@@ -51,16 +51,16 @@ function buildSystemPrompt() {
     "2. Do NOT run the same command twice with minor variations.\n" +
     "3. Do NOT write results to files or re-read data unless explicitly asked.\n" +
     "4. Never ask for confirmation.\n" +
-    "5. Continue calling tools ONLY when the task requires additional steps.\n" +
-    "6. Call done ONLY when every part of the user's request is complete.\n" +
+    "5. Continue calling tools until EVERY part of the task is complete.\n" +
+    "6. Call done ONLY after all steps are finished.\n" +
     "7. NEVER describe tool calls inside think blocks. Think blocks are for reasoning ONLY.\n" +
     "8. If you think about calling a tool, you MUST actually call it in your next response.\n\n" +
     "Response format (choose ONE, output raw JSON only):\n" +
     '- {"think": "your reasoning here"}  -- reasoning only, NO tool descriptions\n' +
     '- {"tool": "tool_name", "arguments": {"key": "value"}}  -- execute a tool\n' +
     '- {"done": true, "result": "final answer"}  -- task fully complete\n\n' +
-    "WRONG: {\"think\": \"I will call sidekick_store...\"}  -- do NOT describe actions in think\n" +
-    "RIGHT: {\"tool\": \"sidekick_store\", \"arguments\": {\"key\": \"x\", \"value\": \"y\"}}\n\n" +
+    "WRONG: {\"think\": \"Called sidekick_get -> result\"}  -- do NOT mimic tool output in think\n" +
+    "RIGHT: {\"tool\": \"sidekick_get\", \"arguments\": {\"key\": \"mykey\"}}\n\n" +
     "Example (simple): sidekick_bash returns \"64.176.216.202\" for IP query\n" +
     "-> {\"done\": true, \"result\": \"Your public IP is 64.176.216.202\"}\n\n" +
     "Example (multi-step): \"store disk usage and retrieve it\"\n" +
@@ -68,6 +68,12 @@ function buildSystemPrompt() {
     "-> {\"tool\": \"sidekick_store\", \"arguments\": {\"key\": \"disk\", \"value\": \"23%\"}}\n" +
     "-> {\"tool\": \"sidekick_get\", \"arguments\": {\"key\": \"disk\"}}\n" +
     "-> {\"done\": true, \"result\": \"Disk usage: 23%\"}\n\n" +
+    "Example (two retrievals): \"store A and B, then retrieve both\"\n" +
+    "-> {\"tool\": \"sidekick_store\", \"arguments\": {\"key\": \"A\", \"value\": \"1\"}}\n" +
+    "-> {\"tool\": \"sidekick_store\", \"arguments\": {\"key\": \"B\", \"value\": \"2\"}}\n" +
+    "-> {\"tool\": \"sidekick_get\", \"arguments\": {\"key\": \"A\"}}\n" +
+    "-> {\"tool\": \"sidekick_get\", \"arguments\": {\"key\": \"B\"}}  -- MUST call this, do NOT skip\n" +
+    "-> {\"done\": true, \"result\": \"A=1, B=2\"}\n\n" +
     "You have these tools:\n" + toolDescs;
 }
 
@@ -186,7 +192,13 @@ async function runAgent(goal, taskId) {
     if (decision.think) {
       emit(taskId, { type: "step", text: decision.think });
       steps.push({ type: "thought", text: decision.think });
-      history.push({ role: "assistant", content: "Thought: " + decision.think });
+      // Detect hallucinated tool calls in think blocks
+      if (/called\s+sidekick_\w+\s*→/i.test(decision.think) || /stored\s+key/i.test(decision.think)) {
+        history.push({ role: "assistant", content: "Thought: " + decision.think });
+        history.push({ role: "user", content: "You described a tool call but did not execute it. You MUST output a tool call JSON now, not a think block." });
+      } else {
+        history.push({ role: "assistant", content: "Thought: " + decision.think });
+      }
       continue;
     }
 
