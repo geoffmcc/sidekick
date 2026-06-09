@@ -74,7 +74,12 @@ function httpRequest(path, bodyData, sessionId) {
     }, (res) => {
       let data = "";
       res.on("data", (c) => data += c);
-      res.on("end", () => resolve({ data: res.headers["mcp-session-id"] || "", status: res.statusCode, body: data }));
+      res.on("end", () => {
+      const mcpSid = res.headers["mcp-session-id"] || res.headers["mcp-session-id".toLowerCase()] || "(none)";
+      const keys = Object.keys(res.headers).join(",");
+      console.log("MCP resp headers:", keys, "mcp-session-id:", mcpSid);
+      resolve({ data: mcpSid === "(none)" ? "" : mcpSid, status: res.statusCode, body: data });
+    });
     });
     req.on("error", reject);
     req.write(bodyData);
