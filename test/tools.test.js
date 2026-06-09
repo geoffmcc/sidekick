@@ -19,13 +19,12 @@ if (fs.existsSync(testKVFile)) {
 
 // Now require tools (will use test data dir)
 delete require.cache[require.resolve('../src/tools')];
+const tools = require('../src/tools');
 const { 
-  sidekick_store, 
-  sidekick_get, 
-  sidekick_list_projects, 
-  sidekick_get_by_project,
+  TOOLS,
   setSource 
-} = require('../src/tools');
+} = tools;
+const { sidekick_store, sidekick_get, sidekick_list_projects, sidekick_get_by_project } = TOOLS;
 
 console.log('Running Tools Tests...\n');
 
