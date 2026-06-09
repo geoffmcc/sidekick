@@ -99,12 +99,9 @@ console.log('Test 2.1: sidekick_store with project');
 
     // Test 2.7: Project naming validation
     console.log('Test 2.7: Project naming validation');
-    try {
-      await sidekick_store({ key: 'test_invalid', value: 'data', project: 'Invalid-Project' });
-      assert.fail('Should have thrown error for invalid project name');
-    } catch (e) {
-      assert.ok(e.message.includes('Invalid project name'), 'Should mention invalid project name');
-    }
+    const invalidResult = await sidekick_store({ key: 'test_invalid', value: 'data', project: 'Invalid-Project' });
+    assert.ok(invalidResult.isError, 'Should return error for invalid project name');
+    assert.ok(invalidResult.content[0].text.includes('Invalid project name'), 'Should mention invalid project name');
     console.log('✓ Passed\n');
 
     // Test 2.8: Update existing key preserves created timestamp
