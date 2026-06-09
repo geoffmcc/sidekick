@@ -26,6 +26,7 @@ A remote VPS agent with MCP tools, live dashboard, and a local AI agent — all 
 │         └─────────────────────────────────┘              │
 └────────────────────────────────────────────────────────┘
 ```
+*The agent bridge also supports Groq cloud API — when `GROQ_API_KEY` is set, it uses Groq instead of Ollama for near-instant LLM responses.*
 
 ## Services
 
@@ -34,7 +35,7 @@ A remote VPS agent with MCP tools, live dashboard, and a local AI agent — all 
 | **MCP Server** | 4097 | 8 tools: bash, read, write, list, store, get, web_fetch, llm |
 | **Dashboard** | 4098 | Web UI: system health, activity log, KV data, agent |
 | **Agent Bridge** | 4099 | AI agent loop — LLM plans and calls MCP tools autonomously |
-| **Ollama** | 11434 | Local LLM inference (phi3:mini, CPU-only) |
+| **Ollama** | 11434 | Local LLM inference (phi3:mini, CPU-only). Fallback when no `GROQ_API_KEY` |
 
 ## Quick Start
 
@@ -95,13 +96,12 @@ Open `http://YOUR_VPS_IP:4098/` in a browser.
 - **Activity** — live tool call log (auto-refreshes every 10s)
 - **Data** — KV store contents (auto-seeded on dashboard startup with 35 server reference keys: IP, services, security, software, deployment)
 - **Agent** — submit tasks for the AI agent to execute autonomously
-- *(Dashboard basic auth + hardened agent proxy in progress)*
 
 ## Agent Bridge
 
 The agent at `:4099` takes a natural-language goal and runs an autonomous loop:
 
-1. Sends goal + tool definitions to the local LLM
+1. Sends goal + tool definitions to the LLM (Groq cloud or local Ollama)
 2. LLM responds with a tool call decision
 3. Bridge executes the tool via MCP
 4. Feeds result back to LLM
@@ -160,4 +160,6 @@ The dashboard auth and IP whitelist are disabled by default (empty env var = no 
 | `SIDEKICK_DASHBOARD_USER` | — | Dashboard basic auth username (empty = disabled) |
 | `SIDEKICK_DASHBOARD_PASS` | — | Dashboard basic auth password (empty = disabled) |
 | `SIDEKICK_DATA_DIR` | `./data` | Data directory for logs, KV, conversations |
-| `OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama API URL |
+| `OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama API URL (local fallback) |
+| `GROQ_API_KEY` | — | Groq API key for cloud LLM (empty = use local Ollama) |
+| `GROQ_MODEL` | `llama3-8b-8192` | Groq model name |

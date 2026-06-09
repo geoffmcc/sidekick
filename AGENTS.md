@@ -13,14 +13,14 @@ A remote VPS agent system. Connect via the sidekick MCP server at `YOUR_VPS_IP:4
 | `sidekick_store` | Store a value persistently in KV storage |
 | `sidekick_get` | Retrieve a stored value from KV storage |
 | `sidekick_web_fetch` | Fetch a URL from the VPS IP (bypasses local IP restrictions) |
-| `sidekick_llm` | Query the local Phi-3-mini LLM running on the VPS |
+| `sidekick_llm` | Query the LLM (Groq cloud or local Phi-3-mini) |
 
 ## Services
 
 - **MCP Server** (`:4097`) — 8 tools, called automatically when you use `sidekick_*` tools
 - **Dashboard** (`:4098`) — web UI with System, Activity, Data, and Agent tabs
 - **Agent Bridge** (`:4099`) — autonomous LLM agent that plans and executes multi-step tasks
-- **Ollama** (`:11434`) — local Phi-3-mini model running CPU-only on the VPS
+- **Ollama** (`:11434`) — local Phi-3-mini fallback. Uses cloud Groq API when `GROQ_API_KEY` is set
 
 ## Usage
 

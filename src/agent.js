@@ -7,6 +7,8 @@ const EventEmitter = require("events");
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 const API_KEY = process.env.SIDEKICK_API_KEY || "sk-sidekick-local-dev";
+const GROQ_API_KEY = process.env.GROQ_API_KEY || "";
+const GROQ_MODEL = process.env.GROQ_MODEL || "llama3-8b-8192";
 
 const CONV_DIR = path.join(DATA_DIR, "conversations");
 fs.mkdirSync(CONV_DIR, { recursive: true });
@@ -24,18 +26,20 @@ process.on("uncaughtException", (e) => {
   console.error("Uncaught:", e.message);
 });
 
-// Pre-warm Ollama model on startup
-setTimeout(() => {
-  const http = require("http");
-  const body = JSON.stringify({ model: "phi3:mini", prompt: "hello", stream: false });
-  const req = http.request({
-    hostname: "127.0.0.1", port: 11434, path: "/api/generate", method: "POST",
-    headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }
-  });
-  req.write(body); req.end();
-  req.on("error", () => {});
-  req.setTimeout(300000, () => req.destroy());
-}, 1000);
+// Pre-warm Ollama model on startup (only used when no Groq key)
+if (!GROQ_API_KEY) {
+  setTimeout(() => {
+    const http = require("http");
+    const body = JSON.stringify({ model: "phi3:mini", prompt: "hello", stream: false });
+    const req = http.request({
+      hostname: "127.0.0.1", port: 11434, path: "/api/generate", method: "POST",
+      headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }
+    });
+    req.write(body); req.end();
+    req.on("error", () => {});
+    req.setTimeout(300000, () => req.destroy());
+  }, 1000);
+}
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
@@ -50,7 +54,7 @@ const TOOL_DEFS = [
   { name: "sidekick_store", description: "Store a value persistently in KV storage", args: { key: "string", value: "string" } },
   { name: "sidekick_get", description: "Retrieve a stored value from KV storage", args: { key: "string" } },
   { name: "sidekick_web_fetch", description: "Fetch a URL from the VPS", args: { url: "string" } },
-  { name: "sidekick_llm", description: "Ask the local Phi-3-mini LLM on the VPS", args: { prompt: "string", system: "string (optional)", temperature: "number (optional)" } },
+  { name: "sidekick_llm", description: "Ask the LLM (Groq cloud or local Phi-3-mini)", args: { prompt: "string", system: "string (optional)", temperature: "number (optional)" } },
 ];
 
 function callMCP(tool, args) {
@@ -90,24 +94,71 @@ function callMCP(tool, args) {
   });
 }
 
+function buildSystemPrompt() {
+  const toolDescs = TOOL_DEFS.map(t =>
+    "- " + t.name + "(" + Object.keys(t.args).join(", ") + "): " + t.description
+  ).join("\n");
+  return "You are an autonomous agent running on a VPS. You have these tools:\n" + toolDescs +
+    "\n\nRespond with JSON ONLY. No other text.\n" +
+    'To use a tool: {"tool": "tool_name", "arguments": {"key": "value"}}\n' +
+    'To explain reasoning: {"think": "your reasoning"}\n' +
+    'When finished: {"done": true, "result": "summary of what was done"}\n' +
+    "Never ask for confirmation. Just do it.";
+}
+
 function callLLM(messages) {
+  if (GROQ_API_KEY) return callGroqLLM(messages);
+  return callOllamaLLM(messages);
+}
+
+function callGroqLLM(messages) {
+  return new Promise((resolve, reject) => {
+    const https = require("https");
+    const body = JSON.stringify({
+      model: GROQ_MODEL,
+      messages: [
+        { role: "system", content: buildSystemPrompt() },
+        ...messages.map(m => ({ role: m.role, content: m.content }))
+      ],
+      temperature: 0.3,
+      response_format: { type: "json_object" }
+    });
+    const req = https.request({
+      hostname: "api.groq.com",
+      path: "/openai/v1/chat/completions",
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + GROQ_API_KEY,
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(body)
+      }
+    }, (res) => {
+      let data = "";
+      res.on("data", (c) => data += c);
+      res.on("end", () => {
+        try {
+          const parsed = JSON.parse(data);
+          const content = parsed.choices?.[0]?.message?.content || "";
+          resolve({ response: content });
+        } catch (e) {
+          reject(new Error("Groq parse fail: " + data.substring(0, 200)));
+        }
+      });
+    });
+    req.setTimeout(30000, () => { req.destroy(); reject(new Error("LLM timeout")); });
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+function callOllamaLLM(messages) {
   return new Promise((resolve, reject) => {
     const http = require("http");
-    const toolDescs = TOOL_DEFS.map(t =>
-      "- " + t.name + "(" + Object.keys(t.args).join(", ") + "): " + t.description
-    ).join("\n");
-    const systemPrompt =
-      "You are an autonomous agent running on a VPS. You have these tools:\n" + toolDescs +
-      "\n\nRespond with JSON ONLY. No other text.\n" +
-      'To use a tool: {"tool": "tool_name", "arguments": {"key": "value"}}\n' +
-      'To explain reasoning: {"think": "your reasoning"}\n' +
-      'When finished: {"done": true, "result": "summary of what was done"}\n' +
-      "Never ask for confirmation. Just do it.";
-
     const body = JSON.stringify({
       model: "phi3:mini",
       prompt: messages.map(m => (m.role === "system" ? "System: " : "User: ") + m.content).join("\n\n"),
-      system: systemPrompt,
+      system: buildSystemPrompt(),
       options: { temperature: 0.3 },
       stream: false
     });
