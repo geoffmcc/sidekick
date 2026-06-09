@@ -73,6 +73,20 @@ git pull
 sudo systemctl restart sidekick-mcp sidekick-dashboard sidekick-agent
 ```
 
+## Configuration Changes
+
+To change environment variables (ports, API keys, max iterations, etc.):
+
+```powershell
+# 1. Edit .env locally
+notepad .env
+
+# 2. Deploy (syncs .env to VPS and restarts services)
+.\deploy.ps1
+```
+
+The deploy script automatically syncs `.env` to the VPS if it exists locally. No SSH required for config changes.
+
 ## MCP Tools
 
 All tools are exposed via the MCP server at `http://YOUR_VPS_IP:4097/mcp`.

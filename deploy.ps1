@@ -34,6 +34,16 @@ $changed += "agent.js"
 Copy-ToVPS "C:\Users\geoffrey\Projects\sidekick\package.json" "$REMOTE_DIR/package.json"
 $changed += "package.json"
 
+# Sync .env if it exists locally (contains API keys, ports, config)
+$localEnv = "C:\Users\geoffrey\Projects\sidekick\.env"
+if (Test-Path $localEnv) {
+  Write-Host "Syncing .env..." -ForegroundColor Green
+  Copy-ToVPS $localEnv "$REMOTE_DIR/.env"
+  $changed += ".env"
+} else {
+  Write-Host "No local .env found, skipping env sync" -ForegroundColor Yellow
+}
+
 # Run npm install on VPS if package.json changed
 Write-Host "Running npm install on VPS..." -ForegroundColor Green
 Run-Remote "cd $REMOTE_DIR && npm install 2>&1" | Out-Null
@@ -61,10 +71,7 @@ Restart=always
 RestartSec=5
 User=sidekick
 Group=sidekick
-Environment=NODE_ENV=production
-Environment=SIDEKICK_AGENT_PORT=4099
-Environment=SIDEKICK_DATA_DIR=$REMOTE_DIR/data
-Environment=SIDEKICK_MAX_ITERATIONS=15
+EnvironmentFile=$REMOTE_DIR/.env
 
 [Install]
 WantedBy=multi-user.target
