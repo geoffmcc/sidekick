@@ -342,7 +342,7 @@ function toggleHistory(){
     fetch('/api/agent/history').then(r=>r.json()).then(d=>{
       if (!d.runs || !d.runs.length) { el.innerHTML = '<div class="empty">No past runs</div>'; return; }
       el.innerHTML = d.runs.map(r =>
-        '<div class="log-entry" style="cursor:pointer" onclick="loadRun(\'' + r.id + '\')">' +
+        '<div class="log-entry" style="cursor:pointer" onclick="loadRun(\\'' + r.id + '\\')">' +
         '<span class="log-time">' + fmtTime(r.t) + '</span>' +
         '<span class="' + (r.status === 'completed' ? 'log-ok' : 'log-fail') + '">' + r.status + '</span>' +
         '<span class="log-summary">' + esc(r.goal.substring(0,80)) + '</span></div>'
