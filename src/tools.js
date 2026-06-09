@@ -28,15 +28,26 @@ function saveKV() {
   fs.writeFileSync(KV_FILE, JSON.stringify(kvStore, null, 2));
 }
 
+function formatArgs(args) {
+  if (typeof args !== "object" || args === null) return "";
+  const parts = [];
+  for (const [key, value] of Object.entries(args)) {
+    const str = String(value);
+    const truncated = str.length > 100 ? str.substring(0, 100) + "..." : str;
+    parts.push(key + "=" + truncated);
+  }
+  return parts.join(", ");
+}
+
 function logToolCall(name, args, duration, success, summary) {
   try {
     const entry = JSON.stringify({
       t: new Date().toISOString(),
       n: name,
-      a: typeof args === "object" ? Object.keys(args).join(",") : "",
+      a: formatArgs(args),
       d: Math.round(duration),
       ok: success,
-      s: String(summary).substring(0, 120),
+      s: String(summary).substring(0, 200),
       src: currentSource
     }) + "\n";
     fs.appendFileSync(LOG_FILE, entry, "utf-8");

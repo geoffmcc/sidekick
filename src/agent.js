@@ -12,7 +12,7 @@ const CONV_DIR = path.join(DATA_DIR, "conversations");
 fs.mkdirSync(CONV_DIR, { recursive: true });
 
 try {
-  const cutoff = Date.now() - 86400000;
+  const cutoff = Date.now() - (30 * 86400000);
   fs.readdirSync(CONV_DIR).filter(f => f.endsWith(".json")).forEach(f => {
     const p = path.join(CONV_DIR, f);
     if (fs.statSync(p).mtimeMs < cutoff) fs.unlinkSync(p);

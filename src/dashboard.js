@@ -214,6 +214,47 @@ app.get("/api/config", (req, res) => {
   res.json({ config });
 });
 
+app.put("/api/kv/:key", (req, res) => {
+  let body = "";
+  req.on("data", c => body += c);
+  req.on("end", () => {
+    try {
+      const { value } = JSON.parse(body);
+      const kv = readKV();
+      kv[req.params.key] = value;
+      writeKV(kv);
+      res.json({ ok: true });
+    } catch { res.status(400).json({ error: "invalid body" }); }
+  });
+});
+
+app.delete("/api/kv/:key", (req, res) => {
+  const kv = readKV();
+  delete kv[req.params.key];
+  writeKV(kv);
+  res.json({ ok: true });
+});
+
+app.get("/api/stats", (req, res) => {
+  const logs = readLogs();
+  const stats = {};
+  for (const entry of logs) {
+    const name = entry.n;
+    if (!stats[name]) stats[name] = { count: 0, ok: 0, fail: 0, totalMs: 0 };
+    stats[name].count++;
+    if (entry.ok) stats[name].ok++; else stats[name].fail++;
+    stats[name].totalMs += (entry.d || 0);
+  }
+  const result = Object.entries(stats).map(([name, s]) => ({
+    name,
+    count: s.count,
+    ok: s.ok,
+    fail: s.fail,
+    avgMs: Math.round(s.totalMs / s.count)
+  })).sort((a, b) => b.count - a.count);
+  res.json({ stats: result });
+});
+
 // --- Frontend ---
 
 app.get("/", (req, res) => {
@@ -246,21 +287,30 @@ nav a.active{color:#58a6ff;border-color:#58a6ff;background:#0d1117}
 .section-title{font-size:.85rem;color:#8b949e;margin-bottom:8px;text-transform:uppercase}
 .log-entry{padding:8px 0;border-bottom:1px solid #21262d;font-size:.82rem;display:flex;gap:12px;align-items:flex-start}
 .log-entry:last-child{border-bottom:none}
+.log-entry.error{background:#1a0a0a;margin:0 -16px;padding:8px 16px;border-left:3px solid #f85149}
 .log-time{color:#8b949e;white-space:nowrap;font-family:monospace;min-width:140px}
 .log-name{color:#58a6ff;font-weight:500;min-width:130px;font-family:monospace}
 .log-ok{color:#3fb950}
 .log-fail{color:#f85149}
 .log-summary{color:#8b949e;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
-.kv-entry{padding:6px 0;border-bottom:1px solid #21262d;font-size:.82rem}
+.log-args{color:#7ee787;font-family:monospace;font-size:.78rem;word-break:break-all;max-height:60px;overflow-y:auto;flex:1}
+.kv-entry{padding:8px 0;border-bottom:1px solid #21262d;font-size:.82rem;display:flex;gap:8px;align-items:flex-start}
 .kv-entry:last-child{border-bottom:none}
-.kv-key{color:#ffa657;font-family:monospace;font-weight:500}
-.kv-val{color:#c9d1d9;font-family:monospace;word-break:break-all}
+.kv-key{color:#ffa657;font-family:monospace;font-weight:500;min-width:180px;word-break:break-all}
+.kv-val{color:#c9d1d9;font-family:monospace;word-break:break-all;flex:1}
+.kv-actions{display:flex;gap:4px;flex-shrink:0}
+.kv-actions button{background:#21262d;border:1px solid #30363d;color:#8b949e;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:.75rem}
+.kv-actions button:hover{background:#30363d;color:#c9d1d9}
+.kv-actions button.del:hover{background:#da3633;color:#fff;border-color:#da3633}
 .empty{color:#484f58;font-style:italic;padding:12px 0}
 .agent-goal{width:100%;padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#c9d1d9;font-size:.9rem;margin-bottom:8px;resize:vertical}
 .agent-goal:focus{outline:none;border-color:#58a6ff}
 .btn{background:#238636;color:#fff;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:.85rem}
 .btn:disabled{opacity:.5;cursor:not-allowed}
 .btn-danger{background:#da3633}
+.btn-sm{padding:4px 12px;font-size:.78rem}
+.btn-outline{background:transparent;border:1px solid #30363d;color:#8b949e}
+.btn-outline:hover{border-color:#58a6ff;color:#58a6ff}
 .agent-log{padding:12px;background:#0d1117;border:1px solid #21262d;border-radius:6px;font-family:monospace;font-size:.8rem;max-height:500px;overflow-y:auto;margin-top:8px;white-space:pre-wrap;line-height:1.5}
 .agent-step{color:#58a6ff;font-weight:500}
 .agent-ok{color:#3fb950}
@@ -281,10 +331,39 @@ nav a.active{color:#58a6ff;border-color:#58a6ff;background:#0d1117}
 .config-key{color:#ffa657;font-family:monospace;font-weight:500;min-width:200px}
 .config-val{color:#c9d1d9;font-family:monospace;word-break:break-all;flex:1}
 .config-val.redacted{color:#8b949e;font-style:italic}
-.history-item{padding:8px 0;border-bottom:1px solid #21262d;font-size:.82rem;cursor:pointer}
+.history-item{padding:8px 0;border-bottom:1px solid #21262d;font-size:.82rem;cursor:pointer;display:flex;gap:8px;align-items:center}
 .history-item:hover{background:#161b22}
 .history-item:last-child{border-bottom:none}
 .history-detail{padding:8px 0 8px 20px;background:#0d1117;border-left:2px solid #21262d;margin:4px 0;font-family:monospace;font-size:.78rem;white-space:pre-wrap;line-height:1.4;max-height:400px;overflow-y:auto}
+.search-bar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.search-bar input,.search-bar select{padding:6px 12px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#c9d1d9;font-size:.82rem}
+.search-bar input:focus,.search-bar select:focus{outline:none;border-color:#58a6ff}
+.search-bar input{flex:1;min-width:200px}
+.session-group{margin-bottom:16px;border:1px solid #21262d;border-radius:8px;overflow:hidden}
+.session-header{padding:8px 16px;background:#161b22;cursor:pointer;display:flex;gap:12px;align-items:center;font-size:.82rem}
+.session-header:hover{background:#1c2128}
+.session-header .session-time{color:#58a6ff;font-family:monospace;font-weight:500}
+.session-header .session-count{color:#8b949e}
+.session-header .session-src{color:#bc8cff;font-size:.75rem}
+.session-body{padding:0 16px;display:none}
+.session-body.open{display:block}
+.stats-table{width:100%;border-collapse:collapse;font-size:.82rem}
+.stats-table th{text-align:left;padding:8px 12px;border-bottom:2px solid #21262d;color:#8b949e;font-weight:500;text-transform:uppercase;font-size:.75rem}
+.stats-table td{padding:8px 12px;border-bottom:1px solid #21262d}
+.stats-table tr:hover{background:#161b22}
+.stats-bar{height:6px;background:#21262d;border-radius:3px;overflow:hidden;min-width:60px}
+.stats-bar-fill{height:100%;border-radius:3px}
+.stats-bar-fill.ok{background:#3fb950}
+.stats-bar-fill.fail{background:#f85149}
+.load-more{display:block;width:100%;padding:8px;background:transparent;border:1px solid #21262d;border-radius:6px;color:#58a6ff;cursor:pointer;font-size:.82rem;margin-top:8px}
+.load-more:hover{background:#161b22;border-color:#58a6ff}
+.modal-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:1000;align-items:center;justify-content:center}
+.modal-overlay.active{display:flex}
+.modal{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:24px;max-width:600px;width:90%;max-height:80vh;overflow-y:auto}
+.modal h3{color:#58a6ff;margin-bottom:16px}
+.modal textarea{width:100%;min-height:200px;padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#c9d1d9;font-family:monospace;font-size:.82rem;resize:vertical}
+.modal textarea:focus{outline:none;border-color:#58a6ff}
+.modal-actions{display:flex;gap:8px;margin-top:16px;justify-content:flex-end}
 footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
 </style>
 </head>
@@ -315,16 +394,40 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
   </div>
   <div class="section-title" style="margin-bottom:8px">Local LLM</div>
   <div id="llmStatus"><div class="empty">Checking...</div></div>
+  <div class="section-title" style="margin:16px 0 8px">Tool Usage</div>
+  <div class="card" style="padding:0;overflow:hidden">
+    <table class="stats-table" id="statsTable">
+      <thead><tr><th>Tool</th><th>Calls</th><th>Success</th><th>Fail</th><th>Avg</th><th>Rate</th></tr></thead>
+      <tbody id="statsBody"><tr><td colspan="6" class="empty">Loading...</td></tr></tbody>
+    </table>
+  </div>
 </div>
 
 <!-- Activity Page -->
 <div class="page" id="page-activity">
+  <div class="search-bar">
+    <input type="text" id="logSearch" placeholder="Search tool name, args, or output..." oninput="filterLogs()">
+    <select id="logSourceFilter" onchange="filterLogs()">
+      <option value="">All Sources</option>
+      <option value="mcp">MCP</option>
+      <option value="agent">Agent</option>
+      <option value="unknown">Unknown</option>
+    </select>
+    <select id="logStatusFilter" onchange="filterLogs()">
+      <option value="">All Status</option>
+      <option value="ok">OK</option>
+      <option value="fail">Failed</option>
+    </select>
+  </div>
   <div class="section-title">Activity Log (<span id="logCount">0</span>)</div>
-  <div class="card" id="logList" style="max-height:600px;overflow-y:auto;padding:8px 16px"></div>
+  <div id="logList" style="max-height:600px;overflow-y:auto"></div>
 </div>
 
 <!-- Data Page -->
 <div class="page" id="page-data">
+  <div class="search-bar">
+    <input type="text" id="kvSearch" placeholder="Search keys or values..." oninput="filterKV()">
+  </div>
   <div class="section-title">Stored Data (<span id="kvCount">0</span>)</div>
   <div class="card" id="kvList" style="max-height:600px;overflow-y:auto;padding:8px 16px"></div>
 </div>
@@ -351,6 +454,19 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
   </div>
 </div>
 
+<!-- Edit Modal -->
+<div class="modal-overlay" id="editModal">
+  <div class="modal">
+    <h3>Edit KV Entry</h3>
+    <div style="margin-bottom:8px;color:#8b949e;font-size:.82rem">Key: <span id="editKey" style="color:#ffa657;font-family:monospace"></span></div>
+    <textarea id="editValue"></textarea>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeEditModal()">Cancel</button>
+      <button class="btn" onclick="saveKVEdit()">Save</button>
+    </div>
+  </div>
+</div>
+
 <footer>refreshes every 10s</footer>
 
 <script>
@@ -358,30 +474,16 @@ let currentPage = 'system';
 let agentRunning = false;
 let agentStream = null;
 let expandedHistory = {};
+let allLogs = [];
+let allKV = [];
+let logPage = 0;
+const LOG_PAGE_SIZE = 50;
+const SESSION_GAP_MS = 5 * 60 * 1000;
 
-const SERVICE_ICONS = {
-  'sidekick-mcp': 'fa-server',
-  'sidekick-agent': 'fa-robot',
-  'ollama': 'fa-brain'
-};
-
-const SERVICE_LABELS = {
-  'sidekick-mcp': 'MCP',
-  'sidekick-agent': 'Agent',
-  'ollama': 'Ollama'
-};
-
-const SOURCE_ICONS = {
-  'agent': 'fa-robot',
-  'mcp': 'fa-plug',
-  'unknown': 'fa-circle-question'
-};
-
-const SOURCE_COLORS = {
-  'agent': '#58a6ff',
-  'mcp': '#bc8cff',
-  'unknown': '#8b949e'
-};
+const SERVICE_ICONS = { 'sidekick-mcp': 'fa-server', 'sidekick-agent': 'fa-robot', 'ollama': 'fa-brain' };
+const SERVICE_LABELS = { 'sidekick-mcp': 'MCP', 'sidekick-agent': 'Agent', 'ollama': 'Ollama' };
+const SOURCE_ICONS = { 'agent': 'fa-robot', 'mcp': 'fa-plug', 'unknown': 'fa-circle-question' };
+const SOURCE_COLORS = { 'agent': '#58a6ff', 'mcp': '#bc8cff', 'unknown': '#8b949e' };
 
 function $(id){return document.getElementById(id)}
 
@@ -391,7 +493,7 @@ function showPage(name){
   document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
   $('page-' + name).classList.add('active');
   $('nav-' + name).classList.add('active');
-  if (name === 'system') { loadSystem(); loadLLM(); loadServices(); }
+  if (name === 'system') { loadSystem(); loadLLM(); loadServices(); loadStats(); }
   if (name === 'activity') loadLogs();
   if (name === 'data') loadKV();
   if (name === 'config') loadConfig();
@@ -400,6 +502,11 @@ function showPage(name){
 function fmtTime(iso){
   const d = new Date(iso);
   return d.toLocaleTimeString() + "." + String(d.getMilliseconds()).padStart(3,'0');
+}
+
+function fmtDate(iso){
+  const d = new Date(iso);
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString();
 }
 
 function esc(s){
@@ -413,13 +520,12 @@ function loadServices(){
   fetch('/api/services').then(r=>r.json()).then(d=>{
     const container = $('serviceDots');
     if (!d.services) { container.innerHTML = ''; return; }
-    const html = Object.entries(d.services).map(([name, status]) => {
+    container.innerHTML = Object.entries(d.services).map(([name, status]) => {
       const icon = SERVICE_ICONS[name] || 'fa-circle';
       const label = SERVICE_LABELS[name] || name;
       const cls = status === 'active' ? 'on' : 'off';
       return '<span class="service-indicator ' + cls + '"><i class="fas ' + icon + '"></i> ' + label + '</span>';
     }).join('');
-    container.innerHTML = html;
   }).catch(()=>{});
 }
 
@@ -449,36 +555,193 @@ function loadLLM(){
   }).catch(()=>{});
 }
 
-// -- Activity -- //
-function loadLogs(){
-  fetch('/api/logs?limit=50').then(r=>r.json()).then(d=>{
-    $('logCount').textContent = d.total;
-    const list = $('logList');
-    if (!d.entries.length){ list.innerHTML='<div class="empty">No activity yet</div>'; return }
-    list.innerHTML = d.entries.map(e => {
-      const src = e.src || 'unknown';
-      const icon = SOURCE_ICONS[src] || SOURCE_ICONS['unknown'];
-      const color = SOURCE_COLORS[src] || SOURCE_COLORS['unknown'];
-      return '<div class="log-entry">' +
-        '<span class="log-time">' + fmtTime(e.t) + '</span>' +
-        '<i class="fas ' + icon + '" style="color:' + color + ';margin-right:6px;font-size:.75rem"></i>' +
-        '<span class="log-name">' + esc(e.n) + '</span>' +
-        '<span class="' + (e.ok ? 'log-ok' : 'log-fail') + '">' + (e.ok ? 'OK' : 'FAIL') + '</span>' +
-        '<span class="log-summary">' + esc(e.s) + '</span></div>';
+function loadStats(){
+  fetch('/api/stats').then(r=>r.json()).then(d=>{
+    const body = $('statsBody');
+    if (!d.stats || !d.stats.length) { body.innerHTML = '<tr><td colspan="6" class="empty">No data</td></tr>'; return; }
+    const maxCount = Math.max(...d.stats.map(s => s.count));
+    body.innerHTML = d.stats.map(s => {
+      const rate = s.count > 0 ? Math.round(s.ok / s.count * 100) : 0;
+      const barWidth = Math.round(s.count / maxCount * 100);
+      return '<tr>' +
+        '<td style="color:#58a6ff;font-family:monospace">' + esc(s.name) + '</td>' +
+        '<td>' + s.count + '</td>' +
+        '<td style="color:#3fb950">' + s.ok + '</td>' +
+        '<td style="color:' + (s.fail > 0 ? '#f85149' : '#484f58') + '">' + s.fail + '</td>' +
+        '<td>' + s.avgMs + 'ms</td>' +
+        '<td><div class="stats-bar"><div class="stats-bar-fill ' + (rate >= 90 ? 'ok' : rate >= 70 ? '' : 'fail') + '" style="width:' + barWidth + '%"></div></div> ' + rate + '%</td>' +
+        '</tr>';
     }).join('');
   }).catch(()=>{});
+}
+
+// -- Activity -- //
+function loadLogs(){
+  fetch('/api/logs?limit=500').then(r=>r.json()).then(d=>{
+    allLogs = d.entries || [];
+    logPage = 0;
+    renderLogs();
+  }).catch(()=>{});
+}
+
+function filterLogs(){
+  logPage = 0;
+  renderLogs();
+}
+
+function getFilteredLogs(){
+  const search = ($('logSearch').value || '').toLowerCase();
+  const srcFilter = $('logSourceFilter').value;
+  const statusFilter = $('logStatusFilter').value;
+  return allLogs.filter(e => {
+    if (srcFilter && (e.src || 'unknown') !== srcFilter) return false;
+    if (statusFilter === 'ok' && !e.ok) return false;
+    if (statusFilter === 'fail' && e.ok) return false;
+    if (search) {
+      const haystack = (e.n + ' ' + e.a + ' ' + e.s).toLowerCase();
+      if (!haystack.includes(search)) return false;
+    }
+    return true;
+  });
+}
+
+function groupSessions(logs){
+  if (!logs.length) return [];
+  const sessions = [];
+  let current = { entries: [logs[0]], src: logs[0].src || 'unknown', startTime: new Date(logs[0].t).getTime() };
+  for (let i = 1; i < logs.length; i++) {
+    const entry = logs[i];
+    const time = new Date(entry.t).getTime();
+    const src = entry.src || 'unknown';
+    const gap = current.entries[current.entries.length - 1] ? time - new Date(current.entries[current.entries.length - 1].t).getTime() : 0;
+    if (gap <= SESSION_GAP_MS && src === current.src) {
+      current.entries.push(entry);
+    } else {
+      sessions.push(current);
+      current = { entries: [entry], src: src, startTime: time };
+    }
+  }
+  sessions.push(current);
+  return sessions;
+}
+
+function renderLogs(){
+  const filtered = getFilteredLogs();
+  $('logCount').textContent = filtered.length;
+  const container = $('logList');
+  if (!filtered.length) { container.innerHTML = '<div class="empty">No matching activity</div>'; return; }
+
+  const sessions = groupSessions(filtered);
+  const visibleSessions = sessions.slice(0, logPage + 1);
+  let html = '';
+
+  visibleSessions.forEach((session, si) => {
+    const src = session.src;
+    const icon = SOURCE_ICONS[src] || SOURCE_ICONS['unknown'];
+    const color = SOURCE_COLORS[src] || SOURCE_COLORS['unknown'];
+    const startTime = fmtDate(session.entries[0].t);
+    const endTime = fmtDate(session.entries[session.entries.length - 1].t);
+    const timeRange = startTime === endTime ? startTime : startTime + ' - ' + endTime.split(' ')[1];
+
+    html += '<div class="session-group">';
+    html += '<div class="session-header" onclick="toggleSession(' + si + ')">';
+    html += '<i class="fas ' + icon + '" style="color:' + color + '"></i>';
+    html += '<span class="session-time">' + esc(timeRange) + '</span>';
+    html += '<span class="session-count">' + session.entries.length + ' calls</span>';
+    html += '<span class="session-src">' + esc(src) + '</span>';
+    html += '</div>';
+    html += '<div class="session-body" id="session-' + si + '">';
+    session.entries.forEach(e => {
+      const errClass = e.ok ? '' : ' error';
+      html += '<div class="log-entry' + errClass + '">';
+      html += '<span class="log-time">' + fmtTime(e.t) + '</span>';
+      html += '<span class="log-name">' + esc(e.n) + '</span>';
+      html += '<span class="' + (e.ok ? 'log-ok' : 'log-fail') + '">' + (e.ok ? 'OK' : 'FAIL') + '</span>';
+      if (e.a) html += '<span class="log-args">' + esc(e.a) + '</span>';
+      else html += '<span class="log-summary">' + esc(e.s) + '</span>';
+      html += '</div>';
+    });
+    html += '</div></div>';
+  });
+
+  if (visibleSessions.length < sessions.length) {
+    html += '<button class="load-more" onclick="loadMoreLogs()">Show more sessions (' + (sessions.length - visibleSessions.length) + ' remaining)</button>';
+  }
+
+  container.innerHTML = html;
+}
+
+function toggleSession(idx){
+  const body = $('session-' + idx);
+  body.classList.toggle('open');
+}
+
+function loadMoreLogs(){
+  logPage++;
+  renderLogs();
 }
 
 // -- Data -- //
 function loadKV(){
   fetch('/api/kv').then(r=>r.json()).then(d=>{
-    $('kvCount').textContent = d.total;
-    const list = $('kvList');
-    if (!d.entries.length){ list.innerHTML='<div class="empty">No stored data</div>'; return }
-    list.innerHTML = d.entries.map(e =>
-      '<div class="kv-entry"><span class="kv-key">' + esc(e.key) + '</span>: <span class="kv-val">' + esc(String(e.value).substring(0,200)) + '</span></div>'
-    ).join('');
+    allKV = d.entries || [];
+    renderKV();
   }).catch(()=>{});
+}
+
+function filterKV(){
+  renderKV();
+}
+
+function renderKV(){
+  const search = ($('kvSearch').value || '').toLowerCase();
+  const filtered = allKV.filter(e => {
+    if (!search) return true;
+    return (e.key + ' ' + String(e.value)).toLowerCase().includes(search);
+  });
+  $('kvCount').textContent = filtered.length;
+  const list = $('kvList');
+  if (!filtered.length) { list.innerHTML = '<div class="empty">No matching data</div>'; return; }
+  list.innerHTML = filtered.map(e =>
+    '<div class="kv-entry">' +
+    '<span class="kv-key">' + esc(e.key) + '</span>' +
+    '<span class="kv-val">' + esc(String(e.value).substring(0,200)) + (String(e.value).length > 200 ? '...' : '') + '</span>' +
+    '<span class="kv-actions">' +
+    '<button onclick="openEditModal(\\'' + esc(e.key).replace(/'/g, "\\\\'") + '\\')"><i class="fas fa-edit"></i></button>' +
+    '<button class="del" onclick="deleteKV(\\'' + esc(e.key).replace(/'/g, "\\\\'") + '\\')"><i class="fas fa-trash"></i></button>' +
+    '</span></div>'
+  ).join('');
+}
+
+function openEditModal(key){
+  const entry = allKV.find(e => e.key === key);
+  if (!entry) return;
+  $('editKey').textContent = key;
+  $('editValue').value = String(entry.value);
+  $('editModal').classList.add('active');
+  $('editModal').dataset.key = key;
+}
+
+function closeEditModal(){
+  $('editModal').classList.remove('active');
+}
+
+function saveKVEdit(){
+  const key = $('editModal').dataset.key;
+  const value = $('editValue').value;
+  fetch('/api/kv/' + encodeURIComponent(key), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value })
+  }).then(r => r.json()).then(d => {
+    if (d.ok) { closeEditModal(); loadKV(); }
+  }).catch(()=>{});
+}
+
+function deleteKV(key){
+  if (!confirm('Delete "' + key + '"?')) return;
+  fetch('/api/kv/' + encodeURIComponent(key), { method: 'DELETE' })
+    .then(r => r.json()).then(d => { if (d.ok) loadKV(); }).catch(()=>{});
 }
 
 // -- Config -- //
@@ -551,11 +814,14 @@ function toggleHistory(){
     fetch('/api/agent/history').then(r=>r.json()).then(d=>{
       if (!d.runs || !d.runs.length) { el.innerHTML = '<div class="empty">No past runs</div>'; return; }
       el.innerHTML = d.runs.map(r =>
-        '<div class="history-item" onclick="toggleRunDetail(\\'' + r.id + '\\')">' +
+        '<div class="history-item">' +
         '<span class="log-time">' + fmtTime(r.t) + '</span> ' +
         '<span class="' + (r.status === 'completed' ? 'log-ok' : 'log-fail') + '">' + r.status + '</span> ' +
-        '<span class="log-summary">' + esc(r.goal.substring(0,80)) + '</span>' +
-        '<div id="run-detail-' + r.id + '" style="display:none"></div></div>'
+        '<span class="log-summary" style="flex:1">' + esc(r.goal.substring(0,80)) + '</span>' +
+        '<button class="btn btn-sm btn-outline" onclick="exportRun(\\'' + r.id + '\\')"><i class="fas fa-download"></i></button>' +
+        '<button class="btn btn-sm btn-outline" onclick="toggleRunDetail(\\'' + r.id + '\\')"><i class="fas fa-chevron-down"></i></button>' +
+        '<div id="run-detail-' + r.id + '" style="display:none;width:100%"></div>' +
+        '</div>'
       ).join('');
     }).catch(()=>{});
   }
@@ -584,11 +850,23 @@ function toggleRunDetail(id){
   }).catch(()=>{ detail.innerHTML = '<div class="agent-err">Failed to load details</div>'; });
 }
 
+function exportRun(id){
+  fetch('/api/agent/run/' + id).then(r=>r.json()).then(run=>{
+    const blob = new Blob([JSON.stringify(run, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'agent-run-' + id + '.json';
+    a.click();
+    URL.revokeObjectURL(url);
+  }).catch(()=>{});
+}
+
 // -- Refresh -- //
 function refresh(){
   const now = new Date();
   $('lastUpdate').textContent = 'updated ' + now.toLocaleTimeString();
-  if (currentPage === 'system') { loadSystem(); loadLLM(); loadServices(); }
+  if (currentPage === 'system') { loadSystem(); loadLLM(); loadServices(); loadStats(); }
   else if (currentPage === 'activity') loadLogs();
   else if (currentPage === 'data') loadKV();
   else if (currentPage === 'config') loadConfig();
