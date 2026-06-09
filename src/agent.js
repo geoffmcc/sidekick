@@ -20,6 +20,10 @@ try {
   });
 } catch (e) {}
 
+process.on("uncaughtException", (e) => {
+  console.error("Uncaught:", e.message);
+});
+
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
@@ -105,7 +109,7 @@ function callLLM(messages) {
         catch { reject(new Error("LLM parse fail: " + data.substring(0, 200))); }
       });
     });
-    req.setTimeout(60000, () => { req.destroy(); reject(new Error("LLM timeout")); });
+    req.setTimeout(120000, () => { req.destroy(); reject(new Error("LLM timeout")); });
     req.on("error", reject);
     req.write(body);
     req.end();

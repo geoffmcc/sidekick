@@ -44,6 +44,7 @@ app.all(/^\/api\/agent\//, (req, res) => {
       res.writeHead(px.statusCode, px.headers);
       px.pipe(res);
     });
+    pr.on("error", () => { if (!res.headersSent) res.status(502).json({ error: "Agent unavailable" }); });
     if (body) pr.write(body);
     pr.end();
   });
