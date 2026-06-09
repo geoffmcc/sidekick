@@ -68,8 +68,8 @@ function seedKV() {
 
     "security:ufw": exec("systemctl is-active ufw"),
     "security:fail2ban": exec("systemctl is-active fail2ban"),
-    "security:ssh_port": exec("awk '/^Port /{print \$2}' /etc/ssh/sshd_config 2>/dev/null") || "22",
-    "security:last_login": exec('last -1 -F -n 1 2>/dev/null | head -1 | awk \'{print $1,$3,$4,$5}\''),
+    "security:ssh_port": (() => { try { const c = fs.readFileSync("/etc/ssh/sshd_config","utf-8").match(/^Port\s+(\d+)/m); return c ? c[1] : "22"; } catch { return "22"; } })(),
+    "security:last_login": exec("last -1 -F -n 1 2>/dev/null | head -1 | awk '{print \$1,\$3,\$4,\$5}'"),
     "security:failed_logins": exec("grep -c 'Failed password' /var/log/auth.log 2>/dev/null || echo 0"),
 
     "software:node_version": exec("node --version"),
