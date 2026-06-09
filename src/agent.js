@@ -96,11 +96,8 @@ function initMCP() {
   const notifBody = JSON.stringify({
     jsonrpc: "2.0", method: "notifications/initialized"
   });
-  return httpPost(initBody).then(r1 => {
-    parseBody(r1.body);
-    return httpPost(notifBody);
-  }).then(r2 => {
-    parseBody(r2.body);
+  return httpPost(initBody).then(r1 => parseBody(r1.body)).then(() => httpPost(notifBody)).then(r2 => {
+    if (r2.body) parseBody(r2.body);
   });
 }
 
@@ -109,7 +106,10 @@ function callMCP(tool, args) {
     jsonrpc: "2.0", id: "1", method: "tools/call",
     params: { name: tool, arguments: args }
   });
-  return httpPost(body).then(res => parseBody(res.body));
+  return httpPost(body).then(res => {
+    if (!res.body) throw new Error("Empty response (status " + res.status + ")");
+    return parseBody(res.body);
+  });
 }
 
 function buildSystemPrompt() {

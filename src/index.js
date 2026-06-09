@@ -291,8 +291,13 @@ const transport = new StreamableHTTPServerTransport({
   enableJsonResponse: true
 });
 
-app.post("/mcp", (req, res) => {
-  transport.handleRequest(req, res, req.body);
+app.post("/mcp", async (req, res) => {
+  try {
+    await transport.handleRequest(req, res, req.body);
+  } catch (e) {
+    console.error("MCP error:", e.message, e.stack?.split("\n").slice(0, 3).join("\n"));
+    if (!res.headersSent) res.status(500).json({ error: e.message });
+  }
 });
 
 server.connect(transport);
