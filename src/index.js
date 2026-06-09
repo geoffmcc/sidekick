@@ -316,6 +316,60 @@ app.post("/mcp", async (req, res) => {
   }
 });
 
+app.get("/mcp", async (req, res) => {
+  try {
+    const wh = {};
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (typeof v === "string") wh[k] = v;
+    }
+    const webReq = new Request("http://127.0.0.1:4097/mcp", {
+      method: "GET",
+      headers: wh
+    });
+    const webRes = await transport.handleRequest(webReq);
+    res.status(webRes.status);
+    webRes.headers.forEach((v, k) => { if (k !== "content-encoding" && k !== "content-length") res.setHeader(k, v); });
+    if (webRes.body) {
+      const reader = webRes.body.getReader();
+      const pump = async () => {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) { res.end(); break; }
+          res.write(Buffer.from(value));
+        }
+      };
+      await pump();
+    } else {
+      res.end();
+    }
+  } catch (e) {
+    console.error("MCP GET error:", e.message);
+    if (!res.headersSent) res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete("/mcp", async (req, res) => {
+  try {
+    const wh = {};
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (typeof v === "string") wh[k] = v;
+    }
+    const webReq = new Request("http://127.0.0.1:4097/mcp", {
+      method: "DELETE",
+      headers: wh
+    });
+    const webRes = await transport.handleRequest(webReq);
+    res.status(webRes.status);
+    webRes.headers.forEach((v, k) => { if (k !== "content-encoding" && k !== "content-length") res.setHeader(k, v); });
+    const text = await webRes.text();
+    if (text) res.send(text);
+    else res.end();
+  } catch (e) {
+    console.error("MCP DELETE error:", e.message);
+    if (!res.headersSent) res.status(500).json({ error: e.message });
+  }
+});
+
 server.connect(transport);
 
 app.listen(PORT, "0.0.0.0", () => {
