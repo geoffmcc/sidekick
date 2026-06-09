@@ -68,9 +68,9 @@ function seedKV() {
 
     "security:ufw": exec("systemctl is-active ufw"),
     "security:fail2ban": exec("systemctl is-active fail2ban"),
-    "security:ssh_port": exec(`grep -E '^Port ' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}'`),
-    "security:last_login": exec("last -1 -F -n 1 2>/dev/null | head -1 | awk '{print $1,$3,$4,$5,$6,$7}'"),
-    "security:failed_logins_24h": exec(`grep 'Failed password' /var/log/auth.log 2>/dev/null | awk '\\$1>=\"$(date -d \"24 hours ago\" +%b)\"' | wc -l`),
+    "security:ssh_port": exec("sshd -T 2>/dev/null | grep '^port ' | awk '{print $2}' || echo 22"),
+    "security:last_login": exec("lastlog -u $(whoami) 2>/dev/null | tail -1 | awk '{print $5,$6,$7,$8,$9}' || echo never"),
+    "security:failed_logins": exec("grep -c 'Failed password' /var/log/auth.log 2>/dev/null || echo 0"),
 
     "software:node_version": exec("node --version"),
     "software:npm_version": exec("npm --version"),
