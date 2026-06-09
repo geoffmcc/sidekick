@@ -79,7 +79,7 @@ function callLLM(messages) {
       "Never ask for confirmation. Just do it.";
 
     const body = JSON.stringify({
-      model: "phi-3-mini:4k-q4_K_M",
+      model: "phi3:mini",
       prompt: messages.map(m => (m.role === "system" ? "System: " : "User: ") + m.content).join("\n\n"),
       system: systemPrompt,
       options: { temperature: 0.3 },

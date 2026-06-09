@@ -214,7 +214,7 @@ register("sidekick_llm",
     const http = require("http");
     return new Promise((resolve, reject) => {
       const body = JSON.stringify({
-        model: "phi-3-mini:4k-q4_K_M",
+        model: "phi3:mini",
         prompt: prompt,
         system: system || "You are a helpful assistant running on a VPS.",
         options: { temperature: temperature || 0.7 },
