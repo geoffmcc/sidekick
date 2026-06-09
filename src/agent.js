@@ -133,11 +133,11 @@ function buildSystemPrompt() {
     "- " + t.name + "(" + Object.keys(t.args).join(", ") + "): " + t.description
   ).join("\n");
   return "You are an autonomous agent running on a VPS. You have these tools:\n" + toolDescs +
-    "\n\nRespond with JSON ONLY. No other text.\n" +
+    "\n\nRespond with a SINGLE JSON object. No other text. One of these formats only:\n" +
     'To use a tool: {"tool": "tool_name", "arguments": {"key": "value"}}\n' +
-    'To explain reasoning: {"think": "your reasoning"}\n' +
-    'When finished: {"done": true, "result": "summary of what was done"}\n' +
-    "Never ask for confirmation. Just do it.";
+    'To explain: {"think": "your reasoning"}\n' +
+    'When done: {"done": true, "result": "summary"}\n' +
+    "Never ask for confirmation. Do not include multiple JSON objects.";
 }
 
 function callLLM(messages) {
@@ -145,7 +145,7 @@ function callLLM(messages) {
   return callOllamaLLM(messages);
 }
 
-function callGroqLLM(messages) {
+function callGroqLLM(messages, retries = 3) {
   return new Promise((resolve, reject) => {
     const https = require("https");
     const body = JSON.stringify({
@@ -156,35 +156,42 @@ function callGroqLLM(messages) {
       ],
       temperature: 0.3
     });
-    const req = https.request({
-      hostname: "api.groq.com",
-      path: "/openai/v1/chat/completions",
-      method: "POST",
-      headers: {
-        "Authorization": "Bearer " + GROQ_API_KEY,
-        "Content-Type": "application/json",
-        "Content-Length": Buffer.byteLength(body)
-      }
-    }, (res) => {
-      let data = "";
-      res.on("data", (c) => data += c);
-      res.on("end", () => {
-        try {
-          const parsed = JSON.parse(data);
-          if (res.statusCode >= 400) {
-            return reject(new Error("Groq API: " + (parsed.error?.message || data.substring(0, 200))));
-          }
-          const content = parsed.choices?.[0]?.message?.content || "";
-          resolve({ response: content });
-        } catch (e) {
-          reject(new Error("Groq parse fail: " + data.substring(0, 200)));
+    const doReq = () => {
+      const req = https.request({
+        hostname: "api.groq.com",
+        path: "/openai/v1/chat/completions",
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + GROQ_API_KEY,
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(body)
         }
+      }, (res) => {
+        let data = "";
+        res.on("data", (c) => data += c);
+        res.on("end", () => {
+          try {
+            const parsed = JSON.parse(data);
+            if (res.statusCode === 429 && retries > 0) {
+              const wait = Math.min(5000, 1000 * Math.pow(2, 4 - retries));
+              return setTimeout(() => { retries--; doReq(); }, wait);
+            }
+            if (res.statusCode >= 400) {
+              return reject(new Error("Groq: " + (parsed.error?.message || data.substring(0, 200))));
+            }
+            const content = parsed.choices?.[0]?.message?.content || "";
+            resolve({ response: content });
+          } catch (e) {
+            reject(new Error("Groq parse: " + data.substring(0, 200)));
+          }
+        });
       });
-    });
-    req.setTimeout(30000, () => { req.destroy(); reject(new Error("LLM timeout")); });
-    req.on("error", reject);
-    req.write(body);
-    req.end();
+      req.setTimeout(30000, () => { req.destroy(); reject(new Error("LLM timeout")); });
+      req.on("error", reject);
+      req.write(body);
+      req.end();
+    };
+    doReq();
   });
 }
 
