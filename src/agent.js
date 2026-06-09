@@ -82,6 +82,15 @@ function httpRequest(path, bodyData, sessionId) {
   });
 }
 
+function parseBody(raw) {
+  if (raw.startsWith("event:")) {
+    const dl = raw.split("\n").find(l => l.startsWith("data: "));
+    if (dl) return JSON.parse(dl.replace("data: ", ""));
+    throw new Error("SSE: no data line");
+  }
+  return JSON.parse(raw);
+}
+
 function initMCP() {
   const initBody = JSON.stringify({
     jsonrpc: "2.0", id: "init", method: "initialize",
@@ -91,12 +100,12 @@ function initMCP() {
     jsonrpc: "2.0", method: "notifications/initialized"
   });
   return httpRequest("/mcp", initBody).then(r1 => {
-    JSON.parse(r1.body);
+    parseBody(r1.body);
     if (!r1.data) throw new Error("MCP init: no session ID");
     mcpSessionId = r1.data;
     return httpRequest("/mcp", notifBody, mcpSessionId);
   }).then(r2 => {
-    JSON.parse(r2.body);
+    parseBody(r2.body);
   });
 }
 
@@ -105,15 +114,7 @@ function callMCP(tool, args) {
     jsonrpc: "2.0", id: "1", method: "tools/call",
     params: { name: tool, arguments: args }
   });
-  return httpRequest("/mcp", body, mcpSessionId).then(res => {
-    const data = res.body;
-    if (data.startsWith("event:")) {
-      const dl = data.split("\n").find(l => l.startsWith("data: "));
-      if (dl) return JSON.parse(dl.replace("data: ", ""));
-      throw new Error("SSE: no data line");
-    }
-    return JSON.parse(data);
-  });
+  return httpRequest("/mcp", body, mcpSessionId).then(res => parseBody(res.body));
 }
 
 function buildSystemPrompt() {
