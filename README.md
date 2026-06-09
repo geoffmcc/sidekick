@@ -1,6 +1,6 @@
 # Sidekick
 
-A remote VPS agent with MCP tools, live dashboard, and a local AI agent — all running on a $20/month Ubuntu VPS.
+A remote VPS agent with MCP tools, live dashboard, and a local AI agent.
 
 ## Architecture
 
