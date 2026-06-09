@@ -3,8 +3,9 @@ const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
 const { execSync } = require("child_process");
+const { Readable } = require("stream");
 const { McpServer } = require("@modelcontextprotocol/sdk/server/mcp.js");
-const { StreamableHTTPServerTransport } = require("@modelcontextprotocol/sdk/server/streamableHttp.js");
+const { WebStandardStreamableHTTPServerTransport } = require("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js");
 const { z } = require("zod");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
@@ -286,16 +287,31 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: "1mb" }));
 
-const transport = new StreamableHTTPServerTransport({
+const transport = new WebStandardStreamableHTTPServerTransport({
   sessionIdGenerator: undefined,
   enableJsonResponse: true
 });
 
 app.post("/mcp", async (req, res) => {
   try {
-    await transport.handleRequest(req, res, req.body);
+    const body = typeof req.body === "object" ? JSON.stringify(req.body) : req.body || "";
+    const webReq = new Request("http://127.0.0.1:4097/mcp", {
+      method: "POST",
+      headers: {
+        "authorization": req.headers["authorization"] || "",
+        "content-type": "application/json",
+        "accept": "application/json, text/event-stream"
+      },
+      body: body
+    });
+    const webRes = await transport.handleRequest(webReq, { parsedBody: req.body });
+    res.status(webRes.status);
+    webRes.headers.forEach((v, k) => { if (k !== "content-encoding") res.setHeader(k, v); });
+    const text = await webRes.text();
+    if (text) res.send(text);
+    else res.end();
   } catch (e) {
-    console.error("MCP error:", e.message, e.stack?.split("\n").slice(0, 3).join("\n"));
+    console.error("MCP error:", e.message);
     if (!res.headersSent) res.status(500).json({ error: e.message });
   }
 });
