@@ -223,6 +223,7 @@ app.get("/", (req, res) => {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sidekick Dashboard</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;background:#0d1117;color:#c9d1d9;padding:20px}
@@ -271,10 +272,10 @@ nav a.active{color:#58a6ff;border-color:#58a6ff;background:#0d1117}
 .llm-dot.off{background:#484f58}
 .llm-name{font-weight:500;color:#c9d1d9}
 .llm-size{color:#8b949e;font-size:.8rem}
-.service-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:4px}
-.service-dot.on{background:#3fb950;box-shadow:0 0 6px #3fb95066}
-.service-dot.off{background:#f85149;box-shadow:0 0 6px #f8514966}
-.service-dot.unknown{background:#484f58}
+.service-indicator{display:inline-flex;align-items:center;gap:4px;margin-right:12px;font-size:.8rem}
+.service-indicator i{font-size:.9rem}
+.service-indicator.on{color:#3fb950}
+.service-indicator.off{color:#f85149}
 .config-entry{padding:6px 0;border-bottom:1px solid #21262d;font-size:.82rem;display:flex;gap:12px}
 .config-entry:last-child{border-bottom:none}
 .config-key{color:#ffa657;font-family:monospace;font-weight:500;min-width:200px}
@@ -290,7 +291,7 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
 <body>
 <div class="header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;padding-bottom:12px;border-bottom:1px solid #21262d">
   <div>
-    <h1 style="font-size:1.4rem;color:#58a6ff">Sidekick Dashboard <span id="serviceDots" style="font-size:.9rem;margin-left:12px"></span></h1>
+    <h1 style="font-size:1.4rem;color:#58a6ff">Sidekick Dashboard <span id="serviceDots" style="font-size:.85rem;margin-left:12px"></span></h1>
     <div class="sub">64.176.216.202</div>
   </div>
   <div class="sub" id="lastUpdate"></div>
@@ -358,6 +359,20 @@ let agentRunning = false;
 let agentStream = null;
 let expandedHistory = {};
 
+const SERVICE_ICONS = {
+  'sidekick-mcp': 'fa-server',
+  'sidekick-dashboard': 'fa-gauge-high',
+  'sidekick-agent': 'fa-robot',
+  'ollama': 'fa-brain'
+};
+
+const SERVICE_LABELS = {
+  'sidekick-mcp': 'MCP',
+  'sidekick-dashboard': 'Dashboard',
+  'sidekick-agent': 'Agent',
+  'ollama': 'Ollama'
+};
+
 function $(id){return document.getElementById(id)}
 
 function showPage(name){
@@ -386,14 +401,15 @@ function esc(s){
 // -- Services -- //
 function loadServices(){
   fetch('/api/services').then(r=>r.json()).then(d=>{
-    const dots = $('serviceDots');
-    if (!d.services) { dots.innerHTML = ''; return; }
+    const container = $('serviceDots');
+    if (!d.services) { container.innerHTML = ''; return; }
     const html = Object.entries(d.services).map(([name, status]) => {
+      const icon = SERVICE_ICONS[name] || 'fa-circle';
+      const label = SERVICE_LABELS[name] || name;
       const cls = status === 'active' ? 'on' : 'off';
-      const title = name + ': ' + status;
-      return '<span class="service-dot ' + cls + '" title="' + esc(title) + '"></span>';
+      return '<span class="service-indicator ' + cls + '"><i class="fas ' + icon + '"></i> ' + label + '</span>';
     }).join('');
-    dots.innerHTML = html;
+    container.innerHTML = html;
   }).catch(()=>{});
 }
 
