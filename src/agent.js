@@ -120,8 +120,7 @@ function callGroqLLM(messages) {
         { role: "system", content: buildSystemPrompt() },
         ...messages.map(m => ({ role: m.role, content: m.content }))
       ],
-      temperature: 0.3,
-      response_format: { type: "json_object" }
+      temperature: 0.3
     });
     const req = https.request({
       hostname: "api.groq.com",
@@ -138,6 +137,9 @@ function callGroqLLM(messages) {
       res.on("end", () => {
         try {
           const parsed = JSON.parse(data);
+          if (res.statusCode >= 400) {
+            return reject(new Error("Groq API: " + (parsed.error?.message || data.substring(0, 200))));
+          }
           const content = parsed.choices?.[0]?.message?.content || "";
           resolve({ response: content });
         } catch (e) {
