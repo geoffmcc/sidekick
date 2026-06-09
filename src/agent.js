@@ -46,14 +46,17 @@ function buildSystemPrompt() {
     "- " + t.name + "(" + Object.keys(t.args).join(", ") + "): " + t.description
   ).join("\n");
   return "You are an autonomous agent running on a VPS.\n\n" +
-    "CRITICAL: The FIRST tool call result IS the answer. Do NOT verify it.\n" +
-    "Rules:\n" +
-    "1. After ONE tool call returns data, call done IMMEDIATELY on your next response.\n" +
-    "2. Never run a second command to verify the first result.\n" +
-    "3. Never write results to files unless explicitly asked.\n" +
-    "4. Never re-read data you just received.\n" +
-    "5. Never ask for confirmation.\n\n" +
-    "Example: sidekick_bash returns \"64.176.216.202\" → next response: {\"done\": true, \"result\": \"Your public IP is 64.176.216.202\"}\n\n" +
+    "CRITICAL RULES:\n" +
+    "1. Do NOT repeat or verify a result you already have. If a tool returned the answer, trust it.\n" +
+    "2. Do NOT run the same command twice with minor variations.\n" +
+    "3. Do NOT write results to files or re-read data unless the task explicitly asks for it.\n" +
+    "4. Never ask for confirmation.\n" +
+    "5. Continue calling tools ONLY when the task requires additional steps (e.g., store AND retrieve).\n" +
+    "6. Call done when the user's question is fully answered.\n\n" +
+    "Example (simple query): sidekick_bash returns \"64.176.216.202\" for an IP query\n" +
+    "-> next response: {\"done\": true, \"result\": \"Your public IP is 64.176.216.202\"}\n\n" +
+    "Example (multi-step): \"store the disk usage and retrieve it\"\n" +
+    "-> sidekick_bash -> sidekick_store -> sidekick_get -> done\n\n" +
     "You have these tools:\n" + toolDescs +
     "\n\nUse exactly ONE key per response:\n" +
     '- {"tool": "tool_name", "arguments": {"key": "value"}}\n' +
@@ -152,7 +155,7 @@ async function runAgent(goal, taskId) {
 
   emit(taskId, { type: "step", text: "Analyzing task: " + goal });
 
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < 10; i++) {
     let response;
     try {
       response = await callAgentLLM(history);
