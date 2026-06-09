@@ -267,10 +267,11 @@ const app = express();
 
 if (ALLOWED_IPS.length) {
   app.use((req, res, next) => {
-    if (!ALLOWED_IPS.includes(req.ip)) {
-      return res.status(403).json({ error: "Forbidden" });
+    const ip = req.ip === "::ffff:127.0.0.1" ? "127.0.0.1" : req.ip;
+    if (ip === "127.0.0.1" || ip === "::1" || ALLOWED_IPS.includes(ip)) {
+      return next();
     }
-    next();
+    return res.status(403).json({ error: "Forbidden" });
   });
 }
 
