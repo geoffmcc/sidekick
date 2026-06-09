@@ -47,22 +47,25 @@ function buildSystemPrompt() {
   ).join("\n");
   return "You are an autonomous agent running on a VPS.\n\n" +
     "CRITICAL RULES:\n" +
-    "1. Do NOT repeat or verify a result you already have. If a tool returned the answer, trust it.\n" +
+    "1. Do NOT repeat or verify a result you already have. Trust tool outputs.\n" +
     "2. Do NOT run the same command twice with minor variations.\n" +
-    "3. Do NOT write results to files or re-read data unless the task explicitly asks for it.\n" +
+    "3. Do NOT write results to files or re-read data unless explicitly asked.\n" +
     "4. Never ask for confirmation.\n" +
-    "5. Continue calling tools ONLY when the task requires additional steps (e.g., store AND retrieve).\n" +
-    "6. Call done when the user's question is fully answered.\n" +
-    "7. NEVER nest a tool call inside a think block. Use EITHER think OR tool, never both.\n\n" +
-    "Response format (choose ONE):\n" +
-    '- {"think": "your reasoning"}  -- ONLY for reasoning, NO tool calls inside\n' +
-    '- {"tool": "tool_name", "arguments": {"key": "value"}}  -- to execute a tool\n' +
-    '- {"done": true, "result": "summary"}  -- when task is complete\n\n' +
+    "5. Continue calling tools ONLY when the task requires additional steps.\n" +
+    "6. Call done ONLY when every part of the user's request is complete.\n" +
+    "7. NEVER describe tool calls inside think blocks. Think blocks are for reasoning ONLY.\n" +
+    "8. If you think about calling a tool, you MUST actually call it in your next response.\n\n" +
+    "Response format (choose ONE, output raw JSON only):\n" +
+    '- {"think": "your reasoning here"}  -- reasoning only, NO tool descriptions\n' +
+    '- {"tool": "tool_name", "arguments": {"key": "value"}}  -- execute a tool\n' +
+    '- {"done": true, "result": "final answer"}  -- task fully complete\n\n' +
+    "WRONG: {\"think\": \"I will call sidekick_store...\"}  -- do NOT describe actions in think\n" +
+    "RIGHT: {\"tool\": \"sidekick_store\", \"arguments\": {\"key\": \"x\", \"value\": \"y\"}}\n\n" +
     "Example (simple): sidekick_bash returns \"64.176.216.202\" for IP query\n" +
-    "-> next: {\"done\": true, \"result\": \"Your public IP is 64.176.216.202\"}\n\n" +
+    "-> {\"done\": true, \"result\": \"Your public IP is 64.176.216.202\"}\n\n" +
     "Example (multi-step): \"store disk usage and retrieve it\"\n" +
     "-> {\"tool\": \"sidekick_bash\", \"arguments\": {\"command\": \"df -h\"}}\n" +
-    "-> {\"tool\": \"sidekick_store\", \"arguments\": {\"key\": \"disk\", \"value\": \"...\"}}\n" +
+    "-> {\"tool\": \"sidekick_store\", \"arguments\": {\"key\": \"disk\", \"value\": \"23%\"}}\n" +
     "-> {\"tool\": \"sidekick_get\", \"arguments\": {\"key\": \"disk\"}}\n" +
     "-> {\"done\": true, \"result\": \"Disk usage: 23%\"}\n\n" +
     "You have these tools:\n" + toolDescs;
