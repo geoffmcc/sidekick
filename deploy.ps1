@@ -4,12 +4,17 @@ param(
 
 $VPS = "sidekick@149.28.229.13"
 $REMOTE_DIR = "/home/sidekick/mcp-sidekick"
-$SSH_KEY = "/root/.ssh/sidekick"
-$WSL = "wsl -d Ubuntu -u root"
+$SSH_KEY = "$env:USERPROFILE\.ssh\sidekick"
 
-function Run-Remote { param([string]$Cmd) & $WSL -- ssh -i $SSH_KEY -o StrictHostKeyChecking=accept-new -o BatchMode=yes $VPS $Cmd 2>&1 }
+function Run-Remote {
+  param([string]$Cmd)
+  wsl -d Ubuntu -u root -- ssh -i $SSH_KEY -o StrictHostKeyChecking=accept-new -o BatchMode=yes $VPS $Cmd 2>&1
+}
 
-function Copy-ToVPS { param([string]$Local, [string]$Remote) & $WSL -- sh -c "scp -i $SSH_KEY -o StrictHostKeyChecking=accept-new -o BatchMode=yes '$Local' $VPS`:$Remote 2>&1" }
+function Copy-ToVPS {
+  param([string]$Local, [string]$Remote)
+  wsl -d Ubuntu -u root -- sh -c "scp -i $SSH_KEY -o StrictHostKeyChecking=accept-new -o BatchMode=yes '$Local' $VPS`:$Remote 2>&1"
+}
 
 function Restart-Service { param([string]$Name) Write-Host "  restarting $Name..." -ForegroundColor Yellow; Run-Remote "sudo systemctl restart $Name" | Out-Null }
 
@@ -19,23 +24,23 @@ Write-Host "=== Deploying Sidekick ===" -ForegroundColor Cyan
 
 # Sync src files
 Write-Host "Syncing source files..." -ForegroundColor Green
-Copy-ToVPS "C:\Users\geoffrey\Projects\sidekick\src\tools.js" "$REMOTE_DIR/src/tools.js"
+Copy-ToVPS "src\tools.js" "$REMOTE_DIR/src/tools.js"
 $changed += "tools.js"
-Copy-ToVPS "C:\Users\geoffrey\Projects\sidekick\src\index.js" "$REMOTE_DIR/src/index.js"
+Copy-ToVPS "src\index.js" "$REMOTE_DIR/src/index.js"
 $changed += "index.js"
-Copy-ToVPS "C:\Users\geoffrey\Projects\sidekick\src\dashboard.js" "$REMOTE_DIR/src/dashboard.js"
+Copy-ToVPS "src\dashboard.js" "$REMOTE_DIR/src/dashboard.js"
 $changed += "dashboard.js"
 
 # agent.js may not exist on VPS yet
-Copy-ToVPS "C:\Users\geoffrey\Projects\sidekick\src\agent.js" "$REMOTE_DIR/src/agent.js"
+Copy-ToVPS "src\agent.js" "$REMOTE_DIR/src/agent.js"
 $changed += "agent.js"
 
 # Sync package.json if changed
-Copy-ToVPS "C:\Users\geoffrey\Projects\sidekick\package.json" "$REMOTE_DIR/package.json"
+Copy-ToVPS "package.json" "$REMOTE_DIR/package.json"
 $changed += "package.json"
 
 # Sync .env if it exists locally (contains API keys, ports, config)
-$localEnv = "C:\Users\geoffrey\Projects\sidekick\.env"
+$localEnv = Join-Path $PSScriptRoot ".env"
 if (Test-Path $localEnv) {
   Write-Host "Syncing .env..." -ForegroundColor Green
   Copy-ToVPS $localEnv "$REMOTE_DIR/.env"
