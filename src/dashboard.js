@@ -57,7 +57,7 @@ function seedKV() {
 
     "network:public_ip": exec("curl -s ifconfig.me 2>/dev/null || echo ?"),
     "network:private_ip": exec("hostname -I | awk '{print $1}'"),
-    "network:interfaces": exec("ip -o link show | awk -F': ' '{print $2}' | paste -sd, "),
+    "network:interfaces": exec("ip -o link show | awk -F': ' '{print $2}' | paste -sd,"),
     "network:dns": exec(`grep nameserver /etc/resolv.conf | awk '{print $2}' | paste -sd,`),
     "network:gateway": exec("ip route | grep default | awk '{print $3}'"),
 
@@ -88,6 +88,8 @@ function seedKV() {
   };
 
   Object.assign(kv, seed);
+  const stale = Object.keys(kv).filter(k => k.startsWith("security:failed_logins_24h"));
+  stale.forEach(k => delete kv[k]);
   writeKV(kv);
   console.log("Seed KV written with", Object.keys(seed).length, "keys");
 }
