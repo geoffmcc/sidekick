@@ -147,17 +147,19 @@ function callLLM(messages) {
 }
 
 function callGroqLLM(messages, retries = 3) {
-  return new Promise((resolve, reject) => {
-    const https = require("https");
-    const body = JSON.stringify({
-      model: GROQ_MODEL,
-      messages: [
-        { role: "system", content: buildSystemPrompt() },
-        ...messages.map(m => ({ role: m.role, content: m.content }))
-      ],
-      temperature: 0.3
-    });
-    const doReq = () => {
+  const https = require("https");
+  const body = JSON.stringify({
+    model: GROQ_MODEL,
+    messages: [
+      { role: "system", content: buildSystemPrompt() },
+      ...messages.map(m => ({ role: m.role, content: m.content }))
+    ],
+    temperature: 0.3
+  });
+  console.log("GROQ body length:", body.length);
+  const doReq = (attempt) => {
+    return new Promise((resolve, reject) => {
+      console.log("GROQ attempt", attempt, "at", new Date().toISOString());
       const req = https.request({
         hostname: "api.groq.com",
         path: "/openai/v1/chat/completions",
@@ -168,17 +170,22 @@ function callGroqLLM(messages, retries = 3) {
           "Content-Length": Buffer.byteLength(body)
         }
       }, (res) => {
+        console.log("GROQ status", res.statusCode);
         let data = "";
-        res.on("data", (c) => data += c);
+        res.on("data", (c) => { data += c; console.log("GROQ chunk", c.length); });
         res.on("end", () => {
+          console.log("GROQ end, data:", data.substring(0, 200));
           try {
             const parsed = JSON.parse(data);
-            if (res.statusCode === 429 && retries > 0) {
-              const wait = Math.min(5000, 1000 * Math.pow(2, 4 - retries));
-              return setTimeout(() => { retries--; doReq(); }, wait);
+            if (res.statusCode === 429 && attempt < 3) {
+              const wait = Math.min(5000, 1000 * Math.pow(2, attempt));
+              console.log("GROQ rate limit, retry in", wait, "ms");
+              setTimeout(() => resolve(doReq(attempt + 1)), wait);
+              return;
             }
             if (res.statusCode >= 400) {
-              return reject(new Error("Groq: " + (parsed.error?.message || data.substring(0, 200))));
+              reject(new Error("Groq: " + (parsed.error?.message || data.substring(0, 200))));
+              return;
             }
             const content = parsed.choices?.[0]?.message?.content || "";
             resolve({ response: content });
@@ -187,13 +194,13 @@ function callGroqLLM(messages, retries = 3) {
           }
         });
       });
-      req.setTimeout(30000, () => { req.destroy(); reject(new Error("LLM timeout")); });
-      req.on("error", reject);
+      req.setTimeout(30000, () => { console.log("GROQ timeout"); req.destroy(); reject(new Error("LLM timeout")); });
+      req.on("error", (e) => { console.log("GROQ error", e.message); reject(e); });
       req.write(body);
       req.end();
-    };
-    doReq();
-  });
+    });
+  };
+  return doReq(1);
 }
 
 function callOllamaLLM(messages) {
