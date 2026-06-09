@@ -5,3 +5,4 @@ data/*
 *.log
 .opencode/
 opencode.json
+CONTEXT.md
