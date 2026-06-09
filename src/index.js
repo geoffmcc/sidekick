@@ -3,7 +3,7 @@ const cors = require("cors");
 const { McpServer } = require("@modelcontextprotocol/sdk/server/mcp.js");
 const { WebStandardStreamableHTTPServerTransport } = require("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js");
 const { z } = require("zod");
-const { TOOLS, TOOL_DEFS, DATA_DIR, setSource } = require("./tools");
+const { TOOLS, TOOL_DEFS, DATA_DIR, setSource, logToolCall } = require("./tools");
 
 const API_KEY = process.env.SIDEKICK_API_KEY || "sk-sidekick-local-dev";
 const PORT = parseInt(process.env.SIDEKICK_PORT || "4097", 10);
@@ -42,7 +42,17 @@ for (const def of TOOL_DEFS) {
     inputSchema: TOOL_SCHEMAS[def.name]
   }, async (args, extra) => {
     setSource("mcp");
-    return TOOLS[def.name](args);
+    const start = Date.now();
+    try {
+      const result = await TOOLS[def.name](args);
+      logToolCall(def.name, args, Date.now() - start, true,
+        result.content?.[0]?.text?.substring(0, 80) || "(ok)"
+      );
+      return result;
+    } catch (e) {
+      logToolCall(def.name, args, Date.now() - start, false, e.message);
+      throw e;
+    }
   });
 }
 
@@ -69,17 +79,55 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: "1mb" }));
 
-const transport = new WebStandardStreamableHTTPServerTransport({
-  sessionIdGenerator: () => "sess-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8),
-  enableJsonResponse: true
-});
+// --- Session-aware transport management ---
 
-// Diagnostic logging for session investigation
+const sessionTransports = new Map();
+
+function generateSessionId() {
+  return "sess-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+}
+
+async function getOrCreateTransport(sessionId) {
+  if (sessionId && sessionTransports.has(sessionId)) {
+    return sessionTransports.get(sessionId).transport;
+  }
+
+  const newSessionId = generateSessionId();
+
+  const newTransport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: () => newSessionId,
+    enableJsonResponse: true
+  });
+
+  await server.connect(newTransport);
+
+  sessionTransports.set(newSessionId, {
+    transport: newTransport,
+    createdAt: Date.now()
+  });
+
+  return newTransport;
+}
+
+// Cleanup stale sessions older than 1 hour, every 10 minutes
+setInterval(() => {
+  const cutoff = Date.now() - 3600000;
+  for (const [id, entry] of sessionTransports) {
+    if (entry.createdAt < cutoff) {
+      sessionTransports.delete(id);
+    }
+  }
+}, 600000);
+
+// --- Diagnostic logging ---
+
 function logSession(method, headers, body) {
   const sessionId = headers["mcp-session-id"] || headers["Mcp-Session-Id"] || "none";
   const methodType = body ? (typeof body === "object" ? body.method : "unknown") : "unknown";
   console.log(`[MCP ${method}] session=${sessionId} method=${methodType}`);
 }
+
+// --- MCP routes ---
 
 app.post("/mcp", async (req, res) => {
   try {
@@ -88,6 +136,8 @@ app.post("/mcp", async (req, res) => {
     for (const [k, v] of Object.entries(req.headers)) {
       if (typeof v === "string") wh[k] = v;
     }
+    const sessionId = wh["mcp-session-id"] || wh["Mcp-Session-Id"];
+    const transport = await getOrCreateTransport(sessionId);
     logSession("POST", wh, req.body);
     const webReq = new Request("http://127.0.0.1:4097/mcp", {
       method: "POST",
@@ -112,6 +162,9 @@ app.get("/mcp", async (req, res) => {
     for (const [k, v] of Object.entries(req.headers)) {
       if (typeof v === "string") wh[k] = v;
     }
+    const sessionId = wh["mcp-session-id"] || wh["Mcp-Session-Id"];
+    const transport = await getOrCreateTransport(sessionId);
+    logSession("GET", wh, null);
     const webReq = new Request("http://127.0.0.1:4097/mcp", {
       method: "GET",
       headers: wh
@@ -144,6 +197,9 @@ app.delete("/mcp", async (req, res) => {
     for (const [k, v] of Object.entries(req.headers)) {
       if (typeof v === "string") wh[k] = v;
     }
+    const sessionId = wh["mcp-session-id"] || wh["Mcp-Session-Id"];
+    const transport = await getOrCreateTransport(sessionId);
+    logSession("DELETE", wh, null);
     const webReq = new Request("http://127.0.0.1:4097/mcp", {
       method: "DELETE",
       headers: wh
@@ -159,8 +215,6 @@ app.delete("/mcp", async (req, res) => {
     if (!res.headersSent) res.status(500).json({ error: e.message });
   }
 });
-
-server.connect(transport);
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log("Sidekick MCP server listening on port " + PORT);
