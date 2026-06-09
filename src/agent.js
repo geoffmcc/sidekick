@@ -74,7 +74,11 @@ function httpRequest(path, bodyData, sessionId) {
     }, (res) => {
       let data = "";
       res.on("data", (c) => data += c);
-      res.on("end", () => resolve({ data: res.headers["mcp-session-id"] || "", status: res.statusCode, body: data }));
+      res.on("end", () => {
+        const sid = res.headers["mcp-session-id"] || "";
+        console.log("Agent POST sid=" + sid + " status=" + res.statusCode + " body=" + data.substring(0, 120));
+        resolve({ data: sid, status: res.statusCode, body: data });
+      });
     });
     req.on("error", reject);
     req.write(bodyData);
