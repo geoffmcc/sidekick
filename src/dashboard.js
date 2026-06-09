@@ -12,7 +12,7 @@ const app = express();
 const http = require("http");
 const AGENT_PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 
-app.all("/api/agent/*", (req, res) => {
+app.all(/^\/api\/agent\//, (req, res) => {
   let body = "";
   req.on("data", c => body += c);
   req.on("end", () => {
