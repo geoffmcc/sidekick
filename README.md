@@ -31,7 +31,7 @@ A remote VPS agent with MCP tools, live dashboard, and a local AI agent — all 
 
 | Service | Port | Description |
 |---------|------|-------------|
-| **MCP Server** | 4097 | 9 tools: bash, read, write, list, store, get, web_fetch, llm |
+| **MCP Server** | 4097 | 8 tools: bash, read, write, list, store, get, web_fetch, llm |
 | **Dashboard** | 4098 | Web UI: system health, activity log, KV data, agent |
 | **Agent Bridge** | 4099 | AI agent loop — LLM plans and calls MCP tools autonomously |
 | **Ollama** | 11434 | Local LLM inference (phi3:mini, CPU-only) |
@@ -93,8 +93,9 @@ Open `http://YOUR_VPS_IP:4098/` in a browser.
 
 - **System** — uptime, CPU, memory, disk, LLM status
 - **Activity** — live tool call log (auto-refreshes every 10s)
-- **Data** — KV store contents
+- **Data** — KV store contents (auto-seeded on dashboard startup with 35 server reference keys: IP, services, security, software, deployment)
 - **Agent** — submit tasks for the AI agent to execute autonomously
+- *(Dashboard basic auth + hardened agent proxy in progress)*
 
 ## Agent Bridge
 
@@ -143,5 +144,7 @@ curl http://YOUR_VPS_IP:4099/api/agent/history
 | `SIDEKICK_PORT` | 4097 | MCP server port |
 | `SIDEKICK_DASHBOARD_PORT` | 4098 | Dashboard port |
 | `SIDEKICK_AGENT_PORT` | 4099 | Agent bridge port |
+| `SIDEKICK_DASHBOARD_USER` | — | Dashboard basic auth username (empty = disabled) |
+| `SIDEKICK_DASHBOARD_PASS` | — | Dashboard basic auth password (empty = disabled) |
 | `SIDEKICK_DATA_DIR` | `./data` | Data directory for logs, KV, conversations |
 | `OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama API URL |

@@ -9,6 +9,27 @@ const PORT = parseInt(process.env.SIDEKICK_DASHBOARD_PORT || "4098", 10);
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const app = express();
+const http = require("http");
+const AGENT_PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
+
+app.all("/api/agent/*", (req, res) => {
+  let body = "";
+  req.on("data", c => body += c);
+  req.on("end", () => {
+    const opts = {
+      hostname: "127.0.0.1", port: AGENT_PORT,
+      path: req.originalUrl, method: req.method,
+      headers: { ...req.headers, host: "127.0.0.1:" + AGENT_PORT }
+    };
+    if (body) opts.headers["Content-Length"] = Buffer.byteLength(body);
+    const pr = http.request(opts, px => {
+      res.writeHead(px.statusCode, px.headers);
+      px.pipe(res);
+    });
+    if (body) pr.write(body);
+    pr.end();
+  });
+});
 
 // --- API ---
 
@@ -130,7 +151,6 @@ app.get("/api/system", (req, res) => {
 
 app.get("/api/llm", (req, res) => {
   try {
-    const http = require("http");
     http.get("http://127.0.0.1:11434/api/tags", (r) => {
       let data = "";
       r.on("data", (c) => data += c);

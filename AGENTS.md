@@ -1,11 +1,38 @@
 # Sidekick VPS
 
-This project has a remote MCP server running at `64.176.216.202:4097` called **sidekick**.
-Use the `sidekick_*` tools when you need to:
+A remote VPS agent system. Connect via the sidekick MCP server at `YOUR_VPS_IP:4097`.
 
-- Run shell commands on a remote VPS (`sidekick_bash`)
-- Read/write files on the remote VPS (`sidekick_read`, `sidekick_write`, `sidekick_list`)
-- Access the web from a different IP (`sidekick_web_fetch`)
-- Store data persistently between sessions (`sidekick_store`, `sidekick_get`)
+## MCP Tools (8)
 
-The sidekick is always available - just use the tools directly. To invoke the @sidekick subagent explicitly, use `@sidekick` in your prompt.
+| Tool | When to use |
+|------|-------------|
+| `sidekick_bash` | Run any shell command on the VPS |
+| `sidekick_read` | Read a file from the VPS filesystem |
+| `sidekick_write` | Write or edit a file on the VPS |
+| `sidekick_list` | List files and directories on the VPS |
+| `sidekick_store` | Store a value persistently in KV storage |
+| `sidekick_get` | Retrieve a stored value from KV storage |
+| `sidekick_web_fetch` | Fetch a URL from the VPS IP (bypasses local IP restrictions) |
+| `sidekick_llm` | Query the local Phi-3-mini LLM running on the VPS |
+
+## Services
+
+- **MCP Server** (`:4097`) — 8 tools, called automatically when you use `sidekick_*` tools
+- **Dashboard** (`:4098`) — web UI with System, Activity, Data, and Agent tabs
+- **Agent Bridge** (`:4099`) — autonomous LLM agent that plans and executes multi-step tasks
+- **Ollama** (`:11434`) — local Phi-3-mini model running CPU-only on the VPS
+
+## Usage
+
+- **Direct tool use**: Just use any `sidekick_*` tool — the MCP server handles it automatically.
+- **Subagent (`@sidekick`)**: Use for complex multi-step tasks. The agent will plan, call tools, and iterate until the goal is met.
+- **Dashboard**: Open `http://YOUR_VPS_IP:4098/` in a browser for system monitoring and the agent chat interface.
+
+## Deployment
+
+After pushing to GitHub, SSH into the VPS and run:
+```bash
+cd /home/sidekick/mcp-sidekick
+git pull
+sudo systemctl restart sidekick-mcp sidekick-dashboard sidekick-agent
+```
