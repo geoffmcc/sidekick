@@ -154,8 +154,7 @@ function callGroqLLM(messages, retries = 3) {
         { role: "system", content: buildSystemPrompt() },
         ...messages.map(m => ({ role: m.role, content: m.content }))
       ],
-      temperature: 0.3,
-      response_format: { type: "json_object" }
+      temperature: 0.3
     });
     const doReq = () => {
       const req = https.request({
@@ -254,12 +253,16 @@ async function runAgent(goal, taskId) {
     }
 
     const text = (response.response || "").trim();
+
+    // Try to find the first valid JSON object in the response
     let decision;
-    try {
-      decision = JSON.parse(text);
-    } catch {
-      decision = { think: text };
+    for (const line of text.split("\n")) {
+      try {
+        const parsed = JSON.parse(line.trim());
+        if (parsed && typeof parsed === "object") { decision = parsed; break; }
+      } catch {}
     }
+    if (!decision) decision = { think: text };
 
     if (decision.think) {
       emit(taskId, { type: "step", text: decision.think });
