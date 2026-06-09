@@ -106,9 +106,10 @@ All tools are exposed via the MCP server at `http://YOUR_VPS_IP:4097/mcp`.
 
 Open `http://YOUR_VPS_IP:4098/` in a browser.
 
-- **System** — uptime, CPU, memory, disk, LLM status
-- **Activity** — live tool call log (auto-refreshes every 10s)
+- **System** — uptime, CPU, memory, disk, LLM status, service indicators (MCP, Agent, Ollama)
+- **Activity** — live tool call log with source icons (🤖 agent, 🔌 MCP, ❓ unknown)
 - **Data** — KV store contents (auto-seeded on dashboard startup with 35 server reference keys: IP, services, security, software, deployment)
+- **Config** — environment variables (sensitive values redacted)
 - **Agent** — submit tasks for the AI agent to execute autonomously
 
 ## Agent Bridge
@@ -152,13 +153,15 @@ The dashboard auth and IP whitelist are disabled by default (empty env var = no 
 
 ```
 ├── src/
-│   ├── index.js        MCP server (all tools + logging)
-│   ├── dashboard.js    Dashboard web UI
-│   └── agent.js        Agent bridge (LLM tool-use loop)
+│   ├── tools.js        Shared tool handlers (extracted from index.js)
+│   ├── index.js        MCP server (session-aware transport management)
+│   ├── dashboard.js    Dashboard web UI (source tagging, Font Awesome icons)
+│   └── agent.js        Agent bridge (LLM tool-use loop, direct tool calls)
 ├── data/               Runtime data (on VPS: logs, KV, conversations)
 ├── deploy.ps1          Deploy script — syncs and restarts services
 ├── .env.example        Environment variable template
 ├── AGENTS.md           opencode subagent config
+├── CONTEXT.md          Project context and session notes
 └── opencode.json       opencode MCP server config
 ```
 

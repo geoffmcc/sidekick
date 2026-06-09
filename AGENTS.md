@@ -18,7 +18,7 @@ A remote VPS agent system. Connect via the sidekick MCP server at `YOUR_VPS_IP:4
 ## Services
 
 - **MCP Server** (`:4097`) — 8 tools, called automatically when you use `sidekick_*` tools
-- **Dashboard** (`:4098`) — web UI with System, Activity, Data, and Agent tabs
+- **Dashboard** (`:4098`) — web UI with System, Activity, Data, Config, and Agent tabs
 - **Agent Bridge** (`:4099`) — autonomous LLM agent that plans and executes multi-step tasks
 - **Ollama** (`:11434`) — local Phi-3-mini fallback. Uses cloud Groq API when `GROQ_API_KEY` is set
 
