@@ -37,4 +37,10 @@ git pull
 sudo systemctl restart sidekick-mcp sidekick-dashboard sidekick-agent
 ```
 
+## Known Limitation
+
+**Opencode MCP Client:** The `sidekick_sidekick_store` and other sidekick tools may fail with "Server not initialized" errors. This is an opencode client-side issue (doesn't properly manage MCP sessions). The server-side fix is correct (per-session transports), but opencode's MCP client needs updating.
+
+**Workaround:** Use file-based documentation (`CONTEXT.md`) for persistent context instead of the KV store.
+
 See `CONTEXT.md` for full project context.
