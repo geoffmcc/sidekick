@@ -292,9 +292,6 @@ const transport = new StreamableHTTPServerTransport({
 });
 
 app.post("/mcp", (req, res) => {
-  const sid = req.headers["mcp-session-id"] || "(none)";
-  const method = req.body?.method || "(no method)";
-  console.log("MCP POST sid=" + sid + " method=" + method);
   transport.handleRequest(req, res, req.body);
 });
 
