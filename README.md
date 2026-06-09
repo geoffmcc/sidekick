@@ -11,7 +11,7 @@ A remote VPS agent with MCP tools, live dashboard, and a local AI agent — all 
 └────────────────────────────────────────────────────────┘
                          │
                          ▼
-┌─ VPS (64.176.216.202) ────────────────────────────────┐
+┌─ VPS (YOUR_VPS_IP) ────────────────────────────────┐
 │                                                        │
 │  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐  │
 │  │  MCP Server  │  │  Dashboard   │  │ Agent Bridge │  │
@@ -66,7 +66,7 @@ git push
 
 Or SSH directly to pull:
 ```bash
-ssh sidekick@64.176.216.202
+ssh sidekick@YOUR_VPS_IP
 cd /home/sidekick/mcp-sidekick
 git pull
 sudo systemctl restart sidekick-mcp sidekick-dashboard sidekick-agent
@@ -74,7 +74,7 @@ sudo systemctl restart sidekick-mcp sidekick-dashboard sidekick-agent
 
 ## MCP Tools
 
-All tools are exposed via the MCP server at `http://64.176.216.202:4097/mcp`.
+All tools are exposed via the MCP server at `http://YOUR_VPS_IP:4097/mcp`.
 
 | Tool | Purpose |
 |------|---------|
@@ -89,7 +89,7 @@ All tools are exposed via the MCP server at `http://64.176.216.202:4097/mcp`.
 
 ## Dashboard
 
-Open `http://64.176.216.202:4098/` in a browser.
+Open `http://YOUR_VPS_IP:4098/` in a browser.
 
 - **System** — uptime, CPU, memory, disk, LLM status
 - **Activity** — live tool call log (auto-refreshes every 10s)
@@ -110,15 +110,15 @@ The agent at `:4099` takes a natural-language goal and runs an autonomous loop:
 
 ```bash
 # Start a task
-curl -X POST http://64.176.216.202:4099/api/agent/run \
+curl -X POST http://YOUR_VPS_IP:4099/api/agent/run \
   -H "Content-Type: application/json" \
   -d '{"goal": "check disk usage and store the result"}'
 
 # Stream progress (SSE)
-curl http://64.176.216.202:4099/api/agent/stream/{taskId}
+curl http://YOUR_VPS_IP:4099/api/agent/stream/{taskId}
 
 # View history
-curl http://64.176.216.202:4099/api/agent/history
+curl http://YOUR_VPS_IP:4099/api/agent/history
 ```
 
 ## Files
