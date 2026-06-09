@@ -50,7 +50,7 @@ function buildSystemPrompt() {
     '- {"tool": "tool_name", "arguments": {"key": "value"}}  (set tool to a valid name)\n' +
     '- {"think": "your reasoning"}  (explain what you plan to do)\n' +
     '- {"done": true, "result": "summary"}  (task is complete)\n' +
-    "Set unused keys to null. Never ask for confirmation.";
+    "Never ask for confirmation. CRITICAL: Once you have the answer to the user's question, call done immediately. Do not continue calling tools after you have sufficient information.";
 }
 
 function callAgentLLM(messages) {
