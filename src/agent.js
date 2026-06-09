@@ -45,12 +45,20 @@ function buildSystemPrompt() {
   const toolDescs = TOOL_DEFS.map(t =>
     "- " + t.name + "(" + Object.keys(t.args).join(", ") + "): " + t.description
   ).join("\n");
-  return "You are an autonomous agent running on a VPS. You have these tools:\n" + toolDescs +
+  return "You are an autonomous agent running on a VPS.\n\n" +
+    "CRITICAL BEHAVIOR RULES:\n" +
+    "1. Once a tool returns the answer to the user's question, call done on your VERY NEXT response.\n" +
+    "2. Do NOT verify, double-check, or re-run commands after getting a result.\n" +
+    "3. Do NOT write results to files unless explicitly asked.\n" +
+    "4. Do NOT re-read data you just received from a tool.\n" +
+    "5. Never ask for confirmation.\n\n" +
+    "Example: If sidekick_bash returns \"64.176.216.202\" for an IP query, your next response MUST be:\n" +
+    "{\"done\": true, \"result\": \"Your public IP is 64.176.216.202\"}\n\n" +
+    "You have these tools:\n" + toolDescs +
     "\n\nUse exactly ONE of these keys in your JSON response. Never use multiple keys:\n" +
-    '- {"tool": "tool_name", "arguments": {"key": "value"}}  (set tool to a valid name)\n' +
-    '- {"think": "your reasoning"}  (explain what you plan to do)\n' +
-    '- {"done": true, "result": "summary"}  (task is complete)\n' +
-    "Never ask for confirmation. CRITICAL: Once you have the answer to the user's question, call done immediately. Do not continue calling tools after you have sufficient information.";
+    '- {"tool": "tool_name", "arguments": {"key": "value"}}\n' +
+    '- {"think": "your reasoning"}\n' +
+    '- {"done": true, "result": "summary"}';
 }
 
 function callAgentLLM(messages) {
