@@ -24,6 +24,19 @@ process.on("uncaughtException", (e) => {
   console.error("Uncaught:", e.message);
 });
 
+// Pre-warm Ollama model on startup
+setTimeout(() => {
+  const http = require("http");
+  const body = JSON.stringify({ model: "phi3:mini", prompt: "hello", stream: false });
+  const req = http.request({
+    hostname: "127.0.0.1", port: 11434, path: "/api/generate", method: "POST",
+    headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }
+  });
+  req.write(body); req.end();
+  req.on("error", () => {});
+  req.setTimeout(300000, () => req.destroy());
+}, 1000);
+
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
@@ -109,7 +122,7 @@ function callLLM(messages) {
         catch { reject(new Error("LLM parse fail: " + data.substring(0, 200))); }
       });
     });
-    req.setTimeout(120000, () => { req.destroy(); reject(new Error("LLM timeout")); });
+    req.setTimeout(300000, () => { req.destroy(); reject(new Error("LLM timeout")); });
     req.on("error", reject);
     req.write(body);
     req.end();
