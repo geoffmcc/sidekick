@@ -64,6 +64,7 @@ Group=sidekick
 Environment=NODE_ENV=production
 Environment=SIDEKICK_AGENT_PORT=4099
 Environment=SIDEKICK_DATA_DIR=$REMOTE_DIR/data
+Environment=SIDEKICK_MAX_ITERATIONS=15
 
 [Install]
 WantedBy=multi-user.target

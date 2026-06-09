@@ -163,3 +163,4 @@ The dashboard auth and IP whitelist are disabled by default (empty env var = no 
 | `OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama API URL (local fallback) |
 | `GROQ_API_KEY` | — | Groq API key for cloud LLM (empty = use local Ollama) |
 | `GROQ_MODEL` | `llama3-8b-8192` | Groq model name |
+| `SIDEKICK_MAX_ITERATIONS` | `15` | Max agent loop iterations (safety limit) |

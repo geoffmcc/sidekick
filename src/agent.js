@@ -7,6 +7,7 @@ const { callTool, TOOL_DEFS, DATA_DIR, GROQ_API_KEY, GROQ_MODEL } = require("./t
 
 const PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 
+const MAX_ITERATIONS = parseInt(process.env.SIDEKICK_MAX_ITERATIONS || "15", 10);
 const CONV_DIR = path.join(DATA_DIR, "conversations");
 fs.mkdirSync(CONV_DIR, { recursive: true });
 
@@ -168,7 +169,7 @@ async function runAgent(goal, taskId) {
 
   emit(taskId, { type: "step", text: "Analyzing task: " + goal });
 
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < MAX_ITERATIONS; i++) {
     let response;
     try {
       response = await callAgentLLM(history);
