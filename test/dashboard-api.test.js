@@ -11,7 +11,7 @@ if (!fs.existsSync(TEST_DATA_DIR)) {
 
 // Set environment variables before requiring dashboard
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
-process.env.SIDEKICK_DASHBOARD_PORT = '4099';
+process.env.SIDEKICK_DASHBOARD_PORT = '4100';
 
 // Clean up test data
 const testKVFile = path.join(TEST_DATA_DIR, 'kvstore.json');
@@ -24,7 +24,7 @@ function makeRequest(method, path, body = null) {
   return new Promise((resolve, reject) => {
     const options = {
       hostname: 'localhost',
-      port: 4099,
+      port: 4100,
       path: path,
       method: method,
       headers: {
