@@ -59,73 +59,60 @@ const TOOL_DEFS = [
 
 let mcpSessionId = "";
 
-function initMCP() {
+function httpRequest(path, bodyData, sessionId) {
   return new Promise((resolve, reject) => {
     const http = require("http");
-    const body = JSON.stringify({
-      jsonrpc: "2.0", id: "init", method: "initialize",
-      params: { protocolVersion: "2024-11-05", capabilities: {}, client: { name: "sidekick-agent", version: "1.0.0" } }
-    });
+    const headers = {
+      "Authorization": "Bearer " + API_KEY,
+      "Content-Type": "application/json",
+      "Accept": "application/json, text/event-stream",
+      "Content-Length": Buffer.byteLength(bodyData)
+    };
+    if (sessionId) headers["Mcp-Session-Id"] = sessionId;
     const req = http.request({
-      hostname: "127.0.0.1", port: 4097, path: "/mcp", method: "POST",
-      headers: {
-        "Authorization": "Bearer " + API_KEY,
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/event-stream",
-        "Content-Length": Buffer.byteLength(body)
-      }
+      hostname: "127.0.0.1", port: 4097, path: path, method: "POST", headers
     }, (res) => {
-      mcpSessionId = res.headers["mcp-session-id"] || "";
       let data = "";
       res.on("data", (c) => data += c);
-      res.on("end", () => {
-        try {
-          JSON.parse(data);
-          if (!mcpSessionId) reject(new Error("MCP init: no session ID"));
-          else resolve();
-        } catch (e) { reject(new Error("MCP init: " + data.substring(0, 200))); }
-      });
+      res.on("end", () => resolve({ data: res.headers["mcp-session-id"] || "", status: res.statusCode, body: data }));
     });
     req.on("error", reject);
-    req.write(body);
+    req.write(bodyData);
     req.end();
   });
 }
 
+function initMCP() {
+  const initBody = JSON.stringify({
+    jsonrpc: "2.0", id: "init", method: "initialize",
+    params: { protocolVersion: "2024-11-05", capabilities: {}, client: { name: "sidekick-agent", version: "1.0.0" } }
+  });
+  const notifBody = JSON.stringify({
+    jsonrpc: "2.0", method: "notifications/initialized"
+  });
+  return httpRequest("/mcp", initBody).then(r1 => {
+    JSON.parse(r1.body);
+    if (!r1.data) throw new Error("MCP init: no session ID");
+    mcpSessionId = r1.data;
+    return httpRequest("/mcp", notifBody, mcpSessionId);
+  }).then(r2 => {
+    JSON.parse(r2.body);
+  });
+}
+
 function callMCP(tool, args) {
-  return new Promise((resolve, reject) => {
-    const http = require("http");
-    const body = JSON.stringify({
-      jsonrpc: "2.0", id: "1", method: "tools/call",
-      params: { name: tool, arguments: args }
-    });
-    const req = http.request({
-      hostname: "127.0.0.1", port: 4097, path: "/mcp", method: "POST",
-      headers: {
-        "Authorization": "Bearer " + API_KEY,
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/event-stream",
-        "Mcp-Session-Id": mcpSessionId,
-        "Content-Length": Buffer.byteLength(body)
-      }
-    }, (res) => {
-      let data = "";
-      res.on("data", (c) => data += c);
-      res.on("end", () => {
-        try {
-          if (data.startsWith("event:")) {
-            const dl = data.split("\n").find(l => l.startsWith("data: "));
-            if (dl) resolve(JSON.parse(dl.replace("data: ", "")));
-            else reject(new Error("SSE: no data line"));
-          } else {
-            resolve(JSON.parse(data));
-          }
-        } catch (e) { reject(new Error("Parse: " + e.message)); }
-      });
-    });
-    req.on("error", reject);
-    req.write(body);
-    req.end();
+  const body = JSON.stringify({
+    jsonrpc: "2.0", id: "1", method: "tools/call",
+    params: { name: tool, arguments: args }
+  });
+  return httpRequest("/mcp", body, mcpSessionId).then(res => {
+    const data = res.body;
+    if (data.startsWith("event:")) {
+      const dl = data.split("\n").find(l => l.startsWith("data: "));
+      if (dl) return JSON.parse(dl.replace("data: ", ""));
+      throw new Error("SSE: no data line");
+    }
+    return JSON.parse(data);
   });
 }
 
