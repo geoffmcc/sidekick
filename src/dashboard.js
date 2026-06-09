@@ -291,7 +291,7 @@ function runAgent(){
   agentRunning = true;
   $('agentGo').disabled = true;
   $('agentStop').disabled = false;
-  $('agentLog').innerHTML = '<span class="agent-step">► Starting agent...</span>\n';
+  $('agentLog').innerHTML = '<span class="agent-step">► Starting agent...</span>\\n';
 
   fetch('/api/agent/run', {
     method: 'POST',
@@ -324,7 +324,7 @@ function runAgent(){
 }
 
 function appendLog(html){
-  $('agentLog').innerHTML += html + '\n';
+  $('agentLog').innerHTML += html + '\\n';
   $('agentLog').scrollTop = $('agentLog').scrollHeight;
 }
 
@@ -354,7 +354,7 @@ function toggleHistory(){
 function loadRun(id){
   fetch('/api/agent/run/' + id).then(r=>r.json()).then(run=>{
     if (!run) return;
-    $('agentLog').innerHTML = '<span class="agent-step">► Run: ' + esc(run.goal) + '</span>\n';
+    $('agentLog').innerHTML = '<span class="agent-step">► Run: ' + esc(run.goal) + '</span>\\n';
     (run.steps || []).forEach(s => {
       if (s.type === 'thought') appendLog('<span class="agent-step">● ' + esc(s.text) + '</span>');
       else if (s.type === 'tool') appendLog('  <span class="agent-ok">→ ' + esc(s.tool) + '</span> ' + esc(s.result || ''));
