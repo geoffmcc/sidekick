@@ -4,6 +4,7 @@ const path = require("path");
 const crypto = require("crypto");
 const EventEmitter = require("events");
 
+let mcpSessionId = "";
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 const API_KEY = process.env.SIDEKICK_API_KEY || "sk-sidekick-local-dev";
@@ -57,21 +58,22 @@ const TOOL_DEFS = [
   { name: "sidekick_llm", description: "Ask the LLM (Groq cloud or local Phi-3-mini)", args: { prompt: "string", system: "string (optional)", temperature: "number (optional)" } },
 ];
 
-function httpPost(bodyData) {
+function httpPost(bodyData, sessionId) {
   return new Promise((resolve, reject) => {
     const http = require("http");
+    const headers = {
+      "Authorization": "Bearer " + API_KEY,
+      "Content-Type": "application/json",
+      "Accept": "application/json, text/event-stream",
+      "Content-Length": Buffer.byteLength(bodyData)
+    };
+    if (sessionId) headers["Mcp-Session-Id"] = sessionId;
     const req = http.request({
-      hostname: "127.0.0.1", port: 4097, path: "/mcp", method: "POST",
-      headers: {
-        "Authorization": "Bearer " + API_KEY,
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/event-stream",
-        "Content-Length": Buffer.byteLength(bodyData)
-      }
+      hostname: "127.0.0.1", port: 4097, path: "/mcp", method: "POST", headers
     }, (res) => {
       let data = "";
       res.on("data", (c) => data += c);
-      res.on("end", () => resolve({ status: res.statusCode, body: data }));
+      res.on("end", () => resolve({ data: res.headers["mcp-session-id"] || "", status: res.statusCode, body: data }));
     });
     req.on("error", reject);
     req.write(bodyData);
@@ -96,7 +98,11 @@ function initMCP() {
   const notifBody = JSON.stringify({
     jsonrpc: "2.0", method: "notifications/initialized"
   });
-  return httpPost(initBody).then(r1 => parseBody(r1.body)).then(() => httpPost(notifBody)).then(r2 => {
+  return httpPost(initBody).then(r1 => {
+    parseBody(r1.body);
+    mcpSessionId = r1.data;
+    return httpPost(notifBody, mcpSessionId);
+  }).then(r2 => {
     if (r2.body) parseBody(r2.body);
   });
 }
@@ -106,8 +112,8 @@ function callMCP(tool, args) {
     jsonrpc: "2.0", id: "1", method: "tools/call",
     params: { name: tool, arguments: args }
   });
-  return httpPost(body).then(res => {
-    if (!res.body) throw new Error("Empty response (status " + res.status + ")");
+  return httpPost(body, mcpSessionId).then(res => {
+    if (!res.body) throw new Error("Empty response");
     return parseBody(res.body);
   });
 }
@@ -214,11 +220,13 @@ async function runAgent(goal, taskId) {
   const history = [{ role: "user", content: goal }];
 
   emit(taskId, { type: "step", text: "Analyzing task: " + goal });
-  try {
-    await initMCP();
-    emit(taskId, { type: "step", text: "MCP initialized" });
-  } catch (e) {
-    emit(taskId, { type: "error", text: "MCP init failed: " + e.message });
+  if (!mcpSessionId) {
+    try {
+      await initMCP();
+      emit(taskId, { type: "step", text: "MCP initialized" });
+    } catch (e) {
+      emit(taskId, { type: "error", text: "MCP init failed: " + e.message });
+    }
   }
 
   for (let i = 0; i < 20; i++) {
