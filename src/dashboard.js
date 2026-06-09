@@ -255,6 +255,40 @@ app.get("/api/stats", (req, res) => {
   res.json({ stats: result });
 });
 
+app.delete("/api/logs", (req, res) => {
+  const f = path.join(DATA_DIR, "log.jsonl");
+  try { fs.writeFileSync(f, "", "utf-8"); } catch {}
+  res.json({ ok: true });
+});
+
+app.delete("/api/kv", (req, res) => {
+  const f = path.join(DATA_DIR, "kvstore.json");
+  try { fs.writeFileSync(f, "{}", "utf-8"); } catch {}
+  res.json({ ok: true });
+});
+
+app.delete("/api/conversations", (req, res) => {
+  const dir = path.join(DATA_DIR, "conversations");
+  try {
+    fs.readdirSync(dir).filter(f => f.endsWith(".json")).forEach(f => {
+      fs.unlinkSync(path.join(dir, f));
+    });
+  } catch {}
+  res.json({ ok: true });
+});
+
+app.delete("/api/data", (req, res) => {
+  try {
+    fs.writeFileSync(path.join(DATA_DIR, "log.jsonl"), "", "utf-8");
+    fs.writeFileSync(path.join(DATA_DIR, "kvstore.json"), "{}", "utf-8");
+    const dir = path.join(DATA_DIR, "conversations");
+    fs.readdirSync(dir).filter(f => f.endsWith(".json")).forEach(f => {
+      fs.unlinkSync(path.join(dir, f));
+    });
+  } catch {}
+  res.json({ ok: true });
+});
+
 // --- Frontend ---
 
 app.get("/", (req, res) => {
@@ -405,6 +439,13 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
 
 <!-- Activity Page -->
 <div class="page" id="page-activity">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div class="section-title" style="margin:0">Activity Log (<span id="logCount">0</span>)</div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-sm btn-outline" onclick="clearData('logs')" title="Clear activity log"><i class="fas fa-trash"></i> Clear Log</button>
+      <button class="btn btn-sm btn-outline" onclick="clearData('all')" title="Clear all data"><i class="fas fa-trash-alt"></i> Clear All</button>
+    </div>
+  </div>
   <div class="search-bar">
     <input type="text" id="logSearch" placeholder="Search tool name, args, or output..." oninput="filterLogs()">
     <select id="logSourceFilter" onchange="filterLogs()">
@@ -419,16 +460,18 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
       <option value="fail">Failed</option>
     </select>
   </div>
-  <div class="section-title">Activity Log (<span id="logCount">0</span>)</div>
   <div id="logList" style="max-height:600px;overflow-y:auto"></div>
 </div>
 
 <!-- Data Page -->
 <div class="page" id="page-data">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div class="section-title" style="margin:0">Stored Data (<span id="kvCount">0</span>)</div>
+    <button class="btn btn-sm btn-outline" onclick="clearData('kv')" title="Clear all KV data"><i class="fas fa-trash"></i> Clear KV</button>
+  </div>
   <div class="search-bar">
     <input type="text" id="kvSearch" placeholder="Search keys or values..." oninput="filterKV()">
   </div>
-  <div class="section-title">Stored Data (<span id="kvCount">0</span>)</div>
   <div class="card" id="kvList" style="max-height:600px;overflow-y:auto;padding:8px 16px"></div>
 </div>
 
@@ -501,7 +544,13 @@ function showPage(name){
 
 function fmtTime(iso){
   const d = new Date(iso);
-  return d.toLocaleTimeString() + "." + String(d.getMilliseconds()).padStart(3,'0');
+  const h = d.getHours();
+  const m = String(d.getMinutes()).padStart(2, '0');
+  const s = String(d.getSeconds()).padStart(2, '0');
+  const ms = String(d.getMilliseconds()).padStart(3, '0');
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const hour12 = h % 12 || 12;
+  return hour12 + ':' + m + ':' + s + '.' + ms + ' ' + ampm;
 }
 
 function fmtDate(iso){
@@ -812,8 +861,11 @@ function toggleHistory(){
   el.style.display = el.style.display === 'none' ? 'block' : 'none';
   if (el.style.display === 'block') {
     fetch('/api/agent/history').then(r=>r.json()).then(d=>{
-      if (!d.runs || !d.runs.length) { el.innerHTML = '<div class="empty">No past runs</div>'; return; }
-      el.innerHTML = d.runs.map(r =>
+      let html = '<div style="color:#8b949e;font-size:.78rem;margin-bottom:12px;padding:8px;background:#161b22;border-radius:6px">' +
+        '<i class="fas fa-info-circle"></i> Agent history shows tasks submitted via this dashboard. ' +
+        'Tool calls from opencode appear in the Activity tab, grouped by session.</div>';
+      if (!d.runs || !d.runs.length) { html += '<div class="empty">No past runs</div>'; el.innerHTML = html; return; }
+      html += d.runs.map(r =>
         '<div class="history-item">' +
         '<span class="log-time">' + fmtTime(r.t) + '</span> ' +
         '<span class="' + (r.status === 'completed' ? 'log-ok' : 'log-fail') + '">' + r.status + '</span> ' +
@@ -823,6 +875,7 @@ function toggleHistory(){
         '<div id="run-detail-' + r.id + '" style="display:none;width:100%"></div>' +
         '</div>'
       ).join('');
+      el.innerHTML = html;
     }).catch(()=>{});
   }
 }
@@ -862,14 +915,36 @@ function exportRun(id){
   }).catch(()=>{});
 }
 
+function clearData(type){
+  const messages = {
+    logs: 'Clear all activity logs? This cannot be undone.',
+    kv: 'Clear all stored KV data? This cannot be undone.',
+    conversations: 'Clear all agent conversation history? This cannot be undone.',
+    all: 'Clear ALL data (logs, KV, conversations)? This cannot be undone.'
+  };
+  if (!confirm(messages[type])) return;
+  const endpoints = {
+    logs: '/api/logs',
+    kv: '/api/kv',
+    conversations: '/api/conversations',
+    all: '/api/data'
+  };
+  fetch(endpoints[type], { method: 'DELETE' })
+    .then(r => r.json())
+    .then(d => {
+      if (d.ok) {
+        if (type === 'logs' || type === 'all') loadLogs();
+        if (type === 'kv' || type === 'all') loadKV();
+      }
+    })
+    .catch(()=>{});
+}
+
 // -- Refresh -- //
 function refresh(){
   const now = new Date();
   $('lastUpdate').textContent = 'updated ' + now.toLocaleTimeString();
   if (currentPage === 'system') { loadSystem(); loadLLM(); loadServices(); loadStats(); }
-  else if (currentPage === 'activity') loadLogs();
-  else if (currentPage === 'data') loadKV();
-  else if (currentPage === 'config') loadConfig();
 }
 refresh();
 setInterval(refresh, 10000);
