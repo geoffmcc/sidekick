@@ -25,13 +25,12 @@ console.log('Test 4.1: Full workflow - store, list projects, get by project');
   try {
     // Clear require cache and import fresh
     delete require.cache[require.resolve('../src/tools')];
+    const tools = require('../src/tools');
     const { 
-      sidekick_store, 
-      sidekick_get, 
-      sidekick_list_projects, 
-      sidekick_get_by_project,
+      TOOLS,
       setSource 
-    } = require('../src/tools');
+    } = tools;
+    const { sidekick_store, sidekick_get, sidekick_list_projects, sidekick_get_by_project } = TOOLS;
 
     setSource('mcp');
 
@@ -86,7 +85,7 @@ console.log('Test 4.1: Full workflow - store, list projects, get by project');
       await new Promise(resolve => setTimeout(resolve, 100));
 
       // List projects - should have system, proxmox_backup, and null
-      const projectsResult2 = await tools2.sidekick_list_projects();
+      const projectsResult2 = await tools2.TOOLS.sidekick_list_projects();
       const projects2 = JSON.parse(projectsResult2.content[0].text);
       assert.ok(projects2.includes('system'), 'Should have system project');
       assert.ok(projects2.includes('proxmox_backup'), 'Should have proxmox_backup project');
@@ -94,7 +93,7 @@ console.log('Test 4.1: Full workflow - store, list projects, get by project');
       console.log('✓ Migration created correct projects');
 
       // Get by system project
-      const systemResult = await tools2.sidekick_get_by_project({ project: 'system' });
+      const systemResult = await tools2.TOOLS.sidekick_get_by_project({ project: 'system' });
       const systemKeys = JSON.parse(systemResult.content[0].text);
       assert.ok(systemKeys.length >= 2, 'System should have at least 2 keys');
       assert.ok(systemKeys.find(k => k.key === 'server:hostname'), 'Should find server:hostname');
@@ -102,14 +101,14 @@ console.log('Test 4.1: Full workflow - store, list projects, get by project');
       console.log('✓ System project keys correct');
 
       // Get by proxmox_backup project
-      const proxmoxResult = await tools2.sidekick_get_by_project({ project: 'proxmox_backup' });
+      const proxmoxResult = await tools2.TOOLS.sidekick_get_by_project({ project: 'proxmox_backup' });
       const proxmoxKeys = JSON.parse(proxmoxResult.content[0].text);
       assert.strictEqual(proxmoxKeys.length, 1, 'proxmox_backup should have 1 key');
       assert.strictEqual(proxmoxKeys[0].key, 'proxmox_backup_plan', 'Should be proxmox_backup_plan');
       console.log('✓ Proxmox_backup project keys correct');
 
       // Get by null project
-      const nullResult = await tools2.sidekick_get_by_project({ project: null });
+      const nullResult = await tools2.TOOLS.sidekick_get_by_project({ project: null });
       const nullKeys = JSON.parse(nullResult.content[0].text);
       assert.ok(nullKeys.find(k => k.key === 'custom_key'), 'Should find custom_key in null project');
       console.log('✓ Null project keys correct');
@@ -129,7 +128,7 @@ console.log('Test 4.1: Full workflow - store, list projects, get by project');
       // Perform multiple concurrent stores
       const promises = [];
       for (let i = 0; i < 10; i++) {
-        promises.push(tools3.sidekick_store({ 
+        promises.push(tools3.TOOLS.sidekick_store({ 
           key: `concurrent_${i}`, 
           value: `value_${i}`, 
           project: i % 2 === 0 ? 'even' : 'odd' 
@@ -142,11 +141,11 @@ console.log('Test 4.1: Full workflow - store, list projects, get by project');
       assert.strictEqual(Object.keys(kvData).length, 10, 'Should have 10 keys');
       
       // Verify projects
-      const evenResult = await tools3.sidekick_get_by_project({ project: 'even' });
+      const evenResult = await tools3.TOOLS.sidekick_get_by_project({ project: 'even' });
       const evenKeys = JSON.parse(evenResult.content[0].text);
       assert.strictEqual(evenKeys.length, 5, 'Should have 5 even keys');
       
-      const oddResult = await tools3.sidekick_get_by_project({ project: 'odd' });
+      const oddResult = await tools3.TOOLS.sidekick_get_by_project({ project: 'odd' });
       const oddKeys = JSON.parse(oddResult.content[0].text);
       assert.strictEqual(oddKeys.length, 5, 'Should have 5 odd keys');
       
@@ -162,10 +161,10 @@ console.log('Test 4.1: Full workflow - store, list projects, get by project');
 
       // Store a large value (1MB)
       const largeValue = 'x'.repeat(1024 * 1024);
-      await tools4.sidekick_store({ key: 'large_key', value: largeValue, project: 'large' });
+      await tools4.TOOLS.sidekick_store({ key: 'large_key', value: largeValue, project: 'large' });
 
       // Retrieve it
-      const result = await tools4.sidekick_get({ key: 'large_key' });
+      const result = await tools4.TOOLS.sidekick_get({ key: 'large_key' });
       assert.strictEqual(result.content[0].text.length, largeValue.length, 'Large value should be preserved');
       
       console.log('✓ Large values handled correctly');
@@ -178,13 +177,13 @@ console.log('Test 4.1: Full workflow - store, list projects, get by project');
       delete require.cache[require.resolve('../src/tools')];
       const tools5 = require('../src/tools');
 
-      await tools5.sidekick_store({ 
+      await tools5.TOOLS.sidekick_store({ 
         key: 'special-key_with.dots:and@chars', 
         value: 'value with "quotes" and \'apostrophes\' and\nnewlines',
         project: 'special'
       });
 
-      const result = await tools5.sidekick_get({ key: 'special-key_with.dots:and@chars' });
+      const result = await tools5.TOOLS.sidekick_get({ key: 'special-key_with.dots:and@chars' });
       assert.ok(result.content[0].text.includes('quotes'), 'Should preserve quotes');
       assert.ok(result.content[0].text.includes('newlines'), 'Should preserve newlines');
       
