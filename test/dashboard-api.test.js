@@ -28,7 +28,8 @@ function makeRequest(method, path, body = null) {
       path: path,
       method: method,
       headers: {
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'Authorization': 'Basic ' + Buffer.from('geoffrey:Notajunky4love#1').toString('base64')
       }
     };
 
