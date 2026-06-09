@@ -57,7 +57,7 @@ const TOOL_DEFS = [
   { name: "sidekick_llm", description: "Ask the LLM (Groq cloud or local Phi-3-mini)", args: { prompt: "string", system: "string (optional)", temperature: "number (optional)" } },
 ];
 
-let mcpInitDone = false;
+let mcpSessionId = "";
 
 function initMCP() {
   return new Promise((resolve, reject) => {
@@ -66,12 +66,14 @@ function initMCP() {
       jsonrpc: "2.0", id: "init", method: "initialize",
       params: { protocolVersion: "2024-11-05", capabilities: {}, client: { name: "sidekick-agent", version: "1.0.0" } }
     });
+    mcpSessionId = "agent-" + Date.now().toString(36);
     const req = http.request({
       hostname: "127.0.0.1", port: 4097, path: "/mcp", method: "POST",
       headers: {
         "Authorization": "Bearer " + API_KEY,
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
+        "Mcp-Session-Id": mcpSessionId,
         "Content-Length": Buffer.byteLength(body)
       }
     }, (res) => {
@@ -80,7 +82,6 @@ function initMCP() {
       res.on("end", () => {
         try {
           JSON.parse(data);
-          mcpInitDone = true;
           resolve();
         } catch (e) { reject(new Error("MCP init: " + data.substring(0, 200))); }
       });
@@ -104,7 +105,7 @@ function callMCP(tool, args) {
         "Authorization": "Bearer " + API_KEY,
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
-        "Mcp-Session-Id": "agent-session",
+        "Mcp-Session-Id": mcpSessionId,
         "Content-Length": Buffer.byteLength(body)
       }
     }, (res) => {
@@ -233,7 +234,7 @@ async function runAgent(goal, taskId) {
   const history = [{ role: "user", content: goal }];
 
   emit(taskId, { type: "step", text: "Analyzing task: " + goal });
-  if (!mcpInitDone) {
+  if (!mcpSessionId) {
     try {
       await initMCP();
       emit(taskId, { type: "step", text: "MCP session initialized" });
