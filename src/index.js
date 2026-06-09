@@ -11,6 +11,7 @@ const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "da
 const API_KEY = process.env.SIDEKICK_API_KEY || "sk-sidekick-local-dev";
 const PORT = parseInt(process.env.SIDEKICK_PORT || "4097", 10);
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
+const ALLOWED_IPS = (process.env.SIDEKICK_ALLOWED_IPS || "").split(",").map(s => s.trim()).filter(Boolean);
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -68,12 +69,27 @@ const server = new McpServer({
   capabilities: { tools: {} }
 });
 
+const DANGEROUS_PATTERNS = [
+  /rm\s+-rf\s+\//, /\s+>\s*\/dev\/(sd|nvme|vd|sda|xvda)/,
+  /mkfs/, /fdisk/, /parted/, /dd\s+if=/,
+  /:\(\s*\{/,
+  /(curl|wget)\s+.*\|\s*(bash|sh)\b/,
+  /chmod\s+-R\s+777\s+\//,
+];
+
+function isDangerous(cmd) {
+  return DANGEROUS_PATTERNS.some(p => p.test(cmd));
+}
+
 register("sidekick_bash",
   "Execute a shell command on the VPS.",
   z.object({
     command: z.string().describe("Shell command to execute")
   }),
   async ({ command }) => {
+    if (isDangerous(command)) {
+      return { content: [{ type: "text", text: "Blocked: command matches a dangerous pattern" }], isError: true };
+    }
     try {
       const stdout = execSync(command, { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
       return { content: [{ type: "text", text: stdout || "(empty output)" }] };
@@ -248,7 +264,15 @@ register("sidekick_llm",
 );
 
 const app = express();
-app.use(cors());
+
+if (ALLOWED_IPS.length) {
+  app.use((req, res, next) => {
+    if (!ALLOWED_IPS.includes(req.ip)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    next();
+  });
+}
 
 app.use((req, res, next) => {
   const authHeader = req.headers["authorization"];
@@ -259,7 +283,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 
 const transport = new StreamableHTTPServerTransport({
   sessionIdGenerator: () => "sidekick-session"

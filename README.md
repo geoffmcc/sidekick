@@ -122,6 +122,18 @@ curl http://YOUR_VPS_IP:4099/api/agent/stream/{taskId}
 curl http://YOUR_VPS_IP:4099/api/agent/history
 ```
 
+## Security
+
+| Layer | Measure |
+|-------|---------|
+| **MCP Server** | Bearer token auth + IP whitelist (`SIDEKICK_ALLOWED_IPS`) + dangerous command blocklist |
+| **Dashboard** | HTTP Basic Auth (`SIDEKICK_DASHBOARD_USER`/`PASS`) + agent proxy via localhost-only bridge |
+| **Agent Bridge** | Binds to `127.0.0.1` only, accessible exclusively through the dashboard proxy |
+| **Sidekick user** | Sudo restricted to service management commands only (no wildcard `ALL`) |
+| **Infrastructure** | SSH key-only, fail2ban, UFW, unattended-upgrades, `.env` file permissions locked to owner |
+
+The dashboard auth and IP whitelist are disabled by default (empty env var = no restriction). Set them in `.env` before exposing to the internet.
+
 ## Files
 
 ```
@@ -141,6 +153,7 @@ curl http://YOUR_VPS_IP:4099/api/agent/history
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SIDEKICK_API_KEY` | — | API key for MCP server auth |
+| `SIDEKICK_ALLOWED_IPS` | — | Comma-separated IP whitelist for MCP server (empty = allow all) |
 | `SIDEKICK_PORT` | 4097 | MCP server port |
 | `SIDEKICK_DASHBOARD_PORT` | 4098 | Dashboard port |
 | `SIDEKICK_AGENT_PORT` | 4099 | Agent bridge port |

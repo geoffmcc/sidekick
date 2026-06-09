@@ -11,8 +11,17 @@ const API_KEY = process.env.SIDEKICK_API_KEY || "sk-sidekick-local-dev";
 const CONV_DIR = path.join(DATA_DIR, "conversations");
 fs.mkdirSync(CONV_DIR, { recursive: true });
 
+// Clean up conversation files older than 24 hours
+try {
+  const cutoff = Date.now() - 86400000;
+  fs.readdirSync(CONV_DIR).filter(f => f.endsWith(".json")).forEach(f => {
+    const p = path.join(CONV_DIR, f);
+    if (fs.statSync(p).mtimeMs < cutoff) fs.unlinkSync(p);
+  });
+} catch (e) {}
+
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 
 const taskEmitters = {};
 
@@ -96,6 +105,7 @@ function callLLM(messages) {
         catch { reject(new Error("LLM parse fail: " + data.substring(0, 200))); }
       });
     });
+    req.setTimeout(60000, () => { req.destroy(); reject(new Error("LLM timeout")); });
     req.on("error", reject);
     req.write(body);
     req.end();

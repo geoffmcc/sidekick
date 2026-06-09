@@ -12,6 +12,24 @@ const app = express();
 const http = require("http");
 const AGENT_PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 
+const DASHBOARD_USER = process.env.SIDEKICK_DASHBOARD_USER || "";
+const DASHBOARD_PASS = process.env.SIDEKICK_DASHBOARD_PASS || "";
+
+if (DASHBOARD_USER && DASHBOARD_PASS) {
+  app.use((req, res, next) => {
+    const auth = req.headers.authorization;
+    if (!auth || !auth.startsWith("Basic ")) {
+      res.set("WWW-Authenticate", 'Basic realm="Sidekick Dashboard"');
+      return res.status(401).send("Authentication required");
+    }
+    const decoded = Buffer.from(auth.slice(6), "base64").toString();
+    const [user, pass] = decoded.split(":");
+    if (user === DASHBOARD_USER && pass === DASHBOARD_PASS) return next();
+    res.set("WWW-Authenticate", 'Basic realm="Sidekick Dashboard"');
+    res.status(401).send("Authentication required");
+  });
+}
+
 app.all(/^\/api\/agent\//, (req, res) => {
   let body = "";
   req.on("data", c => body += c);
@@ -90,8 +108,8 @@ function seedKV() {
     "security:ufw": exec("systemctl is-active ufw"),
     "security:fail2ban": exec("systemctl is-active fail2ban"),
     "security:ssh_port": (() => { try { const c = fs.readFileSync("/etc/ssh/sshd_config","utf-8").match(/^Port\s+(\d+)/m); return c ? c[1] : "22"; } catch { return "22"; } })(),
-    "security:last_login": exec("last -1 -F -n 1 2>/dev/null | head -1 | awk '{print \$1,\$3,\$4,\$5}'"),
-    "security:failed_logins": exec("grep -c 'Failed password' /var/log/auth.log 2>/dev/null || echo 0"),
+    "security:last_login": "[redacted on startup]",
+    "security:failed_logins": "[redacted on startup]",
 
     "software:node_version": exec("node --version"),
     "software:npm_version": exec("npm --version"),
