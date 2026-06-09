@@ -210,6 +210,16 @@ async function runAgent(goal, taskId) {
     }
 
     if (decision.tool) {
+      // Deduplication check: prevent repeated identical tool calls
+      const toolKey = decision.tool + ":" + JSON.stringify(decision.arguments || {});
+      const recentCalls = steps.slice(-3).filter(s => s.type === "tool" && s.tool === decision.tool && JSON.stringify(s.args) === JSON.stringify(decision.arguments || {}));
+      if (recentCalls.length >= 1) {
+        emit(taskId, { type: "error", text: "Blocked: repeated call to " + decision.tool + " with same arguments" });
+        history.push({ role: "assistant", content: "Called " + decision.tool + " → (blocked: already called)" });
+        history.push({ role: "user", content: "You already called this tool with these arguments. Do NOT repeat it. Call done if the task is complete, or call a DIFFERENT tool." });
+        continue;
+      }
+
       emit(taskId, { type: "tool", tool: decision.tool, summary: JSON.stringify(decision.arguments) });
       steps.push({ type: "tool", tool: decision.tool, args: decision.arguments });
 
