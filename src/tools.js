@@ -13,9 +13,48 @@ const KV_FILE = path.join(DATA_DIR, "kvstore.json");
 const LOG_FILE = path.join(DATA_DIR, "log.jsonl");
 const MAX_LOG = 1000;
 
+const PROJECT_RE = /^[a-z][a-z0-9_]*$/;
+
+function migrateKV(data) {
+  const now = new Date().toISOString();
+  const migrated = {};
+  
+  for (const [key, val] of Object.entries(data)) {
+    if (typeof val === 'string') {
+      let project = null;
+      if (key.startsWith('server:') || key.startsWith('network:') || 
+          key.startsWith('services:') || key.startsWith('security:') ||
+          key.startsWith('software:') || key.startsWith('deploy:') ||
+          key.startsWith('config:')) {
+        project = 'system';
+      } else if (key.startsWith('proxmox_backup_') || key === 'env_var_deployment_status') {
+        project = 'proxmox_backup';
+      }
+      
+      migrated[key] = {
+        value: val,
+        project: project,
+        source: 'unknown',
+        created: now,
+        updated: now
+      };
+    } else if (typeof val === 'object' && val !== null && 'value' in val) {
+      migrated[key] = val;
+    } else {
+      migrated[key] = val;
+    }
+  }
+  
+  return migrated;
+}
+
 let kvStore = {};
 if (fs.existsSync(KV_FILE)) {
-  try { kvStore = JSON.parse(fs.readFileSync(KV_FILE, "utf-8")); } catch (e) {}
+  try { 
+    const rawData = JSON.parse(fs.readFileSync(KV_FILE, "utf-8"));
+    kvStore = migrateKV(rawData);
+    fs.writeFileSync(KV_FILE, JSON.stringify(kvStore, null, 2));
+  } catch (e) {}
 }
 
 let currentSource = "unknown";
@@ -97,8 +136,32 @@ async function sidekick_write({ path: filePath, content }) {
   return { content: [{ type: "text", text: "Written " + stat.size + " bytes to " + filePath }] };
 }
 
-async function sidekick_store({ key, value }) {
-  kvStore[key] = value;
+async function sidekick_store({ key, value, project }) {
+  if (project !== undefined && project !== null && !PROJECT_RE.test(project)) {
+    return { content: [{ type: "text", text: "Invalid project name. Must match /^[a-z][a-z0-9_]*$/" }], isError: true };
+  }
+  
+  const now = new Date().toISOString();
+  const existing = kvStore[key];
+  
+  if (existing && typeof existing === 'object' && 'value' in existing) {
+    kvStore[key] = {
+      value: value,
+      project: project !== undefined ? project : existing.project,
+      source: currentSource,
+      created: existing.created,
+      updated: now
+    };
+  } else {
+    kvStore[key] = {
+      value: value,
+      project: project || null,
+      source: currentSource,
+      created: now,
+      updated: now
+    };
+  }
+  
   saveKV();
   return { content: [{ type: "text", text: "Stored key \"" + key + "\" (" + value.length + " chars)" }] };
 }
@@ -107,7 +170,31 @@ async function sidekick_get({ key }) {
   if (!(key in kvStore)) {
     return { content: [{ type: "text", text: "Key not found: " + key }], isError: true };
   }
-  return { content: [{ type: "text", text: kvStore[key] }] };
+  const entry = kvStore[key];
+  const value = (typeof entry === 'object' && entry !== null && 'value' in entry) ? entry.value : entry;
+  return { content: [{ type: "text", text: value }] };
+}
+
+async function sidekick_list_projects() {
+  const projects = new Set();
+  for (const entry of Object.values(kvStore)) {
+    if (typeof entry === 'object' && entry !== null && 'project' in entry) {
+      projects.add(entry.project);
+    }
+  }
+  return { content: [{ type: "text", text: JSON.stringify(Array.from(projects)) }] };
+}
+
+async function sidekick_get_by_project({ project }) {
+  const results = [];
+  for (const [key, entry] of Object.entries(kvStore)) {
+    if (typeof entry === 'object' && entry !== null && 'project' in entry) {
+      if (entry.project === project) {
+        results.push({ key, value: entry.value });
+      }
+    }
+  }
+  return { content: [{ type: "text", text: JSON.stringify(results) }] };
 }
 
 async function sidekick_list({ path: dirPath }) {
@@ -253,6 +340,8 @@ const TOOLS = {
   sidekick_list,
   sidekick_web_fetch,
   sidekick_llm,
+  sidekick_list_projects,
+  sidekick_get_by_project,
 };
 
 const TOOL_DEFS = [
@@ -260,10 +349,12 @@ const TOOL_DEFS = [
   { name: "sidekick_read", description: "Read a file from the VPS filesystem", args: { path: "string" } },
   { name: "sidekick_write", description: "Write content to a file on the VPS", args: { path: "string", content: "string" } },
   { name: "sidekick_list", description: "List files and directories on the VPS", args: { path: "string" } },
-  { name: "sidekick_store", description: "Store a value persistently in KV storage", args: { key: "string", value: "string" } },
+  { name: "sidekick_store", description: "Store a value persistently in KV storage", args: { key: "string", value: "string", project: "string (optional)" } },
   { name: "sidekick_get", description: "Retrieve a stored value from KV storage", args: { key: "string" } },
   { name: "sidekick_web_fetch", description: "Fetch a URL from the VPS", args: { url: "string", method: "string (optional)", headers: "string (optional)", body: "string (optional)" } },
   { name: "sidekick_llm", description: "Ask the LLM (Groq cloud or local Phi-3-mini)", args: { prompt: "string", system: "string (optional)", temperature: "number (optional)" } },
+  { name: "sidekick_list_projects", description: "List all unique project names in KV storage", args: {} },
+  { name: "sidekick_get_by_project", description: "Get all keys and values for a specific project", args: { project: "string" } },
 ];
 
 async function callTool(name, args) {
@@ -284,4 +375,4 @@ async function callTool(name, args) {
   }
 }
 
-module.exports = { TOOLS, TOOL_DEFS, callTool, logToolCall, setSource, DATA_DIR, OLLAMA_URL, GROQ_API_KEY, GROQ_MODEL };
+module.exports = { TOOLS, TOOL_DEFS, callTool, logToolCall, setSource, DATA_DIR, OLLAMA_URL, GROQ_API_KEY, GROQ_MODEL, migrateKV };

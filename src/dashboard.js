@@ -127,7 +127,18 @@ function seedKV() {
     "config:env": process.env.NODE_ENV || "production",
   };
 
-  Object.assign(kv, seed);
+  for (const [key, value] of Object.entries(seed)) {
+    if (!(key in kv)) {
+      kv[key] = {
+        value: value,
+        project: "system",
+        source: "dashboard",
+        created: now,
+        updated: now
+      };
+    }
+  }
+
   const stale = Object.keys(kv).filter(k => k.startsWith("security:failed_logins_24h"));
   stale.forEach(k => delete kv[k]);
   writeKV(kv);
@@ -142,7 +153,13 @@ app.get("/api/logs", (req, res) => {
 
 app.get("/api/kv", (req, res) => {
   const kv = readKV();
-  const entries = Object.entries(kv).map(([key, value]) => ({ key, value }));
+  const entries = Object.entries(kv).map(([key, entry]) => {
+    if (typeof entry === 'object' && entry !== null && 'value' in entry) {
+      return { key, value: entry.value, project: entry.project, source: entry.source, created: entry.created, updated: entry.updated };
+    } else {
+      return { key, value: entry, project: null, source: null, created: null, updated: null };
+    }
+  });
   res.json({ entries, total: entries.length });
 });
 
@@ -219,13 +236,44 @@ app.put("/api/kv/:key", (req, res) => {
   req.on("data", c => body += c);
   req.on("end", () => {
     try {
-      const { value } = JSON.parse(body);
+      const { value, project } = JSON.parse(body);
       const kv = readKV();
-      kv[req.params.key] = value;
+      const now = new Date().toISOString();
+      const existing = kv[req.params.key];
+      
+      if (existing && typeof existing === 'object' && 'value' in existing) {
+        kv[req.params.key] = {
+          value: value,
+          project: project !== undefined ? project : existing.project,
+          source: existing.source,
+          created: existing.created,
+          updated: now
+        };
+      } else {
+        kv[req.params.key] = {
+          value: value,
+          project: project || null,
+          source: "dashboard",
+          created: now,
+          updated: now
+        };
+      }
+      
       writeKV(kv);
       res.json({ ok: true });
     } catch { res.status(400).json({ error: "invalid body" }); }
   });
+});
+
+app.get("/api/kv/projects", (req, res) => {
+  const kv = readKV();
+  const projects = new Set();
+  for (const entry of Object.values(kv)) {
+    if (typeof entry === 'object' && entry !== null && 'project' in entry) {
+      projects.add(entry.project);
+    }
+  }
+  res.json({ projects: Array.from(projects) });
 });
 
 app.delete("/api/kv/:key", (req, res) => {
@@ -332,6 +380,7 @@ nav a.active{color:#58a6ff;border-color:#58a6ff;background:#0d1117}
 .kv-entry:last-child{border-bottom:none}
 .kv-key{color:#ffa657;font-family:monospace;font-weight:500;min-width:180px;word-break:break-all}
 .kv-val{color:#c9d1d9;font-family:monospace;word-break:break-all;flex:1}
+.kv-project{background:#21262d;color:#58a6ff;padding:2px 8px;border-radius:4px;font-size:.75rem;font-family:monospace;white-space:nowrap}
 .kv-actions{display:flex;gap:4px;flex-shrink:0}
 .kv-actions button{background:#21262d;border:1px solid #30363d;color:#8b949e;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:.75rem}
 .kv-actions button:hover{background:#30363d;color:#c9d1d9}
@@ -471,6 +520,9 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
   </div>
   <div class="search-bar">
     <input type="text" id="kvSearch" placeholder="Search keys or values..." oninput="filterKV()">
+    <select id="kvProjectFilter" onchange="filterKV()">
+      <option value="">All Projects</option>
+    </select>
   </div>
   <div class="card" id="kvList" style="max-height:600px;overflow-y:auto;padding:8px 16px"></div>
 </div>
@@ -502,6 +554,7 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
   <div class="modal">
     <h3>Edit KV Entry</h3>
     <div style="margin-bottom:8px;color:#8b949e;font-size:.82rem">Key: <span id="editKey" style="color:#ffa657;font-family:monospace"></span></div>
+    <div style="margin-bottom:8px;color:#8b949e;font-size:.82rem">Project: <input type="text" id="editProject" placeholder="Global (leave empty)" style="background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;padding:4px 8px;font-family:monospace;font-size:.82rem;margin-left:8px"></div>
     <textarea id="editValue"></textarea>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeEditModal()">Cancel</button>
@@ -732,8 +785,21 @@ function loadMoreLogs(){
 
 // -- Data -- //
 function loadKV(){
-  fetch('/api/kv').then(r=>r.json()).then(d=>{
-    allKV = d.entries || [];
+  Promise.all([
+    fetch('/api/kv').then(r=>r.json()),
+    fetch('/api/kv/projects').then(r=>r.json())
+  ]).then(([kvData, projData]) => {
+    allKV = kvData.entries || [];
+    
+    const select = $('kvProjectFilter');
+    if (select) {
+      const currentVal = select.value;
+      const projects = projData.projects || [];
+      select.innerHTML = '<option value="">All Projects</option>' +
+        projects.map(p => p === null ? '<option value="null">Global</option>' : '<option value="' + esc(p) + '">' + esc(p) + '</option>').join('');
+      select.value = currentVal;
+    }
+    
     renderKV();
   }).catch(()=>{});
 }
@@ -744,22 +810,29 @@ function filterKV(){
 
 function renderKV(){
   const search = ($('kvSearch').value || '').toLowerCase();
+  const projectFilter = $('kvProjectFilter') ? $('kvProjectFilter').value : '';
   const filtered = allKV.filter(e => {
+    if (projectFilter) {
+      if (projectFilter === 'null' && e.project !== null) return false;
+      if (projectFilter !== 'null' && e.project !== projectFilter) return false;
+    }
     if (!search) return true;
     return (e.key + ' ' + String(e.value)).toLowerCase().includes(search);
   });
   $('kvCount').textContent = filtered.length;
   const list = $('kvList');
   if (!filtered.length) { list.innerHTML = '<div class="empty">No matching data</div>'; return; }
-  list.innerHTML = filtered.map(e =>
-    '<div class="kv-entry">' +
-    '<span class="kv-key">' + esc(e.key) + '</span>' +
-    '<span class="kv-val">' + esc(String(e.value).substring(0,200)) + (String(e.value).length > 200 ? '...' : '') + '</span>' +
-    '<span class="kv-actions">' +
-    '<button onclick="openEditModal(\\'' + esc(e.key).replace(/'/g, "\\\\'") + '\\')"><i class="fas fa-edit"></i></button>' +
-    '<button class="del" onclick="deleteKV(\\'' + esc(e.key).replace(/'/g, "\\\\'") + '\\')"><i class="fas fa-trash"></i></button>' +
-    '</span></div>'
-  ).join('');
+  list.innerHTML = filtered.map(e => {
+    const projectBadge = e.project ? '<span class="kv-project">' + esc(e.project) + '</span>' : '';
+    return '<div class="kv-entry">' +
+      '<span class="kv-key">' + esc(e.key) + '</span>' +
+      projectBadge +
+      '<span class="kv-val">' + esc(String(e.value).substring(0,200)) + (String(e.value).length > 200 ? '...' : '') + '</span>' +
+      '<span class="kv-actions">' +
+      '<button onclick="openEditModal(\\'' + esc(e.key).replace(/'/g, "\\\\'") + '\\')"><i class="fas fa-edit"></i></button>' +
+      '<button class="del" onclick="deleteKV(\\'' + esc(e.key).replace(/'/g, "\\\\'") + '\\')"><i class="fas fa-trash"></i></button>' +
+      '</span></div>';
+  }).join('');
 }
 
 function openEditModal(key){
@@ -767,6 +840,7 @@ function openEditModal(key){
   if (!entry) return;
   $('editKey').textContent = key;
   $('editValue').value = String(entry.value);
+  $('editProject').value = entry.project || '';
   $('editModal').classList.add('active');
   $('editModal').dataset.key = key;
 }
@@ -778,10 +852,11 @@ function closeEditModal(){
 function saveKVEdit(){
   const key = $('editModal').dataset.key;
   const value = $('editValue').value;
+  const project = $('editProject').value || null;
   fetch('/api/kv/' + encodeURIComponent(key), {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ value })
+    body: JSON.stringify({ value, project })
   }).then(r => r.json()).then(d => {
     if (d.ok) { closeEditModal(); loadKV(); }
   }).catch(()=>{});

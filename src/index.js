@@ -13,7 +13,11 @@ const TOOL_SCHEMAS = {
   sidekick_bash: z.object({ command: z.string().describe("Shell command to execute") }),
   sidekick_read: z.object({ path: z.string().describe("Absolute path to the file to read") }),
   sidekick_write: z.object({ path: z.string().describe("Absolute path to write to"), content: z.string().describe("File content to write") }),
-  sidekick_store: z.object({ key: z.string().describe("Storage key"), value: z.string().describe("Value to store") }),
+  sidekick_store: z.object({ 
+    key: z.string().describe("Storage key"), 
+    value: z.string().describe("Value to store"),
+    project: z.string().optional().describe("Project name (lowercase, underscores only)")
+  }),
   sidekick_get: z.object({ key: z.string().describe("Storage key to retrieve") }),
   sidekick_list: z.object({ path: z.string().optional().default("/home/sidekick").describe("Directory path to list") }),
   sidekick_web_fetch: z.object({
@@ -27,6 +31,8 @@ const TOOL_SCHEMAS = {
     system: z.string().optional().describe("System prompt override"),
     temperature: z.number().optional().default(0.7).describe("Sampling temperature (0-2)")
   }),
+  sidekick_list_projects: z.object({}),
+  sidekick_get_by_project: z.object({ project: z.string().describe("Project name to filter by") }),
 };
 
 // --- Factory: create fresh McpServer + register tools ---
