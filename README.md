@@ -2,6 +2,143 @@
 
 A remote VPS agent with MCP tools, live dashboard, and a local AI agent.
 
+## What is Sidekick?
+
+Sidekick is not just a tool server. It is a **persistent remote AI collaborator** that lives on a VPS and works alongside you across every coding session. It can run commands on a remote machine, store and recall information across sessions, review your code, execute multi-step tasks autonomously, and serve as a second brain for your projects.
+
+What sets Sidekick apart: it is **always on**, it **remembers things**, and it **reads your instructions every time you open a session** — so it knows how to help before you even ask.
+
+## How It Works: The AGENTS.md Loop
+
+The secret sauce is a single file: `~/.config/opencode/AGENTS.md`.
+
+Every time you open opencode, it automatically reads this file and loads whatever instructions are in it into the AI's context. Sidekick leverages this mechanism to make itself a persistent presence in your workflow:
+
+1. **You open opencode** — it reads `AGENTS.md`
+2. **Sidekick's tools and instructions are loaded** — the AI now knows about the VPS, the tools, and how to collaborate
+3. **You work** — the AI can call sidekick tools, delegate tasks to the `@sidekick` subagent, or you can chat with the agent directly via the dashboard
+4. **Session ends** — but anything stored in Sidekick's KV persists for next time
+
+This is what makes Sidekick different from a plain MCP tool server. Without `AGENTS.md`, Sidekick is just a set of APIs. With it, Sidekick is a collaborator that is always present, always aware, and always ready.
+
+## What You Can Achieve
+
+| Capability | How | Why AGENTS.md Matters |
+|---|---|---|
+| **Remote code execution** | `sidekick_bash` runs commands on a persistent VPS | Instructions tell the AI when and how to use it |
+| **Persistent memory across sessions** | `sidekick_store` / `sidekick_get` — KV storage that survives restarts | AI knows which keys to store and retrieve |
+| **Autonomous multi-step tasks** | Agent bridge at `:4099` plans and executes until done | AI knows to delegate complex work to the agent |
+| **Code review collaborator** | Ask sidekick to review diffs, catch issues, suggest improvements | Decision tree in AGENTS.md tells the AI *when* to ask |
+| **GitHub integration** | Stored tokens let sidekick create repos, push code, manage PRs | AGENTS.md tells the AI where to find credentials |
+| **Live monitoring dashboard** | Web UI at `:4098` — system health, activity, KV data, agent tasks | Always accessible, no config needed |
+| **Web scraping from VPS** | `sidekick_web_fetch` bypasses local network restrictions | AI knows to use VPS for fetching when needed |
+| **LLM on demand** | Cloud Groq for speed, local Ollama as fallback | AI knows which to use and when |
+
+## Collaborative Workflows
+
+Sidekick is designed to be involved throughout your project lifecycle, not just when you explicitly call it.
+
+### When to Involve Sidekick
+
+- **Code reviews** — Security-sensitive or multi-system changes → always review. Trivial changes (docs, comments, renames) → skip. Everything else → review if confidence < 95%.
+- **Planning** — Involve sidekick during planning, not just before commit. It can catch architectural issues earlier.
+- **Second opinions** — Weighing tradeoffs or design decisions? Get sidekick's perspective.
+- **Issue identification** — Before testing or deployment, have sidekick analyze for potential problems.
+- **Test coverage** — Ask sidekick to review test coverage, not just code correctness.
+- **Documentation review** — Have sidekick review README, AGENTS.md, and other docs for completeness.
+
+### How to Use Sidekick
+
+- **`@sidekick` subagent** — Delegate complex multi-step tasks. The agent plans, calls tools, and iterates until the goal is met.
+- **Dashboard chat** — Open `http://YOUR_VPS_IP:4098/` and use the Agent tab to submit tasks directly.
+- **Direct MCP tools** — Use `sidekick_bash`, `sidekick_read`, `sidekick_write`, `sidekick_store`, `sidekick_get`, etc. from any MCP-compatible client.
+
+### Best Practices
+
+- **Provide context** — When asking for review, explain what the change does and why.
+- **Be specific** — If you are unsure about something, tell sidekick what to focus on.
+- **Early involvement** — The earlier sidekick is involved, the more valuable its input.
+- **Rule of thumb** — If in doubt, ask sidekick. The overhead is minimal and the benefit is worth it.
+
+## Persistent Memory
+
+Sidekick's KV store is its long-term memory. Unlike conversation context, which disappears when the session ends, KV data persists indefinitely on the VPS.
+
+**Example workflow:**
+
+```
+# Store a decision in one session
+sidekick_store("project_status", "Migrated to new VPS, all services green")
+
+# Retrieve it in a future session
+sidekick_get("project_status")
+# → "Migrated to new VPS, all services green"
+```
+
+The AGENTS.md file tells the AI *what* to store and *when* to retrieve it — turning Sidekick into a project memory that spans sessions, days, and even weeks.
+
+## Setting Up AGENTS.md
+
+> **This is the most important step.** Without this file, Sidekick is just a tool server. With it, Sidekick becomes a persistent collaborator that is present in every opencode session.
+
+Create or edit `~/.config/opencode/AGENTS.md` and add the following (replace all placeholders with your values):
+
+~~~markdown
+# Sidekick VPS Configuration
+
+## VPS Connection
+- IP: YOUR_VPS_IP
+- MCP Server: port 4097
+- Dashboard: port 4098
+- Agent Bridge: port 4099
+
+## Credentials
+- GitHub token stored in KV key: `github_token`
+- Use `sidekick_get("github_token")` to retrieve it for GitHub API calls
+- API usage:
+  ```
+  Authorization: token <TOKEN>
+  Accept: application/vnd.github.v3+json
+  ```
+
+## Using Sidekick Proactively
+
+Sidekick is not just for storage — use it as a collaborator throughout projects.
+
+### When to Use Sidekick
+- **Code reviews**: Ask sidekick to review changes before committing
+  - Security-sensitive, multi-system, or infrastructure changes → Always review
+  - Trivial changes (docs, comments, renames) → Skip
+  - Everything else → Review if confidence < 95%
+- **Planning**: Involve sidekick during planning phase, not just before commit
+- **Second opinions**: When weighing tradeoffs or design decisions
+- **Issue identification**: Before testing or deployment, analyze for potential problems
+- **Test coverage**: Review test coverage, not just code correctness
+- **Persistent memory**: Store project status, decisions, and outcomes in KV
+- **Documentation review**: Review README, AGENTS.md, and other docs for completeness
+
+### How to Use Sidekick
+- `sidekick_bash` — Run analysis tasks, code reviews, suggestions on the VPS
+- `sidekick_store` — Save important decisions and outcomes to KV
+- `sidekick_get` — Retrieve stored context from previous sessions
+- `sidekick_read` — Examine files on the VPS
+
+### Best Practices
+- **Provide context**: Explain what the change does and why
+- **Be specific**: Tell sidekick what to focus on
+- **Early involvement**: The earlier sidekick is involved, the more valuable its input
+
+### Why It Matters
+- Creates more conversation points and decision opportunities
+- Provides structured review that catches issues early
+- Makes the development process more interactive and engaging
+- Builds a persistent record of project evolution
+
+**Rule of thumb**: If in doubt, ask sidekick. The overhead is minimal and the benefit is worth it.
+~~~
+
+**opencode reads this file automatically on every session start.** No plugins, no hooks, no manual loading — just a markdown file in the right place.
+
 ## Architecture
 
 ```

@@ -63,12 +63,6 @@ Key env vars:
 - `GROQ_API_KEY` - Cloud LLM (optional, falls back to Ollama)
 - `SIDEKICK_MAX_ITERATIONS` - Agent loop limit (default: 15)
 
-## Known Limitation
-
-**Opencode MCP Client:** The `sidekick_sidekick_store` and other sidekick tools may fail with connection errors. This is an opencode client-side issue (doesn't properly manage MCP sessions). The server-side fix is correct (per-session transports tested with Python), but opencode's MCP client needs updating.
-
-**Workaround:** Use file-based documentation (`CONTEXT.md`) for persistent context instead of the KV store.
-
 ## Security
 
 - SSH key: `~/.ssh/sidekick` (dedicated key for this VPS)
