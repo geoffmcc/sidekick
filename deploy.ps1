@@ -2,7 +2,7 @@ param(
   [switch]$Force
 )
 
-$VPS = "sidekick@64.176.216.202"
+$VPS = "sidekick@149.28.229.13"
 $REMOTE_DIR = "/home/sidekick/mcp-sidekick"
 $SSH_KEY = "/root/.ssh/sidekick"
 $WSL = "wsl -d Ubuntu -u root"

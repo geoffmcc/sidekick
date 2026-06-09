@@ -292,7 +292,7 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
 <div class="header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;padding-bottom:12px;border-bottom:1px solid #21262d">
   <div>
     <h1 style="font-size:1.4rem;color:#58a6ff">Sidekick Dashboard <span id="serviceDots" style="font-size:.85rem;margin-left:12px"></span></h1>
-    <div class="sub">64.176.216.202</div>
+    <div class="sub">149.28.229.13</div>
   </div>
   <div class="sub" id="lastUpdate"></div>
 </div>
