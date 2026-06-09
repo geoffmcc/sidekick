@@ -295,18 +295,18 @@ const transport = new WebStandardStreamableHTTPServerTransport({
 app.post("/mcp", async (req, res) => {
   try {
     const body = typeof req.body === "object" ? JSON.stringify(req.body) : req.body || "";
+    const wh = {};
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (typeof v === "string") wh[k] = v;
+    }
     const webReq = new Request("http://127.0.0.1:4097/mcp", {
       method: "POST",
-      headers: {
-        "authorization": req.headers["authorization"] || "",
-        "content-type": "application/json",
-        "accept": "application/json, text/event-stream"
-      },
+      headers: wh,
       body: body
     });
     const webRes = await transport.handleRequest(webReq, { parsedBody: req.body });
     res.status(webRes.status);
-    webRes.headers.forEach((v, k) => { if (k !== "content-encoding") res.setHeader(k, v); });
+    webRes.headers.forEach((v, k) => { if (k !== "content-encoding" && k !== "content-length") res.setHeader(k, v); });
     const text = await webRes.text();
     if (text) res.send(text);
     else res.end();
