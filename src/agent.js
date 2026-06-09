@@ -57,6 +57,40 @@ const TOOL_DEFS = [
   { name: "sidekick_llm", description: "Ask the LLM (Groq cloud or local Phi-3-mini)", args: { prompt: "string", system: "string (optional)", temperature: "number (optional)" } },
 ];
 
+let mcpInitDone = false;
+
+function initMCP() {
+  return new Promise((resolve, reject) => {
+    const http = require("http");
+    const body = JSON.stringify({
+      jsonrpc: "2.0", id: "init", method: "initialize",
+      params: { protocolVersion: "2024-11-05", capabilities: {}, client: { name: "sidekick-agent", version: "1.0.0" } }
+    });
+    const req = http.request({
+      hostname: "127.0.0.1", port: 4097, path: "/mcp", method: "POST",
+      headers: {
+        "Authorization": "Bearer " + API_KEY,
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "Content-Length": Buffer.byteLength(body)
+      }
+    }, (res) => {
+      let data = "";
+      res.on("data", (c) => data += c);
+      res.on("end", () => {
+        try {
+          JSON.parse(data);
+          mcpInitDone = true;
+          resolve();
+        } catch (e) { reject(new Error("MCP init: " + data.substring(0, 200))); }
+      });
+    });
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
+}
+
 function callMCP(tool, args) {
   return new Promise((resolve, reject) => {
     const http = require("http");
@@ -192,6 +226,14 @@ async function runAgent(goal, taskId) {
   const history = [{ role: "user", content: goal }];
 
   emit(taskId, { type: "step", text: "Analyzing task: " + goal });
+  if (!mcpInitDone) {
+    try {
+      await initMCP();
+      emit(taskId, { type: "step", text: "MCP session initialized" });
+    } catch (e) {
+      emit(taskId, { type: "error", text: "MCP init failed: " + e.message });
+    }
+  }
 
   for (let i = 0; i < 20; i++) {
     let response;
