@@ -28,7 +28,8 @@ function makeRequest(method, path, body = null) {
       path: path,
       method: method,
       headers: {
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'Authorization': 'Basic ' + Buffer.from('geoffrey:dashboard-password-from-local-test-datadashboard-password-from-local-test-data#1').toString('base64')
       }
     };
 
