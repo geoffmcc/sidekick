@@ -216,7 +216,9 @@ async function runAgent(goal, taskId) {
       if (recentCalls.length >= 1) {
         emit(taskId, { type: "error", text: "Blocked: repeated call to " + decision.tool + " with same arguments" });
         history.push({ role: "assistant", content: "Called " + decision.tool + " → (blocked: already called)" });
-        history.push({ role: "user", content: "You already called this tool with these arguments. Do NOT repeat it. Call done if the task is complete, or call a DIFFERENT tool." });
+        // Collect all retrieved values from previous get calls
+        const retrievedValues = steps.filter(s => s.type === "tool" && s.tool === "sidekick_get").map(s => s.args.key + "=" + (s.result || "").substring(0, 50)).join(", ");
+        history.push({ role: "user", content: "You already have all the data. Call done NOW with this result: " + retrievedValues + ". Do NOT call any more tools." });
         continue;
       }
 
