@@ -19,6 +19,8 @@ Write-Host "=== Deploying Sidekick ===" -ForegroundColor Cyan
 
 # Sync src files
 Write-Host "Syncing source files..." -ForegroundColor Green
+Copy-ToVPS "C:\Users\geoffrey\Projects\sidekick\src\tools.js" "$REMOTE_DIR/src/tools.js"
+$changed += "tools.js"
 Copy-ToVPS "C:\Users\geoffrey\Projects\sidekick\src\index.js" "$REMOTE_DIR/src/index.js"
 $changed += "index.js"
 Copy-ToVPS "C:\Users\geoffrey\Projects\sidekick\src\dashboard.js" "$REMOTE_DIR/src/dashboard.js"

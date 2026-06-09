@@ -3,18 +3,13 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const EventEmitter = require("events");
+const { callTool, TOOL_DEFS, DATA_DIR, GROQ_API_KEY, GROQ_MODEL } = require("./tools");
 
-let mcpSessionId = "";
-const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
-const API_KEY = process.env.SIDEKICK_API_KEY || "sk-sidekick-local-dev";
-const GROQ_API_KEY = process.env.GROQ_API_KEY || "";
-const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.1-8b-instant";
 
 const CONV_DIR = path.join(DATA_DIR, "conversations");
 fs.mkdirSync(CONV_DIR, { recursive: true });
 
-// Clean up conversation files older than 24 hours
 try {
   const cutoff = Date.now() - 86400000;
   fs.readdirSync(CONV_DIR).filter(f => f.endsWith(".json")).forEach(f => {
@@ -27,7 +22,6 @@ process.on("uncaughtException", (e) => {
   console.error("Uncaught:", e.message);
 });
 
-// Pre-warm Ollama model on startup (only used when no Groq key)
 if (!GROQ_API_KEY) {
   setTimeout(() => {
     const http = require("http");
@@ -47,77 +41,6 @@ app.use(express.json({ limit: "1mb" }));
 
 const taskEmitters = {};
 
-const TOOL_DEFS = [
-  { name: "sidekick_bash", description: "Execute a shell command on the VPS", args: { command: "string" } },
-  { name: "sidekick_read", description: "Read a file from the VPS filesystem", args: { path: "string" } },
-  { name: "sidekick_write", description: "Write content to a file on the VPS", args: { path: "string", content: "string" } },
-  { name: "sidekick_list", description: "List files and directories on the VPS", args: { path: "string" } },
-  { name: "sidekick_store", description: "Store a value persistently in KV storage", args: { key: "string", value: "string" } },
-  { name: "sidekick_get", description: "Retrieve a stored value from KV storage", args: { key: "string" } },
-  { name: "sidekick_web_fetch", description: "Fetch a URL from the VPS", args: { url: "string" } },
-  { name: "sidekick_llm", description: "Ask the LLM (Groq cloud or local Phi-3-mini)", args: { prompt: "string", system: "string (optional)", temperature: "number (optional)" } },
-];
-
-function httpPost(bodyData, sessionId) {
-  return new Promise((resolve, reject) => {
-    const http = require("http");
-    const headers = {
-      "Authorization": "Bearer " + API_KEY,
-      "Content-Type": "application/json",
-      "Accept": "application/json, text/event-stream",
-      "Content-Length": Buffer.byteLength(bodyData)
-    };
-    if (sessionId) headers["Mcp-Session-Id"] = sessionId;
-    const req = http.request({
-      hostname: "127.0.0.1", port: 4097, path: "/mcp", method: "POST", headers
-    }, (res) => {
-      let data = "";
-      res.on("data", (c) => data += c);
-      res.on("end", () => resolve({ data: res.headers["mcp-session-id"] || "", status: res.statusCode, body: data }));
-    });
-    req.on("error", reject);
-    req.write(bodyData);
-    req.end();
-  });
-}
-
-function parseBody(raw) {
-  if (raw.startsWith("event:")) {
-    const dl = raw.split("\n").find(l => l.startsWith("data: "));
-    if (dl) return JSON.parse(dl.replace("data: ", ""));
-    throw new Error("SSE: no data line");
-  }
-  return JSON.parse(raw);
-}
-
-function initMCP() {
-  const initBody = JSON.stringify({
-    jsonrpc: "2.0", id: "init", method: "initialize",
-    params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "sidekick-agent", version: "1.0.0" } }
-  });
-  const notifBody = JSON.stringify({
-    jsonrpc: "2.0", method: "notifications/initialized"
-  });
-  return httpPost(initBody).then(r1 => {
-    parseBody(r1.body);
-    mcpSessionId = r1.data;
-    return httpPost(notifBody, mcpSessionId);
-  }).then(r2 => {
-    if (r2.body) parseBody(r2.body);
-  });
-}
-
-function callMCP(tool, args) {
-  const body = JSON.stringify({
-    jsonrpc: "2.0", id: "1", method: "tools/call",
-    params: { name: tool, arguments: args }
-  });
-  return httpPost(body, mcpSessionId).then(res => {
-    if (!res.body) throw new Error("Empty response");
-    return parseBody(res.body);
-  });
-}
-
 function buildSystemPrompt() {
   const toolDescs = TOOL_DEFS.map(t =>
     "- " + t.name + "(" + Object.keys(t.args).join(", ") + "): " + t.description
@@ -130,7 +53,7 @@ function buildSystemPrompt() {
     "Set unused keys to null. Never ask for confirmation.";
 }
 
-function callLLM(messages) {
+function callAgentLLM(messages) {
   if (GROQ_API_KEY) return callGroqLLM(messages);
   return callOllamaLLM(messages);
 }
@@ -220,19 +143,11 @@ async function runAgent(goal, taskId) {
   const history = [{ role: "user", content: goal }];
 
   emit(taskId, { type: "step", text: "Analyzing task: " + goal });
-  if (!mcpSessionId) {
-    try {
-      await initMCP();
-      emit(taskId, { type: "step", text: "MCP initialized" });
-    } catch (e) {
-      emit(taskId, { type: "error", text: "MCP init failed: " + e.message });
-    }
-  }
 
   for (let i = 0; i < 20; i++) {
     let response;
     try {
-      response = await callLLM(history);
+      response = await callAgentLLM(history);
     } catch (e) {
       emit(taskId, { type: "error", text: "LLM error: " + e.message });
       steps.push({ type: "error", text: e.message });
@@ -241,7 +156,6 @@ async function runAgent(goal, taskId) {
 
     const text = (response.response || "").trim();
 
-    // Try to find the first valid JSON object in the response
     let decision;
     for (const line of text.split("\n")) {
       try {
@@ -271,11 +185,11 @@ async function runAgent(goal, taskId) {
 
       let result;
       try {
-        const mcpRes = await callMCP(decision.tool, decision.arguments || {});
-        if (mcpRes.error) {
-          result = "Error: " + mcpRes.error.message;
+        const toolRes = await callTool(decision.tool, decision.arguments || {});
+        if (toolRes.isError) {
+          result = "Error: " + (toolRes.content?.[0]?.text || "unknown error");
         } else {
-          result = mcpRes.result?.content?.[0]?.text || "(empty result)";
+          result = toolRes.content?.[0]?.text || "(empty result)";
         }
       } catch (e) {
         result = "Call failed: " + e.message;
@@ -293,8 +207,6 @@ async function runAgent(goal, taskId) {
   fs.writeFileSync(path.join(CONV_DIR, taskId + ".json"), transcript, "utf-8");
   emit(taskId, { type: "done", text: "Transcript saved" });
 }
-
-// --- API ---
 
 app.post("/api/agent/run", (req, res) => {
   const { goal } = req.body;

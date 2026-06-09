@@ -425,7 +425,7 @@ function runAgent(){
     };
     agentStream.onerror = () => stopAgent();
   }).catch(e => {
-    appendLog('<span class="agent-err">✖ Request failed: ' + esc(e.message) + '</span>');
+    appendLog('<span class="agent-err"> Request failed: ' + esc(e.message) + '</span>');
     stopAgent();
   });
 }
