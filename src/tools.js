@@ -18,6 +18,12 @@ if (fs.existsSync(KV_FILE)) {
   try { kvStore = JSON.parse(fs.readFileSync(KV_FILE, "utf-8")); } catch (e) {}
 }
 
+let currentSource = "unknown";
+
+function setSource(source) {
+  currentSource = source;
+}
+
 function saveKV() {
   fs.writeFileSync(KV_FILE, JSON.stringify(kvStore, null, 2));
 }
@@ -30,7 +36,8 @@ function logToolCall(name, args, duration, success, summary) {
       a: typeof args === "object" ? Object.keys(args).join(",") : "",
       d: Math.round(duration),
       ok: success,
-      s: String(summary).substring(0, 120)
+      s: String(summary).substring(0, 120),
+      src: currentSource
     }) + "\n";
     fs.appendFileSync(LOG_FILE, entry, "utf-8");
     const lines = fs.readFileSync(LOG_FILE, "utf-8").trim().split("\n");
@@ -266,4 +273,4 @@ async function callTool(name, args) {
   }
 }
 
-module.exports = { TOOLS, TOOL_DEFS, callTool, logToolCall, DATA_DIR, OLLAMA_URL, GROQ_API_KEY, GROQ_MODEL };
+module.exports = { TOOLS, TOOL_DEFS, callTool, logToolCall, setSource, DATA_DIR, OLLAMA_URL, GROQ_API_KEY, GROQ_MODEL };

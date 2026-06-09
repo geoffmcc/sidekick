@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const EventEmitter = require("events");
-const { callTool, TOOL_DEFS, DATA_DIR, GROQ_API_KEY, GROQ_MODEL } = require("./tools");
+const { callTool, TOOL_DEFS, DATA_DIR, GROQ_API_KEY, GROQ_MODEL, setSource } = require("./tools");
 
 const PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 
@@ -164,6 +164,7 @@ function emit(taskId, data) {
 }
 
 async function runAgent(goal, taskId) {
+  setSource("agent");
   const steps = [];
   const history = [{ role: "user", content: goal }];
 

@@ -191,7 +191,7 @@ app.get("/api/llm", (req, res) => {
 });
 
 app.get("/api/services", (req, res) => {
-  const services = ["sidekick-mcp", "sidekick-dashboard", "sidekick-agent", "ollama"];
+  const services = ["sidekick-mcp", "sidekick-agent", "ollama"];
   const status = {};
   for (const svc of services) {
     try {
@@ -361,16 +361,26 @@ let expandedHistory = {};
 
 const SERVICE_ICONS = {
   'sidekick-mcp': 'fa-server',
-  'sidekick-dashboard': 'fa-gauge-high',
   'sidekick-agent': 'fa-robot',
   'ollama': 'fa-brain'
 };
 
 const SERVICE_LABELS = {
   'sidekick-mcp': 'MCP',
-  'sidekick-dashboard': 'Dashboard',
   'sidekick-agent': 'Agent',
   'ollama': 'Ollama'
+};
+
+const SOURCE_ICONS = {
+  'agent': 'fa-robot',
+  'mcp': 'fa-plug',
+  'unknown': 'fa-circle-question'
+};
+
+const SOURCE_COLORS = {
+  'agent': '#58a6ff',
+  'mcp': '#bc8cff',
+  'unknown': '#8b949e'
 };
 
 function $(id){return document.getElementById(id)}
@@ -445,13 +455,17 @@ function loadLogs(){
     $('logCount').textContent = d.total;
     const list = $('logList');
     if (!d.entries.length){ list.innerHTML='<div class="empty">No activity yet</div>'; return }
-    list.innerHTML = d.entries.map(e =>
-      '<div class="log-entry">' +
-      '<span class="log-time">' + fmtTime(e.t) + '</span>' +
-      '<span class="log-name">' + esc(e.n) + '</span>' +
-      '<span class="' + (e.ok ? 'log-ok' : 'log-fail') + '">' + (e.ok ? 'OK' : 'FAIL') + '</span>' +
-      '<span class="log-summary">' + esc(e.s) + '</span></div>'
-    ).join('');
+    list.innerHTML = d.entries.map(e => {
+      const src = e.src || 'unknown';
+      const icon = SOURCE_ICONS[src] || SOURCE_ICONS['unknown'];
+      const color = SOURCE_COLORS[src] || SOURCE_COLORS['unknown'];
+      return '<div class="log-entry">' +
+        '<span class="log-time">' + fmtTime(e.t) + '</span>' +
+        '<i class="fas ' + icon + '" style="color:' + color + ';margin-right:6px;font-size:.75rem"></i>' +
+        '<span class="log-name">' + esc(e.n) + '</span>' +
+        '<span class="' + (e.ok ? 'log-ok' : 'log-fail') + '">' + (e.ok ? 'OK' : 'FAIL') + '</span>' +
+        '<span class="log-summary">' + esc(e.s) + '</span></div>';
+    }).join('');
   }).catch(()=>{});
 }
 

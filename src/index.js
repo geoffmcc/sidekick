@@ -3,7 +3,7 @@ const cors = require("cors");
 const { McpServer } = require("@modelcontextprotocol/sdk/server/mcp.js");
 const { WebStandardStreamableHTTPServerTransport } = require("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js");
 const { z } = require("zod");
-const { TOOLS, TOOL_DEFS, DATA_DIR } = require("./tools");
+const { TOOLS, TOOL_DEFS, DATA_DIR, setSource } = require("./tools");
 
 const API_KEY = process.env.SIDEKICK_API_KEY || "sk-sidekick-local-dev";
 const PORT = parseInt(process.env.SIDEKICK_PORT || "4097", 10);
@@ -41,6 +41,7 @@ for (const def of TOOL_DEFS) {
     description: def.description,
     inputSchema: TOOL_SCHEMAS[def.name]
   }, async (args, extra) => {
+    setSource("mcp");
     return TOOLS[def.name](args);
   });
 }
@@ -73,6 +74,13 @@ const transport = new WebStandardStreamableHTTPServerTransport({
   enableJsonResponse: true
 });
 
+// Diagnostic logging for session investigation
+function logSession(method, headers, body) {
+  const sessionId = headers["mcp-session-id"] || headers["Mcp-Session-Id"] || "none";
+  const methodType = body ? (typeof body === "object" ? body.method : "unknown") : "unknown";
+  console.log(`[MCP ${method}] session=${sessionId} method=${methodType}`);
+}
+
 app.post("/mcp", async (req, res) => {
   try {
     const body = typeof req.body === "object" ? JSON.stringify(req.body) : req.body || "";
@@ -80,6 +88,7 @@ app.post("/mcp", async (req, res) => {
     for (const [k, v] of Object.entries(req.headers)) {
       if (typeof v === "string") wh[k] = v;
     }
+    logSession("POST", wh, req.body);
     const webReq = new Request("http://127.0.0.1:4097/mcp", {
       method: "POST",
       headers: wh,
