@@ -48,8 +48,11 @@ cd sidekick
 copy .env.example .env
 # Edit .env with your API key and settings
 
-# Deploy to VPS
+# Deploy to VPS (Windows)
 .\deploy.ps1
+
+# Or deploy (Linux/Mac)
+./deploy.sh
 ```
 
 ## Daily Workflow
@@ -61,8 +64,11 @@ git add -A
 git commit -m "what you changed"
 git push
 
-# 3. Deploy to VPS
+# 3. Deploy to VPS (Windows)
 .\deploy.ps1
+
+# Or deploy (Linux/Mac)
+./deploy.sh
 ```
 
 Or SSH directly to pull:
