@@ -26,6 +26,72 @@ function readKV() {
   try { return JSON.parse(fs.readFileSync(f, "utf-8")); } catch { return {}; }
 }
 
+function writeKV(data) {
+  const f = path.join(DATA_DIR, "kvstore.json");
+  fs.writeFileSync(f, JSON.stringify(data, null, 2));
+}
+
+function exec(cmd, opts = {}) {
+  try {
+    return execSync(cmd, { encoding: "utf-8", timeout: 5000, ...opts }).trim();
+  } catch { return "?"; }
+}
+
+function seedKV() {
+  const kv = readKV();
+  const repoRoot = path.join(__dirname, "..");
+  const gitOpts = { cwd: repoRoot };
+  const now = new Date().toISOString();
+
+  const seed = {
+    "server:hostname": exec("hostname"),
+    "server:os": exec('lsb_release -d -s 2>/dev/null || . /etc/os-release && echo "$PRETTY_NAME"'),
+    "server:kernel": exec("uname -r"),
+    "server:arch": exec("uname -m"),
+    "server:cpu": exec(`grep 'model name' /proc/cpuinfo | head -1 | cut -d: -f2 | xargs`),
+    "server:memory_total": exec(`grep MemTotal /proc/meminfo | awk '{print $2 " " $3}'`),
+    "server:swap_total": exec(`grep SwapTotal /proc/meminfo | awk '{print $2 " " $3}'`),
+    "server:disk_total_root": exec("df -h / | tail -1 | awk '{print $2}'"),
+    "server:processes": exec("ps aux | wc -l"),
+    "server:uptime_at_start": exec("uptime -p"),
+
+    "network:public_ip": exec("curl -s ifconfig.me 2>/dev/null || echo ?"),
+    "network:private_ip": exec("hostname -I | awk '{print $1}'"),
+    "network:interfaces": exec("ip -o link show | awk -F': ' '{print $2}' | paste -sd, "),
+    "network:dns": exec(`grep nameserver /etc/resolv.conf | awk '{print $2}' | paste -sd,`),
+    "network:gateway": exec("ip route | grep default | awk '{print $3}'"),
+
+    "services:sidekick-mcp": exec("systemctl is-active sidekick-mcp"),
+    "services:sidekick-dashboard": exec("systemctl is-active sidekick-dashboard"),
+    "services:sidekick-agent": exec("systemctl is-active sidekick-agent"),
+    "services:ollama": exec("systemctl is-active ollama"),
+
+    "security:ufw": exec("systemctl is-active ufw"),
+    "security:fail2ban": exec("systemctl is-active fail2ban"),
+    "security:ssh_port": exec(`grep -E '^Port ' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}'`),
+    "security:last_login": exec("last -1 -F -n 1 2>/dev/null | head -1 | awk '{print $1,$3,$4,$5,$6,$7}'"),
+    "security:failed_logins_24h": exec(`grep 'Failed password' /var/log/auth.log 2>/dev/null | awk '\\$1>=\"$(date -d \"24 hours ago\" +%b)\"' | wc -l`),
+
+    "software:node_version": exec("node --version"),
+    "software:npm_version": exec("npm --version"),
+    "software:ollama_version": exec("ollama --version 2>/dev/null || echo not found"),
+    "software:python_version": exec("python3 --version 2>/dev/null || echo not found"),
+
+    "deploy:git_commit": exec("git rev-parse HEAD", gitOpts),
+    "deploy:branch": exec("git rev-parse --abbrev-ref HEAD", gitOpts),
+    "deploy:remote_url": exec("git remote get-url origin", gitOpts),
+    "deploy:initialized": now,
+
+    "config:timezone": exec("timedatectl show -p Timezone --value 2>/dev/null || echo UTC"),
+    "config:locale": exec(`grep LANG= /etc/default/locale 2>/dev/null | cut -d= -f2 || echo C.UTF-8`),
+    "config:env": process.env.NODE_ENV || "production",
+  };
+
+  Object.assign(kv, seed);
+  writeKV(kv);
+  console.log("Seed KV written with", Object.keys(seed).length, "keys");
+}
+
 app.get("/api/logs", (req, res) => {
   const logs = readLogs();
   const limit = Math.min(parseInt(req.query.limit) || 100, 500);
@@ -381,5 +447,6 @@ setInterval(refresh, 10000);
 });
 
 app.listen(PORT, "0.0.0.0", () => {
+  seedKV();
   console.log("Sidekick dashboard listening on http://0.0.0.0:" + PORT);
 });
