@@ -8,7 +8,7 @@ const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "da
 const PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 const API_KEY = process.env.SIDEKICK_API_KEY || "sk-sidekick-local-dev";
 const GROQ_API_KEY = process.env.GROQ_API_KEY || "";
-const GROQ_MODEL = process.env.GROQ_MODEL || "llama3-8b-8192";
+const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.1-8b-instant";
 
 const CONV_DIR = path.join(DATA_DIR, "conversations");
 fs.mkdirSync(CONV_DIR, { recursive: true });
