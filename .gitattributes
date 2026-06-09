@@ -1,0 +1,7 @@
+# Normalize all text files to LF (required for Linux VPS)
+* text=auto eol=lf
+
+# Binary files — never touch
+*.png binary
+*.jpg binary
+*.ico binary
