@@ -36,3 +36,14 @@ cd /home/sidekick/mcp-sidekick
 git pull
 sudo systemctl restart sidekick-mcp sidekick-dashboard sidekick-agent
 ```
+
+## Known Bug: MCP Session Transport
+
+`server.connect()` is called for every new session in `getOrCreateTransport()`, but McpServer can only connect once. This causes "Already connected to a transport" errors on subsequent sessions.
+
+**Fix options:**
+1. Connect server once on startup with default transport
+2. Create separate McpServer instances per session
+3. Use a different session management approach
+
+See `CONTEXT.md` for full project context.

@@ -29,32 +29,87 @@ const TOOL_SCHEMAS = {
   }),
 };
 
-const server = new McpServer({
-  name: "sidekick-mcp-server",
-  version: "1.0.0"
-}, {
-  capabilities: { tools: {} }
-});
+// --- Factory: create fresh McpServer + register tools ---
 
-for (const def of TOOL_DEFS) {
-  server.registerTool(def.name, {
-    description: def.description,
-    inputSchema: TOOL_SCHEMAS[def.name]
-  }, async (args, extra) => {
-    setSource("mcp");
-    const start = Date.now();
-    try {
-      const result = await TOOLS[def.name](args);
-      logToolCall(def.name, args, Date.now() - start, true,
-        result.content?.[0]?.text?.substring(0, 80) || "(ok)"
-      );
-      return result;
-    } catch (e) {
-      logToolCall(def.name, args, Date.now() - start, false, e.message);
-      throw e;
-    }
+function createMcpServer() {
+  const server = new McpServer({
+    name: "sidekick-mcp-server",
+    version: "1.0.0"
+  }, {
+    capabilities: { tools: {} }
+  });
+
+  for (const def of TOOL_DEFS) {
+    server.registerTool(def.name, {
+      description: def.description,
+      inputSchema: TOOL_SCHEMAS[def.name]
+    }, async (args, extra) => {
+      setSource("mcp");
+      const start = Date.now();
+      try {
+        const result = await TOOLS[def.name](args);
+        logToolCall(def.name, args, Date.now() - start, true,
+          result.content?.[0]?.text?.substring(0, 80) || "(ok)"
+        );
+        return result;
+      } catch (e) {
+        logToolCall(def.name, args, Date.now() - start, false, e.message);
+        throw e;
+      }
+    });
+  }
+
+  return server;
+}
+
+// --- Session management: one McpServer + Transport pair per session ---
+
+const sessions = new Map();
+
+function generateSessionId() {
+  return "sess-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+}
+
+async function getTransportForRequest(sessionId) {
+  // Return existing transport if session exists
+  if (sessionId && sessions.has(sessionId)) {
+    const entry = sessions.get(sessionId);
+    entry.lastAccess = Date.now();
+    return { transport: entry.transport, isNew: false };
+  }
+
+  // Create fresh McpServer + Transport pair
+  const server = createMcpServer();
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: () => generateSessionId(),
+    enableJsonResponse: true
+  });
+
+  // Connect server to transport (one-time per server instance)
+  await server.connect(transport);
+
+  return { transport, isNew: true };
+}
+
+function registerSession(sessionId, transport) {
+  sessions.set(sessionId, {
+    transport,
+    createdAt: Date.now(),
+    lastAccess: Date.now()
   });
 }
+
+// Cleanup sessions inactive for more than 1 hour, every 10 minutes
+setInterval(() => {
+  const cutoff = Date.now() - 3600000;
+  for (const [id, entry] of sessions) {
+    if (entry.lastAccess < cutoff) {
+      sessions.delete(id);
+    }
+  }
+}, 600000);
+
+// --- Express app ---
 
 const app = express();
 
@@ -79,46 +134,6 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: "1mb" }));
 
-// --- Session-aware transport management ---
-
-const sessionTransports = new Map();
-
-function generateSessionId() {
-  return "sess-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
-}
-
-async function getOrCreateTransport(sessionId) {
-  if (sessionId && sessionTransports.has(sessionId)) {
-    return sessionTransports.get(sessionId).transport;
-  }
-
-  const newSessionId = generateSessionId();
-
-  const newTransport = new WebStandardStreamableHTTPServerTransport({
-    sessionIdGenerator: () => newSessionId,
-    enableJsonResponse: true
-  });
-
-  await server.connect(newTransport);
-
-  sessionTransports.set(newSessionId, {
-    transport: newTransport,
-    createdAt: Date.now()
-  });
-
-  return newTransport;
-}
-
-// Cleanup stale sessions older than 1 hour, every 10 minutes
-setInterval(() => {
-  const cutoff = Date.now() - 3600000;
-  for (const [id, entry] of sessionTransports) {
-    if (entry.createdAt < cutoff) {
-      sessionTransports.delete(id);
-    }
-  }
-}, 600000);
-
 // --- Diagnostic logging ---
 
 function logSession(method, headers, body) {
@@ -137,14 +152,26 @@ app.post("/mcp", async (req, res) => {
       if (typeof v === "string") wh[k] = v;
     }
     const sessionId = wh["mcp-session-id"] || wh["Mcp-Session-Id"];
-    const transport = await getOrCreateTransport(sessionId);
     logSession("POST", wh, req.body);
+
+    const { transport, isNew } = await getTransportForRequest(sessionId);
+
     const webReq = new Request("http://127.0.0.1:4097/mcp", {
       method: "POST",
       headers: wh,
       body: body
     });
+
     const webRes = await transport.handleRequest(webReq, { parsedBody: req.body });
+
+    // Capture session ID from response headers for new sessions
+    if (isNew) {
+      const newSessionId = webRes.headers.get("mcp-session-id");
+      if (newSessionId) {
+        registerSession(newSessionId, transport);
+      }
+    }
+
     res.status(webRes.status);
     webRes.headers.forEach((v, k) => { if (k !== "content-encoding" && k !== "content-length") res.setHeader(k, v); });
     const text = await webRes.text();
@@ -163,13 +190,24 @@ app.get("/mcp", async (req, res) => {
       if (typeof v === "string") wh[k] = v;
     }
     const sessionId = wh["mcp-session-id"] || wh["Mcp-Session-Id"];
-    const transport = await getOrCreateTransport(sessionId);
     logSession("GET", wh, null);
+
+    const { transport, isNew } = await getTransportForRequest(sessionId);
+
     const webReq = new Request("http://127.0.0.1:4097/mcp", {
       method: "GET",
       headers: wh
     });
+
     const webRes = await transport.handleRequest(webReq);
+
+    if (isNew) {
+      const newSessionId = webRes.headers.get("mcp-session-id");
+      if (newSessionId) {
+        registerSession(newSessionId, transport);
+      }
+    }
+
     res.status(webRes.status);
     webRes.headers.forEach((v, k) => { if (k !== "content-encoding" && k !== "content-length") res.setHeader(k, v); });
     if (webRes.body) {
@@ -198,13 +236,24 @@ app.delete("/mcp", async (req, res) => {
       if (typeof v === "string") wh[k] = v;
     }
     const sessionId = wh["mcp-session-id"] || wh["Mcp-Session-Id"];
-    const transport = await getOrCreateTransport(sessionId);
     logSession("DELETE", wh, null);
+
+    const { transport, isNew } = await getTransportForRequest(sessionId);
+
     const webReq = new Request("http://127.0.0.1:4097/mcp", {
       method: "DELETE",
       headers: wh
     });
+
     const webRes = await transport.handleRequest(webReq);
+
+    if (isNew) {
+      const newSessionId = webRes.headers.get("mcp-session-id");
+      if (newSessionId) {
+        registerSession(newSessionId, transport);
+      }
+    }
+
     res.status(webRes.status);
     webRes.headers.forEach((v, k) => { if (k !== "content-encoding" && k !== "content-length") res.setHeader(k, v); });
     const text = await webRes.text();
