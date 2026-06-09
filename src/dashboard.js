@@ -190,6 +190,30 @@ app.get("/api/llm", (req, res) => {
   }
 });
 
+app.get("/api/services", (req, res) => {
+  const services = ["sidekick-mcp", "sidekick-dashboard", "sidekick-agent", "ollama"];
+  const status = {};
+  for (const svc of services) {
+    try {
+      status[svc] = execSync(`systemctl is-active ${svc}`, { encoding: "utf-8", timeout: 3000 }).trim();
+    } catch {
+      status[svc] = "inactive";
+    }
+  }
+  res.json({ services: status });
+});
+
+app.get("/api/config", (req, res) => {
+  const sensitive = ["API_KEY", "PASS", "SECRET", "TOKEN", "PASSWORD"];
+  const config = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (!key.startsWith("SIDEKICK_") && !key.startsWith("GROQ_") && !key.startsWith("OLLAMA_")) continue;
+    const isSensitive = sensitive.some(s => key.includes(s));
+    config[key] = isSensitive ? "***redacted***" : (value || "");
+  }
+  res.json({ config });
+});
+
 // --- Frontend ---
 
 app.get("/", (req, res) => {
@@ -247,13 +271,26 @@ nav a.active{color:#58a6ff;border-color:#58a6ff;background:#0d1117}
 .llm-dot.off{background:#484f58}
 .llm-name{font-weight:500;color:#c9d1d9}
 .llm-size{color:#8b949e;font-size:.8rem}
+.service-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:4px}
+.service-dot.on{background:#3fb950;box-shadow:0 0 6px #3fb95066}
+.service-dot.off{background:#f85149;box-shadow:0 0 6px #f8514966}
+.service-dot.unknown{background:#484f58}
+.config-entry{padding:6px 0;border-bottom:1px solid #21262d;font-size:.82rem;display:flex;gap:12px}
+.config-entry:last-child{border-bottom:none}
+.config-key{color:#ffa657;font-family:monospace;font-weight:500;min-width:200px}
+.config-val{color:#c9d1d9;font-family:monospace;word-break:break-all;flex:1}
+.config-val.redacted{color:#8b949e;font-style:italic}
+.history-item{padding:8px 0;border-bottom:1px solid #21262d;font-size:.82rem;cursor:pointer}
+.history-item:hover{background:#161b22}
+.history-item:last-child{border-bottom:none}
+.history-detail{padding:8px 0 8px 20px;background:#0d1117;border-left:2px solid #21262d;margin:4px 0;font-family:monospace;font-size:.78rem;white-space:pre-wrap;line-height:1.4;max-height:400px;overflow-y:auto}
 footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
 </style>
 </head>
 <body>
 <div class="header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;padding-bottom:12px;border-bottom:1px solid #21262d">
   <div>
-    <h1 style="font-size:1.4rem;color:#58a6ff">Sidekick Dashboard</h1>
+    <h1 style="font-size:1.4rem;color:#58a6ff">Sidekick Dashboard <span id="serviceDots" style="font-size:.9rem;margin-left:12px"></span></h1>
     <div class="sub">64.176.216.202</div>
   </div>
   <div class="sub" id="lastUpdate"></div>
@@ -263,6 +300,7 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
   <a class="active" onclick="showPage('system')" id="nav-system">System</a>
   <a onclick="showPage('activity')" id="nav-activity">Activity</a>
   <a onclick="showPage('data')" id="nav-data">Data</a>
+  <a onclick="showPage('config')" id="nav-config">Config</a>
   <a onclick="showPage('agent')" id="nav-agent">Agent</a>
 </nav>
 
@@ -290,6 +328,12 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
   <div class="card" id="kvList" style="max-height:600px;overflow-y:auto;padding:8px 16px"></div>
 </div>
 
+<!-- Config Page -->
+<div class="page" id="page-config">
+  <div class="section-title">Environment Configuration</div>
+  <div class="card" id="configList" style="max-height:600px;overflow-y:auto;padding:8px 16px"></div>
+</div>
+
 <!-- Agent Page -->
 <div class="page" id="page-agent">
   <div class="section-title">Run Agent Task</div>
@@ -312,6 +356,7 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
 let currentPage = 'system';
 let agentRunning = false;
 let agentStream = null;
+let expandedHistory = {};
 
 function $(id){return document.getElementById(id)}
 
@@ -321,9 +366,10 @@ function showPage(name){
   document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
   $('page-' + name).classList.add('active');
   $('nav-' + name).classList.add('active');
-  if (name === 'system') { loadSystem(); loadLLM(); }
+  if (name === 'system') { loadSystem(); loadLLM(); loadServices(); }
   if (name === 'activity') loadLogs();
   if (name === 'data') loadKV();
+  if (name === 'config') loadConfig();
 }
 
 function fmtTime(iso){
@@ -335,6 +381,20 @@ function esc(s){
   const d = document.createElement('div');
   d.textContent = s;
   return d.innerHTML;
+}
+
+// -- Services -- //
+function loadServices(){
+  fetch('/api/services').then(r=>r.json()).then(d=>{
+    const dots = $('serviceDots');
+    if (!d.services) { dots.innerHTML = ''; return; }
+    const html = Object.entries(d.services).map(([name, status]) => {
+      const cls = status === 'active' ? 'on' : 'off';
+      const title = name + ': ' + status;
+      return '<span class="service-dot ' + cls + '" title="' + esc(title) + '"></span>';
+    }).join('');
+    dots.innerHTML = html;
+  }).catch(()=>{});
 }
 
 // -- System -- //
@@ -388,6 +448,18 @@ function loadKV(){
     list.innerHTML = d.entries.map(e =>
       '<div class="kv-entry"><span class="kv-key">' + esc(e.key) + '</span>: <span class="kv-val">' + esc(String(e.value).substring(0,200)) + '</span></div>'
     ).join('');
+  }).catch(()=>{});
+}
+
+// -- Config -- //
+function loadConfig(){
+  fetch('/api/config').then(r=>r.json()).then(d=>{
+    const list = $('configList');
+    if (!d.config || !Object.keys(d.config).length){ list.innerHTML='<div class="empty">No configuration</div>'; return }
+    list.innerHTML = Object.entries(d.config).map(([key, value]) => {
+      const isRedacted = value === '***redacted***';
+      return '<div class="config-entry"><span class="config-key">' + esc(key) + '</span><span class="config-val' + (isRedacted ? ' redacted' : '') + '">' + esc(String(value)) + '</span></div>';
+    }).join('');
   }).catch(()=>{});
 }
 
@@ -449,36 +521,47 @@ function toggleHistory(){
     fetch('/api/agent/history').then(r=>r.json()).then(d=>{
       if (!d.runs || !d.runs.length) { el.innerHTML = '<div class="empty">No past runs</div>'; return; }
       el.innerHTML = d.runs.map(r =>
-        '<div class="log-entry" style="cursor:pointer" onclick="loadRun(\\'' + r.id + '\\')">' +
-        '<span class="log-time">' + fmtTime(r.t) + '</span>' +
-        '<span class="' + (r.status === 'completed' ? 'log-ok' : 'log-fail') + '">' + r.status + '</span>' +
-        '<span class="log-summary">' + esc(r.goal.substring(0,80)) + '</span></div>'
+        '<div class="history-item" onclick="toggleRunDetail(\\'' + r.id + '\\')">' +
+        '<span class="log-time">' + fmtTime(r.t) + '</span> ' +
+        '<span class="' + (r.status === 'completed' ? 'log-ok' : 'log-fail') + '">' + r.status + '</span> ' +
+        '<span class="log-summary">' + esc(r.goal.substring(0,80)) + '</span>' +
+        '<div id="run-detail-' + r.id + '" style="display:none"></div></div>'
       ).join('');
     }).catch(()=>{});
   }
 }
 
-function loadRun(id){
+function toggleRunDetail(id){
+  const detail = $('run-detail-' + id);
+  if (expandedHistory[id]) {
+    detail.style.display = 'none';
+    expandedHistory[id] = false;
+    return;
+  }
+  expandedHistory[id] = true;
+  detail.style.display = 'block';
+  detail.innerHTML = '<div class="empty">Loading...</div>';
   fetch('/api/agent/run/' + id).then(r=>r.json()).then(run=>{
-    if (!run) return;
-    $('agentLog').innerHTML = '<span class="agent-step">► Run: ' + esc(run.goal) + '</span>\\n';
-    (run.steps || []).forEach(s => {
-      if (s.type === 'thought') appendLog('<span class="agent-step">● ' + esc(s.text) + '</span>');
-      else if (s.type === 'tool') appendLog('  <span class="agent-ok">→ ' + esc(s.tool) + '</span> ' + esc(s.result || ''));
-      else if (s.type === 'error') appendLog('<span class="agent-err">✖ ' + esc(s.text) + '</span>');
+    if (!run || !run.steps) { detail.innerHTML = '<div class="empty">No details</div>'; return; }
+    let html = '';
+    run.steps.forEach(s => {
+      if (s.type === 'thought') html += '<span class="agent-step">● ' + esc(s.text) + '</span>\\n';
+      else if (s.type === 'tool') html += '  <span class="agent-ok">→ ' + esc(s.tool) + '</span> ' + esc(s.args ? JSON.stringify(s.args) : '') + '\\n    ' + esc((s.result || '').substring(0, 200)) + '\\n';
+      else if (s.type === 'error') html += '<span class="agent-err">✖ ' + esc(s.text) + '</span>\\n';
+      else if (s.type === 'done') html += '<span class="agent-done">✔ ' + esc(s.text) + '</span>\\n';
     });
-    if (run.status === 'completed') appendLog('<span class="agent-done">✔ Completed</span>');
-    else appendLog('<span class="agent-err">✖ ' + run.status + '</span>');
-  }).catch(()=>{});
+    detail.innerHTML = '<div class="history-detail">' + html + '</div>';
+  }).catch(()=>{ detail.innerHTML = '<div class="agent-err">Failed to load details</div>'; });
 }
 
 // -- Refresh -- //
 function refresh(){
   const now = new Date();
   $('lastUpdate').textContent = 'updated ' + now.toLocaleTimeString();
-  if (currentPage === 'system') { loadSystem(); loadLLM(); }
+  if (currentPage === 'system') { loadSystem(); loadLLM(); loadServices(); }
   else if (currentPage === 'activity') loadLogs();
   else if (currentPage === 'data') loadKV();
+  else if (currentPage === 'config') loadConfig();
 }
 refresh();
 setInterval(refresh, 10000);
