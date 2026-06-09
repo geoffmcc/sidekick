@@ -52,16 +52,20 @@ function buildSystemPrompt() {
     "3. Do NOT write results to files or re-read data unless the task explicitly asks for it.\n" +
     "4. Never ask for confirmation.\n" +
     "5. Continue calling tools ONLY when the task requires additional steps (e.g., store AND retrieve).\n" +
-    "6. Call done when the user's question is fully answered.\n\n" +
-    "Example (simple query): sidekick_bash returns \"64.176.216.202\" for an IP query\n" +
-    "-> next response: {\"done\": true, \"result\": \"Your public IP is 64.176.216.202\"}\n\n" +
-    "Example (multi-step): \"store the disk usage and retrieve it\"\n" +
-    "-> sidekick_bash -> sidekick_store -> sidekick_get -> done\n\n" +
-    "You have these tools:\n" + toolDescs +
-    "\n\nUse exactly ONE key per response:\n" +
-    '- {"tool": "tool_name", "arguments": {"key": "value"}}\n' +
-    '- {"think": "your reasoning"}\n' +
-    '- {"done": true, "result": "summary"}';
+    "6. Call done when the user's question is fully answered.\n" +
+    "7. NEVER nest a tool call inside a think block. Use EITHER think OR tool, never both.\n\n" +
+    "Response format (choose ONE):\n" +
+    '- {"think": "your reasoning"}  -- ONLY for reasoning, NO tool calls inside\n' +
+    '- {"tool": "tool_name", "arguments": {"key": "value"}}  -- to execute a tool\n' +
+    '- {"done": true, "result": "summary"}  -- when task is complete\n\n' +
+    "Example (simple): sidekick_bash returns \"64.176.216.202\" for IP query\n" +
+    "-> next: {\"done\": true, \"result\": \"Your public IP is 64.176.216.202\"}\n\n" +
+    "Example (multi-step): \"store disk usage and retrieve it\"\n" +
+    "-> {\"tool\": \"sidekick_bash\", \"arguments\": {\"command\": \"df -h\"}}\n" +
+    "-> {\"tool\": \"sidekick_store\", \"arguments\": {\"key\": \"disk\", \"value\": \"...\"}}\n" +
+    "-> {\"tool\": \"sidekick_get\", \"arguments\": {\"key\": \"disk\"}}\n" +
+    "-> {\"done\": true, \"result\": \"Disk usage: 23%\"}\n\n" +
+    "You have these tools:\n" + toolDescs;
 }
 
 function callAgentLLM(messages) {
