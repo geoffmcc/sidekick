@@ -133,11 +133,11 @@ function buildSystemPrompt() {
     "- " + t.name + "(" + Object.keys(t.args).join(", ") + "): " + t.description
   ).join("\n");
   return "You are an autonomous agent running on a VPS. You have these tools:\n" + toolDescs +
-    "\n\nRespond with a SINGLE JSON object. No other text. One of these formats only:\n" +
-    'To use a tool: {"tool": "tool_name", "arguments": {"key": "value"}}\n' +
-    'To explain: {"think": "your reasoning"}\n' +
-    'When done: {"done": true, "result": "summary"}\n' +
-    "Never ask for confirmation. Do not include multiple JSON objects.";
+    "\n\nUse exactly ONE of these keys in your JSON response. Never use multiple keys:\n" +
+    '- {"tool": "tool_name", "arguments": {"key": "value"}}  (set tool to a valid name)\n' +
+    '- {"think": "your reasoning"}  (explain what you plan to do)\n' +
+    '- {"done": true, "result": "summary"}  (task is complete)\n' +
+    "Set unused keys to null. Never ask for confirmation.";
 }
 
 function callLLM(messages) {
@@ -154,7 +154,8 @@ function callGroqLLM(messages, retries = 3) {
         { role: "system", content: buildSystemPrompt() },
         ...messages.map(m => ({ role: m.role, content: m.content }))
       ],
-      temperature: 0.3
+      temperature: 0.3,
+      response_format: { type: "json_object" }
     });
     const doReq = () => {
       const req = https.request({
