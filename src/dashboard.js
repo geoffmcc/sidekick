@@ -661,10 +661,9 @@ function loadStats(){
   fetch('/api/stats').then(r=>r.json()).then(d=>{
     const body = $('statsBody');
     if (!d.stats || !d.stats.length) { body.innerHTML = '<tr><td colspan="6" class="empty">No data</td></tr>'; return; }
-    const maxCount = Math.max(...d.stats.map(s => s.count));
     body.innerHTML = d.stats.map(s => {
       const rate = s.count > 0 ? Math.round(s.ok / s.count * 100) : 0;
-      const barWidth = Math.round(s.count / maxCount * 100);
+      const barWidth = Math.max(5, rate);
       return '<tr>' +
         '<td style="color:#58a6ff;font-family:monospace">' + esc(s.name) + '</td>' +
         '<td>' + s.count + '</td>' +
