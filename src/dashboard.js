@@ -979,7 +979,7 @@ function renderLogs(){
       // Show result (expandable)
       if (e.s) {
         const resultId = 'result-' + Math.random().toString(36).substr(2, 9);
-        html += '<div class="log-result" id="' + resultId + '" onclick="toggleResult(\'' + resultId + '\')">';
+        html += '<div class="log-result" id="' + resultId + '" onclick="toggleResult(\\'' + resultId + '\\')">';
         html += esc(e.s);
         html += '</div>';
       }
@@ -1106,14 +1106,14 @@ function renderKV(){
         '<span><i class="fas fa-plus-circle"></i> Created ' + createdAgo + '</span>' +
         (isUpdated ? '<span><i class="fas fa-edit"></i> Updated ' + updatedAgo + '</span>' : '') +
       '</div>' +
-      '<div class="kv-value-preview" onclick="showValueModal(\'' + esc(e.key).replace(/'/g, "\\'") + '\')">' +
+      '<div class="kv-value-preview" onclick="showValueModal(\\'' + esc(e.key).replace(/'/g, "\\'") + '\\')">' +
         esc(valuePreview) + (hasMore ? '...' : '') +
       '</div>' +
       '<div class="kv-actions">' +
-        '<button onclick="openEditModal(\'' + esc(e.key).replace(/'/g, "\\'") + '\')" title="Edit">' +
+        '<button onclick="openEditModal(\\'' + esc(e.key).replace(/'/g, "\\'") + '\\')" title="Edit">' +
           '<i class="fas fa-edit"></i>' +
         '</button>' +
-        '<button class="del" onclick="deleteKV(\'' + esc(e.key).replace(/'/g, "\\'") + '\')" title="Delete">' +
+        '<button class="del" onclick="deleteKV(\\'' + esc(e.key).replace(/'/g, "\\'") + '\\')" title="Delete">' +
           '<i class="fas fa-trash"></i>' +
         '</button>' +
       '</div>' +
@@ -1152,7 +1152,7 @@ function showValueModal(key) {
   modal.innerHTML = '<div class="kv-modal-content">' +
     '<div class="kv-modal-header">' +
       '<h3>' + esc(key) + '</h3>' +
-      '<button onclick="this.closest(\'.kv-modal\').remove()" style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:20px;">' +
+      '<button onclick="this.closest(\\'.kv-modal\\').remove()" style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:20px;">' +
         '<i class="fas fa-times"></i>' +
       '</button>' +
     '</div>' +
