@@ -1,6 +1,6 @@
 # Sidekick VPS
 
-A remote VPS agent system. Connect via the sidekick MCP server at `149.28.229.13:4097`.
+A remote VPS agent system. Connect via the sidekick MCP server at `YOUR_VPS_IP:4097`.
 
 ## Sidekick Interaction Policy
 
@@ -62,7 +62,7 @@ All tool outputs automatically redact:
 
 - **Direct tool use**: Just use any `sidekick_*` tool — the MCP server handles it automatically.
 - **Subagent (`@sidekick`)**: Use for complex multi-step tasks. The agent will plan, call tools, and iterate until the goal is met.
-- **Dashboard**: Open `http://149.28.229.13:4098/` in a browser (auth: geoffrey) for system monitoring and the agent chat interface.
+- **Dashboard**: Open `http://YOUR_VPS_IP:4098/` in a browser (auth: geoffrey) for system monitoring and the agent chat interface.
 
 ## Deployment
 
@@ -78,7 +78,7 @@ All tool outputs automatically redact:
 
 ### Manual (SSH)
 ```bash
-ssh sidekick@149.28.229.13
+ssh sidekick@YOUR_VPS_IP
 cd /home/sidekick/mcp-sidekick
 git pull
 sudo systemctl restart sidekick-mcp sidekick-dashboard sidekick-agent
