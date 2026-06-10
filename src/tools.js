@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { execSync } = require("child_process");
+const { redactSensitive } = require("./redact");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
@@ -73,7 +74,7 @@ function formatArgs(args) {
   for (const [key, value] of Object.entries(args)) {
     const str = String(value);
     const truncated = str.length > 100 ? str.substring(0, 100) + "..." : str;
-    parts.push(key + "=" + truncated);
+    parts.push(key + "=" + redactSensitive(truncated));
   }
   return parts.join(", ");
 }
@@ -86,7 +87,7 @@ function logToolCall(name, args, duration, success, summary) {
       a: formatArgs(args),
       d: Math.round(duration),
       ok: success,
-      s: String(summary).substring(0, 200),
+      s: redactSensitive(String(summary).substring(0, 200)),
       src: currentSource
     }) + "\n";
     fs.appendFileSync(LOG_FILE, entry, "utf-8");
@@ -115,9 +116,9 @@ async function sidekick_bash({ command }) {
   }
   try {
     const stdout = execSync(command, { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
-    return { content: [{ type: "text", text: stdout || "(empty output)" }] };
+    return { content: [{ type: "text", text: redactSensitive(stdout || "(empty output)") }] };
   } catch (e) {
-    return { content: [{ type: "text", text: "Exit code: " + e.status + "\nstdout: " + (e.stdout || "") + "\nstderr: " + (e.stderr || "") }] };
+    return { content: [{ type: "text", text: redactSensitive("Exit code: " + e.status + "\nstdout: " + (e.stdout || "") + "\nstderr: " + (e.stderr || "")) }], isError: true };
   }
 }
 
@@ -126,7 +127,7 @@ async function sidekick_read({ path: filePath }) {
     return { content: [{ type: "text", text: "File not found: " + filePath }], isError: true };
   }
   const content = fs.readFileSync(filePath, "utf-8");
-  return { content: [{ type: "text", text: content }] };
+  return { content: [{ type: "text", text: redactSensitive(content) }] };
 }
 
 async function sidekick_write({ path: filePath, content }) {
@@ -172,7 +173,7 @@ async function sidekick_get({ key }) {
   }
   const entry = kvStore[key];
   const value = (typeof entry === 'object' && entry !== null && 'value' in entry) ? entry.value : entry;
-  return { content: [{ type: "text", text: value }] };
+  return { content: [{ type: "text", text: redactSensitive(value) }] };
 }
 
 async function sidekick_list_projects() {
@@ -210,7 +211,7 @@ async function sidekick_list({ path: dirPath }) {
     const date = stat ? stat.mtime.toISOString().slice(0, 19).replace("T", " ") : "";
     return type.padEnd(5) + " " + String(size).padStart(10) + " " + date + " " + i.name;
   });
-  return { content: [{ type: "text", text: lines.join("\n") || "(empty directory)" }] };
+  return { content: [{ type: "text", text: redactSensitive(lines.join("\n") || "(empty directory)") }] };
 }
 
 async function sidekick_web_fetch({ url: targetUrl, method, headers, body }) {
@@ -365,7 +366,8 @@ async function callTool(name, args) {
   const start = Date.now();
   try {
     const result = await handler(args);
-    logToolCall(name, args, Date.now() - start, true,
+    const success = !result.isError;
+    logToolCall(name, args, Date.now() - start, success,
       result.content?.[0]?.text?.substring(0, 80) || "(ok)"
     );
     return result;
