@@ -4,13 +4,46 @@ What's planned for Sidekick.
 
 ## Current (v1.0)
 
-- 8 MCP tools (bash, read, write, list, store, get, web_fetch, llm)
+- 10 MCP tools (bash, read, write, list, store, get, list_projects, get_by_project, web_fetch, llm)
 - Live dashboard with 5 tabs (System, Activity, Data, Config, Agent)
 - Autonomous agent bridge with Groq cloud + local Ollama fallback
 - Persistent KV storage across sessions
 - AGENTS.md integration for persistent collaboration
+- Project labeling system for KV store (organize by project)
+- Sensitive data redaction (SSH keys, tokens, passwords, etc.)
+- Enhanced dashboard with timestamps, source badges, expandable content
+- Comprehensive testing strategy (7 priority levels, 19 hours estimated)
+
+## Current Blockers 🔴
+
+### MCP Connection Issues
+**Status:** Unresolved (HIGH PRIORITY)  
+**Impact:** Blocking reliable use of Sidekick from opencode  
+**Timeline:** Week 1-3 for investigation/fix
+
+**Symptoms:**
+- "Server not initialized" errors
+- Intermittent tool call failures
+- Session management problems
+
+**Success Criteria:**
+- Zero errors over 24-hour period
+- 100+ consecutive successful tool calls
+- Clear error messages when failures occur
+
+See `CONTEXT.md` for detailed investigation plan and root cause hypotheses.
 
 ## Planned
+
+### Proxmox Migration (After MCP issues resolved - Week 4+)
+- Migrate from VPS to local Proxmox VM
+- 12GB VM with on-demand Ollama strategy
+- AMD GPU passthrough (Radeon 680M)
+- Native Ollama (not Docker) for simpler AMD GPU management
+- Device passthrough for GPU with fallback plan
+- Clean shutdown via Proxmox UI
+- Systemd dependencies with health checks
+- Proxmox snapshots with qemu-guest-agent
 
 ### CI/CD Integration
 - Trigger GitHub Actions workflows from sidekick
