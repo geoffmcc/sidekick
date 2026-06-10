@@ -2,7 +2,7 @@
 
 ## Overview
 
-Migrate Sidekick from current VPS (149.28.229.13) to local Proxmox VM on NucBox M7 Ultra (AMD Ryzen 7 PRO 6850U, Radeon 680M GPU).
+Migrate Sidekick from current VPS (YOUR_VPS_IP) to local Proxmox VM on NucBox M7 Ultra (AMD Ryzen 7 PRO 6850U, Radeon 680M GPU).
 
 **Status:** Planned  
 **Timeline:** After MCP connection issues are resolved (Week 4+)  
@@ -240,7 +240,7 @@ See `CONTEXT.md` for detailed investigation plan and root cause hypotheses.
 
 ## Notes
 
-- Current VPS: 149.28.229.13
+- Current VPS: YOUR_VPS_IP
 - New VM IP: 10.0.0.10 (WireGuard)
 - Domain: home.digitaltrainwreck.com (split DNS)
 - GPU: AMD Radeon 680M (RDNA2, 12 cores)
