@@ -4,7 +4,7 @@ A persistent remote AI collaborator that remembers everything and reads your ins
 
 **How?** A single `AGENTS.md` file that opencode reads on every session start. No plugins, no hooks — just markdown.
 
-> **Fun fact:** Sidekick has been actively helping develop itself — reviewing code, suggesting architecture improvements, and even helping write this README.
+> **Note:** This project was developed using its own remote execution tools — the AI assistant used Sidekick's infrastructure to help build and test the very system it runs on.
 
 <!-- TODO: Add dashboard screenshot -->
 <!-- TODO: Add agent loop GIF -->
@@ -33,14 +33,14 @@ Open `http://YOUR_VPS_IP:4098/` in a browser. That's it — Sidekick is live.
 
 ## How It Works
 
-Every time you open opencode, it automatically reads `~/.config/opencode/AGENTS.md` and loads whatever instructions are in it into the AI's context. Sidekick leverages this mechanism to make itself a persistent presence in your workflow:
+Every time you open opencode, it automatically reads `~/.config/opencode/AGENTS.md` and loads whatever instructions are in it into the AI's context. Sidekick provides the infrastructure — remote execution tools, persistent memory, and an autonomous agent — that the AI can use.
 
 1. **You open opencode** — it reads `AGENTS.md`
-2. **Sidekick's tools and instructions are loaded** — the AI now knows about the remote machine, the tools, and how to collaborate
-3. **You work** — the AI can call sidekick tools, delegate tasks to the `@sidekick` subagent, or you can chat with the agent directly via the dashboard
+2. **Sidekick's tools and instructions are loaded** — the AI now knows about the remote machine, the tools, and how to use them
+3. **You work** — the AI can call sidekick tools to execute commands on the remote machine, store/retrieve persistent data, or you can submit tasks to the autonomous Agent Bridge via the dashboard
 4. **Session ends** — but anything stored in Sidekick's KV persists for next time
 
-This is what makes Sidekick different from a plain MCP tool server. Without `AGENTS.md`, Sidekick is just a set of APIs. With it, Sidekick is a collaborator that is always present, always aware, and always ready.
+Sidekick is the infrastructure. The AI (running in opencode) uses that infrastructure to help you work. Without `AGENTS.md`, the AI doesn't know Sidekick exists. With it, the AI has persistent remote capabilities.
 
 ## What You Can Achieve
 
@@ -49,7 +49,7 @@ This is what makes Sidekick different from a plain MCP tool server. Without `AGE
 | **Remote code execution** | `sidekick_bash` runs commands on a persistent remote machine | Instructions tell the AI when and how to use it |
 | **Persistent memory across sessions** | `sidekick_store` / `sidekick_get` — KV storage that survives restarts | AI knows which keys to store and retrieve |
 | **Autonomous multi-step tasks** | Agent bridge at `:4099` plans and executes until done | AI knows to delegate complex work to the agent |
-| **Code review collaborator** | Ask sidekick to review diffs, catch issues, suggest improvements | Decision tree in AGENTS.md tells the AI *when* to ask |
+| **Code review** | Ask the AI to review diffs using remote execution tools | Decision tree in AGENTS.md tells the AI *when* to use sidekick tools for review |
 | **GitHub integration** | Stored tokens let sidekick create repos, push code, manage PRs | AGENTS.md tells the AI where to find credentials |
 | **Live monitoring dashboard** | Web UI at `:4098` — system health, activity, KV data, agent tasks | Always accessible, no config needed |
 | **Web scraping from remote** | `sidekick_web_fetch` bypasses local network restrictions | AI knows to use remote machine for fetching when needed |
@@ -92,6 +92,23 @@ This is what makes Sidekick different from a plain MCP tool server. Without `AGE
 | **Ollama** | 11434 | Local LLM inference (phi3:mini). Fallback when no `GROQ_API_KEY` |
 
 All tools are exposed via the MCP server at `http://YOUR_VPS_IP:4097/mcp`.
+
+## Understanding the Architecture
+
+To avoid confusion, it's important to understand what each component is:
+
+- **Sidekick** = The infrastructure: remote machine + MCP tools + KV store + Dashboard + Agent Bridge
+- **The AI** = The assistant running in opencode (e.g., qwen, Claude, etc.) that uses Sidekick tools
+- **Agent Bridge** = A separate autonomous AI (Groq/Ollama) that runs tasks independently via the Dashboard
+
+When you "ask Sidekick" something in opencode, you're actually asking the AI to use Sidekick's remote execution tools. The AI makes the decisions; Sidekick provides the capabilities.
+
+The Agent Bridge is a separate system that can run tasks autonomously, but it's not integrated into the main AI's workflow. It's accessed via the Dashboard's Agent tab or direct API calls.
+
+**What Sidekick does NOT do (currently):**
+- It does not provide multi-AI collaboration (the main AI cannot consult the Agent Bridge and get responses back)
+- It does not make decisions on its own (the AI in opencode makes all decisions)
+- It is not a separate AI entity (it's infrastructure that the AI uses)
 
 ## Security
 
@@ -173,24 +190,24 @@ Create or edit `~/.config/opencode/AGENTS.md` with the following structure (repl
 
 For the full AGENTS.md template with detailed usage guidelines, see [`AGENTS.md`](AGENTS.md) in this repo.
 
-## Collaborative Workflows
+## Using Sidekick Tools
 
-Sidekick is designed to be involved throughout your project lifecycle, not just when you explicitly call it.
+The AI can use Sidekick's tools throughout your project lifecycle, not just when you explicitly ask.
 
-### When to Involve Sidekick
+### When the AI Should Use Sidekick Tools
 
-- **Code reviews** — Security-sensitive or multi-system changes → always review. Trivial changes (docs, comments, renames) → skip. Everything else → review if confidence < 95%.
-- **Planning** — Involve sidekick during planning, not just before commit. It can catch architectural issues earlier.
-- **Second opinions** — Weighing tradeoffs or design decisions? Get sidekick's perspective.
-- **Issue identification** — Before testing or deployment, have sidekick analyze for potential problems.
-- **Test coverage** — Ask sidekick to review test coverage, not just code correctness.
+- **Code reviews** — Security-sensitive or multi-system changes → the AI should use sidekick tools to review. Trivial changes (docs, comments, renames) → skip. Everything else → review if confidence < 95%.
+- **Planning** — The AI can use sidekick tools during planning, not just before commit. It can analyze the remote environment and catch issues earlier.
+- **Second opinions** — The AI can use the autonomous Agent Bridge (via dashboard) to get a different perspective from Groq/Ollama.
+- **Issue identification** — Before testing or deployment, the AI can use sidekick tools to analyze the remote environment for potential problems.
+- **Test coverage** — The AI can use sidekick tools to review test coverage on the remote machine.
 
 ### Best Practices
 
-- **Provide context** — When asking for review, explain what the change does and why.
-- **Be specific** — If you are unsure about something, tell sidekick what to focus on.
-- **Early involvement** — The earlier sidekick is involved, the more valuable its input.
-- **Rule of thumb** — If in doubt, ask sidekick. The overhead is minimal and the benefit is worth it.
+- **Provide context** — When asking the AI to review, explain what the change does and why.
+- **Be specific** — If you are unsure about something, tell the AI what to focus on when using sidekick tools.
+- **Early involvement** — The earlier the AI uses sidekick tools, the more valuable its input.
+- **Rule of thumb** — If in doubt, ask the AI to use sidekick tools. The overhead is minimal and the benefit is worth it.
 
 ## Persistent Memory
 
@@ -299,7 +316,7 @@ sudo systemctl status sidekick-dashboard
 1. Clone the repo
 2. Copy `.env.example` → `.env` and fill in your values
 3. Run `./deploy.ps1` (Windows) or `./deploy.sh` (Linux/Mac)
-4. Open `http://YOUR_VPS_IP:4098/` and say hello to your new collaborator
+4. Open `http://YOUR_VPS_IP:4098/` and explore your new remote AI infrastructure
 
 That's it. Sidekick is live.
 
