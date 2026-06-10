@@ -16,6 +16,31 @@ What's planned for Sidekick.
 
 ## Current Blockers 🔴
 
+### Dashboard Syntax Error
+**Status:** 🔴 CRITICAL - Dashboard Broken  
+**Impact:** Dashboard completely non-functional  
+**Timeline:** Immediate fix required (next session)
+
+**Problem:**
+- Syntax error at line 456 in src/dashboard.js
+- Template literal for HTML is malformed
+- Dashboard service crashes on startup
+- All dashboard features unavailable
+
+**What Was Attempted:**
+- Comprehensive security hardening (rate limiting, CSRF protection, audit logging)
+- Error handling improvements (toast notifications, error logging)
+- All 15 fetch() calls updated with credentials
+- All 14 silent error handlers replaced
+
+**Next Steps:**
+1. Fix syntax error at line 456
+2. Test with `node --check src/dashboard.js`
+3. Deploy and verify all dashboard features work
+4. Test security features (rate limiting, CSRF, audit logging)
+
+See `CONTEXT.md` for detailed checklist and rollback plan.
+
 ### MCP Connection Issues
 **Status:** Unresolved (HIGH PRIORITY)  
 **Impact:** Blocking reliable use of Sidekick from opencode  
