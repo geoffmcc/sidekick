@@ -2,8 +2,6 @@
 
 A remote VPS agent with MCP tools, live dashboard, and a local AI agent.
 
-> **⚠️ Current Status:** Dashboard is temporarily broken due to a syntax error introduced during security hardening. The MCP server and agent are working normally. Dashboard will be fixed in the next development session. See CONTEXT.md for details.
-
 ## What is Sidekick?
 
 Sidekick is not just a tool server. It is a **persistent remote AI collaborator** that lives on a VPS and works alongside you across every coding session. It can run commands on a remote machine, store and recall information across sessions, review your code, execute multi-step tasks autonomously, and serve as a second brain for your projects.

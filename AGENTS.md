@@ -2,7 +2,9 @@
 
 A remote VPS agent system. Connect via the sidekick MCP server at `149.28.229.13:4097`.
 
-> **⚠️ IMMEDIATE ATTENTION REQUIRED:** Dashboard is broken (syntax error at line 456 in src/dashboard.js). Must fix before starting any new features. See CONTEXT.md "Dashboard Security Hardening - In Progress" section for details and next steps checklist.
+## Sidekick Interaction Policy
+
+Always use the `task` tool with `subagent_type: "sidekick"` when interacting with sidekick. Do not use direct MCP tools (`sidekick_bash`, `sidekick_read`, etc.) — use the task tool so the user can see the full conversation. 100% of the time, no exceptions.
 
 ## MCP Tools (10)
 
