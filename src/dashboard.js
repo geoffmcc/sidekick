@@ -14,100 +14,6 @@ const AGENT_PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 
 const DASHBOARD_USER = process.env.SIDEKICK_DASHBOARD_USER || "";
 const DASHBOARD_PASS = process.env.SIDEKICK_DASHBOARD_PASS || "";
-const DASHBOARD_ALLOWED_IPS = (process.env.SIDEKICK_DASHBOARD_ALLOWED_IPS || "").split(",").map(s => s.trim()).filter(Boolean);
-
-// Rate limiting (in-memory, per IP)
-const rateLimit = new Map();
-const RATE_LIMIT_WINDOW = 15 * 60 * 1000; // 15 minutes
-const RATE_LIMIT_MAX = 200;
-
-function checkRateLimit(ip) {
-  const now = Date.now();
-  const timestamps = (rateLimit.get(ip) || []).filter(t => now - t < RATE_LIMIT_WINDOW);
-  if (timestamps.length >= RATE_LIMIT_MAX) return false;
-  timestamps.push(now);
-  rateLimit.set(ip, timestamps);
-  return true;
-}
-
-// Audit logging
-const AUDIT_LOG = path.join(DATA_DIR, 'audit.jsonl');
-function auditLog(req, action, details) {
-  const entry = {
-    timestamp: new Date().toISOString(),
-    action,
-    key: req.params.key || null,
-    ip: req.ip,
-    user: (() => {
-      const auth = req.headers.authorization;
-      if (auth && auth.startsWith('Basic ')) {
-        return Buffer.from(auth.slice(6), 'base64').toString().split(':')[0];
-      }
-      return 'anonymous';
-    })(),
-    details
-  };
-  const line = JSON.stringify(entry) + '\n';
-  fs.appendFileSync(AUDIT_LOG, line);
-}
-
-// Error logging
-const ERROR_LOG = path.join(DATA_DIR, 'dashboard-errors.log');
-function logError(url, status, error, page, userAgent) {
-  const entry = {
-    timestamp: new Date().toISOString(),
-    url,
-    status,
-    error: error.message || String(error),
-    page,
-    userAgent,
-    logged: new Date().toISOString()
-  };
-  const line = JSON.stringify(entry) + '\n';
-  fs.appendFileSync(ERROR_LOG, line);
-}
-
-// IP whitelist middleware
-if (DASHBOARD_ALLOWED_IPS.length) {
-  app.use((req, res, next) => {
-    const ip = req.ip === '::ffff:127.0.0.1' ? '127.0.0.1' : req.ip;
-    if (ip === '127.0.0.1' || ip === '::1' || DASHBOARD_ALLOWED_IPS.includes(ip)) {
-      return next();
-    }
-    return res.status(403).json({ error: 'Forbidden' });
-  });
-}
-
-// Rate limiting middleware
-app.use((req, res, next) => {
-  const ip = req.ip;
-  if (!checkRateLimit(ip)) {
-    return res.status(429).json({ error: 'Too many requests, please try again later' });
-  }
-  next();
-});
-
-// Request size limit
-app.use(express.json({ limit: '1mb' }));
-app.use((req, res, next) => {
-  const contentLength = parseInt(req.headers['content-length'] || '0');
-  if (contentLength > 1024 * 1024) {
-    return res.status(413).json({ error: 'Request too large' });
-  }
-  next();
-});
-
-// CSRF protection - validate Origin header for state-changing requests
-app.use((req, res, next) => {
-  if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) {
-    const origin = req.headers.origin;
-    const host = req.headers.host;
-    if (origin && !origin.includes(host)) {
-      return res.status(403).json({ error: 'Invalid origin' });
-    }
-  }
-  next();
-});
 
 if (DASHBOARD_USER && DASHBOARD_PASS) {
   app.use((req, res, next) => {
@@ -354,7 +260,6 @@ app.put("/api/kv/:key", (req, res) => {
       }
       
       writeKV(kv);
-      auditLog(req, 'kv.update', { value_length: value?.length, project });
       res.json({ ok: true });
     } catch { res.status(400).json({ error: "invalid body" }); }
   });
@@ -375,7 +280,6 @@ app.delete("/api/kv/:key", (req, res) => {
   const kv = readKV();
   delete kv[req.params.key];
   writeKV(kv);
-  auditLog(req, 'kv.delete', {});
   res.json({ ok: true });
 });
 
@@ -402,14 +306,12 @@ app.get("/api/stats", (req, res) => {
 app.delete("/api/logs", (req, res) => {
   const f = path.join(DATA_DIR, "log.jsonl");
   try { fs.writeFileSync(f, "", "utf-8"); } catch {}
-  auditLog(req, 'logs.clear', {});
   res.json({ ok: true });
 });
 
 app.delete("/api/kv", (req, res) => {
   const f = path.join(DATA_DIR, "kvstore.json");
   try { fs.writeFileSync(f, "{}", "utf-8"); } catch {}
-  auditLog(req, 'kv.clear', {});
   res.json({ ok: true });
 });
 
@@ -420,7 +322,6 @@ app.delete("/api/conversations", (req, res) => {
       fs.unlinkSync(path.join(dir, f));
     });
   } catch {}
-  auditLog(req, 'conversations.clear', {});
   res.json({ ok: true });
 });
 
@@ -433,21 +334,7 @@ app.delete("/api/data", (req, res) => {
       fs.unlinkSync(path.join(dir, f));
     });
   } catch {}
-  auditLog(req, 'data.clear', {});
   res.json({ ok: true });
-});
-
-// Error logging endpoint (for frontend errors)
-app.post('/api/internal/error-log', (req, res) => {
-  let body = '';
-  req.on('data', c => body += c);
-  req.on('end', () => {
-    try {
-      const entry = JSON.parse(body);
-      logError(entry.url, entry.status, entry.error, entry.page, entry.userAgent);
-    } catch {}
-    res.json({ ok: true });
-  });
 });
 
 // --- Frontend ---
@@ -598,12 +485,6 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
 .log-result::after{content:'Click to expand';position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,#161b22);padding:20px 12px 8px;text-align:center;font-size:11px;opacity:0;transition:opacity 0.2s}
 .log-result:hover::after{opacity:1}
 .log-result.expanded::after{display:none}
-.toast{position:fixed;top:20px;right:20px;padding:12px 20px;border-radius:6px;color:#fff;font-size:.85rem;z-index:10000;opacity:0;transform:translateX(400px);transition:all 0.3s ease;max-width:400px;box-shadow:0 4px 6px rgba(0,0,0,0.3)}
-.toast.show{opacity:1;transform:translateX(0)}
-.toast-info{background:#1f6feb}
-.toast-success{background:#238636}
-.toast-warning{background:#d29922}
-.toast-error{background:#da3633}
 </style>
 </head>
 <body>
@@ -743,47 +624,6 @@ const SERVICE_LABELS = { 'sidekick-mcp': 'MCP', 'sidekick-agent': 'Agent', 'olla
 const SOURCE_ICONS = { 'agent': 'fa-robot', 'mcp': 'fa-plug', 'unknown': 'fa-circle-question' };
 const SOURCE_COLORS = { 'agent': '#58a6ff', 'mcp': '#bc8cff', 'unknown': '#8b949e' };
 
-// Toast notification system
-function showToast(message, type = 'info') {
-  const toast = document.createElement('div');
-  toast.className = `toast toast-${type}`;
-  toast.textContent = message;
-  document.body.appendChild(toast);
-  setTimeout(() => toast.classList.add('show'), 10);
-  setTimeout(() => {
-    toast.classList.remove('show');
-    setTimeout(() => toast.remove(), 300);
-  }, 5000);
-}
-
-// Centralized error handler
-function apiError(url, error, status) {
-  const messages = {
-    401: 'Authentication required — please refresh the page',
-    429: 'Rate limited — please wait before refreshing',
-    502: 'Backend service unavailable',
-    503: 'Service temporarily unavailable',
-  };
-  
-  const msg = messages[status] || `Request failed: ${error.message || 'Unknown error'}`;
-  showToast(msg, status >= 500 ? 'error' : 'warning');
-  
-  // Log to server (fire-and-forget)
-  fetch('/api/internal/error-log', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
-    body: JSON.stringify({
-      timestamp: new Date().toISOString(),
-      url,
-      status,
-      error: error.message || String(error),
-      page: currentPage,
-      userAgent: navigator.userAgent
-    })
-  }).catch(() => {}); // This one CAN silently fail
-}
-
 function $(id){return document.getElementById(id)}
 
 function showPage(name){
@@ -822,7 +662,7 @@ function esc(s){
 
 // -- Services -- //
 function loadServices(){
-  fetch('/api/services', { credentials: 'same-origin' }).then(r=>r.json()).then(d=>{
+  fetch('/api/services').then(r=>r.json()).then(d=>{
     const container = $('serviceDots');
     if (!d.services) { container.innerHTML = ''; return; }
     container.innerHTML = Object.entries(d.services).map(([name, status]) => {
@@ -831,12 +671,12 @@ function loadServices(){
       const cls = status === 'active' ? 'on' : 'off';
       return '<span class="service-indicator ' + cls + '"><i class="fas ' + icon + '"></i> ' + label + '</span>';
     }).join('');
-  }).catch(e => apiError('/api/services', e, 0));
+  }).catch(()=>{});
 }
 
 // -- System -- //
 function loadSystem(){
-  fetch('/api/system', { credentials: 'same-origin' }).then(r=>r.json()).then(d=>{
+  fetch('/api/system').then(r=>r.json()).then(d=>{
     if(d.error){ $('uptime').textContent='error'; return }
     $('uptime').textContent = d.uptime || '?';
     const cpuVal = parseFloat(d.cpu);
@@ -844,11 +684,11 @@ function loadSystem(){
     $('cpu').className = 'value' + (cpuVal > 80 ? ' warn' : cpuVal > 50 ? '' : ' ok');
     $('memory').textContent = d.memory.used + '/' + d.memory.total;
     $('disk').textContent = d.disk.free + ' free (' + d.disk.pct + ')';
-  }).catch(e => apiError('/api/system', e, 0));
+  }).catch(()=>{});
 }
 
 function loadLLM(){
-  fetch('/api/llm', { credentials: 'same-origin' }).then(r=>r.json()).then(d=>{
+  fetch('/api/llm').then(r=>r.json()).then(d=>{
     const el = $('llmStatus');
     if (!d.available) {
       el.innerHTML = '<div class="llm-card"><span class="llm-dot off"></span><span class="empty">Ollama not reachable</span></div>';
@@ -857,11 +697,11 @@ function loadLLM(){
     el.innerHTML = d.models.map(m =>
       '<div class="llm-card"><span class="llm-dot on"></span><span class="llm-name">' + esc(m.name) + '</span><span class="llm-size">' + m.size + '</span></div>'
     ).join('') || '<div class="llm-card"><span class="llm-dot on"></span><span class="llm-name">Ollama running, no models</span></div>';
-  }).catch(e => apiError('/api/llm', e, 0));
+  }).catch(()=>{});
 }
 
 function loadStats(){
-  fetch('/api/stats', { credentials: 'same-origin' }).then(r=>r.json()).then(d=>{
+  fetch('/api/stats').then(r=>r.json()).then(d=>{
     const body = $('statsBody');
     if (!d.stats || !d.stats.length) { body.innerHTML = '<tr><td colspan="6" class="empty">No data</td></tr>'; return; }
     body.innerHTML = d.stats.map(s => {
@@ -876,16 +716,16 @@ function loadStats(){
         '<td><div class="stats-bar"><div class="stats-bar-fill ' + (rate >= 90 ? 'ok' : rate >= 70 ? '' : 'fail') + '" style="width:' + barWidth + '%"></div></div> ' + rate + '%</td>' +
         '</tr>';
     }).join('');
-  }).catch(e => apiError('/api/stats', e, 0));
+  }).catch(()=>{});
 }
 
 // -- Activity -- //
 function loadLogs(){
-  fetch('/api/logs?limit=500', { credentials: 'same-origin' }).then(r=>r.json()).then(d=>{
+  fetch('/api/logs?limit=500').then(r=>r.json()).then(d=>{
     allLogs = d.entries || [];
     logPage = 0;
     renderLogs();
-  }).catch(e => apiError('/api/logs', e, 0));
+  }).catch(()=>{});
 }
 
 function filterLogs(){
@@ -1017,8 +857,8 @@ function loadMoreLogs(){
 // -- Data -- //
 function loadKV(){
   Promise.all([
-    fetch('/api/kv', { credentials: 'same-origin' }).then(r=>r.json()),
-    fetch('/api/kv/projects', { credentials: 'same-origin' }).then(r=>r.json())
+    fetch('/api/kv').then(r=>r.json()),
+    fetch('/api/kv/projects').then(r=>r.json())
   ]).then(([kvData, projData]) => {
     allKV = kvData.entries || [];
     
@@ -1032,7 +872,7 @@ function loadKV(){
     }
     
     renderKV();
-  }).catch(e => apiError('/api/kv', e, 0));
+  }).catch(()=>{});
 }
 
 function filterKV(){
@@ -1183,37 +1023,28 @@ function saveKVEdit(){
   fetch('/api/kv/' + encodeURIComponent(key), {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
     body: JSON.stringify({ value, project })
   }).then(r => r.json()).then(d => {
-    if (d.ok) { closeEditModal(); loadKV(); showToast('Entry updated successfully', 'success'); }
-  }).catch(e => apiError('/api/kv/' + encodeURIComponent(key), e, 0));
+    if (d.ok) { closeEditModal(); loadKV(); }
+  }).catch(()=>{});
 }
 
 function deleteKV(key){
   if (!confirm('Delete "' + key + '"?')) return;
-  fetch('/api/kv/' + encodeURIComponent(key), { 
-    method: 'DELETE',
-    credentials: 'same-origin'
-  })
-    .then(r => r.json()).then(d => { 
-      if (d.ok) { 
-        loadKV(); 
-        showToast('Entry deleted successfully', 'success'); 
-      } 
-    }).catch(e => apiError('/api/kv/' + encodeURIComponent(key), e, 0));
+  fetch('/api/kv/' + encodeURIComponent(key), { method: 'DELETE' })
+    .then(r => r.json()).then(d => { if (d.ok) loadKV(); }).catch(()=>{});
 }
 
 // -- Config -- //
 function loadConfig(){
-  fetch('/api/config', { credentials: 'same-origin' }).then(r=>r.json()).then(d=>{
+  fetch('/api/config').then(r=>r.json()).then(d=>{
     const list = $('configList');
     if (!d.config || !Object.keys(d.config).length){ list.innerHTML='<div class="empty">No configuration</div>'; return }
     list.innerHTML = Object.entries(d.config).map(([key, value]) => {
       const isRedacted = value === '***redacted***';
       return '<div class="config-entry"><span class="config-key">' + esc(key) + '</span><span class="config-val' + (isRedacted ? ' redacted' : '') + '">' + esc(String(value)) + '</span></div>';
     }).join('');
-  }).catch(e => apiError('/api/config', e, 0));
+  }).catch(()=>{});
 }
 
 // -- Agent -- //
@@ -1228,7 +1059,6 @@ function runAgent(){
   fetch('/api/agent/run', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
     body: JSON.stringify({ goal })
   }).then(r=>r.json()).then(data => {
     if (data.error) {
@@ -1252,7 +1082,6 @@ function runAgent(){
     agentStream.onerror = () => stopAgent();
   }).catch(e => {
     appendLog('<span class="agent-err"> Request failed: ' + esc(e.message) + '</span>');
-    apiError('/api/agent/run', e, 0);
     stopAgent();
   });
 }
@@ -1273,7 +1102,7 @@ function toggleHistory(){
   const el = $('agentHistory');
   el.style.display = el.style.display === 'none' ? 'block' : 'none';
   if (el.style.display === 'block') {
-    fetch('/api/agent/history', { credentials: 'same-origin' }).then(r=>r.json()).then(d=>{
+    fetch('/api/agent/history').then(r=>r.json()).then(d=>{
       let html = '<div style="color:#8b949e;font-size:.78rem;margin-bottom:12px;padding:8px;background:#161b22;border-radius:6px">' +
         '<i class="fas fa-info-circle"></i> Agent history shows tasks submitted via this dashboard. ' +
         'Tool calls from opencode appear in the Activity tab, grouped by session.</div>';
@@ -1289,7 +1118,7 @@ function toggleHistory(){
         '</div>'
       ).join('');
       el.innerHTML = html;
-    }).catch(e => apiError('/api/agent/history', e, 0));
+    }).catch(()=>{});
   }
 }
 
@@ -1303,7 +1132,7 @@ function toggleRunDetail(id){
   expandedHistory[id] = true;
   detail.style.display = 'block';
   detail.innerHTML = '<div class="empty">Loading...</div>';
-  fetch('/api/agent/run/' + id, { credentials: 'same-origin' }).then(r=>r.json()).then(run=>{
+  fetch('/api/agent/run/' + id).then(r=>r.json()).then(run=>{
     if (!run || !run.steps) { detail.innerHTML = '<div class="empty">No details</div>'; return; }
     let html = '';
     run.steps.forEach(s => {
@@ -1313,14 +1142,11 @@ function toggleRunDetail(id){
       else if (s.type === 'done') html += '<span class="agent-done">✔ ' + esc(s.text) + '</span>\\n';
     });
     detail.innerHTML = '<div class="history-detail">' + html + '</div>';
-  }).catch(e => { 
-    detail.innerHTML = '<div class="agent-err">Failed to load details</div>'; 
-    apiError('/api/agent/run/' + id, e, 0);
-  });
+  }).catch(()=>{ detail.innerHTML = '<div class="agent-err">Failed to load details</div>'; });
 }
 
 function exportRun(id){
-  fetch('/api/agent/run/' + id, { credentials: 'same-origin' }).then(r=>r.json()).then(run=>{
+  fetch('/api/agent/run/' + id).then(r=>r.json()).then(run=>{
     const blob = new Blob([JSON.stringify(run, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1328,7 +1154,7 @@ function exportRun(id){
     a.download = 'agent-run-' + id + '.json';
     a.click();
     URL.revokeObjectURL(url);
-  }).catch(e => apiError('/api/agent/run/' + id, e, 0));
+  }).catch(()=>{});
 }
 
 function clearData(type){
@@ -1345,30 +1171,22 @@ function clearData(type){
     conversations: '/api/conversations',
     all: '/api/data'
   };
-  fetch(endpoints[type], { 
-    method: 'DELETE',
-    credentials: 'same-origin'
-  })
+  fetch(endpoints[type], { method: 'DELETE' })
     .then(r => r.json())
     .then(d => {
       if (d.ok) {
         if (type === 'logs' || type === 'all') loadLogs();
         if (type === 'kv' || type === 'all') loadKV();
-        showToast('Data cleared successfully', 'success');
       }
     })
-    .catch(e => apiError(endpoints[type], e, 0));
+    .catch(()=>{});
 }
 
 // -- Refresh -- //
 function refresh(){
-  // Only refresh if on system page AND tab is visible
-  if (currentPage !== 'system') return;
-  if (document.hidden) return;
-  
   const now = new Date();
   $('lastUpdate').textContent = 'updated ' + now.toLocaleTimeString();
-  loadSystem(); loadLLM(); loadServices(); loadStats();
+  if (currentPage === 'system') { loadSystem(); loadLLM(); loadServices(); loadStats(); }
 }
 refresh();
 setInterval(refresh, 10000);
