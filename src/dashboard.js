@@ -746,7 +746,7 @@ const SOURCE_COLORS = { 'agent': '#58a6ff', 'mcp': '#bc8cff', 'unknown': '#8b949
 // Toast notification system
 function showToast(message, type = 'info') {
   const toast = document.createElement('div');
-  toast.className = `toast toast-${type}`;
+  toast.className = \`toast toast-\${type}\`;
   toast.textContent = message;
   document.body.appendChild(toast);
   setTimeout(() => toast.classList.add('show'), 10);
@@ -765,7 +765,7 @@ function apiError(url, error, status) {
     503: 'Service temporarily unavailable',
   };
   
-  const msg = messages[status] || `Request failed: ${error.message || 'Unknown error'}`;
+  const msg = messages[status] || \`Request failed: \${error.message || 'Unknown error'}\`;
   showToast(msg, status >= 500 ? 'error' : 'warning');
   
   // Log to server (fire-and-forget)
