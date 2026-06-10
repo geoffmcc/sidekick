@@ -448,6 +448,43 @@ nav a.active{color:#58a6ff;border-color:#58a6ff;background:#0d1117}
 .modal textarea:focus{outline:none;border-color:#58a6ff}
 .modal-actions{display:flex;gap:8px;margin-top:16px;justify-content:flex-end}
 footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
+.kv-entry{display:flex;flex-direction:column;gap:8px;padding:12px;border-bottom:1px solid #21262d}
+.kv-entry:last-child{border-bottom:none}
+.kv-header{display:flex;justify-content:space-between;align-items:center}
+.kv-key{font-weight:600;font-family:monospace;color:#c9d1d9}
+.kv-badges{display:flex;gap:6px}
+.kv-source{font-size:11px;padding:2px 8px;border-radius:3px;background:#21262d;color:#8b949e}
+.kv-source.mcp{background:#2d4a2d;color:#7ee787}
+.kv-source.agent{background:#4a2d4a;color:#d2a8ff}
+.kv-source.dashboard{background:#2d3a4a;color:#79c0ff}
+.kv-value-preview{background:#161b22;padding:8px 12px;border-radius:4px;font-family:monospace;font-size:12px;cursor:pointer;white-space:pre-wrap;word-break:break-all;max-height:100px;overflow:hidden;position:relative}
+.kv-value-preview:hover{background:#1c2128}
+.kv-value-preview.expanded{max-height:none}
+.kv-value-preview::after{content:'Click to expand';position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,#161b22);padding:20px 12px 8px;text-align:center;font-size:11px;color:#8b949e;opacity:0;transition:opacity 0.2s}
+.kv-value-preview:hover::after{opacity:1}
+.kv-value-preview.expanded::after{display:none}
+.kv-timestamps{display:flex;gap:16px;font-size:11px;color:#8b949e}
+.kv-timestamps span{display:flex;align-items:center;gap:4px}
+.kv-modal{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.8);display:flex;align-items:center;justify-content:center;z-index:1000}
+.kv-modal-content{background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:24px;max-width:800px;max-height:80vh;overflow:auto;width:90%}
+.kv-modal-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+.kv-modal-header h3{color:#58a6ff;margin:0}
+.kv-modal-value{background:#161b22;padding:16px;border-radius:4px;font-family:monospace;font-size:13px;white-space:pre-wrap;word-break:break-all;max-height:60vh;overflow:auto}
+.log-entry{display:flex;flex-direction:column;gap:8px;padding:12px;border-bottom:1px solid #21262d;position:relative}
+.log-entry.error{background:rgba(248,81,73,0.05);border-left:3px solid #f85149}
+.log-header{display:flex;justify-content:space-between;align-items:center}
+.log-time{font-size:11px;color:#8b949e;font-family:monospace}
+.log-tool{font-weight:600;font-family:monospace;color:#58a6ff}
+.log-status{font-size:11px;padding:2px 8px;border-radius:3px;font-weight:600}
+.log-status.ok{background:#2d4a2d;color:#7ee787}
+.log-status.fail{background:#4a2d2d;color:#f85149}
+.log-args{background:#161b22;padding:8px 12px;border-radius:4px;font-family:monospace;font-size:12px;color:#c9d1d9;white-space:pre-wrap;word-break:break-all}
+.log-result{background:#161b22;padding:8px 12px;border-radius:4px;font-family:monospace;font-size:12px;color:#8b949e;cursor:pointer;max-height:100px;overflow:hidden;position:relative;white-space:pre-wrap;word-break:break-all}
+.log-result:hover{background:#1c2128}
+.log-result.expanded{max-height:none}
+.log-result::after{content:'Click to expand';position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,#161b22);padding:20px 12px 8px;text-align:center;font-size:11px;opacity:0;transition:opacity 0.2s}
+.log-result:hover::after{opacity:1}
+.log-result.expanded::after{display:none}
 </style>
 </head>
 <body>
@@ -522,6 +559,12 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
     <input type="text" id="kvSearch" placeholder="Search keys or values..." oninput="filterKV()">
     <select id="kvProjectFilter" onchange="filterKV()">
       <option value="">All Projects</option>
+    </select>
+    <select id="kvAgeFilter" onchange="filterKV()">
+      <option value="all">All Time</option>
+      <option value="today">Today</option>
+      <option value="week">This Week</option>
+      <option value="month">This Month</option>
     </select>
   </div>
   <div class="card" id="kvList" style="max-height:600px;overflow-y:auto;padding:8px 16px"></div>
@@ -730,7 +773,10 @@ function renderLogs(){
   const filtered = getFilteredLogs();
   $('logCount').textContent = filtered.length;
   const container = $('logList');
-  if (!filtered.length) { container.innerHTML = '<div class="empty">No matching activity</div>'; return; }
+  if (!filtered.length) { 
+    container.innerHTML = '<div class="empty">No matching activity</div>'; 
+    return; 
+  }
 
   const sessions = groupSessions(filtered);
   const visibleSessions = sessions.slice(0, logPage + 1);
@@ -752,16 +798,35 @@ function renderLogs(){
     html += '<span class="session-src">' + esc(src) + '</span>';
     html += '</div>';
     html += '<div class="session-body" id="session-' + si + '">';
+    
     session.entries.forEach(e => {
       const errClass = e.ok ? '' : ' error';
+      const statusClass = e.ok ? 'ok' : 'fail';
+      const statusText = e.ok ? 'OK' : 'FAIL';
+      
       html += '<div class="log-entry' + errClass + '">';
+      html += '<div class="log-header">';
       html += '<span class="log-time">' + fmtTime(e.t) + '</span>';
-      html += '<span class="log-name">' + esc(e.n) + '</span>';
-      html += '<span class="' + (e.ok ? 'log-ok' : 'log-fail') + '">' + (e.ok ? 'OK' : 'FAIL') + '</span>';
-      if (e.a) html += '<span class="log-args">' + esc(e.a) + '</span>';
-      else html += '<span class="log-summary">' + esc(e.s) + '</span>';
+      html += '<span class="log-tool">' + esc(e.n) + '</span>';
+      html += '<span class="log-status ' + statusClass + '">' + statusText + '</span>';
+      html += '</div>';
+      
+      // Show arguments
+      if (e.a) {
+        html += '<div class="log-args">' + esc(e.a) + '</div>';
+      }
+      
+      // Show result (expandable)
+      if (e.s) {
+        const resultId = 'result-' + Math.random().toString(36).substr(2, 9);
+        html += '<div class="log-result" id="' + resultId + '" onclick="toggleResult(\'' + resultId + '\')">';
+        html += esc(e.s);
+        html += '</div>';
+      }
+      
       html += '</div>';
     });
+    
     html += '</div></div>';
   });
 
@@ -770,6 +835,13 @@ function renderLogs(){
   }
 
   container.innerHTML = html;
+}
+
+function toggleResult(id) {
+  const el = document.getElementById(id);
+  if (el) {
+    el.classList.toggle('expanded');
+  }
 }
 
 function toggleSession(idx){
@@ -810,28 +882,124 @@ function filterKV(){
 function renderKV(){
   const search = ($('kvSearch').value || '').toLowerCase();
   const projectFilter = $('kvProjectFilter') ? $('kvProjectFilter').value : '';
-  const filtered = allKV.filter(e => {
+  const ageFilter = $('kvAgeFilter') ? $('kvAgeFilter').value : 'all';
+  
+  let filtered = allKV.filter(e => {
+    // Project filter
     if (projectFilter) {
       if (projectFilter === 'null' && e.project !== null) return false;
       if (projectFilter !== 'null' && e.project !== projectFilter) return false;
     }
+    
+    // Age filter
+    if (ageFilter !== 'all') {
+      const updated = new Date(e.updated);
+      const now = new Date();
+      const diffMs = now - updated;
+      const diffDays = diffMs / (1000 * 60 * 60 * 24);
+      
+      if (ageFilter === 'today' && diffDays > 1) return false;
+      if (ageFilter === 'week' && diffDays > 7) return false;
+      if (ageFilter === 'month' && diffDays > 30) return false;
+    }
+    
+    // Search filter
     if (!search) return true;
     return (e.key + ' ' + String(e.value)).toLowerCase().includes(search);
   });
+  
+  // Sort by updated date (newest first)
+  filtered.sort((a, b) => new Date(b.updated) - new Date(a.updated));
+  
   $('kvCount').textContent = filtered.length;
   const list = $('kvList');
-  if (!filtered.length) { list.innerHTML = '<div class="empty">No matching data</div>'; return; }
+  if (!filtered.length) { 
+    list.innerHTML = '<div class="empty">No matching data</div>'; 
+    return; 
+  }
+  
   list.innerHTML = filtered.map(e => {
-    const projectBadge = e.project ? '<span class="kv-project">' + esc(e.project) + '</span>' : '';
+    const projectBadge = e.project 
+      ? '<span class="kv-project">' + esc(e.project) + '</span>' 
+      : '<span class="kv-project">global</span>';
+    
+    const sourceBadge = e.source 
+      ? '<span class="kv-source ' + esc(e.source) + '">' + esc(e.source) + '</span>' 
+      : '';
+    
+    const createdAgo = formatTimeAgo(e.created);
+    const updatedAgo = formatTimeAgo(e.updated);
+    const isUpdated = e.created !== e.updated;
+    
+    const valuePreview = String(e.value).substring(0, 300);
+    const hasMore = String(e.value).length > 300;
+    
     return '<div class="kv-entry">' +
-      '<span class="kv-key">' + esc(e.key) + '</span>' +
-      projectBadge +
-      '<span class="kv-val">' + esc(String(e.value).substring(0,200)) + (String(e.value).length > 200 ? '...' : '') + '</span>' +
-      '<span class="kv-actions">' +
-      '<button onclick="openEditModal(\\'' + esc(e.key).replace(/'/g, "\\\\'") + '\\')"><i class="fas fa-edit"></i></button>' +
-      '<button class="del" onclick="deleteKV(\\'' + esc(e.key).replace(/'/g, "\\\\'") + '\\')"><i class="fas fa-trash"></i></button>' +
-      '</span></div>';
+      '<div class="kv-header">' +
+        '<span class="kv-key">' + esc(e.key) + '</span>' +
+        '<div class="kv-badges">' +
+          projectBadge +
+          sourceBadge +
+        '</div>' +
+      '</div>' +
+      '<div class="kv-timestamps">' +
+        '<span><i class="fas fa-plus-circle"></i> Created ' + createdAgo + '</span>' +
+        (isUpdated ? '<span><i class="fas fa-edit"></i> Updated ' + updatedAgo + '</span>' : '') +
+      '</div>' +
+      '<div class="kv-value-preview" onclick="showValueModal(\'' + esc(e.key).replace(/'/g, "\\'") + '\')">' +
+        esc(valuePreview) + (hasMore ? '...' : '') +
+      '</div>' +
+      '<div class="kv-actions">' +
+        '<button onclick="openEditModal(\'' + esc(e.key).replace(/'/g, "\\'") + '\')" title="Edit">' +
+          '<i class="fas fa-edit"></i>' +
+        '</button>' +
+        '<button class="del" onclick="deleteKV(\'' + esc(e.key).replace(/'/g, "\\'") + '\')" title="Delete">' +
+          '<i class="fas fa-trash"></i>' +
+        '</button>' +
+      '</div>' +
+    '</div>';
   }).join('');
+}
+
+function formatTimeAgo(dateStr) {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now - date;
+  const diffSecs = Math.floor(diffMs / 1000);
+  const diffMins = Math.floor(diffSecs / 60);
+  const diffHours = Math.floor(diffMins / 60);
+  const diffDays = Math.floor(diffHours / 24);
+  
+  if (diffSecs < 60) return 'just now';
+  if (diffMins < 60) return diffMins + 'm ago';
+  if (diffHours < 24) return diffHours + 'h ago';
+  if (diffDays < 7) return diffDays + 'd ago';
+  if (diffDays < 30) return Math.floor(diffDays / 7) + 'w ago';
+  if (diffDays < 365) return Math.floor(diffDays / 30) + 'mo ago';
+  return Math.floor(diffDays / 365) + 'y ago';
+}
+
+function showValueModal(key) {
+  const entry = allKV.find(e => e.key === key);
+  if (!entry) return;
+  
+  const modal = document.createElement('div');
+  modal.className = 'kv-modal';
+  modal.onclick = function(e) {
+    if (e.target === modal) modal.remove();
+  };
+  
+  modal.innerHTML = '<div class="kv-modal-content">' +
+    '<div class="kv-modal-header">' +
+      '<h3>' + esc(key) + '</h3>' +
+      '<button onclick="this.closest(\'.kv-modal\').remove()" style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:20px;">' +
+        '<i class="fas fa-times"></i>' +
+      '</button>' +
+    '</div>' +
+    '<div class="kv-modal-value">' + esc(String(entry.value)) + '</div>' +
+  '</div>';
+  
+  document.body.appendChild(modal);
 }
 
 function openEditModal(key){
