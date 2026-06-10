@@ -2,7 +2,7 @@
 
 A remote VPS agent system. Connect via the sidekick MCP server at `149.28.229.13:4097`.
 
-## MCP Tools (8)
+## MCP Tools (10)
 
 | Tool | When to use |
 |------|-------------|
@@ -12,6 +12,8 @@ A remote VPS agent system. Connect via the sidekick MCP server at `149.28.229.13
 | `sidekick_list` | List files and directories on the VPS |
 | `sidekick_store` | Store a value persistently in KV storage |
 | `sidekick_get` | Retrieve a stored value from KV storage |
+| `sidekick_list_projects` | List all projects in KV storage |
+| `sidekick_get_by_project` | Get all keys and values for a specific project |
 | `sidekick_web_fetch` | Fetch a URL from the VPS IP (bypasses local IP restrictions) |
 | `sidekick_llm` | Query the LLM (Groq cloud or local Phi-3-mini) |
 
@@ -26,6 +28,31 @@ All tool calls are logged with source tags:
 - **Dashboard** (`:4098`) — web UI with System, Activity, Data, Config, and Agent tabs, Font Awesome icons
 - **Agent Bridge** (`:4099`) — autonomous LLM agent that calls tools directly (bypasses MCP HTTP)
 - **Ollama** (`:11434`) — local Phi-3-mini fallback. Uses cloud Groq API when `GROQ_API_KEY` is set
+
+## Recent Features
+
+### Project Labeling
+KV store supports project-based organization. Use `project` parameter when storing data to group related keys. Dashboard shows project badges and filtering.
+
+### Sensitive Data Redaction
+All tool outputs automatically redact:
+- SSH private keys (RSA, EC, DSA, OPENSSH)
+- GitHub tokens (ghp_, github_pat_)
+- API keys (sk-*, api_key=*)
+- AWS keys (AKIA*, aws_secret_*)
+- Passwords in env vars
+- Bearer tokens
+- Database connection strings
+- Stripe keys
+- JWT tokens
+
+### Enhanced Dashboard
+- Timestamps with relative time
+- Source badges (mcp/agent/dashboard)
+- Expandable value previews
+- Age filtering (today/week/month/all)
+- Failed command highlighting
+- Sort by updated date
 
 ## Usage
 

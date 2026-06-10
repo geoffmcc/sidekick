@@ -8,6 +8,8 @@ Sidekick is not just a tool server. It is a **persistent remote AI collaborator*
 
 What sets Sidekick apart: it is **always on**, it **remembers things**, and it **reads your instructions every time you open a session** — so it knows how to help before you even ask.
 
+> **Fun fact:** Sidekick has been actively helping develop itself — reviewing code, suggesting architecture improvements, and even helping write this README. It's not just a tool; it's a collaborator that's helping build its own future.
+
 ## How It Works: The AGENTS.md Loop
 
 The secret sauce is a single file: `~/.config/opencode/AGENTS.md`.
@@ -139,6 +141,25 @@ Sidekick is not just for storage — use it as a collaborator throughout project
 
 **opencode reads this file automatically on every session start.** No plugins, no hooks, no manual loading — just a markdown file in the right place.
 
+## Recent Enhancements
+
+### Project Labeling System
+KV store now supports project-based organization. Store data with `project` parameter to group related keys, filter by project in the dashboard, and maintain better context across sessions.
+
+### Sensitive Data Redaction
+All tool outputs are automatically scanned for sensitive data (SSH keys, GitHub tokens, API keys, passwords, database URLs, etc.) and redacted before logging or display. Protects against accidental credential exposure.
+
+### Enhanced Dashboard
+- **Timestamps** with relative time display ("Created 2h ago", "Updated 5m ago")
+- **Source badges** showing where data came from (mcp/agent/dashboard)
+- **Expandable value previews** - click to see full content in a modal
+- **Age filtering** - filter by today/this week/this month/all time
+- **Failed command highlighting** - red background and border for errors
+- **Sort by updated date** - newest entries first
+
+### Comprehensive Testing Strategy
+7-priority testing framework covering security, error handling, MCP protocol compliance, agent bridge, dashboard APIs, performance, and backward compatibility. Tests written and ready for execution.
+
 ## Architecture
 
 ```
@@ -242,6 +263,8 @@ All tools are exposed via the MCP server at `http://YOUR_VPS_IP:4097/mcp`.
 | `sidekick_list` | List directories |
 | `sidekick_store` | KV storage — store a value |
 | `sidekick_get` | KV storage — retrieve a value |
+| `sidekick_list_projects` | List all projects in KV store |
+| `sidekick_get_by_project` | Get all keys for a specific project |
 | `sidekick_web_fetch` | Fetch URLs from the VPS IP |
 | `sidekick_llm` | Query the local Phi-3 model |
 

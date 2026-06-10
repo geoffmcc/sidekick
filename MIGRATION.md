@@ -2,326 +2,198 @@
 
 ## Overview
 
-Migrate Sidekick from current VPS (149.28.229.13) to Proxmox VM on local NucBox M7 Ultra (AMD Ryzen 7 PRO 6850U, Radeon 680M GPU).
+Migrate Sidekick from current VPS (149.28.229.13) to local Proxmox VM on NucBox M7 Ultra (AMD Ryzen 7 PRO 6850U, Radeon 680M GPU).
 
-**Benefits:**
-- 8 cores / 16 threads vs 2-4 cores on VPS
-- Up to 64GB RAM vs limited VPS RAM
-- Radeon 680M GPU for local LLM acceleration (ROCm)
-- No ongoing VPS fees
-- Full control with Proxmox flexibility
+**Status:** Planned  
+**Timeline:** After MCP connection issues are resolved (Week 4+)  
+**Priority:** 🔴 HIGH - Must fix MCP issues first
 
-## Architecture
+## Architecture (Updated 2026-06-10)
 
+### VM Specifications
+- **RAM:** 12GB (conservative, leaves 10GB buffer for Proxmox + Jellyfin)
+- **CPU:** 8 cores
+- **Storage:** 100GB VM disk + 50-100GB separate for Ollama models
+- **OS:** Ubuntu 24.04
+- **Network:** Behind WireGuard (10.0.0.10)
+
+### Service Architecture
 ```
-Proxmox VM (Ubuntu 24.04, 16GB RAM, 8 cores)
-├── WireGuard client (10.0.0.10)
-├── Caddy reverse proxy (10.0.0.10:443)
-│   ├── mcp.home.digitaltrainwreck.com → localhost:4097
-│   ├── dashboard.home.digitaltrainwreck.com → localhost:4098
-│   └── agent.home.digitaltrainwreck.com → localhost:4099
-├── MCP Server (127.0.0.1:4097) - Bearer token auth
-├── Dashboard (127.0.0.1:4098) - HTTP Basic Auth
-├── Agent Bridge (127.0.0.1:4099) - localhost only
-└── Ollama (127.0.0.1:11434) - Radeon 680M GPU acceleration
+Proxmox VM (Ubuntu 24.04, 12GB RAM)
+├── Node.js services (systemd)
+│   ├── MCP Server (:4097)
+│   ├── Dashboard (:4098)
+│   └── Agent Bridge (:4099)
+├── Ollama (native, on-demand)
+│   └── Models stored on separate volume
+└── WireGuard client (10.0.0.10)
+    └── Caddy reverse proxy (:443)
 ```
 
-**Security Model:**
-- All services bind to 127.0.0.1 only (not exposed to WireGuard network)
-- Caddy handles all external access via WireGuard interface
-- Bearer token auth for MCP, HTTP Basic Auth for Dashboard, localhost-only for Agent
+### Key Strategy: On-Demand Ollama
+- **Idle state:** 2.5GB RAM (OS + Node.js services, Ollama stopped)
+- **Active state:** 10.5GB RAM (with Ollama + 8B model)
+- **Implementation:** `systemctl start ollama` when LLM needed, `systemctl stop ollama` when done
+- **Benefit:** Saves 8GB RAM when just using MCP/Dashboard
 
-## Prerequisites (Resolve Before Execution)
+### Resource Budget (12GB VM)
+| Component | RAM Usage | Notes |
+|-----------|-----------|-------|
+| Ubuntu OS overhead | ~2GB | OS, systemd, qemu-guest-agent |
+| Node.js services (3) | ~0.5GB | MCP + Dashboard + Agent |
+| Ollama + 8B model (when active) | ~8GB | Phi-3-mini or Llama 3.1 8B |
+| Safety margin | ~1.5GB | For spikes and overhead |
+| **Total (active)** | **~10.5GB** | Comfortable within 12GB |
 
-1. **Cloudflare API token** - Token with DNS edit permissions for `digitaltrainwreck.com` (Zone → DNS → Edit, Zone → Zone → Read)
+### Model Constraints
+- **Phi-3-mini (3.8B):** ~4GB VRAM → ✅ Perfect (5.5GB headroom)
+- **Llama 3.1 8B:** ~8GB VRAM → ✅ Works (1.5GB headroom)
+- **13B+ models:** ~12GB+ VRAM → ❌ Too risky (OOM territory)
+
+### Operation
+- **Manual start/stop** via Proxmox UI when working on projects
+- **Clean shutdown** (10-30 seconds) for data integrity
+- **Systemd dependencies** with health checks for startup order:
+  1. WireGuard (network)
+  2. Ollama (LLM service) - with health check
+  3. Node.js services (MCP, Dashboard, Agent)
+
+### GPU Passthrough
+- **Approach:** Device passthrough (pass `/dev/kfd` and `/dev/dri` to VM)
+- **GPU:** AMD Radeon 680M (RDNA2, integrated in Ryzen 7 PRO 6850U)
+- **Fallback:** If passthrough fails, run Ollama on Proxmox host and expose API to VM
+
+### Backup Strategy
+- **Method:** Proxmox snapshots
+- **Enable:** qemu-guest-agent for filesystem-level snapshots
+- **Exclude:** Ollama models from snapshots (large, re-downloadable)
+- **Schedule:** Daily (7 days), Weekly (4 weeks), Monthly (6 months)
+
+### Network Architecture
+```
+WireGuard (wg0 interface, 10.0.0.10)
+    ↓
+Caddy (listens on wg0 interface, port 443)
+    ↓
+Services (bind to 127.0.0.1 only)
+```
+
+### Monitoring
+- **Method:** systemd limits + simple health check script (cron every 5 min)
+- **Checks:** RAM usage > 90%, Ollama responsiveness, Node.js service status
+- **Overhead:** <1MB
+
+## Prerequisites
+
+### 🔴 CRITICAL: Fix MCP Connection Issues First
+**Status:** Unresolved (HIGH PRIORITY)  
+**Timeline:** Week 1-3 for investigation/fix  
+**Impact:** Blocking reliable use of Sidekick from opencode
+
+**Symptoms:**
+- "Server not initialized" errors
+- Intermittent tool call failures
+- Session management problems
+
+**Success Criteria:**
+- Zero errors over 24-hour period
+- 100+ consecutive successful tool calls
+- Clear error messages when failures occur
+
+See `CONTEXT.md` for detailed investigation plan and root cause hypotheses.
+
+### Technical Prerequisites
+1. **Cloudflare API token** - Token with DNS edit permissions for `digitaltrainwreck.com`
 2. **Let's Encrypt email** - Email for Caddy's Let's Encrypt account
 3. **WireGuard config** - Router's public key and endpoint IP
 4. **Split DNS** - A records on local DNS server for subdomains
 
 ## Migration Phases
 
-### Phase 1: Code Modifications (Local)
+### Phase 0: Fix MCP Connection Issues (Week 1-3) 🔴
+**MUST complete before any migration work**
+- Add detailed logging to track session lifecycle
+- Capture error messages with timestamps
+- Track frequency and patterns
+- Identify root cause
+- Implement fix
+- Test thoroughly, verify success criteria
 
-**Add BIND_ADDRESS support to all services:**
+### Phase 1: Test GPU Passthrough (Week 4)
+- Test AMD Radeon 680M passthrough to VM
+- Verify device passthrough approach works
+- Test fallback plan (Ollama on Proxmox host) if needed
 
-Modify `src/index.js`, `src/dashboard.js`, `src/agent.js`:
-```javascript
-const BIND_ADDRESS = process.env.BIND_ADDRESS || "0.0.0.0";
-// Change: app.listen(PORT) → app.listen(PORT, BIND_ADDRESS)
-```
-
-### Phase 2: Proxmox VM Setup
-
-**Create Ubuntu 24.04 VM:**
-- 16GB RAM, 8 cores, 100GB storage
-- Install Ubuntu Server 24.04
-- Configure SSH key auth, disable password login
+### Phase 2: Create VM (Week 4)
+- Create VM with 12GB RAM, 8 cores, 100GB disk
+- Install Ubuntu 24.04
+- Configure SSH key authentication
 - Create `sidekick` user with restricted sudo
 
-**Base packages:**
-```bash
-apt update && apt upgrade -y
-apt install -y curl git build-essential qemu-guest-agent ufw wireguard
-systemctl enable --now qemu-guest-agent
-```
+### Phase 3: Set Up WireGuard Client (Week 4)
+- Generate client keys
+- Configure WireGuard interface (wg0)
+- Test connectivity to router
 
-### Phase 3: WireGuard Client Setup
+### Phase 4: Install Node.js and Deploy Services (Week 4)
+- Install Node.js 22.x
+- Clone repository
+- Install dependencies
+- Configure `.env` file
+- Set up systemd services with proper dependencies
 
-**Generate client keys:**
-```bash
-wg genkey | sudo tee /etc/wireguard/privatekey | sudo wg pubkey | sudo tee /etc/wireguard/publickey
-```
+### Phase 5: Install Ollama and Configure GPU (Week 4)
+- Install Ollama (native, not Docker)
+- Configure GPU passthrough
+- Set up on-demand start/stop mechanism
+- Pull initial models (phi3:mini)
 
-**Create `/etc/wireguard/wg0.conf`:**
-```ini
-[Interface]
-PrivateKey = <client-private-key>
-Address = 10.0.0.10/24
-DNS = 1.1.1.1
+### Phase 6: Set Up Caddy Reverse Proxy (Week 4)
+- Install Caddy with Cloudflare DNS plugin
+- Configure Caddyfile for subdomains
+- Set up Let's Encrypt certificates
+- Test HTTPS connectivity
 
-[Peer]
-PublicKey = <router-public-key>
-Endpoint = <router-public-ip>:51820
-AllowedIPs = 10.0.0.0/24
-PersistentKeepalive = 25
-```
+### Phase 7: Test All Services (Week 4)
+- Verify all services are running
+- Test MCP connectivity from opencode
+- Test dashboard access
+- Test agent bridge
+- Test Ollama with GPU acceleration
 
-**Enable WireGuard:**
-```bash
-systemctl enable --now wg-quick@wg0
-```
+### Phase 8: Migrate Data (Week 4)
+- Export KV store from VPS
+- Export conversation history
+- Export logs
+- Import to new VM
+- Verify data integrity
 
-### Phase 4: Firewall Configuration
+### Phase 9: Update Local Configuration (Week 4)
+- Update `opencode.json` to point to new VM
+- Update `AGENTS.md` with new IP/architecture
+- Test end-to-end with opencode
 
-**UFW rules:**
-```bash
-ufw default deny incoming
-ufw default allow outgoing
-ufw allow in on wg0 to any port 443 proto tcp comment 'Caddy HTTPS'
-ufw allow in on wg0 to any port 22 proto tcp comment 'SSH'
-ufw enable
-```
+### Phase 10: Decommission VPS (Week 5)
+- Run new VM in parallel for 1 week
+- Monitor for issues
+- Decommission VPS after stable operation confirmed
 
-### Phase 5: Caddy Installation & Configuration
+## Risks & Mitigations
 
-**Install Caddy with Cloudflare DNS plugin:**
-```bash
-apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
-apt update
-apt install -y caddy xcaddy
-xcaddy build --with github.com/caddy-dns/cloudflare --output /usr/bin/caddy
-```
+### Risk 1: GPU Passthrough (Medium confidence)
+**Mitigation:** Have fallback plan ready (run Ollama on Proxmox host)  
+**Testing:** Test GPU passthrough early in migration
 
-**Create `/etc/caddy/Caddyfile`:**
-```caddyfile
-{
-  email your-email@example.com
-}
+### Risk 2: RAM for Larger Models
+**Mitigation:** Start with 12GB, monitor actual usage  
+**Note:** Can upgrade to 16GB later if needed (Proxmox makes this easy)
 
-mcp.home.digitaltrainwreck.com {
-  reverse_proxy localhost:4097
-}
+### Risk 3: Snapshot Consistency
+**Mitigation:** Enable qemu-guest-agent, add pre-snapshot hook for KV store
 
-dashboard.home.digitaltrainwreck.com {
-  basicauth {
-    geoffrey <bcrypt-hash>
-  }
-  reverse_proxy localhost:4098
-}
-
-agent.home.digitaltrainwreck.com {
-  reverse_proxy localhost:4099
-}
-```
-
-**Set Cloudflare API token:**
-```bash
-systemctl edit caddy
-# Add:
-# [Service]
-# Environment="CLOUDFLARE_API_TOKEN=<your-token>"
-```
-
-### Phase 6: Split DNS Configuration
-
-**On your DNS server (pfSense/UniFi/Pi-hole), add A records:**
-- `mcp.home.digitaltrainwreck.com` → 10.0.0.10
-- `dashboard.home.digitaltrainwreck.com` → 10.0.0.10
-- `agent.home.digitaltrainwreck.com` → 10.0.0.10
-
-### Phase 7: Application Setup
-
-**Install Node.js 22.x:**
-```bash
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-apt install -y nodejs
-```
-
-**Clone and setup:**
-```bash
-cd /home/sidekick
-git clone <repo> mcp-sidekick
-cd mcp-sidekick
-npm install
-```
-
-**Create `.env`:**
-```bash
-SIDEKICK_API_KEY=<generate-new-key>
-SIDEKICK_ALLOWED_IPS=
-SIDEKICK_PORT=4097
-SIDEKICK_DASHBOARD_PORT=4098
-SIDEKICK_AGENT_PORT=4099
-SIDEKICK_DASHBOARD_USER=geoffrey
-SIDEKICK_DASHBOARD_PASS=<generate-strong-password>
-SIDEKICK_DATA_DIR=/home/sidekick/mcp-sidekick/data
-OLLAMA_URL=http://127.0.0.1:11434
-GROQ_API_KEY=<your-groq-key>
-GROQ_MODEL=llama-3.1-8b-instant
-SIDEKICK_MAX_ITERATIONS=15
-BIND_ADDRESS=127.0.0.1
-```
-
-### Phase 8: Ollama + GPU Setup
-
-**Install Ollama:**
-```bash
-curl -fsSL https://ollama.com/install.sh | sh
-```
-
-**Install ROCm for Radeon 680M:**
-```bash
-wget https://repo.radeon.com/rocm/rocm.gpg.key -O - | gpg --dearmor | tee /etc/apt/keyrings/rocm.gpg > /dev/null
-echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/6.1.2 jammy main" | tee /etc/apt/sources.list.d/rocm.list
-apt update
-apt install -y rocm
-```
-
-**Configure Ollama for GPU:**
-```bash
-systemctl edit ollama
-# Add:
-# [Service]
-# Environment="HSA_OVERRIDE_GFX_VERSION=10.3.0"
-# Environment="PATH=/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-# Environment="LD_LIBRARY_PATH=/opt/rocm/lib"
-systemctl daemon-reload
-systemctl restart ollama
-```
-
-**Pull models:**
-```bash
-ollama pull phi3:mini
-```
-
-### Phase 9: Systemd Services
-
-**Create `/etc/systemd/system/sidekick-mcp.service`:**
-```ini
-[Unit]
-Description=Sidekick MCP Server
-After=network.target
-
-[Service]
-WorkingDirectory=/home/sidekick/mcp-sidekick
-ExecStart=/usr/bin/node src/index.js
-Restart=always
-RestartSec=5
-User=sidekick
-Group=sidekick
-EnvironmentFile=/home/sidekick/mcp-sidekick/.env
-
-[Install]
-WantedBy=multi-user.target
-```
-
-**Create `/etc/systemd/system/sidekick-dashboard.service`:**
-```ini
-[Unit]
-Description=Sidekick Dashboard
-After=network.target
-
-[Service]
-WorkingDirectory=/home/sidekick/mcp-sidekick
-ExecStart=/usr/bin/node src/dashboard.js
-Restart=always
-RestartSec=5
-User=sidekick
-Group=sidekick
-EnvironmentFile=/home/sidekick/mcp-sidekick/.env
-
-[Install]
-WantedBy=multi-user.target
-```
-
-**Create `/etc/systemd/system/sidekick-agent.service`:**
-```ini
-[Unit]
-Description=Sidekick Agent Bridge
-After=network.target
-
-[Service]
-WorkingDirectory=/home/sidekick/mcp-sidekick
-ExecStart=/usr/bin/node src/agent.js
-Restart=always
-RestartSec=5
-User=sidekick
-Group=sidekick
-EnvironmentFile=/home/sidekick/mcp-sidekick/.env
-
-[Install]
-WantedBy=multi-user.target
-```
-
-**Enable and start:**
-```bash
-systemctl daemon-reload
-systemctl enable --now sidekick-mcp sidekick-dashboard sidekick-agent
-```
-
-### Phase 10: Testing & Validation
-
-**From WireGuard client:**
-```bash
-curl https://mcp.home.digitaltrainwreck.com/api/health
-curl -u geoffrey:<pass> https://dashboard.home.digitaltrainwreck.com/api/services
-curl https://agent.home.digitaltrainwreck.com/api/health
-```
-
-**Test KV store:**
-```bash
-# Use opencode or curl to test sidekick_sidekick_store and sidekick_sidekick_get
-```
-
-**Test GPU acceleration:**
-```bash
-rocm-smi  # Check GPU status
-ollama run phi3:mini "hello"  # Check response time
-```
-
-### Phase 11: Update Local Config
-
-**Update `opencode.json`:**
-```json
-{
-  "mcp": {
-    "sidekick": {
-      "type": "remote",
-      "url": "https://mcp.home.digitaltrainwreck.com/mcp",
-      "enabled": true,
-      "headers": {
-        "Authorization": "Bearer <new-api-key>"
-      }
-    }
-  }
-}
-```
-
-**Update `CONTEXT.md` and `AGENTS.md`:**
-- Document new IP, architecture, GPU setup
-- Update deployment instructions
+### Risk 4: MCP Connection Issues
+**Mitigation:** Fix before migration (see Phase 0)  
+**Note:** Migrating with broken MCP = migrating a broken system
 
 ## Rollback Plan
 
@@ -331,32 +203,40 @@ ollama run phi3:mini "hello"  # Check response time
 
 ## Estimated Time
 
-30-45 minutes to execute once prerequisites are met.
+- **Phase 0 (MCP fix):** 1-3 weeks (depends on root cause)
+- **Phases 1-10 (migration):** 1 week (after MCP issues resolved)
+- **Total:** 2-4 weeks
 
 ## Security Decisions
 
-- **Dashboard password**: Generate new 24+ char strong password
-- **API key**: Generate new key (more secure than reusing)
-- **Auth**: Bearer token (MCP), HTTP Basic Auth (Dashboard), localhost-only (Agent)
-- **Network**: All services bind to 127.0.0.1, Caddy handles external access via WireGuard
+- **Dashboard password:** Generate new 24+ char strong password
+- **API key:** Generate new key (more secure than reusing)
+- **Auth:** Bearer token (MCP), HTTP Basic Auth (Dashboard), localhost-only (Agent)
+- **Network:** All services bind to 127.0.0.1, Caddy handles external access via WireGuard
 
 ## Troubleshooting
 
-**GPU Issues:**
+### GPU Issues
 - Check `rocm-smi` for GPU status
-- Verify `HSA_OVERRIDE_GFX_VERSION=10.3.0` is set
+- Verify device passthrough configuration
 - Check Ollama logs: `journalctl -u ollama -f`
 - Fallback to CPU if GPU doesn't work (still faster with 8 cores)
 
-**Caddy Issues:**
+### Caddy Issues
 - Check Caddy logs: `journalctl -u caddy -f`
 - Verify Cloudflare API token has correct permissions
 - Check DNS resolution: `nslookup mcp.home.digitaltrainwreck.com`
 
-**WireGuard Issues:**
+### WireGuard Issues
 - Check connection: `wg show`
 - Verify router's WireGuard config has client's public key
 - Test connectivity: `ping 10.0.0.1` (router)
+
+### MCP Connection Issues
+- See `CONTEXT.md` for detailed troubleshooting
+- Check session logs
+- Verify network connectivity
+- Test with different MCP clients
 
 ## Notes
 
@@ -366,3 +246,7 @@ ollama run phi3:mini "hello"  # Check response time
 - GPU: AMD Radeon 680M (RDNA2, 12 cores)
 - Node.js: 22.x (LTS)
 - Ubuntu: 24.04 LTS
+- Migration plan stored in Sidekick's KV store under `migration_plan_proxmox` key
+- All services (MCP, Dashboard, Agent) stay together in one VM
+- Ollama runs natively (not in Docker) for simpler AMD GPU management
+- On-demand Ollama is the game-changer that makes 12GB VM work
