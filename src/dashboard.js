@@ -536,7 +536,7 @@ app.get("/", (req, res) => {
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;background:#0d1117;color:#c9d1d9;padding:20px}
 h1{font-size:1.4rem;margin-bottom:8px;color:#58a6ff}
-nav{display:flex;gap:8px;margin-bottom:20px}
+nav{display:flex;gap:8px;margin-bottom:12px}
 nav a{padding:6px 16px;border-radius:6px;text-decoration:none;font-size:.85rem;color:#8b949e;background:#161b22;border:1px solid #21262d;cursor:pointer}
 nav a.active{color:#58a6ff;border-color:#58a6ff;background:#0d1117}
 .page{display:none}
@@ -548,6 +548,12 @@ nav a.active{color:#58a6ff;border-color:#58a6ff;background:#0d1117}
 .card .value{font-size:1.3rem;font-weight:600;margin-top:4px}
 .card .value.ok{color:#3fb950}
 .card .value.warn{color:#d29922}
+.status-row{display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap}
+.status-box{background:#161b22;border:1px solid #21262d;border-radius:6px;padding:8px 12px;flex:1;min-width:120px}
+.status-box .s-label{font-size:.65rem;color:#6e7681;text-transform:uppercase}
+.status-box .s-val{font-size:.85rem;font-weight:600;margin-top:2px}
+.status-box .s-val.ok{color:#3fb950}
+.status-box .s-val.warn{color:#d29922}
 .two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px}
 @media(max-width:800px){.two-col,.three-col{grid-template-columns:1fr}}
 .three-col{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:24px}
@@ -694,15 +700,15 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
   <a onclick="showPage('config')" id="nav-config">Config</a>
   <a onclick="showPage('agent')" id="nav-agent">Agent</a>
 </nav>
+<div class="status-row">
+  <div class="status-box"><div class="s-label">Uptime</div><div class="s-val" id="s-uptime">...</div></div>
+  <div class="status-box"><div class="s-label">CPU</div><div class="s-val" id="s-cpu">...</div></div>
+  <div class="status-box"><div class="s-label">Memory</div><div class="s-val" id="s-memory">...</div></div>
+  <div class="status-box"><div class="s-label">Disk</div><div class="s-val" id="s-disk">...</div></div>
+</div>
 
 <!-- System Page -->
 <div class="page active" id="page-system">
-  <div class="grid" id="systemCards">
-    <div class="card"><div class="label">Uptime</div><div class="value" id="uptime">...</div></div>
-    <div class="card"><div class="label">CPU</div><div class="value" id="cpu">...</div></div>
-    <div class="card"><div class="label">Memory</div><div class="value" id="memory">...</div></div>
-    <div class="card"><div class="label">Disk</div><div class="value" id="disk">...</div></div>
-  </div>
   <div class="section-title" style="margin-bottom:8px">Local LLM</div>
   <div id="llmStatus"><div class="empty">Checking...</div></div>
   <div class="section-title" style="margin:16px 0 8px">Tool Usage</div>
@@ -864,7 +870,8 @@ function showPage(name){
   document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
   $('page-' + name).classList.add('active');
   $('nav-' + name).classList.add('active');
-  if (name === 'system') { loadSystem(); loadLLM(); loadServices(); loadStats(); }
+  loadSystem();
+  if (name === 'system') { loadLLM(); loadServices(); loadStats(); }
   if (name === 'activity') loadLogs();
   if (name === 'data') loadKV();
   if (name === 'config') loadConfig();
@@ -909,13 +916,13 @@ function loadServices(){
 // -- System -- //
 function loadSystem(){
   fetch('/api/system', { credentials: 'same-origin' }).then(r=>r.json()).then(d=>{
-    if(d.error){ $('uptime').textContent='error'; return }
-    $('uptime').textContent = d.uptime || '?';
+    if(d.error){ $('s-uptime').textContent='error'; return }
+    $('s-uptime').textContent = d.uptime || '?';
     const cpuVal = parseFloat(d.cpu);
-    $('cpu').textContent = d.cpu;
-    $('cpu').className = 'value' + (cpuVal > 80 ? ' warn' : cpuVal > 50 ? '' : ' ok');
-    $('memory').textContent = d.memory.used + '/' + d.memory.total;
-    $('disk').textContent = d.disk.free + ' free (' + d.disk.pct + ')';
+    $('s-cpu').textContent = d.cpu;
+    $('s-cpu').className = 's-val' + (cpuVal > 80 ? ' warn' : cpuVal > 50 ? '' : ' ok');
+    $('s-memory').textContent = d.memory.used + '/' + d.memory.total;
+    $('s-disk').textContent = d.disk.free + ' free (' + d.disk.pct + ')';
   }).catch(e => apiError('/api/system', e, 0));
 }
 
