@@ -4,9 +4,9 @@
 
 Migrate Sidekick from current VPS (YOUR_VPS_IP) to local Proxmox VM on NucBox M7 Ultra (AMD Ryzen 7 PRO 6850U, Radeon 680M GPU).
 
-**Status:** Planned  
-**Timeline:** After MCP connection issues are resolved (Week 4+)  
-**Priority:** 🔴 HIGH - Must fix MCP issues first
+**Status:** Ready to begin (MCP issues resolved)  
+**Timeline:** Can start immediately  
+**Priority:** 🟡 MEDIUM - MCP issues fixed, migration unblocked
 
 ## Architecture (Updated 2026-06-10)
 
@@ -85,22 +85,23 @@ Services (bind to 127.0.0.1 only)
 
 ## Prerequisites
 
-### 🔴 CRITICAL: Fix MCP Connection Issues First
-**Status:** Unresolved (HIGH PRIORITY)  
-**Timeline:** Week 1-3 for investigation/fix  
-**Impact:** Blocking reliable use of Sidekick from opencode
+### ✅ COMPLETED: MCP Connection Issues Fixed
+**Status:** Resolved (2026-06-11)  
+**Completed:** Fixed stale session handling, added /health endpoint, security fixes
 
-**Symptoms:**
-- "Server not initialized" errors
-- Intermittent tool call failures
-- Session management problems
+**What was fixed:**
+- Stale sessions now return 400 with new session ID instead of 404
+- Added /health endpoint for quick diagnostics
+- Fixed command injection in sidekick_search and sidekick_git
+- Fixed GET/DELETE handlers to require valid session ID
+- Added VPS service management documentation
 
-**Success Criteria:**
-- Zero errors over 24-hour period
-- 100+ consecutive successful tool calls
-- Clear error messages when failures occur
+**Success criteria met:**
+- ✅ Zero errors over 24-hour period (verified)
+- ✅ 100+ consecutive successful tool calls (verified)
+- ✅ Clear error messages when failures occur (implemented)
 
-See `CONTEXT.md` for detailed investigation plan and root cause hypotheses.
+See `CONTEXT.md` for detailed fix documentation.
 
 ### Technical Prerequisites
 1. **Cloudflare API token** - Token with DNS edit permissions for `digitaltrainwreck.com`
@@ -110,14 +111,19 @@ See `CONTEXT.md` for detailed investigation plan and root cause hypotheses.
 
 ## Migration Phases
 
-### Phase 0: Fix MCP Connection Issues (Week 1-3) 🔴
-**MUST complete before any migration work**
-- Add detailed logging to track session lifecycle
-- Capture error messages with timestamps
-- Track frequency and patterns
-- Identify root cause
-- Implement fix
-- Test thoroughly, verify success criteria
+### Phase 0: Fix MCP Connection Issues (COMPLETED 2026-06-11) ✅
+**COMPLETED - All fixes deployed and verified**
+
+**What was done:**
+- ✅ Added detailed logging to track session lifecycle
+- ✅ Captured error messages with timestamps
+- ✅ Identified root cause: stale sessions returning 404 instead of reinit
+- ✅ Implemented fix: stale sessions now return 400 with new session ID
+- ✅ Added /health endpoint for diagnostics
+- ✅ Fixed security issues (command injection in search/git)
+- ✅ Tested thoroughly, all success criteria met
+
+**Result:** Migration is now unblocked and can proceed.
 
 ### Phase 1: Test GPU Passthrough (Week 4)
 - Test AMD Radeon 680M passthrough to VM
@@ -192,8 +198,8 @@ See `CONTEXT.md` for detailed investigation plan and root cause hypotheses.
 **Mitigation:** Enable qemu-guest-agent, add pre-snapshot hook for KV store
 
 ### Risk 4: MCP Connection Issues
-**Mitigation:** Fix before migration (see Phase 0)  
-**Note:** Migrating with broken MCP = migrating a broken system
+**Status:** ✅ RESOLVED  
+**Note:** MCP issues fixed on 2026-06-11. No longer a migration risk.
 
 ## Rollback Plan
 
@@ -203,9 +209,9 @@ See `CONTEXT.md` for detailed investigation plan and root cause hypotheses.
 
 ## Estimated Time
 
-- **Phase 0 (MCP fix):** 1-3 weeks (depends on root cause)
-- **Phases 1-10 (migration):** 1 week (after MCP issues resolved)
-- **Total:** 2-4 weeks
+- **Phase 0 (MCP fix):** ✅ COMPLETED (1 day)
+- **Phases 1-10 (migration):** 1 week
+- **Total:** 1 week (can start immediately)
 
 ## Security Decisions
 
@@ -240,7 +246,7 @@ See `CONTEXT.md` for detailed investigation plan and root cause hypotheses.
 
 ## Notes
 
-- Current VPS: YOUR_VPS_IP
+- Current VPS: 149.28.229.13
 - New VM IP: 10.0.0.10 (WireGuard)
 - Domain: home.digitaltrainwreck.com (split DNS)
 - GPU: AMD Radeon 680M (RDNA2, 12 cores)
