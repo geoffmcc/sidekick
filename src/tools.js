@@ -476,6 +476,125 @@ async function sidekick_notify({ channel, webhook_url, recipient, message, title
   return { content: [{ type: "text", text: "Invalid channel. Use: discord, slack, or email" }], isError: true };
 }
 
+async function sidekick_process({ action, filter, pid, name, signal }) {
+  const allowedActions = ["list", "top", "kill", "tree"];
+  if (!allowedActions.includes(action)) {
+    return { content: [{ type: "text", text: "Invalid action. Allowed: " + allowedActions.join(", ") }], isError: true };
+  }
+  
+  let cmd;
+  if (action === "list") {
+    cmd = ["ps", "aux"];
+    if (filter) cmd = ["ps", "aux", "|", "grep", "-i", filter];
+  } else if (action === "top") {
+    cmd = ["ps", "aux", "--sort=-%cpu", "|", "head", "-20"];
+  } else if (action === "kill") {
+    if (!pid && !name) {
+      return { content: [{ type: "text", text: "pid or name required for kill" }], isError: true };
+    }
+    const sig = signal || "TERM";
+    if (pid) {
+      cmd = ["kill", "-" + sig, String(pid)];
+    } else {
+      cmd = ["pkill", "-" + sig, name];
+    }
+  } else if (action === "tree") {
+    cmd = ["pstree", "-p"];
+  }
+  
+  try {
+    const stdout = execSync(cmd.join(" "), { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024 });
+    return { content: [{ type: "text", text: redactSensitive(stdout || "(empty output)") }] };
+  } catch (e) {
+    if (action === "kill" && e.status === 0) {
+      return { content: [{ type: "text", text: "Process killed" }] };
+    }
+    return { content: [{ type: "text", text: redactSensitive("Error: " + (e.stderr || e.stdout || e.message)) }], isError: true };
+  }
+}
+
+async function sidekick_service({ action, service, lines }) {
+  const allowedActions = ["start", "stop", "restart", "status", "enable", "disable", "logs"];
+  if (!allowedActions.includes(action)) {
+    return { content: [{ type: "text", text: "Invalid action. Allowed: " + allowedActions.join(", ") }], isError: true };
+  }
+  
+  let cmd;
+  if (action === "logs") {
+    if (!service) {
+      return { content: [{ type: "text", text: "service required for logs" }], isError: true };
+    }
+    const n = lines || 50;
+    cmd = ["journalctl", "-u", service, "-n", String(n), "--no-pager"];
+  } else {
+    if (!service) {
+      return { content: [{ type: "text", text: "service required for " + action }], isError: true };
+    }
+    cmd = ["sudo", "systemctl", action, service];
+  }
+  
+  try {
+    const stdout = execSync(cmd.join(" "), { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024 });
+    return { content: [{ type: "text", text: redactSensitive(stdout || "OK") }] };
+  } catch (e) {
+    return { content: [{ type: "text", text: redactSensitive("Error: " + (e.stderr || e.stdout || e.message)) }], isError: true };
+  }
+}
+
+async function sidekick_archive({ action, path: sourcePath, output, format }) {
+  const allowedActions = ["create", "extract", "list"];
+  if (!allowedActions.includes(action)) {
+    return { content: [{ type: "text", text: "Invalid action. Allowed: " + allowedActions.join(", ") }], isError: true };
+  }
+  
+  if (!sourcePath) {
+    return { content: [{ type: "text", text: "path required" }], isError: true };
+  }
+  
+  if (!fs.existsSync(sourcePath)) {
+    return { content: [{ type: "text", text: "Path not found: " + sourcePath }], isError: true };
+  }
+  
+  const fmt = format || "tar.gz";
+  let cmd;
+  
+  if (action === "create") {
+    if (!output) {
+      return { content: [{ type: "text", text: "output required for create" }], isError: true };
+    }
+    if (fmt === "tar.gz" || fmt === "tgz") {
+      cmd = ["tar", "-czf", output, "-C", path.dirname(sourcePath), path.basename(sourcePath)];
+    } else if (fmt === "zip") {
+      cmd = ["zip", "-r", output, sourcePath];
+    } else {
+      return { content: [{ type: "text", text: "Invalid format. Use: tar.gz, tgz, or zip" }], isError: true };
+    }
+  } else if (action === "extract") {
+    if (sourcePath.endsWith(".tar.gz") || sourcePath.endsWith(".tgz")) {
+      cmd = ["tar", "-xzf", sourcePath];
+    } else if (sourcePath.endsWith(".zip")) {
+      cmd = ["unzip", sourcePath];
+    } else {
+      return { content: [{ type: "text", text: "Unsupported archive format" }], isError: true };
+    }
+  } else if (action === "list") {
+    if (sourcePath.endsWith(".tar.gz") || sourcePath.endsWith(".tgz")) {
+      cmd = ["tar", "-tzf", sourcePath];
+    } else if (sourcePath.endsWith(".zip")) {
+      cmd = ["unzip", "-l", sourcePath];
+    } else {
+      return { content: [{ type: "text", text: "Unsupported archive format" }], isError: true };
+    }
+  }
+  
+  try {
+    const stdout = execSync(cmd.join(" "), { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
+    return { content: [{ type: "text", text: redactSensitive(stdout || "OK") }] };
+  } catch (e) {
+    return { content: [{ type: "text", text: redactSensitive("Error: " + (e.stderr || e.stdout || e.message)) }], isError: true };
+  }
+}
+
 const TOOLS = {
   sidekick_bash,
   sidekick_read,
@@ -490,6 +609,9 @@ const TOOLS = {
   sidekick_search,
   sidekick_git,
   sidekick_notify,
+  sidekick_process,
+  sidekick_service,
+  sidekick_archive,
 };
 
 const TOOL_DEFS = [
@@ -506,6 +628,9 @@ const TOOL_DEFS = [
   { name: "sidekick_search", description: "Search file contents using ripgrep or grep", args: { pattern: "string", path: "string (optional)", include: "string (optional)" } },
   { name: "sidekick_git", description: "Structured git operations (status, diff, log, add, commit, push, pull, branch, checkout, stash)", args: { action: "string", path: "string (optional)", args: "string (optional)" } },
   { name: "sidekick_notify", description: "Send notifications to Discord, Slack, or email", args: { channel: "string", webhook_url: "string (optional)", recipient: "string (optional)", message: "string", title: "string (optional)" } },
+  { name: "sidekick_process", description: "Manage processes (list, top CPU/memory, kill, tree)", args: { action: "string", filter: "string (optional)", pid: "number (optional)", name: "string (optional)", signal: "string (optional)" } },
+  { name: "sidekick_service", description: "Manage systemd services (start, stop, restart, status, enable, disable, logs)", args: { action: "string", service: "string", lines: "number (optional)" } },
+  { name: "sidekick_archive", description: "Create, extract, or list archives (tar.gz, zip)", args: { action: "string", path: "string", output: "string (optional)", format: "string (optional)" } },
 ];
 
 async function callTool(name, args) {

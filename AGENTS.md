@@ -6,7 +6,7 @@ A remote VPS agent system. Connect via the sidekick MCP server at `YOUR_VPS_IP:4
 
 Always use the `task` tool with `subagent_type: "sidekick"` when interacting with sidekick. Do not use direct MCP tools (`sidekick_bash`, `sidekick_read`, etc.) — use the task tool so the user can see the full conversation. 100% of the time, no exceptions.
 
-## MCP Tools (13)
+## MCP Tools (16)
 
 | Tool | When to use |
 |------|-------------|
@@ -17,6 +17,9 @@ Always use the `task` tool with `subagent_type: "sidekick"` when interacting wit
 | `sidekick_search` | Search file contents using ripgrep/grep (faster than bash grep) |
 | `sidekick_git` | Structured git operations (status, diff, log, add, commit, push, pull, branch, checkout, stash) |
 | `sidekick_notify` | Send alerts to Discord, Slack, or email |
+| `sidekick_process` | Manage processes (list, top CPU/memory, kill, tree) |
+| `sidekick_service` | Manage systemd services (start, stop, restart, status, enable, disable, logs) |
+| `sidekick_archive` | Create, extract, or list archives (tar.gz, zip) |
 | `sidekick_store` | Store a value persistently in KV storage |
 | `sidekick_get` | Retrieve a stored value from KV storage |
 | `sidekick_list_projects` | List all projects in KV storage |
@@ -31,12 +34,17 @@ All tool calls are logged with source tags:
 
 ## Services
 
-- **MCP Server** (`:4097`) — 13 tools, session-aware transport (new McpServer+Transport per session)
+- **MCP Server** (`:4097`) — 16 tools, session-aware transport (new McpServer+Transport per session)
 - **Dashboard** (`:4098`) — web UI with System, Activity, Data, Config, and Agent tabs, Font Awesome icons
 - **Agent Bridge** (`:4099`) — autonomous LLM agent that calls tools directly (bypasses MCP HTTP)
 - **Ollama** (`:11434`) — local Phi-3-mini fallback. Uses cloud Groq API when `GROQ_API_KEY` is set
 
 ## Recent Features
+
+### New Tools (v1.2)
+- **`sidekick_process`** — Manage processes: list, top CPU/memory consumers, kill by PID/name, process tree.
+- **`sidekick_service`** — Manage systemd services: start, stop, restart, status, enable, disable, view logs.
+- **`sidekick_archive`** — Create, extract, or list archives (tar.gz, tgz, zip).
 
 ### New Tools (v1.1)
 - **`sidekick_search`** — Fast file content search using ripgrep (falls back to grep). Supports regex patterns and file filtering.
