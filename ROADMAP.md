@@ -2,9 +2,9 @@
 
 What's planned for Sidekick.
 
-## Current (v1.0)
+## Current (v1.5)
 
-- 10 MCP tools (bash, read, write, list, store, get, list_projects, get_by_project, web_fetch, llm)
+- 21 MCP tools (bash, read, write, list, search, git, notify, process, service, archive, cron, github, webhook, context, teach, store, get, list_projects, get_by_project, web_fetch, llm)
 - Live dashboard with 5 tabs (System, Activity, Data, Config, Agent)
 - Autonomous agent bridge with Groq cloud + local Ollama fallback
 - Persistent KV storage across sessions
@@ -14,6 +14,17 @@ What's planned for Sidekick.
 - Enhanced dashboard with timestamps, source badges, expandable content
 - Comprehensive testing strategy (7 priority levels, 19 hours estimated)
 - Dashboard security hardening (rate limiting, CSRF protection, audit logging, error handling)
+- **sidekick_search** — Fast file content search using ripgrep/grep
+- **sidekick_git** — Structured git operations (status, diff, log, add, commit, push, pull, branch, checkout, stash)
+- **sidekick_notify** — Send notifications to Discord, Slack, or email
+- **sidekick_process** — Manage processes (list, top CPU/memory, kill, tree)
+- **sidekick_service** — Manage systemd services safely
+- **sidekick_archive** — Create, extract, or list archives (tar.gz, zip)
+- **sidekick_cron** — Schedule recurring tasks via system crontab
+- **sidekick_github** — Full GitHub API integration (PRs, issues, commits, releases)
+- **sidekick_webhook** — Receive and manage webhooks from external services
+- **sidekick_context** — Persistent intelligent context management (track projects, decisions, problems, patterns)
+- **sidekick_teach** — Meta-learning and self-extension (teach procedures, generate tools, learn from examples)
 
 ## Recently Completed ✅
 
@@ -68,6 +79,7 @@ See `CONTEXT.md` for detailed investigation plan and root cause hypotheses.
 - Proxmox snapshots with qemu-guest-agent
 
 ### CI/CD Integration
+- ✅ **sidekick_github** — Full GitHub API integration (PRs, issues, commits, releases)
 - Trigger GitHub Actions workflows from sidekick
 - Report build/test status back to GitHub PRs
 - Automated deployment pipelines with rollback capabilities
@@ -86,16 +98,18 @@ See `CONTEXT.md` for detailed investigation plan and root cause hypotheses.
 - Integration with security advisory databases
 
 ### Notifications & Integrations
-- Webhook support for Slack, Discord, Teams
-- Email notifications for critical agent events
+- ✅ **sidekick_notify** — Send notifications to Discord, Slack, or email
+- ✅ **sidekick_webhook** — Receive and manage webhooks from external services
 - RSS/Atom feed for activity log
 - API for external integrations
 
 ### Enhanced Agent Capabilities
 - Multi-agent orchestration (specialized agents working together)
-- Scheduled tasks and cron-like automation
+- ✅ **sidekick_cron** — Scheduled tasks and cron-like automation
 - Long-running task persistence (survive VPS restarts)
 - Agent-to-agent communication
+- ✅ **sidekick_context** — Persistent intelligent context management
+- ✅ **sidekick_teach** — Meta-learning and self-extension
 
 ---
 

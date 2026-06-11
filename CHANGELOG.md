@@ -2,6 +2,70 @@
 
 All notable changes to Sidekick.
 
+## 2026-06-11
+
+### v1.5: sidekick_teach - Meta-Learning and Self-Extension
+- **`sidekick_teach`** — Revolutionary tool that enables sidekick to learn new procedures and generate new tools dynamically
+- Actions: teach_procedure, generate_tool, learn_from_example, execute, list, remove
+- Uses LLM to generate procedure steps from natural language descriptions
+- Stores procedures as JSON for safety and portability
+- Transforms sidekick from a fixed tool server into a self-extending platform
+- Total tools: 20 → 21
+
+### v1.4: sidekick_context - Persistent Intelligent Context Management
+- **`sidekick_context`** — Tracks projects, decisions, problems, and patterns across sessions
+- Actions: track_project, track_decision, track_problem, track_pattern, recall, suggest, summarize, list
+- Semantic similarity search for intelligent recall
+- Proactive suggestions based on past context
+- Stores context in `data/context.json`
+- Total tools: 19 → 20
+
+### v1.3: Automation and Integration Tools
+- **`sidekick_cron`** — Schedule recurring tasks using system crontab
+  - Actions: add, list, remove, run
+  - Stores jobs in `data/cron.json`
+  - Syncs with system crontab for execution
+- **`sidekick_github`** — Full GitHub API integration
+  - Actions: pr_list, pr_create, pr_get, pr_merge, issue_list, issue_create, issue_close, commit_status, release_create, repo_info
+  - Uses stored `github_token` from KV
+- **`sidekick_webhook`** — Receive and manage webhooks from external services
+  - Actions: list, get, clear
+  - Webhook endpoint: `POST /api/webhook/:source` on dashboard
+  - Stores webhooks in `data/webhooks.json` (max 1000)
+- Total tools: 16 → 19
+
+### v1.2: VPS Management Tools
+- **`sidekick_process`** — Manage processes (list, top CPU/memory, kill, tree)
+  - Actions: list, top, kill, tree
+  - Filter by name, kill by PID or name
+- **`sidekick_service`** — Manage systemd services safely
+  - Actions: start, stop, restart, status, enable, disable, logs
+  - Validates service names, prevents dangerous commands
+- **`sidekick_archive`** — Create, extract, or list archives
+  - Actions: create, extract, list
+  - Formats: tar.gz, tgz, zip
+- Total tools: 13 → 16
+
+### v1.1: Core Utility Tools
+- **`sidekick_search`** — Fast file content search using ripgrep (falls back to grep)
+  - Supports regex patterns and file filtering
+  - Much faster than manual bash grep
+- **`sidekick_git`** — Structured git operations
+  - Actions: status, diff, log, add, commit, push, pull, branch, checkout, stash
+  - Safer than raw bash for git commands
+  - Validates actions, prevents dangerous operations
+- **`sidekick_notify`** — Send notifications to Discord, Slack, or email
+  - Discord/Slack via webhooks
+  - Email via SMTP (requires SMTP_HOST, SMTP_USER, SMTP_PASS env vars)
+- Total tools: 10 → 13
+
+### SSH Key Infrastructure
+- Generated new ED25519 SSH key on VPS
+- Added to authorized_keys for both root and sidekick users
+- Saved to `C:\Users\geoffrey\.ssh\sidekick` on Windows
+- Replaced old broken key that wasn't working
+- All deploys now use the new key successfully
+
 ## 2026-06-10
 
 ### Dashboard Security Hardening
