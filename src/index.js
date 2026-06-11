@@ -350,6 +350,33 @@ async function getTransportForRequest(sessionId) {
     registerSession(newSessionId, server, transport);
     await server.connect(transport);
 
+    // Auto-initialize replacement sessions so they're ready for immediate use
+    try {
+      const initReq = new Request("http://127.0.0.1:4097/mcp", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json, text/event-stream",
+          "mcp-session-id": newSessionId
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2024-11-05",
+            capabilities: {},
+            clientInfo: { name: "sidekick-auto-init", version: "1.0" }
+          }
+        })
+      });
+      await transport.handleRequest(initReq);
+      markSessionInitialized(newSessionId);
+      logDebug("AUTO_INITIALIZED_REPLACEMENT", { staleSessionId: sessionId, newSessionId });
+    } catch (initError) {
+      logDebug("AUTO_INIT_FAILED", { newSessionId, error: initError.message });
+    }
+
     staleSessionMap.set(sessionId, newSessionId);
     if (staleSessionMap.size > 100) {
       const firstKey = staleSessionMap.keys().next().value;
@@ -370,6 +397,33 @@ async function getTransportForRequest(sessionId) {
   registerSession(newSessionId, server, transport);
   await server.connect(transport);
 
+  // Auto-initialize fresh sessions so they're ready for immediate use
+  try {
+    const initReq = new Request("http://127.0.0.1:4097/mcp", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "mcp-session-id": newSessionId
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+          capabilities: {},
+          clientInfo: { name: "sidekick-auto-init", version: "1.0" }
+        }
+      })
+    });
+    await transport.handleRequest(initReq);
+    markSessionInitialized(newSessionId);
+    logDebug("AUTO_INITIALIZED_FRESH", { newSessionId });
+  } catch (initError) {
+    logDebug("AUTO_INIT_FAILED", { newSessionId, error: initError.message });
+  }
+
   logDebug("CREATED_NEW_TRANSPORT", { newSessionId });
   return { transport, isNew: true, newSessionId };
 }
@@ -380,8 +434,17 @@ function registerSession(sessionId, server, transport) {
     server,
     transport,
     createdAt: Date.now(),
-    lastAccess: Date.now()
+    lastAccess: Date.now(),
+    initialized: false
   });
+}
+
+function markSessionInitialized(sessionId) {
+  const entry = sessions.get(sessionId);
+  if (entry) {
+    entry.initialized = true;
+    logDebug("SESSION_INITIALIZED", { sessionId });
+  }
 }
 
 // Cleanup sessions inactive for more than 24 hours, every 10 minutes
@@ -421,11 +484,19 @@ app.get("/health", (req, res) => {
   const seconds = uptimeSeconds % 60;
   const uptimeStr = `${hours}h ${minutes}m ${seconds}s`;
 
+  const sessionDetails = Array.from(sessions.entries()).map(([id, entry]) => ({
+    id,
+    age: Date.now() - entry.createdAt,
+    idle: Date.now() - entry.lastAccess,
+    initialized: entry.initialized
+  }));
+
   res.json({
     status: "healthy",
     uptime: uptimeSeconds,
     uptimeHuman: uptimeStr,
     sessions: sessions.size,
+    sessionDetails,
     staleMappings: staleSessionMap.size,
     version: "1.0.0",
     timestamp: new Date().toISOString()
@@ -472,7 +543,7 @@ app.post("/mcp", async (req, res) => {
       res.setHeader("mcp-session-id", newSessionId);
       res.json({
         jsonrpc: "2.0",
-        error: { code: -32001, message: "Session expired. Re-initialize with the session ID in the mcp-session-id response header." },
+        error: { code: -32001, message: "Session expired. A new session has been created. Please re-initialize using the session ID from the mcp-session-id response header. If this persists, check server logs for initialization errors." },
         id: null
       });
       return;
