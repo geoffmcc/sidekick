@@ -4,6 +4,102 @@ All notable changes to Sidekick.
 
 ## 2026-06-11
 
+### v1.15: Meta-Capabilities (evolve, orchestrate, predict)
+- **`sidekick_evolve`** — Self-modification with safety: analyze tool usage patterns, propose improvements, test and approve changes
+  - Analyzes tool usage logs to find frequent patterns
+  - Proposals require testing and explicit approval
+  - Rate limited to 10 proposals per day
+  - Tracks proposal history and feedback
+- **`sidekick_orchestrate`** — Multi-agent coordination: create task graphs, execute subtasks with dependencies
+  - Supports parallel and sequential execution
+  - Dependency tracking between subtasks
+  - Resource limits (timeout, concurrent tasks)
+  - Progress tracking across all subtasks
+- **`sidekick_predict`** — Anticipatory intelligence: analyze patterns, predict needs, track prediction usefulness
+  - Analyzes context and tool usage patterns
+  - Generates predictions with confidence scores
+  - Tracks prediction usefulness via feedback
+  - Suggests actions based on past predictions
+- Total tools: 34 → 37
+
+### v1.14: Workflow & Reliability (validate, template, queue, retry)
+- **`sidekick_validate`** — Validate data against JSON Schema using ajv
+  - Supports JSON Schema draft-07
+  - Returns detailed error messages with paths
+  - Auto-parses JSON strings
+- **`sidekick_template`** — Render Handlebars templates with data
+  - Supports variables, conditionals, loops, and helpers
+  - For config generation and dynamic content
+- **`sidekick_queue`** — Persistent task queue with priorities
+  - Priority-based task scheduling
+  - Status tracking (pending/processing/completed/failed)
+  - Automatic retry tracking with attempt counts
+- **`sidekick_retry`** — Retry wrapper for tool calls with backoff
+  - Exponential, linear, and fixed backoff strategies
+  - Configurable max attempts and initial delay
+- Total tools: 30 → 34
+
+### v1.13: Core Data Utilities (parse, diff, hash)
+- **`sidekick_parse`** — Parse structured data formats with auto-detection
+  - Supports JSON, YAML, XML, INI, CSV
+  - Auto-detects format from content
+  - Returns parsed JSON structure
+- **`sidekick_diff`** — Semantic comparison with structure-aware diffing
+  - Text diff (line-by-line)
+  - JSON/YAML diff (structure-aware, shows added/removed/modified fields)
+  - Output formats: unified, summary, JSON
+- **`sidekick_hash`** — Checksum generation and verification
+  - Algorithms: MD5, SHA1, SHA256, SHA512
+  - Can hash strings or files
+  - Verification mode to check against expected hash
+- Added dependencies: yaml, fast-xml-parser, ini
+- Total tools: 27 → 30
+
+### v1.12: Companion Tools Phase 1 (transform, health)
+- **`sidekick_transform`** — Data manipulation pipeline
+  - Actions: filter, extract, sort, format, map
+  - Format options: json, csv, table, text
+  - Enables tool composition (bash | transform | context)
+- **`sidekick_health`** — Composite system health checks
+  - Checks: services, processes, disk, network, custom
+  - Scoring system (0-100)
+  - Threshold-based alerting
+  - Stores health history for trending
+- Total tools: 25 → 27
+
+### v1.11: Companion Tools Phase 2 (delay, snapshot)
+- **`sidekick_delay`** — One-shot task scheduling
+  - Time formats: 10s, 5m, 2h, 1d, or ISO date
+  - Agent bridge loads delays on startup
+  - /api/delays/reload endpoint for live updates
+- **`sidekick_snapshot`** — State capture and drift detection
+  - Capture types: processes, services, disk, packages, network, files
+  - Compare snapshots to detect added/removed/changed items
+  - Stores snapshots in data/snapshots/
+- Total tools: 23 → 25
+
+### v1.10: Companion Tools Phase 3 (watch, secret)
+- **`sidekick_watch`** — Event-driven monitoring
+  - Sources: service, process, endpoint, file
+  - Conditions: status!=active, not_running, status!=200, content_matches
+  - Configurable intervals (30s, 5m, 1h)
+  - Triggers tool calls when conditions met
+  - Agent bridge loads watches on startup
+- **`sidekick_secret`** — Encrypted credential management
+  - AES-256-GCM encryption
+  - Requires SIDEKICK_SECRET_KEY in .env
+  - Actions: store, get, delete, list, rotate
+  - Rotation with random value generation
+- Total tools: 21 → 23
+
+### Companion Tools Expansion (v1.10-v1.15)
+- Implemented 10 new companion tools in 3 stages
+- Stage 1 (Core Data Utilities): parse, diff, hash
+- Stage 2 (Workflow & Reliability): validate, template, queue, retry
+- Stage 3 (Meta-Capabilities): evolve, orchestrate, predict
+- All tools follow Unix philosophy: single responsibility, composable
+- Total tools: 21 → 37
+
 ### v1.5: sidekick_teach - Meta-Learning and Self-Extension
 - **`sidekick_teach`** — Revolutionary tool that enables sidekick to learn new procedures and generate new tools dynamically
 - Actions: teach_procedure, generate_tool, learn_from_example, execute, list, remove

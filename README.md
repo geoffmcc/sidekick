@@ -1,6 +1,6 @@
 # Sidekick
 
-A remote VPS agent system with persistent storage, 21 MCP tools, and an autonomous agent bridge.
+A remote VPS agent system with persistent storage, 37 MCP tools, and an autonomous agent bridge.
 
 **How?** A single `AGENTS.md` file that opencode reads on every session start. No plugins, no hooks — just markdown.
 
@@ -97,12 +97,46 @@ Sidekick is the infrastructure. The AI (running in opencode) uses that infrastru
 
 | Service | Port | Description |
 |---------|------|-------------|
-| **MCP Server** | 4097 | 21 tools: bash, read, write, list, search, git, notify, process, service, archive, cron, github, webhook, context, teach, store, get, list_projects, get_by_project, web_fetch, llm |
+| **MCP Server** | 4097 | 37 tools: bash, read, write, list, search, git, notify, process, service, archive, cron, github, webhook, context, teach, store, get, list_projects, get_by_project, web_fetch, llm, transform, health, delay, snapshot, watch, secret, parse, diff, hash, validate, template, queue, retry, evolve, orchestrate, predict |
 | **Dashboard** | 4098 | Web UI: system health, activity log, KV data, agent tasks |
 | **Agent Bridge** | 4099 | AI agent loop — LLM plans and calls MCP tools autonomously |
 | **Ollama** | 11434 | Local LLM inference (phi3:mini). Fallback when no `GROQ_API_KEY` |
 
 All tools are exposed via the MCP server at `http://YOUR_VPS_IP:4097/mcp`.
+
+### New Tools (v1.15) - Meta-Capabilities
+
+- **`sidekick_evolve`** — Self-modification with safety: analyze tool usage patterns, propose improvements, test and approve changes. Rate limited to 10 proposals per day.
+- **`sidekick_orchestrate`** — Multi-agent coordination: create task graphs, execute subtasks with dependencies, track progress across all subtasks.
+- **`sidekick_predict`** — Anticipatory intelligence: analyze context and tool patterns, predict needs, track prediction usefulness via feedback.
+
+### New Tools (v1.14) - Workflow & Reliability
+
+- **`sidekick_validate`** — Validate data against JSON Schema using ajv. Returns detailed error messages with paths.
+- **`sidekick_template`** — Render Handlebars templates with data for config generation and dynamic content.
+- **`sidekick_queue`** — Persistent task queue with priorities, status tracking, and automatic retry tracking.
+- **`sidekick_retry`** — Retry wrapper for any tool call with exponential/linear/fixed backoff strategies.
+
+### New Tools (v1.13) - Core Data Utilities
+
+- **`sidekick_parse`** — Parse structured data formats (JSON, YAML, XML, INI, CSV) with auto-detection.
+- **`sidekick_diff`** — Semantic comparison of text, JSON, or YAML with structure-aware diffing.
+- **`sidekick_hash`** — Generate checksums (MD5, SHA1, SHA256, SHA512) for files or data with verification.
+
+### New Tools (v1.12) - Companion Tools Phase 1
+
+- **`sidekick_transform`** — Data manipulation pipeline: filter, extract, sort, format, and map data.
+- **`sidekick_health`** — Composite system health checks with scoring and issue detection.
+
+### New Tools (v1.11) - Companion Tools Phase 2
+
+- **`sidekick_delay`** — One-shot task scheduling: run a tool once at a specific time or after a delay.
+- **`sidekick_snapshot`** — Capture system state and detect drift by comparing snapshots.
+
+### New Tools (v1.10) - Companion Tools Phase 3
+
+- **`sidekick_watch`** — Event-driven monitoring: watch services, processes, endpoints, or files and trigger actions on conditions.
+- **`sidekick_secret`** — Encrypted credential management with AES-256-GCM (requires SIDEKICK_SECRET_KEY in .env).
 
 ### New Tools (v1.5)
 
