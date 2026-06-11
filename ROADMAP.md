@@ -50,7 +50,7 @@ Inside a Node.js template literal (the entire HTML frontend), `\'` is an unrecog
 ## Current Blockers 🟡
 
 ### MCP Connection Issues
-**Status:** Unresolved (HIGH PRIORITY)  
+**Status:** Diagnostic logging deployed, monitoring 24-48 hours  
 **Impact:** Blocking reliable use of Sidekick from opencode  
 **Timeline:** Week 1-3 for investigation/fix
 
@@ -58,6 +58,11 @@ Inside a Node.js template literal (the entire HTML frontend), `\'` is an unrecog
 - "Server not initialized" errors
 - Intermittent tool call failures
 - Session management problems
+
+**Progress:**
+- ✅ Phase 1: Added diagnostic logging to `src/index.js`
+- ⏳ Phase 2: Monitor logs for 24-48 hours to identify pattern
+- ⏳ Phase 3: Implement targeted fix based on root cause
 
 **Success Criteria:**
 - Zero errors over 24-hour period

@@ -136,3 +136,27 @@ Key env vars:
 - Agent bridge binds to 127.0.0.1 only
 
 See `CONTEXT.md` for full project context, architecture details, and testing commands.
+
+## Troubleshooting
+
+### MCP Server Logs
+```bash
+ssh sidekick@149.28.229.13
+sudo journalctl -u sidekick-mcp -f
+```
+
+### Restart MCP Service
+```bash
+ssh sidekick@149.28.229.13
+sudo systemctl restart sidekick-mcp
+```
+
+### Check All Services
+```bash
+ssh sidekick@149.28.229.13
+sudo systemctl status sidekick-mcp sidekick-dashboard sidekick-agent
+```
+
+### Dashboard (HTTP Basic Auth)
+- URL: `http://149.28.229.13:4098/`
+- Credentials in `.env` on VPS: `SIDEKICK_DASHBOARD_USER` / `SIDEKICK_DASHBOARD_PASS`

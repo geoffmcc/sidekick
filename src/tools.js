@@ -1223,10 +1223,28 @@ async function sidekick_teach({ action, name, description, steps, example, trigg
     if (!name || !description) {
       return { content: [{ type: "text", text: "name and description required" }], isError: true };
     }
+    const toolSchemas = `
+Tool parameter schemas:
+- sidekick_bash: { "command": "shell command to run" }
+- sidekick_read: { "path": "absolute file path" }
+- sidekick_write: { "path": "absolute file path", "content": "file content" }
+- sidekick_list: { "path": "/home/sidekick" } (optional path)
+- sidekick_search: { "pattern": "regex", "path": "optional dir", "include": "optional file pattern" }
+- sidekick_git: { "action": "status|diff|log|add|commit|push|pull|branch|checkout|stash", "args": "optional string" }
+- sidekick_notify: { "channel": "discord|slack|email", "message": "text", "webhook_url": "for discord/slack", "recipient": "for email" }
+- sidekick_process: { "action": "list|top|kill|tree", "filter": "optional name", "pid": "optional number", "name": "optional name" }
+- sidekick_service: { "action": "start|stop|restart|status|enable|disable|logs", "service": "service name" }
+- sidekick_archive: { "action": "create|extract|list", "path": "source path", "output": "output path for create", "format": "tar.gz|zip" }
+- sidekick_store: { "key": "storage key", "value": "value to store", "project": "optional project name" }
+- sidekick_get: { "key": "storage key" }
+- sidekick_web_fetch: { "url": "URL to fetch", "method": "GET|POST", "body": "optional", "headers": "optional JSON" }
+- sidekick_llm: { "prompt": "question", "system": "optional system prompt", "temperature": "optional 0-2" }
+`;
     const prompt = `Generate a procedure definition for "${name}" based on this description: "${description}". 
 Return a JSON array of steps, where each step has "tool" and "args" properties.
-Available tools: sidekick_bash, sidekick_read, sidekick_write, sidekick_list, sidekick_search, sidekick_git, sidekick_notify, sidekick_process, sidekick_service, sidekick_archive, sidekick_store, sidekick_get, sidekick_web_fetch, sidekick_llm.
-Example format: [{"tool": "sidekick_bash", "args": {"command": "ls -la"}}, {"tool": "sidekick_notify", "args": {"message": "Done!"}}]
+${toolSchemas}
+Example format: [{"tool": "sidekick_bash", "args": {"command": "ls -la"}}, {"tool": "sidekick_notify", "args": {"channel": "discord", "webhook_url": "https://...", "message": "Done!"}}]
+IMPORTANT: Use ONLY the parameters shown in the schemas above. Do not invent parameters like "output_var".
 Return ONLY the JSON array, no other text.`;
     
     const llmResult = await sidekick_llm({ prompt, system: "You are a helpful assistant that generates tool procedures. Return only valid JSON." });
@@ -1269,10 +1287,28 @@ Return ONLY the JSON array, no other text.`;
     if (!name || !example) {
       return { content: [{ type: "text", text: "name and example required" }], isError: true };
     }
+    const toolSchemas = `
+Tool parameter schemas:
+- sidekick_bash: { "command": "shell command to run" }
+- sidekick_read: { "path": "absolute file path" }
+- sidekick_write: { "path": "absolute file path", "content": "file content" }
+- sidekick_list: { "path": "/home/sidekick" } (optional path)
+- sidekick_search: { "pattern": "regex", "path": "optional dir", "include": "optional file pattern" }
+- sidekick_git: { "action": "status|diff|log|add|commit|push|pull|branch|checkout|stash", "args": "optional string" }
+- sidekick_notify: { "channel": "discord|slack|email", "message": "text", "webhook_url": "for discord/slack", "recipient": "for email" }
+- sidekick_process: { "action": "list|top|kill|tree", "filter": "optional name", "pid": "optional number", "name": "optional name" }
+- sidekick_service: { "action": "start|stop|restart|status|enable|disable|logs", "service": "service name" }
+- sidekick_archive: { "action": "create|extract|list", "path": "source path", "output": "output path for create", "format": "tar.gz|zip" }
+- sidekick_store: { "key": "storage key", "value": "value to store", "project": "optional project name" }
+- sidekick_get: { "key": "storage key" }
+- sidekick_web_fetch: { "url": "URL to fetch", "method": "GET|POST", "body": "optional", "headers": "optional JSON" }
+- sidekick_llm: { "prompt": "question", "system": "optional system prompt", "temperature": "optional 0-2" }
+`;
     const prompt = `Parse this example and extract the procedure steps:
 "${example}"
 Return a JSON array of steps, where each step has "tool" and "args" properties.
-Available tools: sidekick_bash, sidekick_read, sidekick_write, sidekick_list, sidekick_search, sidekick_git, sidekick_notify, sidekick_process, sidekick_service, sidekick_archive, sidekick_store, sidekick_get, sidekick_web_fetch, sidekick_llm.
+${toolSchemas}
+IMPORTANT: Use ONLY the parameters shown in the schemas above. Do not invent parameters like "output_var".
 Return ONLY the JSON array, no other text.`;
     
     const llmResult = await sidekick_llm({ prompt, system: "You are a helpful assistant that extracts procedures from examples. Return only valid JSON." });

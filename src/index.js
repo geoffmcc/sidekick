@@ -9,6 +9,16 @@ const API_KEY = process.env.SIDEKICK_API_KEY || "sk-sidekick-local-dev";
 const PORT = parseInt(process.env.SIDEKICK_PORT || "4097", 10);
 const ALLOWED_IPS = (process.env.SIDEKICK_ALLOWED_IPS || "").split(",").map(s => s.trim()).filter(Boolean);
 
+function logDebug(context, data) {
+  const ts = new Date().toISOString();
+  const prefix = `[MCP-DEBUG ${ts}]`;
+  if (typeof data === 'string') {
+    console.log(`${prefix} ${context}: ${data}`);
+  } else {
+    console.log(`${prefix} ${context}:`, JSON.stringify(data, null, 2));
+  }
+}
+
 const TOOL_SCHEMAS = {
   sidekick_bash: z.object({ command: z.string().describe("Shell command to execute") }),
   sidekick_read: z.object({ path: z.string().describe("Absolute path to the file to read") }),
@@ -151,11 +161,20 @@ function generateSessionId() {
 }
 
 async function getTransportForRequest(sessionId) {
+  logDebug("getTransportForRequest", { requestedSessionId: sessionId, sessionCount: sessions.size });
+  
   // Return existing transport if session exists
   if (sessionId && sessions.has(sessionId)) {
     const entry = sessions.get(sessionId);
+    const age = Date.now() - entry.createdAt;
+    const idle = Date.now() - entry.lastAccess;
     entry.lastAccess = Date.now();
+    logDebug("REUSE_SESSION", { sessionId, age_ms: age, idle_ms: idle });
     return { transport: entry.transport, isNew: false };
+  }
+
+  if (sessionId && !sessions.has(sessionId)) {
+    logDebug("SESSION_NOT_FOUND", { sessionId, availableSessions: Array.from(sessions.keys()) });
   }
 
   // Create fresh McpServer + Transport pair
@@ -168,10 +187,12 @@ async function getTransportForRequest(sessionId) {
   // Connect server to transport (one-time per server instance)
   await server.connect(transport);
 
+  logDebug("CREATED_NEW_TRANSPORT", { requestedSessionId: sessionId });
   return { transport, isNew: true };
 }
 
 function registerSession(sessionId, transport) {
+  logDebug("REGISTER_SESSION", { sessionId, sessionCount: sessions.size + 1 });
   sessions.set(sessionId, {
     transport,
     createdAt: Date.now(),
@@ -182,10 +203,15 @@ function registerSession(sessionId, transport) {
 // Cleanup sessions inactive for more than 1 hour, every 10 minutes
 setInterval(() => {
   const cutoff = Date.now() - 3600000;
+  const evicted = [];
   for (const [id, entry] of sessions) {
     if (entry.lastAccess < cutoff) {
+      evicted.push({ sessionId: id, age_ms: Date.now() - entry.createdAt, idle_ms: Date.now() - entry.lastAccess });
       sessions.delete(id);
     }
+  }
+  if (evicted.length > 0) {
+    logDebug("SESSION_CLEANUP", { evicted, remaining: sessions.size });
   }
 }, 600000);
 
@@ -248,7 +274,10 @@ app.post("/mcp", async (req, res) => {
     if (isNew) {
       const newSessionId = webRes.headers.get("mcp-session-id");
       if (newSessionId) {
+        logDebug("CAPTURED_SESSION_ID_FROM_RESPONSE", { newSessionId, requestedSessionId: sessionId });
         registerSession(newSessionId, transport);
+      } else {
+        logDebug("NO_SESSION_ID_IN_RESPONSE", { requestedSessionId: sessionId, responseHeaders: Object.fromEntries(webRes.headers.entries()) });
       }
     }
 
@@ -259,6 +288,7 @@ app.post("/mcp", async (req, res) => {
     else res.end();
   } catch (e) {
     console.error("MCP error:", e.message);
+    logDebug("MCP_POST_ERROR", { error: e.message, stack: e.stack, sessionId: req.headers["mcp-session-id"] });
     if (!res.headersSent) res.status(500).json({ error: e.message });
   }
 });
@@ -284,7 +314,10 @@ app.get("/mcp", async (req, res) => {
     if (isNew) {
       const newSessionId = webRes.headers.get("mcp-session-id");
       if (newSessionId) {
+        logDebug("CAPTURED_SESSION_ID_FROM_GET_RESPONSE", { newSessionId, requestedSessionId: sessionId });
         registerSession(newSessionId, transport);
+      } else {
+        logDebug("NO_SESSION_ID_IN_GET_RESPONSE", { requestedSessionId: sessionId });
       }
     }
 
@@ -305,6 +338,7 @@ app.get("/mcp", async (req, res) => {
     }
   } catch (e) {
     console.error("MCP GET error:", e.message);
+    logDebug("MCP_GET_ERROR", { error: e.message, stack: e.stack, sessionId: req.headers["mcp-session-id"] });
     if (!res.headersSent) res.status(500).json({ error: e.message });
   }
 });
@@ -330,7 +364,10 @@ app.delete("/mcp", async (req, res) => {
     if (isNew) {
       const newSessionId = webRes.headers.get("mcp-session-id");
       if (newSessionId) {
+        logDebug("CAPTURED_SESSION_ID_FROM_DELETE_RESPONSE", { newSessionId, requestedSessionId: sessionId });
         registerSession(newSessionId, transport);
+      } else {
+        logDebug("NO_SESSION_ID_IN_DELETE_RESPONSE", { requestedSessionId: sessionId });
       }
     }
 
@@ -341,6 +378,7 @@ app.delete("/mcp", async (req, res) => {
     else res.end();
   } catch (e) {
     console.error("MCP DELETE error:", e.message);
+    logDebug("MCP_DELETE_ERROR", { error: e.message, stack: e.stack, sessionId: req.headers["mcp-session-id"] });
     if (!res.headersSent) res.status(500).json({ error: e.message });
   }
 });
