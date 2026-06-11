@@ -1,4 +1,4 @@
-# Normalize all text files to LF (required for Linux VPS)
+# Normalize all text files to LF (required for Linux remote machine)
 * text=auto eol=lf
 
 # Binary files — never touch

@@ -278,7 +278,7 @@ function buildSystemPrompt() {
   const toolDescs = TOOL_DEFS.map(t =>
     "- " + t.name + "(" + Object.keys(t.args).join(", ") + "): " + t.description
   ).join("\n");
-  return "You are an autonomous agent running on a VPS.\n\n" +
+  return "You are an autonomous agent running on a remote machine.\n\n" +
     "CRITICAL RULES:\n" +
     "1. Do NOT repeat or verify a result you already have. Trust tool outputs.\n" +
     "2. Do NOT run the same command twice with minor variations.\n" +

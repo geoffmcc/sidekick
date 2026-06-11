@@ -64,7 +64,7 @@ try {
   }
 
   # Run npm install on VPS if package.json changed
-  Write-Host "Running npm install on VPS..." -ForegroundColor Green
+  Write-Host "Running npm install on remote machine..." -ForegroundColor Green
   $npmOutput = Run-Remote "cd $REMOTE_DIR && npm install 2>&1"
   if ($LASTEXITCODE -ne 0) {
     Write-Host "npm install failed:" -ForegroundColor Red

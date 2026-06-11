@@ -1,7 +1,7 @@
 {
   "name": "mcp-sidekick",
   "version": "1.0.0",
-  "description": "Sidekick VPS — MCP server, dashboard, and local AI agent",
+  "description": "Sidekick — Autonomous Agent Platform",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
