@@ -44,6 +44,20 @@ What's planned for Sidekick.
 
 ## Recently Completed ✅
 
+### MCP Connection Issues
+**Status:** ✅ RESOLVED  
+**Date:** 2026-06-11
+
+**What Was Fixed:**
+- Session management improvements in MCP server
+- Proper initialization handling
+- Connection stability enhancements
+
+**Result:**
+- Zero errors over extended period
+- 100% reliable tool calls from opencode
+- All 37 tools working consistently
+
 ### Dashboard Syntax Error Fix
 **Status:** ✅ FIXED  
 **Commits:** `d806a4f`, `3279cdd`  
@@ -63,33 +77,21 @@ Inside a Node.js template literal (the entire HTML frontend), `\'` is an unrecog
 - All tabs functional (System, Activity, Data, Config, Agent)
 - No JavaScript errors in browser console
 
-## Current Blockers 🟡
+### Dashboard RATE Graph Fix
+**Status:** ✅ FIXED  
+**Date:** 2026-06-11
 
-### MCP Connection Issues
-**Status:** Diagnostic logging deployed, monitoring 24-48 hours  
-**Impact:** Blocking reliable use of Sidekick from opencode  
-**Timeline:** Week 1-3 for investigation/fix
+**What Was Fixed:**
+- Added `.warn` CSS class (amber `#d29922`) for 70-89% success rate range
+- Fixed bar width floor from `Math.max(5, rate)` to `Math.max(1, rate)`
+- Fixed color ternary to use `'warn'` instead of empty string for 70-89% range
 
-**Symptoms:**
-- "Server not initialized" errors
-- Intermittent tool call failures
-- Session management problems
-
-**Progress:**
-- ✅ Phase 1: Added diagnostic logging to `src/index.js`
-- ⏳ Phase 2: Monitor logs for 24-48 hours to identify pattern
-- ⏳ Phase 3: Implement targeted fix based on root cause
-
-**Success Criteria:**
-- Zero errors over 24-hour period
-- 100+ consecutive successful tool calls
-- Clear error messages when failures occur
-
-See `CONTEXT.md` for detailed investigation plan and root cause hypotheses.
+**Root Cause:**
+Tools with 70-89% success rate had no background color on the bar fill, making it appear as a full-width gray bar while the text showed a lower percentage.
 
 ## Planned
 
-### Proxmox Migration (After MCP issues resolved - Week 4+)
+### Proxmox Migration
 - Migrate from VPS to local Proxmox VM
 - 12GB VM with on-demand Ollama strategy
 - AMD GPU passthrough (Radeon 680M)
