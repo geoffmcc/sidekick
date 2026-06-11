@@ -179,6 +179,32 @@ Key env vars:
 - MCP server uses Bearer token + IP whitelist
 - Agent bridge binds to 127.0.0.1 only
 
+## VPS Service Management
+
+The `sidekick` user has restricted sudo permissions for service management:
+
+### Allowed Commands
+```bash
+sudo systemctl restart|stop|start|status sidekick-mcp
+sudo systemctl restart|stop|start|status sidekick-dashboard
+sudo systemctl restart|stop|start|status sidekick-agent
+sudo journalctl -u sidekick-mcp
+sudo journalctl -u sidekick-dashboard
+sudo journalctl -u sidekick-agent
+```
+
+### Examples
+```bash
+# Restart MCP server
+sudo systemctl restart sidekick-mcp
+
+# Check service status
+sudo systemctl status sidekick-mcp
+
+# View recent logs
+sudo journalctl -u sidekick-mcp -n 50
+```
+
 See `CONTEXT.md` for full project context, architecture details, and testing commands.
 
 ## Troubleshooting

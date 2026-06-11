@@ -312,6 +312,8 @@ function createMcpServer() {
 // --- Session management: one McpServer + Transport pair per session ---
 
 const sessions = new Map();
+const staleSessionMap = new Map();
+const serverStartTime = Date.now();
 
 function generateSessionId() {
   return "sess-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
@@ -320,7 +322,6 @@ function generateSessionId() {
 async function getTransportForRequest(sessionId) {
   logDebug("getTransportForRequest", { requestedSessionId: sessionId, sessionCount: sessions.size });
   
-  // Return existing transport if session exists
   if (sessionId && sessions.has(sessionId)) {
     const entry = sessions.get(sessionId);
     const age = Date.now() - entry.createdAt;
@@ -331,12 +332,34 @@ async function getTransportForRequest(sessionId) {
   }
 
   if (sessionId && !sessions.has(sessionId)) {
-    logDebug("SESSION_NOT_FOUND", { sessionId, availableSessions: Array.from(sessions.keys()) });
-    // Return null to signal caller should return 404 instead of creating new transport
-    return { transport: null, isNew: false, sessionNotFound: true };
+    const replacementId = staleSessionMap.get(sessionId);
+    if (replacementId && sessions.has(replacementId)) {
+      logDebug("STALE_SESSION_KNOWN_REPLACEMENT", { staleSessionId: sessionId, replacementId });
+      return { transport: null, isNew: false, newSessionId: replacementId, staleRedirect: true };
+    }
+
+    logDebug("STALE_SESSION_CREATING_REPLACEMENT", { staleSessionId: sessionId, sessionCount: sessions.size });
+
+    const newSessionId = generateSessionId();
+    const server = createMcpServer();
+    const transport = new WebStandardStreamableHTTPServerTransport({
+      sessionIdGenerator: () => newSessionId,
+      enableJsonResponse: true
+    });
+
+    registerSession(newSessionId, server, transport);
+    await server.connect(transport);
+
+    staleSessionMap.set(sessionId, newSessionId);
+    if (staleSessionMap.size > 100) {
+      const firstKey = staleSessionMap.keys().next().value;
+      staleSessionMap.delete(firstKey);
+    }
+
+    logDebug("CREATED_REPLACEMENT_SESSION", { staleSessionId: sessionId, newSessionId });
+    return { transport: null, isNew: true, newSessionId, staleRedirect: true };
   }
 
-  // Create fresh McpServer + Transport pair with pre-generated session ID
   const newSessionId = generateSessionId();
   const server = createMcpServer();
   const transport = new WebStandardStreamableHTTPServerTransport({
@@ -344,19 +367,17 @@ async function getTransportForRequest(sessionId) {
     enableJsonResponse: true
   });
 
-  // Register session BEFORE connecting and handling requests
-  registerSession(newSessionId, transport);
-
-  // Connect server to transport (one-time per server instance)
+  registerSession(newSessionId, server, transport);
   await server.connect(transport);
 
-  logDebug("CREATED_NEW_TRANSPORT", { newSessionId, requestedSessionId: sessionId });
+  logDebug("CREATED_NEW_TRANSPORT", { newSessionId });
   return { transport, isNew: true, newSessionId };
 }
 
-function registerSession(sessionId, transport) {
+function registerSession(sessionId, server, transport) {
   logDebug("REGISTER_SESSION", { sessionId, sessionCount: sessions.size + 1 });
   sessions.set(sessionId, {
+    server,
     transport,
     createdAt: Date.now(),
     lastAccess: Date.now()
@@ -392,6 +413,25 @@ if (ALLOWED_IPS.length) {
   });
 }
 
+app.get("/health", (req, res) => {
+  const uptimeMs = Date.now() - serverStartTime;
+  const uptimeSeconds = Math.floor(uptimeMs / 1000);
+  const hours = Math.floor(uptimeSeconds / 3600);
+  const minutes = Math.floor((uptimeSeconds % 3600) / 60);
+  const seconds = uptimeSeconds % 60;
+  const uptimeStr = `${hours}h ${minutes}m ${seconds}s`;
+
+  res.json({
+    status: "healthy",
+    uptime: uptimeSeconds,
+    uptimeHuman: uptimeStr,
+    sessions: sessions.size,
+    staleMappings: staleSessionMap.size,
+    version: "1.0.0",
+    timestamp: new Date().toISOString()
+  });
+});
+
 app.use((req, res, next) => {
   const authHeader = req.headers["authorization"];
   const token = authHeader ? authHeader.replace("Bearer ", "") : req.query.api_key;
@@ -423,16 +463,19 @@ app.post("/mcp", async (req, res) => {
     const sessionId = wh["mcp-session-id"] || wh["Mcp-Session-Id"];
     logSession("POST", wh, req.body);
 
-    const { transport, isNew, newSessionId, sessionNotFound } = await getTransportForRequest(sessionId);
+    const { transport, isNew, newSessionId, staleRedirect } = await getTransportForRequest(sessionId);
 
-    // If client sent a session ID we don't recognize, return 404
-    if (sessionNotFound) {
-      logDebug("SESSION_NOT_FOUND_REJECTED", { sessionId });
-      return res.status(404).json({ 
-        jsonrpc: "2.0", 
-        error: { code: -32001, message: "Session not found. Please re-initialize." }, 
-        id: null 
+    if (staleRedirect) {
+      logDebug("STALE_SESSION_RETURNING_REINIT", { staleSessionId: sessionId, newSessionId });
+      res.status(400);
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("mcp-session-id", newSessionId);
+      res.json({
+        jsonrpc: "2.0",
+        error: { code: -32001, message: "Session expired. Re-initialize with the session ID in the mcp-session-id response header." },
+        id: null
       });
+      return;
     }
 
     const webReq = new Request("http://127.0.0.1:4097/mcp", {
@@ -443,9 +486,8 @@ app.post("/mcp", async (req, res) => {
 
     const webRes = await transport.handleRequest(webReq, { parsedBody: req.body });
 
-    // Log the pre-generated session ID for new sessions
     if (isNew && newSessionId) {
-      logDebug("NEW_SESSION_HANDLED", { newSessionId, requestedSessionId: sessionId });
+      logDebug("NEW_SESSION_HANDLED", { newSessionId });
     }
 
     res.status(webRes.status);
@@ -469,17 +511,16 @@ app.get("/mcp", async (req, res) => {
     const sessionId = wh["mcp-session-id"] || wh["Mcp-Session-Id"];
     logSession("GET", wh, null);
 
-    const { transport, isNew, newSessionId, sessionNotFound } = await getTransportForRequest(sessionId);
-
-    // If client sent a session ID we don't recognize, return 404
-    if (sessionNotFound) {
-      logDebug("SESSION_NOT_FOUND_REJECTED", { sessionId });
-      return res.status(404).json({ 
-        jsonrpc: "2.0", 
-        error: { code: -32001, message: "Session not found. Please re-initialize." }, 
-        id: null 
+    if (!sessionId || !sessions.has(sessionId)) {
+      logDebug("GET_WITHOUT_SESSION", { sessionId });
+      return res.status(400).json({
+        jsonrpc: "2.0",
+        error: { code: -32000, message: "GET requires a valid mcp-session-id header" },
+        id: null
       });
     }
+
+    const { transport } = await getTransportForRequest(sessionId);
 
     const webReq = new Request("http://127.0.0.1:4097/mcp", {
       method: "GET",
@@ -487,11 +528,6 @@ app.get("/mcp", async (req, res) => {
     });
 
     const webRes = await transport.handleRequest(webReq);
-
-    // Log the pre-generated session ID for new sessions
-    if (isNew && newSessionId) {
-      logDebug("NEW_SESSION_HANDLED_GET", { newSessionId, requestedSessionId: sessionId });
-    }
 
     res.status(webRes.status);
     webRes.headers.forEach((v, k) => { if (k !== "content-encoding" && k !== "content-length") res.setHeader(k, v); });
@@ -524,17 +560,16 @@ app.delete("/mcp", async (req, res) => {
     const sessionId = wh["mcp-session-id"] || wh["Mcp-Session-Id"];
     logSession("DELETE", wh, null);
 
-    const { transport, isNew, newSessionId, sessionNotFound } = await getTransportForRequest(sessionId);
-
-    // If client sent a session ID we don't recognize, return 404
-    if (sessionNotFound) {
-      logDebug("SESSION_NOT_FOUND_REJECTED", { sessionId });
-      return res.status(404).json({ 
-        jsonrpc: "2.0", 
-        error: { code: -32001, message: "Session not found. Please re-initialize." }, 
-        id: null 
+    if (!sessionId || !sessions.has(sessionId)) {
+      logDebug("DELETE_WITHOUT_SESSION", { sessionId });
+      return res.status(400).json({
+        jsonrpc: "2.0",
+        error: { code: -32000, message: "DELETE requires a valid mcp-session-id header" },
+        id: null
       });
     }
+
+    const { transport } = await getTransportForRequest(sessionId);
 
     const webReq = new Request("http://127.0.0.1:4097/mcp", {
       method: "DELETE",
@@ -543,12 +578,6 @@ app.delete("/mcp", async (req, res) => {
 
     const webRes = await transport.handleRequest(webReq);
 
-    // Log the pre-generated session ID for new sessions
-    if (isNew && newSessionId) {
-      logDebug("NEW_SESSION_HANDLED_DELETE", { newSessionId, requestedSessionId: sessionId });
-    }
-
-    // Clean up the session on DELETE
     if (sessionId && sessions.has(sessionId)) {
       sessions.delete(sessionId);
       logDebug("SESSION_DELETED", { sessionId });

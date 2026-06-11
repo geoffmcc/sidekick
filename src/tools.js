@@ -1,6 +1,6 @@
 const fs = require("fs");
 const path = require("path");
-const { execSync } = require("child_process");
+const { execSync, execFileSync } = require("child_process");
 const { redactSensitive } = require("./redact");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
@@ -19,6 +19,13 @@ const PROCEDURES_FILE = path.join(DATA_DIR, "procedures.json");
 const MAX_LOG = 1000;
 
 const PROJECT_RE = /^[a-z][a-z0-9_]*$/;
+
+const SHELL_META = /[`$\\!#&|;()*?<>[\]{}"'\n\r]/;
+function shellEscape(arg) {
+  if (arg === "") return "''";
+  if (!SHELL_META.test(arg)) return arg;
+  return "'" + arg.replace(/'/g, "'\\''") + "'";
+}
 
 function migrateKV(data) {
   const now = new Date().toISOString();
@@ -342,20 +349,25 @@ async function sidekick_search({ pattern, path: searchPath, include }) {
     return { content: [{ type: "text", text: "Path not found: " + targetPath }], isError: true };
   }
   
-  let cmd;
+  let useRg = false;
   try {
-    execSync("which rg", { stdio: "ignore" });
-    cmd = ["rg", "--json", "--max-count", "100"];
-    if (include) cmd.push("-g", include);
-    cmd.push(pattern, targetPath);
-  } catch (e) {
-    cmd = ["grep", "-rn", "--max-count=100"];
-    if (include) cmd.push("--include=" + include);
-    cmd.push(pattern, targetPath);
-  }
+    execFileSync("which", ["rg"], { stdio: "ignore" });
+    useRg = true;
+  } catch (e) {}
   
   try {
-    const stdout = execSync(cmd.join(" "), { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024 });
+    let stdout;
+    if (useRg) {
+      const args = ["--json", "--max-count", "100"];
+      if (include) args.push("-g", include);
+      args.push(pattern, targetPath);
+      stdout = execFileSync("rg", args, { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024 });
+    } else {
+      const args = ["-rn", "--max-count=100"];
+      if (include) args.push("--include=" + include);
+      args.push(pattern, targetPath);
+      stdout = execFileSync("grep", args, { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024 });
+    }
     return { content: [{ type: "text", text: redactSensitive(stdout || "(no matches)") }] };
   } catch (e) {
     if (e.status === 1) {
@@ -376,14 +388,14 @@ async function sidekick_git({ action, path: repoPath, args: extraArgs }) {
     return { content: [{ type: "text", text: "Invalid action. Allowed: " + allowedActions.join(", ") }], isError: true };
   }
   
-  const baseCmd = ["git", "-C", repo, action];
+  const cmdArgs = ["-C", repo, action];
   if (extraArgs) {
     const parsed = extraArgs.split(/\s+/).filter(Boolean);
-    baseCmd.push(...parsed);
+    cmdArgs.push(...parsed);
   }
   
   try {
-    const stdout = execSync(baseCmd.join(" "), { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
+    const stdout = execFileSync("git", cmdArgs, { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
     return { content: [{ type: "text", text: redactSensitive(stdout || "(empty output)") }] };
   } catch (e) {
     return { content: [{ type: "text", text: redactSensitive("Exit code: " + e.status + "\n" + (e.stderr || e.stdout || "")) }], isError: true };
