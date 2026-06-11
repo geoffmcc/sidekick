@@ -148,7 +148,7 @@ async function sidekick_write({ path: filePath, content }) {
   return { content: [{ type: "text", text: "Written " + stat.size + " bytes to " + filePath }] };
 }
 
-async function sidekick_store({ key, value, project }) {
+async function sidekick_store({ key, value, project, category }) {
   if (project !== undefined && project !== null && !PROJECT_RE.test(project)) {
     return { content: [{ type: "text", text: "Invalid project name. Must match /^[a-z][a-z0-9_]*$/" }], isError: true };
   }
@@ -160,6 +160,7 @@ async function sidekick_store({ key, value, project }) {
     kvStore[key] = {
       value: value,
       project: project !== undefined ? project : existing.project,
+      category: category !== undefined ? category : existing.category,
       source: currentSource,
       created: existing.created,
       updated: now
@@ -168,6 +169,7 @@ async function sidekick_store({ key, value, project }) {
     kvStore[key] = {
       value: value,
       project: project || null,
+      category: category || null,
       source: currentSource,
       created: now,
       updated: now

@@ -27,7 +27,8 @@ const TOOL_SCHEMAS = {
   sidekick_store: z.object({ 
     key: z.string().describe("Storage key"), 
     value: z.string().describe("Value to store"),
-    project: z.string().optional().describe("Project name (lowercase, underscores only)")
+    project: z.string().optional().describe("Project name (lowercase, underscores only)"),
+    category: z.string().optional().describe("Category tag for filtering (e.g. 'mcp', 'tool', 'config')")
   }),
   sidekick_get: z.object({ key: z.string().describe("Storage key to retrieve") }),
   sidekick_list: z.object({ path: z.string().optional().default("/home/sidekick").describe("Directory path to list") }),
