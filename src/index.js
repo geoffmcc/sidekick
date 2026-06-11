@@ -85,6 +85,19 @@ const TOOL_SCHEMAS = {
     id: z.string().optional().describe("Webhook ID (required for get)"),
     limit: z.number().optional().describe("Number of webhooks to list (default: 20)")
   }),
+  sidekick_context: z.object({
+    action: z.enum(["track_project", "track_decision", "track_problem", "track_pattern", "recall", "suggest", "summarize", "list"]).describe("Context action to perform"),
+    project: z.string().optional().describe("Project name (for tracking and filtering)"),
+    context: z.string().optional().describe("Context description (for decisions/patterns)"),
+    decision: z.string().optional().describe("Decision made (for track_decision)"),
+    reasoning: z.string().optional().describe("Reasoning behind decision (for track_decision)"),
+    problem: z.string().optional().describe("Problem description (for track_problem)"),
+    solution: z.string().optional().describe("Solution to problem (for track_problem)"),
+    pattern: z.string().optional().describe("Pattern description (for track_pattern)"),
+    query: z.string().optional().describe("Search query (for recall/suggest)"),
+    type: z.string().optional().describe("Context type: decisions, problems, patterns, projects, or all (default: all)"),
+    limit: z.number().optional().describe("Maximum results to return (default: 10)")
+  }),
 };
 
 // --- Factory: create fresh McpServer + register tools ---
