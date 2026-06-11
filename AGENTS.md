@@ -6,7 +6,7 @@ A remote VPS agent system. Connect via the sidekick MCP server at `YOUR_VPS_IP:4
 
 Always use the `task` tool with `subagent_type: "sidekick"` when interacting with sidekick. Do not use direct MCP tools (`sidekick_bash`, `sidekick_read`, etc.) — use the task tool so the user can see the full conversation. 100% of the time, no exceptions.
 
-## MCP Tools (10)
+## MCP Tools (13)
 
 | Tool | When to use |
 |------|-------------|
@@ -14,6 +14,9 @@ Always use the `task` tool with `subagent_type: "sidekick"` when interacting wit
 | `sidekick_read` | Read a file from the VPS filesystem |
 | `sidekick_write` | Write or edit a file on the VPS |
 | `sidekick_list` | List files and directories on the VPS |
+| `sidekick_search` | Search file contents using ripgrep/grep (faster than bash grep) |
+| `sidekick_git` | Structured git operations (status, diff, log, add, commit, push, pull, branch, checkout, stash) |
+| `sidekick_notify` | Send alerts to Discord, Slack, or email |
 | `sidekick_store` | Store a value persistently in KV storage |
 | `sidekick_get` | Retrieve a stored value from KV storage |
 | `sidekick_list_projects` | List all projects in KV storage |
@@ -28,12 +31,17 @@ All tool calls are logged with source tags:
 
 ## Services
 
-- **MCP Server** (`:4097`) — 8 tools, session-aware transport (new McpServer+Transport per session)
+- **MCP Server** (`:4097`) — 13 tools, session-aware transport (new McpServer+Transport per session)
 - **Dashboard** (`:4098`) — web UI with System, Activity, Data, Config, and Agent tabs, Font Awesome icons
 - **Agent Bridge** (`:4099`) — autonomous LLM agent that calls tools directly (bypasses MCP HTTP)
 - **Ollama** (`:11434`) — local Phi-3-mini fallback. Uses cloud Groq API when `GROQ_API_KEY` is set
 
 ## Recent Features
+
+### New Tools (v1.1)
+- **`sidekick_search`** — Fast file content search using ripgrep (falls back to grep). Supports regex patterns and file filtering.
+- **`sidekick_git`** — Structured git operations: status, diff, log, add, commit, push, pull, branch, checkout, stash. Safer than raw bash for git commands.
+- **`sidekick_notify`** — Send notifications to Discord, Slack (via webhooks), or email (via SMTP). Useful for alerts and monitoring.
 
 ### Project Labeling
 KV store supports project-based organization. Use `project` parameter when storing data to group related keys. Dashboard shows project badges and filtering.

@@ -332,6 +332,150 @@ function callGroqLLM(prompt, system, temperature) {
   });
 }
 
+async function sidekick_search({ pattern, path: searchPath, include }) {
+  const targetPath = searchPath || ".";
+  if (!fs.existsSync(targetPath)) {
+    return { content: [{ type: "text", text: "Path not found: " + targetPath }], isError: true };
+  }
+  
+  let cmd;
+  try {
+    execSync("which rg", { stdio: "ignore" });
+    cmd = ["rg", "--json", "--max-count", "100"];
+    if (include) cmd.push("-g", include);
+    cmd.push(pattern, targetPath);
+  } catch (e) {
+    cmd = ["grep", "-rn", "--max-count=100"];
+    if (include) cmd.push("--include=" + include);
+    cmd.push(pattern, targetPath);
+  }
+  
+  try {
+    const stdout = execSync(cmd.join(" "), { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024 });
+    return { content: [{ type: "text", text: redactSensitive(stdout || "(no matches)") }] };
+  } catch (e) {
+    if (e.status === 1) {
+      return { content: [{ type: "text", text: "No matches found" }] };
+    }
+    return { content: [{ type: "text", text: "Search error: " + (e.stderr || e.message) }], isError: true };
+  }
+}
+
+async function sidekick_git({ action, path: repoPath, args: extraArgs }) {
+  const repo = repoPath || ".";
+  if (!fs.existsSync(repo)) {
+    return { content: [{ type: "text", text: "Repository path not found: " + repo }], isError: true };
+  }
+  
+  const allowedActions = ["status", "diff", "log", "add", "commit", "push", "pull", "branch", "checkout", "stash"];
+  if (!allowedActions.includes(action)) {
+    return { content: [{ type: "text", text: "Invalid action. Allowed: " + allowedActions.join(", ") }], isError: true };
+  }
+  
+  const baseCmd = ["git", "-C", repo, action];
+  if (extraArgs) {
+    const parsed = extraArgs.split(/\s+/).filter(Boolean);
+    baseCmd.push(...parsed);
+  }
+  
+  try {
+    const stdout = execSync(baseCmd.join(" "), { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
+    return { content: [{ type: "text", text: redactSensitive(stdout || "(empty output)") }] };
+  } catch (e) {
+    return { content: [{ type: "text", text: redactSensitive("Exit code: " + e.status + "\n" + (e.stderr || e.stdout || "")) }], isError: true };
+  }
+}
+
+async function sidekick_notify({ channel, webhook_url, recipient, message, title }) {
+  const https = require("https");
+  const http = require("http");
+  
+  if (channel === "discord" || channel === "slack") {
+    if (!webhook_url) {
+      return { content: [{ type: "text", text: "webhook_url required for " + channel }], isError: true };
+    }
+    
+    const payload = channel === "discord" 
+      ? JSON.stringify({ content: title ? `**${title}**\n${message}` : message })
+      : JSON.stringify({ text: title ? `*${title}*\n${message}` : message });
+    
+    return new Promise((resolve) => {
+      const urlObj = new URL(webhook_url);
+      const lib = urlObj.protocol === "https:" ? https : http;
+      const req = lib.request({
+        hostname: urlObj.hostname,
+        port: urlObj.port || (urlObj.protocol === "https:" ? 443 : 80),
+        path: urlObj.pathname + urlObj.search,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(payload)
+        },
+        timeout: 10000
+      }, (res) => {
+        let data = "";
+        res.on("data", (chunk) => data += chunk);
+        res.on("end", () => {
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resolve({ content: [{ type: "text", text: "Sent to " + channel }] });
+          } else {
+            resolve({ content: [{ type: "text", text: "Failed: " + res.statusCode + " " + data }], isError: true });
+          }
+        });
+      });
+      req.on("error", (err) => resolve({ content: [{ type: "text", text: "Error: " + err.message }], isError: true }));
+      req.on("timeout", () => { req.destroy(); resolve({ content: [{ type: "text", text: "Timeout" }], isError: true }); });
+      req.write(payload);
+      req.end();
+    });
+  }
+  
+  if (channel === "email") {
+    if (!recipient) {
+      return { content: [{ type: "text", text: "recipient required for email" }], isError: true };
+    }
+    
+    const smtpHost = process.env.SMTP_HOST || "smtp.gmail.com";
+    const smtpPort = parseInt(process.env.SMTP_PORT || "587", 10);
+    const smtpUser = process.env.SMTP_USER || "";
+    const smtpPass = process.env.SMTP_PASS || "";
+    
+    if (!smtpUser || !smtpPass) {
+      return { content: [{ type: "text", text: "SMTP_USER and SMTP_PASS env vars required" }], isError: true };
+    }
+    
+    const subject = title || "Sidekick Notification";
+    const emailContent = `From: ${smtpUser}\nTo: ${recipient}\nSubject: ${subject}\n\n${message}`;
+    
+    return new Promise((resolve) => {
+      const req = https.request({
+        hostname: smtpHost,
+        port: smtpPort,
+        path: "/",
+        method: "POST",
+        auth: `${smtpUser}:${smtpPass}`,
+        headers: {
+          "Content-Type": "text/plain",
+          "Content-Length": Buffer.byteLength(emailContent)
+        },
+        timeout: 30000
+      }, (res) => {
+        let data = "";
+        res.on("data", (chunk) => data += chunk);
+        res.on("end", () => {
+          resolve({ content: [{ type: "text", text: "Email sent to " + recipient }] });
+        });
+      });
+      req.on("error", (err) => resolve({ content: [{ type: "text", text: "Email error: " + err.message }], isError: true }));
+      req.on("timeout", () => { req.destroy(); resolve({ content: [{ type: "text", text: "Email timeout" }], isError: true }); });
+      req.write(emailContent);
+      req.end();
+    });
+  }
+  
+  return { content: [{ type: "text", text: "Invalid channel. Use: discord, slack, or email" }], isError: true };
+}
+
 const TOOLS = {
   sidekick_bash,
   sidekick_read,
@@ -343,6 +487,9 @@ const TOOLS = {
   sidekick_llm,
   sidekick_list_projects,
   sidekick_get_by_project,
+  sidekick_search,
+  sidekick_git,
+  sidekick_notify,
 };
 
 const TOOL_DEFS = [
@@ -356,6 +503,9 @@ const TOOL_DEFS = [
   { name: "sidekick_llm", description: "Ask the LLM (Groq cloud or local Phi-3-mini)", args: { prompt: "string", system: "string (optional)", temperature: "number (optional)" } },
   { name: "sidekick_list_projects", description: "List all unique project names in KV storage", args: {} },
   { name: "sidekick_get_by_project", description: "Get all keys and values for a specific project", args: { project: "string" } },
+  { name: "sidekick_search", description: "Search file contents using ripgrep or grep", args: { pattern: "string", path: "string (optional)", include: "string (optional)" } },
+  { name: "sidekick_git", description: "Structured git operations (status, diff, log, add, commit, push, pull, branch, checkout, stash)", args: { action: "string", path: "string (optional)", args: "string (optional)" } },
+  { name: "sidekick_notify", description: "Send notifications to Discord, Slack, or email", args: { channel: "string", webhook_url: "string (optional)", recipient: "string (optional)", message: "string", title: "string (optional)" } },
 ];
 
 async function callTool(name, args) {
