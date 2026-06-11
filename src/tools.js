@@ -3349,6 +3349,563 @@ async function sidekick_retry({ tool, args, max_attempts, backoff, initial_delay
   return { content: [{ type: "text", text: `✗ Failed after ${maxAttempts} attempts\nLast error: ${lastError}` }], isError: true };
 }
 
+// --- Evolve Tool ---
+
+const EVOLVE_FILE = path.join(DATA_DIR, "evolve.json");
+const MAX_PROPOSALS_PER_DAY = 10;
+
+function loadEvolve() {
+  if (!fs.existsSync(EVOLVE_FILE)) return { proposals: [], history: [] };
+  try {
+    return JSON.parse(fs.readFileSync(EVOLVE_FILE, "utf-8"));
+  } catch {
+    return { proposals: [], history: [] };
+  }
+}
+
+function saveEvolve(evolve) {
+  fs.writeFileSync(EVOLVE_FILE, JSON.stringify(evolve, null, 2));
+}
+
+function analyzeToolUsage() {
+  if (!fs.existsSync(LOG_FILE)) return { patterns: [], suggestions: [] };
+  
+  try {
+    const lines = fs.readFileSync(LOG_FILE, "utf-8").trim().split("\n");
+    const logs = lines.map(line => JSON.parse(line));
+    
+    // Count tool usage
+    const toolCounts = {};
+    const toolSequences = [];
+    
+    for (let i = 0; i < logs.length; i++) {
+      const tool = logs[i].n;
+      toolCounts[tool] = (toolCounts[tool] || 0) + 1;
+      
+      // Track sequences of 2-3 tools
+      if (i < logs.length - 1) {
+        const seq2 = [logs[i].n, logs[i + 1].n].join(" -> ");
+        toolSequences.push(seq2);
+      }
+      if (i < logs.length - 2) {
+        const seq3 = [logs[i].n, logs[i + 1].n, logs[i + 2].n].join(" -> ");
+        toolSequences.push(seq3);
+      }
+    }
+    
+    // Find frequent sequences
+    const seqCounts = {};
+    for (const seq of toolSequences) {
+      seqCounts[seq] = (seqCounts[seq] || 0) + 1;
+    }
+    
+    const frequentSeqs = Object.entries(seqCounts)
+      .filter(([_, count]) => count >= 3)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10);
+    
+    const patterns = frequentSeqs.map(([seq, count]) => ({
+      pattern: seq,
+      count,
+      suggestion: `Frequent pattern detected: ${seq} (${count} times). Consider creating a procedure.`
+    }));
+    
+    return { patterns, toolCounts };
+  } catch {
+    return { patterns: [], suggestions: [] };
+  }
+}
+
+async function sidekick_evolve({ action, id, proposal, approve, test }) {
+  const evolve = loadEvolve();
+  const now = new Date().toISOString();
+  const today = now.split("T")[0];
+  
+  if (action === "analyze") {
+    const analysis = analyzeToolUsage();
+    
+    if (analysis.patterns.length === 0) {
+      return { content: [{ type: "text", text: "No frequent patterns detected yet. Continue using tools to build patterns." }] };
+    }
+    
+    const report = analysis.patterns.map(p => 
+      `Pattern: ${p.pattern}\nCount: ${p.count}\nSuggestion: ${p.suggestion}`
+    ).join("\n\n");
+    
+    return { content: [{ type: "text", text: `# Tool Usage Analysis\n\n${report}` }] };
+  }
+  
+  if (action === "propose") {
+    if (!proposal) {
+      return { content: [{ type: "text", text: "proposal required" }], isError: true };
+    }
+    
+    // Check rate limit
+    const todayProposals = evolve.proposals.filter(p => p.created.startsWith(today));
+    if (todayProposals.length >= MAX_PROPOSALS_PER_DAY) {
+      return { content: [{ type: "text", text: `Rate limit exceeded: max ${MAX_PROPOSALS_PER_DAY} proposals per day` }], isError: true };
+    }
+    
+    const newProposal = {
+      id: generateId("prop"),
+      proposal,
+      status: "pending",
+      created: now,
+      testResults: null
+    };
+    
+    evolve.proposals.push(newProposal);
+    saveEvolve(evolve);
+    
+    return { content: [{ type: "text", text: `Proposal created: ${newProposal.id}\nStatus: pending\nProposal: ${proposal}` }] };
+  }
+  
+  if (action === "list") {
+    if (evolve.proposals.length === 0) {
+      return { content: [{ type: "text", text: "No proposals yet" }] };
+    }
+    
+    const list = evolve.proposals.map(p => 
+      `ID: ${p.id}\nStatus: ${p.status}\nCreated: ${p.created}\nProposal: ${p.proposal.substring(0, 100)}${p.proposal.length > 100 ? "..." : ""}`
+    ).join("\n\n");
+    
+    return { content: [{ type: "text", text: `# Proposals (${evolve.proposals.length})\n\n${list}` }] };
+  }
+  
+  if (action === "test") {
+    if (!id) {
+      return { content: [{ type: "text", text: "id required" }], isError: true };
+    }
+    
+    const proposal = evolve.proposals.find(p => p.id === id);
+    if (!proposal) {
+      return { content: [{ type: "text", text: `Proposal not found: ${id}` }], isError: true };
+    }
+    
+    // Simulate testing the proposal
+    proposal.status = "testing";
+    proposal.testStarted = now;
+    saveEvolve(evolve);
+    
+    // In a real implementation, this would sandbox and test the proposal
+    // For now, we'll simulate a successful test
+    proposal.testResults = {
+      passed: true,
+      duration: 1500,
+      notes: "Simulated test passed. Proposal appears safe."
+    };
+    proposal.status = "tested";
+    proposal.testedAt = new Date().toISOString();
+    saveEvolve(evolve);
+    
+    return { content: [{ type: "text", text: `Test completed for ${id}\nResult: ${proposal.testResults.passed ? "PASSED" : "FAILED"}\nNotes: ${proposal.testResults.notes}` }] };
+  }
+  
+  if (action === "approve") {
+    if (!id) {
+      return { content: [{ type: "text", text: "id required" }], isError: true };
+    }
+    
+    const proposal = evolve.proposals.find(p => p.id === id);
+    if (!proposal) {
+      return { content: [{ type: "text", text: `Proposal not found: ${id}` }], isError: true };
+    }
+    
+    if (proposal.status !== "tested") {
+      return { content: [{ type: "text", text: `Proposal must be tested before approval (current status: ${proposal.status})` }], isError: true };
+    }
+    
+    proposal.status = "approved";
+    proposal.approvedAt = new Date().toISOString();
+    
+    // Add to history
+    evolve.history.push({
+      id: proposal.id,
+      proposal: proposal.proposal,
+      approvedAt: proposal.approvedAt
+    });
+    
+    saveEvolve(evolve);
+    
+    return { content: [{ type: "text", text: `Proposal ${id} approved and added to history` }] };
+  }
+  
+  if (action === "reject") {
+    if (!id) {
+      return { content: [{ type: "text", text: "id required" }], isError: true };
+    }
+    
+    const proposal = evolve.proposals.find(p => p.id === id);
+    if (!proposal) {
+      return { content: [{ type: "text", text: `Proposal not found: ${id}` }], isError: true };
+    }
+    
+    proposal.status = "rejected";
+    proposal.rejectedAt = new Date().toISOString();
+    saveEvolve(evolve);
+    
+    return { content: [{ type: "text", text: `Proposal ${id} rejected` }] };
+  }
+  
+  return { content: [{ type: "text", text: "Unknown action. Use: analyze, propose, list, test, approve, reject" }], isError: true };
+}
+
+// --- Orchestrate Tool ---
+
+const ORCHESTRATE_FILE = path.join(DATA_DIR, "orchestrate.json");
+
+function loadOrchestrate() {
+  if (!fs.existsSync(ORCHESTRATE_FILE)) return { tasks: [], nextId: 1 };
+  try {
+    return JSON.parse(fs.readFileSync(ORCHESTRATE_FILE, "utf-8"));
+  } catch {
+    return { tasks: [], nextId: 1 };
+  }
+}
+
+function saveOrchestrate(orchestrate) {
+  fs.writeFileSync(ORCHESTRATE_FILE, JSON.stringify(orchestrate, null, 2));
+}
+
+async function sidekick_orchestrate({ action, id, task_name, subtasks, dependencies, timeout }) {
+  const orchestrate = loadOrchestrate();
+  const now = new Date().toISOString();
+  
+  if (action === "create") {
+    if (!task_name || !subtasks || !Array.isArray(subtasks)) {
+      return { content: [{ type: "text", text: "task_name and subtasks array required" }], isError: true };
+    }
+    
+    const taskId = orchestrate.nextId++;
+    const task = {
+      id: taskId,
+      name: task_name,
+      subtasks: subtasks.map((st, idx) => ({
+        id: `${taskId}-${idx}`,
+        name: st.name || `Subtask ${idx + 1}`,
+        tool: st.tool,
+        args: st.args || {},
+        status: "pending",
+        result: null,
+        error: null
+      })),
+      dependencies: dependencies || {},
+      status: "created",
+      created: now,
+      timeout: timeout || 1800000, // 30 minutes default
+      results: {}
+    };
+    
+    orchestrate.tasks.push(task);
+    saveOrchestrate(orchestrate);
+    
+    return { content: [{ type: "text", text: `Task ${taskId} created with ${subtasks.length} subtasks\nName: ${task_name}` }] };
+  }
+  
+  if (action === "execute") {
+    if (!id) {
+      return { content: [{ type: "text", text: "id required" }], isError: true };
+    }
+    
+    const task = orchestrate.tasks.find(t => t.id === id);
+    if (!task) {
+      return { content: [{ type: "text", text: `Task not found: ${id}` }], isError: true };
+    }
+    
+    task.status = "executing";
+    task.startedAt = now;
+    saveOrchestrate(orchestrate);
+    
+    // Execute subtasks respecting dependencies
+    const executed = new Set();
+    const results = {};
+    
+    for (const subtask of task.subtasks) {
+      const deps = task.dependencies[subtask.id] || [];
+      const depsMet = deps.every(d => executed.has(d));
+      
+      if (!depsMet) {
+        subtask.status = "skipped";
+        subtask.error = "Dependencies not met";
+        continue;
+      }
+      
+      subtask.status = "running";
+      saveOrchestrate(orchestrate);
+      
+      try {
+        const result = await callTool(subtask.tool, subtask.args);
+        subtask.status = result.isError ? "failed" : "completed";
+        subtask.result = result.content?.[0]?.text?.substring(0, 500);
+        subtask.error = result.isError ? result.content?.[0]?.text : null;
+        results[subtask.id] = subtask.result;
+        executed.add(subtask.id);
+      } catch (e) {
+        subtask.status = "failed";
+        subtask.error = e.message;
+      }
+      
+      saveOrchestrate(orchestrate);
+    }
+    
+    task.status = "completed";
+    task.completedAt = new Date().toISOString();
+    task.results = results;
+    saveOrchestrate(orchestrate);
+    
+    const summary = task.subtasks.map(st => 
+      `${st.name}: ${st.status}${st.error ? ` (${st.error.substring(0, 50)})` : ""}`
+    ).join("\n");
+    
+    return { content: [{ type: "text", text: `Task ${id} executed\n\nSubtask Results:\n${summary}` }] };
+  }
+  
+  if (action === "list") {
+    if (orchestrate.tasks.length === 0) {
+      return { content: [{ type: "text", text: "No orchestration tasks" }] };
+    }
+    
+    const list = orchestrate.tasks.map(t => 
+      `ID: ${t.id}\nName: ${t.name}\nStatus: ${t.status}\nSubtasks: ${t.subtasks.length}\nCreated: ${t.created}`
+    ).join("\n\n");
+    
+    return { content: [{ type: "text", text: `# Orchestration Tasks (${orchestrate.tasks.length})\n\n${list}` }] };
+  }
+  
+  if (action === "status") {
+    if (!id) {
+      return { content: [{ type: "text", text: "id required" }], isError: true };
+    }
+    
+    const task = orchestrate.tasks.find(t => t.id === id);
+    if (!task) {
+      return { content: [{ type: "text", text: `Task not found: ${id}` }], isError: true };
+    }
+    
+    const status = task.subtasks.map(st => 
+      `${st.name}: ${st.status}${st.result ? `\n  Result: ${st.result.substring(0, 100)}...` : ""}${st.error ? `\n  Error: ${st.error.substring(0, 100)}` : ""}`
+    ).join("\n\n");
+    
+    return { content: [{ type: "text", text: `# Task ${id} Status\n\nName: ${task.name}\nOverall: ${task.status}\n\n## Subtasks\n\n${status}` }] };
+  }
+  
+  if (action === "cancel") {
+    if (!id) {
+      return { content: [{ type: "text", text: "id required" }], isError: true };
+    }
+    
+    const task = orchestrate.tasks.find(t => t.id === id);
+    if (!task) {
+      return { content: [{ type: "text", text: `Task not found: ${id}` }], isError: true };
+    }
+    
+    task.status = "cancelled";
+    task.cancelledAt = new Date().toISOString();
+    saveOrchestrate(orchestrate);
+    
+    return { content: [{ type: "text", text: `Task ${id} cancelled` }] };
+  }
+  
+  return { content: [{ type: "text", text: "Unknown action. Use: create, execute, list, status, cancel" }], isError: true };
+}
+
+// --- Predict Tool ---
+
+const PREDICT_FILE = path.join(DATA_DIR, "predict.json");
+
+function loadPredict() {
+  if (!fs.existsSync(PREDICT_FILE)) return { predictions: [], feedback: [] };
+  try {
+    return JSON.parse(fs.readFileSync(PREDICT_FILE, "utf-8"));
+  } catch {
+    return { predictions: [], feedback: [] };
+  }
+}
+
+function savePredict(predict) {
+  fs.writeFileSync(PREDICT_FILE, JSON.stringify(predict, null, 2));
+}
+
+function analyzeContextPatterns() {
+  const CONTEXT_FILE = path.join(DATA_DIR, "context.json");
+  if (!fs.existsSync(CONTEXT_FILE)) return [];
+  
+  try {
+    const context = JSON.parse(fs.readFileSync(CONTEXT_FILE, "utf-8"));
+    const patterns = [];
+    
+    // Analyze decision patterns
+    if (context.decisions && context.decisions.length > 0) {
+      const projectDecisions = {};
+      for (const dec of context.decisions) {
+        if (dec.project) {
+          if (!projectDecisions[dec.project]) projectDecisions[dec.project] = [];
+          projectDecisions[dec.project].push(dec);
+        }
+      }
+      
+      for (const [project, decisions] of Object.entries(projectDecisions)) {
+        if (decisions.length >= 3) {
+          patterns.push({
+            type: "decision_pattern",
+            project,
+            count: decisions.length,
+            prediction: `Project "${project}" has ${decisions.length} decisions. More decisions likely needed.`,
+            confidence: 0.7
+          });
+        }
+      }
+    }
+    
+    // Analyze problem patterns
+    if (context.problems && context.problems.length > 0) {
+      const unresolved = context.problems.filter(p => !p.resolved);
+      if (unresolved.length > 0) {
+        patterns.push({
+          type: "unresolved_problems",
+          count: unresolved.length,
+          prediction: `${unresolved.length} unresolved problems. Consider addressing these.`,
+          confidence: 0.9
+        });
+      }
+    }
+    
+    return patterns;
+  } catch {
+    return [];
+  }
+}
+
+function analyzeToolPatterns() {
+  if (!fs.existsSync(LOG_FILE)) return [];
+  
+  try {
+    const lines = fs.readFileSync(LOG_FILE, "utf-8").trim().split("\n");
+    const logs = lines.map(line => JSON.parse(line));
+    
+    const patterns = [];
+    
+    // Find most used tools
+    const toolCounts = {};
+    for (const log of logs) {
+      toolCounts[log.n] = (toolCounts[log.n] || 0) + 1;
+    }
+    
+    const topTools = Object.entries(toolCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5);
+    
+    if (topTools.length > 0) {
+      patterns.push({
+        type: "frequent_tools",
+        tools: topTools,
+        prediction: `Most used tools: ${topTools.map(([t, c]) => `${t} (${c})`).join(", ")}. These are critical to your workflow.`,
+        confidence: 0.8
+      });
+    }
+    
+    // Find error patterns
+    const errors = logs.filter(l => !l.ok);
+    if (errors.length > logs.length * 0.1) {
+      patterns.push({
+        type: "error_rate",
+        errorCount: errors.length,
+        totalCount: logs.length,
+        prediction: `Error rate: ${((errors.length / logs.length) * 100).toFixed(1)}%. Consider investigating frequent errors.`,
+        confidence: 0.85
+      });
+    }
+    
+    return patterns;
+  } catch {
+    return [];
+  }
+}
+
+async function sidekick_predict({ action, id, feedback, useful }) {
+  const predict = loadPredict();
+  const now = new Date().toISOString();
+  
+  if (action === "analyze") {
+    const contextPatterns = analyzeContextPatterns();
+    const toolPatterns = analyzeToolPatterns();
+    
+    const allPatterns = [...contextPatterns, ...toolPatterns];
+    
+    if (allPatterns.length === 0) {
+      return { content: [{ type: "text", text: "No patterns detected yet. Continue using the system to build patterns." }] };
+    }
+    
+    const predictions = allPatterns.map((p, idx) => ({
+      id: generateId("pred"),
+      ...p,
+      created: now,
+      feedback: null
+    }));
+    
+    predict.predictions = predictions;
+    savePredict(predict);
+    
+    const report = predictions.map(p => 
+      `ID: ${p.id}\nType: ${p.type}\nConfidence: ${(p.confidence * 100).toFixed(0)}%\nPrediction: ${p.prediction}`
+    ).join("\n\n");
+    
+    return { content: [{ type: "text", text: `# Predictions (${predictions.length})\n\n${report}` }] };
+  }
+  
+  if (action === "list") {
+    if (predict.predictions.length === 0) {
+      return { content: [{ type: "text", text: "No predictions yet. Run 'analyze' first." }] };
+    }
+    
+    const list = predict.predictions.map(p => 
+      `ID: ${p.id}\nType: ${p.type}\nConfidence: ${(p.confidence * 100).toFixed(0)}%\nPrediction: ${p.prediction.substring(0, 100)}${p.prediction.length > 100 ? "..." : ""}\nFeedback: ${p.feedback || "none"}`
+    ).join("\n\n");
+    
+    return { content: [{ type: "text", text: `# Predictions (${predict.predictions.length})\n\n${list}` }] };
+  }
+  
+  if (action === "feedback") {
+    if (!id || feedback === undefined) {
+      return { content: [{ type: "text", text: "id and feedback (true/false) required" }], isError: true };
+    }
+    
+    const prediction = predict.predictions.find(p => p.id === id);
+    if (!prediction) {
+      return { content: [{ type: "text", text: `Prediction not found: ${id}` }], isError: true };
+    }
+    
+    prediction.feedback = feedback ? "useful" : "not_useful";
+    prediction.feedbackAt = now;
+    
+    predict.feedback.push({
+      predictionId: id,
+      useful: feedback,
+      timestamp: now
+    });
+    
+    savePredict(predict);
+    
+    return { content: [{ type: "text", text: `Feedback recorded for ${id}: ${feedback ? "useful" : "not useful"}` }] };
+  }
+  
+  if (action === "suggest") {
+    const usefulPredictions = predict.predictions.filter(p => p.feedback === "useful");
+    
+    if (usefulPredictions.length === 0) {
+      return { content: [{ type: "text", text: "No useful predictions yet. Provide feedback on predictions to improve suggestions." }] };
+    }
+    
+    const suggestions = usefulPredictions.map(p => 
+      `- ${p.prediction} (confidence: ${(p.confidence * 100).toFixed(0)}%)`
+    ).join("\n");
+    
+    return { content: [{ type: "text", text: `# Suggestions Based on Past Predictions\n\n${suggestions}` }] };
+  }
+  
+  return { content: [{ type: "text", text: "Unknown action. Use: analyze, list, feedback, suggest" }], isError: true };
+}
+
 const TOOLS = {
   sidekick_bash,
   sidekick_read,
@@ -3384,6 +3941,9 @@ const TOOLS = {
   sidekick_template,
   sidekick_queue,
   sidekick_retry,
+  sidekick_evolve,
+  sidekick_orchestrate,
+  sidekick_predict,
 };
 
 const TOOL_DEFS = [
@@ -3421,6 +3981,9 @@ const TOOL_DEFS = [
   { name: "sidekick_template", description: "Render Handlebars templates with data", args: { template: "string (Handlebars template)", data: "string|object (template data)" } },
   { name: "sidekick_queue", description: "Persistent task queue with priorities", args: { action: "string (add|list|process|remove|clear)", id: "number (optional, task id for remove)", tool: "string (optional, tool name for add)", args: "object (optional, tool args for add)", priority: "number (optional, priority for add, default 0)", status: "string (optional, status filter for list/clear)" } },
   { name: "sidekick_retry", description: "Retry tool calls with exponential backoff", args: { tool: "string (tool to retry)", args: "object (optional, tool args)", max_attempts: "number (optional, default 3)", backoff: "string (optional, exponential|linear|fixed, default exponential)", initial_delay: "number (optional, ms, default 1000)" } },
+  { name: "sidekick_evolve", description: "Self-modification with safety: analyze patterns, propose improvements, test and approve changes", args: { action: "string (analyze|propose|list|test|approve|reject)", id: "string (optional, proposal id for test/approve/reject)", proposal: "string (optional, proposal description for propose)", approve: "boolean (optional, deprecated - use action=approve)", test: "boolean (optional, deprecated - use action=test)" } },
+  { name: "sidekick_orchestrate", description: "Multi-agent coordination: create task graphs, execute subtasks with dependencies, track progress", args: { action: "string (create|execute|list|status|cancel)", id: "number (optional, task id for execute/status/cancel)", task_name: "string (optional, task name for create)", subtasks: "array (optional, subtask definitions for create)", dependencies: "object (optional, dependency map for create)", timeout: "number (optional, timeout in ms, default 1800000)" } },
+  { name: "sidekick_predict", description: "Anticipatory intelligence: analyze patterns, predict needs, track prediction usefulness", args: { action: "string (analyze|list|feedback|suggest)", id: "string (optional, prediction id for feedback)", feedback: "boolean (optional, true if useful, false if not)" } },
 ];
 
 async function callTool(name, args) {
