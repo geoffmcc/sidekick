@@ -450,6 +450,43 @@ app.post('/api/internal/error-log', (req, res) => {
   });
 });
 
+// Webhook receiver endpoint
+const WEBHOOK_FILE = path.join(DATA_DIR, "webhooks.json");
+function loadWebhooks() {
+  if (!fs.existsSync(WEBHOOK_FILE)) return [];
+  try {
+    return JSON.parse(fs.readFileSync(WEBHOOK_FILE, "utf-8"));
+  } catch (e) {
+    return [];
+  }
+}
+function saveWebhooks(webhooks) {
+  fs.writeFileSync(WEBHOOK_FILE, JSON.stringify(webhooks, null, 2));
+}
+
+app.post('/api/webhook/:source', (req, res) => {
+  let body = '';
+  req.on('data', c => body += c);
+  req.on('end', () => {
+    try {
+      const payload = JSON.parse(body);
+      const webhooks = loadWebhooks();
+      const webhook = {
+        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        source: req.params.source,
+        timestamp: new Date().toISOString(),
+        payload
+      };
+      webhooks.push(webhook);
+      if (webhooks.length > 1000) webhooks.splice(0, webhooks.length - 1000);
+      saveWebhooks(webhooks);
+      res.json({ ok: true, id: webhook.id });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+});
+
 // --- Frontend ---
 
 app.get("/", (req, res) => {
