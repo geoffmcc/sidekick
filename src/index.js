@@ -519,10 +519,10 @@ app.use(express.json({ limit: "1mb" }));
 
 app.get("/sse", async (req, res) => {
   try {
-    const sessionId = generateSessionId();
     const server = createMcpServer();
     const transport = new SSEServerTransport("/messages", res);
     
+    const sessionId = transport.sessionId;
     registerSession(sessionId, server, transport);
     await server.connect(transport);
     

@@ -46,7 +46,7 @@ function migrateKV(data) {
       migrated[key] = {
         value: val,
         project: project,
-        source: 'unknown',
+        source: 'init',
         created: now,
         updated: now
       };
@@ -722,10 +722,22 @@ function syncCrontab(jobs) {
 // --- GitHub Tool ---
 
 async function sidekick_github({ action, repo, args: extraArgs }) {
-  const tokenEntry = kvStore["github_token"];
-  const token = tokenEntry?.value || tokenEntry;
+  let token = process.env.GITHUB_TOKEN;
+  
   if (!token) {
-    return { content: [{ type: "text", text: "github_token not found in KV store" }], isError: true };
+    try {
+      const secrets = loadSecrets();
+      const secret = secrets["github_token"];
+      if (secret) {
+        token = decryptSecret(secret);
+      }
+    } catch (e) {
+      // Secret store not available
+    }
+  }
+  
+  if (!token) {
+    return { content: [{ type: "text", text: "github_token not found in secret store" }], isError: true };
   }
 
   const https = require("https");
