@@ -14,6 +14,7 @@ const KV_FILE = path.join(DATA_DIR, "kvstore.json");
 const LOG_FILE = path.join(DATA_DIR, "log.jsonl");
 const CRON_FILE = path.join(DATA_DIR, "cron.json");
 const WEBHOOK_FILE = path.join(DATA_DIR, "webhooks.json");
+const CONTEXT_FILE = path.join(DATA_DIR, "context.json");
 const MAX_LOG = 1000;
 
 const PROJECT_RE = /^[a-z][a-z0-9_]*$/;
@@ -885,6 +886,289 @@ async function sidekick_webhook({ action, id, limit }) {
   }
 }
 
+// --- Context Tool ---
+
+function loadContext() {
+  if (!fs.existsSync(CONTEXT_FILE)) {
+    return {
+      projects: {},
+      decisions: [],
+      problems: [],
+      patterns: [],
+      sessions: []
+    };
+  }
+  try {
+    return JSON.parse(fs.readFileSync(CONTEXT_FILE, "utf-8"));
+  } catch (e) {
+    return {
+      projects: {},
+      decisions: [],
+      problems: [],
+      patterns: [],
+      sessions: []
+    };
+  }
+}
+
+function saveContext(ctx) {
+  fs.writeFileSync(CONTEXT_FILE, JSON.stringify(ctx, null, 2));
+}
+
+function generateId(prefix) {
+  return prefix + "_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+function simpleSimilarity(text1, text2) {
+  const words1 = text1.toLowerCase().split(/\s+/);
+  const words2 = text2.toLowerCase().split(/\s+/);
+  const set1 = new Set(words1);
+  const set2 = new Set(words2);
+  const intersection = new Set([...set1].filter(x => set2.has(x)));
+  const union = new Set([...set1, ...set2]);
+  return intersection.size / union.size;
+}
+
+function searchContext(ctx, query, type, limit = 10) {
+  const results = [];
+  
+  if (type === "all" || type === "decisions") {
+    for (const dec of ctx.decisions) {
+      const text = `${dec.context} ${dec.decision} ${dec.reasoning}`;
+      const score = simpleSimilarity(query, text);
+      if (score > 0.1) {
+        results.push({ type: "decision", item: dec, score });
+      }
+    }
+  }
+  
+  if (type === "all" || type === "problems") {
+    for (const prob of ctx.problems) {
+      const text = `${prob.description} ${prob.solution || ""}`;
+      const score = simpleSimilarity(query, text);
+      if (score > 0.1) {
+        results.push({ type: "problem", item: prob, score });
+      }
+    }
+  }
+  
+  if (type === "all" || type === "patterns") {
+    for (const pat of ctx.patterns) {
+      const text = `${pat.description} ${pat.example || ""}`;
+      const score = simpleSimilarity(query, text);
+      if (score > 0.1) {
+        results.push({ type: "pattern", item: pat, score });
+      }
+    }
+  }
+  
+  results.sort((a, b) => b.score - a.score);
+  return results.slice(0, limit);
+}
+
+async function sidekick_context({ action, project, context, decision, reasoning, problem, solution, pattern, query, type, limit }) {
+  const allowedActions = ["track_project", "track_decision", "track_problem", "track_pattern", "recall", "suggest", "summarize", "list"];
+  if (!allowedActions.includes(action)) {
+    return { content: [{ type: "text", text: "Invalid action. Allowed: " + allowedActions.join(", ") }], isError: true };
+  }
+
+  const ctx = loadContext();
+  const now = new Date().toISOString();
+
+  if (action === "track_project") {
+    if (!project) {
+      return { content: [{ type: "text", text: "project required" }], isError: true };
+    }
+    if (!ctx.projects[project]) {
+      ctx.projects[project] = {
+        name: project,
+        created: now,
+        lastWorked: now,
+        sessions: 0,
+        active: true
+      };
+    } else {
+      ctx.projects[project].lastWorked = now;
+      ctx.projects[project].sessions++;
+    }
+    saveContext(ctx);
+    return { content: [{ type: "text", text: `Tracked project: ${project}` }] };
+  }
+
+  if (action === "track_decision") {
+    if (!context || !decision) {
+      return { content: [{ type: "text", text: "context and decision required" }], isError: true };
+    }
+    const dec = {
+      id: generateId("dec"),
+      date: now,
+      project: project || null,
+      context,
+      decision,
+      reasoning: reasoning || null,
+      outcome: null
+    };
+    ctx.decisions.push(dec);
+    if (project && ctx.projects[project]) {
+      ctx.projects[project].lastWorked = now;
+    }
+    saveContext(ctx);
+    return { content: [{ type: "text", text: `Tracked decision: ${decision} (id: ${dec.id})` }] };
+  }
+
+  if (action === "track_problem") {
+    if (!problem) {
+      return { content: [{ type: "text", text: "problem required" }], isError: true };
+    }
+    const prob = {
+      id: generateId("prob"),
+      date: now,
+      project: project || null,
+      description: problem,
+      solution: solution || null,
+      resolved: !!solution
+    };
+    ctx.problems.push(prob);
+    if (project && ctx.projects[project]) {
+      ctx.projects[project].lastWorked = now;
+    }
+    saveContext(ctx);
+    return { content: [{ type: "text", text: `Tracked problem: ${problem} (id: ${prob.id})` }] };
+  }
+
+  if (action === "track_pattern") {
+    if (!pattern) {
+      return { content: [{ type: "text", text: "pattern required" }], isError: true };
+    }
+    const pat = {
+      id: generateId("pat"),
+      date: now,
+      project: project || null,
+      description: pattern,
+      example: context || null
+    };
+    ctx.patterns.push(pat);
+    saveContext(ctx);
+    return { content: [{ type: "text", text: `Tracked pattern: ${pattern} (id: ${pat.id})` }] };
+  }
+
+  if (action === "recall") {
+    if (!query) {
+      return { content: [{ type: "text", text: "query required" }], isError: true };
+    }
+    const results = searchContext(ctx, query, type || "all", limit || 10);
+    if (results.length === 0) {
+      return { content: [{ type: "text", text: "No relevant context found" }] };
+    }
+    const summary = results.map(r => {
+      const item = r.item;
+      if (r.type === "decision") {
+        return `[Decision ${item.id}] ${item.date}\nContext: ${item.context}\nDecision: ${item.decision}\nReasoning: ${item.reasoning || "N/A"}`;
+      } else if (r.type === "problem") {
+        return `[Problem ${item.id}] ${item.date}\nDescription: ${item.description}\nSolution: ${item.solution || "Unresolved"}`;
+      } else if (r.type === "pattern") {
+        return `[Pattern ${item.id}] ${item.date}\nDescription: ${item.description}\nExample: ${item.example || "N/A"}`;
+      }
+    }).join("\n\n");
+    return { content: [{ type: "text", text: summary }] };
+  }
+
+  if (action === "suggest") {
+    if (!query) {
+      return { content: [{ type: "text", text: "query required" }], isError: true };
+    }
+    const results = searchContext(ctx, query, "all", 5);
+    if (results.length === 0) {
+      return { content: [{ type: "text", text: "No suggestions based on past context" }] };
+    }
+    const suggestions = results.map(r => {
+      const item = r.item;
+      if (r.type === "decision") {
+        return `• You previously decided: "${item.decision}" because "${item.reasoning || "no reason recorded"}" (on ${item.date})`;
+      } else if (r.type === "problem") {
+        return `• You encountered a similar problem: "${item.description}" - ${item.solution ? `solved with: "${item.solution}"` : "unresolved"}`;
+      } else if (r.type === "pattern") {
+        return `• You have a pattern: "${item.description}"`;
+      }
+    }).join("\n");
+    return { content: [{ type: "text", text: `Based on your past context:\n\n${suggestions}` }] };
+  }
+
+  if (action === "summarize") {
+    const projectName = project || "all";
+    let summary = `# Context Summary`;
+    
+    if (projectName !== "all") {
+      const proj = ctx.projects[projectName];
+      if (!proj) {
+        return { content: [{ type: "text", text: `Project not found: ${projectName}` }], isError: true };
+      }
+      summary += `\n\n## Project: ${projectName}\n`;
+      summary += `- Created: ${proj.created}\n`;
+      summary += `- Last worked: ${proj.lastWorked}\n`;
+      summary += `- Sessions: ${proj.sessions}\n`;
+      
+      const projDecisions = ctx.decisions.filter(d => d.project === projectName);
+      const projProblems = ctx.problems.filter(p => p.project === projectName);
+      const projPatterns = ctx.patterns.filter(p => p.project === projectName);
+      
+      if (projDecisions.length > 0) {
+        summary += `\n### Decisions (${projDecisions.length}):\n`;
+        projDecisions.slice(-5).forEach(d => {
+          summary += `- ${d.date}: ${d.decision}\n`;
+        });
+      }
+      
+      if (projProblems.length > 0) {
+        summary += `\n### Problems (${projProblems.length}):\n`;
+        projProblems.slice(-5).forEach(p => {
+          summary += `- ${p.date}: ${p.description} ${p.resolved ? "(resolved)" : "(unresolved)"}\n`;
+        });
+      }
+      
+      if (projPatterns.length > 0) {
+        summary += `\n### Patterns (${projPatterns.length}):\n`;
+        projPatterns.slice(-5).forEach(p => {
+          summary += `- ${p.description}\n`;
+        });
+      }
+    } else {
+      summary += `\n\n## Overview\n`;
+      summary += `- Total projects: ${Object.keys(ctx.projects).length}\n`;
+      summary += `- Total decisions: ${ctx.decisions.length}\n`;
+      summary += `- Total problems: ${ctx.problems.length}\n`;
+      summary += `- Total patterns: ${ctx.patterns.length}\n`;
+      
+      const activeProjects = Object.values(ctx.projects).filter(p => p.active);
+      if (activeProjects.length > 0) {
+        summary += `\n### Active Projects:\n`;
+        activeProjects.forEach(p => {
+          summary += `- ${p.name} (last worked: ${p.lastWorked})\n`;
+        });
+      }
+    }
+    
+    return { content: [{ type: "text", text: summary }] };
+  }
+
+  if (action === "list") {
+    const items = [];
+    if (!type || type === "all" || type === "decisions") {
+      items.push(`Decisions: ${ctx.decisions.length}`);
+    }
+    if (!type || type === "all" || type === "problems") {
+      items.push(`Problems: ${ctx.problems.length}`);
+    }
+    if (!type || type === "all" || type === "patterns") {
+      items.push(`Patterns: ${ctx.patterns.length}`);
+    }
+    if (!type || type === "all" || type === "projects") {
+      items.push(`Projects: ${Object.keys(ctx.projects).length}`);
+    }
+    return { content: [{ type: "text", text: items.join("\n") }] };
+  }
+}
+
 const TOOLS = {
   sidekick_bash,
   sidekick_read,
@@ -905,6 +1189,7 @@ const TOOLS = {
   sidekick_cron,
   sidekick_github,
   sidekick_webhook,
+  sidekick_context,
 };
 
 const TOOL_DEFS = [
@@ -927,6 +1212,7 @@ const TOOL_DEFS = [
   { name: "sidekick_cron", description: "Schedule recurring tasks (add, list, remove, run jobs)", args: { action: "string", name: "string (optional)", schedule: "string (optional)", command: "string (optional)", id: "string (optional)" } },
   { name: "sidekick_github", description: "GitHub API integration (PRs, issues, commits, releases)", args: { action: "string", repo: "string", args: "string (optional)" } },
   { name: "sidekick_webhook", description: "Manage received webhooks (list, get, clear)", args: { action: "string", id: "string (optional)", limit: "number (optional)" } },
+  { name: "sidekick_context", description: "Persistent intelligent context management (track projects, decisions, problems, patterns; recall and suggest based on past context)", args: { action: "string", project: "string (optional)", context: "string (optional)", decision: "string (optional)", reasoning: "string (optional)", problem: "string (optional)", solution: "string (optional)", pattern: "string (optional)", query: "string (optional)", type: "string (optional)", limit: "number (optional)" } },
 ];
 
 async function callTool(name, args) {

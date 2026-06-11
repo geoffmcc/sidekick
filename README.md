@@ -63,6 +63,7 @@ Sidekick is the infrastructure. The AI (running in opencode) uses that infrastru
 | **Scheduled tasks** | `sidekick_cron` schedules recurring jobs via crontab | AI can set up automated health checks, backups, monitoring |
 | **GitHub automation** | `sidekick_github` manages PRs, issues, releases via API | AI can automate PR workflows, track issues, create releases |
 | **Webhook integration** | `sidekick_webhook` receives and stores external webhooks | AI can react to GitHub events, CI/CD pipelines, external alerts |
+| **Persistent context** | `sidekick_context` tracks projects, decisions, problems, patterns | AI can recall past context, get suggestions, maintain continuity across sessions |
 
 ## Architecture
 
@@ -95,12 +96,16 @@ Sidekick is the infrastructure. The AI (running in opencode) uses that infrastru
 
 | Service | Port | Description |
 |---------|------|-------------|
-| **MCP Server** | 4097 | 19 tools: bash, read, write, list, search, git, notify, process, service, archive, cron, github, webhook, store, get, list_projects, get_by_project, web_fetch, llm |
+| **MCP Server** | 4097 | 20 tools: bash, read, write, list, search, git, notify, process, service, archive, cron, github, webhook, context, store, get, list_projects, get_by_project, web_fetch, llm |
 | **Dashboard** | 4098 | Web UI: system health, activity log, KV data, agent tasks |
 | **Agent Bridge** | 4099 | AI agent loop — LLM plans and calls MCP tools autonomously |
 | **Ollama** | 11434 | Local LLM inference (phi3:mini). Fallback when no `GROQ_API_KEY` |
 
 All tools are exposed via the MCP server at `http://YOUR_VPS_IP:4097/mcp`.
+
+### New Tools (v1.4)
+
+- **`sidekick_context`** — Persistent intelligent context management: track projects, decisions, problems, patterns; recall and suggest based on past context. Uses semantic similarity search.
 
 ### New Tools (v1.3)
 
