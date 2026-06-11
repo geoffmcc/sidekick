@@ -6,7 +6,7 @@ A remote VPS agent system. Connect via the sidekick MCP server at `YOUR_VPS_IP:4
 
 Always use the `task` tool with `subagent_type: "sidekick"` when interacting with sidekick. Do not use direct MCP tools (`sidekick_bash`, `sidekick_read`, etc.) — use the task tool so the user can see the full conversation. 100% of the time, no exceptions.
 
-## MCP Tools (20)
+## MCP Tools (21)
 
 | Tool | When to use |
 |------|-------------|
@@ -24,6 +24,7 @@ Always use the `task` tool with `subagent_type: "sidekick"` when interacting wit
 | `sidekick_github` | GitHub API integration (PRs, issues, commits, releases) |
 | `sidekick_webhook` | Manage received webhooks (list, get, clear) |
 | `sidekick_context` | Persistent intelligent context management (track projects, decisions, problems, patterns; recall and suggest based on past context) |
+| `sidekick_teach` | Meta-learning and self-extension: teach procedures, generate tools, learn from examples, execute learned workflows |
 | `sidekick_store` | Store a value persistently in KV storage |
 | `sidekick_get` | Retrieve a stored value from KV storage |
 | `sidekick_list_projects` | List all projects in KV storage |
@@ -38,12 +39,15 @@ All tool calls are logged with source tags:
 
 ## Services
 
-- **MCP Server** (`:4097`) — 20 tools, session-aware transport (new McpServer+Transport per session)
+- **MCP Server** (`:4097`) — 21 tools, session-aware transport (new McpServer+Transport per session)
 - **Dashboard** (`:4098`) — web UI with System, Activity, Data, Config, and Agent tabs, Font Awesome icons
 - **Agent Bridge** (`:4099`) — autonomous LLM agent that calls tools directly (bypasses MCP HTTP)
 - **Ollama** (`:11434`) — local Phi-3-mini fallback. Uses cloud Groq API when `GROQ_API_KEY` is set
 
 ## Recent Features
+
+### New Tools (v1.5)
+- **`sidekick_teach`** — Meta-learning and self-extension: teach procedures, generate tools from descriptions, learn from examples, execute learned workflows. Enables sidekick to grow its own capabilities.
 
 ### New Tools (v1.4)
 - **`sidekick_context`** — Persistent intelligent context management: track projects, decisions, problems, patterns; recall and suggest based on past context. Uses semantic similarity search.
