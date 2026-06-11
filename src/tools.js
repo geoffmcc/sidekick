@@ -1185,7 +1185,25 @@ function saveProcedures(procedures) {
   fs.writeFileSync(PROCEDURES_FILE, JSON.stringify(procedures, null, 2));
 }
 
-async function sidekick_teach({ action, name, description, steps, example, trigger_phrases, implementation }) {
+function substituteParams(obj, params) {
+  if (typeof obj === "string") {
+    if (!params) return obj;
+    return obj.replace(/\{\{(\w+)\}\}/g, (match, key) => {
+      return params[key] !== undefined ? String(params[key]) : match;
+    });
+  }
+  if (!params || typeof obj !== "object" || obj === null) return obj;
+  if (Array.isArray(obj)) {
+    return obj.map(item => substituteParams(item, params));
+  }
+  const result = {};
+  for (const [k, v] of Object.entries(obj)) {
+    result[k] = substituteParams(v, params);
+  }
+  return result;
+}
+
+async function sidekick_teach({ action, name, description, steps, example, trigger_phrases, implementation, parameters, args }) {
   const allowedActions = ["teach_procedure", "generate_tool", "learn_from_example", "execute", "list", "remove"];
   if (!allowedActions.includes(action)) {
     return { content: [{ type: "text", text: "Invalid action. Allowed: " + allowedActions.join(", ") }], isError: true };
@@ -1209,6 +1227,7 @@ async function sidekick_teach({ action, name, description, steps, example, trigg
     procedures[name] = {
       name,
       description,
+      parameters: parameters || {},
       steps,
       triggerPhrases: trigger_phrases || [],
       createdAt: now,
@@ -1216,7 +1235,8 @@ async function sidekick_teach({ action, name, description, steps, example, trigg
       useCount: 0
     };
     saveProcedures(procedures);
-    return { content: [{ type: "text", text: `Taught procedure: ${name} (${steps.length} steps)` }] };
+    const paramCount = Object.keys(parameters || {}).length;
+    return { content: [{ type: "text", text: `Taught procedure: ${name} (${steps.length} steps, ${paramCount} parameters)` }] };
   }
 
   if (action === "generate_tool") {
@@ -1240,30 +1260,46 @@ Tool parameter schemas:
 - sidekick_web_fetch: { "url": "URL to fetch", "method": "GET|POST", "body": "optional", "headers": "optional JSON" }
 - sidekick_llm: { "prompt": "question", "system": "optional system prompt", "temperature": "optional 0-2" }
 `;
-    const prompt = `Generate a procedure definition for "${name}" based on this description: "${description}". 
-Return a JSON array of steps, where each step has "tool" and "args" properties.
+    const prompt = `Generate a procedure definition for "${name}" based on this description: "${description}".
+
+Return a JSON object with two properties:
+1. "parameters": an object defining input parameters, where each key is a param name and value has "type" (string|number|boolean), "description", and optional "required" (boolean, default false)
+2. "steps": a JSON array of steps, where each step has "tool" and "args" properties. Use {{paramName}} in arg values to reference parameters.
+
 ${toolSchemas}
-Example format: [{"tool": "sidekick_bash", "args": {"command": "ls -la"}}, {"tool": "sidekick_notify", "args": {"channel": "discord", "webhook_url": "https://...", "message": "Done!"}}]
-IMPORTANT: Use ONLY the parameters shown in the schemas above. Do not invent parameters like "output_var".
-Return ONLY the JSON array, no other text.`;
+Example format:
+{
+  "parameters": { "path": { "type": "string", "description": "Directory to check", "required": true } },
+  "steps": [
+    {"tool": "sidekick_bash", "args": {"command": "df -h {{path}}"}},
+    {"tool": "sidekick_bash", "args": {"command": "du -sh {{path}}"}}
+  ]
+}
+
+If the procedure takes no parameters, return an empty "parameters" object.
+IMPORTANT: Use ONLY the parameters shown in the schemas above. Do not invent tool parameters.
+Return ONLY the JSON object, no other text.`;
     
-    const llmResult = await sidekick_llm({ prompt, system: "You are a helpful assistant that generates tool procedures. Return only valid JSON." });
+    const llmResult = await sidekick_llm({ prompt, system: "You are a helpful assistant that generates tool procedures with parameters. Return only valid JSON." });
     if (llmResult.isError) {
       return { content: [{ type: "text", text: "Failed to generate tool: " + llmResult.content[0].text }], isError: true };
     }
     
-    let generatedSteps;
+    let generated;
     try {
       const text = llmResult.content[0].text.trim();
-      const jsonMatch = text.match(/\[[\s\S]*\]/);
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
-        generatedSteps = JSON.parse(jsonMatch[0]);
+        generated = JSON.parse(jsonMatch[0]);
       } else {
-        generatedSteps = JSON.parse(text);
+        generated = JSON.parse(text);
       }
     } catch (e) {
-      return { content: [{ type: "text", text: "Failed to parse generated steps: " + e.message }], isError: true };
+      return { content: [{ type: "text", text: "Failed to parse generated definition: " + e.message }], isError: true };
     }
+    
+    const generatedSteps = generated.steps;
+    const generatedParams = generated.parameters || {};
     
     if (!Array.isArray(generatedSteps) || generatedSteps.length === 0) {
       return { content: [{ type: "text", text: "Generated steps are invalid" }], isError: true };
@@ -1272,6 +1308,7 @@ Return ONLY the JSON array, no other text.`;
     procedures[name] = {
       name,
       description,
+      parameters: generatedParams,
       steps: generatedSteps,
       triggerPhrases: [],
       createdAt: now,
@@ -1280,7 +1317,8 @@ Return ONLY the JSON array, no other text.`;
       generated: true
     };
     saveProcedures(procedures);
-    return { content: [{ type: "text", text: `Generated tool: ${name} (${generatedSteps.length} steps)\nSteps:\n${JSON.stringify(generatedSteps, null, 2)}` }] };
+    const paramNames = Object.keys(generatedParams);
+    return { content: [{ type: "text", text: `Generated tool: ${name} (${generatedSteps.length} steps, parameters: ${paramNames.length > 0 ? paramNames.join(", ") : "none"})\nSteps:\n${JSON.stringify(generatedSteps, null, 2)}` }] };
   }
 
   if (action === "learn_from_example") {
@@ -1304,35 +1342,43 @@ Tool parameter schemas:
 - sidekick_web_fetch: { "url": "URL to fetch", "method": "GET|POST", "body": "optional", "headers": "optional JSON" }
 - sidekick_llm: { "prompt": "question", "system": "optional system prompt", "temperature": "optional 0-2" }
 `;
-    const prompt = `Parse this example and extract the procedure steps:
+    const prompt = `Parse this example and extract a procedure definition:
 "${example}"
-Return a JSON array of steps, where each step has "tool" and "args" properties.
+
+Return a JSON object with two properties:
+1. "parameters": an object defining input parameters (use {{paramName}} references in steps). If nothing varies, use empty {}.
+2. "steps": a JSON array of steps, where each step has "tool" and "args" properties.
+
 ${toolSchemas}
-IMPORTANT: Use ONLY the parameters shown in the schemas above. Do not invent parameters like "output_var".
-Return ONLY the JSON array, no other text.`;
+IMPORTANT: Use ONLY the parameters shown in the schemas above. Do not invent tool parameters.
+Return ONLY the JSON object, no other text.`;
     
     const llmResult = await sidekick_llm({ prompt, system: "You are a helpful assistant that extracts procedures from examples. Return only valid JSON." });
     if (llmResult.isError) {
       return { content: [{ type: "text", text: "Failed to parse example: " + llmResult.content[0].text }], isError: true };
     }
     
-    let parsedSteps;
+    let parsed;
     try {
       const text = llmResult.content[0].text.trim();
-      const jsonMatch = text.match(/\[[\s\S]*\]/);
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
-        parsedSteps = JSON.parse(jsonMatch[0]);
+        parsed = JSON.parse(jsonMatch[0]);
       } else {
-        parsedSteps = JSON.parse(text);
+        parsed = JSON.parse(text);
       }
     } catch (e) {
       return { content: [{ type: "text", text: "Failed to parse steps from example: " + e.message }], isError: true };
     }
     
+    const parsedSteps = parsed.steps || parsed;
+    const parsedParams = parsed.parameters || {};
+    
     procedures[name] = {
       name,
       description: example,
-      steps: parsedSteps,
+      parameters: parsedParams,
+      steps: Array.isArray(parsedSteps) ? parsedSteps : [],
       triggerPhrases: trigger_phrases || [],
       createdAt: now,
       lastUsed: null,
@@ -1340,7 +1386,7 @@ Return ONLY the JSON array, no other text.`;
       learned: true
     };
     saveProcedures(procedures);
-    return { content: [{ type: "text", text: `Learned procedure: ${name} (${parsedSteps.length} steps)` }] };
+    return { content: [{ type: "text", text: `Learned procedure: ${name} (${(Array.isArray(parsedSteps) ? parsedSteps.length : 0)} steps)` }] };
   }
 
   if (action === "execute") {
@@ -1352,6 +1398,15 @@ Return ONLY the JSON array, no other text.`;
       return { content: [{ type: "text", text: `Procedure not found: ${name}` }], isError: true };
     }
     
+    const params = args || {};
+    const requiredParams = Object.entries(procedure.parameters || {})
+      .filter(([, def]) => def.required)
+      .map(([k]) => k);
+    const missing = requiredParams.filter(k => params[k] === undefined);
+    if (missing.length > 0) {
+      return { content: [{ type: "text", text: `Missing required parameters: ${missing.join(", ")}` }], isError: true };
+    }
+    
     procedure.lastUsed = now;
     procedure.useCount++;
     saveProcedures(procedures);
@@ -1359,8 +1414,9 @@ Return ONLY the JSON array, no other text.`;
     const results = [];
     for (let i = 0; i < procedure.steps.length; i++) {
       const step = procedure.steps[i];
+      const resolvedArgs = substituteParams(step.args, params);
       try {
-        const result = await callTool(step.tool, step.args);
+        const result = await callTool(step.tool, resolvedArgs);
         results.push({
           step: i + 1,
           tool: step.tool,
@@ -1389,8 +1445,10 @@ Return ONLY the JSON array, no other text.`;
       const tags = [];
       if (proc.generated) tags.push("generated");
       if (proc.learned) tags.push("learned");
+      const paramNames = Object.keys(proc.parameters || {});
       const tagStr = tags.length > 0 ? ` [${tags.join(", ")}]` : "";
-      return `${name}${tagStr} - ${proc.description} (${proc.steps.length} steps, used ${proc.useCount} times)`;
+      const paramStr = paramNames.length > 0 ? ` params: {${paramNames.join(", ")}}` : "";
+      return `${name}${tagStr} - ${proc.description} (${proc.steps.length} steps, used ${proc.useCount} times${paramStr})`;
     }).join("\n");
     return { content: [{ type: "text", text: `Taught procedures (${procNames.length}):\n\n${summary}` }] };
   }
@@ -1453,7 +1511,7 @@ const TOOL_DEFS = [
   { name: "sidekick_github", description: "GitHub API integration (PRs, issues, commits, releases)", args: { action: "string", repo: "string", args: "string (optional)" } },
   { name: "sidekick_webhook", description: "Manage received webhooks (list, get, clear)", args: { action: "string", id: "string (optional)", limit: "number (optional)" } },
   { name: "sidekick_context", description: "Persistent intelligent context management (track projects, decisions, problems, patterns; recall and suggest based on past context)", args: { action: "string", project: "string (optional)", context: "string (optional)", decision: "string (optional)", reasoning: "string (optional)", problem: "string (optional)", solution: "string (optional)", pattern: "string (optional)", query: "string (optional)", type: "string (optional)", limit: "number (optional)" } },
-  { name: "sidekick_teach", description: "Meta-learning and self-extension: teach procedures, generate tools, learn from examples, execute learned workflows", args: { action: "string", name: "string (optional)", description: "string (optional)", steps: "array (optional)", example: "string (optional)", trigger_phrases: "array (optional)", implementation: "string (optional)" } },
+  { name: "sidekick_teach", description: "Meta-learning and self-extension: teach procedures, generate tools, learn from examples, execute learned workflows", args: { action: "string", name: "string (optional)", description: "string (optional)", steps: "array (optional)", parameters: "object (optional)", args: "object (optional)", example: "string (optional)", trigger_phrases: "array (optional)", implementation: "string (optional)" } },
 ];
 
 async function callTool(name, args) {
@@ -1475,4 +1533,4 @@ async function callTool(name, args) {
   }
 }
 
-module.exports = { TOOLS, TOOL_DEFS, callTool, logToolCall, setSource, DATA_DIR, OLLAMA_URL, GROQ_API_KEY, GROQ_MODEL, migrateKV };
+module.exports = { TOOLS, TOOL_DEFS, callTool, logToolCall, setSource, DATA_DIR, OLLAMA_URL, GROQ_API_KEY, GROQ_MODEL, migrateKV, loadProcedures };

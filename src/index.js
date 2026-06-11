@@ -3,7 +3,7 @@ const cors = require("cors");
 const { McpServer } = require("@modelcontextprotocol/sdk/server/mcp.js");
 const { WebStandardStreamableHTTPServerTransport } = require("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js");
 const { z } = require("zod");
-const { TOOLS, TOOL_DEFS, DATA_DIR, setSource, logToolCall } = require("./tools");
+const { TOOLS, TOOL_DEFS, DATA_DIR, setSource, logToolCall, loadProcedures } = require("./tools");
 
 const API_KEY = process.env.SIDEKICK_API_KEY || "sk-sidekick-local-dev";
 const PORT = parseInt(process.env.SIDEKICK_PORT || "4097", 10);
@@ -113,6 +113,8 @@ const TOOL_SCHEMAS = {
     name: z.string().optional().describe("Procedure name (required for teach/generate/execute/remove)"),
     description: z.string().optional().describe("Procedure description (required for teach/generate)"),
     steps: z.array(z.object({ tool: z.string(), args: z.record(z.any()) })).optional().describe("Array of steps (required for teach_procedure)"),
+    parameters: z.record(z.object({ type: z.enum(["string", "number", "boolean"]), description: z.string().optional(), required: z.boolean().optional() })).optional().describe("Parameter definitions for the procedure"),
+    args: z.record(z.any()).optional().describe("Arguments to pass when executing a procedure"),
     example: z.string().optional().describe("Example to learn from (required for learn_from_example)"),
     trigger_phrases: z.array(z.string()).optional().describe("Trigger phrases for the procedure"),
     implementation: z.string().optional().describe("Implementation details (for generate_tool)")
@@ -120,6 +122,25 @@ const TOOL_SCHEMAS = {
 };
 
 // --- Factory: create fresh McpServer + register tools ---
+
+function buildProcedureSchema(parameters) {
+  const shape = {};
+  for (const [key, def] of Object.entries(parameters || {})) {
+    let field;
+    if (def.type === "number") {
+      field = z.number().describe(def.description || key);
+    } else if (def.type === "boolean") {
+      field = z.boolean().describe(def.description || key);
+    } else {
+      field = z.string().describe(def.description || key);
+    }
+    if (!def.required) {
+      field = field.optional();
+    }
+    shape[key] = field;
+  }
+  return z.object(shape);
+}
 
 function createMcpServer() {
   const server = new McpServer({
@@ -144,6 +165,32 @@ function createMcpServer() {
         return result;
       } catch (e) {
         logToolCall(def.name, args, Date.now() - start, false, e.message);
+        throw e;
+      }
+    });
+  }
+
+  const procedures = loadProcedures();
+  for (const [procName, proc] of Object.entries(procedures)) {
+    const toolName = "sidekick_" + procName;
+    if (TOOL_SCHEMAS[toolName]) continue;
+    const paramSchema = buildProcedureSchema(proc.parameters);
+    const paramNames = Object.keys(proc.parameters || {});
+    const paramDesc = paramNames.length > 0 ? ` Parameters: ${paramNames.join(", ")}.` : "";
+    server.registerTool(toolName, {
+      description: `[procedure] ${proc.description}${paramDesc}`,
+      inputSchema: paramSchema
+    }, async (args, extra) => {
+      setSource("mcp");
+      const start = Date.now();
+      try {
+        const result = await TOOLS.sidekick_teach({ action: "execute", name: procName, args });
+        logToolCall(toolName, args, Date.now() - start, !result.isError,
+          result.content?.[0]?.text?.substring(0, 80) || "(ok)"
+        );
+        return result;
+      } catch (e) {
+        logToolCall(toolName, args, Date.now() - start, false, e.message);
         throw e;
       }
     });
