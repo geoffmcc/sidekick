@@ -209,6 +209,26 @@ const TOOL_SCHEMAS = {
     backoff: z.enum(["exponential", "linear", "fixed"]).optional().describe("Backoff strategy (default: exponential)"),
     initial_delay: z.number().optional().describe("Initial delay in milliseconds (default: 1000)")
   }),
+  sidekick_evolve: z.object({
+    action: z.enum(["analyze", "propose", "list", "test", "approve", "reject"]).describe("Evolve action"),
+    id: z.string().optional().describe("Proposal ID (for test/approve/reject)"),
+    proposal: z.string().optional().describe("Proposal description (for propose)"),
+    approve: z.boolean().optional().describe("Deprecated - use action=approve"),
+    test: z.boolean().optional().describe("Deprecated - use action=test")
+  }),
+  sidekick_orchestrate: z.object({
+    action: z.enum(["create", "execute", "list", "status", "cancel"]).describe("Orchestrate action"),
+    id: z.number().optional().describe("Task ID (for execute/status/cancel)"),
+    task_name: z.string().optional().describe("Task name (for create)"),
+    subtasks: z.array(z.record(z.any())).optional().describe("Subtask definitions (for create)"),
+    dependencies: z.record(z.array(z.string())).optional().describe("Dependency map (for create)"),
+    timeout: z.number().optional().describe("Timeout in milliseconds (default: 1800000)")
+  }),
+  sidekick_predict: z.object({
+    action: z.enum(["analyze", "list", "feedback", "suggest"]).describe("Predict action"),
+    id: z.string().optional().describe("Prediction ID (for feedback)"),
+    feedback: z.boolean().optional().describe("True if prediction was useful, false if not (for feedback)")
+  }),
 };
 
 // --- Factory: create fresh McpServer + register tools ---
