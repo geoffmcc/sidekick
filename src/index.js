@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const { McpServer } = require("@modelcontextprotocol/sdk/server/mcp.js");
 const { WebStandardStreamableHTTPServerTransport } = require("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js");
+const { SSEServerTransport } = require("@modelcontextprotocol/sdk/server/sse.js");
 const { z } = require("zod");
 const { TOOLS, TOOL_DEFS, DATA_DIR, setSource, logToolCall, loadProcedures } = require("./tools");
 
@@ -513,6 +514,45 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json({ limit: "1mb" }));
+
+// --- Legacy SSE routes (for clients like opencode) ---
+
+app.get("/sse", async (req, res) => {
+  try {
+    const sessionId = generateSessionId();
+    const server = createMcpServer();
+    const transport = new SSEServerTransport("/messages", res);
+    
+    registerSession(sessionId, server, transport);
+    await server.connect(transport);
+    
+    console.log(`[SSE] New session: ${sessionId}`);
+  } catch (e) {
+    console.error("[SSE] Error:", e.message);
+    if (!res.headersSent) res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/messages", async (req, res) => {
+  try {
+    const sessionId = req.query.sessionId;
+    if (!sessionId || !sessions.has(sessionId)) {
+      return res.status(400).json({ error: "Invalid session" });
+    }
+    
+    const entry = sessions.get(sessionId);
+    const transport = entry.transport;
+    if (!(transport instanceof SSEServerTransport)) {
+      return res.status(400).json({ error: "Not an SSE session" });
+    }
+    
+    entry.lastAccess = Date.now();
+    await transport.handlePostMessage(req, res, req.body);
+  } catch (e) {
+    console.error("[SSE POST] Error:", e.message);
+    if (!res.headersSent) res.status(500).json({ error: e.message });
+  }
+});
 
 // --- Diagnostic logging ---
 
