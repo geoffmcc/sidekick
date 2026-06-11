@@ -54,6 +54,9 @@ Sidekick is the infrastructure. The AI (running in opencode) uses that infrastru
 | **Live monitoring dashboard** | Web UI at `:4098` — system health, activity, KV data, agent tasks | Always accessible, no config needed |
 | **Web scraping from remote** | `sidekick_web_fetch` bypasses local network restrictions | AI knows to use remote machine for fetching when needed |
 | **LLM on demand** | Cloud Groq for speed, local Ollama as fallback | AI knows which to use and when |
+| **File content search** | `sidekick_search` uses ripgrep/grep for fast code search | AI can quickly find code patterns across the codebase |
+| **Git operations** | `sidekick_git` provides structured git commands | AI can check status, diff, log, commit, push, pull safely |
+| **Notifications** | `sidekick_notify` sends alerts to Discord, Slack, or email | AI can alert you when tasks complete or errors occur |
 
 ## Architecture
 
@@ -86,12 +89,18 @@ Sidekick is the infrastructure. The AI (running in opencode) uses that infrastru
 
 | Service | Port | Description |
 |---------|------|-------------|
-| **MCP Server** | 4097 | 10 tools: bash, read, write, list, store, get, list_projects, get_by_project, web_fetch, llm |
+| **MCP Server** | 4097 | 13 tools: bash, read, write, list, search, git, notify, store, get, list_projects, get_by_project, web_fetch, llm |
 | **Dashboard** | 4098 | Web UI: system health, activity log, KV data, agent tasks |
 | **Agent Bridge** | 4099 | AI agent loop — LLM plans and calls MCP tools autonomously |
 | **Ollama** | 11434 | Local LLM inference (phi3:mini). Fallback when no `GROQ_API_KEY` |
 
 All tools are exposed via the MCP server at `http://YOUR_VPS_IP:4097/mcp`.
+
+### New Tools (v1.1)
+
+- **`sidekick_search`** — Fast file content search using ripgrep (falls back to grep). Supports regex patterns and file filtering.
+- **`sidekick_git`** — Structured git operations: status, diff, log, add, commit, push, pull, branch, checkout, stash. Safer than raw bash for git commands.
+- **`sidekick_notify`** — Send notifications to Discord, Slack (via webhooks), or email (via SMTP). Useful for alerts and monitoring.
 
 ## Understanding the Architecture
 

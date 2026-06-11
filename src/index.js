@@ -33,6 +33,23 @@ const TOOL_SCHEMAS = {
   }),
   sidekick_list_projects: z.object({}),
   sidekick_get_by_project: z.object({ project: z.string().describe("Project name to filter by") }),
+  sidekick_search: z.object({
+    pattern: z.string().describe("Regex pattern to search for"),
+    path: z.string().optional().describe("Directory to search in (defaults to current directory)"),
+    include: z.string().optional().describe("File pattern to include (e.g. '*.js', '*.ts')")
+  }),
+  sidekick_git: z.object({
+    action: z.enum(["status", "diff", "log", "add", "commit", "push", "pull", "branch", "checkout", "stash"]).describe("Git action to perform"),
+    path: z.string().optional().describe("Repository path (defaults to current directory)"),
+    args: z.string().optional().describe("Additional arguments for the git command")
+  }),
+  sidekick_notify: z.object({
+    channel: z.enum(["discord", "slack", "email"]).describe("Notification channel"),
+    webhook_url: z.string().optional().describe("Webhook URL (required for discord/slack)"),
+    recipient: z.string().optional().describe("Email recipient (required for email)"),
+    message: z.string().describe("Message content to send"),
+    title: z.string().optional().describe("Optional title/subject")
+  }),
 };
 
 // --- Factory: create fresh McpServer + register tools ---
