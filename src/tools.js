@@ -3107,6 +3107,248 @@ async function sidekick_hash({ input, algorithm, verify, path: filePath }) {
   return { content: [{ type: "text", text: `${algo.toUpperCase()}: ${hash}` }] };
 }
 
+// --- Validate Tool ---
+
+const Ajv = require("ajv");
+const ajv = new Ajv({ allErrors: true, verbose: true });
+
+async function sidekick_validate({ data, schema }) {
+  if (!data || !schema) {
+    return { content: [{ type: "text", text: "data and schema required" }], isError: true };
+  }
+  
+  let parsedData, parsedSchema;
+  
+  try {
+    // Try to parse data as JSON, otherwise use as-is
+    parsedData = typeof data === "string" ? JSON.parse(data) : data;
+  } catch {
+    parsedData = data;
+  }
+  
+  try {
+    parsedSchema = typeof schema === "string" ? JSON.parse(schema) : schema;
+  } catch (e) {
+    return { content: [{ type: "text", text: `Schema parse error: ${e.message}` }], isError: true };
+  }
+  
+  try {
+    const validate = ajv.compile(parsedSchema);
+    const valid = validate(parsedData);
+    
+    if (valid) {
+      return { content: [{ type: "text", text: "✓ Validation passed" }] };
+    } else {
+      const errors = validate.errors.map(e => ({
+        path: e.instancePath || "/",
+        message: e.message,
+        params: e.params
+      }));
+      return { content: [{ type: "text", text: `✗ Validation failed:\n${JSON.stringify(errors, null, 2)}` }] };
+    }
+  } catch (e) {
+    return { content: [{ type: "text", text: `Validation error: ${e.message}` }], isError: true };
+  }
+}
+
+// --- Template Tool ---
+
+const Handlebars = require("handlebars");
+
+async function sidekick_template({ template, data }) {
+  if (!template) {
+    return { content: [{ type: "text", text: "template required" }], isError: true };
+  }
+  
+  let parsedData = {};
+  
+  if (data) {
+    try {
+      parsedData = typeof data === "string" ? JSON.parse(data) : data;
+    } catch (e) {
+      return { content: [{ type: "text", text: `Data parse error: ${e.message}` }], isError: true };
+    }
+  }
+  
+  try {
+    const compiled = Handlebars.compile(template);
+    const result = compiled(parsedData);
+    return { content: [{ type: "text", text: result }] };
+  } catch (e) {
+    return { content: [{ type: "text", text: `Template error: ${e.message}` }], isError: true };
+  }
+}
+
+// --- Queue Tool ---
+
+const QUEUE_FILE = path.join(DATA_DIR, "queue.json");
+
+function loadQueue() {
+  if (!fs.existsSync(QUEUE_FILE)) return { tasks: [], nextId: 1 };
+  try {
+    return JSON.parse(fs.readFileSync(QUEUE_FILE, "utf-8"));
+  } catch {
+    return { tasks: [], nextId: 1 };
+  }
+}
+
+function saveQueue(queue) {
+  fs.writeFileSync(QUEUE_FILE, JSON.stringify(queue, null, 2));
+}
+
+async function sidekick_queue({ action, id, tool, args, priority, status }) {
+  const queue = loadQueue();
+  
+  if (action === "add") {
+    if (!tool) {
+      return { content: [{ type: "text", text: "tool required" }], isError: true };
+    }
+    
+    const task = {
+      id: queue.nextId++,
+      tool,
+      args: args || {},
+      priority: priority || 0,
+      status: "pending",
+      created: new Date().toISOString(),
+      attempts: 0
+    };
+    
+    queue.tasks.push(task);
+    queue.tasks.sort((a, b) => b.priority - a.priority);
+    saveQueue(queue);
+    
+    return { content: [{ type: "text", text: `Added task ${task.id} (priority: ${task.priority})` }] };
+  }
+  
+  if (action === "list") {
+    const filterStatus = status || "all";
+    const filtered = filterStatus === "all" 
+      ? queue.tasks 
+      : queue.tasks.filter(t => t.status === filterStatus);
+    
+    if (filtered.length === 0) {
+      return { content: [{ type: "text", text: `No tasks found (status: ${filterStatus})` }] };
+    }
+    
+    const summary = filtered.map(t => 
+      `Task ${t.id}: ${t.tool} (priority: ${t.priority}, status: ${t.status}, attempts: ${t.attempts})`
+    ).join("\n");
+    
+    return { content: [{ type: "text", text: `Queue (${filtered.length} tasks):\n${summary}` }] };
+  }
+  
+  if (action === "process") {
+    const pending = queue.tasks.find(t => t.status === "pending");
+    
+    if (!pending) {
+      return { content: [{ type: "text", text: "No pending tasks" }] };
+    }
+    
+    pending.status = "processing";
+    pending.attempts++;
+    saveQueue(queue);
+    
+    try {
+      const result = await callTool(pending.tool, pending.args);
+      
+      if (result.isError) {
+        pending.status = "failed";
+        pending.error = result.content?.[0]?.text || "Unknown error";
+        pending.failedAt = new Date().toISOString();
+      } else {
+        pending.status = "completed";
+        pending.result = result.content?.[0]?.text?.substring(0, 200);
+        pending.completedAt = new Date().toISOString();
+      }
+      
+      saveQueue(queue);
+      return result;
+    } catch (e) {
+      pending.status = "failed";
+      pending.error = e.message;
+      pending.failedAt = new Date().toISOString();
+      saveQueue(queue);
+      
+      return { content: [{ type: "text", text: `Task failed: ${e.message}` }], isError: true };
+    }
+  }
+  
+  if (action === "remove") {
+    if (!id) {
+      return { content: [{ type: "text", text: "id required" }], isError: true };
+    }
+    
+    const idx = queue.tasks.findIndex(t => t.id === id);
+    if (idx === -1) {
+      return { content: [{ type: "text", text: `Task ${id} not found` }], isError: true };
+    }
+    
+    queue.tasks.splice(idx, 1);
+    saveQueue(queue);
+    
+    return { content: [{ type: "text", text: `Removed task ${id}` }] };
+  }
+  
+  if (action === "clear") {
+    const clearStatus = status || "all";
+    
+    if (clearStatus === "all") {
+      queue.tasks = [];
+    } else {
+      queue.tasks = queue.tasks.filter(t => t.status !== clearStatus);
+    }
+    
+    saveQueue(queue);
+    return { content: [{ type: "text", text: `Cleared tasks (status: ${clearStatus})` }] };
+  }
+  
+  return { content: [{ type: "text", text: "Unknown action. Use: add, list, process, remove, clear" }], isError: true };
+}
+
+// --- Retry Tool ---
+
+async function sidekick_retry({ tool, args, max_attempts, backoff, initial_delay }) {
+  if (!tool) {
+    return { content: [{ type: "text", text: "tool required" }], isError: true };
+  }
+  
+  const maxAttempts = max_attempts || 3;
+  const backoffType = backoff || "exponential";
+  const initialDelay = initial_delay || 1000;
+  
+  let lastError;
+  
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const result = await callTool(tool, args || {});
+      
+      if (!result.isError) {
+        return { content: [{ type: "text", text: `✓ Succeeded on attempt ${attempt}\n\n${result.content?.[0]?.text || ""}` }] };
+      }
+      
+      lastError = result.content?.[0]?.text || "Unknown error";
+    } catch (e) {
+      lastError = e.message;
+    }
+    
+    if (attempt < maxAttempts) {
+      let delay;
+      if (backoffType === "exponential") {
+        delay = initialDelay * Math.pow(2, attempt - 1);
+      } else if (backoffType === "linear") {
+        delay = initialDelay * attempt;
+      } else {
+        delay = initialDelay;
+      }
+      
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  
+  return { content: [{ type: "text", text: `✗ Failed after ${maxAttempts} attempts\nLast error: ${lastError}` }], isError: true };
+}
+
 const TOOLS = {
   sidekick_bash,
   sidekick_read,
@@ -3138,6 +3380,10 @@ const TOOLS = {
   sidekick_parse,
   sidekick_diff,
   sidekick_hash,
+  sidekick_validate,
+  sidekick_template,
+  sidekick_queue,
+  sidekick_retry,
 };
 
 const TOOL_DEFS = [
@@ -3171,6 +3417,10 @@ const TOOL_DEFS = [
   { name: "sidekick_parse", description: "Parse structured data formats (JSON, YAML, XML, INI, CSV) with auto-detection", args: { input: "string (data to parse)", format: "string (optional, json|yaml|xml|ini|csv - auto-detected if not specified)" } },
   { name: "sidekick_diff", description: "Semantic comparison of text, JSON, or YAML with structure-aware diffing", args: { old_text: "string (original content)", new_text: "string (modified content)", type: "string (optional, text|json|yaml|auto - default auto)", format: "string (optional, unified|summary|json - default unified)" } },
   { name: "sidekick_hash", description: "Generate checksums (MD5, SHA1, SHA256, SHA512) for files or data with verification", args: { input: "string (optional, data to hash)", path: "string (optional, file path to hash)", algorithm: "string (optional, md5|sha1|sha256|sha512 - default sha256)", verify: "string (optional, expected hash to verify against)" } },
+  { name: "sidekick_validate", description: "Validate data against JSON Schema", args: { data: "string|object (data to validate)", schema: "string|object (JSON Schema)" } },
+  { name: "sidekick_template", description: "Render Handlebars templates with data", args: { template: "string (Handlebars template)", data: "string|object (template data)" } },
+  { name: "sidekick_queue", description: "Persistent task queue with priorities", args: { action: "string (add|list|process|remove|clear)", id: "number (optional, task id for remove)", tool: "string (optional, tool name for add)", args: "object (optional, tool args for add)", priority: "number (optional, priority for add, default 0)", status: "string (optional, status filter for list/clear)" } },
+  { name: "sidekick_retry", description: "Retry tool calls with exponential backoff", args: { tool: "string (tool to retry)", args: "object (optional, tool args)", max_attempts: "number (optional, default 3)", backoff: "string (optional, exponential|linear|fixed, default exponential)", initial_delay: "number (optional, ms, default 1000)" } },
 ];
 
 async function callTool(name, args) {
