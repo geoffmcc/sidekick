@@ -163,6 +163,118 @@ function emit(taskId, data) {
   if (ee) ee.emit("data", data);
 }
 
+function suggestGroqLLM(prompt, attempt = 1) {
+  return new Promise((resolve, reject) => {
+    const https = require("https");
+    const body = JSON.stringify({
+      model: GROQ_MODEL,
+      messages: [
+        { role: "system", content: "You analyze agent task transcripts and decide if they should be saved as reusable procedures. Return only valid JSON." },
+        { role: "user", content: prompt }
+      ],
+      temperature: 0.2
+    });
+    const req = https.request({
+      hostname: "api.groq.com",
+      path: "/openai/v1/chat/completions",
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + GROQ_API_KEY,
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(body)
+      }
+    }, (res) => {
+      let data = "";
+      res.on("data", (c) => data += c);
+      res.on("end", () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (res.statusCode === 429 && attempt < 3) {
+            const wait = Math.min(5000, 1000 * Math.pow(2, attempt));
+            return setTimeout(() => resolve(suggestGroqLLM(prompt, attempt + 1)), wait);
+          }
+          if (res.statusCode >= 400) {
+            return reject(new Error("Groq: " + (parsed.error?.message || data.substring(0, 200))));
+          }
+          const content = parsed.choices?.[0]?.message?.content || "";
+          resolve(content);
+        } catch (e) {
+          reject(new Error("Groq parse: " + data.substring(0, 200)));
+        }
+      });
+    });
+    req.setTimeout(15000, () => { req.destroy(); reject(new Error("LLM timeout")); });
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+async function suggestProcedure(goal, steps, taskId) {
+  const toolSteps = steps.filter(s => s.type === "tool");
+  if (toolSteps.length < 3) return;
+
+  const transcript = toolSteps.map(s => {
+    const argsStr = JSON.stringify(s.args || {});
+    return `- ${s.tool}(${argsStr})`;
+  }).join("\n");
+
+  const prompt = `Analyze this agent task and decide if it should be saved as a reusable procedure.
+
+Task goal: "${goal}"
+
+Steps taken:
+${transcript}
+
+Return a JSON object:
+- If this should be saved: {"save": true, "name": "snake_case_name", "description": "what it does", "parameters": {"paramName": {"type": "string", "description": "...", "required": true}}, "steps": [{"tool": "sidekick_bash", "args": {"command": "..."}}]}
+- If not: {"save": false, "reason": "why not"}
+
+Rules for saving:
+- Save if the task is a reusable pattern (e.g., "check disk space", "backup database", "deploy service")
+- Don't save if it's a one-off query (e.g., "what time is it", "get my IP")
+- Use {{paramName}} in step args for values that should be parameterized
+- Only include parameters for values that would change between uses
+- Keep steps minimal — remove verification/redundant steps
+
+Return ONLY valid JSON.`;
+
+  try {
+    const response = await suggestGroqLLM(prompt);
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return;
+    
+    const suggestion = JSON.parse(jsonMatch[0]);
+    if (!suggestion.save) {
+      emit(taskId, { type: "step", text: `Procedure suggestion: skipped (${suggestion.reason || "not reusable"})` });
+      return;
+    }
+
+    if (!suggestion.name || !suggestion.description || !Array.isArray(suggestion.steps)) {
+      emit(taskId, { type: "step", text: "Procedure suggestion: invalid format" });
+      return;
+    }
+
+    const result = await callTool("sidekick_teach", {
+      action: "teach_procedure",
+      name: suggestion.name,
+      description: suggestion.description,
+      parameters: suggestion.parameters || {},
+      steps: suggestion.steps,
+      trigger_phrases: []
+    });
+
+    if (result.isError) {
+      emit(taskId, { type: "step", text: `Procedure save failed: ${result.content?.[0]?.text}` });
+    } else {
+      const paramCount = Object.keys(suggestion.parameters || {}).length;
+      emit(taskId, { type: "step", text: `Auto-saved procedure: ${suggestion.name} (${suggestion.steps.length} steps, ${paramCount} params) — available as sidekick_${suggestion.name} after restart` });
+    }
+  } catch (e) {
+    emit(taskId, { type: "step", text: `Procedure suggestion failed: ${e.message}` });
+  }
+}
+
 async function runAgent(goal, taskId) {
   setSource("agent");
   const steps = [];
@@ -249,6 +361,9 @@ async function runAgent(goal, taskId) {
 
   const transcript = JSON.stringify({ goal, steps, status: "completed", t: new Date().toISOString() });
   fs.writeFileSync(path.join(CONV_DIR, taskId + ".json"), transcript, "utf-8");
+  
+  await suggestProcedure(goal, steps, taskId);
+  
   emit(taskId, { type: "done", text: "Transcript saved" });
 }
 
