@@ -50,6 +50,24 @@ const TOOL_SCHEMAS = {
     message: z.string().describe("Message content to send"),
     title: z.string().optional().describe("Optional title/subject")
   }),
+  sidekick_process: z.object({
+    action: z.enum(["list", "top", "kill", "tree"]).describe("Process action to perform"),
+    filter: z.string().optional().describe("Filter processes by name (for list action)"),
+    pid: z.number().optional().describe("Process ID to kill"),
+    name: z.string().optional().describe("Process name to kill (alternative to pid)"),
+    signal: z.string().optional().describe("Signal to send when killing (default: TERM)")
+  }),
+  sidekick_service: z.object({
+    action: z.enum(["start", "stop", "restart", "status", "enable", "disable", "logs"]).describe("Service action to perform"),
+    service: z.string().describe("Systemd service name"),
+    lines: z.number().optional().describe("Number of log lines to show (default: 50)")
+  }),
+  sidekick_archive: z.object({
+    action: z.enum(["create", "extract", "list"]).describe("Archive action to perform"),
+    path: z.string().describe("Source path (file/directory for create, archive for extract/list)"),
+    output: z.string().optional().describe("Output path (required for create)"),
+    format: z.string().optional().describe("Archive format: tar.gz, tgz, or zip (default: tar.gz)")
+  }),
 };
 
 // --- Factory: create fresh McpServer + register tools ---

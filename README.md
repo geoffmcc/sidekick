@@ -57,6 +57,9 @@ Sidekick is the infrastructure. The AI (running in opencode) uses that infrastru
 | **File content search** | `sidekick_search` uses ripgrep/grep for fast code search | AI can quickly find code patterns across the codebase |
 | **Git operations** | `sidekick_git` provides structured git commands | AI can check status, diff, log, commit, push, pull safely |
 | **Notifications** | `sidekick_notify` sends alerts to Discord, Slack, or email | AI can alert you when tasks complete or errors occur |
+| **Process management** | `sidekick_process` lists, monitors, and kills processes | AI can troubleshoot high CPU/memory or kill hung processes |
+| **Service management** | `sidekick_service` controls systemd services safely | AI can restart services, check status, view logs |
+| **Archive operations** | `sidekick_archive` creates/extracts tar.gz and zip files | AI can backup data, deploy archives, manage backups |
 
 ## Architecture
 
@@ -89,12 +92,18 @@ Sidekick is the infrastructure. The AI (running in opencode) uses that infrastru
 
 | Service | Port | Description |
 |---------|------|-------------|
-| **MCP Server** | 4097 | 13 tools: bash, read, write, list, search, git, notify, store, get, list_projects, get_by_project, web_fetch, llm |
+| **MCP Server** | 4097 | 16 tools: bash, read, write, list, search, git, notify, process, service, archive, store, get, list_projects, get_by_project, web_fetch, llm |
 | **Dashboard** | 4098 | Web UI: system health, activity log, KV data, agent tasks |
 | **Agent Bridge** | 4099 | AI agent loop — LLM plans and calls MCP tools autonomously |
 | **Ollama** | 11434 | Local LLM inference (phi3:mini). Fallback when no `GROQ_API_KEY` |
 
 All tools are exposed via the MCP server at `http://YOUR_VPS_IP:4097/mcp`.
+
+### New Tools (v1.2)
+
+- **`sidekick_process`** — Manage processes: list, top CPU/memory consumers, kill by PID/name, process tree.
+- **`sidekick_service`** — Manage systemd services: start, stop, restart, status, enable, disable, view logs.
+- **`sidekick_archive`** — Create, extract, or list archives (tar.gz, tgz, zip).
 
 ### New Tools (v1.1)
 
