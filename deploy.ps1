@@ -4,16 +4,19 @@ param(
 
 $VPS = "sidekick@149.28.229.13"
 $REMOTE_DIR = "/home/sidekick/mcp-sidekick"
-$SSH_KEY = "$env:USERPROFILE\.ssh\sidekick"
+$SSH_KEY_WIN = Join-Path $env:USERPROFILE ".ssh\sidekick"
+$SSH_KEY_WSL = (wsl -d Ubuntu -u root -- wslpath "$( $SSH_KEY_WIN -replace '\\','/' )")
 
 function Run-Remote {
   param([string]$Cmd)
-  wsl -d Ubuntu -u root -- ssh -i $SSH_KEY -o StrictHostKeyChecking=accept-new -o BatchMode=yes $VPS $Cmd 2>&1
+  wsl -d Ubuntu -u root -- ssh -i "$SSH_KEY_WSL" -o StrictHostKeyChecking=accept-new -o BatchMode=yes "$VPS" "$Cmd" 2>&1
 }
 
 function Copy-ToVPS {
   param([string]$Local, [string]$Remote)
-  wsl -d Ubuntu -u root -- sh -c "scp -i $SSH_KEY -o StrictHostKeyChecking=accept-new -o BatchMode=yes '$Local' $VPS`:$Remote 2>&1"
+  $fullLocal = (Resolve-Path $Local).Path
+  $localWsl = (wsl -d Ubuntu -u root -- wslpath "$( $fullLocal -replace '\\','/' )")
+  wsl -d Ubuntu -u root -- scp -i "$SSH_KEY_WSL" -o StrictHostKeyChecking=accept-new -o BatchMode=yes "$localWsl" "${VPS}:${Remote}" 2>&1
 }
 
 function Restart-Service { param([string]$Name) Write-Host "  restarting $Name..." -ForegroundColor Yellow; Run-Remote "sudo systemctl restart $Name" | Out-Null }
@@ -100,7 +103,7 @@ Write-Host ""
 
 # Check service statuses
 foreach ($svc in @("sidekick-mcp", "sidekick-dashboard", "sidekick-agent")) {
-  $status = Run-Remote "sudo systemctl is-active $svc"
+  $status = Run-Remote "sudo systemctl status $svc 2>&1 | grep -oP 'Active: \K\S+'"
   $color = if ($status -match "active") { "Green" } else { "Red" }
   Write-Host ("  $svc : ".PadRight(30)) -NoNewline
   Write-Host $status -ForegroundColor $color

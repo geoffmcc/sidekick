@@ -1,6 +1,7 @@
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 const { execSync } = require("child_process");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
@@ -11,6 +12,19 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 const app = express();
 const http = require("http");
 const AGENT_PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
+
+function getPublicIP() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return 'unknown';
+}
+const VPS_IP = getPublicIP();
 
 const DASHBOARD_USER = process.env.SIDEKICK_DASHBOARD_USER || "";
 const DASHBOARD_PASS = process.env.SIDEKICK_DASHBOARD_PASS || "";
@@ -647,7 +661,7 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
 <div class="header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;padding-bottom:12px;border-bottom:1px solid #21262d">
   <div>
     <h1 style="font-size:1.4rem;color:#58a6ff">Sidekick Dashboard <span id="serviceDots" style="font-size:.85rem;margin-left:12px"></span></h1>
-    <div class="sub">YOUR_VPS_IP</div>
+    <div class="sub">${VPS_IP}</div>
   </div>
   <div class="sub" id="lastUpdate"></div>
 </div>
@@ -988,7 +1002,7 @@ function renderLogs(){
     const timeRange = startTime === endTime ? startTime : startTime + ' - ' + endTime.split(' ')[1];
 
     html += '<div class="session-group">';
-    html += '<div class="session-header" onclick="toggleSession(' + si + ')">';
+    html += '<div class="session-header">';
     html += '<i class="fas ' + icon + '" style="color:' + color + '"></i>';
     html += '<span class="session-time">' + esc(timeRange) + '</span>';
     html += '<span class="session-count">' + session.entries.length + ' calls</span>';
@@ -1016,7 +1030,7 @@ function renderLogs(){
       // Show result (expandable)
       if (e.s) {
         const resultId = 'result-' + Math.random().toString(36).substr(2, 9);
-        html += '<div class="log-result" id="' + resultId + '" onclick="toggleResult(\\'' + resultId + '\\')">';
+        html += '<div class="log-result" id="' + resultId + '" data-result-id="' + resultId + '">';
         html += esc(e.s);
         html += '</div>';
       }
@@ -1032,6 +1046,19 @@ function renderLogs(){
   }
 
   container.innerHTML = html;
+
+  container.querySelectorAll('.log-result[data-result-id]').forEach(el => {
+    el.addEventListener('click', function() {
+      this.classList.toggle('expanded');
+    });
+  });
+
+  container.querySelectorAll('.session-header').forEach((el, idx) => {
+    el.addEventListener('click', function() {
+      const body = this.nextElementSibling;
+      if (body) body.classList.toggle('open');
+    });
+  });
 }
 
 function toggleResult(id) {
@@ -1039,11 +1066,6 @@ function toggleResult(id) {
   if (el) {
     el.classList.toggle('expanded');
   }
-}
-
-function toggleSession(idx){
-  const body = $('session-' + idx);
-  body.classList.toggle('open');
 }
 
 function loadMoreLogs(){
@@ -1131,7 +1153,7 @@ function renderKV(){
     const valuePreview = String(e.value).substring(0, 300);
     const hasMore = String(e.value).length > 300;
     
-    return '<div class="kv-entry">' +
+    return '<div class="kv-entry" data-key="' + esc(e.key).replace(/"/g, '&quot;') + '">' +
       '<div class="kv-header">' +
         '<span class="kv-key">' + esc(e.key) + '</span>' +
         '<div class="kv-badges">' +
@@ -1143,19 +1165,26 @@ function renderKV(){
         '<span><i class="fas fa-plus-circle"></i> Created ' + createdAgo + '</span>' +
         (isUpdated ? '<span><i class="fas fa-edit"></i> Updated ' + updatedAgo + '</span>' : '') +
       '</div>' +
-      '<div class="kv-value-preview" onclick="showValueModal(\\'' + esc(e.key).replace(/'/g, "\\'") + '\\')">' +
+      '<div class="kv-value-preview" data-action="view">' +
         esc(valuePreview) + (hasMore ? '...' : '') +
       '</div>' +
       '<div class="kv-actions">' +
-        '<button onclick="openEditModal(\\'' + esc(e.key).replace(/'/g, "\\'") + '\\')" title="Edit">' +
+        '<button data-action="edit" title="Edit">' +
           '<i class="fas fa-edit"></i>' +
         '</button>' +
-        '<button class="del" onclick="deleteKV(\\'' + esc(e.key).replace(/'/g, "\\'") + '\\')" title="Delete">' +
+        '<button class="del" data-action="delete" title="Delete">' +
           '<i class="fas fa-trash"></i>' +
         '</button>' +
       '</div>' +
     '</div>';
   }).join('');
+
+  list.querySelectorAll('.kv-entry').forEach(entry => {
+    const key = entry.dataset.key;
+    entry.querySelector('[data-action="view"]').addEventListener('click', () => showValueModal(key));
+    entry.querySelector('[data-action="edit"]').addEventListener('click', () => openEditModal(key));
+    entry.querySelector('[data-action="delete"]').addEventListener('click', () => deleteKV(key));
+  });
 }
 
 function formatTimeAgo(dateStr) {
@@ -1189,13 +1218,14 @@ function showValueModal(key) {
   modal.innerHTML = '<div class="kv-modal-content">' +
     '<div class="kv-modal-header">' +
       '<h3>' + esc(key) + '</h3>' +
-      '<button onclick="this.closest(\\'.kv-modal\\').remove()" style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:20px;">' +
+      '<button class="kv-modal-close" style="background:none;border:none;color:#8b949e;cursor:pointer;font-size:20px;">' +
         '<i class="fas fa-times"></i>' +
       '</button>' +
     '</div>' +
     '<div class="kv-modal-value">' + esc(String(entry.value)) + '</div>' +
   '</div>';
   
+  modal.querySelector('.kv-modal-close').addEventListener('click', () => modal.remove());
   document.body.appendChild(modal);
 }
 
@@ -1320,12 +1350,22 @@ function toggleHistory(){
         '<span class="log-time">' + fmtTime(r.t) + '</span> ' +
         '<span class="' + (r.status === 'completed' ? 'log-ok' : 'log-fail') + '">' + r.status + '</span> ' +
         '<span class="log-summary" style="flex:1">' + esc(r.goal.substring(0,80)) + '</span>' +
-        '<button class="btn btn-sm btn-outline" onclick="exportRun(\\'' + r.id + '\\')"><i class="fas fa-download"></i></button>' +
-        '<button class="btn btn-sm btn-outline" onclick="toggleRunDetail(\\'' + r.id + '\\')"><i class="fas fa-chevron-down"></i></button>' +
-        '<div id="run-detail-' + r.id + '" style="display:none;width:100%"></div>' +
+        '<button class="btn btn-sm btn-outline" data-action="export" data-id="' + esc(r.id) + '" title="Export"><i class="fas fa-download"></i></button>' +
+        '<button class="btn btn-sm btn-outline" data-action="toggle" data-id="' + esc(r.id) + '" title="Details"><i class="fas fa-chevron-down"></i></button>' +
+        '<div id="run-detail-' + esc(r.id) + '" style="display:none;width:100%"></div>' +
         '</div>'
       ).join('');
       el.innerHTML = html;
+
+      el.querySelectorAll('button[data-action]').forEach(btn => {
+        btn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          const action = this.dataset.action;
+          const id = this.dataset.id;
+          if (action === 'export') exportRun(id);
+          else if (action === 'toggle') toggleRunDetail(id);
+        });
+      });
     }).catch(e => apiError('/api/agent/history', e, 0));
   }
 }
