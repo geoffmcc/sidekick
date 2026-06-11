@@ -125,6 +125,7 @@ app.use((req, res, next) => {
 
 if (DASHBOARD_USER && DASHBOARD_PASS) {
   app.use((req, res, next) => {
+    if (req.path.startsWith('/api/agent/stream/')) return next();
     const auth = req.headers.authorization;
     if (!auth || !auth.startsWith("Basic ")) {
       res.set("WWW-Authenticate", 'Basic realm="Sidekick Dashboard"');
@@ -137,26 +138,6 @@ if (DASHBOARD_USER && DASHBOARD_PASS) {
     res.status(401).send("Authentication required");
   });
 }
-
-app.all(/^\/api\/agent\//, (req, res) => {
-  let body = "";
-  req.on("data", c => body += c);
-  req.on("end", () => {
-    const opts = {
-      hostname: "127.0.0.1", port: AGENT_PORT,
-      path: req.originalUrl, method: req.method,
-      headers: { ...req.headers, host: "127.0.0.1:" + AGENT_PORT }
-    };
-    if (body) opts.headers["Content-Length"] = Buffer.byteLength(body);
-    const pr = http.request(opts, px => {
-      res.writeHead(px.statusCode, px.headers);
-      px.pipe(res);
-    });
-    pr.on("error", () => { if (!res.headersSent) res.status(502).json({ error: "Agent unavailable" }); });
-    if (body) pr.write(body);
-    pr.end();
-  });
-});
 
 // --- API ---
 
@@ -499,6 +480,46 @@ app.post('/api/webhook/:source', (req, res) => {
       res.status(400).json({ error: e.message });
     }
   });
+});
+
+// --- Agent Proxy ---
+
+function proxyAgent(req, res, method, body) {
+  const headers = { "Content-Type": "application/json" };
+  if (body) headers["Content-Length"] = Buffer.byteLength(body);
+  const opts = {
+    hostname: "127.0.0.1",
+    port: AGENT_PORT,
+    path: req.originalUrl,
+    method: method,
+    headers: headers
+  };
+  const proxy = http.request(opts, (upstream) => {
+    res.writeHead(upstream.statusCode, upstream.headers);
+    upstream.pipe(res);
+  });
+  proxy.on("error", (e) => {
+    res.status(502).json({ error: "Agent bridge unavailable: " + e.message });
+  });
+  if (body) proxy.write(body);
+  proxy.end();
+}
+
+app.post("/api/agent/run", (req, res) => {
+  const body = JSON.stringify(req.body);
+  proxyAgent(req, res, "POST", body);
+});
+
+app.get("/api/agent/stream/:taskId", (req, res) => {
+  proxyAgent(req, res, "GET");
+});
+
+app.get("/api/agent/history", (req, res) => {
+  proxyAgent(req, res, "GET");
+});
+
+app.get("/api/agent/run/:id", (req, res) => {
+  proxyAgent(req, res, "GET");
 });
 
 // --- Frontend ---
