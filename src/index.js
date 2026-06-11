@@ -68,6 +68,23 @@ const TOOL_SCHEMAS = {
     output: z.string().optional().describe("Output path (required for create)"),
     format: z.string().optional().describe("Archive format: tar.gz, tgz, or zip (default: tar.gz)")
   }),
+  sidekick_cron: z.object({
+    action: z.enum(["add", "list", "remove", "run"]).describe("Cron action to perform"),
+    name: z.string().optional().describe("Job name (required for add, optional for remove/run)"),
+    schedule: z.string().optional().describe("Cron schedule expression (e.g. '0 * * * *' for hourly)"),
+    command: z.string().optional().describe("Command to execute (required for add)"),
+    id: z.string().optional().describe("Job ID (for remove/run)")
+  }),
+  sidekick_github: z.object({
+    action: z.enum(["pr_list", "pr_create", "pr_get", "pr_merge", "issue_list", "issue_create", "issue_close", "commit_status", "release_create", "repo_info"]).describe("GitHub action to perform"),
+    repo: z.string().describe("Repository in format 'owner/repo'"),
+    args: z.string().optional().describe("Additional arguments (JSON string or value depending on action)")
+  }),
+  sidekick_webhook: z.object({
+    action: z.enum(["list", "get", "clear"]).describe("Webhook action to perform"),
+    id: z.string().optional().describe("Webhook ID (required for get)"),
+    limit: z.number().optional().describe("Number of webhooks to list (default: 20)")
+  }),
 };
 
 // --- Factory: create fresh McpServer + register tools ---

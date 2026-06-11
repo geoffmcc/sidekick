@@ -12,6 +12,8 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const KV_FILE = path.join(DATA_DIR, "kvstore.json");
 const LOG_FILE = path.join(DATA_DIR, "log.jsonl");
+const CRON_FILE = path.join(DATA_DIR, "cron.json");
+const WEBHOOK_FILE = path.join(DATA_DIR, "webhooks.json");
 const MAX_LOG = 1000;
 
 const PROJECT_RE = /^[a-z][a-z0-9_]*$/;
@@ -595,6 +597,294 @@ async function sidekick_archive({ action, path: sourcePath, output, format }) {
   }
 }
 
+// --- Cron Tool ---
+
+function loadCronJobs() {
+  if (!fs.existsSync(CRON_FILE)) return [];
+  try {
+    return JSON.parse(fs.readFileSync(CRON_FILE, "utf-8"));
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveCronJobs(jobs) {
+  fs.writeFileSync(CRON_FILE, JSON.stringify(jobs, null, 2));
+}
+
+async function sidekick_cron({ action, name, schedule, command, id }) {
+  const allowedActions = ["add", "list", "remove", "run"];
+  if (!allowedActions.includes(action)) {
+    return { content: [{ type: "text", text: "Invalid action. Allowed: " + allowedActions.join(", ") }], isError: true };
+  }
+
+  const jobs = loadCronJobs();
+
+  if (action === "add") {
+    if (!name || !schedule || !command) {
+      return { content: [{ type: "text", text: "name, schedule, and command required" }], isError: true };
+    }
+    const newJob = {
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      name,
+      schedule,
+      command,
+      enabled: true,
+      createdAt: new Date().toISOString(),
+      lastRun: null,
+      lastResult: null
+    };
+    jobs.push(newJob);
+    saveCronJobs(jobs);
+    syncCrontab(jobs);
+    return { content: [{ type: "text", text: "Added cron job: " + name + " (id: " + newJob.id + ")" }] };
+  }
+
+  if (action === "list") {
+    if (jobs.length === 0) {
+      return { content: [{ type: "text", text: "No cron jobs scheduled" }] };
+    }
+    const summary = jobs.map(j => 
+      j.id + " | " + j.name + " | " + j.schedule + " | " + (j.enabled ? "enabled" : "disabled") + " | last: " + (j.lastRun || "never")
+    ).join("\n");
+    return { content: [{ type: "text", text: summary }] };
+  }
+
+  if (action === "remove") {
+    if (!id && !name) {
+      return { content: [{ type: "text", text: "id or name required" }], isError: true };
+    }
+    const idx = jobs.findIndex(j => j.id === id || j.name === name);
+    if (idx === -1) {
+      return { content: [{ type: "text", text: "Job not found" }], isError: true };
+    }
+    const removed = jobs.splice(idx, 1)[0];
+    saveCronJobs(jobs);
+    syncCrontab(jobs);
+    return { content: [{ type: "text", text: "Removed job: " + removed.name }] };
+  }
+
+  if (action === "run") {
+    if (!id && !name) {
+      return { content: [{ type: "text", text: "id or name required" }], isError: true };
+    }
+    const job = jobs.find(j => j.id === id || j.name === name);
+    if (!job) {
+      return { content: [{ type: "text", text: "Job not found" }], isError: true };
+    }
+    try {
+      const stdout = execSync(job.command, { timeout: 300000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
+      job.lastRun = new Date().toISOString();
+      job.lastResult = "success";
+      saveCronJobs(jobs);
+      return { content: [{ type: "text", text: redactSensitive(stdout || "(empty output)") }] };
+    } catch (e) {
+      job.lastRun = new Date().toISOString();
+      job.lastResult = "error";
+      saveCronJobs(jobs);
+      return { content: [{ type: "text", text: redactSensitive("Error: " + (e.stderr || e.stdout || e.message)) }], isError: true };
+    }
+  }
+}
+
+function syncCrontab(jobs) {
+  try {
+    const enabledJobs = jobs.filter(j => j.enabled);
+    if (enabledJobs.length === 0) {
+      execSync('crontab -r 2>/dev/null || true', { encoding: "utf-8" });
+      return;
+    }
+    const lines = enabledJobs.map(j => {
+      const script = `cd /home/sidekick/mcp-sidekick && ${j.command} >> ${DATA_DIR}/cron-${j.id}.log 2>&1`;
+      return `${j.schedule} ${script} # sidekick:${j.id}`;
+    });
+    const crontabContent = lines.join("\n") + "\n";
+    execSync(`echo ${JSON.stringify(crontabContent)} | crontab -`, { encoding: "utf-8" });
+  } catch (e) {
+    // Silently fail if crontab not available
+  }
+}
+
+// --- GitHub Tool ---
+
+async function sidekick_github({ action, repo, args: extraArgs }) {
+  const tokenEntry = kvStore["github_token"];
+  const token = tokenEntry?.value || tokenEntry;
+  if (!token) {
+    return { content: [{ type: "text", text: "github_token not found in KV store" }], isError: true };
+  }
+
+  const https = require("https");
+  const apiBase = "https://api.github.com";
+
+  function ghRequest(method, endpoint, body) {
+    return new Promise((resolve) => {
+      const url = new URL(apiBase + endpoint);
+      const options = {
+        hostname: url.hostname,
+        path: url.pathname + url.search,
+        method,
+        headers: {
+          "Authorization": "token " + token,
+          "Accept": "application/vnd.github.v3+json",
+          "User-Agent": "Sidekick-MCP/1.0"
+        }
+      };
+      if (body) {
+        const bodyStr = JSON.stringify(body);
+        options.headers["Content-Type"] = "application/json";
+        options.headers["Content-Length"] = Buffer.byteLength(bodyStr);
+      }
+      const req = https.request(options, (res) => {
+        let data = "";
+        res.on("data", (chunk) => data += chunk);
+        res.on("end", () => {
+          try {
+            const parsed = JSON.parse(data);
+            resolve({ status: res.statusCode, data: parsed });
+          } catch (e) {
+            resolve({ status: res.statusCode, data: data });
+          }
+        });
+      });
+      req.on("error", (err) => resolve({ status: 0, data: err.message }));
+      req.setTimeout(30000, () => { req.destroy(); resolve({ status: 0, data: "timeout" }); });
+      if (body) req.write(JSON.stringify(body));
+      req.end();
+    });
+  }
+
+  const actions = {
+    pr_list: async () => {
+      const res = await ghRequest("GET", `/repos/${repo}/pulls?state=open`);
+      if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
+      const prs = res.data.map(pr => `#${pr.number} ${pr.title} (${pr.user.login}) - ${pr.html_url}`);
+      return { content: [{ type: "text", text: prs.join("\n") || "No open PRs" }] };
+    },
+    pr_create: async () => {
+      const { title, head, base, body } = JSON.parse(extraArgs || "{}");
+      if (!title || !head) return { content: [{ type: "text", text: "title and head required" }], isError: true };
+      const res = await ghRequest("POST", `/repos/${repo}/pulls`, { title, head, base: base || "main", body: body || "" });
+      if (res.status !== 201) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
+      return { content: [{ type: "text", text: `Created PR #${res.data.number}: ${res.data.html_url}` }] };
+    },
+    pr_get: async () => {
+      const num = extraArgs;
+      if (!num) return { content: [{ type: "text", text: "PR number required" }], isError: true };
+      const res = await ghRequest("GET", `/repos/${repo}/pulls/${num}`);
+      if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
+      const pr = res.data;
+      return { content: [{ type: "text", text: `#${pr.number} ${pr.title}\nState: ${pr.state}\nAuthor: ${pr.user.login}\nURL: ${pr.html_url}\n${pr.body || ""}` }] };
+    },
+    pr_merge: async () => {
+      const num = extraArgs;
+      if (!num) return { content: [{ type: "text", text: "PR number required" }], isError: true };
+      const res = await ghRequest("PUT", `/repos/${repo}/pulls/${num}/merge`, { merge_method: "squash" });
+      if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
+      return { content: [{ type: "text", text: `Merged PR #${num}` }] };
+    },
+    issue_list: async () => {
+      const res = await ghRequest("GET", `/repos/${repo}/issues?state=open`);
+      if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
+      const issues = res.data.filter(i => !i.pull_request).map(i => `#${i.number} ${i.title} (${i.user.login}) - ${i.html_url}`);
+      return { content: [{ type: "text", text: issues.join("\n") || "No open issues" }] };
+    },
+    issue_create: async () => {
+      const { title, body } = JSON.parse(extraArgs || "{}");
+      if (!title) return { content: [{ type: "text", text: "title required" }], isError: true };
+      const res = await ghRequest("POST", `/repos/${repo}/issues`, { title, body: body || "" });
+      if (res.status !== 201) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
+      return { content: [{ type: "text", text: `Created issue #${res.data.number}: ${res.data.html_url}` }] };
+    },
+    issue_close: async () => {
+      const num = extraArgs;
+      if (!num) return { content: [{ type: "text", text: "issue number required" }], isError: true };
+      const res = await ghRequest("PATCH", `/repos/${repo}/issues/${num}`, { state: "closed" });
+      if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
+      return { content: [{ type: "text", text: `Closed issue #${num}` }] };
+    },
+    commit_status: async () => {
+      const sha = extraArgs;
+      if (!sha) return { content: [{ type: "text", text: "commit SHA required" }], isError: true };
+      const res = await ghRequest("GET", `/repos/${repo}/commits/${sha}/status`);
+      if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
+      const statuses = res.data.statuses.map(s => `${s.context}: ${s.state} - ${s.description || ""}`);
+      return { content: [{ type: "text", text: `Overall: ${res.data.state}\n${statuses.join("\n") || "No statuses"}` }] };
+    },
+    release_create: async () => {
+      const { tag_name, name, body, draft, prerelease } = JSON.parse(extraArgs || "{}");
+      if (!tag_name) return { content: [{ type: "text", text: "tag_name required" }], isError: true };
+      const res = await ghRequest("POST", `/repos/${repo}/releases`, { tag_name, name: name || tag_name, body: body || "", draft: draft || false, prerelease: prerelease || false });
+      if (res.status !== 201) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
+      return { content: [{ type: "text", text: `Created release ${res.data.name}: ${res.data.html_url}` }] };
+    },
+    repo_info: async () => {
+      const res = await ghRequest("GET", `/repos/${repo}`);
+      if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
+      const r = res.data;
+      return { content: [{ type: "text", text: `${r.full_name}\nStars: ${r.stargazers_count} | Forks: ${r.forks_count} | Issues: ${r.open_issues_count}\nDefault branch: ${r.default_branch}\n${r.description || ""}` }] };
+    }
+  };
+
+  if (!actions[action]) {
+    return { content: [{ type: "text", text: "Invalid action. Allowed: " + Object.keys(actions).join(", ") }], isError: true };
+  }
+
+  return actions[action]();
+}
+
+// --- Webhook Tool ---
+
+function loadWebhooks() {
+  if (!fs.existsSync(WEBHOOK_FILE)) return [];
+  try {
+    return JSON.parse(fs.readFileSync(WEBHOOK_FILE, "utf-8"));
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveWebhooks(webhooks) {
+  fs.writeFileSync(WEBHOOK_FILE, JSON.stringify(webhooks, null, 2));
+}
+
+async function sidekick_webhook({ action, id, limit }) {
+  const allowedActions = ["list", "get", "clear"];
+  if (!allowedActions.includes(action)) {
+    return { content: [{ type: "text", text: "Invalid action. Allowed: " + allowedActions.join(", ") }], isError: true };
+  }
+
+  const webhooks = loadWebhooks();
+
+  if (action === "list") {
+    if (webhooks.length === 0) {
+      return { content: [{ type: "text", text: "No webhooks received" }] };
+    }
+    const n = limit || 20;
+    const recent = webhooks.slice(-n);
+    const summary = recent.map(w => 
+      w.id + " | " + w.source + " | " + w.timestamp + " | " + JSON.stringify(w.payload).substring(0, 50) + "..."
+    ).join("\n");
+    return { content: [{ type: "text", text: summary }] };
+  }
+
+  if (action === "get") {
+    if (!id) {
+      return { content: [{ type: "text", text: "id required" }], isError: true };
+    }
+    const webhook = webhooks.find(w => w.id === id);
+    if (!webhook) {
+      return { content: [{ type: "text", text: "Webhook not found" }], isError: true };
+    }
+    return { content: [{ type: "text", text: JSON.stringify(webhook, null, 2) }] };
+  }
+
+  if (action === "clear") {
+    saveWebhooks([]);
+    return { content: [{ type: "text", text: "Cleared all webhooks" }] };
+  }
+}
+
 const TOOLS = {
   sidekick_bash,
   sidekick_read,
@@ -612,6 +902,9 @@ const TOOLS = {
   sidekick_process,
   sidekick_service,
   sidekick_archive,
+  sidekick_cron,
+  sidekick_github,
+  sidekick_webhook,
 };
 
 const TOOL_DEFS = [
@@ -631,6 +924,9 @@ const TOOL_DEFS = [
   { name: "sidekick_process", description: "Manage processes (list, top CPU/memory, kill, tree)", args: { action: "string", filter: "string (optional)", pid: "number (optional)", name: "string (optional)", signal: "string (optional)" } },
   { name: "sidekick_service", description: "Manage systemd services (start, stop, restart, status, enable, disable, logs)", args: { action: "string", service: "string", lines: "number (optional)" } },
   { name: "sidekick_archive", description: "Create, extract, or list archives (tar.gz, zip)", args: { action: "string", path: "string", output: "string (optional)", format: "string (optional)" } },
+  { name: "sidekick_cron", description: "Schedule recurring tasks (add, list, remove, run jobs)", args: { action: "string", name: "string (optional)", schedule: "string (optional)", command: "string (optional)", id: "string (optional)" } },
+  { name: "sidekick_github", description: "GitHub API integration (PRs, issues, commits, releases)", args: { action: "string", repo: "string", args: "string (optional)" } },
+  { name: "sidekick_webhook", description: "Manage received webhooks (list, get, clear)", args: { action: "string", id: "string (optional)", limit: "number (optional)" } },
 ];
 
 async function callTool(name, args) {

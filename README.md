@@ -60,6 +60,9 @@ Sidekick is the infrastructure. The AI (running in opencode) uses that infrastru
 | **Process management** | `sidekick_process` lists, monitors, and kills processes | AI can troubleshoot high CPU/memory or kill hung processes |
 | **Service management** | `sidekick_service` controls systemd services safely | AI can restart services, check status, view logs |
 | **Archive operations** | `sidekick_archive` creates/extracts tar.gz and zip files | AI can backup data, deploy archives, manage backups |
+| **Scheduled tasks** | `sidekick_cron` schedules recurring jobs via crontab | AI can set up automated health checks, backups, monitoring |
+| **GitHub automation** | `sidekick_github` manages PRs, issues, releases via API | AI can automate PR workflows, track issues, create releases |
+| **Webhook integration** | `sidekick_webhook` receives and stores external webhooks | AI can react to GitHub events, CI/CD pipelines, external alerts |
 
 ## Architecture
 
@@ -92,12 +95,18 @@ Sidekick is the infrastructure. The AI (running in opencode) uses that infrastru
 
 | Service | Port | Description |
 |---------|------|-------------|
-| **MCP Server** | 4097 | 16 tools: bash, read, write, list, search, git, notify, process, service, archive, store, get, list_projects, get_by_project, web_fetch, llm |
+| **MCP Server** | 4097 | 19 tools: bash, read, write, list, search, git, notify, process, service, archive, cron, github, webhook, store, get, list_projects, get_by_project, web_fetch, llm |
 | **Dashboard** | 4098 | Web UI: system health, activity log, KV data, agent tasks |
 | **Agent Bridge** | 4099 | AI agent loop — LLM plans and calls MCP tools autonomously |
 | **Ollama** | 11434 | Local LLM inference (phi3:mini). Fallback when no `GROQ_API_KEY` |
 
 All tools are exposed via the MCP server at `http://YOUR_VPS_IP:4097/mcp`.
+
+### New Tools (v1.3)
+
+- **`sidekick_cron`** — Schedule recurring tasks: add, list, remove, run jobs. Uses system crontab for scheduling.
+- **`sidekick_github`** — Full GitHub API integration: PRs (list/create/get/merge), issues (list/create/close), commit status, releases, repo info. Uses stored `github_token`.
+- **`sidekick_webhook`** — Receive and manage webhooks: list, get, clear. Webhook endpoint at `POST /api/webhook/:source` on dashboard.
 
 ### New Tools (v1.2)
 
