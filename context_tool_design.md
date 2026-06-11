@@ -82,7 +82,7 @@ sidekick_context: "Last time you set up SSH (2026-06-10), you chose ED25519 keys
 
 ## Why This Is Gamechanging
 
-1. **True Continuity** - Sidekick becomes a persistent collaborator, not just a tool server
+1. **True Continuity** - Sidekick maintains context across sessions, not just raw data
 2. **Compound Value** - Gets more useful the longer you use it
 3. **Eliminates Repetition** - No more re-explaining context every session
 4. **Institutional Memory** - Captures tribal knowledge that would otherwise be lost
@@ -97,4 +97,4 @@ sidekick_context: "Last time you set up SSH (2026-06-10), you chose ED25519 keys
 5. **Proactive Suggestions** - Pattern matching on current work vs. past context
 
 ## Transformation
-This transforms sidekick from "a tool that waits for commands" into "a collaborator that understands your work and helps you build on it."
+This transforms sidekick from "a tool that waits for commands" into "a system that understands your work and helps you build on it."

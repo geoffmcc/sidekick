@@ -1,6 +1,6 @@
 # Sidekick
 
-A persistent remote AI collaborator that remembers everything and reads your instructions every time you open [opencode](https://opencode.ai).
+A remote VPS agent system with persistent storage, 21 MCP tools, and an autonomous agent bridge.
 
 **How?** A single `AGENTS.md` file that opencode reads on every session start. No plugins, no hooks — just markdown.
 
@@ -138,7 +138,7 @@ To avoid confusion, it's important to understand what each component is:
 - **The AI** = The assistant running in opencode (e.g., qwen, Claude, etc.) that uses Sidekick tools
 - **Agent Bridge** = A separate autonomous AI (Groq/Ollama) that runs tasks independently via the Dashboard
 
-When you "ask Sidekick" something in opencode, you're actually asking the AI to use Sidekick's remote execution tools. The AI makes the decisions; Sidekick provides the capabilities.
+When you call sidekick tools in opencode, you're executing commands on the remote VPS. The AI makes the decisions; Sidekick provides the capabilities.
 
 The Agent Bridge is a separate system that can run tasks autonomously, but it's not integrated into the main AI's workflow. It's accessed via the Dashboard's Agent tab or direct API calls.
 
@@ -199,7 +199,7 @@ curl http://YOUR_VPS_IP:4099/api/agent/history
 
 ## Setting Up AGENTS.md
 
-> **This is the most important step.** Without this file, Sidekick is just a tool server. With it, Sidekick becomes a persistent collaborator that is present in every opencode session.
+> **This is the most important step.** Without this file, Sidekick is just a tool server. With it, Sidekick's tools and instructions are loaded into every opencode session.
 
 Create or edit `~/.config/opencode/AGENTS.md` with the following structure (replace placeholders with your values):
 
@@ -220,48 +220,13 @@ Create or edit `~/.config/opencode/AGENTS.md` with the following structure (repl
 - `sidekick_bash` — Run commands on the remote machine
 - `sidekick_store` / `sidekick_get` — Persistent KV storage
 - `sidekick_read` / `sidekick_write` — File operations
-- `@sidekick` subagent — Delegate complex multi-step tasks
+- `sidekick_git` — Git operations
+- `task` subagent — Delegate complex multi-step tasks
 ~~~
 
 **opencode reads this file automatically on every session start.** No plugins, no hooks, no manual loading — just a markdown file in the right place.
 
 For the full AGENTS.md template with detailed usage guidelines, see [`AGENTS.md`](AGENTS.md) in this repo.
-
-## Using Sidekick Tools
-
-The AI can use Sidekick's tools throughout your project lifecycle, not just when you explicitly ask.
-
-### When the AI Should Use Sidekick Tools
-
-- **Code reviews** — Security-sensitive or multi-system changes → the AI should use sidekick tools to review. Trivial changes (docs, comments, renames) → skip. Everything else → review if confidence < 95%.
-- **Planning** — The AI can use sidekick tools during planning, not just before commit. It can analyze the remote environment and catch issues earlier.
-- **Second opinions** — The AI can use the autonomous Agent Bridge (via dashboard) to get a different perspective from Groq/Ollama.
-- **Issue identification** — Before testing or deployment, the AI can use sidekick tools to analyze the remote environment for potential problems.
-- **Test coverage** — The AI can use sidekick tools to review test coverage on the remote machine.
-
-### Best Practices
-
-- **Provide context** — When asking the AI to review, explain what the change does and why.
-- **Be specific** — If you are unsure about something, tell the AI what to focus on when using sidekick tools.
-- **Early involvement** — The earlier the AI uses sidekick tools, the more valuable its input.
-- **Rule of thumb** — If in doubt, ask the AI to use sidekick tools. The overhead is minimal and the benefit is worth it.
-
-## Persistent Memory
-
-Sidekick's KV store is its long-term memory. Unlike conversation context, which disappears when the session ends, KV data persists indefinitely.
-
-**Example workflow:**
-
-```
-# Store a decision in one session
-sidekick_store("project_status", "Migrated to new server, all services green")
-
-# Retrieve it in a future session
-sidekick_get("project_status")
-# → "Migrated to new server, all services green"
-```
-
-The AGENTS.md file tells the AI *what* to store and *when* to retrieve it — turning Sidekick into a project memory that spans sessions, days, and even weeks.
 
 ## Daily Workflow
 
