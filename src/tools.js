@@ -15,6 +15,7 @@ const LOG_FILE = path.join(DATA_DIR, "log.jsonl");
 const CRON_FILE = path.join(DATA_DIR, "cron.json");
 const WEBHOOK_FILE = path.join(DATA_DIR, "webhooks.json");
 const CONTEXT_FILE = path.join(DATA_DIR, "context.json");
+const PROCEDURES_FILE = path.join(DATA_DIR, "procedures.json");
 const MAX_LOG = 1000;
 
 const PROJECT_RE = /^[a-z][a-z0-9_]*$/;
@@ -1169,6 +1170,208 @@ async function sidekick_context({ action, project, context, decision, reasoning,
   }
 }
 
+// --- Teach Tool ---
+
+function loadProcedures() {
+  if (!fs.existsSync(PROCEDURES_FILE)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(PROCEDURES_FILE, "utf-8"));
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveProcedures(procedures) {
+  fs.writeFileSync(PROCEDURES_FILE, JSON.stringify(procedures, null, 2));
+}
+
+async function sidekick_teach({ action, name, description, steps, example, trigger_phrases, implementation }) {
+  const allowedActions = ["teach_procedure", "generate_tool", "learn_from_example", "execute", "list", "remove"];
+  if (!allowedActions.includes(action)) {
+    return { content: [{ type: "text", text: "Invalid action. Allowed: " + allowedActions.join(", ") }], isError: true };
+  }
+
+  const procedures = loadProcedures();
+  const now = new Date().toISOString();
+
+  if (action === "teach_procedure") {
+    if (!name || !description || !steps) {
+      return { content: [{ type: "text", text: "name, description, and steps required" }], isError: true };
+    }
+    if (!Array.isArray(steps) || steps.length === 0) {
+      return { content: [{ type: "text", text: "steps must be a non-empty array" }], isError: true };
+    }
+    for (const step of steps) {
+      if (!step.tool || !step.args) {
+        return { content: [{ type: "text", text: "Each step must have 'tool' and 'args' properties" }], isError: true };
+      }
+    }
+    procedures[name] = {
+      name,
+      description,
+      steps,
+      triggerPhrases: trigger_phrases || [],
+      createdAt: now,
+      lastUsed: null,
+      useCount: 0
+    };
+    saveProcedures(procedures);
+    return { content: [{ type: "text", text: `Taught procedure: ${name} (${steps.length} steps)` }] };
+  }
+
+  if (action === "generate_tool") {
+    if (!name || !description) {
+      return { content: [{ type: "text", text: "name and description required" }], isError: true };
+    }
+    const prompt = `Generate a procedure definition for "${name}" based on this description: "${description}". 
+Return a JSON array of steps, where each step has "tool" and "args" properties.
+Available tools: sidekick_bash, sidekick_read, sidekick_write, sidekick_list, sidekick_search, sidekick_git, sidekick_notify, sidekick_process, sidekick_service, sidekick_archive, sidekick_store, sidekick_get, sidekick_web_fetch, sidekick_llm.
+Example format: [{"tool": "sidekick_bash", "args": {"command": "ls -la"}}, {"tool": "sidekick_notify", "args": {"message": "Done!"}}]
+Return ONLY the JSON array, no other text.`;
+    
+    const llmResult = await sidekick_llm({ prompt, system: "You are a helpful assistant that generates tool procedures. Return only valid JSON." });
+    if (llmResult.isError) {
+      return { content: [{ type: "text", text: "Failed to generate tool: " + llmResult.content[0].text }], isError: true };
+    }
+    
+    let generatedSteps;
+    try {
+      const text = llmResult.content[0].text.trim();
+      const jsonMatch = text.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        generatedSteps = JSON.parse(jsonMatch[0]);
+      } else {
+        generatedSteps = JSON.parse(text);
+      }
+    } catch (e) {
+      return { content: [{ type: "text", text: "Failed to parse generated steps: " + e.message }], isError: true };
+    }
+    
+    if (!Array.isArray(generatedSteps) || generatedSteps.length === 0) {
+      return { content: [{ type: "text", text: "Generated steps are invalid" }], isError: true };
+    }
+    
+    procedures[name] = {
+      name,
+      description,
+      steps: generatedSteps,
+      triggerPhrases: [],
+      createdAt: now,
+      lastUsed: null,
+      useCount: 0,
+      generated: true
+    };
+    saveProcedures(procedures);
+    return { content: [{ type: "text", text: `Generated tool: ${name} (${generatedSteps.length} steps)\nSteps:\n${JSON.stringify(generatedSteps, null, 2)}` }] };
+  }
+
+  if (action === "learn_from_example") {
+    if (!name || !example) {
+      return { content: [{ type: "text", text: "name and example required" }], isError: true };
+    }
+    const prompt = `Parse this example and extract the procedure steps:
+"${example}"
+Return a JSON array of steps, where each step has "tool" and "args" properties.
+Available tools: sidekick_bash, sidekick_read, sidekick_write, sidekick_list, sidekick_search, sidekick_git, sidekick_notify, sidekick_process, sidekick_service, sidekick_archive, sidekick_store, sidekick_get, sidekick_web_fetch, sidekick_llm.
+Return ONLY the JSON array, no other text.`;
+    
+    const llmResult = await sidekick_llm({ prompt, system: "You are a helpful assistant that extracts procedures from examples. Return only valid JSON." });
+    if (llmResult.isError) {
+      return { content: [{ type: "text", text: "Failed to parse example: " + llmResult.content[0].text }], isError: true };
+    }
+    
+    let parsedSteps;
+    try {
+      const text = llmResult.content[0].text.trim();
+      const jsonMatch = text.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        parsedSteps = JSON.parse(jsonMatch[0]);
+      } else {
+        parsedSteps = JSON.parse(text);
+      }
+    } catch (e) {
+      return { content: [{ type: "text", text: "Failed to parse steps from example: " + e.message }], isError: true };
+    }
+    
+    procedures[name] = {
+      name,
+      description: example,
+      steps: parsedSteps,
+      triggerPhrases: trigger_phrases || [],
+      createdAt: now,
+      lastUsed: null,
+      useCount: 0,
+      learned: true
+    };
+    saveProcedures(procedures);
+    return { content: [{ type: "text", text: `Learned procedure: ${name} (${parsedSteps.length} steps)` }] };
+  }
+
+  if (action === "execute") {
+    if (!name) {
+      return { content: [{ type: "text", text: "name required" }], isError: true };
+    }
+    const procedure = procedures[name];
+    if (!procedure) {
+      return { content: [{ type: "text", text: `Procedure not found: ${name}` }], isError: true };
+    }
+    
+    procedure.lastUsed = now;
+    procedure.useCount++;
+    saveProcedures(procedures);
+    
+    const results = [];
+    for (let i = 0; i < procedure.steps.length; i++) {
+      const step = procedure.steps[i];
+      try {
+        const result = await callTool(step.tool, step.args);
+        results.push({
+          step: i + 1,
+          tool: step.tool,
+          success: !result.isError,
+          output: result.content[0].text.substring(0, 200)
+        });
+        if (result.isError) {
+          return { content: [{ type: "text", text: `Procedure '${name}' failed at step ${i + 1} (${step.tool}):\n${result.content[0].text}` }], isError: true };
+        }
+      } catch (e) {
+        return { content: [{ type: "text", text: `Procedure '${name}' failed at step ${i + 1} (${step.tool}): ${e.message}` }], isError: true };
+      }
+    }
+    
+    const summary = results.map(r => `Step ${r.step} (${r.tool}): ${r.success ? "✓" : "✗"} ${r.output}`).join("\n");
+    return { content: [{ type: "text", text: `Executed procedure '${name}' (${procedure.steps.length} steps)\n\n${summary}` }] };
+  }
+
+  if (action === "list") {
+    const procNames = Object.keys(procedures);
+    if (procNames.length === 0) {
+      return { content: [{ type: "text", text: "No procedures taught yet" }] };
+    }
+    const summary = procNames.map(name => {
+      const proc = procedures[name];
+      const tags = [];
+      if (proc.generated) tags.push("generated");
+      if (proc.learned) tags.push("learned");
+      const tagStr = tags.length > 0 ? ` [${tags.join(", ")}]` : "";
+      return `${name}${tagStr} - ${proc.description} (${proc.steps.length} steps, used ${proc.useCount} times)`;
+    }).join("\n");
+    return { content: [{ type: "text", text: `Taught procedures (${procNames.length}):\n\n${summary}` }] };
+  }
+
+  if (action === "remove") {
+    if (!name) {
+      return { content: [{ type: "text", text: "name required" }], isError: true };
+    }
+    if (!procedures[name]) {
+      return { content: [{ type: "text", text: `Procedure not found: ${name}` }], isError: true };
+    }
+    delete procedures[name];
+    saveProcedures(procedures);
+    return { content: [{ type: "text", text: `Removed procedure: ${name}` }] };
+  }
+}
+
 const TOOLS = {
   sidekick_bash,
   sidekick_read,
@@ -1190,6 +1393,7 @@ const TOOLS = {
   sidekick_github,
   sidekick_webhook,
   sidekick_context,
+  sidekick_teach,
 };
 
 const TOOL_DEFS = [
@@ -1213,6 +1417,7 @@ const TOOL_DEFS = [
   { name: "sidekick_github", description: "GitHub API integration (PRs, issues, commits, releases)", args: { action: "string", repo: "string", args: "string (optional)" } },
   { name: "sidekick_webhook", description: "Manage received webhooks (list, get, clear)", args: { action: "string", id: "string (optional)", limit: "number (optional)" } },
   { name: "sidekick_context", description: "Persistent intelligent context management (track projects, decisions, problems, patterns; recall and suggest based on past context)", args: { action: "string", project: "string (optional)", context: "string (optional)", decision: "string (optional)", reasoning: "string (optional)", problem: "string (optional)", solution: "string (optional)", pattern: "string (optional)", query: "string (optional)", type: "string (optional)", limit: "number (optional)" } },
+  { name: "sidekick_teach", description: "Meta-learning and self-extension: teach procedures, generate tools, learn from examples, execute learned workflows", args: { action: "string", name: "string (optional)", description: "string (optional)", steps: "array (optional)", example: "string (optional)", trigger_phrases: "array (optional)", implementation: "string (optional)" } },
 ];
 
 async function callTool(name, args) {

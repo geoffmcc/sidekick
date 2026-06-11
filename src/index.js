@@ -98,6 +98,15 @@ const TOOL_SCHEMAS = {
     type: z.string().optional().describe("Context type: decisions, problems, patterns, projects, or all (default: all)"),
     limit: z.number().optional().describe("Maximum results to return (default: 10)")
   }),
+  sidekick_teach: z.object({
+    action: z.enum(["teach_procedure", "generate_tool", "learn_from_example", "execute", "list", "remove"]).describe("Teach action to perform"),
+    name: z.string().optional().describe("Procedure name (required for teach/generate/execute/remove)"),
+    description: z.string().optional().describe("Procedure description (required for teach/generate)"),
+    steps: z.array(z.object({ tool: z.string(), args: z.record(z.any()) })).optional().describe("Array of steps (required for teach_procedure)"),
+    example: z.string().optional().describe("Example to learn from (required for learn_from_example)"),
+    trigger_phrases: z.array(z.string()).optional().describe("Trigger phrases for the procedure"),
+    implementation: z.string().optional().describe("Implementation details (for generate_tool)")
+  }),
 };
 
 // --- Factory: create fresh McpServer + register tools ---
