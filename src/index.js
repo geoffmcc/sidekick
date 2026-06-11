@@ -96,7 +96,7 @@ const TOOL_SCHEMAS = {
     limit: z.number().optional().describe("Number of webhooks to list (default: 20)")
   }),
   sidekick_context: z.object({
-    action: z.enum(["track_project", "track_decision", "track_problem", "track_pattern", "recall", "suggest", "summarize", "list"]).describe("Context action to perform"),
+    action: z.enum(["track_project", "track_decision", "track_problem", "track_pattern", "track_session", "recall", "suggest", "summarize", "list"]).describe("Context action to perform"),
     project: z.string().optional().describe("Project name (for tracking and filtering)"),
     context: z.string().optional().describe("Context description (for decisions/patterns)"),
     decision: z.string().optional().describe("Decision made (for track_decision)"),
@@ -104,8 +104,12 @@ const TOOL_SCHEMAS = {
     problem: z.string().optional().describe("Problem description (for track_problem)"),
     solution: z.string().optional().describe("Solution to problem (for track_problem)"),
     pattern: z.string().optional().describe("Pattern description (for track_pattern)"),
+    summary: z.string().optional().describe("Session summary (for track_session)"),
+    topics: z.string().optional().describe("Comma-separated session topics (for track_session)"),
+    outcome: z.string().optional().describe("Session outcome: success, partial, or abandoned (for track_session)"),
+    notes: z.string().optional().describe("Additional session notes (for track_session)"),
     query: z.string().optional().describe("Search query (for recall/suggest)"),
-    type: z.string().optional().describe("Context type: decisions, problems, patterns, projects, or all (default: all)"),
+    type: z.string().optional().describe("Context type: decisions, problems, patterns, projects, sessions, or all (default: all)"),
     limit: z.number().optional().describe("Maximum results to return (default: 10)")
   }),
   sidekick_teach: z.object({
@@ -118,6 +122,53 @@ const TOOL_SCHEMAS = {
     example: z.string().optional().describe("Example to learn from (required for learn_from_example)"),
     trigger_phrases: z.array(z.string()).optional().describe("Trigger phrases for the procedure"),
     implementation: z.string().optional().describe("Implementation details (for generate_tool)")
+  }),
+  sidekick_transform: z.object({
+    action: z.enum(["filter", "extract", "sort", "format", "map"]).describe("Transform action: filter (regex match), extract (field path), sort (array sort), format (convert format), map (add field)"),
+    input: z.string().describe("Input data (text or JSON string)"),
+    pattern: z.string().optional().describe("Regex pattern for filter action"),
+    field: z.string().optional().describe("Field path for extract action (e.g. 'data.items[0].name')"),
+    key: z.string().optional().describe("Key for sort action (object key) or map action (new field name)"),
+    value: z.string().optional().describe("Value for map action (new field value)"),
+    format: z.string().optional().describe("Output format for format action: json, csv, table, text")
+  }),
+  sidekick_health: z.object({
+    check: z.enum(["all", "services", "processes", "disk", "network", "custom"]).describe("Health check type: all (services+processes+disk+network), services, processes, disk, network, or custom commands"),
+    services: z.string().optional().describe("Comma-separated service names for services check (default: sidekick-mcp,sidekick-dashboard,sidekick-agent)"),
+    commands: z.string().optional().describe("Comma-separated shell commands for custom check"),
+    threshold: z.string().optional().describe("Alert thresholds (e.g. 'disk>90,mem>80')")
+  }),
+  sidekick_delay: z.object({
+    action: z.enum(["add", "list", "cancel", "run"]).describe("Delay action: add (schedule new), list (show all), cancel (remove pending), run (execute immediately)"),
+    id: z.string().optional().describe("Delay ID (required for cancel/run)"),
+    when: z.string().optional().describe("When to execute: 10s, 5m, 2h, 1d, or ISO date string"),
+    name: z.string().optional().describe("Human-readable name for the delay"),
+    tool: z.string().optional().describe("Tool name to execute (for add action)"),
+    args: z.record(z.any()).optional().describe("Arguments to pass to the tool (for add action)")
+  }),
+  sidekick_snapshot: z.object({
+    action: z.enum(["capture", "compare", "list", "delete"]).describe("Snapshot action: capture (save state), compare (detect drift), list (show all), delete (remove)"),
+    name: z.string().optional().describe("Snapshot name"),
+    capture: z.string().optional().describe("What to capture: processes,services,disk,packages,network,files:/path (comma-separated)"),
+    compare: z.string().optional().describe("Baseline snapshot name for compare action")
+  }),
+  sidekick_watch: z.object({
+    action: z.enum(["add", "list", "remove", "pause", "check"]).describe("Watch action: add (create new), list (show all), remove (delete), pause (pause/resume), check (manual check)"),
+    id: z.string().optional().describe("Watch ID (required for remove/pause/check)"),
+    name: z.string().optional().describe("Human-readable watch name"),
+    source: z.string().optional().describe("Watch source: service, process, endpoint, or file"),
+    target: z.string().optional().describe("Watch target: service name, process name, URL, or file path"),
+    condition: z.string().optional().describe("Trigger condition: status!=active, not_running, status!=200, content_matches, exists, not_exists"),
+    interval: z.string().optional().describe("Check interval: 30s, 5m, 1h (default: 60s)"),
+    action_tool: z.string().optional().describe("Tool to call when triggered (default: sidekick_notify)"),
+    action_args: z.record(z.any()).optional().describe("Arguments for action tool"),
+    pause: z.boolean().optional().describe("True to pause, false to resume")
+  }),
+  sidekick_secret: z.object({
+    action: z.enum(["store", "get", "delete", "list", "rotate"]).describe("Secret action: store (save encrypted), get (retrieve), delete (remove), list (show names), rotate (generate new)"),
+    key: z.string().optional().describe("Secret name/key"),
+    value: z.string().optional().describe("Secret value (for store action)"),
+    generate: z.string().optional().describe("Length for rotation (e.g. '32' for 32-char random hex)")
   }),
 };
 
@@ -222,20 +273,26 @@ async function getTransportForRequest(sessionId) {
 
   if (sessionId && !sessions.has(sessionId)) {
     logDebug("SESSION_NOT_FOUND", { sessionId, availableSessions: Array.from(sessions.keys()) });
+    // Return null to signal caller should return 404 instead of creating new transport
+    return { transport: null, isNew: false, sessionNotFound: true };
   }
 
-  // Create fresh McpServer + Transport pair
+  // Create fresh McpServer + Transport pair with pre-generated session ID
+  const newSessionId = generateSessionId();
   const server = createMcpServer();
   const transport = new WebStandardStreamableHTTPServerTransport({
-    sessionIdGenerator: () => generateSessionId(),
+    sessionIdGenerator: () => newSessionId,
     enableJsonResponse: true
   });
+
+  // Register session BEFORE connecting and handling requests
+  registerSession(newSessionId, transport);
 
   // Connect server to transport (one-time per server instance)
   await server.connect(transport);
 
-  logDebug("CREATED_NEW_TRANSPORT", { requestedSessionId: sessionId });
-  return { transport, isNew: true };
+  logDebug("CREATED_NEW_TRANSPORT", { newSessionId, requestedSessionId: sessionId });
+  return { transport, isNew: true, newSessionId };
 }
 
 function registerSession(sessionId, transport) {
@@ -247,9 +304,9 @@ function registerSession(sessionId, transport) {
   });
 }
 
-// Cleanup sessions inactive for more than 1 hour, every 10 minutes
+// Cleanup sessions inactive for more than 24 hours, every 10 minutes
 setInterval(() => {
-  const cutoff = Date.now() - 3600000;
+  const cutoff = Date.now() - 86400000;
   const evicted = [];
   for (const [id, entry] of sessions) {
     if (entry.lastAccess < cutoff) {
@@ -307,7 +364,17 @@ app.post("/mcp", async (req, res) => {
     const sessionId = wh["mcp-session-id"] || wh["Mcp-Session-Id"];
     logSession("POST", wh, req.body);
 
-    const { transport, isNew } = await getTransportForRequest(sessionId);
+    const { transport, isNew, newSessionId, sessionNotFound } = await getTransportForRequest(sessionId);
+
+    // If client sent a session ID we don't recognize, return 404
+    if (sessionNotFound) {
+      logDebug("SESSION_NOT_FOUND_REJECTED", { sessionId });
+      return res.status(404).json({ 
+        jsonrpc: "2.0", 
+        error: { code: -32001, message: "Session not found. Please re-initialize." }, 
+        id: null 
+      });
+    }
 
     const webReq = new Request("http://127.0.0.1:4097/mcp", {
       method: "POST",
@@ -317,15 +384,9 @@ app.post("/mcp", async (req, res) => {
 
     const webRes = await transport.handleRequest(webReq, { parsedBody: req.body });
 
-    // Capture session ID from response headers for new sessions
-    if (isNew) {
-      const newSessionId = webRes.headers.get("mcp-session-id");
-      if (newSessionId) {
-        logDebug("CAPTURED_SESSION_ID_FROM_RESPONSE", { newSessionId, requestedSessionId: sessionId });
-        registerSession(newSessionId, transport);
-      } else {
-        logDebug("NO_SESSION_ID_IN_RESPONSE", { requestedSessionId: sessionId, responseHeaders: Object.fromEntries(webRes.headers.entries()) });
-      }
+    // Log the pre-generated session ID for new sessions
+    if (isNew && newSessionId) {
+      logDebug("NEW_SESSION_HANDLED", { newSessionId, requestedSessionId: sessionId });
     }
 
     res.status(webRes.status);
@@ -349,7 +410,17 @@ app.get("/mcp", async (req, res) => {
     const sessionId = wh["mcp-session-id"] || wh["Mcp-Session-Id"];
     logSession("GET", wh, null);
 
-    const { transport, isNew } = await getTransportForRequest(sessionId);
+    const { transport, isNew, newSessionId, sessionNotFound } = await getTransportForRequest(sessionId);
+
+    // If client sent a session ID we don't recognize, return 404
+    if (sessionNotFound) {
+      logDebug("SESSION_NOT_FOUND_REJECTED", { sessionId });
+      return res.status(404).json({ 
+        jsonrpc: "2.0", 
+        error: { code: -32001, message: "Session not found. Please re-initialize." }, 
+        id: null 
+      });
+    }
 
     const webReq = new Request("http://127.0.0.1:4097/mcp", {
       method: "GET",
@@ -358,14 +429,9 @@ app.get("/mcp", async (req, res) => {
 
     const webRes = await transport.handleRequest(webReq);
 
-    if (isNew) {
-      const newSessionId = webRes.headers.get("mcp-session-id");
-      if (newSessionId) {
-        logDebug("CAPTURED_SESSION_ID_FROM_GET_RESPONSE", { newSessionId, requestedSessionId: sessionId });
-        registerSession(newSessionId, transport);
-      } else {
-        logDebug("NO_SESSION_ID_IN_GET_RESPONSE", { requestedSessionId: sessionId });
-      }
+    // Log the pre-generated session ID for new sessions
+    if (isNew && newSessionId) {
+      logDebug("NEW_SESSION_HANDLED_GET", { newSessionId, requestedSessionId: sessionId });
     }
 
     res.status(webRes.status);
@@ -399,7 +465,17 @@ app.delete("/mcp", async (req, res) => {
     const sessionId = wh["mcp-session-id"] || wh["Mcp-Session-Id"];
     logSession("DELETE", wh, null);
 
-    const { transport, isNew } = await getTransportForRequest(sessionId);
+    const { transport, isNew, newSessionId, sessionNotFound } = await getTransportForRequest(sessionId);
+
+    // If client sent a session ID we don't recognize, return 404
+    if (sessionNotFound) {
+      logDebug("SESSION_NOT_FOUND_REJECTED", { sessionId });
+      return res.status(404).json({ 
+        jsonrpc: "2.0", 
+        error: { code: -32001, message: "Session not found. Please re-initialize." }, 
+        id: null 
+      });
+    }
 
     const webReq = new Request("http://127.0.0.1:4097/mcp", {
       method: "DELETE",
@@ -408,14 +484,15 @@ app.delete("/mcp", async (req, res) => {
 
     const webRes = await transport.handleRequest(webReq);
 
-    if (isNew) {
-      const newSessionId = webRes.headers.get("mcp-session-id");
-      if (newSessionId) {
-        logDebug("CAPTURED_SESSION_ID_FROM_DELETE_RESPONSE", { newSessionId, requestedSessionId: sessionId });
-        registerSession(newSessionId, transport);
-      } else {
-        logDebug("NO_SESSION_ID_IN_DELETE_RESPONSE", { requestedSessionId: sessionId });
-      }
+    // Log the pre-generated session ID for new sessions
+    if (isNew && newSessionId) {
+      logDebug("NEW_SESSION_HANDLED_DELETE", { newSessionId, requestedSessionId: sessionId });
+    }
+
+    // Clean up the session on DELETE
+    if (sessionId && sessions.has(sessionId)) {
+      sessions.delete(sessionId);
+      logDebug("SESSION_DELETED", { sessionId });
     }
 
     res.status(webRes.status);

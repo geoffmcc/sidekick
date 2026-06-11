@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const EventEmitter = require("events");
-const { callTool, TOOL_DEFS, DATA_DIR, GROQ_API_KEY, GROQ_MODEL, setSource } = require("./tools");
+const { callTool, TOOL_DEFS, DATA_DIR, GROQ_API_KEY, GROQ_MODEL, setSource, loadDelays, saveDelays, loadWatches, saveWatches } = require("./tools");
 
 const PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 
@@ -18,6 +18,238 @@ try {
     if (fs.statSync(p).mtimeMs < cutoff) fs.unlinkSync(p);
   });
 } catch (e) {}
+
+const delayTimers = {};
+
+function scheduleDelay(delay) {
+  const executeAt = new Date(delay.when).getTime();
+  const msUntil = executeAt - Date.now();
+  
+  if (msUntil <= 0) {
+    executeDelay(delay);
+    return;
+  }
+  
+  delayTimers[delay.id] = setTimeout(() => {
+    executeDelay(delay);
+  }, msUntil);
+  
+  console.log(`Scheduled delay ${delay.id} for ${delay.when} (${Math.round(msUntil / 60000)} minutes)`);
+}
+
+async function executeDelay(delay) {
+  const delays = loadDelays();
+  const current = delays.find(d => d.id === delay.id);
+  
+  if (!current || current.status !== "pending") {
+    delete delayTimers[delay.id];
+    return;
+  }
+  
+  current.status = "running";
+  current.startedAt = new Date().toISOString();
+  saveDelays(delays);
+  
+  console.log(`Executing delay ${delay.id}: ${delay.tool}`);
+  
+  try {
+    const result = await callTool(delay.tool, delay.args || {});
+    const delaysAfter = loadDelays();
+    const updated = delaysAfter.find(d => d.id === delay.id);
+    if (updated) {
+      updated.status = "completed";
+      updated.completedAt = new Date().toISOString();
+      updated.result = result.content?.[0]?.text?.substring(0, 200) || "ok";
+      saveDelays(delaysAfter);
+    }
+    console.log(`Delay ${delay.id} completed`);
+  } catch (e) {
+    const delaysAfter = loadDelays();
+    const updated = delaysAfter.find(d => d.id === delay.id);
+    if (updated) {
+      updated.status = "failed";
+      updated.completedAt = new Date().toISOString();
+      updated.error = e.message;
+      saveDelays(delaysAfter);
+    }
+    console.error(`Delay ${delay.id} failed: ${e.message}`);
+  }
+  
+  delete delayTimers[delay.id];
+}
+
+function loadAndScheduleDelays() {
+  const delays = loadDelays();
+  const pending = delays.filter(d => d.status === "pending");
+  
+  for (const delay of pending) {
+    scheduleDelay(delay);
+  }
+  
+  console.log(`Loaded ${pending.length} pending delays`);
+}
+
+loadAndScheduleDelays();
+
+const watchIntervals = {};
+
+function parseWatchInterval(interval) {
+  if (!interval) return 60000;
+  const match = interval.match(/^(\d+)(s|m|h)$/);
+  if (!match) return 60000;
+  const amount = parseInt(match[1]);
+  const unit = match[2];
+  const multipliers = { s: 1000, m: 60000, h: 3600000 };
+  return amount * multipliers[unit];
+}
+
+function checkService(serviceName) {
+  try {
+    const output = require("child_process").execSync(`systemctl is-active ${serviceName} 2>&1`, { encoding: "utf-8" }).trim();
+    return { status: output, active: output === "active" };
+  } catch {
+    return { status: "unknown", active: false };
+  }
+}
+
+function checkProcess(processName) {
+  try {
+    const output = require("child_process").execSync(`pgrep -f "${processName}" 2>/dev/null`, { encoding: "utf-8" }).trim();
+    return { running: output.length > 0, pids: output.split("\n").filter(Boolean) };
+  } catch {
+    return { running: false, pids: [] };
+  }
+}
+
+function checkEndpoint(url) {
+  try {
+    const output = require("child_process").execSync(`curl -s -o /dev/null -w "%{http_code}" --max-time 5 "${url}"`, { encoding: "utf-8" }).trim();
+    return { status: parseInt(output), ok: output.startsWith("2") };
+  } catch {
+    return { status: 0, ok: false };
+  }
+}
+
+function checkFile(filePath, pattern) {
+  try {
+    const output = require("child_process").execSync(`cat "${filePath}" 2>/dev/null`, { encoding: "utf-8" });
+    const matches = pattern ? output.includes(pattern) : true;
+    return { exists: true, matches, content: output.substring(0, 200) };
+  } catch {
+    return { exists: false, matches: false };
+  }
+}
+
+function evaluateWatchCondition(watch, checkResult) {
+  const { source, condition, value } = watch;
+  
+  if (source === "service") {
+    if (condition === "status!=active") return !checkResult.active;
+    if (condition === "status=active") return checkResult.active;
+  }
+  
+  if (source === "process") {
+    if (condition === "not_running") return !checkResult.running;
+    if (condition === "running") return checkResult.running;
+  }
+  
+  if (source === "endpoint") {
+    if (condition === "status!=200") return checkResult.status !== 200;
+    if (condition === "status=200") return checkResult.status === 200;
+    if (condition.startsWith("status>=")) {
+      const threshold = parseInt(condition.substring(8));
+      return checkResult.status >= threshold;
+    }
+  }
+  
+  if (source === "file") {
+    if (condition === "content_matches") return checkResult.exists && checkResult.matches;
+    if (condition === "not_exists") return !checkResult.exists;
+    if (condition === "exists") return checkResult.exists;
+  }
+  
+  return false;
+}
+
+async function executeWatchAction(watch, checkResult) {
+  const { action_tool, action_args } = watch;
+  if (!action_tool) return;
+  
+  const args = { ...action_args };
+  if (args.message) {
+    args.message = args.message
+      .replace(/\{\{source\}\}/g, watch.source)
+      .replace(/\{\{target\}\}/g, watch.target)
+      .replace(/\{\{status\}\}/g, JSON.stringify(checkResult))
+      .replace(/\{\{time\}\}/g, new Date().toISOString());
+  }
+  
+  try {
+    await callTool(action_tool, args);
+  } catch (e) {
+    console.error(`Watch ${watch.id} action failed: ${e.message}`);
+  }
+}
+
+async function checkWatch(watch) {
+  const watches = loadWatches();
+  const current = watches.find(w => w.id === watch.id);
+  
+  if (!current || current.status !== "active") {
+    return;
+  }
+  
+  let checkResult;
+  if (watch.source === "service") {
+    checkResult = checkService(watch.target);
+  } else if (watch.source === "process") {
+    checkResult = checkProcess(watch.target);
+  } else if (watch.source === "endpoint") {
+    checkResult = checkEndpoint(watch.target);
+  } else if (watch.source === "file") {
+    checkResult = checkFile(watch.target, watch.condition === "content_matches" ? watch.value : null);
+  }
+  
+  const triggered = evaluateWatchCondition(watch, checkResult);
+  
+  const watchesAfter = loadWatches();
+  const updated = watchesAfter.find(w => w.id === watch.id);
+  if (updated) {
+    updated.lastCheck = new Date().toISOString();
+    if (triggered) {
+      updated.lastTriggered = new Date().toISOString();
+      updated.triggerCount = (updated.triggerCount || 0) + 1;
+      saveWatches(watchesAfter);
+      console.log(`Watch ${watch.id} triggered: ${watch.source} ${watch.target} (${watch.condition})`);
+      await executeWatchAction(watch, checkResult);
+    } else {
+      saveWatches(watchesAfter);
+    }
+  }
+}
+
+function scheduleWatch(watch) {
+  const intervalMs = parseWatchInterval(watch.interval);
+  
+  watchIntervals[watch.id] = setInterval(() => {
+    checkWatch(watch);
+  }, intervalMs);
+  
+  console.log(`Scheduled watch ${watch.id} every ${watch.interval} (${intervalMs}ms)`);
+}
+
+function loadAndScheduleWatches() {
+  const watches = loadWatches();
+  const active = watches.filter(w => w.status === "active");
+  
+  for (const watch of active) {
+    scheduleWatch(watch);
+  }
+  
+  console.log(`Loaded ${active.length} active watches`);
+}
+
+loadAndScheduleWatches();
 
 process.on("uncaughtException", (e) => {
   console.error("Uncaught:", e.message);
@@ -423,6 +655,19 @@ app.get("/api/agent/run/:id", (req, res) => {
 });
 
 app.get("/api/health", (req, res) => res.json({ ok: true }));
+
+app.post("/api/delays/reload", (req, res) => {
+  loadAndScheduleDelays();
+  res.json({ ok: true });
+});
+
+app.post("/api/watches/reload", (req, res) => {
+  for (const id in watchIntervals) {
+    clearInterval(watchIntervals[id]);
+  }
+  loadAndScheduleWatches();
+  res.json({ ok: true });
+});
 
 app.listen(PORT, "127.0.0.1", () => {
   console.log("Sidekick agent bridge listening on http://127.0.0.1:" + PORT);
