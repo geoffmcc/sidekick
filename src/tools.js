@@ -963,12 +963,22 @@ function searchContext(ctx, query, type, limit = 10) {
     }
   }
   
+  if (type === "all" || type === "sessions") {
+    for (const sess of (ctx.sessions || [])) {
+      const text = `${sess.summary || ""} ${(sess.topics || []).join(" ")} ${sess.notes || ""}`;
+      const score = simpleSimilarity(query, text);
+      if (score > 0.1) {
+        results.push({ type: "session", item: sess, score });
+      }
+    }
+  }
+  
   results.sort((a, b) => b.score - a.score);
   return results.slice(0, limit);
 }
 
-async function sidekick_context({ action, project, context, decision, reasoning, problem, solution, pattern, query, type, limit }) {
-  const allowedActions = ["track_project", "track_decision", "track_problem", "track_pattern", "recall", "suggest", "summarize", "list"];
+async function sidekick_context({ action, project, context, decision, reasoning, problem, solution, pattern, summary, topics, outcome, notes, query, type, limit }) {
+  const allowedActions = ["track_project", "track_decision", "track_problem", "track_pattern", "track_session", "recall", "suggest", "summarize", "list"];
   if (!allowedActions.includes(action)) {
     return { content: [{ type: "text", text: "Invalid action. Allowed: " + allowedActions.join(", ") }], isError: true };
   }
@@ -1053,6 +1063,34 @@ async function sidekick_context({ action, project, context, decision, reasoning,
     return { content: [{ type: "text", text: `Tracked pattern: ${pattern} (id: ${pat.id})` }] };
   }
 
+  if (action === "track_session") {
+    if (!summary) {
+      return { content: [{ type: "text", text: "summary required" }], isError: true };
+    }
+    const redactedSummary = redactSensitive(summary);
+    const redactedNotes = notes ? redactSensitive(notes) : null;
+    const topicList = topics ? topics.split(",").map(t => redactSensitive(t.trim())).filter(Boolean) : [];
+    const sess = {
+      id: generateId("sess"),
+      date: now,
+      project: project || null,
+      summary: redactedSummary,
+      topics: topicList,
+      outcome: outcome || null,
+      notes: redactedNotes
+    };
+    if (!ctx.sessions) ctx.sessions = [];
+    ctx.sessions.push(sess);
+    if (ctx.sessions.length > 100) {
+      ctx.sessions = ctx.sessions.slice(-100);
+    }
+    if (project && ctx.projects[project]) {
+      ctx.projects[project].lastWorked = now;
+    }
+    saveContext(ctx);
+    return { content: [{ type: "text", text: `Tracked session: ${redactedSummary} (id: ${sess.id})` }] };
+  }
+
   if (action === "recall") {
     if (!query) {
       return { content: [{ type: "text", text: "query required" }], isError: true };
@@ -1069,6 +1107,8 @@ async function sidekick_context({ action, project, context, decision, reasoning,
         return `[Problem ${item.id}] ${item.date}\nDescription: ${item.description}\nSolution: ${item.solution || "Unresolved"}`;
       } else if (r.type === "pattern") {
         return `[Pattern ${item.id}] ${item.date}\nDescription: ${item.description}\nExample: ${item.example || "N/A"}`;
+      } else if (r.type === "session") {
+        return `[Session ${item.id}] ${item.date}\nSummary: ${item.summary}\nTopics: ${(item.topics || []).join(", ")}\nOutcome: ${item.outcome || "N/A"}`;
       }
     }).join("\n\n");
     return { content: [{ type: "text", text: summary }] };
@@ -1090,6 +1130,8 @@ async function sidekick_context({ action, project, context, decision, reasoning,
         return `• You encountered a similar problem: "${item.description}" - ${item.solution ? `solved with: "${item.solution}"` : "unresolved"}`;
       } else if (r.type === "pattern") {
         return `• You have a pattern: "${item.description}"`;
+      } else if (r.type === "session") {
+        return `• You had a session on ${item.date}: "${item.summary}" (${item.outcome || "no outcome recorded"})`;
       }
     }).join("\n");
     return { content: [{ type: "text", text: `Based on your past context:\n\n${suggestions}` }] };
@@ -1133,12 +1175,21 @@ async function sidekick_context({ action, project, context, decision, reasoning,
           summary += `- ${p.description}\n`;
         });
       }
+      
+      const projSessions = (ctx.sessions || []).filter(s => s.project === projectName);
+      if (projSessions.length > 0) {
+        summary += `\n### Recent Sessions (${projSessions.length}):\n`;
+        projSessions.slice(-5).forEach(s => {
+          summary += `- ${s.date}: ${s.summary} (${s.outcome || "N/A"})\n`;
+        });
+      }
     } else {
       summary += `\n\n## Overview\n`;
       summary += `- Total projects: ${Object.keys(ctx.projects).length}\n`;
       summary += `- Total decisions: ${ctx.decisions.length}\n`;
       summary += `- Total problems: ${ctx.problems.length}\n`;
       summary += `- Total patterns: ${ctx.patterns.length}\n`;
+      summary += `- Total sessions: ${(ctx.sessions || []).length}\n`;
       
       const activeProjects = Object.values(ctx.projects).filter(p => p.active);
       if (activeProjects.length > 0) {
@@ -1165,6 +1216,9 @@ async function sidekick_context({ action, project, context, decision, reasoning,
     }
     if (!type || type === "all" || type === "projects") {
       items.push(`Projects: ${Object.keys(ctx.projects).length}`);
+    }
+    if (!type || type === "all" || type === "sessions") {
+      items.push(`Sessions: ${(ctx.sessions || []).length}`);
     }
     return { content: [{ type: "text", text: items.join("\n") }] };
   }
@@ -1466,6 +1520,1312 @@ Return ONLY the JSON object, no other text.`;
   }
 }
 
+// --- Transform Tool ---
+
+async function sidekick_transform({ action, input, pattern, format, field, key, value }) {
+  if (!input && input !== "") {
+    return { content: [{ type: "text", text: "input required" }], isError: true };
+  }
+
+  let data;
+  try {
+    data = JSON.parse(input);
+  } catch {
+    data = input;
+  }
+
+  if (action === "filter") {
+    if (!pattern) {
+      return { content: [{ type: "text", text: "pattern required for filter" }], isError: true };
+    }
+    if (typeof data === "string") {
+      const regex = new RegExp(pattern);
+      const lines = data.split("\n");
+      const matches = lines.filter(line => regex.test(line));
+      const result = matches.join("\n");
+      return { content: [{ type: "text", text: result }] };
+    } else if (Array.isArray(data)) {
+      const regex = new RegExp(pattern);
+      const filtered = data.filter(item => {
+        if (typeof item === "string") return regex.test(item);
+        if (typeof item === "object") return regex.test(JSON.stringify(item));
+        return regex.test(String(item));
+      });
+      return { content: [{ type: "text", text: JSON.stringify(filtered, null, 2) }] };
+    } else {
+      return { content: [{ type: "text", text: "filter works on strings or arrays" }], isError: true };
+    }
+  }
+
+  if (action === "extract") {
+    if (!field) {
+      return { content: [{ type: "text", text: "field required for extract" }], isError: true };
+    }
+    if (typeof data !== "object" || data === null) {
+      return { content: [{ type: "text", text: "extract requires JSON input" }], isError: true };
+    }
+    const fields = field.split(".");
+    let result = data;
+    for (const f of fields) {
+      if (result === undefined || result === null) break;
+      if (Array.isArray(result) && f === "[]") {
+        continue;
+      }
+      result = result[f];
+    }
+    const output = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+    return { content: [{ type: "text", text: output }] };
+  }
+
+  if (action === "sort") {
+    if (!Array.isArray(data)) {
+      return { content: [{ type: "text", text: "sort requires array input" }], isError: true };
+    }
+    const sorted = [...data].sort((a, b) => {
+      if (typeof a === "string" && typeof b === "string") return a.localeCompare(b);
+      if (typeof a === "number" && typeof b === "number") return a - b;
+      if (typeof a === "object" && typeof b === "object") {
+        if (key) {
+          const aVal = a[key];
+          const bVal = b[key];
+          if (typeof aVal === "number" && typeof bVal === "number") return aVal - bVal;
+          return String(aVal).localeCompare(String(bVal));
+        }
+      }
+      return String(a).localeCompare(String(b));
+    });
+    return { content: [{ type: "text", text: JSON.stringify(sorted, null, 2) }] };
+  }
+
+  if (action === "format") {
+    if (!format) {
+      return { content: [{ type: "text", text: "format required" }], isError: true };
+    }
+    if (format === "json") {
+      if (typeof data === "string") {
+        try {
+          const parsed = JSON.parse(data);
+          return { content: [{ type: "text", text: JSON.stringify(parsed, null, 2) }] };
+        } catch {
+          return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+        }
+      }
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+    if (format === "csv") {
+      if (!Array.isArray(data)) {
+        return { content: [{ type: "text", text: "csv format requires array input" }], isError: true };
+      }
+      if (data.length === 0) return { content: [{ type: "text", text: "" }] };
+      const first = data[0];
+      if (typeof first !== "object" || first === null) {
+        return { content: [{ type: "text", text: data.join("\n") }] };
+      }
+      const headers = Object.keys(first);
+      const rows = data.map(item => headers.map(h => {
+        const val = item[h];
+        const str = val === null || val === undefined ? "" : String(val);
+        return str.includes(",") || str.includes('"') ? `"${str.replace(/"/g, '""')}"` : str;
+      }).join(","));
+      return { content: [{ type: "text", text: [headers.join(","), ...rows].join("\n") }] };
+    }
+    if (format === "table") {
+      if (!Array.isArray(data)) {
+        return { content: [{ type: "text", text: "table format requires array input" }], isError: true };
+      }
+      if (data.length === 0) return { content: [{ type: "text", text: "" }] };
+      const first = data[0];
+      if (typeof first !== "object" || first === null) {
+        return { content: [{ type: "text", text: data.join("\n") }] };
+      }
+      const headers = Object.keys(first);
+      const widths = headers.map(h => Math.max(h.length, ...data.map(row => String(row[h] || "").length)));
+      const headerRow = headers.map((h, i) => h.padEnd(widths[i])).join(" | ");
+      const separator = widths.map(w => "-".repeat(w)).join("-+-");
+      const dataRows = data.map(row => headers.map((h, i) => String(row[h] || "").padEnd(widths[i])).join(" | "));
+      return { content: [{ type: "text", text: [headerRow, separator, ...dataRows].join("\n") }] };
+    }
+    if (format === "text") {
+      if (typeof data === "string") return { content: [{ type: "text", text: data }] };
+      if (Array.isArray(data)) return { content: [{ type: "text", text: data.join("\n") }] };
+      return { content: [{ type: "text", text: JSON.stringify(data) }] };
+    }
+    return { content: [{ type: "text", text: "Unknown format. Use: json, csv, table, text" }], isError: true };
+  }
+
+  if (action === "map") {
+    if (!key || !value) {
+      return { content: [{ type: "text", text: "key and value required for map" }], isError: true };
+    }
+    if (!Array.isArray(data)) {
+      return { content: [{ type: "text", text: "map requires array input" }], isError: true };
+    }
+    const mapped = data.map(item => {
+      if (typeof item === "object" && item !== null) {
+        return { ...item, [key]: value };
+      }
+      return { [key]: value, original: item };
+    });
+    return { content: [{ type: "text", text: JSON.stringify(mapped, null, 2) }] };
+  }
+
+  return { content: [{ type: "text", text: "Unknown action. Use: filter, extract, sort, format, map" }], isError: true };
+}
+
+// --- Health Tool ---
+
+const HEALTH_HISTORY_FILE = path.join(DATA_DIR, "health_history.json");
+const MAX_HEALTH_HISTORY = 100;
+
+function loadHealthHistory() {
+  if (!fs.existsSync(HEALTH_HISTORY_FILE)) return [];
+  try {
+    return JSON.parse(fs.readFileSync(HEALTH_HISTORY_FILE, "utf-8"));
+  } catch {
+    return [];
+  }
+}
+
+function saveHealthHistory(history) {
+  fs.writeFileSync(HEALTH_HISTORY_FILE, JSON.stringify(history, null, 2));
+}
+
+function checkServices(serviceList) {
+  const services = serviceList ? serviceList.split(",").map(s => s.trim()) : ["sidekick-mcp", "sidekick-dashboard", "sidekick-agent"];
+  const results = [];
+  let healthy = 0;
+  for (const svc of services) {
+    try {
+      const output = execSync(`systemctl is-active ${svc} 2>&1`, { encoding: "utf-8" }).trim();
+      const isActive = output === "active";
+      results.push({ service: svc, status: output, healthy: isActive });
+      if (isActive) healthy++;
+    } catch (e) {
+      results.push({ service: svc, status: "unknown", healthy: false, error: e.message });
+    }
+  }
+  return { results, score: (healthy / services.length) * 100, healthy, total: services.length };
+}
+
+function checkProcesses() {
+  try {
+    const output = execSync("ps aux --sort=-%cpu | head -11", { encoding: "utf-8" });
+    const lines = output.trim().split("\n");
+    const processes = lines.slice(1).map(line => {
+      const parts = line.split(/\s+/);
+      return {
+        user: parts[0],
+        pid: parseInt(parts[1]),
+        cpu: parseFloat(parts[2]),
+        mem: parseFloat(parts[3]),
+        command: parts.slice(10).join(" ")
+      };
+    });
+    const highCpu = processes.filter(p => p.cpu > 50);
+    const highMem = processes.filter(p => p.mem > 50);
+    const score = 100 - (highCpu.length * 10) - (highMem.length * 10);
+    return {
+      results: { top: processes.slice(0, 5), highCpu, highMem },
+      score: Math.max(0, score),
+      issues: [...highCpu.map(p => `High CPU: ${p.command} (${p.cpu}%)`), ...highMem.map(p => `High MEM: ${p.command} (${p.mem}%)`)]
+    };
+  } catch (e) {
+    return { results: {}, score: 0, issues: [`Failed to check processes: ${e.message}`] };
+  }
+}
+
+function checkDisk() {
+  try {
+    const output = execSync("df -h --output=source,pcent,target | grep -E '^/dev'", { encoding: "utf-8" });
+    const lines = output.trim().split("\n");
+    const disks = lines.map(line => {
+      const parts = line.split(/\s+/);
+      return {
+        filesystem: parts[0],
+        usage: parseInt(parts[1]),
+        mount: parts[2]
+      };
+    });
+    const critical = disks.filter(d => d.usage > 90);
+    const warning = disks.filter(d => d.usage > 80 && d.usage <= 90);
+    const score = 100 - (critical.length * 20) - (warning.length * 10);
+    return {
+      results: disks,
+      score: Math.max(0, score),
+      issues: [...critical.map(d => `Critical: ${d.mount} at ${d.usage}%`), ...warning.map(d => `Warning: ${d.mount} at ${d.usage}%`)]
+    };
+  } catch (e) {
+    return { results: {}, score: 0, issues: [`Failed to check disk: ${e.message}`] };
+  }
+}
+
+function checkNetwork() {
+  try {
+    const pingOutput = execSync("ping -c 1 -W 2 8.8.8.8 2>&1", { encoding: "utf-8" });
+    const hasInternet = pingOutput.includes("1 received");
+    const services = ["sidekick-mcp", "sidekick-dashboard", "sidekick-agent"];
+    const ports = {};
+    for (const svc of services) {
+      try {
+        const port = svc === "sidekick-mcp" ? 4097 : svc === "sidekick-dashboard" ? 4098 : 4099;
+        execSync(`ss -tlnp | grep :${port}`, { encoding: "utf-8" });
+        ports[svc] = { port, listening: true };
+      } catch {
+        ports[svc] = { port: svc === "sidekick-mcp" ? 4097 : svc === "sidekick-dashboard" ? 4098 : 4099, listening: false };
+      }
+    }
+    const listeningCount = Object.values(ports).filter(p => p.listening).length;
+    const score = (hasInternet ? 50 : 0) + (listeningCount / services.length) * 50;
+    return {
+      results: { internet: hasInternet, ports },
+      score,
+      issues: hasInternet ? [] : ["No internet connectivity"],
+      recommendations: Object.entries(ports).filter(([_, p]) => !p.listening).map(([svc]) => `${svc} not listening on port ${svc === "sidekick-mcp" ? 4097 : svc === "sidekick-dashboard" ? 4098 : 4099}`)
+    };
+  } catch (e) {
+    return { results: {}, score: 0, issues: [`Failed to check network: ${e.message}`] };
+  }
+}
+
+function checkCustom(commands) {
+  if (!commands) return { results: {}, score: 100, issues: [] };
+  const cmdList = commands.split(",").map(c => c.trim());
+  const results = [];
+  let allPassed = true;
+  for (const cmd of cmdList) {
+    try {
+      const output = execSync(cmd, { encoding: "utf-8", timeout: 10000 }).trim();
+      results.push({ command: cmd, output, success: true });
+    } catch (e) {
+      results.push({ command: cmd, error: e.message, success: false });
+      allPassed = false;
+    }
+  }
+  return { results, score: allPassed ? 100 : 50, issues: results.filter(r => !r.success).map(r => `Failed: ${r.command}`) };
+}
+
+function parseThresholds(threshold) {
+  if (!threshold) return {};
+  const thresholds = {};
+  const parts = threshold.split(",").map(t => t.trim());
+  for (const part of parts) {
+    const match = part.match(/^(\w+)([><=]+)(\d+)$/);
+    if (match) {
+      thresholds[match[1]] = { operator: match[2], value: parseInt(match[3]) };
+    }
+  }
+  return thresholds;
+}
+
+function applyThresholds(results, thresholds) {
+  const issues = [];
+  for (const [metric, { operator, value }] of Object.entries(thresholds)) {
+    if (metric === "disk" && results.disk?.results) {
+      for (const disk of results.disk.results) {
+        const usage = disk.usage;
+        if ((operator === ">" && usage > value) || (operator === ">=" && usage >= value)) {
+          issues.push(`Disk ${disk.mount} at ${usage}% exceeds threshold ${operator}${value}%`);
+        }
+      }
+    }
+    if (metric === "mem" && results.processes?.results?.top) {
+      for (const proc of results.processes.results.top) {
+        if ((operator === ">" && proc.mem > value) || (operator === ">=" && proc.mem >= value)) {
+          issues.push(`Process ${proc.command} using ${proc.mem}% memory exceeds threshold ${operator}${value}%`);
+        }
+      }
+    }
+  }
+  return issues;
+}
+
+async function sidekick_health({ check, services, commands, threshold }) {
+  const now = new Date().toISOString();
+  const checks = check === "all" ? ["services", "processes", "disk", "network"] : [check];
+  const results = {};
+  let totalScore = 0;
+  let totalChecks = 0;
+  const allIssues = [];
+  const allRecommendations = [];
+
+  for (const c of checks) {
+    if (c === "services") {
+      results.services = checkServices(services);
+      totalScore += results.services.score;
+      totalChecks++;
+    } else if (c === "processes") {
+      results.processes = checkProcesses();
+      totalScore += results.processes.score;
+      totalChecks++;
+      if (results.processes.issues) allIssues.push(...results.processes.issues);
+    } else if (c === "disk") {
+      results.disk = checkDisk();
+      totalScore += results.disk.score;
+      totalChecks++;
+      if (results.disk.issues) allIssues.push(...results.disk.issues);
+    } else if (c === "network") {
+      results.network = checkNetwork();
+      totalScore += results.network.score;
+      totalChecks++;
+      if (results.network.issues) allIssues.push(...results.network.issues);
+      if (results.network.recommendations) allRecommendations.push(...results.network.recommendations);
+    } else if (c === "custom") {
+      results.custom = checkCustom(commands);
+      totalScore += results.custom.score;
+      totalChecks++;
+      if (results.custom.issues) allIssues.push(...results.custom.issues);
+    } else {
+      return { content: [{ type: "text", text: `Unknown check: ${c}. Use: all, services, processes, disk, network, custom` }], isError: true };
+    }
+  }
+
+  const thresholds = parseThresholds(threshold);
+  const thresholdIssues = applyThresholds(results, thresholds);
+  allIssues.push(...thresholdIssues);
+
+  const overallScore = totalChecks > 0 ? Math.round(totalScore / totalChecks) : 0;
+
+  const history = loadHealthHistory();
+  history.push({ date: now, score: overallScore, checks: checks.join(","), issues: allIssues.length });
+  if (history.length > MAX_HEALTH_HISTORY) history.splice(0, history.length - MAX_HEALTH_HISTORY);
+  saveHealthHistory(history);
+
+  let output = `# Health Check Report\n\n`;
+  output += `**Overall Score: ${overallScore}/100**\n`;
+  output += `**Time: ${now}**\n\n`;
+
+  for (const c of checks) {
+    output += `## ${c.charAt(0).toUpperCase() + c.slice(1)}\n`;
+    if (c === "services") {
+      output += `- Score: ${results.services.score.toFixed(0)}/100\n`;
+      output += `- Services: ${results.services.healthy}/${results.services.total} healthy\n`;
+      for (const svc of results.services.results) {
+        output += `  - ${svc.service}: ${svc.status} ${svc.healthy ? "✓" : "✗"}\n`;
+      }
+    } else if (c === "processes") {
+      output += `- Score: ${results.processes.score.toFixed(0)}/100\n`;
+      output += `- Top processes (by CPU):\n`;
+      for (const proc of results.processes.results.top) {
+        output += `  - ${proc.command.substring(0, 40)}: CPU ${proc.cpu}%, MEM ${proc.mem}%\n`;
+      }
+    } else if (c === "disk") {
+      output += `- Score: ${results.disk.score.toFixed(0)}/100\n`;
+      output += `- Disk usage:\n`;
+      for (const disk of results.disk.results) {
+        output += `  - ${disk.mount}: ${disk.usage}%\n`;
+      }
+    } else if (c === "network") {
+      output += `- Score: ${results.network.score.toFixed(0)}/100\n`;
+      output += `- Internet: ${results.network.results.internet ? "✓" : "✗"}\n`;
+      output += `- Ports:\n`;
+      for (const [svc, info] of Object.entries(results.network.results.ports)) {
+        output += `  - ${svc} (${info.port}): ${info.listening ? "listening" : "not listening"}\n`;
+      }
+    } else if (c === "custom") {
+      output += `- Score: ${results.custom.score.toFixed(0)}/100\n`;
+      for (const res of results.custom.results) {
+        output += `  - ${res.command}: ${res.success ? "✓" : "✗"}\n`;
+        if (res.output) output += `    ${res.output.substring(0, 100)}\n`;
+      }
+    }
+    output += `\n`;
+  }
+
+  if (allIssues.length > 0) {
+    output += `## Issues (${allIssues.length})\n`;
+    for (const issue of allIssues) {
+      output += `- ${issue}\n`;
+    }
+    output += `\n`;
+  }
+
+  if (allRecommendations.length > 0) {
+    output += `## Recommendations\n`;
+    for (const rec of allRecommendations) {
+      output += `- ${rec}\n`;
+    }
+    output += `\n`;
+  }
+
+  if (overallScore >= 90) {
+    output += `**Status: HEALTHY** ✓\n`;
+  } else if (overallScore >= 70) {
+    output += `**Status: WARNING** ⚠\n`;
+  } else {
+    output += `**Status: CRITICAL** ✗\n`;
+  }
+
+  return { content: [{ type: "text", text: output }] };
+}
+
+// --- Delay Tool ---
+
+const DELAYS_FILE = path.join(DATA_DIR, "delays.json");
+
+function loadDelays() {
+  if (!fs.existsSync(DELAYS_FILE)) return [];
+  try {
+    return JSON.parse(fs.readFileSync(DELAYS_FILE, "utf-8"));
+  } catch {
+    return [];
+  }
+}
+
+function saveDelays(delays) {
+  fs.writeFileSync(DELAYS_FILE, JSON.stringify(delays, null, 2));
+}
+
+function parseWhen(when) {
+  if (!when) return null;
+  
+  const match = when.match(/^(\d+)(s|m|h|d)$/);
+  if (match) {
+    const amount = parseInt(match[1]);
+    const unit = match[2];
+    const multipliers = { s: 1000, m: 60000, h: 3600000, d: 86400000 };
+    return new Date(Date.now() + amount * multipliers[unit]);
+  }
+  
+  const date = new Date(when);
+  if (!isNaN(date.getTime())) {
+    return date;
+  }
+  
+  return null;
+}
+
+async function sidekick_delay({ action, id, when, name, tool, args }) {
+  const delays = loadDelays();
+  const now = new Date().toISOString();
+  
+  if (action === "add") {
+    if (!when || !tool) {
+      return { content: [{ type: "text", text: "when and tool required" }], isError: true };
+    }
+    
+    const executeAt = parseWhen(when);
+    if (!executeAt) {
+      return { content: [{ type: "text", text: "Invalid when format. Use: 10s, 5m, 2h, 1d, or ISO date" }], isError: true };
+    }
+    
+    if (executeAt.getTime() <= Date.now()) {
+      return { content: [{ type: "text", text: "Time must be in the future" }], isError: true };
+    }
+    
+    const delay = {
+      id: generateId("delay"),
+      name: name || `${tool} at ${executeAt.toISOString()}`,
+      when: executeAt.toISOString(),
+      tool,
+      args: args || {},
+      created: now,
+      status: "pending"
+    };
+    
+    delays.push(delay);
+    saveDelays(delays);
+    
+    const msUntil = executeAt.getTime() - Date.now();
+    const minutes = Math.round(msUntil / 60000);
+    
+    try {
+      const http = require("http");
+      const req = http.request({
+        hostname: "127.0.0.1",
+        port: 4099,
+        path: "/api/delays/reload",
+        method: "POST"
+      });
+      req.on("error", () => {});
+      req.end();
+    } catch {}
+    
+    return { content: [{ type: "text", text: `Scheduled delay: ${delay.id}\nWill execute ${tool} in ${minutes} minutes (${executeAt.toISOString()})` }] };
+  }
+  
+  if (action === "list") {
+    const pending = delays.filter(d => d.status === "pending");
+    const completed = delays.filter(d => d.status === "completed");
+    const cancelled = delays.filter(d => d.status === "cancelled");
+    
+    let output = `# Scheduled Delays\n\n`;
+    output += `**Pending: ${pending.length}**\n`;
+    output += `**Completed: ${completed.length}**\n`;
+    output += `**Cancelled: ${cancelled.length}**\n\n`;
+    
+    if (pending.length > 0) {
+      output += `## Pending\n`;
+      for (const d of pending) {
+        const when = new Date(d.when);
+        const msUntil = when.getTime() - Date.now();
+        const minutes = Math.round(msUntil / 60000);
+        output += `- **${d.id}**: ${d.name}\n`;
+        output += `  - Tool: ${d.tool}\n`;
+        output += `  - Executes in: ${minutes} minutes (${d.when})\n`;
+      }
+    }
+    
+    if (completed.length > 0) {
+      output += `\n## Completed (last 5)\n`;
+      for (const d of completed.slice(-5)) {
+        output += `- ${d.id}: ${d.name} (completed ${d.completedAt})\n`;
+      }
+    }
+    
+    return { content: [{ type: "text", text: output }] };
+  }
+  
+  if (action === "cancel") {
+    if (!id) {
+      return { content: [{ type: "text", text: "id required" }], isError: true };
+    }
+    
+    const delay = delays.find(d => d.id === id);
+    if (!delay) {
+      return { content: [{ type: "text", text: `Delay not found: ${id}` }], isError: true };
+    }
+    
+    if (delay.status !== "pending") {
+      return { content: [{ type: "text", text: `Delay ${id} is not pending (status: ${delay.status})` }], isError: true };
+    }
+    
+    delay.status = "cancelled";
+    delay.cancelledAt = now;
+    saveDelays(delays);
+    
+    return { content: [{ type: "text", text: `Cancelled delay: ${id}` }] };
+  }
+  
+  if (action === "run") {
+    if (!id) {
+      return { content: [{ type: "text", text: "id required" }], isError: true };
+    }
+    
+    const delay = delays.find(d => d.id === id);
+    if (!delay) {
+      return { content: [{ type: "text", text: `Delay not found: ${id}` }], isError: true };
+    }
+    
+    if (delay.status !== "pending") {
+      return { content: [{ type: "text", text: `Delay ${id} is not pending (status: ${delay.status})` }], isError: true };
+    }
+    
+    delay.status = "running";
+    delay.startedAt = now;
+    saveDelays(delays);
+    
+    try {
+      const result = await callTool(delay.tool, delay.args);
+      delay.status = "completed";
+      delay.completedAt = new Date().toISOString();
+      delay.result = result.content?.[0]?.text?.substring(0, 200) || "ok";
+      saveDelays(delays);
+      
+      return { content: [{ type: "text", text: `Executed delay ${id}:\n\n${result.content?.[0]?.text || "ok"}` }] };
+    } catch (e) {
+      delay.status = "failed";
+      delay.completedAt = new Date().toISOString();
+      delay.error = e.message;
+      saveDelays(delays);
+      
+      return { content: [{ type: "text", text: `Delay ${id} failed: ${e.message}` }], isError: true };
+    }
+  }
+  
+  return { content: [{ type: "text", text: "Unknown action. Use: add, list, cancel, run" }], isError: true };
+}
+
+// --- Snapshot Tool ---
+
+const SNAPSHOTS_DIR = path.join(DATA_DIR, "snapshots");
+if (!fs.existsSync(SNAPSHOTS_DIR)) {
+  fs.mkdirSync(SNAPSHOTS_DIR, { recursive: true });
+}
+
+function captureProcesses() {
+  try {
+    const output = execSync("ps aux --sort=-%mem", { encoding: "utf-8" });
+    const lines = output.trim().split("\n");
+    return lines.slice(1).map(line => {
+      const parts = line.split(/\s+/);
+      return {
+        user: parts[0],
+        pid: parseInt(parts[1]),
+        cpu: parseFloat(parts[2]),
+        mem: parseFloat(parts[3]),
+        command: parts.slice(10).join(" ")
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+function captureServices() {
+  try {
+    const output = execSync("systemctl list-units --type=service --state=running --no-pager", { encoding: "utf-8" });
+    const lines = output.trim().split("\n").slice(1, -5);
+    return lines.map(line => {
+      const parts = line.trim().split(/\s+/);
+      return {
+        unit: parts[0],
+        load: parts[1],
+        active: parts[2],
+        sub: parts[3],
+        description: parts.slice(4).join(" ")
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+function captureDisk() {
+  try {
+    const output = execSync("df -h --output=source,size,used,avail,pcent,target", { encoding: "utf-8" });
+    const lines = output.trim().split("\n");
+    return lines.slice(1).map(line => {
+      const parts = line.trim().split(/\s+/);
+      return {
+        filesystem: parts[0],
+        size: parts[1],
+        used: parts[2],
+        avail: parts[3],
+        usePercent: parts[4],
+        mounted: parts[5]
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+function captureFiles(filePaths) {
+  if (!filePaths) return {};
+  const paths = filePaths.split(",").map(p => p.trim());
+  const result = {};
+  for (const p of paths) {
+    try {
+      const stat = execSync(`stat -c '%Y %s' ${p} 2>/dev/null`, { encoding: "utf-8" }).trim();
+      const [mtime, size] = stat.split(" ");
+      result[p] = { mtime: parseInt(mtime), size: parseInt(size) };
+    } catch {
+      result[p] = { error: "not found" };
+    }
+  }
+  return result;
+}
+
+function capturePackages() {
+  try {
+    const output = execSync("dpkg -l | grep '^ii' | awk '{print $2, $3}'", { encoding: "utf-8" });
+    return output.trim().split("\n").map(line => {
+      const [name, version] = line.split(" ");
+      return { name, version };
+    });
+  } catch {
+    return [];
+  }
+}
+
+function captureNetwork() {
+  try {
+    const interfaces = execSync("ip -o link show | awk '{print $2}' | tr -d ':'", { encoding: "utf-8" }).trim().split("\n");
+    const result = {};
+    for (const iface of interfaces) {
+      try {
+        const ip = execSync(`ip -o -4 addr show ${iface} | awk '{print $4}'`, { encoding: "utf-8" }).trim();
+        result[iface] = { ip };
+      } catch {
+        result[iface] = { ip: "none" };
+      }
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+async function sidekick_snapshot({ action, name, capture, compare }) {
+  const now = new Date().toISOString();
+  
+  if (action === "capture") {
+    if (!name) {
+      return { content: [{ type: "text", text: "name required" }], isError: true };
+    }
+    
+    const types = capture ? capture.split(",").map(t => t.trim()) : ["processes", "services", "disk"];
+    const snapshot = { name, date: now, types, data: {} };
+    
+    for (const type of types) {
+      if (type === "processes") {
+        snapshot.data.processes = captureProcesses();
+      } else if (type === "services") {
+        snapshot.data.services = captureServices();
+      } else if (type === "disk") {
+        snapshot.data.disk = captureDisk();
+      } else if (type === "packages") {
+        snapshot.data.packages = capturePackages();
+      } else if (type === "network") {
+        snapshot.data.network = captureNetwork();
+      } else if (type.startsWith("files:")) {
+        const paths = type.substring(6);
+        snapshot.data.files = captureFiles(paths);
+      }
+    }
+    
+    const snapshotPath = path.join(SNAPSHOTS_DIR, `${name}.json`);
+    fs.writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2));
+    
+    return { content: [{ type: "text", text: `Captured snapshot: ${name}\nTypes: ${types.join(", ")}\nDate: ${now}` }] };
+  }
+  
+  if (action === "compare") {
+    if (!name || !compare) {
+      return { content: [{ type: "text", text: "name and compare required" }], isError: true };
+    }
+    
+    const snapshotPath = path.join(SNAPSHOTS_DIR, `${name}.json`);
+    const comparePath = path.join(SNAPSHOTS_DIR, `${compare}.json`);
+    
+    if (!fs.existsSync(snapshotPath)) {
+      return { content: [{ type: "text", text: `Snapshot not found: ${name}` }], isError: true };
+    }
+    if (!fs.existsSync(comparePath)) {
+      return { content: [{ type: "text", text: `Snapshot not found: ${compare}` }], isError: true };
+    }
+    
+    const current = JSON.parse(fs.readFileSync(snapshotPath, "utf-8"));
+    const baseline = JSON.parse(fs.readFileSync(comparePath, "utf-8"));
+    
+    let output = `# Snapshot Comparison\n\n`;
+    output += `**Current: ${name}** (${current.date})\n`;
+    output += `**Baseline: ${compare}** (${baseline.date})\n\n`;
+    
+    const diff = { added: [], removed: [], changed: [] };
+    
+    if (current.data.processes && baseline.data.processes) {
+      const currentPids = new Set(current.data.processes.map(p => p.pid));
+      const baselinePids = new Set(baseline.data.processes.map(p => p.pid));
+      
+      for (const p of current.data.processes) {
+        if (!baselinePids.has(p.pid)) diff.added.push(`Process: ${p.command} (PID ${p.pid})`);
+      }
+      for (const p of baseline.data.processes) {
+        if (!currentPids.has(p.pid)) diff.removed.push(`Process: ${p.command} (PID ${p.pid})`);
+      }
+    }
+    
+    if (current.data.services && baseline.data.services) {
+      const currentServices = new Set(current.data.services.map(s => s.unit));
+      const baselineServices = new Set(baseline.data.services.map(s => s.unit));
+      
+      for (const s of current.data.services) {
+        if (!baselineServices.has(s.unit)) diff.added.push(`Service: ${s.unit}`);
+      }
+      for (const s of baseline.data.services) {
+        if (!currentServices.has(s.unit)) diff.removed.push(`Service: ${s.unit}`);
+      }
+    }
+    
+    if (current.data.files && baseline.data.files) {
+      for (const [path, info] of Object.entries(current.data.files)) {
+        const baselineInfo = baseline.data.files[path];
+        if (!baselineInfo) {
+          diff.added.push(`File: ${path}`);
+        } else if (info.mtime !== baselineInfo.mtime || info.size !== baselineInfo.size) {
+          diff.changed.push(`File: ${path} (modified)`);
+        }
+      }
+      for (const path of Object.keys(baseline.data.files)) {
+        if (!current.data.files[path]) {
+          diff.removed.push(`File: ${path}`);
+        }
+      }
+    }
+    
+    output += `## Summary\n`;
+    output += `- Added: ${diff.added.length}\n`;
+    output += `- Removed: ${diff.removed.length}\n`;
+    output += `- Changed: ${diff.changed.length}\n\n`;
+    
+    if (diff.added.length > 0) {
+      output += `## Added\n`;
+      for (const item of diff.added.slice(0, 20)) {
+        output += `- ${item}\n`;
+      }
+      if (diff.added.length > 20) output += `- ... and ${diff.added.length - 20} more\n`;
+      output += `\n`;
+    }
+    
+    if (diff.removed.length > 0) {
+      output += `## Removed\n`;
+      for (const item of diff.removed.slice(0, 20)) {
+        output += `- ${item}\n`;
+      }
+      if (diff.removed.length > 20) output += `- ... and ${diff.removed.length - 20} more\n`;
+      output += `\n`;
+    }
+    
+    if (diff.changed.length > 0) {
+      output += `## Changed\n`;
+      for (const item of diff.changed.slice(0, 20)) {
+        output += `- ${item}\n`;
+      }
+      if (diff.changed.length > 20) output += `- ... and ${diff.changed.length - 20} more\n`;
+      output += `\n`;
+    }
+    
+    return { content: [{ type: "text", text: output }] };
+  }
+  
+  if (action === "list") {
+    const files = fs.readdirSync(SNAPSHOTS_DIR).filter(f => f.endsWith(".json"));
+    const snapshots = files.map(f => {
+      const data = JSON.parse(fs.readFileSync(path.join(SNAPSHOTS_DIR, f), "utf-8"));
+      return { name: data.name, date: data.date, types: data.types.join(", ") };
+    });
+    
+    let output = `# Snapshots (${snapshots.length})\n\n`;
+    for (const s of snapshots) {
+      output += `- **${s.name}** (${s.date})\n  Types: ${s.types}\n`;
+    }
+    
+    return { content: [{ type: "text", text: output }] };
+  }
+  
+  if (action === "delete") {
+    if (!name) {
+      return { content: [{ type: "text", text: "name required" }], isError: true };
+    }
+    
+    const snapshotPath = path.join(SNAPSHOTS_DIR, `${name}.json`);
+    if (!fs.existsSync(snapshotPath)) {
+      return { content: [{ type: "text", text: `Snapshot not found: ${name}` }], isError: true };
+    }
+    
+    fs.unlinkSync(snapshotPath);
+    return { content: [{ type: "text", text: `Deleted snapshot: ${name}` }] };
+  }
+  
+  return { content: [{ type: "text", text: "Unknown action. Use: capture, compare, list, delete" }], isError: true };
+}
+
+// --- Watch Tool ---
+
+const WATCHES_FILE = path.join(DATA_DIR, "watches.json");
+
+function loadWatches() {
+  if (!fs.existsSync(WATCHES_FILE)) return [];
+  try {
+    return JSON.parse(fs.readFileSync(WATCHES_FILE, "utf-8"));
+  } catch {
+    return [];
+  }
+}
+
+function saveWatches(watches) {
+  fs.writeFileSync(WATCHES_FILE, JSON.stringify(watches, null, 2));
+}
+
+function parseInterval(interval) {
+  if (!interval) return 60000;
+  const match = interval.match(/^(\d+)(s|m|h)$/);
+  if (!match) return 60000;
+  const amount = parseInt(match[1]);
+  const unit = match[2];
+  const multipliers = { s: 1000, m: 60000, h: 3600000 };
+  return amount * multipliers[unit];
+}
+
+function checkService(serviceName) {
+  try {
+    const output = execSync(`systemctl is-active ${serviceName} 2>&1`, { encoding: "utf-8" }).trim();
+    return { status: output, active: output === "active" };
+  } catch {
+    return { status: "unknown", active: false };
+  }
+}
+
+function checkProcess(processName) {
+  try {
+    const output = execSync(`pgrep -f "${processName}" 2>/dev/null`, { encoding: "utf-8" }).trim();
+    return { running: output.length > 0, pids: output.split("\n").filter(Boolean) };
+  } catch {
+    return { running: false, pids: [] };
+  }
+}
+
+function checkEndpoint(url) {
+  try {
+    const output = execSync(`curl -s -o /dev/null -w "%{http_code}" --max-time 5 "${url}"`, { encoding: "utf-8" }).trim();
+    return { status: parseInt(output), ok: output.startsWith("2") };
+  } catch {
+    return { status: 0, ok: false };
+  }
+}
+
+function checkFile(filePath, pattern) {
+  try {
+    const output = execSync(`cat "${filePath}" 2>/dev/null`, { encoding: "utf-8" });
+    const matches = pattern ? output.includes(pattern) : true;
+    return { exists: true, matches, content: output.substring(0, 200) };
+  } catch {
+    return { exists: false, matches: false };
+  }
+}
+
+function evaluateCondition(watch, checkResult) {
+  const { source, condition, value } = watch;
+  
+  if (source === "service") {
+    if (condition === "status!=active") return !checkResult.active;
+    if (condition === "status=active") return checkResult.active;
+  }
+  
+  if (source === "process") {
+    if (condition === "not_running") return !checkResult.running;
+    if (condition === "running") return checkResult.running;
+  }
+  
+  if (source === "endpoint") {
+    if (condition === "status!=200") return checkResult.status !== 200;
+    if (condition === "status=200") return checkResult.status === 200;
+    if (condition.startsWith("status>=")) {
+      const threshold = parseInt(condition.substring(8));
+      return checkResult.status >= threshold;
+    }
+  }
+  
+  if (source === "file") {
+    if (condition === "content_matches") return checkResult.exists && checkResult.matches;
+    if (condition === "not_exists") return !checkResult.exists;
+    if (condition === "exists") return checkResult.exists;
+  }
+  
+  return false;
+}
+
+async function executeWatchAction(watch, checkResult) {
+  const { action_tool, action_args } = watch;
+  if (!action_tool) return;
+  
+  const args = { ...action_args };
+  if (args.message) {
+    args.message = args.message
+      .replace(/\{\{source\}\}/g, watch.source)
+      .replace(/\{\{target\}\}/g, watch.target)
+      .replace(/\{\{status\}\}/g, JSON.stringify(checkResult))
+      .replace(/\{\{time\}\}/g, new Date().toISOString());
+  }
+  
+  try {
+    await callTool(action_tool, args);
+  } catch (e) {
+    console.error(`Watch ${watch.id} action failed: ${e.message}`);
+  }
+}
+
+async function sidekick_watch({ action, id, name, source, target, condition, interval, action_tool, action_args, pause }) {
+  const watches = loadWatches();
+  const now = new Date().toISOString();
+  
+  if (action === "add") {
+    if (!name || !source || !target || !condition) {
+      return { content: [{ type: "text", text: "name, source, target, and condition required" }], isError: true };
+    }
+    
+    const validSources = ["service", "process", "endpoint", "file"];
+    if (!validSources.includes(source)) {
+      return { content: [{ type: "text", text: `Invalid source. Use: ${validSources.join(", ")}` }], isError: true };
+    }
+    
+    const watch = {
+      id: generateId("watch"),
+      name,
+      source,
+      target,
+      condition,
+      interval: interval || "60s",
+      action_tool: action_tool || "sidekick_notify",
+      action_args: action_args || { channel: "discord", message: "Watch triggered: {{source}} {{target}} at {{time}}" },
+      created: now,
+      status: "active",
+      lastCheck: null,
+      lastTriggered: null,
+      triggerCount: 0
+    };
+    
+    watches.push(watch);
+    saveWatches(watches);
+    
+    try {
+      const http = require("http");
+      const req = http.request({
+        hostname: "127.0.0.1",
+        port: 4099,
+        path: "/api/watches/reload",
+        method: "POST"
+      });
+      req.on("error", () => {});
+      req.end();
+    } catch {}
+    
+    return { content: [{ type: "text", text: `Added watch: ${watch.id}\nName: ${name}\nSource: ${source} ${target}\nCondition: ${condition}\nInterval: ${watch.interval}\nAction: ${watch.action_tool}` }] };
+  }
+  
+  if (action === "list") {
+    const active = watches.filter(w => w.status === "active");
+    const paused = watches.filter(w => w.status === "paused");
+    
+    let output = `# Active Watches\n\n`;
+    output += `**Active: ${active.length}**\n`;
+    output += `**Paused: ${paused.length}**\n\n`;
+    
+    if (active.length > 0) {
+      output += `## Active\n`;
+      for (const w of active) {
+        output += `- **${w.id}**: ${w.name}\n`;
+        output += `  - Source: ${w.source} ${w.target}\n`;
+        output += `  - Condition: ${w.condition}\n`;
+        output += `  - Interval: ${w.interval}\n`;
+        output += `  - Triggers: ${w.triggerCount}\n`;
+        if (w.lastCheck) output += `  - Last check: ${w.lastCheck}\n`;
+        if (w.lastTriggered) output += `  - Last triggered: ${w.lastTriggered}\n`;
+      }
+    }
+    
+    if (paused.length > 0) {
+      output += `\n## Paused\n`;
+      for (const w of paused) {
+        output += `- ${w.id}: ${w.name}\n`;
+      }
+    }
+    
+    return { content: [{ type: "text", text: output }] };
+  }
+  
+  if (action === "remove") {
+    if (!id) {
+      return { content: [{ type: "text", text: "id required" }], isError: true };
+    }
+    
+    const idx = watches.findIndex(w => w.id === id);
+    if (idx === -1) {
+      return { content: [{ type: "text", text: `Watch not found: ${id}` }], isError: true };
+    }
+    
+    watches.splice(idx, 1);
+    saveWatches(watches);
+    
+    return { content: [{ type: "text", text: `Removed watch: ${id}` }] };
+  }
+  
+  if (action === "pause") {
+    if (!id) {
+      return { content: [{ type: "text", text: "id required" }], isError: true };
+    }
+    
+    const watch = watches.find(w => w.id === id);
+    if (!watch) {
+      return { content: [{ type: "text", text: `Watch not found: ${id}` }], isError: true };
+    }
+    
+    watch.status = pause ? "paused" : "active";
+    saveWatches(watches);
+    
+    return { content: [{ type: "text", text: `${pause ? "Paused" : "Resumed"} watch: ${id}` }] };
+  }
+  
+  if (action === "check") {
+    if (!id) {
+      return { content: [{ type: "text", text: "id required" }], isError: true };
+    }
+    
+    const watch = watches.find(w => w.id === id);
+    if (!watch) {
+      return { content: [{ type: "text", text: `Watch not found: ${id}` }], isError: true };
+    }
+    
+    let checkResult;
+    if (watch.source === "service") {
+      checkResult = checkService(watch.target);
+    } else if (watch.source === "process") {
+      checkResult = checkProcess(watch.target);
+    } else if (watch.source === "endpoint") {
+      checkResult = checkEndpoint(watch.target);
+    } else if (watch.source === "file") {
+      checkResult = checkFile(watch.target, watch.condition === "content_matches" ? watch.value : null);
+    }
+    
+    const triggered = evaluateCondition(watch, checkResult);
+    
+    watch.lastCheck = now;
+    if (triggered) {
+      watch.lastTriggered = now;
+      watch.triggerCount++;
+      await executeWatchAction(watch, checkResult);
+    }
+    saveWatches(watches);
+    
+    return { content: [{ type: "text", text: `Watch check: ${watch.id}\nSource: ${watch.source} ${watch.target}\nResult: ${JSON.stringify(checkResult)}\nTriggered: ${triggered}` }] };
+  }
+  
+  return { content: [{ type: "text", text: "Unknown action. Use: add, list, remove, pause, check" }], isError: true };
+}
+
+// --- Secret Tool ---
+
+const crypto = require("crypto");
+const SECRETS_FILE = path.join(DATA_DIR, "secrets.enc");
+
+function getSecretKey() {
+  const key = process.env.SIDEKICK_SECRET_KEY;
+  if (!key) {
+    throw new Error("SIDEKICK_SECRET_KEY not set in .env");
+  }
+  return crypto.createHash("sha256").update(key).digest();
+}
+
+function loadSecrets() {
+  if (!fs.existsSync(SECRETS_FILE)) return {};
+  try {
+    const data = fs.readFileSync(SECRETS_FILE, "utf-8");
+    return JSON.parse(data);
+  } catch {
+    return {};
+  }
+}
+
+function saveSecrets(secrets) {
+  fs.writeFileSync(SECRETS_FILE, JSON.stringify(secrets, null, 2));
+}
+
+function encryptSecret(value) {
+  const key = getSecretKey();
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  let encrypted = cipher.update(value, "utf8", "hex");
+  encrypted += cipher.final("hex");
+  const authTag = cipher.getAuthTag().toString("hex");
+  return { iv: iv.toString("hex"), data: encrypted, authTag };
+}
+
+function decryptSecret(encrypted) {
+  const key = getSecretKey();
+  const iv = Buffer.from(encrypted.iv, "hex");
+  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
+  decipher.setAuthTag(Buffer.from(encrypted.authTag, "hex"));
+  let decrypted = decipher.update(encrypted.data, "hex", "utf8");
+  decrypted += decipher.final("utf8");
+  return decrypted;
+}
+
+async function sidekick_secret({ action, key, value, generate }) {
+  const now = new Date().toISOString();
+  
+  try {
+    getSecretKey();
+  } catch (e) {
+    return { content: [{ type: "text", text: e.message }], isError: true };
+  }
+  
+  const secrets = loadSecrets();
+  
+  if (action === "store") {
+    if (!key || !value) {
+      return { content: [{ type: "text", text: "key and value required" }], isError: true };
+    }
+    
+    const encrypted = encryptSecret(value);
+    secrets[key] = {
+      ...encrypted,
+      created: now,
+      updated: now
+    };
+    saveSecrets(secrets);
+    
+    return { content: [{ type: "text", text: `Stored secret: ${key}` }] };
+  }
+  
+  if (action === "get") {
+    if (!key) {
+      return { content: [{ type: "text", text: "key required" }], isError: true };
+    }
+    
+    const secret = secrets[key];
+    if (!secret) {
+      return { content: [{ type: "text", text: `Secret not found: ${key}` }], isError: true };
+    }
+    
+    try {
+      const decrypted = decryptSecret(secret);
+      return { content: [{ type: "text", text: decrypted }] };
+    } catch (e) {
+      return { content: [{ type: "text", text: `Decryption failed: ${e.message}` }], isError: true };
+    }
+  }
+  
+  if (action === "delete") {
+    if (!key) {
+      return { content: [{ type: "text", text: "key required" }], isError: true };
+    }
+    
+    if (!secrets[key]) {
+      return { content: [{ type: "text", text: `Secret not found: ${key}` }], isError: true };
+    }
+    
+    delete secrets[key];
+    saveSecrets(secrets);
+    
+    return { content: [{ type: "text", text: `Deleted secret: ${key}` }] };
+  }
+  
+  if (action === "list") {
+    const keys = Object.keys(secrets);
+    let output = `# Stored Secrets (${keys.length})\n\n`;
+    for (const k of keys) {
+      const s = secrets[k];
+      output += `- **${k}** (created: ${s.created}, updated: ${s.updated})\n`;
+    }
+    return { content: [{ type: "text", text: output }] };
+  }
+  
+  if (action === "rotate") {
+    if (!key) {
+      return { content: [{ type: "text", text: "key required" }], isError: true };
+    }
+    
+    const secret = secrets[key];
+    if (!secret) {
+      return { content: [{ type: "text", text: `Secret not found: ${key}` }], isError: true };
+    }
+    
+    let newValue;
+    if (generate) {
+      const length = parseInt(generate);
+      if (isNaN(length) || length < 8) {
+        return { content: [{ type: "text", text: "generate must be a number >= 8" }], isError: true };
+      }
+      newValue = crypto.randomBytes(length).toString("hex").substring(0, length);
+    } else {
+      return { content: [{ type: "text", text: "generate parameter required for rotation" }], isError: true };
+    }
+    
+    const encrypted = encryptSecret(newValue);
+    secrets[key] = {
+      ...encrypted,
+      created: secret.created,
+      updated: now
+    };
+    saveSecrets(secrets);
+    
+    return { content: [{ type: "text", text: `Rotated secret: ${key}\nNew value: ${newValue}` }] };
+  }
+  
+  return { content: [{ type: "text", text: "Unknown action. Use: store, get, delete, list, rotate" }], isError: true };
+}
+
 const TOOLS = {
   sidekick_bash,
   sidekick_read,
@@ -1488,6 +2848,12 @@ const TOOLS = {
   sidekick_webhook,
   sidekick_context,
   sidekick_teach,
+  sidekick_transform,
+  sidekick_health,
+  sidekick_delay,
+  sidekick_snapshot,
+  sidekick_watch,
+  sidekick_secret,
 };
 
 const TOOL_DEFS = [
@@ -1512,6 +2878,12 @@ const TOOL_DEFS = [
   { name: "sidekick_webhook", description: "Manage received webhooks (list, get, clear)", args: { action: "string", id: "string (optional)", limit: "number (optional)" } },
   { name: "sidekick_context", description: "Persistent intelligent context management (track projects, decisions, problems, patterns; recall and suggest based on past context)", args: { action: "string", project: "string (optional)", context: "string (optional)", decision: "string (optional)", reasoning: "string (optional)", problem: "string (optional)", solution: "string (optional)", pattern: "string (optional)", query: "string (optional)", type: "string (optional)", limit: "number (optional)" } },
   { name: "sidekick_teach", description: "Meta-learning and self-extension: teach procedures, generate tools, learn from examples, execute learned workflows", args: { action: "string", name: "string (optional)", description: "string (optional)", steps: "array (optional)", parameters: "object (optional)", args: "object (optional)", example: "string (optional)", trigger_phrases: "array (optional)", implementation: "string (optional)" } },
+  { name: "sidekick_transform", description: "Data manipulation pipeline: filter, extract, sort, format, and map data", args: { action: "string (filter|extract|sort|format|map)", input: "string", pattern: "string (optional, for filter)", field: "string (optional, for extract)", key: "string (optional, for sort/map)", value: "string (optional, for map)", format: "string (optional, for format: json|csv|table|text)" } },
+  { name: "sidekick_health", description: "Composite system health checks with scoring and issue detection", args: { check: "string (all|services|processes|disk|network|custom)", services: "string (optional, comma-separated service names)", commands: "string (optional, comma-separated commands for custom check)", threshold: "string (optional, e.g. 'disk>90,mem>80')" } },
+  { name: "sidekick_delay", description: "One-shot task scheduling: run a tool once at a specific time or after a delay", args: { action: "string (add|list|cancel|run)", id: "string (optional, for cancel/run)", when: "string (optional, e.g. 10s, 5m, 2h, 1d, or ISO date)", name: "string (optional, human-readable name)", tool: "string (optional, tool name to execute)", args: "object (optional, arguments for the tool)" } },
+  { name: "sidekick_snapshot", description: "Capture system state and detect drift by comparing snapshots", args: { action: "string (capture|compare|list|delete)", name: "string (snapshot name)", capture: "string (optional, comma-separated: processes,services,disk,packages,network,files:/path)", compare: "string (optional, baseline snapshot name for compare action)" } },
+  { name: "sidekick_watch", description: "Event-driven monitoring: watch services, processes, endpoints, or files and trigger actions on conditions", args: { action: "string (add|list|remove|pause|check)", id: "string (optional, for remove/pause/check)", name: "string (optional, watch name)", source: "string (optional, service|process|endpoint|file)", target: "string (optional, service name, process name, URL, or file path)", condition: "string (optional, e.g. status!=active, not_running, status!=200, content_matches)", interval: "string (optional, e.g. 30s, 5m, 1h)", action_tool: "string (optional, tool to call when triggered)", action_args: "object (optional, args for action tool)", pause: "boolean (optional, true to pause, false to resume)" } },
+  { name: "sidekick_secret", description: "Encrypted credential management with AES-256-GCM (requires SIDEKICK_SECRET_KEY in .env)", args: { action: "string (store|get|delete|list|rotate)", key: "string (secret name)", value: "string (optional, for store)", generate: "string (optional, length for rotate, e.g. '32')" } },
 ];
 
 async function callTool(name, args) {
@@ -1533,4 +2905,4 @@ async function callTool(name, args) {
   }
 }
 
-module.exports = { TOOLS, TOOL_DEFS, callTool, logToolCall, setSource, DATA_DIR, OLLAMA_URL, GROQ_API_KEY, GROQ_MODEL, migrateKV, loadProcedures };
+module.exports = { TOOLS, TOOL_DEFS, callTool, logToolCall, setSource, DATA_DIR, OLLAMA_URL, GROQ_API_KEY, GROQ_MODEL, migrateKV, loadProcedures, loadDelays, saveDelays, loadWatches, saveWatches };
