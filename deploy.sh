@@ -14,21 +14,40 @@ changed=()
 
 echo -e "\033[36m=== Deploying Sidekick ===\033[0m"
 
+# Verify SSH key exists
+if [ ! -f "$SSH_KEY" ]; then
+  echo -e "\033[31mERROR: SSH key not found at $SSH_KEY\033[0m"
+  exit 1
+fi
+
 # Sync src files
 echo -e "\033[32mSyncing source files...\033[0m"
 for f in tools.js index.js dashboard.js agent.js; do
-  copy_to_vps "src/$f" "$REMOTE_DIR/src/$f"
+  if [ ! -f "$PROJECT_DIR/src/$f" ]; then
+    echo -e "  \033[33mWarning: src/$f not found, skipping\033[0m"
+    continue
+  fi
+  if ! copy_to_vps "src/$f" "$REMOTE_DIR/src/$f"; then
+    echo -e "\033[31mERROR: Failed to copy $f\033[0m"
+    exit 1
+  fi
   changed+=("$f")
 done
 
 # Sync package.json
-copy_to_vps "package.json" "$REMOTE_DIR/package.json"
+if ! copy_to_vps "package.json" "$REMOTE_DIR/package.json"; then
+  echo -e "\033[31mERROR: Failed to copy package.json\033[0m"
+  exit 1
+fi
 changed+=("package.json")
 
 # Sync .env if it exists
 if [ -f "$PROJECT_DIR/.env" ]; then
   echo -e "\033[32mSyncing .env...\033[0m"
-  copy_to_vps ".env" "$REMOTE_DIR/.env"
+  if ! copy_to_vps ".env" "$REMOTE_DIR/.env"; then
+    echo -e "\033[31mERROR: Failed to copy .env\033[0m"
+    exit 1
+  fi
   changed+=(".env")
 else
   echo -e "\033[33mNo local .env found, skipping env sync\033[0m"
@@ -36,7 +55,10 @@ fi
 
 # npm install
 echo -e "\033[32mRunning npm install on VPS...\033[0m"
-run_remote "cd $REMOTE_DIR && npm install 2>&1" >/dev/null
+if ! run_remote "cd $REMOTE_DIR && npm install 2>&1"; then
+  echo -e "\033[31mERROR: npm install failed\033[0m"
+  exit 1
+fi
 
 # Restart services
 echo -e "\033[32mRestarting services...\033[0m"
@@ -71,7 +93,7 @@ sudo systemctl start sidekick-agent" >/dev/null
 fi
 
 # UFW port check
-if ! run_remote "sudo ufw status | grep -q 4099"; then
+if ! run_remote "sudo ufw status | grep -qw 4099"; then
   echo -e "\033[33m  opening UFW port 4099...\033[0m"
   run_remote "sudo ufw allow 4099/tcp comment 'Sidekick Agent Bridge'" >/dev/null
 fi
