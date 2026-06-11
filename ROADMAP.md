@@ -2,9 +2,9 @@
 
 What's planned for Sidekick.
 
-## Current (v1.5)
+## Current (v1.15)
 
-- 21 MCP tools (bash, read, write, list, search, git, notify, process, service, archive, cron, github, webhook, context, teach, store, get, list_projects, get_by_project, web_fetch, llm)
+- 37 MCP tools (bash, read, write, list, search, git, notify, process, service, archive, cron, github, webhook, context, teach, store, get, list_projects, get_by_project, web_fetch, llm, transform, health, delay, snapshot, watch, secret, parse, diff, hash, validate, template, queue, retry, evolve, orchestrate, predict)
 - Live dashboard with 5 tabs (System, Activity, Data, Config, Agent)
 - Autonomous agent bridge with Groq cloud + local Ollama fallback
 - Persistent KV storage across sessions
@@ -25,6 +25,22 @@ What's planned for Sidekick.
 - **sidekick_webhook** — Receive and manage webhooks from external services
 - **sidekick_context** — Persistent intelligent context management (track projects, decisions, problems, patterns)
 - **sidekick_teach** — Meta-learning and self-extension (teach procedures, generate tools, learn from examples)
+- **sidekick_watch** — Event-driven monitoring (watch services, processes, endpoints, files)
+- **sidekick_secret** — Encrypted credential management with AES-256-GCM
+- **sidekick_delay** — One-shot task scheduling
+- **sidekick_snapshot** — State capture and drift detection
+- **sidekick_transform** — Data manipulation pipeline (filter, extract, sort, format, map)
+- **sidekick_health** — Composite system health checks with scoring
+- **sidekick_parse** — Parse structured data formats (JSON, YAML, XML, INI, CSV)
+- **sidekick_diff** — Semantic comparison with structure-aware diffing
+- **sidekick_hash** — Checksum generation and verification
+- **sidekick_validate** — JSON Schema validation
+- **sidekick_template** — Handlebars template rendering
+- **sidekick_queue** — Persistent task queue with priorities
+- **sidekick_retry** — Retry wrapper with backoff strategies
+- **sidekick_evolve** — Self-modification with safety
+- **sidekick_orchestrate** — Multi-agent coordination
+- **sidekick_predict** — Anticipatory intelligence
 
 ## Recently Completed ✅
 
@@ -105,16 +121,35 @@ See `CONTEXT.md` for detailed investigation plan and root cause hypotheses.
 ### Notifications & Integrations
 - ✅ **sidekick_notify** — Send notifications to Discord, Slack, or email
 - ✅ **sidekick_webhook** — Receive and manage webhooks from external services
+- ✅ **sidekick_watch** — Event-driven monitoring (watch services, processes, endpoints, files)
 - RSS/Atom feed for activity log
 - API for external integrations
 
+### Data & Configuration Tools
+- ✅ **sidekick_parse** — Parse structured data formats (JSON, YAML, XML, INI, CSV)
+- ✅ **sidekick_diff** — Semantic comparison with structure-aware diffing
+- ✅ **sidekick_hash** — Checksum generation and verification
+- ✅ **sidekick_validate** — JSON Schema validation
+- ✅ **sidekick_template** — Handlebars template rendering for config generation
+- ✅ **sidekick_transform** — Data manipulation pipeline (filter, extract, sort, format, map)
+
+### Reliability & Monitoring
+- ✅ **sidekick_health** — Composite system health checks with scoring
+- ✅ **sidekick_snapshot** — State capture and drift detection
+- ✅ **sidekick_retry** — Retry wrapper with exponential/linear/fixed backoff
+- ✅ **sidekick_secret** — Encrypted credential management with AES-256-GCM
+
 ### Enhanced Agent Capabilities
-- Multi-agent orchestration (specialized agents working together)
+- ✅ **sidekick_orchestrate** — Multi-agent coordination (create task graphs, execute subtasks with dependencies)
 - ✅ **sidekick_cron** — Scheduled tasks and cron-like automation
+- ✅ **sidekick_delay** — One-shot task scheduling
+- ✅ **sidekick_queue** — Persistent task queue with priorities
 - Long-running task persistence (survive VPS restarts)
 - Agent-to-agent communication
 - ✅ **sidekick_context** — Persistent intelligent context management
 - ✅ **sidekick_teach** — Meta-learning and self-extension
+- ✅ **sidekick_evolve** — Self-modification with safety (analyze patterns, propose improvements)
+- ✅ **sidekick_predict** — Anticipatory intelligence (predict needs, track usefulness)
 
 ---
 
