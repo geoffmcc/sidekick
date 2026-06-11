@@ -13,9 +13,11 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "ajv": "^8.17.1",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "fast-xml-parser": "^4.5.0",
+    "handlebars": "^4.7.8",
     "ini": "^5.0.0",
     "yaml": "^2.6.0",
     "zod": "^4.4.3"

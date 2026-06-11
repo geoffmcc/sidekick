@@ -186,6 +186,29 @@ const TOOL_SCHEMAS = {
     algorithm: z.string().optional().describe("Hash algorithm: md5, sha1, sha256, sha512 (default: sha256)"),
     verify: z.string().optional().describe("Expected hash value to verify against")
   }),
+  sidekick_validate: z.object({
+    data: z.union([z.string(), z.record(z.any())]).describe("Data to validate (JSON string or object)"),
+    schema: z.union([z.string(), z.record(z.any())]).describe("JSON Schema (JSON string or object)")
+  }),
+  sidekick_template: z.object({
+    template: z.string().describe("Handlebars template string"),
+    data: z.union([z.string(), z.record(z.any())]).optional().describe("Template data (JSON string or object)")
+  }),
+  sidekick_queue: z.object({
+    action: z.enum(["add", "list", "process", "remove", "clear"]).describe("Queue action"),
+    id: z.number().optional().describe("Task ID (for remove action)"),
+    tool: z.string().optional().describe("Tool name to queue (for add action)"),
+    args: z.record(z.any()).optional().describe("Tool arguments (for add action)"),
+    priority: z.number().optional().describe("Task priority, higher = more important (default: 0)"),
+    status: z.string().optional().describe("Status filter for list/clear: pending, processing, completed, failed, or all")
+  }),
+  sidekick_retry: z.object({
+    tool: z.string().describe("Tool name to retry"),
+    args: z.record(z.any()).optional().describe("Tool arguments"),
+    max_attempts: z.number().optional().describe("Maximum retry attempts (default: 3)"),
+    backoff: z.enum(["exponential", "linear", "fixed"]).optional().describe("Backoff strategy (default: exponential)"),
+    initial_delay: z.number().optional().describe("Initial delay in milliseconds (default: 1000)")
+  }),
 };
 
 // --- Factory: create fresh McpServer + register tools ---
