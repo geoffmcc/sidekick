@@ -54,7 +54,7 @@ else
 fi
 
 # npm install
-echo -e "\033[32mRunning npm install on VPS...\033[0m"
+echo -e "\033[32mRunning npm install on remote machine...\033[0m"
 if ! run_remote "cd $REMOTE_DIR && npm install 2>&1"; then
   echo -e "\033[31mERROR: npm install failed\033[0m"
   exit 1

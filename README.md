@@ -1,6 +1,8 @@
 # Sidekick
 
-A remote VPS agent system with persistent storage, 37 MCP tools, and an autonomous agent bridge.
+**Autonomous Agent Platform**
+
+A self-hosted AI agent platform with persistent memory, 37+ tools, and the ability to extend itself. Runs on your remote machine, learns from your workflow, and grows its own capabilities—no code changes required.
 
 **How?** A single `AGENTS.md` file that opencode reads on every session start. No plugins, no hooks — just markdown.
 
@@ -29,7 +31,7 @@ copy .env.example .env
 ./deploy.sh
 ```
 
-Open `http://YOUR_VPS_IP:4098/` in a browser. That's it — Sidekick is live.
+Open `http://YOUR_REMOTE_IP:4098/` in a browser. That's it — Sidekick is live.
 
 ## How It Works
 
@@ -41,6 +43,40 @@ Every time you open opencode, it automatically reads `~/.config/opencode/AGENTS.
 4. **Session ends** — but anything stored in Sidekick's KV persists for next time
 
 Sidekick is the infrastructure. The AI (running in opencode) uses that infrastructure to help you work. Without `AGENTS.md`, the AI doesn't know Sidekick exists. With it, the AI has persistent remote capabilities.
+
+## What Makes Sidekick Different?
+
+Most MCP servers are just tool wrappers—they give AI access to specific APIs or services. Sidekick is fundamentally different:
+
+### 🧠 Persistent Memory Across Sessions
+Sidekick remembers everything. Your decisions, project context, API responses, workflow patterns—it all persists in a structured KV store organized by project. The AI doesn't start from scratch every session.
+
+### 🔄 Self-Extending Capabilities
+Teach Sidekick new procedures, and it can generate its own tools. The `sidekick_teach` tool lets you describe a workflow in natural language, and Sidekick creates the implementation. It's not just using tools—it's building them.
+
+### 🤖 True Autonomous Operation
+The Agent Bridge runs independently from your main AI session. Submit a complex task via the dashboard, and Sidekick will plan, execute, and iterate until it's done—without you babysitting each step.
+
+### 📊 Built-in Intelligence
+- **Context tracking** - Automatically recalls relevant past decisions and patterns
+- **Health monitoring** - Real-time system health checks with scoring
+- **Predictive analysis** - Identifies patterns in your workflow and suggests improvements
+- **Event-driven automation** - Watches for conditions and triggers actions automatically
+
+### 🔒 Security-First Design
+Every tool output is automatically scanned and redacted for sensitive data (API keys, tokens, passwords). The dashboard has rate limiting, CSRF protection, and audit logging. The agent bridge is isolated and only accessible through the dashboard.
+
+### 🛠️ 37+ Specialized Tools
+Not just bash and file operations. Sidekick includes tools for:
+- GitHub integration (PRs, issues, releases)
+- Service and process management
+- Scheduled tasks and monitoring
+- Data transformation and validation
+- Multi-agent orchestration
+- Encrypted credential management
+- And much more
+
+**The result:** Sidekick isn't just a tool server—it's an autonomous platform that learns, adapts, and grows with your workflow.
 
 ## What You Can Achieve
 
@@ -75,7 +111,7 @@ Sidekick is the infrastructure. The AI (running in opencode) uses that infrastru
 └────────────────────────────────────────────────────────┘
                           │
                           ▼
-┌─ Remote Machine (YOUR_VPS_IP) ─────────────────────────┐
+┌─ Remote Machine (YOUR_REMOTE_IP) ─────────────────────────┐
 │                                                        │
 │  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐  │
 │  │  MCP Server  │  │  Dashboard   │  │ Agent Bridge │  │
@@ -102,7 +138,7 @@ Sidekick is the infrastructure. The AI (running in opencode) uses that infrastru
 | **Agent Bridge** | 4099 | AI agent loop — LLM plans and calls MCP tools autonomously |
 | **Ollama** | 11434 | Local LLM inference (phi3:mini). Fallback when no `GROQ_API_KEY` |
 
-All tools are exposed via the MCP server at `http://YOUR_VPS_IP:4097/mcp`.
+All tools are exposed via the MCP server at `http://YOUR_REMOTE_IP:4097/mcp`.
 
 ### New Tools (v1.15) - Meta-Capabilities
 
@@ -168,11 +204,11 @@ All tools are exposed via the MCP server at `http://YOUR_VPS_IP:4097/mcp`.
 
 To avoid confusion, it's important to understand what each component is:
 
-- **Sidekick** = The infrastructure: remote machine + MCP tools + KV store + Dashboard + Agent Bridge
-- **The AI** = The assistant running in opencode (e.g., qwen, Claude, etc.) that uses Sidekick tools
-- **Agent Bridge** = A separate autonomous AI (Groq/Ollama) that runs tasks independently via the Dashboard
+- **Sidekick** = The autonomous agent platform: remote machine + 37+ MCP tools + persistent memory + Dashboard + Agent Bridge + self-extending capabilities
+- **The AI** = The assistant running in opencode (e.g., qwen, Claude, etc.) that uses Sidekick's platform
+- **Agent Bridge** = Sidekick's autonomous agent that runs tasks independently via the Dashboard
 
-When you call sidekick tools in opencode, you're executing commands on the remote VPS. The AI makes the decisions; Sidekick provides the capabilities.
+When you call sidekick tools in opencode, you're executing commands on the remote machine. The AI makes the decisions; Sidekick provides the capabilities.
 
 The Agent Bridge is a separate system that can run tasks autonomously, but it's not integrated into the main AI's workflow. It's accessed via the Dashboard's Agent tab or direct API calls.
 
@@ -198,7 +234,7 @@ The dashboard auth and IP whitelist are disabled by default (empty env var = no 
 
 ### Dashboard
 
-Open `http://YOUR_VPS_IP:4098/` in a browser.
+Open `http://YOUR_REMOTE_IP:4098/` in a browser.
 
 - **System** — uptime, CPU, memory, disk, LLM status, service indicators (MCP, Agent, Ollama)
 - **Activity** — live tool call log with source badges (mcp/agent/dashboard)
@@ -220,15 +256,15 @@ The agent at `:4099` takes a natural-language goal and runs an autonomous loop:
 
 ```bash
 # Start a task
-curl -X POST http://YOUR_VPS_IP:4099/api/agent/run \
+curl -X POST http://YOUR_REMOTE_IP:4099/api/agent/run \
   -H "Content-Type: application/json" \
   -d '{"goal": "check disk usage and store the result"}'
 
 # Stream progress (SSE)
-curl http://YOUR_VPS_IP:4099/api/agent/stream/{taskId}
+curl http://YOUR_REMOTE_IP:4099/api/agent/stream/{taskId}
 
 # View history
-curl http://YOUR_VPS_IP:4099/api/agent/history
+curl http://YOUR_REMOTE_IP:4099/api/agent/history
 ```
 
 ## Setting Up AGENTS.md
@@ -241,7 +277,7 @@ Create or edit `~/.config/opencode/AGENTS.md` with the following structure (repl
 # Sidekick Configuration
 
 ## Connection
-- IP: YOUR_VPS_IP
+- IP: YOUR_REMOTE_IP
 - MCP Server: port 4097
 - Dashboard: port 4098
 - Agent Bridge: port 4099
@@ -280,7 +316,7 @@ git push
 
 Or SSH directly to pull:
 ```bash
-ssh sidekick@YOUR_VPS_IP
+ssh sidekick@YOUR_REMOTE_IP
 cd /home/sidekick/mcp-sidekick
 git pull
 sudo systemctl restart sidekick-mcp sidekick-dashboard sidekick-agent
@@ -352,7 +388,7 @@ sudo systemctl status sidekick-dashboard
 1. Clone the repo
 2. Copy `.env.example` → `.env` and fill in your values
 3. Run `./deploy.ps1` (Windows) or `./deploy.sh` (Linux/Mac)
-4. Open `http://YOUR_VPS_IP:4098/` and explore your new remote AI infrastructure
+4. Open `http://YOUR_REMOTE_IP:4098/` and explore your new autonomous agent platform
 
 That's it. Sidekick is live.
 

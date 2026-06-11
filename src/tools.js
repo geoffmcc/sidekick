@@ -273,7 +273,7 @@ function callOllamaLLM(prompt, system, temperature) {
     const body = JSON.stringify({
       model: "phi3:mini",
       prompt: prompt,
-      system: system || "You are a helpful assistant running on a VPS.",
+      system: system || "You are a helpful assistant running on a remote machine.",
       options: { temperature: temperature || 0.7 },
       stream: false
     });
@@ -309,7 +309,7 @@ function callGroqLLM(prompt, system, temperature) {
     const body = JSON.stringify({
       model: GROQ_MODEL,
       messages: [
-        { role: "system", content: system || "You are a helpful assistant running on a VPS." },
+        { role: "system", content: system || "You are a helpful assistant running on a remote machine." },
         { role: "user", content: prompt }
       ],
       temperature: temperature || 0.7
@@ -3959,13 +3959,13 @@ const TOOLS = {
 };
 
 const TOOL_DEFS = [
-  { name: "sidekick_bash", description: "Execute a shell command on the VPS", args: { command: "string" } },
-  { name: "sidekick_read", description: "Read a file from the VPS filesystem", args: { path: "string" } },
-  { name: "sidekick_write", description: "Write content to a file on the VPS", args: { path: "string", content: "string" } },
-  { name: "sidekick_list", description: "List files and directories on the VPS", args: { path: "string" } },
+  { name: "sidekick_bash", description: "Execute a shell command on the remote machine", args: { command: "string" } },
+  { name: "sidekick_read", description: "Read a file from the remote filesystem", args: { path: "string" } },
+  { name: "sidekick_write", description: "Write content to a file on the remote machine", args: { path: "string", content: "string" } },
+  { name: "sidekick_list", description: "List files and directories on the remote machine", args: { path: "string" } },
   { name: "sidekick_store", description: "Store a value persistently in KV storage", args: { key: "string", value: "string", project: "string (optional)" } },
   { name: "sidekick_get", description: "Retrieve a stored value from KV storage", args: { key: "string" } },
-  { name: "sidekick_web_fetch", description: "Fetch a URL from the VPS", args: { url: "string", method: "string (optional)", headers: "string (optional)", body: "string (optional)" } },
+  { name: "sidekick_web_fetch", description: "Fetch a URL from the remote machine", args: { url: "string", method: "string (optional)", headers: "string (optional)", body: "string (optional)" } },
   { name: "sidekick_llm", description: "Ask the LLM (Groq cloud or local Phi-3-mini)", args: { prompt: "string", system: "string (optional)", temperature: "number (optional)" } },
   { name: "sidekick_list_projects", description: "List all unique project names in KV storage", args: {} },
   { name: "sidekick_get_by_project", description: "Get all keys and values for a specific project", args: { project: "string" } },

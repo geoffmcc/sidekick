@@ -1,6 +1,6 @@
-# Sidekick VPS
+# Sidekick
 
-A remote VPS agent system. Connect via the sidekick MCP server at `YOUR_VPS_IP:4097`.
+A remote agent system. Connect via the sidekick MCP server at `YOUR_REMOTE_IP:4097`.
 
 ## Sidekick Interaction Policy
 
@@ -10,10 +10,10 @@ Always use the `task` tool with `subagent_type: "sidekick"` when interacting wit
 
 | Tool | When to use |
 |------|-------------|
-| `sidekick_bash` | Run any shell command on the VPS |
-| `sidekick_read` | Read a file from the VPS filesystem |
-| `sidekick_write` | Write or edit a file on the VPS |
-| `sidekick_list` | List files and directories on the VPS |
+| `sidekick_bash` | Run any shell command on the remote machine |
+| `sidekick_read` | Read a file from the remote filesystem |
+| `sidekick_write` | Write or edit a file on the remote machine |
+| `sidekick_list` | List files and directories on the remote machine |
 | `sidekick_search` | Search file contents using ripgrep/grep (faster than bash grep) |
 | `sidekick_git` | Structured git operations (status, diff, log, add, commit, push, pull, branch, checkout, stash) |
 | `sidekick_notify` | Send alerts to Discord, Slack, or email |
@@ -29,7 +29,7 @@ Always use the `task` tool with `subagent_type: "sidekick"` when interacting wit
 | `sidekick_get` | Retrieve a stored value from KV storage |
 | `sidekick_list_projects` | List all projects in KV storage |
 | `sidekick_get_by_project` | Get all keys and values for a specific project |
-| `sidekick_web_fetch` | Fetch a URL from the VPS IP (bypasses local IP restrictions) |
+| `sidekick_web_fetch` | Fetch a URL from the remote IP (bypasses local IP restrictions) |
 | `sidekick_llm` | Query the LLM (Groq cloud or local Phi-3-mini) |
 | `sidekick_transform` | Data manipulation pipeline: filter, extract, sort, format, map data |
 | `sidekick_health` | Composite system health checks with scoring and issue detection |
@@ -138,7 +138,7 @@ All tool outputs automatically redact:
 
 - **Direct tool use**: Just use any `sidekick_*` tool — the MCP server handles it automatically.
 - **Subagent (`@sidekick`)**: Use for complex multi-step tasks. The agent will plan, call tools, and iterate until the goal is met.
-- **Dashboard**: Open `http://YOUR_VPS_IP:4098/` in a browser (auth: geoffrey) for system monitoring and the agent chat interface.
+- **Dashboard**: Open `http://YOUR_REMOTE_IP:4098/` in a browser (auth: geoffrey) for system monitoring and the agent chat interface.
 
 ## Deployment
 
@@ -154,7 +154,7 @@ All tool outputs automatically redact:
 
 ### Manual (SSH)
 ```bash
-ssh sidekick@YOUR_VPS_IP
+ssh sidekick@YOUR_REMOTE_IP
 cd /home/sidekick/mcp-sidekick
 git pull
 sudo systemctl restart sidekick-mcp sidekick-dashboard sidekick-agent
@@ -162,7 +162,7 @@ sudo systemctl restart sidekick-mcp sidekick-dashboard sidekick-agent
 
 ## Configuration
 
-Edit `.env` locally, then deploy. The deploy script syncs `.env` to VPS automatically.
+Edit `.env` locally, then deploy. The deploy script syncs `.env` to remote machine automatically.
 
 Key env vars:
 - `SIDEKICK_API_KEY` - MCP server auth
@@ -172,14 +172,14 @@ Key env vars:
 
 ## Security
 
-- SSH key: `~/.ssh/sidekick` (dedicated key for this VPS)
+- SSH key: `~/.ssh/sidekick` (dedicated key for this remote machine)
 - API keys in `.env` (gitignored)
 - `opencode.json` has API key and IP (gitignored)
 - Dashboard uses HTTP Basic Auth
 - MCP server uses Bearer token + IP whitelist
 - Agent bridge binds to 127.0.0.1 only
 
-## VPS Service Management
+## Remote Service Management
 
 The `sidekick` user has restricted sudo permissions for service management:
 
@@ -229,4 +229,4 @@ sudo systemctl status sidekick-mcp sidekick-dashboard sidekick-agent
 
 ### Dashboard (HTTP Basic Auth)
 - URL: `http://149.28.229.13:4098/`
-- Credentials in `.env` on VPS: `SIDEKICK_DASHBOARD_USER` / `SIDEKICK_DASHBOARD_PASS`
+- Credentials in `.env` on remote machine: `SIDEKICK_DASHBOARD_USER` / `SIDEKICK_DASHBOARD_PASS`
