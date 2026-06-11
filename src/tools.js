@@ -2826,6 +2826,287 @@ async function sidekick_secret({ action, key, value, generate }) {
   return { content: [{ type: "text", text: "Unknown action. Use: store, get, delete, list, rotate" }], isError: true };
 }
 
+// --- Parse Tool ---
+
+const YAML = require("yaml");
+const { XMLParser, XMLBuilder } = require("fast-xml-parser");
+const INI = require("ini");
+
+function detectFormat(input) {
+  const trimmed = input.trim();
+  
+  // Try JSON first
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      JSON.parse(trimmed);
+      return "json";
+    } catch {}
+  }
+  
+  // Check for YAML indicators
+  if (trimmed.includes(":") && (trimmed.includes("\n") || trimmed.startsWith("---"))) {
+    try {
+      YAML.parse(trimmed);
+      return "yaml";
+    } catch {}
+  }
+  
+  // Check for XML
+  if (trimmed.startsWith("<?xml") || trimmed.startsWith("<")) {
+    try {
+      const parser = new XMLParser();
+      parser.parse(trimmed);
+      return "xml";
+    } catch {}
+  }
+  
+  // Check for INI
+  if (trimmed.includes("[") && trimmed.includes("=")) {
+    try {
+      INI.parse(trimmed);
+      return "ini";
+    } catch {}
+  }
+  
+  // Check for CSV (has commas and newlines)
+  if (trimmed.includes(",") && trimmed.includes("\n")) {
+    return "csv";
+  }
+  
+  return null;
+}
+
+function parseCSV(input) {
+  const lines = input.trim().split("\n");
+  if (lines.length === 0) return [];
+  
+  const headers = lines[0].split(",").map(h => h.trim().replace(/^"(.*)"$/, "$1"));
+  const rows = [];
+  
+  for (let i = 1; i < lines.length; i++) {
+    const values = lines[i].split(",").map(v => v.trim().replace(/^"(.*)"$/, "$1"));
+    const row = {};
+    for (let j = 0; j < headers.length; j++) {
+      row[headers[j]] = values[j] || "";
+    }
+    rows.push(row);
+  }
+  
+  return rows;
+}
+
+async function sidekick_parse({ input, format }) {
+  if (!input) {
+    return { content: [{ type: "text", text: "input required" }], isError: true };
+  }
+  
+  const detectedFormat = format || detectFormat(input);
+  
+  if (!detectedFormat) {
+    return { content: [{ type: "text", text: "Could not detect format. Specify format: json, yaml, xml, ini, csv" }], isError: true };
+  }
+  
+  try {
+    let parsed;
+    
+    if (detectedFormat === "json") {
+      parsed = JSON.parse(input);
+    } else if (detectedFormat === "yaml") {
+      parsed = YAML.parse(input);
+    } else if (detectedFormat === "xml") {
+      const parser = new XMLParser({ ignoreAttributes: false });
+      parsed = parser.parse(input);
+    } else if (detectedFormat === "ini") {
+      parsed = INI.parse(input);
+    } else if (detectedFormat === "csv") {
+      parsed = parseCSV(input);
+    } else {
+      return { content: [{ type: "text", text: `Unsupported format: ${detectedFormat}` }], isError: true };
+    }
+    
+    return { content: [{ type: "text", text: JSON.stringify(parsed, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: "text", text: `Parse error (${detectedFormat}): ${e.message}` }], isError: true };
+  }
+}
+
+// --- Diff Tool ---
+
+function diffText(oldText, newText) {
+  const oldLines = oldText.split("\n");
+  const newLines = newText.split("\n");
+  const changes = [];
+  
+  // Simple line-by-line diff
+  const maxLen = Math.max(oldLines.length, newLines.length);
+  for (let i = 0; i < maxLen; i++) {
+    const oldLine = oldLines[i];
+    const newLine = newLines[i];
+    
+    if (oldLine === undefined) {
+      changes.push({ type: "added", line: i + 1, content: newLine });
+    } else if (newLine === undefined) {
+      changes.push({ type: "removed", line: i + 1, content: oldLine });
+    } else if (oldLine !== newLine) {
+      changes.push({ type: "modified", line: i + 1, oldContent: oldLine, newContent: newLine });
+    }
+  }
+  
+  return changes;
+}
+
+function diffJSON(oldObj, newObj, path = "") {
+  const changes = [];
+  
+  const allKeys = new Set([...Object.keys(oldObj || {}), ...Object.keys(newObj || {})]);
+  
+  for (const key of allKeys) {
+    const currentPath = path ? `${path}.${key}` : key;
+    const oldVal = oldObj?.[key];
+    const newVal = newObj?.[key];
+    
+    if (oldVal === undefined) {
+      changes.push({ type: "added", path: currentPath, value: newVal });
+    } else if (newVal === undefined) {
+      changes.push({ type: "removed", path: currentPath, value: oldVal });
+    } else if (typeof oldVal === "object" && typeof newVal === "object" && oldVal !== null && newVal !== null) {
+      // Recursively diff nested objects
+      if (Array.isArray(oldVal) && Array.isArray(newVal)) {
+        // Array comparison
+        if (JSON.stringify(oldVal) !== JSON.stringify(newVal)) {
+          changes.push({ type: "modified", path: currentPath, oldValue: oldVal, newValue: newVal });
+        }
+      } else {
+        // Object comparison
+        changes.push(...diffJSON(oldVal, newVal, currentPath));
+      }
+    } else if (oldVal !== newVal) {
+      changes.push({ type: "modified", path: currentPath, oldValue: oldVal, newValue: newVal });
+    }
+  }
+  
+  return changes;
+}
+
+function formatChanges(changes, format) {
+  if (format === "summary") {
+    const added = changes.filter(c => c.type === "added").length;
+    const removed = changes.filter(c => c.type === "removed").length;
+    const modified = changes.filter(c => c.type === "modified").length;
+    return `Summary: ${added} added, ${removed} removed, ${modified} modified`;
+  }
+  
+  if (format === "unified") {
+    return changes.map(c => {
+      if (c.type === "added") {
+        return `+ ${c.path || `line ${c.line}`}: ${JSON.stringify(c.value || c.content)}`;
+      } else if (c.type === "removed") {
+        return `- ${c.path || `line ${c.line}`}: ${JSON.stringify(c.value || c.content)}`;
+      } else if (c.type === "modified") {
+        return `~ ${c.path || `line ${c.line}`}:\n- ${JSON.stringify(c.oldValue || c.oldContent)}\n+ ${JSON.stringify(c.newValue || c.newContent)}`;
+      }
+    }).join("\n");
+  }
+  
+  // Default: structured JSON
+  return JSON.stringify(changes, null, 2);
+}
+
+async function sidekick_diff({ old_text, new_text, format, type }) {
+  if (!old_text || !new_text) {
+    return { content: [{ type: "text", text: "old_text and new_text required" }], isError: true };
+  }
+  
+  const diffType = type || "auto";
+  const outputFormat = format || "unified";
+  
+  let changes;
+  
+  if (diffType === "text") {
+    changes = diffText(old_text, new_text);
+  } else if (diffType === "json") {
+    try {
+      const oldObj = JSON.parse(old_text);
+      const newObj = JSON.parse(new_text);
+      changes = diffJSON(oldObj, newObj);
+    } catch (e) {
+      return { content: [{ type: "text", text: `JSON parse error: ${e.message}` }], isError: true };
+    }
+  } else if (diffType === "yaml") {
+    try {
+      const oldObj = YAML.parse(old_text);
+      const newObj = YAML.parse(new_text);
+      changes = diffJSON(oldObj, newObj);
+    } catch (e) {
+      return { content: [{ type: "text", text: `YAML parse error: ${e.message}` }], isError: true };
+    }
+  } else {
+    // Auto-detect
+    const oldFormat = detectFormat(old_text);
+    const newFormat = detectFormat(new_text);
+    
+    if (oldFormat === "json" && newFormat === "json") {
+      try {
+        const oldObj = JSON.parse(old_text);
+        const newObj = JSON.parse(new_text);
+        changes = diffJSON(oldObj, newObj);
+      } catch (e) {
+        return { content: [{ type: "text", text: `Auto-detect JSON parse error: ${e.message}` }], isError: true };
+      }
+    } else if ((oldFormat === "yaml" && newFormat === "yaml") || (oldFormat === "json" && newFormat === "yaml") || (oldFormat === "yaml" && newFormat === "json")) {
+      try {
+        const oldObj = oldFormat === "json" ? JSON.parse(old_text) : YAML.parse(old_text);
+        const newObj = newFormat === "json" ? JSON.parse(new_text) : YAML.parse(new_text);
+        changes = diffJSON(oldObj, newObj);
+      } catch (e) {
+        return { content: [{ type: "text", text: `Auto-detect YAML/JSON parse error: ${e.message}` }], isError: true };
+      }
+    } else {
+      // Fall back to text diff
+      changes = diffText(old_text, new_text);
+    }
+  }
+  
+  const output = formatChanges(changes, outputFormat);
+  return { content: [{ type: "text", text: output }] };
+}
+
+// --- Hash Tool ---
+
+async function sidekick_hash({ input, algorithm, verify, path: filePath }) {
+  const algo = algorithm || "sha256";
+  const validAlgorithms = ["md5", "sha1", "sha256", "sha512"];
+  
+  if (!validAlgorithms.includes(algo)) {
+    return { content: [{ type: "text", text: `Invalid algorithm. Use: ${validAlgorithms.join(", ")}` }], isError: true };
+  }
+  
+  let data;
+  
+  if (filePath) {
+    // Hash a file
+    try {
+      data = fs.readFileSync(filePath);
+    } catch (e) {
+      return { content: [{ type: "text", text: `File read error: ${e.message}` }], isError: true };
+    }
+  } else if (input) {
+    // Hash input string
+    data = Buffer.from(input, "utf-8");
+  } else {
+    return { content: [{ type: "text", text: "input or path required" }], isError: true };
+  }
+  
+  const hash = crypto.createHash(algo).update(data).digest("hex");
+  
+  if (verify) {
+    const matches = hash === verify.toLowerCase();
+    return { content: [{ type: "text", text: matches ? `✓ Hash matches (${algo}: ${hash})` : `✗ Hash mismatch\nExpected: ${verify}\nActual:   ${hash}` }] };
+  }
+  
+  return { content: [{ type: "text", text: `${algo.toUpperCase()}: ${hash}` }] };
+}
+
 const TOOLS = {
   sidekick_bash,
   sidekick_read,
@@ -2854,6 +3135,9 @@ const TOOLS = {
   sidekick_snapshot,
   sidekick_watch,
   sidekick_secret,
+  sidekick_parse,
+  sidekick_diff,
+  sidekick_hash,
 };
 
 const TOOL_DEFS = [
@@ -2884,6 +3168,9 @@ const TOOL_DEFS = [
   { name: "sidekick_snapshot", description: "Capture system state and detect drift by comparing snapshots", args: { action: "string (capture|compare|list|delete)", name: "string (snapshot name)", capture: "string (optional, comma-separated: processes,services,disk,packages,network,files:/path)", compare: "string (optional, baseline snapshot name for compare action)" } },
   { name: "sidekick_watch", description: "Event-driven monitoring: watch services, processes, endpoints, or files and trigger actions on conditions", args: { action: "string (add|list|remove|pause|check)", id: "string (optional, for remove/pause/check)", name: "string (optional, watch name)", source: "string (optional, service|process|endpoint|file)", target: "string (optional, service name, process name, URL, or file path)", condition: "string (optional, e.g. status!=active, not_running, status!=200, content_matches)", interval: "string (optional, e.g. 30s, 5m, 1h)", action_tool: "string (optional, tool to call when triggered)", action_args: "object (optional, args for action tool)", pause: "boolean (optional, true to pause, false to resume)" } },
   { name: "sidekick_secret", description: "Encrypted credential management with AES-256-GCM (requires SIDEKICK_SECRET_KEY in .env)", args: { action: "string (store|get|delete|list|rotate)", key: "string (secret name)", value: "string (optional, for store)", generate: "string (optional, length for rotate, e.g. '32')" } },
+  { name: "sidekick_parse", description: "Parse structured data formats (JSON, YAML, XML, INI, CSV) with auto-detection", args: { input: "string (data to parse)", format: "string (optional, json|yaml|xml|ini|csv - auto-detected if not specified)" } },
+  { name: "sidekick_diff", description: "Semantic comparison of text, JSON, or YAML with structure-aware diffing", args: { old_text: "string (original content)", new_text: "string (modified content)", type: "string (optional, text|json|yaml|auto - default auto)", format: "string (optional, unified|summary|json - default unified)" } },
+  { name: "sidekick_hash", description: "Generate checksums (MD5, SHA1, SHA256, SHA512) for files or data with verification", args: { input: "string (optional, data to hash)", path: "string (optional, file path to hash)", algorithm: "string (optional, md5|sha1|sha256|sha512 - default sha256)", verify: "string (optional, expected hash to verify against)" } },
 ];
 
 async function callTool(name, args) {

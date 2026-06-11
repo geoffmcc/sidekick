@@ -170,6 +170,22 @@ const TOOL_SCHEMAS = {
     value: z.string().optional().describe("Secret value (for store action)"),
     generate: z.string().optional().describe("Length for rotation (e.g. '32' for 32-char random hex)")
   }),
+  sidekick_parse: z.object({
+    input: z.string().describe("Data to parse (string content)"),
+    format: z.string().optional().describe("Format: json, yaml, xml, ini, csv (auto-detected if not specified)")
+  }),
+  sidekick_diff: z.object({
+    old_text: z.string().describe("Original content to compare"),
+    new_text: z.string().describe("Modified content to compare"),
+    type: z.string().optional().describe("Diff type: text, json, yaml, or auto (default: auto)"),
+    format: z.string().optional().describe("Output format: unified, summary, or json (default: unified)")
+  }),
+  sidekick_hash: z.object({
+    input: z.string().optional().describe("Data to hash (string content)"),
+    path: z.string().optional().describe("File path to hash"),
+    algorithm: z.string().optional().describe("Hash algorithm: md5, sha1, sha256, sha512 (default: sha256)"),
+    verify: z.string().optional().describe("Expected hash value to verify against")
+  }),
 };
 
 // --- Factory: create fresh McpServer + register tools ---
