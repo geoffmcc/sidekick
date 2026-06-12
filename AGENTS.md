@@ -172,20 +172,18 @@ All tool outputs automatically redact:
 
 ### First Deploy
 On first deploy to a fresh VM, the script will:
-- Detect the initial user (ubuntu, admin, or root)
-- Prompt for the initial user's password (once)
+- Prompt for the initial SSH user (e.g., ubuntu, admin, root)
+- Open an SSH ControlMaster connection (prompts for password once)
 - Bootstrap the VM by running `scripts/bootstrap.sh` remotely:
   - Create the sidekick user
   - Install Node.js 20 LTS
-  - Set up SSH directory and keys
   - Configure sudoers for passwordless service management
-  - Create application directories
+  - Install and enable systemd services
+  - Install your SSH key for passwordless access
   - Open firewall ports (if UFW is active)
-- Copy SSH public key to the sidekick user
-- Install and enable systemd services
 - Sync files and start services
 
-All privileged operations are performed during the bootstrap phase using the initial user's password.
+All privileged operations are performed during the bootstrap phase using the initial user's password. The SSH ControlMaster connection multiplexes all file transfers and commands through a single authenticated session, requiring only one password prompt.
 
 ### Subsequent Deploys
 After first deploy, the script detects that services are already installed and skips all setup steps. Only minimal sudo permissions are used:
@@ -196,18 +194,11 @@ No password is required for subsequent deploys.
 
 ### Automation/CI
 ```powershell
-# Windows - with parameter
-.\deploy.ps1 -IP "YOUR_REMOTE_IP" -Password "initial_user_password"
+# Windows
+.\deploy.ps1 -IP "YOUR_REMOTE_IP" -InitialUser "ubuntu"
 
-# Windows - with environment variable
-$env:SIDEKICK_INITIAL_PASSWORD="initial_user_password"
-.\deploy.ps1 -IP "YOUR_REMOTE_IP"
-
-# Linux/Mac - with parameter
-./deploy.sh -IP YOUR_REMOTE_IP -Password "initial_user_password"
-
-# Linux/Mac - with environment variable
-SIDEKICK_INITIAL_PASSWORD="initial_user_password" ./deploy.sh -IP YOUR_REMOTE_IP
+# Linux/Mac
+./deploy.sh -IP YOUR_REMOTE_IP -InitialUser ubuntu
 ```
 
 ### Manual (SSH)

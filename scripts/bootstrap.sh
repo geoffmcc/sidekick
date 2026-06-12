@@ -3,7 +3,7 @@ set -e
 
 # Sidekick Bootstrap Script
 # Prepares a fresh Ubuntu/Debian machine for Sidekick deployment
-# Creates sidekick user, installs Node.js, sets up directories
+# Creates sidekick user, installs Node.js, sets up directories, optionally installs services
 
 # Colors for output
 RED='\033[0;31m'
@@ -14,6 +14,8 @@ NC='\033[0m' # No Color
 # Default values
 USERNAME="sidekick"
 NODE_VERSION="20"
+INSTALL_SERVICES=false
+SSH_PUB_KEY=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -24,6 +26,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --node-version)
       NODE_VERSION="$2"
+      shift 2
+      ;;
+    --install-services)
+      INSTALL_SERVICES=true
+      shift
+      ;;
+    --ssh-key)
+      SSH_PUB_KEY="$2"
       shift 2
       ;;
     --yes)
@@ -78,7 +88,7 @@ apt-get update -qq
 
 # Install required packages
 log "Installing required packages..."
-apt-get install -y -qq curl ca-certificates gnupg git > /dev/null
+apt-get install -y -qq curl ca-certificates gnupg > /dev/null
 
 # Create user if doesn't exist
 if id "$USERNAME" &>/dev/null; then
@@ -133,6 +143,16 @@ touch "$USER_HOME/.ssh/authorized_keys"
 chmod 700 "$USER_HOME/.ssh"
 chmod 600 "$USER_HOME/.ssh/authorized_keys"
 chown -R "$USERNAME:$USERNAME" "$USER_HOME/.ssh"
+
+# Install SSH key if provided
+if [ -n "$SSH_PUB_KEY" ]; then
+  log "Installing SSH key for $USERNAME..."
+  echo "$SSH_PUB_KEY" >> "$USER_HOME/.ssh/authorized_keys"
+  sort -u "$USER_HOME/.ssh/authorized_keys" -o "$USER_HOME/.ssh/authorized_keys"
+  chown "$USERNAME:$USERNAME" "$USER_HOME/.ssh/authorized_keys"
+  log "SSH key installed"
+fi
+
 log "SSH directory configured"
 
 # Create application directories
@@ -158,6 +178,37 @@ else
   warn "UFW not installed. Please ensure ports 4097, 4098, 4099 are open."
 fi
 
+# Install services if requested
+if [ "$INSTALL_SERVICES" = true ]; then
+  log "Installing systemd services..."
+  
+  # Check for service files in /tmp
+  for svc in sidekick-mcp sidekick-dashboard sidekick-agent; do
+    if [ -f "/tmp/$svc.service" ]; then
+      cp "/tmp/$svc.service" "/etc/systemd/system/$svc.service"
+      log "  Installed $svc.service"
+    else
+      warn "  Service file /tmp/$svc.service not found, skipping"
+    fi
+  done
+  
+  # Reload systemd and enable services
+  systemctl daemon-reload
+  log "Systemd daemon reloaded"
+  
+  for svc in sidekick-mcp sidekick-dashboard sidekick-agent; do
+    if [ -f "/etc/systemd/system/$svc.service" ]; then
+      systemctl enable "$svc"
+      log "  Enabled $svc"
+    fi
+  done
+  
+  # Clean up temp files
+  rm -f /tmp/sidekick-*.service
+  
+  log "Services installed and enabled"
+fi
+
 # Final verification
 log "Verifying installation..."
 if ! id "$USERNAME" &>/dev/null; then
@@ -172,14 +223,28 @@ if [ ! -d "$USER_HOME/sidekick" ]; then
   error "Application directory not created"
 fi
 
+if [ "$INSTALL_SERVICES" = true ]; then
+  for svc in sidekick-mcp sidekick-dashboard sidekick-agent; do
+    if [ ! -f "/etc/systemd/system/$svc.service" ]; then
+      error "Service $svc not installed"
+    fi
+  done
+fi
+
 log "Bootstrap completed successfully!"
 echo ""
-log "Next steps:"
-echo "  1. Exit this VM: exit"
-echo "  2. On your local machine, run: ./deploy.sh -IP YOUR_VM_IP"
-echo ""
-log "The deploy script will:"
-echo "  - Copy your SSH key to the $USERNAME user"
-echo "  - Install Sidekick services"
-echo "  - Start the application"
+if [ "$INSTALL_SERVICES" = true ]; then
+  log "Next steps:"
+  echo "  On your local machine, run: ./deploy.sh -IP YOUR_VM_IP"
+  echo "  The deploy script will sync files and start the application."
+else
+  log "Next steps:"
+  echo "  1. Exit this VM: exit"
+  echo "  2. On your local machine, run: ./deploy.sh -IP YOUR_VM_IP"
+  echo ""
+  log "The deploy script will:"
+  echo "  - Install Sidekick services"
+  echo "  - Sync source files"
+  echo "  - Start the application"
+fi
 echo ""

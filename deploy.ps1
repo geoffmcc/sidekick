@@ -15,14 +15,13 @@ $PROJECT_DIR = $PSScriptRoot
 
 $SSH_OPTS = "-o StrictHostKeyChecking=accept-new -o BatchMode=yes"
 
+# ControlMaster configuration for connection reuse
+$ControlPath = "$env:TEMP\sidekick-ssh-%r@%h:%p"
+$ControlOpts = "-o ControlMaster=auto -o ControlPath=$ControlPath -o ControlPersist=60"
+
 function Run-Remote {
   param([string]$Cmd)
   ssh -i "$SSH_KEY" $SSH_OPTS.Split(' ') "$VPS" "$Cmd" 2>&1
-}
-
-function Run-Remote-Interactive {
-  param([string]$Cmd)
-  ssh -t -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new "$VPS" "$Cmd" 2>&1
 }
 
 function Copy-ToVPS {
@@ -40,12 +39,18 @@ function Restart-SidekickService {
 function Ensure-SSHKey {
   if (Test-Path $SSH_KEY) {
     Write-Host "  SSH key found at $SSH_KEY" -ForegroundColor Gray
-    return
+    # Verify public key exists
+    if (-not (Test-Path $SSH_PUB_KEY)) {
+      Write-Host "  Public key missing, regenerating..." -ForegroundColor Yellow
+      Remove-Item $SSH_KEY -Force
+    } else {
+      return
+    }
   }
   Write-Host "  Generating SSH key..." -ForegroundColor Yellow
-  ssh-keygen -t ed25519 -f "$SSH_KEY" -N '""' -q
-  if (-not (Test-Path $SSH_KEY)) {
-    throw "Failed to generate SSH key"
+  ssh-keygen -t ed25519 -f "$SSH_KEY" -N "" -q
+  if (-not (Test-Path $SSH_KEY) -or -not (Test-Path $SSH_PUB_KEY)) {
+    throw "Failed to generate SSH key at $SSH_KEY"
   }
   Write-Host "  SSH key generated" -ForegroundColor Green
 }
@@ -55,112 +60,121 @@ function Test-SSHConnection {
   return ($result -match "OK")
 }
 
-function Detect-InitialUser {
-  $users = @("ubuntu", "admin", "root")
-  foreach ($user in $users) {
-    $result = ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=3 "$user@$IP" "echo OK" 2>&1
-    if ($result -match "OK") {
-      return $user
-    }
-  }
-  return $null
-}
-
 function Test-SidekickUserExists {
   $result = ssh -i "$SSH_KEY" $SSH_OPTS.Split(' ') -o ConnectTimeout=3 "$VPS" "echo OK" 2>&1
   return ($result -match "OK")
 }
 
 function Run-Bootstrap {
-  param([string]$User, [string]$Pass)
+  param([string]$User)
   
   Write-Host ""
   Write-Host "=== Running Bootstrap ===" -ForegroundColor Cyan
-  
   Write-Host "  Bootstrapping as $User@$IP..." -ForegroundColor Yellow
   
-  # Copy bootstrap script to remote
+  # Validate local files
+  Write-Host "  Validating local files..." -ForegroundColor Gray
   $bootstrapLocal = Join-Path $PROJECT_DIR "scripts\bootstrap.sh"
   if (-not (Test-Path $bootstrapLocal)) {
     throw "Bootstrap script not found at $bootstrapLocal"
   }
   
+  if (-not (Test-Path $SSH_PUB_KEY)) {
+    throw "SSH public key not found at $SSH_PUB_KEY"
+  }
+  
+  $pubKey = (Get-Content $SSH_PUB_KEY -Raw).Trim()
+  if ([string]::IsNullOrWhiteSpace($pubKey)) {
+    throw "SSH public key is empty"
+  }
+  
+  # Open control master connection (1 password prompt)
+  Write-Host "  Opening SSH connection (1 password prompt)..." -ForegroundColor Yellow
+  Write-Host "  Enter password for $User@$IP when prompted:" -ForegroundColor Cyan
+  
+  $sshResult = ssh -o ControlMaster=yes -o ControlPath="$ControlPath" `
+                   -o ControlPersist=60 -o StrictHostKeyChecking=accept-new `
+                   -o ConnectTimeout=10 -N "$User@$IP" 2>&1
+  
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "  ERROR: Failed to establish SSH connection" -ForegroundColor Red
+    Write-Host "Possible causes:" -ForegroundColor Yellow
+    Write-Host "  - Incorrect password"
+    Write-Host "  - User doesn't exist on remote"
+    Write-Host "  - Network connectivity issues"
+    throw "SSH connection failed"
+  }
+  
+  Write-Host "  SSH connection established" -ForegroundColor Green
+  
+  # Upload files using control connection (no password prompts)
   Write-Host "  Uploading bootstrap script..." -ForegroundColor Yellow
-  if ($Pass) {
-    # Use sshpass if available for non-interactive execution
-    $env:SSHPASS = $Pass
-    $result = sshpass -e scp -o StrictHostKeyChecking=accept-new "$bootstrapLocal" "$User@$IP`:/tmp/bootstrap.sh" 2>&1
-    if ($LASTEXITCODE -ne 0) {
-      throw "Failed to copy bootstrap script. Install sshpass or use SSH key authentication."
+  $scpResult = scp -o ControlPath="$ControlPath" "$bootstrapLocal" "$User@$IP`:/tmp/bootstrap.sh" 2>&1
+  
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "  ERROR: Failed to upload bootstrap script" -ForegroundColor Red
+    ssh -o ControlPath="$ControlPath" -O exit "$User@$IP" 2>$null
+    throw "SCP failed"
+  }
+  Write-Host "    ✓ bootstrap.sh" -ForegroundColor Gray
+  
+  Write-Host "  Uploading service files..." -ForegroundColor Yellow
+  $services = @("sidekick-mcp", "sidekick-dashboard", "sidekick-agent")
+  foreach ($svc in $services) {
+    $svcLocal = Join-Path $PROJECT_DIR "systemd\$svc.service"
+    if (-not (Test-Path $svcLocal)) {
+      Write-Host "  ERROR: Service file not found: $svcLocal" -ForegroundColor Red
+      ssh -o ControlPath="$ControlPath" -O exit "$User@$IP" 2>$null
+      throw "Service file not found"
     }
-  } else {
-    scp -o StrictHostKeyChecking=accept-new "$bootstrapLocal" "$User@$IP`:/tmp/bootstrap.sh" 2>&1 | Out-Null
+    
+    $scpResult = scp -o ControlPath="$ControlPath" "$svcLocal" "$User@$IP`:/tmp/$svc.service" 2>&1
+    
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host "  ERROR: Failed to upload $svc.service" -ForegroundColor Red
+      ssh -o ControlPath="$ControlPath" -O exit "$User@$IP" 2>$null
+      throw "SCP failed"
+    }
+    Write-Host "    ✓ $svc.service" -ForegroundColor Gray
   }
   
-  Write-Host "  Executing bootstrap script..." -ForegroundColor Yellow
-  if ($Pass) {
-    $env:SSHPASS = $Pass
-    sshpass -e ssh -o StrictHostKeyChecking=accept-new "$User@$IP" "echo '$Pass' | sudo -S bash /tmp/bootstrap.sh --yes && rm /tmp/bootstrap.sh" 2>&1 | Where-Object { $_ -match "\[BOOTSTRAP\]|\[WARNING\]|\[ERROR\]" }
-  } else {
-    ssh -o StrictHostKeyChecking=accept-new "$User@$IP" "sudo bash /tmp/bootstrap.sh --yes && rm /tmp/bootstrap.sh" 2>&1 | Where-Object { $_ -match "\[BOOTSTRAP\]|\[WARNING\]|\[ERROR\]" }
+  # Run bootstrap using control connection (no password prompt)
+  Write-Host "  Executing bootstrap..." -ForegroundColor Yellow
+  Write-Host "--- Bootstrap Output ---" -ForegroundColor DarkGray
+  
+  $bootstrapCmd = "sudo bash /tmp/bootstrap.sh --yes --install-services --ssh-key '$pubKey' && rm /tmp/bootstrap.sh /tmp/sidekick-*.service"
+  
+  $sshResult = ssh -o ControlPath="$ControlPath" "$User@$IP" $bootstrapCmd 2>&1
+  
+  # Filter and display output
+  $sshResult | Where-Object { $_ -notmatch "Warning: Permanently added" } | ForEach-Object {
+    Write-Host $_
   }
   
-  # Verify sidekick user was created
+  $exitCode = $LASTEXITCODE
+  Write-Host "--- End Bootstrap Output ---" -ForegroundColor DarkGray
+  
+  # Close control master connection
+  ssh -o ControlPath="$ControlPath" -O exit "$User@$IP" 2>$null
+  
+  if ($exitCode -ne 0) {
+    throw "Bootstrap execution failed (exit code: $exitCode)"
+  }
+  
+  # Verify sidekick user was created and SSH key installed
+  Write-Host ""
   Write-Host "  Verifying bootstrap..." -ForegroundColor Yellow
   Start-Sleep -Seconds 2
   
-  # Try to SSH as sidekick user to verify
   $result = ssh -i "$SSH_KEY" $SSH_OPTS.Split(' ') -o ConnectTimeout=5 "$VPS" "echo OK" 2>&1
   if ($result -match "OK") {
     Write-Host "  Bootstrap completed successfully" -ForegroundColor Green
     return $true
   }
   
-  # If SSH key auth doesn't work yet, we need to copy the key
-  Write-Host "  Copying SSH key to sidekick user..." -ForegroundColor Yellow
-  $pubKey = Get-Content $SSH_PUB_KEY -Raw
-  
-  if ($Pass) {
-    $env:SSHPASS = $Pass
-    sshpass -e ssh -o StrictHostKeyChecking=accept-new "$User@$IP" "sudo -u sidekick bash -c 'mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo `"$pubKey`" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'" 2>&1 | Out-Null
-  } else {
-    ssh -o StrictHostKeyChecking=accept-new "$User@$IP" "sudo -u sidekick bash -c 'mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo `"$pubKey`" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'" 2>&1 | Out-Null
-  }
-  
-  # Verify SSH key installation
-  $result = ssh -i "$SSH_KEY" $SSH_OPTS.Split(' ') -o ConnectTimeout=5 "$VPS" "echo OK" 2>&1
-  if ($result -match "OK") {
-    Write-Host "  SSH key installed successfully" -ForegroundColor Green
-    Write-Host "  Bootstrap completed successfully" -ForegroundColor Green
-    return $true
-  }
-  
-  throw "Bootstrap verification failed"
-}
-
-function Install-SSHKey {
-  Write-Host ""
-  Write-Host "  SSH key not installed on remote. Installing..." -ForegroundColor Yellow
-
-  $pubKey = Get-Content $SSH_PUB_KEY -Raw
-
-  if ($Password) {
-    Write-Host "  Using provided password..." -ForegroundColor Gray
-    $installCmd = "mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '$pubKey' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && echo KEY_INSTALLED"
-    $result = ssh -o StrictHostKeyChecking=accept-new "$VPS" "echo '$Password' | sudo -S -u sidekick bash -c `"$installCmd`"" 2>&1
-    if ($result -match "KEY_INSTALLED") { return $true }
-    return $false
-  }
-
-  Write-Host "  Enter sidekick password when prompted to install SSH key:" -ForegroundColor Cyan
-  $installCmd = "mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '$pubKey' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
-  Run-Remote-Interactive "$installCmd"
-  return ($LASTEXITCODE -eq 0)
-}
-
-function Test-Sudo {
-  $result = Run-Remote "sudo -n /usr/bin/systemctl status sidekick-mcp 2>&1 | head -1"
-  return ($result -match "sidekick-mcp.service")
+  Write-Host "  ERROR: Bootstrap verification failed" -ForegroundColor Red
+  Write-Host "  Could not SSH as sidekick user. Check the bootstrap output above for errors." -ForegroundColor Yellow
+  return $false
 }
 
 function Test-ServicesExist {
@@ -182,86 +196,14 @@ function Initialize-Remote {
   $servicesExist = Test-ServicesExist
 
   if (-not $servicesExist) {
-    Write-Host "  First-time setup detected..." -ForegroundColor Yellow
-
-    # Setup sudoers if needed
-    if (-not (Test-Sudo)) {
-      Write-Host "  Setting up sudoers configuration..." -ForegroundColor Yellow
-
-      $sudoersLocal = Join-Path $PROJECT_DIR "systemd\sidekick-sudoers"
-      if (-not (Test-Path $sudoersLocal)) {
-        throw "sudoers file not found at $sudoersLocal"
-      }
-
-      Copy-ToVPS $sudoersLocal "/tmp/sidekick-sudoers" | Out-Null
-
-      if ($Password) {
-        Write-Host "  Installing sudoers with provided password..." -ForegroundColor Gray
-        Run-Remote "echo '$Password' | sudo -S cp /tmp/sidekick-sudoers /etc/sudoers.d/sidekick" | Out-Null
-        Run-Remote "echo '$Password' | sudo -S chmod 440 /etc/sudoers.d/sidekick" | Out-Null
-        Run-Remote "rm -f /tmp/sidekick-sudoers" | Out-Null
-      } else {
-        Write-Host "  Enter sidekick password when prompted to install sudoers:" -ForegroundColor Cyan
-        Run-Remote-Interactive "sudo cp /tmp/sidekick-sudoers /etc/sudoers.d/sidekick && sudo chmod 440 /etc/sudoers.d/sidekick && rm -f /tmp/sidekick-sudoers"
-      }
-
-      if (-not (Test-Sudo)) {
-        throw "Sudoers setup failed"
-      }
-      Write-Host "  Sudoers configured" -ForegroundColor Green
-    } else {
-      Write-Host "  Sudoers already configured" -ForegroundColor Gray
-    }
-
-    # Copy all service files to /tmp first (no password needed)
-    Write-Host "  Uploading service files..." -ForegroundColor Yellow
-    $services = @("sidekick-mcp", "sidekick-dashboard", "sidekick-agent")
-    foreach ($svc in $services) {
-      $svcLocal = Join-Path $PROJECT_DIR "systemd\$svc.service"
-      Copy-ToVPS $svcLocal "/tmp/$svc.service" | Out-Null
-    }
-
-    # Batch all privileged operations into a single interactive session
-    Write-Host "  Installing and enabling services..." -ForegroundColor Yellow
-    
-    # Build the command to install all services
-    $installCmd = "sudo cp /tmp/sidekick-mcp.service /tmp/sidekick-dashboard.service /tmp/sidekick-agent.service /etc/systemd/system/"
-    $installCmd += " && sudo systemctl daemon-reload"
-    $installCmd += " && sudo systemctl enable sidekick-mcp sidekick-dashboard sidekick-agent"
-    $installCmd += " && rm -f /tmp/sidekick-*.service"
-    
-    # Check if UFW is active and add firewall commands if needed
-    $ufwActive = Run-Remote "systemctl is-active ufw 2>&1"
-    if ($ufwActive -match "active") {
-      $installCmd += " && sudo ufw allow 4097/tcp comment 'Sidekick MCP'"
-      $installCmd += " && sudo ufw allow 4098/tcp comment 'Sidekick Dashboard'"
-      $installCmd += " && sudo ufw allow 4099/tcp comment 'Sidekick Agent'"
-    }
-
-    if ($Password) {
-      # Use password for all operations
-      $passwordCmd = $installCmd -replace "sudo", "echo '$Password' | sudo -S"
-      Run-Remote $passwordCmd | Out-Null
-    } else {
-      # Use interactive password prompt (single prompt for all operations)
-      Run-Remote-Interactive $installCmd | Out-Null
-    }
-
-    # Verify services were installed
-    if (-not (Test-ServicesExist)) {
-      throw "Service installation failed - services not found after setup"
-    }
-
-    if ($ufwActive -match "active") {
-      Write-Host "  Firewall ports opened (4097, 4098, 4099)" -ForegroundColor Green
-    } else {
-      Write-Host "  UFW not active, skipping firewall config" -ForegroundColor Yellow
-    }
-
-    Write-Host "  First-time setup complete" -ForegroundColor Green
-  } else {
-    Write-Host "  Services already installed, skipping setup" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "  ERROR: Services not found after bootstrap." -ForegroundColor Red
+    Write-Host "  Please run bootstrap with --install-services flag:" -ForegroundColor Yellow
+    Write-Host "    sudo ./scripts/bootstrap.sh --install-services" -ForegroundColor Gray
+    throw "Service installation failed - services not found after bootstrap"
   }
+
+  Write-Host "  Services verified" -ForegroundColor Green
 
   Write-Host "  Creating remote directories..." -ForegroundColor Yellow
   Run-Remote "mkdir -p $REMOTE_DIR/src $REMOTE_DIR/data" | Out-Null
@@ -283,35 +225,27 @@ try {
   if (-not (Test-SidekickUserExists)) {
     Write-Host "  Sidekick user not found. Bootstrap required." -ForegroundColor Yellow
     
-    # Detect or use provided initial user
+    # Get initial user - prompt if not provided
     if (-not $InitialUser) {
-      Write-Host "  Detecting initial user..." -ForegroundColor Yellow
-      $InitialUser = Detect-InitialUser
+      $InitialUser = Read-Host "  Enter initial SSH user for $IP"
       if (-not $InitialUser) {
-        throw "Could not detect initial user. Use -InitialUser parameter."
+        throw "Initial user is required for bootstrap"
       }
-      Write-Host "  Detected initial user: $InitialUser" -ForegroundColor Green
     }
     
     # Run bootstrap
-    if (-not (Run-Bootstrap -User $InitialUser -Pass $Password)) {
+    if (-not (Run-Bootstrap -User $InitialUser)) {
       throw "Bootstrap failed"
     }
   } else {
     Write-Host "  Sidekick user found" -ForegroundColor Green
   }
 
+  # Verify SSH connection
   if (-not (Test-SSHConnection)) {
-    if (-not (Install-SSHKey)) {
-      throw "Failed to install SSH key on remote"
-    }
-    if (-not (Test-SSHConnection)) {
-      throw "SSH connection still fails after key install"
-    }
-    Write-Host "  SSH key installed successfully" -ForegroundColor Green
-  } else {
-    Write-Host "  SSH connection OK" -ForegroundColor Green
+    throw "SSH connection failed after bootstrap"
   }
+  Write-Host "  SSH connection OK" -ForegroundColor Green
 
   Write-Host ""
   Write-Host "--- Remote Setup ---" -ForegroundColor Cyan

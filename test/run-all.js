@@ -21,6 +21,12 @@ const testSuites = [
     description: 'Security tests (redaction, auth, dangerous commands)'
   },
   {
+    name: 'deploy-scripts.test.js',
+    path: 'test/deploy-scripts.test.js',
+    critical: false,
+    description: 'Deploy scripts tests (ControlMaster, SSH key validation, error handling)'
+  },
+  {
     name: 'kv-migration.test.js',
     path: 'test/kv-migration.test.js',
     critical: false,
