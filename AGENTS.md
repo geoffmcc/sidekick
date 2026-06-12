@@ -6,7 +6,7 @@ A remote agent system. Connect via the sidekick MCP server at `YOUR_REMOTE_IP:40
 
 Always use the `task` tool with `subagent_type: "sidekick"` when interacting with sidekick. Do not use direct MCP tools (`sidekick_bash`, `sidekick_read`, etc.) — use the task tool so the user can see the full conversation. 100% of the time, no exceptions.
 
-## Tools (48 total)
+## Tools (50 total)
 
 ### Core Tools (11)
 
@@ -24,7 +24,7 @@ Always use the `task` tool with `subagent_type: "sidekick"` when interacting wit
 | `todowrite` | Track multi-step tasks with a todo list |
 | `webfetch` | Fetch and convert URLs to markdown/text/html |
 
-### Sidekick MCP Tools (37)
+### Sidekick MCP Tools (39)
 
 | Tool | When to use |
 |------|-------------|
@@ -65,6 +65,8 @@ Always use the `task` tool with `subagent_type: "sidekick"` when interacting wit
 | `sidekick_evolve` | Self-modification with safety: analyze patterns, propose improvements, test and approve changes |
 | `sidekick_orchestrate` | Multi-agent coordination: create task graphs, execute subtasks with dependencies |
 | `sidekick_predict` | Anticipatory intelligence: analyze patterns, predict needs, track prediction usefulness |
+| `sidekick_debug_tool` | Structured debugging cache: store file contents, hypotheses, and findings during debug sessions to avoid redundant reads |
+| `sidekick_fresheyes` | Get a fresh perspective from Sidekick's LLM (Grok) on a problem. Sends sanitized context for independent analysis |
 
 All tool calls are logged with source tags:
 - 🤖 **agent** - Calls from the autonomous agent bridge
@@ -73,12 +75,16 @@ All tool calls are logged with source tags:
 
 ## Services
 
-- **MCP Server** (`:4097`) — 37 tools, session-aware transport (new McpServer+Transport per session)
+- **MCP Server** (`:4097`) — 39 tools, session-aware transport (new McpServer+Transport per session)
 - **Dashboard** (`:4098`) — web UI with System, Activity, Data, Config, and Agent tabs, Font Awesome icons
 - **Agent Bridge** (`:4099`) — autonomous LLM agent that calls tools directly (bypasses MCP HTTP)
 - **Ollama** (`:11434`) — local Phi-3-mini fallback. Uses cloud Groq API when `GROQ_API_KEY` is set
 
 ## Recent Features
+
+### New Tools (v1.16) - Debugging & Analysis
+- **`sidekick_debug_tool`** — Structured debugging cache: store file contents, hypotheses, and findings during debug sessions to avoid redundant reads. Session-based with 8-hour TTL, supports multiple concurrent sessions.
+- **`sidekick_fresheyes`** — Get a fresh perspective from Sidekick's LLM (Grok) on a problem. Sends sanitized context for independent analysis, returns key insights by default.
 
 ### New Tools (v1.15) - Meta-Capabilities
 - **`sidekick_evolve`** — Self-modification with safety: analyze tool usage patterns, propose improvements, test and approve changes. Rate limited to 10 proposals per day.

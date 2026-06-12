@@ -3932,6 +3932,154 @@ async function sidekick_predict({ action, id, feedback, useful }) {
   return { content: [{ type: "text", text: "Unknown action. Use: analyze, list, feedback, suggest" }], isError: true };
 }
 
+// Debug tool implementation
+const DEBUG_SESSIONS = {};
+const DEBUG_TTL_MS = 8 * 60 * 60 * 1000; // 8 hours
+
+function loadDebugSessions() {
+  const now = Date.now();
+  for (const [id, session] of Object.entries(DEBUG_SESSIONS)) {
+    if (now - session.started > DEBUG_TTL_MS) {
+      delete DEBUG_SESSIONS[id];
+    }
+  }
+}
+
+async function sidekick_debug_tool({ action, session_name, key, value }) {
+  loadDebugSessions();
+  const now = Date.now();
+  
+  if (action === "start") {
+    const sessionId = session_name || `debug_${Date.now()}`;
+    DEBUG_SESSIONS[sessionId] = {
+      started: now,
+      cache: {},
+      name: session_name || sessionId
+    };
+    return { content: [{ type: "text", text: `Debug session started: ${sessionId}\nTTL: 8 hours` }] };
+  }
+  
+  if (action === "stop") {
+    const sessionId = session_name || Object.keys(DEBUG_SESSIONS).pop();
+    if (!DEBUG_SESSIONS[sessionId]) {
+      return { content: [{ type: "text", text: `Session not found: ${sessionId}` }], isError: true };
+    }
+    delete DEBUG_SESSIONS[sessionId];
+    return { content: [{ type: "text", text: `Debug session stopped: ${sessionId}` }] };
+  }
+  
+  if (action === "cache") {
+    const sessionId = session_name || Object.keys(DEBUG_SESSIONS).pop();
+    if (!DEBUG_SESSIONS[sessionId]) {
+      return { content: [{ type: "text", text: `No active session. Start one with action="start"` }], isError: true };
+    }
+    if (!key || value === undefined) {
+      return { content: [{ type: "text", text: `key and value required` }], isError: true };
+    }
+    DEBUG_SESSIONS[sessionId].cache[key] = {
+      value: value,
+      cached_at: new Date().toISOString()
+    };
+    return { content: [{ type: "text", text: `Cached: ${key} (${String(value).length} chars)` }] };
+  }
+  
+  if (action === "get") {
+    const sessionId = session_name || Object.keys(DEBUG_SESSIONS).pop();
+    if (!DEBUG_SESSIONS[sessionId]) {
+      return { content: [{ type: "text", text: `No active session` }], isError: true };
+    }
+    if (!key) {
+      return { content: [{ type: "text", text: `key required` }], isError: true };
+    }
+    const cached = DEBUG_SESSIONS[sessionId].cache[key];
+    if (!cached) {
+      return { content: [{ type: "text", text: `Key not found in session: ${key}` }], isError: true };
+    }
+    return { content: [{ type: "text", text: cached.value }] };
+  }
+  
+  if (action === "status") {
+    if (Object.keys(DEBUG_SESSIONS).length === 0) {
+      return { content: [{ type: "text", text: `No active debug sessions` }] };
+    }
+    const sessions = Object.entries(DEBUG_SESSIONS).map(([id, s]) => {
+      const age = Math.round((now - s.started) / 1000 / 60);
+      const cacheSize = Object.keys(s.cache).length;
+      return `${id}: ${cacheSize} items, ${age}min old`;
+    }).join("\n");
+    return { content: [{ type: "text", text: `Active sessions:\n${sessions}` }] };
+  }
+  
+  if (action === "clear") {
+    const sessionId = session_name;
+    if (sessionId) {
+      if (!DEBUG_SESSIONS[sessionId]) {
+        return { content: [{ type: "text", text: `Session not found: ${sessionId}` }], isError: true };
+      }
+      delete DEBUG_SESSIONS[sessionId];
+      return { content: [{ type: "text", text: `Cleared session: ${sessionId}` }] };
+    } else {
+      const count = Object.keys(DEBUG_SESSIONS).length;
+      for (const id of Object.keys(DEBUG_SESSIONS)) {
+        delete DEBUG_SESSIONS[id];
+      }
+      return { content: [{ type: "text", text: `Cleared ${count} sessions` }] };
+    }
+  }
+  
+  return { content: [{ type: "text", text: "Unknown action. Use: start, stop, cache, get, status, clear" }], isError: true };
+}
+
+// FreshEyes tool implementation
+async function sidekick_fresheyes({ problem, context, files, hypotheses, full_response }) {
+  let prompt = `You are analyzing a problem with fresh eyes. Provide a clear, independent analysis.
+
+Problem: ${problem}
+
+`;
+  
+  if (context) {
+    prompt += `Context:\n${context}\n\n`;
+  }
+  
+  if (files && files.length > 0) {
+    prompt += `Files analyzed:\n${files.map(f => `- ${f}`).join("\n")}\n\n`;
+  }
+  
+  if (hypotheses && hypotheses.length > 0) {
+    prompt += `Current hypotheses:\n${hypotheses.map(h => `- ${h}`).join("\n")}\n\n`;
+  }
+  
+  prompt += `Provide your analysis:
+1. What do you think is the root cause?
+2. What approach would you take to solve it?
+3. Are there any blind spots or assumptions in the current thinking?`;
+  
+  const sanitizedPrompt = redactSensitive(prompt);
+  
+  try {
+    const result = await sidekick_llm({
+      prompt: sanitizedPrompt,
+      system: "You are a senior engineer providing a fresh perspective on a problem. Be direct and analytical. Focus on key insights, not verbose explanations.",
+      temperature: 0.3
+    });
+    
+    if (full_response) {
+      return result;
+    }
+    
+    const response = result.content?.[0]?.text || "";
+    const insights = response.split("\n").filter(line => 
+      line.trim().length > 0 && 
+      (line.includes("root cause") || line.includes("approach") || line.includes("blind spot") || line.match(/^\d+\./))
+    ).slice(0, 10).join("\n");
+    
+    return { content: [{ type: "text", text: insights || response.substring(0, 500) }] };
+  } catch (e) {
+    return { content: [{ type: "text", text: `Error calling LLM: ${e.message}` }], isError: true };
+  }
+}
+
 const TOOLS = {
   sidekick_bash,
   sidekick_read,
@@ -3970,6 +4118,8 @@ const TOOLS = {
   sidekick_evolve,
   sidekick_orchestrate,
   sidekick_predict,
+  sidekick_debug_tool,
+  sidekick_fresheyes,
 };
 
 const TOOL_DEFS = [
@@ -4010,6 +4160,8 @@ const TOOL_DEFS = [
   { name: "sidekick_evolve", description: "Self-modification with safety: analyze patterns, propose improvements, test and approve changes", args: { action: "string (analyze|propose|list|test|approve|reject)", id: "string (optional, proposal id for test/approve/reject)", proposal: "string (optional, proposal description for propose)", approve: "boolean (optional, deprecated - use action=approve)", test: "boolean (optional, deprecated - use action=test)" } },
   { name: "sidekick_orchestrate", description: "Multi-agent coordination: create task graphs, execute subtasks with dependencies, track progress", args: { action: "string (create|execute|list|status|cancel)", id: "number (optional, task id for execute/status/cancel)", task_name: "string (optional, task name for create)", subtasks: "array (optional, subtask definitions for create)", dependencies: "object (optional, dependency map for create)", timeout: "number (optional, timeout in ms, default 1800000)" } },
   { name: "sidekick_predict", description: "Anticipatory intelligence: analyze patterns, predict needs, track prediction usefulness", args: { action: "string (analyze|list|feedback|suggest)", id: "string (optional, prediction id for feedback)", feedback: "boolean (optional, true if useful, false if not)" } },
+  { name: "sidekick_debug_tool", description: "Structured debugging cache: store file contents, hypotheses, and findings during debug sessions to avoid redundant reads", args: { action: "string (start|stop|cache|get|status|clear)", session_name: "string (optional, session identifier)", key: "string (optional, cache key for get/cache)", value: "string (optional, value to cache)" } },
+  { name: "sidekick_fresheyes", description: "Get a fresh perspective from Sidekick's LLM (Grok) on a problem. Sends sanitized context for independent analysis", args: { problem: "string (problem description)", context: "string (optional, relevant context)", files: "array (optional, files analyzed)", hypotheses: "array (optional, current hypotheses)", full_response: "boolean (optional, return full response vs key insights)" } },
 ];
 
 async function callTool(name, args) {
