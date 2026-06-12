@@ -10,6 +10,11 @@ sidekick-main/
     dashboard.js   Dashboard web app and API
     agent.js       Autonomous agent bridge
     redact.js      Sensitive-data redaction helpers
+  systemd/
+    sidekick-mcp.service       MCP server systemd unit
+    sidekick-dashboard.service Dashboard systemd unit
+    sidekick-agent.service     Agent bridge systemd unit
+    sidekick-sudoers           Sudoers config for sidekick user
   test/
     *.test.js      Node-based test files
     run-all.js     Test runner
