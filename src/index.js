@@ -10,6 +10,17 @@ const API_KEY = process.env.SIDEKICK_API_KEY || "sk-sidekick-local-dev";
 const PORT = parseInt(process.env.SIDEKICK_PORT || "4097", 10);
 const ALLOWED_IPS = (process.env.SIDEKICK_ALLOWED_IPS || "").split(",").map(s => s.trim()).filter(Boolean);
 
+function ipInRange(ip, cidr) {
+  if (!cidr.includes("/")) return ip === cidr;
+  const [rangeIp, bits] = cidr.split("/");
+  const maskBits = parseInt(bits, 10);
+  if (isNaN(maskBits) || maskBits < 0 || maskBits > 32) return false;
+  const mask = ~(2 ** (32 - maskBits) - 1) >>> 0;
+  const ipNum = ip.split(".").reduce((acc, oct) => (acc << 8) + parseInt(oct, 10), 0) >>> 0;
+  const rangeNum = rangeIp.split(".").reduce((acc, oct) => (acc << 8) + parseInt(oct, 10), 0) >>> 0;
+  return (ipNum & mask) === (rangeNum & mask);
+}
+
 function logDebug(context, data) {
   const ts = new Date().toISOString();
   const prefix = `[MCP-DEBUG ${ts}]`;
@@ -471,7 +482,7 @@ const app = express();
 if (ALLOWED_IPS.length) {
   app.use((req, res, next) => {
     const ip = req.ip === "::ffff:127.0.0.1" ? "127.0.0.1" : req.ip;
-    if (ip === "127.0.0.1" || ip === "::1" || ALLOWED_IPS.includes(ip)) {
+    if (ip === "127.0.0.1" || ip === "::1" || ALLOWED_IPS.some(entry => ipInRange(ip, entry))) {
       return next();
     }
     return res.status(403).json({ error: "Forbidden" });

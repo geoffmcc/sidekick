@@ -30,6 +30,17 @@ const DASHBOARD_USER = process.env.SIDEKICK_DASHBOARD_USER || "";
 const DASHBOARD_PASS = process.env.SIDEKICK_DASHBOARD_PASS || "";
 const DASHBOARD_ALLOWED_IPS = (process.env.SIDEKICK_DASHBOARD_ALLOWED_IPS || "").split(",").map(s => s.trim()).filter(Boolean);
 
+function ipInRange(ip, cidr) {
+  if (!cidr.includes("/")) return ip === cidr;
+  const [rangeIp, bits] = cidr.split("/");
+  const maskBits = parseInt(bits, 10);
+  if (isNaN(maskBits) || maskBits < 0 || maskBits > 32) return false;
+  const mask = ~(2 ** (32 - maskBits) - 1) >>> 0;
+  const ipNum = ip.split(".").reduce((acc, oct) => (acc << 8) + parseInt(oct, 10), 0) >>> 0;
+  const rangeNum = rangeIp.split(".").reduce((acc, oct) => (acc << 8) + parseInt(oct, 10), 0) >>> 0;
+  return (ipNum & mask) === (rangeNum & mask);
+}
+
 // Rate limiting (in-memory, per IP)
 const rateLimit = new Map();
 const RATE_LIMIT_WINDOW = 15 * 60 * 1000; // 15 minutes
@@ -85,7 +96,7 @@ function logError(url, status, error, page, userAgent) {
 if (DASHBOARD_ALLOWED_IPS.length) {
   app.use((req, res, next) => {
     const ip = req.ip === '::ffff:127.0.0.1' ? '127.0.0.1' : req.ip;
-    if (ip === '127.0.0.1' || ip === '::1' || DASHBOARD_ALLOWED_IPS.includes(ip)) {
+    if (ip === '127.0.0.1' || ip === '::1' || DASHBOARD_ALLOWED_IPS.some(entry => ipInRange(ip, entry))) {
       return next();
     }
     return res.status(403).json({ error: 'Forbidden' });
