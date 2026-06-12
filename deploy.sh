@@ -252,7 +252,7 @@ echo ""
 echo -e "\033[36m--- Deploying Files ---\033[0m"
 
 echo -e "\033[32mSyncing source files...\033[0m"
-for f in tools.js index.js dashboard.js agent.js redact.js; do
+for f in tools.js index.js dashboard.js agent.js redact.js env.js; do
   if [ ! -f "$PROJECT_DIR/src/$f" ]; then
     echo -e "  \033[33mWarning: src/$f not found, skipping\033[0m"
     continue
@@ -271,12 +271,17 @@ fi
 changed+=("package.json")
 
 if [ -f "$PROJECT_DIR/.env" ]; then
-  echo -e "\033[32mSyncing .env...\033[0m"
-  if ! copy_to_vps "$PROJECT_DIR/.env" "$REMOTE_DIR/.env" >/dev/null; then
-    echo -e "\033[31mERROR: Failed to copy .env\033[0m"
-    exit 1
+  remote_env_exists=$(run_remote "test -f $REMOTE_DIR/.env && echo YES || echo NO")
+  if [ "$remote_env_exists" = "YES" ]; then
+    echo -e "\033[33mRemote .env exists, skipping (preserves machine-specific settings)\033[0m"
+  else
+    echo -e "\033[32mSyncing .env (first deploy)...\033[0m"
+    if ! copy_to_vps "$PROJECT_DIR/.env" "$REMOTE_DIR/.env" >/dev/null; then
+      echo -e "\033[31mERROR: Failed to copy .env\033[0m"
+      exit 1
+    fi
+    changed+=(".env")
   fi
-  changed+=(".env")
 else
   echo -e "\033[33mNo local .env found, skipping\033[0m"
 fi

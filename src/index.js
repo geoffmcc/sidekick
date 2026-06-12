@@ -1,3 +1,4 @@
+require("./env");
 const express = require("express");
 const cors = require("cors");
 const { McpServer } = require("@modelcontextprotocol/sdk/server/mcp.js");
