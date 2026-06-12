@@ -1,0 +1,16 @@
+[Unit]
+Description=Sidekick MCP Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/sidekick/sidekick
+ExecStart=/usr/bin/node src/index.js
+Restart=always
+RestartSec=10
+User=sidekick
+Group=sidekick
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

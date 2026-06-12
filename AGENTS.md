@@ -162,12 +162,27 @@ All tool outputs automatically redact:
 
 ### Windows (PowerShell)
 ```powershell
-.\deploy.ps1
+.\deploy.ps1 -IP "YOUR_REMOTE_IP"
 ```
 
 ### Linux/Mac (Bash)
 ```bash
-./deploy.sh
+./deploy.sh YOUR_REMOTE_IP
+```
+
+### First Deploy
+On first deploy, the script will:
+- Generate SSH key if missing (`~/.ssh/sidekick`)
+- Install key on remote (you'll enter password once)
+- Configure sudo permissions for service management
+- Install and enable systemd services
+- Open firewall ports (if UFW is active)
+
+Subsequent deploys are fully automated — no password required.
+
+### Automation/CI
+```powershell
+.\deploy.ps1 -IP "YOUR_REMOTE_IP" -Password "sidekick"
 ```
 
 ### Manual (SSH)

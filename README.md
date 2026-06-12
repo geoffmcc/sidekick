@@ -24,12 +24,21 @@ cd sidekick
 copy .env.example .env
 # Edit .env with your API key and settings
 
-# Deploy (Windows)
-.\deploy.ps1
+# Deploy to your remote machine (Windows)
+.\deploy.ps1 -IP "YOUR_REMOTE_IP"
 
 # Or deploy (Linux/Mac)
-./deploy.sh
+./deploy.sh YOUR_REMOTE_IP
 ```
+
+**First deploy:** The script will automatically:
+- Generate an SSH key if you don't have one
+- Install the key on the remote (you'll enter the password once)
+- Configure sudo permissions for the sidekick user
+- Install and enable systemd services
+- Open firewall ports (if UFW is active)
+
+Subsequent deploys are fully automated — no password required.
 
 Open `http://YOUR_REMOTE_IP:4098/` in a browser. That's it — Sidekick is live.
 
@@ -308,10 +317,10 @@ git commit -m "what you changed"
 git push
 
 # 3. Deploy (Windows)
-.\deploy.ps1
+.\deploy.ps1 -IP "YOUR_REMOTE_IP"
 
 # Or deploy (Linux/Mac)
-./deploy.sh
+./deploy.sh YOUR_REMOTE_IP
 ```
 
 Or SSH directly to pull:
@@ -331,10 +340,24 @@ To change environment variables (ports, API keys, max iterations, etc.):
 notepad .env
 
 # 2. Deploy (syncs .env to remote and restarts services)
-.\deploy.ps1
+.\deploy.ps1 -IP "YOUR_REMOTE_IP"
 ```
 
 The deploy script automatically syncs `.env` to the remote machine if it exists locally. No SSH required for config changes.
+
+### Deploy Script Options
+
+| Option | Description |
+|--------|-------------|
+| `-IP` / `$1` | Remote machine IP address (default: `192.168.1.10`) |
+| `-Password` / `$2` | Sidekick user password (optional, for automation/CI) |
+
+**First deploy:** You'll be prompted for the sidekick user password twice (SSH key install + sudoers setup). After that, deploys are fully automated.
+
+**Automation/CI:** Pass the password as a parameter to skip interactive prompts:
+```powershell
+.\deploy.ps1 -IP "192.168.1.10" -Password "sidekick"
+```
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -360,6 +383,11 @@ The deploy script automatically syncs `.env` to the remote machine if it exists 
 │   ├── dashboard.js    Dashboard web UI (source tagging, Font Awesome icons)
 │   ├── agent.js        Agent bridge (LLM tool-use loop, direct tool calls)
 │   └── redact.js       Sensitive data redaction
+├── systemd/
+│   ├── sidekick-mcp.service       MCP server systemd unit
+│   ├── sidekick-dashboard.service Dashboard systemd unit
+│   ├── sidekick-agent.service     Agent bridge systemd unit
+│   └── sidekick-sudoers           Sudoers config for sidekick user
 ├── data/               Runtime data (on remote: logs, KV, conversations)
 ├── deploy.ps1          Deploy script (Windows)
 ├── deploy.sh           Deploy script (Linux/Mac)
@@ -371,6 +399,12 @@ The deploy script automatically syncs `.env` to the remote machine if it exists 
 
 ## Troubleshooting
 
+**Deploy script fails with "SSH key not found":** The script will automatically generate an SSH key if one doesn't exist at `~/.ssh/sidekick`.
+
+**Deploy script fails with SSH connection error:** On first deploy, you'll need to install the SSH key. The script will prompt you for the sidekick password automatically.
+
+**Deploy script fails with "sudoers setup failed":** Ensure the sidekick user exists on the remote machine and has sudo access. The script will prompt for the password to configure passwordless sudo for service management.
+
 **MCP connection issues:** If you see "Server not initialized" errors, restart the MCP service:
 ```bash
 sudo systemctl restart sidekick-mcp
@@ -381,14 +415,20 @@ sudo systemctl restart sidekick-mcp
 sudo systemctl status sidekick-dashboard
 ```
 
-**Deploy script fails:** Ensure SSH key authentication is set up and the remote machine is reachable.
+**Services not starting:** Check the logs:
+```bash
+sudo journalctl -u sidekick-mcp -n 50
+sudo journalctl -u sidekick-dashboard -n 50
+sudo journalctl -u sidekick-agent -n 50
+```
 
 ## Get Started
 
 1. Clone the repo
 2. Copy `.env.example` → `.env` and fill in your values
-3. Run `./deploy.ps1` (Windows) or `./deploy.sh` (Linux/Mac)
-4. Open `http://YOUR_REMOTE_IP:4098/` and explore your new autonomous agent platform
+3. Run `.\deploy.ps1 -IP "YOUR_REMOTE_IP"` (Windows) or `./deploy.sh YOUR_REMOTE_IP` (Linux/Mac)
+4. Enter the sidekick password when prompted (first deploy only)
+5. Open `http://YOUR_REMOTE_IP:4098/` and explore your new autonomous agent platform
 
 That's it. Sidekick is live.
 
