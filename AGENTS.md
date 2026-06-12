@@ -178,7 +178,14 @@ On first deploy, the script will:
 - Install and enable systemd services
 - Open firewall ports (if UFW is active)
 
-Subsequent deploys are fully automated — no password required.
+All privileged operations (sudo cp, daemon-reload, enable, ufw) require the sidekick user password during first-time setup.
+
+### Subsequent Deploys
+After first deploy, the script detects that services are already installed and skips all setup steps. Only minimal sudo permissions are used:
+- `systemctl restart/stop/start/status sidekick-*`
+- `journalctl -u sidekick-*`
+
+No password is required for subsequent deploys.
 
 ### Automation/CI
 ```powershell

@@ -79,80 +79,105 @@ function Test-Sudo {
   return ($result -match "sidekick-mcp.service")
 }
 
+function Test-ServicesExist {
+  $services = @("sidekick-mcp", "sidekick-dashboard", "sidekick-agent")
+  foreach ($svc in $services) {
+    $exists = Run-Remote "test -f /etc/systemd/system/$svc.service && echo YES || echo NO"
+    if (-not ($exists -match "YES")) {
+      return $false
+    }
+  }
+  return $true
+}
+
 function Initialize-Remote {
   Write-Host ""
   Write-Host "=== Initializing remote server ===" -ForegroundColor Cyan
 
-  if (-not (Test-Sudo)) {
-    Write-Host "  Setting up sudoers configuration..." -ForegroundColor Yellow
+  Write-Host "  Checking if services are already installed..." -ForegroundColor Yellow
+  $servicesExist = Test-ServicesExist
 
-    $sudoersLocal = Join-Path $PROJECT_DIR "systemd\sidekick-sudoers"
-    if (-not (Test-Path $sudoersLocal)) {
-      throw "sudoers file not found at $sudoersLocal"
-    }
+  if (-not $servicesExist) {
+    Write-Host "  First-time setup detected..." -ForegroundColor Yellow
 
-    Copy-ToVPS $sudoersLocal "/tmp/sidekick-sudoers" | Out-Null
-
-    if ($Password) {
-      Write-Host "  Installing sudoers with provided password..." -ForegroundColor Gray
-      Run-Remote "echo '$Password' | sudo -S cp /tmp/sidekick-sudoers /etc/sudoers.d/sidekick" | Out-Null
-      Run-Remote "echo '$Password' | sudo -S chmod 440 /etc/sudoers.d/sidekick" | Out-Null
-      Run-Remote "rm -f /tmp/sidekick-sudoers" | Out-Null
-    } else {
-      Write-Host "  Enter sidekick password when prompted to install sudoers:" -ForegroundColor Cyan
-      Run-Remote-Interactive "sudo cp /tmp/sidekick-sudoers /etc/sudoers.d/sidekick && sudo chmod 440 /etc/sudoers.d/sidekick && rm -f /tmp/sidekick-sudoers"
-    }
-
+    # Setup sudoers if needed
     if (-not (Test-Sudo)) {
-      throw "Sudoers setup failed"
+      Write-Host "  Setting up sudoers configuration..." -ForegroundColor Yellow
+
+      $sudoersLocal = Join-Path $PROJECT_DIR "systemd\sidekick-sudoers"
+      if (-not (Test-Path $sudoersLocal)) {
+        throw "sudoers file not found at $sudoersLocal"
+      }
+
+      Copy-ToVPS $sudoersLocal "/tmp/sidekick-sudoers" | Out-Null
+
+      if ($Password) {
+        Write-Host "  Installing sudoers with provided password..." -ForegroundColor Gray
+        Run-Remote "echo '$Password' | sudo -S cp /tmp/sidekick-sudoers /etc/sudoers.d/sidekick" | Out-Null
+        Run-Remote "echo '$Password' | sudo -S chmod 440 /etc/sudoers.d/sidekick" | Out-Null
+        Run-Remote "rm -f /tmp/sidekick-sudoers" | Out-Null
+      } else {
+        Write-Host "  Enter sidekick password when prompted to install sudoers:" -ForegroundColor Cyan
+        Run-Remote-Interactive "sudo cp /tmp/sidekick-sudoers /etc/sudoers.d/sidekick && sudo chmod 440 /etc/sudoers.d/sidekick && rm -f /tmp/sidekick-sudoers"
+      }
+
+      if (-not (Test-Sudo)) {
+        throw "Sudoers setup failed"
+      }
+      Write-Host "  Sudoers configured" -ForegroundColor Green
+    } else {
+      Write-Host "  Sudoers already configured" -ForegroundColor Gray
     }
-    Write-Host "  Sudoers configured" -ForegroundColor Green
+
+    # Install service files (requires password)
+    Write-Host "  Installing service files..." -ForegroundColor Yellow
+    $services = @("sidekick-mcp", "sidekick-dashboard", "sidekick-agent")
+    foreach ($svc in $services) {
+      $svcLocal = Join-Path $PROJECT_DIR "systemd\$svc.service"
+      Copy-ToVPS $svcLocal "/tmp/$svc.service" | Out-Null
+      
+      if ($Password) {
+        Run-Remote "echo '$Password' | sudo -S cp /tmp/$svc.service /etc/systemd/system/$svc.service" | Out-Null
+        Run-Remote "rm -f /tmp/$svc.service" | Out-Null
+      } else {
+        Run-Remote-Interactive "sudo cp /tmp/$svc.service /etc/systemd/system/$svc.service && rm -f /tmp/$svc.service"
+      }
+    }
+
+    # daemon-reload and enable (requires password)
+    Write-Host "  Enabling services..." -ForegroundColor Yellow
+    if ($Password) {
+      Run-Remote "echo '$Password' | sudo -S systemctl daemon-reload" | Out-Null
+      foreach ($svc in $services) {
+        Run-Remote "echo '$Password' | sudo -S systemctl enable $svc" | Out-Null
+      }
+    } else {
+      Run-Remote-Interactive "sudo systemctl daemon-reload && sudo systemctl enable sidekick-mcp sidekick-dashboard sidekick-agent"
+    }
+
+    # Open firewall ports (requires password)
+    Write-Host "  Checking firewall..." -ForegroundColor Yellow
+    $ufwActive = Run-Remote "systemctl is-active ufw 2>&1"
+    if ($ufwActive -match "active") {
+      if ($Password) {
+        Run-Remote "echo '$Password' | sudo -S ufw allow 4097/tcp comment 'Sidekick MCP'" | Out-Null
+        Run-Remote "echo '$Password' | sudo -S ufw allow 4098/tcp comment 'Sidekick Dashboard'" | Out-Null
+        Run-Remote "echo '$Password' | sudo -S ufw allow 4099/tcp comment 'Sidekick Agent'" | Out-Null
+      } else {
+        Run-Remote-Interactive "sudo ufw allow 4097/tcp comment 'Sidekick MCP' && sudo ufw allow 4098/tcp comment 'Sidekick Dashboard' && sudo ufw allow 4099/tcp comment 'Sidekick Agent'"
+      }
+      Write-Host "  Firewall ports opened (4097, 4098, 4099)" -ForegroundColor Green
+    } else {
+      Write-Host "  UFW not active, skipping firewall config" -ForegroundColor Yellow
+    }
+
+    Write-Host "  First-time setup complete" -ForegroundColor Green
   } else {
-    Write-Host "  Sudoers already configured" -ForegroundColor Gray
+    Write-Host "  Services already installed, skipping setup" -ForegroundColor Gray
   }
 
   Write-Host "  Creating remote directories..." -ForegroundColor Yellow
   Run-Remote "mkdir -p $REMOTE_DIR/src $REMOTE_DIR/data" | Out-Null
-
-  Write-Host "  Checking service files..." -ForegroundColor Yellow
-  $services = @("sidekick-mcp", "sidekick-dashboard", "sidekick-agent")
-  $servicesNeedInstall = $false
-  
-  foreach ($svc in $services) {
-    $exists = Run-Remote "test -f /etc/systemd/system/$svc.service && echo YES || echo NO"
-    if (-not ($exists -match "YES")) {
-      $servicesNeedInstall = $true
-      break
-    }
-  }
-  
-  if ($servicesNeedInstall) {
-    Write-Host "  Installing service files..." -ForegroundColor Yellow
-    foreach ($svc in $services) {
-      $svcLocal = Join-Path $PROJECT_DIR "systemd\$svc.service"
-      Copy-ToVPS $svcLocal "/tmp/$svc.service" | Out-Null
-      Run-Remote "sudo cp /tmp/$svc.service /etc/systemd/system/$svc.service && rm -f /tmp/$svc.service" | Out-Null
-    }
-  } else {
-    Write-Host "  Service files already installed" -ForegroundColor Gray
-  }
-
-  Write-Host "  Enabling services..." -ForegroundColor Yellow
-  Run-Remote "sudo systemctl daemon-reload" | Out-Null
-  foreach ($svc in $services) {
-    Run-Remote "sudo systemctl enable $svc" | Out-Null
-  }
-
-  Write-Host "  Checking firewall..." -ForegroundColor Yellow
-  $ufwActive = Run-Remote "systemctl is-active ufw 2>&1"
-  if ($ufwActive -match "active") {
-    Run-Remote "sudo ufw allow 4097/tcp comment 'Sidekick MCP'" | Out-Null
-    Run-Remote "sudo ufw allow 4098/tcp comment 'Sidekick Dashboard'" | Out-Null
-    Run-Remote "sudo ufw allow 4099/tcp comment 'Sidekick Agent'" | Out-Null
-    Write-Host "  Firewall ports opened (4097, 4098, 4099)" -ForegroundColor Green
-  } else {
-    Write-Host "  UFW not active, skipping firewall config" -ForegroundColor Yellow
-  }
 
   Write-Host "  Remote initialization complete" -ForegroundColor Green
 }

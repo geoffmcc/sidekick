@@ -352,12 +352,25 @@ The deploy script automatically syncs `.env` to the remote machine if it exists 
 | `-IP` / `$1` | Remote machine IP address (default: `192.168.1.10`) |
 | `-Password` / `$2` | Sidekick user password (optional, for automation/CI) |
 
-**First deploy:** You'll be prompted for the sidekick user password twice (SSH key install + sudoers setup). After that, deploys are fully automated.
+**First deploy:** You'll be prompted for the sidekick user password to set up SSH keys, sudoers, services, and firewall. After that, deploys are fully automated with no password required.
 
 **Automation/CI:** Pass the password as a parameter to skip interactive prompts:
 ```powershell
 .\deploy.ps1 -IP "192.168.1.10" -Password "sidekick"
 ```
+
+### Security Model
+
+The deploy script follows a two-phase security approach:
+
+1. **First deploy (password required):** Sets up SSH keys, sudoers configuration, systemd services, and firewall rules. All privileged operations require the sidekick user password.
+
+2. **Subsequent deploys (no password):** Only uses minimal sudo permissions for service management (start/stop/restart/status) and log viewing. The sudoers file restricts the sidekick user to only these specific commands:
+   - `systemctl start/stop/restart/status sidekick-*`
+   - `journalctl -u sidekick-*`
+   - `ufw allow 4097/4098/4099`
+
+This follows the principle of least privilege: after initial setup, the sidekick user cannot reload systemd, enable/disable services, or modify the system in any way beyond managing the Sidekick services.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
