@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $VPS = "sidekick@149.28.229.13"
-$REMOTE_DIR = "/home/sidekick/mcp-sidekick"
+$REMOTE_DIR = "/home/sidekick/sidekick"
 $SSH_KEY = if ($env:SIDEKICK_SSH_KEY) { $env:SIDEKICK_SSH_KEY } else { Join-Path $env:USERPROFILE ".ssh\sidekick" }
 
 function Run-Remote {

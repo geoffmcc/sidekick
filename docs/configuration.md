@@ -60,7 +60,7 @@ SIDEKICK_DASHBOARD_PASS=<long-random-password>
 SIDEKICK_ALLOWED_IPS=<trusted-client-ip-list>
 SIDEKICK_DASHBOARD_ALLOWED_IPS=<trusted-browser-ip-list>
 SIDEKICK_SECRET_KEY=<long-random-secret>
-SIDEKICK_DATA_DIR=/home/sidekick/mcp-sidekick/data
+SIDEKICK_DATA_DIR=/home/sidekick/sidekick/data
 ```
 
 Use a firewall or reverse proxy to limit exposed ports. The agent bridge is already bound to loopback and should normally remain private.

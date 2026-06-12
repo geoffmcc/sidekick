@@ -1,5 +1,5 @@
 {
-  "name": "mcp-sidekick",
+  "name": "sidekick",
   "version": "1.0.0",
   "description": "Sidekick — Autonomous Agent Platform",
   "main": "src/index.js",

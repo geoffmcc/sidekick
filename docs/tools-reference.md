@@ -115,7 +115,7 @@ Parameter definitions support `string`, `number`, and `boolean` types.
 
 ### `sidekick_cron`
 
-Stores cron job metadata in `cron.json` and syncs enabled jobs to the user's crontab. Generated crontab lines run from `/home/sidekick/mcp-sidekick` and redirect output to `cron-<id>.log` under `SIDEKICK_DATA_DIR`.
+Stores cron job metadata in `cron.json` and syncs enabled jobs to the user's crontab. Generated crontab lines run from `/home/sidekick/sidekick` and redirect output to `cron-<id>.log` under `SIDEKICK_DATA_DIR`.
 
 ### `sidekick_delay`
 
