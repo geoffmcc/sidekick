@@ -2,7 +2,7 @@
 
 **Autonomous Agent Platform**
 
-A self-hosted AI agent platform with persistent memory, 37+ tools, and the ability to extend itself. Runs on your remote machine, learns from your workflow, and grows its own capabilities—no code changes required.
+A self-hosted AI agent platform with persistent memory, 49+ tools, and the ability to extend itself. Runs on your remote machine, learns from your workflow, and grows its own capabilities—no code changes required.
 
 **How?** A single `AGENTS.md` file that opencode reads on every session start. No plugins, no hooks — just markdown.
 
@@ -87,7 +87,7 @@ The Agent Bridge runs independently from your main AI session. Submit a complex 
 ### 🔒 Security-First Design
 Every tool output is automatically scanned and redacted for sensitive data (API keys, tokens, passwords). The dashboard has rate limiting, CSRF protection, and audit logging. The agent bridge is isolated and only accessible through the dashboard.
 
-### 🛠️ 37+ Specialized Tools
+### 🛠️ 49+ Specialized Tools
 Not just bash and file operations. Sidekick includes tools for:
 - GitHub integration (PRs, issues, releases)
 - Service and process management
@@ -154,12 +154,25 @@ Not just bash and file operations. Sidekick includes tools for:
 
 | Service | Port | Description |
 |---------|------|-------------|
-| **MCP Server** | 4097 | 37 tools: bash, read, write, list, search, git, notify, process, service, archive, cron, github, webhook, context, teach, store, get, list_projects, get_by_project, web_fetch, llm, transform, health, delay, snapshot, watch, secret, parse, diff, hash, validate, template, queue, retry, evolve, orchestrate, predict |
+| **MCP Server** | 4097 | 49 tools: bash, read, write, list, search, git, notify, process, service, archive, cron, github, webhook, context, teach, store, get, list_projects, get_by_project, web_fetch, llm, transform, health, delay, snapshot, watch, secret, parse, diff, hash, validate, template, queue, retry, evolve, orchestrate, predict, debug_tool, fresheyes, batch, cache, summarize, filter, project, tail, diff_files, find, status, extract |
 | **Dashboard** | 4098 | Web UI: system health, activity log, KV data, agent tasks |
 | **Agent Bridge** | 4099 | AI agent loop — LLM plans and calls MCP tools autonomously |
 | **Ollama** | 11434 | Local LLM inference (phi3:mini). Fallback when no `GROQ_API_KEY` |
 
 All tools are exposed via the MCP server at `http://YOUR_REMOTE_IP:4097/mcp`.
+
+### New Tools (v1.17) - Token Efficiency
+
+- **`sidekick_batch`** — Execute multiple tool calls in one request to reduce API round-trips (max 20 per batch).
+- **`sidekick_cache`** — Session-scoped caching to avoid redundant operations. Store and retrieve values with TTL.
+- **`sidekick_summarize`** — Summarize large files before returning to reduce token usage. Strategies: head, tail, grep, stats.
+- **`sidekick_filter`** — Filter file contents or directory listings by pattern, date, or size before returning.
+- **`sidekick_project`** — Get complete project context in one call: KV entries, context tracking, recent logs, procedures.
+- **`sidekick_tail`** — Tail recent log entries with filtering. Sources: log.jsonl, journalctl, or any file.
+- **`sidekick_diff_files`** — Compare two files directly without reading both into context. Returns unified diff or summary.
+- **`sidekick_find`** — Advanced file finder: search by name pattern, date range, size range, and content pattern.
+- **`sidekick_status`** — Unified system status: services, disk, memory, load, uptime, top processes in one call.
+- **`sidekick_extract`** — Parse JSON/YAML/INI/XML and extract specific fields by path. Returns only what you need.
 
 ### New Tools (v1.15) - Meta-Capabilities
 

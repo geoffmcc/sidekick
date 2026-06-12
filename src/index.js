@@ -243,6 +243,64 @@ const TOOL_SCHEMAS = {
     id: z.string().optional().describe("Prediction ID (for feedback)"),
     feedback: z.boolean().optional().describe("True if prediction was useful, false if not (for feedback)")
   }),
+  sidekick_batch: z.object({
+    calls: z.array(z.object({
+      tool: z.string().describe("Tool name to call"),
+      args: z.record(z.any()).optional().describe("Arguments for the tool")
+    })).describe("Array of tool calls to execute (max 20)")
+  }),
+  sidekick_cache: z.object({
+    action: z.enum(["get", "set", "clear", "list"]).describe("Cache action"),
+    key: z.string().optional().describe("Cache key"),
+    ttl: z.string().optional().describe("Time-to-live: 30s, 5m, 1h (default: 5m)"),
+    value: z.string().optional().describe("Value to cache (for set action)")
+  }),
+  sidekick_summarize: z.object({
+    path: z.string().describe("File path to summarize"),
+    max_lines: z.number().optional().describe("Maximum lines to return (default: 50)"),
+    strategy: z.enum(["head", "tail", "grep", "stats"]).optional().describe("Summarization strategy (default: head)"),
+    pattern: z.string().optional().describe("Regex pattern for grep strategy")
+  }),
+  sidekick_filter: z.object({
+    path: z.string().describe("File or directory path to filter"),
+    pattern: z.string().optional().describe("Regex pattern to match"),
+    after: z.string().optional().describe("ISO date: include files modified after this date"),
+    before: z.string().optional().describe("ISO date: include files modified before this date"),
+    max_results: z.number().optional().describe("Maximum results to return (default: 50)")
+  }),
+  sidekick_project: z.object({
+    name: z.string().describe("Project name"),
+    include: z.string().optional().describe("Sections to include: kv,context,logs,procedures (default: kv,context)")
+  }),
+  sidekick_tail: z.object({
+    source: z.string().describe("Source: log.jsonl, journalctl, or file path"),
+    pattern: z.string().optional().describe("Regex filter (for journalctl: service name)"),
+    lines: z.number().optional().describe("Number of lines to return (default: 50)"),
+    since: z.string().optional().describe("Filter entries since this date (ISO or relative: 1h, 1d)")
+  }),
+  sidekick_diff_files: z.object({
+    path_a: z.string().describe("First file path"),
+    path_b: z.string().describe("Second file path"),
+    format: z.enum(["unified", "summary"]).optional().describe("Output format (default: unified)")
+  }),
+  sidekick_find: z.object({
+    path: z.string().describe("Directory to search in"),
+    name: z.string().optional().describe("File name glob pattern (e.g. '*.js')"),
+    modified_after: z.string().optional().describe("ISO date: files modified after"),
+    modified_before: z.string().optional().describe("ISO date: files modified before"),
+    size_min: z.string().optional().describe("Minimum file size (e.g. '1KB', '1MB')"),
+    size_max: z.string().optional().describe("Maximum file size (e.g. '10MB')"),
+    content: z.string().optional().describe("Regex pattern to match file contents"),
+    max_results: z.number().optional().describe("Maximum results (default: 50)")
+  }),
+  sidekick_status: z.object({
+    include: z.string().optional().describe("Sections: services,disk,memory,load,uptime,processes (default: services,disk)"),
+    services: z.string().optional().describe("Comma-separated service names (default: sidekick-mcp,sidekick-dashboard,sidekick-agent)")
+  }),
+  sidekick_extract: z.object({
+    path: z.string().describe("File path (JSON, YAML, INI, or XML)"),
+    fields: z.union([z.string(), z.array(z.string())]).optional().describe("Field paths to extract (e.g. 'database.host,database.port')")
+  }),
 };
 
 // --- Factory: create fresh McpServer + register tools ---

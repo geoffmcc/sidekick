@@ -6,7 +6,7 @@ A remote agent system. Connect via the sidekick MCP server at `YOUR_REMOTE_IP:40
 
 Always use the `task` tool with `subagent_type: "sidekick"` when interacting with sidekick. Do not use direct MCP tools (`sidekick_bash`, `sidekick_read`, etc.) — use the task tool so the user can see the full conversation. 100% of the time, no exceptions.
 
-## Tools (50 total)
+## Tools (60 total)
 
 ### Core Tools (11)
 
@@ -24,7 +24,7 @@ Always use the `task` tool with `subagent_type: "sidekick"` when interacting wit
 | `todowrite` | Track multi-step tasks with a todo list |
 | `webfetch` | Fetch and convert URLs to markdown/text/html |
 
-### Sidekick MCP Tools (39)
+### Sidekick MCP Tools (49)
 
 | Tool | When to use |
 |------|-------------|
@@ -67,6 +67,16 @@ Always use the `task` tool with `subagent_type: "sidekick"` when interacting wit
 | `sidekick_predict` | Anticipatory intelligence: analyze patterns, predict needs, track prediction usefulness |
 | `sidekick_debug_tool` | Structured debugging cache: store file contents, hypotheses, and findings during debug sessions to avoid redundant reads |
 | `sidekick_fresheyes` | Get a fresh perspective from Sidekick's LLM (Grok) on a problem. Sends sanitized context for independent analysis |
+| `sidekick_batch` | Execute multiple tool calls in one request to reduce API round-trips (max 20 per batch) |
+| `sidekick_cache` | Session-scoped caching to avoid redundant operations. Store and retrieve values with TTL |
+| `sidekick_summarize` | Summarize large files before returning to reduce token usage (head, tail, grep, stats strategies) |
+| `sidekick_filter` | Filter file contents or directory listings by pattern, date, or size before returning |
+| `sidekick_project` | Get complete project context in one call: KV entries, context tracking, recent logs, procedures |
+| `sidekick_tail` | Tail recent log entries with filtering (log.jsonl, journalctl, or any file) |
+| `sidekick_diff_files` | Compare two files directly without reading both into context (unified diff or summary) |
+| `sidekick_find` | Advanced file finder: search by name pattern, date range, size range, and content pattern |
+| `sidekick_status` | Unified system status: services, disk, memory, load, uptime, top processes in one call |
+| `sidekick_extract` | Parse JSON/YAML/INI/XML and extract specific fields by path. Returns only what you need |
 
 All tool calls are logged with source tags:
 - 🤖 **agent** - Calls from the autonomous agent bridge
@@ -75,12 +85,24 @@ All tool calls are logged with source tags:
 
 ## Services
 
-- **MCP Server** (`:4097`) — 39 tools, session-aware transport (new McpServer+Transport per session) at YOUR_REMOTE_IP
+- **MCP Server** (`:4097`) — 49 tools, session-aware transport (new McpServer+Transport per session) at YOUR_REMOTE_IP
 - **Dashboard** (`:4098`) — web UI with System, Activity, Data, Config, and Agent tabs, Font Awesome icons
 - **Agent Bridge** (`:4099`) — autonomous LLM agent that calls tools directly (bypasses MCP HTTP)
 - **Ollama** (`:11434`) — local Phi-3-mini fallback. Uses cloud Groq API when `GROQ_API_KEY` is set
 
 ## Recent Features
+
+### New Tools (v1.17) - Token Efficiency
+- **`sidekick_batch`** — Execute multiple tool calls in one request to reduce API round-trips (max 20 per batch).
+- **`sidekick_cache`** — Session-scoped caching to avoid redundant operations. Store and retrieve values with TTL.
+- **`sidekick_summarize`** — Summarize large files before returning to reduce token usage. Strategies: head, tail, grep, stats.
+- **`sidekick_filter`** — Filter file contents or directory listings by pattern, date, or size before returning.
+- **`sidekick_project`** — Get complete project context in one call: KV entries, context tracking, recent logs, procedures.
+- **`sidekick_tail`** — Tail recent log entries with filtering. Sources: log.jsonl, journalctl, or any file.
+- **`sidekick_diff_files`** — Compare two files directly without reading both into context. Returns unified diff or summary.
+- **`sidekick_find`** — Advanced file finder: search by name pattern, date range, size range, and content pattern.
+- **`sidekick_status`** — Unified system status: services, disk, memory, load, uptime, top processes in one call.
+- **`sidekick_extract`** — Parse JSON/YAML/INI/XML and extract specific fields by path. Returns only what you need.
 
 ### New Tools (v1.16) - Debugging & Analysis
 - **`sidekick_debug_tool`** — Structured debugging cache: store file contents, hypotheses, and findings during debug sessions to avoid redundant reads. Session-based with 8-hour TTL, supports multiple concurrent sessions.

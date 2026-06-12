@@ -4080,6 +4080,483 @@ Problem: ${problem}
   }
 }
 
+// --- Token-efficient tools (v1.17) ---
+
+const sessionCache = new Map();
+
+function parseDuration(str) {
+  if (!str) return 300000;
+  const match = str.match(/^(\d+)(s|m|h|d)$/);
+  if (!match) return 300000;
+  const val = parseInt(match[1], 10);
+  const unit = match[2];
+  const multipliers = { s: 1000, m: 60000, h: 3600000, d: 86400000 };
+  return val * (multipliers[unit] || 60000);
+}
+
+async function sidekick_batch({ calls }) {
+  if (!Array.isArray(calls) || calls.length === 0) {
+    return { content: [{ type: "text", text: "calls must be a non-empty array" }], isError: true };
+  }
+  if (calls.length > 20) {
+    return { content: [{ type: "text", text: "Maximum 20 calls per batch" }], isError: true };
+  }
+  const results = [];
+  for (let i = 0; i < calls.length; i++) {
+    const call = calls[i];
+    if (!call.tool || !TOOLS[call.tool]) {
+      results.push({ index: i, tool: call.tool, error: "Unknown tool: " + call.tool });
+      continue;
+    }
+    const start = Date.now();
+    try {
+      const result = await TOOLS[call.tool](call.args || {});
+      results.push({
+        index: i,
+        tool: call.tool,
+        result: result.content?.[0]?.text?.substring(0, 500) || "(ok)",
+        error: result.isError || false,
+        duration_ms: Date.now() - start
+      });
+    } catch (e) {
+      results.push({ index: i, tool: call.tool, error: e.message });
+    }
+  }
+  return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+}
+
+async function sidekick_cache({ action, key, ttl, value }) {
+  const now = Date.now();
+  if (action === "clear") {
+    if (key) {
+      sessionCache.delete(key);
+      return { content: [{ type: "text", text: "Cleared cache: " + key }] };
+    }
+    const count = sessionCache.size;
+    sessionCache.clear();
+    return { content: [{ type: "text", text: "Cleared " + count + " cache entries" }] };
+  }
+  if (action === "list") {
+    const entries = [];
+    for (const [k, v] of sessionCache) {
+      entries.push({ key: k, expires_in_ms: v.expires - now, size: v.value.length });
+    }
+    return { content: [{ type: "text", text: JSON.stringify(entries) }] };
+  }
+  if (action === "get") {
+    if (!key) return { content: [{ type: "text", text: "key required" }], isError: true };
+    const entry = sessionCache.get(key);
+    if (!entry || entry.expires < now) {
+      if (entry) sessionCache.delete(key);
+      return { content: [{ type: "text", text: "Cache miss: " + key }], isError: true };
+    }
+    return { content: [{ type: "text", text: redactSensitive(entry.value) }] };
+  }
+  if (action === "set") {
+    if (!key || value === undefined) return { content: [{ type: "text", text: "key and value required" }], isError: true };
+    const duration = parseDuration(ttl);
+    sessionCache.set(key, { value: String(value), expires: now + duration });
+    return { content: [{ type: "text", text: "Cached " + key + " (TTL: " + ttl + ")" }] };
+  }
+  return { content: [{ type: "text", text: "Invalid action. Use: get, set, clear, list" }], isError: true };
+}
+
+async function sidekick_summarize({ path: filePath, max_lines, strategy, pattern }) {
+  const maxLines = max_lines || 50;
+  const strat = strategy || "head";
+  if (!fs.existsSync(filePath)) {
+    return { content: [{ type: "text", text: "File not found: " + filePath }], isError: true };
+  }
+  const stat = fs.statSync(filePath);
+  if (stat.size > 50 * 1024 * 1024) {
+    return { content: [{ type: "text", text: "File too large to summarize (>50MB): " + filePath }], isError: true };
+  }
+  const content = fs.readFileSync(filePath, "utf-8");
+  const lines = content.split("\n");
+  let summary;
+  if (strat === "head") {
+    summary = lines.slice(0, maxLines).join("\n");
+  } else if (strat === "tail") {
+    summary = lines.slice(-maxLines).join("\n");
+  } else if (strat === "grep") {
+    if (!pattern) return { content: [{ type: "text", text: "pattern required for grep strategy" }], isError: true };
+    const re = new RegExp(pattern, "i");
+    const matched = [];
+    for (let i = 0; i < lines.length && matched.length < maxLines; i++) {
+      if (re.test(lines[i])) {
+        const start = Math.max(0, i - 1);
+        const end = Math.min(lines.length, i + 2);
+        for (let j = start; j < end; j++) {
+          if (!matched.includes(lines[j])) matched.push(lines[j]);
+        }
+      }
+    }
+    summary = matched.join("\n");
+  } else if (strat === "stats") {
+    const nonEmpty = lines.filter(l => l.trim().length > 0);
+    summary = [
+      "File: " + filePath,
+      "Size: " + stat.size + " bytes",
+      "Total lines: " + lines.length,
+      "Non-empty lines: " + nonEmpty.length,
+      "First line: " + (lines[0] || "(empty)"),
+      "Last line: " + (lines[lines.length - 1] || "(empty)")
+    ].join("\n");
+  } else {
+    return { content: [{ type: "text", text: "Invalid strategy. Use: head, tail, grep, stats" }], isError: true };
+  }
+  const header = "[Summary: " + lines.length + " lines, strategy=" + strat + (strat === "grep" ? ", pattern=" + pattern : "") + "]\n";
+  return { content: [{ type: "text", text: redactSensitive(header + summary) }] };
+}
+
+async function sidekick_filter({ path: targetPath, pattern, after, before, max_results }) {
+  const maxResults = max_results || 50;
+  if (!fs.existsSync(targetPath)) {
+    return { content: [{ type: "text", text: "Path not found: " + targetPath }], isError: true };
+  }
+  const stat = fs.statSync(targetPath);
+  const results = [];
+  if (stat.isFile()) {
+    const content = fs.readFileSync(targetPath, "utf-8");
+    const lines = content.split("\n");
+    const re = pattern ? new RegExp(pattern, "i") : null;
+    for (let i = 0; i < lines.length && results.length < maxResults; i++) {
+      if (!re || re.test(lines[i])) {
+        results.push({ line: i + 1, text: lines[i].substring(0, 200) });
+      }
+    }
+  } else if (stat.isDirectory()) {
+    const afterDate = after ? new Date(after).getTime() : 0;
+    const beforeDate = before ? new Date(before).getTime() : Infinity;
+    const re = pattern ? new RegExp(pattern, "i") : null;
+    function walkDir(dir, depth) {
+      if (depth > 5 || results.length >= maxResults) return;
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+      for (const entry of entries) {
+        if (results.length >= maxResults) break;
+        const fullPath = path.join(dir, entry.name);
+        try {
+          const s = fs.statSync(fullPath);
+          if (entry.isDirectory()) {
+            if (!entry.name.startsWith(".") && entry.name !== "node_modules") {
+              walkDir(fullPath, depth + 1);
+            }
+          } else if (entry.isFile()) {
+            if (s.mtimeMs >= afterDate && s.mtimeMs <= beforeDate) {
+              if (!re || re.test(entry.name)) {
+                results.push({
+                  path: fullPath,
+                  size: s.size,
+                  modified: s.mtime.toISOString().slice(0, 19)
+                });
+              }
+            }
+          }
+        } catch (e) {}
+      }
+    }
+    walkDir(targetPath, 0);
+  }
+  return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+}
+
+async function sidekick_project({ name, include }) {
+  const sections = (include || "kv,context").split(",").map(s => s.trim());
+  const output = {};
+  if (sections.includes("kv")) {
+    const kvResults = [];
+    for (const [key, entry] of Object.entries(kvStore)) {
+      if (typeof entry === 'object' && entry !== null && entry.project === name) {
+        kvResults.push({ key, value: typeof entry.value === 'string' ? entry.value.substring(0, 200) : entry.value, updated: entry.updated });
+      }
+    }
+    output.kv = kvResults;
+  }
+  if (sections.includes("context")) {
+    const ctxFile = path.join(DATA_DIR, "context.json");
+    if (fs.existsSync(ctxFile)) {
+      try {
+        const ctx = JSON.parse(fs.readFileSync(ctxFile, "utf-8"));
+        const items = (ctx.items || []).filter(i => i.project === name);
+        output.context = items.slice(-20).map(i => ({
+          type: i.type,
+          summary: (i.context || i.decision || i.problem || i.pattern || "").substring(0, 200),
+          created: i.created
+        }));
+      } catch (e) { output.context = []; }
+    } else { output.context = []; }
+  }
+  if (sections.includes("logs")) {
+    if (fs.existsSync(LOG_FILE)) {
+      try {
+        const lines = fs.readFileSync(LOG_FILE, "utf-8").trim().split("\n");
+        const recent = lines.slice(-50).map(l => {
+          try { return JSON.parse(l); } catch (e) { return null; }
+        }).filter(Boolean);
+        output.logs = recent.slice(-20).map(l => ({
+          time: l.t, tool: l.n, ok: l.ok, summary: l.s
+        }));
+      } catch (e) { output.logs = []; }
+    } else { output.logs = []; }
+  }
+  if (sections.includes("procedures")) {
+    const procs = loadProcedures();
+    output.procedures = Object.keys(procs).filter(n => n.toLowerCase().includes(name.toLowerCase()));
+  }
+  return { content: [{ type: "text", text: JSON.stringify(output, null, 2) }] };
+}
+
+async function sidekick_tail({ source, pattern, lines, since }) {
+  const maxLines = lines || 50;
+  const re = pattern ? new RegExp(pattern, "i") : null;
+  let content;
+  if (source === "log.jsonl" || source === "log") {
+    if (!fs.existsSync(LOG_FILE)) {
+      return { content: [{ type: "text", text: "Log file not found" }], isError: true };
+    }
+    const allLines = fs.readFileSync(LOG_FILE, "utf-8").trim().split("\n");
+    const parsed = allLines.map(l => { try { return JSON.parse(l); } catch (e) { return null; } }).filter(Boolean);
+    let filtered = parsed;
+    if (since) {
+      const sinceDate = new Date(since).getTime();
+      filtered = parsed.filter(l => new Date(l.t).getTime() >= sinceDate);
+    }
+    if (re) {
+      filtered = filtered.filter(l => re.test(l.n) || re.test(l.s) || re.test(l.a));
+    }
+    content = filtered.slice(-maxLines).map(l =>
+      l.t.slice(11, 19) + " [" + (l.ok ? "OK" : "ERR") + "] " + l.n + ": " + l.s
+    ).join("\n");
+  } else if (source === "journalctl") {
+    try {
+      const svc = pattern || "sidekick-mcp";
+      const stdout = execFileSync("journalctl", ["-u", svc, "-n", String(maxLines), "--no-pager"], {
+        timeout: 10000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024
+      });
+      content = stdout;
+    } catch (e) {
+      content = e.stdout || e.message;
+    }
+  } else {
+    if (!fs.existsSync(source)) {
+      return { content: [{ type: "text", text: "File not found: " + source }], isError: true };
+    }
+    const allLines = fs.readFileSync(source, "utf-8").split("\n");
+    let filtered = allLines;
+    if (re) filtered = allLines.filter(l => re.test(l));
+    content = filtered.slice(-maxLines).join("\n");
+  }
+  return { content: [{ type: "text", text: redactSensitive(content || "(no matching entries)") }] };
+}
+
+async function sidekick_diff_files({ path_a, path_b, format }) {
+  if (!fs.existsSync(path_a)) return { content: [{ type: "text", text: "File not found: " + path_a }], isError: true };
+  if (!fs.existsSync(path_b)) return { content: [{ type: "text", text: "File not found: " + path_b }], isError: true };
+  const contentA = fs.readFileSync(path_a, "utf-8");
+  const contentB = fs.readFileSync(path_b, "utf-8");
+  if (format === "summary") {
+    const linesA = contentA.split("\n");
+    const linesB = contentB.split("\n");
+    let added = 0, removed = 0, changed = 0;
+    const maxLen = Math.max(linesA.length, linesB.length);
+    for (let i = 0; i < maxLen; i++) {
+      const a = linesA[i] || "";
+      const b = linesB[i] || "";
+      if (a === b) continue;
+      if (i >= linesA.length) added++;
+      else if (i >= linesB.length) removed++;
+      else changed++;
+    }
+    return { content: [{ type: "text", text: JSON.stringify({
+      file_a: path_a, file_b: path_b,
+      lines_a: linesA.length, lines_b: linesB.length,
+      added, removed, changed
+    }) }] };
+  }
+  const linesA = contentA.split("\n");
+  const linesB = contentB.split("\n");
+  const diffLines = [];
+  const maxLen = Math.max(linesA.length, linesB.length);
+  let diffCount = 0;
+  for (let i = 0; i < maxLen && diffCount < 100; i++) {
+    const a = linesA[i];
+    const b = linesB[i];
+    if (a !== b) {
+      diffCount++;
+      if (a !== undefined) diffLines.push("- " + (i + 1) + ": " + a.substring(0, 200));
+      if (b !== undefined) diffLines.push("+ " + (i + 1) + ": " + b.substring(0, 200));
+    }
+  }
+  const header = "--- " + path_a + "\n+++ " + path_b + "\n";
+  return { content: [{ type: "text", text: redactSensitive(header + diffLines.join("\n")) }] };
+}
+
+async function sidekick_find({ path: searchPath, name, modified_after, modified_before, size_min, size_max, content, max_results }) {
+  const maxResults = max_results || 50;
+  if (!fs.existsSync(searchPath)) {
+    return { content: [{ type: "text", text: "Path not found: " + searchPath }], isError: true };
+  }
+  const afterMs = modified_after ? new Date(modified_after).getTime() : 0;
+  const beforeMs = modified_before ? new Date(modified_before).getTime() : Infinity;
+  const sizeMin = size_min ? parseSize(size_min) : 0;
+  const sizeMax = size_max ? parseSize(size_max) : Infinity;
+  const nameRe = name ? new RegExp("^" + name.replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "i") : null;
+  const contentRe = content ? new RegExp(content, "i") : null;
+  const results = [];
+  function walk(dir, depth) {
+    if (depth > 8 || results.length >= maxResults) return;
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+    for (const entry of entries) {
+      if (results.length >= maxResults) break;
+      if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.name === "__pycache__") continue;
+      const fullPath = path.join(dir, entry.name);
+      try {
+        const s = fs.statSync(fullPath);
+        if (entry.isDirectory()) {
+          walk(fullPath, depth + 1);
+        } else if (entry.isFile()) {
+          if (nameRe && !nameRe.test(entry.name)) continue;
+          if (s.mtimeMs < afterMs || s.mtimeMs > beforeMs) continue;
+          if (s.size < sizeMin || s.size > sizeMax) continue;
+          if (contentRe) {
+            try {
+              const fileContent = fs.readFileSync(fullPath, "utf-8").substring(0, 1024 * 1024);
+              if (!contentRe.test(fileContent)) continue;
+            } catch (e) { continue; }
+          }
+          results.push({
+            path: fullPath,
+            size: s.size,
+            modified: s.mtime.toISOString().slice(0, 19)
+          });
+        }
+      } catch (e) {}
+    }
+  }
+  walk(searchPath, 0);
+  return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+}
+
+function parseSize(str) {
+  if (typeof str === "number") return str;
+  const match = String(str).match(/^(\d+(?:\.\d+)?)\s*(B|KB|MB|GB)?$/i);
+  if (!match) return 0;
+  const val = parseFloat(match[1]);
+  const unit = (match[2] || "B").toUpperCase();
+  const multipliers = { B: 1, KB: 1024, MB: 1048576, GB: 1073741824 };
+  return Math.floor(val * (multipliers[unit] || 1));
+}
+
+async function sidekick_status({ include, services }) {
+  const sections = (include || "services,disk").split(",").map(s => s.trim());
+  const output = {};
+  if (sections.includes("services")) {
+    const svcList = (services || "sidekick-mcp,sidekick-dashboard,sidekick-agent").split(",").map(s => s.trim());
+    output.services = {};
+    for (const svc of svcList) {
+      try {
+        const stdout = execFileSync("systemctl", ["is-active", svc], { timeout: 5000, encoding: "utf-8" }).trim();
+        output.services[svc] = stdout;
+      } catch (e) {
+        output.services[svc] = (e.stdout || "unknown").trim();
+      }
+    }
+  }
+  if (sections.includes("disk")) {
+    try {
+      const stdout = execFileSync("df", ["-h", "--output=target,size,used,avail,pcent", "/"], {
+        timeout: 5000, encoding: "utf-8"
+      }).trim();
+      const lines = stdout.split("\n");
+      if (lines.length > 1) {
+        const parts = lines[1].trim().split(/\s+/);
+        output.disk = { mount: parts[0], size: parts[1], used: parts[2], avail: parts[3], pct: parts[4] };
+      }
+    } catch (e) { output.disk = { error: e.message }; }
+  }
+  if (sections.includes("memory")) {
+    try {
+      const stdout = execFileSync("free", ["-h"], { timeout: 5000, encoding: "utf-8" }).trim();
+      const lines = stdout.split("\n");
+      if (lines.length > 1) {
+        const parts = lines[1].trim().split(/\s+/);
+        output.memory = { total: parts[1], used: parts[2], free: parts[3] };
+      }
+    } catch (e) { output.memory = { error: e.message }; }
+  }
+  if (sections.includes("load")) {
+    try {
+      const stdout = fs.readFileSync("/proc/loadavg", "utf-8").trim();
+      const parts = stdout.split(/\s+/);
+      output.load = { "1m": parts[0], "5m": parts[1], "15m": parts[2] };
+    } catch (e) { output.load = { error: e.message }; }
+  }
+  if (sections.includes("uptime")) {
+    try {
+      const stdout = execFileSync("uptime", ["-p"], { timeout: 5000, encoding: "utf-8" }).trim();
+      output.uptime = stdout;
+    } catch (e) { output.uptime = { error: e.message }; }
+  }
+  if (sections.includes("processes")) {
+    try {
+      const stdout = execFileSync("ps", ["aux", "--sort=-%cpu"], { timeout: 5000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024 });
+      const lines = stdout.trim().split("\n").slice(0, 11);
+      output.processes_top = lines.slice(1).map(l => {
+        const p = l.trim().split(/\s+/);
+        return { user: p[0], pid: p[1], cpu: p[2], mem: p[3], cmd: p.slice(10).join(" ").substring(0, 80) };
+      });
+    } catch (e) { output.processes_top = []; }
+  }
+  output.timestamp = new Date().toISOString();
+  return { content: [{ type: "text", text: JSON.stringify(output, null, 2) }] };
+}
+
+async function sidekick_extract({ path: filePath, fields }) {
+  if (!filePath) return { content: [{ type: "text", text: "path required" }], isError: true };
+  if (!fs.existsSync(filePath)) {
+    return { content: [{ type: "text", text: "File not found: " + filePath }], isError: true };
+  }
+  const content = fs.readFileSync(filePath, "utf-8");
+  let data;
+  const ext = path.extname(filePath).toLowerCase();
+  try {
+    if (ext === ".json") {
+      data = JSON.parse(content);
+    } else if (ext === ".yaml" || ext === ".yml") {
+      const yaml = require("yaml");
+      data = yaml.parse(content);
+    } else if (ext === ".ini" || ext === ".cfg") {
+      const ini = require("ini");
+      data = ini.parse(content);
+    } else if (ext === ".xml") {
+      const { XMLParser } = require("fast-xml-parser");
+      const parser = new XMLParser();
+      data = parser.parse(content);
+    } else {
+      data = JSON.parse(content);
+    }
+  } catch (e) {
+    return { content: [{ type: "text", text: "Parse error: " + e.message }], isError: true };
+  }
+  if (!fields) {
+    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+  }
+  const fieldList = Array.isArray(fields) ? fields : fields.split(",").map(f => f.trim());
+  const result = {};
+  for (const fieldPath of fieldList) {
+    const parts = fieldPath.replace(/\[(\d+)\]/g, ".$1").split(".");
+    let val = data;
+    for (const part of parts) {
+      if (val === null || val === undefined) { val = undefined; break; }
+      val = val[part];
+    }
+    result[fieldPath] = val !== undefined ? (typeof val === "object" ? JSON.stringify(val) : String(val)) : null;
+  }
+  return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+}
+
 const TOOLS = {
   sidekick_bash,
   sidekick_read,
@@ -4120,6 +4597,16 @@ const TOOLS = {
   sidekick_predict,
   sidekick_debug_tool,
   sidekick_fresheyes,
+  sidekick_batch,
+  sidekick_cache,
+  sidekick_summarize,
+  sidekick_filter,
+  sidekick_project,
+  sidekick_tail,
+  sidekick_diff_files,
+  sidekick_find,
+  sidekick_status,
+  sidekick_extract,
 };
 
 const TOOL_DEFS = [
@@ -4162,6 +4649,16 @@ const TOOL_DEFS = [
   { name: "sidekick_predict", description: "Anticipatory intelligence: analyze patterns, predict needs, track prediction usefulness", args: { action: "string (analyze|list|feedback|suggest)", id: "string (optional, prediction id for feedback)", feedback: "boolean (optional, true if useful, false if not)" } },
   { name: "sidekick_debug_tool", description: "Structured debugging cache: store file contents, hypotheses, and findings during debug sessions to avoid redundant reads", args: { action: "string (start|stop|cache|get|status|clear)", session_name: "string (optional, session identifier)", key: "string (optional, cache key for get/cache)", value: "string (optional, value to cache)" } },
   { name: "sidekick_fresheyes", description: "Get a fresh perspective from Sidekick's LLM (Grok) on a problem. Sends sanitized context for independent analysis", args: { problem: "string (problem description)", context: "string (optional, relevant context)", files: "array (optional, files analyzed)", hypotheses: "array (optional, current hypotheses)", full_response: "boolean (optional, return full response vs key insights)" } },
+  { name: "sidekick_batch", description: "Execute multiple tool calls in one request to reduce API round-trips. Max 20 calls per batch.", args: { calls: "array (array of { tool: string, args: object })" } },
+  { name: "sidekick_cache", description: "Session-scoped caching to avoid redundant operations. Store and retrieve values with TTL.", args: { action: "string (get|set|clear|list)", key: "string (cache key)", ttl: "string (optional, e.g. 30s, 5m, 1h - default 5m)", value: "string (value to cache, for set action)" } },
+  { name: "sidekick_summarize", description: "Summarize large files before returning to reduce token usage. Strategies: head, tail, grep, stats.", args: { path: "string (file path)", max_lines: "number (optional, default 50)", strategy: "string (optional, head|tail|grep|stats - default head)", pattern: "string (optional, regex for grep strategy)" } },
+  { name: "sidekick_filter", description: "Filter file contents or directory listings by pattern, date, or size before returning.", args: { path: "string (file or directory path)", pattern: "string (optional, regex pattern)", after: "string (optional, ISO date for files modified after)", before: "string (optional, ISO date for files modified before)", max_results: "number (optional, default 50)" } },
+  { name: "sidekick_project", description: "Get complete project context in one call: KV entries, context tracking, recent logs, procedures.", args: { name: "string (project name)", include: "string (optional, comma-separated: kv,context,logs,procedures - default kv,context)" } },
+  { name: "sidekick_tail", description: "Tail recent log entries with filtering. Sources: log.jsonl (sidekick logs), journalctl, or any file.", args: { source: "string (log.jsonl, journalctl, or file path)", pattern: "string (optional, regex filter - for journalctl: service name)", lines: "number (optional, default 50)", since: "string (optional, ISO date or relative like 1h, 1d)" } },
+  { name: "sidekick_diff_files", description: "Compare two files directly without reading both into context. Returns unified diff or summary.", args: { path_a: "string (first file path)", path_b: "string (second file path)", format: "string (optional, unified|summary - default unified)" } },
+  { name: "sidekick_find", description: "Advanced file finder: search by name pattern, date range, size range, and content pattern.", args: { path: "string (directory to search)", name: "string (optional, glob pattern e.g. '*.js')", modified_after: "string (optional, ISO date)", modified_before: "string (optional, ISO date)", size_min: "string (optional, e.g. '1KB', '1MB')", size_max: "string (optional, e.g. '10MB')", content: "string (optional, regex pattern to match file contents)", max_results: "number (optional, default 50)" } },
+  { name: "sidekick_status", description: "Unified system status: services, disk, memory, load, uptime, top processes in one call.", args: { include: "string (optional, comma-separated: services,disk,memory,load,uptime,processes - default services,disk)", services: "string (optional, comma-separated service names - default sidekick-mcp,sidekick-dashboard,sidekick-agent)" } },
+  { name: "sidekick_extract", description: "Parse JSON/YAML/INI/XML and extract specific fields by path. Returns only what you need.", args: { path: "string (file path)", fields: "string|array (optional, field paths to extract e.g. 'database.host,database.port')" } },
 ];
 
 async function callTool(name, args) {
