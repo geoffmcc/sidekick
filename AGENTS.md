@@ -75,9 +75,7 @@ All tool calls are logged with source tags:
 
 ## Services
 
-- **MCP Server** (`:4097`) — 39 tools, session-aware transport (new McpServer+Transport per session)
-  - `sidekick` — Primary server at 149.28.229.13
-  - `sidekick-1` — Testing server at 192.168.1.10 (temporary, will become primary)
+- **MCP Server** (`:4097`) — 39 tools, session-aware transport (new McpServer+Transport per session) at 192.168.1.10
 - **Dashboard** (`:4098`) — web UI with System, Activity, Data, Config, and Agent tabs, Font Awesome icons
 - **Agent Bridge** (`:4099`) — autonomous LLM agent that calls tools directly (bypasses MCP HTTP)
 - **Ollama** (`:11434`) — local Phi-3-mini fallback. Uses cloud Groq API when `GROQ_API_KEY` is set
@@ -281,22 +279,22 @@ Procedure:
 
 ### MCP Server Logs
 ```bash
-ssh sidekick@149.28.229.13
+ssh sidekick@192.168.1.10
 sudo journalctl -u sidekick-mcp -f
 ```
 
 ### Restart MCP Service
 ```bash
-ssh sidekick@149.28.229.13
+ssh sidekick@192.168.1.10
 sudo systemctl restart sidekick-mcp
 ```
 
 ### Check All Services
 ```bash
-ssh sidekick@149.28.229.13
+ssh sidekick@192.168.1.10
 sudo systemctl status sidekick-mcp sidekick-dashboard sidekick-agent
 ```
 
 ### Dashboard (HTTP Basic Auth)
-- URL: `http://149.28.229.13:4098/`
+- URL: `http://192.168.1.10:4098/`
 - Credentials in `.env` on remote machine: `SIDEKICK_DASHBOARD_USER` / `SIDEKICK_DASHBOARD_PASS`
