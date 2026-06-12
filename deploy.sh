@@ -114,43 +114,41 @@ initialize_remote() {
       echo -e "  \033[90mSudoers already configured\033[0m"
     fi
 
-    # Install service files (requires password)
-    echo -e "  \033[33mInstalling service files...\033[0m"
+    # Copy all service files to /tmp first (no password needed)
+    echo -e "  \033[33mUploading service files...\033[0m"
     for svc in sidekick-mcp sidekick-dashboard sidekick-agent; do
       local svc_local="$PROJECT_DIR/systemd/$svc.service"
       copy_to_vps "$svc_local" "/tmp/$svc.service" >/dev/null
-      
-      if [ -n "$PASSWORD" ]; then
-        run_remote "echo '$PASSWORD' | sudo -S cp /tmp/$svc.service /etc/systemd/system/$svc.service" >/dev/null
-        run_remote "rm -f /tmp/$svc.service" >/dev/null
-      else
-        run_remote_interactive "sudo cp /tmp/$svc.service /etc/systemd/system/$svc.service && rm -f /tmp/$svc.service"
-      fi
     done
 
-    # daemon-reload and enable (requires password)
-    echo -e "  \033[33mEnabling services...\033[0m"
-    if [ -n "$PASSWORD" ]; then
-      run_remote "echo '$PASSWORD' | sudo -S systemctl daemon-reload" >/dev/null
-      for svc in sidekick-mcp sidekick-dashboard sidekick-agent; do
-        run_remote "echo '$PASSWORD' | sudo -S systemctl enable $svc" >/dev/null
-      done
-    else
-      run_remote_interactive "sudo systemctl daemon-reload && sudo systemctl enable sidekick-mcp sidekick-dashboard sidekick-agent"
-    fi
-
-    # Open firewall ports (requires password)
-    echo -e "  \033[33mChecking firewall...\033[0m"
+    # Batch all privileged operations into a single interactive session
+    echo -e "  \033[33mInstalling and enabling services...\033[0m"
+    
+    # Build the command to install all services
+    local install_cmd="sudo cp /tmp/sidekick-mcp.service /tmp/sidekick-dashboard.service /tmp/sidekick-agent.service /etc/systemd/system/"
+    install_cmd+=" && sudo systemctl daemon-reload"
+    install_cmd+=" && sudo systemctl enable sidekick-mcp sidekick-dashboard sidekick-agent"
+    install_cmd+=" && rm -f /tmp/sidekick-*.service"
+    
+    # Check if UFW is active and add firewall commands if needed
     local ufw_active
     ufw_active=$(run_remote "systemctl is-active ufw 2>&1") || true
     if [[ "$ufw_active" == *"active"* ]]; then
-      if [ -n "$PASSWORD" ]; then
-        run_remote "echo '$PASSWORD' | sudo -S ufw allow 4097/tcp comment 'Sidekick MCP'" >/dev/null
-        run_remote "echo '$PASSWORD' | sudo -S ufw allow 4098/tcp comment 'Sidekick Dashboard'" >/dev/null
-        run_remote "echo '$PASSWORD' | sudo -S ufw allow 4099/tcp comment 'Sidekick Agent'" >/dev/null
-      else
-        run_remote_interactive "sudo ufw allow 4097/tcp comment 'Sidekick MCP' && sudo ufw allow 4098/tcp comment 'Sidekick Dashboard' && sudo ufw allow 4099/tcp comment 'Sidekick Agent'"
-      fi
+      install_cmd+=" && sudo ufw allow 4097/tcp comment 'Sidekick MCP'"
+      install_cmd+=" && sudo ufw allow 4098/tcp comment 'Sidekick Dashboard'"
+      install_cmd+=" && sudo ufw allow 4099/tcp comment 'Sidekick Agent'"
+    fi
+
+    if [ -n "$PASSWORD" ]; then
+      # Use password for all operations
+      local password_cmd="${install_cmd//sudo/echo '$PASSWORD' | sudo -S}"
+      run_remote "$password_cmd" >/dev/null
+    else
+      # Use interactive password prompt (single prompt for all operations)
+      run_remote_interactive "$install_cmd"
+    fi
+
+    if [[ "$ufw_active" == *"active"* ]]; then
       echo -e "  \033[32mFirewall ports opened (4097, 4098, 4099)\033[0m"
     else
       echo -e "  \033[33mUFW not active, skipping firewall config\033[0m"

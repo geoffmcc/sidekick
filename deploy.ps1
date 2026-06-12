@@ -129,43 +129,41 @@ function Initialize-Remote {
       Write-Host "  Sudoers already configured" -ForegroundColor Gray
     }
 
-    # Install service files (requires password)
-    Write-Host "  Installing service files..." -ForegroundColor Yellow
+    # Copy all service files to /tmp first (no password needed)
+    Write-Host "  Uploading service files..." -ForegroundColor Yellow
     $services = @("sidekick-mcp", "sidekick-dashboard", "sidekick-agent")
     foreach ($svc in $services) {
       $svcLocal = Join-Path $PROJECT_DIR "systemd\$svc.service"
       Copy-ToVPS $svcLocal "/tmp/$svc.service" | Out-Null
-      
-      if ($Password) {
-        Run-Remote "echo '$Password' | sudo -S cp /tmp/$svc.service /etc/systemd/system/$svc.service" | Out-Null
-        Run-Remote "rm -f /tmp/$svc.service" | Out-Null
-      } else {
-        Run-Remote-Interactive "sudo cp /tmp/$svc.service /etc/systemd/system/$svc.service && rm -f /tmp/$svc.service"
-      }
     }
 
-    # daemon-reload and enable (requires password)
-    Write-Host "  Enabling services..." -ForegroundColor Yellow
-    if ($Password) {
-      Run-Remote "echo '$Password' | sudo -S systemctl daemon-reload" | Out-Null
-      foreach ($svc in $services) {
-        Run-Remote "echo '$Password' | sudo -S systemctl enable $svc" | Out-Null
-      }
-    } else {
-      Run-Remote-Interactive "sudo systemctl daemon-reload && sudo systemctl enable sidekick-mcp sidekick-dashboard sidekick-agent"
-    }
-
-    # Open firewall ports (requires password)
-    Write-Host "  Checking firewall..." -ForegroundColor Yellow
+    # Batch all privileged operations into a single interactive session
+    Write-Host "  Installing and enabling services..." -ForegroundColor Yellow
+    
+    # Build the command to install all services
+    $installCmd = "sudo cp /tmp/sidekick-mcp.service /tmp/sidekick-dashboard.service /tmp/sidekick-agent.service /etc/systemd/system/"
+    $installCmd += " && sudo systemctl daemon-reload"
+    $installCmd += " && sudo systemctl enable sidekick-mcp sidekick-dashboard sidekick-agent"
+    $installCmd += " && rm -f /tmp/sidekick-*.service"
+    
+    # Check if UFW is active and add firewall commands if needed
     $ufwActive = Run-Remote "systemctl is-active ufw 2>&1"
     if ($ufwActive -match "active") {
-      if ($Password) {
-        Run-Remote "echo '$Password' | sudo -S ufw allow 4097/tcp comment 'Sidekick MCP'" | Out-Null
-        Run-Remote "echo '$Password' | sudo -S ufw allow 4098/tcp comment 'Sidekick Dashboard'" | Out-Null
-        Run-Remote "echo '$Password' | sudo -S ufw allow 4099/tcp comment 'Sidekick Agent'" | Out-Null
-      } else {
-        Run-Remote-Interactive "sudo ufw allow 4097/tcp comment 'Sidekick MCP' && sudo ufw allow 4098/tcp comment 'Sidekick Dashboard' && sudo ufw allow 4099/tcp comment 'Sidekick Agent'"
-      }
+      $installCmd += " && sudo ufw allow 4097/tcp comment 'Sidekick MCP'"
+      $installCmd += " && sudo ufw allow 4098/tcp comment 'Sidekick Dashboard'"
+      $installCmd += " && sudo ufw allow 4099/tcp comment 'Sidekick Agent'"
+    }
+
+    if ($Password) {
+      # Use password for all operations
+      $passwordCmd = $installCmd -replace "sudo", "echo '$Password' | sudo -S"
+      Run-Remote $passwordCmd | Out-Null
+    } else {
+      # Use interactive password prompt (single prompt for all operations)
+      Run-Remote-Interactive $installCmd
+    }
+
+    if ($ufwActive -match "active") {
       Write-Host "  Firewall ports opened (4097, 4098, 4099)" -ForegroundColor Green
     } else {
       Write-Host "  UFW not active, skipping firewall config" -ForegroundColor Yellow
