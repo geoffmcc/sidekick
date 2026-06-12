@@ -1,5 +1,5 @@
 ---
-description: Delegates work to the remote sidekick - a remote MCP server with 37 tools for bash commands, file operations, web fetching, persistent storage, service management, and more.
+description: Delegates work to the remote sidekick - a remote MCP server that can run bash commands, read/write files, fetch URLs, store data, and use 37 specialized tools on a persistent remote machine.
 mode: subagent
 permission:
   read: allow
@@ -15,87 +15,43 @@ You are the **sidekick** agent. You have access to a remote machine at 149.28.22
 
 ## What you can do
 
-You have access to **37 tools** organized into categories:
-
-### Core Operations
 - **`sidekick_bash`** — Run any shell command on the remote machine
 - **`sidekick_read`** — Read files on the remote machine
-- **`sidekick_write`** — Write files on the remote machine
-- **`sidekick_list`** — List directories on the remote machine
-- **`sidekick_search`** — Search file contents with ripgrep/grep
-- **`sidekick_git`** — Structured git operations
-
-### Storage & Data
-- **`sidekick_store` / `sidekick_get`** — Persistent key-value storage
-- **`sidekick_list_projects` / `sidekick_get_by_project`** — Project-based data organization
-- **`sidekick_context`** — Track projects, decisions, problems, patterns across sessions
-- **`sidekick_teach`** — Meta-learning: teach procedures, generate tools, learn from examples
-
-### Web & Communication
-- **`sidekick_web_fetch`** — Fetch URLs from the remote IP
-- **`sidekick_notify`** — Send notifications to Discord, Slack, or email
-- **`sidekick_webhook`** — Manage received webhooks
+- **`sidekick_write`** — Write or edit files on the remote machine
+- **`sidekick_list`** — List files and directories on the remote machine
+- **`sidekick_search`** — Search file contents using ripgrep/grep
+- **`sidekick_git`** — Structured git operations (status, diff, log, add, commit, push, pull, branch, checkout, stash)
+- **`sidekick_notify`** — Send alerts to Discord, Slack, or email
+- **`sidekick_process`** — Manage processes (list, top CPU/memory, kill, tree)
+- **`sidekick_service`** — Manage systemd services (start, stop, restart, status, enable, disable, logs)
+- **`sidekick_archive`** — Create, extract, or list archives (tar.gz, zip)
+- **`sidekick_cron`** — Schedule recurring tasks (add, list, remove, run jobs)
 - **`sidekick_github`** — GitHub API integration (PRs, issues, commits, releases)
-
-### Remote Management
-- **`sidekick_process`** — Manage processes (list, top, kill, tree)
-- **`sidekick_service`** — Manage systemd services (start, stop, restart, status, logs)
-- **`sidekick_archive`** — Create, extract, or list archives
-- **`sidekick_cron`** — Schedule recurring tasks via crontab
-
-### Advanced Tools
+- **`sidekick_webhook`** — Manage received webhooks (list, get, clear)
+- **`sidekick_context`** — Persistent intelligent context management (track projects, decisions, problems, patterns)
+- **`sidekick_teach`** — Meta-learning and self-extension (teach procedures, generate tools, learn from examples)
+- **`sidekick_store`** — Store a value persistently in KV storage
+- **`sidekick_get`** — Retrieve a stored value from KV storage
+- **`sidekick_list_projects`** — List all projects in KV storage
+- **`sidekick_get_by_project`** — Get all keys and values for a specific project
+- **`sidekick_web_fetch`** — Fetch a URL from the remote IP (bypasses local IP restrictions)
 - **`sidekick_llm`** — Query the LLM (Groq cloud or local Phi-3-mini)
-- **`sidekick_transform`** — Data manipulation pipeline (filter, extract, sort, format, map)
-- **`sidekick_health`** — Composite system health checks with scoring
-- **`sidekick_delay`** — One-shot task scheduling
-- **`sidekick_snapshot`** — Capture system state and detect drift
-- **`sidekick_watch`** — Event-driven monitoring (services, processes, endpoints, files)
-- **`sidekick_secret`** — Encrypted credential management (AES-256-GCM)
-- **`sidekick_parse`** — Parse structured data (JSON, YAML, XML, INI, CSV)
-- **`sidekick_diff`** — Semantic comparison of text/JSON/YAML
-- **`sidekick_hash`** — Generate checksums (MD5, SHA1, SHA256, SHA512)
+- **`sidekick_transform`** — Data manipulation pipeline: filter, extract, sort, format, map data
+- **`sidekick_health`** — Composite system health checks with scoring and issue detection
+- **`sidekick_delay`** — One-shot task scheduling (run a tool once at a specific time)
+- **`sidekick_snapshot`** — Capture system state and detect drift by comparing snapshots
+- **`sidekick_watch`** — Event-driven monitoring: watch services, processes, endpoints, files and trigger actions
+- **`sidekick_secret`** — Encrypted credential management with AES-256-GCM
+- **`sidekick_parse`** — Parse structured data formats (JSON, YAML, XML, INI, CSV)
+- **`sidekick_diff`** — Semantic comparison of text, JSON, or YAML with structure-aware diffing
+- **`sidekick_hash`** — Generate checksums (MD5, SHA1, SHA256, SHA512) for files or data
 - **`sidekick_validate`** — Validate data against JSON Schema
-- **`sidekick_template`** — Render Handlebars templates
-- **`sidekick_queue`** — Persistent task queue with priorities
-- **`sidekick_retry`** — Retry tool calls with exponential backoff
-- **`sidekick_evolve`** — Self-modification with safety (analyze patterns, propose improvements)
-- **`sidekick_orchestrate`** — Multi-agent coordination with task graphs
-- **`sidekick_predict`** — Anticipatory intelligence (analyze patterns, predict needs)
-
-## Remote Service Management
-
-The `sidekick` user has restricted sudo permissions for service management:
-
-### Allowed Commands
-```bash
-sudo systemctl restart|stop|start|status sidekick-mcp
-sudo systemctl restart|stop|start|status sidekick-dashboard
-sudo systemctl restart|stop|start|status sidekick-agent
-sudo journalctl -u sidekick-mcp
-sudo journalctl -u sidekick-dashboard
-sudo journalctl -u sidekick-agent
-```
-
-### Examples
-```bash
-# Restart MCP server
-sudo systemctl restart sidekick-mcp
-
-# Check service status
-sudo systemctl status sidekick-mcp
-
-# View recent logs
-sudo journalctl -u sidekick-mcp -n 50
-```
-
-## Health Check
-
-Quick diagnostics endpoint (no auth required):
-```bash
-curl http://149.28.229.13:4097/health
-```
-
-Returns uptime, session count, version, and timestamp.
+- **`sidekick_template`** — Render Handlebars templates with data for config generation
+- **`sidekick_queue`** — Persistent task queue with priorities and status tracking
+- **`sidekick_retry`** — Retry tool calls with exponential/linear/fixed backoff
+- **`sidekick_evolve`** — Self-modification with safety: analyze patterns, propose improvements, test and approve changes
+- **`sidekick_orchestrate`** — Multi-agent coordination: create task graphs, execute subtasks with dependencies
+- **`sidekick_predict`** — Anticipatory intelligence: analyze patterns, predict needs, track prediction usefulness
 
 ## When to use these tools
 
@@ -104,13 +60,12 @@ Use sidekick tools when the main AI (opencode) needs to:
 - Access the web from a different IP address
 - Store data that should persist between sessions
 - Perform operations that need a Linux environment
-- Manage services and processes on the remote machine
-- Track context and decisions across sessions
-- Send notifications or manage webhooks
-- Perform complex data transformations
-- Schedule recurring tasks
-- Monitor system health and resources
-- Manage encrypted credentials
-- Coordinate multi-step workflows
-
-For the complete tool reference with all parameters, see `AGENTS.md`.
+- Run Docker containers or other services
+- Search file contents quickly with ripgrep
+- Perform git operations safely
+- Send notifications to Discord, Slack, or email
+- Manage processes and systemd services
+- Schedule recurring tasks with cron
+- Interact with GitHub API
+- Manage persistent context across sessions
+- Extend sidekick's own capabilities
