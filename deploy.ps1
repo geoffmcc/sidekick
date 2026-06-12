@@ -1,7 +1,8 @@
 param(
   [switch]$Force,
   [string]$IP = "192.168.1.10",
-  [string]$Password
+  [string]$Password = $env:SIDEKICK_INITIAL_PASSWORD,
+  [string]$InitialUser = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -52,6 +53,89 @@ function Ensure-SSHKey {
 function Test-SSHConnection {
   $result = ssh -i "$SSH_KEY" $SSH_OPTS.Split(' ') -o ConnectTimeout=5 "$VPS" "echo OK" 2>&1
   return ($result -match "OK")
+}
+
+function Detect-InitialUser {
+  $users = @("ubuntu", "admin", "root")
+  foreach ($user in $users) {
+    $result = ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=3 "$user@$IP" "echo OK" 2>&1
+    if ($result -match "OK") {
+      return $user
+    }
+  }
+  return $null
+}
+
+function Test-SidekickUserExists {
+  $result = ssh -i "$SSH_KEY" $SSH_OPTS.Split(' ') -o ConnectTimeout=3 "$VPS" "echo OK" 2>&1
+  return ($result -match "OK")
+}
+
+function Run-Bootstrap {
+  param([string]$User, [string]$Pass)
+  
+  Write-Host ""
+  Write-Host "=== Running Bootstrap ===" -ForegroundColor Cyan
+  
+  Write-Host "  Bootstrapping as $User@$IP..." -ForegroundColor Yellow
+  
+  # Copy bootstrap script to remote
+  $bootstrapLocal = Join-Path $PROJECT_DIR "scripts\bootstrap.sh"
+  if (-not (Test-Path $bootstrapLocal)) {
+    throw "Bootstrap script not found at $bootstrapLocal"
+  }
+  
+  Write-Host "  Uploading bootstrap script..." -ForegroundColor Yellow
+  if ($Pass) {
+    # Use sshpass if available for non-interactive execution
+    $env:SSHPASS = $Pass
+    $result = sshpass -e scp -o StrictHostKeyChecking=accept-new "$bootstrapLocal" "$User@$IP`:/tmp/bootstrap.sh" 2>&1
+    if ($LASTEXITCODE -ne 0) {
+      throw "Failed to copy bootstrap script. Install sshpass or use SSH key authentication."
+    }
+  } else {
+    scp -o StrictHostKeyChecking=accept-new "$bootstrapLocal" "$User@$IP`:/tmp/bootstrap.sh" 2>&1 | Out-Null
+  }
+  
+  Write-Host "  Executing bootstrap script..." -ForegroundColor Yellow
+  if ($Pass) {
+    $env:SSHPASS = $Pass
+    sshpass -e ssh -o StrictHostKeyChecking=accept-new "$User@$IP" "echo '$Pass' | sudo -S bash /tmp/bootstrap.sh --yes && rm /tmp/bootstrap.sh" 2>&1 | Where-Object { $_ -match "\[BOOTSTRAP\]|\[WARNING\]|\[ERROR\]" }
+  } else {
+    ssh -o StrictHostKeyChecking=accept-new "$User@$IP" "sudo bash /tmp/bootstrap.sh --yes && rm /tmp/bootstrap.sh" 2>&1 | Where-Object { $_ -match "\[BOOTSTRAP\]|\[WARNING\]|\[ERROR\]" }
+  }
+  
+  # Verify sidekick user was created
+  Write-Host "  Verifying bootstrap..." -ForegroundColor Yellow
+  Start-Sleep -Seconds 2
+  
+  # Try to SSH as sidekick user to verify
+  $result = ssh -i "$SSH_KEY" $SSH_OPTS.Split(' ') -o ConnectTimeout=5 "$VPS" "echo OK" 2>&1
+  if ($result -match "OK") {
+    Write-Host "  Bootstrap completed successfully" -ForegroundColor Green
+    return $true
+  }
+  
+  # If SSH key auth doesn't work yet, we need to copy the key
+  Write-Host "  Copying SSH key to sidekick user..." -ForegroundColor Yellow
+  $pubKey = Get-Content $SSH_PUB_KEY -Raw
+  
+  if ($Pass) {
+    $env:SSHPASS = $Pass
+    sshpass -e ssh -o StrictHostKeyChecking=accept-new "$User@$IP" "sudo -u sidekick bash -c 'mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo `"$pubKey`" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'" 2>&1 | Out-Null
+  } else {
+    ssh -o StrictHostKeyChecking=accept-new "$User@$IP" "sudo -u sidekick bash -c 'mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo `"$pubKey`" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'" 2>&1 | Out-Null
+  }
+  
+  # Verify SSH key installation
+  $result = ssh -i "$SSH_KEY" $SSH_OPTS.Split(' ') -o ConnectTimeout=5 "$VPS" "echo OK" 2>&1
+  if ($result -match "OK") {
+    Write-Host "  SSH key installed successfully" -ForegroundColor Green
+    Write-Host "  Bootstrap completed successfully" -ForegroundColor Green
+    return $true
+  }
+  
+  throw "Bootstrap verification failed"
 }
 
 function Install-SSHKey {
@@ -193,6 +277,29 @@ try {
   Write-Host ""
   Write-Host "--- SSH Setup ---" -ForegroundColor Cyan
   Ensure-SSHKey
+
+  # Check if sidekick user exists
+  Write-Host "  Checking for sidekick user..." -ForegroundColor Yellow
+  if (-not (Test-SidekickUserExists)) {
+    Write-Host "  Sidekick user not found. Bootstrap required." -ForegroundColor Yellow
+    
+    # Detect or use provided initial user
+    if (-not $InitialUser) {
+      Write-Host "  Detecting initial user..." -ForegroundColor Yellow
+      $InitialUser = Detect-InitialUser
+      if (-not $InitialUser) {
+        throw "Could not detect initial user. Use -InitialUser parameter."
+      }
+      Write-Host "  Detected initial user: $InitialUser" -ForegroundColor Green
+    }
+    
+    # Run bootstrap
+    if (-not (Run-Bootstrap -User $InitialUser -Pass $Password)) {
+      throw "Bootstrap failed"
+    }
+  } else {
+    Write-Host "  Sidekick user found" -ForegroundColor Green
+  }
 
   if (-not (Test-SSHConnection)) {
     if (-not (Install-SSHKey)) {

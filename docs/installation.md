@@ -14,29 +14,34 @@ Sidekick is a Node.js project. The codebase expects:
 
 ## Quick Deploy (Recommended)
 
-The deploy scripts handle everything automatically:
+The deploy script handles everything automatically, including bootstrapping a fresh VM:
 
 ```powershell
 # Windows
 .\deploy.ps1 -IP "YOUR_REMOTE_IP"
 
 # Linux/macOS
-./deploy.sh YOUR_REMOTE_IP
+./deploy.sh -IP YOUR_REMOTE_IP
 ```
 
 ### What the Deploy Script Does
 
-**First deploy:**
-1. Generates SSH key at `~/.ssh/sidekick` if it doesn't exist
-2. Installs the SSH key on the remote (prompts for password)
-3. Configures sudoers for passwordless service management (prompts for password)
-4. Creates remote directories (`/home/sidekick/sidekick/src`, `/home/sidekick/sidekick/data`)
+**First deploy to a fresh VM:**
+1. Detects the initial user (ubuntu, admin, or root)
+2. Prompts for the initial user's password (once)
+3. Bootstraps the VM by running `scripts/bootstrap.sh` remotely:
+   - Creates the `sidekick` user
+   - Installs Node.js 20 LTS
+   - Sets up SSH directory and keys
+   - Configures sudoers for passwordless service management
+   - Creates application directories
+   - Opens firewall ports 4097, 4098, 4099 (if UFW is active)
+4. Copies SSH public key to the sidekick user
 5. Installs systemd service files from `systemd/` directory
 6. Enables all services (sidekick-mcp, sidekick-dashboard, sidekick-agent)
-7. Opens firewall ports 4097, 4098, 4099 (if UFW is active)
-8. Syncs source files, package.json, and .env
-9. Runs `npm install --production` on remote
-10. Starts all services
+7. Syncs source files, package.json, and .env
+8. Runs `npm install --production` on remote
+9. Starts all services
 
 **Subsequent deploys:**
 - Fully automated (no password prompts)
@@ -47,47 +52,61 @@ The deploy scripts handle everything automatically:
 
 **Windows (PowerShell):**
 ```powershell
-.\deploy.ps1 -IP "192.168.1.10"              # Deploy to specific IP
-.\deploy.ps1 -IP "192.168.1.10" -Password "sidekick"  # For automation/CI
+.\deploy.ps1 -IP "192.168.1.10"                              # Deploy to specific IP
+.\deploy.ps1 -IP "192.168.1.10" -InitialUser "ubuntu"        # Specify initial user
+.\deploy.ps1 -IP "192.168.1.10" -Password "ubuntu_password"  # For automation/CI
 ```
 
 **Linux/macOS (Bash):**
 ```bash
-./deploy.sh 192.168.1.10                     # Deploy to specific IP
-./deploy.sh 192.168.1.10 sidekick            # For automation/CI
+./deploy.sh -IP 192.168.1.10                              # Deploy to specific IP
+./deploy.sh -IP 192.168.1.10 -InitialUser ubuntu          # Specify initial user
+./deploy.sh -IP 192.168.1.10 -Password ubuntu_password    # For automation/CI
 ```
 
 | Parameter | Description |
 |-----------|-------------|
-| `-IP` / `$1` | Remote machine IP address (default: `192.168.1.10`) |
-| `-Password` / `$2` | Sidekick user password (optional, for automation) |
+| `-IP` | Remote machine IP address (default: `192.168.1.10`) |
+| `-InitialUser` | Initial SSH user for bootstrap (auto-detected: ubuntu, admin, root) |
+| `-Password` | Initial user password (optional, for automation/CI) |
+
+**Environment Variables:**
+- `SIDEKICK_INITIAL_PASSWORD` - Alternative to `-Password` parameter for automation/CI
 
 ### First Deploy Experience
 
-When you run the deploy script for the first time:
+When you run the deploy script for the first time on a fresh VM:
 
 1. **SSH key generation** (automatic if missing)
-2. **Password prompt #1:** "Enter sidekick password when prompted to install SSH key"
-   - This installs your public key to `~/.ssh/authorized_keys` on the remote
-3. **Password prompt #2:** "Enter sidekick password when prompted to install sudoers"
-   - This configures passwordless sudo for service management commands
-4. **Automated setup:** Services installed, enabled, and started
+2. **Initial user detection** (tries ubuntu, admin, root in order)
+3. **Password prompt:** "Enter password for ubuntu@YOUR_VM_IP"
+   - This is the only password prompt you'll see
+   - The script uses this to bootstrap the VM and set up SSH keys
+4. **Automated bootstrap:** Creates sidekick user, installs Node.js, configures sudoers, installs services
+5. **Automated deploy:** Syncs files, installs dependencies, starts services
 
 After the first deploy, you never need to enter the password again.
 
 ### For Automation/CI
 
-Pass the password as a parameter to skip interactive prompts:
+Pass the password as a parameter or use the environment variable to skip interactive prompts:
 
 ```powershell
-# Windows
-.\deploy.ps1 -IP "192.168.1.10" -Password "sidekick"
+# Windows - with parameter
+.\deploy.ps1 -IP "192.168.1.10" -Password "ubuntu_password"
 
-# Linux/macOS
-./deploy.sh 192.168.1.10 sidekick
+# Windows - with environment variable
+$env:SIDEKICK_INITIAL_PASSWORD="ubuntu_password"
+.\deploy.ps1 -IP "192.168.1.10"
+
+# Linux/macOS - with parameter
+./deploy.sh -IP 192.168.1.10 -Password "ubuntu_password"
+
+# Linux/macOS - with environment variable
+SIDEKICK_INITIAL_PASSWORD="ubuntu_password" ./deploy.sh -IP 192.168.1.10
 ```
 
-**Security note:** The password is used only during the initial setup and is cleared from memory immediately after use. For security, prefer interactive prompts when possible.
+**Security note:** The password is used only during the initial bootstrap and is cleared from memory immediately after use. For security, prefer interactive prompts when possible.
 
 ### Security Model
 
@@ -95,8 +114,9 @@ The deploy script follows a two-phase security approach based on the principle o
 
 **Phase 1: First Deploy (Password Required)**
 
-During the initial deployment, the script performs privileged operations that require the sidekick user password:
-- Install SSH public key to `~/.ssh/authorized_keys`
+During the initial deployment, the script SSHs as the initial user (ubuntu/admin/root) and bootstraps the VM:
+- Create the sidekick user
+- Install Node.js 20 LTS
 - Copy sudoers file to `/etc/sudoers.d/sidekick`
 - Copy systemd service files to `/etc/systemd/system/`
 - Run `systemctl daemon-reload`
@@ -123,7 +143,39 @@ This ensures that even if the SSH key is compromised, the attacker cannot reload
 
 ## Manual Setup (Advanced)
 
-If you need to customize the deployment or the automated script doesn't work for your environment:
+If you need to customize the deployment or the automated script doesn't work for your environment, you can use the bootstrap script manually or follow the steps below.
+
+### Option A: Manual Bootstrap
+
+You can run the bootstrap script manually on the remote machine:
+
+```bash
+# SSH into the remote machine as a sudo user
+ssh ubuntu@YOUR_REMOTE_IP
+
+# Download and run the bootstrap script
+curl -sSL https://raw.githubusercontent.com/geoffmcc/sidekick/main/scripts/bootstrap.sh | sudo bash
+
+# Or if you've cloned the repo
+sudo ./scripts/bootstrap.sh
+```
+
+The bootstrap script will:
+- Create the sidekick user
+- Install Node.js 20 LTS
+- Set up SSH directory and keys
+- Configure sudoers for passwordless service management
+- Create application directories
+- Open firewall ports (if UFW is active)
+
+After running bootstrap, you can deploy using:
+```bash
+./deploy.sh -IP YOUR_REMOTE_IP
+```
+
+### Option B: Step-by-Step Manual Setup
+
+If you need full control over the setup process:
 
 ### 1. Prepare Remote Machine
 

@@ -1,8 +1,32 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IP="${1:-192.168.1.10}"
-PASSWORD="${2:-}"
+# Parse arguments
+IP="192.168.1.10"
+INITIAL_USER=""
+INITIAL_PASSWORD="${SIDEKICK_INITIAL_PASSWORD:-}"
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -IP|--ip)
+      IP="$2"
+      shift 2
+      ;;
+    -InitialUser|--initial-user)
+      INITIAL_USER="$2"
+      shift 2
+      ;;
+    -Password|--password)
+      INITIAL_PASSWORD="$2"
+      shift 2
+      ;;
+    *)
+      echo "Unknown parameter: $1"
+      echo "Usage: $0 [-IP <ip>] [-InitialUser <user>] [-Password <password>]"
+      exit 1
+      ;;
+  esac
+done
 
 VPS="sidekick@$IP"
 REMOTE_DIR="/home/sidekick/sidekick"
@@ -37,6 +61,106 @@ test_ssh_connection() {
   [[ "$result" == *"OK"* ]]
 }
 
+detect_initial_user() {
+  # Try common default users
+  for user in ubuntu admin root; do
+    if ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=3 "$user@$IP" "echo OK" 2>/dev/null | grep -q "OK"; then
+      echo "$user"
+      return 0
+    fi
+  done
+  return 1
+}
+
+test_sidekick_user_exists() {
+  # Try to SSH as sidekick user
+  if ssh -i "$SSH_KEY" $SSH_OPTS -o ConnectTimeout=3 "$VPS" "echo OK" 2>/dev/null | grep -q "OK"; then
+    return 0
+  fi
+  return 1
+}
+
+run_bootstrap() {
+  echo ""
+  echo -e "\033[36m=== Running Bootstrap ===\033[0m"
+  
+  local user="$1"
+  local password="$2"
+  
+  echo -e "  \033[33mBootstrapping as $user@$IP...\033[0m"
+  
+  # Copy bootstrap script to remote
+  local bootstrap_local="$PROJECT_DIR/scripts/bootstrap.sh"
+  if [ ! -f "$bootstrap_local" ]; then
+    echo -e "\033[31mERROR: Bootstrap script not found at $bootstrap_local\033[0m"
+    exit 1
+  fi
+  
+  echo -e "  \033[33mUploading bootstrap script...\033[0m"
+  if [ -n "$password" ]; then
+    scp -o StrictHostKeyChecking=accept-new "$bootstrap_local" "$user@$IP:/tmp/bootstrap.sh" <<< "$password" >/dev/null 2>&1 || {
+      # Try with sshpass if available
+      if command -v sshpass &> /dev/null; then
+        sshpass -p "$password" scp -o StrictHostKeyChecking=accept-new "$bootstrap_local" "$user@$IP:/tmp/bootstrap.sh" >/dev/null 2>&1
+      else
+        echo -e "\033[31mERROR: Failed to copy bootstrap script. Install sshpass or use SSH key authentication.\033[0m"
+        exit 1
+      fi
+    }
+  else
+    scp -o StrictHostKeyChecking=accept-new "$bootstrap_local" "$user@$IP:/tmp/bootstrap.sh" >/dev/null 2>&1
+  fi
+  
+  echo -e "  \033[33mExecuting bootstrap script...\033[0m"
+  if [ -n "$password" ]; then
+    # Use sshpass if available for non-interactive execution
+    if command -v sshpass &> /dev/null; then
+      sshpass -p "$password" ssh -o StrictHostKeyChecking=accept-new "$user@$IP" "echo '$password' | sudo -S bash /tmp/bootstrap.sh --yes && rm /tmp/bootstrap.sh" 2>&1 | grep -E "\[BOOTSTRAP\]|\[WARNING\]|\[ERROR\]" || true
+    else
+      echo -e "  \033[36mEnter $user password when prompted:\033[0m"
+      ssh -o StrictHostKeyChecking=accept-new "$user@$IP" "sudo bash /tmp/bootstrap.sh --yes && rm /tmp/bootstrap.sh" 2>&1 | grep -E "\[BOOTSTRAP\]|\[WARNING\]|\[ERROR\]" || true
+    fi
+  else
+    ssh -o StrictHostKeyChecking=accept-new "$user@$IP" "sudo bash /tmp/bootstrap.sh --yes && rm /tmp/bootstrap.sh" 2>&1 | grep -E "\[BOOTSTRAP\]|\[WARNING\]|\[ERROR\]" || true
+  fi
+  
+  # Verify sidekick user was created
+  echo -e "  \033[33mVerifying bootstrap...\033[0m"
+  sleep 2
+  
+  # Try to SSH as sidekick user to verify
+  if ssh -i "$SSH_KEY" $SSH_OPTS -o ConnectTimeout=5 "$VPS" "echo OK" 2>/dev/null | grep -q "OK"; then
+    echo -e "  \033[32mBootstrap completed successfully\033[0m"
+    return 0
+  fi
+  
+  # If SSH key auth doesn't work yet, we need to copy the key
+  echo -e "  \033[33mCopying SSH key to sidekick user...\033[0m"
+  local pub_key
+  pub_key=$(cat "$SSH_PUB_KEY")
+  
+  if [ -n "$password" ]; then
+    if command -v sshpass &> /dev/null; then
+      sshpass -p "$password" ssh -o StrictHostKeyChecking=accept-new "$user@$IP" "sudo -u sidekick bash -c 'mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo \"$pub_key\" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'" >/dev/null 2>&1
+    else
+      echo -e "  \033[36mEnter $user password when prompted:\033[0m"
+      ssh -o StrictHostKeyChecking=accept-new "$user@$IP" "sudo -u sidekick bash -c 'mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo \"$pub_key\" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'" >/dev/null 2>&1
+    fi
+  else
+    ssh -o StrictHostKeyChecking=accept-new "$user@$IP" "sudo -u sidekick bash -c 'mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo \"$pub_key\" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'" >/dev/null 2>&1
+  fi
+  
+  # Verify SSH key installation
+  if ssh -i "$SSH_KEY" $SSH_OPTS -o ConnectTimeout=5 "$VPS" "echo OK" 2>/dev/null | grep -q "OK"; then
+    echo -e "  \033[32mSSH key installed successfully\033[0m"
+    echo -e "  \033[32mBootstrap completed successfully\033[0m"
+    return 0
+  fi
+  
+  echo -e "\033[31mERROR: Bootstrap verification failed\033[0m"
+  return 1
+}
+
 install_ssh_key() {
   echo ""
   echo -e "  \033[33mSSH key not installed on remote. Installing...\033[0m"
@@ -44,11 +168,11 @@ install_ssh_key() {
   local pub_key
   pub_key=$(cat "$SSH_PUB_KEY")
 
-  if [ -n "$PASSWORD" ]; then
+  if [ -n "$INITIAL_PASSWORD" ]; then
     echo -e "  \033[90mUsing provided password...\033[0m"
     local install_cmd="mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '$pub_key' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && echo KEY_INSTALLED"
     local result
-    result=$(ssh -o StrictHostKeyChecking=accept-new "$VPS" "echo '$PASSWORD' | sudo -S -u sidekick bash -c \"$install_cmd\"" 2>&1) || true
+    result=$(ssh -o StrictHostKeyChecking=accept-new "$VPS" "echo '$INITIAL_PASSWORD' | sudo -S -u sidekick bash -c \"$install_cmd\"" 2>&1) || true
     if [[ "$result" == *"KEY_INSTALLED"* ]]; then return 0; fi
     return 1
   fi
@@ -95,10 +219,10 @@ initialize_remote() {
 
       copy_to_vps "$sudoers_local" "/tmp/sidekick-sudoers" >/dev/null
 
-      if [ -n "$PASSWORD" ]; then
+      if [ -n "$INITIAL_PASSWORD" ]; then
         echo -e "  \033[90mInstalling sudoers with provided password...\033[0m"
-        run_remote "echo '$PASSWORD' | sudo -S cp /tmp/sidekick-sudoers /etc/sudoers.d/sidekick" >/dev/null
-        run_remote "echo '$PASSWORD' | sudo -S chmod 440 /etc/sudoers.d/sidekick" >/dev/null
+        run_remote "echo '$INITIAL_PASSWORD' | sudo -S cp /tmp/sidekick-sudoers /etc/sudoers.d/sidekick" >/dev/null
+        run_remote "echo '$INITIAL_PASSWORD' | sudo -S chmod 440 /etc/sudoers.d/sidekick" >/dev/null
         run_remote "rm -f /tmp/sidekick-sudoers" >/dev/null
       else
         echo -e "  \033[36mEnter sidekick password when prompted to install sudoers:\033[0m"
@@ -139,9 +263,9 @@ initialize_remote() {
       install_cmd+=" && sudo ufw allow 4099/tcp comment 'Sidekick Agent'"
     fi
 
-    if [ -n "$PASSWORD" ]; then
+    if [ -n "$INITIAL_PASSWORD" ]; then
       # Use password for all operations
-      local password_cmd="${install_cmd//sudo/echo '$PASSWORD' | sudo -S}"
+      local password_cmd="${install_cmd//sudo/echo '$INITIAL_PASSWORD' | sudo -S}"
       run_remote "$password_cmd" >/dev/null
     else
       # Use interactive password prompt (single prompt for all operations)
@@ -179,6 +303,31 @@ echo ""
 echo -e "\033[36m--- SSH Setup ---\033[0m"
 ensure_ssh_key
 
+# Check if sidekick user exists
+echo -e "  \033[33mChecking for sidekick user...\033[0m"
+if ! test_sidekick_user_exists; then
+  echo -e "  \033[33mSidekick user not found. Bootstrap required.\033[0m"
+  
+  # Detect or use provided initial user
+  if [ -z "$INITIAL_USER" ]; then
+    echo -e "  \033[33mDetecting initial user...\033[0m"
+    INITIAL_USER=$(detect_initial_user) || {
+      echo -e "\033[31mERROR: Could not detect initial user. Use -InitialUser parameter.\033[0m"
+      exit 1
+    }
+    echo -e "  \033[32mDetected initial user: $INITIAL_USER\033[0m"
+  fi
+  
+  # Run bootstrap
+  if ! run_bootstrap "$INITIAL_USER" "$INITIAL_PASSWORD"; then
+    echo -e "\033[31mERROR: Bootstrap failed\033[0m"
+    exit 1
+  fi
+else
+  echo -e "  \033[32mSidekick user found\033[0m"
+fi
+
+# Test SSH connection to sidekick user
 if ! test_ssh_connection; then
   if ! install_ssh_key; then
     echo -e "\033[31mERROR: Failed to install SSH key on remote\033[0m"

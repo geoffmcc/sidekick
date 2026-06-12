@@ -10,6 +10,8 @@ sidekick-main/
     dashboard.js   Dashboard web app and API
     agent.js       Autonomous agent bridge
     redact.js      Sensitive-data redaction helpers
+  scripts/
+    bootstrap.sh   VM bootstrap script (creates user, installs Node.js, etc.)
   systemd/
     sidekick-mcp.service       MCP server systemd unit
     sidekick-dashboard.service Dashboard systemd unit
