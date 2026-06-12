@@ -116,7 +116,7 @@ function Run-Bootstrap {
     ssh -o ControlPath="$ControlPath" -O exit "$User@$IP" 2>$null
     throw "SCP failed"
   }
-  Write-Host "    ✓ bootstrap.sh" -ForegroundColor Gray
+  Write-Host "    [ok] bootstrap.sh" -ForegroundColor Gray
   
   Write-Host "  Uploading service files..." -ForegroundColor Yellow
   $services = @("sidekick-mcp", "sidekick-dashboard", "sidekick-agent")
@@ -135,7 +135,7 @@ function Run-Bootstrap {
       ssh -o ControlPath="$ControlPath" -O exit "$User@$IP" 2>$null
       throw "SCP failed"
     }
-    Write-Host "    ✓ $svc.service" -ForegroundColor Gray
+    Write-Host "    [ok] $svc.service" -ForegroundColor Gray
   }
   
   # Run bootstrap using control connection (no password prompt)
