@@ -629,6 +629,7 @@ nav a.active{color:#58a6ff;border-color:#58a6ff;background:#0d1117}
 .stats-bar-fill{height:100%;border-radius:3px}
 .stats-bar-fill.ok{background:#3fb950}
 .stats-bar-fill.fail{background:#f85149}
+.stats-bar-fill.warn{background:#d29922}
 .load-more{display:block;width:100%;padding:8px;background:transparent;border:1px solid #21262d;border-radius:6px;color:#58a6ff;cursor:pointer;font-size:.82rem;margin-top:8px}
 .load-more:hover{background:#161b22;border-color:#58a6ff}
 .modal-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:1000;align-items:center;justify-content:center}
@@ -945,14 +946,14 @@ function loadStats(){
     if (!d.stats || !d.stats.length) { body.innerHTML = '<tr><td colspan="6" class="empty">No data</td></tr>'; return; }
     body.innerHTML = d.stats.map(s => {
       const rate = s.count > 0 ? Math.round(s.ok / s.count * 100) : 0;
-      const barWidth = Math.max(5, rate);
+      const barWidth = Math.max(1, rate);
       return '<tr>' +
         '<td style="color:#58a6ff;font-family:monospace">' + esc(s.name) + '</td>' +
         '<td>' + s.count + '</td>' +
         '<td style="color:#3fb950">' + s.ok + '</td>' +
         '<td style="color:' + (s.fail > 0 ? '#f85149' : '#484f58') + '">' + s.fail + '</td>' +
         '<td>' + s.avgMs + 'ms</td>' +
-        '<td><div class="stats-bar"><div class="stats-bar-fill ' + (rate >= 90 ? 'ok' : rate >= 70 ? '' : 'fail') + '" style="width:' + barWidth + '%"></div></div> ' + rate + '%</td>' +
+        '<td><div class="stats-bar"><div class="stats-bar-fill ' + (rate >= 90 ? 'ok' : rate >= 70 ? 'warn' : 'fail') + '" style="width:' + barWidth + '%"></div></div> ' + rate + '%</td>' +
         '</tr>';
     }).join('');
   }).catch(e => apiError('/api/stats', e, 0));
