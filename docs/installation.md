@@ -89,6 +89,38 @@ Pass the password as a parameter to skip interactive prompts:
 
 **Security note:** The password is used only during the initial setup and is cleared from memory immediately after use. For security, prefer interactive prompts when possible.
 
+### Security Model
+
+The deploy script follows a two-phase security approach based on the principle of least privilege:
+
+**Phase 1: First Deploy (Password Required)**
+
+During the initial deployment, the script performs privileged operations that require the sidekick user password:
+- Install SSH public key to `~/.ssh/authorized_keys`
+- Copy sudoers file to `/etc/sudoers.d/sidekick`
+- Copy systemd service files to `/etc/systemd/system/`
+- Run `systemctl daemon-reload`
+- Run `systemctl enable` for all services
+- Run `ufw allow` for firewall ports
+
+All these operations are performed once during first-time setup. The script detects if services are already installed and skips this phase entirely on subsequent deploys.
+
+**Phase 2: Subsequent Deploys (No Password)**
+
+After the initial setup, the deploy script only uses commands that are explicitly allowed in the sudoers file without a password:
+- `systemctl start/stop/restart/status sidekick-*`
+- `journalctl -u sidekick-*`
+- `ufw allow 4097/4098/4099` (already configured, idempotent)
+
+The sidekick user **cannot** perform these privileged operations after initial setup:
+- Cannot run `systemctl daemon-reload`
+- Cannot run `systemctl enable/disable`
+- Cannot copy files to `/etc/systemd/system/`
+- Cannot modify `/etc/sudoers.d/`
+- Cannot perform arbitrary sudo operations
+
+This ensures that even if the SSH key is compromised, the attacker cannot reload systemd configuration, enable/disable services, or modify the system beyond managing the Sidekick services.
+
 ## Manual Setup (Advanced)
 
 If you need to customize the deployment or the automated script doesn't work for your environment:

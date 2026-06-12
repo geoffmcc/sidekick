@@ -64,83 +64,105 @@ test_sudo() {
   [[ "$result" == *"sidekick-mcp.service"* ]]
 }
 
-initialize_remote() {
-  echo ""
-  echo -e "\033[36m=== Initializing remote server ===\033[0m"
-
-  if ! test_sudo; then
-    echo -e "  \033[33mSetting up sudoers configuration...\033[0m"
-
-    local sudoers_local="$PROJECT_DIR/systemd/sidekick-sudoers"
-    if [ ! -f "$sudoers_local" ]; then
-      echo -e "\033[31mERROR: sudoers file not found at $sudoers_local\033[0m"
-      exit 1
-    fi
-
-    copy_to_vps "$sudoers_local" "/tmp/sidekick-sudoers" >/dev/null
-
-    if [ -n "$PASSWORD" ]; then
-      echo -e "  \033[90mInstalling sudoers with provided password...\033[0m"
-      run_remote "echo '$PASSWORD' | sudo -S cp /tmp/sidekick-sudoers /etc/sudoers.d/sidekick" >/dev/null
-      run_remote "echo '$PASSWORD' | sudo -S chmod 440 /etc/sudoers.d/sidekick" >/dev/null
-      run_remote "rm -f /tmp/sidekick-sudoers" >/dev/null
-    else
-      echo -e "  \033[36mEnter sidekick password when prompted to install sudoers:\033[0m"
-      run_remote_interactive "sudo cp /tmp/sidekick-sudoers /etc/sudoers.d/sidekick && sudo chmod 440 /etc/sudoers.d/sidekick && rm -f /tmp/sidekick-sudoers"
-    fi
-
-    if ! test_sudo; then
-      echo -e "\033[31mERROR: Sudoers setup failed\033[0m"
-      exit 1
-    fi
-    echo -e "  \033[32mSudoers configured\033[0m"
-  else
-    echo -e "  \033[90mSudoers already configured\033[0m"
-  fi
-
-  echo -e "  \033[33mCreating remote directories...\033[0m"
-  run_remote "mkdir -p $REMOTE_DIR/src $REMOTE_DIR/data" >/dev/null
-
-  echo -e "  \033[33mChecking service files...\033[0m"
-  services_need_install=false
-  
+test_services_exist() {
   for svc in sidekick-mcp sidekick-dashboard sidekick-agent; do
     local exists
     exists=$(run_remote "test -f /etc/systemd/system/$svc.service && echo YES || echo NO") || true
     if [[ "$exists" != *"YES"* ]]; then
-      services_need_install=true
-      break
+      return 1
     fi
   done
-  
-  if [ "$services_need_install" = true ]; then
+  return 0
+}
+
+initialize_remote() {
+  echo ""
+  echo -e "\033[36m=== Initializing remote server ===\033[0m"
+
+  echo -e "  \033[33mChecking if services are already installed...\033[0m"
+  if ! test_services_exist; then
+    echo -e "  \033[33mFirst-time setup detected...\033[0m"
+
+    # Setup sudoers if needed
+    if ! test_sudo; then
+      echo -e "  \033[33mSetting up sudoers configuration...\033[0m"
+
+      local sudoers_local="$PROJECT_DIR/systemd/sidekick-sudoers"
+      if [ ! -f "$sudoers_local" ]; then
+        echo -e "\033[31mERROR: sudoers file not found at $sudoers_local\033[0m"
+        exit 1
+      fi
+
+      copy_to_vps "$sudoers_local" "/tmp/sidekick-sudoers" >/dev/null
+
+      if [ -n "$PASSWORD" ]; then
+        echo -e "  \033[90mInstalling sudoers with provided password...\033[0m"
+        run_remote "echo '$PASSWORD' | sudo -S cp /tmp/sidekick-sudoers /etc/sudoers.d/sidekick" >/dev/null
+        run_remote "echo '$PASSWORD' | sudo -S chmod 440 /etc/sudoers.d/sidekick" >/dev/null
+        run_remote "rm -f /tmp/sidekick-sudoers" >/dev/null
+      else
+        echo -e "  \033[36mEnter sidekick password when prompted to install sudoers:\033[0m"
+        run_remote_interactive "sudo cp /tmp/sidekick-sudoers /etc/sudoers.d/sidekick && sudo chmod 440 /etc/sudoers.d/sidekick && rm -f /tmp/sidekick-sudoers"
+      fi
+
+      if ! test_sudo; then
+        echo -e "\033[31mERROR: Sudoers setup failed\033[0m"
+        exit 1
+      fi
+      echo -e "  \033[32mSudoers configured\033[0m"
+    else
+      echo -e "  \033[90mSudoers already configured\033[0m"
+    fi
+
+    # Install service files (requires password)
     echo -e "  \033[33mInstalling service files...\033[0m"
     for svc in sidekick-mcp sidekick-dashboard sidekick-agent; do
       local svc_local="$PROJECT_DIR/systemd/$svc.service"
       copy_to_vps "$svc_local" "/tmp/$svc.service" >/dev/null
-      run_remote "sudo cp /tmp/$svc.service /etc/systemd/system/$svc.service && rm -f /tmp/$svc.service" >/dev/null
+      
+      if [ -n "$PASSWORD" ]; then
+        run_remote "echo '$PASSWORD' | sudo -S cp /tmp/$svc.service /etc/systemd/system/$svc.service" >/dev/null
+        run_remote "rm -f /tmp/$svc.service" >/dev/null
+      else
+        run_remote_interactive "sudo cp /tmp/$svc.service /etc/systemd/system/$svc.service && rm -f /tmp/$svc.service"
+      fi
     done
+
+    # daemon-reload and enable (requires password)
+    echo -e "  \033[33mEnabling services...\033[0m"
+    if [ -n "$PASSWORD" ]; then
+      run_remote "echo '$PASSWORD' | sudo -S systemctl daemon-reload" >/dev/null
+      for svc in sidekick-mcp sidekick-dashboard sidekick-agent; do
+        run_remote "echo '$PASSWORD' | sudo -S systemctl enable $svc" >/dev/null
+      done
+    else
+      run_remote_interactive "sudo systemctl daemon-reload && sudo systemctl enable sidekick-mcp sidekick-dashboard sidekick-agent"
+    fi
+
+    # Open firewall ports (requires password)
+    echo -e "  \033[33mChecking firewall...\033[0m"
+    local ufw_active
+    ufw_active=$(run_remote "systemctl is-active ufw 2>&1") || true
+    if [[ "$ufw_active" == *"active"* ]]; then
+      if [ -n "$PASSWORD" ]; then
+        run_remote "echo '$PASSWORD' | sudo -S ufw allow 4097/tcp comment 'Sidekick MCP'" >/dev/null
+        run_remote "echo '$PASSWORD' | sudo -S ufw allow 4098/tcp comment 'Sidekick Dashboard'" >/dev/null
+        run_remote "echo '$PASSWORD' | sudo -S ufw allow 4099/tcp comment 'Sidekick Agent'" >/dev/null
+      else
+        run_remote_interactive "sudo ufw allow 4097/tcp comment 'Sidekick MCP' && sudo ufw allow 4098/tcp comment 'Sidekick Dashboard' && sudo ufw allow 4099/tcp comment 'Sidekick Agent'"
+      fi
+      echo -e "  \033[32mFirewall ports opened (4097, 4098, 4099)\033[0m"
+    else
+      echo -e "  \033[33mUFW not active, skipping firewall config\033[0m"
+    fi
+
+    echo -e "  \033[32mFirst-time setup complete\033[0m"
   else
-    echo -e "  \033[90mService files already installed\033[0m"
+    echo -e "  \033[90mServices already installed, skipping setup\033[0m"
   fi
 
-  echo -e "  \033[33mEnabling services...\033[0m"
-  run_remote "sudo systemctl daemon-reload" >/dev/null
-  for svc in sidekick-mcp sidekick-dashboard sidekick-agent; do
-    run_remote "sudo systemctl enable $svc" >/dev/null
-  done
-
-  echo -e "  \033[33mChecking firewall...\033[0m"
-  local ufw_active
-  ufw_active=$(run_remote "systemctl is-active ufw 2>&1") || true
-  if [[ "$ufw_active" == *"active"* ]]; then
-    run_remote "sudo ufw allow 4097/tcp comment 'Sidekick MCP'" >/dev/null
-    run_remote "sudo ufw allow 4098/tcp comment 'Sidekick Dashboard'" >/dev/null
-    run_remote "sudo ufw allow 4099/tcp comment 'Sidekick Agent'" >/dev/null
-    echo -e "  \033[32mFirewall ports opened (4097, 4098, 4099)\033[0m"
-  else
-    echo -e "  \033[33mUFW not active, skipping firewall config\033[0m"
-  fi
+  echo -e "  \033[33mCreating remote directories...\033[0m"
+  run_remote "mkdir -p $REMOTE_DIR/src $REMOTE_DIR/data" >/dev/null
 
   echo -e "  \033[32mRemote initialization complete\033[0m"
 }
