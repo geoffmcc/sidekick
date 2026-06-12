@@ -711,7 +711,7 @@ function syncCrontab(jobs) {
       return;
     }
     const lines = enabledJobs.map(j => {
-      const script = `cd /home/sidekick/mcp-sidekick && ${j.command} >> ${DATA_DIR}/cron-${j.id}.log 2>&1`;
+      const script = `cd /home/sidekick/sidekick && ${j.command} >> ${DATA_DIR}/cron-${j.id}.log 2>&1`;
       return `${j.schedule} ${script} # sidekick:${j.id}`;
     });
     const crontabContent = lines.join("\n") + "\n";

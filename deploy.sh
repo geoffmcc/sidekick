@@ -2,7 +2,7 @@
 set -euo pipefail
 
 VPS="sidekick@149.28.229.13"
-REMOTE_DIR="/home/sidekick/mcp-sidekick"
+REMOTE_DIR="/home/sidekick/sidekick"
 SSH_KEY="${SIDEKICK_SSH_KEY:-$HOME/.ssh/sidekick}"
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 

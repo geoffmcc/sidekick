@@ -317,7 +317,7 @@ git push
 Or SSH directly to pull:
 ```bash
 ssh sidekick@YOUR_REMOTE_IP
-cd /home/sidekick/mcp-sidekick
+cd /home/sidekick/sidekick
 git pull
 sudo systemctl restart sidekick-mcp sidekick-dashboard sidekick-agent
 ```
