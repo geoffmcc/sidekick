@@ -145,7 +145,13 @@ initialize_remote() {
       run_remote "$password_cmd" >/dev/null
     else
       # Use interactive password prompt (single prompt for all operations)
-      run_remote_interactive "$install_cmd"
+      run_remote_interactive "$install_cmd" >/dev/null
+    fi
+
+    # Verify services were installed
+    if ! test_services_exist; then
+      echo -e "\033[31mERROR: Service installation failed - services not found after setup\033[0m"
+      exit 1
     fi
 
     if [[ "$ufw_active" == *"active"* ]]; then

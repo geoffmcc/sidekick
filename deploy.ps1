@@ -160,7 +160,12 @@ function Initialize-Remote {
       Run-Remote $passwordCmd | Out-Null
     } else {
       # Use interactive password prompt (single prompt for all operations)
-      Run-Remote-Interactive $installCmd
+      Run-Remote-Interactive $installCmd | Out-Null
+    }
+
+    # Verify services were installed
+    if (-not (Test-ServicesExist)) {
+      throw "Service installation failed - services not found after setup"
     }
 
     if ($ufwActive -match "active") {
