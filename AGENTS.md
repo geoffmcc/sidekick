@@ -167,18 +167,25 @@ All tool outputs automatically redact:
 
 ### Linux/Mac (Bash)
 ```bash
-./deploy.sh YOUR_REMOTE_IP
+./deploy.sh -IP YOUR_REMOTE_IP
 ```
 
 ### First Deploy
-On first deploy, the script will:
-- Generate SSH key if missing (`~/.ssh/sidekick`)
-- Install key on remote (you'll enter password once)
-- Configure sudo permissions for service management
+On first deploy to a fresh VM, the script will:
+- Detect the initial user (ubuntu, admin, or root)
+- Prompt for the initial user's password (once)
+- Bootstrap the VM by running `scripts/bootstrap.sh` remotely:
+  - Create the sidekick user
+  - Install Node.js 20 LTS
+  - Set up SSH directory and keys
+  - Configure sudoers for passwordless service management
+  - Create application directories
+  - Open firewall ports (if UFW is active)
+- Copy SSH public key to the sidekick user
 - Install and enable systemd services
-- Open firewall ports (if UFW is active)
+- Sync files and start services
 
-All privileged operations (sudo cp, daemon-reload, enable, ufw) require the sidekick user password during first-time setup.
+All privileged operations are performed during the bootstrap phase using the initial user's password.
 
 ### Subsequent Deploys
 After first deploy, the script detects that services are already installed and skips all setup steps. Only minimal sudo permissions are used:
@@ -189,7 +196,18 @@ No password is required for subsequent deploys.
 
 ### Automation/CI
 ```powershell
-.\deploy.ps1 -IP "YOUR_REMOTE_IP" -Password "sidekick"
+# Windows - with parameter
+.\deploy.ps1 -IP "YOUR_REMOTE_IP" -Password "initial_user_password"
+
+# Windows - with environment variable
+$env:SIDEKICK_INITIAL_PASSWORD="initial_user_password"
+.\deploy.ps1 -IP "YOUR_REMOTE_IP"
+
+# Linux/Mac - with parameter
+./deploy.sh -IP YOUR_REMOTE_IP -Password "initial_user_password"
+
+# Linux/Mac - with environment variable
+SIDEKICK_INITIAL_PASSWORD="initial_user_password" ./deploy.sh -IP YOUR_REMOTE_IP
 ```
 
 ### Manual (SSH)

@@ -28,17 +28,32 @@ copy .env.example .env
 .\deploy.ps1 -IP "YOUR_REMOTE_IP"
 
 # Or deploy (Linux/Mac)
-./deploy.sh YOUR_REMOTE_IP
+./deploy.sh -IP YOUR_REMOTE_IP
 ```
 
-**First deploy:** The script will automatically:
-- Generate an SSH key if you don't have one
-- Install the key on the remote (you'll enter the password once)
-- Configure sudo permissions for the sidekick user
+**First deploy to a fresh VM:** The script will automatically:
+- Detect the initial user (ubuntu, admin, or root)
+- Prompt for the initial user's password (once)
+- Create the sidekick user and install Node.js
+- Generate and install SSH keys
+- Configure sudo permissions
 - Install and enable systemd services
 - Open firewall ports (if UFW is active)
 
-Subsequent deploys are fully automated — no password required.
+**Subsequent deploys** are fully automated — no password required.
+
+**For automation/CI**, use the `-Password` parameter or `SIDEKICK_INITIAL_PASSWORD` environment variable:
+```powershell
+# Windows
+.\deploy.ps1 -IP "YOUR_REMOTE_IP" -Password "initial_user_password"
+
+# Linux/Mac
+./deploy.sh -IP YOUR_REMOTE_IP -Password "initial_user_password"
+
+# Or with environment variable
+$env:SIDEKICK_INITIAL_PASSWORD="initial_user_password"
+.\deploy.ps1 -IP "YOUR_REMOTE_IP"
+```
 
 Open `http://YOUR_REMOTE_IP:4098/` in a browser. That's it — Sidekick is live.
 
@@ -350,22 +365,34 @@ The deploy script automatically syncs `.env` to the remote machine if it exists 
 | Option | Description |
 |--------|-------------|
 | `-IP` / `$1` | Remote machine IP address (default: `192.168.1.10`) |
-| `-Password` / `$2` | Sidekick user password (optional, for automation/CI) |
+| `-InitialUser` | Initial SSH user for bootstrap (auto-detected: ubuntu, admin, root) |
+| `-Password` / `$2` | Initial user password (optional, for automation/CI) |
 
-**First deploy:** You'll be prompted for the sidekick user password to set up SSH keys, sudoers, services, and firewall. After that, deploys are fully automated with no password required.
+**First deploy:** The script automatically detects the initial user and prompts for their password once. It then bootstraps the VM (creates sidekick user, installs Node.js, sets up SSH keys, configures sudoers, installs services, and opens firewall ports). After that, deploys are fully automated with no password required.
 
-**Automation/CI:** Pass the password as a parameter to skip interactive prompts:
+**Automation/CI:** Pass the password as a parameter or use the `SIDEKICK_INITIAL_PASSWORD` environment variable to skip interactive prompts:
 ```powershell
-.\deploy.ps1 -IP "192.168.1.10" -Password "sidekick"
+# Windows - with parameter
+.\deploy.ps1 -IP "192.168.1.10" -Password "ubuntu_password"
+
+# Windows - with environment variable
+$env:SIDEKICK_INITIAL_PASSWORD="ubuntu_password"
+.\deploy.ps1 -IP "192.168.1.10"
+
+# Linux/Mac - with parameter
+./deploy.sh -IP 192.168.1.10 -Password "ubuntu_password"
+
+# Linux/Mac - with environment variable
+SIDEKICK_INITIAL_PASSWORD="ubuntu_password" ./deploy.sh -IP 192.168.1.10
 ```
 
 ### Security Model
 
 The deploy script follows a two-phase security approach:
 
-1. **First deploy (password required):** Sets up SSH keys, sudoers configuration, systemd services, and firewall rules. All privileged operations require the sidekick user password.
+1. **First deploy (password required):** The script SSHs as the initial user (ubuntu/admin/root) and bootstraps the VM. This creates the sidekick user, installs Node.js, sets up SSH keys, configures sudoers, installs systemd services, and opens firewall ports. All privileged operations require the initial user's password.
 
-2. **Subsequent deploys (no password):** Only uses minimal sudo permissions for service management (start/stop/restart/status) and log viewing. The sudoers file restricts the sidekick user to only these specific commands:
+2. **Subsequent deploys (no password):** The script SSHs as the sidekick user using SSH key authentication. Only minimal sudo permissions are used for service management (start/stop/restart/status) and log viewing. The sudoers file restricts the sidekick user to only these specific commands:
    - `systemctl start/stop/restart/status sidekick-*`
    - `journalctl -u sidekick-*`
    - `ufw allow 4097/4098/4099`
@@ -396,6 +423,8 @@ This follows the principle of least privilege: after initial setup, the sidekick
 │   ├── dashboard.js    Dashboard web UI (source tagging, Font Awesome icons)
 │   ├── agent.js        Agent bridge (LLM tool-use loop, direct tool calls)
 │   └── redact.js       Sensitive data redaction
+├── scripts/
+│   └── bootstrap.sh    VM bootstrap script (creates user, installs Node.js, etc.)
 ├── systemd/
 │   ├── sidekick-mcp.service       MCP server systemd unit
 │   ├── sidekick-dashboard.service Dashboard systemd unit
