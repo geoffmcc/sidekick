@@ -6,7 +6,25 @@ A remote agent system. Connect via the sidekick MCP server at `YOUR_REMOTE_IP:40
 
 Always use the `task` tool with `subagent_type: "sidekick"` when interacting with sidekick. Do not use direct MCP tools (`sidekick_bash`, `sidekick_read`, etc.) — use the task tool so the user can see the full conversation. 100% of the time, no exceptions.
 
-## MCP Tools (37)
+## Tools (48 total)
+
+### Core Tools (11)
+
+| Tool | When to use |
+|------|-------------|
+| `bash` | Execute PowerShell commands on the local Windows machine |
+| `edit` | String replacement in files (requires prior read) |
+| `glob` | Find files by pattern (e.g. `**/*.ts`) |
+| `grep` | Search file contents with regex, filter by file type |
+| `read` | Read files and directories |
+| `write` | Write files to the local filesystem |
+| `question` | Ask the user questions during execution |
+| `skill` | Load a specialized skill when task matches |
+| `task` | Launch subagents (explore, general, sidekick) for complex tasks |
+| `todowrite` | Track multi-step tasks with a todo list |
+| `webfetch` | Fetch and convert URLs to markdown/text/html |
+
+### Sidekick MCP Tools (37)
 
 | Tool | When to use |
 |------|-------------|
