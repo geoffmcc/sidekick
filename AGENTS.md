@@ -207,6 +207,19 @@ sudo journalctl -u sidekick-mcp -n 50
 
 See `CONTEXT.md` for full project context, architecture details, and testing commands.
 
+## Context Recall Protocol
+
+When the user says any of these trigger phrases, automatically query sidekick's stored context and KV store without being asked:
+- "remember that thing" / "recall" / "what did we save"
+- "mcp setup" / "lan setup" / "tomorrow's plan"
+- "the store" / "the context" / "stored"
+- Any reference to something that was "saved" or "stored" previously
+
+Procedure:
+1. `sidekick_context action="recall" query="<topic>"` to search context patterns
+2. `sidekick_get key="<topic>"` or `sidekick_get_by_project project="<project>"` for KV entries
+3. Present the findings before taking any actions
+
 ## Troubleshooting
 
 ### MCP Server Logs
