@@ -146,7 +146,7 @@ run_bootstrap() {
   echo -e "  \033[33mExecuting bootstrap...\033[0m"
   echo -e "\033[90m--- Bootstrap Output ---\033[0m"
   
-  local bootstrap_cmd="sudo bash /tmp/bootstrap.sh --yes --install-services --ssh-key '$pub_key' && rm /tmp/bootstrap.sh /tmp/sidekick-*.service"
+  local bootstrap_cmd="sudo bash /tmp/bootstrap.sh --yes --install-services --ssh-key '$pub_key' && rm -f /tmp/bootstrap.sh /tmp/sidekick-*.service"
   
   if ! ssh -t -o ControlPath="$CONTROL_PATH" "$user@$IP" "$bootstrap_cmd"; then
     echo -e "\033[90m--- End Bootstrap Output ---\033[0m"
@@ -284,7 +284,7 @@ fi
 echo ""
 echo -e "\033[36m--- Installing Dependencies ---\033[0m"
 echo -e "\033[32mRunning npm install...\033[0m"
-if ! run_remote "cd $REMOTE_DIR && npm install --production 2>&1"; then
+if ! run_remote "cd $REMOTE_DIR && npm install --omit=dev 2>&1"; then
   echo -e "\033[31mERROR: npm install failed\033[0m"
   exit 1
 fi
