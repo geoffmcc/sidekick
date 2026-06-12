@@ -78,6 +78,66 @@ Always use the `task` tool with `subagent_type: "sidekick"` when interacting wit
 | `sidekick_status` | Unified system status: services, disk, memory, load, uptime, top processes in one call |
 | `sidekick_extract` | Parse JSON/YAML/INI/XML and extract specific fields by path. Returns only what you need |
 
+## Token Efficiency Rules
+
+### Meta-Rules
+1. NEVER use `sidekick_bash` when a specialized sidekick tool exists
+2. When making 2+ independent sidekick calls, MUST use `sidekick_batch`
+3. Before reading a file >100 lines, use `sidekick_summarize` first
+4. Cache values needed 2+ times in a session with `sidekick_cache`
+
+### Tool Selection Rules
+
+| Task | MUST Use | NEVER Use |
+|------|----------|-----------|
+| Content search | `sidekick_search` | `sidekick_bash grep/rg` |
+| Git operations | `sidekick_git` | `sidekick_bash git` |
+| Service management | `sidekick_service` | `sidekick_bash systemctl` |
+| Process management | `sidekick_process` | `sidekick_bash ps/kill/top` |
+| Read large file (>100 lines) | `sidekick_summarize` | `sidekick_read` |
+| Find files by criteria | `sidekick_find` | `sidekick_bash find/ls` |
+| Filter directory listing | `sidekick_filter` | `sidekick_list` + manual filter |
+| Compare two files | `sidekick_diff_files` | 2x `sidekick_read` |
+| Tail/view logs | `sidekick_tail` | `sidekick_bash journalctl\|tail` |
+| Extract config fields | `sidekick_extract` | `sidekick_read` + manual parse |
+| Parse structured data | `sidekick_parse` | `sidekick_bash jq/python` |
+| Project KV + context | `sidekick_project` | `sidekick_get_by_project` + `sidekick_context` |
+| System health overview | `sidekick_status` | Multiple `sidekick_service` calls |
+| Health assessment | `sidekick_health` | Manual service/process checks |
+| Archive operations | `sidekick_archive` | `sidekick_bash tar/zip` |
+| Semantic data diff | `sidekick_diff` | `sidekick_bash diff` |
+| Checksums/hashing | `sidekick_hash` | `sidekick_bash md5sum/sha256sum` |
+| Data transforms | `sidekick_transform` | `sidekick_bash awk/sed/jq` |
+| Validate data | `sidekick_validate` | Manual validation |
+| Render templates | `sidekick_template` | `sidekick_bash` with string concat |
+
+### Examples
+
+**BAD:** `sidekick_bash "systemctl status sidekick-mcp"`
+**GOOD:** `sidekick_service action="status" service="sidekick-mcp"`
+
+**BAD:** `sidekick_service(mcp)` + `sidekick_service(dashboard)` + `sidekick_service(agent)` (3 calls)
+**GOOD:** `sidekick_batch [service(mcp), service(dashboard), service(agent)]` (1 call)
+
+**BAD:** `sidekick_read /path/to/500-line-file` (loads all 500 lines)
+**GOOD:** `sidekick_summarize path=/path/to/500-line-file strategy=head max_lines=30`
+
+**BAD:** `sidekick_read package.json` → manually find "version" field
+**GOOD:** `sidekick_extract path=package.json fields="name,version"`
+
+**BAD:** `sidekick_read fileA` + `sidekick_read fileB` + manual diff
+**GOOD:** `sidekick_diff_files path_a=fileA path_b=fileB format=summary`
+
+### Restricted Tools
+
+Only use these when explicitly asked:
+- `sidekick_debug_tool` — debugging sessions only
+- `sidekick_fresheyes` — when asked for a fresh perspective
+- `sidekick_notify` — only when asked or triggered by watch/cron
+
+**Semi-proactive (surface opportunity, then ask):**
+- `sidekick_evolve` — may analyze patterns and surface improvement opportunities, but MUST ask before proposing changes
+
 All tool calls are logged with source tags:
 - 🤖 **agent** - Calls from the autonomous agent bridge
 - 🔌 **mcp** - Calls from external MCP clients (opencode, etc.)
