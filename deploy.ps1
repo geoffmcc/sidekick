@@ -255,7 +255,7 @@ try {
   Write-Host "--- Deploying Files ---" -ForegroundColor Cyan
 
   Write-Host "  Syncing source files..." -ForegroundColor Green
-  $files = @("tools.js", "index.js", "dashboard.js", "agent.js", "redact.js")
+  $files = @("tools.js", "index.js", "dashboard.js", "agent.js", "redact.js", "env.js")
   foreach ($file in $files) {
     $localPath = Join-Path $PROJECT_DIR "src\$file"
     if (-not (Test-Path $localPath)) {
@@ -275,11 +275,16 @@ try {
 
   $localEnv = Join-Path $PROJECT_DIR ".env"
   if (Test-Path $localEnv) {
-    Write-Host "  Syncing .env..." -ForegroundColor Green
-    if (-not (Copy-ToVPS $localEnv "$REMOTE_DIR/.env")) {
-      throw "Failed to copy .env"
+    $remoteEnvExists = Run-Remote "test -f $REMOTE_DIR/.env && echo YES || echo NO"
+    if ($remoteEnvExists -match "YES") {
+      Write-Host "  Remote .env exists, skipping (preserves machine-specific settings)" -ForegroundColor Yellow
+    } else {
+      Write-Host "  Syncing .env (first deploy)..." -ForegroundColor Green
+      if (-not (Copy-ToVPS $localEnv "$REMOTE_DIR/.env")) {
+        throw "Failed to copy .env"
+      }
+      $changed += ".env"
     }
-    $changed += ".env"
   } else {
     Write-Host "  No local .env found, skipping" -ForegroundColor Yellow
   }
