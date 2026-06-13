@@ -64,6 +64,7 @@ http://<host>:4098
 | GET | `/api/llm` | none | Return LLM status/configuration summary. |
 | GET | `/api/services` | none | Return service statuses. |
 | GET | `/api/config` | none | Return dashboard-safe config summary. |
+| GET | `/api/tools` | none | Return the full tool catalog (name, description, args). |
 | GET | `/api/stats` | none | Return summary stats. |
 | DELETE | `/api/logs` | none | Clear tool logs. |
 | DELETE | `/api/kv` | none | Reset KV storage. |

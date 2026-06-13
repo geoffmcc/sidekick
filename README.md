@@ -292,6 +292,7 @@ Open `http://YOUR_REMOTE_IP:4098/` in a browser.
 - **Data** — KV store contents with project filtering, age filtering, and expandable previews
 - **Config** — environment variables (sensitive values redacted)
 - **Agent** — submit tasks for the AI agent to execute autonomously
+- **Tools** — browsable catalog of all 59 tools with search, category filtering, and detailed argument info
 
 ### Agent Bridge
 

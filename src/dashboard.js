@@ -4,6 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const { execSync } = require("child_process");
+const { TOOL_DEFS } = require("./tools");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const PORT = parseInt(process.env.SIDEKICK_DASHBOARD_PORT || "4098", 10);
@@ -406,6 +407,10 @@ app.get("/api/stats", (req, res) => {
   res.json({ stats: result });
 });
 
+app.get("/api/tools", (req, res) => {
+  res.json({ tools: TOOL_DEFS });
+});
+
 app.delete("/api/logs", (req, res) => {
   const f = path.join(DATA_DIR, "log.jsonl");
   try { fs.writeFileSync(f, "", "utf-8"); } catch {}
@@ -695,6 +700,30 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
 .toast-success{background:#238636}
 .toast-warning{background:#d29922}
 .toast-error{background:#da3633}
+.tool-category-header{display:flex;align-items:center;gap:10px;padding:12px 0 8px;margin-top:8px;border-bottom:1px solid #21262d}
+.tool-category-header i{font-size:1rem;width:20px;text-align:center}
+.tool-category-header .cat-name{font-size:.9rem;font-weight:600;color:#c9d1d9}
+.tool-category-header .cat-count{font-size:.75rem;color:#8b949e;background:#21262d;padding:2px 8px;border-radius:10px}
+.tool-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px;padding:8px 0}
+.tool-card{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:14px;cursor:pointer;transition:border-color 0.15s}
+.tool-card:hover{border-color:#58a6ff}
+.tool-card-name{font-family:monospace;font-weight:600;color:#58a6ff;font-size:.88rem;margin-bottom:4px}
+.tool-card-desc{color:#8b949e;font-size:.8rem;line-height:1.4;margin-bottom:8px}
+.tool-card-args{font-size:.75rem;color:#6e7681;font-family:monospace;word-break:break-all}
+.tool-card-args .arg-name{color:#ffa657}
+.tool-card-args .arg-opt{color:#484f58}
+.tool-detail-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:1000;align-items:center;justify-content:center}
+.tool-detail-overlay.active{display:flex}
+.tool-detail{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:24px;max-width:650px;width:90%;max-height:80vh;overflow-y:auto}
+.tool-detail h3{color:#58a6ff;font-family:monospace;margin-bottom:8px}
+.tool-detail .td-desc{color:#c9d1d9;font-size:.9rem;margin-bottom:16px;line-height:1.5}
+.tool-detail .td-section{margin-bottom:12px}
+.tool-detail .td-label{font-size:.75rem;color:#8b949e;text-transform:uppercase;margin-bottom:4px}
+.tool-detail .td-args{background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:12px;font-family:monospace;font-size:.82rem}
+.tool-detail .td-arg-row{padding:4px 0;border-bottom:1px solid #21262d}
+.tool-detail .td-arg-row:last-child{border-bottom:none}
+.tool-detail .td-arg-name{color:#ffa657;font-weight:500}
+.tool-detail .td-arg-type{color:#8b949e;margin-left:8px}
 </style>
 </head>
 <body>
@@ -712,6 +741,7 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
   <a onclick="showPage('data')" id="nav-data">Data</a>
   <a onclick="showPage('config')" id="nav-config">Config</a>
   <a onclick="showPage('agent')" id="nav-agent">Agent</a>
+  <a onclick="showPage('tools')" id="nav-tools">Tools</a>
 </nav>
 <div class="status-row">
   <div class="status-box"><div class="s-label">Uptime</div><div class="s-val" id="s-uptime">...</div></div>
@@ -802,6 +832,20 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
   </div>
 </div>
 
+<!-- Tools Page -->
+<div class="page" id="page-tools">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div class="section-title" style="margin:0">Tool Catalog (<span id="toolCount">0</span>)</div>
+  </div>
+  <div class="search-bar">
+    <input type="text" id="toolSearch" placeholder="Search tools by name or description..." oninput="filterTools()">
+    <select id="toolCategoryFilter" onchange="filterTools()">
+      <option value="">All Categories</option>
+    </select>
+  </div>
+  <div id="toolList"></div>
+</div>
+
 <!-- Edit Modal -->
 <div class="modal-overlay" id="editModal">
   <div class="modal">
@@ -828,6 +872,33 @@ let allKV = [];
 let logPage = 0;
 const LOG_PAGE_SIZE = 50;
 const SESSION_GAP_MS = 5 * 60 * 1000;
+let allTools = [];
+
+const TOOL_CATEGORIES = {
+  'Core': { icon: 'fa-terminal', tools: ['sidekick_bash','sidekick_read','sidekick_write','sidekick_list','sidekick_search','sidekick_web_fetch','sidekick_llm'] },
+  'Storage': { icon: 'fa-database', tools: ['sidekick_store','sidekick_get','sidekick_list_projects','sidekick_get_by_project'] },
+  'Git & GitHub': { icon: 'fa-code-branch', tools: ['sidekick_git','sidekick_github'] },
+  'Services': { icon: 'fa-cogs', tools: ['sidekick_process','sidekick_service'] },
+  'Scheduling': { icon: 'fa-clock', tools: ['sidekick_cron','sidekick_delay'] },
+  'Communication': { icon: 'fa-bell', tools: ['sidekick_notify','sidekick_webhook'] },
+  'Context & Learning': { icon: 'fa-brain', tools: ['sidekick_context','sidekick_teach'] },
+  'Data Pipeline': { icon: 'fa-filter', tools: ['sidekick_transform','sidekick_parse','sidekick_diff','sidekick_hash','sidekick_validate','sidekick_template','sidekick_extract','sidekick_anonymize','sidekick_diff_files'] },
+  'Monitoring': { icon: 'fa-heartbeat', tools: ['sidekick_health','sidekick_status','sidekick_watch','sidekick_baseline','sidekick_snapshot','sidekick_timeline','sidekick_black_box','sidekick_netdiag'] },
+  'Workflow': { icon: 'fa-tasks', tools: ['sidekick_queue','sidekick_retry','sidekick_orchestrate','sidekick_runbook'] },
+  'Meta': { icon: 'fa-robot', tools: ['sidekick_evolve','sidekick_predict','sidekick_debug_tool','sidekick_fresheyes'] },
+  'Efficiency': { icon: 'fa-bolt', tools: ['sidekick_batch','sidekick_cache','sidekick_summarize','sidekick_filter','sidekick_project','sidekick_tail','sidekick_find'] },
+  'Security': { icon: 'fa-shield-alt', tools: ['sidekick_secret','sidekick_sandbox'] },
+  'Development': { icon: 'fa-code', tools: ['sidekick_changelog','sidekick_depend'] },
+  'Reliability': { icon: 'fa-plug', tools: ['sidekick_circuit'] },
+  'Archive': { icon: 'fa-file-archive', tools: ['sidekick_archive'] }
+};
+
+function getToolCategory(toolName) {
+  for (const [cat, info] of Object.entries(TOOL_CATEGORIES)) {
+    if (info.tools.includes(toolName)) return cat;
+  }
+  return 'Other';
+}
 
 const SERVICE_ICONS = { 'sidekick-mcp': 'fa-server', 'sidekick-agent': 'fa-robot', 'ollama': 'fa-brain' };
 const SERVICE_LABELS = { 'sidekick-mcp': 'MCP', 'sidekick-agent': 'Agent', 'ollama': 'Ollama' };
@@ -888,6 +959,7 @@ function showPage(name){
   if (name === 'activity') loadLogs();
   if (name === 'data') loadKV();
   if (name === 'config') loadConfig();
+  if (name === 'tools') loadTools();
 }
 
 function fmtTime(iso){
