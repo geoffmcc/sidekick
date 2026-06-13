@@ -2,353 +2,110 @@
 
 ## Requirements
 
-Sidekick is a Node.js project. The codebase expects:
+- Node.js 18 or newer. The deploy scripts install Node.js 20 LTS on fresh Debian/Ubuntu-style systems.
+- npm.
+- Git.
+- A Linux host for persistent operation.
+- Network access from the MCP client to the MCP server.
+- Optional: Ollama for local LLM calls.
+- Optional: Groq API key for cloud LLM calls.
 
-- Node.js 18 or newer (local machine only).
-- npm for dependency installation (local machine only).
-- A remote Ubuntu/Debian machine with SSH access.
-- Git for deployment and repository management.
-- systemd if using the service management model shown by the project.
-- Optional: Ollama on `127.0.0.1:11434` for local LLM fallback.
-- Optional: a Groq API key for faster cloud LLM calls.
+## Local development install
 
-## Quick Deploy (Recommended)
+```bash
+git clone https://github.com/geoffmcc/sidekick.git
+cd sidekick
+cp .env.example .env
+npm install
+npm start
+```
 
-The deploy script handles everything automatically, including bootstrapping a fresh VM:
+In separate terminals:
 
-```powershell
-# Windows
-.\deploy.ps1 -IP "YOUR_REMOTE_IP"
+```bash
+npm run dashboard
+npm run agent
+```
 
-# Linux/macOS
+Defaults:
+
+- MCP server: `http://127.0.0.1:4097`
+- Dashboard: `http://127.0.0.1:4098`
+- Agent Bridge: `http://127.0.0.1:4099`
+
+## Deployment scripts
+
+The repo includes `deploy.sh` for Linux/macOS and `deploy.ps1` for Windows. The scripts are designed to bootstrap a fresh remote host, create or use a `sidekick` user, install Node.js, copy the app, install dependencies, install systemd services, and configure UFW rules if UFW is active.
+
+Linux/macOS:
+
+```bash
 ./deploy.sh -IP YOUR_REMOTE_IP
-```
-
-### What the Deploy Script Does
-
-**First deploy to a fresh VM:**
-1. Prompts for the initial SSH user (e.g., ubuntu, admin, root)
-2. Opens an SSH ControlMaster connection (prompts for password once)
-3. Bootstraps the VM by running `scripts/bootstrap.sh` remotely:
-   - Creates the `sidekick` user
-   - Installs Node.js 20 LTS
-   - Configures sudoers for passwordless service management
-   - Installs systemd service files from `systemd/` directory
-   - Enables all services (sidekick-mcp, sidekick-dashboard, sidekick-agent)
-   - Installs your SSH public key for passwordless access
-   - Opens firewall ports 4097, 4098, 4099 (if UFW is active)
-4. Syncs source files, package.json, and .env
-5. Runs `npm install --production` on remote
-6. Starts all services
-
-The SSH ControlMaster connection multiplexes all file transfers and commands through a single authenticated session, requiring only one password prompt.
-
-**Subsequent deploys:**
-- Fully automated (no password prompts)
-- Syncs changed files
-- Restarts services
-
-### Deploy Script Options
-
-**Windows (PowerShell):**
-```powershell
-.\deploy.ps1 -IP "192.168.1.10"                       # Deploy to specific IP
-.\deploy.ps1 -IP "192.168.1.10" -InitialUser "ubuntu" # Specify initial user
-```
-
-**Linux/macOS (Bash):**
-```bash
-./deploy.sh -IP 192.168.1.10                       # Deploy to specific IP
-./deploy.sh -IP 192.168.1.10 -InitialUser ubuntu   # Specify initial user
-```
-
-| Parameter | Description |
-|-----------|-------------|
-| `-IP` | Remote machine IP address (default: `192.168.1.10`) |
-| `-InitialUser` | Initial SSH user for bootstrap (e.g., ubuntu, admin, root) |
-
-### First Deploy Experience
-
-When you run the deploy script for the first time on a fresh VM:
-
-1. **SSH key generation** (automatic if missing)
-2. **Initial user prompt:** "Enter initial SSH user for YOUR_VM_IP"
-   - Specify the SSH user for your VM (e.g., ubuntu, admin, root)
-3. **Password prompt:** SSH prompts for the initial user's password
-   - This is the only password prompt you'll see
-   - The script uses this to bootstrap the VM and set up SSH keys
-4. **Automated bootstrap:** Creates sidekick user, installs Node.js, configures sudoers, installs services, installs SSH key
-5. **Automated deploy:** Syncs files, installs dependencies, starts services
-
-After the first deploy, you never need to enter the password again.
-
-### For Automation/CI
-
-Specify the initial user with `-InitialUser` to skip the interactive prompt:
-
-```powershell
-# Windows
-.\deploy.ps1 -IP "192.168.1.10" -InitialUser "ubuntu"
-
-# Linux/macOS
-./deploy.sh -IP 192.168.1.10 -InitialUser ubuntu
-```
-
-**Note:** The initial user's password is still required for the first deploy. The script will prompt for it via SSH's native password prompt.
-
-**Security note:** The password is used only during the initial bootstrap via SSH's native password prompt. The sidekick user is created without a password (SSH key-only authentication), which is more secure than password-based authentication.
-
-### Security Model
-
-The deploy script follows a two-phase security approach based on the principle of least privilege:
-
-**Phase 1: First Deploy (Password Required)**
-
-During the initial deployment, the script opens an SSH ControlMaster connection as the initial user (ubuntu/admin/root) and bootstraps the VM:
-- Create the sidekick user
-- Install Node.js 20 LTS
-- Copy sudoers file to `/etc/sudoers.d/sidekick`
-- Copy systemd service files to `/etc/systemd/system/`
-- Run `systemctl daemon-reload`
-- Run `systemctl enable` for all services
-- Install SSH public key for passwordless access
-- Run `ufw allow` for firewall ports
-
-The SSH ControlMaster connection multiplexes all file transfers and commands through a single authenticated session, requiring only one password prompt. All these operations are performed once during first-time setup. The script detects if services are already installed and skips this phase entirely on subsequent deploys.
-
-**Phase 2: Subsequent Deploys (No Password)**
-
-After the initial setup, the deploy script only uses commands that are explicitly allowed in the sudoers file without a password:
-- `systemctl start/stop/restart/status sidekick-*`
-- `journalctl -u sidekick-*`
-- `ufw allow 4097/4098/4099` (already configured, idempotent)
-
-The sidekick user **cannot** perform these privileged operations after initial setup:
-- Cannot run `systemctl daemon-reload`
-- Cannot run `systemctl enable/disable`
-- Cannot copy files to `/etc/systemd/system/`
-- Cannot modify `/etc/sudoers.d/`
-- Cannot perform arbitrary sudo operations
-
-This ensures that even if the SSH key is compromised, the attacker cannot reload systemd configuration, enable/disable services, or modify the system beyond managing the Sidekick services.
-
-## Manual Setup (Advanced)
-
-If you need to customize the deployment or the automated script doesn't work for your environment, you can use the bootstrap script manually or follow the steps below.
-
-### Option A: Manual Bootstrap
-
-You can run the bootstrap script manually on the remote machine:
-
-```bash
-# SSH into the remote machine as a sudo user
-ssh ubuntu@YOUR_REMOTE_IP
-
-# Download and run the bootstrap script with service installation
-curl -sSL https://raw.githubusercontent.com/geoffmcc/sidekick/main/scripts/bootstrap.sh | sudo bash -s -- --install-services --ssh-key "$(cat ~/.ssh/sidekick.pub)"
-
-# Or if you've cloned the repo
-sudo ./scripts/bootstrap.sh --install-services --ssh-key "$(cat ~/.ssh/sidekick.pub)"
-```
-
-The bootstrap script will:
-- Create the sidekick user
-- Install Node.js 20 LTS
-- Configure sudoers for passwordless service management
-- Install systemd service files
-- Enable all services
-- Install your SSH public key
-- Open firewall ports (if UFW is active)
-
-After running bootstrap, you can deploy using:
-```bash
 ./deploy.sh -IP YOUR_REMOTE_IP -InitialUser ubuntu
 ```
 
-### Option B: Step-by-Step Manual Setup
+Windows PowerShell:
 
-If you need full control over the setup process:
+```powershell
+.\deploy.ps1 -IP "YOUR_REMOTE_IP"
+.\deploy.ps1 -IP "YOUR_REMOTE_IP" -InitialUser "ubuntu"
+```
 
-### 1. Prepare Remote Machine
+The scripts use SSH. On a fresh host they may prompt for the initial user's password once, then install a key for later passwordless deployment.
 
-Create the sidekick user and directories:
+## Manual systemd installation
+
+Assuming the app lives at `/home/sidekick/sidekick` and runs as the `sidekick` user:
 
 ```bash
-# On remote machine
-sudo useradd -m -s /bin/bash sidekick
-sudo mkdir -p /home/sidekick/sidekick/src /home/sidekick/sidekick/data
+sudo useradd --system --create-home --shell /bin/bash sidekick
+sudo mkdir -p /home/sidekick/sidekick
 sudo chown -R sidekick:sidekick /home/sidekick/sidekick
-```
 
-### 2. Install SSH Key
+sudo -u sidekick git clone https://github.com/geoffmcc/sidekick.git /home/sidekick/sidekick
+cd /home/sidekick/sidekick
+sudo -u sidekick cp .env.example .env
+sudo -u sidekick npm install --omit=dev
 
-Copy your public key to the remote:
-
-```bash
-# From local machine
-ssh-copy-id -i ~/.ssh/sidekick.pub sidekick@YOUR_REMOTE_IP
-```
-
-Or manually:
-
-```bash
-# On remote machine
-mkdir -p ~/.ssh
-chmod 700 ~/.ssh
-echo "YOUR_PUBLIC_KEY" >> ~/.ssh/authorized_keys
-chmod 600 ~/.ssh/authorized_keys
-```
-
-### 3. Configure Sudoers
-
-Install the sudoers file for passwordless service management:
-
-```bash
-# On remote machine
-sudo cp /path/to/systemd/sidekick-sudoers /etc/sudoers.d/sidekick
-sudo chmod 440 /etc/sudoers.d/sidekick
-```
-
-### 4. Install Service Files
-
-Copy and enable the systemd services:
-
-```bash
-# On remote machine
 sudo cp systemd/sidekick-mcp.service /etc/systemd/system/
 sudo cp systemd/sidekick-dashboard.service /etc/systemd/system/
 sudo cp systemd/sidekick-agent.service /etc/systemd/system/
-
-sudo systemctl daemon-reload
-sudo systemctl enable sidekick-mcp sidekick-dashboard sidekick-agent
-```
-
-### 5. Deploy Files
-
-Sync source files and install dependencies:
-
-```bash
-# From local machine
-scp -r src/* sidekick@YOUR_REMOTE_IP:/home/sidekick/sidekick/src/
-scp package.json sidekick@YOUR_REMOTE_IP:/home/sidekick/sidekick/
-scp .env sidekick@YOUR_REMOTE_IP:/home/sidekick/sidekick/
-
-# On remote machine
-cd /home/sidekick/sidekick
-npm install --production
-```
-
-### 6. Start Services
-
-```bash
-sudo systemctl start sidekick-mcp sidekick-dashboard sidekick-agent
-```
-
-### 7. Configure Firewall (Optional)
-
-If using UFW:
-
-```bash
-sudo ufw allow 4097/tcp comment 'Sidekick MCP'
-sudo ufw allow 4098/tcp comment 'Sidekick Dashboard'
-sudo ufw allow 4099/tcp comment 'Sidekick Agent'
-```
-
-## Local Development Setup
-
-For local development or testing:
-
-```bash
-git clone <repository-url> sidekick
-cd sidekick
-npm install
-cp .env.example .env
-# Edit .env with your settings
-
-# Start services manually
-npm run start      # MCP server on port 4097
-npm run dashboard  # Dashboard on port 4098
-npm run agent      # Agent bridge on port 4099
-```
-
-## opencode Integration
-
-The repository contains `.opencode/agents/sidekick.md`, which defines a Sidekick subagent for opencode. The project README also describes using `AGENTS.md` to teach opencode about Sidekick.
-
-A typical integration needs:
-
-1. Sidekick services running on the remote host.
-2. The MCP endpoint configured in the opencode environment.
-3. The same API key configured in Sidekick and the client.
-4. Agent instructions that tell opencode when to delegate work to Sidekick.
-
-The MCP endpoint is:
-
-```text
-http://<host>:4097/mcp
-```
-
-The legacy SSE endpoint is:
-
-```text
-http://<host>:4097/sse
-```
-
-## Verification
-
-After deployment, verify services are running:
-
-```bash
-# Check service status
-sudo systemctl status sidekick-mcp sidekick-dashboard sidekick-agent
-
-# Check health endpoints
-curl http://YOUR_REMOTE_IP:4097/health
-curl http://YOUR_REMOTE_IP:4098/api/system
-curl http://YOUR_REMOTE_IP:4099/api/health
-
-# Open dashboard in browser
-# http://YOUR_REMOTE_IP:4098/
-```
-
-When dashboard authentication is configured, browser/API access requires HTTP Basic authentication except for the agent event-stream path.
-
-## Troubleshooting
-
-### SSH Key Issues
-
-**Problem:** "Permission denied (publickey)"
-**Solution:** Ensure your SSH key is installed on the remote:
-```bash
-ssh-copy-id -i ~/.ssh/sidekick.pub sidekick@YOUR_REMOTE_IP
-```
-
-### Sudo Permission Issues
-
-**Problem:** "sudo: a terminal is required to read the password"
-**Solution:** Install the sudoers file:
-```bash
 sudo cp systemd/sidekick-sudoers /etc/sudoers.d/sidekick
 sudo chmod 440 /etc/sudoers.d/sidekick
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now sidekick-mcp sidekick-dashboard sidekick-agent
 ```
 
-### Services Not Starting
+Check services:
 
-**Problem:** Services fail to start
-**Solution:** Check logs:
 ```bash
-sudo journalctl -u sidekick-mcp -n 50
-sudo journalctl -u sidekick-dashboard -n 50
-sudo journalctl -u sidekick-agent -n 50
+systemctl status sidekick-mcp
+systemctl status sidekick-dashboard
+systemctl status sidekick-agent
 ```
 
-### Firewall Blocking Ports
+## opencode MCP configuration
 
-**Problem:** Can't connect to services
-**Solution:** Check if UFW is active and open ports:
-```bash
-sudo ufw status
-sudo ufw allow 4097/tcp
-sudo ufw allow 4098/tcp
-sudo ufw allow 4099/tcp
+Use Streamable HTTP with the MCP server URL and bearer token. A typical config shape is:
+
+```jsonc
+{
+  "mcp": {
+    "sidekick": {
+      "enabled": true,
+      "type": "remote",
+      "url": "http://YOUR_HOST:4097/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_SIDEKICK_API_KEY"
+      }
+    }
+  }
+}
 ```
+
+For older clients that need SSE, use the `/sse` endpoint and `/messages` endpoint generated by the SDK transport.
+
+## Firewall and exposure
+
+At minimum, expose port 4097 only to systems that need MCP access. The dashboard and agent ports should usually be private, VPN-only, or reverse-proxied behind authentication. If UFW is active, the supplied scripts can open ports 4097, 4098, and 4099, but that is not the safest public-facing configuration.
