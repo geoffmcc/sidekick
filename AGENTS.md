@@ -124,6 +124,7 @@ Always use the `task` tool with `subagent_type: "sidekick"` when interacting wit
 | Build event timeline | `sidekick_timeline` | Multiple `sidekick_tail` + manual correlation |
 | Capture incident context | `sidekick_black_box` | Multiple `sidekick_service`/`sidekick_process`/`sidekick_tail` calls |
 | Wrap tool with circuit breaker | `sidekick_circuit` | Raw tool calls without failure protection |
+| Debugging issues | `sidekick_debug_tool` | Repeated file reads, manual context tracking |
 
 ### Examples
 
@@ -145,7 +146,6 @@ Always use the `task` tool with `subagent_type: "sidekick"` when interacting wit
 ### Restricted Tools
 
 Only use these when explicitly asked:
-- `sidekick_debug_tool` — debugging sessions only
 - `sidekick_fresheyes` — when asked for a fresh perspective
 - `sidekick_notify` — only when asked or triggered by watch/cron
 
