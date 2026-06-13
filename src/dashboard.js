@@ -296,6 +296,138 @@ app.get("/api/system", (req, res) => {
   }
 });
 
+app.get("/api/dashboard-summary", (req, res) => {
+  try {
+    // Health score calculation
+    const mem = execSync("free -h | grep Mem", { encoding: "utf-8", timeout: 5000 }).trim().split(/\s+/);
+    const disk = execSync("df -h / | tail -1", { encoding: "utf-8", timeout: 5000 }).trim().split(/\s+/);
+    const cpu = execSync("top -bn1 | grep 'Cpu(s)' | awk '{print $2}'", { encoding: "utf-8", timeout: 5000 }).trim();
+    
+    const cpuPct = parseFloat(cpu) || 0;
+    const memPct = mem.length >= 5 ? parseFloat(mem[4]) || 0 : 0;
+    const diskPct = disk.length >= 5 ? parseFloat(disk[4]) || 0 : 0;
+    
+    // Calculate health score (100 = perfect, deduct for high usage)
+    let healthScore = 100;
+    if (cpuPct > 80) healthScore -= 30;
+    else if (cpuPct > 50) healthScore -= 15;
+    if (memPct > 90) healthScore -= 30;
+    else if (memPct > 70) healthScore -= 15;
+    if (diskPct > 90) healthScore -= 30;
+    else if (diskPct > 70) healthScore -= 15;
+    healthScore = Math.max(0, healthScore);
+    
+    // Storage info
+    let kvCount = 0;
+    try {
+      const kvData = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "kvstore.json"), "utf-8"));
+      kvCount = Object.keys(kvData).length;
+    } catch {}
+    
+    let logSize = 0;
+    try {
+      const logStat = fs.statSync(path.join(DATA_DIR, "log.jsonl"));
+      logSize = logStat.size;
+    } catch {}
+    
+    let convCount = 0;
+    try {
+      const convDir = path.join(DATA_DIR, "conversations");
+      if (fs.existsSync(convDir)) {
+        convCount = fs.readdirSync(convDir).filter(f => f.endsWith(".json")).length;
+      }
+    } catch {}
+    
+    // Active sessions
+    let mcpClients = 0;
+    try {
+      const mcpLog = execSync("sudo journalctl -u sidekick-mcp --since '5 minutes ago' --no-pager 2>/dev/null | grep -c 'Session created' || echo 0", { encoding: "utf-8", timeout: 5000 }).trim();
+      mcpClients = parseInt(mcpLog) || 0;
+    } catch {}
+    
+    let cronJobs = 0;
+    try {
+      const cronData = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "cron.json"), "utf-8"));
+      cronJobs = cronData.length || 0;
+    } catch {}
+    
+    let activeWatches = 0;
+    try {
+      const watchData = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "watches.json"), "utf-8"));
+      activeWatches = watchData.filter(w => w.status === "active").length;
+    } catch {}
+    
+    let agentStatus = "idle";
+    try {
+      const agentStatusRes = execSync("curl -s http://127.0.0.1:4099/api/agent/status 2>/dev/null || echo '{}'", { encoding: "utf-8", timeout: 3000 }).trim();
+      const agentData = JSON.parse(agentStatusRes);
+      if (agentData.activeTasks > 0) {
+        agentStatus = `running (${agentData.activeTasks})`;
+      }
+    } catch {
+      agentStatus = "offline";
+    }
+    
+    // Recent errors (last 3 failures from log)
+    let recentErrors = [];
+    try {
+      const logFile = path.join(DATA_DIR, "log.jsonl");
+      if (fs.existsSync(logFile)) {
+        const lines = fs.readFileSync(logFile, "utf-8").trim().split("\n").filter(Boolean);
+        const errors = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean).filter(e => !e.ok);
+        recentErrors = errors.slice(-3).reverse().map(e => ({
+          tool: e.n,
+          time: e.t,
+          summary: (e.s || "").substring(0, 80)
+        }));
+      }
+    } catch {}
+    
+    // Recent deployments (from version.json)
+    let deployments = [];
+    try {
+      const versionFile = path.join(__dirname, "..", "version.json");
+      if (fs.existsSync(versionFile)) {
+        const version = JSON.parse(fs.readFileSync(versionFile, "utf-8"));
+        deployments.push({
+          commit: (version.commit || "").substring(0, 7),
+          branch: version.branch || "unknown",
+          deployed_at: version.deployed_at
+        });
+      }
+    } catch {}
+    
+    res.json({
+      health: {
+        score: healthScore,
+        cpu: cpuPct,
+        memory: memPct,
+        disk: diskPct
+      },
+      toolStats: {
+        calls: 0, // Will be populated from /api/stats on frontend
+        successRate: 0,
+        avgTime: 0
+      },
+      storage: {
+        kvCount,
+        logSize,
+        convCount
+      },
+      sessions: {
+        mcpClients,
+        agentStatus,
+        cronJobs,
+        activeWatches
+      },
+      recentErrors,
+      deployments
+    });
+  } catch (e) {
+    res.json({ error: e.message });
+  }
+});
+
 app.get("/api/llm", (req, res) => {
   try {
     http.get("http://127.0.0.1:11434/api/tags", (r) => {
@@ -752,6 +884,63 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
 
 <!-- System Page -->
 <div class="page active" id="page-system">
+  <!-- Row 1: Health, Tool Stats, Storage -->
+  <div class="grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:6px">System Health</div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <div id="healthScore" style="font-size:2rem;font-weight:700;color:#3fb950">--</div>
+        <div style="font-size:.75rem;color:#8b949e">
+          <div>CPU: <span id="healthCpu">--</span>%</div>
+          <div>MEM: <span id="healthMem">--</span>%</div>
+          <div>DISK: <span id="healthDisk">--</span>%</div>
+        </div>
+      </div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:6px">Tool Usage Today</div>
+      <div style="font-size:.85rem;color:#c9d1d9;line-height:1.6">
+        <div><span id="toolCalls">--</span> calls</div>
+        <div><span id="toolSuccess">--</span>% success</div>
+        <div><span id="toolAvg">--</span>ms avg</div>
+      </div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:6px">Storage</div>
+      <div style="font-size:.85rem;color:#c9d1d9;line-height:1.6">
+        <div>KV: <span id="storageKv">--</span> entries</div>
+        <div>Logs: <span id="storageLogs">--</span></div>
+        <div>Conversations: <span id="storageConv">--</span></div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Row 2: Active Sessions, Recent Errors, Recent Deployments -->
+  <div class="grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:6px">Active Sessions</div>
+      <div style="font-size:.85rem;color:#c9d1d9;line-height:1.6">
+        <div>MCP: <span id="sessionMcp">--</span> clients</div>
+        <div>Agent: <span id="sessionAgent">--</span></div>
+        <div>Cron: <span id="sessionCron">--</span> jobs</div>
+        <div>Watches: <span id="sessionWatches">--</span> active</div>
+      </div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:6px">Recent Errors</div>
+      <div id="recentErrors" style="font-size:.78rem;color:#f85149;line-height:1.5">
+        <div class="empty" style="padding:4px 0">No recent errors</div>
+      </div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:6px">Recent Deployments</div>
+      <div id="recentDeployments" style="font-size:.78rem;color:#c9d1d9;line-height:1.5">
+        <div class="empty" style="padding:4px 0">No deployment info</div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Row 3: Local LLM (full width) -->
   <div class="section-title" style="margin-bottom:8px">Local LLM</div>
   <div id="llmStatus"><div class="empty">Checking...</div></div>
 </div>
@@ -1018,7 +1207,7 @@ function showPage(name){
   $('page-' + name).classList.add('active');
   $('nav-' + name).classList.add('active');
   loadSystem();
-  if (name === 'system') { loadLLM(); loadServices(); }
+  if (name === 'system') { loadDashboardSummary(); loadLLM(); loadServices(); }
   if (name === 'activity') loadLogs();
   if (name === 'data') loadKV();
   if (name === 'config') loadConfig();
@@ -1072,6 +1261,86 @@ function loadSystem(){
     $('s-memory').textContent = d.memory.used + '/' + d.memory.total;
     $('s-disk').textContent = d.disk.free + ' free (' + d.disk.pct + ')';
   }).catch(e => apiError('/api/system', e, 0));
+}
+
+function loadDashboardSummary(){
+  // Fetch dashboard summary data
+  authFetch('/api/dashboard-summary').then(r=>r.json()).then(d=>{
+    if(d.error) return;
+    
+    // Health score
+    const score = d.health.score;
+    const scoreEl = $('healthScore');
+    scoreEl.textContent = score;
+    scoreEl.style.color = score >= 80 ? '#3fb950' : score >= 50 ? '#d29922' : '#f85149';
+    $('healthCpu').textContent = Math.round(d.health.cpu);
+    $('healthMem').textContent = Math.round(d.health.memory);
+    $('healthDisk').textContent = Math.round(d.health.disk);
+    
+    // Storage
+    $('storageKv').textContent = d.storage.kvCount;
+    $('storageLogs').textContent = formatBytes(d.storage.logSize);
+    $('storageConv').textContent = d.storage.convCount;
+    
+    // Active sessions
+    $('sessionMcp').textContent = d.sessions.mcpClients;
+    $('sessionAgent').textContent = d.sessions.agentStatus;
+    $('sessionCron').textContent = d.sessions.cronJobs;
+    $('sessionWatches').textContent = d.sessions.activeWatches;
+    
+    // Recent errors
+    const errorsEl = $('recentErrors');
+    if(d.recentErrors.length === 0){
+      errorsEl.innerHTML = '<div class="empty" style="padding:4px 0">No recent errors</div>';
+    } else {
+      errorsEl.innerHTML = d.recentErrors.map(e => {
+        const time = new Date(e.time).toLocaleTimeString();
+        return '<div style="margin-bottom:4px"><span style="color:#8b949e">' + time + '</span> ' + esc(e.tool) + '<br><span style="color:#f85149;font-size:.72rem">' + esc(e.summary) + '</span></div>';
+      }).join('');
+    }
+    
+    // Recent deployments
+    const deployEl = $('recentDeployments');
+    if(d.deployments.length === 0){
+      deployEl.innerHTML = '<div class="empty" style="padding:4px 0">No deployment info</div>';
+    } else {
+      deployEl.innerHTML = d.deployments.map(dep => {
+        const time = new Date(dep.deployed_at).toLocaleString();
+        return '<div style="margin-bottom:4px"><span style="color:#58a6ff;font-family:monospace">' + esc(dep.commit) + '</span> <span style="color:#8b949e">(' + esc(dep.branch) + ')</span><br><span style="color:#8b949e;font-size:.72rem">' + time + '</span></div>';
+      }).join('');
+    }
+  }).catch(e => apiError('/api/dashboard-summary', e, 0));
+  
+  // Fetch tool stats
+  authFetch('/api/stats').then(r=>r.json()).then(d=>{
+    if(d.error || !d.stats) return;
+    
+    // Calculate totals
+    let totalCalls = 0;
+    let totalSuccess = 0;
+    let totalTime = 0;
+    
+    d.stats.forEach(s => {
+      totalCalls += s.count || 0;
+      totalSuccess += s.ok || 0;
+      totalTime += (s.avgMs || 0) * (s.count || 0);
+    });
+    
+    const successRate = totalCalls > 0 ? Math.round((totalSuccess / totalCalls) * 100) : 0;
+    const avgTime = totalCalls > 0 ? Math.round(totalTime / totalCalls) : 0;
+    
+    $('toolCalls').textContent = totalCalls;
+    $('toolSuccess').textContent = successRate;
+    $('toolAvg').textContent = avgTime;
+  }).catch(e => apiError('/api/stats', e, 0));
+}
+
+function formatBytes(bytes){
+  if(bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return Math.round(bytes / Math.pow(k, i) * 10) / 10 + ' ' + sizes[i];
 }
 
 function loadLLM(){
@@ -1706,7 +1975,7 @@ function refresh(){
   
   const now = new Date();
   $('lastUpdate').textContent = 'updated ' + now.toLocaleTimeString();
-  loadSystem(); loadLLM(); loadServices();
+  loadSystem(); loadDashboardSummary(); loadLLM(); loadServices();
 }
 refresh();
 setInterval(refresh, 10000);
