@@ -724,6 +724,9 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
 .tool-detail .td-arg-row:last-child{border-bottom:none}
 .tool-detail .td-arg-name{color:#ffa657;font-weight:500}
 .tool-detail .td-arg-type{color:#8b949e;margin-left:8px}
+.tool-card-stats{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;padding-top:6px;border-top:1px solid #21262d}
+.tool-card-stats .stat-item{font-size:.72rem;color:#8b949e;font-family:monospace}
+.tool-card-stats .stat-item i{margin-right:2px}
 </style>
 </head>
 <body>
@@ -1548,6 +1551,114 @@ function clearData(type){
       }
     })
     .catch(e => apiError(endpoints[type], e, 0));
+}
+
+// -- Tools -- //
+let toolStats = {};
+
+function loadTools(){
+  Promise.all([
+    fetch('/api/tools', { credentials: 'same-origin' }).then(r=>r.json()),
+    fetch('/api/stats', { credentials: 'same-origin' }).then(r=>r.json())
+  ]).then(([toolsData, statsData]) => {
+    allTools = toolsData.tools || [];
+    toolStats = {};
+    (statsData.stats || []).forEach(s => {
+      toolStats[s.name] = s;
+    });
+    renderTools();
+  }).catch(e => apiError('/api/tools', e, 0));
+}
+
+function filterTools(){
+  renderTools();
+}
+
+function renderTools(){
+  const search = ($('toolSearch').value || '').toLowerCase();
+  const catFilter = $('toolCategoryFilter').value;
+  let filtered = allTools;
+  if (catFilter) filtered = filtered.filter(t => getToolCategory(t.name) === catFilter);
+  if (search) filtered = filtered.filter(t => (t.name + ' ' + t.description).toLowerCase().includes(search));
+  $('toolCount').textContent = filtered.length;
+  const container = $('toolList');
+  if (!filtered.length) { container.innerHTML = '<div class="empty">No matching tools</div>'; return; }
+  const grouped = {};
+  for (const t of filtered) {
+    const cat = getToolCategory(t.name);
+    if (!grouped[cat]) grouped[cat] = [];
+    grouped[cat].push(t);
+  }
+  let html = '';
+  for (const [cat, tools] of Object.entries(grouped).sort((a,b) => a[0].localeCompare(b[0]))) {
+    const catInfo = TOOL_CATEGORIES[cat] || { icon: 'fa-wrench' };
+    html += '<div class="tool-category-header">';
+    html += '<i class="fas ' + catInfo.icon + '"></i>';
+    html += '<span class="cat-name">' + esc(cat) + '</span>';
+    html += '<span class="cat-count">' + tools.length + '</span>';
+    html += '</div>';
+    html += '<div class="tool-grid">';
+    for (const t of tools) {
+      const stats = toolStats[t.name];
+      const hasStats = stats && stats.count > 0;
+      html += '<div class="tool-card" onclick="showToolDetail(\'' + esc(t.name) + '\')">';
+      html += '<div class="tool-card-name">' + esc(t.name) + '</div>';
+      html += '<div class="tool-card-desc">' + esc(t.description) + '</div>';
+      if (hasStats) {
+        const rate = Math.round(stats.ok / stats.count * 100);
+        const rateColor = rate >= 90 ? '#3fb950' : rate >= 70 ? '#d29922' : '#f85149';
+        html += '<div class="tool-card-stats">';
+        html += '<span class="stat-item"><i class="fas fa-play"></i> ' + stats.count + '</span>';
+        html += '<span class="stat-item"><i class="fas fa-check"></i> ' + stats.ok + '</span>';
+        html += '<span class="stat-item"><i class="fas fa-times"></i> ' + stats.fail + '</span>';
+        html += '<span class="stat-item"><i class="fas fa-clock"></i> ' + stats.avgMs + 'ms</span>';
+        html += '<span class="stat-item" style="color:' + rateColor + '"><i class="fas fa-chart-line"></i> ' + rate + '%</span>';
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+  container.innerHTML = html;
+}
+
+function showToolDetail(name){
+  const t = allTools.find(x => x.name === name);
+  if (!t) return;
+  const cat = getToolCategory(name);
+  const catInfo = TOOL_CATEGORIES[cat] || { icon: 'fa-wrench' };
+  const stats = toolStats[name];
+  const hasStats = stats && stats.count > 0;
+  let html = '<div class="tool-detail-overlay active" onclick="if(event.target===this)this.classList.remove(\'active\')">';
+  html += '<div class="tool-detail">';
+  html += '<h3><i class="fas ' + catInfo.icon + '" style="margin-right:8px"></i>' + esc(t.name) + '</h3>';
+  html += '<div class="td-desc">' + esc(t.description) + '</div>';
+  html += '<div class="td-section"><div class="td-label">Category</div><div style="color:#58a6ff">' + esc(cat) + '</div></div>';
+  if (hasStats) {
+    const rate = Math.round(stats.ok / stats.count * 100);
+    const rateColor = rate >= 90 ? '#3fb950' : rate >= 70 ? '#d29922' : '#f85149';
+    html += '<div class="td-section"><div class="td-label">Usage Stats</div>';
+    html += '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;text-align:center">';
+    html += '<div><div style="font-size:1.2rem;font-weight:600;color:#58a6ff">' + stats.count + '</div><div style="font-size:.7rem;color:#8b949e">CALLS</div></div>';
+    html += '<div><div style="font-size:1.2rem;font-weight:600;color:#3fb950">' + stats.ok + '</div><div style="font-size:.7rem;color:#8b949e">SUCCESS</div></div>';
+    html += '<div><div style="font-size:1.2rem;font-weight:600;color:#f85149">' + stats.fail + '</div><div style="font-size:.7rem;color:#8b949e">FAIL</div></div>';
+    html += '<div><div style="font-size:1.2rem;font-weight:600;color:#c9d1d9">' + stats.avgMs + 'ms</div><div style="font-size:.7rem;color:#8b949e">AVG</div></div>';
+    html += '<div><div style="font-size:1.2rem;font-weight:600;color:' + rateColor + '">' + rate + '%</div><div style="font-size:.7rem;color:#8b949e">RATE</div></div>';
+    html += '</div></div>';
+  }
+  if (t.args && Object.keys(t.args).length) {
+    html += '<div class="td-section"><div class="td-label">Arguments</div><div class="td-args">';
+    for (const [k, v] of Object.entries(t.args)) {
+      const isOpt = String(v).includes('optional');
+      html += '<div class="td-arg-row"><span class="td-arg-name">' + esc(k) + '</span><span class="td-arg-type">' + esc(String(v)) + '</span>' + (isOpt ? ' <span style="color:#484f58;font-size:.75rem">(optional)</span>' : '') + '</div>';
+    }
+    html += '</div></div>';
+  }
+  html += '<div style="margin-top:16px;text-align:right"><button class="btn btn-outline" onclick="this.closest(\'.tool-detail-overlay\').classList.remove(\'active\')">Close</button></div>';
+  html += '</div></div>';
+  const existing = document.querySelector('.tool-detail-overlay');
+  if (existing) existing.remove();
+  document.body.insertAdjacentHTML('beforeend', html);
 }
 
 // -- Refresh -- //
