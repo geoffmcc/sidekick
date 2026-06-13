@@ -1,152 +1,454 @@
-# MCP Tools Reference
+# Tools Reference
 
-Sidekick registers built-in tools from `TOOL_DEFS` in `src/tools.js` and maps them to Zod schemas in `src/index.js`. All built-in tools return MCP content arrays with text payloads. Many tools also set `isError: true` when validation or execution fails.
+This catalog is generated from `TOOL_DEFS` in `src/tools.js`. The code exports 60 tool handlers. Most tools return MCP content blocks containing text. Errors usually set `isError: true` and include an explanatory text result.
 
-## Complete Tool Table
+## Full inventory
 
-| Tool | Category | Description | Arguments | Implementation Notes |
-|---|---|---|---|---|
-| `sidekick_bash` | Core Operations | Execute a shell command on the remote machine. | `command` | Blocks several destructive command patterns before execution. Output is redacted before return/logging. |
-| `sidekick_read` | Core Operations | Read a UTF-8 text file from the remote filesystem. | `path` | Returns an error if the file does not exist. Content is redacted. |
-| `sidekick_write` | Core Operations | Write UTF-8 content to a file on the remote machine. | `path, content` | Creates parent directories recursively before writing. |
-| `sidekick_list` | Core Operations | List files and directories with type, size, modified time, and name. | `path` | Defaults to a server path through the MCP schema when omitted. |
-| `sidekick_search` | Core Operations | Search file contents using ripgrep when available, falling back to grep. | `pattern, path optional, include optional` | Limits results and emits raw ripgrep JSON when ripgrep is used. |
-| `sidekick_git` | Core Operations | Run structured git operations in a repository. | `action, path optional, args optional` | Allowed actions: status, diff, log, add, commit, push, pull, branch, checkout, stash. |
-| `sidekick_store` | Storage and Context | Store a persistent key-value entry with optional project metadata. | `key, value, project optional` | Project names must match lowercase snake-style identifiers. |
-| `sidekick_get` | Storage and Context | Retrieve a value from persistent KV storage. | `key` | Returns only the entry value, not the surrounding metadata. |
-| `sidekick_list_projects` | Storage and Context | List unique project names present in KV storage. | `none` | Returns a JSON array. |
-| `sidekick_get_by_project` | Storage and Context | Return all KV entries belonging to one project. | `project` | Returns a JSON array of key/value pairs. |
-| `sidekick_context` | Storage and Context | Track and recall project context, decisions, problems, reusable patterns, and session summaries. | `action plus context fields` | Actions: track_project, track_decision, track_problem, track_pattern, track_session, recall, suggest, summarize, list. |
-| `sidekick_teach` | Storage and Context | Create reusable procedures and dynamically expose them as MCP tools after restart. | `action, name, description, steps, parameters, args, example, trigger_phrases, implementation` | Actions: teach_procedure, generate_tool, learn_from_example, execute, list, remove. |
-| `sidekick_web_fetch` | Web and Communication | Fetch a URL from the remote host with optional method, headers, and body. | `url, method optional, headers optional, body optional` | Supports GET and POST at the MCP schema level. |
-| `sidekick_llm` | Web and Communication | Send a prompt to the LLM. Defaults to local Ollama, use `provider='groq'` for cloud Groq. | `prompt, system optional, temperature optional, provider optional` | The local fallback targets Ollama on 127.0.0.1:11434 and uses phi3:mini. |
-| `sidekick_notify` | Web and Communication | Send notifications to Discord, Slack, or email. | `channel, webhook_url, recipient, message, title` | Discord and Slack use incoming webhooks. Email path expects SMTP environment variables but uses an HTTP-style request implementation. |
-| `sidekick_github` | Web and Communication | Use the GitHub REST API for pull requests, issues, commit statuses, releases, and repository information. | `action, repo, args optional` | Reads the GitHub token from KV key github_token. |
-| `sidekick_webhook` | Web and Communication | List, inspect, or clear webhook payloads received by the dashboard webhook endpoint. | `action, id optional, limit optional` | Actions: list, get, clear. |
-| `sidekick_process` | Remote Management | List processes, display top CPU processes, kill by pid/name, or show process tree. | `action, filter, pid, name, signal` | Actions: list, top, kill, tree. |
-| `sidekick_service` | Remote Management | Control or inspect systemd services. | `action, service, lines` | Actions: start, stop, restart, status, enable, disable, logs. Service actions use sudo systemctl; logs use journalctl. |
-| `sidekick_archive` | Remote Management | Create, extract, or list tar.gz/tgz/zip archives. | `action, path, output, format` | Extraction runs in the current process working directory; output is required for create. |
-| `sidekick_cron` | Automation | Add, list, remove, or manually run recurring cron jobs. | `action, name, schedule, command, id` | Stores metadata in cron.json and syncs enabled entries to the user's crontab. |
-| `sidekick_delay` | Automation | Schedule a one-shot tool call for a future time. | `action, id, when, name, tool, args` | Actions: add, list, cancel, run. Supports relative strings such as 10s, 5m, 2h, 1d, or an ISO date. |
-| `sidekick_watch` | Automation | Monitor a service, process, endpoint, or file and trigger another Sidekick tool when a condition is met. | `action, id, name, source, target, condition, interval, action_tool, action_args, pause` | Conditions include status checks, process running checks, endpoint status checks, file existence, and file content matching. |
-| `sidekick_queue` | Automation | Manage a persistent priority queue of Sidekick tool calls. | `action, id, tool, args, priority, status` | Actions: add, list, process, remove, clear. Higher priority values are processed first. |
-| `sidekick_retry` | Automation | Retry a tool call with fixed, linear, or exponential backoff. | `tool, args, max_attempts, backoff, initial_delay` | Default behavior is three attempts with exponential backoff. |
-| `sidekick_health` | Observability | Run composite system health checks and produce a scored report. | `check, services, commands, threshold` | Checks: all, services, processes, disk, network, custom. Results are appended to health_history.json. |
-| `sidekick_snapshot` | Observability | Capture system state and compare snapshots for drift. | `action, name, capture, compare` | Captures processes, services, disk, packages, network, and selected file/directory listings. |
-| `sidekick_secret` | Security | Store, retrieve, rotate, delete, or list encrypted secrets. | `action, key, value, generate` | Uses AES-256-GCM and requires SIDEKICK_SECRET_KEY. |
-| `sidekick_parse` | Data Utilities | Parse JSON, YAML, XML, INI, or CSV input with optional auto-detection. | `input, format optional` | Returns normalized JSON text. |
-| `sidekick_transform` | Data Utilities | Filter, extract, sort, format, or map text/JSON data. | `action, input, pattern, format, field, key, value` | Actions: filter, extract, sort, format, map. |
-| `sidekick_diff` | Data Utilities | Compare old and new text, JSON, or YAML. | `old_text, new_text, type, format` | Output formats: unified, summary, json. |
-| `sidekick_hash` | Data Utilities | Hash a string or file and optionally verify against an expected digest. | `input, path, algorithm, verify` | Algorithms: md5, sha1, sha256, sha512. |
-| `sidekick_validate` | Data Utilities | Validate data against JSON Schema using AJV. | `data, schema` | Accepts JSON strings or objects for both data and schema. |
-| `sidekick_template` | Data Utilities | Render Handlebars templates using supplied data. | `template, data` | Template data may be a JSON string or object. |
-| `sidekick_evolve` | Advanced Intelligence | Analyze usage patterns and maintain proposed system improvements with safety gates. | `action, id, proposal, approve, test` | Actions: analyze, propose, list, test, approve, reject. Proposals are rate-limited in code. |
-| `sidekick_orchestrate` | Advanced Intelligence | Create and execute multi-step task graphs with dependency tracking. | `action, id, task_name, subtasks, dependencies, timeout` | Actions: create, execute, list, status, cancel. |
-| `sidekick_predict` | Advanced Intelligence | Analyze stored context and tool logs to generate predictions and collect feedback. | `action, id, feedback` | Actions: analyze, list, feedback, suggest. |
-| `sidekick_anonymize` | Security | Replace sensitive data with realistic fake values. Consistent mapping, custom patterns, redact safety net. | `action, input, format, custom_patterns, consistency` | Actions: anonymize, patterns, add_pattern, remove_pattern. Built-in patterns for IPs, emails, UUIDs, paths, hostnames. |
-| `sidekick_sandbox` | Safety | Execute operations with automatic file backup and rollback. Safe experimentation on remote systems. | `action, sandbox_name, command, files, auto_backup, rollback_id` | Actions: exec, rollback, list, diff, clean. Backs up files before execution, supports rollback. |
-| `sidekick_changelog` | Development | Generate release notes from git history. Groups by type/scope/author, optional LLM summaries. | `action, from, to, format, group_by, use_llm, include, path` | Actions: generate, preview, save. Parses conventional commits, groups semantically. |
-| `sidekick_netdiag` | Diagnostics | Unified network diagnostics: DNS, routing, port scanning, connectivity checks, local listeners. | `action, target, port_range, timeout, format` | Actions: check, dns, route, ports, listeners, connectivity. Replaces multiple network commands. |
-| `sidekick_timeline` | Observability | Build chronological timelines from multiple sources (log.jsonl, journalctl, git, files). | `action, since, until, sources, pattern, severity, format, max_events` | Actions: build, filter, export. Correlates events across sources chronologically. |
-| `sidekick_circuit` | Reliability | Generic circuit breaker for any tool call. Fast-fail when targets are down, configurable thresholds. | `action, target, tool, args, failure_threshold, cooldown_seconds, cache_response` | Actions: call, status, reset, configure. Prevents cascading failures. |
-| `sidekick_baseline` | Observability | Behavioral baseline and anomaly detection. Learns patterns, detects statistical deviations. | `action, metric_name, value, source, command, window, sensitivity` | Actions: record, learn, check, status, reset. Time-of-day bucketing, statistical analysis. |
-| `sidekick_depend` | Analysis | Dependency analyzer for npm, systemd services, processes. Trees, reverse deps, impact analysis. | `action, type, target, depth, format` | Actions: tree, reverse, outdated, impact, orphans. Shows dependency relationships and blast radius. |
-| `sidekick_runbook` | Operations | Operational runbook executor with autonomous and guided modes. Verification, rollback, step-by-step. | `action, name, mode, steps, runbook_id, step_index` | Actions: create, start, next, verify, rollback, abort, list, get, delete. Supports both autonomous and guided execution. |
-| `sidekick_black_box` | Observability | Incident time capsule capturing full system context. Rate limited (5/day, 7-day TTL, 3 active max). | `action, name, include, analyze_with_llm, incident_id` | Actions: capture, list, get, delete, analyze. Captures services, processes, logs, disk, network in one call. |
+| Tool | Category | Description | Argument summary |
+|---|---|---|---|
+| `sidekick_bash` | Core file, shell, and code operations | Execute a shell command on the remote machine | `{ command: "string" }` |
+| `sidekick_read` | Core file, shell, and code operations | Read a file from the remote filesystem | `{ path: "string" }` |
+| `sidekick_write` | Core file, shell, and code operations | Write content to a file on the remote machine | `{ path: "string", content: "string" }` |
+| `sidekick_list` | Core file, shell, and code operations | List files and directories on the remote machine | `{ path: "string" }` |
+| `sidekick_store` | Persistent memory and project context | Store a value persistently in KV storage | `{ key: "string", value: "string", project: "string (optional)" }` |
+| `sidekick_get` | Persistent memory and project context | Retrieve a stored value from KV storage | `{ key: "string" }` |
+| `sidekick_web_fetch` | Core file, shell, and code operations | Fetch a URL from the remote machine | `{ url: "string", method: "string (optional)", headers: "string (optional)", body: "string (optional)" }` |
+| `sidekick_llm` | AI, learning, and self-extension | Ask the LLM (defaults to local Ollama, use provider='groq' for cloud Groq) | `{ prompt: "string", system: "string (optional)", temperature: "number (optional)", provider: "string (optional, 'ollama' or 'groq' - default from SIDEKICK_DEFAULT_LLM env var or 'ollama')" }` |
+| `sidekick_list_projects` | Persistent memory and project context | List all unique project names in KV storage | `{}` |
+| `sidekick_get_by_project` | Persistent memory and project context | Get all keys and values for a specific project | `{ project: "string" }` |
+| `sidekick_search` | Core file, shell, and code operations | Search file contents using ripgrep or grep | `{ pattern: "string", path: "string (optional)", include: "string (optional)" }` |
+| `sidekick_git` | Core file, shell, and code operations | Structured git operations (status, diff, log, add, commit, push, pull, branch, checkout, stash) | `{ action: "string", path: "string (optional)", args: "string (optional)" }` |
+| `sidekick_notify` | External integrations and secrets | Send notifications to Discord, Slack, or email | `{ channel: "string", webhook_url: "string (optional)", recipient: "string (optional)", message: "string", title: "string (optional)" }` |
+| `sidekick_process` | Core file, shell, and code operations | Manage processes (list, top CPU/memory, kill, tree) | `{ action: "string", filter: "string (optional)", pid: "number (optional)", name: "string (optional)", signal: "string (optional)" }` |
+| `sidekick_service` | Core file, shell, and code operations | Manage systemd services (start, stop, restart, status, enable, disable, logs) | `{ action: "string", service: "string", lines: "number (optional)" }` |
+| `sidekick_archive` | Core file, shell, and code operations | Create, extract, or list archives (tar.gz, zip) | `{ action: "string", path: "string", output: "string (optional)", format: "string (optional)" }` |
+| `sidekick_cron` | Automation, scheduling, and orchestration | Schedule recurring tasks (add, list, remove, run jobs) | `{ action: "string", name: "string (optional)", schedule: "string (optional)", command: "string (optional)", id: "string (optional)" }` |
+| `sidekick_github` | External integrations and secrets | GitHub API integration (PRs, issues, commits, releases) | `{ action: "string", repo: "string", args: "string (optional)" }` |
+| `sidekick_webhook` | External integrations and secrets | Manage received webhooks (list, get, clear) | `{ action: "string", id: "string (optional)", limit: "number (optional)" }` |
+| `sidekick_context` | Persistent memory and project context | Persistent intelligent context management (track projects, decisions, problems, patterns; recall and suggest based on past context) | `{ action: "string", project: "string (optional)", context: "string (optional)", decision: "string (optional)", reasoning: "string (optional)", problem: "string (optional)", solution: "string (optional)", pattern: "string (optional)", query: "string (optional)", type: "string (optional)", limit: "number (optional)" }` |
+| `sidekick_teach` | AI, learning, and self-extension | Meta-learning and self-extension: teach procedures, generate tools, learn from examples, execute learned workflows | `{ action: "string", name: "string (optional)", description: "string (optional)", steps: "array (optional)", parameters: "object (optional)", args: "object (optional)", example: "string (optional)", trigger_phrases: "array (optional)", implementation: "string (optional)" }` |
+| `sidekick_transform` | Data processing and document utilities | Data manipulation pipeline: filter, extract, sort, format, and map data | `{ action: "string (filter|extract|sort|format|map)", input: "string", pattern: "string (optional, for filter)", field: "string (optional, for extract)", key: "string (optional, for sort/map)", value: "string (optional, for map)", format: "string (optional, for format: json|csv|table|text)" }` |
+| `sidekick_health` | Monitoring, diagnostics, and operations | Composite system health checks with scoring and issue detection | `{ check: "string (all|services|processes|disk|network|custom)", services: "string (optional, comma-separated service names)", commands: "string (optional, comma-separated commands for custom check)", threshold: "string (optional, e.g. 'disk>90,mem>80')" }` |
+| `sidekick_delay` | Automation, scheduling, and orchestration | One-shot task scheduling: run a tool once at a specific time or after a delay | `{ action: "string (add|list|cancel|run)", id: "string (optional, for cancel/run)", when: "string (optional, e.g. 10s, 5m, 2h, 1d, or ISO date)", name: "string (optional, human-readable name)", tool: "string (optional, tool name to execute)", args: "object (optional, arguments for the tool)" }` |
+| `sidekick_snapshot` | Monitoring, diagnostics, and operations | Capture system state and detect drift by comparing snapshots | `{ action: "string (capture|compare|list|delete)", name: "string (snapshot name)", capture: "string (optional, comma-separated: processes,services,disk,packages,network,files:/path)", compare: "string (optional, baseline snapshot name for compare action)" }` |
+| `sidekick_watch` | Automation, scheduling, and orchestration | Event-driven monitoring: watch services, processes, endpoints, or files and trigger actions on conditions | `{ action: "string (add|list|remove|pause|check)", id: "string (optional, for remove/pause/check)", name: "string (optional, watch name)", source: "string (optional, service|process|endpoint|file)", target: "string (optional, service name, process name, URL, or file path)", condition: "string (optional, e.g. status!=active, not_running, status!=200, content_matches)", interval: "string (optional, e.g. 30s, 5m, 1h)", action_tool: "string (optional, tool to call when triggered)", action_args: "object (optional, args for action tool)", pause: "boolean (optional, true to pause, false to resume)" }` |
+| `sidekick_secret` | External integrations and secrets | Encrypted credential management with AES-256-GCM (requires SIDEKICK_SECRET_KEY in .env) | `{ action: "string (store|get|delete|list|rotate)", key: "string (secret name)", value: "string (optional, for store)", generate: "string (optional, length for rotate, e.g. '32')" }` |
+| `sidekick_parse` | Data processing and document utilities | Parse structured data formats (JSON, YAML, XML, INI, CSV) with auto-detection | `{ input: "string (data to parse)", format: "string (optional, json|yaml|xml|ini|csv - auto-detected if not specified)" }` |
+| `sidekick_diff` | Data processing and document utilities | Semantic comparison of text, JSON, or YAML with structure-aware diffing | `{ old_text: "string (original content)", new_text: "string (modified content)", type: "string (optional, text|json|yaml|auto - default auto)", format: "string (optional, unified|summary|json - default unified)" }` |
+| `sidekick_hash` | Data processing and document utilities | Generate checksums (MD5, SHA1, SHA256, SHA512) for files or data with verification | `{ input: "string (optional, data to hash)", path: "string (optional, file path to hash)", algorithm: "string (optional, md5|sha1|sha256|sha512 - default sha256)", verify: "string (optional, expected hash to verify against)" }` |
+| `sidekick_validate` | Data processing and document utilities | Validate data against JSON Schema | `{ data: "string|object (data to validate)", schema: "string|object (JSON Schema)" }` |
+| `sidekick_template` | Data processing and document utilities | Render Handlebars templates with data | `{ template: "string (Handlebars template)", data: "string|object (template data)" }` |
+| `sidekick_queue` | Automation, scheduling, and orchestration | Persistent task queue with priorities | `{ action: "string (add|list|process|remove|clear)", id: "number (optional, task id for remove)", tool: "string (optional, tool name for add)", args: "object (optional, tool args for add)", priority: "number (optional, priority for add, default 0)", status: "string (optional, status filter for list/clear)" }` |
+| `sidekick_retry` | Automation, scheduling, and orchestration | Retry tool calls with exponential backoff | `{ tool: "string (tool to retry)", args: "object (optional, tool args)", max_attempts: "number (optional, default 3)", backoff: "string (optional, exponential|linear|fixed, default exponential)", initial_delay: "number (optional, ms, default 1000)" }` |
+| `sidekick_evolve` | AI, learning, and self-extension | Self-modification with safety: analyze patterns, propose improvements, test and approve changes | `{ action: "string (analyze|propose|list|test|approve|reject)", id: "string (optional, proposal id for test/approve/reject)", proposal: "string (optional, proposal description for propose)", approve: "boolean (optional, deprecated - use action=approve)", test: "boolean (optional, deprecated - use action=test)" }` |
+| `sidekick_orchestrate` | Automation, scheduling, and orchestration | Multi-agent coordination: create task graphs, execute subtasks with dependencies, track progress | `{ action: "string (create|execute|list|status|cancel)", id: "number (optional, task id for execute/status/cancel)", task_name: "string (optional, task name for create)", subtasks: "array (optional, subtask definitions for create)", dependencies: "object (optional, dependency map for create)", timeout: "number (optional, timeout in ms, default 1800000)" }` |
+| `sidekick_predict` | AI, learning, and self-extension | Anticipatory intelligence: analyze patterns, predict needs, track prediction usefulness | `{ action: "string (analyze|list|feedback|suggest)", id: "string (optional, prediction id for feedback)", feedback: "boolean (optional, true if useful, false if not)" }` |
+| `sidekick_debug_tool` | Persistent memory and project context | Structured debugging cache with persistent storage for cross-session debugging. Store findings, recall past investigations, cleanup old entries. | `{ action: "string (store|recall|cleanup|start|stop|cache|get|status|clear)", session_name: "string (optional, session identifier for legacy actions)", key: "string (optional, cache key for get/cache, or debug key for cleanup)", value: "string (optional, value to cache/store)", service: "string (optional, service name for store/recall)", issue: "string (optional, issue description for store)", redact: "boolean (optional, default true - set false to skip redaction)" }` |
+| `sidekick_fresheyes` | AI, learning, and self-extension | Get a fresh perspective from Sidekick's LLM (Grok) on a problem. Sends sanitized context for independent analysis | `{ problem: "string (problem description)", context: "string (optional, relevant context)", files: "array (optional, files analyzed)", hypotheses: "array (optional, current hypotheses)", full_response: "boolean (optional, return full response vs key insights)" }` |
+| `sidekick_batch` | Automation, scheduling, and orchestration | Execute multiple tool calls in one request to reduce API round-trips. Max 20 calls per batch. | `{ calls: "array (array of { tool: string, args: object })" }` |
+| `sidekick_cache` | Data processing and document utilities | Session-scoped caching to avoid redundant operations. Store and retrieve values with TTL. | `{ action: "string (get|set|clear|list)", key: "string (cache key)", ttl: "string (optional, e.g. 30s, 5m, 1h - default 5m)", value: "string (value to cache, for set action)" }` |
+| `sidekick_summarize` | Monitoring, diagnostics, and operations | Summarize large files before returning to reduce token usage. Strategies: head, tail, grep, stats. | `{ path: "string (file path)", max_lines: "number (optional, default 50)", strategy: "string (optional, head|tail|grep|stats - default head)", pattern: "string (optional, regex for grep strategy)" }` |
+| `sidekick_filter` | Monitoring, diagnostics, and operations | Filter file contents or directory listings by pattern, date, or size before returning. | `{ path: "string (file or directory path)", pattern: "string (optional, regex pattern)", after: "string (optional, ISO date for files modified after)", before: "string (optional, ISO date for files modified before)", max_results: "number (optional, default 50)" }` |
+| `sidekick_project` | Persistent memory and project context | Get complete project context in one call: KV entries, context tracking, recent logs, procedures. | `{ name: "string (project name)", include: "string (optional, comma-separated: kv,context,logs,procedures - default kv,context)" }` |
+| `sidekick_tail` | Monitoring, diagnostics, and operations | Tail recent log entries with filtering. Sources: log.jsonl (sidekick logs), journalctl, or any file. | `{ source: "string (log.jsonl, journalctl, or file path)", pattern: "string (optional, regex filter - for journalctl: service name)", lines: "number (optional, default 50)", since: "string (optional, ISO date or relative like 1h, 1d)" }` |
+| `sidekick_diff_files` | Monitoring, diagnostics, and operations | Compare two files directly without reading both into context. Returns unified diff or summary. | `{ path_a: "string (first file path)", path_b: "string (second file path)", format: "string (optional, unified|summary - default unified)" }` |
+| `sidekick_find` | Monitoring, diagnostics, and operations | Advanced file finder: search by name pattern, date range, size range, and content pattern. | `{ path: "string (directory to search)", name: "string (optional, glob pattern e.g. '*.js')", modified_after: "string (optional, ISO date)", modified_before: "string (optional, ISO date)", size_min: "string (optional, e.g. '1KB', '1MB')", size_max: "string (optional, e.g. '10MB')", content: "string (optional, regex pattern to match file contents)", max_results: "number (optional, default 50)" }` |
+| `sidekick_status` | Monitoring, diagnostics, and operations | Unified system status: services, disk, memory, load, uptime, top processes in one call. | `{ include: "string (optional, comma-separated: services,disk,memory,load,uptime,processes - default services,disk)", services: "string (optional, comma-separated service names - default sidekick-mcp,sidekick-dashboard,sidekick-agent)" }` |
+| `sidekick_extract` | Data processing and document utilities | Parse JSON/YAML/INI/XML and extract specific fields by path. Returns only what you need. | `{ path: "string (file path)", fields: "string|array (optional, field paths to extract e.g. 'database.host,database.port')" }` |
+| `sidekick_anonymize` | Data processing and document utilities | Replace sensitive data with realistic but fake values. Preserves data structure while making it safe to share externally. | `{ action: "string (anonymize|patterns|add_pattern|remove_pattern)", input: "string (optional, text to anonymize)", format: "string (optional, text|json|yaml - default text)", custom_patterns: "array (optional, {pattern, replacement} objects)", consistency: "boolean (optional, same input always maps to same output - default true)" }` |
+| `sidekick_sandbox` | External integrations and secrets | Execute operations in a tracked context with automatic backup and rollback. Safe experimentation on remote systems. | `{ action: "string (exec|rollback|list|diff|clean)", sandbox_name: "string (optional, sandbox identifier)", command: "string (optional, command to execute)", files: "array (optional, files to auto-backup before exec)", auto_backup: "boolean (optional, default true)", rollback_id: "string (optional, sandbox to rollback)" }` |
+| `sidekick_changelog` | Data processing and document utilities | Generate human-readable changelogs from git history. Groups commits semantically and optionally uses LLM for summaries. | `{ action: "string (generate|preview|save)", from: "string (starting ref: tag, commit, branch)", to: "string (optional, ending ref - default HEAD)", format: "string (optional, markdown|plain|conventional - default markdown)", group_by: "string (optional, type|scope|author - default type)", use_llm: "boolean (optional, generate LLM summary - default false)", include: "string (optional, all|features|fixes|breaking|refactor|deps - default all)", path: "string (optional, git repository path - default current directory)" }` |
+| `sidekick_netdiag` | Monitoring, diagnostics, and operations | Unified network diagnostics: DNS, routing, port scanning, connectivity checks, and local listeners. | `{ action: "string (check|dns|route|ports|listeners|connectivity)", target: "string (host, URL, or IP to diagnose)", port_range: "string (optional, port range e.g. '80-443')", timeout: "number (optional, timeout in ms - default 5000)", format: "string (optional, detailed|compact|json - default detailed)" }` |
+| `sidekick_timeline` | Monitoring, diagnostics, and operations | Build chronological timeline from multiple log sources. Correlates events across log.jsonl, journalctl, git, and file modifications. | `{ action: "string (build|filter|export)", since: "string (start time: ISO or relative like 1h, 1d)", until: "string (optional, end time - default now)", sources: "array (optional, log.jsonl|journalctl|git|files|all - default all)", pattern: "string (optional, regex filter)", severity: "string (optional, error|warn|info|all - default all)", format: "string (optional, compact|detailed|json - default compact)", max_events: "number (optional, default 200)" }` |
+| `sidekick_circuit` | Automation, scheduling, and orchestration | Circuit breaker for tool calls. Prevents cascading failures by fast-failing when a target is down. | `{ action: "string (call|status|reset|configure)", target: "string (circuit target label)", tool: "string (optional, tool name for call action)", args: "object (optional, tool arguments for call action)", failure_threshold: "number (optional, failures before opening - default 5)", cooldown_seconds: "number (optional, seconds before half-open - default 60)", cache_response: "boolean (optional, cache last successful response - default false)" }` |
+| `sidekick_baseline` | Monitoring, diagnostics, and operations | Behavioral baseline and anomaly detection. Learns normal patterns and detects statistical deviations. | `{ action: "string (record|learn|check|status|reset)", metric_name: "string (metric identifier)", value: "number (optional, value to record)", source: "string (optional, health|custom|command)", command: "string (optional, command to collect metric)", window: "string (optional, history window - default 7d)", sensitivity: "string (optional, low|medium|high - default medium)" }` |
+| `sidekick_depend` | Monitoring, diagnostics, and operations | Dependency analyzer for npm packages, systemd services, and processes. Shows dependency trees, reverse dependencies, and impact analysis. | `{ action: "string (tree|reverse|outdated|impact|orphans)", type: "string (npm|service|process)", target: "string (optional, package, service, or PID)", depth: "number (optional, tree depth - default 5)", format: "string (optional, tree|flat|json - default tree)" }` |
+| `sidekick_runbook` | Automation, scheduling, and orchestration | Operational runbook executor with autonomous and guided modes. Supports verification, rollback, and step-by-step execution. | `{ action: "string (create|start|next|verify|rollback|abort|list|get|delete)", name: "string (optional, runbook name)", mode: "string (optional, autonomous|guided - default autonomous)", steps: "array (optional, step definitions)", runbook_id: "string (optional, instance or definition ID)", step_index: "number (optional, step index)" }` |
+| `sidekick_black_box` | Monitoring, diagnostics, and operations | Incident time capsule: captures full system context (services, processes, logs, disk, network) in one call for debugging. Rate limited. | `{ action: "string (capture|list|get|delete|analyze)", name: "string (optional, incident name)", include: "array (optional, services|processes|logs|disk|network|all - default all)", analyze_with_llm: "boolean (optional, use LLM for analysis - default false)", incident_id: "string (optional, incident ID)" }` |
+| `sidekick_respond` | AI, learning, and self-extension | Return a text response directly without calling other tools. Use this for simple answers or when no tool action is needed. | `{ text: "string (the response text to return)" }` |
 
-## Core Operation Tools
+
+## Core file, shell, and code operations
 
 ### `sidekick_bash`
 
-Executes a shell command with a 60-second timeout and a 10 MB output buffer. Before execution, commands are checked against destructive patterns such as `rm -rf /`, disk formatting commands, direct writes to block devices, fork bombs, curl/wget piped into shell, and recursive `chmod 777 /`.
+Execute a shell command on the remote machine
 
-Use this for Linux command execution when a specialized tool is not available. Prefer specialized tools for git, services, process management, archives, and web requests because they validate inputs more narrowly.
+Arguments: `{ command: "string" }`
 
-### `sidekick_read`, `sidekick_write`, and `sidekick_list`
+### `sidekick_read`
 
-These provide direct filesystem access. `sidekick_write` creates parent directories before writing. `sidekick_list` reports item type, size, modified timestamp, and name.
+Read a file from the remote filesystem
+
+Arguments: `{ path: "string" }`
+
+### `sidekick_write`
+
+Write content to a file on the remote machine
+
+Arguments: `{ path: "string", content: "string" }`
+
+### `sidekick_list`
+
+List files and directories on the remote machine
+
+Arguments: `{ path: "string" }`
+
+### `sidekick_web_fetch`
+
+Fetch a URL from the remote machine
+
+Arguments: `{ url: "string", method: "string (optional)", headers: "string (optional)", body: "string (optional)" }`
 
 ### `sidekick_search`
 
-Searches with `rg --json --max-count 100` when ripgrep exists. If ripgrep is unavailable, it falls back to grep with recursive search and maximum count. The optional `include` argument is passed as a file glob.
+Search file contents using ripgrep or grep
+
+Arguments: `{ pattern: "string", path: "string (optional)", include: "string (optional)" }`
 
 ### `sidekick_git`
 
-Wraps selected git actions with `git -C <repo> <action>`. The `args` string is split on whitespace and appended. This keeps the primary action constrained but does not fully parse shell-style quoting.
+Structured git operations (status, diff, log, add, commit, push, pull, branch, checkout, stash)
 
-## Storage and Memory Tools
+Arguments: `{ action: "string", path: "string (optional)", args: "string (optional)" }`
 
-### KV Store
+### `sidekick_process`
 
-`sidekick_store`, `sidekick_get`, `sidekick_list_projects`, and `sidekick_get_by_project` operate on `kvstore.json`.
+Manage processes (list, top CPU/memory, kill, tree)
 
-New-format KV entries use this structure:
+Arguments: `{ action: "string", filter: "string (optional)", pid: "number (optional)", name: "string (optional)", signal: "string (optional)" }`
 
-```json
-{
-  "value": "stored text",
-  "project": "project_name_or_null",
-  "source": "mcp|agent|dashboard|unknown",
-  "created": "ISO timestamp",
-  "updated": "ISO timestamp"
-}
-```
+### `sidekick_service`
 
-Legacy string entries are migrated at startup by `migrateKV()`.
+Manage systemd services (start, stop, restart, status, enable, disable, logs)
 
-### Context Store
+Arguments: `{ action: "string", service: "string", lines: "number (optional)" }`
 
-`sidekick_context` stores structured project context in `context.json`. It tracks:
+### `sidekick_archive`
 
-- Projects.
-- Decisions.
-- Problems and solutions.
-- Workflow patterns.
-- Session summaries.
+Create, extract, or list archives (tar.gz, zip)
 
-Recall and suggestion operations use simple word-set similarity rather than embeddings.
+Arguments: `{ action: "string", path: "string", output: "string (optional)", format: "string (optional)" }`
 
-### Teach and Procedures
+## Persistent memory and project context
 
-`sidekick_teach` stores learned procedures in `procedures.json`. Procedures can be executed directly through `sidekick_teach` or exposed as dynamic MCP tools after server restart.
+### `sidekick_store`
 
-A procedure step is a tool call:
+Store a value persistently in KV storage
 
-```json
-{
-  "tool": "sidekick_bash",
-  "args": { "command": "uptime" }
-}
-```
+Arguments: `{ key: "string", value: "string", project: "string (optional)" }`
 
-Parameter definitions support `string`, `number`, and `boolean` types.
+### `sidekick_get`
 
-## Automation Tools
+Retrieve a stored value from KV storage
+
+Arguments: `{ key: "string" }`
+
+### `sidekick_list_projects`
+
+List all unique project names in KV storage
+
+Arguments: `{}`
+
+### `sidekick_get_by_project`
+
+Get all keys and values for a specific project
+
+Arguments: `{ project: "string" }`
+
+### `sidekick_context`
+
+Persistent intelligent context management (track projects, decisions, problems, patterns; recall and suggest based on past context)
+
+Arguments: `{ action: "string", project: "string (optional)", context: "string (optional)", decision: "string (optional)", reasoning: "string (optional)", problem: "string (optional)", solution: "string (optional)", pattern: "string (optional)", query: "string (optional)", type: "string (optional)", limit: "number (optional)" }`
+
+### `sidekick_debug_tool`
+
+Structured debugging cache with persistent storage for cross-session debugging. Store findings, recall past investigations, cleanup old entries.
+
+Arguments: `{ action: "string (store|recall|cleanup|start|stop|cache|get|status|clear)", session_name: "string (optional, session identifier for legacy actions)", key: "string (optional, cache key for get/cache, or debug key for cleanup)", value: "string (optional, value to cache/store)", service: "string (optional, service name for store/recall)", issue: "string (optional, issue description for store)", redact: "boolean (optional, default true - set false to skip redaction)" }`
+
+### `sidekick_project`
+
+Get complete project context in one call: KV entries, context tracking, recent logs, procedures.
+
+Arguments: `{ name: "string (project name)", include: "string (optional, comma-separated: kv,context,logs,procedures - default kv,context)" }`
+
+## AI, learning, and self-extension
+
+### `sidekick_llm`
+
+Ask the LLM (defaults to local Ollama, use provider='groq' for cloud Groq)
+
+Arguments: `{ prompt: "string", system: "string (optional)", temperature: "number (optional)", provider: "string (optional, 'ollama' or 'groq' - default from SIDEKICK_DEFAULT_LLM env var or 'ollama')" }`
+
+### `sidekick_teach`
+
+Meta-learning and self-extension: teach procedures, generate tools, learn from examples, execute learned workflows
+
+Arguments: `{ action: "string", name: "string (optional)", description: "string (optional)", steps: "array (optional)", parameters: "object (optional)", args: "object (optional)", example: "string (optional)", trigger_phrases: "array (optional)", implementation: "string (optional)" }`
+
+### `sidekick_evolve`
+
+Self-modification with safety: analyze patterns, propose improvements, test and approve changes
+
+Arguments: `{ action: "string (analyze|propose|list|test|approve|reject)", id: "string (optional, proposal id for test/approve/reject)", proposal: "string (optional, proposal description for propose)", approve: "boolean (optional, deprecated - use action=approve)", test: "boolean (optional, deprecated - use action=test)" }`
+
+### `sidekick_predict`
+
+Anticipatory intelligence: analyze patterns, predict needs, track prediction usefulness
+
+Arguments: `{ action: "string (analyze|list|feedback|suggest)", id: "string (optional, prediction id for feedback)", feedback: "boolean (optional, true if useful, false if not)" }`
+
+### `sidekick_fresheyes`
+
+Get a fresh perspective from Sidekick's LLM (Grok) on a problem. Sends sanitized context for independent analysis
+
+Arguments: `{ problem: "string (problem description)", context: "string (optional, relevant context)", files: "array (optional, files analyzed)", hypotheses: "array (optional, current hypotheses)", full_response: "boolean (optional, return full response vs key insights)" }`
+
+### `sidekick_respond`
+
+Return a text response directly without calling other tools. Use this for simple answers or when no tool action is needed.
+
+Arguments: `{ text: "string (the response text to return)" }`
+
+## External integrations and secrets
+
+### `sidekick_notify`
+
+Send notifications to Discord, Slack, or email
+
+Arguments: `{ channel: "string", webhook_url: "string (optional)", recipient: "string (optional)", message: "string", title: "string (optional)" }`
+
+### `sidekick_github`
+
+GitHub API integration (PRs, issues, commits, releases)
+
+Arguments: `{ action: "string", repo: "string", args: "string (optional)" }`
+
+### `sidekick_webhook`
+
+Manage received webhooks (list, get, clear)
+
+Arguments: `{ action: "string", id: "string (optional)", limit: "number (optional)" }`
+
+### `sidekick_secret`
+
+Encrypted credential management with AES-256-GCM (requires SIDEKICK_SECRET_KEY in .env)
+
+Arguments: `{ action: "string (store|get|delete|list|rotate)", key: "string (secret name)", value: "string (optional, for store)", generate: "string (optional, length for rotate, e.g. '32')" }`
+
+### `sidekick_sandbox`
+
+Execute operations in a tracked context with automatic backup and rollback. Safe experimentation on remote systems.
+
+Arguments: `{ action: "string (exec|rollback|list|diff|clean)", sandbox_name: "string (optional, sandbox identifier)", command: "string (optional, command to execute)", files: "array (optional, files to auto-backup before exec)", auto_backup: "boolean (optional, default true)", rollback_id: "string (optional, sandbox to rollback)" }`
+
+## Automation, scheduling, and orchestration
 
 ### `sidekick_cron`
 
-Stores cron job metadata in `cron.json` and syncs enabled jobs to the user's crontab. Generated crontab lines run from `/home/sidekick/sidekick` and redirect output to `cron-<id>.log` under `SIDEKICK_DATA_DIR`.
+Schedule recurring tasks (add, list, remove, run jobs)
+
+Arguments: `{ action: "string", name: "string (optional)", schedule: "string (optional)", command: "string (optional)", id: "string (optional)" }`
 
 ### `sidekick_delay`
 
-Stores one-shot scheduled tool calls in `delays.json`. The agent bridge loads pending delays on startup and schedules them in memory. If the agent bridge is not running, pending delays will not execute until it starts and reloads them.
+One-shot task scheduling: run a tool once at a specific time or after a delay
+
+Arguments: `{ action: "string (add|list|cancel|run)", id: "string (optional, for cancel/run)", when: "string (optional, e.g. 10s, 5m, 2h, 1d, or ISO date)", name: "string (optional, human-readable name)", tool: "string (optional, tool name to execute)", args: "object (optional, arguments for the tool)" }`
 
 ### `sidekick_watch`
 
-Stores monitoring rules in `watches.json`. The agent bridge loads active watches and checks them on intervals. Supported sources are service, process, endpoint, and file. Watches can call another Sidekick tool when triggered and support message template replacements such as `{source}`, `{target}`, `{status}`, and `{time}`.
+Event-driven monitoring: watch services, processes, endpoints, or files and trigger actions on conditions
 
-### `sidekick_queue` and `sidekick_retry`
+Arguments: `{ action: "string (add|list|remove|pause|check)", id: "string (optional, for remove/pause/check)", name: "string (optional, watch name)", source: "string (optional, service|process|endpoint|file)", target: "string (optional, service name, process name, URL, or file path)", condition: "string (optional, e.g. status!=active, not_running, status!=200, content_matches)", interval: "string (optional, e.g. 30s, 5m, 1h)", action_tool: "string (optional, tool to call when triggered)", action_args: "object (optional, args for action tool)", pause: "boolean (optional, true to pause, false to resume)" }`
 
-The queue stores pending tool calls with priority and status. The retry tool wraps `callTool()` and retries failed results with configurable backoff.
+### `sidekick_queue`
 
-## Observability Tools
+Persistent task queue with priorities
 
-`sidekick_health` checks services, processes, disk, network, or custom commands and produces a Markdown report. `sidekick_snapshot` captures state and supports drift comparison. `sidekick_predict` analyzes context and tool logs to identify patterns.
+Arguments: `{ action: "string (add|list|process|remove|clear)", id: "number (optional, task id for remove)", tool: "string (optional, tool name for add)", args: "object (optional, tool args for add)", priority: "number (optional, priority for add, default 0)", status: "string (optional, status filter for list/clear)" }`
 
-## Security and Credentials Tools
+### `sidekick_retry`
 
-`sidekick_secret` encrypts secrets with AES-256-GCM into `secrets.enc`. It requires `SIDEKICK_SECRET_KEY`. `sidekick_github` does not use `sidekick_secret`; it reads a token from the KV key `github_token`.
+Retry tool calls with exponential backoff
 
-## Data Utility Tools
+Arguments: `{ tool: "string (tool to retry)", args: "object (optional, tool args)", max_attempts: "number (optional, default 3)", backoff: "string (optional, exponential|linear|fixed, default exponential)", initial_delay: "number (optional, ms, default 1000)" }`
 
-The parsing, transformation, diff, hash, validation, and template tools provide local data manipulation for agent workflows. They avoid needing ad hoc shell pipelines for common structured data tasks.
+### `sidekick_orchestrate`
+
+Multi-agent coordination: create task graphs, execute subtasks with dependencies, track progress
+
+Arguments: `{ action: "string (create|execute|list|status|cancel)", id: "number (optional, task id for execute/status/cancel)", task_name: "string (optional, task name for create)", subtasks: "array (optional, subtask definitions for create)", dependencies: "object (optional, dependency map for create)", timeout: "number (optional, timeout in ms, default 1800000)" }`
+
+### `sidekick_batch`
+
+Execute multiple tool calls in one request to reduce API round-trips. Max 20 calls per batch.
+
+Arguments: `{ calls: "array (array of { tool: string, args: object })" }`
+
+### `sidekick_circuit`
+
+Circuit breaker for tool calls. Prevents cascading failures by fast-failing when a target is down.
+
+Arguments: `{ action: "string (call|status|reset|configure)", target: "string (circuit target label)", tool: "string (optional, tool name for call action)", args: "object (optional, tool arguments for call action)", failure_threshold: "number (optional, failures before opening - default 5)", cooldown_seconds: "number (optional, seconds before half-open - default 60)", cache_response: "boolean (optional, cache last successful response - default false)" }`
+
+### `sidekick_runbook`
+
+Operational runbook executor with autonomous and guided modes. Supports verification, rollback, and step-by-step execution.
+
+Arguments: `{ action: "string (create|start|next|verify|rollback|abort|list|get|delete)", name: "string (optional, runbook name)", mode: "string (optional, autonomous|guided - default autonomous)", steps: "array (optional, step definitions)", runbook_id: "string (optional, instance or definition ID)", step_index: "number (optional, step index)" }`
+
+## Data processing and document utilities
+
+### `sidekick_transform`
+
+Data manipulation pipeline: filter, extract, sort, format, and map data
+
+Arguments: `{ action: "string (filter|extract|sort|format|map)", input: "string", pattern: "string (optional, for filter)", field: "string (optional, for extract)", key: "string (optional, for sort/map)", value: "string (optional, for map)", format: "string (optional, for format: json|csv|table|text)" }`
+
+### `sidekick_parse`
+
+Parse structured data formats (JSON, YAML, XML, INI, CSV) with auto-detection
+
+Arguments: `{ input: "string (data to parse)", format: "string (optional, json|yaml|xml|ini|csv - auto-detected if not specified)" }`
+
+### `sidekick_diff`
+
+Semantic comparison of text, JSON, or YAML with structure-aware diffing
+
+Arguments: `{ old_text: "string (original content)", new_text: "string (modified content)", type: "string (optional, text|json|yaml|auto - default auto)", format: "string (optional, unified|summary|json - default unified)" }`
+
+### `sidekick_hash`
+
+Generate checksums (MD5, SHA1, SHA256, SHA512) for files or data with verification
+
+Arguments: `{ input: "string (optional, data to hash)", path: "string (optional, file path to hash)", algorithm: "string (optional, md5|sha1|sha256|sha512 - default sha256)", verify: "string (optional, expected hash to verify against)" }`
+
+### `sidekick_validate`
+
+Validate data against JSON Schema
+
+Arguments: `{ data: "string|object (data to validate)", schema: "string|object (JSON Schema)" }`
+
+### `sidekick_template`
+
+Render Handlebars templates with data
+
+Arguments: `{ template: "string (Handlebars template)", data: "string|object (template data)" }`
+
+### `sidekick_cache`
+
+Session-scoped caching to avoid redundant operations. Store and retrieve values with TTL.
+
+Arguments: `{ action: "string (get|set|clear|list)", key: "string (cache key)", ttl: "string (optional, e.g. 30s, 5m, 1h - default 5m)", value: "string (value to cache, for set action)" }`
+
+### `sidekick_extract`
+
+Parse JSON/YAML/INI/XML and extract specific fields by path. Returns only what you need.
+
+Arguments: `{ path: "string (file path)", fields: "string|array (optional, field paths to extract e.g. 'database.host,database.port')" }`
+
+### `sidekick_anonymize`
+
+Replace sensitive data with realistic but fake values. Preserves data structure while making it safe to share externally.
+
+Arguments: `{ action: "string (anonymize|patterns|add_pattern|remove_pattern)", input: "string (optional, text to anonymize)", format: "string (optional, text|json|yaml - default text)", custom_patterns: "array (optional, {pattern, replacement} objects)", consistency: "boolean (optional, same input always maps to same output - default true)" }`
+
+### `sidekick_changelog`
+
+Generate human-readable changelogs from git history. Groups commits semantically and optionally uses LLM for summaries.
+
+Arguments: `{ action: "string (generate|preview|save)", from: "string (starting ref: tag, commit, branch)", to: "string (optional, ending ref - default HEAD)", format: "string (optional, markdown|plain|conventional - default markdown)", group_by: "string (optional, type|scope|author - default type)", use_llm: "boolean (optional, generate LLM summary - default false)", include: "string (optional, all|features|fixes|breaking|refactor|deps - default all)", path: "string (optional, git repository path - default current directory)" }`
+
+## Monitoring, diagnostics, and operations
+
+### `sidekick_health`
+
+Composite system health checks with scoring and issue detection
+
+Arguments: `{ check: "string (all|services|processes|disk|network|custom)", services: "string (optional, comma-separated service names)", commands: "string (optional, comma-separated commands for custom check)", threshold: "string (optional, e.g. 'disk>90,mem>80')" }`
+
+### `sidekick_snapshot`
+
+Capture system state and detect drift by comparing snapshots
+
+Arguments: `{ action: "string (capture|compare|list|delete)", name: "string (snapshot name)", capture: "string (optional, comma-separated: processes,services,disk,packages,network,files:/path)", compare: "string (optional, baseline snapshot name for compare action)" }`
+
+### `sidekick_summarize`
+
+Summarize large files before returning to reduce token usage. Strategies: head, tail, grep, stats.
+
+Arguments: `{ path: "string (file path)", max_lines: "number (optional, default 50)", strategy: "string (optional, head|tail|grep|stats - default head)", pattern: "string (optional, regex for grep strategy)" }`
+
+### `sidekick_filter`
+
+Filter file contents or directory listings by pattern, date, or size before returning.
+
+Arguments: `{ path: "string (file or directory path)", pattern: "string (optional, regex pattern)", after: "string (optional, ISO date for files modified after)", before: "string (optional, ISO date for files modified before)", max_results: "number (optional, default 50)" }`
+
+### `sidekick_tail`
+
+Tail recent log entries with filtering. Sources: log.jsonl (sidekick logs), journalctl, or any file.
+
+Arguments: `{ source: "string (log.jsonl, journalctl, or file path)", pattern: "string (optional, regex filter - for journalctl: service name)", lines: "number (optional, default 50)", since: "string (optional, ISO date or relative like 1h, 1d)" }`
+
+### `sidekick_diff_files`
+
+Compare two files directly without reading both into context. Returns unified diff or summary.
+
+Arguments: `{ path_a: "string (first file path)", path_b: "string (second file path)", format: "string (optional, unified|summary - default unified)" }`
+
+### `sidekick_find`
+
+Advanced file finder: search by name pattern, date range, size range, and content pattern.
+
+Arguments: `{ path: "string (directory to search)", name: "string (optional, glob pattern e.g. '*.js')", modified_after: "string (optional, ISO date)", modified_before: "string (optional, ISO date)", size_min: "string (optional, e.g. '1KB', '1MB')", size_max: "string (optional, e.g. '10MB')", content: "string (optional, regex pattern to match file contents)", max_results: "number (optional, default 50)" }`
+
+### `sidekick_status`
+
+Unified system status: services, disk, memory, load, uptime, top processes in one call.
+
+Arguments: `{ include: "string (optional, comma-separated: services,disk,memory,load,uptime,processes - default services,disk)", services: "string (optional, comma-separated service names - default sidekick-mcp,sidekick-dashboard,sidekick-agent)" }`
+
+### `sidekick_netdiag`
+
+Unified network diagnostics: DNS, routing, port scanning, connectivity checks, and local listeners.
+
+Arguments: `{ action: "string (check|dns|route|ports|listeners|connectivity)", target: "string (host, URL, or IP to diagnose)", port_range: "string (optional, port range e.g. '80-443')", timeout: "number (optional, timeout in ms - default 5000)", format: "string (optional, detailed|compact|json - default detailed)" }`
+
+### `sidekick_timeline`
+
+Build chronological timeline from multiple log sources. Correlates events across log.jsonl, journalctl, git, and file modifications.
+
+Arguments: `{ action: "string (build|filter|export)", since: "string (start time: ISO or relative like 1h, 1d)", until: "string (optional, end time - default now)", sources: "array (optional, log.jsonl|journalctl|git|files|all - default all)", pattern: "string (optional, regex filter)", severity: "string (optional, error|warn|info|all - default all)", format: "string (optional, compact|detailed|json - default compact)", max_events: "number (optional, default 200)" }`
+
+### `sidekick_baseline`
+
+Behavioral baseline and anomaly detection. Learns normal patterns and detects statistical deviations.
+
+Arguments: `{ action: "string (record|learn|check|status|reset)", metric_name: "string (metric identifier)", value: "number (optional, value to record)", source: "string (optional, health|custom|command)", command: "string (optional, command to collect metric)", window: "string (optional, history window - default 7d)", sensitivity: "string (optional, low|medium|high - default medium)" }`
+
+### `sidekick_depend`
+
+Dependency analyzer for npm packages, systemd services, and processes. Shows dependency trees, reverse dependencies, and impact analysis.
+
+Arguments: `{ action: "string (tree|reverse|outdated|impact|orphans)", type: "string (npm|service|process)", target: "string (optional, package, service, or PID)", depth: "number (optional, tree depth - default 5)", format: "string (optional, tree|flat|json - default tree)" }`
+
+### `sidekick_black_box`
+
+Incident time capsule: captures full system context (services, processes, logs, disk, network) in one call for debugging. Rate limited.
+
+Arguments: `{ action: "string (capture|list|get|delete|analyze)", name: "string (optional, incident name)", include: "array (optional, services|processes|logs|disk|network|all - default all)", analyze_with_llm: "boolean (optional, use LLM for analysis - default false)", incident_id: "string (optional, incident ID)" }`
+
+
+## Dispatcher behavior
+
+All agent-side tool calls should go through `callTool(name, args)`. The dispatcher looks up the handler in `TOOLS`, records start time, executes the handler, logs success/failure through `logToolCall`, and returns a normalized MCP-style result.
+
+Unknown tool names return an error result instead of throwing. Exceptions inside handlers are caught, logged, and converted to an error result.
+
+## Redaction behavior
+
+Tool output is passed through `redactSensitive` in many handlers before being returned or logged. This is intended to prevent accidental leakage of private keys, tokens, passwords, and similar material. Redaction is a safety layer, not a substitute for avoiding dangerous commands or overbroad file reads.

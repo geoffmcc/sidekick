@@ -1,146 +1,68 @@
 # Architecture
 
-## Overview
-
-Sidekick is a Node.js application split into three cooperating services:
-
-- `src/index.js`: the MCP server exposed to MCP clients such as opencode.
-- `src/dashboard.js`: an Express dashboard and API server.
-- `src/agent.js`: an autonomous agent bridge that runs locally and is proxied through the dashboard.
-
-The shared tool implementations live in `src/tools.js`. The redaction engine lives in `src/redact.js` and is used before tool outputs are returned or logged.
-
-## Runtime Topology
+Sidekick is a three-process Node.js application with a shared data directory.
 
 ```text
-opencode or MCP client
+opencode / MCP client
         |
-        | Bearer token or api_key
+        | Bearer token
         v
-+-------------------------+
-| MCP Server :4097        |
-| src/index.js            |
-| /mcp, /sse, /messages   |
-+-----------+-------------+
-            |
-            | calls
-            v
-+-------------------------+
-| Tool Registry           |
-| src/tools.js            |
-+-----------+-------------+
-            |
-            | reads/writes
-            v
-+-------------------------+
-| SIDEKICK_DATA_DIR       |
-| JSON and JSONL files    |
-+-------------------------+
+MCP Server :4097  ---- loads/registers tools ----> src/tools.js
+        |
+        | JSON files under SIDEKICK_DATA_DIR
+        v
+Persistent data directory
 
 Browser
-   |
-   v
-+-------------------------+        loopback proxy        +-------------------------+
-| Dashboard :4098         |----------------------------->| Agent Bridge :4099      |
-| src/dashboard.js        |                              | src/agent.js            |
-+-------------------------+                              +-------------------------+
+        |
+        v
+Dashboard :4098 ---- proxy ----> Agent Bridge :4099
+
+Agent Bridge :4099 ---- calls ----> src/tools.js
 ```
 
-## MCP Server
+## Service boundaries
 
-The MCP server is created with `McpServer` from `@modelcontextprotocol/sdk`. It registers each entry in `TOOL_DEFS` and maps the tool name to a Zod input schema in `TOOL_SCHEMAS`.
+### MCP server: `src/index.js`
 
-Each tool call follows this flow:
+The MCP server creates an `McpServer` from `@modelcontextprotocol/sdk`, registers the Sidekick tool definitions, and serves them over:
 
-1. MCP client calls a registered Sidekick tool.
-2. `src/index.js` sets the source to `mcp`.
-3. The matching handler in `TOOLS` runs.
-4. Output is redacted where implemented by the tool.
-5. `logToolCall()` appends a compact record to `log.jsonl`.
-6. The MCP server returns the tool result.
+- `POST /mcp`, `GET /mcp`, and `DELETE /mcp` for Streamable HTTP;
+- `GET /sse` and `POST /messages` for legacy SSE clients;
+- `GET /health` for diagnostics.
 
-The MCP server supports streamable HTTP at `/mcp` and a legacy SSE transport at `/sse` and `/messages`.
+The server requires `Authorization: Bearer <SIDEKICK_API_KEY>` or `?api_key=<key>` for MCP routes. It can also enforce `SIDEKICK_ALLOWED_IPS`.
 
-## Session Handling
+### Tool implementation: `src/tools.js`
 
-The streamable HTTP implementation stores sessions in memory. A session record contains the server instance, transport, creation time, last access time, and initialized state.
+The tool module owns most application behavior. It loads configuration, ensures the data directory exists, implements tool handlers, redacts sensitive output, logs tool calls, and persists JSON state files.
 
-Important session behavior:
+Important exported values include:
 
-- Session IDs are UUID-like values generated server-side.
-- Inactive sessions are evicted after 24 hours.
-- A cleanup interval runs every 10 minutes.
-- A stale session can be mapped to a new session to guide clients toward reinitialization.
-- The `/health` endpoint returns session count, session details, stale mapping count, uptime, version, and timestamp.
+- `TOOLS`: map of tool name to handler function.
+- `TOOL_DEFS`: dashboard-facing catalog of tool names, descriptions, and argument summaries.
+- `callTool(name, args)`: central dispatcher used by the agent and wrapper tools.
+- `logToolCall(...)`: appends JSONL audit-style tool activity to `log.jsonl`.
+- `setSource(source)`: records whether a call came from MCP, dashboard, agent, or another path.
 
-Because sessions are in memory, restarting the MCP service invalidates active sessions. Clients must reconnect and initialize again.
+### Dashboard: `src/dashboard.js`
 
-## Dashboard
+The dashboard serves a browser UI and JSON API. It reads the Sidekick data directory, reports system state, allows KV editing and deletion, exposes tool metadata, accepts webhooks, and proxies agent requests to the Agent Bridge.
 
-The dashboard is an Express application that serves a browser UI and JSON API. It reads the same data directory as the tools. It provides API endpoints for:
+It includes dashboard-specific protections: optional Basic Auth, IP allowlist, rate limiting, basic CSRF origin checks, audit logging, and error logging.
 
-- Tool logs.
-- KV storage.
-- System metrics.
-- Service status.
-- Configuration summary.
-- Dashboard statistics.
-- Tool catalog browsing.
-- Webhook ingestion.
-- Agent bridge proxying.
-- Data clearing and reset operations.
+### Agent Bridge: `src/agent.js`
 
-At startup, the dashboard seeds system information into the KV store if those keys are missing. Seeded keys include server information, network information, service status, security settings, software versions, deployment metadata, and configuration metadata.
+The Agent Bridge accepts high-level task requests, builds a task transcript, repeatedly chooses tool calls, executes them through `callTool`, and streams progress events. It also loads scheduled delays and watches at startup.
 
-## Agent Bridge
+The agent has a loop limit controlled by `SIDEKICK_MAX_ITERATIONS` and stores transcripts under `data/conversations/`.
 
-The agent bridge listens on `127.0.0.1` by default. It is intended to be accessed through the dashboard rather than exposed publicly.
+## Session handling
 
-A task run works as follows:
+The MCP server tracks sessions in memory. Sessions include the MCP server instance, transport, creation time, last access time, and initialization state. Inactive sessions are removed after 24 hours. Streamable HTTP GET and DELETE require a valid `mcp-session-id` header. Stale POST sessions return a structured JSON-RPC error and a replacement session ID header so the client can reinitialize.
 
-1. The dashboard posts a goal to `/api/agent/run`.
-2. The agent creates a short task ID and an event emitter.
-3. The agent builds a system prompt from the current tool registry.
-4. The configured LLM returns raw JSON instructions.
-5. The agent either records a thought, calls a tool, or marks the task done.
-6. Events are streamed as Server-Sent Events.
-7. A transcript is written under `data/conversations`.
-8. If Groq is configured, the agent may ask the LLM whether the workflow should be saved as a reusable procedure.
+## Shared storage
 
-The agent includes safeguards against repeated identical tool calls and limits each task with `SIDEKICK_MAX_ITERATIONS`.
+All services use the same `SIDEKICK_DATA_DIR`. By default, this is `data/` relative to the project during local development, and `/home/sidekick/sidekick/data` in the example deployment.
 
-## Shared Tool Layer
-
-`src/tools.js` contains all first-party tool handlers, persistent storage helpers, logging, redaction integration, and dynamic procedure execution support.
-
-The file exports:
-
-- `TOOLS`: map from tool name to async function.
-- `TOOL_DEFS`: MCP-facing tool metadata.
-- `callTool()`: internal tool dispatcher used by agent, delays, queue, retry, orchestration, watches, and procedures.
-- Persistent-state helpers such as `loadProcedures()`, `loadDelays()`, and `loadWatches()`.
-- Runtime configuration constants such as `DATA_DIR`, `OLLAMA_URL`, `GROQ_API_KEY`, and `GROQ_MODEL`.
-
-Tool categories include:
-- **Core Operations**: bash, read, write, list, search, git
-- **Storage & Context**: store, get, context, teach
-- **Web & Communication**: web_fetch, llm, notify, github, webhook
-- **Remote Management**: process, service, archive
-- **Automation**: cron, delay, watch, queue, retry
-- **Observability**: health, snapshot, timeline, baseline, black_box
-- **Security**: secret, anonymize
-- **Data Utilities**: parse, transform, diff, hash, validate, template
-- **Advanced Intelligence**: evolve, orchestrate, predict
-- **Token Efficiency**: batch, cache, summarize, filter, project, tail, diff_files, find, status, extract
-- **Safety & Reliability**: sandbox, circuit
-- **Development**: changelog, depend
-- **Operations**: runbook
-- **Diagnostics**: netdiag
-
-## Dynamic Procedures
-
-`sidekick_teach` stores procedure definitions in `procedures.json`. On MCP server startup, `src/index.js` loads procedures and registers each one as a new MCP tool named `sidekick_<procedure_name>` unless that name conflicts with a built-in tool.
-
-A procedure contains a description, a parameter schema, and a sequence of tool calls. Parameters are substituted into step arguments when the procedure executes.
-
-Because procedure tools are registered at startup, newly taught procedures become MCP-visible after the MCP server restarts.
+Because storage is simple JSON and JSONL files, backups and inspection are straightforward. The tradeoff is that very large data files or concurrent heavy writes can become fragile. Keep logs trimmed, back up state regularly, and avoid using the KV store as a large database.

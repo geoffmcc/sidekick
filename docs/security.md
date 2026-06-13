@@ -1,113 +1,65 @@
 # Security
 
-Sidekick provides powerful remote execution capabilities. Treat any exposed Sidekick endpoint as privileged infrastructure.
+Sidekick is powerful by design. It can execute commands, read and write files, manage services, store secrets, and call external APIs. Treat it like remote shell access to the host.
 
-## MCP Authentication
+## MCP authentication
 
-The MCP server requires an API key for all routes after `/health`. The key is accepted as either:
+The MCP server requires an API key. Clients can send it as:
 
-```text
-Authorization: Bearer <SIDEKICK_API_KEY>
+```http
+Authorization: Bearer YOUR_SIDEKICK_API_KEY
 ```
 
-or:
+or as an `api_key` query parameter. Use the header form whenever possible.
 
-```text
-?api_key=<SIDEKICK_API_KEY>
-```
+The default development value is `sk-sidekick-local-dev`. Change it before any non-local deployment.
 
-The default key is `sk-sidekick-local-dev`. Change it before any network exposure.
+## IP allowlists
 
-## MCP IP Allowlist
+`SIDEKICK_ALLOWED_IPS` restricts MCP access by IPv4 address or CIDR range. Localhost is always allowed. `SIDEKICK_DASHBOARD_ALLOWED_IPS` provides similar filtering for the dashboard.
 
-Set `SIDEKICK_ALLOWED_IPS` to a comma-separated list of trusted addresses. Loopback addresses are always allowed. If unset, the MCP server does not enforce an IP allowlist.
+IP allowlists are useful but should not be the only protection if the service is public. Prefer VPN, SSH tunnel, reverse proxy auth, and firewall rules.
 
-## Dashboard Protections
+## Dashboard authentication
+
+Set both `SIDEKICK_DASHBOARD_USER` and `SIDEKICK_DASHBOARD_PASS` to enable Basic Auth for dashboard API routes. For public exposure, Basic Auth alone is not ideal; combine it with TLS and network restrictions.
+
+## Dashboard protections
 
 The dashboard includes:
 
-- Optional IP allowlist via `SIDEKICK_DASHBOARD_ALLOWED_IPS`.
-- In-memory rate limiting: 200 requests per 15 minutes per IP.
-- JSON body limit of 1 MB.
-- Content-Length rejection above 1 MB.
-- Origin checks for POST, PUT, DELETE, and PATCH requests.
-- Optional HTTP Basic auth through `SIDEKICK_DASHBOARD_USER` and `SIDEKICK_DASHBOARD_PASS`.
-- Audit logging for state-changing operations.
+- in-memory rate limiting per IP;
+- basic origin checks for mutating requests;
+- audit logging of mutating actions;
+- frontend error logging;
+- optional Basic Auth;
+- optional IP allowlist.
 
-Important note: the dashboard permits `/api/agent/stream/:taskId` without Basic auth so Server-Sent Events can work. Use firewall rules, a reverse proxy, VPN access, or an IP allowlist to protect the dashboard.
+## Command safety
 
-## Agent Bridge Exposure
+`sidekick_bash` blocks commands matching known dangerous patterns, including examples such as recursive root deletion, block-device writes, filesystem creation, fork-bomb pattern, curl/wget piped to shell, and recursive `chmod 777 /`.
 
-The agent bridge listens on `127.0.0.1`, which is the correct default posture. It can execute Sidekick tools autonomously, so it should not be exposed directly to the public internet.
+This is a guardrail, not a full sandbox. It will not detect every destructive command. Avoid granting Sidekick broader sudo access than necessary.
 
-## Command Safety
+## Sudoers scope
 
-`sidekick_bash` blocks several destructive patterns before command execution, including:
-
-- `rm -rf /`
-- direct writes to common block devices
-- `mkfs`, `fdisk`, `parted`, and `dd if=`
-- fork bomb pattern
-- `curl` or `wget` piped to `bash` or `sh`
-- recursive `chmod 777 /`
-
-This is a safeguard, not a sandbox. Many dangerous commands will not match those patterns. Use OS-level permissions, a restricted user, backups, and network controls.
+The supplied sudoers file allows the `sidekick` user to run specific systemctl and journalctl commands for the three Sidekick services, plus selected UFW allow commands. Keep this file narrow. Do not give blanket passwordless sudo unless you intentionally want the assistant to have full root-level control.
 
 ## Redaction
 
-`src/redact.js` redacts common secret patterns, including:
+`src/redact.js` redacts sensitive output patterns before data is returned or logged. The tests cover private keys, GitHub tokens, and other secret-like values. Redaction reduces accidental leakage but cannot guarantee every secret in every format is removed.
 
-- SSH private keys.
-- GitHub classic and fine-grained tokens.
-- OpenAI-style `sk-` keys.
-- AWS access keys and secret variables.
-- Generic password, secret, token, and API key assignments.
-- Bearer tokens.
-- Database connection-string passwords.
-- Stripe live keys.
-- JWTs.
+## Secret storage
 
-Redaction is applied in many tool outputs and logs, but it should not be treated as a complete data-loss prevention system.
+`sidekick_secret` provides AES-256-GCM encrypted credential management and requires `SIDEKICK_SECRET_KEY`. Store the secret key outside the repository and include it in your host secret management or systemd environment strategy.
 
-## Data Anonymization
+## Exposure recommendations
 
-`sidekick_anonymize` replaces sensitive data with realistic but fake values while preserving data structure. This is useful for sharing logs, debugging output, or any data that contains sensitive information but needs to be analyzed or shared externally.
+Recommended safest setup:
 
-Built-in patterns cover:
-- IP addresses → `10.0.0.x`
-- Email addresses → `user{n}@example.com`
-- UUIDs → `00000000-0000-0000-0000-{n}`
-- Phone numbers → `555-000-XXXX`
-- File paths (`/home/user`, `/Users/user`) → `/home/user{n}`
-- Hostnames (`*.com`, `*.org`, etc.) → `host-{n}.internal`
-
-Custom patterns can be added for project-specific needs. All output also passes through `redactSensitive()` as a safety net to catch any remaining credentials.
-
-Consistency mode ensures the same input always maps to the same output within a single anonymization call, making it easier to track data relationships.
-
-## Rate Limiting
-
-Several tools implement rate limiting to prevent runaway API calls and resource exhaustion:
-
-- `sidekick_black_box`: 5 captures per day, 7-day TTL, maximum 3 active incidents
-- `sidekick_evolve`: 10 proposals per day
-
-All tools have a default 30-second timeout (60 seconds for complex tools like `black_box` and `timeline`). Output is truncated at 1MB to prevent memory issues.
-
-## Secret Storage
-
-`sidekick_secret` encrypts stored credentials with AES-256-GCM. It requires `SIDEKICK_SECRET_KEY`; without that variable, secret operations fail. The encrypted store is `secrets.enc`.
-
-The GitHub integration currently reads `github_token` from KV storage, not from the encrypted secret store. If using GitHub automation, consider the exposure implications of storing that token in KV.
-
-## Recommended Hardening
-
-- Change `SIDEKICK_API_KEY` immediately.
-- Keep the agent bridge on loopback.
-- Restrict ports 4097 and 4098 with a firewall, VPN, or reverse proxy ACL.
-- Enable dashboard Basic auth.
-- Use both MCP and dashboard IP allowlists where possible.
-- Run Sidekick as an unprivileged user.
-- Limit sudoers rules to specific required systemctl and journalctl commands.
-- Back up `SIDEKICK_DATA_DIR` before enabling automated operations.
-- Avoid using `sidekick_bash` for actions that have safer specialized tools.
+1. Bind services to a private interface or firewall them to VPN-only access.
+2. Use a strong `SIDEKICK_API_KEY`.
+3. Enable dashboard auth if dashboard is reachable by browser clients.
+4. Keep the Agent Bridge private; access it through the dashboard proxy only.
+5. Use HTTPS if crossing an untrusted network.
+6. Back up the data directory but protect backups because they can contain sensitive operational history.

@@ -1,141 +1,73 @@
-# Development Guide
+# Development
 
-## Project Structure
+## Project structure
 
-```text
-sidekick-main/
-  src/
-    index.js       MCP server and tool registration
-    tools.js       Tool implementations, state helpers, and tool metadata
-    dashboard.js   Dashboard web app and API
-    agent.js       Autonomous agent bridge
-    redact.js      Sensitive-data redaction helpers
-  scripts/
-    bootstrap.sh   VM bootstrap script (creates user, installs Node.js, etc.)
-  systemd/
-    sidekick-mcp.service       MCP server systemd unit
-    sidekick-dashboard.service Dashboard systemd unit
-    sidekick-agent.service     Agent bridge systemd unit
-    sidekick-sudoers           Sudoers config for sidekick user
-  test/
-    *.test.js      Node-based test files
-    run-all.js     Test runner
-  data/
-    .gitkeep       Placeholder for runtime data directory
-  .opencode/
-    agents/
-      sidekick.md  opencode subagent definition
-  package.json
-  deploy.sh
-  deploy.ps1
-```
+| Path | Purpose |
+|---|---|
+| `src/index.js` | MCP server, auth, sessions, Streamable HTTP, legacy SSE, health endpoint. |
+| `src/tools.js` | Tool implementations, tool definitions, dispatcher, persistence helpers. |
+| `src/dashboard.js` | Dashboard web UI and API. |
+| `src/agent.js` | Autonomous Agent Bridge, task loop, streaming, delays, watches. |
+| `src/env.js` | Environment loading. |
+| `src/redact.js` | Sensitive output redaction. |
+| `docs/` | Existing documentation in the source tree. |
+| `systemd/` | Service units and sudoers snippet. |
+| `scripts/bootstrap.sh` | Remote bootstrap helper used by deploy scripts. |
+| `deploy.sh` | Linux/macOS deploy script. |
+| `deploy.ps1` | Windows PowerShell deploy script. |
+| `test/` | Node.js test suites. |
 
-## Code Organization
-
-### `src/index.js`
-
-Responsibilities:
-
-- Build the MCP server.
-- Define Zod schemas for tools.
-- Register built-in tools from `TOOL_DEFS`.
-- Register learned procedures from `procedures.json`.
-- Manage MCP streamable HTTP sessions.
-- Serve `/health`, `/mcp`, `/sse`, and `/messages`.
-- Enforce MCP API key and optional IP allowlist.
-
-### `src/tools.js`
-
-Responsibilities:
-
-- Implement all built-in Sidekick tools.
-- Manage file-backed persistent state.
-- Log tool calls.
-- Migrate legacy KV data.
-- Dispatch internal tool calls with `callTool()`.
-- Export metadata for MCP registration and the agent prompt.
-
-### `src/dashboard.js`
-
-Responsibilities:
-
-- Serve the dashboard UI.
-- Implement dashboard APIs.
-- Enforce dashboard rate limits, size limits, CSRF origin checks, optional Basic auth, and optional IP allowlist.
-- Seed system KV data.
-- Proxy agent bridge APIs.
-- Store webhooks and dashboard error logs.
-
-### `src/agent.js`
-
-Responsibilities:
-
-- Run autonomous task loops.
-- Select Groq or Ollama as the LLM backend.
-- Stream task events through SSE.
-- Save conversation transcripts.
-- Suggest reusable procedures from task transcripts.
-- Schedule one-shot delays and watches.
-
-### `src/redact.js`
-
-Responsibilities:
-
-- Remove common credentials and tokens from tool output and logs.
-
-## Adding a Built-In Tool
-
-To add a built-in tool:
-
-1. Implement an async function in `src/tools.js`.
-2. Add the function to the `TOOLS` export map.
-3. Add metadata to `TOOL_DEFS`.
-4. Add a Zod schema to `TOOL_SCHEMAS` in `src/index.js`.
-5. Add tests under `test/`.
-6. Restart the MCP server.
-
-For the complete guide with code templates and conventions, see [tool-creation.md](tool-creation.md).
-
-Use `redactSensitive()` on any output that may include command output, HTTP responses, file content, logs, or user-provided text.
-
-## Adding a Learned Procedure
-
-Use `sidekick_teach` with action `teach_procedure`. A procedure contains:
-
-- `name`: procedure identifier.
-- `description`: human-readable description.
-- `parameters`: optional schema object.
-- `steps`: array of Sidekick tool calls.
-- `trigger_phrases`: optional phrases for future matching.
-
-After restart, the MCP server registers it as `sidekick_<name>`.
-
-## Testing
-
-The `test/` directory includes tests for:
-
-- Dashboard APIs.
-- Integration behavior.
-- KV migration.
-- New tool behavior.
-- Security behavior.
-- Core tools.
-
-The package does not define an npm `test` script in `package.json`; use the test runner directly if dependencies are installed:
+## npm scripts
 
 ```bash
-node test/run-all.js
+npm start          # node src/index.js
+npm run dashboard  # node src/dashboard.js
+npm run agent      # node src/agent.js
 ```
 
-## Implementation Notes and Review Items
+The test runner is `node test/run-all.js`.
 
-These are observations from the code that are useful for maintainers:
+## Test coverage in this tree
 
-- The dashboard and tools share JSON files without explicit file locking. Concurrent writes can race under heavy usage.
-- The MCP session store is in memory and resets on process restart.
-- The `OLLAMA_URL` variable is exported but the implemented Ollama calls use hard-coded `127.0.0.1:11434` values.
-- The email branch of `sidekick_notify` uses `https.request()` rather than a conventional SMTP transport and should be tested before production use.
-- Several tools execute shell commands through `execSync()`. The specific safety level varies by tool.
-- `sidekick_process` constructs some commands with pipes by joining an array into a shell command string.
-- Learned procedure tools require an MCP restart before they appear in the tool registry.
-- Delay and watch scheduling are in memory and depend on the agent bridge being alive.
+The supplied tests cover:
+
+- redaction, authentication, and dangerous command handling;
+- deployment script structure;
+- KV migration behavior;
+- core tools and project metadata;
+- dashboard API behavior;
+- integration workflow for storage and project lookups.
+
+Some future test suites are listed in `test/run-all.js` but not implemented in the supplied tree.
+
+## Adding a tool
+
+A normal tool addition requires changes in two places:
+
+1. Add an async handler function in `src/tools.js`.
+2. Add the handler to the `TOOLS` map.
+3. Add a user-facing entry to `TOOL_DEFS`.
+4. Add a Zod schema in `TOOL_SCHEMAS` in `src/index.js` so MCP clients know the input shape.
+5. Add tests for success and failure cases.
+6. Update documentation.
+
+Tool handlers should return MCP-style content:
+
+```js
+return { content: [{ type: "text", text: "result text" }] };
+```
+
+For errors:
+
+```js
+return { content: [{ type: "text", text: "error text" }], isError: true };
+```
+
+## Implementation notes
+
+- Keep command construction safe. Prefer `execFileSync` or explicit argument escaping when possible.
+- Redact returned and logged output when it may contain secrets.
+- Keep output small. Add summaries, filters, or limits for large data.
+- Store persistent state in the configured data directory, not in the source tree.
+- Avoid undocumented environment variables; add them to `.env.example` and `configuration.md`.
+- Keep dashboard endpoints consistent with audit logging and CSRF checks when mutating state.

@@ -1,84 +1,36 @@
 # Agent Bridge
 
-The agent bridge is implemented in `src/agent.js` and listens on `127.0.0.1:<SIDEKICK_AGENT_PORT>`, default `127.0.0.1:4099`.
+The Agent Bridge is implemented in `src/agent.js` and defaults to port 4099. It runs autonomous tasks outside the main opencode session.
 
 ## Purpose
 
-The bridge turns a user goal into an autonomous tool-using loop. It is designed to run independently from an opencode session and is normally accessed through the dashboard.
+The MCP server is reactive: a client calls a tool and receives a result. The Agent Bridge is task-oriented: the user submits a goal, Sidekick plans tool use, executes tools, records the transcript, and streams progress.
 
-## Task Lifecycle
+## Task lifecycle
 
-1. A client posts `{ "goal": "..." }` to `/api/agent/run`.
-2. The bridge creates an eight-character task ID from a UUID and returns it.
-3. The bridge starts `runAgent(goal, taskId)` asynchronously.
-4. A client connects to `/api/agent/stream/:taskId` for Server-Sent Events.
-5. The agent calls the configured LLM repeatedly until the task is done, an error occurs, or `SIDEKICK_MAX_ITERATIONS` is reached.
-6. The transcript is saved to `data/conversations/<taskId>.json`.
-7. If possible, the bridge analyzes whether the tool sequence should become a reusable procedure.
+1. A client submits a task to `POST /api/agent/run`.
+2. The bridge creates a task ID and transcript file.
+3. The agent loops until the goal is complete, fails, or reaches `SIDEKICK_MAX_ITERATIONS`.
+4. Each tool call goes through `callTool` from `src/tools.js`.
+5. Progress is emitted as Server-Sent Events through `/api/agent/stream/:taskId`.
+6. Completed task history is available through `/api/agent/history` and `/api/agent/run/:id`.
 
-## LLM Selection
+## LLM behavior
 
-The bridge uses Groq when `GROQ_API_KEY` is set. Otherwise, it calls local Ollama at `127.0.0.1:11434` with model `phi3:mini`.
+The agent can use Groq when `GROQ_API_KEY` is configured and can fall back to local Ollama through `OLLAMA_URL`. The exact behavior depends on environment and implemented provider selection in `agent.js`.
 
-Groq calls use:
+## Conversation retention
 
-- `GROQ_MODEL`, default `llama-3.1-8b-instant`.
-- Temperature `0.3` for agent decisions.
-- Retry behavior for HTTP 429 responses.
+Task transcripts are stored under `data/conversations/`. On startup, the Agent Bridge deletes transcript files older than 30 days.
 
-## Decision Protocol
+## Delays
 
-The agent system prompt instructs the LLM to emit raw JSON in one of three forms:
+`sidekick_delay` stores one-shot scheduled jobs. The Agent Bridge loads pending delays at startup, creates timers, executes them at the scheduled time through `callTool`, and updates their status to completed or failed.
 
-```json
-{ "think": "reasoning text" }
-```
+## Watches
 
-```json
-{ "tool": "sidekick_tool_name", "arguments": { "key": "value" } }
-```
+`sidekick_watch` stores recurring watches. The Agent Bridge loads active watches at startup and checks them on intervals. Watch sources include services, processes, endpoints, and files. If a watch condition triggers, it can call another Sidekick tool with templated values such as source, target, status, and time.
 
-```json
-{ "done": true, "result": "final answer" }
-```
+## Safety limits
 
-The bridge parses the first valid JSON object from the model response. If no JSON is found, it treats the response as a thought.
-
-## Safeguards
-
-The bridge includes several execution controls:
-
-- `SIDEKICK_MAX_ITERATIONS` limits loop length.
-- Repeated identical tool calls are blocked if the same tool and arguments were used recently.
-- Hallucinated tool calls in thought text are detected with simple pattern checks and corrected by prompting the LLM to issue an actual tool call.
-- Tool outputs added to model history are truncated.
-- Conversation transcripts are pruned at startup if older than 30 days.
-
-## Delays and Watches
-
-The agent bridge also schedules pending one-shot delays and active watches:
-
-- `delays.json` is loaded at startup and pending entries are scheduled with `setTimeout()`.
-- `watches.json` is loaded at startup and active watches are scheduled with `setInterval()`.
-- `/api/delays/reload` reloads delay schedules.
-- `/api/watches/reload` clears existing watch intervals and reloads active watches.
-
-Because these timers are in memory, they depend on the bridge process being alive.
-
-## Procedure Suggestion
-
-After a task completes, the bridge may analyze the tool-call transcript. If the task used at least three tool calls and Groq is configured, it asks the LLM whether the sequence is reusable.
-
-If the LLM returns a valid save recommendation, the bridge calls `sidekick_teach` with action `teach_procedure`. The procedure becomes available as `sidekick_<name>` after the MCP server restarts.
-
-## Agent API
-
-| Method | Path | Description |
-|---|---|---|
-| POST | `/api/agent/run` | Start a task. Body must include `goal`. Returns `taskId`. |
-| GET | `/api/agent/stream/:taskId` | Stream task events as Server-Sent Events. |
-| GET | `/api/agent/history` | Return the 20 most recent saved transcripts. |
-| GET | `/api/agent/run/:id` | Return a saved transcript by ID. |
-| GET | `/api/health` | Return `{ "ok": true }`. |
-| POST | `/api/delays/reload` | Reload delay timers from storage. |
-| POST | `/api/watches/reload` | Reload watch intervals from storage. |
+The main safety control is `SIDEKICK_MAX_ITERATIONS`, which defaults to 15. Tool-level safety still applies: dangerous shell commands are blocked by pattern checks, output redaction is applied, and tools return structured errors.

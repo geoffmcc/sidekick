@@ -1,100 +1,71 @@
-# Data Model and Persistent Storage
+# Data Model
 
-Sidekick stores operational state under `SIDEKICK_DATA_DIR`. By default this is the repository `data` directory.
+Sidekick stores persistent state as JSON and JSONL files under `SIDEKICK_DATA_DIR`.
 
-## Storage Files
+## Important files
 
-| Path | Owner | Purpose |
-|---|---|---|
-| `kvstore.json` | tools, dashboard | Persistent key-value storage with project/source/timestamp metadata. |
-| `log.jsonl` | tools | Append-only tool call log, capped to the most recent 1000 entries. |
-| `cron.json` | `sidekick_cron` | Recurring task definitions that are synced to crontab. |
-| `webhooks.json` | dashboard, `sidekick_webhook` | Stored webhook payloads. |
-| `context.json` | `sidekick_context`, `sidekick_predict` | Projects, decisions, problems, patterns, and sessions. |
-| `procedures.json` | `sidekick_teach`, MCP startup | Learned procedures and dynamic tool definitions. |
-| `health_history.json` | `sidekick_health` | Historical health scores. |
-| `delays.json` | `sidekick_delay`, agent bridge | One-shot scheduled tool calls. |
-| `snapshots/` | `sidekick_snapshot` | Captured system state snapshots. |
-| `watches.json` | `sidekick_watch`, agent bridge | Active and paused monitoring rules. |
-| `secrets.enc` | `sidekick_secret` | Encrypted credential store. |
-| `queue.json` | `sidekick_queue` | Persistent task queue. |
-| `evolve.json` | `sidekick_evolve` | Proposed system improvements and analysis metadata. |
-| `orchestrate.json` | `sidekick_orchestrate` | Multi-step task graph records. |
-| `predict.json` | `sidekick_predict` | Predictions and prediction feedback. |
-| `anonymize_patterns.json` | `sidekick_anonymize` | Custom anonymization patterns. |
-| `sandbox.json` | `sidekick_sandbox` | Active sandbox metadata. |
-| `sandboxes/` | `sidekick_sandbox` | File backups for sandboxes. |
-| `circuits.json` | `sidekick_circuit` | Circuit breaker states. |
-| `baselines.json` | `sidekick_baseline` | Metric baselines and data points. |
-| `runbooks.json` | `sidekick_runbook` | Runbook definitions and instances. |
-| `blackbox.json` | `sidekick_black_box` | Incident metadata. |
-| `blackbox/` | `sidekick_black_box` | Incident data files. |
-| `conversations/*.json` | agent bridge | Saved autonomous agent task transcripts. |
-| `audit.jsonl` | dashboard | State-changing dashboard operation audit log. |
-| `dashboard-errors.log` | dashboard | Frontend/API error log. |
+| File or directory | Purpose |
+|---|---|
+| `kvstore.json` | Persistent key-value memory. Supports legacy string values and metadata objects. |
+| `log.jsonl` | Tool call log. Each line is a JSON object. Trimmed to the newest 1000 entries by `logToolCall`. |
+| `audit.jsonl` | Dashboard audit events for mutating API actions. |
+| `dashboard-errors.log` | Frontend or dashboard error reports. |
+| `cron.json` | Sidekick-managed cron metadata. |
+| `webhooks.json` | Stored webhook payloads received through dashboard API. |
+| `context.json` | Structured project context, decisions, problems, patterns, sessions, and related data. |
+| `procedures.json` | Learned procedures used by `sidekick_teach`. |
+| `conversations/` | Agent task transcripts. Files older than 30 days are removed on Agent Bridge startup. |
+| Additional tool files | Snapshots, queues, caches, baselines, circuits, runbooks, black-box captures, and other feature state may be stored by their matching tools. |
 
-## KV Store Format
+## KV schema
 
-The current KV format stores metadata with every value:
+Legacy form:
 
 ```json
 {
-  "example:key": {
-    "value": "stored value",
-    "project": "system",
+  "some_key": "some value"
+}
+```
+
+Current metadata form:
+
+```json
+{
+  "some_key": {
+    "value": "some value",
+    "project": "sidekick",
+    "category": "config",
     "source": "mcp",
-    "created": "2026-06-11T00:00:00.000Z",
-    "updated": "2026-06-11T00:00:00.000Z"
+    "created": "2026-06-13T00:00:00.000Z",
+    "updated": "2026-06-13T00:00:00.000Z"
   }
 }
 ```
 
-The migration code accepts legacy entries where a key maps directly to a string. During startup, strings are converted to metadata objects. Some key prefixes are automatically assigned to project `system`, and selected legacy keys are assigned to project `proxmox_backup`.
+`sidekick_get` returns only the stored value for backward compatibility. `sidekick_get_by_project` returns key/value pairs for matching project metadata.
 
-## Tool Call Log Format
+## KV migration
 
-`log.jsonl` stores one JSON object per line:
+On load, `migrateKV` converts simple string entries to metadata objects. Some historical key prefixes are mapped to project names such as `system` or `proxmox_backup`. Existing object entries with a `value` field are preserved.
+
+## Tool log schema
+
+`logToolCall` writes JSONL entries with fields similar to:
 
 ```json
 {
-  "t": "ISO timestamp",
-  "n": "tool name",
-  "a": "formatted arguments",
-  "d": 42,
+  "t": "timestamp",
+  "n": "tool_name",
+  "a": "formatted redacted args",
+  "d": 12,
   "ok": true,
-  "s": "summary",
+  "s": "redacted summary",
   "src": "mcp"
 }
 ```
 
-Arguments and summaries are redacted before they are logged. The log is trimmed to the newest 1000 lines.
+The logger truncates argument and summary fields and redacts sensitive strings before writing.
 
-## Conversation Transcript Format
+## Backup guidance
 
-Agent transcripts are stored as JSON files named by task ID. The object includes:
-
-- `goal`: original task goal.
-- `steps`: thoughts, tool calls, results, errors, and done events.
-- `status`: currently written as `completed` by the bridge.
-- `t`: timestamp.
-
-At agent startup, transcripts older than 30 days are deleted.
-
-## Secret Store
-
-`secrets.enc` is written by `sidekick_secret`. The implementation uses AES-256-GCM and derives the encryption key from `SIDEKICK_SECRET_KEY`. Secret listing returns secret names rather than decrypted values.
-
-## Backup Guidance
-
-For backups, include the entire `SIDEKICK_DATA_DIR`. At minimum, preserve:
-
-- `kvstore.json`
-- `context.json`
-- `procedures.json`
-- `secrets.enc` plus the external `SIDEKICK_SECRET_KEY`
-- `cron.json`
-- `watches.json`
-- `delays.json`
-- `snapshots/`
-
-Without `SIDEKICK_SECRET_KEY`, encrypted secrets cannot be recovered from `secrets.enc`.
+Back up the entire data directory. The highest-value files are `kvstore.json`, `context.json`, `procedures.json`, `webhooks.json` if used, and `conversations/` if task transcripts matter. Logs and caches are usually lower value.
