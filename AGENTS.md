@@ -27,6 +27,12 @@ Debug the dashboard service. First, check for recent debug findings: sidekick_de
 - Set `redact=false` only if you need to store sensitive data that shouldn't be redacted
 - Findings persist for 7 days, then get flagged for cleanup
 
+## Tool Creation Protocol
+
+Before creating any new tool or tool suite:
+1. Recall from KV store: `sidekick_get key="tool_making_guide" project="sidekick"`
+2. If not available, read `docs/tool-creation.md` and store it in KV for next time
+
 ## Tools (70 total)
 
 ### Core Tools (11)

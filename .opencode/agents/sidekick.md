@@ -99,3 +99,9 @@ When debugging issues:
 - Avoid re-reading the same files multiple times
 - Store intermediate results in the debug cache to reduce opencode API calls
 - Use `sidekick_cache` for values needed 2+ times in a session
+
+## Tool creation protocol
+
+Before creating any new tool or tool suite:
+1. Recall from KV store: `sidekick_get key="tool_making_guide" project="sidekick"`
+2. If not available, read `docs/tool-creation.md` and store it in KV for next time
