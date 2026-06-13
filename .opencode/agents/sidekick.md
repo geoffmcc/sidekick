@@ -91,3 +91,11 @@ Use sidekick tools when the main AI (opencode) needs to:
 - Interact with GitHub API
 - Manage persistent context across sessions
 - Extend sidekick's own capabilities
+
+## Debugging best practices
+
+When debugging issues:
+- **MUST use `sidekick_debug_tool`** to cache file contents, hypotheses, and findings
+- Avoid re-reading the same files multiple times
+- Store intermediate results in the debug cache to reduce opencode API calls
+- Use `sidekick_cache` for values needed 2+ times in a session
