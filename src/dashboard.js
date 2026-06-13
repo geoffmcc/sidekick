@@ -1601,7 +1601,7 @@ function renderTools(){
     for (const t of tools) {
       const stats = toolStats[t.name];
       const hasStats = stats && stats.count > 0;
-      html += '<div class="tool-card" onclick="showToolDetail(\'' + esc(t.name) + '\')">';
+      html += '<div class="tool-card" onclick="showToolDetail(\\\\'' + esc(t.name) + '\\\\')">';
       html += '<div class="tool-card-name">' + esc(t.name) + '</div>';
       html += '<div class="tool-card-desc">' + esc(t.description) + '</div>';
       if (hasStats) {
@@ -1629,7 +1629,7 @@ function showToolDetail(name){
   const catInfo = TOOL_CATEGORIES[cat] || { icon: 'fa-wrench' };
   const stats = toolStats[name];
   const hasStats = stats && stats.count > 0;
-  let html = '<div class="tool-detail-overlay active" onclick="if(event.target===this)this.classList.remove(\'active\')">';
+  let html = '<div class="tool-detail-overlay active" onclick="if(event.target===this)this.classList.remove(\\\\'active\\\\')">';
   html += '<div class="tool-detail">';
   html += '<h3><i class="fas ' + catInfo.icon + '" style="margin-right:8px"></i>' + esc(t.name) + '</h3>';
   html += '<div class="td-desc">' + esc(t.description) + '</div>';
@@ -1654,7 +1654,7 @@ function showToolDetail(name){
     }
     html += '</div></div>';
   }
-  html += '<div style="margin-top:16px;text-align:right"><button class="btn btn-outline" onclick="this.closest(\'.tool-detail-overlay\').classList.remove(\'active\')">Close</button></div>';
+  html += '<div style="margin-top:16px;text-align:right"><button class="btn btn-outline" onclick="this.closest(\\\\'.tool-detail-overlay\\\\').classList.remove(\\\\'active\\\\')">Close</button></div>';
   html += '</div></div>';
   const existing = document.querySelector('.tool-detail-overlay');
   if (existing) existing.remove();
