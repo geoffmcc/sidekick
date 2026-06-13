@@ -6,6 +6,27 @@ A remote agent system. Connect via the sidekick MCP server at `YOUR_REMOTE_IP:40
 
 Always use the `task` tool with `subagent_type: "sidekick"` when interacting with sidekick. Do not use direct MCP tools (`sidekick_bash`, `sidekick_read`, etc.) — use the task tool so the user can see the full conversation. 100% of the time, no exceptions.
 
+## Debugging Best Practices
+
+When delegating debugging tasks to the sidekick task agent, include this instruction in the prompt:
+
+```
+"First, check for recent debug findings: sidekick_debug_tool action='recall' service='<service_name>'"
+```
+
+This surfaces past investigation findings before starting new work, avoiding redundant investigation.
+
+**Example task prompt:**
+```
+Debug the dashboard service. First, check for recent debug findings: sidekick_debug_tool action='recall' service='dashboard'. Then investigate the issue, storing key findings with sidekick_debug_tool action='store' service='dashboard' issue='<description>'.
+```
+
+**When storing findings:**
+- Use `service` parameter to identify the component (e.g., "dashboard", "mcp", "agent")
+- Use `issue` parameter for a short description (e.g., "auth_blocking", "connection_timeout")
+- Set `redact=false` only if you need to store sensitive data that shouldn't be redacted
+- Findings persist for 7 days, then get flagged for cleanup
+
 ## Tools (70 total)
 
 ### Core Tools (11)
@@ -65,7 +86,7 @@ Always use the `task` tool with `subagent_type: "sidekick"` when interacting wit
 | `sidekick_evolve` | Self-modification with safety: analyze patterns, propose improvements, test and approve changes |
 | `sidekick_orchestrate` | Multi-agent coordination: create task graphs, execute subtasks with dependencies |
 | `sidekick_predict` | Anticipatory intelligence: analyze patterns, predict needs, track prediction usefulness |
-| `sidekick_debug_tool` | Structured debugging cache: store file contents, hypotheses, and findings during debug sessions to avoid redundant reads |
+| `sidekick_debug_tool` | Persistent debugging cache: store findings with `action="store"`, recall past investigations with `action="recall"`, cleanup old entries with `action="cleanup"`. Cross-session persistence via KV store. |
 | `sidekick_fresheyes` | Get a fresh perspective from Sidekick's LLM (Grok) on a problem. Sends sanitized context for independent analysis |
 | `sidekick_batch` | Execute multiple tool calls in one request to reduce API round-trips (max 20 per batch) |
 | `sidekick_cache` | Session-scoped caching to avoid redundant operations. Store and retrieve values with TTL |
@@ -191,7 +212,7 @@ All tool calls are logged with source tags:
 - **`sidekick_extract`** — Parse JSON/YAML/INI/XML and extract specific fields by path. Returns only what you need.
 
 ### New Tools (v1.16) - Debugging & Analysis
-- **`sidekick_debug_tool`** — Structured debugging cache: store file contents, hypotheses, and findings during debug sessions to avoid redundant reads. Session-based with 8-hour TTL, supports multiple concurrent sessions.
+- **`sidekick_debug_tool`** — Persistent debugging cache: store findings with `action="store"`, recall past investigations with `action="recall"`, cleanup old entries with `action="cleanup"`. Cross-session persistence via KV store with 7-day retention. Optional `redact=false` to bypass redaction.
 - **`sidekick_fresheyes`** — Get a fresh perspective from Sidekick's LLM (Grok) on a problem. Sends sanitized context for independent analysis, returns key insights by default.
 
 ### New Tools (v1.15) - Meta-Capabilities

@@ -243,6 +243,22 @@ const TOOL_SCHEMAS = {
     id: z.string().optional().describe("Prediction ID (for feedback)"),
     feedback: z.boolean().optional().describe("True if prediction was useful, false if not (for feedback)")
   }),
+  sidekick_debug_tool: z.object({
+    action: z.enum(["store", "recall", "cleanup", "start", "stop", "cache", "get", "status", "clear"]).describe("Debug action"),
+    session_name: z.string().optional().describe("Session identifier (for legacy session actions)"),
+    key: z.string().optional().describe("Cache key (for get/cache) or debug key (for cleanup)"),
+    value: z.string().optional().describe("Value to cache/store"),
+    service: z.string().optional().describe("Service name (for store/recall)"),
+    issue: z.string().optional().describe("Issue description (for store)"),
+    redact: z.boolean().optional().describe("Default true - set false to skip redaction")
+  }),
+  sidekick_fresheyes: z.object({
+    problem: z.string().describe("Problem description"),
+    context: z.string().optional().describe("Relevant context"),
+    files: z.array(z.string()).optional().describe("Files analyzed"),
+    hypotheses: z.array(z.string()).optional().describe("Current hypotheses"),
+    full_response: z.boolean().optional().describe("Return full response vs key insights")
+  }),
   sidekick_batch: z.object({
     calls: z.array(z.object({
       tool: z.string().describe("Tool name to call"),

@@ -3932,9 +3932,10 @@ async function sidekick_predict({ action, id, feedback, useful }) {
   return { content: [{ type: "text", text: "Unknown action. Use: analyze, list, feedback, suggest" }], isError: true };
 }
 
-// Debug tool implementation
+// Debug tool implementation - uses persistent KV store for cross-session debugging
 const DEBUG_SESSIONS = {};
-const DEBUG_TTL_MS = 8 * 60 * 60 * 1000; // 8 hours
+const DEBUG_TTL_MS = 8 * 60 * 60 * 1000; // 8 hours (for in-memory sessions)
+const DEBUG_RETENTION_DAYS = 7; // For persistent storage
 
 function loadDebugSessions() {
   const now = Date.now();
@@ -3945,9 +3946,140 @@ function loadDebugSessions() {
   }
 }
 
-async function sidekick_debug_tool({ action, session_name, key, value }) {
+function generateDebugKey(service, issue) {
+  const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const slug = (issue || 'general').toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 30);
+  return `debug:${service || 'unknown'}:${slug}_${date}`;
+}
+
+function getDebugEntries() {
+  const entries = [];
+  for (const [key, entry] of Object.entries(kvStore)) {
+    if (key.startsWith('debug:') && typeof entry === 'object' && entry !== null && 'value' in entry) {
+      entries.push({ key, ...entry });
+    }
+  }
+  return entries.sort((a, b) => new Date(b.updated) - new Date(a.updated));
+}
+
+function isOlderThan7Days(dateStr) {
+  const entryDate = new Date(dateStr);
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - DEBUG_RETENTION_DAYS);
+  return entryDate < cutoff;
+}
+
+async function sidekick_debug_tool({ action, session_name, key, value, service, issue, redact }) {
   loadDebugSessions();
   const now = Date.now();
+  const shouldRedact = redact !== false; // Default to true
+  
+  // --- Persistent storage actions (new) ---
+  
+  if (action === "store") {
+    if (!service) {
+      return { content: [{ type: "text", text: "service parameter required" }], isError: true };
+    }
+    if (!value) {
+      return { content: [{ type: "text", text: "value parameter required" }], isError: true };
+    }
+    
+    const debugKey = generateDebugKey(service, issue);
+    const nowISO = new Date().toISOString();
+    
+    const storedValue = shouldRedact ? redactSensitive(value) : value;
+    
+    kvStore[debugKey] = {
+      value: storedValue,
+      project: "debug",
+      category: "debug",
+      source: currentSource,
+      created: nowISO,
+      updated: nowISO,
+      service: service,
+      issue: issue || "general"
+    };
+    
+    saveKV();
+    return { content: [{ type: "text", text: `Stored debug finding: ${debugKey} (${storedValue.length} chars)` }] };
+  }
+  
+  if (action === "recall") {
+    const entries = getDebugEntries();
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - DEBUG_RETENTION_DAYS);
+    
+    const recent = entries.filter(e => !isOlderThan7Days(e.updated));
+    const old = entries.filter(e => isOlderThan7Days(e.updated));
+    
+    // Filter by service if provided
+    const filtered = service 
+      ? recent.filter(e => e.service === service)
+      : recent;
+    
+    if (filtered.length === 0) {
+      let msg = "No recent debug findings";
+      if (service) msg += ` for service: ${service}`;
+      return { content: [{ type: "text", text: msg }] };
+    }
+    
+    let result = `# Debug Findings (last ${DEBUG_RETENTION_DAYS} days)\n\n`;
+    result += filtered.map(e => {
+      const age = Math.round((now - new Date(e.updated)) / 1000 / 60 / 60);
+      return `## ${e.key}\n- Service: ${e.service}\n- Issue: ${e.issue}\n- Updated: ${age}h ago\n- Value: ${e.value}\n`;
+    }).join("\n");
+    
+    if (old.length > 0) {
+      result += `\n---\n**Note:** Found ${old.length} debug entries older than ${DEBUG_RETENTION_DAYS} days. Run cleanup with: sidekick_debug_tool action="cleanup"`;
+    }
+    
+    return { content: [{ type: "text", text: result }] };
+  }
+  
+  if (action === "cleanup") {
+    // If key parameter provided, delete that specific entry (regardless of age)
+    if (key && key !== "all") {
+      if (kvStore[key] && key.startsWith('debug:')) {
+        delete kvStore[key];
+        saveKV();
+        return { content: [{ type: "text", text: `Deleted: ${key}` }] };
+      }
+      return { content: [{ type: "text", text: `Key not found or not a debug entry: ${key}` }], isError: true };
+    }
+    
+    const entries = getDebugEntries();
+    const old = entries.filter(e => isOlderThan7Days(e.updated));
+    
+    if (old.length === 0) {
+      return { content: [{ type: "text", text: "No debug entries older than " + DEBUG_RETENTION_DAYS + " days" }] };
+    }
+    
+    // List old entries for review
+    let result = `# Debug Entries Older Than ${DEBUG_RETENTION_DAYS} Days\n\n`;
+    result += old.map(e => {
+      const age = Math.round((now - new Date(e.updated)) / 1000 / 60 / 60 / 24);
+      return `- **${e.key}** (${age} days old)\n  - Service: ${e.service}, Issue: ${e.issue}\n  - Delete with: sidekick_debug_tool action="cleanup" key="${e.key}"`;
+    }).join("\n\n");
+    
+    result += `\n\nTo delete all old entries, use: sidekick_debug_tool action="cleanup" key="all"`;
+    
+    return { content: [{ type: "text", text: result }] };
+  }
+  
+  // Special case: delete all old entries
+  if (action === "cleanup" && key === "all") {
+    const entries = getDebugEntries();
+    const old = entries.filter(e => isOlderThan7Days(e.updated));
+    let deleted = 0;
+    for (const e of old) {
+      delete kvStore[e.key];
+      deleted++;
+    }
+    saveKV();
+    return { content: [{ type: "text", text: `Deleted ${deleted} old debug entries` }] };
+  }
+  
+  // --- Legacy in-memory session actions (backward compatibility) ---
   
   if (action === "start") {
     const sessionId = session_name || `debug_${Date.now()}`;
@@ -3956,7 +4088,7 @@ async function sidekick_debug_tool({ action, session_name, key, value }) {
       cache: {},
       name: session_name || sessionId
     };
-    return { content: [{ type: "text", text: `Debug session started: ${sessionId}\nTTL: 8 hours` }] };
+    return { content: [{ type: "text", text: `Debug session started: ${sessionId}\nTTL: 8 hours\n\nNote: For cross-session persistence, use action="store" instead.` }] };
   }
   
   if (action === "stop") {
@@ -4027,7 +4159,7 @@ async function sidekick_debug_tool({ action, session_name, key, value }) {
     }
   }
   
-  return { content: [{ type: "text", text: "Unknown action. Use: start, stop, cache, get, status, clear" }], isError: true };
+  return { content: [{ type: "text", text: "Unknown action. Use: store, recall, cleanup (persistent) or start, stop, cache, get, status, clear (session)" }], isError: true };
 }
 
 // FreshEyes tool implementation
@@ -6925,7 +7057,7 @@ const TOOL_DEFS = [
   { name: "sidekick_evolve", description: "Self-modification with safety: analyze patterns, propose improvements, test and approve changes", args: { action: "string (analyze|propose|list|test|approve|reject)", id: "string (optional, proposal id for test/approve/reject)", proposal: "string (optional, proposal description for propose)", approve: "boolean (optional, deprecated - use action=approve)", test: "boolean (optional, deprecated - use action=test)" } },
   { name: "sidekick_orchestrate", description: "Multi-agent coordination: create task graphs, execute subtasks with dependencies, track progress", args: { action: "string (create|execute|list|status|cancel)", id: "number (optional, task id for execute/status/cancel)", task_name: "string (optional, task name for create)", subtasks: "array (optional, subtask definitions for create)", dependencies: "object (optional, dependency map for create)", timeout: "number (optional, timeout in ms, default 1800000)" } },
   { name: "sidekick_predict", description: "Anticipatory intelligence: analyze patterns, predict needs, track prediction usefulness", args: { action: "string (analyze|list|feedback|suggest)", id: "string (optional, prediction id for feedback)", feedback: "boolean (optional, true if useful, false if not)" } },
-  { name: "sidekick_debug_tool", description: "Structured debugging cache: store file contents, hypotheses, and findings during debug sessions to avoid redundant reads", args: { action: "string (start|stop|cache|get|status|clear)", session_name: "string (optional, session identifier)", key: "string (optional, cache key for get/cache)", value: "string (optional, value to cache)" } },
+  { name: "sidekick_debug_tool", description: "Structured debugging cache with persistent storage for cross-session debugging. Store findings, recall past investigations, cleanup old entries.", args: { action: "string (store|recall|cleanup|start|stop|cache|get|status|clear)", session_name: "string (optional, session identifier for legacy actions)", key: "string (optional, cache key for get/cache, or debug key for cleanup)", value: "string (optional, value to cache/store)", service: "string (optional, service name for store/recall)", issue: "string (optional, issue description for store)", redact: "boolean (optional, default true - set false to skip redaction)" } },
   { name: "sidekick_fresheyes", description: "Get a fresh perspective from Sidekick's LLM (Grok) on a problem. Sends sanitized context for independent analysis", args: { problem: "string (problem description)", context: "string (optional, relevant context)", files: "array (optional, files analyzed)", hypotheses: "array (optional, current hypotheses)", full_response: "boolean (optional, return full response vs key insights)" } },
   { name: "sidekick_batch", description: "Execute multiple tool calls in one request to reduce API round-trips. Max 20 calls per batch.", args: { calls: "array (array of { tool: string, args: object })" } },
   { name: "sidekick_cache", description: "Session-scoped caching to avoid redundant operations. Store and retrieve values with TTL.", args: { action: "string (get|set|clear|list)", key: "string (cache key)", ttl: "string (optional, e.g. 30s, 5m, 1h - default 5m)", value: "string (value to cache, for set action)" } },
