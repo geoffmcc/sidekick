@@ -678,9 +678,13 @@ app.get("/", (req, res) => {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sidekick Dashboard</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,sans-serif;background:#0d1117;color:#c9d1d9;padding:20px}
+:root{--font:'JetBrains Mono',monospace}
+*{box-sizing:border-box;margin:0;padding:0;font-family:var(--font)}
+body{background:#0d1117;color:#c9d1d9;padding:20px}
 h1{font-size:1.4rem;margin-bottom:8px;color:#58a6ff}
 nav{display:flex;gap:8px;margin-bottom:12px}
 nav a{padding:6px 16px;border-radius:6px;text-decoration:none;font-size:.85rem;color:#8b949e;background:#161b22;border:1px solid #21262d;cursor:pointer}
@@ -707,17 +711,17 @@ nav a.active{color:#58a6ff;border-color:#58a6ff;background:#0d1117}
 .log-entry{padding:8px 0;border-bottom:1px solid #21262d;font-size:.82rem;display:flex;gap:12px;align-items:flex-start}
 .log-entry:last-child{border-bottom:none}
 .log-entry.error{background:#1a0a0a;margin:0 -16px;padding:8px 16px;border-left:3px solid #f85149}
-.log-time{color:#8b949e;white-space:nowrap;font-family:monospace;min-width:140px}
-.log-name{color:#58a6ff;font-weight:500;min-width:130px;font-family:monospace}
+.log-time{color:#8b949e;white-space:nowrap;font-family:var(--font);min-width:140px}
+.log-name{color:#58a6ff;font-weight:500;min-width:130px;font-family:var(--font)}
 .log-ok{color:#3fb950}
 .log-fail{color:#f85149}
 .log-summary{color:#8b949e;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
-.log-args{color:#7ee787;font-family:monospace;font-size:.78rem;word-break:break-all;max-height:60px;overflow-y:auto;flex:1}
+.log-args{color:#7ee787;font-family:var(--font);font-size:.78rem;word-break:break-all;max-height:60px;overflow-y:auto;flex:1}
 .kv-entry{padding:8px 0;border-bottom:1px solid #21262d;font-size:.82rem;display:flex;gap:8px;align-items:flex-start}
 .kv-entry:last-child{border-bottom:none}
-.kv-key{color:#ffa657;font-family:monospace;font-weight:500;min-width:180px;word-break:break-all}
-.kv-val{color:#c9d1d9;font-family:monospace;word-break:break-all;flex:1}
-.kv-project{background:#21262d;color:#58a6ff;padding:2px 8px;border-radius:4px;font-size:.75rem;font-family:monospace;white-space:nowrap}
+.kv-key{color:#ffa657;font-family:var(--font);font-weight:500;min-width:180px;word-break:break-all}
+.kv-val{color:#c9d1d9;font-family:var(--font);word-break:break-all;flex:1}
+.kv-project{background:#21262d;color:#58a6ff;padding:2px 8px;border-radius:4px;font-size:.75rem;font-family:var(--font);white-space:nowrap}
 .kv-actions{display:flex;gap:4px;flex-shrink:0}
 .kv-actions button{background:#21262d;border:1px solid #30363d;color:#8b949e;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:.75rem}
 .kv-actions button:hover{background:#30363d;color:#c9d1d9}
@@ -731,7 +735,7 @@ nav a.active{color:#58a6ff;border-color:#58a6ff;background:#0d1117}
 .btn-sm{padding:4px 12px;font-size:.78rem}
 .btn-outline{background:transparent;border:1px solid #30363d;color:#8b949e}
 .btn-outline:hover{border-color:#58a6ff;color:#58a6ff}
-.agent-log{padding:12px;background:#0d1117;border:1px solid #21262d;border-radius:6px;font-family:monospace;font-size:.8rem;max-height:500px;overflow-y:auto;margin-top:8px;white-space:pre-wrap;line-height:1.5}
+.agent-log{padding:12px;background:#0d1117;border:1px solid #21262d;border-radius:6px;font-family:var(--font);font-size:.8rem;max-height:500px;overflow-y:auto;margin-top:8px;white-space:pre-wrap;line-height:1.5}
 .agent-step{color:#58a6ff;font-weight:500}
 .agent-ok{color:#3fb950}
 .agent-err{color:#f85149}
@@ -748,13 +752,13 @@ nav a.active{color:#58a6ff;border-color:#58a6ff;background:#0d1117}
 .service-indicator.off{color:#f85149}
 .config-entry{padding:6px 0;border-bottom:1px solid #21262d;font-size:.82rem;display:flex;gap:12px}
 .config-entry:last-child{border-bottom:none}
-.config-key{color:#ffa657;font-family:monospace;font-weight:500;min-width:200px}
-.config-val{color:#c9d1d9;font-family:monospace;word-break:break-all;flex:1}
+.config-key{color:#ffa657;font-family:var(--font);font-weight:500;min-width:200px}
+.config-val{color:#c9d1d9;font-family:var(--font);word-break:break-all;flex:1}
 .config-val.redacted{color:#8b949e;font-style:italic}
 .history-item{padding:8px 0;border-bottom:1px solid #21262d;font-size:.82rem;cursor:pointer;display:flex;gap:8px;align-items:center}
 .history-item:hover{background:#161b22}
 .history-item:last-child{border-bottom:none}
-.history-detail{padding:8px 0 8px 20px;background:#0d1117;border-left:2px solid #21262d;margin:4px 0;font-family:monospace;font-size:.78rem;white-space:pre-wrap;line-height:1.4;max-height:400px;overflow-y:auto}
+.history-detail{padding:8px 0 8px 20px;background:#0d1117;border-left:2px solid #21262d;margin:4px 0;font-family:var(--font);font-size:.78rem;white-space:pre-wrap;line-height:1.4;max-height:400px;overflow-y:auto}
 .search-bar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
 .search-bar input,.search-bar select{padding:6px 12px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#c9d1d9;font-size:.82rem}
 .search-bar input:focus,.search-bar select:focus{outline:none;border-color:#58a6ff}
@@ -762,7 +766,7 @@ nav a.active{color:#58a6ff;border-color:#58a6ff;background:#0d1117}
 .session-group{margin-bottom:16px;border:1px solid #21262d;border-radius:8px;overflow:hidden}
 .session-header{padding:8px 16px;background:#161b22;cursor:pointer;display:flex;gap:12px;align-items:center;font-size:.82rem}
 .session-header:hover{background:#1c2128}
-.session-header .session-time{color:#58a6ff;font-family:monospace;font-weight:500}
+.session-header .session-time{color:#58a6ff;font-family:var(--font);font-weight:500}
 .session-header .session-count{color:#8b949e}
 .session-header .session-src{color:#bc8cff;font-size:.75rem}
 .session-body{padding:0 16px;display:none}
@@ -782,20 +786,20 @@ nav a.active{color:#58a6ff;border-color:#58a6ff;background:#0d1117}
 .modal-overlay.active{display:flex}
 .modal{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:24px;max-width:600px;width:90%;max-height:80vh;overflow-y:auto}
 .modal h3{color:#58a6ff;margin-bottom:16px}
-.modal textarea{width:100%;min-height:200px;padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#c9d1d9;font-family:monospace;font-size:.82rem;resize:vertical}
+.modal textarea{width:100%;min-height:200px;padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#c9d1d9;font-family:var(--font);font-size:.82rem;resize:vertical}
 .modal textarea:focus{outline:none;border-color:#58a6ff}
 .modal-actions{display:flex;gap:8px;margin-top:16px;justify-content:flex-end}
 footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
 .kv-entry{display:flex;flex-direction:column;gap:8px;padding:12px;border-bottom:1px solid #21262d}
 .kv-entry:last-child{border-bottom:none}
 .kv-header{display:flex;justify-content:space-between;align-items:center}
-.kv-key{font-weight:600;font-family:monospace;color:#c9d1d9}
+.kv-key{font-weight:600;font-family:var(--font);color:#c9d1d9}
 .kv-badges{display:flex;gap:6px}
 .kv-source{font-size:11px;padding:2px 8px;border-radius:3px;background:#21262d;color:#8b949e}
 .kv-source.mcp{background:#2d4a2d;color:#7ee787}
 .kv-source.agent{background:#4a2d4a;color:#d2a8ff}
 .kv-source.dashboard{background:#2d3a4a;color:#79c0ff}
-.kv-value-preview{background:#161b22;padding:8px 12px;border-radius:4px;font-family:monospace;font-size:12px;cursor:pointer;white-space:pre-wrap;word-break:break-all;max-height:100px;overflow:hidden;position:relative}
+.kv-value-preview{background:#161b22;padding:8px 12px;border-radius:4px;font-family:var(--font);font-size:12px;cursor:pointer;white-space:pre-wrap;word-break:break-all;max-height:100px;overflow:hidden;position:relative}
 .kv-value-preview:hover{background:#1c2128}
 .kv-value-preview.expanded{max-height:none}
 .kv-value-preview::after{content:'Click to expand';position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,#161b22);padding:20px 12px 8px;text-align:center;font-size:11px;color:#8b949e;opacity:0;transition:opacity 0.2s}
@@ -807,17 +811,17 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
 .kv-modal-content{background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:24px;max-width:800px;max-height:80vh;overflow:auto;width:90%}
 .kv-modal-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
 .kv-modal-header h3{color:#58a6ff;margin:0}
-.kv-modal-value{background:#161b22;padding:16px;border-radius:4px;font-family:monospace;font-size:13px;white-space:pre-wrap;word-break:break-all;max-height:60vh;overflow:auto}
+.kv-modal-value{background:#161b22;padding:16px;border-radius:4px;font-family:var(--font);font-size:13px;white-space:pre-wrap;word-break:break-all;max-height:60vh;overflow:auto}
 .log-entry{display:flex;flex-direction:column;gap:8px;padding:12px;border-bottom:1px solid #21262d;position:relative}
 .log-entry.error{background:rgba(248,81,73,0.05);border-left:3px solid #f85149}
 .log-header{display:flex;justify-content:space-between;align-items:center}
-.log-time{font-size:11px;color:#8b949e;font-family:monospace}
-.log-tool{font-weight:600;font-family:monospace;color:#58a6ff}
+.log-time{font-size:11px;color:#8b949e;font-family:var(--font)}
+.log-tool{font-weight:600;font-family:var(--font);color:#58a6ff}
 .log-status{font-size:11px;padding:2px 8px;border-radius:3px;font-weight:600}
 .log-status.ok{background:#2d4a2d;color:#7ee787}
 .log-status.fail{background:#4a2d2d;color:#f85149}
-.log-args{background:#161b22;padding:8px 12px;border-radius:4px;font-family:monospace;font-size:12px;color:#c9d1d9;white-space:pre-wrap;word-break:break-all}
-.log-result{background:#161b22;padding:8px 12px;border-radius:4px;font-family:monospace;font-size:12px;color:#8b949e;cursor:pointer;max-height:100px;overflow:hidden;position:relative;white-space:pre-wrap;word-break:break-all}
+.log-args{background:#161b22;padding:8px 12px;border-radius:4px;font-family:var(--font);font-size:12px;color:#c9d1d9;white-space:pre-wrap;word-break:break-all}
+.log-result{background:#161b22;padding:8px 12px;border-radius:4px;font-family:var(--font);font-size:12px;color:#8b949e;cursor:pointer;max-height:100px;overflow:hidden;position:relative;white-space:pre-wrap;word-break:break-all}
 .log-result:hover{background:#1c2128}
 .log-result.expanded{max-height:none}
 .log-result::after{content:'Click to expand';position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,#161b22);padding:20px 12px 8px;text-align:center;font-size:11px;opacity:0;transition:opacity 0.2s}
@@ -836,25 +840,25 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
 .tool-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px;padding:8px 0}
 .tool-card{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:14px;cursor:pointer;transition:border-color 0.15s}
 .tool-card:hover{border-color:#58a6ff}
-.tool-card-name{font-family:monospace;font-weight:600;color:#58a6ff;font-size:.88rem;margin-bottom:4px}
+.tool-card-name{font-family:var(--font);font-weight:600;color:#58a6ff;font-size:.88rem;margin-bottom:4px}
 .tool-card-desc{color:#8b949e;font-size:.8rem;line-height:1.4;margin-bottom:8px}
-.tool-card-args{font-size:.75rem;color:#6e7681;font-family:monospace;word-break:break-all}
+.tool-card-args{font-size:.75rem;color:#6e7681;font-family:var(--font);word-break:break-all}
 .tool-card-args .arg-name{color:#ffa657}
 .tool-card-args .arg-opt{color:#484f58}
 .tool-detail-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:1000;align-items:center;justify-content:center}
 .tool-detail-overlay.active{display:flex}
 .tool-detail{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:24px;max-width:650px;width:90%;max-height:80vh;overflow-y:auto}
-.tool-detail h3{color:#58a6ff;font-family:monospace;margin-bottom:8px}
+.tool-detail h3{color:#58a6ff;font-family:var(--font);margin-bottom:8px}
 .tool-detail .td-desc{color:#c9d1d9;font-size:.9rem;margin-bottom:16px;line-height:1.5}
 .tool-detail .td-section{margin-bottom:12px}
 .tool-detail .td-label{font-size:.75rem;color:#8b949e;text-transform:uppercase;margin-bottom:4px}
-.tool-detail .td-args{background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:12px;font-family:monospace;font-size:.82rem}
+.tool-detail .td-args{background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:12px;font-family:var(--font);font-size:.82rem}
 .tool-detail .td-arg-row{padding:4px 0;border-bottom:1px solid #21262d}
 .tool-detail .td-arg-row:last-child{border-bottom:none}
 .tool-detail .td-arg-name{color:#ffa657;font-weight:500}
 .tool-detail .td-arg-type{color:#8b949e;margin-left:8px}
 .tool-card-stats{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;padding-top:6px;border-top:1px solid #21262d}
-.tool-card-stats .stat-item{font-size:.72rem;color:#8b949e;font-family:monospace}
+.tool-card-stats .stat-item{font-size:.72rem;color:#8b949e;font-family:var(--font)}
 .tool-card-stats .stat-item i{margin-right:2px}
 </style>
 </head>
@@ -1032,8 +1036,8 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
 <div class="modal-overlay" id="editModal">
   <div class="modal">
     <h3>Edit KV Entry</h3>
-    <div style="margin-bottom:8px;color:#8b949e;font-size:.82rem">Key: <span id="editKey" style="color:#ffa657;font-family:monospace"></span></div>
-    <div style="margin-bottom:8px;color:#8b949e;font-size:.82rem">Project: <input type="text" id="editProject" placeholder="Global (leave empty)" style="background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;padding:4px 8px;font-family:monospace;font-size:.82rem;margin-left:8px"></div>
+    <div style="margin-bottom:8px;color:#8b949e;font-size:.82rem">Key: <span id="editKey" style="color:#ffa657;font-family:var(--font)"></span></div>
+    <div style="margin-bottom:8px;color:#8b949e;font-size:.82rem">Project: <input type="text" id="editProject" placeholder="Global (leave empty)" style="background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;padding:4px 8px;font-family:var(--font);font-size:.82rem;margin-left:8px"></div>
     <textarea id="editValue"></textarea>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeEditModal()">Cancel</button>
@@ -1306,7 +1310,7 @@ function loadDashboardSummary(){
     } else {
       deployEl.innerHTML = d.deployments.map(dep => {
         const time = new Date(dep.deployed_at).toLocaleString();
-        return '<div style="margin-bottom:4px"><span style="color:#58a6ff;font-family:monospace">' + esc(dep.commit) + '</span> <span style="color:#8b949e">(' + esc(dep.branch) + ')</span><br><span style="color:#8b949e;font-size:.72rem">' + time + '</span></div>';
+        return '<div style="margin-bottom:4px"><span style="color:#58a6ff;font-family:var(--font)">' + esc(dep.commit) + '</span> <span style="color:#8b949e">(' + esc(dep.branch) + ')</span><br><span style="color:#8b949e;font-size:.72rem">' + time + '</span></div>';
       }).join('');
     }
   }).catch(e => apiError('/api/dashboard-summary', e, 0));
