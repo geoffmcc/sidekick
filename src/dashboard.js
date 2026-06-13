@@ -754,13 +754,6 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
 <div class="page active" id="page-system">
   <div class="section-title" style="margin-bottom:8px">Local LLM</div>
   <div id="llmStatus"><div class="empty">Checking...</div></div>
-  <div class="section-title" style="margin:16px 0 8px">Tool Usage</div>
-  <div class="card" style="padding:0;overflow:hidden">
-    <table class="stats-table" id="statsTable">
-      <thead><tr><th>Tool</th><th>Calls</th><th>Success</th><th>Fail</th><th>Avg</th><th>Rate</th></tr></thead>
-      <tbody id="statsBody"><tr><td colspan="6" class="empty">Loading...</td></tr></tbody>
-    </table>
-  </div>
 </div>
 
 <!-- Activity Page -->
@@ -1025,7 +1018,7 @@ function showPage(name){
   $('page-' + name).classList.add('active');
   $('nav-' + name).classList.add('active');
   loadSystem();
-  if (name === 'system') { loadLLM(); loadServices(); loadStats(); }
+  if (name === 'system') { loadLLM(); loadServices(); }
   if (name === 'activity') loadLogs();
   if (name === 'data') loadKV();
   if (name === 'config') loadConfig();
@@ -1092,25 +1085,6 @@ function loadLLM(){
       '<div class="llm-card"><span class="llm-dot on"></span><span class="llm-name">' + esc(m.name) + '</span><span class="llm-size">' + m.size + '</span></div>'
     ).join('') || '<div class="llm-card"><span class="llm-dot on"></span><span class="llm-name">Ollama running, no models</span></div>';
   }).catch(e => apiError('/api/llm', e, 0));
-}
-
-function loadStats(){
-  authFetch('/api/stats').then(r=>r.json()).then(d=>{
-    const body = $('statsBody');
-    if (!d.stats || !d.stats.length) { body.innerHTML = '<tr><td colspan="6" class="empty">No data</td></tr>'; return; }
-    body.innerHTML = d.stats.map(s => {
-      const rate = s.count > 0 ? Math.round(s.ok / s.count * 100) : 0;
-      const barWidth = Math.max(1, rate);
-      return '<tr>' +
-        '<td style="color:#58a6ff;font-family:monospace">' + esc(s.name) + '</td>' +
-        '<td>' + s.count + '</td>' +
-        '<td style="color:#3fb950">' + s.ok + '</td>' +
-        '<td style="color:' + (s.fail > 0 ? '#f85149' : '#484f58') + '">' + s.fail + '</td>' +
-        '<td>' + s.avgMs + 'ms</td>' +
-        '<td><div class="stats-bar"><div class="stats-bar-fill ' + (rate >= 90 ? 'ok' : rate >= 70 ? 'warn' : 'fail') + '" style="width:' + barWidth + '%"></div></div> ' + rate + '%</td>' +
-        '</tr>';
-    }).join('');
-  }).catch(e => apiError('/api/stats', e, 0));
 }
 
 // -- Activity -- //
@@ -1732,7 +1706,7 @@ function refresh(){
   
   const now = new Date();
   $('lastUpdate').textContent = 'updated ' + now.toLocaleTimeString();
-  loadSystem(); loadLLM(); loadServices(); loadStats();
+  loadSystem(); loadLLM(); loadServices();
 }
 refresh();
 setInterval(refresh, 10000);
