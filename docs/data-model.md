@@ -21,6 +21,14 @@ Sidekick stores operational state under `SIDEKICK_DATA_DIR`. By default this is 
 | `evolve.json` | `sidekick_evolve` | Proposed system improvements and analysis metadata. |
 | `orchestrate.json` | `sidekick_orchestrate` | Multi-step task graph records. |
 | `predict.json` | `sidekick_predict` | Predictions and prediction feedback. |
+| `anonymize_patterns.json` | `sidekick_anonymize` | Custom anonymization patterns. |
+| `sandbox.json` | `sidekick_sandbox` | Active sandbox metadata. |
+| `sandboxes/` | `sidekick_sandbox` | File backups for sandboxes. |
+| `circuits.json` | `sidekick_circuit` | Circuit breaker states. |
+| `baselines.json` | `sidekick_baseline` | Metric baselines and data points. |
+| `runbooks.json` | `sidekick_runbook` | Runbook definitions and instances. |
+| `blackbox.json` | `sidekick_black_box` | Incident metadata. |
+| `blackbox/` | `sidekick_black_box` | Incident data files. |
 | `conversations/*.json` | agent bridge | Saved autonomous agent task transcripts. |
 | `audit.jsonl` | dashboard | State-changing dashboard operation audit log. |
 | `dashboard-errors.log` | dashboard | Frontend/API error log. |

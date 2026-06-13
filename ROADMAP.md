@@ -2,9 +2,9 @@
 
 What's planned for Sidekick.
 
-## Current (v1.15)
+## Current (v1.18)
 
-- 37 MCP tools (bash, read, write, list, search, git, notify, process, service, archive, cron, github, webhook, context, teach, store, get, list_projects, get_by_project, web_fetch, llm, transform, health, delay, snapshot, watch, secret, parse, diff, hash, validate, template, queue, retry, evolve, orchestrate, predict)
+- 59 MCP tools (bash, read, write, list, search, git, notify, process, service, archive, cron, github, webhook, context, teach, store, get, list_projects, get_by_project, web_fetch, llm, transform, health, delay, snapshot, watch, secret, parse, diff, hash, validate, template, queue, retry, evolve, orchestrate, predict, debug_tool, fresheyes, batch, cache, summarize, filter, project, tail, diff_files, find, status, extract, anonymize, sandbox, changelog, netdiag, timeline, circuit, baseline, depend, runbook, black_box)
 - Live dashboard with 5 tabs (System, Activity, Data, Config, Agent)
 - Autonomous agent bridge with Groq cloud + local Ollama fallback
 - Persistent KV storage across sessions
@@ -41,8 +41,50 @@ What's planned for Sidekick.
 - **sidekick_evolve** — Self-modification with safety
 - **sidekick_orchestrate** — Multi-agent coordination
 - **sidekick_predict** — Anticipatory intelligence
+- **sidekick_debug_tool** — Structured debugging cache for debug sessions
+- **sidekick_fresheyes** — Fresh perspective from Sidekick's LLM
+- **sidekick_batch** — Execute multiple tool calls in one request
+- **sidekick_cache** — Session-scoped caching with TTL
+- **sidekick_summarize** — Summarize large files before returning
+- **sidekick_filter** — Filter file contents or directory listings
+- **sidekick_project** — Get complete project context in one call
+- **sidekick_tail** — Tail recent log entries with filtering
+- **sidekick_diff_files** — Compare two files directly
+- **sidekick_find** — Advanced file finder by name, date, size, content
+- **sidekick_status** — Unified system status in one call
+- **sidekick_extract** — Parse and extract specific fields from structured data
+- **sidekick_anonymize** — Replace sensitive data with realistic fake values
+- **sidekick_sandbox** — Execute operations with automatic backup and rollback
+- **sidekick_changelog** — Generate release notes from git history
+- **sidekick_netdiag** — Unified network diagnostics
+- **sidekick_timeline** — Build chronological timelines from multiple sources
+- **sidekick_circuit** — Circuit breaker for any tool call
+- **sidekick_baseline** — Behavioral baseline and anomaly detection
+- **sidekick_depend** — Dependency analyzer for npm, services, processes
+- **sidekick_runbook** — Operational runbook executor (autonomous and guided)
+- **sidekick_black_box** — Incident time capsule (rate limited: 5/day, 7-day TTL)
 
 ## Recently Completed ✅
+
+### v1.18: Operations Platform Expansion
+**Status:** ✅ COMPLETED  
+**Date:** 2026-06-13
+
+**What Was Added:**
+- `sidekick_anonymize` — Replace sensitive data with realistic fake values
+- `sidekick_sandbox` — Execute operations with automatic backup and rollback
+- `sidekick_changelog` — Generate release notes from git history
+- `sidekick_netdiag` — Unified network diagnostics
+- `sidekick_timeline` — Build chronological timelines from multiple sources
+- `sidekick_circuit` — Circuit breaker for any tool call
+- `sidekick_baseline` — Behavioral baseline and anomaly detection
+- `sidekick_depend` — Dependency analyzer for npm, services, processes
+- `sidekick_runbook` — Operational runbook executor (autonomous and guided)
+- `sidekick_black_box` — Incident time capsule (rate limited)
+
+**Result:**
+- Total tools: 49 → 59
+- All tools implemented, deployed, and tested
 
 ### MCP Connection Issues
 **Status:** ✅ RESOLVED  

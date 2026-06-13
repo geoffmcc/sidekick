@@ -70,6 +70,16 @@ This documentation set was generated from the project source code in the supplie
 | `sidekick_evolve` | Advanced Intelligence | Analyze usage patterns and maintain proposed system improvements with safety gates. | `action, id, proposal, approve, test` |
 | `sidekick_orchestrate` | Advanced Intelligence | Create and execute multi-step task graphs with dependency tracking. | `action, id, task_name, subtasks, dependencies, timeout` |
 | `sidekick_predict` | Advanced Intelligence | Analyze stored context and tool logs to generate predictions and collect feedback. | `action, id, feedback` |
+| `sidekick_anonymize` | Security | Replace sensitive data with realistic fake values. Consistent mapping, custom patterns, redact safety net. | `action, input, format, custom_patterns, consistency` |
+| `sidekick_sandbox` | Safety | Execute operations with automatic file backup and rollback. Safe experimentation on remote systems. | `action, sandbox_name, command, files, auto_backup, rollback_id` |
+| `sidekick_changelog` | Development | Generate release notes from git history. Groups by type/scope/author, optional LLM summaries. | `action, from, to, format, group_by, use_llm, include, path` |
+| `sidekick_netdiag` | Diagnostics | Unified network diagnostics: DNS, routing, port scanning, connectivity checks, local listeners. | `action, target, port_range, timeout, format` |
+| `sidekick_timeline` | Observability | Build chronological timelines from multiple sources (log.jsonl, journalctl, git, files). | `action, since, until, sources, pattern, severity, format, max_events` |
+| `sidekick_circuit` | Reliability | Generic circuit breaker for any tool call. Fast-fail when targets are down, configurable thresholds. | `action, target, tool, args, failure_threshold, cooldown_seconds, cache_response` |
+| `sidekick_baseline` | Observability | Behavioral baseline and anomaly detection. Learns patterns, detects statistical deviations. | `action, metric_name, value, source, command, window, sensitivity` |
+| `sidekick_depend` | Analysis | Dependency analyzer for npm, systemd services, processes. Trees, reverse deps, impact analysis. | `action, type, target, depth, format` |
+| `sidekick_runbook` | Operations | Operational runbook executor with autonomous and guided modes. Verification, rollback, step-by-step. | `action, name, mode, steps, runbook_id, step_index` |
+| `sidekick_black_box` | Observability | Incident time capsule capturing full system context. Rate limited (5/day, 7-day TTL, 3 active max). | `action, name, include, analyze_with_llm, incident_id` |
 
 ## Key Concepts
 
