@@ -69,6 +69,31 @@ This is a safeguard, not a sandbox. Many dangerous commands will not match those
 
 Redaction is applied in many tool outputs and logs, but it should not be treated as a complete data-loss prevention system.
 
+## Data Anonymization
+
+`sidekick_anonymize` replaces sensitive data with realistic but fake values while preserving data structure. This is useful for sharing logs, debugging output, or any data that contains sensitive information but needs to be analyzed or shared externally.
+
+Built-in patterns cover:
+- IP addresses → `10.0.0.x`
+- Email addresses → `user{n}@example.com`
+- UUIDs → `00000000-0000-0000-0000-{n}`
+- Phone numbers → `555-000-XXXX`
+- File paths (`/home/user`, `/Users/user`) → `/home/user{n}`
+- Hostnames (`*.com`, `*.org`, etc.) → `host-{n}.internal`
+
+Custom patterns can be added for project-specific needs. All output also passes through `redactSensitive()` as a safety net to catch any remaining credentials.
+
+Consistency mode ensures the same input always maps to the same output within a single anonymization call, making it easier to track data relationships.
+
+## Rate Limiting
+
+Several tools implement rate limiting to prevent runaway API calls and resource exhaustion:
+
+- `sidekick_black_box`: 5 captures per day, 7-day TTL, maximum 3 active incidents
+- `sidekick_evolve`: 10 proposals per day
+
+All tools have a default 30-second timeout (60 seconds for complex tools like `black_box` and `timeline`). Output is truncated at 1MB to prevent memory issues.
+
 ## Secret Storage
 
 `sidekick_secret` encrypts stored credentials with AES-256-GCM. It requires `SIDEKICK_SECRET_KEY`; without that variable, secret operations fail. The encrypted store is `secrets.enc`.

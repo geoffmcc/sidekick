@@ -6,7 +6,7 @@ A remote agent system. Connect via the sidekick MCP server at `YOUR_REMOTE_IP:40
 
 Always use the `task` tool with `subagent_type: "sidekick"` when interacting with sidekick. Do not use direct MCP tools (`sidekick_bash`, `sidekick_read`, etc.) — use the task tool so the user can see the full conversation. 100% of the time, no exceptions.
 
-## Tools (60 total)
+## Tools (70 total)
 
 ### Core Tools (11)
 
@@ -24,7 +24,7 @@ Always use the `task` tool with `subagent_type: "sidekick"` when interacting wit
 | `todowrite` | Track multi-step tasks with a todo list |
 | `webfetch` | Fetch and convert URLs to markdown/text/html |
 
-### Sidekick MCP Tools (49)
+### Sidekick MCP Tools (59)
 
 | Tool | When to use |
 |------|-------------|
@@ -77,6 +77,16 @@ Always use the `task` tool with `subagent_type: "sidekick"` when interacting wit
 | `sidekick_find` | Advanced file finder: search by name pattern, date range, size range, and content pattern |
 | `sidekick_status` | Unified system status: services, disk, memory, load, uptime, top processes in one call |
 | `sidekick_extract` | Parse JSON/YAML/INI/XML and extract specific fields by path. Returns only what you need |
+| `sidekick_anonymize` | Replace sensitive data with realistic fake values. Consistent mapping, custom patterns, redact safety net |
+| `sidekick_sandbox` | Execute operations with automatic file backup and rollback. Safe experimentation on remote systems |
+| `sidekick_changelog` | Generate release notes from git history. Groups by type/scope/author, optional LLM summaries |
+| `sidekick_netdiag` | Unified network diagnostics: DNS, routing, port scanning, connectivity checks, local listeners |
+| `sidekick_timeline` | Build chronological timelines from multiple sources (log.jsonl, journalctl, git, files) |
+| `sidekick_circuit` | Generic circuit breaker for any tool call. Fast-fail when targets are down, configurable thresholds |
+| `sidekick_baseline` | Behavioral baseline and anomaly detection. Learns patterns, detects statistical deviations |
+| `sidekick_depend` | Dependency analyzer for npm, systemd services, processes. Trees, reverse deps, impact analysis |
+| `sidekick_runbook` | Operational runbook executor with autonomous and guided modes. Verification, rollback, step-by-step |
+| `sidekick_black_box` | Incident time capsule capturing full system context. Rate limited (5/day, 7-day TTL, 3 active max) |
 
 ## Token Efficiency Rules
 
@@ -110,6 +120,10 @@ Always use the `task` tool with `subagent_type: "sidekick"` when interacting wit
 | Data transforms | `sidekick_transform` | `sidekick_bash awk/sed/jq` |
 | Validate data | `sidekick_validate` | Manual validation |
 | Render templates | `sidekick_template` | `sidekick_bash` with string concat |
+| Network diagnostics | `sidekick_netdiag` | Multiple `sidekick_bash` ping/dig/ss calls |
+| Build event timeline | `sidekick_timeline` | Multiple `sidekick_tail` + manual correlation |
+| Capture incident context | `sidekick_black_box` | Multiple `sidekick_service`/`sidekick_process`/`sidekick_tail` calls |
+| Wrap tool with circuit breaker | `sidekick_circuit` | Raw tool calls without failure protection |
 
 ### Examples
 
@@ -145,12 +159,24 @@ All tool calls are logged with source tags:
 
 ## Services
 
-- **MCP Server** (`:4097`) — 49 tools, session-aware transport (new McpServer+Transport per session) at YOUR_REMOTE_IP
+- **MCP Server** (`:4097`) — 59 tools, session-aware transport (new McpServer+Transport per session) at YOUR_REMOTE_IP
 - **Dashboard** (`:4098`) — web UI with System, Activity, Data, Config, and Agent tabs, Font Awesome icons
 - **Agent Bridge** (`:4099`) — autonomous LLM agent that calls tools directly (bypasses MCP HTTP)
 - **Ollama** (`:11434`) — local Phi-3-mini fallback. Uses cloud Groq API when `GROQ_API_KEY` is set
 
 ## Recent Features
+
+### New Tools (v1.18) - Operations Platform Expansion
+- **`sidekick_anonymize`** — Replace sensitive data with realistic fake values. Consistent mapping, custom patterns, redact safety net.
+- **`sidekick_sandbox`** — Execute operations with automatic file backup and rollback. Safe experimentation on remote systems.
+- **`sidekick_changelog`** — Generate release notes from git history. Groups by type/scope/author, optional LLM summaries.
+- **`sidekick_netdiag`** — Unified network diagnostics: DNS, routing, port scanning, connectivity checks, local listeners.
+- **`sidekick_timeline`** — Build chronological timelines from multiple sources (log.jsonl, journalctl, git, files).
+- **`sidekick_circuit`** — Generic circuit breaker for any tool call. Fast-fail when targets are down, configurable thresholds.
+- **`sidekick_baseline`** — Behavioral baseline and anomaly detection. Learns patterns, detects statistical deviations.
+- **`sidekick_depend`** — Dependency analyzer for npm, systemd services, processes. Trees, reverse deps, impact analysis.
+- **`sidekick_runbook`** — Operational runbook executor with autonomous and guided modes. Verification, rollback, step-by-step.
+- **`sidekick_black_box`** — Incident time capsule capturing full system context. Rate limited (5/day, 7-day TTL, 3 active max).
 
 ### New Tools (v1.17) - Token Efficiency
 - **`sidekick_batch`** — Execute multiple tool calls in one request to reduce API round-trips (max 20 per batch).

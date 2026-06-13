@@ -301,6 +301,97 @@ const TOOL_SCHEMAS = {
     path: z.string().describe("File path (JSON, YAML, INI, or XML)"),
     fields: z.union([z.string(), z.array(z.string())]).optional().describe("Field paths to extract (e.g. 'database.host,database.port')")
   }),
+  sidekick_anonymize: z.object({
+    action: z.enum(["anonymize", "patterns", "add_pattern", "remove_pattern"]),
+    input: z.string().optional().describe("Text to anonymize"),
+    format: z.enum(["text", "json", "yaml"]).optional().default("text"),
+    custom_patterns: z.array(z.object({
+      pattern: z.string(),
+      replacement: z.string()
+    })).optional(),
+    consistency: z.boolean().optional().default(true).describe("Same input always maps to same output")
+  }),
+  sidekick_sandbox: z.object({
+    action: z.enum(["exec", "rollback", "list", "diff", "clean"]),
+    sandbox_name: z.string().optional(),
+    command: z.string().optional().describe("Command to execute in sandbox"),
+    files: z.array(z.string()).optional().describe("Files to auto-backup before exec"),
+    auto_backup: z.boolean().optional().default(true),
+    rollback_id: z.string().optional()
+  }),
+  sidekick_changelog: z.object({
+    action: z.enum(["generate", "preview", "save"]),
+    from: z.string().describe("Starting ref (tag, commit, branch)"),
+    to: z.string().optional().default("HEAD"),
+    format: z.enum(["markdown", "plain", "conventional"]).optional().default("markdown"),
+    group_by: z.enum(["type", "scope", "author"]).optional().default("type"),
+    use_llm: z.boolean().optional().default(false),
+    include: z.enum(["all", "features", "fixes", "breaking", "refactor", "deps"]).optional().default("all"),
+    path: z.string().optional().describe("Git repository path (default: current directory)")
+  }),
+  sidekick_netdiag: z.object({
+    action: z.enum(["check", "dns", "route", "ports", "listeners", "connectivity"]),
+    target: z.string().describe("Host, URL, or IP to diagnose"),
+    port_range: z.string().optional().describe("Port range for scan (e.g., '80-443')"),
+    timeout: z.number().optional().default(5000),
+    format: z.enum(["detailed", "compact", "json"]).optional().default("detailed")
+  }),
+  sidekick_timeline: z.object({
+    action: z.enum(["build", "filter", "export"]),
+    since: z.string().describe("Start time (ISO or relative: 1h, 1d, 7d)"),
+    until: z.string().optional().default("now"),
+    sources: z.array(z.enum(["log.jsonl", "journalctl", "git", "files", "all"])).optional().default(["all"]),
+    pattern: z.string().optional().describe("Regex filter for event content"),
+    severity: z.enum(["error", "warn", "info", "all"]).optional().default("all"),
+    format: z.enum(["compact", "detailed", "json"]).optional().default("compact"),
+    max_events: z.number().optional().default(200)
+  }),
+  sidekick_circuit: z.object({
+    action: z.enum(["call", "status", "reset", "configure"]),
+    target: z.string().describe("Circuit target label (e.g., 'github-api', 'web-fetch')"),
+    tool: z.string().optional().describe("Tool name to call (for action=call)"),
+    args: z.record(z.any()).optional().describe("Tool arguments (for action=call)"),
+    failure_threshold: z.number().optional().default(5),
+    cooldown_seconds: z.number().optional().default(60),
+    cache_response: z.boolean().optional().default(false)
+  }),
+  sidekick_baseline: z.object({
+    action: z.enum(["record", "learn", "check", "status", "reset"]),
+    metric_name: z.string().describe("Metric identifier"),
+    value: z.number().optional().describe("Value to record (for action=record)"),
+    source: z.string().optional().describe("Data source: 'health', 'custom', 'command'"),
+    command: z.string().optional().describe("Command to collect metric (for source=command)"),
+    window: z.string().optional().default("7d").describe("History window to analyze"),
+    sensitivity: z.enum(["low", "medium", "high"]).optional().default("medium")
+  }),
+  sidekick_depend: z.object({
+    action: z.enum(["tree", "reverse", "outdated", "impact", "orphans"]),
+    type: z.enum(["npm", "service", "process"]),
+    target: z.string().optional().describe("Package, service, or PID to analyze"),
+    depth: z.number().optional().default(5),
+    format: z.enum(["tree", "flat", "json"]).optional().default("tree")
+  }),
+  sidekick_runbook: z.object({
+    action: z.enum(["create", "start", "next", "verify", "rollback", "abort", "list", "get", "delete"]),
+    name: z.string().optional(),
+    mode: z.enum(["autonomous", "guided"]).optional().default("autonomous"),
+    steps: z.array(z.object({
+      name: z.string(),
+      command: z.string(),
+      expected: z.string().optional().describe("Expected output pattern (regex)"),
+      rollback: z.string().optional().describe("Rollback command if this step fails"),
+      verify_command: z.string().optional().describe("Verification command to run after")
+    })).optional(),
+    runbook_id: z.string().optional(),
+    step_index: z.number().optional()
+  }),
+  sidekick_black_box: z.object({
+    action: z.enum(["capture", "list", "get", "delete", "analyze"]),
+    name: z.string().optional().describe("Incident name/identifier"),
+    include: z.array(z.enum(["services", "processes", "logs", "disk", "network", "all"])).optional().default(["all"]),
+    analyze_with_llm: z.boolean().optional().default(false),
+    incident_id: z.string().optional()
+  }),
 };
 
 // --- Factory: create fresh McpServer + register tools ---

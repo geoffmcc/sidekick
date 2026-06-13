@@ -138,3 +138,144 @@ Learned procedures are registered at MCP startup. Restart `sidekick-mcp` after t
 ### GitHub calls fail
 
 The GitHub tool expects a KV entry named `github_token`. Verify it exists and that the token has the required repository permissions.
+
+## Incident Response
+
+When something goes wrong, use `sidekick_black_box` to capture a complete system snapshot in one call:
+
+```json
+{
+  "action": "capture",
+  "name": "incident-2026-06-13",
+  "include": ["all"]
+}
+```
+
+This captures:
+- Service status (systemctl)
+- Top processes (ps aux)
+- Recent logs (journalctl, log.jsonl)
+- Disk usage (df -h)
+- Network listeners (ss -tlnp)
+
+Rate limits: 5 captures per day, 7-day TTL, maximum 3 active incidents.
+
+To retrieve a captured incident:
+
+```json
+{
+  "action": "get",
+  "incident_id": "bb_abc123"
+}
+```
+
+## Operational Procedures
+
+Use `sidekick_runbook` to define and execute operational procedures with verification and rollback:
+
+```json
+{
+  "action": "create",
+  "name": "deploy-service",
+  "mode": "autonomous",
+  "steps": [
+    {
+      "name": "Stop service",
+      "command": "sudo systemctl stop myapp",
+      "rollback": "sudo systemctl start myapp"
+    },
+    {
+      "name": "Deploy new version",
+      "command": "cd /opt/myapp && git pull && npm install",
+      "rollback": "cd /opt/myapp && git checkout HEAD~1 && npm install"
+    },
+    {
+      "name": "Start service",
+      "command": "sudo systemctl start myapp",
+      "verify_command": "curl -f http://localhost:3000/health"
+    }
+  ]
+}
+```
+
+Execute autonomously:
+
+```json
+{
+  "action": "start",
+  "name": "deploy-service",
+  "mode": "autonomous"
+}
+```
+
+Or execute step-by-step in guided mode:
+
+```json
+{
+  "action": "start",
+  "name": "deploy-service",
+  "mode": "guided"
+}
+```
+
+Then advance with `action: "next"` and verify with `action: "verify"`.
+
+## Network Troubleshooting
+
+Use `sidekick_netdiag` for unified network diagnostics instead of running multiple commands:
+
+```json
+{
+  "action": "check",
+  "target": "https://api.example.com"
+}
+```
+
+This checks:
+- DNS resolution
+- Ping connectivity
+- HTTP response (status, time, SSL)
+- SSH port availability
+
+Other actions:
+- `dns` — DNS resolution chain
+- `route` — Traceroute to target
+- `ports` — Scan specific ports or common ports
+- `listeners` — Show local listening ports
+- `connectivity` — Quick up/down check for multiple targets
+
+## Anomaly Detection
+
+Use `sidekick_baseline` to learn normal behavior patterns and detect anomalies:
+
+Record data points:
+
+```json
+{
+  "action": "record",
+  "metric_name": "cpu_usage",
+  "value": 25
+}
+```
+
+After collecting sufficient data (minimum 10 points), learn the baseline:
+
+```json
+{
+  "action": "learn",
+  "metric_name": "cpu_usage"
+}
+```
+
+Check for anomalies:
+
+```json
+{
+  "action": "check",
+  "metric_name": "cpu_usage",
+  "value": 45,
+  "sensitivity": "medium"
+}
+```
+
+The baseline uses time-of-day bucketing (4-hour windows) and statistical analysis (mean ± standard deviation) to detect deviations from normal patterns.

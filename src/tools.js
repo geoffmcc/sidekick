@@ -4557,6 +4557,2274 @@ async function sidekick_extract({ path: filePath, fields }) {
   return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
 }
 
+const ANONYMIZE_PATTERNS_FILE = path.join(DATA_DIR, "anonymize_patterns.json");
+const MAX_ANONYMIZE_INPUT_SIZE = 1024 * 1024;
+
+function loadAnonymizePatterns() {
+  try {
+    if (fs.existsSync(ANONYMIZE_PATTERNS_FILE)) {
+      return JSON.parse(fs.readFileSync(ANONYMIZE_PATTERNS_FILE, "utf8"));
+    }
+  } catch {}
+  return { patterns: [] };
+}
+
+function saveAnonymizePatterns(data) {
+  fs.writeFileSync(ANONYMIZE_PATTERNS_FILE, JSON.stringify(data, null, 2));
+}
+
+function buildConsistencyMap() {
+  return {
+    emails: new Map(),
+    ips: new Map(),
+    hostnames: new Map(),
+    paths: new Map(),
+    uuids: new Map(),
+    phones: new Map(),
+    names: new Map(),
+    _counters: { email: 0, ip: 0, host: 0, path: 0, uuid: 0, phone: 0, name: 0 }
+  };
+}
+
+function getOrAssign(map, key, counter, generator) {
+  if (map.has(key)) return map.get(key);
+  const val = generator(counter.value);
+  counter.value++;
+  map.set(key, val);
+  return val;
+}
+
+function anonymizeText(text, consistency, customPatterns) {
+  if (!text || typeof text !== "string") return text;
+  
+  if (text.length > MAX_ANONYMIZE_INPUT_SIZE) {
+    return `[ANONYMIZE ERROR: Input exceeds maximum size of ${MAX_ANONYMIZE_INPUT_SIZE} bytes (${text.length} bytes)]`;
+  }
+
+  const cmap = buildConsistencyMap();
+  let result = text;
+
+  const uuidCounter = { value: 1 };
+  result = result.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, (match) => {
+    if (consistency) {
+      return getOrAssign(cmap.uuids, match.toLowerCase(), uuidCounter, (n) => 
+        `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`
+      );
+    }
+    return `00000000-0000-0000-0000-${String(Math.floor(Math.random() * 999999999999)).padStart(12, "0")}`;
+  });
+
+  const ipCounter = { value: 1 };
+  result = result.replace(/\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b/g, (match) => {
+    if (match === "127.0.0.1" || match === "0.0.0.0" || match === "255.255.255.255") return match;
+    if (consistency) {
+      return getOrAssign(cmap.ips, match, ipCounter, (n) => `10.0.0.${n}`);
+    }
+    return `10.0.0.${Math.floor(Math.random() * 254) + 1}`;
+  });
+
+  const emailCounter = { value: 1 };
+  result = result.replace(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g, (match) => {
+    if (match.endsWith("@example.com") || match.endsWith("@localhost")) return match;
+    if (consistency) {
+      return getOrAssign(cmap.emails, match.toLowerCase(), emailCounter, (n) => `user${n}@example.com`);
+    }
+    return `user${Math.floor(Math.random() * 9999) + 1}@example.com`;
+  });
+
+  const phoneCounter = { value: 1 };
+  result = result.replace(/(?<!\d[-\d])(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}\b(?!\d)/g, (match) => {
+    if (consistency) {
+      return getOrAssign(cmap.phones, match.replace(/\D/g, ""), phoneCounter, (n) => 
+        `555-000-${String(n).padStart(4, "0")}`
+      );
+    }
+    return `555-000-${String(Math.floor(Math.random() * 9999)).padStart(4, "0")}`;
+  });
+
+  const SYSTEM_USERS = ["sidekick", "root", "nobody", "admin", "www-data", "nginx", "apache", "mysql", "postgres", "redis", "daemon", "bin", "sys", "sync", "games", "man", "mail", "news", "proxy", "backup", "list", "irc", "gnats", "systemd", "messagebus", "sshd", "ntp", "avahi", "colord", "hplp", "pollinate", "landscape", "ubuntu"];
+  const pathCounter = { value: 1 };
+  result = result.replace(/\/(?:home|Users)\/([a-zA-Z0-9_\-]+)(?:\/[^\s]*)?/g, (match, userPart) => {
+    if (SYSTEM_USERS.includes(userPart.toLowerCase())) return match;
+    if (consistency) {
+      const replacement = getOrAssign(cmap.paths, userPart, pathCounter, (n) => `user${n}`);
+      return match.replace(`/${userPart}`, `/${replacement}`);
+    }
+    const replacement = `user${Math.floor(Math.random() * 99) + 1}`;
+    return match.replace(`/${userPart}`, `/${replacement}`);
+  });
+
+  const hostnameCounter = { value: 1 };
+  result = result.replace(/\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+(?:com|org|net|io|dev|app|local|internal)\b/g, (match) => {
+    if (match === "example.com" || match === "localhost" || match.endsWith(".example.com")) return match;
+    if (consistency) {
+      return getOrAssign(cmap.hostnames, match.toLowerCase(), hostnameCounter, (n) => `host-${n}.internal`);
+    }
+    return `host-${Math.floor(Math.random() * 999) + 1}.internal`;
+  });
+
+  if (customPatterns && customPatterns.length > 0) {
+    for (const cp of customPatterns) {
+      try {
+        const regex = new RegExp(cp.pattern, "g");
+        result = result.replace(regex, cp.replacement);
+      } catch {}
+    }
+  }
+
+  const stored = loadAnonymizePatterns();
+  for (const sp of stored.patterns) {
+    try {
+      const regex = new RegExp(sp.pattern, "g");
+      result = result.replace(regex, sp.replacement);
+    } catch {}
+  }
+
+  result = redactSensitive(result);
+
+  return result;
+}
+
+async function sidekick_anonymize({ action, input, format, custom_patterns, consistency }) {
+  if (action === "patterns") {
+    const stored = loadAnonymizePatterns();
+    if (stored.patterns.length === 0) {
+      return { content: [{ type: "text", text: "No custom patterns defined.\n\nBuilt-in patterns:\n- IPv4 addresses → 10.0.0.x\n- Email addresses → user{n}@example.com\n- UUIDs → 00000000-0000-0000-0000-{n}\n- Phone numbers → 555-000-XXXX\n- File paths (/home/user, /Users/user) → /home/user{n}\n- Hostnames (*.com, *.org, etc.) → host-{n}.internal\n- SSH private keys → [REDACTED]\n- GitHub tokens → [REDACTED]\n- API keys → [REDACTED]\n- AWS keys → [REDACTED]\n- Passwords/secrets → [REDACTED]\n- Bearer tokens → [REDACTED]\n- Database connection strings → [REDACTED]\n- Stripe keys → [REDACTED]\n- JWT tokens → [REDACTED]" }] };
+    }
+    const list = stored.patterns.map((p, i) => `${i + 1}. Pattern: ${p.pattern}\n   Replacement: ${p.replacement}`).join("\n\n");
+    return { content: [{ type: "text", text: `Custom patterns (${stored.patterns.length}):\n\n${list}` }] };
+  }
+
+  if (action === "add_pattern") {
+    if (!custom_patterns || custom_patterns.length === 0) {
+      return { content: [{ type: "text", text: "custom_patterns required (array of {pattern, replacement})" }], isError: true };
+    }
+    const stored = loadAnonymizePatterns();
+    let added = 0;
+    for (const cp of custom_patterns) {
+      if (!cp.pattern || !cp.replacement) continue;
+      try {
+        new RegExp(cp.pattern);
+      } catch (e) {
+        return { content: [{ type: "text", text: `Invalid regex pattern: ${cp.pattern} (${e.message})` }], isError: true };
+      }
+      stored.patterns.push({ pattern: cp.pattern, replacement: cp.replacement, added: new Date().toISOString() });
+      added++;
+    }
+    saveAnonymizePatterns(stored);
+    return { content: [{ type: "text", text: `Added ${added} custom pattern(s). Total: ${stored.patterns.length}` }] };
+  }
+
+  if (action === "remove_pattern") {
+    if (!custom_patterns || custom_patterns.length === 0) {
+      return { content: [{ type: "text", text: "custom_patterns required with pattern field to remove" }], isError: true };
+    }
+    const stored = loadAnonymizePatterns();
+    const before = stored.patterns.length;
+    const toRemove = custom_patterns.map(cp => cp.pattern);
+    stored.patterns = stored.patterns.filter(p => !toRemove.includes(p.pattern));
+    const removed = before - stored.patterns.length;
+    saveAnonymizePatterns(stored);
+    return { content: [{ type: "text", text: `Removed ${removed} pattern(s). Remaining: ${stored.patterns.length}` }] };
+  }
+
+  if (action === "anonymize") {
+    if (input === undefined || input === null) {
+      return { content: [{ type: "text", text: "input required" }], isError: true };
+    }
+
+    const useConsistency = consistency !== false;
+    let result = anonymizeText(input, useConsistency, custom_patterns);
+
+    if (format === "json") {
+      try {
+        const parsed = JSON.parse(result);
+        result = JSON.stringify(parsed, null, 2);
+      } catch {}
+    } else if (format === "yaml") {
+      try {
+        const yaml = require("yaml");
+        const parsed = JSON.parse(result);
+        result = yaml.stringify(parsed);
+      } catch {}
+    }
+
+    const stats = {
+      original_size: input.length,
+      anonymized_size: result.length,
+      consistency: useConsistency
+    };
+
+    return { content: [{ type: "text", text: `${result}\n\n--- Anonymization Stats ---\n${JSON.stringify(stats, null, 2)}` }] };
+  }
+
+  return { content: [{ type: "text", text: "Unknown action. Use: anonymize, patterns, add_pattern, remove_pattern" }], isError: true };
+}
+
+const SANDBOX_FILE = path.join(DATA_DIR, "sandbox.json");
+const SANDBOX_DIR = path.join(DATA_DIR, "sandboxes");
+const MAX_ACTIVE_SANDBOXES = 5;
+const MAX_ROLLBACKS_PER_SANDBOX = 50;
+const SANDBOX_TTL_HOURS = 24;
+const MAX_BACKUP_FILE_SIZE = 10 * 1024 * 1024;
+
+fs.mkdirSync(SANDBOX_DIR, { recursive: true });
+
+function loadSandboxes() {
+  try {
+    if (fs.existsSync(SANDBOX_FILE)) {
+      return JSON.parse(fs.readFileSync(SANDBOX_FILE, "utf8"));
+    }
+  } catch {}
+  return { sandboxes: {} };
+}
+
+function saveSandboxes(data) {
+  fs.writeFileSync(SANDBOX_FILE, JSON.stringify(data, null, 2));
+}
+
+function purgeExpiredSandboxes(data) {
+  const now = Date.now();
+  const ttlMs = SANDBOX_TTL_HOURS * 60 * 60 * 1000;
+  let purged = 0;
+  for (const [id, sb] of Object.entries(data.sandboxes)) {
+    if (now - sb.created > ttlMs) {
+      const sbPath = path.join(SANDBOX_DIR, id);
+      try { fs.rmSync(sbPath, { recursive: true, force: true }); } catch {}
+      delete data.sandboxes[id];
+      purged++;
+    }
+  }
+  return purged;
+}
+
+function generateSandboxId() {
+  return "sb_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+async function sidekick_sandbox({ action, sandbox_name, command, files, auto_backup, rollback_id }) {
+  const data = loadSandboxes();
+  purgeExpiredSandboxes(data);
+
+  if (action === "list") {
+    const entries = Object.entries(data.sandboxes);
+    if (entries.length === 0) {
+      return { content: [{ type: "text", text: "No active sandboxes" }] };
+    }
+    const list = entries.map(([id, sb]) => {
+      const age = Math.round((Date.now() - sb.created) / 1000 / 60);
+      return `${id} (${sb.name || "unnamed"}): ${sb.operations.length} ops, ${age}min old, ${sb.backups.length} backups`;
+    }).join("\n");
+    return { content: [{ type: "text", text: `Active sandboxes (${entries.length}/${MAX_ACTIVE_SANDBOXES}):\n\n${list}` }] };
+  }
+
+  if (action === "exec") {
+    if (!command) {
+      return { content: [{ type: "text", text: "command required" }], isError: true };
+    }
+
+    const name = sandbox_name || `sandbox_${Date.now()}`;
+    let sbId = null;
+    for (const [id, sb] of Object.entries(data.sandboxes)) {
+      if (sb.name === name) { sbId = id; break; }
+    }
+
+    if (!sbId) {
+      if (Object.keys(data.sandboxes).length >= MAX_ACTIVE_SANDBOXES) {
+        return { content: [{ type: "text", text: `Max active sandboxes reached (${MAX_ACTIVE_SANDBOXES}). Clean up with action="clean" or wait for TTL expiry.` }], isError: true };
+      }
+      sbId = generateSandboxId();
+      data.sandboxes[sbId] = {
+        name,
+        created: Date.now(),
+        operations: [],
+        backups: [],
+        newFiles: []
+      };
+    }
+
+    const sb = data.sandboxes[sbId];
+    if (sb.operations.length >= MAX_ROLLBACKS_PER_SANDBOX) {
+      return { content: [{ type: "text", text: `Max operations reached for this sandbox (${MAX_ROLLBACKS_PER_SANDBOX}). Create a new sandbox or clean this one.` }], isError: true };
+    }
+
+    const sbPath = path.join(SANDBOX_DIR, sbId);
+    fs.mkdirSync(sbPath, { recursive: true });
+
+    const filesToBackup = files || [];
+    const backedUp = [];
+    const skipped = [];
+
+    if (auto_backup !== false && filesToBackup.length > 0) {
+      for (const f of filesToBackup) {
+        try {
+          const stat = fs.statSync(f);
+          if (!stat.isFile()) continue;
+          if (stat.size > MAX_BACKUP_FILE_SIZE) {
+            skipped.push({ file: f, reason: `exceeds ${MAX_BACKUP_FILE_SIZE} bytes` });
+            continue;
+          }
+          const relPath = f.replace(/^\//, "").replace(/\//g, "_");
+          const backupPath = path.join(sbPath, `backup_${sb.operations.length}_${relPath}`);
+          fs.copyFileSync(f, backupPath);
+          sb.backups.push({ original: f, backup: backupPath, size: stat.size, timestamp: Date.now() });
+          backedUp.push(f);
+        } catch (e) {
+          if (e.code === "ENOENT") {
+            sb.newFiles.push({ path: f, opIndex: sb.operations.length });
+          }
+        }
+      }
+    }
+
+    const opRecord = {
+      index: sb.operations.length,
+      command,
+      timestamp: Date.now(),
+      backedUp,
+      skipped
+    };
+
+    let output = "";
+    let exitCode = 0;
+    try {
+      output = execSync(command, { timeout: 30000, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+    } catch (e) {
+      output = (e.stdout || "") + (e.stderr || "");
+      exitCode = e.status || 1;
+    }
+
+    opRecord.exitCode = exitCode;
+    opRecord.output = output.substring(0, 5000);
+    sb.operations.push(opRecord);
+    saveSandboxes(data);
+
+    const summary = [
+      `Sandbox: ${sbId} (${sb.name})`,
+      `Command: ${command}`,
+      `Exit: ${exitCode}`,
+      `Backed up: ${backedUp.length} file(s)${backedUp.length > 0 ? " [" + backedUp.join(", ") + "]" : ""}`,
+      skipped.length > 0 ? `Skipped: ${skipped.length} file(s) ${JSON.stringify(skipped)}` : "",
+      `Operations: ${sb.operations.length}/${MAX_ROLLBACKS_PER_SANDBOX}`,
+      "",
+      output.substring(0, 2000)
+    ].filter(Boolean).join("\n");
+
+    return { content: [{ type: "text", text: summary }] };
+  }
+
+  if (action === "rollback") {
+    let targetId = rollback_id;
+    
+    if (!targetId && sandbox_name) {
+      for (const [id, sb] of Object.entries(data.sandboxes)) {
+        if (sb.name === sandbox_name) {
+          targetId = id;
+          break;
+        }
+      }
+    }
+    
+    if (!targetId) {
+      const entries = Object.entries(data.sandboxes);
+      if (entries.length === 0) {
+        return { content: [{ type: "text", text: "No active sandboxes to rollback" }], isError: true };
+      }
+      targetId = entries[entries.length - 1][0];
+    }
+
+    const sb = data.sandboxes[targetId];
+    if (!sb) {
+      return { content: [{ type: "text", text: `Sandbox not found: ${targetId}` }], isError: true };
+    }
+
+    if (sb.backups.length === 0 && sb.newFiles.length === 0) {
+      return { content: [{ type: "text", text: `No backups to rollback for sandbox ${targetId}` }] };
+    }
+
+    const restored = [];
+    const removed = [];
+    const errors = [];
+
+    for (const backup of sb.backups.reverse()) {
+      try {
+        fs.copyFileSync(backup.backup, backup.original);
+        restored.push(backup.original);
+      } catch (e) {
+        errors.push({ file: backup.original, error: e.message });
+      }
+    }
+
+    for (const nf of sb.newFiles.reverse()) {
+      try {
+        if (fs.existsSync(nf.path)) {
+          fs.unlinkSync(nf.path);
+          removed.push(nf.path);
+        }
+      } catch (e) {
+        errors.push({ file: nf.path, error: e.message });
+      }
+    }
+
+    sb.backups = [];
+    sb.newFiles = [];
+    saveSandboxes(data);
+
+    const summary = [
+      `Rollback complete for sandbox: ${targetId} (${sb.name})`,
+      `Restored: ${restored.length} file(s)${restored.length > 0 ? " [" + restored.join(", ") + "]" : ""}`,
+      `Removed: ${removed.length} new file(s)${removed.length > 0 ? " [" + removed.join(", ") + "]" : ""}`,
+      errors.length > 0 ? `Errors: ${JSON.stringify(errors)}` : ""
+    ].filter(Boolean).join("\n");
+
+    return { content: [{ type: "text", text: summary }] };
+  }
+
+  if (action === "diff") {
+    let targetId = sandbox_name;
+    if (!targetId) {
+      return { content: [{ type: "text", text: "sandbox_name required for diff" }], isError: true };
+    }
+    
+    for (const [id, sb] of Object.entries(data.sandboxes)) {
+      if (sb.name === sandbox_name) {
+        targetId = id;
+        break;
+      }
+    }
+
+    const sb = data.sandboxes[targetId];
+    if (!sb) {
+      return { content: [{ type: "text", text: `Sandbox not found: ${targetId}` }], isError: true };
+    }
+
+    if (sb.operations.length === 0) {
+      return { content: [{ type: "text", text: `No operations recorded for sandbox ${targetId}` }] };
+    }
+
+    const diffs = sb.operations.map((op, i) => {
+      return [
+        `--- Operation ${op.index} ---`,
+        `Command: ${op.command}`,
+        `Time: ${new Date(op.timestamp).toISOString()}`,
+        `Exit: ${op.exitCode}`,
+        `Backed up: ${op.backedUp.join(", ") || "none"}`,
+        op.output ? `Output:\n${op.output.substring(0, 500)}` : ""
+      ].filter(Boolean).join("\n");
+    }).join("\n\n");
+
+    return { content: [{ type: "text", text: `Sandbox: ${targetId} (${sb.name})\nOperations: ${sb.operations.length}\n\n${diffs}` }] };
+  }
+
+  if (action === "clean") {
+    let targetId = sandbox_name;
+    if (targetId) {
+      for (const [id, sb] of Object.entries(data.sandboxes)) {
+        if (sb.name === sandbox_name) {
+          targetId = id;
+          break;
+        }
+      }
+      
+      if (!data.sandboxes[targetId]) {
+        return { content: [{ type: "text", text: `Sandbox not found: ${targetId}` }], isError: true };
+      }
+      const sbPath = path.join(SANDBOX_DIR, targetId);
+      try { fs.rmSync(sbPath, { recursive: true, force: true }); } catch {}
+      delete data.sandboxes[targetId];
+      saveSandboxes(data);
+      return { content: [{ type: "text", text: `Cleaned sandbox: ${targetId}` }] };
+    } else {
+      const count = Object.keys(data.sandboxes).length;
+      for (const id of Object.keys(data.sandboxes)) {
+        const sbPath = path.join(SANDBOX_DIR, id);
+        try { fs.rmSync(sbPath, { recursive: true, force: true }); } catch {}
+      }
+      data.sandboxes = {};
+      saveSandboxes(data);
+      return { content: [{ type: "text", text: `Cleaned ${count} sandbox(es)` }] };
+    }
+  }
+
+  return { content: [{ type: "text", text: "Unknown action. Use: exec, rollback, list, diff, clean" }], isError: true };
+}
+
+const COMMIT_TYPE_MAP = {
+  feat: "Features",
+  fix: "Bug Fixes",
+  docs: "Documentation",
+  style: "Styles",
+  refactor: "Code Refactoring",
+  perf: "Performance Improvements",
+  test: "Tests",
+  build: "Build System",
+  ci: "Continuous Integration",
+  chore: "Chores",
+  revert: "Reverts",
+  deps: "Dependencies"
+};
+
+function parseConventionalCommit(message) {
+  const match = message.match(/^(\w+)(?:\(([^)]+)\))?(!)?:\s*(.+)$/);
+  if (!match) {
+    return { type: "other", scope: null, breaking: false, description: message };
+  }
+  return {
+    type: match[1].toLowerCase(),
+    scope: match[2] || null,
+    breaking: !!match[3] || message.includes("BREAKING CHANGE:"),
+    description: match[4]
+  };
+}
+
+async function sidekick_changelog({ action, from, to, format, group_by, use_llm, include, path: repoPath }) {
+  if (!from) {
+    return { content: [{ type: "text", text: "from parameter required (starting ref: tag, commit, or branch)" }], isError: true };
+  }
+
+  const toRef = to || "HEAD";
+  const fmt = format || "markdown";
+  const groupBy = group_by || "type";
+  const includeType = include || "all";
+  const cwd = repoPath || process.cwd();
+
+  let gitLogCmd = `git log ${from}..${toRef} --pretty=format:"%H|%s|%an|%ad" --date=short`;
+  
+  let logOutput = "";
+  try {
+    logOutput = execSync(gitLogCmd, { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], cwd });
+  } catch (e) {
+    return { content: [{ type: "text", text: `Git log failed: ${e.message}\n\nMake sure you're in a git repository and the refs exist.` }], isError: true };
+  }
+
+  if (!logOutput.trim()) {
+    return { content: [{ type: "text", text: `No commits found between ${from} and ${toRef}` }] };
+  }
+
+  const commits = logOutput.trim().split("\n").map(line => {
+    const [hash, message, author, date] = line.split("|");
+    const parsed = parseConventionalCommit(message);
+    return { hash, message, author, date, ...parsed };
+  });
+
+  let filtered = commits;
+  if (includeType !== "all") {
+    const typeFilter = {
+      features: ["feat"],
+      fixes: ["fix"],
+      breaking: commits.filter(c => c.breaking).map(c => c.type),
+      refactor: ["refactor"],
+      deps: ["deps", "chore"]
+    };
+    const allowedTypes = typeFilter[includeType] || [];
+    filtered = commits.filter(c => allowedTypes.includes(c.type) || (includeType === "breaking" && c.breaking));
+  }
+
+  if (filtered.length === 0) {
+    return { content: [{ type: "text", text: `No commits matching filter "${includeType}" between ${from} and ${toRef}` }] };
+  }
+
+  const grouped = {};
+  for (const commit of filtered) {
+    let key;
+    if (groupBy === "type") {
+      key = COMMIT_TYPE_MAP[commit.type] || commit.type;
+    } else if (groupBy === "scope") {
+      key = commit.scope || "general";
+    } else if (groupBy === "author") {
+      key = commit.author;
+    } else {
+      key = "other";
+    }
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push(commit);
+  }
+
+  let changelog = "";
+  
+  if (fmt === "markdown") {
+    const breaking = filtered.filter(c => c.breaking);
+    if (breaking.length > 0) {
+      changelog += "## ⚠ BREAKING CHANGES\n\n";
+      for (const c of breaking) {
+        changelog += `- ${c.description} (${c.hash.substring(0, 7)})\n`;
+      }
+      changelog += "\n";
+    }
+
+    for (const [group, commits] of Object.entries(grouped)) {
+      if (groupBy === "type" && group === "other") continue;
+      changelog += `## ${group}\n\n`;
+      for (const c of commits) {
+        const scope = c.scope ? `**${c.scope}:** ` : "";
+        changelog += `- ${scope}${c.description} (${c.hash.substring(0, 7)})\n`;
+      }
+      changelog += "\n";
+    }
+
+    changelog += `---\n**${filtered.length} commits** from ${from} to ${toRef}\n`;
+  } else if (fmt === "plain") {
+    for (const [group, commits] of Object.entries(grouped)) {
+      changelog += `${group}:\n`;
+      for (const c of commits) {
+        changelog += `  - ${c.description}\n`;
+      }
+      changelog += "\n";
+    }
+  } else if (fmt === "conventional") {
+    for (const c of filtered) {
+      changelog += `${c.message}\n`;
+    }
+  }
+
+  if (use_llm && fmt === "markdown") {
+    try {
+      const summaryPrompt = `Summarize these ${filtered.length} git commits in 2-3 sentences for release notes. Focus on what changed and why it matters:\n\n${filtered.map(c => `- ${c.message}`).join("\n")}`;
+      const llmResult = await sidekick_llm({
+        prompt: summaryPrompt,
+        system: "You are a technical writer creating release notes. Be concise and focus on user-facing changes.",
+        temperature: 0.3
+      });
+      if (llmResult.content && llmResult.content[0]) {
+        changelog = `## Summary\n\n${llmResult.content[0].text}\n\n${changelog}`;
+      }
+    } catch (e) {
+      changelog += `\n*LLM summary failed: ${e.message}*\n`;
+    }
+  }
+
+  if (action === "preview" || action === "generate") {
+    return { content: [{ type: "text", text: changelog }] };
+  }
+
+  if (action === "save") {
+    const changelogPath = path.join(cwd, "CHANGELOG.md");
+    let existingContent = "";
+    try {
+      existingContent = fs.readFileSync(changelogPath, "utf8");
+    } catch {}
+
+    const date = new Date().toISOString().split("T")[0];
+    const header = `## ${date}\n\n`;
+    const newEntry = header + changelog;
+
+    const lines = existingContent.split("\n");
+    let insertIndex = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].startsWith("# ")) {
+        insertIndex = i + 1;
+        while (insertIndex < lines.length && lines[insertIndex].trim() === "") insertIndex++;
+        break;
+      }
+    }
+
+    lines.splice(insertIndex, 0, newEntry);
+    fs.writeFileSync(changelogPath, lines.join("\n"));
+
+    return { content: [{ type: "text", text: `Changelog saved to ${changelogPath}\n\n${newEntry}` }] };
+  }
+
+  return { content: [{ type: "text", text: changelog }] };
+}
+
+const MAX_NETDIAG_COMMANDS = 15;
+const COMMON_PORTS = [22, 80, 443, 3000, 3001, 4000, 5000, 8080, 8443, 9090];
+
+function runNetDiagCommand(cmd, timeout = 5000) {
+  try {
+    const output = execSync(cmd, { encoding: "utf8", timeout, stdio: ["pipe", "pipe", "pipe"] });
+    return { success: true, output: output.trim() };
+  } catch (e) {
+    return { success: false, output: (e.stdout || "") + (e.stderr || ""), error: e.message };
+  }
+}
+
+async function sidekick_netdiag({ action, target, port_range, timeout, format }) {
+  if (!target && action !== "listeners") {
+    return { content: [{ type: "text", text: "target required (host, URL, or IP)" }], isError: true };
+  }
+
+  const fmt = format || "detailed";
+  const to = timeout || 5000;
+  let commandCount = 0;
+
+  const checkLimit = () => {
+    commandCount++;
+    if (commandCount > MAX_NETDIAG_COMMANDS) {
+      throw new Error(`Exceeded max commands per diagnostic (${MAX_NETDIAG_COMMANDS})`);
+    }
+  };
+
+  if (action === "dns") {
+    checkLimit();
+    const dnsResult = runNetDiagCommand(`dig +short ${shellEscape(target)} A`, to);
+    checkLimit();
+    const dnsAny = runNetDiagCommand(`dig +short ${shellEscape(target)} ANY`, to);
+    checkLimit();
+    const reverse = runNetDiagCommand(`dig +short -x ${shellEscape(target)}`, to);
+
+    let result = `DNS Resolution for: ${target}\n\n`;
+    result += `A Records:\n${dnsResult.output || "None"}\n\n`;
+    result += `ANY Records:\n${dnsAny.output || "None"}\n\n`;
+    result += `Reverse DNS:\n${reverse.output || "None"}`;
+
+    return { content: [{ type: "text", text: result }] };
+  }
+
+  if (action === "route") {
+    checkLimit();
+    const traceResult = runNetDiagCommand(`traceroute -m 10 -w 2 ${shellEscape(target)}`, to * 2);
+    
+    let result = `Route to: ${target}\n\n`;
+    result += traceResult.output || "Traceroute failed or timed out";
+
+    return { content: [{ type: "text", text: result }] };
+  }
+
+  if (action === "ports") {
+    let ports = COMMON_PORTS;
+    if (port_range) {
+      const match = port_range.match(/(\d+)-(\d+)/);
+      if (match) {
+        const start = parseInt(match[1]);
+        const end = parseInt(match[2]);
+        ports = [];
+        for (let i = start; i <= end && ports.length < 20; i++) {
+          ports.push(i);
+        }
+      }
+    }
+
+    checkLimit();
+    const results = [];
+    for (const port of ports) {
+      const ncResult = runNetDiagCommand(`nc -z -w 2 ${shellEscape(target)} ${port} 2>&1`, 3000);
+      const isOpen = ncResult.success && !ncResult.output.includes("failed");
+      results.push({ port, open: isOpen });
+    }
+
+    let result = `Port Scan for: ${target}\n\n`;
+    const openPorts = results.filter(r => r.open);
+    const closedPorts = results.filter(r => !r.open);
+    
+    result += `Open: ${openPorts.length}\n`;
+    if (openPorts.length > 0) {
+      result += `  ${openPorts.map(r => r.port).join(", ")}\n`;
+    }
+    result += `\nClosed: ${closedPorts.length}\n`;
+    if (fmt === "detailed" && closedPorts.length > 0) {
+      result += `  ${closedPorts.map(r => r.port).join(", ")}\n`;
+    }
+
+    return { content: [{ type: "text", text: result }] };
+  }
+
+  if (action === "listeners") {
+    checkLimit();
+    const ssResult = runNetDiagCommand("ss -tlnp", to);
+    
+    let result = "Local Listening Ports\n\n";
+    result += ssResult.output || "No listeners found or ss command failed";
+
+    return { content: [{ type: "text", text: result }] };
+  }
+
+  if (action === "connectivity") {
+    const targets = target.split(",").map(t => t.trim());
+    const results = [];
+
+    for (const t of targets) {
+      checkLimit();
+      const pingResult = runNetDiagCommand(`ping -c 2 -W 2 ${shellEscape(t)} 2>&1`, to);
+      const isUp = pingResult.success && pingResult.output.includes("bytes from");
+      results.push({ target: t, up: isUp, latency: isUp ? pingResult.output.match(/time[=<](\d+\.?\d*)/)?.[1] + "ms" : "N/A" });
+    }
+
+    let result = "Connectivity Check\n\n";
+    for (const r of results) {
+      result += `${r.target}: ${r.up ? "✓ UP" : "✗ DOWN"} (${r.latency})\n`;
+    }
+
+    return { content: [{ type: "text", text: result }] };
+  }
+
+  if (action === "check") {
+    let host = target;
+    let url = null;
+    if (target.startsWith("http://") || target.startsWith("https://")) {
+      try {
+        const parsed = new URL(target);
+        host = parsed.hostname;
+        url = target;
+      } catch {}
+    }
+
+    const report = { target, host, timestamp: new Date().toISOString(), checks: {} };
+
+    checkLimit();
+    const dnsResult = runNetDiagCommand(`dig +short ${shellEscape(host)} A`, to);
+    report.checks.dns = dnsResult.output || "Failed";
+
+    checkLimit();
+    const pingResult = runNetDiagCommand(`ping -c 2 -W 2 ${shellEscape(host)} 2>&1`, to);
+    report.checks.ping = pingResult.success && pingResult.output.includes("bytes from") ? "OK" : "Failed";
+
+    if (url) {
+      checkLimit();
+      const curlResult = runNetDiagCommand(`curl -s -o /dev/null -w "%{http_code}|%{time_total}|%{ssl_verify_result}" --max-time ${to / 1000} ${shellEscape(url)}`, to);
+      if (curlResult.success) {
+        const parts = curlResult.output.split("|");
+        report.checks.http = {
+          status: parts[0] || "N/A",
+          time: parts[1] ? parseFloat(parts[1]).toFixed(3) + "s" : "N/A",
+          ssl: parts[2] === "0" ? "Valid" : "Invalid"
+        };
+      } else {
+        report.checks.http = "Failed";
+      }
+    }
+
+    checkLimit();
+    const portResult = runNetDiagCommand(`nc -z -w 2 ${shellEscape(host)} 22 2>&1`, 3000);
+    report.checks.ssh = portResult.success && !portResult.output.includes("failed") ? "Open" : "Closed";
+
+    let result = `Network Diagnostic Report\n`;
+    result += `Target: ${target}\n`;
+    result += `Time: ${report.timestamp}\n\n`;
+    result += `DNS: ${report.checks.dns}\n`;
+    result += `Ping: ${report.checks.ping}\n`;
+    if (report.checks.http) {
+      if (typeof report.checks.http === "object") {
+        result += `HTTP: ${report.checks.http.status} (${report.checks.http.time}, SSL: ${report.checks.http.ssl})\n`;
+      } else {
+        result += `HTTP: ${report.checks.http}\n`;
+      }
+    }
+    result += `SSH (22): ${report.checks.ssh}\n`;
+
+    return { content: [{ type: "text", text: result }] };
+  }
+
+  return { content: [{ type: "text", text: "Unknown action. Use: check, dns, route, ports, listeners, connectivity" }], isError: true };
+}
+
+const MAX_TIMELINE_EVENTS = 500;
+const MAX_TIMELINE_RANGE_DAYS = 30;
+
+function parseRelativeTime(str) {
+  if (!str || str === "now") return new Date();
+  const match = str.match(/^(\d+)([smhd])$/);
+  if (match) {
+    const val = parseInt(match[1]);
+    const unit = match[2];
+    const multipliers = { s: 1000, m: 60000, h: 3600000, d: 86400000 };
+    return new Date(Date.now() - val * multipliers[unit]);
+  }
+  return new Date(str);
+}
+
+function parseJournalctlLine(line) {
+  const match = line.match(/^(\S+ \d+ \d+:\d+:\d+) (\S+) (.+)$/);
+  if (!match) return null;
+  const [_, timestamp, host, message] = match;
+  const year = new Date().getFullYear();
+  const date = new Date(`${year} ${timestamp}`);
+  const severity = /error|fail|critical/i.test(message) ? "error" 
+    : /warn/i.test(message) ? "warn" : "info";
+  return { timestamp: date.toISOString(), source: "journalctl", severity, summary: message.substring(0, 200) };
+}
+
+function parseLogJsonlLine(line) {
+  try {
+    const entry = JSON.parse(line);
+    return {
+      timestamp: entry.t,
+      source: "log.jsonl",
+      severity: entry.ok ? "info" : "error",
+      summary: `${entry.n}: ${(entry.s || "").substring(0, 150)}`
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseGitLogLine(line) {
+  const match = line.match(/^(\S+)\s+(\S+)\s+(.+)$/);
+  if (!match) return null;
+  const [_, hash, date, message] = match;
+  return {
+    timestamp: new Date(date).toISOString(),
+    source: "git",
+    severity: "info",
+    summary: `${hash.substring(0, 7)}: ${message.substring(0, 150)}`
+  };
+}
+
+async function sidekick_timeline({ action, since, until, sources, pattern, severity, format, max_events }) {
+  const maxEvents = max_events || MAX_TIMELINE_EVENTS;
+  const startTime = parseRelativeTime(since);
+  const endTime = parseRelativeTime(until || "now");
+  
+  const rangeDays = (endTime - startTime) / 86400000;
+  if (rangeDays > MAX_TIMELINE_RANGE_DAYS) {
+    return { content: [{ type: "text", text: `Time range exceeds maximum of ${MAX_TIMELINE_RANGE_DAYS} days` }], isError: true };
+  }
+
+  const useSources = sources && sources[0] !== "all" ? sources : ["log.jsonl", "journalctl", "git", "files"];
+  const events = [];
+
+  if (useSources.includes("log.jsonl")) {
+    try {
+      const logContent = fs.readFileSync(LOG_FILE, "utf8");
+      const lines = logContent.trim().split("\n").filter(Boolean);
+      for (const line of lines) {
+        const event = parseLogJsonlLine(line);
+        if (event) {
+          const eventTime = new Date(event.timestamp);
+          if (eventTime >= startTime && eventTime <= endTime) {
+            events.push(event);
+          }
+        }
+      }
+    } catch {}
+  }
+
+  if (useSources.includes("journalctl")) {
+    try {
+      const sinceStr = startTime.toISOString();
+      const result = execSync(`journalctl --since "${sinceStr}" --no-pager -n 500`, { 
+        encoding: "utf8", 
+        timeout: 10000,
+        stdio: ["pipe", "pipe", "pipe"] 
+      });
+      const lines = result.trim().split("\n").slice(4);
+      for (const line of lines) {
+        const event = parseJournalctlLine(line);
+        if (event) {
+          const eventTime = new Date(event.timestamp);
+          if (eventTime >= startTime && eventTime <= endTime) {
+            events.push(event);
+          }
+        }
+      }
+    } catch {}
+  }
+
+  if (useSources.includes("git")) {
+    try {
+      const sinceDate = startTime.toISOString();
+      const result = execSync(`git log --since="${sinceDate}" --pretty=format:"%H %ad %s" --date=iso -n 100`, {
+        encoding: "utf8",
+        timeout: 10000,
+        cwd: "/home/sidekick/sidekick",
+        stdio: ["pipe", "pipe", "pipe"]
+      });
+      const lines = result.trim().split("\n");
+      for (const line of lines) {
+        const event = parseGitLogLine(line);
+        if (event) events.push(event);
+      }
+    } catch {}
+  }
+
+  if (useSources.includes("files")) {
+    try {
+      const minutes = Math.ceil((Date.now() - startTime.getTime()) / 60000);
+      const result = execSync(`find /home/sidekick/sidekick -type f -mmin -${minutes} -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null | head -50`, {
+        encoding: "utf8",
+        timeout: 10000,
+        stdio: ["pipe", "pipe", "pipe"]
+      });
+      const files = result.trim().split("\n").filter(Boolean);
+      for (const file of files) {
+        try {
+          const stat = fs.statSync(file);
+          events.push({
+            timestamp: stat.mtime.toISOString(),
+            source: "files",
+            severity: "info",
+            summary: `Modified: ${file}`
+          });
+        } catch {}
+      }
+    } catch {}
+  }
+
+  events.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+  let filtered = events;
+  if (severity && severity !== "all") {
+    filtered = filtered.filter(e => e.severity === severity);
+  }
+  if (pattern) {
+    const regex = new RegExp(pattern, "i");
+    filtered = filtered.filter(e => regex.test(e.summary));
+  }
+
+  if (filtered.length > maxEvents) {
+    filtered = filtered.slice(0, maxEvents);
+  }
+
+  if (action === "filter") {
+    return { content: [{ type: "text", text: `Found ${filtered.length} events matching filters` }] };
+  }
+
+  if (action === "export" && format === "json") {
+    return { content: [{ type: "text", text: JSON.stringify(filtered, null, 2) }] };
+  }
+
+  if (filtered.length === 0) {
+    return { content: [{ type: "text", text: `No events found between ${since} and ${until || "now"}` }] };
+  }
+
+  let output = `Timeline: ${startTime.toISOString()} to ${endTime.toISOString()}\n`;
+  output += `Events: ${filtered.length}\n\n`;
+
+  if (format === "detailed") {
+    for (const event of filtered) {
+      output += `[${event.timestamp}] [${event.source}] [${event.severity}]\n  ${event.summary}\n\n`;
+    }
+  } else {
+    for (const event of filtered) {
+      const time = event.timestamp.substring(11, 19);
+      output += `${time} [${event.source.padEnd(10)}] ${event.summary}\n`;
+    }
+  }
+
+  return { content: [{ type: "text", text: output }] };
+}
+
+const CIRCUIT_FILE = path.join(DATA_DIR, "circuits.json");
+const MAX_CIRCUIT_TARGETS = 20;
+const CIRCUIT_IDLE_RESET_HOURS = 1;
+
+function loadCircuits() {
+  try {
+    if (fs.existsSync(CIRCUIT_FILE)) {
+      return JSON.parse(fs.readFileSync(CIRCUIT_FILE, "utf8"));
+    }
+  } catch {}
+  return { circuits: {} };
+}
+
+function saveCircuits(data) {
+  fs.writeFileSync(CIRCUIT_FILE, JSON.stringify(data, null, 2));
+}
+
+function cleanupIdleCircuits(data) {
+  const now = Date.now();
+  const idleMs = CIRCUIT_IDLE_RESET_HOURS * 3600000;
+  let cleaned = 0;
+  for (const [target, circuit] of Object.entries(data.circuits)) {
+    if (now - circuit.lastAccess > idleMs) {
+      delete data.circuits[target];
+      cleaned++;
+    }
+  }
+  return cleaned;
+}
+
+async function sidekick_circuit({ action, target, tool, args, failure_threshold, cooldown_seconds, cache_response }) {
+  const data = loadCircuits();
+  cleanupIdleCircuits(data);
+
+  if (action === "status") {
+    const entries = Object.entries(data.circuits);
+    if (entries.length === 0) {
+      return { content: [{ type: "text", text: "No circuits configured" }] };
+    }
+    const list = entries.map(([t, c]) => {
+      const age = Math.round((Date.now() - c.lastAccess) / 1000);
+      return `${t}: ${c.state} (failures: ${c.failures}/${c.threshold}, cooldown: ${c.cooldown}s, last: ${age}s ago)`;
+    }).join("\n");
+    return { content: [{ type: "text", text: `Circuits (${entries.length}/${MAX_CIRCUIT_TARGETS}):\n\n${list}` }] };
+  }
+
+  if (action === "reset") {
+    if (!target) {
+      return { content: [{ type: "text", text: "target required" }], isError: true };
+    }
+    if (data.circuits[target]) {
+      data.circuits[target].state = "closed";
+      data.circuits[target].failures = 0;
+      data.circuits[target].lastFailure = null;
+      saveCircuits(data);
+      return { content: [{ type: "text", text: `Circuit reset: ${target}` }] };
+    }
+    return { content: [{ type: "text", text: `Circuit not found: ${target}` }], isError: true };
+  }
+
+  if (action === "configure") {
+    if (!target) {
+      return { content: [{ type: "text", text: "target required" }], isError: true };
+    }
+    if (!data.circuits[target]) {
+      if (Object.keys(data.circuits).length >= MAX_CIRCUIT_TARGETS) {
+        return { content: [{ type: "text", text: `Max circuits reached (${MAX_CIRCUIT_TARGETS})` }], isError: true };
+      }
+      data.circuits[target] = {
+        state: "closed",
+        failures: 0,
+        threshold: failure_threshold || 5,
+        cooldown: cooldown_seconds || 60,
+        lastFailure: null,
+        lastAccess: Date.now(),
+        cachedResponse: null
+      };
+    } else {
+      if (failure_threshold !== undefined) data.circuits[target].threshold = failure_threshold;
+      if (cooldown_seconds !== undefined) data.circuits[target].cooldown = cooldown_seconds;
+    }
+    saveCircuits(data);
+    return { content: [{ type: "text", text: `Circuit configured: ${target} (threshold: ${data.circuits[target].threshold}, cooldown: ${data.circuits[target].cooldown}s)` }] };
+  }
+
+  if (action === "call") {
+    if (!target || !tool) {
+      return { content: [{ type: "text", text: "target and tool required" }], isError: true };
+    }
+
+    if (!data.circuits[target]) {
+      if (Object.keys(data.circuits).length >= MAX_CIRCUIT_TARGETS) {
+        return { content: [{ type: "text", text: `Max circuits reached (${MAX_CIRCUIT_TARGETS}). Configure a circuit first.` }], isError: true };
+      }
+      data.circuits[target] = {
+        state: "closed",
+        failures: 0,
+        threshold: failure_threshold || 5,
+        cooldown: cooldown_seconds || 60,
+        lastFailure: null,
+        lastAccess: Date.now(),
+        cachedResponse: null
+      };
+    }
+
+    const circuit = data.circuits[target];
+    circuit.lastAccess = Date.now();
+    const now = Date.now();
+
+    if (circuit.state === "open") {
+      const elapsed = (now - circuit.lastFailure) / 1000;
+      if (elapsed >= circuit.cooldown) {
+        circuit.state = "half-open";
+      } else {
+        const remaining = Math.ceil(circuit.cooldown - elapsed);
+        if (cache_response && circuit.cachedResponse) {
+          saveCircuits(data);
+          return { content: [{ type: "text", text: `[CIRCUIT OPEN - CACHED] ${target}\nCooldown: ${remaining}s remaining\n\n${circuit.cachedResponse}` }] };
+        }
+        saveCircuits(data);
+        return { content: [{ type: "text", text: `[CIRCUIT OPEN] ${target}\nFailures: ${circuit.failures}/${circuit.threshold}\nCooldown: ${remaining}s remaining\nTool: ${tool} (not called)` }], isError: true };
+      }
+    }
+
+    const result = await callTool(tool, args || {});
+    const success = !result.isError;
+
+    if (success) {
+      circuit.state = "closed";
+      circuit.failures = 0;
+      circuit.lastFailure = null;
+      if (cache_response && result.content && result.content[0]) {
+        circuit.cachedResponse = result.content[0].text;
+      }
+      saveCircuits(data);
+      return result;
+    } else {
+      circuit.failures++;
+      circuit.lastFailure = now;
+      if (circuit.failures >= circuit.threshold) {
+        circuit.state = "open";
+      }
+      saveCircuits(data);
+      const stateInfo = circuit.state === "open" ? " (CIRCUIT NOW OPEN)" : "";
+      return { content: [{ type: "text", text: `${result.content?.[0]?.text || "Tool call failed"}\n\n[CIRCUIT] ${target}: ${circuit.failures}/${circuit.threshold} failures${stateInfo}` }], isError: true };
+    }
+  }
+
+  return { content: [{ type: "text", text: "Unknown action. Use: call, status, reset, configure" }], isError: true };
+}
+
+const BASELINE_FILE = path.join(DATA_DIR, "baselines.json");
+const MAX_TRACKED_METRICS = 50;
+const MAX_DATA_POINTS_PER_METRIC = 1000;
+const MIN_DATA_POINTS_FOR_LEARNING = 10;
+
+function loadBaselines() {
+  try {
+    if (fs.existsSync(BASELINE_FILE)) {
+      return JSON.parse(fs.readFileSync(BASELINE_FILE, "utf8"));
+    }
+  } catch {}
+  return { metrics: {} };
+}
+
+function saveBaselines(data) {
+  fs.writeFileSync(BASELINE_FILE, JSON.stringify(data, null, 2));
+}
+
+function getTimeBucket(hour) {
+  return Math.floor(hour / 4) * 4;
+}
+
+function calculateStats(values) {
+  if (values.length === 0) return { mean: 0, stddev: 0 };
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const variance = values.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / values.length;
+  const stddev = Math.sqrt(variance);
+  return { mean, stddev };
+}
+
+async function sidekick_baseline({ action, metric_name, value, source, command, window, sensitivity }) {
+  const data = loadBaselines();
+  const sens = sensitivity || "medium";
+  const sigmaMultiplier = { low: 3, medium: 2, high: 1.5 }[sens] || 2;
+
+  if (action === "record") {
+    if (!metric_name || value === undefined) {
+      return { content: [{ type: "text", text: "metric_name and value required" }], isError: true };
+    }
+
+    if (!data.metrics[metric_name]) {
+      if (Object.keys(data.metrics).length >= MAX_TRACKED_METRICS) {
+        return { content: [{ type: "text", text: `Max metrics reached (${MAX_TRACKED_METRICS})` }], isError: true };
+      }
+      data.metrics[metric_name] = {
+        dataPoints: [],
+        baseline: null,
+        created: Date.now()
+      };
+    }
+
+    const metric = data.metrics[metric_name];
+    metric.dataPoints.push({
+      value,
+      timestamp: Date.now(),
+      hour: new Date().getHours()
+    });
+
+    if (metric.dataPoints.length > MAX_DATA_POINTS_PER_METRIC) {
+      metric.dataPoints = metric.dataPoints.slice(-MAX_DATA_POINTS_PER_METRIC);
+    }
+
+    saveBaselines(data);
+    return { content: [{ type: "text", text: `Recorded ${value} for ${metric_name} (${metric.dataPoints.length} points total)` }] };
+  }
+
+  if (action === "learn") {
+    if (!metric_name) {
+      return { content: [{ type: "text", text: "metric_name required" }], isError: true };
+    }
+
+    const metric = data.metrics[metric_name];
+    if (!metric) {
+      return { content: [{ type: "text", text: `Metric not found: ${metric_name}` }], isError: true };
+    }
+
+    if (metric.dataPoints.length < MIN_DATA_POINTS_FOR_LEARNING) {
+      return { content: [{ type: "text", text: `Insufficient data: ${metric.dataPoints.length}/${MIN_DATA_POINTS_FOR_LEARNING} points needed` }], isError: true };
+    }
+
+    const buckets = {};
+    for (const point of metric.dataPoints) {
+      const bucket = getTimeBucket(point.hour);
+      if (!buckets[bucket]) buckets[bucket] = [];
+      buckets[bucket].push(point.value);
+    }
+
+    const baseline = {};
+    for (const [bucket, values] of Object.entries(buckets)) {
+      const stats = calculateStats(values);
+      baseline[bucket] = {
+        mean: stats.mean,
+        stddev: stats.stddev,
+        count: values.length
+      };
+    }
+
+    metric.baseline = baseline;
+    metric.learnedAt = Date.now();
+    saveBaselines(data);
+
+    const bucketSummary = Object.entries(baseline).map(([b, s]) => 
+      `${b.toString().padStart(2, "0")}:00 - mean: ${s.mean.toFixed(2)}, σ: ${s.stddev.toFixed(2)} (n=${s.count})`
+    ).join("\n");
+
+    return { content: [{ type: "text", text: `Baseline learned for ${metric_name}\n\nTime buckets:\n${bucketSummary}` }] };
+  }
+
+  if (action === "check") {
+    if (!metric_name) {
+      return { content: [{ type: "text", text: "metric_name required" }], isError: true };
+    }
+
+    let currentValue = value;
+    if (currentValue === undefined && source === "command" && command) {
+      try {
+        const result = execSync(command, { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] });
+        currentValue = parseFloat(result.trim());
+      } catch (e) {
+        return { content: [{ type: "text", text: `Command failed: ${e.message}` }], isError: true };
+      }
+    }
+
+    if (currentValue === undefined || isNaN(currentValue)) {
+      return { content: [{ type: "text", text: "value required (or use source=command with a command that outputs a number)" }], isError: true };
+    }
+
+    const metric = data.metrics[metric_name];
+    if (!metric || !metric.baseline) {
+      return { content: [{ type: "text", text: `No baseline for ${metric_name}. Use action=learn first.` }], isError: true };
+    }
+
+    const currentHour = new Date().getHours();
+    const bucket = getTimeBucket(currentHour);
+    const bucketStats = metric.baseline[bucket];
+
+    if (!bucketStats) {
+      return { content: [{ type: "text", text: `No baseline data for time bucket ${bucket}:00` }], isError: true };
+    }
+
+    const deviation = Math.abs(currentValue - bucketStats.mean);
+    const sigmaDeviation = bucketStats.stddev > 0 ? deviation / bucketStats.stddev : 0;
+    const isAnomaly = sigmaDeviation > sigmaMultiplier;
+
+    const result = {
+      metric: metric_name,
+      current: currentValue,
+      expected: bucketStats.mean.toFixed(2),
+      deviation: sigmaDeviation.toFixed(2) + "σ",
+      threshold: sigmaMultiplier + "σ",
+      status: isAnomaly ? "ANOMALY" : "normal",
+      timeBucket: `${bucket}:00-${bucket + 3}:59`
+    };
+
+    let output = `Baseline Check: ${metric_name}\n`;
+    output += `Current: ${result.current}\n`;
+    output += `Expected: ${result.expected} (±${bucketStats.stddev.toFixed(2)}σ)\n`;
+    output += `Deviation: ${result.deviation} (threshold: ${result.threshold})\n`;
+    output += `Time bucket: ${result.timeBucket}\n`;
+    output += `Status: ${result.status}`;
+
+    return { content: [{ type: "text", text: output }] };
+  }
+
+  if (action === "status") {
+    const entries = Object.entries(data.metrics);
+    if (entries.length === 0) {
+      return { content: [{ type: "text", text: "No metrics tracked" }] };
+    }
+    const list = entries.map(([name, m]) => {
+      const learned = m.baseline ? "✓" : "✗";
+      return `${name}: ${m.dataPoints.length} points, baseline: ${learned}`;
+    }).join("\n");
+    return { content: [{ type: "text", text: `Tracked metrics (${entries.length}/${MAX_TRACKED_METRICS}):\n\n${list}` }] };
+  }
+
+  if (action === "reset") {
+    if (!metric_name) {
+      return { content: [{ type: "text", text: "metric_name required" }], isError: true };
+    }
+    if (data.metrics[metric_name]) {
+      delete data.metrics[metric_name];
+      saveBaselines(data);
+      return { content: [{ type: "text", text: `Reset metric: ${metric_name}` }] };
+    }
+    return { content: [{ type: "text", text: `Metric not found: ${metric_name}` }], isError: true };
+  }
+
+  return { content: [{ type: "text", text: "Unknown action. Use: record, learn, check, status, reset" }], isError: true };
+}
+
+const MAX_DEPEND_DEPTH = 10;
+const MAX_DEPEND_RESULTS = 100;
+
+async function sidekick_depend({ action, type, target, depth, format }) {
+  const maxDepth = Math.min(depth || 5, MAX_DEPEND_DEPTH);
+  const fmt = format || "tree";
+
+  if (action === "tree") {
+    if (!type) {
+      return { content: [{ type: "text", text: "type required (npm, service, process)" }], isError: true };
+    }
+
+    if (type === "npm") {
+      const cwd = target || process.cwd();
+      try {
+        const result = execSync(`npm ls --depth=${maxDepth} --json`, { 
+          encoding: "utf8", 
+          cwd,
+          timeout: 10000,
+          stdio: ["pipe", "pipe", "pipe"]
+        });
+        const tree = JSON.parse(result);
+        
+        if (fmt === "json") {
+          return { content: [{ type: "text", text: JSON.stringify(tree, null, 2) }] };
+        }
+        
+        const formatNpmTree = (node, indent = 0) => {
+          let output = "";
+          const prefix = "  ".repeat(indent);
+          if (node.name) {
+            output += `${prefix}${node.name}@${node.version || "?"}\n`;
+          }
+          if (node.dependencies) {
+            for (const [name, dep] of Object.entries(node.dependencies)) {
+              output += formatNpmTree(dep, indent + 1);
+            }
+          }
+          return output;
+        };
+        
+        return { content: [{ type: "text", text: formatNpmTree(tree) }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: `npm ls failed: ${e.message}` }], isError: true };
+      }
+    }
+
+    if (type === "service") {
+      if (!target) {
+        return { content: [{ type: "text", text: "target required for service tree" }], isError: true };
+      }
+      try {
+        const result = execSync(`systemctl list-dependencies ${shellEscape(target)} --no-pager`, {
+          encoding: "utf8",
+          timeout: 5000,
+          stdio: ["pipe", "pipe", "pipe"]
+        });
+        return { content: [{ type: "text", text: result }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: `systemctl failed: ${e.message}` }], isError: true };
+      }
+    }
+
+    if (type === "process") {
+      const pid = target || "1";
+      try {
+        const result = execSync(`pstree -p ${shellEscape(pid)}`, {
+          encoding: "utf8",
+          timeout: 5000,
+          stdio: ["pipe", "pipe", "pipe"]
+        });
+        return { content: [{ type: "text", text: result }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: `pstree failed: ${e.message}` }], isError: true };
+      }
+    }
+
+    return { content: [{ type: "text", text: "Unknown type. Use: npm, service, process" }], isError: true };
+  }
+
+  if (action === "reverse") {
+    if (!type || !target) {
+      return { content: [{ type: "text", text: "type and target required" }], isError: true };
+    }
+
+    if (type === "npm") {
+      const cwd = process.cwd();
+      try {
+        const result = execSync(`npm ls --all --json`, {
+          encoding: "utf8",
+          cwd,
+          timeout: 15000,
+          stdio: ["pipe", "pipe", "pipe"]
+        });
+        const tree = JSON.parse(result);
+        
+        const findDependents = (node, targetName, path = []) => {
+          const results = [];
+          if (node.dependencies) {
+            for (const [name, dep] of Object.entries(node.dependencies)) {
+              if (name === targetName) {
+                results.push([...path, node.name || "root"]);
+              }
+              results.push(...findDependents(dep, targetName, [...path, node.name || "root"]));
+            }
+          }
+          return results;
+        };
+        
+        const dependents = findDependents(tree, target);
+        if (dependents.length === 0) {
+          return { content: [{ type: "text", text: `No packages depend on ${target}` }] };
+        }
+        
+        const unique = [...new Set(dependents.map(d => d.join(" → ")))];
+        return { content: [{ type: "text", text: `Packages depending on ${target}:\n\n${unique.slice(0, MAX_DEPEND_RESULTS).join("\n")}` }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: `npm ls failed: ${e.message}` }], isError: true };
+      }
+    }
+
+    if (type === "service") {
+      try {
+        const result = execSync(`systemctl list-dependencies --reverse ${shellEscape(target)} --no-pager`, {
+          encoding: "utf8",
+          timeout: 5000,
+          stdio: ["pipe", "pipe", "pipe"]
+        });
+        return { content: [{ type: "text", text: result || `No services depend on ${target}` }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: `systemctl failed: ${e.message}` }], isError: true };
+      }
+    }
+
+    if (type === "process") {
+      try {
+        const result = execSync(`ps -o pid,ppid,comm --ppid ${shellEscape(target)}`, {
+          encoding: "utf8",
+          timeout: 5000,
+          stdio: ["pipe", "pipe", "pipe"]
+        });
+        return { content: [{ type: "text", text: result || `No child processes for PID ${target}` }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: `ps failed: ${e.message}` }], isError: true };
+      }
+    }
+
+    return { content: [{ type: "text", text: "Unknown type. Use: npm, service, process" }], isError: true };
+  }
+
+  if (action === "outdated") {
+    if (type !== "npm") {
+      return { content: [{ type: "text", text: "outdated only supported for npm" }], isError: true };
+    }
+    const cwd = target || process.cwd();
+    try {
+      const result = execSync(`npm outdated --json`, {
+        encoding: "utf8",
+        cwd,
+        timeout: 15000,
+        stdio: ["pipe", "pipe", "pipe"]
+      });
+      const outdated = JSON.parse(result);
+      if (Object.keys(outdated).length === 0) {
+        return { content: [{ type: "text", text: "All packages are up to date" }] };
+      }
+      const list = Object.entries(outdated).map(([name, info]) => 
+        `${name}: ${info.current || "?"} → ${info.latest} (wanted: ${info.wanted || "?"})`
+      ).join("\n");
+      return { content: [{ type: "text", text: `Outdated packages:\n\n${list}` }] };
+    } catch (e) {
+      if (e.stdout) {
+        try {
+          const outdated = JSON.parse(e.stdout);
+          const list = Object.entries(outdated).map(([name, info]) => 
+            `${name}: ${info.current || "?"} → ${info.latest} (wanted: ${info.wanted || "?"})`
+          ).join("\n");
+          return { content: [{ type: "text", text: `Outdated packages:\n\n${list}` }] };
+        } catch {}
+      }
+      return { content: [{ type: "text", text: `npm outdated failed: ${e.message}` }], isError: true };
+    }
+  }
+
+  if (action === "impact") {
+    if (!type || !target) {
+      return { content: [{ type: "text", text: "type and target required" }], isError: true };
+    }
+
+    let impact = `Impact analysis for removing ${target}:\n\n`;
+    
+    if (type === "npm") {
+      try {
+        const result = execSync(`npm ls --all --json`, {
+          encoding: "utf8",
+          cwd: process.cwd(),
+          timeout: 15000,
+          stdio: ["pipe", "pipe", "pipe"]
+        });
+        const tree = JSON.parse(result);
+        
+        const findDependents = (node, targetName) => {
+          const results = [];
+          if (node.dependencies) {
+            for (const [name, dep] of Object.entries(node.dependencies)) {
+              if (name === targetName) {
+                results.push(node.name || "root");
+              }
+              results.push(...findDependents(dep, targetName));
+            }
+          }
+          return results;
+        };
+        
+        const dependents = findDependents(tree, target);
+        if (dependents.length === 0) {
+          impact += "No packages depend on this. Safe to remove.";
+        } else {
+          const unique = [...new Set(dependents)];
+          impact += `WARNING: ${unique.length} package(s) depend on this:\n`;
+          impact += unique.slice(0, 20).map(d => `  - ${d}`).join("\n");
+          if (unique.length > 20) impact += `\n  ... and ${unique.length - 20} more`;
+        }
+      } catch (e) {
+        impact += `Analysis failed: ${e.message}`;
+      }
+    } else if (type === "service") {
+      try {
+        const result = execSync(`systemctl list-dependencies --reverse ${shellEscape(target)} --no-pager`, {
+          encoding: "utf8",
+          timeout: 5000,
+          stdio: ["pipe", "pipe", "pipe"]
+        });
+        if (result.trim()) {
+          impact += `WARNING: The following services depend on ${target}:\n${result}`;
+        } else {
+          impact += "No services depend on this. Safe to remove.";
+        }
+      } catch (e) {
+        impact += `Analysis failed: ${e.message}`;
+      }
+    } else {
+      impact += "Impact analysis not supported for this type";
+    }
+
+    return { content: [{ type: "text", text: impact }] };
+  }
+
+  if (action === "orphans") {
+    if (type !== "npm") {
+      return { content: [{ type: "text", text: "orphans only supported for npm" }], isError: true };
+    }
+    const cwd = target || process.cwd();
+    try {
+      const pkgPath = path.join(cwd, "package.json");
+      if (!fs.existsSync(pkgPath)) {
+        return { content: [{ type: "text", text: "No package.json found" }], isError: true };
+      }
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+      const declared = Object.keys(pkg.dependencies || {});
+      
+      const result = execSync(`npm ls --depth=0 --json`, {
+        encoding: "utf8",
+        cwd,
+        timeout: 10000,
+        stdio: ["pipe", "pipe", "pipe"]
+      });
+      const tree = JSON.parse(result);
+      const installed = Object.keys(tree.dependencies || {});
+      
+      const orphans = installed.filter(dep => !declared.includes(dep));
+      if (orphans.length === 0) {
+        return { content: [{ type: "text", text: "No orphaned dependencies found" }] };
+      }
+      return { content: [{ type: "text", text: `Orphaned dependencies (installed but not in package.json):\n\n${orphans.join("\n")}` }] };
+    } catch (e) {
+      return { content: [{ type: "text", text: `Analysis failed: ${e.message}` }], isError: true };
+    }
+  }
+
+  return { content: [{ type: "text", text: "Unknown action. Use: tree, reverse, outdated, impact, orphans" }], isError: true };
+}
+
+const RUNBOOK_FILE = path.join(DATA_DIR, "runbooks.json");
+const MAX_RUNBOOKS = 20;
+const MAX_ACTIVE_INSTANCES = 5;
+const MAX_STEPS_PER_RUNBOOK = 20;
+const STEP_TIMEOUT_MS = 60000;
+
+function loadRunbooks() {
+  try {
+    if (fs.existsSync(RUNBOOK_FILE)) {
+      return JSON.parse(fs.readFileSync(RUNBOOK_FILE, "utf8"));
+    }
+  } catch {}
+  return { definitions: {}, instances: {} };
+}
+
+function saveRunbooks(data) {
+  fs.writeFileSync(RUNBOOK_FILE, JSON.stringify(data, null, 2));
+}
+
+function generateRunbookId() {
+  return "rb_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_index }) {
+  const data = loadRunbooks();
+  const execMode = mode || "autonomous";
+
+  if (action === "create") {
+    if (!name || !steps || steps.length === 0) {
+      return { content: [{ type: "text", text: "name and steps required" }], isError: true };
+    }
+    if (steps.length > MAX_STEPS_PER_RUNBOOK) {
+      return { content: [{ type: "text", text: `Max steps per runbook: ${MAX_STEPS_PER_RUNBOOK}` }], isError: true };
+    }
+    if (Object.keys(data.definitions).length >= MAX_RUNBOOKS) {
+      return { content: [{ type: "text", text: `Max runbooks reached (${MAX_RUNBOOKS})` }], isError: true };
+    }
+
+    const id = generateRunbookId();
+    data.definitions[id] = {
+      name,
+      steps,
+      created: Date.now()
+    };
+    saveRunbooks(data);
+    return { content: [{ type: "text", text: `Runbook created: ${id} (${name})\nSteps: ${steps.length}` }] };
+  }
+
+  if (action === "list") {
+    const entries = Object.entries(data.definitions);
+    if (entries.length === 0) {
+      return { content: [{ type: "text", text: "No runbooks defined" }] };
+    }
+    const list = entries.map(([id, rb]) => {
+      const instances = Object.values(data.instances).filter(i => i.definitionId === id && i.status === "running").length;
+      return `${id}: ${rb.name} (${rb.steps.length} steps, ${instances} active)`;
+    }).join("\n");
+    return { content: [{ type: "text", text: `Runbooks (${entries.length}/${MAX_RUNBOOKS}):\n\n${list}` }] };
+  }
+
+  if (action === "get") {
+    if (!runbook_id && !name) {
+      return { content: [{ type: "text", text: "runbook_id or name required" }], isError: true };
+    }
+    let rb = null;
+    let rbId = runbook_id;
+    if (name) {
+      for (const [id, def] of Object.entries(data.definitions)) {
+        if (def.name === name) { rb = def; rbId = id; break; }
+      }
+    } else {
+      rb = data.definitions[runbook_id];
+    }
+    if (!rb) {
+      return { content: [{ type: "text", text: "Runbook not found" }], isError: true };
+    }
+    const stepsList = rb.steps.map((s, i) => `${i + 1}. ${s.name}\n   Command: ${s.command}\n   ${s.rollback ? "Rollback: " + s.rollback : ""}\n   ${s.verify_command ? "Verify: " + s.verify_command : ""}`).join("\n\n");
+    return { content: [{ type: "text", text: `Runbook: ${rbId} (${rb.name})\n\n${stepsList}` }] };
+  }
+
+  if (action === "delete") {
+    if (!runbook_id && !name) {
+      return { content: [{ type: "text", text: "runbook_id or name required" }], isError: true };
+    }
+    let targetId = runbook_id;
+    if (name) {
+      for (const [id, def] of Object.entries(data.definitions)) {
+        if (def.name === name) { targetId = id; break; }
+      }
+    }
+    if (!data.definitions[targetId]) {
+      return { content: [{ type: "text", text: "Runbook not found" }], isError: true };
+    }
+    delete data.definitions[targetId];
+    saveRunbooks(data);
+    return { content: [{ type: "text", text: `Deleted runbook: ${targetId}` }] };
+  }
+
+  if (action === "start") {
+    if (!runbook_id && !name) {
+      return { content: [{ type: "text", text: "runbook_id or name required" }], isError: true };
+    }
+    let rb = null;
+    let rbId = runbook_id;
+    if (name) {
+      for (const [id, def] of Object.entries(data.definitions)) {
+        if (def.name === name) { rb = def; rbId = id; break; }
+      }
+    } else {
+      rb = data.definitions[runbook_id];
+    }
+    if (!rb) {
+      return { content: [{ type: "text", text: "Runbook not found" }], isError: true };
+    }
+
+    const activeCount = Object.values(data.instances).filter(i => i.status === "running").length;
+    if (activeCount >= MAX_ACTIVE_INSTANCES) {
+      return { content: [{ type: "text", text: `Max active instances reached (${MAX_ACTIVE_INSTANCES})` }], isError: true };
+    }
+
+    const instanceId = generateRunbookId();
+    data.instances[instanceId] = {
+      definitionId: rbId,
+      status: "running",
+      currentStep: 0,
+      mode: execMode,
+      started: Date.now(),
+      results: []
+    };
+    saveRunbooks(data);
+
+    if (execMode === "autonomous") {
+      let output = `Starting autonomous runbook: ${rbId} (${rb.name})\n\n`;
+      for (let i = 0; i < rb.steps.length; i++) {
+        const step = rb.steps[i];
+        output += `Step ${i + 1}/${rb.steps.length}: ${step.name}\n`;
+        try {
+          const result = execSync(step.command, { encoding: "utf8", timeout: STEP_TIMEOUT_MS, stdio: ["pipe", "pipe", "pipe"] });
+          output += `  ✓ Success\n`;
+          if (step.verify_command) {
+            try {
+              const verifyResult = execSync(step.verify_command, { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"] });
+              output += `  ✓ Verified\n`;
+            } catch (e) {
+              output += `  ✗ Verification failed: ${e.message}\n`;
+              if (step.rollback) {
+                output += `  Rolling back...\n`;
+                try {
+                  execSync(step.rollback, { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"] });
+                  output += `  ✓ Rollback successful\n`;
+                } catch (re) {
+                  output += `  ✗ Rollback failed: ${re.message}\n`;
+                }
+              }
+              data.instances[instanceId].status = "failed";
+              saveRunbooks(data);
+              return { content: [{ type: "text", text: output }], isError: true };
+            }
+          }
+          data.instances[instanceId].results.push({ step: i, success: true });
+        } catch (e) {
+          output += `  ✗ Failed: ${e.message}\n`;
+          if (step.rollback) {
+            output += `  Rolling back...\n`;
+            try {
+              execSync(step.rollback, { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"] });
+              output += `  ✓ Rollback successful\n`;
+            } catch (re) {
+              output += `  ✗ Rollback failed: ${re.message}\n`;
+            }
+          }
+          data.instances[instanceId].status = "failed";
+          data.instances[instanceId].currentStep = i;
+          saveRunbooks(data);
+          return { content: [{ type: "text", text: output }], isError: true };
+        }
+      }
+      data.instances[instanceId].status = "completed";
+      saveRunbooks(data);
+      output += `\n✓ Runbook completed successfully`;
+      return { content: [{ type: "text", text: output }] };
+    } else {
+      const step = rb.steps[0];
+      let output = `Starting guided runbook: ${rbId} (${rb.name})\n\n`;
+      output += `Step 1/${rb.steps.length}: ${step.name}\n`;
+      output += `Command: ${step.command}\n`;
+      try {
+        const result = execSync(step.command, { encoding: "utf8", timeout: STEP_TIMEOUT_MS, stdio: ["pipe", "pipe", "pipe"] });
+        output += `Result: ${result.substring(0, 500)}\n`;
+        data.instances[instanceId].results.push({ step: 0, success: true, output: result });
+        if (rb.steps.length > 1) {
+          output += `\nUse action="next" with runbook_id="${instanceId}" to continue`;
+        } else {
+          data.instances[instanceId].status = "completed";
+          output += `\n✓ Runbook completed`;
+        }
+      } catch (e) {
+        output += `Failed: ${e.message}\n`;
+        if (step.rollback) {
+          output += `Use action="rollback" with runbook_id="${instanceId}" to rollback`;
+        }
+        data.instances[instanceId].status = "failed";
+      }
+      saveRunbooks(data);
+      return { content: [{ type: "text", text: output }] };
+    }
+  }
+
+  if (action === "next") {
+    if (!runbook_id) {
+      return { content: [{ type: "text", text: "runbook_id required" }], isError: true };
+    }
+    const instance = data.instances[runbook_id];
+    if (!instance) {
+      return { content: [{ type: "text", text: "Instance not found" }], isError: true };
+    }
+    if (instance.mode !== "guided") {
+      return { content: [{ type: "text", text: "Instance is not in guided mode" }], isError: true };
+    }
+    const rb = data.definitions[instance.definitionId];
+    if (!rb) {
+      return { content: [{ type: "text", text: "Runbook definition not found" }], isError: true };
+    }
+
+    instance.currentStep++;
+    if (instance.currentStep >= rb.steps.length) {
+      instance.status = "completed";
+      saveRunbooks(data);
+      return { content: [{ type: "text", text: `✓ Runbook completed` }] };
+    }
+
+    const step = rb.steps[instance.currentStep];
+    let output = `Step ${instance.currentStep + 1}/${rb.steps.length}: ${step.name}\n`;
+    output += `Command: ${step.command}\n`;
+    try {
+      const result = execSync(step.command, { encoding: "utf8", timeout: STEP_TIMEOUT_MS, stdio: ["pipe", "pipe", "pipe"] });
+      output += `Result: ${result.substring(0, 500)}\n`;
+      instance.results.push({ step: instance.currentStep, success: true, output: result });
+      if (instance.currentStep < rb.steps.length - 1) {
+        output += `\nUse action="next" to continue`;
+      } else {
+        instance.status = "completed";
+        output += `\n✓ Runbook completed`;
+      }
+    } catch (e) {
+      output += `Failed: ${e.message}\n`;
+      if (step.rollback) {
+        output += `Use action="rollback" to rollback`;
+      }
+      instance.status = "failed";
+    }
+    saveRunbooks(data);
+    return { content: [{ type: "text", text: output }] };
+  }
+
+  if (action === "verify") {
+    if (!runbook_id) {
+      return { content: [{ type: "text", text: "runbook_id required" }], isError: true };
+    }
+    const instance = data.instances[runbook_id];
+    if (!instance) {
+      return { content: [{ type: "text", text: "Instance not found" }], isError: true };
+    }
+    const rb = data.definitions[instance.definitionId];
+    if (!rb) {
+      return { content: [{ type: "text", text: "Runbook definition not found" }], isError: true };
+    }
+    const step = rb.steps[instance.currentStep];
+    if (!step.verify_command) {
+      return { content: [{ type: "text", text: "No verification command for this step" }] };
+    }
+    try {
+      const result = execSync(step.verify_command, { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"] });
+      return { content: [{ type: "text", text: `✓ Verification passed\n\n${result}` }] };
+    } catch (e) {
+      return { content: [{ type: "text", text: `✗ Verification failed\n\n${e.message}` }], isError: true };
+    }
+  }
+
+  if (action === "rollback") {
+    if (!runbook_id) {
+      return { content: [{ type: "text", text: "runbook_id required" }], isError: true };
+    }
+    const instance = data.instances[runbook_id];
+    if (!instance) {
+      return { content: [{ type: "text", text: "Instance not found" }], isError: true };
+    }
+    const rb = data.definitions[instance.definitionId];
+    if (!rb) {
+      return { content: [{ type: "text", text: "Runbook definition not found" }], isError: true };
+    }
+
+    let output = `Rolling back runbook: ${runbook_id}\n\n`;
+    for (let i = instance.currentStep; i >= 0; i--) {
+      const step = rb.steps[i];
+      if (step.rollback) {
+        output += `Step ${i + 1}: ${step.name}\n`;
+        try {
+          execSync(step.rollback, { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"] });
+          output += `  ✓ Rollback successful\n`;
+        } catch (e) {
+          output += `  ✗ Rollback failed: ${e.message}\n`;
+        }
+      }
+    }
+    instance.status = "rolled_back";
+    saveRunbooks(data);
+    return { content: [{ type: "text", text: output }] };
+  }
+
+  if (action === "abort") {
+    if (!runbook_id) {
+      return { content: [{ type: "text", text: "runbook_id required" }], isError: true };
+    }
+    const instance = data.instances[runbook_id];
+    if (!instance) {
+      return { content: [{ type: "text", text: "Instance not found" }], isError: true };
+    }
+    instance.status = "aborted";
+    saveRunbooks(data);
+    return { content: [{ type: "text", text: `Aborted runbook: ${runbook_id}` }] };
+  }
+
+  return { content: [{ type: "text", text: "Unknown action. Use: create, start, next, verify, rollback, abort, list, get, delete" }], isError: true };
+}
+
+const BLACKBOX_FILE = path.join(DATA_DIR, "blackbox.json");
+const BLACKBOX_DIR = path.join(DATA_DIR, "blackbox");
+const MAX_BLACKBOX_PER_DAY = 5;
+const BLACKBOX_TTL_DAYS = 7;
+const MAX_BLACKBOX_ACTIVE = 3;
+const MAX_BLACKBOX_COMMANDS = 10;
+
+fs.mkdirSync(BLACKBOX_DIR, { recursive: true });
+
+function loadBlackbox() {
+  try {
+    if (fs.existsSync(BLACKBOX_FILE)) {
+      return JSON.parse(fs.readFileSync(BLACKBOX_FILE, "utf8"));
+    }
+  } catch {}
+  return { incidents: {} };
+}
+
+function saveBlackbox(data) {
+  fs.writeFileSync(BLACKBOX_FILE, JSON.stringify(data, null, 2));
+}
+
+function purgeExpiredIncidents(data) {
+  const now = Date.now();
+  const ttlMs = BLACKBOX_TTL_DAYS * 24 * 60 * 60 * 1000;
+  let purged = 0;
+  for (const [id, incident] of Object.entries(data.incidents)) {
+    if (now - incident.captured > ttlMs) {
+      const incidentPath = path.join(BLACKBOX_DIR, id);
+      try { fs.rmSync(incidentPath, { recursive: true, force: true }); } catch {}
+      delete data.incidents[id];
+      purged++;
+    }
+  }
+  return purged;
+}
+
+function generateIncidentId() {
+  return "bb_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+async function sidekick_black_box({ action, name, include, analyze_with_llm, incident_id }) {
+  const data = loadBlackbox();
+  purgeExpiredIncidents(data);
+
+  if (action === "list") {
+    const entries = Object.entries(data.incidents);
+    if (entries.length === 0) {
+      return { content: [{ type: "text", text: "No incidents captured" }] };
+    }
+    const list = entries.map(([id, inc]) => {
+      const age = Math.round((Date.now() - inc.captured) / 1000 / 60);
+      return `${id}: ${inc.name || "unnamed"} (${age}min ago, ${inc.sources.length} sources)`;
+    }).join("\n");
+    return { content: [{ type: "text", text: `Incidents (${entries.length}/${MAX_BLACKBOX_ACTIVE}):\n\n${list}` }] };
+  }
+
+  if (action === "get") {
+    if (!incident_id) {
+      return { content: [{ type: "text", text: "incident_id required" }], isError: true };
+    }
+    const incident = data.incidents[incident_id];
+    if (!incident) {
+      return { content: [{ type: "text", text: `Incident not found: ${incident_id}` }], isError: true };
+    }
+    const incidentPath = path.join(BLACKBOX_DIR, incident_id);
+    let content = "";
+    try {
+      content = fs.readFileSync(incidentPath, "utf8");
+    } catch (e) {
+      return { content: [{ type: "text", text: `Failed to read incident data: ${e.message}` }], isError: true };
+    }
+    return { content: [{ type: "text", text: content }] };
+  }
+
+  if (action === "delete") {
+    if (!incident_id) {
+      return { content: [{ type: "text", text: "incident_id required" }], isError: true };
+    }
+    if (!data.incidents[incident_id]) {
+      return { content: [{ type: "text", text: `Incident not found: ${incident_id}` }], isError: true };
+    }
+    const incidentPath = path.join(BLACKBOX_DIR, incident_id);
+    try { fs.rmSync(incidentPath, { recursive: true, force: true }); } catch {}
+    delete data.incidents[incident_id];
+    saveBlackbox(data);
+    return { content: [{ type: "text", text: `Deleted incident: ${incident_id}` }] };
+  }
+
+  if (action === "capture") {
+    const today = new Date().toISOString().split("T")[0];
+    const todayIncidents = Object.values(data.incidents).filter(inc => {
+      const incDate = new Date(inc.captured).toISOString().split("T")[0];
+      return incDate === today;
+    });
+
+    if (todayIncidents.length >= MAX_BLACKBOX_PER_DAY) {
+      return { content: [{ type: "text", text: `Rate limit exceeded: max ${MAX_BLACKBOX_PER_DAY} captures per day` }], isError: true };
+    }
+
+    if (Object.keys(data.incidents).length >= MAX_BLACKBOX_ACTIVE) {
+      return { content: [{ type: "text", text: `Max active incidents reached (${MAX_BLACKBOX_ACTIVE}). Delete old incidents or wait for TTL expiry.` }], isError: true };
+    }
+
+    const id = generateIncidentId();
+    const incidentName = name || `incident_${Date.now()}`;
+    const sources = include && include[0] !== "all" ? include : ["services", "processes", "logs", "disk", "network"];
+    
+    let commandCount = 0;
+    const checkLimit = () => {
+      commandCount++;
+      if (commandCount > MAX_BLACKBOX_COMMANDS) {
+        throw new Error(`Exceeded max commands per capture (${MAX_BLACKBOX_COMMANDS})`);
+      }
+    };
+
+    let content = `# Incident Report: ${incidentName}\n`;
+    content += `ID: ${id}\n`;
+    content += `Time: ${new Date().toISOString()}\n`;
+    content += `Sources: ${sources.join(", ")}\n\n`;
+
+    try {
+      if (sources.includes("services")) {
+        checkLimit();
+        content += "## Services\n\n";
+        try {
+          const result = execSync("systemctl list-units --type=service --no-pager --state=running", {
+            encoding: "utf8",
+            timeout: 5000,
+            stdio: ["pipe", "pipe", "pipe"]
+          });
+          content += result + "\n";
+        } catch (e) {
+          content += `Failed to get services: ${e.message}\n`;
+        }
+      }
+
+      if (sources.includes("processes")) {
+        checkLimit();
+        content += "## Top Processes\n\n";
+        try {
+          const result = execSync("ps aux --sort=-%cpu | head -20", {
+            encoding: "utf8",
+            timeout: 5000,
+            stdio: ["pipe", "pipe", "pipe"]
+          });
+          content += result + "\n";
+        } catch (e) {
+          content += `Failed to get processes: ${e.message}\n`;
+        }
+      }
+
+      if (sources.includes("logs")) {
+        checkLimit();
+        content += "## Recent Logs (journalctl)\n\n";
+        try {
+          const result = execSync("journalctl -n 100 --no-pager", {
+            encoding: "utf8",
+            timeout: 5000,
+            stdio: ["pipe", "pipe", "pipe"]
+          });
+          content += result + "\n";
+        } catch (e) {
+          content += `Failed to get journalctl: ${e.message}\n`;
+        }
+
+        checkLimit();
+        content += "## Recent Tool Calls (log.jsonl)\n\n";
+        try {
+          const logContent = fs.readFileSync(LOG_FILE, "utf8");
+          const lines = logContent.trim().split("\n").slice(-100);
+          content += lines.join("\n") + "\n";
+        } catch (e) {
+          content += `Failed to read log.jsonl: ${e.message}\n`;
+        }
+      }
+
+      if (sources.includes("disk")) {
+        checkLimit();
+        content += "## Disk Usage\n\n";
+        try {
+          const result = execSync("df -h", {
+            encoding: "utf8",
+            timeout: 5000,
+            stdio: ["pipe", "pipe", "pipe"]
+          });
+          content += result + "\n";
+        } catch (e) {
+          content += `Failed to get disk: ${e.message}\n`;
+        }
+      }
+
+      if (sources.includes("network")) {
+        checkLimit();
+        content += "## Network Listeners\n\n";
+        try {
+          const result = execSync("ss -tlnp", {
+            encoding: "utf8",
+            timeout: 5000,
+            stdio: ["pipe", "pipe", "pipe"]
+          });
+          content += result + "\n";
+        } catch (e) {
+          content += `Failed to get network: ${e.message}\n`;
+        }
+      }
+    } catch (e) {
+      content += `\n\nCapture error: ${e.message}\n`;
+    }
+
+    const incidentPath = path.join(BLACKBOX_DIR, id);
+    fs.writeFileSync(incidentPath, content);
+
+    data.incidents[id] = {
+      name: incidentName,
+      captured: Date.now(),
+      sources,
+      size: content.length
+    };
+    saveBlackbox(data);
+
+    let result = `Incident captured: ${id}\n`;
+    result += `Name: ${incidentName}\n`;
+    result += `Sources: ${sources.join(", ")}\n`;
+    result += `Size: ${content.length} bytes\n`;
+    result += `Commands executed: ${commandCount}\n`;
+
+    if (analyze_with_llm) {
+      try {
+        const summaryPrompt = `Analyze this incident report and identify potential issues or anomalies:\n\n${content.substring(0, 5000)}`;
+        const llmResult = await sidekick_llm({
+          prompt: summaryPrompt,
+          system: "You are a senior systems engineer analyzing an incident report. Identify key issues, anomalies, and potential root causes. Be concise and actionable.",
+          temperature: 0.3
+        });
+        if (llmResult.content && llmResult.content[0]) {
+          result += `\n## LLM Analysis\n\n${llmResult.content[0].text}`;
+        }
+      } catch (e) {
+        result += `\nLLM analysis failed: ${e.message}`;
+      }
+    }
+
+    return { content: [{ type: "text", text: result }] };
+  }
+
+  if (action === "analyze") {
+    if (!incident_id) {
+      return { content: [{ type: "text", text: "incident_id required" }], isError: true };
+    }
+    const incident = data.incidents[incident_id];
+    if (!incident) {
+      return { content: [{ type: "text", text: `Incident not found: ${incident_id}` }], isError: true };
+    }
+    const incidentPath = path.join(BLACKBOX_DIR, incident_id);
+    let content = "";
+    try {
+      content = fs.readFileSync(incidentPath, "utf8");
+    } catch (e) {
+      return { content: [{ type: "text", text: `Failed to read incident data: ${e.message}` }], isError: true };
+    }
+
+    try {
+      const summaryPrompt = `Analyze this incident report and identify potential issues or anomalies:\n\n${content.substring(0, 5000)}`;
+      const llmResult = await sidekick_llm({
+        prompt: summaryPrompt,
+        system: "You are a senior systems engineer analyzing an incident report. Identify key issues, anomalies, and potential root causes. Be concise and actionable.",
+        temperature: 0.3
+      });
+      if (llmResult.content && llmResult.content[0]) {
+        return { content: [{ type: "text", text: `## LLM Analysis for ${incident_id}\n\n${llmResult.content[0].text}` }] };
+      }
+    } catch (e) {
+      return { content: [{ type: "text", text: `LLM analysis failed: ${e.message}` }], isError: true };
+    }
+  }
+
+  return { content: [{ type: "text", text: "Unknown action. Use: capture, list, get, delete, analyze" }], isError: true };
+}
+
 const TOOLS = {
   sidekick_bash,
   sidekick_read,
@@ -4607,6 +6875,16 @@ const TOOLS = {
   sidekick_find,
   sidekick_status,
   sidekick_extract,
+  sidekick_anonymize,
+  sidekick_sandbox,
+  sidekick_changelog,
+  sidekick_netdiag,
+  sidekick_timeline,
+  sidekick_circuit,
+  sidekick_baseline,
+  sidekick_depend,
+  sidekick_runbook,
+  sidekick_black_box,
 };
 
 const TOOL_DEFS = [
@@ -4659,6 +6937,16 @@ const TOOL_DEFS = [
   { name: "sidekick_find", description: "Advanced file finder: search by name pattern, date range, size range, and content pattern.", args: { path: "string (directory to search)", name: "string (optional, glob pattern e.g. '*.js')", modified_after: "string (optional, ISO date)", modified_before: "string (optional, ISO date)", size_min: "string (optional, e.g. '1KB', '1MB')", size_max: "string (optional, e.g. '10MB')", content: "string (optional, regex pattern to match file contents)", max_results: "number (optional, default 50)" } },
   { name: "sidekick_status", description: "Unified system status: services, disk, memory, load, uptime, top processes in one call.", args: { include: "string (optional, comma-separated: services,disk,memory,load,uptime,processes - default services,disk)", services: "string (optional, comma-separated service names - default sidekick-mcp,sidekick-dashboard,sidekick-agent)" } },
   { name: "sidekick_extract", description: "Parse JSON/YAML/INI/XML and extract specific fields by path. Returns only what you need.", args: { path: "string (file path)", fields: "string|array (optional, field paths to extract e.g. 'database.host,database.port')" } },
+  { name: "sidekick_anonymize", description: "Replace sensitive data with realistic but fake values. Preserves data structure while making it safe to share externally.", args: { action: "string (anonymize|patterns|add_pattern|remove_pattern)", input: "string (optional, text to anonymize)", format: "string (optional, text|json|yaml - default text)", custom_patterns: "array (optional, {pattern, replacement} objects)", consistency: "boolean (optional, same input always maps to same output - default true)" } },
+  { name: "sidekick_sandbox", description: "Execute operations in a tracked context with automatic backup and rollback. Safe experimentation on remote systems.", args: { action: "string (exec|rollback|list|diff|clean)", sandbox_name: "string (optional, sandbox identifier)", command: "string (optional, command to execute)", files: "array (optional, files to auto-backup before exec)", auto_backup: "boolean (optional, default true)", rollback_id: "string (optional, sandbox to rollback)" } },
+  { name: "sidekick_changelog", description: "Generate human-readable changelogs from git history. Groups commits semantically and optionally uses LLM for summaries.", args: { action: "string (generate|preview|save)", from: "string (starting ref: tag, commit, branch)", to: "string (optional, ending ref - default HEAD)", format: "string (optional, markdown|plain|conventional - default markdown)", group_by: "string (optional, type|scope|author - default type)", use_llm: "boolean (optional, generate LLM summary - default false)", include: "string (optional, all|features|fixes|breaking|refactor|deps - default all)", path: "string (optional, git repository path - default current directory)" } },
+  { name: "sidekick_netdiag", description: "Unified network diagnostics: DNS, routing, port scanning, connectivity checks, and local listeners.", args: { action: "string (check|dns|route|ports|listeners|connectivity)", target: "string (host, URL, or IP to diagnose)", port_range: "string (optional, port range e.g. '80-443')", timeout: "number (optional, timeout in ms - default 5000)", format: "string (optional, detailed|compact|json - default detailed)" } },
+  { name: "sidekick_timeline", description: "Build chronological timeline from multiple log sources. Correlates events across log.jsonl, journalctl, git, and file modifications.", args: { action: "string (build|filter|export)", since: "string (start time: ISO or relative like 1h, 1d)", until: "string (optional, end time - default now)", sources: "array (optional, log.jsonl|journalctl|git|files|all - default all)", pattern: "string (optional, regex filter)", severity: "string (optional, error|warn|info|all - default all)", format: "string (optional, compact|detailed|json - default compact)", max_events: "number (optional, default 200)" } },
+  { name: "sidekick_circuit", description: "Circuit breaker for tool calls. Prevents cascading failures by fast-failing when a target is down.", args: { action: "string (call|status|reset|configure)", target: "string (circuit target label)", tool: "string (optional, tool name for call action)", args: "object (optional, tool arguments for call action)", failure_threshold: "number (optional, failures before opening - default 5)", cooldown_seconds: "number (optional, seconds before half-open - default 60)", cache_response: "boolean (optional, cache last successful response - default false)" } },
+  { name: "sidekick_baseline", description: "Behavioral baseline and anomaly detection. Learns normal patterns and detects statistical deviations.", args: { action: "string (record|learn|check|status|reset)", metric_name: "string (metric identifier)", value: "number (optional, value to record)", source: "string (optional, health|custom|command)", command: "string (optional, command to collect metric)", window: "string (optional, history window - default 7d)", sensitivity: "string (optional, low|medium|high - default medium)" } },
+  { name: "sidekick_depend", description: "Dependency analyzer for npm packages, systemd services, and processes. Shows dependency trees, reverse dependencies, and impact analysis.", args: { action: "string (tree|reverse|outdated|impact|orphans)", type: "string (npm|service|process)", target: "string (optional, package, service, or PID)", depth: "number (optional, tree depth - default 5)", format: "string (optional, tree|flat|json - default tree)" } },
+  { name: "sidekick_runbook", description: "Operational runbook executor with autonomous and guided modes. Supports verification, rollback, and step-by-step execution.", args: { action: "string (create|start|next|verify|rollback|abort|list|get|delete)", name: "string (optional, runbook name)", mode: "string (optional, autonomous|guided - default autonomous)", steps: "array (optional, step definitions)", runbook_id: "string (optional, instance or definition ID)", step_index: "number (optional, step index)" } },
+  { name: "sidekick_black_box", description: "Incident time capsule: captures full system context (services, processes, logs, disk, network) in one call for debugging. Rate limited.", args: { action: "string (capture|list|get|delete|analyze)", name: "string (optional, incident name)", include: "array (optional, services|processes|logs|disk|network|all - default all)", analyze_with_llm: "boolean (optional, use LLM for analysis - default false)", incident_id: "string (optional, incident ID)" } },
 ];
 
 async function callTool(name, args) {

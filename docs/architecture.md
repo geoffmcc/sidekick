@@ -120,6 +120,22 @@ The file exports:
 - Persistent-state helpers such as `loadProcedures()`, `loadDelays()`, and `loadWatches()`.
 - Runtime configuration constants such as `DATA_DIR`, `OLLAMA_URL`, `GROQ_API_KEY`, and `GROQ_MODEL`.
 
+Tool categories include:
+- **Core Operations**: bash, read, write, list, search, git
+- **Storage & Context**: store, get, context, teach
+- **Web & Communication**: web_fetch, llm, notify, github, webhook
+- **Remote Management**: process, service, archive
+- **Automation**: cron, delay, watch, queue, retry
+- **Observability**: health, snapshot, timeline, baseline, black_box
+- **Security**: secret, anonymize
+- **Data Utilities**: parse, transform, diff, hash, validate, template
+- **Advanced Intelligence**: evolve, orchestrate, predict
+- **Token Efficiency**: batch, cache, summarize, filter, project, tail, diff_files, find, status, extract
+- **Safety & Reliability**: sandbox, circuit
+- **Development**: changelog, depend
+- **Operations**: runbook
+- **Diagnostics**: netdiag
+
 ## Dynamic Procedures
 
 `sidekick_teach` stores procedure definitions in `procedures.json`. On MCP server startup, `src/index.js` loads procedures and registers each one as a new MCP tool named `sidekick_<procedure_name>` unless that name conflicts with a built-in tool.
