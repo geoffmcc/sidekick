@@ -333,7 +333,7 @@ try {
   Write-Host ""
   Write-Host "--- Installing Dependencies ---" -ForegroundColor Cyan
   Write-Host "  Running npm install..." -ForegroundColor Green
-  $npmOutput = Run-Remote "cd $REMOTE_DIR && npm install --production 2>&1"
+  $npmOutput = Run-Remote "cd $REMOTE_DIR && npm install --omit=dev 2>&1"
   if ($LASTEXITCODE -ne 0) {
     Write-Host "  npm install failed:" -ForegroundColor Red
     Write-Host $npmOutput
