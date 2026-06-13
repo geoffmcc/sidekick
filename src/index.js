@@ -408,6 +408,9 @@ const TOOL_SCHEMAS = {
     analyze_with_llm: z.boolean().optional().default(false),
     incident_id: z.string().optional()
   }),
+  sidekick_respond: z.object({
+    text: z.string().describe("The response text to return")
+  }),
 };
 
 // --- Factory: create fresh McpServer + register tools ---

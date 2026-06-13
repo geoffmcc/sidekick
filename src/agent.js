@@ -288,7 +288,9 @@ function buildSystemPrompt() {
     "5. Continue calling tools until EVERY part of the task is complete.\n" +
     "6. Call done ONLY after all steps are finished.\n" +
     "7. NEVER describe tool calls inside think blocks. Think blocks are for reasoning ONLY.\n" +
-    "8. If you think about calling a tool, you MUST actually call it in your next response.\n\n" +
+    "8. If you think about calling a tool, you MUST actually call it in your next response.\n" +
+    "9. NEVER invent tool names. ONLY use tools from the list below. If a tool doesn't exist, do NOT guess its name.\n" +
+    "10. For simple responses or when no tool action is needed, use sidekick_respond to return text directly.\n\n" +
     "Response format (choose ONE, output raw JSON only):\n" +
     '- {"think": "your reasoning here"}  -- reasoning only, NO tool descriptions\n' +
     '- {"tool": "tool_name", "arguments": {"key": "value"}}  -- execute a tool\n' +
@@ -308,6 +310,9 @@ function buildSystemPrompt() {
     "-> {\"tool\": \"sidekick_get\", \"arguments\": {\"key\": \"A\"}}\n" +
     "-> {\"tool\": \"sidekick_get\", \"arguments\": {\"key\": \"B\"}}  -- MUST call this, do NOT skip\n" +
     "-> {\"done\": true, \"result\": \"A=1, B=2\"}\n\n" +
+    "Example (simple response): \"say hi in one word\"\n" +
+    "-> {\"tool\": \"sidekick_respond\", \"arguments\": {\"text\": \"Hi\"}}\n" +
+    "-> {\"done\": true, \"result\": \"Hi\"}\n\n" +
     "You have these tools:\n" + toolDescs;
 }
 
@@ -557,6 +562,17 @@ async function runAgent(goal, taskId) {
     }
 
     if (decision.tool) {
+      // Tool validation: check if tool exists before calling
+      const validTool = TOOL_DEFS.find(t => t.name === decision.tool);
+      if (!validTool) {
+        emit(taskId, { type: "error", text: "Unknown tool: " + decision.tool });
+        steps.push({ type: "tool", tool: decision.tool, args: decision.arguments, result: "Error: tool does not exist" });
+        const availableTools = TOOL_DEFS.map(t => t.name).join(", ");
+        history.push({ role: "assistant", content: "Called " + decision.tool + " → Error: tool does not exist" });
+        history.push({ role: "user", content: "Tool '" + decision.tool + "' does not exist. Available tools: " + availableTools + ". Use sidekick_respond to return text directly, or choose a valid tool from the list." });
+        continue;
+      }
+
       // Deduplication check: prevent repeated identical tool calls
       const toolKey = decision.tool + ":" + JSON.stringify(decision.arguments || {});
       const recentCalls = steps.slice(-3).filter(s => s.type === "tool" && s.tool === decision.tool && JSON.stringify(s.args) === JSON.stringify(decision.arguments || {}));
@@ -577,6 +593,11 @@ async function runAgent(goal, taskId) {
         const toolRes = await callTool(decision.tool, decision.arguments || {});
         if (toolRes.isError) {
           result = "Error: " + (toolRes.content?.[0]?.text || "unknown error");
+          // If error is "Unknown tool", provide corrective feedback
+          if (result.includes("Unknown tool")) {
+            const availableTools = TOOL_DEFS.map(t => t.name).join(", ");
+            result += ". Available tools: " + availableTools + ". Use sidekick_respond to return text directly.";
+          }
         } else {
           result = toolRes.content?.[0]?.text || "(empty result)";
         }
@@ -588,6 +609,14 @@ async function runAgent(goal, taskId) {
       emit(taskId, { type: "tool", tool: decision.tool, summary: summary.substring(0, 120) });
       steps[steps.length - 1].result = summary;
       history.push({ role: "assistant", content: "Called " + decision.tool + " → " + summary.substring(0, 200) });
+      
+      // Special handling for sidekick_respond: automatically transition to done
+      if (decision.tool === "sidekick_respond" && !result.startsWith("Error:")) {
+        emit(taskId, { type: "done", text: result });
+        steps.push({ type: "done", text: result });
+        break;
+      }
+      
       history.push({ role: "user", content: "Continue. Use another tool or call done." });
     }
   }
