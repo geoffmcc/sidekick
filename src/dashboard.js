@@ -139,6 +139,7 @@ app.use((req, res, next) => {
 if (DASHBOARD_USER && DASHBOARD_PASS) {
   app.use((req, res, next) => {
     if (req.path.startsWith('/api/agent/stream/')) return next();
+    if (req.path === "/") return next();
     const auth = req.headers.authorization;
     if (!auth || !auth.startsWith("Basic ")) {
       res.set("WWW-Authenticate", 'Basic realm="Sidekick Dashboard"');
@@ -182,8 +183,16 @@ function exec(cmd, opts = {}) {
 function seedKV() {
   const kv = readKV();
   const repoRoot = path.join(__dirname, "..");
-  const gitOpts = { cwd: repoRoot };
   const now = new Date().toISOString();
+
+  // Read version.json instead of running git commands
+  let versionInfo = { commit: "?", branch: "?", remote_url: "?" };
+  try {
+    const versionPath = path.join(__dirname, "..", "version.json");
+    if (fs.existsSync(versionPath)) {
+      versionInfo = JSON.parse(fs.readFileSync(versionPath, "utf-8"));
+    }
+  } catch {}
 
   const seed = {
     "server:hostname": exec("hostname"),
@@ -219,9 +228,9 @@ function seedKV() {
     "software:ollama_version": exec("ollama --version 2>/dev/null || echo not found"),
     "software:python_version": exec("python3 --version 2>/dev/null || echo not found"),
 
-    "deploy:git_commit": exec("git rev-parse HEAD", gitOpts),
-    "deploy:branch": exec("git rev-parse --abbrev-ref HEAD", gitOpts),
-    "deploy:remote_url": exec("git remote get-url origin", gitOpts),
+    "deploy:git_commit": versionInfo.commit || "?",
+    "deploy:branch": versionInfo.branch || "?",
+    "deploy:remote_url": versionInfo.remote_url || "?",
     "deploy:initialized": now,
 
     "config:timezone": exec("timedatectl show -p Timezone --value 2>/dev/null || echo UTC"),
@@ -334,38 +343,34 @@ app.get("/api/config", (req, res) => {
 });
 
 app.put("/api/kv/:key", (req, res) => {
-  let body = "";
-  req.on("data", c => body += c);
-  req.on("end", () => {
-    try {
-      const { value, project } = JSON.parse(body);
-      const kv = readKV();
-      const now = new Date().toISOString();
-      const existing = kv[req.params.key];
-      
-      if (existing && typeof existing === 'object' && 'value' in existing) {
-        kv[req.params.key] = {
-          value: value,
-          project: project !== undefined ? project : existing.project,
-          source: existing.source,
-          created: existing.created,
-          updated: now
-        };
-      } else {
-        kv[req.params.key] = {
-          value: value,
-          project: project || null,
-          source: "dashboard",
-          created: now,
-          updated: now
-        };
-      }
-      
-      writeKV(kv);
-      auditLog(req, 'kv.update', { value_length: value?.length, project });
-      res.json({ ok: true });
-    } catch { res.status(400).json({ error: "invalid body" }); }
-  });
+  try {
+    const { value, project } = req.body || {};
+    const kv = readKV();
+    const now = new Date().toISOString();
+    const existing = kv[req.params.key];
+    
+    if (existing && typeof existing === 'object' && 'value' in existing) {
+      kv[req.params.key] = {
+        value: value,
+        project: project !== undefined ? project : existing.project,
+        source: existing.source,
+        created: existing.created,
+        updated: now
+      };
+    } else {
+      kv[req.params.key] = {
+        value: value,
+        project: project || null,
+        source: "dashboard",
+        created: now,
+        updated: now
+      };
+    }
+    
+    writeKV(kv);
+    auditLog(req, 'kv.update', { value_length: value?.length, project });
+    res.json({ ok: true });
+  } catch { res.status(400).json({ error: "invalid body" }); }
 });
 
 app.get("/api/kv/projects", (req, res) => {
@@ -451,15 +456,11 @@ app.delete("/api/data", (req, res) => {
 
 // Error logging endpoint (for frontend errors)
 app.post('/api/internal/error-log', (req, res) => {
-  let body = '';
-  req.on('data', c => body += c);
-  req.on('end', () => {
-    try {
-      const entry = JSON.parse(body);
-      logError(entry.url, entry.status, entry.error, entry.page, entry.userAgent);
-    } catch {}
-    res.json({ ok: true });
-  });
+  try {
+    const entry = req.body || {};
+    logError(entry.url, entry.status, entry.error, entry.page, entry.userAgent);
+  } catch {}
+  res.json({ ok: true });
 });
 
 // Webhook receiver endpoint
@@ -477,26 +478,22 @@ function saveWebhooks(webhooks) {
 }
 
 app.post('/api/webhook/:source', (req, res) => {
-  let body = '';
-  req.on('data', c => body += c);
-  req.on('end', () => {
-    try {
-      const payload = JSON.parse(body);
-      const webhooks = loadWebhooks();
-      const webhook = {
-        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-        source: req.params.source,
-        timestamp: new Date().toISOString(),
-        payload
-      };
-      webhooks.push(webhook);
-      if (webhooks.length > 1000) webhooks.splice(0, webhooks.length - 1000);
-      saveWebhooks(webhooks);
-      res.json({ ok: true, id: webhook.id });
-    } catch (e) {
-      res.status(400).json({ error: e.message });
-    }
-  });
+  try {
+    const payload = req.body || {};
+    const webhooks = loadWebhooks();
+    const webhook = {
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      source: req.params.source,
+      timestamp: new Date().toISOString(),
+      payload
+    };
+    webhooks.push(webhook);
+    if (webhooks.length > 1000) webhooks.splice(0, webhooks.length - 1000);
+    saveWebhooks(webhooks);
+    res.json({ ok: true, id: webhook.id });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 // --- Agent Proxy ---
@@ -877,6 +874,76 @@ const LOG_PAGE_SIZE = 50;
 const SESSION_GAP_MS = 5 * 60 * 1000;
 let allTools = [];
 
+// Authentication helpers
+function getAuthHeader() {
+  return sessionStorage.getItem('sidekick_auth');
+}
+
+function clearAuth() {
+  sessionStorage.removeItem('sidekick_auth');
+}
+
+function showAuthModal(onSuccess) {
+  let modal = document.getElementById('auth-modal');
+  if (!modal) {
+    modal = document.createElement('dialog');
+    modal.id = 'auth-modal';
+    modal.innerHTML = \`
+      <form method="dialog" style="max-width: 300px; padding: 20px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; color: #c9d1d9;">
+        <h3 style="margin-top: 0; color: #58a6ff;">Authentication Required</h3>
+        <label style="display: block; margin: 10px 0 5px; font-size: .85rem;">Username:</label>
+        <input type="text" id="auth-username" style="width: 100%; padding: 8px; margin-bottom: 10px; background: #0d1117; border: 1px solid #30363d; border-radius: 4px; color: #c9d1d9;" required>
+        <label style="display: block; margin: 10px 0 5px; font-size: .85rem;">Password:</label>
+        <input type="password" id="auth-password" style="width: 100%; padding: 8px; margin-bottom: 15px; background: #0d1117; border: 1px solid #30363d; border-radius: 4px; color: #c9d1d9;" required>
+        <div style="display: flex; gap: 10px; justify-content: flex-end;">
+          <button type="button" id="auth-cancel" style="padding: 8px 16px; background: #21262d; border: 1px solid #30363d; color: #c9d1d9; border-radius: 4px; cursor: pointer;">Cancel</button>
+          <button type="submit" id="auth-submit" style="padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Login</button>
+        </div>
+      </form>
+    \`;
+    document.body.appendChild(modal);
+
+    document.getElementById('auth-cancel').addEventListener('click', () => {
+      modal.close();
+    });
+
+    modal.querySelector('form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const user = document.getElementById('auth-username').value;
+      const pass = document.getElementById('auth-password').value;
+      const auth = btoa(user + ':' + pass);
+      sessionStorage.setItem('sidekick_auth', auth);
+      modal.close();
+      if (onSuccess) onSuccess();
+    });
+  }
+
+  document.getElementById('auth-username').value = '';
+  document.getElementById('auth-password').value = '';
+  modal.showModal();
+}
+
+// Authenticated fetch wrapper - adds auth header and handles 401
+function authFetch(url, options) {
+  options = options || {};
+  var headers = options.headers || {};
+  var auth = getAuthHeader();
+  if (auth) {
+    headers['Authorization'] = 'Basic ' + auth;
+  }
+  options.headers = headers;
+  if (!options.credentials) options.credentials = 'same-origin';
+
+  return fetch(url, options).then(function(res) {
+    if (res.status === 401) {
+      clearAuth();
+      showAuthModal(function() { location.reload(); });
+      throw new Error('Authentication required');
+    }
+    return res;
+  });
+}
+
 const TOOL_CATEGORIES = {
   'Core': { icon: 'fa-terminal', tools: ['sidekick_bash','sidekick_read','sidekick_write','sidekick_list','sidekick_search','sidekick_web_fetch','sidekick_llm'] },
   'Storage': { icon: 'fa-database', tools: ['sidekick_store','sidekick_get','sidekick_list_projects','sidekick_get_by_project'] },
@@ -989,7 +1056,7 @@ function esc(s){
 
 // -- Services -- //
 function loadServices(){
-  fetch('/api/services', { credentials: 'same-origin' }).then(r=>r.json()).then(d=>{
+  authFetch('/api/services').then(r=>r.json()).then(d=>{
     const container = $('serviceDots');
     if (!d.services) { container.innerHTML = ''; return; }
     container.innerHTML = Object.entries(d.services).map(([name, status]) => {
@@ -1003,7 +1070,7 @@ function loadServices(){
 
 // -- System -- //
 function loadSystem(){
-  fetch('/api/system', { credentials: 'same-origin' }).then(r=>r.json()).then(d=>{
+  authFetch('/api/system').then(r=>r.json()).then(d=>{
     if(d.error){ $('s-uptime').textContent='error'; return }
     $('s-uptime').textContent = d.uptime || '?';
     const cpuVal = parseFloat(d.cpu);
@@ -1015,7 +1082,7 @@ function loadSystem(){
 }
 
 function loadLLM(){
-  fetch('/api/llm', { credentials: 'same-origin' }).then(r=>r.json()).then(d=>{
+  authFetch('/api/llm').then(r=>r.json()).then(d=>{
     const el = $('llmStatus');
     if (!d.available) {
       el.innerHTML = '<div class="llm-card"><span class="llm-dot off"></span><span class="empty">Ollama not reachable</span></div>';
@@ -1028,7 +1095,7 @@ function loadLLM(){
 }
 
 function loadStats(){
-  fetch('/api/stats', { credentials: 'same-origin' }).then(r=>r.json()).then(d=>{
+  authFetch('/api/stats').then(r=>r.json()).then(d=>{
     const body = $('statsBody');
     if (!d.stats || !d.stats.length) { body.innerHTML = '<tr><td colspan="6" class="empty">No data</td></tr>'; return; }
     body.innerHTML = d.stats.map(s => {
@@ -1048,7 +1115,7 @@ function loadStats(){
 
 // -- Activity -- //
 function loadLogs(){
-  fetch('/api/logs?limit=500', { credentials: 'same-origin' }).then(r=>r.json()).then(d=>{
+  authFetch('/api/logs?limit=500').then(r=>r.json()).then(d=>{
     allLogs = d.entries || [];
     logPage = 0;
     renderLogs();
@@ -1192,8 +1259,8 @@ function loadMoreLogs(){
 // -- Data -- //
 function loadKV(){
   Promise.all([
-    fetch('/api/kv', { credentials: 'same-origin' }).then(r=>r.json()),
-    fetch('/api/kv/projects', { credentials: 'same-origin' }).then(r=>r.json())
+    authFetch('/api/kv').then(r=>r.json()),
+    authFetch('/api/kv/projects').then(r=>r.json())
   ]).then(([kvData, projData]) => {
     allKV = kvData.entries || [];
     
@@ -1363,10 +1430,9 @@ function saveKVEdit(){
   const key = $('editModal').dataset.key;
   const value = $('editValue').value;
   const project = $('editProject').value || null;
-  fetch('/api/kv/' + encodeURIComponent(key), {
+  authFetch('/api/kv/' + encodeURIComponent(key), {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
     body: JSON.stringify({ value, project })
   }).then(r => r.json()).then(d => {
     if (d.ok) { closeEditModal(); loadKV(); showToast('Entry updated successfully', 'success'); }
@@ -1375,9 +1441,8 @@ function saveKVEdit(){
 
 function deleteKV(key){
   if (!confirm('Delete "' + key + '"?')) return;
-  fetch('/api/kv/' + encodeURIComponent(key), { 
-    method: 'DELETE',
-    credentials: 'same-origin'
+  authFetch('/api/kv/' + encodeURIComponent(key), { 
+    method: 'DELETE'
   })
     .then(r => r.json()).then(d => { 
       if (d.ok) { 
@@ -1389,7 +1454,7 @@ function deleteKV(key){
 
 // -- Config -- //
 function loadConfig(){
-  fetch('/api/config', { credentials: 'same-origin' }).then(r=>r.json()).then(d=>{
+  authFetch('/api/config').then(r=>r.json()).then(d=>{
     const list = $('configList');
     if (!d.config || !Object.keys(d.config).length){ list.innerHTML='<div class="empty">No configuration</div>'; return }
     list.innerHTML = Object.entries(d.config).map(([key, value]) => {
@@ -1408,10 +1473,9 @@ function runAgent(){
   $('agentStop').disabled = false;
   $('agentLog').innerHTML = '<span class="agent-step">► Starting agent...</span>\\n';
 
-  fetch('/api/agent/run', {
+  authFetch('/api/agent/run', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
     body: JSON.stringify({ goal })
   }).then(r=>r.json()).then(data => {
     if (data.error) {
@@ -1456,7 +1520,7 @@ function toggleHistory(){
   const el = $('agentHistory');
   el.style.display = el.style.display === 'none' ? 'block' : 'none';
   if (el.style.display === 'block') {
-    fetch('/api/agent/history', { credentials: 'same-origin' }).then(r=>r.json()).then(d=>{
+      authFetch('/api/agent/history').then(r=>r.json()).then(d=>{
       let html = '<div style="color:#8b949e;font-size:.78rem;margin-bottom:12px;padding:8px;background:#161b22;border-radius:6px">' +
         '<i class="fas fa-info-circle"></i> Agent history shows tasks submitted via this dashboard. ' +
         'Tool calls from opencode appear in the Activity tab, grouped by session.</div>';
@@ -1496,7 +1560,7 @@ function toggleRunDetail(id){
   expandedHistory[id] = true;
   detail.style.display = 'block';
   detail.innerHTML = '<div class="empty">Loading...</div>';
-  fetch('/api/agent/run/' + id, { credentials: 'same-origin' }).then(r=>r.json()).then(run=>{
+  authFetch('/api/agent/run/' + id).then(r=>r.json()).then(run=>{
     if (!run || !run.steps) { detail.innerHTML = '<div class="empty">No details</div>'; return; }
     let html = '';
     run.steps.forEach(s => {
@@ -1513,7 +1577,7 @@ function toggleRunDetail(id){
 }
 
 function exportRun(id){
-  fetch('/api/agent/run/' + id, { credentials: 'same-origin' }).then(r=>r.json()).then(run=>{
+  authFetch('/api/agent/run/' + id).then(r=>r.json()).then(run=>{
     const blob = new Blob([JSON.stringify(run, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1538,9 +1602,8 @@ function clearData(type){
     conversations: '/api/conversations',
     all: '/api/data'
   };
-  fetch(endpoints[type], { 
-    method: 'DELETE',
-    credentials: 'same-origin'
+  authFetch(endpoints[type], { 
+    method: 'DELETE'
   })
     .then(r => r.json())
     .then(d => {
@@ -1558,8 +1621,8 @@ let toolStats = {};
 
 function loadTools(){
   Promise.all([
-    fetch('/api/tools', { credentials: 'same-origin' }).then(r=>r.json()),
-    fetch('/api/stats', { credentials: 'same-origin' }).then(r=>r.json())
+    authFetch('/api/tools').then(r=>r.json()),
+    authFetch('/api/stats').then(r=>r.json())
   ]).then(([toolsData, statsData]) => {
     allTools = toolsData.tools || [];
     toolStats = {};
@@ -1601,7 +1664,7 @@ function renderTools(){
     for (const t of tools) {
       const stats = toolStats[t.name];
       const hasStats = stats && stats.count > 0;
-      html += '<div class="tool-card" onclick="showToolDetail(\\\\'' + esc(t.name) + '\\\\')">';
+      html += '<div class="tool-card" onclick="showToolDetail(\\'' + esc(t.name) + '\\')">';
       html += '<div class="tool-card-name">' + esc(t.name) + '</div>';
       html += '<div class="tool-card-desc">' + esc(t.description) + '</div>';
       if (hasStats) {
@@ -1629,7 +1692,7 @@ function showToolDetail(name){
   const catInfo = TOOL_CATEGORIES[cat] || { icon: 'fa-wrench' };
   const stats = toolStats[name];
   const hasStats = stats && stats.count > 0;
-  let html = '<div class="tool-detail-overlay active" onclick="if(event.target===this)this.classList.remove(\\\\'active\\\\')">';
+  let html = '<div class="tool-detail-overlay active" onclick="if(event.target===this)this.classList.remove(\\'active\\')">';
   html += '<div class="tool-detail">';
   html += '<h3><i class="fas ' + catInfo.icon + '" style="margin-right:8px"></i>' + esc(t.name) + '</h3>';
   html += '<div class="td-desc">' + esc(t.description) + '</div>';
@@ -1654,7 +1717,7 @@ function showToolDetail(name){
     }
     html += '</div></div>';
   }
-  html += '<div style="margin-top:16px;text-align:right"><button class="btn btn-outline" onclick="this.closest(\\\\'.tool-detail-overlay\\\\').classList.remove(\\\\'active\\\\')">Close</button></div>';
+  html += '<div style="margin-top:16px;text-align:right"><button class="btn btn-outline" onclick="this.closest(\\'.tool-detail-overlay\\').classList.remove(\\'active\\')">Close</button></div>';
   html += '</div></div>';
   const existing = document.querySelector('.tool-detail-overlay');
   if (existing) existing.remove();
