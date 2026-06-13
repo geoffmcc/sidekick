@@ -289,6 +289,47 @@ try {
     Write-Host "  No local .env found, skipping" -ForegroundColor Yellow
   }
 
+  # Generate version.json from local git
+  Write-Host "  Generating version.json..." -ForegroundColor Green
+  $gitCommit = git rev-parse HEAD 2>$null
+  $gitBranch = git rev-parse --abbrev-ref HEAD 2>$null
+  $gitRemote = git remote get-url origin 2>$null
+  $deployTime = Get-Date -Format "o"
+
+  $versionData = @{
+    commit = $gitCommit
+    branch = $gitBranch
+    remote_url = $gitRemote
+    deployed_at = $deployTime
+  } | ConvertTo-Json
+
+  $versionPath = Join-Path $PROJECT_DIR "version.json"
+  # Write UTF-8 without BOM (PowerShell 5.1 Set-Content adds BOM by default)
+  [System.IO.File]::WriteAllText($versionPath, $versionData, (New-Object System.Text.UTF8Encoding $false))
+
+  if (-not (Copy-ToVPS $versionPath "$REMOTE_DIR/version.json")) {
+    Write-Host "  Warning: Failed to sync version.json" -ForegroundColor Yellow
+  }
+  Remove-Item $versionPath -Force
+  $changed += "version.json"
+
+  # Fix data directory permissions if owned by root
+  Write-Host "  Checking data directory permissions..." -ForegroundColor Yellow
+  $dataOwner = Run-Remote "stat -c '%U:%G' $REMOTE_DIR/data/ 2>/dev/null || echo 'missing'"
+  if ($dataOwner -match "root") {
+    Write-Host "  Data directory owned by root, attempting fix..." -ForegroundColor Yellow
+    # Try to fix permissions - this works if NOPASSWD includes chown or if running as initial user
+    $fixResult = Run-Remote "sudo chown -R sidekick:sidekick $REMOTE_DIR/data/ 2>&1 && sudo chmod -R 755 $REMOTE_DIR/data/ 2>&1 && echo 'FIXED' || echo 'FAILED'"
+    if ($fixResult -match "FIXED") {
+      Write-Host "  Data directory permissions fixed" -ForegroundColor Green
+    } else {
+      Write-Host "  Warning: Could not fix data directory permissions automatically." -ForegroundColor Yellow
+      Write-Host "  Run manually: sudo chown -R sidekick:sidekick $REMOTE_DIR/data/" -ForegroundColor Yellow
+    }
+  } else {
+    Write-Host "  Data directory permissions OK ($dataOwner)" -ForegroundColor Green
+  }
+
   Write-Host ""
   Write-Host "--- Installing Dependencies ---" -ForegroundColor Cyan
   Write-Host "  Running npm install..." -ForegroundColor Green

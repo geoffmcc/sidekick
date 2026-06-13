@@ -112,6 +112,7 @@ sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-dashboard, /usr/b
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-agent, /usr/bin/systemctl stop sidekick-agent, /usr/bin/systemctl restart sidekick-agent, /usr/bin/systemctl status sidekick-agent
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/journalctl -u sidekick-mcp, /usr/bin/journalctl -u sidekick-dashboard, /usr/bin/journalctl -u sidekick-agent
 sidekick ALL=(ALL) NOPASSWD: /usr/sbin/ufw allow 4097/tcp, /usr/sbin/ufw allow 4098/tcp, /usr/sbin/ufw allow 4099/tcp
+sidekick ALL=(ALL) NOPASSWD: /usr/bin/chown -R sidekick\:sidekick /home/sidekick/sidekick/data/, /usr/bin/chmod -R 755 /home/sidekick/sidekick/data/
 EOF
 
 chmod 440 /etc/sudoers.d/sidekick
