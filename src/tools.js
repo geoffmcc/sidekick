@@ -6957,6 +6957,14 @@ async function sidekick_black_box({ action, name, include, analyze_with_llm, inc
   return { content: [{ type: "text", text: "Unknown action. Use: capture, list, get, delete, analyze" }], isError: true };
 }
 
+// Simple respond tool for agent to return text without calling other tools
+async function sidekick_respond({ text }) {
+  if (!text) {
+    return { content: [{ type: "text", text: "text parameter required" }], isError: true };
+  }
+  return { content: [{ type: "text", text: text }] };
+}
+
 const TOOLS = {
   sidekick_bash,
   sidekick_read,
@@ -7017,6 +7025,7 @@ const TOOLS = {
   sidekick_depend,
   sidekick_runbook,
   sidekick_black_box,
+  sidekick_respond,
 };
 
 const TOOL_DEFS = [
@@ -7079,6 +7088,7 @@ const TOOL_DEFS = [
   { name: "sidekick_depend", description: "Dependency analyzer for npm packages, systemd services, and processes. Shows dependency trees, reverse dependencies, and impact analysis.", args: { action: "string (tree|reverse|outdated|impact|orphans)", type: "string (npm|service|process)", target: "string (optional, package, service, or PID)", depth: "number (optional, tree depth - default 5)", format: "string (optional, tree|flat|json - default tree)" } },
   { name: "sidekick_runbook", description: "Operational runbook executor with autonomous and guided modes. Supports verification, rollback, and step-by-step execution.", args: { action: "string (create|start|next|verify|rollback|abort|list|get|delete)", name: "string (optional, runbook name)", mode: "string (optional, autonomous|guided - default autonomous)", steps: "array (optional, step definitions)", runbook_id: "string (optional, instance or definition ID)", step_index: "number (optional, step index)" } },
   { name: "sidekick_black_box", description: "Incident time capsule: captures full system context (services, processes, logs, disk, network) in one call for debugging. Rate limited.", args: { action: "string (capture|list|get|delete|analyze)", name: "string (optional, incident name)", include: "array (optional, services|processes|logs|disk|network|all - default all)", analyze_with_llm: "boolean (optional, use LLM for analysis - default false)", incident_id: "string (optional, incident ID)" } },
+  { name: "sidekick_respond", description: "Return a text response directly without calling other tools. Use this for simple answers or when no tool action is needed.", args: { text: "string (the response text to return)" } },
 ];
 
 async function callTool(name, args) {
