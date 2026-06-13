@@ -685,6 +685,11 @@ app.get("/api/agent/run/:id", (req, res) => {
   catch { res.status(500).json({ error: "parse error" }); }
 });
 
+app.get("/api/agent/status", (req, res) => {
+  const activeTasks = Object.keys(taskEmitters).length;
+  res.json({ activeTasks });
+});
+
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 
 app.post("/api/delays/reload", (req, res) => {
