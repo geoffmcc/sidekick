@@ -27,7 +27,8 @@ Sidekick is configured primarily through environment variables. `.env.example` d
 | Variable | Default | Purpose |
 |---|---|---|
 | `OLLAMA_URL` | `http://127.0.0.1:11434` | Intended local Ollama endpoint. The implemented local calls use `127.0.0.1:11434` directly. |
-| `GROQ_API_KEY` | empty | When set, `sidekick_llm` and the agent bridge use Groq instead of local Ollama. |
+| `GROQ_API_KEY` | empty | When set, `sidekick_llm` can use Groq with `provider='groq'`. Agent bridge uses Groq only if `SIDEKICK_DEFAULT_LLM=groq`. |
+| `SIDEKICK_DEFAULT_LLM` | `ollama` | Default LLM provider for `sidekick_llm` and agent bridge. Set to `groq` to use cloud Groq by default. |
 | `GROQ_MODEL` | `llama-3.1-8b-instant` | Groq model name. |
 
 ## Notification Variables

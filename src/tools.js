@@ -262,8 +262,11 @@ async function sidekick_web_fetch({ url: targetUrl, method, headers, body }) {
   });
 }
 
-async function sidekick_llm({ prompt, system, temperature }) {
-  if (GROQ_API_KEY) {
+async function sidekick_llm({ prompt, system, temperature, provider }) {
+  const defaultProvider = process.env.SIDEKICK_DEFAULT_LLM || "ollama";
+  const useGroq = (provider || defaultProvider) === "groq";
+  
+  if (useGroq && GROQ_API_KEY) {
     return callGroqLLM(prompt, system, temperature);
   }
   return callOllamaLLM(prompt, system, temperature);
@@ -7036,7 +7039,7 @@ const TOOL_DEFS = [
   { name: "sidekick_store", description: "Store a value persistently in KV storage", args: { key: "string", value: "string", project: "string (optional)" } },
   { name: "sidekick_get", description: "Retrieve a stored value from KV storage", args: { key: "string" } },
   { name: "sidekick_web_fetch", description: "Fetch a URL from the remote machine", args: { url: "string", method: "string (optional)", headers: "string (optional)", body: "string (optional)" } },
-  { name: "sidekick_llm", description: "Ask the LLM (Groq cloud or local Phi-3-mini)", args: { prompt: "string", system: "string (optional)", temperature: "number (optional)" } },
+  { name: "sidekick_llm", description: "Ask the LLM (defaults to local Ollama, use provider='groq' for cloud Groq)", args: { prompt: "string", system: "string (optional)", temperature: "number (optional)", provider: "string (optional, 'ollama' or 'groq' - default from SIDEKICK_DEFAULT_LLM env var or 'ollama')" } },
   { name: "sidekick_list_projects", description: "List all unique project names in KV storage", args: {} },
   { name: "sidekick_get_by_project", description: "Get all keys and values for a specific project", args: { project: "string" } },
   { name: "sidekick_search", description: "Search file contents using ripgrep or grep", args: { pattern: "string", path: "string (optional)", include: "string (optional)" } },
