@@ -94,6 +94,8 @@ To add a built-in tool:
 5. Add tests under `test/`.
 6. Restart the MCP server.
 
+For the complete guide with code templates and conventions, see [tool-creation.md](tool-creation.md).
+
 Use `redactSensitive()` on any output that may include command output, HTTP responses, file content, logs, or user-provided text.
 
 ## Adding a Learned Procedure
