@@ -160,7 +160,7 @@ All tool calls are logged with source tags:
 ## Services
 
 - **MCP Server** (`:4097`) — 59 tools, session-aware transport (new McpServer+Transport per session) at YOUR_REMOTE_IP
-- **Dashboard** (`:4098`) — web UI with System, Activity, Data, Config, and Agent tabs, Font Awesome icons
+- **Dashboard** (`:4098`) — web UI with System, Activity, Data, Config, Agent, and Tools tabs, Font Awesome icons
 - **Agent Bridge** (`:4099`) — autonomous LLM agent that calls tools directly (bypasses MCP HTTP)
 - **Ollama** (`:11434`) — local Phi-3-mini fallback. Uses cloud Groq API when `GROQ_API_KEY` is set
 

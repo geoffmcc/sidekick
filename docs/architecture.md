@@ -85,6 +85,7 @@ The dashboard is an Express application that serves a browser UI and JSON API. I
 - Service status.
 - Configuration summary.
 - Dashboard statistics.
+- Tool catalog browsing.
 - Webhook ingestion.
 - Agent bridge proxying.
 - Data clearing and reset operations.

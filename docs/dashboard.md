@@ -10,6 +10,7 @@ Main responsibilities:
 
 - Show recent tool call logs.
 - Browse and edit KV storage.
+- Browse the full tool catalog with search and category filtering.
 - Display system, service, and LLM status.
 - Clear logs, KV data, conversations, or all operational data.
 - Receive and store external webhooks.
@@ -45,6 +46,7 @@ Seeded entries use project `system` and source `dashboard`.
 | GET | `/api/llm` | Return LLM configuration/status summary. |
 | GET | `/api/services` | Return service status for known Sidekick services. |
 | GET | `/api/config` | Return public configuration summary. |
+| GET | `/api/tools` | Return the full tool catalog from `TOOL_DEFS`. |
 | GET | `/api/stats` | Return dashboard summary statistics. |
 | DELETE | `/api/logs` | Clear `log.jsonl`. |
 | DELETE | `/api/kv` | Reset `kvstore.json` to an empty object. |

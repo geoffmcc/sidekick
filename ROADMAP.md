@@ -5,7 +5,7 @@ What's planned for Sidekick.
 ## Current (v1.18)
 
 - 59 MCP tools (bash, read, write, list, search, git, notify, process, service, archive, cron, github, webhook, context, teach, store, get, list_projects, get_by_project, web_fetch, llm, transform, health, delay, snapshot, watch, secret, parse, diff, hash, validate, template, queue, retry, evolve, orchestrate, predict, debug_tool, fresheyes, batch, cache, summarize, filter, project, tail, diff_files, find, status, extract, anonymize, sandbox, changelog, netdiag, timeline, circuit, baseline, depend, runbook, black_box)
-- Live dashboard with 5 tabs (System, Activity, Data, Config, Agent)
+- Live dashboard with 6 tabs (System, Activity, Data, Config, Agent, Tools)
 - Autonomous agent bridge with Groq cloud + local Ollama fallback
 - Persistent KV storage across sessions
 - AGENTS.md integration for persistent collaboration

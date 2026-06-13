@@ -4,6 +4,13 @@ All notable changes to Sidekick.
 
 ## 2026-06-13
 
+### Dashboard: Tools Tab
+- Added dedicated **Tools** tab to the dashboard (6th tab)
+- Browsable catalog of all 59 tools with search and category filtering
+- 15 tool categories with Font Awesome icons (Core, Storage, Git & GitHub, Services, Scheduling, Communication, Context & Learning, Data Pipeline, Monitoring, Workflow, Meta, Efficiency, Security, Development, Reliability, Archive)
+- Click any tool card to see detailed argument info in a modal
+- Added `GET /api/tools` endpoint returning `TOOL_DEFS` from `src/tools.js`
+
 ### v1.18: Operations Platform Expansion (10 new tools)
 - **`sidekick_anonymize`** — Replace sensitive data with realistic fake values. Consistent mapping, custom patterns, safety net via redact.
 - **`sidekick_sandbox`** — Execute operations with automatic file backup and rollback. Safe experimentation on remote systems.
