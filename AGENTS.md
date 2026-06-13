@@ -69,7 +69,7 @@ Debug the dashboard service. First, check for recent debug findings: sidekick_de
 | `sidekick_list_projects` | List all projects in KV storage |
 | `sidekick_get_by_project` | Get all keys and values for a specific project |
 | `sidekick_web_fetch` | Fetch a URL from the remote IP (bypasses local IP restrictions) |
-| `sidekick_llm` | Query the LLM (Groq cloud or local Phi-3-mini) |
+| `sidekick_llm` | Query the LLM (defaults to local Ollama, use provider='groq' for cloud Groq) |
 | `sidekick_transform` | Data manipulation pipeline: filter, extract, sort, format, map data |
 | `sidekick_health` | Composite system health checks with scoring and issue detection |
 | `sidekick_delay` | One-shot task scheduling (run a tool once at a specific time) |

@@ -46,7 +46,7 @@ This documentation set was generated from the project source code in the supplie
 | `sidekick_context` | Storage and Context | Track and recall project context, decisions, problems, reusable patterns, and session summaries. | `action plus context fields` |
 | `sidekick_teach` | Storage and Context | Create reusable procedures and dynamically expose them as MCP tools after restart. | `action, name, description, steps, parameters, args, example, trigger_phrases, implementation` |
 | `sidekick_web_fetch` | Web and Communication | Fetch a URL from the remote host with optional method, headers, and body. | `url, method optional, headers optional, body optional` |
-| `sidekick_llm` | Web and Communication | Send a prompt to Groq if configured, otherwise Ollama. | `prompt, system optional, temperature optional` |
+| `sidekick_llm` | Web and Communication | Send a prompt to the LLM. Defaults to local Ollama, use `provider='groq'` for cloud Groq. | `prompt, system optional, temperature optional, provider optional` |
 | `sidekick_notify` | Web and Communication | Send notifications to Discord, Slack, or email. | `channel, webhook_url, recipient, message, title` |
 | `sidekick_github` | Web and Communication | Use the GitHub REST API for pull requests, issues, commit statuses, releases, and repository information. | `action, repo, args optional` |
 | `sidekick_webhook` | Web and Communication | List, inspect, or clear webhook payloads received by the dashboard webhook endpoint. | `action, id optional, limit optional` |

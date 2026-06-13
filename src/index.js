@@ -53,7 +53,8 @@ const TOOL_SCHEMAS = {
   sidekick_llm: z.object({
     prompt: z.string().describe("The prompt to send to the LLM"),
     system: z.string().optional().describe("System prompt override"),
-    temperature: z.number().optional().default(0.7).describe("Sampling temperature (0-2)")
+    temperature: z.number().optional().default(0.7).describe("Sampling temperature (0-2)"),
+    provider: z.string().optional().describe("LLM provider: 'ollama' (default) or 'groq' (cloud)")
   }),
   sidekick_list_projects: z.object({}),
   sidekick_get_by_project: z.object({ project: z.string().describe("Project name to filter by") }),

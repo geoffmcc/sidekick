@@ -317,7 +317,8 @@ function buildSystemPrompt() {
 }
 
 function callAgentLLM(messages) {
-  if (GROQ_API_KEY) return callGroqLLM(messages);
+  const defaultProvider = process.env.SIDEKICK_DEFAULT_LLM || "ollama";
+  if (defaultProvider === "groq" && GROQ_API_KEY) return callGroqLLM(messages);
   return callOllamaLLM(messages);
 }
 
