@@ -168,10 +168,6 @@ function writeKV(data) {
   dbStore.replaceKV(data || {});
 }
 
-function removeLegacyKVFile() {
-  try { fs.rmSync(path.join(DATA_DIR, "kvstore.json"), { force: true }); } catch {}
-}
-
 function exec(cmd, opts = {}) {
   try {
     return execSync(cmd, { encoding: "utf-8", timeout: 5000, ...opts }).trim();
@@ -551,7 +547,7 @@ app.delete("/api/logs", (req, res) => {
 });
 
 app.delete("/api/kv", (req, res) => {
-  try { dbStore.clearKV(); removeLegacyKVFile(); } catch {}
+  try { dbStore.clearKV(); } catch {}
   auditLog(req, 'kv.clear', {});
   res.json({ ok: true });
 });
@@ -571,7 +567,6 @@ app.delete("/api/data", (req, res) => {
   try {
     dbStore.clearToolLogs();
     dbStore.clearKV();
-    removeLegacyKVFile();
     const dir = path.join(DATA_DIR, "conversations");
     fs.readdirSync(dir).filter(f => f.endsWith(".json")).forEach(f => {
       fs.unlinkSync(path.join(dir, f));

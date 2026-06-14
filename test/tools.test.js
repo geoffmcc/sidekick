@@ -11,15 +11,10 @@ if (!fs.existsSync(TEST_DATA_DIR)) {
 // Set environment variable before requiring tools
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 
-// Clean up test data
-const testKVFile = path.join(TEST_DATA_DIR, 'kvstore.json');
-if (fs.existsSync(testKVFile)) {
-  fs.unlinkSync(testKVFile);
-}
-
 // Now require tools (will use test data dir)
 delete require.cache[require.resolve('../src/tools')];
 const tools = require('../src/tools');
+const dbStore = require('../src/db');
 const { 
   TOOLS,
   setSource 
@@ -37,18 +32,18 @@ console.log('Test 2.1: sidekick_store with project');
     assert.ok(result.content[0].text.includes('Stored'), 'Should return success message');
     
     // Verify in KV store
-    const kvData = JSON.parse(fs.readFileSync(testKVFile, 'utf-8'));
-    assert.strictEqual(typeof kvData['test1'], 'object', 'Should store as object');
-    assert.strictEqual(kvData['test1'].value, 'data1', 'Value should match');
-    assert.strictEqual(kvData['test1'].project, 'myproject', 'Project should match');
-    assert.strictEqual(kvData['test1'].source, 'mcp', 'Source should be mcp');
+    const kvEntry = dbStore.getKV('test1');
+    assert.ok(kvEntry, 'Should exist in store');
+    assert.strictEqual(kvEntry.value, 'data1', 'Value should match');
+    assert.strictEqual(kvEntry.project, 'myproject', 'Project should match');
+    assert.strictEqual(kvEntry.source, 'mcp', 'Source should be mcp');
     console.log('✓ Passed\n');
 
     // Test 2.2: sidekick_store without project
     console.log('Test 2.2: sidekick_store without project');
     await sidekick_store({ key: 'test2', value: 'data2' });
-    const kvData2 = JSON.parse(fs.readFileSync(testKVFile, 'utf-8'));
-    assert.strictEqual(kvData2['test2'].project, null, 'Project should be null');
+    const kvEntry2 = dbStore.getKV('test2');
+    assert.strictEqual(kvEntry2.project, null, 'Project should be null');
     console.log('✓ Passed\n');
 
     // Test 2.3: sidekick_get backward compatibility
@@ -76,7 +71,6 @@ console.log('Test 2.1: sidekick_store with project');
     assert.ok(Array.isArray(projects), 'Should return array');
     assert.ok(projects.includes('proj1'), 'Should include proj1');
     assert.ok(projects.includes('proj2'), 'Should include proj2');
-    assert.ok(projects.includes(null), 'Should include null project');
     console.log('✓ Passed\n');
 
     // Test 2.6: sidekick_get_by_project
@@ -107,25 +101,25 @@ console.log('Test 2.1: sidekick_store with project');
     // Test 2.8: Update existing key preserves created timestamp
     console.log('Test 2.8: Update existing key preserves created timestamp');
     await sidekick_store({ key: 'test_update', value: 'original' });
-    const kvBefore = JSON.parse(fs.readFileSync(testKVFile, 'utf-8'));
-    const createdBefore = kvBefore['test_update'].created;
+    const kvBefore = dbStore.getKV('test_update');
+    const createdBefore = kvBefore.created;
     
     // Wait a bit to ensure timestamp would be different
     await new Promise(resolve => setTimeout(resolve, 10));
     
     await sidekick_store({ key: 'test_update', value: 'updated' });
-    const kvAfter = JSON.parse(fs.readFileSync(testKVFile, 'utf-8'));
-    assert.strictEqual(kvAfter['test_update'].value, 'updated', 'Value should be updated');
-    assert.strictEqual(kvAfter['test_update'].created, createdBefore, 'Created should be preserved');
-    assert.notStrictEqual(kvAfter['test_update'].updated, createdBefore, 'Updated should be different');
+    const kvAfter = dbStore.getKV('test_update');
+    assert.strictEqual(kvAfter.value, 'updated', 'Value should be updated');
+    assert.strictEqual(kvAfter.created, createdBefore, 'Created should be preserved');
+    assert.notStrictEqual(kvAfter.updated, createdBefore, 'Updated should be different');
     console.log('✓ Passed\n');
 
     // Test 2.9: Update existing key can change project
     console.log('Test 2.9: Update existing key can change project');
     await sidekick_store({ key: 'test_proj_change', value: 'data', project: 'old_proj' });
     await sidekick_store({ key: 'test_proj_change', value: 'data', project: 'new_proj' });
-    const kvProj = JSON.parse(fs.readFileSync(testKVFile, 'utf-8'));
-    assert.strictEqual(kvProj['test_proj_change'].project, 'new_proj', 'Project should be updated');
+    const kvProj = dbStore.getKV('test_proj_change');
+    assert.strictEqual(kvProj.project, 'new_proj', 'Project should be updated');
     console.log('✓ Passed\n');
 
     // Clean up

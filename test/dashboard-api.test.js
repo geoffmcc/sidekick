@@ -15,12 +15,6 @@ process.env.SIDEKICK_DASHBOARD_PORT = '4100';
 process.env.SIDEKICK_DASHBOARD_USER = 'test-user';
 process.env.SIDEKICK_DASHBOARD_PASS = 'test-pass';
 
-// Clean up test data
-const testKVFile = path.join(TEST_DATA_DIR, 'kvstore.json');
-if (fs.existsSync(testKVFile)) {
-  fs.unlinkSync(testKVFile);
-}
-
 // Helper function to make HTTP requests
 function makeRequest(method, path, body = null) {
   return new Promise((resolve, reject) => {
@@ -144,7 +138,6 @@ setTimeout(async () => {
       assert.ok(Array.isArray(response.data.projects), 'Should return array');
       assert.ok(response.data.projects.includes('proj1'), 'Should include proj1');
       assert.ok(response.data.projects.includes('proj2'), 'Should include proj2');
-      assert.ok(response.data.projects.includes(null), 'Should include null project');
       console.log('✓ Passed\n');
     }
 

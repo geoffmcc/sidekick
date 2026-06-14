@@ -38,29 +38,6 @@ function clearRequireCache(modulePath) {
 }
 
 /**
- * Create a mock KV store file
- * @param {string} dataDir - Data directory path
- * @param {object} data - KV data to write
- */
-function createMockKVStore(dataDir, data) {
-  const kvFile = path.join(dataDir, 'kvstore.json');
-  fs.writeFileSync(kvFile, JSON.stringify(data, null, 2));
-}
-
-/**
- * Read KV store file
- * @param {string} dataDir - Data directory path
- * @returns {object} - KV store data
- */
-function readKVStore(dataDir) {
-  const kvFile = path.join(dataDir, 'kvstore.json');
-  if (!fs.existsSync(kvFile)) {
-    return {};
-  }
-  return JSON.parse(fs.readFileSync(kvFile, 'utf-8'));
-}
-
-/**
  * Create a mock log file
  * @param {string} dataDir - Data directory path
  * @param {Array} entries - Log entries to write
@@ -160,8 +137,6 @@ module.exports = {
   createTestEnv,
   cleanupTestEnv,
   clearRequireCache,
-  createMockKVStore,
-  readKVStore,
   createMockLogFile,
   readLogFile,
   sleep,

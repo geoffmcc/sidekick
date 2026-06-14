@@ -13,12 +13,6 @@ if (!fs.existsSync(TEST_DATA_DIR)) {
 
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 
-// Clean up test data
-const testKVFile = path.join(TEST_DATA_DIR, 'kvstore.json');
-if (fs.existsSync(testKVFile)) {
-  fs.unlinkSync(testKVFile);
-}
-
 delete require.cache[require.resolve('../src/tools')];
 const { TOOLS, isDangerous } = require('../src/tools');
 
