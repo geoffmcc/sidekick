@@ -11,7 +11,6 @@ const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.1-8b-instant";
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
-const KV_FILE = path.join(DATA_DIR, "kvstore.json");
 const LOG_FILE = path.join(DATA_DIR, "log.jsonl");
 const CRON_FILE = path.join(DATA_DIR, "cron.json");
 const WEBHOOK_FILE = path.join(DATA_DIR, "webhooks.json");
@@ -28,56 +27,10 @@ function shellEscape(arg) {
   return "'" + arg.replace(/'/g, "'\\''") + "'";
 }
 
-function migrateKV(data) {
-  const now = new Date().toISOString();
-  const migrated = {};
-  
-  for (const [key, val] of Object.entries(data)) {
-    if (typeof val === 'string') {
-      let project = null;
-      if (key.startsWith('server:') || key.startsWith('network:') || 
-          key.startsWith('services:') || key.startsWith('security:') ||
-          key.startsWith('software:') || key.startsWith('deploy:') ||
-          key.startsWith('config:')) {
-        project = 'system';
-      } else if (key.startsWith('proxmox_backup_') || key === 'env_var_deployment_status') {
-        project = 'proxmox_backup';
-      }
-      
-      migrated[key] = {
-        value: val,
-        project: project,
-        source: 'init',
-        created: now,
-        updated: now
-      };
-    } else if (typeof val === 'object' && val !== null && 'value' in val) {
-      migrated[key] = val;
-    } else {
-      migrated[key] = val;
-    }
-  }
-  
-  return migrated;
-}
-
-let kvStore = {};
-if (fs.existsSync(KV_FILE)) {
-  try { 
-    const rawData = JSON.parse(fs.readFileSync(KV_FILE, "utf-8"));
-    kvStore = migrateKV(rawData);
-    fs.writeFileSync(KV_FILE, JSON.stringify(kvStore, null, 2));
-  } catch (e) {}
-}
-
 let currentSource = "unknown";
 
 function setSource(source) {
   currentSource = source;
-}
-
-function saveKV() {
-  fs.writeFileSync(KV_FILE, JSON.stringify(kvStore, null, 2));
 }
 
 function formatArgs(args) {
@@ -149,55 +102,30 @@ async function sidekick_store({ key, value, project, category }) {
     return { content: [{ type: "text", text: "Invalid project name. Must match /^[a-z][a-z0-9_]*$/" }], isError: true };
   }
   
-  const now = new Date().toISOString();
-  const existing = kvStore[key];
+  const existing = dbStore.getKV(key);
+  dbStore.setKV(key, value, project !== undefined ? project : (existing?.project || null), currentSource, category !== undefined ? category : (existing?.category || null));
   
-  if (existing && typeof existing === 'object' && 'value' in existing) {
-    kvStore[key] = {
-      value: value,
-      project: project !== undefined ? project : existing.project,
-      category: category !== undefined ? category : existing.category,
-      source: currentSource,
-      created: existing.created,
-      updated: now
-    };
-  } else {
-    kvStore[key] = {
-      value: value,
-      project: project || null,
-      category: category || null,
-      source: currentSource,
-      created: now,
-      updated: now
-    };
-  }
-  
-  saveKV();
   return { content: [{ type: "text", text: "Stored key \"" + key + "\" (" + value.length + " chars)" }] };
 }
 
 async function sidekick_get({ key }) {
-  if (!(key in kvStore)) {
+  const entry = dbStore.getKV(key);
+  if (!entry) {
     return { content: [{ type: "text", text: "Key not found: " + key }], isError: true };
   }
-  const entry = kvStore[key];
   const value = (typeof entry === 'object' && entry !== null && 'value' in entry) ? entry.value : entry;
   return { content: [{ type: "text", text: redactSensitive(value) }] };
 }
 
 async function sidekick_list_projects() {
-  const projects = new Set();
-  for (const entry of Object.values(kvStore)) {
-    if (typeof entry === 'object' && entry !== null && 'project' in entry) {
-      projects.add(entry.project);
-    }
-  }
-  return { content: [{ type: "text", text: JSON.stringify(Array.from(projects)) }] };
+  const projects = dbStore.listKVProjects();
+  return { content: [{ type: "text", text: JSON.stringify(projects) }] };
 }
 
 async function sidekick_get_by_project({ project }) {
+  const allKV = dbStore.getAllKV();
   const results = [];
-  for (const [key, entry] of Object.entries(kvStore)) {
+  for (const [key, entry] of Object.entries(allKV)) {
     if (typeof entry === 'object' && entry !== null && 'project' in entry) {
       if (entry.project === project) {
         results.push({ key, value: entry.value });
@@ -3927,8 +3855,9 @@ function generateDebugKey(service, issue) {
 }
 
 function getDebugEntries() {
+  const allKV = dbStore.getAllKV();
   const entries = [];
-  for (const [key, entry] of Object.entries(kvStore)) {
+  for (const [key, entry] of Object.entries(allKV)) {
     if (key.startsWith('debug:') && typeof entry === 'object' && entry !== null && 'value' in entry) {
       entries.push({ key, ...entry });
     }
@@ -3963,18 +3892,7 @@ async function sidekick_debug_tool({ action, session_name, key, value, service, 
     
     const storedValue = shouldRedact ? redactSensitive(value) : value;
     
-    kvStore[debugKey] = {
-      value: storedValue,
-      project: "debug",
-      category: "debug",
-      source: currentSource,
-      created: nowISO,
-      updated: nowISO,
-      service: service,
-      issue: issue || "general"
-    };
-    
-    saveKV();
+    dbStore.setKV(debugKey, storedValue, "debug", currentSource, "debug");
     return { content: [{ type: "text", text: `Stored debug finding: ${debugKey} (${storedValue.length} chars)` }] };
   }
   
@@ -4013,9 +3931,9 @@ async function sidekick_debug_tool({ action, session_name, key, value, service, 
   if (action === "cleanup") {
     // If key parameter provided, delete that specific entry (regardless of age)
     if (key && key !== "all") {
-      if (kvStore[key] && key.startsWith('debug:')) {
-        delete kvStore[key];
-        saveKV();
+      const entry = dbStore.getKV(key);
+      if (entry && key.startsWith('debug:')) {
+        dbStore.deleteKV(key);
         return { content: [{ type: "text", text: `Deleted: ${key}` }] };
       }
       return { content: [{ type: "text", text: `Key not found or not a debug entry: ${key}` }], isError: true };
@@ -4046,10 +3964,9 @@ async function sidekick_debug_tool({ action, session_name, key, value, service, 
     const old = entries.filter(e => isOlderThan7Days(e.updated));
     let deleted = 0;
     for (const e of old) {
-      delete kvStore[e.key];
+      dbStore.deleteKV(e.key);
       deleted++;
     }
-    saveKV();
     return { content: [{ type: "text", text: `Deleted ${deleted} old debug entries` }] };
   }
   
@@ -4371,8 +4288,9 @@ async function sidekick_project({ name, include }) {
   const sections = (include || "kv,context").split(",").map(s => s.trim());
   const output = {};
   if (sections.includes("kv")) {
+    const allKV = dbStore.getAllKV();
     const kvResults = [];
-    for (const [key, entry] of Object.entries(kvStore)) {
+    for (const [key, entry] of Object.entries(allKV)) {
       if (typeof entry === 'object' && entry !== null && entry.project === name) {
         kvResults.push({ key, value: typeof entry.value === 'string' ? entry.value.substring(0, 200) : entry.value, updated: entry.updated });
       }
@@ -7078,4 +6996,4 @@ async function callTool(name, args) {
   }
 }
 
-module.exports = { TOOLS, TOOL_DEFS, callTool, logToolCall, setSource, DATA_DIR, OLLAMA_URL, GROQ_API_KEY, GROQ_MODEL, migrateKV, loadProcedures, loadDelays, saveDelays, loadWatches, saveWatches, isDangerous };
+module.exports = { TOOLS, TOOL_DEFS, callTool, logToolCall, setSource, DATA_DIR, OLLAMA_URL, GROQ_API_KEY, GROQ_MODEL, loadProcedures, loadDelays, saveDelays, loadWatches, saveWatches, isDangerous };

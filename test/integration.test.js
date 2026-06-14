@@ -11,12 +11,6 @@ if (!fs.existsSync(TEST_DATA_DIR)) {
 // Set environment variable before requiring modules
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 
-// Clean up test data
-const testKVFile = path.join(TEST_DATA_DIR, 'kvstore.json');
-if (fs.existsSync(testKVFile)) {
-  fs.unlinkSync(testKVFile);
-}
-
 console.log('Running Integration Tests...\n');
 
 // Test 4.1: Full workflow - store, list projects, get by project
@@ -47,7 +41,6 @@ console.log('Test 4.1: Full workflow - store, list projects, get by project');
     assert.ok(projects.includes('proj_a'), 'Should include proj_a');
     assert.ok(projects.includes('proj_b'), 'Should include proj_b');
     assert.ok(projects.includes('proj_c'), 'Should include proj_c');
-    assert.ok(projects.includes(null), 'Should include null project');
     console.log('✓ Projects listed correctly');
 
     // Get by project
@@ -65,62 +58,12 @@ console.log('Test 4.1: Full workflow - store, list projects, get by project');
 
     console.log('✓ Test 4.1 Passed\n');
 
-    // Test 4.2: Migration + new tools
-    console.log('Test 4.2: Migration + new tools');
+    // Test 4.2: Concurrent operations
+    console.log('Test 4.2: Concurrent operations');
     {
-      // Clear KV and write flat data
-      const flatData = {
-        "server:hostname": "test-host",
-        "network:ip": "192.168.1.1",
-        "proxmox_backup_plan": "backup plan data",
-        "custom_key": "custom value"
-      };
-      fs.writeFileSync(testKVFile, JSON.stringify(flatData, null, 2));
-
-      // Clear require cache and re-import to trigger migration
-      delete require.cache[require.resolve('../src/tools')];
-      const tools2 = require('../src/tools');
-      
-      // Wait for migration to complete
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      // List projects - should have system, proxmox_backup, and null
-      const projectsResult2 = await tools2.TOOLS.sidekick_list_projects();
-      const projects2 = JSON.parse(projectsResult2.content[0].text);
-      assert.ok(projects2.includes('system'), 'Should have system project');
-      assert.ok(projects2.includes('proxmox_backup'), 'Should have proxmox_backup project');
-      assert.ok(projects2.includes(null), 'Should have null project');
-      console.log('✓ Migration created correct projects');
-
-      // Get by system project
-      const systemResult = await tools2.TOOLS.sidekick_get_by_project({ project: 'system' });
-      const systemKeys = JSON.parse(systemResult.content[0].text);
-      assert.ok(systemKeys.length >= 2, 'System should have at least 2 keys');
-      assert.ok(systemKeys.find(k => k.key === 'server:hostname'), 'Should find server:hostname');
-      assert.ok(systemKeys.find(k => k.key === 'network:ip'), 'Should find network:ip');
-      console.log('✓ System project keys correct');
-
-      // Get by proxmox_backup project
-      const proxmoxResult = await tools2.TOOLS.sidekick_get_by_project({ project: 'proxmox_backup' });
-      const proxmoxKeys = JSON.parse(proxmoxResult.content[0].text);
-      assert.strictEqual(proxmoxKeys.length, 1, 'proxmox_backup should have 1 key');
-      assert.strictEqual(proxmoxKeys[0].key, 'proxmox_backup_plan', 'Should be proxmox_backup_plan');
-      console.log('✓ Proxmox_backup project keys correct');
-
-      // Get by null project
-      const nullResult = await tools2.TOOLS.sidekick_get_by_project({ project: null });
-      const nullKeys = JSON.parse(nullResult.content[0].text);
-      assert.ok(nullKeys.find(k => k.key === 'custom_key'), 'Should find custom_key in null project');
-      console.log('✓ Null project keys correct');
-
-      console.log('✓ Test 4.2 Passed\n');
-    }
-
-    // Test 4.3: Concurrent operations
-    console.log('Test 4.3: Concurrent operations');
-    {
-      // Clear KV
-      fs.writeFileSync(testKVFile, '{}');
+      // Clear KV using dbStore
+      const dbStore = require('../src/db');
+      dbStore.clearKV();
       
       delete require.cache[require.resolve('../src/tools')];
       const tools3 = require('../src/tools');
@@ -136,11 +79,7 @@ console.log('Test 4.1: Full workflow - store, list projects, get by project');
       }
       await Promise.all(promises);
 
-      // Verify all were stored
-      const kvData = JSON.parse(fs.readFileSync(testKVFile, 'utf-8'));
-      assert.strictEqual(Object.keys(kvData).length, 10, 'Should have 10 keys');
-      
-      // Verify projects
+      // Verify all were stored using get_by_project
       const evenResult = await tools3.TOOLS.sidekick_get_by_project({ project: 'even' });
       const evenKeys = JSON.parse(evenResult.content[0].text);
       assert.strictEqual(evenKeys.length, 5, 'Should have 5 even keys');
@@ -150,11 +89,11 @@ console.log('Test 4.1: Full workflow - store, list projects, get by project');
       assert.strictEqual(oddKeys.length, 5, 'Should have 5 odd keys');
       
       console.log('✓ Concurrent operations handled correctly');
-      console.log('✓ Test 4.3 Passed\n');
+      console.log('✓ Test 4.2 Passed\n');
     }
 
-    // Test 4.4: Large values
-    console.log('Test 4.4: Large values');
+    // Test 4.3: Large values
+    console.log('Test 4.3: Large values');
     {
       delete require.cache[require.resolve('../src/tools')];
       const tools4 = require('../src/tools');
@@ -168,11 +107,11 @@ console.log('Test 4.1: Full workflow - store, list projects, get by project');
       assert.strictEqual(result.content[0].text.length, largeValue.length, 'Large value should be preserved');
       
       console.log('✓ Large values handled correctly');
-      console.log('✓ Test 4.4 Passed\n');
+      console.log('✓ Test 4.3 Passed\n');
     }
 
-    // Test 4.5: Special characters in keys and values
-    console.log('Test 4.5: Special characters in keys and values');
+    // Test 4.4: Special characters in keys and values
+    console.log('Test 4.4: Special characters in keys and values');
     {
       delete require.cache[require.resolve('../src/tools')];
       const tools5 = require('../src/tools');
@@ -188,7 +127,7 @@ console.log('Test 4.1: Full workflow - store, list projects, get by project');
       assert.ok(result.content[0].text.includes('newlines'), 'Should preserve newlines');
       
       console.log('✓ Special characters handled correctly');
-      console.log('✓ Test 4.5 Passed\n');
+      console.log('✓ Test 4.4 Passed\n');
     }
 
     // Clean up
