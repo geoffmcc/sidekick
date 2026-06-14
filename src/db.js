@@ -116,12 +116,14 @@ function clearKV() {
 
 function setKV(key, value, project, source, category) {
   const ts = nowIso();
+  const existing = getKV(key);
+  const created = existing ? existing.created : ts;
   const entry = {
     value: value,
     project: project || null,
     category: category || null,
     source: source || null,
-    created: ts,
+    created: created,
     updated: ts
   };
   db.prepare(`
