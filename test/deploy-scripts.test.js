@@ -248,12 +248,12 @@ console.log('Test 2.3: deploy.ps1 uses single SSH session for bootstrap');
 console.log('Test 2.4: deploy.ps1 has progress indicators');
 {
   assert.ok(
-    deployPs1Content.includes('✓ bootstrap.sh'),
-    'deploy.ps1 should show checkmark for bootstrap.sh upload'
+    deployPs1Content.includes('[ok] bootstrap.sh'),
+    'deploy.ps1 should show [ok] for bootstrap.sh upload'
   );
   assert.ok(
-    deployPs1Content.includes('✓ $svc.service'),
-    'deploy.ps1 should show checkmark for service file uploads'
+    deployPs1Content.includes('[ok] $svc.service'),
+    'deploy.ps1 should show [ok] for service file uploads'
   );
   assert.ok(
     deployPs1Content.includes('SSH connection established'),

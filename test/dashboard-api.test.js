@@ -12,6 +12,8 @@ if (!fs.existsSync(TEST_DATA_DIR)) {
 // Set environment variables before requiring dashboard
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_DASHBOARD_PORT = '4100';
+process.env.SIDEKICK_DASHBOARD_USER = 'test-user';
+process.env.SIDEKICK_DASHBOARD_PASS = 'test-pass';
 
 // Clean up test data
 const testKVFile = path.join(TEST_DATA_DIR, 'kvstore.json');
@@ -23,13 +25,13 @@ if (fs.existsSync(testKVFile)) {
 function makeRequest(method, path, body = null) {
   return new Promise((resolve, reject) => {
     const options = {
-      hostname: 'localhost',
+      hostname: '127.0.0.1',
       port: 4100,
       path: path,
       method: method,
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': 'Basic ' + Buffer.from('geoffrey:dashboard-password-from-local-test-datadashboard-password-from-local-test-data#1').toString('base64')
+        'Authorization': 'Basic ' + Buffer.from('test-user:test-pass').toString('base64')
       }
     };
 
