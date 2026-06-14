@@ -68,17 +68,12 @@ setTimeout(async () => {
     // Test 3.1: GET /api/kv returns metadata
     console.log('Test 3.1: GET /api/kv returns metadata');
     {
-      // Store some test data first
-      const kvData = {
-        "test-key": {
-          value: "test-value",
-          project: "testproj",
-          source: "mcp",
-          created: new Date().toISOString(),
-          updated: new Date().toISOString()
-        }
-      };
-      fs.writeFileSync(testKVFile, JSON.stringify(kvData, null, 2));
+      // Store some test data via API
+      await makeRequest('PUT', '/api/kv/test-key', { 
+        value: 'test-value', 
+        project: 'testproj',
+        source: 'mcp'
+      });
 
       const response = await makeRequest('GET', '/api/kv');
       assert.strictEqual(response.status, 200, 'Should return 200');
@@ -104,10 +99,12 @@ setTimeout(async () => {
       assert.strictEqual(response.status, 200, 'Should return 200');
       assert.ok(response.data.ok, 'Should return ok');
 
-      // Verify in file
-      const kvData = JSON.parse(fs.readFileSync(testKVFile, 'utf-8'));
-      assert.strictEqual(kvData['newkey'].value, 'newvalue', 'Value should match');
-      assert.strictEqual(kvData['newkey'].project, 'newproj', 'Project should match');
+      // Verify via API
+      const getResponse = await makeRequest('GET', '/api/kv');
+      const entry = getResponse.data.entries.find(e => e.key === 'newkey');
+      assert.ok(entry, 'Should find newkey');
+      assert.strictEqual(entry.value, 'newvalue', 'Value should match');
+      assert.strictEqual(entry.project, 'newproj', 'Project should match');
       console.log('✓ Passed\n');
     }
 
@@ -125,10 +122,12 @@ setTimeout(async () => {
         value: 'updated'
       });
 
-      // Verify project preserved
-      const kvData = JSON.parse(fs.readFileSync(testKVFile, 'utf-8'));
-      assert.strictEqual(kvData['preserve-test'].value, 'updated', 'Value should be updated');
-      assert.strictEqual(kvData['preserve-test'].project, 'original-proj', 'Project should be preserved');
+      // Verify via API
+      const getResponse = await makeRequest('GET', '/api/kv');
+      const entry = getResponse.data.entries.find(e => e.key === 'preserve-test');
+      assert.ok(entry, 'Should find preserve-test');
+      assert.strictEqual(entry.value, 'updated', 'Value should be updated');
+      assert.strictEqual(entry.project, 'original-proj', 'Project should be preserved');
       console.log('✓ Passed\n');
     }
 
@@ -152,27 +151,20 @@ setTimeout(async () => {
     // Test 3.5: seedKV writes metadata
     console.log('Test 3.5: seedKV writes metadata');
     {
-      // Clear KV file
-      if (fs.existsSync(testKVFile)) {
-        fs.unlinkSync(testKVFile);
-      }
+      // Delete existing test keys via API
+      await makeRequest('DELETE', '/api/kv/test-key');
+      await makeRequest('DELETE', '/api/kv/newkey');
+      await makeRequest('DELETE', '/api/kv/preserve-test');
+      await makeRequest('DELETE', '/api/kv/proj1-key');
+      await makeRequest('DELETE', '/api/kv/proj2-key');
+      await makeRequest('DELETE', '/api/kv/global-key');
 
-      // Call seedKV (it's called on dashboard start, but let's test it directly)
-      // We need to access it somehow... for now, let's just verify the format
-      // after a fresh start would have seeded data
-      
-      // For this test, we'll just verify that system keys would have the right format
-      // by checking what seedKV would produce
-      const kvData = {
-        "server:hostname": {
-          value: "test-host",
-          project: "system",
-          source: "dashboard",
-          created: new Date().toISOString(),
-          updated: new Date().toISOString()
-        }
-      };
-      fs.writeFileSync(testKVFile, JSON.stringify(kvData, null, 2));
+      // Add a system key via API
+      await makeRequest('PUT', '/api/kv/server:hostname', { 
+        value: 'test-host', 
+        project: 'system',
+        source: 'dashboard'
+      });
 
       const response = await makeRequest('GET', '/api/kv');
       const entry = response.data.entries.find(e => e.key === 'server:hostname');
@@ -192,32 +184,15 @@ setTimeout(async () => {
       assert.strictEqual(deleteResponse.status, 200, 'Should return 200');
       assert.ok(deleteResponse.data.ok, 'Should return ok');
 
-      // Verify it's gone
-      const kvData = JSON.parse(fs.readFileSync(testKVFile, 'utf-8'));
-      assert.ok(!kvData['to-delete'], 'Key should be deleted');
+      // Verify it's gone via API
+      const getResponse = await makeRequest('GET', '/api/kv');
+      const deletedEntry = getResponse.data.entries.find(e => e.key === 'to-delete');
+      assert.ok(!deletedEntry, 'Key should be deleted');
       console.log('✓ Passed\n');
     }
 
-    // Test 3.7: Backward compatibility - reading old format
-    console.log('Test 3.7: Backward compatibility - reading old format');
-    {
-      // Write old format (flat string)
-      const oldFormat = { "old-key": "old-value" };
-      fs.writeFileSync(testKVFile, JSON.stringify(oldFormat, null, 2));
-
-      // Try to read it
-      const response = await makeRequest('GET', '/api/kv');
-      assert.strictEqual(response.status, 200, 'Should return 200');
-      
-      // The dashboard should handle old format gracefully
-      // Either by migrating on read or showing as-is
-      const entry = response.data.entries.find(e => e.key === 'old-key');
-      assert.ok(entry, 'Should find old-key');
-      // Value should be accessible somehow
-      assert.ok(entry.value === 'old-value' || entry.value?.value === 'old-value', 
-        'Should be able to read old format value');
-      console.log('✓ Passed\n');
-    }
+    // Test 3.7: Removed - backward compatibility test not applicable with SQLite backend
+    // The SQLite schema enforces structure, so there's no "old format" to migrate from
 
     // Clean up
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });

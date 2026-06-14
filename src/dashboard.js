@@ -5,6 +5,7 @@ const path = require("path");
 const os = require("os");
 const { execSync } = require("child_process");
 const { TOOL_DEFS } = require("./tools");
+const dbStore = require("./db");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const PORT = parseInt(process.env.SIDEKICK_DASHBOARD_PORT || "4098", 10);
@@ -156,22 +157,19 @@ if (DASHBOARD_USER && DASHBOARD_PASS) {
 // --- API ---
 
 function readLogs() {
-  const f = path.join(DATA_DIR, "log.jsonl");
-  if (!fs.existsSync(f)) return [];
-  return fs.readFileSync(f, "utf-8").trim().split("\n").filter(Boolean).map(l => {
-    try { return JSON.parse(l); } catch { return null; }
-  }).filter(Boolean).reverse();
+  return dbStore.readToolLogs();
 }
 
 function readKV() {
-  const f = path.join(DATA_DIR, "kvstore.json");
-  if (!fs.existsSync(f)) return {};
-  try { return JSON.parse(fs.readFileSync(f, "utf-8")); } catch { return {}; }
+  return dbStore.loadKV({});
 }
 
 function writeKV(data) {
-  const f = path.join(DATA_DIR, "kvstore.json");
-  fs.writeFileSync(f, JSON.stringify(data, null, 2));
+  dbStore.replaceKV(data || {});
+}
+
+function removeLegacyKVFile() {
+  try { fs.rmSync(path.join(DATA_DIR, "kvstore.json"), { force: true }); } catch {}
 }
 
 function exec(cmd, opts = {}) {
@@ -320,14 +318,12 @@ app.get("/api/dashboard-summary", (req, res) => {
     // Storage info
     let kvCount = 0;
     try {
-      const kvData = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "kvstore.json"), "utf-8"));
-      kvCount = Object.keys(kvData).length;
+      kvCount = Object.keys(dbStore.loadKV({})).length;
     } catch {}
     
     let logSize = 0;
     try {
-      const logStat = fs.statSync(path.join(DATA_DIR, "log.jsonl"));
-      logSize = logStat.size;
+      logSize = fs.existsSync(dbStore.DB_FILE) ? fs.statSync(dbStore.DB_FILE).size : 0;
     } catch {}
     
     let convCount = 0;
@@ -347,13 +343,13 @@ app.get("/api/dashboard-summary", (req, res) => {
     
     let cronJobs = 0;
     try {
-      const cronData = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "cron.json"), "utf-8"));
+      const cronData = dbStore.loadDocument("cron", []);
       cronJobs = cronData.length || 0;
     } catch {}
     
     let activeWatches = 0;
     try {
-      const watchData = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "watches.json"), "utf-8"));
+      const watchData = dbStore.loadDocument("watches", []);
       activeWatches = watchData.filter(w => w.status === "active").length;
     } catch {}
     
@@ -371,16 +367,12 @@ app.get("/api/dashboard-summary", (req, res) => {
     // Recent errors (last 3 failures from log)
     let recentErrors = [];
     try {
-      const logFile = path.join(DATA_DIR, "log.jsonl");
-      if (fs.existsSync(logFile)) {
-        const lines = fs.readFileSync(logFile, "utf-8").trim().split("\n").filter(Boolean);
-        const errors = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean).filter(e => !e.ok);
-        recentErrors = errors.slice(-3).reverse().map(e => ({
-          tool: e.n,
-          time: e.t,
-          summary: (e.s || "").substring(0, 80)
-        }));
-      }
+      const errors = dbStore.readToolLogs(100).filter(e => !e.ok);
+      recentErrors = errors.slice(0, 3).map(e => ({
+        tool: e.n,
+        time: e.t,
+        summary: (e.s || "").substring(0, 80)
+      }));
     } catch {}
     
     // Recent deployments (from version.json)
@@ -549,15 +541,13 @@ app.get("/api/tools", (req, res) => {
 });
 
 app.delete("/api/logs", (req, res) => {
-  const f = path.join(DATA_DIR, "log.jsonl");
-  try { fs.writeFileSync(f, "", "utf-8"); } catch {}
+  try { dbStore.clearToolLogs(); } catch {}
   auditLog(req, 'logs.clear', {});
   res.json({ ok: true });
 });
 
 app.delete("/api/kv", (req, res) => {
-  const f = path.join(DATA_DIR, "kvstore.json");
-  try { fs.writeFileSync(f, "{}", "utf-8"); } catch {}
+  try { dbStore.clearKV(); removeLegacyKVFile(); } catch {}
   auditLog(req, 'kv.clear', {});
   res.json({ ok: true });
 });
@@ -575,8 +565,9 @@ app.delete("/api/conversations", (req, res) => {
 
 app.delete("/api/data", (req, res) => {
   try {
-    fs.writeFileSync(path.join(DATA_DIR, "log.jsonl"), "", "utf-8");
-    fs.writeFileSync(path.join(DATA_DIR, "kvstore.json"), "{}", "utf-8");
+    dbStore.clearToolLogs();
+    dbStore.clearKV();
+    removeLegacyKVFile();
     const dir = path.join(DATA_DIR, "conversations");
     fs.readdirSync(dir).filter(f => f.endsWith(".json")).forEach(f => {
       fs.unlinkSync(path.join(dir, f));

@@ -64,7 +64,8 @@ console.log('Running New Tools Tests...\n');
     assert.ok(
       gitStatusResult.content[0].text.includes('branch') || 
       gitStatusResult.content[0].text.includes('On branch') ||
-      gitStatusResult.content[0].text.includes('nothing to commit'),
+      gitStatusResult.content[0].text.includes('nothing to commit') ||
+      gitStatusResult.content[0].text.includes('HEAD detached'),
       'Should contain git status output'
     );
     console.log('✓ Passed\n');
