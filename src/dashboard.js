@@ -587,17 +587,11 @@ app.post('/api/internal/error-log', (req, res) => {
 });
 
 // Webhook receiver endpoint
-const WEBHOOK_FILE = path.join(DATA_DIR, "webhooks.json");
 function loadWebhooks() {
-  if (!fs.existsSync(WEBHOOK_FILE)) return [];
-  try {
-    return JSON.parse(fs.readFileSync(WEBHOOK_FILE, "utf-8"));
-  } catch (e) {
-    return [];
-  }
+  return dbStore.loadDocument("webhooks", []);
 }
 function saveWebhooks(webhooks) {
-  fs.writeFileSync(WEBHOOK_FILE, JSON.stringify(webhooks, null, 2));
+  dbStore.setDocument("webhooks", webhooks);
 }
 
 app.post('/api/webhook/:source', (req, res) => {

@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const { execSync, execFileSync } = require("child_process");
 const { redactSensitive } = require("./redact");
+const dbStore = require("./db");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
@@ -92,7 +93,7 @@ function formatArgs(args) {
 
 function logToolCall(name, args, duration, success, summary) {
   try {
-    const entry = JSON.stringify({
+    dbStore.appendToolLog({
       t: new Date().toISOString(),
       n: name,
       a: formatArgs(args),
@@ -100,12 +101,7 @@ function logToolCall(name, args, duration, success, summary) {
       ok: success,
       s: redactSensitive(String(summary).substring(0, 200)),
       src: currentSource
-    }) + "\n";
-    fs.appendFileSync(LOG_FILE, entry, "utf-8");
-    const lines = fs.readFileSync(LOG_FILE, "utf-8").trim().split("\n");
-    if (lines.length > MAX_LOG) {
-      fs.writeFileSync(LOG_FILE, lines.slice(lines.length - MAX_LOG).join("\n") + "\n", "utf-8");
-    }
+    });
   } catch (e) {}
 }
 
@@ -619,16 +615,11 @@ async function sidekick_archive({ action, path: sourcePath, output, format }) {
 // --- Cron Tool ---
 
 function loadCronJobs() {
-  if (!fs.existsSync(CRON_FILE)) return [];
-  try {
-    return JSON.parse(fs.readFileSync(CRON_FILE, "utf-8"));
-  } catch (e) {
-    return [];
-  }
+  return dbStore.loadDocument("cron", []);
 }
 
 function saveCronJobs(jobs) {
-  fs.writeFileSync(CRON_FILE, JSON.stringify(jobs, null, 2));
+  dbStore.setDocument("cron", jobs);
 }
 
 async function sidekick_cron({ action, name, schedule, command, id }) {
@@ -867,16 +858,11 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
 // --- Webhook Tool ---
 
 function loadWebhooks() {
-  if (!fs.existsSync(WEBHOOK_FILE)) return [];
-  try {
-    return JSON.parse(fs.readFileSync(WEBHOOK_FILE, "utf-8"));
-  } catch (e) {
-    return [];
-  }
+  return dbStore.loadDocument("webhooks", []);
 }
 
 function saveWebhooks(webhooks) {
-  fs.writeFileSync(WEBHOOK_FILE, JSON.stringify(webhooks, null, 2));
+  dbStore.setDocument("webhooks", webhooks);
 }
 
 async function sidekick_webhook({ action, id, limit }) {
@@ -918,31 +904,20 @@ async function sidekick_webhook({ action, id, limit }) {
 
 // --- Context Tool ---
 
+const DEFAULT_CONTEXT = {
+  projects: {},
+  decisions: [],
+  problems: [],
+  patterns: [],
+  sessions: []
+};
+
 function loadContext() {
-  if (!fs.existsSync(CONTEXT_FILE)) {
-    return {
-      projects: {},
-      decisions: [],
-      problems: [],
-      patterns: [],
-      sessions: []
-    };
-  }
-  try {
-    return JSON.parse(fs.readFileSync(CONTEXT_FILE, "utf-8"));
-  } catch (e) {
-    return {
-      projects: {},
-      decisions: [],
-      problems: [],
-      patterns: [],
-      sessions: []
-    };
-  }
+  return dbStore.loadDocument("context", DEFAULT_CONTEXT);
 }
 
 function saveContext(ctx) {
-  fs.writeFileSync(CONTEXT_FILE, JSON.stringify(ctx, null, 2));
+  dbStore.setDocument("context", ctx);
 }
 
 function generateId(prefix) {
@@ -3397,12 +3372,10 @@ function saveEvolve(evolve) {
 }
 
 function analyzeToolUsage() {
-  if (!fs.existsSync(LOG_FILE)) return { patterns: [], suggestions: [] };
+  const logs = dbStore.readToolLogs(1000);
+  if (!logs || logs.length === 0) return { patterns: [], suggestions: [] };
   
   try {
-    const lines = fs.readFileSync(LOG_FILE, "utf-8").trim().split("\n");
-    const logs = lines.map(line => JSON.parse(line));
-    
     // Count tool usage
     const toolCounts = {};
     const toolSequences = [];
@@ -3806,12 +3779,10 @@ function analyzeContextPatterns() {
 }
 
 function analyzeToolPatterns() {
-  if (!fs.existsSync(LOG_FILE)) return [];
+  const logs = dbStore.readToolLogs(1000);
+  if (!logs || logs.length === 0) return [];
   
   try {
-    const lines = fs.readFileSync(LOG_FILE, "utf-8").trim().split("\n");
-    const logs = lines.map(line => JSON.parse(line));
-    
     const patterns = [];
     
     // Find most used tools
@@ -4423,17 +4394,10 @@ async function sidekick_project({ name, include }) {
     } else { output.context = []; }
   }
   if (sections.includes("logs")) {
-    if (fs.existsSync(LOG_FILE)) {
-      try {
-        const lines = fs.readFileSync(LOG_FILE, "utf-8").trim().split("\n");
-        const recent = lines.slice(-50).map(l => {
-          try { return JSON.parse(l); } catch (e) { return null; }
-        }).filter(Boolean);
-        output.logs = recent.slice(-20).map(l => ({
-          time: l.t, tool: l.n, ok: l.ok, summary: l.s
-        }));
-      } catch (e) { output.logs = []; }
-    } else { output.logs = []; }
+    const toolLogs = dbStore.readToolLogs(20);
+    output.logs = toolLogs.map(l => ({
+      time: l.t, tool: l.n, ok: l.ok, summary: l.s
+    }));
   }
   if (sections.includes("procedures")) {
     const procs = loadProcedures();
@@ -4447,11 +4411,7 @@ async function sidekick_tail({ source, pattern, lines, since }) {
   const re = pattern ? new RegExp(pattern, "i") : null;
   let content;
   if (source === "log.jsonl" || source === "log") {
-    if (!fs.existsSync(LOG_FILE)) {
-      return { content: [{ type: "text", text: "Log file not found" }], isError: true };
-    }
-    const allLines = fs.readFileSync(LOG_FILE, "utf-8").trim().split("\n");
-    const parsed = allLines.map(l => { try { return JSON.parse(l); } catch (e) { return null; } }).filter(Boolean);
+    let parsed = dbStore.readToolLogs(1000);
     let filtered = parsed;
     if (since) {
       const sinceDate = new Date(since).getTime();
@@ -5610,15 +5570,19 @@ async function sidekick_timeline({ action, since, until, sources, pattern, sever
 
   if (useSources.includes("log.jsonl")) {
     try {
-      const logContent = fs.readFileSync(LOG_FILE, "utf8");
-      const lines = logContent.trim().split("\n").filter(Boolean);
-      for (const line of lines) {
-        const event = parseLogJsonlLine(line);
-        if (event) {
-          const eventTime = new Date(event.timestamp);
-          if (eventTime >= startTime && eventTime <= endTime) {
-            events.push(event);
-          }
+      const toolLogs = dbStore.readToolLogs(1000);
+      for (const log of toolLogs) {
+        const event = {
+          timestamp: log.t,
+          source: "log.jsonl",
+          tool: log.n,
+          status: log.ok ? "success" : "error",
+          summary: log.s,
+          args: log.a
+        };
+        const eventTime = new Date(event.timestamp);
+        if (eventTime >= startTime && eventTime <= endTime) {
+          events.push(event);
         }
       }
     } catch {}
@@ -6849,11 +6813,12 @@ async function sidekick_black_box({ action, name, include, analyze_with_llm, inc
         checkLimit();
         content += "## Recent Tool Calls (log.jsonl)\n\n";
         try {
-          const logContent = fs.readFileSync(LOG_FILE, "utf8");
-          const lines = logContent.trim().split("\n").slice(-100);
-          content += lines.join("\n") + "\n";
+          const toolLogs = dbStore.readToolLogs(100);
+          content += toolLogs.map(l =>
+            l.t + " [" + (l.ok ? "OK" : "ERR") + "] " + l.n + ": " + l.s
+          ).join("\n") + "\n";
         } catch (e) {
-          content += `Failed to read log.jsonl: ${e.message}\n`;
+          content += `Failed to read tool logs: ${e.message}\n`;
         }
       }
 
