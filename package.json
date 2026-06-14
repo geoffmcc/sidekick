@@ -6,7 +6,13 @@
   "scripts": {
     "start": "node src/index.js",
     "dashboard": "node src/dashboard.js",
-    "agent": "node src/agent.js"
+    "agent": "node src/agent.js",
+    "test": "node test/run-all.js",
+    "test:ci": "node test/run-all.js",
+    "test:security": "node test/security.test.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   },
   "keywords": [],
   "author": "",
