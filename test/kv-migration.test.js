@@ -24,7 +24,7 @@ console.log('Test 1.1: Migrate flat string values');
   assert.strictEqual(typeof result["test-key"], 'object', 'Should convert to object');
   assert.strictEqual(result["test-key"].value, "hello from opencode", 'Value should be preserved');
   assert.strictEqual(result["test-key"].project, null, 'Project should be null');
-  assert.strictEqual(result["test-key"].source, "unknown", 'Source should be unknown');
+  assert.strictEqual(result["test-key"].source, "init", 'Source should be init');
   assert.ok(result["test-key"].created, 'Should have created timestamp');
   assert.ok(result["test-key"].updated, 'Should have updated timestamp');
   console.log('✓ Passed\n');

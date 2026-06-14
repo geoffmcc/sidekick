@@ -110,9 +110,9 @@ function logToolCall(name, args, duration, success, summary) {
 }
 
 const DANGEROUS_PATTERNS = [
-  /rm\s+-rf\s+\//, /\s+>\s*\/dev\/(sd|nvme|vd|sda|xvda)/,
-  /mkfs/, /fdisk/, /parted/, /dd\s+if=/,
-  /:\(\s*\{/,
+  /rm\s+-rf\s+\//,   /\s*>\s*\/dev\/(sd|nvme|vd|sda|xvda)/,
+  /mkfs/, /fdisk/, /parted/,   /dd\s+.*\/dev\//,
+  /:\(\)\{/,
   /(curl|wget)\s+.*\|\s*(bash|sh)\b/,
   /chmod\s+-R\s+777\s+\//,
 ];
@@ -7113,4 +7113,4 @@ async function callTool(name, args) {
   }
 }
 
-module.exports = { TOOLS, TOOL_DEFS, callTool, logToolCall, setSource, DATA_DIR, OLLAMA_URL, GROQ_API_KEY, GROQ_MODEL, migrateKV, loadProcedures, loadDelays, saveDelays, loadWatches, saveWatches };
+module.exports = { TOOLS, TOOL_DEFS, callTool, logToolCall, setSource, DATA_DIR, OLLAMA_URL, GROQ_API_KEY, GROQ_MODEL, migrateKV, loadProcedures, loadDelays, saveDelays, loadWatches, saveWatches, isDangerous };
