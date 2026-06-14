@@ -4,6 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const EventEmitter = require("events");
+const { execFileSync } = require("child_process");
 const { callTool, TOOL_DEFS, DATA_DIR, GROQ_API_KEY, GROQ_MODEL, setSource, loadDelays, saveDelays, loadWatches, saveWatches } = require("./tools");
 
 const PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
@@ -106,7 +107,7 @@ function parseWatchInterval(interval) {
 
 function checkService(serviceName) {
   try {
-    const output = require("child_process").execSync(`systemctl is-active ${serviceName} 2>&1`, { encoding: "utf-8" }).trim();
+    const output = execFileSync("systemctl", ["is-active", serviceName], { encoding: "utf-8", timeout: 5000 }).trim();
     return { status: output, active: output === "active" };
   } catch {
     return { status: "unknown", active: false };
@@ -115,7 +116,7 @@ function checkService(serviceName) {
 
 function checkProcess(processName) {
   try {
-    const output = require("child_process").execSync(`pgrep -f "${processName}" 2>/dev/null`, { encoding: "utf-8" }).trim();
+    const output = execFileSync("pgrep", ["-f", processName], { encoding: "utf-8", timeout: 5000 }).trim();
     return { running: output.length > 0, pids: output.split("\n").filter(Boolean) };
   } catch {
     return { running: false, pids: [] };
@@ -124,7 +125,7 @@ function checkProcess(processName) {
 
 function checkEndpoint(url) {
   try {
-    const output = require("child_process").execSync(`curl -s -o /dev/null -w "%{http_code}" --max-time 5 "${url}"`, { encoding: "utf-8" }).trim();
+    const output = execFileSync("curl", ["-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", url], { encoding: "utf-8", timeout: 10000 }).trim();
     return { status: parseInt(output), ok: output.startsWith("2") };
   } catch {
     return { status: 0, ok: false };
@@ -133,7 +134,7 @@ function checkEndpoint(url) {
 
 function checkFile(filePath, pattern) {
   try {
-    const output = require("child_process").execSync(`cat "${filePath}" 2>/dev/null`, { encoding: "utf-8" });
+    const output = fs.readFileSync(filePath, "utf-8");
     const matches = pattern ? output.includes(pattern) : true;
     return { exists: true, matches, content: output.substring(0, 200) };
   } catch {

@@ -255,7 +255,7 @@ try {
   Write-Host "--- Deploying Files ---" -ForegroundColor Cyan
 
   Write-Host "  Syncing source files..." -ForegroundColor Green
-  $files = @("tools.js", "index.js", "dashboard.js", "agent.js", "redact.js", "env.js")
+  $files = @("tools.js", "index.js", "dashboard.js", "agent.js", "redact.js", "env.js", "db.js")
   foreach ($file in $files) {
     $localPath = Join-Path $PROJECT_DIR "src\$file"
     if (-not (Test-Path $localPath)) {
