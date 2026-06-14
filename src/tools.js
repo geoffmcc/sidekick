@@ -1,4 +1,4 @@
-﻿const fs = require("fs");
+const fs = require("fs");
 const path = require("path");
 const { execSync, execFileSync } = require("child_process");
 const { redactSensitive } = require("./redact");
@@ -110,7 +110,7 @@ function logToolCall(name, args, duration, success, summary) {
 }
 
 const DANGEROUS_PATTERNS = [
-  /rm\s+-rf\s+\//, /\s+>\s*\/dev\/(sd|nvme|vd|sda|xvda)/,
+  /rm\s+-rf\s+\//,   /\s*>\s*\/dev\/(sd|nvme|vd|sda|xvda)/,
   /mkfs/, /fdisk/, /parted/, /dd\s+if=/,
   /:\(\s*\{/,
   /(curl|wget)\s+.*\|\s*(bash|sh)\b/,
@@ -1154,13 +1154,13 @@ async function sidekick_context({ action, project, context, decision, reasoning,
     const suggestions = results.map(r => {
       const item = r.item;
       if (r.type === "decision") {
-        return `â€¢ You previously decided: "${item.decision}" because "${item.reasoning || "no reason recorded"}" (on ${item.date})`;
+        return `• You previously decided: "${item.decision}" because "${item.reasoning || "no reason recorded"}" (on ${item.date})`;
       } else if (r.type === "problem") {
-        return `â€¢ You encountered a similar problem: "${item.description}" - ${item.solution ? `solved with: "${item.solution}"` : "unresolved"}`;
+        return `• You encountered a similar problem: "${item.description}" - ${item.solution ? `solved with: "${item.solution}"` : "unresolved"}`;
       } else if (r.type === "pattern") {
-        return `â€¢ You have a pattern: "${item.description}"`;
+        return `• You have a pattern: "${item.description}"`;
       } else if (r.type === "session") {
-        return `â€¢ You had a session on ${item.date}: "${item.summary}" (${item.outcome || "no outcome recorded"})`;
+        return `• You had a session on ${item.date}: "${item.summary}" (${item.outcome || "no outcome recorded"})`;
       }
     }).join("\n");
     return { content: [{ type: "text", text: `Based on your past context:\n\n${suggestions}` }] };
@@ -1514,7 +1514,7 @@ Return ONLY the JSON object, no other text.`;
       }
     }
     
-    const summary = results.map(r => `Step ${r.step} (${r.tool}): ${r.success ? "âœ“" : "âœ—"} ${r.output}`).join("\n");
+    const summary = results.map(r => `Step ${r.step} (${r.tool}): ${r.success ? "✓" : "✗"} ${r.output}`).join("\n");
     return { content: [{ type: "text", text: `Executed procedure '${name}' (${procedure.steps.length} steps)\n\n${summary}` }] };
   }
 
@@ -1929,7 +1929,7 @@ async function sidekick_health({ check, services, commands, threshold }) {
       output += `- Score: ${results.services.score.toFixed(0)}/100\n`;
       output += `- Services: ${results.services.healthy}/${results.services.total} healthy\n`;
       for (const svc of results.services.results) {
-        output += `  - ${svc.service}: ${svc.status} ${svc.healthy ? "âœ“" : "âœ—"}\n`;
+        output += `  - ${svc.service}: ${svc.status} ${svc.healthy ? "✓" : "✗"}\n`;
       }
     } else if (c === "processes") {
       output += `- Score: ${results.processes.score.toFixed(0)}/100\n`;
@@ -1945,7 +1945,7 @@ async function sidekick_health({ check, services, commands, threshold }) {
       }
     } else if (c === "network") {
       output += `- Score: ${results.network.score.toFixed(0)}/100\n`;
-      output += `- Internet: ${results.network.results.internet ? "âœ“" : "âœ—"}\n`;
+      output += `- Internet: ${results.network.results.internet ? "✓" : "✗"}\n`;
       output += `- Ports:\n`;
       for (const [svc, info] of Object.entries(results.network.results.ports)) {
         output += `  - ${svc} (${info.port}): ${info.listening ? "listening" : "not listening"}\n`;
@@ -1953,7 +1953,7 @@ async function sidekick_health({ check, services, commands, threshold }) {
     } else if (c === "custom") {
       output += `- Score: ${results.custom.score.toFixed(0)}/100\n`;
       for (const res of results.custom.results) {
-        output += `  - ${res.command}: ${res.success ? "âœ“" : "âœ—"}\n`;
+        output += `  - ${res.command}: ${res.success ? "✓" : "✗"}\n`;
         if (res.output) output += `    ${res.output.substring(0, 100)}\n`;
       }
     }
@@ -1977,11 +1977,11 @@ async function sidekick_health({ check, services, commands, threshold }) {
   }
 
   if (overallScore >= 90) {
-    output += `**Status: HEALTHY** âœ“\n`;
+    output += `**Status: HEALTHY** ✓\n`;
   } else if (overallScore >= 70) {
-    output += `**Status: WARNING** âš \n`;
+    output += `**Status: WARNING** ⚠\n`;
   } else {
-    output += `**Status: CRITICAL** âœ—\n`;
+    output += `**Status: CRITICAL** ✗\n`;
   }
 
   return { content: [{ type: "text", text: output }] };
@@ -3130,7 +3130,7 @@ async function sidekick_hash({ input, algorithm, verify, path: filePath }) {
   
   if (verify) {
     const matches = hash === verify.toLowerCase();
-    return { content: [{ type: "text", text: matches ? `âœ“ Hash matches (${algo}: ${hash})` : `âœ— Hash mismatch\nExpected: ${verify}\nActual:   ${hash}` }] };
+    return { content: [{ type: "text", text: matches ? `✓ Hash matches (${algo}: ${hash})` : `✗ Hash mismatch\nExpected: ${verify}\nActual:   ${hash}` }] };
   }
   
   return { content: [{ type: "text", text: `${algo.toUpperCase()}: ${hash}` }] };
@@ -3166,14 +3166,14 @@ async function sidekick_validate({ data, schema }) {
     const valid = validate(parsedData);
     
     if (valid) {
-      return { content: [{ type: "text", text: "âœ“ Validation passed" }] };
+      return { content: [{ type: "text", text: "✓ Validation passed" }] };
     } else {
       const errors = validate.errors.map(e => ({
         path: e.instancePath || "/",
         message: e.message,
         params: e.params
       }));
-      return { content: [{ type: "text", text: `âœ— Validation failed:\n${JSON.stringify(errors, null, 2)}` }] };
+      return { content: [{ type: "text", text: `✗ Validation failed:\n${JSON.stringify(errors, null, 2)}` }] };
     }
   } catch (e) {
     return { content: [{ type: "text", text: `Validation error: ${e.message}` }], isError: true };
@@ -3353,7 +3353,7 @@ async function sidekick_retry({ tool, args, max_attempts, backoff, initial_delay
       const result = await callTool(tool, args || {});
       
       if (!result.isError) {
-        return { content: [{ type: "text", text: `âœ“ Succeeded on attempt ${attempt}\n\n${result.content?.[0]?.text || ""}` }] };
+        return { content: [{ type: "text", text: `✓ Succeeded on attempt ${attempt}\n\n${result.content?.[0]?.text || ""}` }] };
       }
       
       lastError = result.content?.[0]?.text || "Unknown error";
@@ -3375,7 +3375,7 @@ async function sidekick_retry({ tool, args, max_attempts, backoff, initial_delay
     }
   }
   
-  return { content: [{ type: "text", text: `âœ— Failed after ${maxAttempts} attempts\nLast error: ${lastError}` }], isError: true };
+  return { content: [{ type: "text", text: `✗ Failed after ${maxAttempts} attempts\nLast error: ${lastError}` }], isError: true };
 }
 
 // --- Evolve Tool ---
@@ -4824,7 +4824,7 @@ async function sidekick_anonymize({ action, input, format, custom_patterns, cons
   if (action === "patterns") {
     const stored = loadAnonymizePatterns();
     if (stored.patterns.length === 0) {
-      return { content: [{ type: "text", text: "No custom patterns defined.\n\nBuilt-in patterns:\n- IPv4 addresses â†’ 10.0.0.x\n- Email addresses â†’ user{n}@example.com\n- UUIDs â†’ 00000000-0000-0000-0000-{n}\n- Phone numbers â†’ 555-000-XXXX\n- File paths (/home/user, /Users/user) â†’ /home/user{n}\n- Hostnames (*.com, *.org, etc.) â†’ host-{n}.internal\n- SSH private keys â†’ [REDACTED]\n- GitHub tokens â†’ [REDACTED]\n- API keys â†’ [REDACTED]\n- AWS keys â†’ [REDACTED]\n- Passwords/secrets â†’ [REDACTED]\n- Bearer tokens â†’ [REDACTED]\n- Database connection strings â†’ [REDACTED]\n- Stripe keys â†’ [REDACTED]\n- JWT tokens â†’ [REDACTED]" }] };
+      return { content: [{ type: "text", text: "No custom patterns defined.\n\nBuilt-in patterns:\n- IPv4 addresses → 10.0.0.x\n- Email addresses → user{n}@example.com\n- UUIDs → 00000000-0000-0000-0000-{n}\n- Phone numbers → 555-000-XXXX\n- File paths (/home/user, /Users/user) → /home/user{n}\n- Hostnames (*.com, *.org, etc.) → host-{n}.internal\n- SSH private keys → [REDACTED]\n- GitHub tokens → [REDACTED]\n- API keys → [REDACTED]\n- AWS keys → [REDACTED]\n- Passwords/secrets → [REDACTED]\n- Bearer tokens → [REDACTED]\n- Database connection strings → [REDACTED]\n- Stripe keys → [REDACTED]\n- JWT tokens → [REDACTED]" }] };
     }
     const list = stored.patterns.map((p, i) => `${i + 1}. Pattern: ${p.pattern}\n   Replacement: ${p.replacement}`).join("\n\n");
     return { content: [{ type: "text", text: `Custom patterns (${stored.patterns.length}):\n\n${list}` }] };
@@ -5280,7 +5280,7 @@ async function sidekick_changelog({ action, from, to, format, group_by, use_llm,
   if (fmt === "markdown") {
     const breaking = filtered.filter(c => c.breaking);
     if (breaking.length > 0) {
-      changelog += "## âš  BREAKING CHANGES\n\n";
+      changelog += "## ⚠ BREAKING CHANGES\n\n";
       for (const c of breaking) {
         changelog += `- ${c.description} (${c.hash.substring(0, 7)})\n`;
       }
@@ -5477,7 +5477,7 @@ async function sidekick_netdiag({ action, target, port_range, timeout, format })
 
     let result = "Connectivity Check\n\n";
     for (const r of results) {
-      result += `${r.target}: ${r.up ? "âœ“ UP" : "âœ— DOWN"} (${r.latency})\n`;
+      result += `${r.target}: ${r.up ? "✓ UP" : "✗ DOWN"} (${r.latency})\n`;
     }
 
     return { content: [{ type: "text", text: result }] };
@@ -5982,7 +5982,7 @@ async function sidekick_baseline({ action, metric_name, value, source, command, 
     saveBaselines(data);
 
     const bucketSummary = Object.entries(baseline).map(([b, s]) => 
-      `${b.toString().padStart(2, "0")}:00 - mean: ${s.mean.toFixed(2)}, Ïƒ: ${s.stddev.toFixed(2)} (n=${s.count})`
+      `${b.toString().padStart(2, "0")}:00 - mean: ${s.mean.toFixed(2)}, σ: ${s.stddev.toFixed(2)} (n=${s.count})`
     ).join("\n");
 
     return { content: [{ type: "text", text: `Baseline learned for ${metric_name}\n\nTime buckets:\n${bucketSummary}` }] };
@@ -6028,15 +6028,15 @@ async function sidekick_baseline({ action, metric_name, value, source, command, 
       metric: metric_name,
       current: currentValue,
       expected: bucketStats.mean.toFixed(2),
-      deviation: sigmaDeviation.toFixed(2) + "Ïƒ",
-      threshold: sigmaMultiplier + "Ïƒ",
+      deviation: sigmaDeviation.toFixed(2) + "σ",
+      threshold: sigmaMultiplier + "σ",
       status: isAnomaly ? "ANOMALY" : "normal",
       timeBucket: `${bucket}:00-${bucket + 3}:59`
     };
 
     let output = `Baseline Check: ${metric_name}\n`;
     output += `Current: ${result.current}\n`;
-    output += `Expected: ${result.expected} (Â±${bucketStats.stddev.toFixed(2)}Ïƒ)\n`;
+    output += `Expected: ${result.expected} (±${bucketStats.stddev.toFixed(2)}σ)\n`;
     output += `Deviation: ${result.deviation} (threshold: ${result.threshold})\n`;
     output += `Time bucket: ${result.timeBucket}\n`;
     output += `Status: ${result.status}`;
@@ -6050,7 +6050,7 @@ async function sidekick_baseline({ action, metric_name, value, source, command, 
       return { content: [{ type: "text", text: "No metrics tracked" }] };
     }
     const list = entries.map(([name, m]) => {
-      const learned = m.baseline ? "âœ“" : "âœ—";
+      const learned = m.baseline ? "✓" : "✗";
       return `${name}: ${m.dataPoints.length} points, baseline: ${learned}`;
     }).join("\n");
     return { content: [{ type: "text", text: `Tracked metrics (${entries.length}/${MAX_TRACKED_METRICS}):\n\n${list}` }] };
@@ -6185,7 +6185,7 @@ async function sidekick_depend({ action, type, target, depth, format }) {
           return { content: [{ type: "text", text: `No packages depend on ${target}` }] };
         }
         
-        const unique = [...new Set(dependents.map(d => d.join(" â†’ ")))];
+        const unique = [...new Set(dependents.map(d => d.join(" → ")))];
         return { content: [{ type: "text", text: `Packages depending on ${target}:\n\n${unique.slice(0, MAX_DEPEND_RESULTS).join("\n")}` }] };
       } catch (e) {
         return { content: [{ type: "text", text: `npm ls failed: ${e.message}` }], isError: true };
@@ -6238,7 +6238,7 @@ async function sidekick_depend({ action, type, target, depth, format }) {
         return { content: [{ type: "text", text: "All packages are up to date" }] };
       }
       const list = Object.entries(outdated).map(([name, info]) => 
-        `${name}: ${info.current || "?"} â†’ ${info.latest} (wanted: ${info.wanted || "?"})`
+        `${name}: ${info.current || "?"} → ${info.latest} (wanted: ${info.wanted || "?"})`
       ).join("\n");
       return { content: [{ type: "text", text: `Outdated packages:\n\n${list}` }] };
     } catch (e) {
@@ -6246,7 +6246,7 @@ async function sidekick_depend({ action, type, target, depth, format }) {
         try {
           const outdated = JSON.parse(e.stdout);
           const list = Object.entries(outdated).map(([name, info]) => 
-            `${name}: ${info.current || "?"} â†’ ${info.latest} (wanted: ${info.wanted || "?"})`
+            `${name}: ${info.current || "?"} → ${info.latest} (wanted: ${info.wanted || "?"})`
           ).join("\n");
           return { content: [{ type: "text", text: `Outdated packages:\n\n${list}` }] };
         } catch {}
@@ -6492,20 +6492,20 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
         output += `Step ${i + 1}/${rb.steps.length}: ${step.name}\n`;
         try {
           const result = execSync(step.command, { encoding: "utf8", timeout: STEP_TIMEOUT_MS, stdio: ["pipe", "pipe", "pipe"] });
-          output += `  âœ“ Success\n`;
+          output += `  ✓ Success\n`;
           if (step.verify_command) {
             try {
               const verifyResult = execSync(step.verify_command, { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"] });
-              output += `  âœ“ Verified\n`;
+              output += `  ✓ Verified\n`;
             } catch (e) {
-              output += `  âœ— Verification failed: ${e.message}\n`;
+              output += `  ✗ Verification failed: ${e.message}\n`;
               if (step.rollback) {
                 output += `  Rolling back...\n`;
                 try {
                   execSync(step.rollback, { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"] });
-                  output += `  âœ“ Rollback successful\n`;
+                  output += `  ✓ Rollback successful\n`;
                 } catch (re) {
-                  output += `  âœ— Rollback failed: ${re.message}\n`;
+                  output += `  ✗ Rollback failed: ${re.message}\n`;
                 }
               }
               data.instances[instanceId].status = "failed";
@@ -6515,14 +6515,14 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
           }
           data.instances[instanceId].results.push({ step: i, success: true });
         } catch (e) {
-          output += `  âœ— Failed: ${e.message}\n`;
+          output += `  ✗ Failed: ${e.message}\n`;
           if (step.rollback) {
             output += `  Rolling back...\n`;
             try {
               execSync(step.rollback, { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"] });
-              output += `  âœ“ Rollback successful\n`;
+              output += `  ✓ Rollback successful\n`;
             } catch (re) {
-              output += `  âœ— Rollback failed: ${re.message}\n`;
+              output += `  ✗ Rollback failed: ${re.message}\n`;
             }
           }
           data.instances[instanceId].status = "failed";
@@ -6533,7 +6533,7 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
       }
       data.instances[instanceId].status = "completed";
       saveRunbooks(data);
-      output += `\nâœ“ Runbook completed successfully`;
+      output += `\n✓ Runbook completed successfully`;
       return { content: [{ type: "text", text: output }] };
     } else {
       const step = rb.steps[0];
@@ -6548,7 +6548,7 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
           output += `\nUse action="next" with runbook_id="${instanceId}" to continue`;
         } else {
           data.instances[instanceId].status = "completed";
-          output += `\nâœ“ Runbook completed`;
+          output += `\n✓ Runbook completed`;
         }
       } catch (e) {
         output += `Failed: ${e.message}\n`;
@@ -6582,7 +6582,7 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
     if (instance.currentStep >= rb.steps.length) {
       instance.status = "completed";
       saveRunbooks(data);
-      return { content: [{ type: "text", text: `âœ“ Runbook completed` }] };
+      return { content: [{ type: "text", text: `✓ Runbook completed` }] };
     }
 
     const step = rb.steps[instance.currentStep];
@@ -6596,7 +6596,7 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
         output += `\nUse action="next" to continue`;
       } else {
         instance.status = "completed";
-        output += `\nâœ“ Runbook completed`;
+        output += `\n✓ Runbook completed`;
       }
     } catch (e) {
       output += `Failed: ${e.message}\n`;
@@ -6627,9 +6627,9 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
     }
     try {
       const result = execSync(step.verify_command, { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"] });
-      return { content: [{ type: "text", text: `âœ“ Verification passed\n\n${result}` }] };
+      return { content: [{ type: "text", text: `✓ Verification passed\n\n${result}` }] };
     } catch (e) {
-      return { content: [{ type: "text", text: `âœ— Verification failed\n\n${e.message}` }], isError: true };
+      return { content: [{ type: "text", text: `✗ Verification failed\n\n${e.message}` }], isError: true };
     }
   }
 
@@ -6653,9 +6653,9 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
         output += `Step ${i + 1}: ${step.name}\n`;
         try {
           execSync(step.rollback, { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"] });
-          output += `  âœ“ Rollback successful\n`;
+          output += `  ✓ Rollback successful\n`;
         } catch (e) {
-          output += `  âœ— Rollback failed: ${e.message}\n`;
+          output += `  ✗ Rollback failed: ${e.message}\n`;
         }
       }
     }
