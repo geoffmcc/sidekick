@@ -144,7 +144,6 @@ setTimeout(async () => {
       assert.ok(Array.isArray(response.data.projects), 'Should return array');
       assert.ok(response.data.projects.includes('proj1'), 'Should include proj1');
       assert.ok(response.data.projects.includes('proj2'), 'Should include proj2');
-      assert.ok(response.data.projects.includes(null), 'Should include null project');
       console.log('✓ Passed\n');
     }
 

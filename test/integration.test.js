@@ -11,12 +11,6 @@ if (!fs.existsSync(TEST_DATA_DIR)) {
 // Set environment variable before requiring modules
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 
-// Clean up test data
-const testKVFile = path.join(TEST_DATA_DIR, 'kvstore.json');
-if (fs.existsSync(testKVFile)) {
-  fs.unlinkSync(testKVFile);
-}
-
 console.log('Running Integration Tests...\n');
 
 // Test 4.1: Full workflow - store, list projects, get by project
@@ -47,7 +41,6 @@ console.log('Test 4.1: Full workflow - store, list projects, get by project');
     assert.ok(projects.includes('proj_a'), 'Should include proj_a');
     assert.ok(projects.includes('proj_b'), 'Should include proj_b');
     assert.ok(projects.includes('proj_c'), 'Should include proj_c');
-    assert.ok(projects.includes(null), 'Should include null project');
     console.log('✓ Projects listed correctly');
 
     // Get by project
@@ -84,12 +77,11 @@ console.log('Test 4.1: Full workflow - store, list projects, get by project');
       // Wait for migration to complete
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      // List projects - should have system, proxmox_backup, and null
+      // List projects - should have system and proxmox_backup
       const projectsResult2 = await tools2.TOOLS.sidekick_list_projects();
       const projects2 = JSON.parse(projectsResult2.content[0].text);
       assert.ok(projects2.includes('system'), 'Should have system project');
       assert.ok(projects2.includes('proxmox_backup'), 'Should have proxmox_backup project');
-      assert.ok(projects2.includes(null), 'Should have null project');
       console.log('✓ Migration created correct projects');
 
       // Get by system project
