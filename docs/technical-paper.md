@@ -362,38 +362,20 @@ The `DANGEROUS_PATTERNS` array blocks commands like `rm -rf /`, direct writes to
 
 #### 4.1.2 Storage and Context
 
-**sidekick_store** persists key-value pairs with metadata:
+**sidekick_store** persists key-value pairs with metadata to SQLite:
 ```javascript
 async function sidekick_store({ key, value, project, category }) {
-  const now = new Date().toISOString();
-  const existing = kvStore[key];
-  
-  if (existing && typeof existing === 'object' && 'value' in existing) {
-    kvStore[key] = {
-      value: value,
-      project: project !== undefined ? project : existing.project,
-      category: category !== undefined ? category : existing.category,
-      source: currentSource,
-      created: existing.created,
-      updated: now
-    };
-  } else {
-    kvStore[key] = {
-      value: value,
-      project: project || null,
-      category: category || null,
-      source: currentSource,
-      created: now,
-      updated: now
-    };
-  }
-  
-  saveKV();
+  const existing = dbStore.getKV(key);
+  dbStore.setKV(key, value, 
+    project !== undefined ? project : (existing?.project || null), 
+    currentSource, 
+    category !== undefined ? category : (existing?.category || null)
+  );
   return { content: [{ type: "text", text: "Stored key \"" + key + "\"" }] };
 }
 ```
 
-The KV store uses an enriched format with metadata (project, source, category, timestamps) enabling project-based organization and audit trails.
+The KV store uses SQLite (`kv_store` table) with an enriched format storing metadata (project, source, category, timestamps) enabling project-based organization and audit trails.
 
 **sidekick_context** maintains structured project context with five entity types (projects, decisions, problems, patterns, sessions) and semantic recall using Jaccard similarity:
 ```javascript
@@ -572,48 +554,28 @@ Sidekick implements a file-based persistence model using JSON/JSONL files, elimi
 
 #### 4.3.1 KV Store
 
-The KV store uses an enriched format with metadata:
-```javascript
-{
-  "key": {
-    "value": "stored value",
-    "project": "project_name",
-    "source": "mcp|agent|dashboard|unknown",
-    "category": "optional_tag",
-    "created": "ISO timestamp",
-    "updated": "ISO timestamp"
-  }
-}
+The KV store uses SQLite (`kv_store` table) with an enriched format storing metadata:
+
+```sql
+CREATE TABLE kv_store (
+  key TEXT PRIMARY KEY,
+  value_json TEXT NOT NULL,
+  project TEXT,
+  source TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 ```
 
-A `migrateKV()` function handles backward compatibility, converting legacy string-only entries to the enriched format at startup:
-```javascript
-function migrateKV(data) {
-  const now = new Date().toISOString();
-  const migrated = {};
-  
-  for (const [key, val] of Object.entries(data)) {
-    if (typeof val === 'string') {
-      let project = null;
-      if (key.startsWith('server:') || key.startsWith('network:')) {
-        project = 'system';
-      }
-      
-      migrated[key] = {
-        value: val,
-        project: project,
-        source: 'init',
-        created: now,
-        updated: now
-      };
-    } else if (typeof val === 'object' && val !== null && 'value' in val) {
-      migrated[key] = val;
-    } else {
-      migrated[key] = val;
-    }
-  }
-  
-  return migrated;
+Each row's `value_json` column contains:
+```json
+{
+  "value": "stored value",
+  "project": "project_name",
+  "source": "mcp|agent|dashboard|unknown",
+  "category": "optional_tag",
+  "created": "ISO timestamp",
+  "updated": "ISO timestamp"
 }
 ```
 
@@ -633,12 +595,12 @@ Semantic recall uses Jaccard similarity for word-overlap scoring across all enti
 
 #### 4.3.3 File-Based Persistence
 
-All state is stored as JSON/JSONL files in `SIDEKICK_DATA_DIR` (default: `./data/`). The system uses 20+ distinct persistence files:
+All state is stored in SQLite (`sidekick.db`) and JSON/JSONL files in `SIDEKICK_DATA_DIR` (default: `./data/`). The system uses 20+ distinct persistence files:
 
 | File | Purpose |
 |------|---------|
-| `kvstore.json` | Key-value store with metadata |
-| `log.jsonl` | Tool call audit log (capped at 1000 entries) |
+| `sidekick.db` | SQLite database: KV store, tool logs, JSON documents, metadata |
+| `log.jsonl` | Legacy tool call audit log (capped at 1000 entries) |
 | `context.json` | Projects, decisions, problems, patterns, sessions |
 | `procedures.json` | Learned procedure definitions |
 | `cron.json` | Recurring task definitions |
@@ -1163,7 +1125,7 @@ A stronger packaging model would likely include:
 - a CLI entry point such as `sidekick init`, `sidekick doctor`, `sidekick service install`, and `sidekick upgrade`;
 - strict separation between package code, configuration, and persistent data;
 - migration scripts for data files and learned procedures;
-- a versioned schema for `kvstore.json`, `context.json`, and `procedures.json`;
+- a versioned schema for `sidekick.db`, `context.json`, and `procedures.json`;
 - post-install warnings that the service can execute commands and should not be casually exposed to the public internet.
 
 This matters because Sidekick's value comes from being persistent and powerful. A packaging mistake could make installation easier while making operational risk worse. The correct distribution strategy should make the secure path the easy path.
