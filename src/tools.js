@@ -111,7 +111,7 @@ function logToolCall(name, args, duration, success, summary) {
 
 const DANGEROUS_PATTERNS = [
   /rm\s+-rf\s+\//,   /\s*>\s*\/dev\/(sd|nvme|vd|sda|xvda)/,
-  /mkfs/, /fdisk/, /parted/, /dd\s+if=/,
+  /mkfs/, /fdisk/, /parted/,   /dd\s+.*\/dev\//,
   /:\(\)\{/,
   /(curl|wget)\s+.*\|\s*(bash|sh)\b/,
   /chmod\s+-R\s+777\s+\//,
