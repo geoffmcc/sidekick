@@ -433,12 +433,16 @@ app.get("/api/llm", (req, res) => {
             size: (m.size / 1073741824).toFixed(2) + "GB",
             modified: m.modified_at
           }));
-          res.json({ available: models.length > 0, models });
-        } catch { res.json({ available: false, error: "parse error" }); }
+          if (models.length === 0) {
+            res.json({ status: "no_models", models: [] });
+          } else {
+            res.json({ status: "ok", models });
+          }
+        } catch { res.json({ status: "unreachable", error: "parse error" }); }
       });
-    }).on("error", (e) => res.json({ available: false, error: e.message }));
+    }).on("error", (e) => res.json({ status: "unreachable", error: e.message }));
   } catch (e) {
-    res.json({ available: false, error: e.message });
+    res.json({ status: "unreachable", error: e.message });
   }
 });
 
@@ -729,6 +733,7 @@ nav a.active{color:#58a6ff;border-color:#58a6ff;background:#0d1117}
 .llm-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
 .llm-dot.on{background:#3fb950;box-shadow:0 0 8px #3fb95066}
 .llm-dot.off{background:#484f58}
+.llm-dot.warn{background:#d29922;box-shadow:0 0 8px #d2992266}
 .llm-name{font-weight:500;color:#c9d1d9}
 .llm-size{color:#8b949e;font-size:.8rem}
 .service-indicator{display:inline-flex;align-items:center;gap:4px;margin-right:12px;font-size:.8rem}
@@ -1335,13 +1340,17 @@ function formatBytes(bytes){
 function loadLLM(){
   authFetch('/api/llm').then(r=>r.json()).then(d=>{
     const el = $('llmStatus');
-    if (!d.available) {
+    if (d.status === "unreachable") {
       el.innerHTML = '<div class="llm-card"><span class="llm-dot off"></span><span class="empty">Ollama not reachable</span></div>';
+      return;
+    }
+    if (d.status === "no_models") {
+      el.innerHTML = '<div class="llm-card"><span class="llm-dot warn"></span><span class="empty">Ollama running, no models installed</span></div>';
       return;
     }
     el.innerHTML = d.models.map(m =>
       '<div class="llm-card"><span class="llm-dot on"></span><span class="llm-name">' + esc(m.name) + '</span><span class="llm-size">' + m.size + '</span></div>'
-    ).join('') || '<div class="llm-card"><span class="llm-dot on"></span><span class="llm-name">Ollama running, no models</span></div>';
+    ).join('');
   }).catch(e => apiError('/api/llm', e, 0));
 }
 
