@@ -114,6 +114,51 @@ function clearKV() {
   db.prepare("DELETE FROM kv_store").run();
 }
 
+function setKV(key, value, project, source, category) {
+  const ts = nowIso();
+  const entry = {
+    value: value,
+    project: project || null,
+    category: category || null,
+    source: source || null,
+    created: ts,
+    updated: ts
+  };
+  db.prepare(`
+    INSERT INTO kv_store (key, value_json, project, source, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET
+      value_json = excluded.value_json,
+      project = excluded.project,
+      source = excluded.source,
+      updated_at = excluded.updated_at
+  `).run(key, JSON.stringify(entry), project, source, ts, ts);
+}
+
+function getKV(key) {
+  const row = db.prepare("SELECT value_json FROM kv_store WHERE key = ?").get(key);
+  if (!row) return null;
+  return parseJson(row.value_json, null);
+}
+
+function deleteKV(key) {
+  db.prepare("DELETE FROM kv_store WHERE key = ?").run(key);
+}
+
+function listKVProjects() {
+  const rows = db.prepare("SELECT DISTINCT project FROM kv_store WHERE project IS NOT NULL").all();
+  return rows.map(r => r.project);
+}
+
+function getAllKV() {
+  const rows = db.prepare("SELECT key, value_json FROM kv_store ORDER BY key").all();
+  const out = {};
+  for (const row of rows) {
+    out[row.key] = parseJson(row.value_json, null);
+  }
+  return out;
+}
+
 function replaceKV(data) {
   const ts = nowIso();
   db.exec("BEGIN IMMEDIATE");
@@ -185,6 +230,11 @@ module.exports = {
   loadKV,
   clearKV,
   replaceKV,
+  setKV,
+  getKV,
+  deleteKV,
+  listKVProjects,
+  getAllKV,
   appendToolLog,
   readToolLogs,
   clearToolLogs,
