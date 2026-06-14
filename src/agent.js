@@ -317,10 +317,24 @@ function buildSystemPrompt() {
     "You have these tools:\n" + toolDescs;
 }
 
-function callAgentLLM(messages) {
-  const defaultProvider = process.env.SIDEKICK_DEFAULT_LLM || "ollama";
-  if (defaultProvider === "groq" && GROQ_API_KEY) return callGroqLLM(messages);
-  return callOllamaLLM(messages);
+async function callAgentLLM(messages) {
+  try {
+    const result = await callOllamaLLM(messages);
+    result.provider = "ollama";
+    return result;
+  } catch (ollamaErr) {
+    if (GROQ_API_KEY) {
+      try {
+        const result = await callGroqLLM(messages);
+        result.provider = "groq";
+        result.fallback = true;
+        return result;
+      } catch (groqErr) {
+        throw new Error("Ollama failed: " + ollamaErr.message + " | Groq fallback failed: " + groqErr.message);
+      }
+    }
+    throw ollamaErr;
+  }
 }
 
 function callGroqLLM(messages, attempt = 1) {
@@ -357,7 +371,7 @@ function callGroqLLM(messages, attempt = 1) {
             return reject(new Error("Groq: " + (parsed.error?.message || data.substring(0, 200))));
           }
           const content = parsed.choices?.[0]?.message?.content || "";
-          resolve({ response: content });
+          resolve({ response: content, model: GROQ_MODEL });
         } catch (e) {
           reject(new Error("Groq parse: " + data.substring(0, 200)));
         }
@@ -427,7 +441,11 @@ function callOllamaLLM(messages) {
         let data = "";
         res.on("data", (c) => data += c);
         res.on("end", () => {
-          try { resolve(JSON.parse(data)); }
+          try {
+            const result = JSON.parse(data);
+            result.model = model;
+            resolve(result);
+          }
           catch { reject(new Error("LLM parse fail: " + data.substring(0, 200))); }
         });
       });
@@ -567,6 +585,12 @@ async function runAgent(goal, taskId) {
     let response;
     try {
       response = await callAgentLLM(history);
+      if (i === 0) {
+        emit(taskId, { type: "provider", name: response.provider, model: response.model || "unknown" });
+      }
+      if (response.fallback) {
+        emit(taskId, { type: "fallback", from: "ollama", to: "groq" });
+      }
     } catch (e) {
       emit(taskId, { type: "error", text: "LLM error: " + e.message });
       steps.push({ type: "error", text: e.message });
