@@ -370,31 +370,72 @@ function callGroqLLM(messages, attempt = 1) {
   });
 }
 
-function callOllamaLLM(messages) {
-  return new Promise((resolve, reject) => {
+function detectBestModel() {
+  return new Promise((resolve) => {
     const http = require("http");
-    const body = JSON.stringify({
-      model: "phi3:mini",
-      prompt: messages.map(m => (m.role === "system" ? "System: " : "User: ") + m.content).join("\n\n"),
-      system: buildSystemPrompt(),
-      options: { temperature: 0.3 },
-      stream: false
-    });
     const req = http.request({
-      hostname: "127.0.0.1", port: 11434, path: "/api/generate", method: "POST",
-      headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }
+      hostname: "127.0.0.1", port: 11434, path: "/api/tags", method: "GET"
     }, (res) => {
       let data = "";
       res.on("data", (c) => data += c);
       res.on("end", () => {
-        try { resolve(JSON.parse(data)); }
-        catch { reject(new Error("LLM parse fail: " + data.substring(0, 200))); }
+        try {
+          const parsed = JSON.parse(data);
+          const models = parsed.models || [];
+          const names = models.map(m => m.name.toLowerCase());
+          
+          // Priority: coding models > general models
+          const CODING_MODELS = ["qwen2.5-coder", "codellama", "deepseek-coder", "starcoder"];
+          const GENERAL_MODELS = ["llama3", "mistral", "phi3", "gemma"];
+          
+          for (const coding of CODING_MODELS) {
+            const found = names.find(n => n.includes(coding));
+            if (found) return resolve(found);
+          }
+          for (const general of GENERAL_MODELS) {
+            const found = names.find(n => n.includes(general));
+            if (found) return resolve(found);
+          }
+          if (names.length > 0) return resolve(names[0]);
+          resolve("phi3:mini");
+        } catch {
+          resolve("phi3:mini");
+        }
       });
     });
-    req.setTimeout(300000, () => { req.destroy(); reject(new Error("LLM timeout")); });
-    req.on("error", reject);
-    req.write(body);
+    req.on("error", () => resolve("phi3:mini"));
+    req.setTimeout(5000, () => { req.destroy(); resolve("phi3:mini"); });
     req.end();
+  });
+}
+
+function callOllamaLLM(messages) {
+  return new Promise((resolve, reject) => {
+    const http = require("http");
+    detectBestModel().then((model) => {
+      const body = JSON.stringify({
+        model: model,
+        prompt: messages.map(m => (m.role === "system" ? "System: " : "User: ") + m.content).join("\n\n"),
+        system: buildSystemPrompt(),
+        options: { temperature: 0.3 },
+        stream: false
+      });
+      const req = http.request({
+        hostname: "127.0.0.1", port: 11434, path: "/api/generate", method: "POST",
+        headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }
+      }, (res) => {
+        let data = "";
+        res.on("data", (c) => data += c);
+        res.on("end", () => {
+          try { resolve(JSON.parse(data)); }
+          catch { reject(new Error("LLM parse fail: " + data.substring(0, 200))); }
+        });
+      });
+      req.setTimeout(300000, () => { req.destroy(); reject(new Error("LLM timeout")); });
+      req.on("error", reject);
+      req.write(body);
+      req.end();
+    });
   });
 }
 
