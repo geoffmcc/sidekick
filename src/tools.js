@@ -3928,9 +3928,10 @@ async function sidekick_evolve({ action, id, proposal, approve, test, confirm })
   }
 
   if (action === "cleanup") {
-    const result = evolveCleanup(evolve, confirm);
+    const confirmBool = confirm === true || confirm === "true";
+    const result = evolveCleanup(evolve, confirmBool);
     
-    if (confirm) {
+    if (confirmBool) {
       saveEvolve(evolve);
       return { content: [{ type: "text", text: `# Evolve Cleanup Complete\n\nDeleted ${result.deleted} entries (${result.proposalsDeleted} proposals, ${result.queueDeleted} queue entries)\nRetention: ${result.retentionDays} days\nCutoff: ${result.cutoffDate}` }] };
     } else {
