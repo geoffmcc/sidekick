@@ -13,7 +13,7 @@ NC='\033[0m' # No Color
 
 # Default values
 USERNAME="sidekick"
-NODE_VERSION="20"
+NODE_VERSION="22"
 INSTALL_SERVICES=false
 SSH_PUB_KEY=""
 
