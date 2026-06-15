@@ -552,7 +552,7 @@ function generateSessionId() {
   return "sess-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
 }
 
-async function getTransportForRequest(sessionId) {
+async function getTransportForRequest(sessionId, metadata = {}) {
   logDebug("getTransportForRequest", { requestedSessionId: sessionId, sessionCount: sessions.size });
   
   if (sessionId && sessions.has(sessionId)) {
@@ -580,7 +580,7 @@ async function getTransportForRequest(sessionId) {
       enableJsonResponse: true
     });
 
-    registerSession(newSessionId, server, transport);
+    registerSession(newSessionId, server, transport, metadata);
     await server.connect(transport);
 
     // Auto-initialize replacement sessions so they're ready for immediate use
@@ -627,7 +627,7 @@ async function getTransportForRequest(sessionId) {
     enableJsonResponse: true
   });
 
-  registerSession(newSessionId, server, transport);
+  registerSession(newSessionId, server, transport, metadata);
   await server.connect(transport);
 
   // Auto-initialize fresh sessions so they're ready for immediate use
@@ -661,14 +661,16 @@ async function getTransportForRequest(sessionId) {
   return { transport, isNew: true, newSessionId };
 }
 
-function registerSession(sessionId, server, transport) {
-  logDebug("REGISTER_SESSION", { sessionId, sessionCount: sessions.size + 1 });
+function registerSession(sessionId, server, transport, metadata = {}) {
+  logDebug("REGISTER_SESSION", { sessionId, sessionCount: sessions.size + 1, userAgent: metadata.userAgent, clientInfo: metadata.clientInfo });
   sessions.set(sessionId, {
     server,
     transport,
     createdAt: Date.now(),
     lastAccess: Date.now(),
-    initialized: false
+    initialized: false,
+    userAgent: metadata.userAgent || null,
+    clientInfo: metadata.clientInfo || null
   });
 }
 
@@ -680,13 +682,13 @@ function markSessionInitialized(sessionId) {
   }
 }
 
-// Cleanup sessions inactive for more than 24 hours, every 10 minutes
+// Cleanup sessions inactive for more than 1 hour, every 10 minutes
 setInterval(() => {
-  const cutoff = Date.now() - 86400000;
+  const cutoff = Date.now() - 3600000;
   const evicted = [];
   for (const [id, entry] of sessions) {
     if (entry.lastAccess < cutoff) {
-      evicted.push({ sessionId: id, age_ms: Date.now() - entry.createdAt, idle_ms: Date.now() - entry.lastAccess });
+      evicted.push({ sessionId: id, age_ms: Date.now() - entry.createdAt, idle_ms: Date.now() - entry.lastAccess, userAgent: entry.userAgent });
       sessions.delete(id);
     }
   }
@@ -739,7 +741,9 @@ app.get("/health", (req, res) => {
       id,
       age: Date.now() - entry.createdAt,
       idle: Date.now() - entry.lastAccess,
-      initialized: entry.initialized
+      initialized: entry.initialized,
+      userAgent: entry.userAgent,
+      clientInfo: entry.clientInfo
     }));
   }
 
@@ -764,10 +768,14 @@ app.get("/sse", async (req, res) => {
     const transport = new SSEServerTransport("/messages", res);
     
     const sessionId = transport.sessionId;
-    registerSession(sessionId, server, transport);
+    const metadata = {
+      userAgent: req.headers["user-agent"],
+      clientInfo: null
+    };
+    registerSession(sessionId, server, transport, metadata);
     await server.connect(transport);
     
-    console.log(`[SSE] New session: ${sessionId}`);
+    console.log(`[SSE] New session: ${sessionId} from ${metadata.userAgent || "unknown"}`);
   } catch (e) {
     console.error("[SSE] Error:", e.message);
     if (!res.headersSent) res.status(500).json({ error: e.message });
@@ -815,7 +823,11 @@ app.post("/mcp", async (req, res) => {
     const sessionId = wh["mcp-session-id"] || wh["Mcp-Session-Id"];
     logSession("POST", wh, req.body);
 
-    const { transport, isNew, newSessionId, staleRedirect } = await getTransportForRequest(sessionId);
+    const metadata = {
+      userAgent: wh["user-agent"],
+      clientInfo: req.body?.params?.clientInfo || null
+    };
+    const { transport, isNew, newSessionId, staleRedirect } = await getTransportForRequest(sessionId, metadata);
 
     if (staleRedirect) {
       logDebug("STALE_SESSION_RETURNING_REINIT", { staleSessionId: sessionId, newSessionId });
