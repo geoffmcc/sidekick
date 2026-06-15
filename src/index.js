@@ -231,7 +231,7 @@ const TOOL_SCHEMAS = {
     proposal: z.string().optional().describe("Proposal description (for propose) or 'auto' for LLM generation"),
     approve: z.boolean().optional().describe("Deprecated - use action=approve"),
     test: z.boolean().optional().describe("Deprecated - use action=test"),
-    confirm: z.boolean().optional().describe("For cleanup action - actually delete old entries")
+    confirm: z.coerce.boolean().optional().describe("For cleanup action - actually delete old entries")
   }),
   sidekick_orchestrate: z.object({
     action: z.enum(["create", "execute", "list", "status", "cancel"]).describe("Orchestrate action"),
