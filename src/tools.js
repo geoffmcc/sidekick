@@ -3491,10 +3491,18 @@ async function evolveSandboxTest(proposal) {
   const startTime = Date.now();
   const testResults = { passed: false, duration: 0, notes: "", checks: {} };
 
-  if (Array.isArray(proposal.implementation)) {
-    proposal.implementation = proposal.implementation.map(step => 
-      typeof step === "object" ? `${step.step || ""}. ${step.action || JSON.stringify(step)}` : String(step)
-    ).join("\n");
+  if (proposal.implementation && typeof proposal.implementation !== 'string') {
+    if (Array.isArray(proposal.implementation)) {
+      proposal.implementation = proposal.implementation.map(step => 
+        typeof step === "object" ? `${step.step || ""}. ${step.action || JSON.stringify(step)}` : String(step)
+      ).join("\n");
+    } else if (typeof proposal.implementation === 'object') {
+      proposal.implementation = Object.entries(proposal.implementation)
+        .map(([key, value]) => `${key}: ${value}`)
+        .join("\n");
+    } else {
+      proposal.implementation = String(proposal.implementation);
+    }
   }
 
   if (proposal.type === "docs") {
