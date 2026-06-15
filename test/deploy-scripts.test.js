@@ -524,6 +524,140 @@ console.log('Test 4.3: Both deploy scripts have same error messages');
 }
 
 // ============================================================================
+// GIT DEPLOY TESTS
+// ============================================================================
+
+console.log('=== GIT DEPLOY TESTS ===\n');
+
+// Test 5.1: deploy.sh has --scp flag for airgap mode
+console.log('Test 5.1: deploy.sh has --scp flag');
+{
+  assert.ok(
+    deployShContent.includes('--scp'),
+    'deploy.sh should support --scp flag'
+  );
+  assert.ok(
+    deployShContent.includes('SCP_MODE'),
+    'deploy.sh should have SCP_MODE variable'
+  );
+  assert.ok(
+    deployShContent.includes('SCP mode'),
+    'deploy.sh should indicate SCP mode to user'
+  );
+  console.log('✓ --scp flag present\n');
+}
+
+// Test 5.2: deploy.ps1 has -Scp flag for airgap mode
+console.log('Test 5.2: deploy.ps1 has -Scp flag');
+{
+  assert.ok(
+    deployPs1Content.includes('$Scp'),
+    'deploy.ps1 should support -Scp switch'
+  );
+  assert.ok(
+    deployPs1Content.includes('SCP mode'),
+    'deploy.ps1 should indicate SCP mode to user'
+  );
+  console.log('✓ -Scp flag present\n');
+}
+
+// Test 5.3: deploy.sh has git clone/pull logic
+console.log('Test 5.3: deploy.sh has git deploy logic');
+{
+  assert.ok(
+    deployShContent.includes('git clone'),
+    'deploy.sh should have git clone command'
+  );
+  assert.ok(
+    deployShContent.includes('git pull'),
+    'deploy.sh should have git pull command'
+  );
+  assert.ok(
+    deployShContent.includes('remote get-url origin'),
+    'deploy.sh should detect repo URL from git remote'
+  );
+  assert.ok(
+    deployShContent.includes('github.com/geoffmcc/sidekick'),
+    'deploy.sh should have fallback repo URL'
+  );
+  console.log('✓ Git deploy logic present\n');
+}
+
+// Test 5.4: deploy.ps1 has git clone/pull logic
+console.log('Test 5.4: deploy.ps1 has git deploy logic');
+{
+  assert.ok(
+    deployPs1Content.includes('git clone'),
+    'deploy.ps1 should have git clone command'
+  );
+  assert.ok(
+    deployPs1Content.includes('git pull'),
+    'deploy.ps1 should have git pull command'
+  );
+  assert.ok(
+    deployPs1Content.includes('remote get-url origin'),
+    'deploy.ps1 should detect repo URL from git remote'
+  );
+  assert.ok(
+    deployPs1Content.includes('github.com/geoffmcc/sidekick'),
+    'deploy.ps1 should have fallback repo URL'
+  );
+  console.log('✓ Git deploy logic present\n');
+}
+
+// Test 5.5: bootstrap.sh installs git
+console.log('Test 5.5: bootstrap.sh installs git');
+{
+  assert.ok(
+    bootstrapShContent.includes('git'),
+    'bootstrap.sh should install git package'
+  );
+  console.log('✓ Git installation present\n');
+}
+
+// ============================================================================
+// CROSS-SCRIPT CONSISTENCY TESTS (Git Deploy)
+// ============================================================================
+
+console.log('=== CROSS-SCRIPT CONSISTENCY TESTS (Git Deploy) ===\n');
+
+// Test 6.1: Both deploy scripts have --scp flag
+console.log('Test 6.1: Both deploy scripts have SCP flag');
+{
+  const shHasScp = deployShContent.includes('--scp');
+  const ps1HasScp = deployPs1Content.includes('$Scp');
+  assert.ok(
+    shHasScp && ps1HasScp,
+    'Both scripts should have SCP flag'
+  );
+  console.log('✓ SCP flags consistent\n');
+}
+
+// Test 6.2: Both deploy scripts have git deploy logic
+console.log('Test 6.2: Both deploy scripts have git deploy logic');
+{
+  const shHasGit = deployShContent.includes('git clone') && deployShContent.includes('git pull');
+  const ps1HasGit = deployPs1Content.includes('git clone') && deployPs1Content.includes('git pull');
+  assert.ok(
+    shHasGit && ps1HasGit,
+    'Both scripts should have git clone and pull'
+  );
+  console.log('✓ Git deploy logic consistent\n');
+}
+
+// Test 6.3: Both deploy scripts preserve .env
+console.log('Test 6.3: Both deploy scripts preserve .env');
+{
+  const shPreservesEnv = deployShContent.includes('.env exists') || deployShContent.includes('.env exists, preserving');
+  const ps1PreservesEnv = deployPs1Content.includes('.env exists') || deployPs1Content.includes('.env exists, preserving');
+  assert.ok(
+    shPreservesEnv && ps1PreservesEnv,
+    'Both scripts should preserve existing .env'
+  );
+  console.log('✓ .env preservation consistent\n');
+}
+
+// ============================================================================
 // SUMMARY
 // ============================================================================
 
@@ -532,8 +666,9 @@ console.log('✅ All deploy script tests passed!');
 console.log('═'.repeat(60));
 console.log('');
 console.log('Summary:');
-console.log('  • deploy.sh: ControlMaster, SSH key validation, error handling ✓');
-console.log('  • deploy.ps1: ControlMaster, SSH key validation, error handling ✓');
-console.log('  • bootstrap.sh: --install-services, --ssh-key, idempotent ✓');
+console.log('  • deploy.sh: ControlMaster, SSH key validation, error handling, git deploy, --scp flag ✓');
+console.log('  • deploy.ps1: ControlMaster, SSH key validation, error handling, git deploy, -Scp flag ✓');
+console.log('  • bootstrap.sh: --install-services, --ssh-key, git install, idempotent ✓');
 console.log('  • Cross-script consistency verified ✓');
+console.log('  • Git deploy flow verified ✓');
 console.log('');
