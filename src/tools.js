@@ -3491,6 +3491,12 @@ async function evolveSandboxTest(proposal) {
   const startTime = Date.now();
   const testResults = { passed: false, duration: 0, notes: "", checks: {} };
 
+  if (Array.isArray(proposal.implementation)) {
+    proposal.implementation = proposal.implementation.map(step => 
+      typeof step === "object" ? `${step.step || ""}. ${step.action || JSON.stringify(step)}` : String(step)
+    ).join("\n");
+  }
+
   if (proposal.type === "docs") {
     testResults.checks.syntax = { passed: true, notes: "Docs change - no syntax to validate" };
     testResults.checks.safety = { passed: true, notes: "Documentation only, no execution risk" };
