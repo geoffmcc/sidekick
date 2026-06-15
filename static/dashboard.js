@@ -127,8 +127,8 @@ function showToast(message, type = 'info') {
 // Centralized error handler
 function apiError(url, error, status) {
   const messages = {
-    401: 'Authentication required â€” please refresh the page',
-    429: 'Rate limited â€” please wait before refreshing',
+    401: 'Authentication required — please refresh the page',
+    429: 'Rate limited — please wait before refreshing',
     502: 'Backend service unavailable',
     503: 'Service temporarily unavailable',
   };
@@ -743,7 +743,7 @@ function runAgent(){
   agentRunning = true;
   $('agentGo').disabled = true;
   $('agentStop').disabled = false;
-  $('agentLog').innerHTML = '<span class="agent-step">â–º Starting agent...</span>\n';
+  $('agentLog').innerHTML = '<span class="agent-step">► Starting agent...</span>\n';
 
   authFetch('/api/agent/run', {
     method: 'POST',
@@ -751,20 +751,20 @@ function runAgent(){
     body: JSON.stringify({ goal })
   }).then(r=>r.json()).then(data => {
     if (data.error) {
-      appendLog('<span class="agent-err">âœ– Error: ' + esc(data.error) + '</span>');
+      appendLog('<span class="agent-err">✖ Error: ' + esc(data.error) + '</span>');
       stopAgent();
       return;
     }
     const taskId = data.taskId;
-    appendLog('<span class="agent-step">â–º Task ' + taskId + ' started</span>');
+    appendLog('<span class="agent-step">► Task ' + taskId + ' started</span>');
     agentStream = new EventSource('/api/agent/stream/' + taskId);
     agentStream.onmessage = (e) => {
       const msg = JSON.parse(e.data);
-      if (msg.type === 'step') appendLog('<span class="agent-step">â— ' + esc(msg.text) + '</span>');
-      else if (msg.type === 'tool') appendLog('  <span class="agent-ok">â†’ ' + esc(msg.tool) + '</span> ' + esc(msg.summary));
-      else if (msg.type === 'error') appendLog('<span class="agent-err">âœ– ' + esc(msg.text) + '</span>');
+      if (msg.type === 'step') appendLog('<span class="agent-step">◄ ' + esc(msg.text) + '</span>');
+      else if (msg.type === 'tool') appendLog('  <span class="agent-ok">→ ' + esc(msg.tool) + '</span> ' + esc(msg.summary));
+      else if (msg.type === 'error') appendLog('<span class="agent-err">✖ ' + esc(msg.text) + '</span>');
       else if (msg.type === 'done') {
-        appendLog('<span class="agent-done">âœ” ' + esc(msg.text) + '</span>');
+        appendLog('<span class="agent-done">✔ ' + esc(msg.text) + '</span>');
         stopAgent();
       }
     };
@@ -836,10 +836,10 @@ function toggleRunDetail(id){
     if (!run || !run.steps) { detail.innerHTML = '<div class="empty">No details</div>'; return; }
     let html = '';
     run.steps.forEach(s => {
-      if (s.type === 'thought') html += '<span class="agent-step">â— ' + esc(s.text) + '</span>\n';
-      else if (s.type === 'tool') html += '  <span class="agent-ok">â†’ ' + esc(s.tool) + '</span> ' + esc(s.args ? JSON.stringify(s.args) : '') + '\n    ' + esc((s.result || '').substring(0, 200)) + '\n';
-      else if (s.type === 'error') html += '<span class="agent-err">âœ– ' + esc(s.text) + '</span>\n';
-      else if (s.type === 'done') html += '<span class="agent-done">âœ” ' + esc(s.text) + '</span>\n';
+      if (s.type === 'thought') html += '<span class="agent-step">◄ ' + esc(s.text) + '</span>\n';
+      else if (s.type === 'tool') html += '  <span class="agent-ok">→ ' + esc(s.tool) + '</span> ' + esc(s.args ? JSON.stringify(s.args) : '') + '\n    ' + esc((s.result || '').substring(0, 200)) + '\n';
+      else if (s.type === 'error') html += '<span class="agent-err">✖ ' + esc(s.text) + '</span>\n';
+      else if (s.type === 'done') html += '<span class="agent-done">✔ ' + esc(s.text) + '</span>\n';
     });
     detail.innerHTML = '<div class="history-detail">' + html + '</div>';
   }).catch(e => { 
