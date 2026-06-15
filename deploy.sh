@@ -366,9 +366,9 @@ fi
 
 echo ""
 echo -e "\033[36m--- Starting Services ---\033[0m"
-restart_service "sidekick-mcp"
-restart_service "sidekick-dashboard"
 restart_service "sidekick-agent"
+restart_service "sidekick-dashboard"
+restart_service "sidekick-mcp"
 
 echo ""
 echo -e "\033[36m=== Deploy complete ===\033[0m"

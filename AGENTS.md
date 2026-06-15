@@ -368,7 +368,7 @@ No password is required for subsequent deploys.
 ssh sidekick@YOUR_REMOTE_IP
 cd /home/sidekick/sidekick
 git pull
-sudo systemctl restart sidekick-mcp sidekick-dashboard sidekick-agent
+sudo systemctl restart sidekick-agent sidekick-dashboard sidekick-mcp
 ```
 
 ## Configuration
@@ -439,11 +439,13 @@ ssh sidekick@YOUR_REMOTE_IP
 sudo journalctl -u sidekick-mcp -f
 ```
 
-### Restart MCP Service
+### Restart All Services
 ```bash
 ssh sidekick@YOUR_REMOTE_IP
-sudo systemctl restart sidekick-mcp
+sudo systemctl restart sidekick-agent sidekick-dashboard sidekick-mcp
 ```
+
+**Restart order matters:** agent first, dashboard second, MCP last. Restarting MCP first causes the other services to lock up waiting for it.
 
 ### Check All Services
 ```bash
