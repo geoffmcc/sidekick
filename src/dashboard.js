@@ -2365,7 +2365,34 @@ function refresh(){
   $('lastUpdate').textContent = 'updated ' + now.toLocaleTimeString();
   loadSystem(); loadDashboardSummary(); loadLLM(); loadServices();
 }
+
+// Debug: Show load status
+let debugPanel = null;
+function showDebug(msg) {
+  if (!debugPanel) {
+    debugPanel = document.createElement('div');
+    debugPanel.style.cssText = 'position:fixed;bottom:10px;right:10px;background:#161b22;border:1px solid #30363d;padding:10px;font-family:monospace;font-size:11px;color:#c9d1d9;z-index:9999;max-width:300px;max-height:200px;overflow-y:auto';
+    document.body.appendChild(debugPanel);
+  }
+  debugPanel.innerHTML += '<div>' + new Date().toLocaleTimeString() + ': ' + msg + '</div>';
+  debugPanel.scrollTop = debugPanel.scrollHeight;
+}
+
+// Override load functions to add debug output
+const origLoadSystem = loadSystem;
+loadSystem = function() {
+  showDebug('loadSystem called');
+  origLoadSystem().then(() => showDebug('loadSystem success')).catch(e => showDebug('loadSystem error: ' + e.message));
+};
+
+const origLoadDashboardSummary = loadDashboardSummary;
+loadDashboardSummary = function() {
+  showDebug('loadDashboardSummary called');
+  origLoadDashboardSummary().then(() => showDebug('loadDashboardSummary success')).catch(e => showDebug('loadDashboardSummary error: ' + e.message));
+};
+
 refresh();
+showDebug('Initial load starting');
 loadSystem();
 loadDashboardSummary();
 loadLLM();
