@@ -13,7 +13,7 @@ A self-hosted AI agent platform with persistent memory, 59+ tools, and the abili
 
 ## Quick Start
 
-**What you need:** Node.js 18+, a remote Ubuntu/Debian machine with SSH access (VPS, home server, Raspberry Pi), Git, ~15 minutes.
+**What you need:** Node.js 22+, a remote Ubuntu/Debian machine with SSH access (VPS, home server, Raspberry Pi), Git, ~15 minutes.
 
 ```powershell
 # Clone the repo
