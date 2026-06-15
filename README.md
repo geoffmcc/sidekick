@@ -2,7 +2,7 @@
 
 **Autonomous Agent Platform**
 
-A self-hosted AI agent platform with persistent memory, 59+ tools, and the ability to extend itself. Runs on your remote machine, learns from your workflow, and grows its own capabilities—no code changes required.
+A self-hosted AI agent platform with persistent memory, 69+ tools, and the ability to extend itself. Runs on your remote machine, learns from your workflow, and grows its own capabilities—no code changes required.
 
 **How?** A single `AGENTS.md` file that opencode reads on every session start. No plugins, no hooks — just markdown.
 
@@ -97,7 +97,7 @@ The Agent Bridge runs independently from your main AI session. Submit a complex 
 ### 🔒 Security-First Design
 Every tool output is automatically scanned and redacted for sensitive data (API keys, tokens, passwords). The dashboard has rate limiting, CSRF protection, and audit logging. The agent bridge is isolated and only accessible through the dashboard.
 
-### 🛠️ 59+ Specialized Tools
+### 🛠️ 69+ Specialized Tools
 Not just bash and file operations. Sidekick includes tools for:
 - GitHub integration (PRs, issues, releases)
 - Service and process management
@@ -109,6 +109,7 @@ Not just bash and file operations. Sidekick includes tools for:
 - Incident response and forensics
 - Operational runbooks and procedures
 - Dependency analysis and impact assessment
+- **Database operations (query, backup, restore, search, migrations)**
 - And much more
 
 **The result:** Sidekick isn't just a tool server—it's an autonomous platform that learns, adapts, and grows with your workflow.
@@ -168,12 +169,25 @@ Not just bash and file operations. Sidekick includes tools for:
 
 | Service | Port | Description |
 |---------|------|-------------|
-| **MCP Server** | 4097 | 59 tools: bash, read, write, list, search, git, notify, process, service, archive, cron, github, webhook, context, teach, store, get, list_projects, get_by_project, web_fetch, llm, transform, health, delay, snapshot, watch, secret, parse, diff, hash, validate, template, queue, retry, evolve, orchestrate, predict, debug_tool, fresheyes, batch, cache, summarize, filter, project, tail, diff_files, find, status, extract, anonymize, sandbox, changelog, netdiag, timeline, circuit, baseline, depend, runbook, black_box |
+| **MCP Server** | 4097 | 69 tools: bash, read, write, list, search, git, notify, process, service, archive, cron, github, webhook, context, teach, store, get, list_projects, get_by_project, web_fetch, llm, transform, health, delay, snapshot, watch, secret, parse, diff, hash, validate, template, queue, retry, evolve, orchestrate, predict, debug_tool, fresheyes, batch, cache, summarize, filter, project, tail, diff_files, find, status, extract, anonymize, sandbox, changelog, netdiag, timeline, circuit, baseline, depend, runbook, black_box, db_schema, db_query, db_stats, db_backup, db_restore, log_query, db_export, db_search, db_migrate, db_diff |
 | **Dashboard** | 4098 | Web UI: system health, activity log, KV data, agent tasks |
 | **Agent Bridge** | 4099 | AI agent loop — LLM plans and calls MCP tools autonomously |
 | **Ollama** | 11434 | Local LLM inference (phi3:mini). Fallback when no `GROQ_API_KEY` |
 
 All tools are exposed via the MCP server at `http://YOUR_REMOTE_IP:4097/mcp`.
+
+### New Tools (v1.19) - Database Tools
+
+- **`sidekick_db_schema`** — Inspect database schema: tables, columns, indexes, foreign keys.
+- **`sidekick_db_query`** — Raw SQL with safety limits (readonly by default, row caps, timeout).
+- **`sidekick_db_stats`** — DB size, table sizes, WAL status, cache hit ratio.
+- **`sidekick_db_backup`** — Timestamped backup with gzip compression.
+- **`sidekick_db_restore`** — Restore from backup with integrity check (auto-backup before restore).
+- **`sidekick_log_query`** — Advanced tool_logs filtering by time, tool, source, status.
+- **`sidekick_db_export`** — Export tables to JSON, CSV, or SQL dump.
+- **`sidekick_db_search`** — Full-text search across all tables (auto-creates FTS5 indexes).
+- **`sidekick_db_migrate`** — Schema migrations with versioning and rollback.
+- **`sidekick_db_diff`** — Compare two DB snapshots, show what changed.
 
 ### New Tools (v1.18) - Operations Platform Expansion
 

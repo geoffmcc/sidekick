@@ -412,6 +412,56 @@ const TOOL_SCHEMAS = {
   sidekick_respond: z.object({
     text: z.string().describe("The response text to return")
   }),
+  sidekick_db_schema: z.object({
+    table: z.string().optional().describe("Specific table name (optional)"),
+    verbose: z.boolean().optional().describe("Include row counts and detailed info")
+  }),
+  sidekick_db_query: z.object({
+    sql: z.string().describe("SQL query to execute"),
+    params: z.array(z.any()).optional().describe("Query parameters"),
+    readonly: z.boolean().optional().default(true).describe("Read-only mode (blocks writes)"),
+    limit: z.number().optional().default(1000).describe("Maximum rows to return"),
+    timeout: z.number().optional().default(5000).describe("Query timeout in milliseconds")
+  }),
+  sidekick_db_stats: z.object({
+    detailed: z.boolean().optional().describe("Include per-table statistics")
+  }),
+  sidekick_db_backup: z.object({
+    path: z.string().optional().describe("Output path (default: data/backups/)"),
+    compress: z.boolean().optional().default(true).describe("Gzip compression")
+  }),
+  sidekick_db_restore: z.object({
+    path: z.string().describe("Backup file path"),
+    verify: z.boolean().optional().default(true).describe("Check integrity before restore")
+  }),
+  sidekick_log_query: z.object({
+    tool: z.string().optional().describe("Filter by tool name"),
+    source: z.string().optional().describe("Filter by source: mcp/agent/dashboard"),
+    success: z.boolean().optional().describe("Filter by success status"),
+    since: z.string().optional().describe("Start time (ISO or relative: 1h, 1d)"),
+    until: z.string().optional().describe("End time (ISO timestamp)"),
+    limit: z.number().optional().default(100).describe("Maximum results")
+  }),
+  sidekick_db_export: z.object({
+    table: z.string().optional().describe("Specific table (exports all if omitted)"),
+    format: z.enum(["json", "csv", "sql"]).optional().default("json").describe("Export format"),
+    path: z.string().optional().describe("Output file path")
+  }),
+  sidekick_db_search: z.object({
+    query: z.string().describe("Search terms"),
+    tables: z.string().optional().describe("Comma-separated table names"),
+    limit: z.number().optional().default(50).describe("Maximum results")
+  }),
+  sidekick_db_migrate: z.object({
+    action: z.enum(["status", "list", "up"]).describe("Migration action"),
+    version: z.number().optional().describe("Target version"),
+    name: z.string().optional().describe("Migration filename (for up action)")
+  }),
+  sidekick_db_diff: z.object({
+    snapshot_a: z.string().optional().describe("Path to snapshot A or 'current'"),
+    snapshot_b: z.string().optional().describe("Path to snapshot B or 'current'"),
+    table: z.string().optional().describe("Specific table to compare")
+  }),
 };
 
 // --- Factory: create fresh McpServer + register tools ---

@@ -1,11 +1,15 @@
 const fs = require("fs");
 const path = require("path");
+const zlib = require("zlib");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const DB_FILE = process.env.SIDEKICK_DB_FILE || path.join(DATA_DIR, "sidekick.db");
+const BACKUP_DIR = process.env.SIDEKICK_BACKUP_DIR || path.join(DATA_DIR, "backups");
+const MIGRATIONS_DIR = process.env.SIDEKICK_MIGRATIONS_DIR || path.join(__dirname, "..", "migrations");
 const MAX_LOG = Number(process.env.SIDEKICK_MAX_LOG || 1000);
 
 fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o750 });
+fs.mkdirSync(BACKUP_DIR, { recursive: true, mode: 0o750 });
 
 let Database;
 try {
@@ -221,10 +225,460 @@ function clearToolLogs() {
   db.prepare("DELETE FROM tool_logs").run();
 }
 
+// === Database Tool Helpers ===
+
+function executeQuery(sql, params = [], options = {}) {
+  const { readonly = true, limit = 1000, timeout = 5000 } = options;
+  const upper = sql.toUpperCase().trim();
+  
+  if (readonly) {
+    if (upper.match(/^\s*(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|REPLACE|PRAGMA\s+\w+\s*=)/)) {
+      throw new Error("Write operations not allowed in readonly mode. Set readonly=false to allow.");
+    }
+  }
+  
+  let limitedSql = sql;
+  if (readonly && !upper.includes("LIMIT")) {
+    limitedSql = sql.replace(/;?\s*$/, "") + ` LIMIT ${limit}`;
+  }
+  
+  const stmt = db.prepare(limitedSql);
+  const results = stmt.all(...params);
+  return results.slice(0, limit);
+}
+
+function getTableList() {
+  return db.prepare(`
+    SELECT name, type, sql 
+    FROM sqlite_master 
+    WHERE type IN ('table', 'view') 
+    AND name NOT LIKE 'sqlite_%'
+    ORDER BY name
+  `).all();
+}
+
+function getTableInfo(tableName) {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
+  const indexes = db.prepare(`PRAGMA index_list(${tableName})`).all();
+  const foreignKeys = db.prepare(`PRAGMA foreign_key_list(${tableName})`).all();
+  
+  const indexDetails = indexes.map(idx => ({
+    ...idx,
+    columns: db.prepare(`PRAGMA index_info(${idx.name})`).all()
+  }));
+  
+  let rowCount = 0;
+  try {
+    rowCount = db.prepare(`SELECT COUNT(*) as count FROM ${tableName}`).get().count;
+  } catch (e) {}
+  
+  return { columns, indexes: indexDetails, foreignKeys, rowCount };
+}
+
+function getDatabaseStats() {
+  const dbSize = fs.statSync(DB_FILE).size;
+  
+  const pageCount = db.prepare("PRAGMA page_count").get().page_count;
+  const pageSize = db.prepare("PRAGMA page_size").get().page_size;
+  const freelistCount = db.prepare("PRAGMA freelist_count").get().freelist_count;
+  
+  const journalMode = db.prepare("PRAGMA journal_mode").get().journal_mode;
+  const walCheckpoint = db.prepare("PRAGMA wal_checkpoint").get();
+  
+  const cacheSize = db.prepare("PRAGMA cache_size").get().cache_size;
+  
+  let cacheHitRatio = null;
+  try {
+    const stats = db.prepare(`
+      SELECT 
+        SUM(CASE WHEN name LIKE 'sqlite_stat%' THEN 0 ELSE 1 END) as user_tables
+      FROM sqlite_master 
+      WHERE type = 'table'
+    `).get();
+  } catch (e) {}
+  
+  const tables = getTableList();
+  const tableStats = tables.map(t => {
+    let size = 0;
+    let rowCount = 0;
+    try {
+      rowCount = db.prepare(`SELECT COUNT(*) as count FROM ${t.name}`).get().count;
+      size = db.prepare(`SELECT page_count * ${pageSize} as size FROM pragma_page_count('${t.name}')`).get().size || 0;
+    } catch (e) {}
+    return { name: t.name, rowCount, size };
+  });
+  
+  return {
+    dbSize,
+    dbSizeHuman: formatBytes(dbSize),
+    pageCount,
+    pageSize,
+    freelistCount,
+    journalMode,
+    walCheckpoint,
+    cacheSize,
+    tables: tableStats,
+    totalTables: tables.length
+  };
+}
+
+function formatBytes(bytes) {
+  if (bytes === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + " " + sizes[i];
+}
+
+function createBackup(destPath = null, compress = true) {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const backupName = `sidekick-backup-${timestamp}.db`;
+  const backupPath = destPath || path.join(BACKUP_DIR, backupName);
+  
+  // Close main db to ensure clean state, then copy
+  const backupDb = new Database(backupPath);
+  try {
+    // Use synchronous backup via file copy
+    // First checkpoint WAL to main db file
+    db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").run();
+    // Copy the database file
+    fs.copyFileSync(DB_FILE, backupPath);
+    backupDb.close();
+    
+    if (compress) {
+      const input = fs.readFileSync(backupPath);
+      const compressed = zlib.gzipSync(input);
+      fs.writeFileSync(backupPath + ".gz", compressed);
+      fs.unlinkSync(backupPath);
+      return { path: backupPath + ".gz", size: compressed.length, compressed: true };
+    }
+    
+    return { path: backupPath, size: fs.statSync(backupPath).size, compressed: false };
+  } catch (err) {
+    try { backupDb.close(); } catch (e) {}
+    throw err;
+  }
+}
+
+function restoreBackup(backupPath, verify = true) {
+  if (!fs.existsSync(backupPath)) {
+    throw new Error(`Backup file not found: ${backupPath}`);
+  }
+  
+  let tempPath = backupPath;
+  if (backupPath.endsWith(".gz")) {
+    tempPath = backupPath.replace(".gz", ".tmp");
+    const compressed = fs.readFileSync(backupPath);
+    const decompressed = zlib.gunzipSync(compressed);
+    fs.writeFileSync(tempPath, decompressed);
+  }
+  
+  if (verify) {
+    const testDb = new Database(tempPath);
+    try {
+      testDb.prepare("PRAGMA integrity_check").get();
+    } catch (e) {
+      testDb.close();
+      if (tempPath !== backupPath) fs.unlinkSync(tempPath);
+      throw new Error("Backup integrity check failed: " + e.message);
+    }
+    testDb.close();
+  }
+  
+  // Create pre-restore backup using synchronous file copy
+  const preBackupPath = path.join(BACKUP_DIR, `pre-restore-${Date.now()}.db`);
+  try {
+    db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").run();
+    fs.copyFileSync(DB_FILE, preBackupPath);
+  } catch (err) {
+    if (tempPath !== backupPath) fs.unlinkSync(tempPath);
+    throw err;
+  }
+  
+  // Restore by copying backup file over main db
+  try {
+    fs.copyFileSync(tempPath, DB_FILE);
+    if (tempPath !== backupPath) fs.unlinkSync(tempPath);
+    return { success: true, preBackupPath };
+  } catch (err) {
+    if (tempPath !== backupPath) fs.unlinkSync(tempPath);
+    throw err;
+  }
+}
+
+function queryToolLogs(filters = {}) {
+  const { tool, source, success, since, until, limit = 100 } = filters;
+  
+  let where = [];
+  let params = [];
+  
+  if (tool) {
+    where.push("tool_name = ?");
+    params.push(tool);
+  }
+  if (source) {
+    where.push("source = ?");
+    params.push(source);
+  }
+  if (success !== undefined && success !== null) {
+    where.push("success = ?");
+    params.push(success ? 1 : 0);
+  }
+  if (since) {
+    where.push("timestamp >= ?");
+    params.push(since);
+  }
+  if (until) {
+    where.push("timestamp <= ?");
+    params.push(until);
+  }
+  
+  const whereClause = where.length > 0 ? "WHERE " + where.join(" AND ") : "";
+  const sql = `SELECT entry_json FROM tool_logs ${whereClause} ORDER BY timestamp DESC LIMIT ?`;
+  params.push(limit);
+  
+  const rows = db.prepare(sql).all(...params);
+  return rows.map(row => parseJson(row.entry_json, null)).filter(Boolean);
+}
+
+function exportTable(tableName, format = "json") {
+  const rows = db.prepare(`SELECT * FROM ${tableName}`).all();
+  
+  if (format === "json") {
+    return JSON.stringify(rows, null, 2);
+  }
+  
+  if (format === "csv") {
+    if (rows.length === 0) return "";
+    const headers = Object.keys(rows[0]);
+    const csvRows = [headers.join(",")];
+    for (const row of rows) {
+      const values = headers.map(h => {
+        const val = row[h];
+        if (val === null) return "";
+        if (typeof val === "string" && (val.includes(",") || val.includes('"') || val.includes("\n"))) {
+          return '"' + val.replace(/"/g, '""') + '"';
+        }
+        return val;
+      });
+      csvRows.push(values.join(","));
+    }
+    return csvRows.join("\n");
+  }
+  
+  if (format === "sql") {
+    const lines = [];
+    for (const row of rows) {
+      const cols = Object.keys(row);
+      const vals = cols.map(c => {
+        const val = row[c];
+        if (val === null) return "NULL";
+        if (typeof val === "number") return val;
+        return "'" + String(val).replace(/'/g, "''") + "'";
+      });
+      lines.push(`INSERT INTO ${tableName} (${cols.join(", ")}) VALUES (${vals.join(", ")});`);
+    }
+    return lines.join("\n");
+  }
+  
+  throw new Error(`Unsupported export format: ${format}`);
+}
+
+function setupFTS5() {
+  const tables = getTableList().filter(t => t.type === "table");
+  
+  for (const table of tables) {
+    const ftsTableName = `${table.name}_fts`;
+    
+    try {
+      db.prepare(`DROP TABLE IF EXISTS ${ftsTableName}`).run();
+    } catch (e) {}
+    
+    const columns = db.prepare(`PRAGMA table_info(${table.name})`).all();
+    const textColumns = columns.filter(c => 
+      c.type.toUpperCase().includes("TEXT") || 
+      c.type.toUpperCase().includes("CHAR") ||
+      c.type.toUpperCase().includes("CLOB")
+    );
+    
+    if (textColumns.length === 0) continue;
+    
+    const columnNames = textColumns.map(c => c.name).join(", ");
+    
+    try {
+      db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS ${ftsTableName} USING fts5(
+          rowid UNINDEXED,
+          ${textColumns.map(c => c.name).join(", ")}
+        );
+        
+        INSERT INTO ${ftsTableName} (rowid, ${columnNames})
+        SELECT rowid, ${columnNames} FROM ${table.name};
+      `);
+    } catch (e) {
+      console.error(`FTS5 setup failed for ${table.name}:`, e.message);
+    }
+  }
+  
+  return { success: true };
+}
+
+function searchAllTables(query, options = {}) {
+  const { tables = null, limit = 50 } = options;
+  
+  const results = [];
+  const ftsTables = getTableList().filter(t => t.name.endsWith("_fts"));
+  
+  for (const ftsTable of ftsTables) {
+    const baseTableName = ftsTable.name.replace("_fts", "");
+    
+    if (tables && !tables.includes(baseTableName)) continue;
+    
+    try {
+      const rows = db.prepare(`
+        SELECT rowid, * FROM ${ftsTable.name} 
+        WHERE ${ftsTable.name} MATCH ? 
+        LIMIT ?
+      `).all(query, limit);
+      
+      for (const row of rows) {
+        results.push({
+          table: baseTableName,
+          rowid: row.rowid,
+          snippet: Object.values(row).filter(v => typeof v === "string").join(" ").substring(0, 200)
+        });
+      }
+    } catch (e) {}
+  }
+  
+  if (results.length === 0) {
+    const searchTables = tables 
+      ? getTableList().filter(t => tables.includes(t.name) && t.type === "table")
+      : getTableList().filter(t => t.type === "table");
+    
+    for (const table of searchTables) {
+      const columns = db.prepare(`PRAGMA table_info(${table.name})`).all();
+      const textColumns = columns.filter(c => 
+        c.type.toUpperCase().includes("TEXT") || 
+        c.type.toUpperCase().includes("CHAR")
+      );
+      
+      for (const col of textColumns) {
+        try {
+          const rows = db.prepare(`
+            SELECT rowid, ${col.name} FROM ${table.name}
+            WHERE ${col.name} LIKE ?
+            LIMIT ?
+          `).all(`%${query}%`, Math.min(limit, 10));
+          
+          for (const row of rows) {
+            results.push({
+              table: table.name,
+              rowid: row.rowid,
+              column: col.name,
+              snippet: String(row[col.name]).substring(0, 200)
+            });
+          }
+        } catch (e) {}
+      }
+      
+      if (results.length >= limit) break;
+    }
+  }
+  
+  return results.slice(0, limit);
+}
+
+function getMigrationVersion() {
+  const row = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get();
+  return row ? parseInt(row.value, 10) : 0;
+}
+
+function runMigration(name, upSql, downSql) {
+  const currentVersion = getMigrationVersion();
+  
+  const migrationMatch = name.match(/^(\d+)_/);
+  if (!migrationMatch) {
+    throw new Error("Migration name must start with version number: NNN_name.sql");
+  }
+  const targetVersion = parseInt(migrationMatch[1], 10);
+  
+  if (targetVersion <= currentVersion) {
+    return { skipped: true, reason: "Migration already applied" };
+  }
+  
+  db.exec(upSql);
+  db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(String(targetVersion));
+  
+  return { success: true, version: targetVersion };
+}
+
+function listMigrations() {
+  if (!fs.existsSync(MIGRATIONS_DIR)) return [];
+  
+  const files = fs.readdirSync(MIGRATIONS_DIR)
+    .filter(f => f.endsWith(".sql"))
+    .sort();
+  
+  const currentVersion = getMigrationVersion();
+  
+  return files.map(f => {
+    const match = f.match(/^(\d+)_/);
+    const version = match ? parseInt(match[1], 10) : 0;
+    return {
+      file: f,
+      version,
+      applied: version <= currentVersion
+    };
+  });
+}
+
+function createSnapshot() {
+  const tables = getTableList().filter(t => t.type === "table");
+  const snapshot = {};
+  
+  for (const table of tables) {
+    snapshot[table.name] = db.prepare(`SELECT * FROM ${table.name}`).all();
+  }
+  
+  return {
+    timestamp: nowIso(),
+    tables: snapshot
+  };
+}
+
+function compareSnapshots(snapshotA, snapshotB) {
+  const diff = {};
+  
+  const allTables = new Set([
+    ...Object.keys(snapshotA.tables || {}),
+    ...Object.keys(snapshotB.tables || {})
+  ]);
+  
+  for (const tableName of allTables) {
+    const rowsA = snapshotA.tables[tableName] || [];
+    const rowsB = snapshotB.tables[tableName] || [];
+    
+    const mapA = new Map(rowsA.map(r => [JSON.stringify(r), r]));
+    const mapB = new Map(rowsB.map(r => [JSON.stringify(r), r]));
+    
+    const added = rowsB.filter(r => !mapA.has(JSON.stringify(r)));
+    const removed = rowsA.filter(r => !mapB.has(JSON.stringify(r)));
+    
+    if (added.length > 0 || removed.length > 0) {
+      diff[tableName] = { added, removed };
+    }
+  }
+  
+  return diff;
+}
+
 
 module.exports = {
   DATA_DIR,
   DB_FILE,
+  BACKUP_DIR,
+  MIGRATIONS_DIR,
   db,
   getDocument,
   setDocument,
@@ -240,4 +694,19 @@ module.exports = {
   appendToolLog,
   readToolLogs,
   clearToolLogs,
+  executeQuery,
+  getTableList,
+  getTableInfo,
+  getDatabaseStats,
+  createBackup,
+  restoreBackup,
+  queryToolLogs,
+  exportTable,
+  setupFTS5,
+  searchAllTables,
+  getMigrationVersion,
+  runMigration,
+  listMigrations,
+  createSnapshot,
+  compareSnapshots,
 };
