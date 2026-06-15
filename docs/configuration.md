@@ -89,6 +89,36 @@ SIDEKICK_BLOCKED_TOOLS=sidekick_db_restore,sidekick_evolve
 
 Policy lists accept exact tool names and risk selectors such as `risk:high` or `risk:critical`. Source-specific variables are available for `MCP`, `DASHBOARD`, and `AGENT` sources, for example `SIDEKICK_AGENT_TOOL_POLICY` and `SIDEKICK_MCP_BLOCKED_TOOLS`.
 
+## Evolve Tool Retention
+
+The evolve tool automatically cleans up old proposals to prevent unbounded growth:
+
+```env
+SIDEKICK_EVOLVE_RETENTION_DAYS=30
+```
+
+**What gets cleaned up:**
+- Rejected, test_failed, and rejected_low_confidence proposals older than retention period
+- Non-pending queue entries older than retention period
+
+**What's kept forever:**
+- All approved proposals (valuable historical record)
+- Recent proposals (< retention days)
+- Pending queue entries
+
+**Automatic cleanup triggers:**
+- File size > 100KB, OR
+- Total proposals > 50
+
+**Manual cleanup:**
+```javascript
+// Preview what would be deleted
+sidekick_evolve({ action: "cleanup" })
+
+// Actually delete old entries
+sidekick_evolve({ action: "cleanup", confirm: true })
+```
+
 ## Useful Checks
 
 Check the configured Ollama model:
