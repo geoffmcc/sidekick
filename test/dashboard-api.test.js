@@ -16,17 +16,22 @@ process.env.SIDEKICK_DASHBOARD_USER = 'test-user';
 process.env.SIDEKICK_DASHBOARD_PASS = 'test-pass';
 
 // Helper function to make HTTP requests
-function makeRequest(method, path, body = null) {
+function makeRequest(method, path, body = null, optionsOverride = {}) {
   return new Promise((resolve, reject) => {
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': 'Basic ' + Buffer.from('test-user:test-pass').toString('base64'),
+      ...(optionsOverride.headers || {})
+    };
+    if (optionsOverride.auth === false) {
+      delete headers.Authorization;
+    }
     const options = {
       hostname: '127.0.0.1',
       port: 4100,
       path: path,
       method: method,
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Basic ' + Buffer.from('test-user:test-pass').toString('base64')
-      }
+      headers
     };
 
     const req = http.request(options, (res) => {
@@ -59,6 +64,48 @@ const dashboard = require('../src/dashboard');
 // Wait for server to start
 setTimeout(async () => {
   try {
+    // Test 3.0: dashboard shell and event streams require auth
+    console.log('Test 3.0: dashboard shell and event streams require auth');
+    {
+      const rootResponse = await makeRequest('GET', '/', null, { auth: false });
+      assert.strictEqual(rootResponse.status, 401, 'Root dashboard should require auth');
+
+      const streamResponse = await makeRequest('GET', '/api/agent/stream/test-task', null, { auth: false });
+      assert.strictEqual(streamResponse.status, 401, 'Agent stream should require auth');
+
+      const staticResponse = await makeRequest('GET', '/static/fontawesome/css/all.min.css', null, { auth: false });
+      assert.notStrictEqual(staticResponse.status, 401, 'Static assets should remain public');
+
+      const staticTemplateResponse = await makeRequest('GET', '/static/dashboard.html', null, { auth: false });
+      assert.strictEqual(staticTemplateResponse.status, 404, 'Dashboard HTML template should not be public static content');
+      console.log('Passed\n');
+    }
+
+    // Test 3.0b: mutating requests reject deceptive cross-origin hosts
+    console.log('Test 3.0b: mutating requests reject deceptive cross-origin hosts');
+    {
+      const response = await makeRequest('PUT', '/api/kv/csrf-test', { value: 'blocked' }, {
+        headers: {
+          Origin: 'http://127.0.0.1:4100.evil.example',
+          Host: '127.0.0.1:4100'
+        }
+      });
+      assert.strictEqual(response.status, 403, 'Should reject non-matching Origin host');
+      console.log('Passed\n');
+    }
+
+    // Test 3.0c: dashboard database endpoints honor tool policy
+    console.log('Test 3.0c: dashboard database endpoints honor tool policy');
+    {
+      const previousBlocked = process.env.SIDEKICK_DASHBOARD_BLOCKED_TOOLS;
+      process.env.SIDEKICK_DASHBOARD_BLOCKED_TOOLS = 'sidekick_db_stats';
+      const response = await makeRequest('GET', '/api/db/stats');
+      assert.strictEqual(response.status, 403, 'Should block dashboard DB endpoint by policy');
+      if (previousBlocked === undefined) delete process.env.SIDEKICK_DASHBOARD_BLOCKED_TOOLS;
+      else process.env.SIDEKICK_DASHBOARD_BLOCKED_TOOLS = previousBlocked;
+      console.log('Passed\n');
+    }
+
     // Test 3.1: GET /api/kv returns metadata
     console.log('Test 3.1: GET /api/kv returns metadata');
     {

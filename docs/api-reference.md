@@ -24,6 +24,12 @@ This reference is generated from Express route declarations in `src/index.js`, `
 | `src/dashboard.js` | DELETE | `/api/kv/:key` | |
 | `src/dashboard.js` | GET | `/api/stats` | |
 | `src/dashboard.js` | GET | `/api/tools` | |
+| `src/dashboard.js` | GET | `/api/db/schema` | |
+| `src/dashboard.js` | POST | `/api/db/query` | |
+| `src/dashboard.js` | GET | `/api/db/stats` | |
+| `src/dashboard.js` | POST | `/api/db/backup` | |
+| `src/dashboard.js` | GET | `/api/db/search` | |
+| `src/dashboard.js` | GET | `/api/db/migrations` | |
 | `src/dashboard.js` | DELETE | `/api/logs` | |
 | `src/dashboard.js` | DELETE | `/api/kv` | |
 | `src/dashboard.js` | DELETE | `/api/conversations` | |
@@ -68,7 +74,7 @@ Legacy SSE transport. `/sse` creates an SSE session. `/messages` posts JSON-RPC 
 
 ## Dashboard API summary
 
-The dashboard API includes read endpoints for logs, KV data, system status, dashboard summary, LLM status, services, config, stats, and tools. It includes mutating endpoints for KV writes/deletes, log/data resets, error logging, webhook capture, and agent proxy operations.
+The dashboard API includes read endpoints for logs, KV data, system status, dashboard summary, LLM status, services, config, stats, tools, database schema, database stats, database search, and migration status. `/api/tools` returns risk and policy metadata for each tool. It includes mutating endpoints for KV writes/deletes, database queries/backups, log/data resets, error logging, webhook capture, and agent proxy operations.
 
 ## Agent API summary
 
