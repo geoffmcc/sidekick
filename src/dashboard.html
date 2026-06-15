@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sidekick Dashboard</title>
+<link rel="stylesheet" href="/static/fontawesome/css/all.min.css">
+<link rel="stylesheet" href="/static/fonts/jetbrains-mono/jetbrains-mono.css">
+<link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+<div class="header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;padding-bottom:12px;border-bottom:1px solid #21262d">
+  <div>
+    <h1 style="font-size:1.4rem;color:#58a6ff">Sidekick Dashboard <span id="serviceDots" style="font-size:.85rem;margin-left:12px"></span></h1>
+    <div class="sub">__VPS_IP__</div>
+  </div>
+  <div class="sub" id="lastUpdate"></div>
+</div>
+
+<nav>
+  <a class="active" onclick="showPage('system')" id="nav-system">System</a>
+  <a onclick="showPage('activity')" id="nav-activity">Activity</a>
+  <a onclick="showPage('data')" id="nav-data">Data</a>
+  <a onclick="showPage('database')" id="nav-database">Database</a>
+  <a onclick="showPage('config')" id="nav-config">Config</a>
+  <a onclick="showPage('agent')" id="nav-agent">Agent</a>
+  <a onclick="showPage('tools')" id="nav-tools">Tools</a>
+</nav>
+<div class="status-row">
+  <div class="status-box"><div class="s-label">Uptime</div><div class="s-val" id="s-uptime">...</div></div>
+  <div class="status-box"><div class="s-label">CPU</div><div class="s-val" id="s-cpu">...</div></div>
+  <div class="status-box"><div class="s-label">Memory</div><div class="s-val" id="s-memory">...</div></div>
+  <div class="status-box"><div class="s-label">Disk</div><div class="s-val" id="s-disk">...</div></div>
+</div>
+
+<!-- System Page -->
+<div class="page active" id="page-system">
+  <!-- Row 1: Health, Tool Stats, Storage -->
+  <div class="grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:6px">System Health</div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <div id="healthScore" style="font-size:2rem;font-weight:700;color:#3fb950">--</div>
+        <div style="font-size:.75rem;color:#8b949e">
+          <div>CPU: <span id="healthCpu">--</span>%</div>
+          <div>MEM: <span id="healthMem">--</span>%</div>
+          <div>DISK: <span id="healthDisk">--</span>%</div>
+        </div>
+      </div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:6px">Tool Usage Today</div>
+      <div style="font-size:.85rem;color:#c9d1d9;line-height:1.6">
+        <div><span id="toolCalls">--</span> calls</div>
+        <div><span id="toolSuccess">--</span>% success</div>
+        <div><span id="toolAvg">--</span>ms avg</div>
+      </div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:6px">Storage</div>
+      <div style="font-size:.85rem;color:#c9d1d9;line-height:1.6">
+        <div>KV: <span id="storageKv">--</span> entries</div>
+        <div>Logs: <span id="storageLogs">--</span></div>
+        <div>Conversations: <span id="storageConv">--</span></div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Row 2: Active Sessions, Recent Errors, Recent Deployments -->
+  <div class="grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:6px">Active Sessions</div>
+      <div style="font-size:.85rem;color:#c9d1d9;line-height:1.6">
+        <div>MCP: <span id="sessionMcp">--</span> clients</div>
+        <div>Agent: <span id="sessionAgent">--</span></div>
+        <div>Cron: <span id="sessionCron">--</span> jobs</div>
+        <div>Watches: <span id="sessionWatches">--</span> active</div>
+        <div id="sessionDetails" class="session-details"><div class="empty" style="padding:2px 0">No MCP sessions</div></div>
+      </div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:6px">Recent Errors</div>
+      <div id="recentErrors" style="font-size:.78rem;color:#f85149;line-height:1.5">
+        <div class="empty" style="padding:4px 0">No recent errors</div>
+      </div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:6px">Recent Deployments</div>
+      <div id="recentDeployments" style="font-size:.78rem;color:#c9d1d9;line-height:1.5">
+        <div class="empty" style="padding:4px 0">No deployment info</div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Row 3: Local LLM (full width) -->
+  <div class="section-title" style="margin-bottom:8px">Local LLM</div>
+  <div id="llmStatus"><div class="empty">Checking...</div></div>
+</div>
+
+<!-- Activity Page -->
+<div class="page" id="page-activity">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div class="section-title" style="margin:0">Activity Log (<span id="logCount">0</span>)</div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-sm btn-outline" onclick="clearData('logs')" title="Clear activity log"><i class="fas fa-trash"></i> Clear Log</button>
+      <button class="btn btn-sm btn-outline" onclick="clearData('all')" title="Clear all data"><i class="fas fa-trash-alt"></i> Clear All</button>
+    </div>
+  </div>
+  <div class="search-bar">
+    <input type="text" id="logSearch" placeholder="Search tool name, args, or output..." oninput="filterLogs()">
+    <select id="logSourceFilter" onchange="filterLogs()">
+      <option value="">All Sources</option>
+      <option value="mcp">MCP</option>
+      <option value="agent">Agent</option>
+      <option value="unknown">Unknown</option>
+    </select>
+    <select id="logStatusFilter" onchange="filterLogs()">
+      <option value="">All Status</option>
+      <option value="ok">OK</option>
+      <option value="fail">Failed</option>
+    </select>
+  </div>
+  <div id="logList" style="max-height:600px;overflow-y:auto"></div>
+</div>
+
+<!-- Data Page -->
+<div class="page" id="page-data">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div class="section-title" style="margin:0">Stored Data (<span id="kvCount">0</span>)</div>
+    <button class="btn btn-sm btn-outline" onclick="clearData('kv')" title="Clear all KV data"><i class="fas fa-trash"></i> Clear KV</button>
+  </div>
+  <div class="search-bar">
+    <input type="text" id="kvSearch" placeholder="Search keys or values..." oninput="filterKV()">
+    <select id="kvProjectFilter" onchange="filterKV()">
+      <option value="">All Projects</option>
+    </select>
+    <select id="kvAgeFilter" onchange="filterKV()">
+      <option value="all">All Time</option>
+      <option value="today">Today</option>
+      <option value="week">This Week</option>
+      <option value="month">This Month</option>
+    </select>
+  </div>
+  <div class="card" id="kvList" style="max-height:600px;overflow-y:auto;padding:8px 16px"></div>
+</div>
+
+<!-- Config Page -->
+<div class="page" id="page-config">
+  <div class="section-title">Environment Configuration</div>
+  <div class="card" id="configList" style="max-height:600px;overflow-y:auto;padding:8px 16px"></div>
+</div>
+
+<!-- Agent Page -->
+<div class="page" id="page-agent">
+  <div class="section-title">Run Agent Task</div>
+  <textarea class="agent-goal" id="agentGoal" rows="3" placeholder="Describe what you want the agent to do...&#10;Example: check disk usage, store the result, and tell me the summary"></textarea>
+  <div style="display:flex;gap:8px;margin-bottom:16px">
+    <button class="btn" id="agentGo" onclick="runAgent()">Go</button>
+    <button class="btn btn-danger" id="agentStop" onclick="stopAgent()" disabled>Stop</button>
+  </div>
+  <div class="section-title">Output</div>
+  <div class="agent-log" id="agentLog"><span class="empty">Submit a task above</span></div>
+  <div style="margin-top:16px">
+    <div class="section-title" style="cursor:pointer" onclick="toggleHistory()">History â–¾</div>
+    <div id="agentHistory" style="display:none;margin-top:8px"></div>
+  </div>
+</div>
+
+<!-- Database Page -->
+<div class="page" id="page-database">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div class="section-title" style="margin:0">Database Management</div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-sm btn-outline" onclick="loadDbStats()" title="Refresh stats"><i class="fas fa-sync"></i> Refresh</button>
+      <button class="btn btn-sm btn-outline" onclick="createBackup()" title="Create backup"><i class="fas fa-download"></i> Backup</button>
+    </div>
+  </div>
+  
+  <div class="grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:6px">Database Size</div>
+      <div style="font-size:1.5rem;font-weight:700;color:#58a6ff" id="dbSize">--</div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:6px">Tables</div>
+      <div style="font-size:1.5rem;font-weight:700;color:#3fb950" id="dbTables">--</div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:6px">WAL Mode</div>
+      <div style="font-size:1.5rem;font-weight:700;color:#3fb950" id="dbWal">--</div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:6px">Cache Hit</div>
+      <div style="font-size:1.5rem;font-weight:700;color:#3fb950" id="dbCache">--</div>
+    </div>
+  </div>
+  
+  <div class="section-title" style="margin-bottom:8px">Schema Browser</div>
+  <div class="card" style="padding:16px;margin-bottom:16px;max-height:400px;overflow-y:auto" id="dbSchema"></div>
+  
+  <div class="section-title" style="margin-bottom:8px">Query Editor</div>
+  <div class="card" style="padding:16px;margin-bottom:16px">
+    <textarea id="dbQuery" rows="4" placeholder="SELECT * FROM kv_store LIMIT 10" style="width:100%;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;padding:8px;font-family:var(--font);font-size:13px;resize:vertical"></textarea>
+    <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+      <button class="btn" onclick="runQuery()">Run Query</button>
+      <label style="display:flex;align-items:center;gap:6px;color:#8b949e;font-size:.85rem">
+        <input type="checkbox" id="dbReadonly" checked> Readonly
+      </label>
+    </div>
+    <div id="dbQueryResult" style="margin-top:12px;max-height:400px;overflow:auto"></div>
+  </div>
+  
+  <div class="section-title" style="margin-bottom:8px">Full-Text Search</div>
+  <div class="card" style="padding:16px;margin-bottom:16px">
+    <div style="display:flex;gap:8px">
+      <input type="text" id="dbSearchQuery" placeholder="Search terms..." style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;padding:8px;font-family:var(--font)">
+      <button class="btn" onclick="runDbSearch()">Search</button>
+    </div>
+    <div id="dbSearchResult" style="margin-top:12px;max-height:400px;overflow:auto"></div>
+  </div>
+  
+  <div class="section-title" style="margin-bottom:8px">Migrations</div>
+  <div class="card" style="padding:16px" id="dbMigrations"></div>
+</div>
+
+<!-- Tools Page -->
+<div class="page" id="page-tools">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div class="section-title" style="margin:0">Tool Catalog (<span id="toolCount">0</span>)</div>
+  </div>
+  <div class="search-bar">
+    <input type="text" id="toolSearch" placeholder="Search tools by name or description..." oninput="filterTools()">
+    <select id="toolCategoryFilter" onchange="filterTools()">
+      <option value="">All Categories</option>
+    </select>
+  </div>
+  <div id="toolList"></div>
+</div>
+
+<!-- Edit Modal -->
+<div class="modal-overlay" id="editModal">
+  <div class="modal">
+    <h3>Edit KV Entry</h3>
+    <div style="margin-bottom:8px;color:#8b949e;font-size:.82rem">Key: <span id="editKey" style="color:#ffa657;font-family:var(--font)"></span></div>
+    <div style="margin-bottom:8px;color:#8b949e;font-size:.82rem">Project: <input type="text" id="editProject" placeholder="Global (leave empty)" style="background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;padding:4px 8px;font-family:var(--font);font-size:.82rem;margin-left:8px"></div>
+    <textarea id="editValue"></textarea>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeEditModal()">Cancel</button>
+      <button class="btn" onclick="saveKVEdit()">Save</button>
+    </div>
+  </div>
+</div>
+
+<footer>refreshes every 10s</footer>
+
+<script src="/static/dashboard.js"></script>
+</body>
+</html>`
