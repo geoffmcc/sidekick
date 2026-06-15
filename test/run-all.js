@@ -20,6 +20,7 @@ const suites = [
   { file: 'test/deploy-scripts.test.js', critical: false, description: 'Deploy script checks' },
   { file: 'test/tools.test.js', critical: false, description: 'Core tool behavior' },
   { file: 'test/new-tools.test.js', critical: false, description: 'Extended tool behavior' },
+  { file: 'test/evolve.test.js', critical: false, description: 'Evolve tool and retention behavior' },
   { file: 'test/db-tools.test.js', critical: false, description: 'Database tools behavior' },
   { file: 'test/integration.test.js', critical: false, description: 'Integration behavior' },
   { file: 'test/dashboard-api.test.js', critical: false, description: 'Dashboard API behavior' },

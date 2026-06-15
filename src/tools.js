@@ -3418,6 +3418,9 @@ const MAX_PROPOSALS_PER_DAY = 10;
 const CONFIDENCE_THRESHOLD = 70;
 const AUTO_APDOCS_THRESHOLD = 90;
 const SANDBOX_TIMEOUT = 120000;
+const EVOLVE_RETENTION_DAYS = parseInt(process.env.SIDEKICK_EVOLVE_RETENTION_DAYS || "30", 10);
+const EVOLVE_AUTO_CLEANUP_SIZE_THRESHOLD = 100 * 1024; // 100KB
+const EVOLVE_AUTO_CLEANUP_COUNT_THRESHOLD = 50;
 
 function loadEvolve() {
   if (!fs.existsSync(EVOLVE_FILE)) return { proposals: [], history: [], queue: [], docs: [] };
@@ -3425,10 +3428,69 @@ function loadEvolve() {
     const d = JSON.parse(fs.readFileSync(EVOLVE_FILE, "utf-8"));
     if (!d.queue) d.queue = [];
     if (!d.docs) d.docs = [];
+    
+    // Automatic cleanup if thresholds exceeded
+    const fileSize = fs.statSync(EVOLVE_FILE).size;
+    const proposalCount = d.proposals.length;
+    
+    if (fileSize > EVOLVE_AUTO_CLEANUP_SIZE_THRESHOLD || proposalCount > EVOLVE_AUTO_CLEANUP_COUNT_THRESHOLD) {
+      const cleanupResult = evolveCleanup(d, false);
+      if (cleanupResult.deleted > 0) {
+        saveEvolve(d);
+        console.log(`[Evolve] Auto-cleanup: deleted ${cleanupResult.deleted} old entries`);
+      }
+    }
+    
     return d;
   } catch {
     return { proposals: [], history: [], queue: [], docs: [] };
   }
+}
+
+function evolveCleanup(evolve, confirm = false) {
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - EVOLVE_RETENTION_DAYS);
+  const cutoffISO = cutoffDate.toISOString();
+  
+  // Find proposals to delete (not approved, older than retention period)
+  const toDelete = evolve.proposals.filter(p => {
+    if (p.status === "approved") return false; // Keep approved forever
+    if (!p.created) return false;
+    return p.created < cutoffISO;
+  });
+  
+  // Find queue entries to delete (not pending, older than retention period)
+  const queueToDelete = evolve.queue.filter(q => {
+    if (q.status === "pending") return false;
+    if (!q.added) return false;
+    return q.added < cutoffISO;
+  });
+  
+  if (!confirm) {
+    // Preview mode
+    return {
+      deleted: toDelete.length + queueToDelete.length,
+      proposals: toDelete.map(p => ({ id: p.id, status: p.status, created: p.created, title: p.title })),
+      queue: queueToDelete.map(q => ({ id: q.id, status: q.status, added: q.added })),
+      retentionDays: EVOLVE_RETENTION_DAYS,
+      cutoffDate: cutoffISO
+    };
+  }
+  
+  // Actually delete
+  const deletedIds = new Set(toDelete.map(p => p.id));
+  evolve.proposals = evolve.proposals.filter(p => !deletedIds.has(p.id));
+  
+  const deletedQueueIds = new Set(queueToDelete.map(q => q.id));
+  evolve.queue = evolve.queue.filter(q => !deletedQueueIds.has(q.id));
+  
+  return {
+    deleted: toDelete.length + queueToDelete.length,
+    proposalsDeleted: toDelete.length,
+    queueDeleted: queueToDelete.length,
+    retentionDays: EVOLVE_RETENTION_DAYS,
+    cutoffDate: cutoffISO
+  };
 }
 
 function saveEvolve(evolve) {
@@ -3865,7 +3927,34 @@ async function sidekick_evolve({ action, id, proposal, approve, test }) {
     return { content: [{ type: "text", text: `# Doc Sync\n\nApproved docs proposals: ${approved.length}\nAuto-applied (conf >= ${AUTO_APDOCS_THRESHOLD}): ${autoApplied.length}\nDiscord notified: ${notified.length}\n${autoApplied.length > 0 ? `\nApplied:\n${autoApplied.map(id => `- ${id}`).join("\n")}` : ""}` }] };
   }
 
-  return { content: [{ type: "text", text: "Unknown action. Use: analyze, propose, list, test, approve, reject, report, sync_docs" }], isError: true };
+  if (action === "cleanup") {
+    const confirm = args.confirm === true;
+    const result = evolveCleanup(evolve, confirm);
+    
+    if (confirm) {
+      saveEvolve(evolve);
+      return { content: [{ type: "text", text: `# Evolve Cleanup Complete\n\nDeleted ${result.deleted} entries (${result.proposalsDeleted} proposals, ${result.queueDeleted} queue entries)\nRetention: ${result.retentionDays} days\nCutoff: ${result.cutoffDate}` }] };
+    } else {
+      // Preview mode
+      if (result.deleted === 0) {
+        return { content: [{ type: "text", text: `# Evolve Cleanup Preview\n\nNo entries older than ${result.retentionDays} days (cutoff: ${result.cutoffDate})\nApproved proposals are kept forever.` }] };
+      }
+      
+      let msg = `# Evolve Cleanup Preview\n\nWould delete ${result.deleted} entries (${result.proposals.length} proposals, ${result.queue.length} queue entries)\nRetention: ${result.retentionDays} days\nCutoff: ${result.cutoffDate}\nApproved proposals are kept forever.\n\n## Proposals to Delete\n`;
+      msg += result.proposals.map(p => `- ${p.id} | ${p.status} | ${p.created} | ${p.title}`).join("\n");
+      
+      if (result.queue.length > 0) {
+        msg += `\n\n## Queue Entries to Delete\n`;
+        msg += result.queue.map(q => `- ${q.id} | ${q.status} | ${q.added}`).join("\n");
+      }
+      
+      msg += `\n\nTo delete, run: sidekick_evolve action="cleanup" confirm=true`;
+      
+      return { content: [{ type: "text", text: msg }] };
+    }
+  }
+
+  return { content: [{ type: "text", text: "Unknown action. Use: analyze, propose, list, test, approve, reject, report, sync_docs, cleanup" }], isError: true };
 }
 
 // --- Orchestrate Tool ---
@@ -7510,7 +7599,7 @@ const TOOL_DEFS = [
   { name: "sidekick_template", description: "Render Handlebars templates with data", args: { template: "string (Handlebars template)", data: "string|object (template data)" } },
   { name: "sidekick_queue", description: "Persistent task queue with priorities", args: { action: "string (add|list|process|remove|clear)", id: "number (optional, task id for remove)", tool: "string (optional, tool name for add)", args: "object (optional, tool args for add)", priority: "number (optional, priority for add, default 0)", status: "string (optional, status filter for list/clear)" } },
   { name: "sidekick_retry", description: "Retry tool calls with exponential backoff", args: { tool: "string (tool to retry)", args: "object (optional, tool args)", max_attempts: "number (optional, default 3)", backoff: "string (optional, exponential|linear|fixed, default exponential)", initial_delay: "number (optional, ms, default 1000)" } },
-  { name: "sidekick_evolve", description: "Self-modification with safety: LLM-powered proposals, sandbox testing, confidence filtering, auto-apply docs", args: { action: "string (analyze|propose|list|test|approve|reject|report|sync_docs)", id: "string (optional, proposal id for test/approve/reject)", proposal: "string (optional, proposal description or 'auto' for LLM generation)", approve: "boolean (optional, deprecated - use action=approve)", test: "boolean (optional, deprecated - use action=test)" } },
+  { name: "sidekick_evolve", description: "Self-modification with safety: LLM-powered proposals, sandbox testing, confidence filtering, auto-apply docs, configurable retention", args: { action: "string (analyze|propose|list|test|approve|reject|report|sync_docs|cleanup)", id: "string (optional, proposal id for test/approve/reject)", proposal: "string (optional, proposal description or 'auto' for LLM generation)", approve: "boolean (optional, deprecated - use action=approve)", test: "boolean (optional, deprecated - use action=test)", confirm: "boolean (optional, for cleanup action - actually delete old entries)" } },
   { name: "sidekick_orchestrate", description: "Multi-agent coordination: create task graphs, execute subtasks with dependencies, track progress", args: { action: "string (create|execute|list|status|cancel)", id: "number (optional, task id for execute/status/cancel)", task_name: "string (optional, task name for create)", subtasks: "array (optional, subtask definitions for create)", dependencies: "object (optional, dependency map for create)", timeout: "number (optional, timeout in ms, default 1800000)" } },
   { name: "sidekick_predict", description: "Anticipatory intelligence: analyze patterns, predict needs, track prediction usefulness", args: { action: "string (analyze|list|feedback|suggest)", id: "string (optional, prediction id for feedback)", feedback: "boolean (optional, true if useful, false if not)" } },
   { name: "sidekick_debug_tool", description: "Structured debugging cache with persistent storage for cross-session debugging. Store findings, recall past investigations, cleanup old entries.", args: { action: "string (store|recall|cleanup|start|stop|cache|get|status|clear)", session_name: "string (optional, session identifier for legacy actions)", key: "string (optional, cache key for get/cache, or debug key for cleanup)", value: "string (optional, value to cache/store)", service: "string (optional, service name for store/recall)", issue: "string (optional, issue description for store)", redact: "boolean (optional, default true - set false to skip redaction)" } },
