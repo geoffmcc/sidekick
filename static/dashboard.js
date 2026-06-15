@@ -1058,13 +1058,16 @@ function createBackup() {
 
 // -- Tools -- //
 let toolStats = {};
+let allProcedures = [];
 
 function loadTools(){
   Promise.all([
     authFetch('/api/tools').then(r=>r.json()),
-    authFetch('/api/stats').then(r=>r.json())
-  ]).then(([toolsData, statsData]) => {
+    authFetch('/api/stats').then(r=>r.json()),
+    authFetch('/api/procedures').then(r=>r.json())
+  ]).then(([toolsData, statsData, procData]) => {
     allTools = toolsData.tools || [];
+    allProcedures = procData.procedures || [];
     toolStats = {};
     (statsData.stats || []).forEach(s => {
       toolStats[s.name] = s;
@@ -1126,6 +1129,31 @@ function renderTools(){
     }
     html += '</div>';
   }
+  
+  // Add Evolved Procedures section
+  if (allProcedures.length > 0) {
+    html += '<div class="tool-category-header" style="margin-top:24px">';
+    html += '<i class="fas fa-magic"></i>';
+    html += '<span class="cat-name">Evolved Procedures</span>';
+    html += '<span class="cat-count">' + allProcedures.length + '</span>';
+    html += '</div>';
+    html += '<div class="tool-grid">';
+    for (const p of allProcedures) {
+      html += '<div class="tool-card" onclick="showProcedureDetail(\'' + esc(p.name) + '\')">';
+      html += '<div class="tool-card-name">' + esc(p.name) + '</div>';
+      html += '<div class="tool-card-desc">' + esc(p.description) + '</div>';
+      html += '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">';
+      html += '<span style="font-size:.68rem;color:#bc8cff;border:1px solid #30363d;border-radius:4px;padding:2px 6px"><i class="fas fa-magic"></i> evolved</span>';
+      html += '<span style="font-size:.68rem;color:#8b949e;border:1px solid #30363d;border-radius:4px;padding:2px 6px">' + p.steps.length + ' steps</span>';
+      if (p.useCount > 0) {
+        html += '<span style="font-size:.68rem;color:#3fb950;border:1px solid #30363d;border-radius:4px;padding:2px 6px">used ' + p.useCount + 'x</span>';
+      }
+      html += '</div>';
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+  
   container.innerHTML = html;
 }
 
@@ -1162,6 +1190,58 @@ function showToolDetail(name){
     }
     html += '</div></div>';
   }
+  html += '<div style="margin-top:16px;text-align:right"><button class="btn btn-outline" onclick="this.closest(\'.tool-detail-overlay\').classList.remove(\'active\')">Close</button></div>';
+  html += '</div></div>';
+  const existing = document.querySelector('.tool-detail-overlay');
+  if (existing) existing.remove();
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+
+function showProcedureDetail(name){
+  const p = allProcedures.find(x => x.name === name);
+  if (!p) return;
+  let html = '<div class="tool-detail-overlay active" onclick="if(event.target===this)this.classList.remove(\'active\')">';
+  html += '<div class="tool-detail">';
+  html += '<h3><i class="fas fa-magic" style="margin-right:8px;color:#bc8cff"></i>' + esc(p.name) + '</h3>';
+  html += '<div class="td-desc">' + esc(p.description) + '</div>';
+  html += '<div class="td-section"><div class="td-label">Type</div><div style="color:#bc8cff"><i class="fas fa-magic"></i> Evolved Procedure</div></div>';
+  html += '<div class="td-section"><div class="td-label">Created</div><div style="color:#8b949e">' + (p.createdAt ? new Date(p.createdAt).toLocaleString() : 'Unknown') + '</div></div>';
+  if (p.lastUsed) {
+    html += '<div class="td-section"><div class="td-label">Last Used</div><div style="color:#8b949e">' + new Date(p.lastUsed).toLocaleString() + '</div></div>';
+  }
+  html += '<div class="td-section"><div class="td-label">Usage Count</div><div style="color:#3fb950">' + (p.useCount || 0) + ' times</div></div>';
+  
+  if (p.parameters && Object.keys(p.parameters).length > 0) {
+    html += '<div class="td-section"><div class="td-label">Parameters</div><div class="td-args">';
+    for (const [k, v] of Object.entries(p.parameters)) {
+      html += '<div class="td-arg-row"><span class="td-arg-name">' + esc(k) + '</span><span class="td-arg-type">' + esc(v.type || 'string') + '</span>' + (v.required ? '' : ' <span style="color:#484f58;font-size:.75rem">(optional)</span>') + '</div>';
+    }
+    html += '</div></div>';
+  }
+  
+  if (p.steps && p.steps.length > 0) {
+    html += '<div class="td-section"><div class="td-label">Steps (' + p.steps.length + ')</div>';
+    html += '<div style="margin-top:8px">';
+    for (let i = 0; i < p.steps.length; i++) {
+      const step = p.steps[i];
+      html += '<div style="padding:8px;margin-bottom:8px;background:#0d1117;border:1px solid #21262d;border-radius:6px">';
+      html += '<div style="font-size:.75rem;color:#58a6ff;margin-bottom:4px">Step ' + (i+1) + ': ' + esc(step.tool) + '</div>';
+      html += '<div style="font-size:.75rem;color:#8b949e;font-family:monospace;white-space:pre-wrap">';
+      html += esc(JSON.stringify(step.args, null, 2));
+      html += '</div></div>';
+    }
+    html += '</div></div>';
+  }
+  
+  if (p.triggerPhrases && p.triggerPhrases.length > 0) {
+    html += '<div class="td-section"><div class="td-label">Trigger Phrases</div>';
+    html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">';
+    for (const phrase of p.triggerPhrases) {
+      html += '<span style="font-size:.75rem;color:#c9d1d9;background:#21262d;padding:4px 8px;border-radius:4px">' + esc(phrase) + '</span>';
+    }
+    html += '</div></div>';
+  }
+  
   html += '<div style="margin-top:16px;text-align:right"><button class="btn btn-outline" onclick="this.closest(\'.tool-detail-overlay\').classList.remove(\'active\')">Close</button></div>';
   html += '</div></div>';
   const existing = document.querySelector('.tool-detail-overlay');
