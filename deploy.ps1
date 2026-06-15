@@ -2,7 +2,8 @@ param(
   [switch]$Force,
   [string]$IP = "192.168.1.10",
   [string]$Password = $env:SIDEKICK_INITIAL_PASSWORD,
-  [string]$InitialUser = ""
+  [string]$InitialUser = "",
+  [switch]$Scp
 )
 
 $ErrorActionPreference = "Stop"
@@ -254,39 +255,111 @@ try {
   Write-Host ""
   Write-Host "--- Deploying Files ---" -ForegroundColor Cyan
 
-  Write-Host "  Syncing source files..." -ForegroundColor Green
-  $files = @("tools.js", "index.js", "dashboard.js", "agent.js", "redact.js", "env.js", "db.js")
-  foreach ($file in $files) {
-    $localPath = Join-Path $PROJECT_DIR "src\$file"
-    if (-not (Test-Path $localPath)) {
-      Write-Host "    Warning: $file not found, skipping" -ForegroundColor Yellow
-      continue
-    }
-    if (-not (Copy-ToVPS $localPath "$REMOTE_DIR/src/$file")) {
-      throw "Failed to copy $file"
-    }
-    $changed += $file
-  }
+  if ($Scp) {
+    Write-Host "  SCP mode: syncing files individually (airgap/offline)" -ForegroundColor Yellow
 
-  if (-not (Copy-ToVPS (Join-Path $PROJECT_DIR "package.json") "$REMOTE_DIR/package.json")) {
-    throw "Failed to copy package.json"
-  }
-  $changed += "package.json"
-
-  $localEnv = Join-Path $PROJECT_DIR ".env"
-  if (Test-Path $localEnv) {
-    $remoteEnvExists = Run-Remote "test -f $REMOTE_DIR/.env && echo YES || echo NO"
-    if ($remoteEnvExists -match "YES") {
-      Write-Host "  Remote .env exists, skipping (preserves machine-specific settings)" -ForegroundColor Yellow
-    } else {
-      Write-Host "  Syncing .env (first deploy)..." -ForegroundColor Green
-      if (-not (Copy-ToVPS $localEnv "$REMOTE_DIR/.env")) {
-        throw "Failed to copy .env"
+    Write-Host "  Syncing source files..." -ForegroundColor Green
+    $files = @("tools.js", "index.js", "dashboard.js", "agent.js", "redact.js", "env.js", "db.js")
+    foreach ($file in $files) {
+      $localPath = Join-Path $PROJECT_DIR "src\$file"
+      if (-not (Test-Path $localPath)) {
+        Write-Host "    Warning: $file not found, skipping" -ForegroundColor Yellow
+        continue
       }
-      $changed += ".env"
+      if (-not (Copy-ToVPS $localPath "$REMOTE_DIR/src/$file")) {
+        throw "Failed to copy $file"
+      }
+      $changed += $file
+    }
+
+    if (-not (Copy-ToVPS (Join-Path $PROJECT_DIR "package.json") "$REMOTE_DIR/package.json")) {
+      throw "Failed to copy package.json"
+    }
+    $changed += "package.json"
+
+    $localEnv = Join-Path $PROJECT_DIR ".env"
+    if (Test-Path $localEnv) {
+      $remoteEnvExists = Run-Remote "test -f $REMOTE_DIR/.env && echo YES || echo NO"
+      if ($remoteEnvExists -match "YES") {
+        Write-Host "  Remote .env exists, skipping (preserves machine-specific settings)" -ForegroundColor Yellow
+      } else {
+        Write-Host "  Syncing .env (first deploy)..." -ForegroundColor Green
+        if (-not (Copy-ToVPS $localEnv "$REMOTE_DIR/.env")) {
+          throw "Failed to copy .env"
+        }
+        $changed += ".env"
+      }
+    } else {
+      Write-Host "  No local .env found, skipping" -ForegroundColor Yellow
     }
   } else {
-    Write-Host "  No local .env found, skipping" -ForegroundColor Yellow
+    Write-Host "  Git deploy mode" -ForegroundColor Green
+
+    # Detect repo URL from local git remote, fallback to main repo
+    $repoUrl = git -C $PROJECT_DIR remote get-url origin 2>$null
+    if (-not $repoUrl) { $repoUrl = "https://github.com/geoffmcc/sidekick.git" }
+
+    $remoteHasGit = Run-Remote "test -d $REMOTE_DIR/.git && echo YES || echo NO"
+
+    if ($remoteHasGit -match "YES") {
+      Write-Host "  Pulling latest changes..." -ForegroundColor Yellow
+      $pullOutput = Run-Remote "cd $REMOTE_DIR && git pull --ff-only 2>&1"
+      if ($LASTEXITCODE -ne 0) {
+        Write-Host "  ERROR: git pull failed" -ForegroundColor Red
+        Write-Host $pullOutput
+        throw "git pull failed"
+      }
+    } else {
+      Write-Host "  Cloning repository..." -ForegroundColor Yellow
+      
+      # Backup existing data and .env before replacing with git clone
+      Write-Host "  Backing up existing data..." -ForegroundColor Yellow
+      Run-Remote "mkdir -p /tmp/sidekick-backup && cp -r $REMOTE_DIR/data /tmp/sidekick-backup/ 2>/dev/null; cp $REMOTE_DIR/.env /tmp/sidekick-backup/ 2>/dev/null; echo DONE" 2>$null
+      
+      # Remove existing directory (git clone requires empty or non-existent dir)
+      Write-Host "  Removing old deployment directory..." -ForegroundColor Yellow
+      $rmOutput = Run-Remote "rm -rf $REMOTE_DIR && mkdir -p $REMOTE_DIR" 2>&1
+      if ($LASTEXITCODE -ne 0) {
+        Write-Host "  ERROR: Failed to remove old directory" -ForegroundColor Red
+        Write-Host $rmOutput
+        throw "Failed to remove old directory"
+      }
+      
+      # Clone fresh
+      $cloneOutput = Run-Remote "git clone '$repoUrl' $REMOTE_DIR 2>&1"
+      if ($LASTEXITCODE -ne 0) {
+        Write-Host "  ERROR: git clone failed" -ForegroundColor Red
+        Write-Host $cloneOutput
+        Write-Host "  Backup preserved at /tmp/sidekick-backup/ on remote" -ForegroundColor Yellow
+        throw "git clone failed"
+      }
+      
+      # Restore data and .env from backup
+      Write-Host "  Restoring data and .env from backup..." -ForegroundColor Yellow
+      Run-Remote "cp -r /tmp/sidekick-backup/data $REMOTE_DIR/ 2>/dev/null; cp /tmp/sidekick-backup/.env $REMOTE_DIR/ 2>/dev/null; echo DONE" 2>$null
+      
+      # Cleanup backup on success
+      Run-Remote "rm -rf /tmp/sidekick-backup" 2>$null
+      Write-Host "  Backup cleaned up" -ForegroundColor Green
+    }
+    $changed += "git"
+
+    # Handle .env on first deploy
+    $localEnv = Join-Path $PROJECT_DIR ".env"
+    if (Test-Path $localEnv) {
+      $remoteEnvExists = Run-Remote "test -f $REMOTE_DIR/.env && echo YES || echo NO"
+      if ($remoteEnvExists -notmatch "YES") {
+        Write-Host "  Syncing .env (first deploy)..." -ForegroundColor Green
+        if (-not (Copy-ToVPS $localEnv "$REMOTE_DIR/.env")) {
+          throw "Failed to copy .env"
+        }
+        $changed += ".env"
+      } else {
+        Write-Host "  Remote .env exists, preserving" -ForegroundColor Yellow
+      }
+    } else {
+      Write-Host "  No local .env found, skipping" -ForegroundColor Yellow
+    }
   }
 
   # Generate version.json from local git

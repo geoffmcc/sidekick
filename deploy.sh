@@ -4,6 +4,7 @@ set -euo pipefail
 # Parse arguments
 IP="192.168.1.10"
 INITIAL_USER=""
+SCP_MODE=false
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -15,9 +16,13 @@ while [[ $# -gt 0 ]]; do
       INITIAL_USER="$2"
       shift 2
       ;;
+    --scp)
+      SCP_MODE=true
+      shift
+      ;;
     *)
       echo "Unknown parameter: $1"
-      echo "Usage: $0 [-IP <ip>] [-InitialUser <user>]"
+      echo "Usage: $0 [-IP <ip>] [-InitialUser <user>] [--scp]"
       exit 1
       ;;
   esac
@@ -251,39 +256,104 @@ initialize_remote
 echo ""
 echo -e "\033[36m--- Deploying Files ---\033[0m"
 
-echo -e "\033[32mSyncing source files...\033[0m"
-for f in tools.js index.js dashboard.js agent.js redact.js env.js db.js; do
-  if [ ! -f "$PROJECT_DIR/src/$f" ]; then
-    echo -e "  \033[33mWarning: src/$f not found, skipping\033[0m"
-    continue
-  fi
-  if ! copy_to_vps "$PROJECT_DIR/src/$f" "$REMOTE_DIR/src/$f" >/dev/null; then
-    echo -e "\033[31mERROR: Failed to copy $f\033[0m"
-    exit 1
-  fi
-  changed+=("$f")
-done
+if [ "$SCP_MODE" = true ]; then
+  echo -e "\033[33mSCP mode: syncing files individually (airgap/offline)\033[0m"
 
-if ! copy_to_vps "$PROJECT_DIR/package.json" "$REMOTE_DIR/package.json" >/dev/null; then
-  echo -e "\033[31mERROR: Failed to copy package.json\033[0m"
-  exit 1
-fi
-changed+=("package.json")
-
-if [ -f "$PROJECT_DIR/.env" ]; then
-  remote_env_exists=$(run_remote "test -f $REMOTE_DIR/.env && echo YES || echo NO")
-  if [ "$remote_env_exists" = "YES" ]; then
-    echo -e "\033[33mRemote .env exists, skipping (preserves machine-specific settings)\033[0m"
-  else
-    echo -e "\033[32mSyncing .env (first deploy)...\033[0m"
-    if ! copy_to_vps "$PROJECT_DIR/.env" "$REMOTE_DIR/.env" >/dev/null; then
-      echo -e "\033[31mERROR: Failed to copy .env\033[0m"
+  echo -e "\033[32mSyncing source files...\033[0m"
+  for f in tools.js index.js dashboard.js agent.js redact.js env.js db.js; do
+    if [ ! -f "$PROJECT_DIR/src/$f" ]; then
+      echo -e "  \033[33mWarning: src/$f not found, skipping\033[0m"
+      continue
+    fi
+    if ! copy_to_vps "$PROJECT_DIR/src/$f" "$REMOTE_DIR/src/$f" >/dev/null; then
+      echo -e "\033[31mERROR: Failed to copy $f\033[0m"
       exit 1
     fi
-    changed+=(".env")
+    changed+=("$f")
+  done
+
+  if ! copy_to_vps "$PROJECT_DIR/package.json" "$REMOTE_DIR/package.json" >/dev/null; then
+    echo -e "\033[31mERROR: Failed to copy package.json\033[0m"
+    exit 1
+  fi
+  changed+=("package.json")
+
+  if [ -f "$PROJECT_DIR/.env" ]; then
+    remote_env_exists=$(run_remote "test -f $REMOTE_DIR/.env && echo YES || echo NO")
+    if [ "$remote_env_exists" = "YES" ]; then
+      echo -e "\033[33mRemote .env exists, skipping (preserves machine-specific settings)\033[0m"
+    else
+      echo -e "\033[32mSyncing .env (first deploy)...\033[0m"
+      if ! copy_to_vps "$PROJECT_DIR/.env" "$REMOTE_DIR/.env" >/dev/null; then
+        echo -e "\033[31mERROR: Failed to copy .env\033[0m"
+        exit 1
+      fi
+      changed+=(".env")
+    fi
+  else
+    echo -e "\033[33mNo local .env found, skipping\033[0m"
   fi
 else
-  echo -e "\033[33mNo local .env found, skipping\033[0m"
+  echo -e "\033[32mGit deploy mode\033[0m"
+
+  # Detect repo URL from local git remote, fallback to main repo
+  REPO_URL=$(git -C "$PROJECT_DIR" remote get-url origin 2>/dev/null || echo "https://github.com/geoffmcc/sidekick.git")
+
+  # Check if remote already has a git repo
+  remote_has_git=$(run_remote "test -d $REMOTE_DIR/.git && echo YES || echo NO" 2>/dev/null) || true
+
+  if [[ "$remote_has_git" == *"YES"* ]]; then
+    echo -e "  \033[33mPulling latest changes...\033[0m"
+    if ! run_remote "cd $REMOTE_DIR && git pull --ff-only 2>&1"; then
+      echo -e "\033[31mERROR: git pull failed\033[0m"
+      exit 1
+    fi
+  else
+    echo -e "  \033[33mCloning repository...\033[0m"
+    # Backup existing data and .env before replacing with git clone
+    echo -e "  \033[33mBacking up existing data...\033[0m"
+    run_remote "mkdir -p /tmp/sidekick-backup && cp -r $REMOTE_DIR/data /tmp/sidekick-backup/ 2>/dev/null; cp $REMOTE_DIR/.env /tmp/sidekick-backup/ 2>/dev/null; echo DONE" >/dev/null 2>&1 || true
+    
+    # Remove existing directory (git clone requires empty or non-existent dir)
+    echo -e "  \033[33mRemoving old deployment directory...\033[0m"
+    if ! run_remote "rm -rf $REMOTE_DIR && mkdir -p $REMOTE_DIR" >/dev/null 2>&1; then
+      echo -e "\033[31mERROR: Failed to remove old directory\033[0m"
+      exit 1
+    fi
+    
+    # Clone fresh
+    if ! run_remote "git clone '$REPO_URL' $REMOTE_DIR 2>&1"; then
+      echo -e "\033[31mERROR: git clone failed\033[0m"
+      echo -e "\033[33mBackup preserved at /tmp/sidekick-backup/ on remote\033[0m"
+      exit 1
+    fi
+    
+    # Restore data and .env from backup
+    echo -e "  \033[33mRestoring data and .env from backup...\033[0m"
+    run_remote "cp -r /tmp/sidekick-backup/data $REMOTE_DIR/ 2>/dev/null; cp /tmp/sidekick-backup/.env $REMOTE_DIR/ 2>/dev/null; echo DONE" >/dev/null 2>&1 || true
+    
+    # Cleanup backup on success
+    run_remote "rm -rf /tmp/sidekick-backup" >/dev/null 2>&1 || true
+    echo -e "  \033[32mBackup cleaned up\033[0m"
+  fi
+  changed+=("git")
+
+  # Handle .env on first deploy
+  if [ -f "$PROJECT_DIR/.env" ]; then
+    remote_env_exists=$(run_remote "test -f $REMOTE_DIR/.env && echo YES || echo NO")
+    if [ "$remote_env_exists" != "YES" ]; then
+      echo -e "\033[32mSyncing .env (first deploy)...\033[0m"
+      if ! copy_to_vps "$PROJECT_DIR/.env" "$REMOTE_DIR/.env" >/dev/null; then
+        echo -e "\033[31mERROR: Failed to copy .env\033[0m"
+        exit 1
+      fi
+      changed+=(".env")
+    else
+      echo -e "\033[33mRemote .env exists, preserving\033[0m"
+    fi
+  else
+    echo -e "\033[33mNo local .env found, skipping\033[0m"
+  fi
 fi
 
 echo ""
