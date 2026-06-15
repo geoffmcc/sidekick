@@ -3730,7 +3730,7 @@ function evolveProcessQueue(evolve) {
   return next || null;
 }
 
-async function sidekick_evolve({ action, id, proposal, approve, test }) {
+async function sidekick_evolve({ action, id, proposal, approve, test, confirm }) {
   const evolve = loadEvolve();
   const now = new Date().toISOString();
   const today = now.split("T")[0];
@@ -3928,7 +3928,6 @@ async function sidekick_evolve({ action, id, proposal, approve, test }) {
   }
 
   if (action === "cleanup") {
-    const confirm = args.confirm === true;
     const result = evolveCleanup(evolve, confirm);
     
     if (confirm) {
