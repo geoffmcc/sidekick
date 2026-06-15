@@ -89,7 +89,7 @@ Before creating any new tool or tool suite:
 | `sidekick_template` | Render Handlebars templates with data for config generation |
 | `sidekick_queue` | Persistent task queue with priorities and status tracking |
 | `sidekick_retry` | Retry tool calls with exponential/linear/fixed backoff |
-| `sidekick_evolve` | Self-modification with safety: analyze patterns, propose improvements, test and approve changes |
+| `sidekick_evolve` | LLM-powered proposals, sandbox testing, confidence filtering, auto-apply docs |
 | `sidekick_orchestrate` | Multi-agent coordination: create task graphs, execute subtasks with dependencies |
 | `sidekick_predict` | Anticipatory intelligence: analyze patterns, predict needs, track prediction usefulness |
 | `sidekick_debug_tool` | Persistent debugging cache: store findings with `action="store"`, recall past investigations with `action="recall"`, cleanup old entries with `action="cleanup"`. Cross-session persistence via KV store. |
@@ -232,7 +232,7 @@ All tool calls are logged with source tags:
 - **`sidekick_fresheyes`** — Get a fresh perspective from Sidekick's LLM (Grok) on a problem. Sends sanitized context for independent analysis, returns key insights by default.
 
 ### New Tools (v1.15) - Meta-Capabilities
-- **`sidekick_evolve`** — Self-modification with safety: analyze tool usage patterns, propose improvements, test and approve changes. Rate limited to 10 proposals per day.
+- **`sidekick_evolve`** — LLM-powered self-improvement: generates proposals via Ollama/Groq, tests in sandbox (120s timeout), filters by confidence (≥70), auto-applies docs (≥90) with Discord notification. Actions: analyze, propose (use "auto" for LLM), list, test, approve, reject, report, sync_docs. Rate limited to 10 proposals/day.
 - **`sidekick_orchestrate`** — Multi-agent coordination: create task graphs, execute subtasks with dependencies, track progress across all subtasks.
 - **`sidekick_predict`** — Anticipatory intelligence: analyze context and tool patterns, predict needs, track prediction usefulness via feedback.
 

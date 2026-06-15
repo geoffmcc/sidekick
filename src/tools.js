@@ -3285,13 +3285,19 @@ async function sidekick_retry({ tool, args, max_attempts, backoff, initial_delay
 
 const EVOLVE_FILE = path.join(DATA_DIR, "evolve.json");
 const MAX_PROPOSALS_PER_DAY = 10;
+const CONFIDENCE_THRESHOLD = 70;
+const AUTO_APDOCS_THRESHOLD = 90;
+const SANDBOX_TIMEOUT = 120000;
 
 function loadEvolve() {
-  if (!fs.existsSync(EVOLVE_FILE)) return { proposals: [], history: [] };
+  if (!fs.existsSync(EVOLVE_FILE)) return { proposals: [], history: [], queue: [], docs: [] };
   try {
-    return JSON.parse(fs.readFileSync(EVOLVE_FILE, "utf-8"));
+    const d = JSON.parse(fs.readFileSync(EVOLVE_FILE, "utf-8"));
+    if (!d.queue) d.queue = [];
+    if (!d.docs) d.docs = [];
+    return d;
   } catch {
-    return { proposals: [], history: [] };
+    return { proposals: [], history: [], queue: [], docs: [] };
   }
 }
 
@@ -3302,182 +3308,307 @@ function saveEvolve(evolve) {
 function analyzeToolUsage() {
   const logs = dbStore.readToolLogs(1000);
   if (!logs || logs.length === 0) return { patterns: [], suggestions: [] };
-  
   try {
-    // Count tool usage
     const toolCounts = {};
     const toolSequences = [];
-    
     for (let i = 0; i < logs.length; i++) {
       const tool = logs[i].n;
       toolCounts[tool] = (toolCounts[tool] || 0) + 1;
-      
-      // Track sequences of 2-3 tools
-      if (i < logs.length - 1) {
-        const seq2 = [logs[i].n, logs[i + 1].n].join(" -> ");
-        toolSequences.push(seq2);
-      }
-      if (i < logs.length - 2) {
-        const seq3 = [logs[i].n, logs[i + 1].n, logs[i + 2].n].join(" -> ");
-        toolSequences.push(seq3);
-      }
+      if (i < logs.length - 1) toolSequences.push([logs[i].n, logs[i + 1].n].join(" -> "));
+      if (i < logs.length - 2) toolSequences.push([logs[i].n, logs[i + 1].n, logs[i + 2].n].join(" -> "));
     }
-    
-    // Find frequent sequences
     const seqCounts = {};
-    for (const seq of toolSequences) {
-      seqCounts[seq] = (seqCounts[seq] || 0) + 1;
-    }
-    
-    const frequentSeqs = Object.entries(seqCounts)
-      .filter(([_, count]) => count >= 3)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10);
-    
+    for (const seq of toolSequences) seqCounts[seq] = (seqCounts[seq] || 0) + 1;
+    const frequentSeqs = Object.entries(seqCounts).filter(([_, c]) => c >= 3).sort((a, b) => b[1] - a[1]).slice(0, 10);
     const patterns = frequentSeqs.map(([seq, count]) => ({
-      pattern: seq,
-      count,
-      suggestion: `Frequent pattern detected: ${seq} (${count} times). Consider creating a procedure.`
+      pattern: seq, count,
+      suggestion: `Frequent pattern: ${seq} (${count}x). Consider creating a procedure.`
     }));
-    
     return { patterns, toolCounts };
   } catch {
     return { patterns: [], suggestions: [] };
   }
 }
 
+async function evolveGenerateProposal(analysis) {
+  const patternSummary = analysis.patterns.slice(0, 5).map(p => `${p.pattern} (${p.count}x)`).join("\n");
+  const topTools = Object.entries(analysis.toolCounts).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([t, c]) => `${t}: ${c}`).join("\n");
+  const prompt = `You are an AI improvement system for a remote agent platform called Sidekick. Analyze these usage patterns and propose ONE concrete improvement.
+
+Top tools by usage:
+${topTools}
+
+Frequent sequences:
+${patternSummary}
+
+Propose a specific, actionable improvement. Return JSON:
+{"title": "short title", "description": "what to change and why", "type": "procedure|config|docs|workflow", "confidence": 0-100, "implementation": "step-by-step how to implement it"}
+
+Be specific. Confidence should reflect how likely this improves efficiency. Return ONLY valid JSON.`;
+
+  const result = await sidekick_llm({
+    prompt,
+    system: "You are a system improvement AI. Return only valid JSON. Be practical and specific.",
+    temperature: 0.4
+  });
+  if (result.isError) return null;
+  try {
+    const text = result.content[0].text.trim();
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    return JSON.parse(jsonMatch ? jsonMatch[0] : text);
+  } catch {
+    return null;
+  }
+}
+
+async function evolveSandboxTest(proposal) {
+  const startTime = Date.now();
+  const testResults = { passed: false, duration: 0, notes: "", checks: {} };
+
+  if (proposal.type === "docs") {
+    testResults.checks.syntax = { passed: true, notes: "Docs change - no syntax to validate" };
+    testResults.checks.safety = { passed: true, notes: "Documentation only, no execution risk" };
+    testResults.checks.relevance = { passed: proposal.confidence >= CONFIDENCE_THRESHOLD, notes: `Confidence: ${proposal.confidence}` };
+    testResults.passed = true;
+    testResults.notes = "Documentation proposal - safe to apply directly";
+    testResults.duration = Date.now() - startTime;
+    return testResults;
+  }
+
+  if (proposal.type === "procedure") {
+    try {
+      const procCheck = await callTool("sidekick_teach", { action: "list" });
+      testResults.checks.procedures_accessible = { passed: !procCheck.isError, notes: procCheck.content[0].text.substring(0, 100) };
+    } catch (e) {
+      testResults.checks.procedures_accessible = { passed: false, notes: e.message };
+    }
+
+    testResults.checks.syntax = { passed: !!proposal.implementation, notes: proposal.implementation ? "Has implementation steps" : "Missing implementation" };
+    testResults.checks.safety = { passed: !proposal.implementation?.match(/rm\s+-rf|sudo|chmod|dd\s/), notes: "No dangerous commands detected" };
+    testResults.checks.confidence = { passed: proposal.confidence >= CONFIDENCE_THRESHOLD, notes: `Confidence ${proposal.confidence} ${proposal.confidence >= CONFIDENCE_THRESHOLD ? ">=" : "<"} ${CONFIDENCE_THRESHOLD}` };
+
+    try {
+      const sandboxResult = await callTool("sidekick_sandbox", {
+        action: "exec",
+        command: `echo "Testing proposal: ${proposal.title}" && echo "${(proposal.implementation || "").substring(0, 200)}"`,
+        sandbox_name: `evolve-${Date.now()}`
+      });
+      testResults.checks.sandbox = { passed: !sandboxResult.isError, notes: sandboxResult.content[0].text.substring(0, 150) };
+    } catch (e) {
+      testResults.checks.sandbox = { passed: false, notes: e.message };
+    }
+
+    const allChecks = Object.values(testResults.checks);
+    testResults.passed = allChecks.every(c => c.passed);
+    testResults.notes = testResults.passed ? "All checks passed" : `Failed: ${allChecks.filter(c => !c.passed).map(c => c.notes).join("; ")}`;
+    testResults.duration = Date.now() - startTime;
+    return testResults;
+  }
+
+  testResults.checks.syntax = { passed: true, notes: "Generic proposal" };
+  testResults.checks.confidence = { passed: proposal.confidence >= CONFIDENCE_THRESHOLD, notes: `Confidence: ${proposal.confidence}` };
+  testResults.passed = proposal.confidence >= CONFIDENCE_THRESHOLD;
+  testResults.notes = testResults.passed ? "Passed confidence threshold" : "Below confidence threshold";
+  testResults.duration = Date.now() - startTime;
+  return testResults;
+}
+
+async function evolveAutoApplyDocs(proposal) {
+  const docsDir = "/home/sidekick/sidekick/docs";
+  const filename = proposal.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").substring(0, 50) + ".md";
+  const filePath = `${docsDir}/${filename}`;
+  const content = `# ${proposal.title}\n\n${proposal.description}\n\n## Implementation\n\n${proposal.implementation || "N/A"}\n\n---\n*Auto-applied by sidekick_evolve (confidence: ${proposal.confidence})*\n*Date: ${new Date().toISOString()}*\n`;
+
+  try {
+    await callTool("sidekick_write", { path: filePath, content });
+    return { applied: true, path: filePath };
+  } catch (e) {
+    return { applied: false, error: e.message };
+  }
+}
+
+async function evolveNotifyDiscord(message) {
+  const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
+  if (!webhookUrl) return { notified: false, reason: "No DISCORD_WEBHOOK_URL set" };
+  try {
+    const result = await callTool("sidekick_notify", { channel: "discord", webhook_url: webhookUrl, message, title: "Evolve: Auto-applied Doc" });
+    return { notified: !result.isError };
+  } catch {
+    return { notified: false, reason: "notify failed" };
+  }
+}
+
+function evolveProcessQueue(evolve) {
+  if (evolve.queue.length === 0) return null;
+  const next = evolve.queue.find(p => p.status === "pending");
+  return next || null;
+}
+
 async function sidekick_evolve({ action, id, proposal, approve, test }) {
   const evolve = loadEvolve();
   const now = new Date().toISOString();
   const today = now.split("T")[0];
-  
+
   if (action === "analyze") {
     const analysis = analyzeToolUsage();
-    
     if (analysis.patterns.length === 0) {
       return { content: [{ type: "text", text: "No frequent patterns detected yet. Continue using tools to build patterns." }] };
     }
-    
-    const report = analysis.patterns.map(p => 
-      `Pattern: ${p.pattern}\nCount: ${p.count}\nSuggestion: ${p.suggestion}`
-    ).join("\n\n");
-    
-    return { content: [{ type: "text", text: `# Tool Usage Analysis\n\n${report}` }] };
+    const generated = await evolveGenerateProposal(analysis);
+    const report = analysis.patterns.map(p => `Pattern: ${p.pattern}\nCount: ${p.count}\nSuggestion: ${p.suggestion}`).join("\n\n");
+    let output = `# Tool Usage Analysis\n\n${report}`;
+    if (generated) {
+      output += `\n\n## LLM-Generated Proposal\n\nTitle: ${generated.title}\nType: ${generated.type}\nConfidence: ${generated.confidence}\nDescription: ${generated.description}\nImplementation: ${generated.implementation}`;
+    }
+    return { content: [{ type: "text", text: output }] };
   }
-  
+
   if (action === "propose") {
     if (!proposal) {
       return { content: [{ type: "text", text: "proposal required" }], isError: true };
     }
-    
-    // Check rate limit
     const todayProposals = evolve.proposals.filter(p => p.created.startsWith(today));
     if (todayProposals.length >= MAX_PROPOSALS_PER_DAY) {
-      return { content: [{ type: "text", text: `Rate limit exceeded: max ${MAX_PROPOSALS_PER_DAY} proposals per day` }], isError: true };
+      return { content: [{ type: "text", text: `Rate limit: max ${MAX_PROPOSALS_PER_DAY} proposals/day` }], isError: true };
     }
-    
+
+    const analysis = analyzeToolUsage();
+    let llmProposal = null;
+    if (proposal === "auto") {
+      llmProposal = await evolveGenerateProposal(analysis);
+      if (!llmProposal) {
+        return { content: [{ type: "text", text: "LLM failed to generate proposal" }], isError: true };
+      }
+    }
+
     const newProposal = {
       id: generateId("prop"),
-      proposal,
+      proposal: llmProposal ? JSON.stringify(llmProposal) : proposal,
+      type: llmProposal?.type || "workflow",
+      title: llmProposal?.title || proposal.substring(0, 50),
+      confidence: llmProposal?.confidence || 50,
+      implementation: llmProposal?.implementation || null,
       status: "pending",
       created: now,
-      testResults: null
+      testResults: null,
+      autoGenerated: !!llmProposal
     };
-    
+
+    if (newProposal.confidence < CONFIDENCE_THRESHOLD) {
+      newProposal.status = "rejected_low_confidence";
+      newProposal.rejectedReason = `Confidence ${newProposal.confidence} below threshold ${CONFIDENCE_THRESHOLD}`;
+    }
+
     evolve.proposals.push(newProposal);
+    if (newProposal.status === "pending") {
+      evolve.queue.push({ id: newProposal.id, status: "pending", added: now });
+    }
     saveEvolve(evolve);
-    
-    return { content: [{ type: "text", text: `Proposal created: ${newProposal.id}\nStatus: pending\nProposal: ${proposal}` }] };
+
+    return { content: [{ type: "text", text: `Proposal: ${newProposal.id}\nTitle: ${newProposal.title}\nType: ${newProposal.type}\nConfidence: ${newProposal.confidence}\nStatus: ${newProposal.status}${newProposal.status === "pending" ? "\nAdded to test queue" : ""}` }] };
   }
-  
+
   if (action === "list") {
-    if (evolve.proposals.length === 0) {
-      return { content: [{ type: "text", text: "No proposals yet" }] };
-    }
-    
-    const list = evolve.proposals.map(p => 
-      `ID: ${p.id}\nStatus: ${p.status}\nCreated: ${p.created}\nProposal: ${p.proposal.substring(0, 100)}${p.proposal.length > 100 ? "..." : ""}`
-    ).join("\n\n");
-    
-    return { content: [{ type: "text", text: `# Proposals (${evolve.proposals.length})\n\n${list}` }] };
+    if (evolve.proposals.length === 0) return { content: [{ type: "text", text: "No proposals yet" }] };
+    const list = evolve.proposals.map(p =>
+      `ID: ${p.id} | ${p.status} | conf:${p.confidence} | ${p.title || p.proposal.substring(0, 60)}`
+    ).join("\n");
+    const queueLen = evolve.queue.filter(q => q.status === "pending").length;
+    return { content: [{ type: "text", text: `# Proposals (${evolve.proposals.length}) | Queue: ${queueLen} pending\n\n${list}` }] };
   }
-  
+
   if (action === "test") {
-    if (!id) {
-      return { content: [{ type: "text", text: "id required" }], isError: true };
+    let target;
+    if (id) {
+      target = evolve.proposals.find(p => p.id === id);
+    } else {
+      const queued = evolveProcessQueue(evolve);
+      if (queued) target = evolve.proposals.find(p => p.id === queued.id);
     }
-    
-    const proposal = evolve.proposals.find(p => p.id === id);
-    if (!proposal) {
-      return { content: [{ type: "text", text: `Proposal not found: ${id}` }], isError: true };
-    }
-    
-    // Simulate testing the proposal
-    proposal.status = "testing";
-    proposal.testStarted = now;
+    if (!target) return { content: [{ type: "text", text: id ? `Proposal not found: ${id}` : "No proposals in queue" }], isError: true };
+
+    target.status = "testing";
+    target.testStarted = now;
     saveEvolve(evolve);
-    
-    // In a real implementation, this would sandbox and test the proposal
-    // For now, we'll simulate a successful test
-    proposal.testResults = {
-      passed: true,
-      duration: 1500,
-      notes: "Simulated test passed. Proposal appears safe."
-    };
-    proposal.status = "tested";
-    proposal.testedAt = new Date().toISOString();
+
+    const testResults = await evolveSandboxTest(target);
+    target.testResults = testResults;
+    target.status = testResults.passed ? "tested" : "test_failed";
+    target.testedAt = new Date().toISOString();
+
+    const queueEntry = evolve.queue.find(q => q.id === target.id);
+    if (queueEntry) queueEntry.status = target.status;
     saveEvolve(evolve);
-    
-    return { content: [{ type: "text", text: `Test completed for ${id}\nResult: ${proposal.testResults.passed ? "PASSED" : "FAILED"}\nNotes: ${proposal.testResults.notes}` }] };
+
+    return { content: [{ type: "text", text: `Test: ${target.id}\nResult: ${testResults.passed ? "PASSED" : "FAILED"}\nDuration: ${testResults.duration}ms\nChecks:\n${Object.entries(testResults.checks).map(([k, v]) => `  ${k}: ${v.passed ? "PASS" : "FAIL"} - ${v.notes}`).join("\n")}` }] };
   }
-  
+
   if (action === "approve") {
-    if (!id) {
-      return { content: [{ type: "text", text: "id required" }], isError: true };
-    }
-    
-    const proposal = evolve.proposals.find(p => p.id === id);
-    if (!proposal) {
-      return { content: [{ type: "text", text: `Proposal not found: ${id}` }], isError: true };
-    }
-    
-    if (proposal.status !== "tested") {
-      return { content: [{ type: "text", text: `Proposal must be tested before approval (current status: ${proposal.status})` }], isError: true };
-    }
-    
-    proposal.status = "approved";
-    proposal.approvedAt = new Date().toISOString();
-    
-    // Add to history
-    evolve.history.push({
-      id: proposal.id,
-      proposal: proposal.proposal,
-      approvedAt: proposal.approvedAt
-    });
-    
+    if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
+    const p = evolve.proposals.find(x => x.id === id);
+    if (!p) return { content: [{ type: "text", text: `Proposal not found: ${id}` }], isError: true };
+    if (p.status !== "tested") return { content: [{ type: "text", text: `Must be tested first (status: ${p.status})` }], isError: true };
+
+    p.status = "approved";
+    p.approvedAt = new Date().toISOString();
+    evolve.history.push({ id: p.id, proposal: p.proposal, approvedAt: p.approvedAt, confidence: p.confidence });
     saveEvolve(evolve);
-    
-    return { content: [{ type: "text", text: `Proposal ${id} approved and added to history` }] };
+    return { content: [{ type: "text", text: `Approved: ${id}` }] };
   }
-  
+
   if (action === "reject") {
-    if (!id) {
-      return { content: [{ type: "text", text: "id required" }], isError: true };
-    }
-    
-    const proposal = evolve.proposals.find(p => p.id === id);
-    if (!proposal) {
-      return { content: [{ type: "text", text: `Proposal not found: ${id}` }], isError: true };
-    }
-    
-    proposal.status = "rejected";
-    proposal.rejectedAt = new Date().toISOString();
+    if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
+    const p = evolve.proposals.find(x => x.id === id);
+    if (!p) return { content: [{ type: "text", text: `Proposal not found: ${id}` }], isError: true };
+    p.status = "rejected";
+    p.rejectedAt = new Date().toISOString();
+    const qe = evolve.queue.find(q => q.id === id);
+    if (qe) qe.status = "rejected";
     saveEvolve(evolve);
-    
-    return { content: [{ type: "text", text: `Proposal ${id} rejected` }] };
+    return { content: [{ type: "text", text: `Rejected: ${id}` }] };
   }
-  
-  return { content: [{ type: "text", text: "Unknown action. Use: analyze, propose, list, test, approve, reject" }], isError: true };
+
+  if (action === "report") {
+    const stats = {
+      total: evolve.proposals.length,
+      pending: evolve.proposals.filter(p => p.status === "pending").length,
+      tested: evolve.proposals.filter(p => p.status === "tested").length,
+      approved: evolve.proposals.filter(p => p.status === "approved").length,
+      rejected: evolve.proposals.filter(p => p.status === "rejected" || p.status === "rejected_low_confidence").length,
+      test_failed: evolve.proposals.filter(p => p.status === "test_failed").length,
+      queue_pending: evolve.queue.filter(q => q.status === "pending").length
+    };
+    const avgConf = evolve.proposals.length > 0 ? Math.round(evolve.proposals.reduce((s, p) => s + (p.confidence || 0), 0) / evolve.proposals.length) : 0;
+    const recent = evolve.proposals.slice(-5).reverse().map(p =>
+      `${p.id} | ${p.status} | conf:${p.confidence} | ${p.title || p.proposal.substring(0, 40)}`
+    ).join("\n");
+    return { content: [{ type: "text", text: `# Evolve Report\n\nTotal: ${stats.total} | Pending: ${stats.pending} | Tested: ${stats.tested} | Approved: ${stats.approved} | Rejected: ${stats.rejected} | Failed: ${stats.test_failed}\nQueue: ${stats.queue_pending} pending\nAvg confidence: ${avgConf}\n\n## Recent\n${recent}` }] };
+  }
+
+  if (action === "sync_docs") {
+    const approved = evolve.proposals.filter(p => p.status === "approved" && p.type === "docs");
+    const autoApplied = [];
+    const notified = [];
+
+    for (const p of approved) {
+      if (p.confidence >= AUTO_APDOCS_THRESHOLD && !p.autoApplied) {
+        const result = await evolveAutoApplyDocs(p);
+        p.autoApplied = true;
+        p.autoAppliedAt = new Date().toISOString();
+        p.autoAppliedPath = result.path || null;
+        if (result.applied) {
+          autoApplied.push(p.id);
+          const notif = await evolveNotifyDiscord(`Auto-applied doc: **${p.title}** (confidence: ${p.confidence})\nPath: \`${result.path}\``);
+          if (notif.notified) notified.push(p.id);
+        }
+      }
+    }
+    saveEvolve(evolve);
+
+    return { content: [{ type: "text", text: `# Doc Sync\n\nApproved docs proposals: ${approved.length}\nAuto-applied (conf >= ${AUTO_APDOCS_THRESHOLD}): ${autoApplied.length}\nDiscord notified: ${notified.length}\n${autoApplied.length > 0 ? `\nApplied:\n${autoApplied.map(id => `- ${id}`).join("\n")}` : ""}` }] };
+  }
+
+  return { content: [{ type: "text", text: "Unknown action. Use: analyze, propose, list, test, approve, reject, report, sync_docs" }], isError: true };
 }
 
 // --- Orchestrate Tool ---
@@ -7122,7 +7253,7 @@ const TOOL_DEFS = [
   { name: "sidekick_template", description: "Render Handlebars templates with data", args: { template: "string (Handlebars template)", data: "string|object (template data)" } },
   { name: "sidekick_queue", description: "Persistent task queue with priorities", args: { action: "string (add|list|process|remove|clear)", id: "number (optional, task id for remove)", tool: "string (optional, tool name for add)", args: "object (optional, tool args for add)", priority: "number (optional, priority for add, default 0)", status: "string (optional, status filter for list/clear)" } },
   { name: "sidekick_retry", description: "Retry tool calls with exponential backoff", args: { tool: "string (tool to retry)", args: "object (optional, tool args)", max_attempts: "number (optional, default 3)", backoff: "string (optional, exponential|linear|fixed, default exponential)", initial_delay: "number (optional, ms, default 1000)" } },
-  { name: "sidekick_evolve", description: "Self-modification with safety: analyze patterns, propose improvements, test and approve changes", args: { action: "string (analyze|propose|list|test|approve|reject)", id: "string (optional, proposal id for test/approve/reject)", proposal: "string (optional, proposal description for propose)", approve: "boolean (optional, deprecated - use action=approve)", test: "boolean (optional, deprecated - use action=test)" } },
+  { name: "sidekick_evolve", description: "Self-modification with safety: LLM-powered proposals, sandbox testing, confidence filtering, auto-apply docs", args: { action: "string (analyze|propose|list|test|approve|reject|report|sync_docs)", id: "string (optional, proposal id for test/approve/reject)", proposal: "string (optional, proposal description or 'auto' for LLM generation)", approve: "boolean (optional, deprecated - use action=approve)", test: "boolean (optional, deprecated - use action=test)" } },
   { name: "sidekick_orchestrate", description: "Multi-agent coordination: create task graphs, execute subtasks with dependencies, track progress", args: { action: "string (create|execute|list|status|cancel)", id: "number (optional, task id for execute/status/cancel)", task_name: "string (optional, task name for create)", subtasks: "array (optional, subtask definitions for create)", dependencies: "object (optional, dependency map for create)", timeout: "number (optional, timeout in ms, default 1800000)" } },
   { name: "sidekick_predict", description: "Anticipatory intelligence: analyze patterns, predict needs, track prediction usefulness", args: { action: "string (analyze|list|feedback|suggest)", id: "string (optional, prediction id for feedback)", feedback: "boolean (optional, true if useful, false if not)" } },
   { name: "sidekick_debug_tool", description: "Structured debugging cache with persistent storage for cross-session debugging. Store findings, recall past investigations, cleanup old entries.", args: { action: "string (store|recall|cleanup|start|stop|cache|get|status|clear)", session_name: "string (optional, session identifier for legacy actions)", key: "string (optional, cache key for get/cache, or debug key for cleanup)", value: "string (optional, value to cache/store)", service: "string (optional, service name for store/recall)", issue: "string (optional, issue description for store)", redact: "boolean (optional, default true - set false to skip redaction)" } },

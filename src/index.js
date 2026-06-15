@@ -225,9 +225,9 @@ const TOOL_SCHEMAS = {
     initial_delay: z.number().optional().describe("Initial delay in milliseconds (default: 1000)")
   }),
   sidekick_evolve: z.object({
-    action: z.enum(["analyze", "propose", "list", "test", "approve", "reject"]).describe("Evolve action"),
+    action: z.enum(["analyze", "propose", "list", "test", "approve", "reject", "report", "sync_docs"]).describe("Evolve action"),
     id: z.string().optional().describe("Proposal ID (for test/approve/reject)"),
-    proposal: z.string().optional().describe("Proposal description (for propose)"),
+    proposal: z.string().optional().describe("Proposal description (for propose) or 'auto' for LLM generation"),
     approve: z.boolean().optional().describe("Deprecated - use action=approve"),
     test: z.boolean().optional().describe("Deprecated - use action=test")
   }),
