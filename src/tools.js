@@ -3524,7 +3524,8 @@ async function evolveSandboxTest(proposal) {
     }
 
     testResults.checks.syntax = { passed: !!proposal.implementation, notes: proposal.implementation ? "Has implementation steps" : "Missing implementation" };
-    testResults.checks.safety = { passed: !proposal.implementation?.match(/rm\s+-rf|sudo|chmod|dd\s/), notes: "No dangerous commands detected" };
+    const dangerousMatch = proposal.implementation?.match(/rm\s+-rf|sudo|chmod|dd\s/);
+    testResults.checks.safety = { passed: !dangerousMatch, notes: dangerousMatch ? `Dangerous command detected: ${dangerousMatch[0]}` : "No dangerous commands detected" };
     testResults.checks.confidence = { passed: proposal.confidence >= CONFIDENCE_THRESHOLD, notes: `Confidence ${proposal.confidence} ${proposal.confidence >= CONFIDENCE_THRESHOLD ? ">=" : "<"} ${CONFIDENCE_THRESHOLD}` };
 
     try {
