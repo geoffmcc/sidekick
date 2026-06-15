@@ -9,6 +9,8 @@ const dbStore = require("./db");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const PORT = parseInt(process.env.SIDEKICK_DASHBOARD_PORT || "4098", 10);
+const MCP_PORT = parseInt(process.env.SIDEKICK_PORT || "4097", 10);
+const MCP_API_KEY = process.env.SIDEKICK_API_KEY || "sk-sidekick-local-dev";
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -93,6 +95,39 @@ function logError(url, status, error, page, userAgent) {
   };
   const line = JSON.stringify(entry) + '\n';
   fs.appendFileSync(ERROR_LOG, line);
+}
+
+function getJsonFromLocalService(port, pathName, headers = {}, timeout = 3000) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      hostname: "127.0.0.1",
+      port,
+      path: pathName,
+      method: "GET",
+      headers,
+      timeout
+    }, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", chunk => { body += chunk; });
+      res.on("end", () => {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          reject(new Error("HTTP " + res.statusCode));
+          return;
+        }
+        try {
+          resolve(JSON.parse(body || "{}"));
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    req.on("timeout", () => {
+      req.destroy(new Error("request timed out"));
+    });
+    req.on("error", reject);
+    req.end();
+  });
 }
 
 // IP whitelist middleware
@@ -290,7 +325,7 @@ app.get("/api/system", (req, res) => {
   }
 });
 
-app.get("/api/dashboard-summary", (req, res) => {
+app.get("/api/dashboard-summary", async (req, res) => {
   try {
     // Health score calculation
     const mem = execSync("free -h | grep Mem", { encoding: "utf-8", timeout: 5000 }).trim().split(/\s+/);
@@ -332,10 +367,14 @@ app.get("/api/dashboard-summary", (req, res) => {
     
     // Active sessions
     let mcpClients = 0;
+    let mcpSessionDetails = [];
     try {
-      const mcpLog = execSync("sudo journalctl -u sidekick-mcp --since '5 minutes ago' --no-pager 2>/dev/null | grep -c 'Session created' || echo 0", { encoding: "utf-8", timeout: 5000 }).trim();
-      mcpClients = parseInt(mcpLog) || 0;
-    } catch {}
+      const mcpHealth = await getJsonFromLocalService(MCP_PORT, "/health", {
+        "Authorization": "Bearer " + MCP_API_KEY
+      });
+      mcpClients = Number(mcpHealth.sessions) || 0;
+      mcpSessionDetails = Array.isArray(mcpHealth.sessionDetails) ? mcpHealth.sessionDetails : [];
+    } catch (e) {}
     
     let cronJobs = 0;
     try {
@@ -404,6 +443,7 @@ app.get("/api/dashboard-summary", (req, res) => {
       },
       sessions: {
         mcpClients,
+        mcpSessionDetails,
         agentStatus,
         cronJobs,
         activeWatches
@@ -851,6 +891,9 @@ nav a.active{color:#58a6ff;border-color:#58a6ff;background:#0d1117}
 .service-indicator i{font-size:.9rem}
 .service-indicator.on{color:#3fb950}
 .service-indicator.off{color:#f85149}
+.session-details{margin-top:6px;padding-top:6px;border-top:1px solid #21262d;font-size:.72rem;color:#8b949e;line-height:1.45}
+.session-detail{display:flex;justify-content:space-between;gap:8px}
+.session-detail span:first-child{color:#c9d1d9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .config-entry{padding:6px 0;border-bottom:1px solid #21262d;font-size:.82rem;display:flex;gap:12px}
 .config-entry:last-child{border-bottom:none}
 .config-key{color:#ffa657;font-family:var(--font);font-weight:500;min-width:200px}
@@ -1030,6 +1073,7 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
         <div>Agent: <span id="sessionAgent">--</span></div>
         <div>Cron: <span id="sessionCron">--</span> jobs</div>
         <div>Watches: <span id="sessionWatches">--</span> active</div>
+        <div id="sessionDetails" class="session-details"><div class="empty" style="padding:2px 0">No MCP sessions</div></div>
       </div>
     </div>
     <div class="card" style="padding:12px">
@@ -1452,6 +1496,16 @@ function loadDashboardSummary(){
     $('sessionAgent').textContent = d.sessions.agentStatus;
     $('sessionCron').textContent = d.sessions.cronJobs;
     $('sessionWatches').textContent = d.sessions.activeWatches;
+    const sessionDetails = Array.isArray(d.sessions.mcpSessionDetails) ? d.sessions.mcpSessionDetails : [];
+    const sessionDetailsEl = $('sessionDetails');
+    if (sessionDetails.length === 0) {
+      sessionDetailsEl.innerHTML = '<div class="empty" style="padding:2px 0">No MCP sessions</div>';
+    } else {
+      sessionDetailsEl.innerHTML = sessionDetails.slice(0, 4).map(s => {
+        const label = s.initialized ? 'ready' : 'starting';
+        return '<div class="session-detail"><span title="' + esc(s.id || '') + '">' + esc(shortSessionId(s.id)) + '</span><span>' + label + ', idle ' + formatDuration(s.idle) + '</span></div>';
+      }).join('') + (sessionDetails.length > 4 ? '<div style="color:#484f58">+' + (sessionDetails.length - 4) + ' more</div>' : '');
+    }
     
     // Recent errors
     const errorsEl = $('recentErrors');
@@ -1506,6 +1560,24 @@ function formatBytes(bytes){
   const sizes = ['B', 'KB', 'MB', 'GB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return Math.round(bytes / Math.pow(k, i) * 10) / 10 + ' ' + sizes[i];
+}
+
+function shortSessionId(id) {
+  if (!id) return 'unknown';
+  const s = String(id);
+  return s.length > 18 ? s.slice(0, 15) + '...' : s;
+}
+
+function formatDuration(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n < 0) return '?';
+  const sec = Math.floor(n / 1000);
+  if (sec < 60) return sec + 's';
+  const min = Math.floor(sec / 60);
+  if (min < 60) return min + 'm';
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return hr + 'h';
+  return Math.floor(hr / 24) + 'd';
 }
 
 function loadLLM(){
