@@ -540,6 +540,125 @@ app.get("/api/tools", (req, res) => {
   res.json({ tools: TOOL_DEFS });
 });
 
+// Database API endpoints
+app.get("/api/db/schema", (req, res) => {
+  try {
+    const db = dbStore.getDb();
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
+    const result = {};
+    for (const t of tables) {
+      const columns = db.prepare(`PRAGMA table_info("${t.name}")`).all();
+      const indexes = db.prepare(`PRAGMA index_list("${t.name}")`).all();
+      const count = db.prepare(`SELECT COUNT(*) as count FROM "${t.name}"`).get();
+      result[t.name] = { columns, indexes, rowCount: count.count };
+    }
+    res.json({ ok: true, schema: result });
+  } catch (e) {
+    res.json({ ok: false, error: e.message });
+  }
+});
+
+app.post("/api/db/query", (req, res) => {
+  try {
+    const { sql, params, readonly } = req.body || {};
+    if (!sql) return res.json({ ok: false, error: "No SQL provided" });
+    const db = dbStore.getDb();
+    if (readonly !== false) {
+      const upper = sql.toUpperCase().trim();
+      if (upper.startsWith("INSERT") || upper.startsWith("UPDATE") || upper.startsWith("DELETE") || upper.startsWith("DROP") || upper.startsWith("CREATE") || upper.startsWith("ALTER")) {
+        return res.json({ ok: false, error: "Readonly mode: write operations blocked" });
+      }
+    }
+    const start = Date.now();
+    const rows = db.prepare(sql).all(...(params || []));
+    const duration = Date.now() - start;
+    res.json({ ok: true, rows, duration, count: rows.length });
+  } catch (e) {
+    res.json({ ok: false, error: e.message });
+  }
+});
+
+app.get("/api/db/stats", (req, res) => {
+  try {
+    const db = dbStore.getDb();
+    const dbPath = path.join(DATA_DIR, "sidekick.db");
+    const stats = fs.statSync(dbPath);
+    const walMode = db.prepare("PRAGMA journal_mode").get();
+    const cacheHit = db.prepare("PRAGMA cache_status").all();
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
+    const tableSizes = {};
+    for (const t of tables) {
+      const size = db.prepare(`SELECT SUM(LENGTH(CAST(rowid AS TEXT)) + ${t.name.split(',').map(() => '100').join(' + ')}) as size FROM "${t.name}"`).get();
+      tableSizes[t.name] = size?.size || 0;
+    }
+    res.json({ ok: true, size: stats.size, tableCount: tables.length, walMode: walMode?.journal_mode, tableSizes });
+  } catch (e) {
+    res.json({ ok: false, error: e.message });
+  }
+});
+
+app.post("/api/db/backup", (req, res) => {
+  try {
+    const backupDir = path.join(DATA_DIR, "backups");
+    fs.mkdirSync(backupDir, { recursive: true });
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const backupPath = path.join(backupDir, `sidekick-${timestamp}.db`);
+    const srcDb = dbStore.getDb();
+    srcDb.backup(backupPath).then(() => {
+      auditLog(req, 'db.backup', { path: backupPath });
+      res.json({ ok: true, path: backupPath });
+    }).catch(e => res.json({ ok: false, error: e.message }));
+  } catch (e) {
+    res.json({ ok: false, error: e.message });
+  }
+});
+
+app.get("/api/db/search", (req, res) => {
+  try {
+    const { q, limit } = req.query;
+    if (!q) return res.json({ ok: false, error: "No query provided" });
+    const db = dbStore.getDb();
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
+    const results = {};
+    const maxResults = parseInt(limit) || 50;
+    for (const t of tables) {
+      const columns = db.prepare(`PRAGMA table_info("${t.name}")`).all();
+      const textCols = columns.filter(c => c.type === "TEXT" || c.type === "").map(c => c.name);
+      if (textCols.length === 0) continue;
+      const whereClause = textCols.map(c => `${c} LIKE ?`).join(" OR ");
+      const params = textCols.map(() => `%${q}%`);
+      const rows = db.prepare(`SELECT * FROM "${t.name}" WHERE ${whereClause} LIMIT ?`).all(...params, maxResults);
+      if (rows.length > 0) results[t.name] = rows;
+    }
+    res.json({ ok: true, results });
+  } catch (e) {
+    res.json({ ok: false, error: e.message });
+  }
+});
+
+app.get("/api/db/migrations", (req, res) => {
+  try {
+    const db = dbStore.getDb();
+    const meta = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get();
+    const currentVersion = meta ? parseInt(meta.value) : 0;
+    const migrationsDir = path.join(__dirname, "..", "migrations");
+    let migrations = [];
+    if (fs.existsSync(migrationsDir)) {
+      migrations = fs.readdirSync(migrationsDir)
+        .filter(f => f.endsWith(".sql"))
+        .map(f => {
+          const match = f.match(/^(\d+)/);
+          const version = match ? parseInt(match[1]) : 0;
+          return { file: f, version, applied: version <= currentVersion };
+        })
+        .sort((a, b) => a.version - b.version);
+    }
+    res.json({ ok: true, currentVersion, migrations });
+  } catch (e) {
+    res.json({ ok: false, error: e.message });
+  }
+});
+
 app.delete("/api/logs", (req, res) => {
   try { dbStore.clearToolLogs(); } catch {}
   auditLog(req, 'logs.clear', {});
@@ -860,6 +979,7 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
   <a class="active" onclick="showPage('system')" id="nav-system">System</a>
   <a onclick="showPage('activity')" id="nav-activity">Activity</a>
   <a onclick="showPage('data')" id="nav-data">Data</a>
+  <a onclick="showPage('database')" id="nav-database">Database</a>
   <a onclick="showPage('config')" id="nav-config">Config</a>
   <a onclick="showPage('agent')" id="nav-agent">Agent</a>
   <a onclick="showPage('tools')" id="nav-tools">Tools</a>
@@ -1003,6 +1123,63 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
   </div>
 </div>
 
+<!-- Database Page -->
+<div class="page" id="page-database">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div class="section-title" style="margin:0">Database Management</div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-sm btn-outline" onclick="loadDbStats()" title="Refresh stats"><i class="fas fa-sync"></i> Refresh</button>
+      <button class="btn btn-sm btn-outline" onclick="createBackup()" title="Create backup"><i class="fas fa-download"></i> Backup</button>
+    </div>
+  </div>
+  
+  <div class="grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:6px">Database Size</div>
+      <div style="font-size:1.5rem;font-weight:700;color:#58a6ff" id="dbSize">--</div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:6px">Tables</div>
+      <div style="font-size:1.5rem;font-weight:700;color:#3fb950" id="dbTables">--</div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:6px">WAL Mode</div>
+      <div style="font-size:1.5rem;font-weight:700;color:#3fb950" id="dbWal">--</div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:6px">Cache Hit</div>
+      <div style="font-size:1.5rem;font-weight:700;color:#3fb950" id="dbCache">--</div>
+    </div>
+  </div>
+  
+  <div class="section-title" style="margin-bottom:8px">Schema Browser</div>
+  <div class="card" style="padding:16px;margin-bottom:16px;max-height:400px;overflow-y:auto" id="dbSchema"></div>
+  
+  <div class="section-title" style="margin-bottom:8px">Query Editor</div>
+  <div class="card" style="padding:16px;margin-bottom:16px">
+    <textarea id="dbQuery" rows="4" placeholder="SELECT * FROM kv_store LIMIT 10" style="width:100%;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;padding:8px;font-family:var(--font);font-size:13px;resize:vertical"></textarea>
+    <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+      <button class="btn" onclick="runQuery()">Run Query</button>
+      <label style="display:flex;align-items:center;gap:6px;color:#8b949e;font-size:.85rem">
+        <input type="checkbox" id="dbReadonly" checked> Readonly
+      </label>
+    </div>
+    <div id="dbQueryResult" style="margin-top:12px;max-height:400px;overflow:auto"></div>
+  </div>
+  
+  <div class="section-title" style="margin-bottom:8px">Full-Text Search</div>
+  <div class="card" style="padding:16px;margin-bottom:16px">
+    <div style="display:flex;gap:8px">
+      <input type="text" id="dbSearchQuery" placeholder="Search terms..." style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;padding:8px;font-family:var(--font)">
+      <button class="btn" onclick="runDbSearch()">Search</button>
+    </div>
+    <div id="dbSearchResult" style="margin-top:12px;max-height:400px;overflow:auto"></div>
+  </div>
+  
+  <div class="section-title" style="margin-bottom:8px">Migrations</div>
+  <div class="card" style="padding:16px" id="dbMigrations"></div>
+</div>
+
 <!-- Tools Page -->
 <div class="page" id="page-tools">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -1118,6 +1295,7 @@ function authFetch(url, options) {
 const TOOL_CATEGORIES = {
   'Core': { icon: 'fa-terminal', tools: ['sidekick_bash','sidekick_read','sidekick_write','sidekick_list','sidekick_search','sidekick_web_fetch','sidekick_llm'] },
   'Storage': { icon: 'fa-database', tools: ['sidekick_store','sidekick_get','sidekick_list_projects','sidekick_get_by_project'] },
+  'Database': { icon: 'fa-database', tools: ['sidekick_db_schema','sidekick_db_query','sidekick_db_stats','sidekick_db_backup','sidekick_db_restore','sidekick_db_export','sidekick_db_search','sidekick_db_migrate','sidekick_db_diff'] },
   'Git & GitHub': { icon: 'fa-code-branch', tools: ['sidekick_git','sidekick_github'] },
   'Services': { icon: 'fa-cogs', tools: ['sidekick_process','sidekick_service'] },
   'Scheduling': { icon: 'fa-clock', tools: ['sidekick_cron','sidekick_delay'] },
@@ -1199,6 +1377,7 @@ function showPage(name){
   if (name === 'system') { loadDashboardSummary(); loadLLM(); loadServices(); }
   if (name === 'activity') loadLogs();
   if (name === 'data') loadKV();
+  if (name === 'database') loadDbStats();
   if (name === 'config') loadConfig();
   if (name === 'tools') loadTools();
 }
@@ -1279,7 +1458,7 @@ function loadDashboardSummary(){
     
     // Recent errors
     const errorsEl = $('recentErrors');
-    if(d.recentErrors.length === 0){
+    if(!d.recentErrors || d.recentErrors.length === 0){
       errorsEl.innerHTML = '<div class="empty" style="padding:4px 0">No recent errors</div>';
     } else {
       errorsEl.innerHTML = d.recentErrors.map(e => {
@@ -1290,7 +1469,7 @@ function loadDashboardSummary(){
     
     // Recent deployments
     const deployEl = $('recentDeployments');
-    if(d.deployments.length === 0){
+    if(!d.deployments || d.deployments.length === 0){
       deployEl.innerHTML = '<div class="empty" style="padding:4px 0">No deployment info</div>';
     } else {
       deployEl.innerHTML = d.deployments.map(dep => {
@@ -1343,7 +1522,7 @@ function loadLLM(){
       el.innerHTML = '<div class="llm-card"><span class="llm-dot warn"></span><span class="empty">Ollama running, no models installed</span></div>';
       return;
     }
-    el.innerHTML = d.models.map(m =>
+    el.innerHTML = (d.models || []).map(m =>
       '<div class="llm-card"><span class="llm-dot on"></span><span class="llm-name">' + esc(m.name) + '</span><span class="llm-size">' + m.size + '</span></div>'
     ).join('');
   }).catch(e => apiError('/api/llm', e, 0));
@@ -1634,6 +1813,19 @@ function showValueModal(key) {
     if (e.target === modal) modal.remove();
   };
   
+  let valueHtml = '';
+  let parsed = null;
+  try {
+    parsed = JSON.parse(entry.value);
+  } catch {}
+  
+  if (parsed !== null && typeof parsed === 'object') {
+    valueHtml = '<div class="json-tree">' + renderJsonTree(parsed, 0) + '</div>';
+  } else {
+    valueHtml = '<div class="kv-modal-value">' + esc(String(entry.value)) + '</div>';
+    valueHtml += '<button class="btn btn-sm btn-outline" style="margin-top:8px" onclick="navigator.clipboard.writeText(this.previousElementSibling.textContent);showToast(\'Copied!\',\'success\')"><i class="fas fa-copy"></i> Copy</button>';
+  }
+  
   modal.innerHTML = '<div class="kv-modal-content">' +
     '<div class="kv-modal-header">' +
       '<h3>' + esc(key) + '</h3>' +
@@ -1641,11 +1833,39 @@ function showValueModal(key) {
         '<i class="fas fa-times"></i>' +
       '</button>' +
     '</div>' +
-    '<div class="kv-modal-value">' + esc(String(entry.value)) + '</div>' +
+    valueHtml +
   '</div>';
   
   modal.querySelector('.kv-modal-close').addEventListener('click', () => modal.remove());
   document.body.appendChild(modal);
+}
+
+function renderJsonTree(obj, depth) {
+  if (obj === null) return '<span style="color:#f85149">null</span>';
+  if (typeof obj === 'boolean') return '<span style="color:#ffa657">' + obj + '</span>';
+  if (typeof obj === 'number') return '<span style="color:#79c0ff">' + obj + '</span>';
+  if (typeof obj === 'string') return '<span style="color:#a5d6ff">"' + esc(obj) + '"</span>';
+  
+  const isArray = Array.isArray(obj);
+  const entries = isArray ? obj : Object.entries(obj);
+  const indent = '  '.repeat(depth);
+  const nextIndent = '  '.repeat(depth + 1);
+  
+  if (entries.length === 0) return isArray ? '[]' : '{}';
+  
+  let html = '<span style="color:#8b949e">' + (isArray ? '[' : '{') + '</span>';
+  html += '<div style="padding-left:20px">';
+  
+  const items = isArray ? entries.map((v, i) => [i, v]) : entries;
+  for (const [k, v] of items) {
+    const keyStr = isArray ? '' : '<span style="color:#7ee787">"' + esc(k) + '"</span>: ';
+    const valueStr = renderJsonTree(v, depth + 1);
+    html += '<div>' + keyStr + valueStr + '</div>';
+  }
+  
+  html += '</div>';
+  html += '<span style="color:#8b949e">' + (isArray ? ']' : '}') + '</span>';
+  return html;
 }
 
 function openEditModal(key){
@@ -1850,6 +2070,175 @@ function clearData(type){
       }
     })
     .catch(e => apiError(endpoints[type], e, 0));
+}
+
+// -- Database -- //
+function loadDbStats() {
+  authFetch('/api/db/stats').then(r => r.json()).then(d => {
+    if (d.ok) {
+      $('dbSize').textContent = formatBytes(d.size);
+      $('dbTables').textContent = d.tableCount;
+      $('dbWal').textContent = d.walMode || 'unknown';
+      $('dbCache').textContent = '--';
+    }
+  }).catch(() => {});
+  
+  authFetch('/api/db/schema').then(r => r.json()).then(d => {
+    if (d.ok) renderDbSchema(d.schema);
+  }).catch(() => {});
+  
+  authFetch('/api/db/migrations').then(r => r.json()).then(d => {
+    if (d.ok) renderDbMigrations(d);
+  }).catch(() => {});
+}
+
+function formatBytes(bytes) {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function renderDbSchema(schema) {
+  let html = '';
+  for (const [table, info] of Object.entries(schema)) {
+    html += '<div style="margin-bottom:16px">';
+    html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
+    html += '<i class="fas fa-table" style="color:#58a6ff"></i>';
+    html += '<span style="font-weight:600;color:#c9d1d9;font-family:var(--font)">' + esc(table) + '</span>';
+    html += '<span style="color:#8b949e;font-size:.8rem">(' + info.rowCount + ' rows)</span>';
+    html += '</div>';
+    html += '<div style="padding-left:24px">';
+    for (const col of info.columns) {
+      const pk = col.pk ? '<span style="color:#ffa657;font-size:.75rem;margin-left:4px">PK</span>' : '';
+      const notnull = col.notnull ? '<span style="color:#f85149;font-size:.75rem;margin-left:4px">NOT NULL</span>' : '';
+      html += '<div style="display:flex;align-items:center;gap:8px;padding:2px 0;font-size:.85rem">';
+      html += '<i class="fas fa-columns" style="color:#6e7681;font-size:.75rem"></i>';
+      html += '<span style="color:#c9d1d9;font-family:var(--font)">' + esc(col.name) + '</span>';
+      html += '<span style="color:#8b949e;font-size:.8rem">' + esc(col.type || 'TEXT') + '</span>';
+      html += pk + notnull;
+      html += '</div>';
+    }
+    if (info.indexes.length > 0) {
+      html += '<div style="margin-top:6px;padding-top:6px;border-top:1px solid #21262d">';
+      for (const idx of info.indexes) {
+        html += '<div style="display:flex;align-items:center;gap:8px;padding:2px 0;font-size:.8rem">';
+        html += '<i class="fas fa-key" style="color:#3fb950;font-size:.7rem"></i>';
+        html += '<span style="color:#8b949e">' + esc(idx.name) + '</span>';
+        if (idx.unique) html += '<span style="color:#3fb950;font-size:.7rem">UNIQUE</span>';
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+    html += '</div></div>';
+  }
+  $('dbSchema').innerHTML = html || '<div class="empty">No tables found</div>';
+}
+
+function runQuery() {
+  const sql = $('dbQuery').value.trim();
+  if (!sql) return;
+  const readonly = $('dbReadonly').checked;
+  $('dbQueryResult').innerHTML = '<div class="empty">Running...</div>';
+  authFetch('/api/db/query', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sql, readonly })
+  }).then(r => r.json()).then(d => {
+    if (d.ok) {
+      if (d.rows.length === 0) {
+        $('dbQueryResult').innerHTML = '<div class="empty">No results (' + d.duration + 'ms)</div>';
+        return;
+      }
+      const cols = Object.keys(d.rows[0]);
+      let html = '<div style="color:#8b949e;font-size:.8rem;margin-bottom:8px">' + d.count + ' rows (' + d.duration + 'ms)</div>';
+      html += '<table style="width:100%;border-collapse:collapse;font-size:.85rem">';
+      html += '<thead><tr>';
+      for (const col of cols) {
+        html += '<th style="text-align:left;padding:6px 8px;border-bottom:1px solid #30363d;color:#58a6ff;font-family:var(--font)">' + esc(col) + '</th>';
+      }
+      html += '</tr></thead><tbody>';
+      for (const row of d.rows) {
+        html += '<tr>';
+        for (const col of cols) {
+          const val = row[col];
+          const display = val === null ? '<span style="color:#6e7681">NULL</span>' : esc(String(val));
+          html += '<td style="padding:6px 8px;border-bottom:1px solid #21262d;color:#c9d1d9;font-family:var(--font);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + display + '</td>';
+        }
+        html += '</tr>';
+      }
+      html += '</tbody></table>';
+      $('dbQueryResult').innerHTML = html;
+    } else {
+      $('dbQueryResult').innerHTML = '<div style="color:#f85149;padding:8px;background:#4a2d2d;border-radius:4px">' + esc(d.error) + '</div>';
+    }
+  }).catch(e => {
+    $('dbQueryResult').innerHTML = '<div style="color:#f85149;padding:8px;background:#4a2d2d;border-radius:4px">' + esc(e.message) + '</div>';
+  });
+}
+
+function runDbSearch() {
+  const q = $('dbSearchQuery').value.trim();
+  if (!q) return;
+  $('dbSearchResult').innerHTML = '<div class="empty">Searching...</div>';
+  authFetch('/api/db/search?q=' + encodeURIComponent(q)).then(r => r.json()).then(d => {
+    if (d.ok) {
+      const tables = Object.keys(d.results);
+      if (tables.length === 0) {
+        $('dbSearchResult').innerHTML = '<div class="empty">No results found</div>';
+        return;
+      }
+      let html = '';
+      for (const table of tables) {
+        const rows = d.results[table];
+        html += '<div style="margin-bottom:12px">';
+        html += '<div style="font-weight:600;color:#58a6ff;margin-bottom:6px">' + esc(table) + ' (' + rows.length + ')</div>';
+        for (const row of rows.slice(0, 5)) {
+          html += '<div style="padding:6px 8px;background:#0d1117;border-radius:4px;margin-bottom:4px;font-size:.8rem;color:#c9d1d9;font-family:var(--font)">';
+          html += esc(JSON.stringify(row).substring(0, 200));
+          if (JSON.stringify(row).length > 200) html += '...';
+          html += '</div>';
+        }
+        if (rows.length > 5) {
+          html += '<div style="color:#8b949e;font-size:.8rem;padding-left:8px">... and ' + (rows.length - 5) + ' more</div>';
+        }
+        html += '</div>';
+      }
+      $('dbSearchResult').innerHTML = html;
+    } else {
+      $('dbSearchResult').innerHTML = '<div style="color:#f85149">' + esc(d.error) + '</div>';
+    }
+  }).catch(e => {
+    $('dbSearchResult').innerHTML = '<div style="color:#f85149">' + esc(e.message) + '</div>';
+  });
+}
+
+function renderDbMigrations(d) {
+  let html = '<div style="margin-bottom:8px;color:#8b949e">Current version: <span style="color:#58a6ff;font-weight:600">' + d.currentVersion + '</span></div>';
+  if (d.migrations.length === 0) {
+    html += '<div class="empty">No migrations found</div>';
+  } else {
+    for (const m of d.migrations) {
+      const status = m.applied ? '<span style="color:#3fb950"><i class="fas fa-check"></i> Applied</span>' : '<span style="color:#d29922"><i class="fas fa-clock"></i> Pending</span>';
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #21262d">';
+      html += '<span style="color:#c9d1d9;font-family:var(--font)">' + esc(m.file) + '</span>';
+      html += status;
+      html += '</div>';
+    }
+  }
+  $('dbMigrations').innerHTML = html;
+}
+
+function createBackup() {
+  if (!confirm('Create database backup?')) return;
+  authFetch('/api/db/backup', { method: 'POST' }).then(r => r.json()).then(d => {
+    if (d.ok) {
+      showToast('Backup created: ' + d.path, 'success');
+    } else {
+      showToast('Backup failed: ' + d.error, 'error');
+    }
+  }).catch(e => showToast('Backup failed: ' + e.message, 'error'));
 }
 
 // -- Tools -- //
