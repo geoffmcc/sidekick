@@ -2357,6 +2357,10 @@ function refresh(){
   loadSystem(); loadDashboardSummary(); loadLLM(); loadServices();
 }
 refresh();
+loadSystem();
+loadDashboardSummary();
+loadLLM();
+loadServices();
 setInterval(refresh, 10000);
 </script>
 </body>
