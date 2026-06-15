@@ -6,7 +6,10 @@
 |---|---|
 | `src/index.js` | MCP server, auth, sessions, Streamable HTTP, legacy SSE, health endpoint. |
 | `src/tools.js` | Tool implementations, tool definitions, dispatcher, persistence helpers. |
-| `src/dashboard.js` | Dashboard web UI and API. |
+| `src/dashboard.js` | Dashboard server, API routes, auth, and agent proxy. |
+| `src/dashboard.html` | Authenticated dashboard HTML shell. |
+| `static/dashboard.css` | Dashboard styles. |
+| `static/dashboard.js` | Dashboard browser-side JavaScript. |
 | `src/agent.js` | Autonomous Agent Bridge, task loop, streaming, delays, watches. |
 | `src/env.js` | Environment loading. |
 | `src/redact.js` | Sensitive output redaction. |

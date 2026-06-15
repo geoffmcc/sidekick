@@ -1,11 +1,12 @@
 require("./env");
 const express = require("express");
 const cors = require("cors");
+const { timingSafeCompare } = require("./crypto-utils");
 const { McpServer } = require("@modelcontextprotocol/sdk/server/mcp.js");
 const { WebStandardStreamableHTTPServerTransport } = require("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js");
 const { SSEServerTransport } = require("@modelcontextprotocol/sdk/server/sse.js");
 const { z } = require("zod");
-const { TOOLS, TOOL_DEFS, DATA_DIR, setSource, logToolCall, loadProcedures } = require("./tools");
+const { TOOLS, TOOL_DEFS, DATA_DIR, setSource, logToolCall, loadProcedures, enforceToolPolicy } = require("./tools");
 
 const API_KEY = process.env.SIDEKICK_API_KEY || "sk-sidekick-local-dev";
 const PORT = parseInt(process.env.SIDEKICK_PORT || "4097", 10);
@@ -501,6 +502,11 @@ function createMcpServer() {
       setSource("mcp");
       const start = Date.now();
       try {
+        const policyError = enforceToolPolicy(def.name, "mcp");
+        if (policyError) {
+          logToolCall(def.name, args, Date.now() - start, false, policyError.content[0].text);
+          return policyError;
+        }
         const result = await TOOLS[def.name](args);
         logToolCall(def.name, args, Date.now() - start, !result.isError,
           result.content?.[0]?.text?.substring(0, 80) || "(ok)"
@@ -527,6 +533,11 @@ function createMcpServer() {
       setSource("mcp");
       const start = Date.now();
       try {
+        const policyError = enforceToolPolicy("sidekick_teach", "mcp");
+        if (policyError) {
+          logToolCall(toolName, args, Date.now() - start, false, policyError.content[0].text);
+          return policyError;
+        }
         const result = await TOOLS.sidekick_teach({ action: "execute", name: procName, args });
         logToolCall(toolName, args, Date.now() - start, !result.isError,
           result.content?.[0]?.text?.substring(0, 80) || "(ok)"
@@ -719,7 +730,11 @@ const app = express();
 
 function getBearerOrQueryToken(req) {
   const authHeader = req.headers["authorization"];
-  return authHeader ? authHeader.replace("Bearer ", "") : req.query.api_key;
+  if (typeof authHeader === "string") {
+    const match = authHeader.match(/^Bearer\s+(.+)$/i);
+    return match ? match[1] : null;
+  }
+  return typeof req.query.api_key === "string" ? req.query.api_key : null;
 }
 
 if (ALLOWED_IPS.length) {
@@ -740,7 +755,7 @@ app.get("/health", (req, res) => {
   const seconds = uptimeSeconds % 60;
   const uptimeStr = `${hours}h ${minutes}m ${seconds}s`;
 
-  const includeDetails = getBearerOrQueryToken(req) === API_KEY;
+  const includeDetails = timingSafeCompare(getBearerOrQueryToken(req), API_KEY);
 
   const payload = {
     status: "healthy",
@@ -768,7 +783,7 @@ app.get("/health", (req, res) => {
 
 app.use((req, res, next) => {
   const token = getBearerOrQueryToken(req);
-  if (token !== API_KEY) {
+  if (!timingSafeCompare(token, API_KEY)) {
     return res.status(401).json({ error: "Unauthorized" });
   }
   next();

@@ -9,7 +9,7 @@ opencode / MCP client
         v
 MCP Server :4097  ---- loads/registers tools ----> src/tools.js
         |
-        | JSON files under SIDEKICK_DATA_DIR
+        | SQLite plus JSON/JSONL under SIDEKICK_DATA_DIR
         v
 Persistent data directory
 
@@ -31,7 +31,7 @@ The MCP server creates an `McpServer` from `@modelcontextprotocol/sdk`, register
 - `GET /sse` and `POST /messages` for legacy SSE clients;
 - `GET /health` for diagnostics.
 
-The server requires `Authorization: Bearer <SIDEKICK_API_KEY>` or `?api_key=<key>` for MCP routes. It can also enforce `SIDEKICK_ALLOWED_IPS`.
+The server requires `Authorization: Bearer <SIDEKICK_API_KEY>` or `?api_key=<key>` for MCP routes. It can also enforce `SIDEKICK_ALLOWED_IPS`. Tool calls are checked against the active tool policy before execution.
 
 ### Tool implementation: `src/tools.js`
 
@@ -41,21 +41,22 @@ Important exported values include:
 
 - `TOOLS`: map of tool name to handler function.
 - `TOOL_DEFS`: dashboard-facing catalog of tool names, descriptions, and argument summaries.
-- `callTool(name, args)`: central dispatcher used by the agent and wrapper tools.
+- `getToolDefsForSource(source)`: policy-aware catalog including risk and enabled status.
+- `callTool(name, args)`: central dispatcher used by the agent and wrapper tools; enforces tool policy.
 - `logToolCall(...)`: appends JSONL audit-style tool activity to `log.jsonl`.
 - `setSource(source)`: records whether a call came from MCP, dashboard, agent, or another path.
 
 ### Dashboard: `src/dashboard.js`
 
-The dashboard serves a browser UI and JSON API. It reads the Sidekick data directory, reports system state, allows KV editing and deletion, exposes tool metadata, accepts webhooks, and proxies agent requests to the Agent Bridge.
+The dashboard serves a browser UI and JSON API. The server code lives in `src/dashboard.js`, the authenticated HTML shell lives in `src/dashboard.html`, and public CSS/JS assets live under `static/`. It reads the Sidekick data directory, reports system state, allows KV editing and deletion, exposes tool metadata, accepts webhooks, and proxies agent requests to the Agent Bridge.
 
-It includes dashboard-specific protections: optional Basic Auth, IP allowlist, rate limiting, basic CSRF origin checks, audit logging, and error logging.
+It includes dashboard-specific protections: optional Basic Auth, IP allowlist, rate limiting, exact-host CSRF origin checks, audit logging, error logging, and policy-aware tool metadata.
 
 ### Agent Bridge: `src/agent.js`
 
 The Agent Bridge accepts high-level task requests, builds a task transcript, repeatedly chooses tool calls, executes them through `callTool`, and streams progress events. It also loads scheduled delays and watches at startup.
 
-The agent has a loop limit controlled by `SIDEKICK_MAX_ITERATIONS` and stores transcripts under `data/conversations/`.
+The agent has a loop limit controlled by `SIDEKICK_MAX_ITERATIONS` and stores transcripts under `data/conversations/`. Its prompt is filtered through the active `agent` tool policy so blocked tools are not offered for planning.
 
 ## Session handling
 
@@ -63,6 +64,6 @@ The MCP server tracks sessions in memory. Sessions include the MCP server instan
 
 ## Shared storage
 
-All services use the same `SIDEKICK_DATA_DIR`. By default, this is `data/` relative to the project during local development, and `/home/sidekick/sidekick/data` in the example deployment.
+All services use the same `SIDEKICK_DATA_DIR`. By default, this is `data/` relative to the project during local development, and `/home/sidekick/sidekick/data` in the example deployment. Core KV, logs, and many operational records are stored in SQLite (`sidekick.db`); some long-lived documents and transcripts remain JSON/JSONL files.
 
-Because storage is simple JSON and JSONL files, backups and inspection are straightforward. The tradeoff is that very large data files or concurrent heavy writes can become fragile. Keep logs trimmed, back up state regularly, and avoid using the KV store as a large database.
+Back up both `sidekick.db` and the surrounding data directory. Keep logs trimmed, protect backups as sensitive operational data, and avoid using the KV store as a large application database.

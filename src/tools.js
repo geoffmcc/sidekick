@@ -33,6 +33,124 @@ function setSource(source) {
   currentSource = source;
 }
 
+const RISK_ORDER = { low: 1, medium: 2, high: 3, critical: 4 };
+
+const TOOL_RISK = {
+  sidekick_bash: "critical",
+  sidekick_write: "critical",
+  sidekick_db_restore: "critical",
+  sidekick_runbook: "critical",
+  sidekick_sandbox: "critical",
+  sidekick_evolve: "critical",
+  sidekick_process: "high",
+  sidekick_service: "high",
+  sidekick_cron: "high",
+  sidekick_delay: "high",
+  sidekick_watch: "high",
+  sidekick_github: "high",
+  sidekick_teach: "high",
+  sidekick_secret: "high",
+  sidekick_db_migrate: "high",
+  sidekick_queue: "high",
+  sidekick_orchestrate: "high",
+  sidekick_notify: "medium",
+  sidekick_read: "medium",
+  sidekick_archive: "medium",
+  sidekick_git: "medium",
+  sidekick_web_fetch: "medium",
+  sidekick_llm: "medium",
+  sidekick_context: "medium",
+  sidekick_health: "medium",
+  sidekick_snapshot: "medium",
+  sidekick_retry: "medium",
+  sidekick_fresheyes: "medium",
+  sidekick_batch: "medium",
+  sidekick_tail: "medium",
+  sidekick_find: "medium",
+  sidekick_status: "medium",
+  sidekick_extract: "medium",
+  sidekick_changelog: "medium",
+  sidekick_netdiag: "medium",
+  sidekick_timeline: "medium",
+  sidekick_circuit: "medium",
+  sidekick_baseline: "medium",
+  sidekick_depend: "medium",
+  sidekick_black_box: "medium",
+  sidekick_db_query: "medium",
+  sidekick_db_backup: "medium",
+  sidekick_db_export: "medium",
+};
+
+function getToolRisk(name) {
+  return TOOL_RISK[name] || "low";
+}
+
+function parsePolicyList(value) {
+  return String(value || "").split(",").map(s => s.trim()).filter(Boolean);
+}
+
+function sourceEnvName(source, suffix) {
+  return "SIDEKICK_" + String(source || "unknown").toUpperCase().replace(/[^A-Z0-9]+/g, "_") + "_" + suffix;
+}
+
+function getPolicyEntries(source, suffixes) {
+  const entries = [];
+  for (const suffix of suffixes) {
+    entries.push(...parsePolicyList(process.env["SIDEKICK_" + suffix]));
+    entries.push(...parsePolicyList(process.env[sourceEnvName(source, suffix)]));
+  }
+  return entries;
+}
+
+function policyListMatches(entries, toolName, risk) {
+  return entries.some(entry => {
+    const normalized = entry.toLowerCase();
+    return normalized === toolName.toLowerCase() || normalized === ("risk:" + risk);
+  });
+}
+
+function getToolPolicyDecision(toolName, source = currentSource) {
+  const risk = getToolRisk(toolName);
+  const sourceMode = process.env[sourceEnvName(source, "TOOL_POLICY")];
+  const mode = (sourceMode || process.env.SIDEKICK_TOOL_POLICY || "open").toLowerCase();
+  const allowedEntries = getPolicyEntries(source, ["ALLOWED_TOOLS"]);
+  const blockedEntries = getPolicyEntries(source, ["DISABLED_TOOLS", "BLOCKED_TOOLS"]);
+
+  if (policyListMatches(blockedEntries, toolName, risk)) {
+    return { allowed: false, source, mode, risk, reason: "blocked by tool policy" };
+  }
+
+  if (allowedEntries.length > 0) {
+    const allowed = policyListMatches(allowedEntries, toolName, risk);
+    return { allowed, source, mode, risk, reason: allowed ? "allowed by explicit allowlist" : "not in explicit allowlist" };
+  }
+
+  if (mode === "restricted" && RISK_ORDER[risk] >= RISK_ORDER.high) {
+    return { allowed: false, source, mode, risk, reason: "restricted policy blocks high and critical risk tools" };
+  }
+
+  return { allowed: true, source, mode, risk, reason: "allowed" };
+}
+
+function enforceToolPolicy(toolName, source = currentSource) {
+  const decision = getToolPolicyDecision(toolName, source);
+  if (decision.allowed) return null;
+  return {
+    content: [{
+      type: "text",
+      text: `Tool blocked by policy: ${toolName} (${decision.risk} risk, source=${decision.source}, mode=${decision.mode}). ${decision.reason}.`
+    }],
+    isError: true
+  };
+}
+
+function getToolDefsForSource(source = currentSource) {
+  return TOOL_DEFS.map(def => {
+    const policy = getToolPolicyDecision(def.name, source);
+    return { ...def, risk: policy.risk, enabled: policy.allowed, policy: policy.reason };
+  });
+}
+
 function formatArgs(args) {
   if (typeof args !== "object" || args === null) return "";
   const parts = [];
@@ -59,11 +177,15 @@ function logToolCall(name, args, duration, success, summary) {
 }
 
 const DANGEROUS_PATTERNS = [
-  /rm\s+-rf\s+\//,   /\s*>\s*\/dev\/(sd|nvme|vd|sda|xvda)/,
-  /mkfs/, /fdisk/, /parted/,   /dd\s+.*\/dev\//,
+  /\brm\s+-(?:[a-z]*r[a-z]*f|[a-z]*f[a-z]*r)[a-z]*\s+(?:--no-preserve-root\s+)?\/(?:\s|$|[/*])/i,
+  /\brm\s+-(?:[a-z]*r[a-z]*f|[a-z]*f[a-z]*r)[a-z]*\s+\/(?:var|etc|home|usr|bin|sbin|lib|lib64|boot|root)(?:\s|$|\/)/i,
+  /\s*>\s*\/dev\/(sd|nvme|vd|xvd)[a-z0-9]*/i,
+  /\bmkfs(?:\.\w+)?\b/i,
+  /\b(fdisk|parted)\b/i,
+  /\bdd\s+.*\bof=\/dev\//i,
   /:\(\)\{/,
-  /(curl|wget)\s+.*\|\s*(bash|sh)\b/,
-  /chmod\s+-R\s+777\s+\//,
+  /\b(curl|wget)\b\s+.*\|\s*(?:sudo\s+)?(?:bash|sh)\b/i,
+  /\bchmod\s+-R\s+777\s+\//i,
 ];
 
 function isDangerous(cmd) {
@@ -7300,6 +7422,11 @@ async function callTool(name, args) {
   if (!handler) {
     return { content: [{ type: "text", text: "Unknown tool: " + name }], isError: true };
   }
+  const policyError = enforceToolPolicy(name, currentSource);
+  if (policyError) {
+    logToolCall(name, args, 0, false, policyError.content[0].text);
+    return policyError;
+  }
   const start = Date.now();
   try {
     const result = await handler(args);
@@ -7314,4 +7441,24 @@ async function callTool(name, args) {
   }
 }
 
-module.exports = { TOOLS, TOOL_DEFS, callTool, logToolCall, setSource, DATA_DIR, OLLAMA_URL, GROQ_API_KEY, GROQ_MODEL, loadProcedures, loadDelays, saveDelays, loadWatches, saveWatches, isDangerous };
+module.exports = {
+  TOOLS,
+  TOOL_DEFS,
+  callTool,
+  logToolCall,
+  setSource,
+  DATA_DIR,
+  OLLAMA_URL,
+  GROQ_API_KEY,
+  GROQ_MODEL,
+  loadProcedures,
+  loadDelays,
+  saveDelays,
+  loadWatches,
+  saveWatches,
+  isDangerous,
+  getToolRisk,
+  getToolPolicyDecision,
+  getToolDefsForSource,
+  enforceToolPolicy
+};

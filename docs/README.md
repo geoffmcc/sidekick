@@ -2,7 +2,7 @@
 
 Sidekick is a self-hosted Model Context Protocol server and autonomous assistant platform intended to give opencode a persistent remote working environment. This documentation was rebuilt from the supplied `sidekick-main(1).zip` source tree and uses the current code as the source of truth.
 
-The project currently exposes three Node.js services and 60 exported MCP tools.
+The project currently exposes three Node.js services and 70 exported MCP tools.
 
 ## Documentation map
 

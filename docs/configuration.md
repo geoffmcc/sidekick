@@ -57,6 +57,38 @@ If `GROQ_API_KEY` is configured, Sidekick can use Groq for faster cloud LLM resp
 
 If Groq is not configured, Sidekick can use local Ollama as a fallback.
 
+## Security and tool policy
+
+Set a strong MCP API key before any non-local deployment:
+
+```env
+SIDEKICK_API_KEY=replace-with-a-long-random-value
+```
+
+Set dashboard credentials if the dashboard is reachable from a browser:
+
+```env
+SIDEKICK_DASHBOARD_USER=admin
+SIDEKICK_DASHBOARD_PASS=replace-with-a-long-random-value
+```
+
+Use IP allowlists when practical:
+
+```env
+SIDEKICK_ALLOWED_IPS=192.168.1.0/24
+SIDEKICK_DASHBOARD_ALLOWED_IPS=192.168.1.0/24
+```
+
+Tool policy defaults to `open` for backward compatibility. Use `restricted` for shared or public-facing deployments:
+
+```env
+SIDEKICK_TOOL_POLICY=restricted
+SIDEKICK_AGENT_ALLOWED_TOOLS=sidekick_read,sidekick_search,sidekick_get,sidekick_respond
+SIDEKICK_BLOCKED_TOOLS=sidekick_db_restore,sidekick_evolve
+```
+
+Policy lists accept exact tool names and risk selectors such as `risk:high` or `risk:critical`. Source-specific variables are available for `MCP`, `DASHBOARD`, and `AGENT` sources, for example `SIDEKICK_AGENT_TOOL_POLICY` and `SIDEKICK_MCP_BLOCKED_TOOLS`.
+
 ## Useful Checks
 
 Check the configured Ollama model:

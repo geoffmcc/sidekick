@@ -4,7 +4,7 @@ The dashboard is implemented in `src/dashboard.js` and defaults to port 4098. It
 
 ## Main UI areas
 
-The dashboard frontend is embedded directly in `dashboard.js`. It is organized around tabs for system status, activity, data, configuration, agent tasks, and tools.
+The dashboard frontend is split across `src/dashboard.html`, `static/dashboard.css`, and `static/dashboard.js`. `src/dashboard.js` serves the private HTML shell from the authenticated root route and serves only CSS/JS/font assets through `/static`. The UI is organized around tabs for system status, activity, data, configuration, agent tasks, and tools.
 
 Typical dashboard functions:
 
@@ -20,9 +20,13 @@ Typical dashboard functions:
 
 ## Authentication and protections
 
-Dashboard Basic Auth is enabled only when both `SIDEKICK_DASHBOARD_USER` and `SIDEKICK_DASHBOARD_PASS` are set. The dashboard also supports `SIDEKICK_DASHBOARD_ALLOWED_IPS`, in-memory rate limiting, origin checks for mutating requests, audit logging, and frontend error logging.
+Dashboard Basic Auth is enabled only when both `SIDEKICK_DASHBOARD_USER` and `SIDEKICK_DASHBOARD_PASS` are set. When enabled, it protects the dashboard HTML, JSON APIs, and agent event streams. Static assets remain public so authenticated browsers can load CSS and fonts. The dashboard also supports `SIDEKICK_DASHBOARD_ALLOWED_IPS`, in-memory rate limiting, origin checks for mutating requests, audit logging, and frontend error logging.
 
-The root page is intentionally allowed through Basic Auth middleware in the current code, while API routes are protected when auth is configured. If the dashboard is exposed outside a private network, put it behind a reverse proxy, VPN, or additional authentication.
+If the dashboard is exposed outside a private network, put it behind a reverse proxy, VPN, or additional authentication. For shared deployments, also set `SIDEKICK_TOOL_POLICY=restricted`.
+
+## Tool catalog
+
+`GET /api/tools` returns tool metadata for the dashboard, including risk classification and whether the active dashboard policy enables each tool. The Tools tab displays that policy state alongside search, category filtering, and argument details.
 
 ## Data editing
 

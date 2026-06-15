@@ -22,7 +22,7 @@ IP allowlists are useful but should not be the only protection if the service is
 
 ## Dashboard authentication
 
-Set both `SIDEKICK_DASHBOARD_USER` and `SIDEKICK_DASHBOARD_PASS` to enable Basic Auth for dashboard API routes. For public exposure, Basic Auth alone is not ideal; combine it with TLS and network restrictions.
+Set both `SIDEKICK_DASHBOARD_USER` and `SIDEKICK_DASHBOARD_PASS` to enable Basic Auth for the dashboard HTML, API routes, and agent event streams. Static assets remain public so authenticated browsers can load CSS and fonts. For public exposure, Basic Auth alone is not ideal; combine it with TLS and network restrictions.
 
 ## Dashboard protections
 
@@ -37,9 +37,29 @@ The dashboard includes:
 
 ## Command safety
 
-`sidekick_bash` blocks commands matching known dangerous patterns, including examples such as recursive root deletion, block-device writes, filesystem creation, fork-bomb pattern, curl/wget piped to shell, and recursive `chmod 777 /`.
+`sidekick_bash` blocks commands matching known dangerous patterns, including examples such as recursive root deletion, common flag-order and case variants, block-device writes, filesystem creation, fork-bomb pattern, curl/wget piped to shell, and recursive `chmod 777 /`.
 
 This is a guardrail, not a full sandbox. It will not detect every destructive command. Avoid granting Sidekick broader sudo access than necessary.
+
+## Tool permission policy
+
+Sidekick now supports a config-driven tool policy. The default `SIDEKICK_TOOL_POLICY=open` preserves existing behavior: tools are allowed unless explicitly blocked.
+
+Set `SIDEKICK_TOOL_POLICY=restricted` to block high and critical risk tools unless they are explicitly allowed. You can also set source-specific policies for `mcp`, `dashboard`, and `agent`:
+
+```env
+SIDEKICK_AGENT_TOOL_POLICY=restricted
+SIDEKICK_AGENT_ALLOWED_TOOLS=sidekick_read,sidekick_search,sidekick_get,sidekick_respond
+SIDEKICK_BLOCKED_TOOLS=sidekick_db_restore,sidekick_evolve
+```
+
+Policy lists accept tool names and risk selectors such as `risk:high` or `risk:critical`. Explicit blocklists win over allowlists.
+
+High and critical tools are not removed from the project because trusted operators need them. For internet-reachable or shared deployments, run the agent and MCP source in `restricted` mode and allow only the tools required for the workflow.
+
+## Database query safety
+
+The database query tool and dashboard query endpoint default to read-only mode. In that mode they allow single-statement row-returning SQL only (`SELECT`, `WITH`, `EXPLAIN`, and non-mutating `PRAGMA`), reject multi-statement input, and apply bounded row limits. Use `readonly=false` only for deliberate maintenance.
 
 ## Sudoers scope
 
@@ -60,6 +80,7 @@ Recommended safest setup:
 1. Bind services to a private interface or firewall them to VPN-only access.
 2. Use a strong `SIDEKICK_API_KEY`.
 3. Enable dashboard auth if dashboard is reachable by browser clients.
-4. Keep the Agent Bridge private; access it through the dashboard proxy only.
-5. Use HTTPS if crossing an untrusted network.
-6. Back up the data directory but protect backups because they can contain sensitive operational history.
+4. Set `SIDEKICK_TOOL_POLICY=restricted` for shared or public-facing deployments.
+5. Keep the Agent Bridge private; access it through the dashboard proxy only.
+6. Use HTTPS if crossing an untrusted network.
+7. Back up the data directory but protect backups because they can contain sensitive operational history.

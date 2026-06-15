@@ -5,7 +5,7 @@ const path = require("path");
 const crypto = require("crypto");
 const EventEmitter = require("events");
 const { execFileSync } = require("child_process");
-const { callTool, TOOL_DEFS, DATA_DIR, GROQ_API_KEY, GROQ_MODEL, setSource, loadDelays, saveDelays, loadWatches, saveWatches } = require("./tools");
+const { callTool, DATA_DIR, GROQ_API_KEY, GROQ_MODEL, setSource, loadDelays, saveDelays, loadWatches, saveWatches, getToolDefsForSource } = require("./tools");
 
 const PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 
@@ -277,8 +277,9 @@ app.use(express.json({ limit: "1mb" }));
 const taskEmitters = {};
 
 function buildSystemPrompt() {
-  const toolDescs = TOOL_DEFS.map(t =>
-    "- " + t.name + "(" + Object.keys(t.args).join(", ") + "): " + t.description
+  const availableTools = getToolDefsForSource("agent").filter(t => t.enabled);
+  const toolDescs = availableTools.map(t =>
+    "- " + t.name + "(" + Object.keys(t.args).join(", ") + "): " + t.description + " [risk: " + t.risk + "]"
   ).join("\n");
   return "You are an autonomous agent running on a remote machine.\n\n" +
     "CRITICAL RULES:\n" +
@@ -630,11 +631,12 @@ async function runAgent(goal, taskId) {
 
     if (decision.tool) {
       // Tool validation: check if tool exists before calling
-      const validTool = TOOL_DEFS.find(t => t.name === decision.tool);
+      const availableToolDefs = getToolDefsForSource("agent").filter(t => t.enabled);
+      const validTool = availableToolDefs.find(t => t.name === decision.tool);
       if (!validTool) {
         emit(taskId, { type: "error", text: "Unknown tool: " + decision.tool });
         steps.push({ type: "tool", tool: decision.tool, args: decision.arguments, result: "Error: tool does not exist" });
-        const availableTools = TOOL_DEFS.map(t => t.name).join(", ");
+        const availableTools = availableToolDefs.map(t => t.name).join(", ");
         history.push({ role: "assistant", content: "Called " + decision.tool + " → Error: tool does not exist" });
         history.push({ role: "user", content: "Tool '" + decision.tool + "' does not exist. Available tools: " + availableTools + ". Use sidekick_respond to return text directly, or choose a valid tool from the list." });
         continue;
@@ -660,9 +662,9 @@ async function runAgent(goal, taskId) {
         const toolRes = await callTool(decision.tool, decision.arguments || {});
         if (toolRes.isError) {
           result = "Error: " + (toolRes.content?.[0]?.text || "unknown error");
-          // If error is "Unknown tool", provide corrective feedback
-          if (result.includes("Unknown tool")) {
-            const availableTools = TOOL_DEFS.map(t => t.name).join(", ");
+          // If policy or lookup blocks a tool, provide corrective feedback.
+          if (result.includes("Unknown tool") || result.includes("Tool blocked by policy")) {
+            const availableTools = getToolDefsForSource("agent").filter(t => t.enabled).map(t => t.name).join(", ");
             result += ". Available tools: " + availableTools + ". Use sidekick_respond to return text directly.";
           }
         } else {
