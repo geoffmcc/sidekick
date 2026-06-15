@@ -458,8 +458,12 @@ async function sidekick_notify({ channel, webhook_url, recipient, message, title
   const http = require("http");
   
   if (channel === "discord" || channel === "slack") {
+    // Fall back to environment variables if webhook_url not provided
     if (!webhook_url) {
-      return { content: [{ type: "text", text: "webhook_url required for " + channel }], isError: true };
+      webhook_url = channel === "discord" ? process.env.DISCORD_WEBHOOK_URL : process.env.SLACK_WEBHOOK_URL;
+    }
+    if (!webhook_url) {
+      return { content: [{ type: "text", text: "webhook_url required for " + channel + " (set DISCORD_WEBHOOK_URL or SLACK_WEBHOOK_URL env var)" }], isError: true };
     }
     
     const payload = channel === "discord" 
