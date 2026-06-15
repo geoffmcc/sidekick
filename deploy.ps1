@@ -415,9 +415,9 @@ try {
 
   Write-Host ""
   Write-Host "--- Starting Services ---" -ForegroundColor Cyan
-  Restart-SidekickService "sidekick-mcp"
-  Restart-SidekickService "sidekick-dashboard"
   Restart-SidekickService "sidekick-agent"
+  Restart-SidekickService "sidekick-dashboard"
+  Restart-SidekickService "sidekick-mcp"
 
   Write-Host ""
   Write-Host "=== Deploy complete ===" -ForegroundColor Cyan
