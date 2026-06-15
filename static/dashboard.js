@@ -156,6 +156,7 @@ function $(id){return document.getElementById(id)}
 
 function showPage(name){
   currentPage = name;
+  localStorage.setItem('sidekick_currentPage', name);
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
   $('page-' + name).classList.add('active');
@@ -1258,6 +1259,12 @@ function refresh(){
   const now = new Date();
   $('lastUpdate').textContent = 'updated ' + now.toLocaleTimeString();
   loadSystem(); loadDashboardSummary(); loadLLM(); loadServices();
+}
+
+// Restore last viewed tab
+const savedPage = localStorage.getItem('sidekick_currentPage');
+if (savedPage && savedPage !== 'system') {
+  showPage(savedPage);
 }
 
 refresh();
