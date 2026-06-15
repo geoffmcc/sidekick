@@ -33,7 +33,7 @@ Before creating any new tool or tool suite:
 1. Recall from KV store: `sidekick_get key="tool_making_guide" project="sidekick"`
 2. If not available, read `docs/tool-creation.md` and store it in KV for next time
 
-## Tools (70 total)
+## Tools (80 total)
 
 ### Core Tools (11)
 
@@ -51,7 +51,7 @@ Before creating any new tool or tool suite:
 | `todowrite` | Track multi-step tasks with a todo list |
 | `webfetch` | Fetch and convert URLs to markdown/text/html |
 
-### Sidekick MCP Tools (59)
+### Sidekick MCP Tools (69)
 
 | Tool | When to use |
 |------|-------------|
@@ -114,6 +114,16 @@ Before creating any new tool or tool suite:
 | `sidekick_depend` | Dependency analyzer for npm, systemd services, processes. Trees, reverse deps, impact analysis |
 | `sidekick_runbook` | Operational runbook executor with autonomous and guided modes. Verification, rollback, step-by-step |
 | `sidekick_black_box` | Incident time capsule capturing full system context. Rate limited (5/day, 7-day TTL, 3 active max) |
+| `sidekick_db_schema` | Inspect database schema: tables, columns, indexes, foreign keys |
+| `sidekick_db_query` | Execute raw SQL with safety limits (readonly mode, row caps, timeout) |
+| `sidekick_db_stats` | Database size, table sizes, WAL status, cache hit ratio |
+| `sidekick_db_backup` | Timestamped backup with compression |
+| `sidekick_db_restore` | Restore from backup with integrity check |
+| `sidekick_log_query` | Advanced tool_logs filtering (time, tool, source, status) |
+| `sidekick_db_export` | Export tables to JSON/CSV/SQL dump |
+| `sidekick_db_search` | Full-text search across all tables (FTS5) |
+| `sidekick_db_migrate` | Schema migrations with versioning and rollback |
+| `sidekick_db_diff` | Compare two DB snapshots, show what changed |
 
 ## Token Efficiency Rules
 
