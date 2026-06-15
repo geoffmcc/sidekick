@@ -15,6 +15,7 @@ const MCP_API_KEY = process.env.SIDEKICK_API_KEY || "sk-sidekick-local-dev";
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const app = express();
+app.use("/static", express.static(path.join(__dirname, "..", "static")));
 const http = require("http");
 const AGENT_PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 
@@ -175,6 +176,7 @@ app.use((req, res, next) => {
 if (DASHBOARD_USER && DASHBOARD_PASS) {
   app.use((req, res, next) => {
     if (req.path.startsWith('/api/agent/stream/')) return next();
+    if (req.path.startsWith('/static/')) return next();
     if (req.path === "/") return next();
     const auth = req.headers.authorization;
     if (!auth || !auth.startsWith("Basic ")) {
@@ -817,10 +819,8 @@ app.get("/", (req, res) => {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sidekick Dashboard</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/fontawesome/css/all.min.css">
+<link rel="stylesheet" href="/static/fonts/jetbrains-mono/jetbrains-mono.css">
 <style>
 :root{--font:'JetBrains Mono',monospace}
 *{box-sizing:border-box;margin:0;padding:0;font-family:var(--font)}
