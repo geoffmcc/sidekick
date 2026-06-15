@@ -200,7 +200,7 @@ function callOllamaLLM(prompt, system, temperature) {
   const http = require("http");
   return new Promise((resolve) => {
     const body = JSON.stringify({
-      model: "phi3:mini",
+      model: process.env.OLLAMA_MODEL || "qwen2.5-coder:7b",
       prompt: prompt,
       system: system || "You are a helpful assistant running on a remote machine.",
       options: { temperature: temperature || 0.7 },
