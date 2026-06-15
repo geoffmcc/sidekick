@@ -3567,6 +3567,75 @@ async function evolveAutoApplyDocs(proposal) {
   }
 }
 
+async function evolveParseProcedureSteps(proposal) {
+  const implementationText = typeof proposal.implementation === "string" 
+    ? proposal.implementation 
+    : JSON.stringify(proposal.implementation);
+  
+  const toolSchemas = `
+Available tools and their parameters:
+- sidekick_bash: { "command": "shell command to run" }
+- sidekick_read: { "path": "absolute file path" }
+- sidekick_write: { "path": "absolute file path", "content": "file content" }
+- sidekick_list: { "path": "/home/sidekick" }
+- sidekick_search: { "pattern": "regex", "path": "optional dir", "include": "optional file pattern" }
+- sidekick_git: { "action": "status|diff|log|add|commit|push|pull|branch|checkout|stash", "args": "optional string" }
+- sidekick_notify: { "channel": "discord|slack|email", "message": "text", "webhook_url": "for discord/slack", "recipient": "for email" }
+- sidekick_process: { "action": "list|top|kill|tree", "filter": "optional name", "pid": "optional number", "name": "optional name" }
+- sidekick_service: { "action": "start|stop|restart|status|enable|disable|logs", "service": "service name" }
+- sidekick_archive: { "action": "create|extract|list", "path": "source path", "output": "output path for create", "format": "tar.gz|zip" }
+- sidekick_store: { "key": "storage key", "value": "value to store", "project": "optional project name" }
+- sidekick_get: { "key": "storage key" }
+- sidekick_web_fetch: { "url": "URL to fetch", "method": "GET|POST", "body": "optional", "headers": "optional JSON" }
+- sidekick_llm: { "prompt": "question", "system": "optional system prompt", "temperature": "optional 0-2" }
+`;
+
+  const prompt = `Convert these procedure steps into structured tool calls.
+
+Procedure: ${proposal.title}
+Description: ${proposal.description}
+
+Implementation steps:
+${implementationText}
+
+${toolSchemas}
+
+Return a JSON array where each element has "tool" and "args" properties.
+Use {{paramName}} syntax for any input parameters the procedure needs.
+
+Example output format:
+[
+  {"tool": "sidekick_bash", "args": {"command": "df -h {{path}}"}},
+  {"tool": "sidekick_store", "args": {"key": "result", "value": "{{output}}"}}
+]
+
+If a step is purely descriptive (like "Identify common patterns") and cannot be implemented as a tool call, skip it.
+Return ONLY the JSON array, no other text.`;
+
+  const llmResult = await sidekick_llm({ 
+    prompt, 
+    system: "You are a helpful assistant that converts procedure descriptions into structured tool calls. Return only valid JSON arrays." 
+  });
+  
+  if (llmResult.isError) {
+    return { steps: [], error: llmResult.content[0].text };
+  }
+  
+  try {
+    const text = llmResult.content[0].text.trim();
+    const jsonMatch = text.match(/\[[\s\S]*\]/);
+    if (jsonMatch) {
+      const steps = JSON.parse(jsonMatch[0]);
+      if (Array.isArray(steps) && steps.length > 0) {
+        return { steps, error: null };
+      }
+    }
+    return { steps: [], error: "No valid steps found in LLM response" };
+  } catch (e) {
+    return { steps: [], error: `Failed to parse steps: ${e.message}` };
+  }
+}
+
 async function evolveNotifyDiscord(message) {
   const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
   if (!webhookUrl) return { notified: false, reason: "No DISCORD_WEBHOOK_URL set" };
@@ -3700,14 +3769,21 @@ async function sidekick_evolve({ action, id, proposal, approve, test }) {
       p.autoAppliedAt = new Date().toISOString();
       p.autoAppliedPath = implementationResult.path || null;
     } else if (p.type === "procedure" && p.implementation) {
-      const teachResult = await callTool("sidekick_teach", {
-        action: "teach_procedure",
-        name: p.title.toLowerCase().replace(/[^a-z0-9]+/g, "_").substring(0, 50),
-        description: p.description || p.title,
-        steps: typeof p.implementation === "string" ? p.implementation.split("\n").filter(s => s.trim()) : []
-      });
-      implementationResult = teachResult.isError ? { applied: false, error: teachResult.content[0].text } : { applied: true };
-      p.autoApplied = !teachResult.isError;
+      const parsedSteps = await evolveParseProcedureSteps(p);
+      if (parsedSteps.error) {
+        implementationResult = { applied: false, error: parsedSteps.error };
+      } else if (parsedSteps.steps.length === 0) {
+        implementationResult = { applied: false, error: "No actionable steps found in implementation" };
+      } else {
+        const teachResult = await callTool("sidekick_teach", {
+          action: "teach_procedure",
+          name: p.title.toLowerCase().replace(/[^a-z0-9]+/g, "_").substring(0, 50),
+          description: p.description || p.title,
+          steps: parsedSteps.steps
+        });
+        implementationResult = teachResult.isError ? { applied: false, error: teachResult.content[0].text } : { applied: true };
+      }
+      p.autoApplied = implementationResult.applied;
       p.autoAppliedAt = new Date().toISOString();
     }
     
