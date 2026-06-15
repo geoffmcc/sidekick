@@ -335,8 +335,14 @@ function createBackup(destPath = null, compress = true) {
   const backupName = `sidekick-backup-${timestamp}.db`;
   const backupPath = destPath || path.join(BACKUP_DIR, backupName);
   
+  // Close main db to ensure clean state, then copy
   const backupDb = new Database(backupPath);
-  db.backup(backupDb).then(() => {
+  try {
+    // Use synchronous backup via file copy
+    // First checkpoint WAL to main db file
+    db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").run();
+    // Copy the database file
+    fs.copyFileSync(DB_FILE, backupPath);
     backupDb.close();
     
     if (compress) {
@@ -348,13 +354,10 @@ function createBackup(destPath = null, compress = true) {
     }
     
     return { path: backupPath, size: fs.statSync(backupPath).size, compressed: false };
-  }).catch(err => {
-    backupDb.close();
+  } catch (err) {
+    try { backupDb.close(); } catch (e) {}
     throw err;
-  });
-  
-  const result = { path: compress ? backupPath + ".gz" : backupPath };
-  return result;
+  }
 }
 
 function restoreBackup(backupPath, verify = true) {
@@ -382,27 +385,25 @@ function restoreBackup(backupPath, verify = true) {
     testDb.close();
   }
   
+  // Create pre-restore backup using synchronous file copy
   const preBackupPath = path.join(BACKUP_DIR, `pre-restore-${Date.now()}.db`);
-  const preBackup = new Database(preBackupPath);
-  db.backup(preBackup).then(() => {
-    preBackup.close();
-    
-    const sourceDb = new Database(tempPath);
-    sourceDb.backup(db).then(() => {
-      sourceDb.close();
-      if (tempPath !== backupPath) fs.unlinkSync(tempPath);
-      return { success: true, preBackupPath };
-    }).catch(err => {
-      sourceDb.close();
-      if (tempPath !== backupPath) fs.unlinkSync(tempPath);
-      throw err;
-    });
-  }).catch(err => {
-    preBackup.close();
+  try {
+    db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").run();
+    fs.copyFileSync(DB_FILE, preBackupPath);
+  } catch (err) {
+    if (tempPath !== backupPath) fs.unlinkSync(tempPath);
     throw err;
-  });
+  }
   
-  return { success: true, preBackupPath };
+  // Restore by copying backup file over main db
+  try {
+    fs.copyFileSync(tempPath, DB_FILE);
+    if (tempPath !== backupPath) fs.unlinkSync(tempPath);
+    return { success: true, preBackupPath };
+  } catch (err) {
+    if (tempPath !== backupPath) fs.unlinkSync(tempPath);
+    throw err;
+  }
 }
 
 function queryToolLogs(filters = {}) {
