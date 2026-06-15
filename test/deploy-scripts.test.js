@@ -615,6 +615,58 @@ console.log('Test 5.5: bootstrap.sh installs git');
   console.log('✓ Git installation present\n');
 }
 
+// Test 5.6: deploy.sh has backup/restore logic for git clone
+console.log('Test 5.6: deploy.sh has backup/restore logic');
+{
+  assert.ok(
+    deployShContent.includes('/tmp/sidekick-backup'),
+    'deploy.sh should use /tmp/sidekick-backup for backup'
+  );
+  assert.ok(
+    deployShContent.includes('Backing up existing data'),
+    'deploy.sh should indicate backup step'
+  );
+  assert.ok(
+    deployShContent.includes('Restoring data'),
+    'deploy.sh should indicate restore step'
+  );
+  assert.ok(
+    deployShContent.includes('Backup cleaned up'),
+    'deploy.sh should clean up backup on success'
+  );
+  assert.ok(
+    deployShContent.includes('Backup preserved'),
+    'deploy.sh should preserve backup on failure'
+  );
+  console.log('✓ Backup/restore logic present\n');
+}
+
+// Test 5.7: deploy.ps1 has backup/restore logic for git clone
+console.log('Test 5.7: deploy.ps1 has backup/restore logic');
+{
+  assert.ok(
+    deployPs1Content.includes('/tmp/sidekick-backup'),
+    'deploy.ps1 should use /tmp/sidekick-backup for backup'
+  );
+  assert.ok(
+    deployPs1Content.includes('Backing up existing data'),
+    'deploy.ps1 should indicate backup step'
+  );
+  assert.ok(
+    deployPs1Content.includes('Restoring data'),
+    'deploy.ps1 should indicate restore step'
+  );
+  assert.ok(
+    deployPs1Content.includes('Backup cleaned up'),
+    'deploy.ps1 should clean up backup on success'
+  );
+  assert.ok(
+    deployPs1Content.includes('Backup preserved'),
+    'deploy.ps1 should preserve backup on failure'
+  );
+  console.log('✓ Backup/restore logic present\n');
+}
+
 // ============================================================================
 // CROSS-SCRIPT CONSISTENCY TESTS (Git Deploy)
 // ============================================================================

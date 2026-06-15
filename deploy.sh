@@ -310,12 +310,31 @@ else
     fi
   else
     echo -e "  \033[33mCloning repository...\033[0m"
-    # Remove any existing files from old scp deploys
-    run_remote "rm -rf $REMOTE_DIR/src $REMOTE_DIR/package.json" >/dev/null 2>&1 || true
-    if ! run_remote "git clone '$REPO_URL' $REMOTE_DIR 2>&1"; then
-      echo -e "\033[31mERROR: git clone failed\033[0m"
+    # Backup existing data and .env before replacing with git clone
+    echo -e "  \033[33mBacking up existing data...\033[0m"
+    run_remote "mkdir -p /tmp/sidekick-backup && cp -r $REMOTE_DIR/data /tmp/sidekick-backup/ 2>/dev/null; cp $REMOTE_DIR/.env /tmp/sidekick-backup/ 2>/dev/null; echo DONE" >/dev/null 2>&1 || true
+    
+    # Remove existing directory (git clone requires empty or non-existent dir)
+    echo -e "  \033[33mRemoving old deployment directory...\033[0m"
+    if ! run_remote "rm -rf $REMOTE_DIR && mkdir -p $REMOTE_DIR" >/dev/null 2>&1; then
+      echo -e "\033[31mERROR: Failed to remove old directory\033[0m"
       exit 1
     fi
+    
+    # Clone fresh
+    if ! run_remote "git clone '$REPO_URL' $REMOTE_DIR 2>&1"; then
+      echo -e "\033[31mERROR: git clone failed\033[0m"
+      echo -e "\033[33mBackup preserved at /tmp/sidekick-backup/ on remote\033[0m"
+      exit 1
+    fi
+    
+    # Restore data and .env from backup
+    echo -e "  \033[33mRestoring data and .env from backup...\033[0m"
+    run_remote "cp -r /tmp/sidekick-backup/data $REMOTE_DIR/ 2>/dev/null; cp /tmp/sidekick-backup/.env $REMOTE_DIR/ 2>/dev/null; echo DONE" >/dev/null 2>&1 || true
+    
+    # Cleanup backup on success
+    run_remote "rm -rf /tmp/sidekick-backup" >/dev/null 2>&1 || true
+    echo -e "  \033[32mBackup cleaned up\033[0m"
   fi
   changed+=("git")
 

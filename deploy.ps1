@@ -311,13 +311,36 @@ try {
       }
     } else {
       Write-Host "  Cloning repository..." -ForegroundColor Yellow
-      Run-Remote "rm -rf $REMOTE_DIR/src $REMOTE_DIR/package.json" 2>$null
+      
+      # Backup existing data and .env before replacing with git clone
+      Write-Host "  Backing up existing data..." -ForegroundColor Yellow
+      Run-Remote "mkdir -p /tmp/sidekick-backup && cp -r $REMOTE_DIR/data /tmp/sidekick-backup/ 2>/dev/null; cp $REMOTE_DIR/.env /tmp/sidekick-backup/ 2>/dev/null; echo DONE" 2>$null
+      
+      # Remove existing directory (git clone requires empty or non-existent dir)
+      Write-Host "  Removing old deployment directory..." -ForegroundColor Yellow
+      $rmOutput = Run-Remote "rm -rf $REMOTE_DIR && mkdir -p $REMOTE_DIR" 2>&1
+      if ($LASTEXITCODE -ne 0) {
+        Write-Host "  ERROR: Failed to remove old directory" -ForegroundColor Red
+        Write-Host $rmOutput
+        throw "Failed to remove old directory"
+      }
+      
+      # Clone fresh
       $cloneOutput = Run-Remote "git clone '$repoUrl' $REMOTE_DIR 2>&1"
       if ($LASTEXITCODE -ne 0) {
         Write-Host "  ERROR: git clone failed" -ForegroundColor Red
         Write-Host $cloneOutput
+        Write-Host "  Backup preserved at /tmp/sidekick-backup/ on remote" -ForegroundColor Yellow
         throw "git clone failed"
       }
+      
+      # Restore data and .env from backup
+      Write-Host "  Restoring data and .env from backup..." -ForegroundColor Yellow
+      Run-Remote "cp -r /tmp/sidekick-backup/data $REMOTE_DIR/ 2>/dev/null; cp /tmp/sidekick-backup/.env $REMOTE_DIR/ 2>/dev/null; echo DONE" 2>$null
+      
+      # Cleanup backup on success
+      Run-Remote "rm -rf /tmp/sidekick-backup" 2>$null
+      Write-Host "  Backup cleaned up" -ForegroundColor Green
     }
     $changed += "git"
 
