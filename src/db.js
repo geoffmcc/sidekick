@@ -674,12 +674,17 @@ function compareSnapshots(snapshotA, snapshotB) {
 }
 
 
+function getDb() {
+  return db;
+}
+
 module.exports = {
   DATA_DIR,
   DB_FILE,
   BACKUP_DIR,
   MIGRATIONS_DIR,
   db,
+  getDb,
   getDocument,
   setDocument,
   loadDocument,
