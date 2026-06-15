@@ -429,26 +429,31 @@ async function sidekick_process({ action, filter, pid, name, signal }) {
   
   let cmd;
   if (action === "list") {
-    cmd = ["ps", "aux"];
-    if (filter) cmd = ["ps", "aux", "|", "grep", "-i", filter];
+    cmd = ["ps", ["aux"]];
   } else if (action === "top") {
-    cmd = ["ps", "aux", "--sort=-%cpu", "|", "head", "-20"];
+    cmd = ["ps", ["aux", "--sort=-%cpu"]];
   } else if (action === "kill") {
     if (!pid && !name) {
       return { content: [{ type: "text", text: "pid or name required for kill" }], isError: true };
     }
     const sig = signal || "TERM";
     if (pid) {
-      cmd = ["kill", "-" + sig, String(pid)];
+      cmd = ["kill", ["-" + sig, String(pid)]];
     } else {
-      cmd = ["pkill", "-" + sig, name];
+      cmd = ["pkill", ["-" + sig, name]];
     }
   } else if (action === "tree") {
-    cmd = ["pstree", "-p"];
+    cmd = ["pstree", ["-p"]];
   }
   
   try {
-    const stdout = execSync(cmd.join(" "), { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024 });
+    let stdout = execFileSync(cmd[0], cmd[1], { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024 });
+    if (action === "list" && filter) {
+      const needle = String(filter).toLowerCase();
+      stdout = stdout.split("\n").filter(line => line.toLowerCase().includes(needle)).join("\n");
+    } else if (action === "top") {
+      stdout = stdout.split("\n").slice(0, 20).join("\n");
+    }
     return { content: [{ type: "text", text: redactSensitive(stdout || "(empty output)") }] };
   } catch (e) {
     if (action === "kill" && e.status === 0) {
@@ -470,16 +475,16 @@ async function sidekick_service({ action, service, lines }) {
       return { content: [{ type: "text", text: "service required for logs" }], isError: true };
     }
     const n = lines || 50;
-    cmd = ["journalctl", "-u", service, "-n", String(n), "--no-pager"];
+    cmd = ["journalctl", ["-u", service, "-n", String(n), "--no-pager"]];
   } else {
     if (!service) {
       return { content: [{ type: "text", text: "service required for " + action }], isError: true };
     }
-    cmd = ["sudo", "systemctl", action, service];
+    cmd = ["sudo", ["systemctl", action, service]];
   }
   
   try {
-    const stdout = execSync(cmd.join(" "), { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024 });
+    const stdout = execFileSync(cmd[0], cmd[1], { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024 });
     return { content: [{ type: "text", text: redactSensitive(stdout || "OK") }] };
   } catch (e) {
     return { content: [{ type: "text", text: redactSensitive("Error: " + (e.stderr || e.stdout || e.message)) }], isError: true };
@@ -508,32 +513,32 @@ async function sidekick_archive({ action, path: sourcePath, output, format }) {
       return { content: [{ type: "text", text: "output required for create" }], isError: true };
     }
     if (fmt === "tar.gz" || fmt === "tgz") {
-      cmd = ["tar", "-czf", output, "-C", path.dirname(sourcePath), path.basename(sourcePath)];
+      cmd = ["tar", ["-czf", output, "-C", path.dirname(sourcePath), path.basename(sourcePath)]];
     } else if (fmt === "zip") {
-      cmd = ["zip", "-r", output, sourcePath];
+      cmd = ["zip", ["-r", output, sourcePath]];
     } else {
       return { content: [{ type: "text", text: "Invalid format. Use: tar.gz, tgz, or zip" }], isError: true };
     }
   } else if (action === "extract") {
     if (sourcePath.endsWith(".tar.gz") || sourcePath.endsWith(".tgz")) {
-      cmd = ["tar", "-xzf", sourcePath];
+      cmd = ["tar", ["-xzf", sourcePath]];
     } else if (sourcePath.endsWith(".zip")) {
-      cmd = ["unzip", sourcePath];
+      cmd = ["unzip", [sourcePath]];
     } else {
       return { content: [{ type: "text", text: "Unsupported archive format" }], isError: true };
     }
   } else if (action === "list") {
     if (sourcePath.endsWith(".tar.gz") || sourcePath.endsWith(".tgz")) {
-      cmd = ["tar", "-tzf", sourcePath];
+      cmd = ["tar", ["-tzf", sourcePath]];
     } else if (sourcePath.endsWith(".zip")) {
-      cmd = ["unzip", "-l", sourcePath];
+      cmd = ["unzip", ["-l", sourcePath]];
     } else {
       return { content: [{ type: "text", text: "Unsupported archive format" }], isError: true };
     }
   }
   
   try {
-    const stdout = execSync(cmd.join(" "), { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
+    const stdout = execFileSync(cmd[0], cmd[1], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
     return { content: [{ type: "text", text: redactSensitive(stdout || "OK") }] };
   } catch (e) {
     return { content: [{ type: "text", text: redactSensitive("Error: " + (e.stderr || e.stdout || e.message)) }], isError: true };
@@ -2138,9 +2143,8 @@ function captureFiles(filePaths) {
   const result = {};
   for (const p of paths) {
     try {
-      const stat = execSync(`stat -c '%Y %s' ${p} 2>/dev/null`, { encoding: "utf-8" }).trim();
-      const [mtime, size] = stat.split(" ");
-      result[p] = { mtime: parseInt(mtime), size: parseInt(size) };
+      const stat = fs.statSync(p);
+      result[p] = { mtime: Math.floor(stat.mtimeMs / 1000), size: stat.size };
     } catch {
       result[p] = { error: "not found" };
     }
@@ -2372,7 +2376,7 @@ function parseInterval(interval) {
 
 function checkService(serviceName) {
   try {
-    const output = execSync(`systemctl is-active ${serviceName} 2>&1`, { encoding: "utf-8" }).trim();
+    const output = execFileSync("systemctl", ["is-active", serviceName], { encoding: "utf-8" }).trim();
     return { status: output, active: output === "active" };
   } catch {
     return { status: "unknown", active: false };
@@ -2381,7 +2385,7 @@ function checkService(serviceName) {
 
 function checkProcess(processName) {
   try {
-    const output = execSync(`pgrep -f "${processName}" 2>/dev/null`, { encoding: "utf-8" }).trim();
+    const output = execFileSync("pgrep", ["-f", processName], { encoding: "utf-8" }).trim();
     return { running: output.length > 0, pids: output.split("\n").filter(Boolean) };
   } catch {
     return { running: false, pids: [] };
@@ -2390,7 +2394,7 @@ function checkProcess(processName) {
 
 function checkEndpoint(url) {
   try {
-    const output = execSync(`curl -s -o /dev/null -w "%{http_code}" --max-time 5 "${url}"`, { encoding: "utf-8" }).trim();
+    const output = execFileSync("curl", ["-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", url], { encoding: "utf-8" }).trim();
     return { status: parseInt(output), ok: output.startsWith("2") };
   } catch {
     return { status: 0, ok: false };
@@ -2399,7 +2403,7 @@ function checkEndpoint(url) {
 
 function checkFile(filePath, pattern) {
   try {
-    const output = execSync(`cat "${filePath}" 2>/dev/null`, { encoding: "utf-8" });
+    const output = fs.readFileSync(filePath, "utf-8");
     const matches = pattern ? output.includes(pattern) : true;
     return { exists: true, matches, content: output.substring(0, 200) };
   } catch {
@@ -4264,7 +4268,7 @@ async function sidekick_batch({ calls }) {
     }
     const start = Date.now();
     try {
-      const result = await TOOLS[call.tool](call.args || {});
+      const result = await callTool(call.tool, call.args || {});
       results.push({
         index: i,
         tool: call.tool,

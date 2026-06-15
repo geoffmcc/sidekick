@@ -502,7 +502,7 @@ function createMcpServer() {
       const start = Date.now();
       try {
         const result = await TOOLS[def.name](args);
-        logToolCall(def.name, args, Date.now() - start, true,
+        logToolCall(def.name, args, Date.now() - start, !result.isError,
           result.content?.[0]?.text?.substring(0, 80) || "(ok)"
         );
         return result;
@@ -699,6 +699,11 @@ setInterval(() => {
 
 const app = express();
 
+function getBearerOrQueryToken(req) {
+  const authHeader = req.headers["authorization"];
+  return authHeader ? authHeader.replace("Bearer ", "") : req.query.api_key;
+}
+
 if (ALLOWED_IPS.length) {
   app.use((req, res, next) => {
     const ip = req.ip === "::ffff:127.0.0.1" ? "127.0.0.1" : req.ip;
@@ -717,28 +722,32 @@ app.get("/health", (req, res) => {
   const seconds = uptimeSeconds % 60;
   const uptimeStr = `${hours}h ${minutes}m ${seconds}s`;
 
-  const sessionDetails = Array.from(sessions.entries()).map(([id, entry]) => ({
-    id,
-    age: Date.now() - entry.createdAt,
-    idle: Date.now() - entry.lastAccess,
-    initialized: entry.initialized
-  }));
+  const includeDetails = getBearerOrQueryToken(req) === API_KEY;
 
-  res.json({
+  const payload = {
     status: "healthy",
     uptime: uptimeSeconds,
     uptimeHuman: uptimeStr,
     sessions: sessions.size,
-    sessionDetails,
     staleMappings: staleSessionMap.size,
     version: "1.0.0",
     timestamp: new Date().toISOString()
-  });
+  };
+
+  if (includeDetails) {
+    payload.sessionDetails = Array.from(sessions.entries()).map(([id, entry]) => ({
+      id,
+      age: Date.now() - entry.createdAt,
+      idle: Date.now() - entry.lastAccess,
+      initialized: entry.initialized
+    }));
+  }
+
+  res.json(payload);
 });
 
 app.use((req, res, next) => {
-  const authHeader = req.headers["authorization"];
-  const token = authHeader ? authHeader.replace("Bearer ", "") : req.query.api_key;
+  const token = getBearerOrQueryToken(req);
   if (token !== API_KEY) {
     return res.status(401).json({ error: "Unauthorized" });
   }
