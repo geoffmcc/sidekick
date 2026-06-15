@@ -79,6 +79,26 @@ console.log('Running Database Tools Tests...\n');
   assert.ok(dropResult.isError, 'Should block DROP in readonly mode');
   console.log('✓ Passed\n');
 
+  console.log('Test: sidekick_db_query - readonly blocks mutating PRAGMA');
+  const pragmaResult = await sidekick_db_query({ sql: 'PRAGMA journal_mode = DELETE' });
+  assert.ok(pragmaResult.isError, 'Should block mutating PRAGMA in readonly mode');
+  console.log('Passed\n');
+
+  console.log('Test: sidekick_db_query - readonly blocks multiple statements');
+  const multiResult = await sidekick_db_query({ sql: 'SELECT * FROM kv_store; DELETE FROM kv_store' });
+  assert.ok(multiResult.isError, 'Should block multiple statements in readonly mode');
+  console.log('Passed\n');
+
+  console.log('Test: sidekick_db_query - readonly allows safe PRAGMA');
+  const safePragmaResult = await sidekick_db_query({ sql: 'PRAGMA table_info(kv_store)' });
+  assert.ok(!safePragmaResult.isError, 'Should allow safe PRAGMA in readonly mode');
+  console.log('Passed\n');
+
+  console.log('Test: sidekick_db_query - readonly blocks mutating WITH statements');
+  const withDeleteResult = await sidekick_db_query({ sql: "WITH rows AS (SELECT key FROM kv_store) DELETE FROM kv_store WHERE key IN (SELECT key FROM rows)" });
+  assert.ok(withDeleteResult.isError, 'Should block mutating WITH statement in readonly mode');
+  console.log('Passed\n');
+
   console.log('Test: sidekick_db_query - with params');
   const paramResult = await sidekick_db_query({
     sql: 'SELECT * FROM kv_store WHERE key = ?',

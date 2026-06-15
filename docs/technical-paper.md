@@ -7,9 +7,9 @@
 
 ## Abstract
 
-The proliferation of large language models (LLMs) has given rise to autonomous agent systems capable of executing complex tasks with minimal human intervention. However, current implementations often rely on cloud services, require complex setup, or lack self-extension capabilities. We present Sidekick, a self-hosted autonomous agent platform that addresses these limitations through three key innovations: (1) a markdown-based integration surface that activates remote execution capabilities without plugins or hooks, (2) a self-extending tool system that allows the AI to create new capabilities through natural language descriptions, and (3) a file-based persistence model that maintains state across sessions without requiring a database. Sidekick consists of three cooperating services—an MCP Server, Dashboard, and Agent Bridge—sharing a unified tool layer of 60 tools across 14 categories. The system implements defense-in-depth security with output redaction, encrypted secret storage, circuit breakers, and restricted sudoers. We evaluate the platform's performance characteristics, compare LLM providers, and discuss design trade-offs. The reviewed codebase comprises 10,773 lines of JavaScript across six source files, with the shared tool layer alone accounting for 7,116 lines. The project uses no TypeScript or transpilation step, relies on a small Node.js dependency set, and is structured for direct systemd deployment on a self-hosted Linux machine.
+The proliferation of large language models (LLMs) has given rise to autonomous agent systems capable of executing complex tasks with minimal human intervention. However, current implementations often rely on cloud services, require complex setup, or lack self-extension capabilities. We present Sidekick, a self-hosted autonomous agent platform that addresses these limitations through three key innovations: (1) a markdown-based integration surface that activates remote execution capabilities without plugins or hooks, (2) a self-extending tool system that allows the AI to create new capabilities through natural language descriptions, and (3) persistent local state that maintains continuity across sessions. Sidekick consists of three cooperating services—an MCP Server, Dashboard, and Agent Bridge—sharing a unified tool layer of 70 tools across functional categories. The system implements defense-in-depth security with output redaction, encrypted secret storage, configurable tool policy, circuit breakers, and restricted sudoers. We evaluate the platform's performance characteristics, compare LLM providers, and discuss design trade-offs. The project uses no TypeScript or transpilation step, relies on a small Node.js dependency set, and is structured for direct systemd deployment on a self-hosted Linux machine.
 
-**Keywords:** autonomous agents, self-hosted systems, model context protocol, self-extension, file-based persistence, AI tool use
+**Keywords:** autonomous agents, self-hosted systems, model context protocol, self-extension, local persistence, AI tool use
 
 ---
 
@@ -47,7 +47,7 @@ This paper presents Sidekick, a self-hosted autonomous agent platform that addre
 
 3. **Triple-Service Architecture with Shared Tool Layer:** We design an architecture where three cooperating services (MCP Server, Dashboard, Agent Bridge) share a unified tool layer, enabling consistent behavior across different interaction modes.
 
-4. **File-Based Persistence Model:** We implement a comprehensive persistence layer using JSON/JSONL files that maintains state across sessions without requiring a database, while supporting automatic migration from legacy formats.
+4. **Local Persistence Model:** We implement a persistence layer using SQLite plus JSON/JSONL files that maintains state across sessions while supporting automatic migration from legacy formats.
 
 5. **Defense-in-Depth Security:** We implement multiple layers of security including output redaction, encrypted secret storage, dangerous command blocking, circuit breakers, and restricted sudoers.
 
@@ -67,7 +67,7 @@ The reviewed repository contains the following core source-line counts:
 | `src/env.js` | Environment loading | 15 |
 | **Total** |  | **10,773** |
 
-The current `src/tools.js` and generated tool catalog confirm **60 exported `sidekick_*` tools**, not 59. The additional count is important because older text in the repository can undercount the catalog if it omits `sidekick_respond`, which is present in both the tool handler map and the dashboard-facing definitions.
+The current `src/tools.js` and generated tool catalog confirm **70 exported `sidekick_*` tools**. The count includes `sidekick_respond` plus the v1.19 database tools.
 
 The package manifest identifies the project as `sidekick` version `1.0.0`. Runtime scripts start the three services directly with Node: `npm start` for the MCP server, `npm run dashboard` for the dashboard, and `npm run agent` for the Agent Bridge. The reviewed dependency set includes `@modelcontextprotocol/sdk`, `express`, `cors`, `zod`, `ajv`, `yaml`, `ini`, `fast-xml-parser`, and `handlebars`.
 
@@ -119,12 +119,12 @@ Table 1 compares Sidekick with related systems across key dimensions.
 | Autonomous operation | Yes | Yes | No | Yes | No |
 | Security features | Comprehensive | Basic | Basic | Basic | Basic |
 | Deployment complexity | Low | High | Medium | Low | Low |
-| Tool ecosystem | 60 tools | Limited | Extensive | Limited | Limited |
+| Tool ecosystem | 70 tools | Limited | Extensive | Limited | Limited |
 | Multi-agent | No | No | No | Yes | No |
 | File-based persistence | Yes | No | No | No | No |
 | Markdown integration | Yes | No | No | No | No |
 
-Sidekick distinguishes itself through its combination of self-hosting, self-extension, file-based persistence, and markdown-based integration—features not simultaneously present in any existing system.
+Sidekick distinguishes itself through its combination of self-hosting, self-extension, local persistence, and markdown-based integration—features not simultaneously present in any existing system.
 
 ---
 
@@ -153,7 +153,7 @@ Sidekick consists of three cooperating services that share a unified tool layer:
                          v
 ┌─────────────────────────────────────────────────────────────┐
 │                   Tool Layer (tools.js)                      │
-│  • 60 tool implementations                                  │
+│  • 70 tool implementations                                  │
 │  • callTool() dispatcher                                    │
 │  • Redaction engine                                         │
 │  • File-based persistence (KV, context, procedures, etc.)   │
@@ -175,7 +175,7 @@ Sidekick consists of three cooperating services that share a unified tool layer:
 
 The three services are:
 
-1. **MCP Server** (port 4097): Exposes 60 tools via the Model Context Protocol to AI clients. Creates a fresh `McpServer` + `Transport` pair per session with automatic stale session recovery.
+1. **MCP Server** (port 4097): Exposes 70 tools via the Model Context Protocol to AI clients. Creates a fresh `McpServer` + `Transport` pair per session with automatic stale session recovery.
 
 2. **Dashboard** (port 4098): Provides a web UI for monitoring and interaction, a JSON API for programmatic access, and proxies requests to the Agent Bridge. Implements HTTP Basic Auth, rate limiting, and CSRF protection.
 
@@ -189,7 +189,7 @@ The MCP Server implements the Model Context Protocol specification, providing st
 
 **Session Management:** The server creates session-scoped MCP server and transport state for Streamable HTTP clients and tracks session creation time, last access time, and initialization status. Inactive sessions are removed after a long timeout, while stale POST sessions are answered with structured JSON-RPC error information and a replacement session ID header so the client can reinitialize cleanly. Legacy SSE routes are also present for older clients.
 
-**Tool Registration:** On startup, `createMcpServer()` iterates over `TOOL_DEFS` (the metadata array for all 60 tools) and registers each with the MCP server using the corresponding Zod schema from `TOOL_SCHEMAS`. Additionally, procedures stored in `procedures.json` are loaded and dynamically registered as tools named `sidekick_<procedure_name>`.
+**Tool Registration:** On startup, `createMcpServer()` iterates over `TOOL_DEFS` (the metadata array for all 70 tools) and registers each with the MCP server using the corresponding Zod schema from `TOOL_SCHEMAS`. Additionally, procedures stored in `procedures.json` are loaded and dynamically registered as tools named `sidekick_<procedure_name>`.
 
 **Protocol Handling:** The server handles MCP protocol messages (`tools/list`, `tools/call`, `initialize`, etc.) and routes them to the appropriate tool handlers via `callTool()`. All tool outputs pass through `redactSensitive()` before being returned to the client.
 
@@ -286,7 +286,7 @@ async function callTool(name, args) {
 
 This dispatcher is used by the Agent Bridge, delays, watches, queue processing, retry logic, orchestration, procedures, and runbooks, providing a consistent interface for tool-to-tool composition.
 
-**Tool Categories:** The 60 tools span 14 functional categories:
+**Tool Categories:** The 70 tools span functional categories:
 
 | Category | Tools | Count |
 |----------|-------|-------|
@@ -340,7 +340,7 @@ The reviewed systemd files expect deployment under `/home/sidekick/sidekick` and
 
 ### 4.1 Tool System
 
-The tool system implements 60 tools across 14 categories, each following the three-layer registration pattern described in Section 3.5. This section highlights key tool implementations that demonstrate the system's capabilities.
+The tool system implements 70 tools across functional categories, each following the three-layer registration pattern described in Section 3.5. This section highlights key tool implementations that demonstrate the system's capabilities.
 
 #### 4.1.1 Core Operations
 
@@ -550,7 +550,7 @@ Testing revealed that Ollama struggles with complex reasoning tasks (3/10 on mul
 
 ### 4.3 Persistence Layer
 
-Sidekick implements a file-based persistence model using JSON/JSONL files, eliminating the need for a database while maintaining state across sessions.
+Sidekick implements local persistence using SQLite plus JSON/JSONL files while maintaining state across sessions.
 
 #### 4.3.1 KV Store
 
@@ -719,7 +719,7 @@ The security architecture implements multiple layers:
 | Layer | Mechanism |
 |-------|-----------|
 | **MCP Server** | Bearer token auth (`SIDEKICK_API_KEY`) + IP whitelist (CIDR) + dangerous command blocklist |
-| **Dashboard** | HTTP Basic Auth + rate limiting (200 req/15min/IP) + CSRF origin validation + 1MB request limit + audit logging |
+| **Dashboard** | HTTP Basic Auth + rate limiting (200 req/15min/IP) + CSRF origin validation + 1MB request limit + audit logging + tool policy visibility |
 | **Agent Bridge** | Binds to `127.0.0.1` only — accessible exclusively through dashboard proxy |
 | **Infrastructure** | SSH key-only auth, restricted sudoers (only `systemctl` and `journalctl` for sidekick-* services), UFW firewall |
 | **Data Redaction** | All tool outputs pass through `redactSensitive()` before return or logging |
@@ -993,7 +993,7 @@ The Token Efficiency tools reduce API token consumption through several mechanis
 
 **File-Based Persistence Limits:**
 
-The file-based persistence model works well for single-user deployments but has scalability limitations:
+The local persistence model works well for single-user deployments but has scalability limitations:
 
 - **KV Store:** Performance degrades with >10,000 entries due to full-file read/write on each operation. Mitigation: Project-based partitioning or migration to SQLite.
 - **Audit Log:** Capped at 1,000 entries in `log.jsonl`. Older entries are automatically rotated out.
@@ -1016,7 +1016,7 @@ The file-based approach was chosen deliberately for simplicity and zero-dependen
 
 **File-Based vs Database Persistence:**
 
-We chose file-based persistence (JSON/JSONL) over a database for several reasons:
+Sidekick originally chose file-based persistence (JSON/JSONL) for several reasons. The current implementation uses SQLite for core KV/log/document state while retaining JSON/JSONL files for transcripts and feature-specific documents:
 - **Zero dependencies:** No database server required, simplifying deployment
 - **Human-readable:** Files can be inspected and edited manually for debugging
 - **Easy backup:** Simple file copy or rsync
@@ -1261,11 +1261,11 @@ Future versions could provide:
 
 ## 9. Conclusion
 
-Sidekick demonstrates that a self-hosted autonomous agent platform can provide a compelling alternative to cloud-based systems while maintaining data sovereignty, security, and extensibility. Through three key innovations—markdown-based integration, self-extending tools, and file-based persistence—Sidekick addresses the limitations of existing autonomous agent systems.
+Sidekick demonstrates that a self-hosted autonomous agent platform can provide a compelling alternative to cloud-based systems while maintaining data sovereignty, security, and extensibility. Through three key innovations—markdown-based integration, self-extending tools, and local persistence—Sidekick addresses the limitations of existing autonomous agent systems.
 
-The platform's triple-service architecture (MCP Server, Dashboard, Agent Bridge) with a shared tool layer of 60 confirmed tools provides consistent behavior across different interaction modes. The defense-in-depth security model, including output redaction, encrypted secret storage, and restricted sudoers, ensures secure operation even with remote execution capabilities.
+The platform's triple-service architecture (MCP Server, Dashboard, Agent Bridge) with a shared tool layer of 70 confirmed tools provides consistent behavior across different interaction modes. The defense-in-depth security model, including output redaction, encrypted secret storage, configurable tool policy, and restricted sudoers, reduces risk even with remote execution capabilities.
 
-Evaluation shows that Sidekick performs well for typical operations tasks, with tool call latency of ~50ms, agent loop iteration speed of 2-5 seconds (Groq) or 15-30 seconds (Ollama), and token savings of 40-60% through efficiency tools. The file-based persistence model works well for single-user deployments but has scalability limitations that would require migration to a database for larger deployments.
+Evaluation shows that Sidekick performs well for typical operations tasks, with tool call latency of ~50ms, agent loop iteration speed of 2-5 seconds (Groq) or 15-30 seconds (Ollama), and token savings of 40-60% through efficiency tools. The SQLite-plus-files persistence model works well for single-user deployments but would still need additional concurrency and tenancy work for larger deployments.
 
 Sidekick's design trade-offs—file-based vs database persistence, single-user vs multi-tenant, self-hosted vs cloud—reflect a deliberate choice for simplicity, data sovereignty, and zero-dependency operation. These trade-offs make Sidekick particularly suitable for individual developers, operations teams, and organizations requiring data sovereignty.
 

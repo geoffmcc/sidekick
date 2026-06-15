@@ -2,7 +2,7 @@
 
 **Autonomous Agent Platform**
 
-A self-hosted AI agent platform with persistent memory, 69+ tools, and the ability to extend itself. Runs on your remote machine, learns from your workflow, and grows its own capabilities—no code changes required.
+A self-hosted AI agent platform with persistent memory, 70 MCP tools, and the ability to extend itself. Runs on your remote machine, learns from your workflow, and grows its own capabilities—no code changes required.
 
 **How?** A single `AGENTS.md` file that opencode reads on every session start. No plugins, no hooks — just markdown.
 
@@ -97,7 +97,7 @@ The Agent Bridge runs independently from your main AI session. Submit a complex 
 ### 🔒 Security-First Design
 Every tool output is automatically scanned and redacted for sensitive data (API keys, tokens, passwords). The dashboard has rate limiting, CSRF protection, and audit logging. The agent bridge is isolated and only accessible through the dashboard.
 
-### 🛠️ 69+ Specialized Tools
+### 🛠️ 70 Specialized Tools
 Not just bash and file operations. Sidekick includes tools for:
 - GitHub integration (PRs, issues, releases)
 - Service and process management
@@ -169,7 +169,7 @@ Not just bash and file operations. Sidekick includes tools for:
 
 | Service | Port | Description |
 |---------|------|-------------|
-| **MCP Server** | 4097 | 69 tools: bash, read, write, list, search, git, notify, process, service, archive, cron, github, webhook, context, teach, store, get, list_projects, get_by_project, web_fetch, llm, transform, health, delay, snapshot, watch, secret, parse, diff, hash, validate, template, queue, retry, evolve, orchestrate, predict, debug_tool, fresheyes, batch, cache, summarize, filter, project, tail, diff_files, find, status, extract, anonymize, sandbox, changelog, netdiag, timeline, circuit, baseline, depend, runbook, black_box, db_schema, db_query, db_stats, db_backup, db_restore, log_query, db_export, db_search, db_migrate, db_diff |
+| **MCP Server** | 4097 | 70 tools: bash, read, write, list, search, git, notify, process, service, archive, cron, github, webhook, context, teach, store, get, list_projects, get_by_project, web_fetch, llm, transform, health, delay, snapshot, watch, secret, parse, diff, hash, validate, template, queue, retry, evolve, orchestrate, predict, debug_tool, fresheyes, batch, cache, summarize, filter, project, tail, diff_files, find, status, extract, anonymize, sandbox, changelog, netdiag, timeline, circuit, baseline, depend, runbook, black_box, respond, db_schema, db_query, db_stats, db_backup, db_restore, log_query, db_export, db_search, db_migrate, db_diff |
 | **Dashboard** | 4098 | Web UI: system health, activity log, KV data, agent tasks |
 | **Agent Bridge** | 4099 | AI agent loop — LLM plans and calls MCP tools autonomously |
 | **Ollama** | 11434 | Local LLM inference (phi3:mini). Fallback when no `GROQ_API_KEY` |
@@ -279,7 +279,7 @@ All tools are exposed via the MCP server at `http://YOUR_REMOTE_IP:4097/mcp`.
 
 To avoid confusion, it's important to understand what each component is:
 
-- **Sidekick** = The autonomous agent platform: remote machine + 37+ MCP tools + persistent memory + Dashboard + Agent Bridge + self-extending capabilities
+- **Sidekick** = The autonomous agent platform: remote machine + 70 MCP tools + persistent memory + Dashboard + Agent Bridge + self-extending capabilities
 - **The AI** = The assistant running in opencode (e.g., qwen, Claude, etc.) that uses Sidekick's platform
 - **Agent Bridge** = Sidekick's autonomous agent that runs tasks independently via the Dashboard
 
@@ -296,14 +296,14 @@ The Agent Bridge is a separate system that can run tasks autonomously, but it's 
 
 | Layer | Measure |
 |-------|---------|
-| **MCP Server** | Bearer token auth + IP whitelist (`SIDEKICK_ALLOWED_IPS`) + dangerous command blocklist |
-| **Dashboard** | HTTP Basic Auth (`SIDEKICK_DASHBOARD_USER`/`PASS`) + rate limiting + CSRF protection + audit logging |
+| **MCP Server** | Bearer token auth + IP whitelist (`SIDEKICK_ALLOWED_IPS`) + dangerous command blocklist + configurable tool policy |
+| **Dashboard** | HTTP Basic Auth (`SIDEKICK_DASHBOARD_USER`/`PASS`) + rate limiting + CSRF protection + audit logging + tool policy visibility |
 | **Agent Bridge** | Binds to `127.0.0.1` only, accessible exclusively through the dashboard proxy |
 | **Sidekick user** | Sudo restricted to service management commands only (no wildcard `ALL`) |
 | **Infrastructure** | SSH key-only, fail2ban, UFW, unattended-upgrades, `.env` file permissions locked to owner |
 | **Data Redaction** | All tool outputs automatically redact SSH keys, GitHub tokens, API keys, passwords, database URLs, etc. |
 
-The dashboard auth and IP whitelist are disabled by default (empty env var = no restriction). Set them in `.env` before exposing to the internet.
+The dashboard auth and IP whitelist are disabled by default (empty env var = no restriction). Set them in `.env` before exposing to the internet. For shared or public-facing deployments, set `SIDEKICK_TOOL_POLICY=restricted` and explicitly allow only the high-risk tools your workflow needs.
 
 ## Dashboard & Agent Bridge
 
@@ -316,7 +316,7 @@ Open `http://YOUR_REMOTE_IP:4098/` in a browser.
 - **Data** — KV store contents with project filtering, age filtering, and expandable previews
 - **Config** — environment variables (sensitive values redacted)
 - **Agent** — submit tasks for the AI agent to execute autonomously
-- **Tools** — browsable catalog of all 59 tools with search, category filtering, and detailed argument info
+- **Tools** — browsable catalog of all 70 tools with search, category filtering, policy status, risk labels, and detailed argument info
 
 ### Agent Bridge
 
@@ -453,6 +453,12 @@ This follows the principle of least privilege: after initial setup, the sidekick
 | `SIDEKICK_DASHBOARD_USER` | — | Dashboard basic auth username (empty = disabled) |
 | `SIDEKICK_DASHBOARD_PASS` | — | Dashboard basic auth password (empty = disabled) |
 | `SIDEKICK_DATA_DIR` | `./data` | Data directory for logs, KV, conversations |
+| `SIDEKICK_TOOL_POLICY` | `open` | Tool policy mode: `open` or `restricted` |
+| `SIDEKICK_BLOCKED_TOOLS` | — | Comma-separated global blocklist of tool names or risk selectors |
+| `SIDEKICK_ALLOWED_TOOLS` | — | Comma-separated global allowlist of tool names or risk selectors |
+| `SIDEKICK_AGENT_TOOL_POLICY` | — | Source-specific tool policy override for the Agent Bridge |
+| `SIDEKICK_MCP_TOOL_POLICY` | — | Source-specific tool policy override for MCP clients |
+| `SIDEKICK_DASHBOARD_TOOL_POLICY` | — | Source-specific tool policy override for dashboard-originated calls |
 | `OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama API URL (local fallback) |
 | `GROQ_API_KEY` | — | Groq API key for cloud LLM (empty = use local Ollama) |
 | `GROQ_MODEL` | `llama3-8b-8192` | Groq model name |

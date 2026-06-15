@@ -2,9 +2,9 @@
 
 What's planned for Sidekick.
 
-## Current (v1.18)
+## Current (v1.19)
 
-- 59 MCP tools (bash, read, write, list, search, git, notify, process, service, archive, cron, github, webhook, context, teach, store, get, list_projects, get_by_project, web_fetch, llm, transform, health, delay, snapshot, watch, secret, parse, diff, hash, validate, template, queue, retry, evolve, orchestrate, predict, debug_tool, fresheyes, batch, cache, summarize, filter, project, tail, diff_files, find, status, extract, anonymize, sandbox, changelog, netdiag, timeline, circuit, baseline, depend, runbook, black_box)
+- 70 MCP tools (bash, read, write, list, search, git, notify, process, service, archive, cron, github, webhook, context, teach, store, get, list_projects, get_by_project, web_fetch, llm, transform, health, delay, snapshot, watch, secret, parse, diff, hash, validate, template, queue, retry, evolve, orchestrate, predict, debug_tool, fresheyes, batch, cache, summarize, filter, project, tail, diff_files, find, status, extract, anonymize, sandbox, changelog, netdiag, timeline, circuit, baseline, depend, runbook, black_box, respond, db_schema, db_query, db_stats, db_backup, db_restore, log_query, db_export, db_search, db_migrate, db_diff)
 - Live dashboard with 6 tabs (System, Activity, Data, Config, Agent, Tools)
 - Autonomous agent bridge with Groq cloud + local Ollama fallback
 - Persistent KV storage across sessions
@@ -14,6 +14,7 @@ What's planned for Sidekick.
 - Enhanced dashboard with timestamps, source badges, expandable content
 - Comprehensive testing strategy (7 priority levels, 19 hours estimated)
 - Dashboard security hardening (rate limiting, CSRF protection, audit logging, error handling)
+- Configurable tool policy with risk classifications and dashboard policy visibility
 - **sidekick_search** — Fast file content search using ripgrep/grep
 - **sidekick_git** — Structured git operations (status, diff, log, add, commit, push, pull, branch, checkout, stash)
 - **sidekick_notify** — Send notifications to Discord, Slack, or email
@@ -63,8 +64,34 @@ What's planned for Sidekick.
 - **sidekick_depend** — Dependency analyzer for npm, services, processes
 - **sidekick_runbook** — Operational runbook executor (autonomous and guided)
 - **sidekick_black_box** — Incident time capsule (rate limited: 5/day, 7-day TTL)
+- **sidekick_respond** — Direct response tool for the Agent Bridge
+- **sidekick_db_schema** — Inspect database schema
+- **sidekick_db_query** — Raw SQL with readonly safety limits
+- **sidekick_db_stats** — Database size and table statistics
+- **sidekick_db_backup** — Timestamped database backup
+- **sidekick_db_restore** — Restore database from backup
+- **sidekick_log_query** — Filter tool logs by time, tool, source, and status
+- **sidekick_db_export** — Export tables to JSON, CSV, or SQL
+- **sidekick_db_search** — Full-text search across database tables
+- **sidekick_db_migrate** — Schema migrations
+- **sidekick_db_diff** — Compare database snapshots
 
 ## Recently Completed ✅
+
+### v1.19: Database Tools and Tool Policy
+**Status:** ✅ COMPLETED
+**Date:** 2026-06-15
+
+**What Was Added:**
+- Database tools for schema inspection, readonly query, stats, backup/restore, log querying, export, search, migration, and diffing
+- `sidekick_respond` for direct Agent Bridge responses
+- Configurable tool policy with source-specific allow/block lists
+- Risk classifications for every exported tool
+- Dashboard policy visibility in the Tools tab
+
+**Result:**
+- Total tools: 59 → 70
+- High and critical risk tools can be gated without deleting operator capability
 
 ### v1.18: Operations Platform Expansion
 **Status:** ✅ COMPLETED  

@@ -33,7 +33,7 @@ Sidekick is broad by design. The current codebase includes tools for:
 | Component | Role |
 |---|---|
 | MCP server | The public tool endpoint used by opencode or another MCP client. |
-| Tool module | Implements all Sidekick tools and persistent JSON-backed state. |
+| Tool module | Implements all Sidekick tools, tool policy, redaction, logging, and persistent state helpers. |
 | Dashboard | Browser-facing UI and API for monitoring and management. |
 | Agent Bridge | Autonomous task loop that can plan and execute Sidekick tool calls. |
 | Data directory | Persistent storage for KV data, logs, contexts, secrets, snapshots, jobs, transcripts, and state files. |

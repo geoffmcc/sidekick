@@ -2,6 +2,17 @@
 
 All notable changes to Sidekick.
 
+## 2026-06-15
+
+### v1.19: Security Policy and Documentation Audit
+- Added config-driven tool policy with global and source-specific allow/block lists.
+- Added risk classifications for all 70 exported MCP tools.
+- Dashboard Tools tab now shows tool risk and active policy status.
+- MCP and Agent Bridge execution paths enforce the active tool policy.
+- Agent Bridge prompt only advertises tools enabled for the `agent` source.
+- Updated README, AGENTS.md, CONTEXT.md, Roadmap, and docs to align on 70 exported MCP tools.
+- Documented recommended restricted mode for shared or public-facing deployments.
+
 ## 2026-06-13
 
 ### Dashboard: Tools Tab

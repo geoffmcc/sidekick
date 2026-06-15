@@ -33,7 +33,7 @@ Before creating any new tool or tool suite:
 1. Recall from KV store: `sidekick_get key="tool_making_guide" project="sidekick"`
 2. If not available, read `docs/tool-creation.md` and store it in KV for next time
 
-## Tools (80 total)
+## Tools (81 total)
 
 ### Core Tools (11)
 
@@ -51,7 +51,7 @@ Before creating any new tool or tool suite:
 | `todowrite` | Track multi-step tasks with a todo list |
 | `webfetch` | Fetch and convert URLs to markdown/text/html |
 
-### Sidekick MCP Tools (69)
+### Sidekick MCP Tools (70)
 
 | Tool | When to use |
 |------|-------------|
@@ -114,6 +114,7 @@ Before creating any new tool or tool suite:
 | `sidekick_depend` | Dependency analyzer for npm, systemd services, processes. Trees, reverse deps, impact analysis |
 | `sidekick_runbook` | Operational runbook executor with autonomous and guided modes. Verification, rollback, step-by-step |
 | `sidekick_black_box` | Incident time capsule capturing full system context. Rate limited (5/day, 7-day TTL, 3 active max) |
+| `sidekick_respond` | Return a direct text response from the Agent Bridge when no other tool action is needed |
 | `sidekick_db_schema` | Inspect database schema: tables, columns, indexes, foreign keys |
 | `sidekick_db_query` | Execute raw SQL with safety limits (readonly mode, row caps, timeout) |
 | `sidekick_db_stats` | Database size, table sizes, WAL status, cache hit ratio |
@@ -189,6 +190,16 @@ Only use these when explicitly asked:
 **Semi-proactive (surface opportunity, then ask):**
 - `sidekick_evolve` — may analyze patterns and surface improvement opportunities, but MUST ask before proposing changes
 
+### Tool Policy
+
+Sidekick supports config-driven tool gating:
+- `SIDEKICK_TOOL_POLICY=open` allows tools unless blocked.
+- `SIDEKICK_TOOL_POLICY=restricted` blocks high and critical risk tools unless explicitly allowed.
+- Source-specific overrides exist for `SIDEKICK_MCP_TOOL_POLICY`, `SIDEKICK_AGENT_TOOL_POLICY`, and `SIDEKICK_DASHBOARD_TOOL_POLICY`.
+- Allow/block lists accept tool names and risk selectors such as `risk:high` or `risk:critical`.
+
+High and critical tools should be treated as privileged operational capability, especially `sidekick_bash`, `sidekick_write`, `sidekick_db_restore`, `sidekick_runbook`, `sidekick_sandbox`, `sidekick_evolve`, `sidekick_process`, `sidekick_service`, `sidekick_cron`, `sidekick_delay`, `sidekick_watch`, `sidekick_github`, `sidekick_teach`, `sidekick_secret`, `sidekick_db_migrate`, `sidekick_queue`, and `sidekick_orchestrate`.
+
 All tool calls are logged with source tags:
 - 🤖 **agent** - Calls from the autonomous agent bridge
 - 🔌 **mcp** - Calls from external MCP clients (opencode, etc.)
@@ -196,7 +207,7 @@ All tool calls are logged with source tags:
 
 ## Services
 
-- **MCP Server** (`:4097`) — 59 tools, session-aware transport (new McpServer+Transport per session) at YOUR_REMOTE_IP
+- **MCP Server** (`:4097`) — 70 tools, session-aware transport (new McpServer+Transport per session) at YOUR_REMOTE_IP
 - **Dashboard** (`:4098`) — web UI with System, Activity, Data, Config, Agent, and Tools tabs, Font Awesome icons
 - **Agent Bridge** (`:4099`) — autonomous LLM agent that calls tools directly (bypasses MCP HTTP)
 - **Ollama** (`:11434`) — local Phi-3-mini fallback. Uses cloud Groq API when `GROQ_API_KEY` is set

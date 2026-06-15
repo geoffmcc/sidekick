@@ -227,24 +227,54 @@ function clearToolLogs() {
 
 // === Database Tool Helpers ===
 
+function clampLimit(limit) {
+  const parsed = parseInt(limit, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return 1000;
+  return Math.min(parsed, 5000);
+}
+
+function isReadonlySql(sql) {
+  const trimmed = String(sql || "").trim();
+  if (!trimmed) return false;
+  const withoutTrailingSemicolon = trimmed.replace(/;\s*$/, "");
+  if (withoutTrailingSemicolon.includes(";")) return false;
+
+  const upper = withoutTrailingSemicolon.toUpperCase();
+  if (/\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|REPLACE|VACUUM|ATTACH|DETACH|REINDEX)\b/.test(upper)) {
+    return false;
+  }
+  if (upper.startsWith("PRAGMA")) {
+    return /^PRAGMA\s+(TABLE_INFO|INDEX_LIST|INDEX_INFO|FOREIGN_KEY_LIST|JOURNAL_MODE|PAGE_COUNT|PAGE_SIZE|DATABASE_LIST|INTEGRITY_CHECK|QUICK_CHECK)\b/.test(upper);
+  }
+  return /^(SELECT|WITH|EXPLAIN)\b/.test(upper);
+}
+
+function quoteIdentifier(identifier) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(identifier)) {
+    throw new Error(`Invalid identifier: ${identifier}`);
+  }
+  return `"${identifier.replace(/"/g, '""')}"`;
+}
+
 function executeQuery(sql, params = [], options = {}) {
   const { readonly = true, limit = 1000, timeout = 5000 } = options;
-  const upper = sql.toUpperCase().trim();
+  const maxRows = clampLimit(limit);
   
-  if (readonly) {
-    if (upper.match(/^\s*(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|REPLACE|PRAGMA\s+\w+\s*=)/)) {
-      throw new Error("Write operations not allowed in readonly mode. Set readonly=false to allow.");
-    }
+  if (readonly && !isReadonlySql(sql)) {
+    throw new Error("Write operations and multi-statement SQL are not allowed in readonly mode. Set readonly=false to allow.");
   }
   
   let limitedSql = sql;
-  if (readonly && !upper.includes("LIMIT")) {
-    limitedSql = sql.replace(/;?\s*$/, "") + ` LIMIT ${limit}`;
+  if (readonly && !/^\s*PRAGMA\b/i.test(sql) && !/\bLIMIT\b/i.test(sql)) {
+    limitedSql = sql.replace(/;?\s*$/, "") + ` LIMIT ${maxRows}`;
   }
   
   const stmt = db.prepare(limitedSql);
+  if (readonly && !stmt.reader) {
+    throw new Error("Readonly mode only allows statements that return rows.");
+  }
   const results = stmt.all(...params);
-  return results.slice(0, limit);
+  return results.slice(0, maxRows);
 }
 
 function getTableList() {
@@ -258,18 +288,19 @@ function getTableList() {
 }
 
 function getTableInfo(tableName) {
-  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
-  const indexes = db.prepare(`PRAGMA index_list(${tableName})`).all();
-  const foreignKeys = db.prepare(`PRAGMA foreign_key_list(${tableName})`).all();
+  const table = quoteIdentifier(tableName);
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all();
+  const indexes = db.prepare(`PRAGMA index_list(${table})`).all();
+  const foreignKeys = db.prepare(`PRAGMA foreign_key_list(${table})`).all();
   
   const indexDetails = indexes.map(idx => ({
     ...idx,
-    columns: db.prepare(`PRAGMA index_info(${idx.name})`).all()
+    columns: db.prepare(`PRAGMA index_info(${quoteIdentifier(idx.name)})`).all()
   }));
   
   let rowCount = 0;
   try {
-    rowCount = db.prepare(`SELECT COUNT(*) as count FROM ${tableName}`).get().count;
+    rowCount = db.prepare(`SELECT COUNT(*) as count FROM ${table}`).get().count;
   } catch (e) {}
   
   return { columns, indexes: indexDetails, foreignKeys, rowCount };
@@ -442,7 +473,7 @@ function queryToolLogs(filters = {}) {
 }
 
 function exportTable(tableName, format = "json") {
-  const rows = db.prepare(`SELECT * FROM ${tableName}`).all();
+  const rows = db.prepare(`SELECT * FROM ${quoteIdentifier(tableName)}`).all();
   
   if (format === "json") {
     return JSON.stringify(rows, null, 2);

@@ -1,6 +1,25 @@
 # Tools Reference
 
-This catalog is generated from `TOOL_DEFS` in `src/tools.js`. The code exports 60 tool handlers. Most tools return MCP content blocks containing text. Errors usually set `isError: true` and include an explanatory text result.
+This catalog is generated from `TOOL_DEFS` in `src/tools.js`. The code exports 70 tool handlers. Most tools return MCP content blocks containing text. Errors usually set `isError: true` and include an explanatory text result.
+
+Tool definitions exposed by the dashboard API include policy metadata:
+
+- `risk`: `low`, `medium`, `high`, or `critical`
+- `enabled`: whether the active source policy allows the tool
+- `policy`: short reason for the policy decision
+
+## Risk classification
+
+Risk is based on what a tool can change or expose, not whether its implementation is currently safe.
+
+| Risk | Tools | Default recommendation |
+|---|---|---|
+| Critical | `sidekick_bash`, `sidekick_write`, `sidekick_db_restore`, `sidekick_runbook`, `sidekick_sandbox`, `sidekick_evolve` | Gate in shared or public deployments. Allow only for trusted operators. |
+| High | `sidekick_process`, `sidekick_service`, `sidekick_cron`, `sidekick_delay`, `sidekick_watch`, `sidekick_github`, `sidekick_teach`, `sidekick_secret`, `sidekick_db_migrate`, `sidekick_queue`, `sidekick_orchestrate` | Block in `restricted` mode unless the workflow needs them. |
+| Medium | `sidekick_notify`, `sidekick_read`, `sidekick_archive`, `sidekick_git`, `sidekick_web_fetch`, `sidekick_llm`, `sidekick_context`, `sidekick_health`, `sidekick_snapshot`, `sidekick_retry`, `sidekick_fresheyes`, `sidekick_batch`, `sidekick_tail`, `sidekick_find`, `sidekick_status`, `sidekick_extract`, `sidekick_changelog`, `sidekick_netdiag`, `sidekick_timeline`, `sidekick_circuit`, `sidekick_baseline`, `sidekick_depend`, `sidekick_black_box`, `sidekick_db_query`, `sidekick_db_backup`, `sidekick_db_export` | Generally useful, but can expose data or trigger external effects. |
+| Low | `sidekick_list`, `sidekick_store`, `sidekick_get`, `sidekick_list_projects`, `sidekick_get_by_project`, `sidekick_search`, `sidekick_webhook`, `sidekick_transform`, `sidekick_parse`, `sidekick_diff`, `sidekick_hash`, `sidekick_validate`, `sidekick_template`, `sidekick_predict`, `sidekick_debug_tool`, `sidekick_cache`, `sidekick_summarize`, `sidekick_filter`, `sidekick_project`, `sidekick_diff_files`, `sidekick_anonymize`, `sidekick_respond`, `sidekick_db_schema`, `sidekick_db_stats`, `sidekick_log_query`, `sidekick_db_search`, `sidekick_db_diff` | Usually safe to expose, subject to data sensitivity. |
+
+Use `SIDEKICK_TOOL_POLICY=restricted` to block high and critical tools by default. Use `SIDEKICK_ALLOWED_TOOLS`, `SIDEKICK_BLOCKED_TOOLS`, and source-specific variants such as `SIDEKICK_AGENT_ALLOWED_TOOLS` for deployment-specific control.
 
 ## Full inventory
 
