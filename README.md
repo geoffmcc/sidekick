@@ -217,7 +217,7 @@ All tools are exposed via the MCP server at `http://YOUR_REMOTE_IP:4097/mcp`.
 
 ### New Tools (v1.15) - Meta-Capabilities
 
-- **`sidekick_evolve`** — Self-modification with safety: analyze tool usage patterns, propose improvements, test and approve changes. Rate limited to 10 proposals per day.
+- **`sidekick_evolve`** — Self-modification with safety: analyze tool usage patterns, propose improvements, test and approve changes. Automatically implements approved proposals (creates documentation and teaches procedures). Rate limited to 10 proposals per day. **Requires explicit tool policy restrictions to prevent automatic implementation.**
 - **`sidekick_orchestrate`** — Multi-agent coordination: create task graphs, execute subtasks with dependencies, track progress across all subtasks.
 - **`sidekick_predict`** — Anticipatory intelligence: analyze context and tool patterns, predict needs, track prediction usefulness via feedback.
 
@@ -304,6 +304,8 @@ The Agent Bridge is a separate system that can run tasks autonomously, but it's 
 | **Data Redaction** | All tool outputs automatically redact SSH keys, GitHub tokens, API keys, passwords, database URLs, etc. |
 
 The dashboard auth and IP whitelist are disabled by default (empty env var = no restriction). Set them in `.env` before exposing to the internet. For shared or public-facing deployments, set `SIDEKICK_TOOL_POLICY=restricted` and explicitly allow only the high-risk tools your workflow needs.
+
+**⚠️ Evolve Tool Warning:** The `sidekick_evolve` tool can automatically implement approved proposals (creating documentation files and teaching procedures). If your tool policy is `open`, evolve will execute these implementations without additional approval. For shared or public-facing deployments, set `SIDEKICK_TOOL_POLICY=restricted` to require explicit tool allowlisting before evolve can create or use tools.
 
 ## Dashboard & Agent Bridge
 
