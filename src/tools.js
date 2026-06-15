@@ -3600,16 +3600,26 @@ ${implementationText}
 
 ${toolSchemas}
 
-Return a JSON array where each element has "tool" and "args" properties.
-Use {{paramName}} syntax for any input parameters the procedure needs.
+CRITICAL REQUIREMENTS:
+1. Use {{paramName}} syntax for ALL values that would vary between invocations (paths, commands, names, messages, etc.)
+2. NEVER use hardcoded example values - make the procedure generic and reusable
+3. Each unique variable should use a consistent parameter name across all steps
+4. If a step is purely descriptive and cannot be implemented as a tool call, skip it
 
-Example output format:
+Example of GOOD parameterization:
 [
-  {"tool": "sidekick_bash", "args": {"command": "df -h {{path}}"}},
-  {"tool": "sidekick_store", "args": {"key": "result", "value": "{{output}}"}}
+  {"tool": "sidekick_read", "args": {"path": "{{file_path}}"}},
+  {"tool": "sidekick_bash", "args": {"command": "wc -l {{file_path}}"}},
+  {"tool": "sidekick_store", "args": {"key": "{{result_key}}", "value": "{{output}}"}}
 ]
 
-If a step is purely descriptive (like "Identify common patterns") and cannot be implemented as a tool call, skip it.
+Example of BAD (hardcoded values - DO NOT DO THIS):
+[
+  {"tool": "sidekick_read", "args": {"path": "/home/sidekick/script.sh"}},
+  {"tool": "sidekick_bash", "args": {"command": "wc -l /home/sidekick/script.sh"}}
+]
+
+Return a JSON array where each element has "tool" and "args" properties.
 Return ONLY the JSON array, no other text.`;
 
   const llmResult = await sidekick_llm({ 
