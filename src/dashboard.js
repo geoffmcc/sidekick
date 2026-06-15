@@ -592,6 +592,29 @@ app.get("/api/tools", (req, res) => {
   res.json({ tools: getToolDefsForSource("dashboard") });
 });
 
+app.get("/api/procedures", (req, res) => {
+  const proceduresFile = path.join(DATA_DIR, "procedures.json");
+  try {
+    if (!fs.existsSync(proceduresFile)) {
+      return res.json({ ok: true, procedures: [] });
+    }
+    const data = JSON.parse(fs.readFileSync(proceduresFile, "utf-8"));
+    const procedures = Object.values(data).map(p => ({
+      name: p.name,
+      description: p.description,
+      steps: p.steps || [],
+      parameters: p.parameters || {},
+      triggerPhrases: p.triggerPhrases || [],
+      createdAt: p.createdAt,
+      lastUsed: p.lastUsed,
+      useCount: p.useCount || 0
+    }));
+    res.json({ ok: true, procedures });
+  } catch (e) {
+    res.json({ ok: false, error: e.message, procedures: [] });
+  }
+});
+
 function requireDashboardTool(req, res, toolName) {
   const policyError = enforceToolPolicy(toolName, "dashboard");
   if (!policyError) return true;
