@@ -3692,8 +3692,34 @@ async function sidekick_evolve({ action, id, proposal, approve, test }) {
     p.status = "approved";
     p.approvedAt = new Date().toISOString();
     evolve.history.push({ id: p.id, proposal: p.proposal, approvedAt: p.approvedAt, confidence: p.confidence });
+    
+    let implementationResult = null;
+    if (p.type === "docs" && p.confidence >= AUTO_APDOCS_THRESHOLD) {
+      implementationResult = await evolveAutoApplyDocs(p);
+      p.autoApplied = true;
+      p.autoAppliedAt = new Date().toISOString();
+      p.autoAppliedPath = implementationResult.path || null;
+    } else if (p.type === "procedure" && p.implementation) {
+      const teachResult = await callTool("sidekick_teach", {
+        action: "teach_procedure",
+        name: p.title.toLowerCase().replace(/[^a-z0-9]+/g, "_").substring(0, 50),
+        description: p.description || p.title,
+        steps: typeof p.implementation === "string" ? p.implementation.split("\n").filter(s => s.trim()) : []
+      });
+      implementationResult = teachResult.isError ? { applied: false, error: teachResult.content[0].text } : { applied: true };
+      p.autoApplied = !teachResult.isError;
+      p.autoAppliedAt = new Date().toISOString();
+    }
+    
     saveEvolve(evolve);
-    return { content: [{ type: "text", text: `Approved: ${id}` }] };
+    
+    let response = `Approved: ${id}`;
+    if (implementationResult) {
+      response += `\nAuto-implemented: ${implementationResult.applied ? "YES" : "NO"}`;
+      if (implementationResult.path) response += `\nPath: ${implementationResult.path}`;
+      if (implementationResult.error) response += `\nError: ${implementationResult.error}`;
+    }
+    return { content: [{ type: "text", text: response }] };
   }
 
   if (action === "reject") {
