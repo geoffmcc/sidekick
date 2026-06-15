@@ -1829,7 +1829,7 @@ function showValueModal(key) {
     valueHtml = '<div class="json-tree">' + renderJsonTree(parsed, 0) + '</div>';
   } else {
     valueHtml = '<div class="kv-modal-value">' + esc(String(entry.value)) + '</div>';
-    valueHtml += '<button class="btn btn-sm btn-outline" style="margin-top:8px" onclick="navigator.clipboard.writeText(this.previousElementSibling.textContent);showToast(\'Copied!\',\'success\')"><i class="fas fa-copy"></i> Copy</button>';
+    valueHtml += '<button class="btn btn-sm btn-outline" style="margin-top:8px" onclick="navigator.clipboard.writeText(this.previousElementSibling.textContent);showToast(&quot;Copied!&quot;,&quot;success&quot;)"><i class="fas fa-copy"></i> Copy</button>';
   }
   
   modal.innerHTML = '<div class="kv-modal-content">' +
