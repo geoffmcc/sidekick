@@ -52,6 +52,16 @@ copy .env.example .env
 ./deploy.sh -IP YOUR_REMOTE_IP -InitialUser ubuntu
 ```
 
+**Airgap/Offline Deploy** — If your remote server cannot reach GitHub (firewall, air-gapped network, etc.), use the `--scp` flag to sync files individually via SSH:
+```powershell
+# Windows
+.\deploy.ps1 -IP "YOUR_REMOTE_IP" -Scp
+
+# Linux/Mac
+./deploy.sh -IP YOUR_REMOTE_IP --scp
+```
+This uses the original SCP-based approach, copying files one-by-one from your local machine. No internet access required on the remote server.
+
 Open `http://YOUR_REMOTE_IP:4098/` in a browser. That's it — Sidekick is live.
 
 ## How It Works

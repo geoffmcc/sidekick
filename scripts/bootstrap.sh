@@ -88,7 +88,7 @@ apt-get update -qq
 
 # Install required packages
 log "Installing required packages..."
-apt-get install -y -qq curl ca-certificates gnupg build-essential python3 make g++ > /dev/null
+apt-get install -y -qq curl ca-certificates gnupg build-essential python3 make g++ git > /dev/null
 
 # Create user if doesn't exist
 if id "$USERNAME" &>/dev/null; then
