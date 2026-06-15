@@ -176,6 +176,7 @@ app.use((req, res, next) => {
 if (DASHBOARD_USER && DASHBOARD_PASS) {
   app.use((req, res, next) => {
     if (req.path.startsWith('/api/agent/stream/')) return next();
+    if (req.path.startsWith('/static/')) return next();
     if (req.path === "/") return next();
     const auth = req.headers.authorization;
     if (!auth || !auth.startsWith("Basic ")) {
