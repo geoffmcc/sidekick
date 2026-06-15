@@ -1208,6 +1208,15 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
 <footer>refreshes every 10s</footer>
 
 <script>
+// Global error handler to catch and display JS errors
+window.onerror = function(msg, url, lineNo, columnNo, error) {
+  const errorDiv = document.createElement('div');
+  errorDiv.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#f85149;color:white;padding:10px;z-index:9999;font-family:monospace;font-size:12px';
+  errorDiv.innerHTML = '<strong>JavaScript Error:</strong> ' + msg + '<br>Line: ' + lineNo + '<br><button onclick="this.parentElement.remove()" style="margin-top:5px;padding:2px 8px">Dismiss</button>';
+  document.body.appendChild(errorDiv);
+  return false;
+};
+
 let currentPage = 'system';
 let agentRunning = false;
 let agentStream = null;
