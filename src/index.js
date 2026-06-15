@@ -545,7 +545,7 @@ function createMcpServer() {
 // --- Session management: one McpServer + Transport pair per session ---
 
 const sessions = new Map();
-const staleSessionMap = new Map();
+const staleSessionMap = new Map(); // staleId -> { replacementId, createdAt }
 const serverStartTime = Date.now();
 
 function generateSessionId() {
@@ -565,7 +565,8 @@ async function getTransportForRequest(sessionId, metadata = {}) {
   }
 
   if (sessionId && !sessions.has(sessionId)) {
-    const replacementId = staleSessionMap.get(sessionId);
+    const staleEntry = staleSessionMap.get(sessionId);
+    const replacementId = staleEntry?.replacementId;
     if (replacementId && sessions.has(replacementId)) {
       logDebug("STALE_SESSION_KNOWN_REPLACEMENT", { staleSessionId: sessionId, replacementId });
       return { transport: null, isNew: false, newSessionId: replacementId, staleRedirect: true };
@@ -610,7 +611,7 @@ async function getTransportForRequest(sessionId, metadata = {}) {
       logDebug("AUTO_INIT_FAILED", { newSessionId, error: initError.message });
     }
 
-    staleSessionMap.set(sessionId, newSessionId);
+    staleSessionMap.set(sessionId, { replacementId: newSessionId, createdAt: Date.now() });
     if (staleSessionMap.size > 100) {
       const firstKey = staleSessionMap.keys().next().value;
       staleSessionMap.delete(firstKey);
@@ -696,6 +697,21 @@ setInterval(() => {
     logDebug("SESSION_CLEANUP", { evicted, remaining: sessions.size });
   }
 }, 600000);
+
+// Cleanup stale session mappings older than 30 minutes, every 5 minutes
+setInterval(() => {
+  const cutoff = Date.now() - 1800000;
+  const evicted = [];
+  for (const [staleId, entry] of staleSessionMap) {
+    if (entry.createdAt < cutoff) {
+      evicted.push({ staleSessionId: staleId, replacementId: entry.replacementId, age_ms: Date.now() - entry.createdAt });
+      staleSessionMap.delete(staleId);
+    }
+  }
+  if (evicted.length > 0) {
+    logDebug("STALE_SESSION_CLEANUP", { evicted, remaining: staleSessionMap.size });
+  }
+}, 300000);
 
 // --- Express app ---
 
