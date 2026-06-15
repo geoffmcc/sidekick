@@ -584,14 +584,11 @@ app.get("/api/db/stats", (req, res) => {
     const dbPath = path.join(DATA_DIR, "sidekick.db");
     const stats = fs.statSync(dbPath);
     const walMode = db.prepare("PRAGMA journal_mode").get();
-    const cacheHit = db.prepare("PRAGMA cache_status").all();
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
-    const tableSizes = {};
-    for (const t of tables) {
-      const size = db.prepare(`SELECT SUM(LENGTH(CAST(rowid AS TEXT)) + ${t.name.split(',').map(() => '100').join(' + ')}) as size FROM "${t.name}"`).get();
-      tableSizes[t.name] = size?.size || 0;
-    }
-    res.json({ ok: true, size: stats.size, tableCount: tables.length, walMode: walMode?.journal_mode, tableSizes });
+    const pageCount = db.prepare("PRAGMA page_count").get();
+    const pageSize = db.prepare("PRAGMA page_size").get();
+    const dbSize = (pageCount?.page_count || 0) * (pageSize?.page_size || 4096);
+    res.json({ ok: true, size: stats.size, tableCount: tables.length, walMode: walMode?.journal_mode, dbSize });
   } catch (e) {
     res.json({ ok: false, error: e.message });
   }
