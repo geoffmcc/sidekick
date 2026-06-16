@@ -550,7 +550,7 @@
           "type": "influxdb",
           "uid": "InfluxDB"
         },
-        "definition": "import \"influxdata/influxdb/schema\"\nschema.measurements(bucket: \"sidekick\")",
+        "definition": "from(bucket: \"sidekick\")\n  |> range(start: -30d)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"tool_calls\")\n  |> group()\n  |> distinct(column: \"tool_name\")\n  |> keep(columns: [\"tool_name\"])\n  |> sort(columns: [\"tool_name\"])",
         "hide": 0,
         "includeAll": false,
         "label": "Tool",

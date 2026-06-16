@@ -477,8 +477,8 @@
       {
         "current": {
           "selected": false,
-          "text": "sidekick-mcp",
-          "value": "sidekick-mcp"
+          "text": "sidekick-grafana",
+          "value": "sidekick-grafana"
         },
         "datasource": {
           "type": "influxdb",
