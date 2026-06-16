@@ -87,6 +87,7 @@ services:
     image: grafana/grafana:latest
     container_name: sidekick-grafana
     restart: unless-stopped
+    user: "1001:1001"
     environment:
       GF_SECURITY_ADMIN_USER: sidekick
       GF_SECURITY_ADMIN_PASSWORD: sidekick
