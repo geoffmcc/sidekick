@@ -7740,6 +7740,7 @@ async function sidekick_analytics({ query, file, format }) {
       }
 
       const sql = query || "SELECT * FROM data LIMIT 100";
+      const escapedSql = sql.replace(/"/g, '\\"');
       const pyScript = `
 import duckdb, json, sys
 con = duckdb.connect()
@@ -7750,7 +7751,7 @@ elif fmt == "json":
     con.execute("CREATE TABLE data AS SELECT * FROM read_json_auto('${file}')")
 elif fmt == "parquet":
     con.execute("CREATE TABLE data AS SELECT * FROM read_parquet('${file}')")
-result = con.execute(\`${sql}\`).fetchdf()
+result = con.execute("${escapedSql}").fetchdf()
 print(result.to_string(index=False))
 `;
       const result = execSync(`echo '${pyScript.replace(/'/g, "'\\''")}' | ${pythonCmd} 2>&1`, { timeout: 60000 }).toString();
@@ -7758,10 +7759,11 @@ print(result.to_string(index=False))
     }
 
     if (query) {
+      const escapedQuery = query.replace(/"/g, '\\"');
       const pyScript = `
 import duckdb
 con = duckdb.connect()
-result = con.execute(\`${query}\`).fetchdf()
+result = con.execute("${escapedQuery}").fetchdf()
 print(result.to_string(index=False))
 `;
       const result = execSync(`echo '${pyScript.replace(/'/g, "'\\''")}' | ${pythonCmd} 2>&1`, { timeout: 60000 }).toString();
