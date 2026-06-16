@@ -516,6 +516,21 @@ const TOOL_SCHEMAS = {
     format: z.string().optional().describe("Video format"),
     audio_only: z.boolean().optional().describe("Extract audio only")
   }),
+  sidekick_wireguard: z.object({
+    action: z.enum(["status", "list_peers", "add_peer", "remove_peer", "generate_keypair"]).describe("WireGuard action"),
+    interface_name: z.string().optional().describe("WireGuard interface (e.g. wg0)"),
+    peer_name: z.string().optional().describe("Peer name (for add_peer)"),
+    public_key: z.string().optional().describe("Peer public key"),
+    endpoint: z.string().optional().describe("Peer endpoint IP:port"),
+    allowed_ips: z.string().optional().describe("Allowed IPs (default 10.0.0.0/24)")
+  }),
+  sidekick_nginx: z.object({
+    action: z.enum(["status", "list_sites", "add_site", "remove_site", "test_config", "reload"]).describe("Nginx action"),
+    site_name: z.string().optional().describe("Site config name"),
+    domain: z.string().optional().describe("Domain name (for add_site)"),
+    upstream_port: z.number().optional().describe("Local port to proxy to"),
+    ssl_email: z.string().optional().describe("Email for Let's Encrypt")
+  }),
 };
 
 // --- Factory: create fresh McpServer + register tools ---
