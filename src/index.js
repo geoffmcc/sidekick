@@ -505,6 +505,11 @@ const TOOL_SCHEMAS = {
     action: z.enum(["list", "ps", "pull", "show"]).describe("Ollama action"),
     model: z.string().optional().describe("Model name (required for pull/show)")
   }),
+  sidekick_tunnel: z.object({
+    action: z.enum(["start", "stop", "list"]).describe("Tunnel action"),
+    port: z.number().optional().describe("Local port to expose (required for start)"),
+    name: z.string().optional().describe("Tunnel name (optional)")
+  }),
 };
 
 // --- Factory: create fresh McpServer + register tools ---
