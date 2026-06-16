@@ -501,6 +501,10 @@ const TOOL_SCHEMAS = {
     text: z.string().describe("Text to embed"),
     model: z.string().optional().default("nomic-embed-text").describe("Embedding model")
   }),
+  sidekick_ollama: z.object({
+    action: z.enum(["list", "ps", "pull", "show"]).describe("Ollama action"),
+    model: z.string().optional().describe("Model name (required for pull/show)")
+  }),
 };
 
 // --- Factory: create fresh McpServer + register tools ---
