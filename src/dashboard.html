@@ -252,6 +252,23 @@
   </div>
 </div>
 
+<!-- Confirmation Modal -->
+<div class="modal-overlay" id="confirmModal">
+  <div class="modal">
+    <h3 id="confirmTitle" style="color:#f85149">Confirm Deletion</h3>
+    <div id="confirmMessage" style="margin:16px 0;color:#c9d1d9;font-size:.9rem;line-height:1.5"></div>
+    <div id="confirmDetails" style="margin:16px 0;padding:12px;background:#161b22;border:1px solid #30363d;border-radius:6px;font-size:.85rem;color:#8b949e"></div>
+    <div id="confirmTypingSection" style="display:none;margin:16px 0">
+      <div style="margin-bottom:8px;color:#f85149;font-size:.85rem">Type <span id="confirmRequiredText" style="font-family:var(--font);font-weight:600;color:#ffa657"></span> to confirm:</div>
+      <input type="text" id="confirmInput" style="width:100%;padding:8px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-family:var(--font)" oninput="checkConfirmInput()">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeConfirmModal()">Cancel</button>
+      <button class="btn btn-danger" id="confirmButton" onclick="executeConfirmAction()" disabled>Delete</button>
+    </div>
+  </div>
+</div>
+
 <footer>refreshes every 10s</footer>
 
 <script src="/static/dashboard.js"></script>
