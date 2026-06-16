@@ -5,7 +5,7 @@ set -euo pipefail
 IP="192.168.1.10"
 INITIAL_USER=""
 SCP_MODE=false
-INSTALL_TOOLS=false
+INSTALL_TOOLS=true
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -21,13 +21,13 @@ while [[ $# -gt 0 ]]; do
       SCP_MODE=true
       shift
       ;;
-    --tools)
-      INSTALL_TOOLS=true
+    --minimal)
+      INSTALL_TOOLS=false
       shift
       ;;
     *)
       echo "Unknown parameter: $1"
-      echo "Usage: $0 [-IP <ip>] [-InitialUser <user>] [--scp] [--tools]"
+      echo "Usage: $0 [-IP <ip>] [-InitialUser <user>] [--scp] [--minimal]"
       exit 1
       ;;
   esac

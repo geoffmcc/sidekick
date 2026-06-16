@@ -4,7 +4,7 @@ param(
   [string]$Password = $env:SIDEKICK_INITIAL_PASSWORD,
   [string]$InitialUser = "",
   [switch]$Scp,
-  [switch]$Tools
+  [switch]$Minimal
 )
 
 $ErrorActionPreference = "Stop"
@@ -145,7 +145,7 @@ function Run-Bootstrap {
   Write-Host "--- Bootstrap Output ---" -ForegroundColor DarkGray
   
   $bootstrapFlags = "--yes --install-services"
-  if ($Tools) {
+  if (-not $Minimal) {
     $bootstrapFlags += " --install-tools"
   }
   $bootstrapCmd = "sudo bash /tmp/bootstrap.sh $bootstrapFlags --ssh-key '$pubKey' && rm /tmp/bootstrap.sh /tmp/sidekick-*.service"
