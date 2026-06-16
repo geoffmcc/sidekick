@@ -15,6 +15,7 @@ NC='\033[0m' # No Color
 USERNAME="sidekick"
 NODE_VERSION="22"
 INSTALL_SERVICES=false
+INSTALL_TOOLS=false
 SSH_PUB_KEY=""
 
 # Parse arguments
@@ -30,6 +31,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --install-services)
       INSTALL_SERVICES=true
+      shift
+      ;;
+    --install-tools)
+      INSTALL_TOOLS=true
       shift
       ;;
     --ssh-key)
@@ -225,6 +230,20 @@ if [ "$INSTALL_SERVICES" = true ]; then
   rm -f /tmp/sidekick-*.service
   
   log "Services installed and enabled"
+fi
+
+# Install tools if requested
+if [ "$INSTALL_TOOLS" = true ]; then
+  log "Installing server tools (Docker, databases, media tools, etc.)..."
+  
+  SETUP_SCRIPT="$USER_HOME/sidekick/scripts/setup-tools.sh"
+  if [ -f "$SETUP_SCRIPT" ]; then
+    bash "$SETUP_SCRIPT"
+    log "Server tools installed"
+  else
+    warn "Setup script not found at $SETUP_SCRIPT"
+    warn "Run setup-tools.sh manually after cloning the repository"
+  fi
 fi
 
 # Final verification

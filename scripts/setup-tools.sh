@@ -332,7 +332,7 @@ echo ""
 # ─────────────────────────────────────────────
 # Phase 8: Ollama — second model
 # ─────────────────────────────────────────────
-log "Phase 8: Pulling second Ollama model..."
+log "Phase 8: Pulling Ollama models..."
 
 if command -v ollama &>/dev/null; then
   if ollama list 2>/dev/null | grep -q "llama3.1:8b"; then
@@ -342,8 +342,16 @@ if command -v ollama &>/dev/null; then
     sudo -u "$USERNAME" ollama pull llama3.1:8b
     pass "llama3.1:8b pulled"
   fi
+
+  if ollama list 2>/dev/null | grep -q "nomic-embed-text"; then
+    skip "nomic-embed-text already pulled"
+  else
+    info "Pulling nomic-embed-text..."
+    sudo -u "$USERNAME" ollama pull nomic-embed-text
+    pass "nomic-embed-text pulled"
+  fi
 else
-  warn "Ollama not installed, skipping second model"
+  warn "Ollama not installed, skipping models"
 fi
 
 echo ""

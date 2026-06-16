@@ -151,7 +151,7 @@ run_bootstrap() {
   echo -e "  \033[33mExecuting bootstrap...\033[0m"
   echo -e "\033[90m--- Bootstrap Output ---\033[0m"
   
-  local bootstrap_cmd="sudo bash /tmp/bootstrap.sh --yes --install-services --ssh-key '$pub_key' && rm -f /tmp/bootstrap.sh /tmp/sidekick-*.service"
+  local bootstrap_cmd="sudo bash /tmp/bootstrap.sh --yes --install-services --install-tools --ssh-key '$pub_key' && rm -f /tmp/bootstrap.sh /tmp/sidekick-*.service"
   
   if ! ssh -t -o ControlPath="$CONTROL_PATH" "$user@$IP" "$bootstrap_cmd"; then
     echo -e "\033[90m--- End Bootstrap Output ---\033[0m"

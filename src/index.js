@@ -416,17 +416,20 @@ const TOOL_SCHEMAS = {
   }),
   sidekick_db_schema: z.object({
     table: z.string().optional().describe("Specific table name (optional)"),
-    verbose: z.boolean().optional().describe("Include row counts and detailed info")
+    verbose: z.boolean().optional().describe("Include row counts and detailed info"),
+    database: z.enum(["sqlite", "postgres"]).optional().default("sqlite").describe("Database backend")
   }),
   sidekick_db_query: z.object({
     sql: z.string().describe("SQL query to execute"),
     params: z.array(z.any()).optional().describe("Query parameters"),
     readonly: z.boolean().optional().default(true).describe("Read-only mode (blocks writes)"),
     limit: z.number().optional().default(1000).describe("Maximum rows to return"),
-    timeout: z.number().optional().default(5000).describe("Query timeout in milliseconds")
+    timeout: z.number().optional().default(5000).describe("Query timeout in milliseconds"),
+    database: z.enum(["sqlite", "postgres"]).optional().default("sqlite").describe("Database backend")
   }),
   sidekick_db_stats: z.object({
-    detailed: z.boolean().optional().describe("Include per-table statistics")
+    detailed: z.boolean().optional().describe("Include per-table statistics"),
+    database: z.enum(["sqlite", "postgres"]).optional().default("sqlite").describe("Database backend")
   }),
   sidekick_db_backup: z.object({
     path: z.string().optional().describe("Output path (default: data/backups/)"),
@@ -447,12 +450,14 @@ const TOOL_SCHEMAS = {
   sidekick_db_export: z.object({
     table: z.string().optional().describe("Specific table (exports all if omitted)"),
     format: z.enum(["json", "csv", "sql"]).optional().default("json").describe("Export format"),
-    path: z.string().optional().describe("Output file path")
+    path: z.string().optional().describe("Output file path"),
+    database: z.enum(["sqlite", "postgres"]).optional().default("sqlite").describe("Database backend")
   }),
   sidekick_db_search: z.object({
     query: z.string().describe("Search terms"),
     tables: z.string().optional().describe("Comma-separated table names"),
-    limit: z.number().optional().default(50).describe("Maximum results")
+    limit: z.number().optional().default(50).describe("Maximum results"),
+    database: z.enum(["sqlite", "postgres"]).optional().default("sqlite").describe("Database backend")
   }),
   sidekick_db_migrate: z.object({
     action: z.enum(["status", "list", "up"]).describe("Migration action"),
@@ -463,6 +468,38 @@ const TOOL_SCHEMAS = {
     snapshot_a: z.string().optional().describe("Path to snapshot A or 'current'"),
     snapshot_b: z.string().optional().describe("Path to snapshot B or 'current'"),
     table: z.string().optional().describe("Specific table to compare")
+  }),
+  sidekick_redis: z.object({
+    action: z.enum(["get", "set", "del", "keys", "ttl", "info", "flush"]).describe("Redis action"),
+    key: z.string().optional().describe("Redis key"),
+    value: z.string().optional().describe("Value for set action"),
+    ttl: z.string().optional().describe("TTL in seconds for set action"),
+    pattern: z.string().optional().describe("Pattern for keys action (default '*')")
+  }),
+  sidekick_ocr: z.object({
+    path: z.string().describe("Image file path"),
+    language: z.string().optional().default("eng").describe("OCR language (default: eng)"),
+    psm: z.number().optional().describe("Page segmentation mode")
+  }),
+  sidekick_media: z.object({
+    action: z.enum(["info", "convert", "extract_audio", "thumbnail", "resize", "trim"]).describe("Media action"),
+    input: z.string().describe("Input file path"),
+    output: z.string().optional().describe("Output file path"),
+    options: z.string().optional().describe("Format-specific options")
+  }),
+  sidekick_transcribe: z.object({
+    path: z.string().describe("Audio/video file path"),
+    model: z.string().optional().default("base").describe("Whisper model (tiny|base|small|medium)"),
+    language: z.string().optional().describe("Language code")
+  }),
+  sidekick_analytics: z.object({
+    query: z.string().optional().describe("SQL query"),
+    file: z.string().optional().describe("Data file path (CSV, JSON, or Parquet)"),
+    format: z.string().optional().describe("File format (csv|json|parquet)")
+  }),
+  sidekick_embed: z.object({
+    text: z.string().describe("Text to embed"),
+    model: z.string().optional().default("nomic-embed-text").describe("Embedding model")
   }),
 };
 
