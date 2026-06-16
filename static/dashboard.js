@@ -298,6 +298,13 @@ function loadDashboardSummary(){
     $('toolCalls').textContent = totalCalls;
     $('toolSuccess').textContent = successRate;
     $('toolAvg').textContent = avgTime;
+    
+    // Show top 5 tools
+    const top5 = d.stats.slice(0, 5);
+    if (top5.length > 0) {
+      $('topTools').innerHTML = '<div style="color:#58a6ff;margin-bottom:4px">Top tools:</div>' + 
+        top5.map(s => '<div style="display:flex;justify-content:space-between"><span style="color:#c9d1d9">' + esc(s.name.replace('sidekick_', '')) + '</span><span style="color:#8b949e">' + s.count + '</span></div>').join('');
+    }
   }).catch(e => apiError('/api/stats', e, 0));
 }
 
