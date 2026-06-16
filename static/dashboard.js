@@ -81,13 +81,13 @@ function authFetch(url, options) {
 
 const TOOL_CATEGORIES = {
   'Core': { icon: 'fa-terminal', tools: ['sidekick_bash','sidekick_read','sidekick_write','sidekick_list','sidekick_search','sidekick_web_fetch','sidekick_llm','sidekick_respond'] },
-  'Storage': { icon: 'fa-database', tools: ['sidekick_store','sidekick_get','sidekick_list_projects','sidekick_get_by_project'] },
-  'Database': { icon: 'fa-database', tools: ['sidekick_db_schema','sidekick_db_query','sidekick_db_stats','sidekick_db_backup','sidekick_db_restore','sidekick_db_export','sidekick_db_search','sidekick_db_migrate','sidekick_db_diff'] },
+  'Storage': { icon: 'fa-database', tools: ['sidekick_store','sidekick_get','sidekick_list_projects','sidekick_get_by_project','sidekick_redis'] },
+  'Database': { icon: 'fa-database', tools: ['sidekick_db_schema','sidekick_db_query','sidekick_db_stats','sidekick_db_backup','sidekick_db_restore','sidekick_db_export','sidekick_db_search','sidekick_db_migrate','sidekick_db_diff','sidekick_analytics'] },
   'Git & GitHub': { icon: 'fa-code-branch', tools: ['sidekick_git','sidekick_github'] },
   'Services': { icon: 'fa-cogs', tools: ['sidekick_process','sidekick_service'] },
   'Scheduling': { icon: 'fa-clock', tools: ['sidekick_cron','sidekick_delay'] },
   'Communication': { icon: 'fa-bell', tools: ['sidekick_notify','sidekick_webhook'] },
-  'Context & Learning': { icon: 'fa-brain', tools: ['sidekick_context','sidekick_teach'] },
+  'Context & Learning': { icon: 'fa-brain', tools: ['sidekick_context','sidekick_teach','sidekick_embed'] },
   'Data Pipeline': { icon: 'fa-filter', tools: ['sidekick_transform','sidekick_parse','sidekick_diff','sidekick_hash','sidekick_validate','sidekick_template','sidekick_extract','sidekick_anonymize','sidekick_diff_files'] },
   'Monitoring': { icon: 'fa-heartbeat', tools: ['sidekick_health','sidekick_status','sidekick_watch','sidekick_baseline','sidekick_snapshot','sidekick_timeline','sidekick_black_box','sidekick_netdiag'] },
   'Workflow': { icon: 'fa-tasks', tools: ['sidekick_queue','sidekick_retry','sidekick_orchestrate','sidekick_runbook'] },
@@ -96,7 +96,8 @@ const TOOL_CATEGORIES = {
   'Security': { icon: 'fa-shield-alt', tools: ['sidekick_secret','sidekick_sandbox'] },
   'Development': { icon: 'fa-code', tools: ['sidekick_changelog','sidekick_depend'] },
   'Reliability': { icon: 'fa-plug', tools: ['sidekick_circuit'] },
-  'Archive': { icon: 'fa-file-archive', tools: ['sidekick_archive'] }
+  'Archive': { icon: 'fa-file-archive', tools: ['sidekick_archive'] },
+  'Media': { icon: 'fa-film', tools: ['sidekick_ocr','sidekick_media','sidekick_transcribe'] }
 };
 
 function getToolCategory(toolName) {
