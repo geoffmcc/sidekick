@@ -94,6 +94,7 @@ const TOOL_RISK = {
   sidekick_wireguard: "high",
   sidekick_nginx: "high",
   sidekick_knowledge: "low",
+  sidekick_metrics: "low",
 };
 
 // Tool categories - maps tool names to their category
@@ -179,6 +180,7 @@ const TOOL_CATEGORIES = {
   'sidekick_transcribe': 'Media',
   'sidekick_download': 'Media',
   'sidekick_knowledge': 'Context & Learning',
+  'sidekick_metrics': 'Monitoring',
 };
 
 function getToolRisk(name) {
@@ -8704,6 +8706,153 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
   }
 }
 
+// --- Metrics Tool ---
+
+async function sidekick_metrics({ action, measurement, fields, tags, timestamp, query, time_range }) {
+  try {
+    const INFLUX_URL = process.env.SIDEKICK_INFLUX_URL || 'http://localhost:8086';
+    const INFLUX_TOKEN = process.env.SIDEKICK_INFLUX_TOKEN || 'sidekick-influx-token';
+    const INFLUX_ORG = process.env.SIDEKICK_INFLUX_ORG || 'sidekick';
+    const INFLUX_BUCKET = process.env.SIDEKICK_INFLUX_BUCKET || 'sidekick';
+
+    if (action === "write") {
+      if (!measurement || !fields || typeof fields !== 'object') {
+        return { content: [{ type: "text", text: "Error: measurement and fields object are required for write" }], isError: true };
+      }
+
+      // Build line protocol
+      let line = measurement;
+      
+      // Add tags
+      if (tags && typeof tags === 'object') {
+        const tagPairs = Object.entries(tags).map(([k, v]) => `${k}=${v}`);
+        if (tagPairs.length > 0) {
+          line += ',' + tagPairs.join(',');
+        }
+      }
+      
+      // Add fields
+      const fieldPairs = Object.entries(fields).map(([k, v]) => {
+        if (typeof v === 'number') {
+          return `${k}=${v}`;
+        } else if (typeof v === 'boolean') {
+          return `${k}=${v}`;
+        } else {
+          return `${k}="${String(v).replace(/"/g, '\\"')}"`;
+        }
+      });
+      line += ' ' + fieldPairs.join(',');
+      
+      // Add timestamp
+      const ts = timestamp || Date.now() * 1000000; // nanoseconds
+      line += ' ' + ts;
+
+      // Write to InfluxDB
+      const response = await fetch(`${INFLUX_URL}/api/v2/write?org=${INFLUX_ORG}&bucket=${INFLUX_BUCKET}&precision=ns`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Token ${INFLUX_TOKEN}`,
+          'Content-Type': 'text/plain; charset=utf-8'
+        },
+        body: line
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return { content: [{ type: "text", text: `Error writing to InfluxDB: ${response.status} - ${errorText}` }], isError: true };
+      }
+
+      return { content: [{ type: "text", text: `Successfully wrote metric: ${measurement}` }] };
+    }
+
+    if (action === "query") {
+      if (!query) {
+        return { content: [{ type: "text", text: "Error: query is required for query action" }], isError: true };
+      }
+
+      const response = await fetch(`${INFLUX_URL}/api/v2/query?org=${INFLUX_ORG}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Token ${INFLUX_TOKEN}`,
+          'Content-Type': 'application/vnd.flux',
+          'Accept': 'application/json'
+        },
+        body: query
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return { content: [{ type: "text", text: `Error querying InfluxDB: ${response.status} - ${errorText}` }], isError: true };
+      }
+
+      const result = await response.text();
+      return { content: [{ type: "text", text: result }] };
+    }
+
+    if (action === "list_measurements") {
+      const fluxQuery = `from(bucket: "${INFLUX_BUCKET}")
+  |> range(start: -30d)
+  |> group()
+  |> distinct(column: "_measurement")
+  |> keep(columns: ["_measurement"])`;
+
+      const response = await fetch(`${INFLUX_URL}/api/v2/query?org=${INFLUX_ORG}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Token ${INFLUX_TOKEN}`,
+          'Content-Type': 'application/vnd.flux',
+          'Accept': 'application/json'
+        },
+        body: fluxQuery
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return { content: [{ type: "text", text: `Error listing measurements: ${response.status} - ${errorText}` }], isError: true };
+      }
+
+      const result = await response.text();
+      return { content: [{ type: "text", text: result }] };
+    }
+
+    if (action === "list_fields") {
+      if (!measurement) {
+        return { content: [{ type: "text", text: "Error: measurement is required for list_fields" }], isError: true };
+      }
+
+      const range = time_range || '-30d';
+      const fluxQuery = `from(bucket: "${INFLUX_BUCKET}")
+  |> range(start: ${range})
+  |> filter(fn: (r) => r._measurement == "${measurement}")
+  |> group()
+  |> distinct(column: "_field")
+  |> keep(columns: ["_field"])`;
+
+      const response = await fetch(`${INFLUX_URL}/api/v2/query?org=${INFLUX_ORG}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Token ${INFLUX_TOKEN}`,
+          'Content-Type': 'application/vnd.flux',
+          'Accept': 'application/json'
+        },
+        body: fluxQuery
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return { content: [{ type: "text", text: `Error listing fields: ${response.status} - ${errorText}` }], isError: true };
+      }
+
+      const result = await response.text();
+      return { content: [{ type: "text", text: result }] };
+    }
+
+    return { content: [{ type: "text", text: "Error: Invalid action. Use: write, query, list_measurements, list_fields" }], isError: true };
+  } catch (e) {
+    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
+  }
+}
+
 const TOOLS = {
   sidekick_bash,
   sidekick_read,
@@ -8787,6 +8936,7 @@ const TOOLS = {
   sidekick_wireguard,
   sidekick_nginx,
   sidekick_knowledge,
+  sidekick_metrics,
 };
 
 const TOOL_DEFS = [
@@ -8872,6 +9022,7 @@ const TOOL_DEFS = [
   { name: "sidekick_wireguard", description: "Manage WireGuard VPN: status, list_peers, add_peer, remove_peer, generate_keypair", args: { action: "string (status|list_peers|add_peer|remove_peer|generate_keypair)", interface_name: "string (WireGuard interface, e.g. wg0)", peer_name: "string (peer name for add_peer)", public_key: "string (peer public key)", endpoint: "string (optional, peer endpoint IP:port)", allowed_ips: "string (optional, allowed IPs, default 10.0.0.0/24)" } },
   { name: "sidekick_nginx", description: "Manage Nginx reverse proxy: status, list_sites, add_site, remove_site, test_config, reload", args: { action: "string (status|list_sites|add_site|remove_site|test_config|reload)", site_name: "string (site config name)", domain: "string (domain name for add_site)", upstream_port: "number (local port to proxy to)", ssl_email: "string (optional, email for Let's Encrypt)" } },
   { name: "sidekick_knowledge", description: "Knowledge base management: search, get, list, add, update, delete entries", args: { action: "string (search|get|list|add|update|delete)", id: "number (optional, entry ID for get/update/delete)", category: "string (optional, category for list/add/update)", title: "string (optional, title for add/update)", content: "string (optional, content for add/update)", tags: "string (optional, comma-separated tags for add/update)", query: "string (optional, search query for search)", limit: "number (optional, max results for search/list)" } },
+  { name: "sidekick_metrics", description: "Metrics collection and querying with InfluxDB: write metrics, query data, list measurements and fields", args: { action: "string (write|query|list_measurements|list_fields)", measurement: "string (measurement name for write/list_fields)", fields: "object (field values for write)", tags: "object (optional, tags for write)", timestamp: "number (optional, nanosecond timestamp for write)", query: "string (Flux query for query action)", time_range: "string (optional, time range for list_fields, e.g. -30d)" } },
 ];
 
 async function callTool(name, args) {

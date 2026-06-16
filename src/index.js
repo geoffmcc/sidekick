@@ -542,6 +542,15 @@ const TOOL_SCHEMAS = {
     query: z.string().optional().describe("Search query (for search)"),
     limit: z.number().optional().describe("Max results (for search/list)")
   }),
+  sidekick_metrics: z.object({
+    action: z.enum(["write", "query", "list_measurements", "list_fields"]).describe("Metrics action"),
+    measurement: z.string().optional().describe("Measurement name (for write/list_fields)"),
+    fields: z.record(z.any()).optional().describe("Field values (for write)"),
+    tags: z.record(z.string()).optional().describe("Tags (for write)"),
+    timestamp: z.number().optional().describe("Nanosecond timestamp (for write)"),
+    query: z.string().optional().describe("Flux query (for query action)"),
+    time_range: z.string().optional().describe("Time range for list_fields (e.g. -30d)")
+  }),
 };
 
 // --- Factory: create fresh McpServer + register tools ---
