@@ -19,5 +19,11 @@ sidekick ALL=(ALL) NOPASSWD: /usr/bin/docker start *, /usr/bin/docker stop *, /u
 # UFW
 sidekick ALL=(ALL) NOPASSWD: /usr/sbin/ufw allow 4097/tcp, /usr/sbin/ufw allow 4098/tcp, /usr/sbin/ufw allow 4099/tcp, /usr/sbin/ufw allow 3000/tcp
 
+# WireGuard
+sidekick ALL=(ALL) NOPASSWD: /usr/bin/wg, /usr/bin/wg-quick
+
+# Nginx
+sidekick ALL=(ALL) NOPASSWD: /usr/sbin/nginx, /usr/sbin/nginx -t, /usr/sbin/nginx -s reload, /usr/bin/systemctl start nginx, /usr/bin/systemctl stop nginx, /usr/bin/systemctl restart nginx, /usr/bin/systemctl reload nginx, /usr/bin/systemctl status nginx
+
 # Data directory
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/chown -R sidekick\:sidekick /home/sidekick/sidekick/data/, /usr/bin/chmod -R 755 /home/sidekick/sidekick/data/
