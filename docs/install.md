@@ -43,10 +43,14 @@ Example with an initial bootstrap user, if supported by the script:
 From the local repo folder:
 
 ```bash
-./deploy.sh YOUR_REMOTE_IP
+./deploy.sh -IP YOUR_REMOTE_IP
 ```
 
-If the script supports an initial bootstrap user, document the exact syntax used by the script. Do not invent flags that the Bash script does not support.
+With an explicit initial bootstrap user:
+
+```bash
+./deploy.sh -IP YOUR_REMOTE_IP -InitialUser ubuntu
+```
 
 ## What the Deploy Scripts Should Handle
 
@@ -71,13 +75,13 @@ http://YOUR_REMOTE_IP:4098/
 Check the service:
 
 ```bash
-sudo systemctl status sidekick
+sudo systemctl status sidekick-mcp sidekick-dashboard sidekick-agent
 ```
 
 View logs:
 
 ```bash
-sudo journalctl -u sidekick -f
+sudo journalctl -u sidekick-mcp -f
 ```
 
 ## Manual Development Setup

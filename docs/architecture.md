@@ -1,6 +1,6 @@
 # Architecture
 
-Sidekick is a three-process Node.js application with a shared data directory.
+Sidekick is a three-process Node.js application with a shared SQLite database and data directory.
 
 ```text
 opencode / MCP client
@@ -9,7 +9,7 @@ opencode / MCP client
         v
 MCP Server :4097  ---- loads/registers tools ----> src/tools.js
         |
-        | SQLite plus JSON/JSONL under SIDEKICK_DATA_DIR
+        | SQLite sidekick.db + selected JSON/JSONL artifacts
         v
 Persistent data directory
 
@@ -35,7 +35,7 @@ The server requires `Authorization: Bearer <SIDEKICK_API_KEY>` or `?api_key=<key
 
 ### Tool implementation: `src/tools.js`
 
-The tool module owns most application behavior. It loads configuration, ensures the data directory exists, implements tool handlers, redacts sensitive output, logs tool calls, and persists JSON state files.
+The tool module owns most application behavior. It loads configuration, ensures the data directory exists, implements tool handlers, redacts sensitive output, logs tool calls, syncs the tool registry into SQLite, and persists state through the SQLite document layer or tool-specific files.
 
 Important exported values include:
 
@@ -43,7 +43,8 @@ Important exported values include:
 - `TOOL_DEFS`: dashboard-facing catalog of tool names, descriptions, and argument summaries.
 - `getToolDefsForSource(source)`: policy-aware catalog including risk and enabled status.
 - `callTool(name, args)`: central dispatcher used by the agent and wrapper tools; enforces tool policy.
-- `logToolCall(...)`: appends JSONL audit-style tool activity to `log.jsonl`.
+- `syncToolRegistry()`: upserts `TOOL_DEFS` into the database on MCP startup and marks removed tools deprecated.
+- `logToolCall(...)`: writes redacted tool activity to the `tool_logs` SQLite table.
 - `setSource(source)`: records whether a call came from MCP, dashboard, agent, or another path.
 
 ### Dashboard: `src/dashboard.js`
@@ -60,10 +61,10 @@ The agent has a loop limit controlled by `SIDEKICK_MAX_ITERATIONS` and stores tr
 
 ## Session handling
 
-The MCP server tracks sessions in memory. Sessions include the MCP server instance, transport, creation time, last access time, and initialization state. Inactive sessions are removed after 24 hours. Streamable HTTP GET and DELETE require a valid `mcp-session-id` header. Stale POST sessions return a structured JSON-RPC error and a replacement session ID header so the client can reinitialize.
+The MCP server tracks sessions in memory. Sessions include the MCP server instance, transport, creation time, last access time, and initialization state. Inactive sessions are removed after 1 hour. Streamable HTTP GET and DELETE require a valid `mcp-session-id` header. Stale POST sessions return a structured JSON-RPC error and a replacement session ID header so the client can reinitialize.
 
 ## Shared storage
 
-All services use the same `SIDEKICK_DATA_DIR`. By default, this is `data/` relative to the project during local development, and `/home/sidekick/sidekick/data` in the example deployment. Core KV, logs, and many operational records are stored in SQLite (`sidekick.db`); some long-lived documents and transcripts remain JSON/JSONL files.
+All services use the same `SIDEKICK_DATA_DIR`. By default, this is `data/` relative to the project during local development, and `/home/sidekick/sidekick/data` in the example deployment. Core KV, tool logs, tool catalog data, knowledge base entries, and named JSON documents are stored in SQLite (`sidekick.db`). Some feature-specific artifacts still use files: agent transcripts, audit/error logs, secrets, snapshots, queues, runbooks, baselines, and similar operational bundles.
 
 Back up both `sidekick.db` and the surrounding data directory. Keep logs trimmed, protect backups as sensitive operational data, and avoid using the KV store as a large application database.

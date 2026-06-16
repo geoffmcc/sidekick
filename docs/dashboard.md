@@ -8,7 +8,7 @@ The dashboard frontend is split across `src/dashboard.html`, `static/dashboard.c
 
 Typical dashboard functions:
 
-- view recent tool calls from `log.jsonl`;
+- view recent tool calls from the `tool_logs` table;
 - browse and edit KV entries;
 - view system statistics;
 - inspect configured tools;
@@ -16,7 +16,7 @@ Typical dashboard functions:
 - stream agent progress;
 - view task history;
 - receive and inspect external webhook payloads;
-- clear logs, KV data, conversations, or all data files.
+- clear logs, KV data, conversations, or all dashboard-managed data.
 
 ## Authentication and protections
 
@@ -34,7 +34,7 @@ If the dashboard is exposed outside a private network, put it behind a reverse p
 
 ## Webhook capture
 
-`POST /api/webhook/:source` stores a webhook payload with a generated ID, source name, timestamp, headers, query string, and body. Webhook storage is backed by `webhooks.json`.
+`POST /api/webhook/:source` stores a webhook payload with a generated ID, source name, timestamp, and body. Webhook storage is backed by the `webhooks` document in the SQLite `json_documents` table.
 
 Use `sidekick_webhook` to list, retrieve, or clear stored webhook payloads from the MCP side.
 

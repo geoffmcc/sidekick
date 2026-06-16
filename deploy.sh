@@ -216,7 +216,7 @@ initialize_remote() {
   echo -e "  \033[32mServices verified\033[0m"
 
   echo -e "  \033[33mCreating remote directories...\033[0m"
-  run_remote "mkdir -p $REMOTE_DIR/src $REMOTE_DIR/data" >/dev/null
+  run_remote "mkdir -p $REMOTE_DIR/src $REMOTE_DIR/scripts $REMOTE_DIR/docs $REMOTE_DIR/migrations $REMOTE_DIR/data" >/dev/null
 
   echo -e "  \033[32mRemote initialization complete\033[0m"
 }
@@ -270,7 +270,7 @@ if [ "$SCP_MODE" = true ]; then
   echo -e "\033[33mSCP mode: syncing files individually (airgap/offline)\033[0m"
 
   echo -e "\033[32mSyncing source files...\033[0m"
-  for f in tools.js index.js dashboard.js agent.js redact.js env.js db.js; do
+  for f in tools.js index.js dashboard.js agent.js redact.js env.js db.js pg.js redis.js qdrant.js crypto-utils.js; do
     if [ ! -f "$PROJECT_DIR/src/$f" ]; then
       echo -e "  \033[33mWarning: src/$f not found, skipping\033[0m"
       continue
@@ -287,6 +287,29 @@ if [ "$SCP_MODE" = true ]; then
     exit 1
   fi
   changed+=("package.json")
+
+  if ! copy_to_vps "$PROJECT_DIR/scripts/seed-knowledge.js" "$REMOTE_DIR/scripts/seed-knowledge.js" >/dev/null; then
+    echo -e "\033[31mERROR: Failed to copy seed-knowledge.js\033[0m"
+    exit 1
+  fi
+  changed+=("seed-knowledge.js")
+
+  if ! copy_to_vps "$PROJECT_DIR/docs/knowledge-seed.sql" "$REMOTE_DIR/docs/knowledge-seed.sql" >/dev/null; then
+    echo -e "\033[31mERROR: Failed to copy knowledge-seed.sql\033[0m"
+    exit 1
+  fi
+  changed+=("knowledge-seed.sql")
+
+  for migration in "$PROJECT_DIR"/migrations/*.sql; do
+    if [ -f "$migration" ]; then
+      name=$(basename "$migration")
+      if ! copy_to_vps "$migration" "$REMOTE_DIR/migrations/$name" >/dev/null; then
+        echo -e "\033[31mERROR: Failed to copy migration $name\033[0m"
+        exit 1
+      fi
+      changed+=("migrations/$name")
+    fi
+  done
 
   if [ -f "$PROJECT_DIR/.env" ]; then
     remote_env_exists=$(run_remote "test -f $REMOTE_DIR/.env && echo YES || echo NO")
@@ -372,6 +395,18 @@ echo -e "\033[32mRunning npm install...\033[0m"
 if ! run_remote "cd $REMOTE_DIR && npm install --omit=dev 2>&1"; then
   echo -e "\033[31mERROR: npm install failed\033[0m"
   exit 1
+fi
+
+echo ""
+echo -e "\033[36m--- Seeding Knowledge Base ---\033[0m"
+seed_available=$(run_remote "cd $REMOTE_DIR && npm run 2>/dev/null | grep -q 'seed:knowledge' && echo YES || echo NO") || true
+if [[ "$seed_available" == *"YES"* ]]; then
+  if ! run_remote "cd $REMOTE_DIR && npm run seed:knowledge 2>&1"; then
+    echo -e "\033[31mERROR: knowledge seed failed\033[0m"
+    exit 1
+  fi
+else
+  echo -e "\033[33mKnowledge seed script not present on remote; skipping. Commit/push this change or use --scp to seed automatically.\033[0m"
 fi
 
 echo ""

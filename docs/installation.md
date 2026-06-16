@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Node.js 18 or newer. The deploy scripts install Node.js 20 LTS on fresh Debian/Ubuntu-style systems.
+- Node.js 22 or newer, matching `package.json`.
 - npm.
 - Git.
 - A Linux host for persistent operation.
@@ -35,7 +35,7 @@ Defaults:
 
 ## Deployment scripts
 
-The repo includes `deploy.sh` for Linux/macOS and `deploy.ps1` for Windows. The scripts are designed to bootstrap a fresh remote host, create or use a `sidekick` user, install Node.js, copy the app, install dependencies, install systemd services, and configure UFW rules if UFW is active.
+The repo includes `deploy.sh` for Linux/macOS and `deploy.ps1` for Windows. The scripts are designed to bootstrap a fresh remote host, create or use a `sidekick` user, install Node.js, copy the app, sync `.env`, install dependencies, install systemd services, and configure UFW rules if UFW is active.
 
 Linux/macOS:
 
@@ -95,7 +95,7 @@ Use Streamable HTTP with the MCP server URL and bearer token. A typical config s
     "sidekick": {
       "enabled": true,
       "type": "remote",
-      "url": "http://YOUR_HOST:4097/mcp",
+      "url": "http://YOUR_REMOTE_IP:4097/mcp",
       "headers": {
         "Authorization": "Bearer YOUR_SIDEKICK_API_KEY"
       }

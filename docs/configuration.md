@@ -44,12 +44,10 @@ YOUR_REMOTE_IP
 Recommended default:
 
 ```env
-OLLAMA_MODEL=phi3:3.8b
+OLLAMA_MODEL=qwen2.5-coder:7b
 ```
 
-This model was chosen because the reference server does not have GPU access, so it needs a small model that can run reasonably on CPU-only hardware.
-
-Users with a stronger CPU, more RAM, or GPU acceleration may want to use a larger or more capable Ollama model instead.
+This matches `.env.example` and is tuned for code-oriented work. CPU-only hosts may choose a smaller model; stronger hosts may choose a larger model.
 
 ## Groq vs Ollama
 
@@ -142,5 +140,5 @@ ollama ps
 Inspect a model:
 
 ```bash
-ollama show phi3:3.8b
+ollama show qwen2.5-coder:7b
 ```

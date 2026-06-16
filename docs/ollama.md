@@ -5,17 +5,15 @@ Sidekick can use Ollama as a local LLM provider/fallback.
 ## Recommended Default Model
 
 ```env
-OLLAMA_MODEL=phi3:3.8b
+OLLAMA_MODEL=qwen2.5-coder:7b
 ```
 
-This model was chosen because the reference server does not have GPU access. A small model is more practical for CPU-only hardware.
-
-If your server has a stronger CPU, more RAM, or GPU acceleration, you may want to choose a larger or more capable model.
+This is the default in `.env.example` and is a good code-oriented local model. If your server is CPU-only or memory constrained, choose a smaller model. If it has more RAM or GPU acceleration, choose a larger model.
 
 ## Install the Model
 
 ```bash
-ollama pull phi3:3.8b
+ollama pull qwen2.5-coder:7b
 ```
 
 ## Confirm Installed Models
@@ -35,13 +33,13 @@ ollama ps
 ## Test the Model
 
 ```bash
-ollama run phi3:3.8b
+ollama run qwen2.5-coder:7b
 ```
 
 ## Inspect the Model
 
 ```bash
-ollama show phi3:3.8b
+ollama show qwen2.5-coder:7b
 ```
 
 ## Configure Sidekick
@@ -56,11 +54,11 @@ nano .env
 Set:
 
 ```env
-OLLAMA_MODEL=phi3:3.8b
+OLLAMA_MODEL=qwen2.5-coder:7b
 ```
 
 Restart Sidekick:
 
 ```bash
-sudo systemctl restart sidekick
+sudo systemctl restart sidekick-agent sidekick-mcp
 ```

@@ -1,6 +1,6 @@
 # Tools Reference
 
-This catalog is generated from `TOOL_DEFS` in `src/tools.js`. The code exports 70 tool handlers. Most tools return MCP content blocks containing text. Errors usually set `isError: true` and include an explanatory text result.
+This catalog is generated from `TOOL_DEFS` in `src/tools.js`. The current code exports 83 built-in tool handlers. Most tools return MCP content blocks containing text. Errors usually set `isError: true` and include an explanatory text result.
 
 Tool definitions exposed by the dashboard API include policy metadata:
 
@@ -15,9 +15,9 @@ Risk is based on what a tool can change or expose, not whether its implementatio
 | Risk | Tools | Default recommendation |
 |---|---|---|
 | Critical | `sidekick_bash`, `sidekick_write`, `sidekick_db_restore`, `sidekick_runbook`, `sidekick_sandbox`, `sidekick_evolve` | Gate in shared or public deployments. Allow only for trusted operators. |
-| High | `sidekick_process`, `sidekick_service`, `sidekick_cron`, `sidekick_delay`, `sidekick_watch`, `sidekick_github`, `sidekick_teach`, `sidekick_secret`, `sidekick_db_migrate`, `sidekick_queue`, `sidekick_orchestrate` | Block in `restricted` mode unless the workflow needs them. |
-| Medium | `sidekick_notify`, `sidekick_read`, `sidekick_archive`, `sidekick_git`, `sidekick_web_fetch`, `sidekick_llm`, `sidekick_context`, `sidekick_health`, `sidekick_snapshot`, `sidekick_retry`, `sidekick_fresheyes`, `sidekick_batch`, `sidekick_tail`, `sidekick_find`, `sidekick_status`, `sidekick_extract`, `sidekick_changelog`, `sidekick_netdiag`, `sidekick_timeline`, `sidekick_circuit`, `sidekick_baseline`, `sidekick_depend`, `sidekick_black_box`, `sidekick_db_query`, `sidekick_db_backup`, `sidekick_db_export` | Generally useful, but can expose data or trigger external effects. |
-| Low | `sidekick_list`, `sidekick_store`, `sidekick_get`, `sidekick_list_projects`, `sidekick_get_by_project`, `sidekick_search`, `sidekick_webhook`, `sidekick_transform`, `sidekick_parse`, `sidekick_diff`, `sidekick_hash`, `sidekick_validate`, `sidekick_template`, `sidekick_predict`, `sidekick_debug_tool`, `sidekick_cache`, `sidekick_summarize`, `sidekick_filter`, `sidekick_project`, `sidekick_diff_files`, `sidekick_anonymize`, `sidekick_respond`, `sidekick_db_schema`, `sidekick_db_stats`, `sidekick_log_query`, `sidekick_db_search`, `sidekick_db_diff` | Usually safe to expose, subject to data sensitivity. |
+| High | `sidekick_process`, `sidekick_service`, `sidekick_cron`, `sidekick_delay`, `sidekick_watch`, `sidekick_github`, `sidekick_teach`, `sidekick_secret`, `sidekick_db_migrate`, `sidekick_queue`, `sidekick_orchestrate`, `sidekick_wireguard`, `sidekick_nginx` | Block in `restricted` mode unless the workflow needs them. |
+| Medium | `sidekick_notify`, `sidekick_read`, `sidekick_archive`, `sidekick_git`, `sidekick_web_fetch`, `sidekick_llm`, `sidekick_context`, `sidekick_health`, `sidekick_snapshot`, `sidekick_retry`, `sidekick_fresheyes`, `sidekick_batch`, `sidekick_tail`, `sidekick_find`, `sidekick_status`, `sidekick_extract`, `sidekick_changelog`, `sidekick_netdiag`, `sidekick_timeline`, `sidekick_circuit`, `sidekick_baseline`, `sidekick_depend`, `sidekick_black_box`, `sidekick_db_query`, `sidekick_db_backup`, `sidekick_db_export`, `sidekick_redis`, `sidekick_tunnel` | Generally useful, but can expose data or trigger external effects. |
+| Low | `sidekick_list`, `sidekick_store`, `sidekick_get`, `sidekick_list_projects`, `sidekick_get_by_project`, `sidekick_search`, `sidekick_webhook`, `sidekick_transform`, `sidekick_parse`, `sidekick_diff`, `sidekick_hash`, `sidekick_validate`, `sidekick_template`, `sidekick_predict`, `sidekick_debug_tool`, `sidekick_cache`, `sidekick_summarize`, `sidekick_filter`, `sidekick_project`, `sidekick_diff_files`, `sidekick_anonymize`, `sidekick_respond`, `sidekick_db_schema`, `sidekick_db_stats`, `sidekick_log_query`, `sidekick_db_search`, `sidekick_db_diff`, `sidekick_ocr`, `sidekick_media`, `sidekick_transcribe`, `sidekick_analytics`, `sidekick_embed`, `sidekick_ollama`, `sidekick_download`, `sidekick_knowledge`, `sidekick_metrics` | Usually safe to expose, subject to data sensitivity. |
 
 Use `SIDEKICK_TOOL_POLICY=restricted` to block high and critical tools by default. Use `SIDEKICK_ALLOWED_TOOLS`, `SIDEKICK_BLOCKED_TOOLS`, and source-specific variants such as `SIDEKICK_AGENT_ALLOWED_TOOLS` for deployment-specific control.
 
@@ -85,6 +85,29 @@ Use `SIDEKICK_TOOL_POLICY=restricted` to block high and critical tools by defaul
 | `sidekick_runbook` | Automation, scheduling, and orchestration | Operational runbook executor with autonomous and guided modes. Supports verification, rollback, and step-by-step execution. | `{ action: "string (create|start|next|verify|rollback|abort|list|get|delete)", name: "string (optional, runbook name)", mode: "string (optional, autonomous|guided - default autonomous)", steps: "array (optional, step definitions)", runbook_id: "string (optional, instance or definition ID)", step_index: "number (optional, step index)" }` |
 | `sidekick_black_box` | Monitoring, diagnostics, and operations | Incident time capsule: captures full system context (services, processes, logs, disk, network) in one call for debugging. Rate limited. | `{ action: "string (capture|list|get|delete|analyze)", name: "string (optional, incident name)", include: "array (optional, services|processes|logs|disk|network|all - default all)", analyze_with_llm: "boolean (optional, use LLM for analysis - default false)", incident_id: "string (optional, incident ID)" }` |
 | `sidekick_respond` | AI, learning, and self-extension | Return a text response directly without calling other tools. Use this for simple answers or when no tool action is needed. | `{ text: "string (the response text to return)" }` |
+| `sidekick_db_schema` | Database | Inspect database schema: tables, columns, indexes, foreign keys | `{ table: "string (optional, specific table name)", verbose: "boolean (optional, include row counts and detailed info)", database: "string (optional, 'sqlite' or 'postgres' - default sqlite)" }` |
+| `sidekick_db_query` | Database | Execute raw SQL queries with safety limits (readonly by default) | `{ sql: "string", params: "array (optional)", readonly: "boolean (optional, default true)", limit: "number (optional, default 1000)", timeout: "number (optional, default 5000)", database: "string (optional, 'sqlite' or 'postgres' - default sqlite)" }` |
+| `sidekick_db_stats` | Database | Database statistics: size, table sizes, WAL status, cache hit ratio | `{ detailed: "boolean (optional)", database: "string (optional, 'sqlite' or 'postgres' - default sqlite)" }` |
+| `sidekick_db_backup` | Database | Create timestamped database backup with optional compression | `{ path: "string (optional)", compress: "boolean (optional, default true)" }` |
+| `sidekick_db_restore` | Database | Restore database from backup with integrity verification | `{ path: "string", verify: "boolean (optional, default true)" }` |
+| `sidekick_log_query` | Database | Advanced tool_logs filtering by time, tool, source, status | `{ tool: "string (optional)", source: "string (optional)", success: "boolean (optional)", since: "string (optional)", until: "string (optional)", limit: "number (optional)" }` |
+| `sidekick_db_export` | Database | Export tables to JSON, CSV, or SQL format | `{ table: "string (optional)", format: "string (optional, json|csv|sql)", path: "string (optional)", database: "string (optional, 'sqlite' or 'postgres')" }` |
+| `sidekick_db_search` | Database | Full-text search across all tables | `{ query: "string", tables: "string (optional, comma-separated)", limit: "number (optional)", database: "string (optional, 'sqlite' or 'postgres')" }` |
+| `sidekick_db_migrate` | Database | Schema migrations with versioning | `{ action: "string (status|list|up)", version: "number (optional)", name: "string (optional)" }` |
+| `sidekick_db_diff` | Database | Compare two database snapshots, show what changed | `{ snapshot_a: "string (optional)", snapshot_b: "string (optional)", table: "string (optional)" }` |
+| `sidekick_redis` | Storage | Redis operations. Requires sidekick-redis service. | `{ action: "string (get|set|del|keys|ttl|info|flush)", key: "string (optional)", value: "string (optional)", ttl: "string (optional)", pattern: "string (optional)" }` |
+| `sidekick_ocr` | Media | Extract text from images using Tesseract OCR | `{ path: "string", language: "string (optional)", psm: "number (optional)" }` |
+| `sidekick_media` | Media | Media processing with ffmpeg: convert, extract audio, thumbnails, resize, trim, info | `{ action: "string", input: "string", output: "string (optional)", options: "string (optional)" }` |
+| `sidekick_transcribe` | Media | Transcribe audio/video to text using Whisper | `{ path: "string", model: "string (optional)", language: "string (optional)" }` |
+| `sidekick_analytics` | Database | Fast analytical queries on CSV/JSON/Parquet files using DuckDB | `{ query: "string", file: "string (optional)", format: "string (optional)" }` |
+| `sidekick_embed` | Context & Learning | Generate text embeddings using Ollama | `{ text: "string", model: "string (optional)" }` |
+| `sidekick_ollama` | Context & Learning | Manage Ollama models: list, ps, pull, show | `{ action: "string (list|ps|pull|show)", model: "string (optional)" }` |
+| `sidekick_tunnel` | Networking | Manage Cloudflare tunnels: start, stop, list | `{ action: "string (start|stop|list)", port: "number", name: "string (optional)" }` |
+| `sidekick_download` | Media | Download videos/audio using yt-dlp | `{ url: "string", output: "string (optional)", format: "string (optional)", audio_only: "boolean (optional)" }` |
+| `sidekick_wireguard` | Networking | Manage WireGuard VPN peers and keys | `{ action: "string", interface_name: "string", peer_name: "string", public_key: "string", endpoint: "string (optional)", allowed_ips: "string (optional)" }` |
+| `sidekick_nginx` | Networking | Manage Nginx reverse proxy sites | `{ action: "string", site_name: "string", domain: "string", upstream_port: "number", ssl_email: "string (optional)" }` |
+| `sidekick_knowledge` | Context & Learning | Knowledge base management: search, get, list, add, update, delete entries | `{ action: "string (search|get|list|add|update|delete)", id: "number (optional)", category: "string (optional)", title: "string (optional)", content: "string (optional)", tags: "string (optional)", query: "string (optional)", limit: "number (optional)" }` |
+| `sidekick_metrics` | Monitoring | Metrics collection and querying with InfluxDB | `{ action: "string (write|query|list_measurements|list_fields)", measurement: "string (optional)", fields: "object (optional)", tags: "object (optional)", timestamp: "number (optional)", query: "string (optional)", time_range: "string (optional)" }` |
 
 
 ## Core file, shell, and code operations
@@ -230,6 +253,22 @@ Arguments: `{ problem: "string (problem description)", context: "string (optiona
 Return a text response directly without calling other tools. Use this for simple answers or when no tool action is needed.
 
 Arguments: `{ text: "string (the response text to return)" }`
+
+## Database, knowledge, and optional infrastructure
+
+### SQLite-backed registry and logs
+
+The built-in database tools operate on SQLite by default and can target PostgreSQL where supported with `database: "postgres"`. Read-only query mode is the default for `sidekick_db_query` and rejects mutating or multi-statement SQL.
+
+Important tools in this group:
+
+- `sidekick_db_schema`, `sidekick_db_query`, `sidekick_db_stats`, `sidekick_db_backup`, `sidekick_db_restore`, `sidekick_db_export`, `sidekick_db_search`, `sidekick_db_migrate`, and `sidekick_db_diff`.
+- `sidekick_log_query` reads the SQLite `tool_logs` table.
+- `sidekick_knowledge` manages the SQLite `knowledge` table used by `AGENTS.md`.
+
+### Optional services
+
+`sidekick_redis`, `sidekick_metrics`, `sidekick_embed`, `sidekick_ollama`, `sidekick_tunnel`, `sidekick_wireguard`, `sidekick_nginx`, `sidekick_ocr`, `sidekick_media`, `sidekick_transcribe`, `sidekick_download`, and `sidekick_analytics` depend on optional services or binaries installed by `scripts/setup-tools.sh`.
 
 ## External integrations and secrets
 

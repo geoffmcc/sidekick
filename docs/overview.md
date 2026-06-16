@@ -36,7 +36,7 @@ Sidekick is broad by design. The current codebase includes tools for:
 | Tool module | Implements all Sidekick tools, tool policy, redaction, logging, and persistent state helpers. |
 | Dashboard | Browser-facing UI and API for monitoring and management. |
 | Agent Bridge | Autonomous task loop that can plan and execute Sidekick tool calls. |
-| Data directory | Persistent storage for KV data, logs, contexts, secrets, snapshots, jobs, transcripts, and state files. |
+| Data layer | SQLite-backed persistent storage for KV data, logs, tool registry data, knowledge entries, and named JSON documents, plus file artifacts for transcripts, secrets, snapshots, queues, and exports. |
 | Deployment scripts | Bootstrap a remote host, create the `sidekick` user, install Node.js, deploy services, and configure systemd. |
 
 ## Recommended operating model
