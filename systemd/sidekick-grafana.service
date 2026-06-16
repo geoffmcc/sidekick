@@ -1,0 +1,17 @@
+[Unit]
+Description=Sidekick Grafana (Docker)
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+WorkingDirectory=/home/sidekick/sidekick/docker
+ExecStart=/usr/bin/docker compose -f /home/sidekick/sidekick/docker/docker-compose.yml up -d grafana
+ExecStop=/usr/bin/docker compose -f /home/sidekick/sidekick/docker/docker-compose.yml stop grafana
+ExecStopPost=/usr/bin/docker compose -f /home/sidekick/sidekick/docker/docker-compose.yml rm -f grafana
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

@@ -106,12 +106,28 @@ usermod -aG sudo "$USERNAME"
 # Setup sudoers for passwordless service management
 log "Configuring sudoers..."
 cat > /etc/sudoers.d/sidekick << 'EOF'
-# Sidekick user permissions - allows service management without password
+# Sidekick user permissions - core services
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-mcp, /usr/bin/systemctl stop sidekick-mcp, /usr/bin/systemctl restart sidekick-mcp, /usr/bin/systemctl status sidekick-mcp
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-dashboard, /usr/bin/systemctl stop sidekick-dashboard, /usr/bin/systemctl restart sidekick-dashboard, /usr/bin/systemctl status sidekick-dashboard
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-agent, /usr/bin/systemctl stop sidekick-agent, /usr/bin/systemctl restart sidekick-agent, /usr/bin/systemctl status sidekick-agent
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/journalctl -u sidekick-mcp, /usr/bin/journalctl -u sidekick-dashboard, /usr/bin/journalctl -u sidekick-agent
-sidekick ALL=(ALL) NOPASSWD: /usr/sbin/ufw allow 4097/tcp, /usr/sbin/ufw allow 4098/tcp, /usr/sbin/ufw allow 4099/tcp
+
+# Sidekick Docker wrapper services
+sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-postgres, /usr/bin/systemctl stop sidekick-postgres, /usr/bin/systemctl restart sidekick-postgres, /usr/bin/systemctl status sidekick-postgres
+sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-redis, /usr/bin/systemctl stop sidekick-redis, /usr/bin/systemctl restart sidekick-redis, /usr/bin/systemctl status sidekick-redis
+sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-qdrant, /usr/bin/systemctl stop sidekick-qdrant, /usr/bin/systemctl restart sidekick-qdrant, /usr/bin/systemctl status sidekick-qdrant
+sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-influxdb, /usr/bin/systemctl stop sidekick-influxdb, /usr/bin/systemctl restart sidekick-influxdb, /usr/bin/systemctl status sidekick-influxdb
+sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-grafana, /usr/bin/systemctl stop sidekick-grafana, /usr/bin/systemctl restart sidekick-grafana, /usr/bin/systemctl status sidekick-grafana
+sidekick ALL=(ALL) NOPASSWD: /usr/bin/journalctl -u sidekick-postgres, /usr/bin/journalctl -u sidekick-redis, /usr/bin/journalctl -u sidekick-qdrant, /usr/bin/journalctl -u sidekick-influxdb, /usr/bin/journalctl -u sidekick-grafana
+
+# Docker management (needed for on-demand services)
+sidekick ALL=(ALL) NOPASSWD: /usr/bin/docker compose -f /home/sidekick/sidekick/docker/docker-compose.yml *
+sidekick ALL=(ALL) NOPASSWD: /usr/bin/docker start *, /usr/bin/docker stop *, /usr/bin/docker restart *, /usr/bin/docker ps, /usr/bin/docker logs *
+
+# UFW
+sidekick ALL=(ALL) NOPASSWD: /usr/sbin/ufw allow 4097/tcp, /usr/sbin/ufw allow 4098/tcp, /usr/sbin/ufw allow 4099/tcp, /usr/sbin/ufw allow 3000/tcp
+
+# Data directory
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/chown -R sidekick\:sidekick /home/sidekick/sidekick/data/, /usr/bin/chmod -R 755 /home/sidekick/sidekick/data/
 EOF
 
@@ -171,7 +187,8 @@ if command -v ufw &> /dev/null; then
     ufw allow 4097/tcp comment 'Sidekick MCP' > /dev/null
     ufw allow 4098/tcp comment 'Sidekick Dashboard' > /dev/null
     ufw allow 4099/tcp comment 'Sidekick Agent' > /dev/null
-    log "Firewall ports opened: 4097, 4098, 4099"
+    ufw allow 3000/tcp comment 'Sidekick Grafana' > /dev/null
+    log "Firewall ports opened: 4097, 4098, 4099, 3000"
   else
     warn "UFW is not active. Please ensure ports 4097, 4098, 4099 are open."
   fi
