@@ -8,6 +8,7 @@ let logPage = 0;
 const LOG_PAGE_SIZE = 50;
 const SESSION_GAP_MS = 5 * 60 * 1000;
 let allTools = [];
+let toolCategories = []; // Will be fetched from API
 
 // Authentication helpers
 function getAuthHeader() {
@@ -79,31 +80,23 @@ function authFetch(url, options) {
   });
 }
 
-const TOOL_CATEGORIES = {
-  'Core': { icon: 'fa-terminal', tools: ['sidekick_bash','sidekick_read','sidekick_write','sidekick_list','sidekick_search','sidekick_web_fetch','sidekick_llm','sidekick_respond'] },
-  'Storage': { icon: 'fa-database', tools: ['sidekick_store','sidekick_get','sidekick_list_projects','sidekick_get_by_project','sidekick_redis'] },
-  'Database': { icon: 'fa-database', tools: ['sidekick_db_schema','sidekick_db_query','sidekick_db_stats','sidekick_db_backup','sidekick_db_restore','sidekick_db_export','sidekick_db_search','sidekick_db_migrate','sidekick_db_diff','sidekick_analytics'] },
-  'Git & GitHub': { icon: 'fa-code-branch', tools: ['sidekick_git','sidekick_github'] },
-  'Services': { icon: 'fa-cogs', tools: ['sidekick_process','sidekick_service'] },
-  'Scheduling': { icon: 'fa-clock', tools: ['sidekick_cron','sidekick_delay'] },
-  'Communication': { icon: 'fa-bell', tools: ['sidekick_notify','sidekick_webhook'] },
-  'Context & Learning': { icon: 'fa-brain', tools: ['sidekick_context','sidekick_teach','sidekick_embed','sidekick_ollama'] },
-  'Data Pipeline': { icon: 'fa-filter', tools: ['sidekick_transform','sidekick_parse','sidekick_diff','sidekick_hash','sidekick_validate','sidekick_template','sidekick_extract','sidekick_anonymize','sidekick_diff_files'] },
-  'Monitoring': { icon: 'fa-heartbeat', tools: ['sidekick_health','sidekick_status','sidekick_watch','sidekick_baseline','sidekick_snapshot','sidekick_timeline','sidekick_black_box','sidekick_netdiag'] },
-  'Workflow': { icon: 'fa-tasks', tools: ['sidekick_queue','sidekick_retry','sidekick_orchestrate','sidekick_runbook'] },
-  'Meta': { icon: 'fa-robot', tools: ['sidekick_evolve','sidekick_predict','sidekick_debug_tool','sidekick_fresheyes'] },
-  'Efficiency': { icon: 'fa-bolt', tools: ['sidekick_batch','sidekick_cache','sidekick_summarize','sidekick_filter','sidekick_project','sidekick_tail','sidekick_find'] },
-  'Security': { icon: 'fa-shield-alt', tools: ['sidekick_secret','sidekick_sandbox'] },
-  'Networking': { icon: 'fa-network-wired', tools: ['sidekick_tunnel','sidekick_wireguard','sidekick_nginx'] },
-  'Development': { icon: 'fa-code', tools: ['sidekick_changelog','sidekick_depend'] },
-  'Reliability': { icon: 'fa-plug', tools: ['sidekick_circuit'] },
-  'Archive': { icon: 'fa-file-archive', tools: ['sidekick_archive'] },
-  'Media': { icon: 'fa-film', tools: ['sidekick_ocr','sidekick_media','sidekick_transcribe','sidekick_download'] }
-};
+// Fetch tool categories from API
+async function fetchToolCategories() {
+  try {
+    const res = await authFetch('/api/tool-categories');
+    const data = await res.json();
+    toolCategories = data.categories || [];
+  } catch (error) {
+    console.error('Failed to fetch tool categories:', error);
+    toolCategories = [];
+  }
+}
 
 function getToolCategory(toolName) {
-  for (const [cat, info] of Object.entries(TOOL_CATEGORIES)) {
-    if (info.tools.includes(toolName)) return cat;
+  for (const cat of toolCategories) {
+    if (cat.tools && cat.tools.some(t => t.name === toolName)) {
+      return cat.name;
+    }
   }
   return 'Other';
 }
@@ -1496,7 +1489,8 @@ function renderTools(){
   }
   let html = '';
   for (const [cat, tools] of Object.entries(grouped).sort((a,b) => a[0].localeCompare(b[0]))) {
-    const catInfo = TOOL_CATEGORIES[cat] || { icon: 'fa-wrench' };
+    const catData = toolCategories.find(c => c.name === cat);
+    const catInfo = catData || { icon: 'fa-wrench' };
     html += '<div class="tool-category-header">';
     html += '<i class="fas ' + catInfo.icon + '"></i>';
     html += '<span class="cat-name">' + esc(cat) + '</span>';
@@ -1560,7 +1554,8 @@ function showToolDetail(name){
   const t = allTools.find(x => x.name === name);
   if (!t) return;
   const cat = getToolCategory(name);
-  const catInfo = TOOL_CATEGORIES[cat] || { icon: 'fa-wrench' };
+  const catData = toolCategories.find(c => c.name === cat);
+  const catInfo = catData || { icon: 'fa-wrench' };
   const stats = toolStats[name];
   const hasStats = stats && stats.count > 0;
   let html = '<div class="tool-detail-overlay active" onclick="if(event.target===this)this.classList.remove(\'active\')">';
@@ -1665,9 +1660,12 @@ if (savedPage && savedPage !== 'system') {
   showPage(savedPage);
 }
 
-refresh();
-loadSystem();
-loadDashboardSummary();
-loadLLM();
-loadServices();
+// Fetch tool categories from API before loading other data
+fetchToolCategories().then(() => {
+  refresh();
+  loadSystem();
+  loadDashboardSummary();
+  loadLLM();
+  loadServices();
+});
 setInterval(refresh, 10000);

@@ -5,7 +5,7 @@ const path = require("path");
 const os = require("os");
 const { timingSafeCompare } = require("./crypto-utils");
 const { execSync } = require("child_process");
-const { getToolDefsForSource, enforceToolPolicy } = require("./tools");
+const { getToolDefsForSource, getToolCategoriesWithTools, enforceToolPolicy } = require("./tools");
 const dbStore = require("./db");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
@@ -590,6 +590,10 @@ app.get("/api/stats", (req, res) => {
 
 app.get("/api/tools", (req, res) => {
   res.json({ tools: getToolDefsForSource("dashboard") });
+});
+
+app.get("/api/tool-categories", (req, res) => {
+  res.json({ categories: getToolCategoriesWithTools("dashboard") });
 });
 
 app.get("/api/procedures", (req, res) => {

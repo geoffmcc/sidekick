@@ -95,8 +95,176 @@ const TOOL_RISK = {
   sidekick_nginx: "high",
 };
 
+// Tool categories - maps tool names to their category
+const TOOL_CATEGORIES = {
+  'sidekick_bash': 'Core',
+  'sidekick_read': 'Core',
+  'sidekick_write': 'Core',
+  'sidekick_list': 'Core',
+  'sidekick_search': 'Core',
+  'sidekick_web_fetch': 'Core',
+  'sidekick_llm': 'Core',
+  'sidekick_respond': 'Core',
+  'sidekick_store': 'Storage',
+  'sidekick_get': 'Storage',
+  'sidekick_list_projects': 'Storage',
+  'sidekick_get_by_project': 'Storage',
+  'sidekick_redis': 'Storage',
+  'sidekick_db_schema': 'Database',
+  'sidekick_db_query': 'Database',
+  'sidekick_db_stats': 'Database',
+  'sidekick_db_backup': 'Database',
+  'sidekick_db_restore': 'Database',
+  'sidekick_db_export': 'Database',
+  'sidekick_db_search': 'Database',
+  'sidekick_db_migrate': 'Database',
+  'sidekick_db_diff': 'Database',
+  'sidekick_analytics': 'Database',
+  'sidekick_git': 'Git & GitHub',
+  'sidekick_github': 'Git & GitHub',
+  'sidekick_process': 'Services',
+  'sidekick_service': 'Services',
+  'sidekick_cron': 'Scheduling',
+  'sidekick_delay': 'Scheduling',
+  'sidekick_notify': 'Communication',
+  'sidekick_webhook': 'Communication',
+  'sidekick_context': 'Context & Learning',
+  'sidekick_teach': 'Context & Learning',
+  'sidekick_embed': 'Context & Learning',
+  'sidekick_ollama': 'Context & Learning',
+  'sidekick_transform': 'Data Pipeline',
+  'sidekick_parse': 'Data Pipeline',
+  'sidekick_diff': 'Data Pipeline',
+  'sidekick_hash': 'Data Pipeline',
+  'sidekick_validate': 'Data Pipeline',
+  'sidekick_template': 'Data Pipeline',
+  'sidekick_extract': 'Data Pipeline',
+  'sidekick_anonymize': 'Data Pipeline',
+  'sidekick_diff_files': 'Data Pipeline',
+  'sidekick_health': 'Monitoring',
+  'sidekick_status': 'Monitoring',
+  'sidekick_watch': 'Monitoring',
+  'sidekick_baseline': 'Monitoring',
+  'sidekick_snapshot': 'Monitoring',
+  'sidekick_timeline': 'Monitoring',
+  'sidekick_black_box': 'Monitoring',
+  'sidekick_netdiag': 'Monitoring',
+  'sidekick_queue': 'Workflow',
+  'sidekick_retry': 'Workflow',
+  'sidekick_orchestrate': 'Workflow',
+  'sidekick_runbook': 'Workflow',
+  'sidekick_evolve': 'Meta',
+  'sidekick_predict': 'Meta',
+  'sidekick_debug_tool': 'Meta',
+  'sidekick_fresheyes': 'Meta',
+  'sidekick_batch': 'Efficiency',
+  'sidekick_cache': 'Efficiency',
+  'sidekick_summarize': 'Efficiency',
+  'sidekick_filter': 'Efficiency',
+  'sidekick_project': 'Efficiency',
+  'sidekick_tail': 'Efficiency',
+  'sidekick_find': 'Efficiency',
+  'sidekick_secret': 'Security',
+  'sidekick_sandbox': 'Security',
+  'sidekick_tunnel': 'Networking',
+  'sidekick_wireguard': 'Networking',
+  'sidekick_nginx': 'Networking',
+  'sidekick_changelog': 'Development',
+  'sidekick_depend': 'Development',
+  'sidekick_circuit': 'Reliability',
+  'sidekick_archive': 'Archive',
+  'sidekick_ocr': 'Media',
+  'sidekick_media': 'Media',
+  'sidekick_transcribe': 'Media',
+  'sidekick_download': 'Media',
+};
+
 function getToolRisk(name) {
   return TOOL_RISK[name] || "low";
+}
+
+// Sync tool registry from code to database
+// This function is called on server startup to ensure the DB has current tool metadata
+function syncToolRegistry() {
+  try {
+    const db = dbStore.getDb();
+    const now = new Date().toISOString();
+    
+    // Check if tool_categories table exists (migration may not have run yet)
+    const tableExists = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='tool_categories'"
+    ).get();
+    
+    if (!tableExists) {
+      console.log('[ToolRegistry] Tables not yet created, skipping sync');
+      return;
+    }
+    
+    // Get all current tools from code
+    const codeTools = new Set(TOOL_DEFS.map(t => t.name));
+    
+    // Get all tools from database
+    const dbTools = db.prepare("SELECT name, deprecated FROM tools").all();
+    const dbToolNames = new Set(dbTools.map(t => t.name));
+    
+    // Upsert tools from code into database
+    const upsertTool = db.prepare(`
+      INSERT INTO tools (name, description, args_json, risk, enabled, deprecated, updated_at)
+      VALUES (?, ?, ?, ?, 1, 0, ?)
+      ON CONFLICT(name) DO UPDATE SET
+        description = excluded.description,
+        args_json = excluded.args_json,
+        risk = excluded.risk,
+        enabled = 1,
+        deprecated = 0,
+        updated_at = excluded.updated_at
+    `);
+    
+    // Map category names to IDs
+    const categoryMap = {};
+    const categories = db.prepare("SELECT id, name FROM tool_categories").all();
+    for (const cat of categories) {
+      categoryMap[cat.name] = cat.id;
+    }
+    
+    // Clear existing tool-category mappings (we'll recreate them)
+    db.prepare("DELETE FROM tool_category_map").run();
+    
+    // Insert/update each tool
+    for (const toolDef of TOOL_DEFS) {
+      const risk = TOOL_RISK[toolDef.name] || "low";
+      const argsJson = JSON.stringify(toolDef.args || {});
+      
+      upsertTool.run(
+        toolDef.name,
+        toolDef.description,
+        argsJson,
+        risk,
+        now
+      );
+      
+      // Get the tool's category
+      const categoryName = TOOL_CATEGORIES[toolDef.name];
+      if (categoryName && categoryMap[categoryName]) {
+        db.prepare(
+          "INSERT INTO tool_category_map (tool_name, category_id) VALUES (?, ?)"
+        ).run(toolDef.name, categoryMap[categoryName]);
+      }
+    }
+    
+    // Mark tools that exist in DB but not in code as deprecated
+    for (const dbTool of dbTools) {
+      if (!codeTools.has(dbTool.name) && !dbTool.deprecated) {
+        db.prepare(
+          "UPDATE tools SET deprecated = 1, enabled = 0, updated_at = ? WHERE name = ?"
+        ).run(now, dbTool.name);
+      }
+    }
+    
+    console.log(`[ToolRegistry] Synced ${TOOL_DEFS.length} tools to database`);
+  } catch (error) {
+    console.error('[ToolRegistry] Error syncing tool registry:', error.message);
+  }
 }
 
 function parsePolicyList(value) {
@@ -159,10 +327,120 @@ function enforceToolPolicy(toolName, source = currentSource) {
 }
 
 function getToolDefsForSource(source = currentSource) {
-  return TOOL_DEFS.map(def => {
-    const policy = getToolPolicyDecision(def.name, source);
-    return { ...def, risk: policy.risk, enabled: policy.allowed, policy: policy.reason };
-  });
+  try {
+    const db = dbStore.getDb();
+    
+    // Check if tools table exists (fallback to in-memory if not)
+    const tableExists = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='tools'"
+    ).get();
+    
+    if (!tableExists) {
+      // Fallback to in-memory TOOL_DEFS if DB not ready
+      return TOOL_DEFS.map(def => {
+        const policy = getToolPolicyDecision(def.name, source);
+        return { ...def, risk: policy.risk, enabled: policy.allowed, policy: policy.reason };
+      });
+    }
+    
+    // Get all enabled, non-deprecated tools from database
+    const tools = db.prepare(`
+      SELECT t.name, t.description, t.args_json, t.risk, t.enabled,
+             tc.name as category
+      FROM tools t
+      LEFT JOIN tool_category_map tcm ON t.name = tcm.tool_name
+      LEFT JOIN tool_categories tc ON tcm.category_id = tc.id
+      WHERE t.enabled = 1 AND t.deprecated = 0
+      ORDER BY t.name
+    `).all();
+    
+    return tools.map(tool => {
+      const policy = getToolPolicyDecision(tool.name, source);
+      const args = tool.args_json ? JSON.parse(tool.args_json) : {};
+      
+      return {
+        name: tool.name,
+        description: tool.description,
+        args: args,
+        category: tool.category,
+        risk: policy.risk,
+        enabled: policy.allowed,
+        policy: policy.reason
+      };
+    });
+  } catch (error) {
+    console.error('[ToolRegistry] Error reading from DB, falling back to in-memory:', error.message);
+    // Fallback to in-memory if DB query fails
+    return TOOL_DEFS.map(def => {
+      const policy = getToolPolicyDecision(def.name, source);
+      return { ...def, risk: policy.risk, enabled: policy.allowed, policy: policy.reason };
+    });
+  }
+}
+
+// Get all tool categories with their tools
+function getToolCategoriesWithTools(source = currentSource) {
+  try {
+    const db = dbStore.getDb();
+    
+    // Check if tables exist
+    const tableExists = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='tool_categories'"
+    ).get();
+    
+    if (!tableExists) {
+      // Return empty if DB not ready
+      return [];
+    }
+    
+    // Get all categories with sort order
+    const categories = db.prepare(`
+      SELECT id, name, icon, sort_order
+      FROM tool_categories
+      ORDER BY sort_order
+    `).all();
+    
+    // Get all tools with their categories
+    const tools = db.prepare(`
+      SELECT t.name, t.description, t.risk, t.enabled, tc.name as category
+      FROM tools t
+      LEFT JOIN tool_category_map tcm ON t.name = tcm.tool_name
+      LEFT JOIN tool_categories tc ON tcm.category_id = tc.id
+      WHERE t.enabled = 1 AND t.deprecated = 0
+      ORDER BY t.name
+    `).all();
+    
+    // Group tools by category
+    const categoryMap = {};
+    for (const cat of categories) {
+      categoryMap[cat.name] = {
+        name: cat.name,
+        icon: cat.icon,
+        sort_order: cat.sort_order,
+        tools: []
+      };
+    }
+    
+    for (const tool of tools) {
+      const policy = getToolPolicyDecision(tool.name, source);
+      if (tool.category && categoryMap[tool.category]) {
+        categoryMap[tool.category].tools.push({
+          name: tool.name,
+          description: tool.description,
+          risk: policy.risk,
+          enabled: policy.allowed
+        });
+      }
+    }
+    
+    // Return as array, filtering out empty categories
+    return Object.values(categoryMap)
+      .filter(cat => cat.tools.length > 0)
+      .sort((a, b) => a.sort_order - b.sort_order);
+  } catch (error) {
+    console.error('[ToolRegistry] Error getting categories:', error.message);
+    return [];
+  }
 }
 
 function formatArgs(args) {
@@ -8522,5 +8800,7 @@ module.exports = {
   getToolRisk,
   getToolPolicyDecision,
   getToolDefsForSource,
-  enforceToolPolicy
+  getToolCategoriesWithTools,
+  enforceToolPolicy,
+  syncToolRegistry
 };
