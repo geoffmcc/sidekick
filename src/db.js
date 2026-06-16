@@ -664,6 +664,32 @@ function listMigrations() {
   });
 }
 
+function runPendingMigrations() {
+  const migrations = listMigrations();
+  const pending = migrations.filter(m => !m.applied);
+  
+  if (pending.length === 0) {
+    return { applied: 0, migrations: [] };
+  }
+  
+  const applied = [];
+  for (const migration of pending) {
+    const migrationPath = path.join(MIGRATIONS_DIR, migration.file);
+    const sql = fs.readFileSync(migrationPath, "utf-8");
+    
+    try {
+      db.exec(sql);
+      db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(String(migration.version));
+      applied.push({ file: migration.file, version: migration.version });
+    } catch (error) {
+      console.error(`[Migration] Failed to apply ${migration.file}:`, error.message);
+      throw error;
+    }
+  }
+  
+  return { applied: applied.length, migrations: applied };
+}
+
 function createSnapshot() {
   const tables = getTableList().filter(t => t.type === "table");
   const snapshot = {};
@@ -743,6 +769,7 @@ module.exports = {
   getMigrationVersion,
   runMigration,
   listMigrations,
+  runPendingMigrations,
   createSnapshot,
   compareSnapshots,
 };

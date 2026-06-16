@@ -1058,6 +1058,16 @@ app.delete("/mcp", async (req, res) => {
   }
 });
 
+// Run pending migrations automatically on startup
+try {
+  const migrationResult = dbStore.runPendingMigrations();
+  if (migrationResult.applied > 0) {
+    console.log(`[Migration] Applied ${migrationResult.applied} migration(s):`, migrationResult.migrations.map(m => m.file).join(', '));
+  }
+} catch (error) {
+  console.error('[Migration] Error running migrations:', error.message);
+}
+
 // Sync tool registry from code to database on startup
 syncToolRegistry();
 
