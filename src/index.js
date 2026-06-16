@@ -6,7 +6,7 @@ const { McpServer } = require("@modelcontextprotocol/sdk/server/mcp.js");
 const { WebStandardStreamableHTTPServerTransport } = require("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js");
 const { SSEServerTransport } = require("@modelcontextprotocol/sdk/server/sse.js");
 const { z } = require("zod");
-const { TOOLS, TOOL_DEFS, DATA_DIR, setSource, logToolCall, loadProcedures, enforceToolPolicy } = require("./tools");
+const { TOOLS, TOOL_DEFS, DATA_DIR, setSource, logToolCall, loadProcedures, enforceToolPolicy, syncToolRegistry } = require("./tools");
 
 const API_KEY = process.env.SIDEKICK_API_KEY || "sk-sidekick-local-dev";
 const PORT = parseInt(process.env.SIDEKICK_PORT || "4097", 10);
@@ -1057,6 +1057,9 @@ app.delete("/mcp", async (req, res) => {
     if (!res.headersSent) res.status(500).json({ error: e.message });
   }
 });
+
+// Sync tool registry from code to database on startup
+syncToolRegistry();
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log("Sidekick MCP server listening on port " + PORT);
