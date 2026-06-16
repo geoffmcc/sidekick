@@ -1,5 +1,5 @@
 -- Sidekick knowledge base seed
--- Purpose: manually populate a fresh Sidekick SQLite database with agent-facing
+-- Purpose: populate a fresh Sidekick SQLite database with agent-facing
 -- self-knowledge about the current database-first setup.
 --
 -- Usage on the Sidekick host after migrations have run:
@@ -8,6 +8,11 @@
 --
 -- This file is intentionally not a migration. Re-run safety is handled by
 -- deleting only entries with this version_added marker before inserting.
+-- The npm helper `npm run seed:knowledge` imports this file only when the
+-- knowledge table has zero enabled rows. To add/refresh these seed rows in a
+-- database that already has knowledge entries, run:
+--   npm run seed:knowledge -- --force
+-- That force mode still deletes only rows with the marker below.
 
 BEGIN TRANSACTION;
 
@@ -91,7 +96,7 @@ To seed this knowledge base manually after migrations:
 cd /home/sidekick/sidekick
 sqlite3 data/sidekick.db < docs/knowledge-seed.sql
 
-This seed deletes and reinserts only entries with version_added = seed-2026-06-16-current. It is not a migration and does not run automatically.',
+This seed deletes and reinserts only entries with version_added = seed-2026-06-16-current. It is not a migration. The deploy scripts call npm run seed:knowledge after npm install; that helper imports the seed only when the knowledge table has zero enabled rows unless --force is supplied.',
 'import,seed,knowledge,database', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('operations', 'Fresh Install Database Contents',

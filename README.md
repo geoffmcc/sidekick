@@ -2,7 +2,7 @@
 
 **Autonomous Agent Platform**
 
-A self-hosted AI agent platform with persistent memory, 92+ MCP tools, knowledge base, and the ability to extend itself. Runs on your remote machine, learns from your workflow, and grows its own capabilities—no code changes required.
+A self-hosted AI agent platform with persistent memory, 83 built-in MCP tools, knowledge base, and the ability to extend itself. Runs on your remote machine, learns from your workflow, and grows its own capabilities—no code changes required.
 
 **How?** A single `AGENTS.md` file that opencode reads on every session start. No plugins, no hooks — just markdown.
 
@@ -113,7 +113,7 @@ The Agent Bridge runs independently from your main AI session. Submit a complex 
 ### 🔒 Security-First Design
 Every tool output is automatically scanned and redacted for sensitive data (API keys, tokens, passwords). The dashboard has rate limiting, CSRF protection, and audit logging. The agent bridge is isolated and only accessible through the dashboard.
 
-### 🛠️ 92+ Specialized Tools
+### 🛠️ 83 Built-In Specialized Tools
 Not just bash and file operations. Sidekick includes tools for:
 - GitHub integration (PRs, issues, releases)
 - Service and process management
@@ -229,7 +229,7 @@ Sidekick used its own tools to help develop itself. Here's the AI agent debuggin
 
 | Service | Port | Description |
 |---------|------|-------------|
-| **MCP Server** | 4097 | 92+ tools across 19 categories (see database for full list) |
+| **MCP Server** | 4097 | 83 built-in tools across 19 categories (see database for authoritative current list) |
 | **Dashboard** | 4098 | Web UI: system health, activity log, KV data, agent tasks, tool catalog, metrics |
 | **Agent Bridge** | 4099 | AI agent loop — LLM plans and calls MCP tools autonomously |
 | **Ollama** | 11434 | Local LLM inference (qwen2.5-coder:7b, llama3.1:8b, nomic-embed-text) |
@@ -277,7 +277,7 @@ ORDER BY tc.sort_order, t.name
 
 To avoid confusion, it's important to understand what each component is:
 
-- **Sidekick** = The autonomous agent platform: remote machine + 92+ MCP tools + persistent memory + knowledge base + Dashboard + Agent Bridge + metrics & monitoring + self-extending capabilities
+- **Sidekick** = The autonomous agent platform: remote machine + 83 built-in MCP tools + persistent memory + knowledge base + Dashboard + Agent Bridge + metrics & monitoring + self-extending capabilities
 - **The AI** = The assistant running in opencode (e.g., qwen, Claude, etc.) that uses Sidekick's platform
 - **Agent Bridge** = Sidekick's autonomous agent that runs tasks independently via the Dashboard
 - **Knowledge Base** = Structured documentation stored in SQLite, searchable via `sidekick_knowledge`
@@ -321,7 +321,7 @@ Open `http://YOUR_REMOTE_IP:4098/` in a browser.
 - **Database** — schema browser, query editor, full-text search, migration management
 - **Config** — environment variables (sensitive values redacted)
 - **Agent** — submit tasks for the AI agent to execute autonomously
-- **Tools** — browsable catalog of all 92+ tools with search, category filtering, policy status, risk labels, and detailed argument info
+- **Tools** — browsable catalog of all 83 built-in tools with search, category filtering, policy status, risk labels, and detailed argument info
 - **Metrics** — embedded Grafana dashboards for system health, tool analytics, database performance, Docker containers, and Ollama metrics
 
 ### Metrics & Monitoring
@@ -347,9 +347,10 @@ Access Grafana directly at `http://YOUR_REMOTE_IP:3000/` (credentials: sidekick/
 
 Sidekick includes a structured knowledge base for storing and retrieving project documentation:
 
-- **36+ entries** across categories: best-practices, architecture, operations, protocols
+- **34 packaged self-knowledge seed entries** across categories: best-practices, architecture, operations, protocols, development
+- **Database-backed live content** that can include imported, custom, or migrated entries beyond the packaged seed
 - **Full-text search** with semantic similarity
-- **Auto-migration** from AGENTS.md and CONTEXT.md
+- **Manual import helper** for migrating CONTEXT.md into structured knowledge entries
 - **Tool**: `sidekick_knowledge` for search, get, list, add, update, delete
 
 Example queries:
@@ -586,7 +587,7 @@ This follows the principle of least privilege: after initial setup, the sidekick
 
 ```
 ├── src/
-│   ├── tools.js        Shared tool handlers (92+ tools)
+│   ├── tools.js        Shared tool handlers (83 built-in tools)
 │   ├── index.js        MCP server (session-aware transport management)
 │   ├── dashboard.js    Dashboard web UI (8 tabs including Metrics)
 │   ├── agent.js        Agent bridge (LLM tool-use loop, direct tool calls)
