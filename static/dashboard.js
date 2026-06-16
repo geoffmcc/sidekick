@@ -719,16 +719,74 @@ function saveKVEdit(){
 }
 
 function deleteKV(key){
-  if (!confirm('Delete "' + key + '"?')) return;
-  authFetch('/api/kv/' + encodeURIComponent(key), { 
-    method: 'DELETE'
-  })
-    .then(r => r.json()).then(d => { 
-      if (d.ok) { 
-        loadKV(); 
-        showToast('Entry deleted successfully', 'success'); 
-      } 
-    }).catch(e => apiError('/api/kv/' + encodeURIComponent(key), e, 0));
+  const entry = allKV.find(e => e.key === key);
+  const valuePreview = entry ? String(entry.value).substring(0, 50) : '';
+  const project = entry?.project || 'Global';
+  
+  showConfirmModal({
+    title: 'Delete KV Entry',
+    message: `Are you sure you want to delete this entry?`,
+    details: `<strong>Key:</strong> ${esc(key)}<br><strong>Project:</strong> ${esc(project)}<br><strong>Value:</strong> ${esc(valuePreview)}${valuePreview.length >= 50 ? '...' : ''}`,
+    tier: 3,
+    action: () => {
+      authFetch('/api/kv/' + encodeURIComponent(key), { 
+        method: 'DELETE'
+      })
+        .then(r => r.json()).then(d => { 
+          if (d.ok) { 
+            loadKV(); 
+            showToast('Entry deleted successfully', 'success'); 
+          } 
+        }).catch(e => apiError('/api/kv/' + encodeURIComponent(key), e, 0));
+    }
+  });
+}
+
+// Confirmation Modal System
+let confirmAction = null;
+let confirmRequiredText = '';
+
+function showConfirmModal(options) {
+  const { title, message, details, tier, action, requiredText } = options;
+  
+  $('confirmTitle').textContent = title;
+  $('confirmMessage').textContent = message;
+  $('confirmDetails').innerHTML = details;
+  
+  confirmAction = action;
+  $('confirmButton').disabled = true;
+  
+  if (tier === 1) {
+    // Nuclear operation - require typing
+    $('confirmTypingSection').style.display = 'block';
+    confirmRequiredText = requiredText;
+    $('confirmRequiredText').textContent = requiredText;
+    $('confirmInput').value = '';
+  } else {
+    // Tier 2 or 3 - no typing required
+    $('confirmTypingSection').style.display = 'none';
+    $('confirmButton').disabled = false;
+  }
+  
+  $('confirmModal').classList.add('active');
+}
+
+function checkConfirmInput() {
+  const input = $('confirmInput').value;
+  $('confirmButton').disabled = (input !== confirmRequiredText);
+}
+
+function closeConfirmModal() {
+  $('confirmModal').classList.remove('active');
+  confirmAction = null;
+  confirmRequiredText = '';
+}
+
+function executeConfirmAction() {
+  if (confirmAction) {
+    confirmAction();
+    closeConfirmModal();
+  }
 }
 
 // -- Config -- //
@@ -868,31 +926,79 @@ function exportRun(id){
 }
 
 function clearData(type){
-  const messages = {
-    logs: 'Clear all activity logs? This cannot be undone.',
-    kv: 'Clear all stored KV data? This cannot be undone.',
-    conversations: 'Clear all agent conversation history? This cannot be undone.',
-    all: 'Clear ALL data (logs, KV, conversations)? This cannot be undone.'
+  const titles = {
+    logs: 'Clear Activity Logs',
+    kv: 'Clear KV Data',
+    conversations: 'Clear Conversations',
+    all: 'Clear ALL Data'
   };
-  if (!confirm(messages[type])) return;
+  
+  const messages = {
+    logs: 'This will permanently delete all activity logs.',
+    kv: 'This will permanently delete all stored KV data.',
+    conversations: 'This will permanently delete all agent conversation history.',
+    all: 'This will permanently delete ALL data (logs, KV, conversations).'
+  };
+  
   const endpoints = {
     logs: '/api/logs',
     kv: '/api/kv',
     conversations: '/api/conversations',
     all: '/api/data'
   };
-  authFetch(endpoints[type], { 
-    method: 'DELETE'
-  })
-    .then(r => r.json())
-    .then(d => {
-      if (d.ok) {
-        if (type === 'logs' || type === 'all') loadLogs();
-        if (type === 'kv' || type === 'all') loadKV();
-        showToast('Data cleared successfully', 'success');
-      }
-    })
-    .catch(e => apiError(endpoints[type], e, 0));
+  
+  // Get counts for details
+  let details = '';
+  let requiredText = '';
+  let tier = 2;
+  
+  if (type === 'kv') {
+    const count = allKV.length;
+    const totalSize = allKV.reduce((sum, e) => sum + String(e.value).length, 0);
+    const sizeStr = formatBytes(totalSize);
+    details = `<strong>Entries:</strong> ${count}<br><strong>Total size:</strong> ${sizeStr}<br><strong>Projects:</strong> ${getUniqueProjects().length}`;
+    requiredText = 'CLEAR ALL';
+    tier = count >= 50 ? 1 : 2;
+  } else if (type === 'all') {
+    const kvCount = allKV.length;
+    const logCount = allLogs.length;
+    details = `<strong>KV entries:</strong> ${kvCount}<br><strong>Log entries:</strong> ${logCount}<br><strong>This action cannot be undone!</strong>`;
+    requiredText = 'CLEAR ALL';
+    tier = 1;
+  } else {
+    details = 'This action cannot be undone.';
+    tier = 2;
+  }
+  
+  showConfirmModal({
+    title: titles[type],
+    message: messages[type],
+    details: details,
+    tier: tier,
+    requiredText: requiredText,
+    action: () => {
+      authFetch(endpoints[type], { 
+        method: 'DELETE'
+      })
+        .then(r => r.json())
+        .then(d => {
+          if (d.ok) {
+            if (type === 'logs' || type === 'all') loadLogs();
+            if (type === 'kv' || type === 'all') loadKV();
+            showToast('Data cleared successfully', 'success');
+          }
+        })
+        .catch(e => apiError(endpoints[type], e, 0));
+    }
+  });
+}
+
+function getUniqueProjects() {
+  const projects = new Set();
+  allKV.forEach(e => {
+    if (e.project) projects.add(e.project);
+  });
+  return Array.from(projects);
 }
 
 // -- Database -- //
