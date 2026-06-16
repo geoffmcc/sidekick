@@ -98,7 +98,7 @@ const TOOL_CATEGORIES = {
   'Development': { icon: 'fa-code', tools: ['sidekick_changelog','sidekick_depend'] },
   'Reliability': { icon: 'fa-plug', tools: ['sidekick_circuit'] },
   'Archive': { icon: 'fa-file-archive', tools: ['sidekick_archive'] },
-  'Media': { icon: 'fa-film', tools: ['sidekick_ocr','sidekick_media','sidekick_transcribe'] }
+  'Media': { icon: 'fa-film', tools: ['sidekick_ocr','sidekick_media','sidekick_transcribe','sidekick_download'] }
 };
 
 function getToolCategory(toolName) {
