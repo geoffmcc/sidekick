@@ -558,54 +558,104 @@ function renderKV(){
     return; 
   }
   
-  list.innerHTML = filtered.map(e => {
-    const projectBadge = e.project 
-      ? '<span class="kv-project">' + esc(e.project) + '</span>' 
-      : '<span class="kv-project">global</span>';
+  // Group by project
+  const grouped = {};
+  filtered.forEach(e => {
+    const project = e.project || 'Global';
+    if (!grouped[project]) grouped[project] = [];
+    grouped[project].push(e);
+  });
+  
+  // Sort projects: Global first, then alphabetically
+  const sortedProjects = Object.keys(grouped).sort((a, b) => {
+    if (a === 'Global') return -1;
+    if (b === 'Global') return 1;
+    return a.localeCompare(b);
+  });
+  
+  let html = '';
+  sortedProjects.forEach(project => {
+    const entries = grouped[project];
+    const projectId = 'project-' + project.toLowerCase().replace(/[^a-z0-9]/g, '-');
     
-    const sourceBadge = e.source 
-      ? '<span class="kv-source ' + esc(e.source) + '">' + esc(e.source) + '</span>' 
-      : '';
+    html += '<div class="kv-project-section">';
+    html += '<div class="kv-project-header" onclick="toggleProjectSection(\'' + esc(projectId) + '\')">';
+    html += '<i class="fas fa-chevron-right kv-project-toggle" id="' + projectId + '-toggle"></i>';
+    html += '<span class="kv-project-name">' + esc(project) + '</span>';
+    html += '<span class="kv-project-count">' + entries.length + ' entries</span>';
+    html += '</div>';
+    html += '<div class="kv-project-entries" id="' + projectId + '-entries" style="display:none">';
     
-    const createdAgo = formatTimeAgo(e.created);
-    const updatedAgo = formatTimeAgo(e.updated);
-    const isUpdated = e.created !== e.updated;
-    
-    const valuePreview = String(e.value).substring(0, 300);
-    const hasMore = String(e.value).length > 300;
-    
-    return '<div class="kv-entry" data-key="' + esc(e.key).replace(/"/g, '&quot;') + '">' +
-      '<div class="kv-header">' +
-        '<span class="kv-key">' + esc(e.key) + '</span>' +
-        '<div class="kv-badges">' +
-          projectBadge +
-          sourceBadge +
+    entries.forEach(e => {
+      const projectBadge = e.project 
+        ? '<span class="kv-project">' + esc(e.project) + '</span>' 
+        : '<span class="kv-project">global</span>';
+      
+      const sourceBadge = e.source 
+        ? '<span class="kv-source ' + esc(e.source) + '">' + esc(e.source) + '</span>' 
+        : '';
+      
+      const createdAgo = formatTimeAgo(e.created);
+      const updatedAgo = formatTimeAgo(e.updated);
+      const isUpdated = e.created !== e.updated;
+      
+      const valuePreview = String(e.value).substring(0, 300);
+      const hasMore = String(e.value).length > 300;
+      
+      html += '<div class="kv-entry" data-key="' + esc(e.key).replace(/"/g, '&quot;') + '">' +
+        '<div class="kv-header">' +
+          '<span class="kv-key">' + esc(e.key) + '</span>' +
+          '<div class="kv-badges">' +
+            projectBadge +
+            sourceBadge +
+          '</div>' +
         '</div>' +
-      '</div>' +
-      '<div class="kv-timestamps">' +
-        '<span><i class="fas fa-plus-circle"></i> Created ' + createdAgo + '</span>' +
-        (isUpdated ? '<span><i class="fas fa-edit"></i> Updated ' + updatedAgo + '</span>' : '') +
-      '</div>' +
-      '<div class="kv-value-preview" data-action="view">' +
-        esc(valuePreview) + (hasMore ? '...' : '') +
-      '</div>' +
-      '<div class="kv-actions">' +
-        '<button data-action="edit" title="Edit">' +
-          '<i class="fas fa-edit"></i>' +
-        '</button>' +
-        '<button class="del" data-action="delete" title="Delete">' +
-          '<i class="fas fa-trash"></i>' +
-        '</button>' +
-      '</div>' +
-    '</div>';
-  }).join('');
+        '<div class="kv-timestamps">' +
+          '<span><i class="fas fa-plus-circle"></i> Created ' + createdAgo + '</span>' +
+          (isUpdated ? '<span><i class="fas fa-edit"></i> Updated ' + updatedAgo + '</span>' : '') +
+        '</div>' +
+        '<div class="kv-value-preview" data-action="view">' +
+          esc(valuePreview) + (hasMore ? '...' : '') +
+        '</div>' +
+        '<div class="kv-actions">' +
+          '<button data-action="edit" title="Edit">' +
+            '<i class="fas fa-edit"></i>' +
+          '</button>' +
+          '<button class="del" data-action="delete" title="Delete">' +
+            '<i class="fas fa-trash"></i>' +
+          '</button>' +
+        '</div>' +
+      '</div>';
+    });
+    
+    html += '</div>';
+    html += '</div>';
+  });
+  
+  list.innerHTML = html;
 
+  // Add event listeners
   list.querySelectorAll('.kv-entry').forEach(entry => {
     const key = entry.dataset.key;
     entry.querySelector('[data-action="view"]').addEventListener('click', () => showValueModal(key));
     entry.querySelector('[data-action="edit"]').addEventListener('click', () => openEditModal(key));
     entry.querySelector('[data-action="delete"]').addEventListener('click', () => deleteKV(key));
   });
+}
+
+function toggleProjectSection(projectId) {
+  const entries = document.getElementById(projectId + '-entries');
+  const toggle = document.getElementById(projectId + '-toggle');
+  
+  if (entries.style.display === 'none') {
+    entries.style.display = 'block';
+    toggle.classList.add('fa-chevron-down');
+    toggle.classList.remove('fa-chevron-right');
+  } else {
+    entries.style.display = 'none';
+    toggle.classList.remove('fa-chevron-down');
+    toggle.classList.add('fa-chevron-right');
+  }
 }
 
 function formatTimeAgo(dateStr) {
@@ -787,6 +837,69 @@ function executeConfirmAction() {
     confirmAction();
     closeConfirmModal();
   }
+}
+
+// New Entry Modal Functions
+function showNewEntryModal() {
+  $('newEntryKey').value = '';
+  $('newEntryProject').value = '';
+  $('newEntryValue').value = '';
+  $('newEntryModal').classList.add('active');
+}
+
+function closeNewEntryModal() {
+  $('newEntryModal').classList.remove('active');
+}
+
+function saveNewEntry() {
+  const key = $('newEntryKey').value.trim();
+  const project = $('newEntryProject').value.trim() || null;
+  const value = $('newEntryValue').value;
+  
+  if (!key) {
+    showToast('Key is required', 'error');
+    return;
+  }
+  
+  if (!value) {
+    showToast('Value is required', 'error');
+    return;
+  }
+  
+  // Check if key already exists
+  const existing = allKV.find(e => e.key === key);
+  if (existing) {
+    showConfirmModal({
+      title: 'Key Already Exists',
+      message: `The key "${key}" already exists. Do you want to overwrite it?`,
+      details: `<strong>Existing project:</strong> ${existing.project || 'Global'}<br><strong>Existing value:</strong> ${esc(String(existing.value).substring(0, 100))}${String(existing.value).length > 100 ? '...' : ''}`,
+      tier: 3,
+      action: () => {
+        createKVEntry(key, value, project);
+      }
+    });
+  } else {
+    createKVEntry(key, value, project);
+  }
+}
+
+function createKVEntry(key, value, project) {
+  authFetch('/api/kv/' + encodeURIComponent(key), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value, project })
+  }).then(r => r.json()).then(d => {
+    if (d.ok) {
+      closeNewEntryModal();
+      loadKV();
+      showToast('Entry created successfully', 'success');
+    } else {
+      showToast('Failed to create entry: ' + (d.error || 'Unknown error'), 'error');
+    }
+  }).catch(e => {
+    apiError('/api/kv/' + encodeURIComponent(key), e, 0);
+    showToast('Failed to create entry', 'error');
+  });
 }
 
 // -- Config -- //
