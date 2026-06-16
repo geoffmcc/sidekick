@@ -552,6 +552,64 @@ function renderKV(){
   filtered.sort((a, b) => new Date(b.updated) - new Date(a.updated));
   
   $('kvCount').textContent = filtered.length;
+  
+  // Render Recently Updated section (top 5 entries updated in last 24 hours)
+  const now = new Date();
+  const recentEntries = allKV.filter(e => {
+    const updated = new Date(e.updated);
+    const diffMs = now - updated;
+    const diffHours = diffMs / (1000 * 60 * 60);
+    return diffHours <= 24;
+  }).sort((a, b) => new Date(b.updated) - new Date(a.updated)).slice(0, 5);
+  
+  const recentSection = $('recentlyUpdatedSection');
+  const recentList = $('recentlyUpdatedList');
+  
+  if (recentEntries.length > 0) {
+    recentSection.style.display = 'block';
+    recentList.innerHTML = recentEntries.map(e => {
+      const projectBadge = e.project 
+        ? '<span class="kv-project">' + esc(e.project) + '</span>' 
+        : '<span class="kv-project">global</span>';
+      
+      const sourceBadge = e.source 
+        ? '<span class="kv-source ' + esc(e.source) + '">' + esc(e.source) + '</span>' 
+        : '';
+      
+      const updatedAgo = formatTimeAgo(e.updated);
+      const valuePreview = String(e.value).substring(0, 100);
+      const hasMore = String(e.value).length > 100;
+      
+      const sizeBytes = new Blob([JSON.stringify(e.value)]).size;
+      const sizeStr = formatBytes(sizeBytes);
+      
+      return '<div class="kv-entry" data-key="' + esc(e.key).replace(/"/g, '&quot;') + '">' +
+        '<div class="kv-header">' +
+          '<span class="kv-key">' + esc(e.key) + '</span>' +
+          '<div class="kv-badges">' +
+            projectBadge +
+            sourceBadge +
+            '<span class="kv-size">' + sizeStr + '</span>' +
+          '</div>' +
+        '</div>' +
+        '<div class="kv-timestamps">' +
+          '<span><i class="fas fa-edit"></i> Updated ' + updatedAgo + '</span>' +
+        '</div>' +
+        '<div class="kv-value-preview" data-action="view">' +
+          esc(valuePreview) + (hasMore ? '...' : '') +
+        '</div>' +
+      '</div>';
+    }).join('');
+    
+    // Add click handlers for recently updated entries
+    recentList.querySelectorAll('.kv-entry').forEach(entry => {
+      const key = entry.dataset.key;
+      entry.querySelector('[data-action="view"]').addEventListener('click', () => showValueModal(key));
+    });
+  } else {
+    recentSection.style.display = 'none';
+  }
+  
   const list = $('kvList');
   if (!filtered.length) { 
     list.innerHTML = '<div class="empty">No matching data</div>'; 
@@ -602,12 +660,17 @@ function renderKV(){
       const valuePreview = String(e.value).substring(0, 300);
       const hasMore = String(e.value).length > 300;
       
+      // Calculate entry size
+      const sizeBytes = new Blob([JSON.stringify(e.value)]).size;
+      const sizeStr = formatBytes(sizeBytes);
+      
       html += '<div class="kv-entry" data-key="' + esc(e.key).replace(/"/g, '&quot;') + '">' +
         '<div class="kv-header">' +
           '<span class="kv-key">' + esc(e.key) + '</span>' +
           '<div class="kv-badges">' +
             projectBadge +
             sourceBadge +
+            '<span class="kv-size">' + sizeStr + '</span>' +
           '</div>' +
         '</div>' +
         '<div class="kv-timestamps">' +
@@ -900,6 +963,113 @@ function createKVEntry(key, value, project) {
     apiError('/api/kv/' + encodeURIComponent(key), e, 0);
     showToast('Failed to create entry', 'error');
   });
+}
+
+function exportKV() {
+  if (allKV.length === 0) {
+    showToast('No data to export', 'warning');
+    return;
+  }
+  
+  const exportData = {
+    exported_at: new Date().toISOString(),
+    version: '1.0',
+    entries: allKV.map(e => ({
+      key: e.key,
+      value: e.value,
+      project: e.project,
+      source: e.source,
+      created: e.created,
+      updated: e.updated
+    }))
+  };
+  
+  const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'sidekick-kv-export-' + new Date().toISOString().split('T')[0] + '.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  
+  showToast('Exported ' + allKV.length + ' entries', 'success');
+}
+
+function importKV() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'application/json';
+  
+  input.onchange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const data = JSON.parse(event.target.result);
+        
+        if (!data.entries || !Array.isArray(data.entries)) {
+          showToast('Invalid export file format', 'error');
+          return;
+        }
+        
+        // Show confirmation modal
+        showConfirmModal({
+          title: 'Import KV Data',
+          message: `Import ${data.entries.length} entries from ${file.name}?`,
+          details: `<strong>Exported at:</strong> ${data.exported_at || 'Unknown'}<br><strong>Version:</strong> ${data.version || 'Unknown'}<br><strong>Entries:</strong> ${data.entries.length}<br><br><span style="color:#f85149">⚠️ This will overwrite existing entries with the same keys!</span>`,
+          tier: 1,
+          requiredText: 'IMPORT',
+          action: () => {
+            // Import entries
+            let imported = 0;
+            let errors = 0;
+            
+            const importPromises = data.entries.map(entry => {
+              return authFetch('/api/kv/' + encodeURIComponent(entry.key), {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  value: entry.value,
+                  project: entry.project
+                })
+              }).then(r => r.json()).then(d => {
+                if (d.ok) {
+                  imported++;
+                } else {
+                  errors++;
+                }
+              }).catch(() => {
+                errors++;
+              });
+            });
+            
+            Promise.all(importPromises).then(() => {
+              loadKV();
+              if (errors === 0) {
+                showToast('Successfully imported ' + imported + ' entries', 'success');
+              } else {
+                showToast('Imported ' + imported + ' entries, ' + errors + ' failed', 'warning');
+              }
+            });
+          }
+        });
+      } catch (e) {
+        showToast('Failed to parse JSON file: ' + e.message, 'error');
+      }
+    };
+    
+    reader.onerror = () => {
+      showToast('Failed to read file', 'error');
+    };
+    
+    reader.readAsText(file);
+  };
+  
+  input.click();
 }
 
 // -- Config -- //
