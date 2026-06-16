@@ -33,7 +33,7 @@ Before creating any new tool or tool suite:
 1. Recall from KV store: `sidekick_get key="tool_making_guide" project="sidekick"`
 2. If not available, read `docs/tool-creation.md` and store it in KV for next time
 
-## Tools (87 total)
+## Tools (88 total)
 
 ### Core Tools (11)
 
@@ -131,6 +131,7 @@ Before creating any new tool or tool suite:
 | `sidekick_transcribe` | Transcribe audio/video to text using Whisper |
 | `sidekick_analytics` | Fast analytical queries on CSV/JSON/Parquet files using DuckDB |
 | `sidekick_embed` | Generate text embeddings using Ollama |
+| `sidekick_ollama` | Manage Ollama models: list, ps, pull, show |
 
 ## Token Efficiency Rules
 

@@ -87,7 +87,7 @@ const TOOL_CATEGORIES = {
   'Services': { icon: 'fa-cogs', tools: ['sidekick_process','sidekick_service'] },
   'Scheduling': { icon: 'fa-clock', tools: ['sidekick_cron','sidekick_delay'] },
   'Communication': { icon: 'fa-bell', tools: ['sidekick_notify','sidekick_webhook'] },
-  'Context & Learning': { icon: 'fa-brain', tools: ['sidekick_context','sidekick_teach','sidekick_embed'] },
+  'Context & Learning': { icon: 'fa-brain', tools: ['sidekick_context','sidekick_teach','sidekick_embed','sidekick_ollama'] },
   'Data Pipeline': { icon: 'fa-filter', tools: ['sidekick_transform','sidekick_parse','sidekick_diff','sidekick_hash','sidekick_validate','sidekick_template','sidekick_extract','sidekick_anonymize','sidekick_diff_files'] },
   'Monitoring': { icon: 'fa-heartbeat', tools: ['sidekick_health','sidekick_status','sidekick_watch','sidekick_baseline','sidekick_snapshot','sidekick_timeline','sidekick_black_box','sidekick_netdiag'] },
   'Workflow': { icon: 'fa-tasks', tools: ['sidekick_queue','sidekick_retry','sidekick_orchestrate','sidekick_runbook'] },
