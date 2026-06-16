@@ -264,7 +264,7 @@ try {
     Write-Host "  SCP mode: syncing files individually (airgap/offline)" -ForegroundColor Yellow
 
     Write-Host "  Syncing source files..." -ForegroundColor Green
-    $files = @("tools.js", "index.js", "dashboard.js", "agent.js", "redact.js", "env.js", "db.js", "pg.js", "redis.js", "qdrant.js", "crypto-utils.js")
+    $files = @("tools.js", "index.js", "dashboard.js", "agent.js", "memory.js", "redact.js", "env.js", "db.js", "pg.js", "redis.js", "qdrant.js", "crypto-utils.js")
     foreach ($file in $files) {
       $localPath = Join-Path $PROJECT_DIR "src\$file"
       if (-not (Test-Path $localPath)) {

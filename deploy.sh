@@ -270,7 +270,7 @@ if [ "$SCP_MODE" = true ]; then
   echo -e "\033[33mSCP mode: syncing files individually (airgap/offline)\033[0m"
 
   echo -e "\033[32mSyncing source files...\033[0m"
-  for f in tools.js index.js dashboard.js agent.js redact.js env.js db.js pg.js redis.js qdrant.js crypto-utils.js; do
+  for f in tools.js index.js dashboard.js agent.js memory.js redact.js env.js db.js pg.js redis.js qdrant.js crypto-utils.js; do
     if [ ! -f "$PROJECT_DIR/src/$f" ]; then
       echo -e "  \033[33mWarning: src/$f not found, skipping\033[0m"
       continue
