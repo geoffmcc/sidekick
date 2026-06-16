@@ -1,0 +1,16 @@
+apiVersion: 1
+
+datasources:
+  - name: InfluxDB
+    type: influxdb
+    access: proxy
+    url: http://sidekick-influxdb:8086
+    jsonData:
+      version: Flux
+      organization: sidekick
+      defaultBucket: sidekick
+      tlsSkipVerify: true
+    secureJsonData:
+      token: sidekick-influx-token
+    isDefault: true
+    editable: true
