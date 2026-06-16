@@ -6,10 +6,9 @@ A self-hosted AI agent platform with persistent memory, 70 MCP tools, and the ab
 
 **How?** A single `AGENTS.md` file that opencode reads on every session start. No plugins, no hooks — just markdown.
 
-> **Note:** This project was developed using its own remote execution tools — the AI assistant used Sidekick's infrastructure to help build and test the very system it runs on.
+![Sidekick Dashboard](docs/screenshots/dashboard-system.png)
 
-<!-- TODO: Add dashboard screenshot -->
-<!-- TODO: Add agent loop GIF -->
+> **Note:** This project was developed using its own remote execution tools — the AI assistant used Sidekick's infrastructure to help build and test the very system it runs on.
 
 ## Quick Start
 
@@ -113,6 +112,19 @@ Not just bash and file operations. Sidekick includes tools for:
 - And much more
 
 **The result:** Sidekick isn't just a tool server—it's an autonomous platform that learns, adapts, and grows with your workflow.
+
+## Self-Debugging in Action
+
+Sidekick used its own tools to help develop itself. Here's the AI agent debugging Sidekick from within opencode:
+
+**Testing the debug tool's store/cleanup/recall cycle:**
+![Debug tool testing](docs/screenshots/debug-tool-testing.png)
+
+**Diagnosing its own hallucination problem with `sidekick_fresheyes`:**
+![Fresh eyes analysis](docs/screenshots/fresh-eyes-analysis.png)
+
+**Investigating why the self-improvement tool isn't working:**
+![Evolve debugging](docs/screenshots/evolve-debugging.png)
 
 ## What You Can Achieve
 
