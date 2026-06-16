@@ -119,6 +119,11 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
 .kv-source.mcp{background:#2d4a2d;color:#7ee787}
 .kv-source.agent{background:#4a2d4a;color:#d2a8ff}
 .kv-source.dashboard{background:#2d3a4a;color:#79c0ff}
+.kv-size{font-size:11px;padding:2px 8px;border-radius:3px;background:#2d2d2d;color:#8b949e}
+#recentlyUpdatedSection .card{border:2px solid #1f6feb;background:#0d1117}
+#recentlyUpdatedSection .section-title{color:#58a6ff}
+#recentlyUpdatedSection .kv-entry{border-bottom:1px solid #21262d}
+#recentlyUpdatedSection .kv-entry:last-child{border-bottom:none}
 .kv-value-preview{background:#161b22;padding:8px 12px;border-radius:4px;font-family:var(--font);font-size:12px;cursor:pointer;white-space:pre-wrap;word-break:break-all;max-height:100px;overflow:hidden;position:relative}
 .kv-value-preview:hover{background:#1c2128}
 .kv-value-preview.expanded{max-height:none}
