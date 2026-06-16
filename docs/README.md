@@ -1,8 +1,31 @@
 # Sidekick Documentation
 
-Sidekick is a self-hosted Model Context Protocol server and autonomous assistant platform intended to give opencode a persistent remote working environment. This documentation was rebuilt from the supplied `sidekick-main(1).zip` source tree and uses the current code as the source of truth.
+Sidekick is a self-hosted Model Context Protocol server and autonomous assistant platform intended to give opencode a persistent remote working environment. These docs use the current source tree, migrations, and `README.md`/`AGENTS.md` as the source of truth.
 
-The project currently exposes three Node.js services and 70 exported MCP tools.
+The project currently exposes three Node.js services and 83 exported MCP tools. Tool metadata, categories, risk labels, enabled/deprecated state, tool logs, key-value data, and the knowledge base are stored in SQLite.
+
+## Agent Information Access
+
+The important runtime pattern is database-first access. `AGENTS.md` is the thin instruction layer that tells agents where to look; the authoritative operational content is in SQLite.
+
+| Need | Primary access path | Backing location |
+|---|---|---|
+| Documentation, architecture, operations, protocols, best practices | `sidekick_knowledge` | `knowledge` table |
+| Current tool list, args, category, risk, enabled/deprecated state | `sidekick_db_query database="sqlite"` | `tools`, `tool_categories`, `tool_category_map` |
+| Persistent project facts | `sidekick_store`, `sidekick_get`, `sidekick_get_by_project` | `kv_store` |
+| Structured feature documents | Feature tools or `sidekick_db_query` | `json_documents` |
+| Recent tool activity | `sidekick_log_query` | `tool_logs` |
+
+The database file is `SIDEKICK_DB_FILE` when set, otherwise `SIDEKICK_DATA_DIR/sidekick.db`. In the standard deployment that resolves to `/home/sidekick/sidekick/data/sidekick.db`.
+
+Fresh databases can be manually seeded with current Sidekick self-knowledge:
+
+```bash
+cd /home/sidekick/sidekick
+sqlite3 data/sidekick.db < docs/knowledge-seed.sql
+```
+
+The deploy scripts also run `npm run seed:knowledge` after dependencies install. That script imports the same seed only when the `knowledge` table is empty, so existing deployments are preserved.
 
 ## Documentation map
 
@@ -16,11 +39,12 @@ The project currently exposes three Node.js services and 70 exported MCP tools.
 | `tool-usage-guide.md` | Practical usage patterns and examples for important tool groups. |
 | `dashboard.md` | Dashboard UI, API routes, webhooks, data editing, reset endpoints, and agent proxy. |
 | `agent-bridge.md` | Autonomous task runner behavior, task history, streaming, delays, and watches. |
-| `data-model.md` | Persistent JSON files, logs, KV schema, contexts, secrets, snapshots, queues, and transcripts. |
+| `data-model.md` | SQLite schema, JSON document storage, remaining file-backed state, backups, and migrations. |
 | `security.md` | Authentication, IP allowlists, redaction, command safety, dashboard protections, and risk notes. |
 | `operations.md` | Day-to-day service commands, health checks, troubleshooting, backups, and maintenance. |
 | `development.md` | Source layout, testing, extension workflow, and implementation notes. |
 | `api-reference.md` | HTTP endpoint reference for MCP, Dashboard, and Agent services. |
+| `knowledge-seed.sql` | Manual SQL seed for populating a fresh `knowledge` table with Sidekick self-knowledge. |
 
 ## Runtime services
 
@@ -41,4 +65,4 @@ npm install
 node src/index.js
 ```
 
-For a persistent deployment, use the supplied deployment scripts or install the three systemd units under `systemd/`.
+Node.js 22 or newer is required. For a persistent deployment, use the supplied deployment scripts or install the three systemd units under `systemd/`.

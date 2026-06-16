@@ -6,6 +6,24 @@ A remote agent system. Connect via the sidekick MCP server at `YOUR_REMOTE_IP:40
 
 **All Sidekick documentation is stored in the knowledge base.** This file provides pointers to help you find what you need.
 
+### Database-First Access Model
+
+The secret sauce is that Sidekick's agent-facing knowledge is not primarily in markdown files at runtime. It is in SQLite:
+
+- **Database file**: `SIDEKICK_DB_FILE`, or `SIDEKICK_DATA_DIR/sidekick.db` when unset. On the standard server this is `/home/sidekick/sidekick/data/sidekick.db`.
+- **Documentation and operating knowledge**: `knowledge` table. Use `sidekick_knowledge` first.
+- **Tool catalog and metadata**: `tools`, `tool_categories`, and `tool_category_map` tables. Use `sidekick_db_query database="sqlite"` when you need exact current tool data.
+- **Persistent key-value memory**: `kv_store` table. Use `sidekick_store`, `sidekick_get`, `sidekick_list_projects`, and `sidekick_get_by_project`.
+- **Named structured documents**: `json_documents` table. Stores documents such as `context`, `cron`, `webhooks`, and `watches`.
+- **Tool activity history**: `tool_logs` table. Use `sidekick_log_query` or SQL for recent tool activity.
+
+Default retrieval order for agents:
+
+1. Search `sidekick_knowledge` for docs, procedures, policies, operations, and architecture.
+2. Query the `tools` tables for exact current tool availability, categories, risk, and args.
+3. Use KV/context tools for project memory and prior decisions.
+4. Read markdown files only when the database entry is missing, stale, or you are editing the docs themselves.
+
 ### How to Query the Knowledge Base
 
 Use the `sidekick_knowledge` tool to search, list, or retrieve specific entries:

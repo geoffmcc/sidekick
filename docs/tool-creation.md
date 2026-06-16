@@ -5,7 +5,7 @@
 **Files to edit (in order):**
 1. `src/tools.js` - implementation + TOOLS export + TOOL_DEFS entry
 2. `src/index.js` - TOOL_SCHEMAS Zod schema
-3. `src/dashboard.js` - TOOL_CATEGORIES addition
+3. `src/tools.js` - TOOL_CATEGORIES category mapping and TOOL_RISK risk entry
 
 ## Registration Pattern
 
@@ -60,41 +60,38 @@ const TOOL_SCHEMAS = {
 };
 ```
 
-### 5. Add to TOOL_CATEGORIES in `src/dashboard.js`
+### 5. Add category and risk metadata in `src/tools.js`
 
 ```javascript
 const TOOL_CATEGORIES = {
   // ... existing categories ...
-  'CategoryName': { 
-    icon: 'fa-icon-name', 
-    tools: ['sidekick_<name>'] 
-  },
+  'sidekick_<name>': 'Monitoring',
+};
+
+const TOOL_RISK = {
+  // ... existing risk overrides ...
+  sidekick_<name>: "medium",
 };
 ```
 
 **Available categories:**
-Core, Storage, Git & GitHub, Services, Scheduling, Communication, Context & Learning, Data Pipeline, Monitoring, Workflow, Meta, Efficiency, Security, Development, Reliability, Archive
+Core, Storage, Database, Git & GitHub, Services, Scheduling, Communication, Context & Learning, Data Pipeline, Monitoring, Workflow, Meta, Efficiency, Security, Networking, Development, Reliability, Archive, Media
 
 ## Data Persistence Pattern
 
-For tools that need to store state:
+For shared state, prefer SQLite helpers from `src/db.js`. Named JSON documents are stored in the `json_documents` table:
 
 ```javascript
-const MYDATA_FILE = path.join(DATA_DIR, "mydata.json");
-
 function loadMydata() {
-  try {
-    if (fs.existsSync(MYDATA_FILE)) {
-      return JSON.parse(fs.readFileSync(MYDATA_FILE, "utf8"));
-    }
-  } catch {}
-  return { items: {} };
+  return dbStore.loadDocument("mydata", { items: {} });
 }
 
 function saveMydata(data) {
-  fs.writeFileSync(MYDATA_FILE, JSON.stringify(data, null, 2));
+  dbStore.setDocument("mydata", data);
 }
 ```
+
+File-backed state is still appropriate for artifacts such as transcripts, encrypted secret blobs, exports, snapshots, and incident bundles.
 
 ## Naming Conventions
 
@@ -155,21 +152,15 @@ All tool calls are automatically logged via `logToolCall()` in the MCP server.
 ```javascript
 // In src/tools.js
 
-const ALERTS_FILE = path.join(DATA_DIR, "alerts.json");
 const MAX_ALERTS = 100;
 
 function loadAlerts() {
-  try {
-    if (fs.existsSync(ALERTS_FILE)) {
-      return JSON.parse(fs.readFileSync(ALERTS_FILE, "utf8"));
-    }
-  } catch {}
-  return { alerts: [], last_updated: null };
+  return dbStore.loadDocument("alerts", { alerts: [], last_updated: null });
 }
 
 function saveAlerts(data) {
   data.last_updated = new Date().toISOString();
-  fs.writeFileSync(ALERTS_FILE, JSON.stringify(data, null, 2));
+  dbStore.setDocument("alerts", data);
 }
 
 async function sidekick_alert({ action, name, severity, message, confirm }) {
@@ -243,14 +234,11 @@ const TOOL_SCHEMAS = {
 ```
 
 ```javascript
-// In src/dashboard.js
+// In src/tools.js
 
 const TOOL_CATEGORIES = {
   // ... existing categories ...
-  'Monitoring': { 
-    icon: 'fa-heartbeat', 
-    tools: ['sidekick_alert', /* ... other monitoring tools */] 
-  },
+  'sidekick_alert': 'Monitoring',
 };
 ```
 
@@ -265,6 +253,6 @@ After implementing your tool:
 
 ## Resources
 
-- This guide is also stored in KV store for fast retrieval: `sidekick_get key="tool_making_guide" project="sidekick"`
+- For agent-facing procedures and documentation, prefer `sidekick_knowledge` entries over large markdown excerpts in prompts.
 - See `docs/development.md` for project structure and architecture overview
 - See `docs/tools-reference.md` for documentation on existing tools

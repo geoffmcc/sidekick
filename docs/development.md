@@ -6,6 +6,10 @@
 |---|---|
 | `src/index.js` | MCP server, auth, sessions, Streamable HTTP, legacy SSE, health endpoint. |
 | `src/tools.js` | Tool implementations, tool definitions, dispatcher, persistence helpers. |
+| `src/db.js` | SQLite database layer, migrations, backups, query helpers, FTS/search helpers, snapshots. |
+| `src/pg.js` | Optional PostgreSQL backend for database tools. |
+| `src/redis.js` | Optional Redis client for cache operations. |
+| `src/qdrant.js` | Optional Qdrant client for vector search. |
 | `src/dashboard.js` | Dashboard server, API routes, auth, and agent proxy. |
 | `src/dashboard.html` | Authenticated dashboard HTML shell. |
 | `static/dashboard.css` | Dashboard styles. |
@@ -18,6 +22,7 @@
 | `scripts/bootstrap.sh` | Remote bootstrap helper used by deploy scripts. |
 | `deploy.sh` | Linux/macOS deploy script. |
 | `deploy.ps1` | Windows PowerShell deploy script. |
+| `migrations/` | SQLite schema migrations for core storage, tool registry, categories, and knowledge base. |
 | `test/` | Node.js test suites. |
 
 ## npm scripts
@@ -45,14 +50,16 @@ Some future test suites are listed in `test/run-all.js` but not implemented in t
 
 ## Adding a tool
 
-A normal tool addition requires changes in two places:
+A normal built-in tool addition requires changes in these places:
 
 1. Add an async handler function in `src/tools.js`.
 2. Add the handler to the `TOOLS` map.
 3. Add a user-facing entry to `TOOL_DEFS`.
-4. Add a Zod schema in `TOOL_SCHEMAS` in `src/index.js` so MCP clients know the input shape.
-5. Add tests for success and failure cases.
-6. Update documentation.
+4. Add a category mapping in `TOOL_CATEGORIES` in `src/tools.js`.
+5. Add a risk entry in `TOOL_RISK` if the default `low` classification is not correct.
+6. Add a Zod schema in `TOOL_SCHEMAS` in `src/index.js` so MCP clients know the input shape.
+7. Add tests for success and failure cases.
+8. Update documentation.
 
 Tool handlers should return MCP-style content:
 
@@ -71,6 +78,6 @@ return { content: [{ type: "text", text: "error text" }], isError: true };
 - Keep command construction safe. Prefer `execFileSync` or explicit argument escaping when possible.
 - Redact returned and logged output when it may contain secrets.
 - Keep output small. Add summaries, filters, or limits for large data.
-- Store persistent state in the configured data directory, not in the source tree.
+- Prefer SQLite through `src/db.js` for shared durable state. Use named JSON documents via `loadDocument`/`setDocument` for simple structured feature state. Use files only for artifacts where a file is the natural representation, such as transcripts, encrypted secrets, snapshots, or exported bundles.
 - Avoid undocumented environment variables; add them to `.env.example` and `configuration.md`.
 - Keep dashboard endpoints consistent with audit logging and CSRF checks when mutating state.

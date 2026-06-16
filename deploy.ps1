@@ -212,7 +212,7 @@ function Initialize-Remote {
   Write-Host "  Services verified" -ForegroundColor Green
 
   Write-Host "  Creating remote directories..." -ForegroundColor Yellow
-  Run-Remote "mkdir -p $REMOTE_DIR/src $REMOTE_DIR/data" | Out-Null
+  Run-Remote "mkdir -p $REMOTE_DIR/src $REMOTE_DIR/scripts $REMOTE_DIR/docs $REMOTE_DIR/migrations $REMOTE_DIR/data" | Out-Null
 
   Write-Host "  Remote initialization complete" -ForegroundColor Green
 }
@@ -264,7 +264,7 @@ try {
     Write-Host "  SCP mode: syncing files individually (airgap/offline)" -ForegroundColor Yellow
 
     Write-Host "  Syncing source files..." -ForegroundColor Green
-    $files = @("tools.js", "index.js", "dashboard.js", "agent.js", "redact.js", "env.js", "db.js")
+    $files = @("tools.js", "index.js", "dashboard.js", "agent.js", "redact.js", "env.js", "db.js", "pg.js", "redis.js", "qdrant.js", "crypto-utils.js")
     foreach ($file in $files) {
       $localPath = Join-Path $PROJECT_DIR "src\$file"
       if (-not (Test-Path $localPath)) {
@@ -281,6 +281,26 @@ try {
       throw "Failed to copy package.json"
     }
     $changed += "package.json"
+
+    if (-not (Copy-ToVPS (Join-Path $PROJECT_DIR "scripts\seed-knowledge.js") "$REMOTE_DIR/scripts/seed-knowledge.js")) {
+      throw "Failed to copy seed-knowledge.js"
+    }
+    $changed += "seed-knowledge.js"
+
+    if (-not (Copy-ToVPS (Join-Path $PROJECT_DIR "docs\knowledge-seed.sql") "$REMOTE_DIR/docs/knowledge-seed.sql")) {
+      throw "Failed to copy knowledge-seed.sql"
+    }
+    $changed += "knowledge-seed.sql"
+
+    $migrationDir = Join-Path $PROJECT_DIR "migrations"
+    if (Test-Path $migrationDir) {
+      Get-ChildItem $migrationDir -Filter "*.sql" | ForEach-Object {
+        if (-not (Copy-ToVPS $_.FullName "$REMOTE_DIR/migrations/$($_.Name)")) {
+          throw "Failed to copy migration $($_.Name)"
+        }
+        $changed += "migrations/$($_.Name)"
+      }
+    }
 
     $localEnv = Join-Path $PROJECT_DIR ".env"
     if (Test-Path $localEnv) {
@@ -416,6 +436,19 @@ try {
     Write-Host "  npm install failed:" -ForegroundColor Red
     Write-Host $npmOutput
     throw "npm install failed"
+  }
+
+  Write-Host ""
+  Write-Host "--- Seeding Knowledge Base ---" -ForegroundColor Cyan
+  $seedAvailable = Run-Remote "cd $REMOTE_DIR && npm run 2>/dev/null | grep -q 'seed:knowledge' && echo YES || echo NO"
+  if ($seedAvailable -match "YES") {
+    $seedOutput = Run-Remote "cd $REMOTE_DIR && npm run seed:knowledge 2>&1"
+    Write-Host $seedOutput
+    if ($LASTEXITCODE -ne 0) {
+      throw "knowledge seed failed"
+    }
+  } else {
+    Write-Host "  Knowledge seed script not present on remote; skipping. Commit/push this change or use -Scp to seed automatically." -ForegroundColor Yellow
   }
 
   Write-Host ""
