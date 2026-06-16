@@ -163,6 +163,13 @@ function showPage(name){
   if (name === 'database') loadDbStats();
   if (name === 'config') loadConfig();
   if (name === 'tools') loadTools();
+  if (name === 'metrics') loadGrafanaDashboard();
+}
+
+function loadGrafanaDashboard() {
+  const dashboard = $('grafanaDashboard').value;
+  const frame = $('grafanaFrame');
+  frame.src = `http://127.0.0.1:3000/d/${dashboard}?orgId=1&kiosk`;
 }
 
 function fmtTime(iso){
@@ -1456,10 +1463,12 @@ function loadTools(){
   Promise.all([
     authFetch('/api/tools').then(r=>r.json()),
     authFetch('/api/stats').then(r=>r.json()),
-    authFetch('/api/procedures').then(r=>r.json())
-  ]).then(([toolsData, statsData, procData]) => {
+    authFetch('/api/procedures').then(r=>r.json()),
+    authFetch('/api/tool-categories').then(r=>r.json())
+  ]).then(([toolsData, statsData, procData, catData]) => {
     allTools = toolsData.tools || [];
     allProcedures = procData.procedures || [];
+    toolCategories = catData.categories || [];
     toolStats = {};
     (statsData.stats || []).forEach(s => {
       toolStats[s.name] = s;
