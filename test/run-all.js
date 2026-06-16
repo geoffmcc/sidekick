@@ -22,6 +22,7 @@ const suites = [
   { file: 'test/new-tools.test.js', critical: false, description: 'Extended tool behavior' },
   { file: 'test/evolve.test.js', critical: false, description: 'Evolve tool and retention behavior' },
   { file: 'test/db-tools.test.js', critical: false, description: 'Database tools behavior' },
+  { file: 'test/automatic-memory.test.js', critical: false, description: 'Automatic memory capture and recall' },
   { file: 'test/integration.test.js', critical: false, description: 'Integration behavior' },
   { file: 'test/dashboard-api.test.js', critical: false, description: 'Dashboard API behavior' },
 ];

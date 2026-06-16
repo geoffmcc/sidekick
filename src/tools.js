@@ -6,6 +6,7 @@ const dbStore = require("./db");
 const pgStore = require("./pg");
 const redisStore = require("./redis");
 const qdrantStore = require("./qdrant");
+const { recordToolCallMemory } = require("./memory");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
@@ -460,14 +461,23 @@ function formatArgs(args) {
 
 function logToolCall(name, args, duration, success, summary) {
   try {
+    const redactedSummary = redactSensitive(String(summary).substring(0, 200));
     dbStore.appendToolLog({
       t: new Date().toISOString(),
       n: name,
       a: formatArgs(args),
       d: Math.round(duration),
       ok: success,
-      s: redactSensitive(String(summary).substring(0, 200)),
+      s: redactedSummary,
       src: currentSource
+    });
+    recordToolCallMemory({
+      name,
+      args,
+      duration,
+      success,
+      summary: redactedSummary,
+      source: currentSource
     });
   } catch (e) {}
 }
@@ -1264,7 +1274,8 @@ const DEFAULT_CONTEXT = {
   decisions: [],
   problems: [],
   patterns: [],
-  sessions: []
+  sessions: [],
+  memories: []
 };
 
 function loadContext() {
@@ -1312,10 +1323,13 @@ async function generateEmbedding(text) {
 }
 
 async function searchContext(ctx, query, type, limit = 10) {
-  // Try Qdrant semantic search first
+  const results = [];
+
+  // Try Qdrant semantic search first, then merge keyword matches so automatic
+  // memories in the SQLite context document are always eligible.
   const qdrantAvailable = await qdrantStore.isAvailable();
   
-  if (qdrantAvailable) {
+  if (qdrantAvailable && type !== "memories") {
     const embedding = await generateEmbedding(query);
     if (embedding) {
       try {
@@ -1323,22 +1337,21 @@ async function searchContext(ctx, query, type, limit = 10) {
           must: [{ key: "type", match: { value: type } }]
         } : null;
         
-        const results = await qdrantStore.search(embedding, limit, filter);
-        
-        return results.map(r => ({
+        const semanticResults = await qdrantStore.search(embedding, limit, filter);
+        for (const r of semanticResults) {
+          results.push({
           type: r.payload.type,
           item: r.payload.data,
           score: r.score
-        }));
+          });
+        }
       } catch (e) {
-        // Fall through to keyword search
+      // Fall through to keyword search
       }
     }
   }
   
   // Fallback to keyword search
-  const results = [];
-  
   if (type === "all" || type === "decisions") {
     for (const dec of ctx.decisions) {
       const text = `${dec.context} ${dec.decision} ${dec.reasoning}`;
@@ -1375,6 +1388,16 @@ async function searchContext(ctx, query, type, limit = 10) {
       const score = simpleSimilarity(query, text);
       if (score > 0.1) {
         results.push({ type: "session", item: sess, score });
+      }
+    }
+  }
+
+  if (type === "all" || type === "memories") {
+    for (const mem of (ctx.memories || [])) {
+      const text = `${mem.summary || ""} ${mem.goal || ""} ${mem.args || ""} ${mem.tool || ""} ${(mem.tools || []).join(" ")}`;
+      const score = simpleSimilarity(query, text);
+      if (score > 0.1) {
+        results.push({ type: "memory", item: mem, score });
       }
     }
   }
@@ -1571,6 +1594,8 @@ async function sidekick_context({ action, project, context, decision, reasoning,
         return `[Pattern ${item.id}] ${item.date}\nDescription: ${item.description}\nExample: ${item.example || "N/A"}`;
       } else if (r.type === "session") {
         return `[Session ${item.id}] ${item.date}\nSummary: ${item.summary}\nTopics: ${(item.topics || []).join(", ")}\nOutcome: ${item.outcome || "N/A"}`;
+      } else if (r.type === "memory") {
+        return `[Memory ${item.id}] ${item.date}\nType: ${item.type || "memory"}\nSummary: ${item.summary || "N/A"}\nTool: ${item.tool || "N/A"}\nOutcome: ${item.outcome || "N/A"}`;
       }
     }).join("\n\n");
     return { content: [{ type: "text", text: summary }] };
@@ -1594,6 +1619,8 @@ async function sidekick_context({ action, project, context, decision, reasoning,
         return `• You have a pattern: "${item.description}"`;
       } else if (r.type === "session") {
         return `• You had a session on ${item.date}: "${item.summary}" (${item.outcome || "no outcome recorded"})`;
+      } else if (r.type === "memory") {
+        return `• Automatic memory from ${item.date}: "${item.summary || item.goal || item.tool}"`;
       }
     }).join("\n");
     return { content: [{ type: "text", text: `Based on your past context:\n\n${suggestions}` }] };
@@ -1616,6 +1643,7 @@ async function sidekick_context({ action, project, context, decision, reasoning,
       const projDecisions = ctx.decisions.filter(d => d.project === projectName);
       const projProblems = ctx.problems.filter(p => p.project === projectName);
       const projPatterns = ctx.patterns.filter(p => p.project === projectName);
+      const projMemories = (ctx.memories || []).filter(m => m.project === projectName);
       
       if (projDecisions.length > 0) {
         summary += `\n### Decisions (${projDecisions.length}):\n`;
@@ -1645,6 +1673,13 @@ async function sidekick_context({ action, project, context, decision, reasoning,
           summary += `- ${s.date}: ${s.summary} (${s.outcome || "N/A"})\n`;
         });
       }
+
+      if (projMemories.length > 0) {
+        summary += `\n### Automatic Memories (${projMemories.length}):\n`;
+        projMemories.slice(-5).forEach(m => {
+          summary += `- ${m.date}: ${m.summary || m.goal || m.tool || "memory"}\n`;
+        });
+      }
     } else {
       summary += `\n\n## Overview\n`;
       summary += `- Total projects: ${Object.keys(ctx.projects).length}\n`;
@@ -1652,6 +1687,7 @@ async function sidekick_context({ action, project, context, decision, reasoning,
       summary += `- Total problems: ${ctx.problems.length}\n`;
       summary += `- Total patterns: ${ctx.patterns.length}\n`;
       summary += `- Total sessions: ${(ctx.sessions || []).length}\n`;
+      summary += `- Automatic memories: ${(ctx.memories || []).length}\n`;
       
       const activeProjects = Object.values(ctx.projects).filter(p => p.active);
       if (activeProjects.length > 0) {
@@ -1681,6 +1717,9 @@ async function sidekick_context({ action, project, context, decision, reasoning,
     }
     if (!type || type === "all" || type === "sessions") {
       items.push(`Sessions: ${(ctx.sessions || []).length}`);
+    }
+    if (!type || type === "all" || type === "memories") {
+      items.push(`Automatic memories: ${(ctx.memories || []).length}`);
     }
     return { content: [{ type: "text", text: items.join("\n") }] };
   }
@@ -5225,18 +5264,19 @@ async function sidekick_project({ name, include }) {
     output.kv = kvResults;
   }
   if (sections.includes("context")) {
-    const ctxFile = path.join(DATA_DIR, "context.json");
-    if (fs.existsSync(ctxFile)) {
-      try {
-        const ctx = JSON.parse(fs.readFileSync(ctxFile, "utf-8"));
-        const items = (ctx.items || []).filter(i => i.project === name);
-        output.context = items.slice(-20).map(i => ({
-          type: i.type,
-          summary: (i.context || i.decision || i.problem || i.pattern || "").substring(0, 200),
-          created: i.created
-        }));
-      } catch (e) { output.context = []; }
-    } else { output.context = []; }
+    const ctx = loadContext();
+    const items = [
+      ...(ctx.decisions || []).map(i => ({ type: "decision", summary: i.decision, created: i.date, project: i.project })),
+      ...(ctx.problems || []).map(i => ({ type: "problem", summary: i.description, created: i.date, project: i.project })),
+      ...(ctx.patterns || []).map(i => ({ type: "pattern", summary: i.description, created: i.date, project: i.project })),
+      ...(ctx.sessions || []).map(i => ({ type: "session", summary: i.summary, created: i.date, project: i.project })),
+      ...(ctx.memories || []).map(i => ({ type: i.type || "memory", summary: i.summary || i.goal || i.tool, created: i.date, project: i.project }))
+    ].filter(i => i.project === name);
+    output.context = items.slice(-20).map(i => ({
+      type: i.type,
+      summary: String(i.summary || "").substring(0, 200),
+      created: i.created
+    }));
   }
   if (sections.includes("logs")) {
     const toolLogs = dbStore.readToolLogs(20);
@@ -8959,7 +8999,7 @@ const TOOL_DEFS = [
   { name: "sidekick_cron", description: "Schedule recurring tasks (add, list, remove, run jobs)", args: { action: "string", name: "string (optional)", schedule: "string (optional)", command: "string (optional)", id: "string (optional)" } },
   { name: "sidekick_github", description: "GitHub API integration (PRs, issues, commits, releases)", args: { action: "string", repo: "string", args: "string (optional)" } },
   { name: "sidekick_webhook", description: "Manage received webhooks (list, get, clear)", args: { action: "string", id: "string (optional)", limit: "number (optional)" } },
-  { name: "sidekick_context", description: "Persistent intelligent context management (track projects, decisions, problems, patterns; recall and suggest based on past context)", args: { action: "string", project: "string (optional)", context: "string (optional)", decision: "string (optional)", reasoning: "string (optional)", problem: "string (optional)", solution: "string (optional)", pattern: "string (optional)", query: "string (optional)", type: "string (optional)", limit: "number (optional)" } },
+  { name: "sidekick_context", description: "Persistent intelligent context management (track projects, decisions, problems, patterns, sessions, automatic memories; recall and suggest based on past context)", args: { action: "string", project: "string (optional)", context: "string (optional)", decision: "string (optional)", reasoning: "string (optional)", problem: "string (optional)", solution: "string (optional)", pattern: "string (optional)", query: "string (optional)", type: "string (optional: decisions|problems|patterns|projects|sessions|memories|all)", limit: "number (optional)" } },
   { name: "sidekick_teach", description: "Meta-learning and self-extension: teach procedures, generate tools, learn from examples, execute learned workflows", args: { action: "string", name: "string (optional)", description: "string (optional)", steps: "array (optional)", parameters: "object (optional)", args: "object (optional)", example: "string (optional)", trigger_phrases: "array (optional)", implementation: "string (optional)" } },
   { name: "sidekick_transform", description: "Data manipulation pipeline: filter, extract, sort, format, and map data", args: { action: "string (filter|extract|sort|format|map)", input: "string", pattern: "string (optional, for filter)", field: "string (optional, for extract)", key: "string (optional, for sort/map)", value: "string (optional, for map)", format: "string (optional, for format: json|csv|table|text)" } },
   { name: "sidekick_health", description: "Composite system health checks with scoring and issue detection", args: { check: "string (all|services|processes|disk|network|custom)", services: "string (optional, comma-separated service names)", commands: "string (optional, comma-separated commands for custom check)", threshold: "string (optional, e.g. 'disk>90,mem>80')" } },

@@ -90,7 +90,7 @@ Sidekick is the infrastructure. The AI (running in opencode) uses that infrastru
 Most MCP servers are just tool wrappers—they give AI access to specific APIs or services. Sidekick is fundamentally different:
 
 ### 🧠 Persistent Memory Across Sessions
-Sidekick provides durable project memory through SQLite-backed KV and context tools. Agents can explicitly store decisions, project facts, problems, patterns, and summaries, then retrieve them in later sessions by key, project, or context query.
+Sidekick provides durable project memory through SQLite-backed KV and context tools. Agents can explicitly store decisions, project facts, problems, patterns, and summaries, then retrieve them in later sessions by key, project, or context query. The Agent Bridge also records bounded, redacted summaries of completed tasks and useful tool calls, and loads relevant remembered context before planning a new task.
 
 ### 📚 Knowledge Base
 All documentation, best practices, and project context stored in a searchable database. The AI can query the knowledge base instead of re-reading files, saving tokens and improving accuracy.
@@ -575,6 +575,8 @@ This follows the principle of least privilege: after initial setup, the sidekick
 | `GROQ_API_KEY` | — | Groq API key for cloud LLM (empty = use local Ollama) |
 | `GROQ_MODEL` | `llama3-8b-8192` | Groq model name |
 | `SIDEKICK_MAX_ITERATIONS` | `15` | Max agent loop iterations (safety limit) |
+| `SIDEKICK_AUTO_MEMORY` | `1` | Enable bounded automatic memory summaries |
+| `SIDEKICK_AUTO_MEMORY_MAX` | `500` | Max retained automatic memory entries |
 | `SIDEKICK_POSTGRES_URL` | `postgresql://sidekick:sidekick@127.0.0.1:5432/sidekick` | PostgreSQL connection string |
 | `SIDEKICK_REDIS_URL` | `redis://127.0.0.1:6379` | Redis connection string |
 | `SIDEKICK_QDRANT_URL` | `http://127.0.0.1:6333` | Qdrant vector DB URL |
@@ -588,6 +590,7 @@ This follows the principle of least privilege: after initial setup, the sidekick
 ```
 ├── src/
 │   ├── tools.js        Shared tool handlers (83 built-in tools)
+│   ├── memory.js       Automatic memory capture and recall helpers
 │   ├── index.js        MCP server (session-aware transport management)
 │   ├── dashboard.js    Dashboard web UI (8 tabs including Metrics)
 │   ├── agent.js        Agent bridge (LLM tool-use loop, direct tool calls)
@@ -595,7 +598,8 @@ This follows the principle of least privilege: after initial setup, the sidekick
 │   ├── db.js           SQLite database layer
 │   ├── pg.js           PostgreSQL support
 │   ├── redis.js        Redis client for caching
-│   └── qdrant.js       Qdrant vector DB client for semantic search
+│   ├── qdrant.js       Qdrant vector DB client for semantic search
+│   └── crypto-utils.js Timing-safe comparison helpers
 ├── scripts/
 │   ├── bootstrap.sh    VM bootstrap script (creates user, installs Node.js, etc.)
 │   ├── setup-tools.sh  Server tooling setup (Docker, databases, media tools, etc.)

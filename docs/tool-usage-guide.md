@@ -28,6 +28,8 @@ Use `sidekick_context` for richer history:
 - `track_session` for session summaries;
 - `recall`, `suggest`, and `summarize` to retrieve prior context.
 
+The Agent Bridge automatically records bounded, redacted memory summaries for completed autonomous tasks and memory-worthy tool calls. These automatic memories are stored in the `context` document under `memories`, capped by `SIDEKICK_AUTO_MEMORY_MAX` and disabled with `SIDEKICK_AUTO_MEMORY=0`. They are meant for continuity, not as complete raw transcripts.
+
 ## Automation
 
 Use `sidekick_delay` for one-shot future actions. The Agent Bridge loads pending delays at startup and executes them at the scheduled time.
