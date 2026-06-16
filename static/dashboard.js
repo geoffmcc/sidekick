@@ -169,7 +169,7 @@ function showPage(name){
 function loadGrafanaDashboard() {
   const dashboard = $('grafanaDashboard').value;
   const frame = $('grafanaFrame');
-  frame.src = `http://127.0.0.1:3000/d/${dashboard}?orgId=1&kiosk`;
+  frame.src = `http://192.168.1.10:3000/d/${dashboard}?orgId=1&kiosk`;
 }
 
 function fmtTime(iso){
