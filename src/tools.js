@@ -3,6 +3,8 @@ const path = require("path");
 const { execSync, execFileSync } = require("child_process");
 const { redactSensitive } = require("./redact");
 const dbStore = require("./db");
+const pgStore = require("./pg");
+const redisStore = require("./redis");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
@@ -79,6 +81,12 @@ const TOOL_RISK = {
   sidekick_db_query: "medium",
   sidekick_db_backup: "medium",
   sidekick_db_export: "medium",
+  sidekick_redis: "medium",
+  sidekick_ocr: "low",
+  sidekick_media: "low",
+  sidekick_transcribe: "low",
+  sidekick_analytics: "low",
+  sidekick_embed: "low",
 };
 
 function getToolRisk(name) {
@@ -7330,8 +7338,24 @@ async function sidekick_respond({ text }) {
 
 // --- Database Tools ---
 
-async function sidekick_db_schema({ table, verbose }) {
+async function sidekick_db_schema({ table, verbose, database }) {
   try {
+    if (database === "postgres") {
+      if (table) {
+        const info = await pgStore.getTableInfo(table);
+        return { content: [{ type: "text", text: JSON.stringify({ table, ...info }, null, 2) }] };
+      }
+      const tables = await pgStore.getTableList();
+      if (verbose) {
+        const detailed = [];
+        for (const t of tables) {
+          const info = await pgStore.getTableInfo(t.name);
+          detailed.push({ name: t.name, type: t.type, ...info });
+        }
+        return { content: [{ type: "text", text: JSON.stringify(detailed, null, 2) }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(tables, null, 2) }] };
+    }
     if (table) {
       const info = dbStore.getTableInfo(table);
       return { content: [{ type: "text", text: JSON.stringify({ table, ...info }, null, 2) }] };
@@ -7351,8 +7375,16 @@ async function sidekick_db_schema({ table, verbose }) {
   }
 }
 
-async function sidekick_db_query({ sql, params, readonly, limit, timeout }) {
+async function sidekick_db_query({ sql, params, readonly, limit, timeout, database }) {
   try {
+    if (database === "postgres") {
+      const results = await pgStore.executeQuery(sql, params || [], {
+        readonly: readonly !== false,
+        limit: limit || 1000,
+        timeout: timeout || 5000
+      });
+      return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+    }
     const results = dbStore.executeQuery(sql, params || [], {
       readonly: readonly !== false,
       limit: limit || 1000,
@@ -7364,8 +7396,15 @@ async function sidekick_db_query({ sql, params, readonly, limit, timeout }) {
   }
 }
 
-async function sidekick_db_stats({ detailed }) {
+async function sidekick_db_stats({ detailed, database }) {
   try {
+    if (database === "postgres") {
+      const stats = await pgStore.getDatabaseStats();
+      if (!detailed) {
+        delete stats.tables;
+      }
+      return { content: [{ type: "text", text: JSON.stringify(stats, null, 2) }] };
+    }
     const stats = dbStore.getDatabaseStats();
     if (!detailed) {
       delete stats.tables;
@@ -7403,9 +7442,30 @@ async function sidekick_log_query({ tool, source, success, since, until, limit }
   }
 }
 
-async function sidekick_db_export({ table, format, path: outputPath }) {
+async function sidekick_db_export({ table, format, path: outputPath, database }) {
   try {
     const fmt = format || "json";
+    if (database === "postgres") {
+      if (table) {
+        const data = await pgStore.exportTable(table, fmt);
+        if (outputPath) {
+          fs.writeFileSync(outputPath, data);
+          return { content: [{ type: "text", text: `Exported ${table} to ${outputPath}` }] };
+        }
+        return { content: [{ type: "text", text: data }] };
+      }
+      const tables = await pgStore.getTableList();
+      const allData = {};
+      for (const t of tables) {
+        allData[t.name] = JSON.parse(await pgStore.exportTable(t.name, "json"));
+      }
+      const output = JSON.stringify(allData, null, 2);
+      if (outputPath) {
+        fs.writeFileSync(outputPath, output);
+        return { content: [{ type: "text", text: `Exported all tables to ${outputPath}` }] };
+      }
+      return { content: [{ type: "text", text: output }] };
+    }
     if (table) {
       const data = dbStore.exportTable(table, fmt);
       if (outputPath) {
@@ -7430,8 +7490,12 @@ async function sidekick_db_export({ table, format, path: outputPath }) {
   }
 }
 
-async function sidekick_db_search({ query, tables, limit }) {
+async function sidekick_db_search({ query, tables, limit, database }) {
   try {
+    if (database === "postgres") {
+      const results = await pgStore.searchAllTables(query, { tables: tables ? tables.split(",").map(t => t.trim()) : null, limit: limit || 50 });
+      return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+    }
     dbStore.setupFTS5();
     const results = dbStore.searchAllTables(query, { tables: tables ? tables.split(",").map(t => t.trim()) : null, limit: limit || 50 });
     return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
@@ -7486,6 +7550,272 @@ async function sidekick_db_diff({ snapshot_a, snapshot_b, table }) {
     }
     
     return { content: [{ type: "text", text: JSON.stringify({ summary, details: diff }, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
+  }
+}
+
+// --- Redis Tools ---
+
+async function sidekick_redis({ action, key, value, ttl, pattern }) {
+  try {
+    const conn = await redisStore.testConnection();
+    if (!conn.connected) {
+      return { content: [{ type: "text", text: `Error: Redis not available (${conn.error}). Start with: sudo systemctl start sidekick-redis` }], isError: true };
+    }
+
+    if (action === "get") {
+      if (!key) return { content: [{ type: "text", text: "Error: key is required for get" }], isError: true };
+      const val = await redisStore.get(key);
+      return { content: [{ type: "text", text: val !== null ? val : "(nil)" }] };
+    }
+
+    if (action === "set") {
+      if (!key || value === undefined) return { content: [{ type: "text", text: "Error: key and value are required for set" }], isError: true };
+      const ttlSec = ttl ? parseInt(ttl) : undefined;
+      await redisStore.set(key, value, ttlSec);
+      return { content: [{ type: "text", text: `OK${ttlSec ? ` (TTL: ${ttlSec}s)` : ""}` }] };
+    }
+
+    if (action === "del") {
+      if (!key) return { content: [{ type: "text", text: "Error: key is required for del" }], isError: true };
+      const deleted = await redisStore.del(key);
+      return { content: [{ type: "text", text: `Deleted: ${deleted}` }] };
+    }
+
+    if (action === "keys") {
+      const keys = await redisStore.keys(pattern || "*");
+      return { content: [{ type: "text", text: JSON.stringify(keys, null, 2) }] };
+    }
+
+    if (action === "ttl") {
+      if (!key) return { content: [{ type: "text", text: "Error: key is required for ttl" }], isError: true };
+      const ttlVal = await redisStore.ttl(key);
+      return { content: [{ type: "text", text: `${ttlVal}` }] };
+    }
+
+    if (action === "info") {
+      const info = await redisStore.info();
+      return { content: [{ type: "text", text: JSON.stringify(info, null, 2) }] };
+    }
+
+    if (action === "flush") {
+      await redisStore.flush();
+      return { content: [{ type: "text", text: "Redis database flushed" }] };
+    }
+
+    return { content: [{ type: "text", text: "Error: unknown action. Use: get, set, del, keys, ttl, info, flush" }], isError: true };
+  } catch (e) {
+    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
+  }
+}
+
+// --- OCR Tool ---
+
+async function sidekick_ocr({ path: imagePath, language, psm }) {
+  try {
+    if (!fs.existsSync(imagePath)) {
+      return { content: [{ type: "text", text: `Error: File not found: ${imagePath}` }], isError: true };
+    }
+
+    const lang = language || "eng";
+    const psmFlag = psm !== undefined ? `--psm ${psm}` : "";
+    const cmd = `tesseract "${imagePath}" stdout -l ${lang} ${psmFlag} 2>/dev/null`;
+    const result = execSync(cmd, { timeout: 30000 }).toString().trim();
+
+    return { content: [{ type: "text", text: result || "(no text detected)" }] };
+  } catch (e) {
+    if (e.message.includes("not found") || e.message.includes("ENOENT")) {
+      return { content: [{ type: "text", text: "Error: tesseract not installed. Run: sudo apt install tesseract-ocr" }], isError: true };
+    }
+    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
+  }
+}
+
+// --- Media Tool ---
+
+async function sidekick_media({ action, input, output, options }) {
+  try {
+    if (!input) {
+      return { content: [{ type: "text", text: "Error: input is required" }], isError: true };
+    }
+
+    if (action === "info") {
+      const cmd = `ffprobe -v quiet -print_format json -show_format -show_streams "${input}" 2>/dev/null`;
+      const result = execSync(cmd, { timeout: 15000 }).toString();
+      return { content: [{ type: "text", text: result }] };
+    }
+
+    if (action === "convert") {
+      if (!output) return { content: [{ type: "text", text: "Error: output is required for convert" }], isError: true };
+      const opts = options || "";
+      const cmd = `ffmpeg -y -i "${input}" ${opts} "${output}" 2>&1`;
+      execSync(cmd, { timeout: 300000 });
+      return { content: [{ type: "text", text: `Converted: ${input} -> ${output}` }] };
+    }
+
+    if (action === "extract_audio") {
+      if (!output) return { content: [{ type: "text", text: "Error: output is required for extract_audio" }], isError: true };
+      const opts = options || "-vn -acodec libmp3lame -q:a 2";
+      const cmd = `ffmpeg -y -i "${input}" ${opts} "${output}" 2>&1`;
+      execSync(cmd, { timeout: 300000 });
+      return { content: [{ type: "text", text: `Extracted audio: ${input} -> ${output}` }] };
+    }
+
+    if (action === "thumbnail") {
+      if (!output) return { content: [{ type: "text", text: "Error: output is required for thumbnail" }], isError: true };
+      const time = options || "00:00:01";
+      const cmd = `ffmpeg -y -i "${input}" -ss ${time} -vframes 1 -q:v 2 "${output}" 2>&1`;
+      execSync(cmd, { timeout: 30000 });
+      return { content: [{ type: "text", text: `Thumbnail created: ${input} -> ${output}` }] };
+    }
+
+    if (action === "resize") {
+      if (!output) return { content: [{ type: "text", text: "Error: output is required for resize" }], isError: true };
+      const scale = options || "800:-1";
+      const cmd = `ffmpeg -y -i "${input}" -vf scale=${scale} "${output}" 2>&1`;
+      execSync(cmd, { timeout: 120000 });
+      return { content: [{ type: "text", text: `Resized: ${input} -> ${output} (${scale})` }] };
+    }
+
+    if (action === "trim") {
+      if (!output) return { content: [{ type: "text", text: "Error: output is required for trim" }], isError: true };
+      const opts = options || "";
+      const cmd = `ffmpeg -y -i "${input}" ${opts} "${output}" 2>&1`;
+      execSync(cmd, { timeout: 300000 });
+      return { content: [{ type: "text", text: `Trimmed: ${input} -> ${output}` }] };
+    }
+
+    return { content: [{ type: "text", text: "Error: unknown action. Use: info, convert, extract_audio, thumbnail, resize, trim" }], isError: true };
+  } catch (e) {
+    if (e.message.includes("not found") || e.message.includes("ENOENT")) {
+      return { content: [{ type: "text", text: "Error: ffmpeg not installed. Run: sudo apt install ffmpeg" }], isError: true };
+    }
+    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
+  }
+}
+
+// --- Transcribe Tool ---
+
+async function sidekick_transcribe({ path: audioPath, model, language }) {
+  try {
+    if (!fs.existsSync(audioPath)) {
+      return { content: [{ type: "text", text: `Error: File not found: ${audioPath}` }], isError: true };
+    }
+
+    const m = model || "base";
+    const langFlag = language ? `--language ${language}` : "";
+    const venvPath = "/home/sidekick/.sidekick-tools/bin/whisper";
+    const whisperCmd = fs.existsSync(venvPath) ? venvPath : "whisper";
+    const cmd = `${whisperCmd} "${audioPath}" --model ${m} ${langFlag} --output_format txt --output_dir /tmp 2>&1`;
+    const result = execSync(cmd, { timeout: 600000 }).toString();
+
+    const txtPath = audioPath.replace(/\.[^.]+$/, ".txt");
+    const tmpTxtPath = `/tmp/${path.basename(audioPath).replace(/\.[^.]+$/, ".txt")}`;
+    if (fs.existsSync(tmpTxtPath)) {
+      const text = fs.readFileSync(tmpTxtPath, "utf-8").trim();
+      fs.unlinkSync(tmpTxtPath);
+      return { content: [{ type: "text", text: text || "(no speech detected)" }] };
+    }
+
+    return { content: [{ type: "text", text: result || "(no speech detected)" }] };
+  } catch (e) {
+    if (e.message.includes("not found") || e.message.includes("ENOENT")) {
+      return { content: [{ type: "text", text: "Error: whisper not installed. Run: pip3 install openai-whisper" }], isError: true };
+    }
+    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
+  }
+}
+
+// --- Analytics Tool ---
+
+async function sidekick_analytics({ query, file, format }) {
+  try {
+    const venvPath = "/home/sidekick/.sidekick-tools/bin/python3";
+    const pythonCmd = fs.existsSync(venvPath) ? venvPath : "python3";
+
+    // Helper: run Python script via temp file to avoid shell escaping issues
+    const runPyScript = (pyScript) => {
+      const tmpFile = path.join(os.tmpdir(), "sidekick_analytics_" + Date.now() + ".py");
+      try {
+        fs.writeFileSync(tmpFile, pyScript);
+        return execSync(pythonCmd + " " + tmpFile + " 2>&1", { timeout: 60000 }).toString();
+      } finally {
+        try { fs.unlinkSync(tmpFile); } catch (e) {}
+      }
+    };
+
+    if (file) {
+      if (!fs.existsSync(file)) {
+        return { content: [{ type: "text", text: "Error: File not found: " + file }], isError: true };
+      }
+
+      const sql = query || "SELECT * FROM data LIMIT 100";
+      const fmt = format || "csv";
+      // Pass all parameters via JSON to avoid escaping issues
+      const params = JSON.stringify({ file, sql, fmt });
+      const pyScript = `import duckdb, json, sys
+params = json.loads(${JSON.stringify(params)})
+con = duckdb.connect()
+f = params["file"]
+if params["fmt"] == "csv":
+    con.execute(f"CREATE TABLE data AS SELECT * FROM read_csv_auto('{f}')")
+elif params["fmt"] == "json":
+    con.execute(f"CREATE TABLE data AS SELECT * FROM read_json_auto('{f}')")
+elif params["fmt"] == "parquet":
+    con.execute(f"CREATE TABLE data AS SELECT * FROM read_parquet('{f}')")
+result = con.execute(params["sql"]).fetchdf()
+print(result.to_string(index=False))
+`;
+      const result = runPyScript(pyScript);
+      return { content: [{ type: "text", text: result }] };
+    }
+
+    if (query) {
+      const params = JSON.stringify({ query });
+      const pyScript = `import duckdb, json, sys
+params = json.loads(${JSON.stringify(params)})
+con = duckdb.connect()
+result = con.execute(params["query"]).fetchdf()
+print(result.to_string(index=False))
+`;
+      const result = runPyScript(pyScript);
+      return { content: [{ type: "text", text: result }] };
+    }
+
+    return { content: [{ type: "text", text: "Error: query or file is required" }], isError: true };
+  } catch (e) {
+    if (e.message.includes("not found") || e.message.includes("ModuleNotFoundError")) {
+      return { content: [{ type: "text", text: "Error: DuckDB not installed. Run: pip3 install duckdb" }], isError: true };
+    }
+    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
+  }
+}
+
+
+// --- Embed Tool ---
+
+async function sidekick_embed({ text, model }) {
+  try {
+    const m = model || "nomic-embed-text";
+    const ollamaUrl = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
+
+    const response = await fetch(`${ollamaUrl}/api/embeddings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: m, prompt: text }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      if (response.status === 404) {
+        return { content: [{ type: "text", text: `Error: Model '${m}' not found. Pull it with: ollama pull ${m}` }], isError: true };
+      }
+      return { content: [{ type: "text", text: `Error: Ollama request failed (${response.status}): ${errText}` }], isError: true };
+    }
+
+    const data = await response.json();
+    return { content: [{ type: "text", text: JSON.stringify({ embedding: data.embedding, dimensions: data.embedding?.length, model: m }, null, 2) }] };
   } catch (e) {
     return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
   }
@@ -7562,6 +7892,12 @@ const TOOLS = {
   sidekick_db_search,
   sidekick_db_migrate,
   sidekick_db_diff,
+  sidekick_redis,
+  sidekick_ocr,
+  sidekick_media,
+  sidekick_transcribe,
+  sidekick_analytics,
+  sidekick_embed,
 };
 
 const TOOL_DEFS = [
@@ -7625,16 +7961,22 @@ const TOOL_DEFS = [
   { name: "sidekick_runbook", description: "Operational runbook executor with autonomous and guided modes. Supports verification, rollback, and step-by-step execution.", args: { action: "string (create|start|next|verify|rollback|abort|list|get|delete)", name: "string (optional, runbook name)", mode: "string (optional, autonomous|guided - default autonomous)", steps: "array (optional, step definitions)", runbook_id: "string (optional, instance or definition ID)", step_index: "number (optional, step index)" } },
   { name: "sidekick_black_box", description: "Incident time capsule: captures full system context (services, processes, logs, disk, network) in one call for debugging. Rate limited.", args: { action: "string (capture|list|get|delete|analyze)", name: "string (optional, incident name)", include: "array (optional, services|processes|logs|disk|network|all - default all)", analyze_with_llm: "boolean (optional, use LLM for analysis - default false)", incident_id: "string (optional, incident ID)" } },
   { name: "sidekick_respond", description: "Return a text response directly without calling other tools. Use this for simple answers or when no tool action is needed.", args: { text: "string (the response text to return)" } },
-  { name: "sidekick_db_schema", description: "Inspect database schema: tables, columns, indexes, foreign keys", args: { table: "string (optional, specific table name)", verbose: "boolean (optional, include row counts and detailed info)" } },
-  { name: "sidekick_db_query", description: "Execute raw SQL queries with safety limits (readonly by default)", args: { sql: "string (SQL query)", params: "array (optional, query parameters)", readonly: "boolean (optional, default true - blocks writes)", limit: "number (optional, max rows - default 1000)", timeout: "number (optional, query timeout in ms - default 5000)" } },
-  { name: "sidekick_db_stats", description: "Database statistics: size, table sizes, WAL status, cache hit ratio", args: { detailed: "boolean (optional, include per-table stats)" } },
+  { name: "sidekick_db_schema", description: "Inspect database schema: tables, columns, indexes, foreign keys", args: { table: "string (optional, specific table name)", verbose: "boolean (optional, include row counts and detailed info)", database: "string (optional, 'sqlite' or 'postgres' - default sqlite)" } },
+  { name: "sidekick_db_query", description: "Execute raw SQL queries with safety limits (readonly by default)", args: { sql: "string (SQL query)", params: "array (optional, query parameters)", readonly: "boolean (optional, default true - blocks writes)", limit: "number (optional, max rows - default 1000)", timeout: "number (optional, query timeout in ms - default 5000)", database: "string (optional, 'sqlite' or 'postgres' - default sqlite)" } },
+  { name: "sidekick_db_stats", description: "Database statistics: size, table sizes, WAL status, cache hit ratio", args: { detailed: "boolean (optional, include per-table stats)", database: "string (optional, 'sqlite' or 'postgres' - default sqlite)" } },
   { name: "sidekick_db_backup", description: "Create timestamped database backup with optional compression", args: { path: "string (optional, output path - default data/backups/)", compress: "boolean (optional, gzip compression - default true)" } },
   { name: "sidekick_db_restore", description: "Restore database from backup with integrity verification", args: { path: "string (backup file path)", verify: "boolean (optional, check integrity before restore - default true)" } },
   { name: "sidekick_log_query", description: "Advanced tool_logs filtering by time, tool, source, status", args: { tool: "string (optional, filter by tool name)", source: "string (optional, filter by source: mcp/agent/dashboard)", success: "boolean (optional, filter by success status)", since: "string (optional, ISO timestamp or relative: 1h, 1d)", until: "string (optional, ISO timestamp)", limit: "number (optional, max results - default 100)" } },
-  { name: "sidekick_db_export", description: "Export tables to JSON, CSV, or SQL format", args: { table: "string (optional, specific table - exports all if omitted)", format: "string (optional, json|csv|sql - default json)", path: "string (optional, output file path)" } },
-  { name: "sidekick_db_search", description: "Full-text search across all tables using FTS5", args: { query: "string (search terms)", tables: "string (optional, comma-separated table names)", limit: "number (optional, max results - default 50)" } },
+  { name: "sidekick_db_export", description: "Export tables to JSON, CSV, or SQL format", args: { table: "string (optional, specific table - exports all if omitted)", format: "string (optional, json|csv|sql - default json)", path: "string (optional, output file path)", database: "string (optional, 'sqlite' or 'postgres' - default sqlite)" } },
+  { name: "sidekick_db_search", description: "Full-text search across all tables", args: { query: "string (search terms)", tables: "string (optional, comma-separated table names)", limit: "number (optional, max results - default 50)", database: "string (optional, 'sqlite' or 'postgres' - default sqlite)" } },
   { name: "sidekick_db_migrate", description: "Schema migrations with versioning and rollback", args: { action: "string (status|list|up)", version: "number (optional, target version)", name: "string (optional, migration filename for up action)" } },
   { name: "sidekick_db_diff", description: "Compare two database snapshots, show what changed", args: { snapshot_a: "string (optional, path to snapshot A or 'current')", snapshot_b: "string (optional, path to snapshot B or 'current')", table: "string (optional, specific table to compare)" } },
+  { name: "sidekick_redis", description: "Redis operations: get, set, del, keys, ttl, info, flush. Requires sidekick-redis service.", args: { action: "string (get|set|del|keys|ttl|info|flush)", key: "string (optional, Redis key)", value: "string (optional, value for set)", ttl: "string (optional, TTL in seconds for set)", pattern: "string (optional, pattern for keys - default '*')" } },
+  { name: "sidekick_ocr", description: "Extract text from images using Tesseract OCR", args: { path: "string (image file path)", language: "string (optional, language code - default eng)", psm: "number (optional, page segmentation mode)" } },
+  { name: "sidekick_media", description: "Media processing with ffmpeg: convert, extract audio, thumbnails, resize, trim, info", args: { action: "string (info|convert|extract_audio|thumbnail|resize|trim)", input: "string (input file path)", output: "string (optional, output file path)", options: "string (optional, format-specific options)" } },
+  { name: "sidekick_transcribe", description: "Transcribe audio/video to text using Whisper", args: { path: "string (audio/video file path)", model: "string (optional, tiny|base|small|medium - default base)", language: "string (optional, language code)" } },
+  { name: "sidekick_analytics", description: "Fast analytical queries on CSV/JSON/Parquet files using DuckDB", args: { query: "string (SQL query)", file: "string (optional, data file path - CSV, JSON, or Parquet)", format: "string (optional, file format: csv|json|parquet - auto-detected)" } },
+  { name: "sidekick_embed", description: "Generate text embeddings using Ollama", args: { text: "string (text to embed)", model: "string (optional, embedding model - default nomic-embed-text)" } },
 ];
 
 async function callTool(name, args) {
