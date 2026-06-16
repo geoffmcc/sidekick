@@ -4635,7 +4635,29 @@ async function sidekick_batch({ calls }) {
 
 async function sidekick_cache({ action, key, ttl, value }) {
   const now = Date.now();
+  
+  // Try Redis first
+  let useRedis = false;
+  try {
+    const conn = await redisStore.testConnection();
+    useRedis = conn.connected;
+  } catch (e) {
+    useRedis = false;
+  }
+  
   if (action === "clear") {
+    if (useRedis) {
+      if (key) {
+        await redisStore.del(`cache:${key}`);
+        return { content: [{ type: "text", text: "Cleared cache: " + key + " (redis)" }] };
+      }
+      const keys = await redisStore.keys("cache:*");
+      if (keys.length > 0) {
+        await Promise.all(keys.map(k => redisStore.del(k)));
+      }
+      return { content: [{ type: "text", text: "Cleared " + keys.length + " cache entries (redis)" }] };
+    }
+    // Fallback to in-memory
     if (key) {
       sessionCache.delete(key);
       return { content: [{ type: "text", text: "Cleared cache: " + key }] };
@@ -4644,15 +4666,36 @@ async function sidekick_cache({ action, key, ttl, value }) {
     sessionCache.clear();
     return { content: [{ type: "text", text: "Cleared " + count + " cache entries" }] };
   }
+  
   if (action === "list") {
+    if (useRedis) {
+      const keys = await redisStore.keys("cache:*");
+      const entries = [];
+      for (const k of keys) {
+        const ttlVal = await redisStore.ttl(k);
+        const cacheKey = k.replace("cache:", "");
+        entries.push({ key: cacheKey, expires_in_seconds: ttlVal > 0 ? ttlVal : null });
+      }
+      return { content: [{ type: "text", text: JSON.stringify(entries) }] };
+    }
+    // Fallback to in-memory
     const entries = [];
     for (const [k, v] of sessionCache) {
       entries.push({ key: k, expires_in_ms: v.expires - now, size: v.value.length });
     }
     return { content: [{ type: "text", text: JSON.stringify(entries) }] };
   }
+  
   if (action === "get") {
     if (!key) return { content: [{ type: "text", text: "key required" }], isError: true };
+    if (useRedis) {
+      const val = await redisStore.get(`cache:${key}`);
+      if (val === null) {
+        return { content: [{ type: "text", text: "Cache miss: " + key }], isError: true };
+      }
+      return { content: [{ type: "text", text: redactSensitive(val) }] };
+    }
+    // Fallback to in-memory
     const entry = sessionCache.get(key);
     if (!entry || entry.expires < now) {
       if (entry) sessionCache.delete(key);
@@ -4660,12 +4703,20 @@ async function sidekick_cache({ action, key, ttl, value }) {
     }
     return { content: [{ type: "text", text: redactSensitive(entry.value) }] };
   }
+  
   if (action === "set") {
     if (!key || value === undefined) return { content: [{ type: "text", text: "key and value required" }], isError: true };
     const duration = parseDuration(ttl);
+    const ttlSeconds = Math.ceil(duration / 1000);
+    if (useRedis) {
+      await redisStore.set(`cache:${key}`, String(value), ttlSeconds);
+      return { content: [{ type: "text", text: "Cached " + key + " (TTL: " + ttl + ", redis)" }] };
+    }
+    // Fallback to in-memory
     sessionCache.set(key, { value: String(value), expires: now + duration });
     return { content: [{ type: "text", text: "Cached " + key + " (TTL: " + ttl + ")" }] };
   }
+  
   return { content: [{ type: "text", text: "Invalid action. Use: get, set, clear, list" }], isError: true };
 }
 
