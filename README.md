@@ -2,7 +2,7 @@
 
 **Autonomous Agent Platform**
 
-A self-hosted AI agent platform with persistent memory, 83 built-in MCP tools, knowledge base, and the ability to extend itself. Runs on your remote machine, learns from your workflow, and grows its own capabilities—no code changes required.
+A self-hosted AI agent platform with persistent memory, 83 built-in MCP tools, knowledge base, and the ability to extend itself. Runs on your remote machine, keeps explicit project context across sessions, and can grow its own capabilities—no code changes required.
 
 **How?** A single `AGENTS.md` file that opencode reads on every session start. No plugins, no hooks — just markdown.
 
@@ -90,7 +90,7 @@ Sidekick is the infrastructure. The AI (running in opencode) uses that infrastru
 Most MCP servers are just tool wrappers—they give AI access to specific APIs or services. Sidekick is fundamentally different:
 
 ### 🧠 Persistent Memory Across Sessions
-Sidekick remembers everything. Your decisions, project context, API responses, workflow patterns—it all persists in a structured KV store organized by project. The AI doesn't start from scratch every session.
+Sidekick provides durable project memory through SQLite-backed KV and context tools. Agents can explicitly store decisions, project facts, problems, patterns, and summaries, then retrieve them in later sessions by key, project, or context query.
 
 ### 📚 Knowledge Base
 All documentation, best practices, and project context stored in a searchable database. The AI can query the knowledge base instead of re-reading files, saving tokens and improving accuracy.
