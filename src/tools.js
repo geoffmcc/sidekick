@@ -88,6 +88,7 @@ const TOOL_RISK = {
   sidekick_analytics: "low",
   sidekick_embed: "low",
   sidekick_ollama: "low",
+  sidekick_tunnel: "medium",
 };
 
 function getToolRisk(name) {
@@ -7953,6 +7954,77 @@ async function sidekick_ollama({ action, model }) {
   }
 }
 
+// --- Cloudflared Tool ---
+
+async function sidekick_tunnel({ action, url, port, name }) {
+  try {
+    if (action === "start") {
+      if (!port) {
+        return { content: [{ type: "text", text: "Error: port required" }], isError: true };
+      }
+      const tunnelName = name || `tunnel-${Date.now()}`;
+      const cmd = `cloudflared tunnel --url http://localhost:${port} --name ${tunnelName} > /tmp/${tunnelName}.log 2>&1 &`;
+      execSync(cmd, { timeout: 5000 });
+      // Wait a moment for tunnel to establish
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      // Try to get the tunnel URL from logs
+      try {
+        const logContent = fs.readFileSync(`/tmp/${tunnelName}.log`, 'utf8');
+        const urlMatch = logContent.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+        const tunnelUrl = urlMatch ? urlMatch[0] : null;
+        return { content: [{ type: "text", text: JSON.stringify({
+          name: tunnelName,
+          port: port,
+          url: tunnelUrl,
+          status: "started",
+          log: `/tmp/${tunnelName}.log`
+        }, null, 2) }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: JSON.stringify({
+          name: tunnelName,
+          port: port,
+          status: "started",
+          note: "Tunnel started but URL not yet available. Check logs with: cat /tmp/" + tunnelName + ".log"
+        }, null, 2) }] };
+      }
+    }
+
+    if (action === "stop") {
+      if (!name) {
+        return { content: [{ type: "text", text: "Error: tunnel name required" }], isError: true };
+      }
+      try {
+        execSync(`pkill -f "cloudflared tunnel.*--name ${name}"`, { timeout: 5000 });
+        return { content: [{ type: "text", text: `Stopped tunnel: ${name}` }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: `Tunnel not found or already stopped: ${name}` }] };
+      }
+    }
+
+    if (action === "list") {
+      try {
+        const result = execSync('ps aux | grep "cloudflared tunnel" | grep -v grep', { timeout: 5000 }).toString();
+        const tunnels = result.split('\n').filter(line => line.trim()).map(line => {
+          const nameMatch = line.match(/--name\s+(\S+)/);
+          const portMatch = line.match(/--url\s+http:\/\/localhost:(\d+)/);
+          return {
+            name: nameMatch ? nameMatch[1] : "unknown",
+            port: portMatch ? portMatch[1] : "unknown",
+            pid: line.split(/\s+/)[1]
+          };
+        });
+        return { content: [{ type: "text", text: JSON.stringify(tunnels, null, 2) }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: "No active tunnels" }] };
+      }
+    }
+
+    return { content: [{ type: "text", text: "Error: Invalid action. Use: start, stop, list" }], isError: true };
+  } catch (e) {
+    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
+  }
+}
+
 const TOOLS = {
   sidekick_bash,
   sidekick_read,
@@ -8031,6 +8103,7 @@ const TOOLS = {
   sidekick_analytics,
   sidekick_embed,
   sidekick_ollama,
+  sidekick_tunnel,
 };
 
 const TOOL_DEFS = [
@@ -8111,6 +8184,7 @@ const TOOL_DEFS = [
   { name: "sidekick_analytics", description: "Fast analytical queries on CSV/JSON/Parquet files using DuckDB", args: { query: "string (SQL query)", file: "string (optional, data file path - CSV, JSON, or Parquet)", format: "string (optional, file format: csv|json|parquet - auto-detected)" } },
   { name: "sidekick_embed", description: "Generate text embeddings using Ollama", args: { text: "string (text to embed)", model: "string (optional, embedding model - default nomic-embed-text)" } },
   { name: "sidekick_ollama", description: "Manage Ollama models: list, ps, pull, show", args: { action: "string (list|ps|pull|show)", model: "string (optional, model name for pull/show)" } },
+  { name: "sidekick_tunnel", description: "Manage Cloudflare tunnels: start, stop, list", args: { action: "string (start|stop|list)", port: "number (local port to expose)", name: "string (optional, tunnel name)" } },
 ];
 
 async function callTool(name, args) {
