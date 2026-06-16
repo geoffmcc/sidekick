@@ -3,7 +3,8 @@ param(
   [string]$IP = "192.168.1.10",
   [string]$Password = $env:SIDEKICK_INITIAL_PASSWORD,
   [string]$InitialUser = "",
-  [switch]$Scp
+  [switch]$Scp,
+  [switch]$Tools
 )
 
 $ErrorActionPreference = "Stop"
@@ -143,7 +144,11 @@ function Run-Bootstrap {
   Write-Host "  Executing bootstrap..." -ForegroundColor Yellow
   Write-Host "--- Bootstrap Output ---" -ForegroundColor DarkGray
   
-  $bootstrapCmd = "sudo bash /tmp/bootstrap.sh --yes --install-services --install-tools --ssh-key '$pubKey' && rm /tmp/bootstrap.sh /tmp/sidekick-*.service"
+  $bootstrapFlags = "--yes --install-services"
+  if ($Tools) {
+    $bootstrapFlags += " --install-tools"
+  }
+  $bootstrapCmd = "sudo bash /tmp/bootstrap.sh $bootstrapFlags --ssh-key '$pubKey' && rm /tmp/bootstrap.sh /tmp/sidekick-*.service"
   
   $sshResult = ssh -o ControlPath="$ControlPath" "$User@$IP" $bootstrapCmd 2>&1
   
