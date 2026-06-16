@@ -93,6 +93,7 @@ const TOOL_RISK = {
   sidekick_download: "low",
   sidekick_wireguard: "high",
   sidekick_nginx: "high",
+  sidekick_knowledge: "low",
 };
 
 // Tool categories - maps tool names to their category
@@ -177,6 +178,7 @@ const TOOL_CATEGORIES = {
   'sidekick_media': 'Media',
   'sidekick_transcribe': 'Media',
   'sidekick_download': 'Media',
+  'sidekick_knowledge': 'Context & Learning',
 };
 
 function getToolRisk(name) {
@@ -8589,6 +8591,119 @@ async function sidekick_nginx({ action, site_name, domain, upstream_port, ssl_em
   }
 }
 
+// --- Knowledge Tool ---
+
+async function sidekick_knowledge({ action, id, category, title, content, tags, query, limit }) {
+  try {
+    const db = dbStore.getDb();
+    const now = new Date().toISOString();
+
+    if (action === "search") {
+      if (!query) return { content: [{ type: "text", text: "Error: query is required for search" }], isError: true };
+      const searchLimit = limit || 10;
+      
+      // Search in title, content, and tags
+      const rows = db.prepare(`
+        SELECT id, category, title, content, tags, updated_at
+        FROM knowledge
+        WHERE enabled = 1 AND (
+          title LIKE ? OR
+          content LIKE ? OR
+          tags LIKE ?
+        )
+        ORDER BY updated_at DESC
+        LIMIT ?
+      `).all(`%${query}%`, `%${query}%`, `%${query}%`, searchLimit);
+      
+      return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
+    }
+
+    if (action === "get") {
+      if (!id) return { content: [{ type: "text", text: "Error: id is required for get" }], isError: true };
+      const row = db.prepare(`
+        SELECT id, category, title, content, tags, updated_at
+        FROM knowledge
+        WHERE id = ? AND enabled = 1
+      `).get(id);
+      
+      if (!row) return { content: [{ type: "text", text: "Error: knowledge entry not found" }], isError: true };
+      return { content: [{ type: "text", text: JSON.stringify(row, null, 2) }] };
+    }
+
+    if (action === "list") {
+      const listLimit = limit || 50;
+      let rows;
+      
+      if (category) {
+        rows = db.prepare(`
+          SELECT id, category, title, tags, updated_at
+          FROM knowledge
+          WHERE enabled = 1 AND category = ?
+          ORDER BY updated_at DESC
+          LIMIT ?
+        `).all(category, listLimit);
+      } else {
+        rows = db.prepare(`
+          SELECT id, category, title, tags, updated_at
+          FROM knowledge
+          WHERE enabled = 1
+          ORDER BY category, updated_at DESC
+          LIMIT ?
+        `).all(listLimit);
+      }
+      
+      return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
+    }
+
+    if (action === "add") {
+      if (!category || !title || !content) {
+        return { content: [{ type: "text", text: "Error: category, title, and content are required for add" }], isError: true };
+      }
+      
+      const result = db.prepare(`
+        INSERT INTO knowledge (category, title, content, tags, enabled, version_added, updated_at)
+        VALUES (?, ?, ?, ?, 1, ?, ?)
+      `).run(category, title, content, tags || '', now, now);
+      
+      return { content: [{ type: "text", text: `Added knowledge entry with id: ${result.lastInsertRowid}` }] };
+    }
+
+    if (action === "update") {
+      if (!id) return { content: [{ type: "text", text: "Error: id is required for update" }], isError: true };
+      
+      const updates = [];
+      const params = [];
+      
+      if (category !== undefined) { updates.push("category = ?"); params.push(category); }
+      if (title !== undefined) { updates.push("title = ?"); params.push(title); }
+      if (content !== undefined) { updates.push("content = ?"); params.push(content); }
+      if (tags !== undefined) { updates.push("tags = ?"); params.push(tags); }
+      
+      if (updates.length === 0) {
+        return { content: [{ type: "text", text: "Error: at least one field to update is required" }], isError: true };
+      }
+      
+      updates.push("updated_at = ?");
+      params.push(now);
+      params.push(id);
+      
+      db.prepare(`UPDATE knowledge SET ${updates.join(", ")} WHERE id = ? AND enabled = 1`).run(...params);
+      
+      return { content: [{ type: "text", text: `Updated knowledge entry ${id}` }] };
+    }
+
+    if (action === "delete") {
+      if (!id) return { content: [{ type: "text", text: "Error: id is required for delete" }], isError: true };
+      db.prepare("UPDATE knowledge SET enabled = 0, updated_at = ? WHERE id = ?").run(now, id);
+      return { content: [{ type: "text", text: `Deleted knowledge entry ${id}` }] };
+    }
+
+    return { content: [{ type: "text", text: "Error: Invalid action. Use: search, get, list, add, update, delete" }], isError: true };
+  } catch (e) {
+    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
+  }
+}
+
 const TOOLS = {
   sidekick_bash,
   sidekick_read,
@@ -8671,6 +8786,7 @@ const TOOLS = {
   sidekick_download,
   sidekick_wireguard,
   sidekick_nginx,
+  sidekick_knowledge,
 };
 
 const TOOL_DEFS = [
@@ -8755,6 +8871,7 @@ const TOOL_DEFS = [
   { name: "sidekick_download", description: "Download videos/audio from YouTube and 1000+ sites using yt-dlp", args: { url: "string (video URL)", output: "string (optional, output path)", format: "string (optional, video format)", audio_only: "boolean (optional, extract audio only)" } },
   { name: "sidekick_wireguard", description: "Manage WireGuard VPN: status, list_peers, add_peer, remove_peer, generate_keypair", args: { action: "string (status|list_peers|add_peer|remove_peer|generate_keypair)", interface_name: "string (WireGuard interface, e.g. wg0)", peer_name: "string (peer name for add_peer)", public_key: "string (peer public key)", endpoint: "string (optional, peer endpoint IP:port)", allowed_ips: "string (optional, allowed IPs, default 10.0.0.0/24)" } },
   { name: "sidekick_nginx", description: "Manage Nginx reverse proxy: status, list_sites, add_site, remove_site, test_config, reload", args: { action: "string (status|list_sites|add_site|remove_site|test_config|reload)", site_name: "string (site config name)", domain: "string (domain name for add_site)", upstream_port: "number (local port to proxy to)", ssl_email: "string (optional, email for Let's Encrypt)" } },
+  { name: "sidekick_knowledge", description: "Knowledge base management: search, get, list, add, update, delete entries", args: { action: "string (search|get|list|add|update|delete)", id: "number (optional, entry ID for get/update/delete)", category: "string (optional, category for list/add/update)", title: "string (optional, title for add/update)", content: "string (optional, content for add/update)", tags: "string (optional, comma-separated tags for add/update)", query: "string (optional, search query for search)", limit: "number (optional, max results for search/list)" } },
 ];
 
 async function callTool(name, args) {

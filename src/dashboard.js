@@ -596,6 +596,37 @@ app.get("/api/tool-categories", (req, res) => {
   res.json({ categories: getToolCategoriesWithTools("dashboard") });
 });
 
+app.get("/api/knowledge", (req, res) => {
+  try {
+    const db = dbStore.getDb();
+    const category = req.query.category;
+    const limit = parseInt(req.query.limit) || 50;
+    
+    let rows;
+    if (category) {
+      rows = db.prepare(`
+        SELECT id, category, title, tags, updated_at
+        FROM knowledge
+        WHERE enabled = 1 AND category = ?
+        ORDER BY updated_at DESC
+        LIMIT ?
+      `).all(category, limit);
+    } else {
+      rows = db.prepare(`
+        SELECT id, category, title, tags, updated_at
+        FROM knowledge
+        WHERE enabled = 1
+        ORDER BY category, updated_at DESC
+        LIMIT ?
+      `).all(limit);
+    }
+    
+    res.json({ ok: true, knowledge: rows });
+  } catch (error) {
+    res.json({ ok: false, error: error.message, knowledge: [] });
+  }
+});
+
 app.get("/api/procedures", (req, res) => {
   const proceduresFile = path.join(DATA_DIR, "procedures.json");
   try {

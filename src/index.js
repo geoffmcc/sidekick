@@ -532,6 +532,16 @@ const TOOL_SCHEMAS = {
     upstream_port: z.number().optional().describe("Local port to proxy to"),
     ssl_email: z.string().optional().describe("Email for Let's Encrypt")
   }),
+  sidekick_knowledge: z.object({
+    action: z.enum(["search", "get", "list", "add", "update", "delete"]).describe("Knowledge base action"),
+    id: z.number().optional().describe("Entry ID (for get/update/delete)"),
+    category: z.string().optional().describe("Category (for list/add/update)"),
+    title: z.string().optional().describe("Title (for add/update)"),
+    content: z.string().optional().describe("Content (for add/update)"),
+    tags: z.string().optional().describe("Comma-separated tags (for add/update)"),
+    query: z.string().optional().describe("Search query (for search)"),
+    limit: z.number().optional().describe("Max results (for search/list)")
+  }),
 };
 
 // --- Factory: create fresh McpServer + register tools ---
