@@ -94,7 +94,7 @@ const TOOL_CATEGORIES = {
   'Meta': { icon: 'fa-robot', tools: ['sidekick_evolve','sidekick_predict','sidekick_debug_tool','sidekick_fresheyes'] },
   'Efficiency': { icon: 'fa-bolt', tools: ['sidekick_batch','sidekick_cache','sidekick_summarize','sidekick_filter','sidekick_project','sidekick_tail','sidekick_find'] },
   'Security': { icon: 'fa-shield-alt', tools: ['sidekick_secret','sidekick_sandbox'] },
-  'Networking': { icon: 'fa-network-wired', tools: ['sidekick_tunnel'] },
+  'Networking': { icon: 'fa-network-wired', tools: ['sidekick_tunnel','sidekick_wireguard','sidekick_nginx'] },
   'Development': { icon: 'fa-code', tools: ['sidekick_changelog','sidekick_depend'] },
   'Reliability': { icon: 'fa-plug', tools: ['sidekick_circuit'] },
   'Archive': { icon: 'fa-file-archive', tools: ['sidekick_archive'] },

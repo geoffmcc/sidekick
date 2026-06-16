@@ -33,7 +33,7 @@ Before creating any new tool or tool suite:
 1. Recall from KV store: `sidekick_get key="tool_making_guide" project="sidekick"`
 2. If not available, read `docs/tool-creation.md` and store it in KV for next time
 
-## Tools (90 total)
+## Tools (92 total)
 
 ### Core Tools (11)
 
@@ -134,6 +134,8 @@ Before creating any new tool or tool suite:
 | `sidekick_ollama` | Manage Ollama models: list, ps, pull, show |
 | `sidekick_tunnel` | Manage Cloudflare tunnels: start, stop, list |
 | `sidekick_download` | Download videos/audio from YouTube and 1000+ sites using yt-dlp |
+| `sidekick_wireguard` | Manage WireGuard VPN: status, list_peers, add_peer, remove_peer, generate_keypair |
+| `sidekick_nginx` | Manage Nginx reverse proxy: status, list_sites, add_site, remove_site, test_config, reload |
 
 ## Token Efficiency Rules
 

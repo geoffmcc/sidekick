@@ -5,6 +5,7 @@ const { redactSensitive } = require("./redact");
 const dbStore = require("./db");
 const pgStore = require("./pg");
 const redisStore = require("./redis");
+const qdrantStore = require("./qdrant");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
@@ -90,6 +91,8 @@ const TOOL_RISK = {
   sidekick_ollama: "low",
   sidekick_tunnel: "medium",
   sidekick_download: "low",
+  sidekick_wireguard: "high",
+  sidekick_nginx: "high",
 };
 
 function getToolRisk(name) {
@@ -1004,7 +1007,54 @@ function simpleSimilarity(text1, text2) {
   return intersection.size / union.size;
 }
 
-function searchContext(ctx, query, type, limit = 10) {
+async function generateEmbedding(text) {
+  const ollamaUrl = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
+  const model = "nomic-embed-text";
+  
+  try {
+    const response = await fetch(`${ollamaUrl}/api/embeddings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model, prompt: text })
+    });
+    
+    if (!response.ok) {
+      return null;
+    }
+    
+    const data = await response.json();
+    return data.embedding;
+  } catch {
+    return null;
+  }
+}
+
+async function searchContext(ctx, query, type, limit = 10) {
+  // Try Qdrant semantic search first
+  const qdrantAvailable = await qdrantStore.isAvailable();
+  
+  if (qdrantAvailable) {
+    const embedding = await generateEmbedding(query);
+    if (embedding) {
+      try {
+        const filter = type && type !== "all" ? {
+          must: [{ key: "type", match: { value: type } }]
+        } : null;
+        
+        const results = await qdrantStore.search(embedding, limit, filter);
+        
+        return results.map(r => ({
+          type: r.payload.type,
+          item: r.payload.data,
+          score: r.score
+        }));
+      } catch (e) {
+        // Fall through to keyword search
+      }
+    }
+  }
+  
+  // Fallback to keyword search
   const results = [];
   
   if (type === "all" || type === "decisions") {
@@ -1098,6 +1148,20 @@ async function sidekick_context({ action, project, context, decision, reasoning,
       ctx.projects[project].lastWorked = now;
     }
     saveContext(ctx);
+    
+    // Store in Qdrant for semantic search
+    try {
+      if (await qdrantStore.isAvailable()) {
+        const text = `${context} ${decision} ${reasoning || ""}`;
+        const embedding = await generateEmbedding(text);
+        if (embedding) {
+          await qdrantStore.upsert(dec.id, embedding, { type: "decision", data: dec });
+        }
+      }
+    } catch (e) {
+      // Silently fail - context is still saved in JSON
+    }
+    
     return { content: [{ type: "text", text: `Tracked decision: ${decision} (id: ${dec.id})` }] };
   }
 
@@ -1118,6 +1182,20 @@ async function sidekick_context({ action, project, context, decision, reasoning,
       ctx.projects[project].lastWorked = now;
     }
     saveContext(ctx);
+    
+    // Store in Qdrant for semantic search
+    try {
+      if (await qdrantStore.isAvailable()) {
+        const text = `${problem} ${solution || ""}`;
+        const embedding = await generateEmbedding(text);
+        if (embedding) {
+          await qdrantStore.upsert(prob.id, embedding, { type: "problem", data: prob });
+        }
+      }
+    } catch (e) {
+      // Silently fail - context is still saved in JSON
+    }
+    
     return { content: [{ type: "text", text: `Tracked problem: ${problem} (id: ${prob.id})` }] };
   }
 
@@ -1134,6 +1212,20 @@ async function sidekick_context({ action, project, context, decision, reasoning,
     };
     ctx.patterns.push(pat);
     saveContext(ctx);
+    
+    // Store in Qdrant for semantic search
+    try {
+      if (await qdrantStore.isAvailable()) {
+        const text = `${pattern} ${context || ""}`;
+        const embedding = await generateEmbedding(text);
+        if (embedding) {
+          await qdrantStore.upsert(pat.id, embedding, { type: "pattern", data: pat });
+        }
+      }
+    } catch (e) {
+      // Silently fail - context is still saved in JSON
+    }
+    
     return { content: [{ type: "text", text: `Tracked pattern: ${pattern} (id: ${pat.id})` }] };
   }
 
@@ -1162,6 +1254,20 @@ async function sidekick_context({ action, project, context, decision, reasoning,
       ctx.projects[project].lastWorked = now;
     }
     saveContext(ctx);
+    
+    // Store in Qdrant for semantic search
+    try {
+      if (await qdrantStore.isAvailable()) {
+        const text = `${redactedSummary} ${topicList.join(" ")} ${redactedNotes || ""}`;
+        const embedding = await generateEmbedding(text);
+        if (embedding) {
+          await qdrantStore.upsert(sess.id, embedding, { type: "session", data: sess });
+        }
+      }
+    } catch (e) {
+      // Silently fail - context is still saved in JSON
+    }
+    
     return { content: [{ type: "text", text: `Tracked session: ${redactedSummary} (id: ${sess.id})` }] };
   }
 
@@ -1169,7 +1275,7 @@ async function sidekick_context({ action, project, context, decision, reasoning,
     if (!query) {
       return { content: [{ type: "text", text: "query required" }], isError: true };
     }
-    const results = searchContext(ctx, query, type || "all", limit || 10);
+    const results = await searchContext(ctx, query, type || "all", limit || 10);
     if (results.length === 0) {
       return { content: [{ type: "text", text: "No relevant context found" }] };
     }
@@ -1192,7 +1298,7 @@ async function sidekick_context({ action, project, context, decision, reasoning,
     if (!query) {
       return { content: [{ type: "text", text: "query required" }], isError: true };
     }
-    const results = searchContext(ctx, query, "all", 5);
+    const results = await searchContext(ctx, query, "all", 5);
     if (results.length === 0) {
       return { content: [{ type: "text", text: "No suggestions based on past context" }] };
     }
@@ -8070,6 +8176,141 @@ async function sidekick_download({ url, output, format, audio_only }) {
   }
 }
 
+// --- WireGuard Tool ---
+
+async function sidekick_wireguard({ action, interface_name, peer_name, public_key, endpoint, allowed_ips }) {
+  try {
+    if (action === "status") {
+      const result = execSync("sudo wg show all 2>&1", { timeout: 5000 }).toString();
+      if (!result.trim()) {
+        return { content: [{ type: "text", text: "No WireGuard interfaces found" }] };
+      }
+      return { content: [{ type: "text", text: result }] };
+    }
+
+    if (action === "list_peers") {
+      if (!interface_name) {
+        return { content: [{ type: "text", text: "Error: interface_name required" }], isError: true };
+      }
+      const result = execSync(`sudo wg show ${interface_name} peers 2>&1`, { timeout: 5000 }).toString();
+      const peers = result.trim().split('\n').filter(line => line && !line.startsWith('Warning')).map(line => {
+        const parts = line.split('\t');
+        return {
+          public_key: parts[0],
+          endpoint: parts[1] || 'none',
+          allowed_ips: parts[2] || 'none',
+          latest_handshake: parts[3] || 'never',
+          transfer_rx: parts[4] || '0',
+          transfer_tx: parts[5] || '0'
+        };
+      });
+      return { content: [{ type: "text", text: JSON.stringify(peers, null, 2) }] };
+    }
+
+    if (action === "add_peer") {
+      if (!interface_name || !peer_name || !public_key) {
+        return { content: [{ type: "text", text: "Error: interface_name, peer_name, and public_key required" }], isError: true };
+      }
+      const cmd = `sudo wg set ${interface_name} peer ${public_key} allowed-ips ${allowed_ips || '10.0.0.0/24'}${endpoint ? ` endpoint ${endpoint}` : ''}`;
+      execSync(cmd, { timeout: 5000 });
+      return { content: [{ type: "text", text: `Added peer ${peer_name} to ${interface_name}` }] };
+    }
+
+    if (action === "remove_peer") {
+      if (!interface_name || !public_key) {
+        return { content: [{ type: "text", text: "Error: interface_name and public_key required" }], isError: true };
+      }
+      execSync(`sudo wg set ${interface_name} peer ${public_key} remove`, { timeout: 5000 });
+      return { content: [{ type: "text", text: `Removed peer from ${interface_name}` }] };
+    }
+
+    if (action === "generate_keypair") {
+      const privateKey = execSync("wg genkey", { timeout: 5000 }).toString().trim();
+      const publicKey = execSync(`echo "${privateKey}" | wg pubkey`, { timeout: 5000 }).toString().trim();
+      return { content: [{ type: "text", text: JSON.stringify({ private_key: privateKey, public_key: publicKey }, null, 2) }] };
+    }
+
+    return { content: [{ type: "text", text: "Error: Invalid action. Use: status, list_peers, add_peer, remove_peer, generate_keypair" }], isError: true };
+  } catch (e) {
+    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
+  }
+}
+
+// --- Nginx Tool ---
+
+async function sidekick_nginx({ action, site_name, domain, upstream_port, ssl_email }) {
+  try {
+    if (action === "status") {
+      const result = execSync("sudo systemctl status nginx 2>&1 | head -20", { timeout: 5000 }).toString();
+      return { content: [{ type: "text", text: result }] };
+    }
+
+    if (action === "list_sites") {
+      const result = execSync("ls -1 /etc/nginx/sites-enabled/ 2>&1", { timeout: 5000 }).toString();
+      const sites = result.trim().split('\n').filter(s => s && s !== 'default');
+      return { content: [{ type: "text", text: JSON.stringify(sites, null, 2) }] };
+    }
+
+    if (action === "add_site") {
+      if (!site_name || !domain || !upstream_port) {
+        return { content: [{ type: "text", text: "Error: site_name, domain, and upstream_port required" }], isError: true };
+      }
+      
+      const config = `server {
+    listen 80;
+    server_name ${domain};
+
+    location / {
+        proxy_pass http://127.0.0.1:${upstream_port};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}`;
+
+      fs.writeFileSync(`/tmp/${site_name}`, config);
+      execSync(`sudo mv /tmp/${site_name} /etc/nginx/sites-available/${site_name}`);
+      execSync(`sudo ln -sf /etc/nginx/sites-available/${site_name} /etc/nginx/sites-enabled/${site_name}`);
+      
+      // Test config
+      const testResult = execSync("sudo nginx -t 2>&1", { timeout: 5000 }).toString();
+      if (testResult.includes('successful')) {
+        execSync("sudo systemctl reload nginx 2>&1", { timeout: 5000 });
+        return { content: [{ type: "text", text: `Added site ${site_name} for ${domain} -> port ${upstream_port}` }] };
+      } else {
+        // Rollback
+        execSync(`sudo rm -f /etc/nginx/sites-enabled/${site_name} /etc/nginx/sites-available/${site_name}`);
+        return { content: [{ type: "text", text: `Error: Invalid nginx config: ${testResult}` }], isError: true };
+      }
+    }
+
+    if (action === "remove_site") {
+      if (!site_name) {
+        return { content: [{ type: "text", text: "Error: site_name required" }], isError: true };
+      }
+      execSync(`sudo rm -f /etc/nginx/sites-enabled/${site_name} /etc/nginx/sites-available/${site_name}`);
+      execSync("sudo systemctl reload nginx 2>&1", { timeout: 5000 });
+      return { content: [{ type: "text", text: `Removed site ${site_name}` }] };
+    }
+
+    if (action === "test_config") {
+      const result = execSync("sudo nginx -t 2>&1", { timeout: 5000 }).toString();
+      return { content: [{ type: "text", text: result }] };
+    }
+
+    if (action === "reload") {
+      execSync("sudo systemctl reload nginx 2>&1", { timeout: 5000 });
+      return { content: [{ type: "text", text: "Nginx reloaded" }] };
+    }
+
+    return { content: [{ type: "text", text: "Error: Invalid action. Use: status, list_sites, add_site, remove_site, test_config, reload" }], isError: true };
+  } catch (e) {
+    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
+  }
+}
+
 const TOOLS = {
   sidekick_bash,
   sidekick_read,
@@ -8150,6 +8391,8 @@ const TOOLS = {
   sidekick_ollama,
   sidekick_tunnel,
   sidekick_download,
+  sidekick_wireguard,
+  sidekick_nginx,
 };
 
 const TOOL_DEFS = [
@@ -8232,6 +8475,8 @@ const TOOL_DEFS = [
   { name: "sidekick_ollama", description: "Manage Ollama models: list, ps, pull, show", args: { action: "string (list|ps|pull|show)", model: "string (optional, model name for pull/show)" } },
   { name: "sidekick_tunnel", description: "Manage Cloudflare tunnels: start, stop, list", args: { action: "string (start|stop|list)", port: "number (local port to expose)", name: "string (optional, tunnel name)" } },
   { name: "sidekick_download", description: "Download videos/audio from YouTube and 1000+ sites using yt-dlp", args: { url: "string (video URL)", output: "string (optional, output path)", format: "string (optional, video format)", audio_only: "boolean (optional, extract audio only)" } },
+  { name: "sidekick_wireguard", description: "Manage WireGuard VPN: status, list_peers, add_peer, remove_peer, generate_keypair", args: { action: "string (status|list_peers|add_peer|remove_peer|generate_keypair)", interface_name: "string (WireGuard interface, e.g. wg0)", peer_name: "string (peer name for add_peer)", public_key: "string (peer public key)", endpoint: "string (optional, peer endpoint IP:port)", allowed_ips: "string (optional, allowed IPs, default 10.0.0.0/24)" } },
+  { name: "sidekick_nginx", description: "Manage Nginx reverse proxy: status, list_sites, add_site, remove_site, test_config, reload", args: { action: "string (status|list_sites|add_site|remove_site|test_config|reload)", site_name: "string (site config name)", domain: "string (domain name for add_site)", upstream_port: "number (local port to proxy to)", ssl_email: "string (optional, email for Let's Encrypt)" } },
 ];
 
 async function callTool(name, args) {
