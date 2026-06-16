@@ -128,7 +128,10 @@
 <div class="page" id="page-data">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
     <div class="section-title" style="margin:0">Stored Data (<span id="kvCount">0</span>)</div>
-    <button class="btn btn-sm btn-outline" onclick="clearData('kv')" title="Clear all KV data"><i class="fas fa-trash"></i> Clear KV</button>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-sm" onclick="showNewEntryModal()" title="Create new KV entry"><i class="fas fa-plus"></i> New Entry</button>
+      <button class="btn btn-sm btn-outline" onclick="clearData('kv')" title="Clear all KV data"><i class="fas fa-trash"></i> Clear KV</button>
+    </div>
   </div>
   <div class="search-bar">
     <input type="text" id="kvSearch" placeholder="Search keys or values..." oninput="filterKV()">
@@ -265,6 +268,29 @@
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeConfirmModal()">Cancel</button>
       <button class="btn btn-danger" id="confirmButton" onclick="executeConfirmAction()" disabled>Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- New Entry Modal -->
+<div class="modal-overlay" id="newEntryModal">
+  <div class="modal">
+    <h3 style="color:#58a6ff">New KV Entry</h3>
+    <div style="margin-bottom:12px">
+      <label style="display:block;margin-bottom:4px;color:#8b949e;font-size:.85rem">Key</label>
+      <input type="text" id="newEntryKey" placeholder="e.g., config:api_key" style="width:100%;padding:8px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-family:var(--font)">
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="display:block;margin-bottom:4px;color:#8b949e;font-size:.85rem">Project (optional)</label>
+      <input type="text" id="newEntryProject" placeholder="e.g., myproject" style="width:100%;padding:8px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-family:var(--font)">
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="display:block;margin-bottom:4px;color:#8b949e;font-size:.85rem">Value</label>
+      <textarea id="newEntryValue" placeholder="Enter value..." style="width:100%;min-height:150px;padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#c9d1d9;font-family:var(--font);font-size:.85rem;resize:vertical"></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeNewEntryModal()">Cancel</button>
+      <button class="btn" onclick="saveNewEntry()">Create</button>
     </div>
   </div>
 </div>
