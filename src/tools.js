@@ -7734,39 +7734,52 @@ async function sidekick_analytics({ query, file, format }) {
     const venvPath = "/home/sidekick/.sidekick-tools/bin/python3";
     const pythonCmd = fs.existsSync(venvPath) ? venvPath : "python3";
 
+    // Helper: run Python script via temp file to avoid shell escaping issues
+    const runPyScript = (pyScript) => {
+      const tmpFile = path.join(os.tmpdir(), "sidekick_analytics_" + Date.now() + ".py");
+      try {
+        fs.writeFileSync(tmpFile, pyScript);
+        return execSync(pythonCmd + " " + tmpFile + " 2>&1", { timeout: 60000 }).toString();
+      } finally {
+        try { fs.unlinkSync(tmpFile); } catch (e) {}
+      }
+    };
+
     if (file) {
       if (!fs.existsSync(file)) {
-        return { content: [{ type: "text", text: `Error: File not found: ${file}` }], isError: true };
+        return { content: [{ type: "text", text: "Error: File not found: " + file }], isError: true };
       }
 
       const sql = query || "SELECT * FROM data LIMIT 100";
-      const escapedSql = sql.replace(/"/g, '\\"');
-      const pyScript = `
-import duckdb, json, sys
+      const fmt = format || "csv";
+      // Pass all parameters via JSON to avoid escaping issues
+      const params = JSON.stringify({ file, sql, fmt });
+      const pyScript = `import duckdb, json, sys
+params = json.loads(${JSON.stringify(params)})
 con = duckdb.connect()
-fmt = "${format || "csv"}"
-if fmt == "csv":
-    con.execute("CREATE TABLE data AS SELECT * FROM read_csv_auto('${file}')")
-elif fmt == "json":
-    con.execute("CREATE TABLE data AS SELECT * FROM read_json_auto('${file}')")
-elif fmt == "parquet":
-    con.execute("CREATE TABLE data AS SELECT * FROM read_parquet('${file}')")
-result = con.execute("${escapedSql}").fetchdf()
+f = params["file"]
+if params["fmt"] == "csv":
+    con.execute(f"CREATE TABLE data AS SELECT * FROM read_csv_auto('{f}')")
+elif params["fmt"] == "json":
+    con.execute(f"CREATE TABLE data AS SELECT * FROM read_json_auto('{f}')")
+elif params["fmt"] == "parquet":
+    con.execute(f"CREATE TABLE data AS SELECT * FROM read_parquet('{f}')")
+result = con.execute(params["sql"]).fetchdf()
 print(result.to_string(index=False))
 `;
-      const result = execSync(`echo '${pyScript.replace(/'/g, "'\\''")}' | ${pythonCmd} 2>&1`, { timeout: 60000 }).toString();
+      const result = runPyScript(pyScript);
       return { content: [{ type: "text", text: result }] };
     }
 
     if (query) {
-      const escapedQuery = query.replace(/"/g, '\\"');
-      const pyScript = `
-import duckdb
+      const params = JSON.stringify({ query });
+      const pyScript = `import duckdb, json, sys
+params = json.loads(${JSON.stringify(params)})
 con = duckdb.connect()
-result = con.execute("${escapedQuery}").fetchdf()
+result = con.execute(params["query"]).fetchdf()
 print(result.to_string(index=False))
 `;
-      const result = execSync(`echo '${pyScript.replace(/'/g, "'\\''")}' | ${pythonCmd} 2>&1`, { timeout: 60000 }).toString();
+      const result = runPyScript(pyScript);
       return { content: [{ type: "text", text: result }] };
     }
 
@@ -7778,6 +7791,7 @@ print(result.to_string(index=False))
     return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
   }
 }
+
 
 // --- Embed Tool ---
 
