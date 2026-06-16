@@ -5,6 +5,7 @@ set -euo pipefail
 IP="192.168.1.10"
 INITIAL_USER=""
 SCP_MODE=false
+INSTALL_TOOLS=true
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -20,9 +21,13 @@ while [[ $# -gt 0 ]]; do
       SCP_MODE=true
       shift
       ;;
+    --minimal)
+      INSTALL_TOOLS=false
+      shift
+      ;;
     *)
       echo "Unknown parameter: $1"
-      echo "Usage: $0 [-IP <ip>] [-InitialUser <user>] [--scp]"
+      echo "Usage: $0 [-IP <ip>] [-InitialUser <user>] [--scp] [--minimal]"
       exit 1
       ;;
   esac
@@ -151,7 +156,12 @@ run_bootstrap() {
   echo -e "  \033[33mExecuting bootstrap...\033[0m"
   echo -e "\033[90m--- Bootstrap Output ---\033[0m"
   
-  local bootstrap_cmd="sudo bash /tmp/bootstrap.sh --yes --install-services --ssh-key '$pub_key' && rm -f /tmp/bootstrap.sh /tmp/sidekick-*.service"
+  local bootstrap_flags="--yes --install-services"
+  if [ "$INSTALL_TOOLS" = true ]; then
+    bootstrap_flags="$bootstrap_flags --install-tools"
+  fi
+  
+  local bootstrap_cmd="sudo bash /tmp/bootstrap.sh $bootstrap_flags --ssh-key '$pub_key' && rm -f /tmp/bootstrap.sh /tmp/sidekick-*.service"
   
   if ! ssh -t -o ControlPath="$CONTROL_PATH" "$user@$IP" "$bootstrap_cmd"; then
     echo -e "\033[90m--- End Bootstrap Output ---\033[0m"

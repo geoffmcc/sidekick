@@ -33,7 +33,7 @@ Before creating any new tool or tool suite:
 1. Recall from KV store: `sidekick_get key="tool_making_guide" project="sidekick"`
 2. If not available, read `docs/tool-creation.md` and store it in KV for next time
 
-## Tools (81 total)
+## Tools (87 total)
 
 ### Core Tools (11)
 
@@ -125,6 +125,12 @@ Before creating any new tool or tool suite:
 | `sidekick_db_search` | Full-text search across all tables (FTS5) |
 | `sidekick_db_migrate` | Schema migrations with versioning and rollback |
 | `sidekick_db_diff` | Compare two DB snapshots, show what changed |
+| `sidekick_redis` | Redis operations: get, set, del, keys, ttl, info, flush |
+| `sidekick_ocr` | Extract text from images using Tesseract OCR |
+| `sidekick_media` | Media processing with ffmpeg: convert, extract audio, thumbnails, resize, trim |
+| `sidekick_transcribe` | Transcribe audio/video to text using Whisper |
+| `sidekick_analytics` | Fast analytical queries on CSV/JSON/Parquet files using DuckDB |
+| `sidekick_embed` | Generate text embeddings using Ollama |
 
 ## Token Efficiency Rules
 
@@ -213,6 +219,16 @@ All tool calls are logged with source tags:
 - **Ollama** (`:11434`) — local Phi-3-mini fallback. Uses cloud Groq API when `GROQ_API_KEY` is set
 
 ## Recent Features
+
+### New Tools (v1.19) - Server Tooling & Data Platform
+- **`sidekick_redis`** — Redis operations: get, set, del, keys, ttl, info, flush. Requires sidekick-redis service.
+- **`sidekick_ocr`** — Extract text from images using Tesseract OCR. Supports multiple languages and page segmentation modes.
+- **`sidekick_media`** — Media processing with ffmpeg: convert, extract audio, thumbnails, resize, trim, info.
+- **`sidekick_transcribe`** — Transcribe audio/video to text using Whisper. Supports multiple models and languages.
+- **`sidekick_analytics`** — Fast analytical queries on CSV/JSON/Parquet files using DuckDB. OLAP without a server.
+- **`sidekick_embed`** — Generate text embeddings using Ollama (nomic-embed-text by default).
+- **Postgres support** — All `sidekick_db_*` tools now support `database="postgres"` for PostgreSQL queries alongside SQLite.
+- **Server tooling** — Full tool stack installable via `scripts/setup-tools.sh`: Docker, PostgreSQL, Redis, Qdrant, InfluxDB, Grafana, ffmpeg, Tesseract, Whisper, DuckDB, and more.
 
 ### New Tools (v1.18) - Operations Platform Expansion
 - **`sidekick_anonymize`** — Replace sensitive data with realistic fake values. Consistent mapping, custom patterns, redact safety net.
