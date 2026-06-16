@@ -2,7 +2,7 @@
 
 Sidekick is a self-hosted Model Context Protocol server and autonomous assistant platform intended to give opencode a persistent remote working environment. These docs use the current source tree, migrations, and `README.md`/`AGENTS.md` as the source of truth.
 
-The project currently exposes three Node.js services and 83 exported MCP tools. Tool metadata, categories, risk labels, enabled/deprecated state, tool logs, key-value data, and the knowledge base are stored in SQLite.
+The project currently exposes three Node.js services and 83 built-in MCP tools. Tool metadata, categories, risk labels, enabled/deprecated state, tool logs, key-value data, and the knowledge base are stored in SQLite.
 
 ## Agent Information Access
 
@@ -25,7 +25,17 @@ cd /home/sidekick/sidekick
 sqlite3 data/sidekick.db < docs/knowledge-seed.sql
 ```
 
-The deploy scripts also run `npm run seed:knowledge` after dependencies install. That script imports the same seed only when the `knowledge` table is empty, so existing deployments are preserved.
+The deploy scripts also run `npm run seed:knowledge` after dependencies install. That script imports the same seed only when the `knowledge` table has zero enabled rows, so existing deployments are preserved. If your database already has knowledge entries and you want to add or refresh the packaged Sidekick seed, run:
+
+```bash
+npm run seed:knowledge -- --force
+```
+
+`--force` only replaces rows whose `version_added` is `seed-2026-06-16-current`; it does not delete user-authored knowledge entries. Verify the seed with:
+
+```bash
+sqlite3 data/sidekick.db "SELECT COUNT(*) FROM knowledge WHERE version_added = 'seed-2026-06-16-current';"
+```
 
 ## Documentation map
 

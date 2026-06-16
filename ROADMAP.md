@@ -4,7 +4,7 @@ What's planned for Sidekick.
 
 ## Current (v1.19)
 
-- 70 MCP tools (bash, read, write, list, search, git, notify, process, service, archive, cron, github, webhook, context, teach, store, get, list_projects, get_by_project, web_fetch, llm, transform, health, delay, snapshot, watch, secret, parse, diff, hash, validate, template, queue, retry, evolve, orchestrate, predict, debug_tool, fresheyes, batch, cache, summarize, filter, project, tail, diff_files, find, status, extract, anonymize, sandbox, changelog, netdiag, timeline, circuit, baseline, depend, runbook, black_box, respond, db_schema, db_query, db_stats, db_backup, db_restore, log_query, db_export, db_search, db_migrate, db_diff)
+- 83 built-in MCP tools. Query the `tools` table for the authoritative current list.
 - Live dashboard with 6 tabs (System, Activity, Data, Config, Agent, Tools)
 - Autonomous agent bridge with Groq cloud + local Ollama fallback
 - Persistent KV storage across sessions
@@ -90,7 +90,7 @@ What's planned for Sidekick.
 - Dashboard policy visibility in the Tools tab
 
 **Result:**
-- Total tools: 59 → 70
+- Total tools: 59 → 70 at this milestone; current built-in total is 83.
 - High and critical risk tools can be gated without deleting operator capability
 
 ### v1.18: Operations Platform Expansion

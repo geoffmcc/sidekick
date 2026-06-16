@@ -2,8 +2,8 @@
 /**
  * Seed the Sidekick knowledge table from docs/knowledge-seed.sql.
  *
- * Default behavior is conservative: seed only when the knowledge table is empty.
- * Use --force to re-apply the seed marker rows.
+ * Default behavior is conservative: seed only when the knowledge table has no
+ * enabled rows. Use --force to add or re-apply only the seed marker rows.
  */
 
 const fs = require("fs");
