@@ -33,7 +33,27 @@ Before creating any new tool or tool suite:
 1. Recall from KV store: `sidekick_get key="tool_making_guide" project="sidekick"`
 2. If not available, read `docs/tool-creation.md` and store it in KV for next time
 
-## Tools (92 total)
+## Tools
+
+**Tool information is stored in the database** and automatically synced on server startup.
+
+To query available tools:
+- Use `sidekick_db_query` with `database="sqlite"` to query the `tools` table
+- Use `sidekick_db_query` with `database="postgres"` for PostgreSQL tools
+- Tool categories are in the `tool_categories` table
+- Tool-category mappings are in the `tool_category_map` table
+
+Example query:
+```sql
+SELECT t.name, t.description, t.risk, tc.name as category
+FROM tools t
+LEFT JOIN tool_category_map tcm ON t.name = tcm.tool_name
+LEFT JOIN tool_categories tc ON tcm.category_id = tc.id
+WHERE t.enabled = 1 AND t.deprecated = 0
+ORDER BY tc.sort_order, t.name
+```
+
+**Knowledge Base**: Use `sidekick_knowledge` tool to search, get, list, add, update, or delete knowledge entries stored in the `knowledge` table.
 
 ### Core Tools (11)
 
@@ -51,91 +71,9 @@ Before creating any new tool or tool suite:
 | `todowrite` | Track multi-step tasks with a todo list |
 | `webfetch` | Fetch and convert URLs to markdown/text/html |
 
-### Sidekick MCP Tools (70)
+### Sidekick MCP Tools
 
-| Tool | When to use |
-|------|-------------|
-| `sidekick_bash` | Run any shell command on the remote machine |
-| `sidekick_read` | Read a file from the remote filesystem |
-| `sidekick_write` | Write or edit a file on the remote machine |
-| `sidekick_list` | List files and directories on the remote machine |
-| `sidekick_search` | Search file contents using ripgrep/grep (faster than bash grep) |
-| `sidekick_git` | Structured git operations (status, diff, log, add, commit, push, pull, branch, checkout, stash) |
-| `sidekick_notify` | Send alerts to Discord, Slack, or email |
-| `sidekick_process` | Manage processes (list, top CPU/memory, kill, tree) |
-| `sidekick_service` | Manage systemd services (start, stop, restart, status, enable, disable, logs) |
-| `sidekick_archive` | Create, extract, or list archives (tar.gz, zip) |
-| `sidekick_cron` | Schedule recurring tasks (add, list, remove, run jobs) |
-| `sidekick_github` | GitHub API integration (PRs, issues, commits, releases) |
-| `sidekick_webhook` | Manage received webhooks (list, get, clear) |
-| `sidekick_context` | Persistent intelligent context management (track projects, decisions, problems, patterns, sessions; recall and suggest based on past context) |
-| `sidekick_teach` | Meta-learning and self-extension: teach procedures, generate tools, learn from examples, execute learned workflows |
-| `sidekick_store` | Store a value persistently in KV storage |
-| `sidekick_get` | Retrieve a stored value from KV storage |
-| `sidekick_list_projects` | List all projects in KV storage |
-| `sidekick_get_by_project` | Get all keys and values for a specific project |
-| `sidekick_web_fetch` | Fetch a URL from the remote IP (bypasses local IP restrictions) |
-| `sidekick_llm` | Query the LLM (defaults to local Ollama, use provider='groq' for cloud Groq) |
-| `sidekick_transform` | Data manipulation pipeline: filter, extract, sort, format, map data |
-| `sidekick_health` | Composite system health checks with scoring and issue detection |
-| `sidekick_delay` | One-shot task scheduling (run a tool once at a specific time) |
-| `sidekick_snapshot` | Capture system state and detect drift by comparing snapshots |
-| `sidekick_watch` | Event-driven monitoring: watch services, processes, endpoints, files and trigger actions |
-| `sidekick_secret` | Encrypted credential management with AES-256-GCM (requires SIDEKICK_SECRET_KEY) |
-| `sidekick_parse` | Parse structured data formats (JSON, YAML, XML, INI, CSV) with auto-detection |
-| `sidekick_diff` | Semantic comparison of text, JSON, or YAML with structure-aware diffing |
-| `sidekick_hash` | Generate checksums (MD5, SHA1, SHA256, SHA512) for files or data with verification |
-| `sidekick_validate` | Validate data against JSON Schema |
-| `sidekick_template` | Render Handlebars templates with data for config generation |
-| `sidekick_queue` | Persistent task queue with priorities and status tracking |
-| `sidekick_retry` | Retry tool calls with exponential/linear/fixed backoff |
-| `sidekick_evolve` | LLM-powered proposals, sandbox testing, confidence filtering, auto-apply docs |
-| `sidekick_orchestrate` | Multi-agent coordination: create task graphs, execute subtasks with dependencies |
-| `sidekick_predict` | Anticipatory intelligence: analyze patterns, predict needs, track prediction usefulness |
-| `sidekick_debug_tool` | Persistent debugging cache: store findings with `action="store"`, recall past investigations with `action="recall"`, cleanup old entries with `action="cleanup"`. Cross-session persistence via KV store. |
-| `sidekick_fresheyes` | Get a fresh perspective from Sidekick's LLM (Grok) on a problem. Sends sanitized context for independent analysis |
-| `sidekick_batch` | Execute multiple tool calls in one request to reduce API round-trips (max 20 per batch) |
-| `sidekick_cache` | Session-scoped caching to avoid redundant operations. Store and retrieve values with TTL |
-| `sidekick_summarize` | Summarize large files before returning to reduce token usage (head, tail, grep, stats strategies) |
-| `sidekick_filter` | Filter file contents or directory listings by pattern, date, or size before returning |
-| `sidekick_project` | Get complete project context in one call: KV entries, context tracking, recent logs, procedures |
-| `sidekick_tail` | Tail recent log entries with filtering (log.jsonl, journalctl, or any file) |
-| `sidekick_diff_files` | Compare two files directly without reading both into context (unified diff or summary) |
-| `sidekick_find` | Advanced file finder: search by name pattern, date range, size range, and content pattern |
-| `sidekick_status` | Unified system status: services, disk, memory, load, uptime, top processes in one call |
-| `sidekick_extract` | Parse JSON/YAML/INI/XML and extract specific fields by path. Returns only what you need |
-| `sidekick_anonymize` | Replace sensitive data with realistic fake values. Consistent mapping, custom patterns, redact safety net |
-| `sidekick_sandbox` | Execute operations with automatic file backup and rollback. Safe experimentation on remote systems |
-| `sidekick_changelog` | Generate release notes from git history. Groups by type/scope/author, optional LLM summaries |
-| `sidekick_netdiag` | Unified network diagnostics: DNS, routing, port scanning, connectivity checks, local listeners |
-| `sidekick_timeline` | Build chronological timelines from multiple sources (log.jsonl, journalctl, git, files) |
-| `sidekick_circuit` | Generic circuit breaker for any tool call. Fast-fail when targets are down, configurable thresholds |
-| `sidekick_baseline` | Behavioral baseline and anomaly detection. Learns patterns, detects statistical deviations |
-| `sidekick_depend` | Dependency analyzer for npm, systemd services, processes. Trees, reverse deps, impact analysis |
-| `sidekick_runbook` | Operational runbook executor with autonomous and guided modes. Verification, rollback, step-by-step |
-| `sidekick_black_box` | Incident time capsule capturing full system context. Rate limited (5/day, 7-day TTL, 3 active max) |
-| `sidekick_respond` | Return a direct text response from the Agent Bridge when no other tool action is needed |
-| `sidekick_db_schema` | Inspect database schema: tables, columns, indexes, foreign keys |
-| `sidekick_db_query` | Execute raw SQL with safety limits (readonly mode, row caps, timeout) |
-| `sidekick_db_stats` | Database size, table sizes, WAL status, cache hit ratio |
-| `sidekick_db_backup` | Timestamped backup with compression |
-| `sidekick_db_restore` | Restore from backup with integrity check |
-| `sidekick_log_query` | Advanced tool_logs filtering (time, tool, source, status) |
-| `sidekick_db_export` | Export tables to JSON/CSV/SQL dump |
-| `sidekick_db_search` | Full-text search across all tables (FTS5) |
-| `sidekick_db_migrate` | Schema migrations with versioning and rollback |
-| `sidekick_db_diff` | Compare two DB snapshots, show what changed |
-| `sidekick_redis` | Redis operations: get, set, del, keys, ttl, info, flush |
-| `sidekick_ocr` | Extract text from images using Tesseract OCR |
-| `sidekick_media` | Media processing with ffmpeg: convert, extract audio, thumbnails, resize, trim |
-| `sidekick_transcribe` | Transcribe audio/video to text using Whisper |
-| `sidekick_analytics` | Fast analytical queries on CSV/JSON/Parquet files using DuckDB |
-| `sidekick_embed` | Generate text embeddings using Ollama |
-| `sidekick_ollama` | Manage Ollama models: list, ps, pull, show |
-| `sidekick_tunnel` | Manage Cloudflare tunnels: start, stop, list |
-| `sidekick_download` | Download videos/audio from YouTube and 1000+ sites using yt-dlp |
-| `sidekick_wireguard` | Manage WireGuard VPN: status, list_peers, add_peer, remove_peer, generate_keypair |
-| `sidekick_nginx` | Manage Nginx reverse proxy: status, list_sites, add_site, remove_site, test_config, reload |
+Query the database for the full list of 92+ Sidekick tools, their descriptions, risk levels, and categories.
 
 ## Token Efficiency Rules
 
@@ -225,92 +163,21 @@ All tool calls are logged with source tags:
 
 ## Recent Features
 
-### New Tools (v1.19) - Server Tooling & Data Platform
-- **`sidekick_redis`** — Redis operations: get, set, del, keys, ttl, info, flush. Requires sidekick-redis service.
-- **`sidekick_ocr`** — Extract text from images using Tesseract OCR. Supports multiple languages and page segmentation modes.
-- **`sidekick_media`** — Media processing with ffmpeg: convert, extract audio, thumbnails, resize, trim, info.
-- **`sidekick_transcribe`** — Transcribe audio/video to text using Whisper. Supports multiple models and languages.
-- **`sidekick_analytics`** — Fast analytical queries on CSV/JSON/Parquet files using DuckDB. OLAP without a server.
-- **`sidekick_embed`** — Generate text embeddings using Ollama (nomic-embed-text by default).
-- **Postgres support** — All `sidekick_db_*` tools now support `database="postgres"` for PostgreSQL queries alongside SQLite.
-- **Server tooling** — Full tool stack installable via `scripts/setup-tools.sh`: Docker, PostgreSQL, Redis, Qdrant, InfluxDB, Grafana, ffmpeg, Tesseract, Whisper, DuckDB, and more.
+### DB-First Architecture (v1.20)
+- **Tool Registry** — All tool metadata (name, description, risk, category) stored in database and synced on startup
+- **Knowledge Base** — Structured knowledge entries in `knowledge` table, accessible via `sidekick_knowledge` tool
+- **Auto-Migration** — Database migrations run automatically on server startup
+- **Dashboard Integration** — Tool categories and knowledge entries accessible via dashboard API
 
-### New Tools (v1.18) - Operations Platform Expansion
-- **`sidekick_anonymize`** — Replace sensitive data with realistic fake values. Consistent mapping, custom patterns, redact safety net.
-- **`sidekick_sandbox`** — Execute operations with automatic file backup and rollback. Safe experimentation on remote systems.
-- **`sidekick_changelog`** — Generate release notes from git history. Groups by type/scope/author, optional LLM summaries.
-- **`sidekick_netdiag`** — Unified network diagnostics: DNS, routing, port scanning, connectivity checks, local listeners.
-- **`sidekick_timeline`** — Build chronological timelines from multiple sources (log.jsonl, journalctl, git, files).
-- **`sidekick_circuit`** — Generic circuit breaker for any tool call. Fast-fail when targets are down, configurable thresholds.
-- **`sidekick_baseline`** — Behavioral baseline and anomaly detection. Learns patterns, detects statistical deviations.
-- **`sidekick_depend`** — Dependency analyzer for npm, systemd services, processes. Trees, reverse deps, impact analysis.
-- **`sidekick_runbook`** — Operational runbook executor with autonomous and guided modes. Verification, rollback, step-by-step.
-- **`sidekick_black_box`** — Incident time capsule capturing full system context. Rate limited (5/day, 7-day TTL, 3 active max).
+### Monitoring & Metrics (v1.20)
+- **Grafana Dashboards** — 6 pre-built dashboards: Overview, Tool Analytics, System Health, Database Performance, Docker Containers, Ollama
+- **InfluxDB Integration** — Time-series metrics storage via `sidekick_metrics` tool
+- **Auto-Provisioning** — Grafana datasources, dashboards, and alerting configured automatically
 
-### New Tools (v1.17) - Token Efficiency
-- **`sidekick_batch`** — Execute multiple tool calls in one request to reduce API round-trips (max 20 per batch).
-- **`sidekick_cache`** — Session-scoped caching to avoid redundant operations. Store and retrieve values with TTL.
-- **`sidekick_summarize`** — Summarize large files before returning to reduce token usage. Strategies: head, tail, grep, stats.
-- **`sidekick_filter`** — Filter file contents or directory listings by pattern, date, or size before returning.
-- **`sidekick_project`** — Get complete project context in one call: KV entries, context tracking, recent logs, procedures.
-- **`sidekick_tail`** — Tail recent log entries with filtering. Sources: log.jsonl, journalctl, or any file.
-- **`sidekick_diff_files`** — Compare two files directly without reading both into context. Returns unified diff or summary.
-- **`sidekick_find`** — Advanced file finder: search by name pattern, date range, size range, and content pattern.
-- **`sidekick_status`** — Unified system status: services, disk, memory, load, uptime, top processes in one call.
-- **`sidekick_extract`** — Parse JSON/YAML/INI/XML and extract specific fields by path. Returns only what you need.
-
-### New Tools (v1.16) - Debugging & Analysis
-- **`sidekick_debug_tool`** — Persistent debugging cache: store findings with `action="store"`, recall past investigations with `action="recall"`, cleanup old entries with `action="cleanup"`. Cross-session persistence via KV store with 7-day retention. Optional `redact=false` to bypass redaction.
-- **`sidekick_fresheyes`** — Get a fresh perspective from Sidekick's LLM (Grok) on a problem. Sends sanitized context for independent analysis, returns key insights by default.
-
-### New Tools (v1.15) - Meta-Capabilities
-- **`sidekick_evolve`** — LLM-powered self-improvement: generates proposals via Ollama/Groq, tests in sandbox (120s timeout), filters by confidence (≥70), auto-applies docs (≥90) with Discord notification. Actions: analyze, propose (use "auto" for LLM), list, test, approve, reject, report, sync_docs. Rate limited to 10 proposals/day.
-- **`sidekick_orchestrate`** — Multi-agent coordination: create task graphs, execute subtasks with dependencies, track progress across all subtasks.
-- **`sidekick_predict`** — Anticipatory intelligence: analyze context and tool patterns, predict needs, track prediction usefulness via feedback.
-
-### New Tools (v1.14) - Workflow & Reliability
-- **`sidekick_validate`** — Validate data against JSON Schema using ajv. Returns detailed error messages with paths.
-- **`sidekick_template`** — Render Handlebars templates with data for config generation and dynamic content.
-- **`sidekick_queue`** — Persistent task queue with priorities, status tracking, and automatic retry tracking.
-- **`sidekick_retry`** — Retry wrapper for any tool call with exponential/linear/fixed backoff strategies.
-
-### New Tools (v1.13) - Core Data Utilities
-- **`sidekick_parse`** — Parse structured data formats (JSON, YAML, XML, INI, CSV) with auto-detection.
-- **`sidekick_diff`** — Semantic comparison of text, JSON, or YAML with structure-aware diffing.
-- **`sidekick_hash`** — Generate checksums (MD5, SHA1, SHA256, SHA512) for files or data with verification.
-
-### New Tools (v1.12) - Companion Tools Phase 1
-- **`sidekick_transform`** — Data manipulation pipeline: filter, extract, sort, format, and map data.
-- **`sidekick_health`** — Composite system health checks with scoring and issue detection.
-
-### New Tools (v1.11) - Companion Tools Phase 2
-- **`sidekick_delay`** — One-shot task scheduling: run a tool once at a specific time or after a delay.
-- **`sidekick_snapshot`** — Capture system state and detect drift by comparing snapshots.
-
-### New Tools (v1.10) - Companion Tools Phase 3
-- **`sidekick_watch`** — Event-driven monitoring: watch services, processes, endpoints, or files and trigger actions on conditions.
-- **`sidekick_secret`** — Encrypted credential management with AES-256-GCM (requires SIDEKICK_SECRET_KEY in .env).
-
-### New Tools (v1.5)
-- **`sidekick_teach`** — Meta-learning and self-extension: teach procedures, generate tools from descriptions, learn from examples, execute learned workflows. Enables sidekick to grow its own capabilities.
-
-### New Tools (v1.4)
-- **`sidekick_context`** — Persistent intelligent context management: track projects, decisions, problems, patterns; recall and suggest based on past context. Uses semantic similarity search.
-
-### New Tools (v1.3)
-- **`sidekick_cron`** — Schedule recurring tasks: add, list, remove, run jobs. Uses system crontab for scheduling.
-- **`sidekick_github`** — Full GitHub API integration: PRs (list/create/get/merge), issues (list/create/close), commit status, releases, repo info. Uses stored `github_token`.
-- **`sidekick_webhook`** — Receive and manage webhooks: list, get, clear. Webhook endpoint at `POST /api/webhook/:source` on dashboard.
-
-### New Tools (v1.2)
-- **`sidekick_process`** — Manage processes: list, top CPU/memory consumers, kill by PID/name, process tree.
-- **`sidekick_service`** — Manage systemd services: start, stop, restart, status, enable, disable, view logs.
-- **`sidekick_archive`** — Create, extract, or list archives (tar.gz, tgz, zip).
-
-### New Tools (v1.1)
-- **`sidekick_search`** — Fast file content search using ripgrep (falls back to grep). Supports regex patterns and file filtering.
-- **`sidekick_git`** — Structured git operations: status, diff, log, add, commit, push, pull, branch, checkout, stash. Safer than raw bash for git commands.
-- **`sidekick_notify`** — Send notifications to Discord, Slack (via webhooks), or email (via SMTP). Useful for alerts and monitoring.
+### Server Tooling (v1.19)
+- **Infrastructure Tools** — Redis, OCR, Media, Transcribe, Analytics, Embed, Ollama, Tunnel, Download, WireGuard, Nginx
+- **Database Support** — PostgreSQL support alongside SQLite for all `sidekick_db_*` tools
+- **Setup Script** — Full tool stack installable via `scripts/setup-tools.sh`
 
 ### Project Labeling
 KV store supports project-based organization. Use `project` parameter when storing data to group related keys. Dashboard shows project badges and filtering.
