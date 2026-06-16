@@ -6,6 +6,7 @@ const crypto = require("crypto");
 const EventEmitter = require("events");
 const { execFileSync } = require("child_process");
 const { callTool, DATA_DIR, GROQ_API_KEY, GROQ_MODEL, setSource, loadDelays, saveDelays, loadWatches, saveWatches, getToolDefsForSource } = require("./tools");
+const { recallMemoryForText, formatMemoryRecall, recordAgentTaskMemory } = require("./memory");
 
 const PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 
@@ -578,9 +579,18 @@ Return ONLY valid JSON.`;
 async function runAgent(goal, taskId) {
   setSource("agent");
   const steps = [];
-  const history = [{ role: "user", content: goal }];
+  const recalledMemory = formatMemoryRecall(recallMemoryForText(goal, { limit: 5 }));
+  const history = recalledMemory
+    ? [
+        { role: "system", content: "Relevant remembered Sidekick context. Use it when helpful, but do not assume it is complete:\n" + recalledMemory },
+        { role: "user", content: goal }
+      ]
+    : [{ role: "user", content: goal }];
 
   emit(taskId, { type: "step", text: "Analyzing task: " + goal });
+  if (recalledMemory) {
+    emit(taskId, { type: "step", text: "Loaded relevant remembered context" });
+  }
 
   for (let i = 0; i < MAX_ITERATIONS; i++) {
     let response;
@@ -692,6 +702,13 @@ async function runAgent(goal, taskId) {
 
   const transcript = JSON.stringify({ goal, steps, status: "completed", t: new Date().toISOString() });
   fs.writeFileSync(path.join(CONV_DIR, taskId + ".json"), transcript, "utf-8");
+
+  try {
+    const saved = recordAgentTaskMemory({ goal, steps, taskId, status: "completed" });
+    if (saved) emit(taskId, { type: "step", text: "Saved automatic memory for this task" });
+  } catch (e) {
+    emit(taskId, { type: "step", text: "Automatic memory save failed: " + e.message });
+  }
   
   await suggestProcedure(goal, steps, taskId);
   

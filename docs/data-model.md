@@ -79,6 +79,19 @@ Each row's `value_json` column contains a JSON object:
 
 The logger truncates argument and summary fields and redacts sensitive strings before writing. The retained row count is controlled by `SIDEKICK_MAX_LOG`.
 
+## Context and automatic memory
+
+The `context` document in `json_documents` stores structured continuity data:
+
+- `projects`
+- `decisions`
+- `problems`
+- `patterns`
+- `sessions`
+- `memories`
+
+Explicit context entries are written through `sidekick_context`. Automatic memories are written by `src/memory.js` from redacted tool-call summaries and completed Agent Bridge tasks. Automatic memory is enabled by default, can be disabled with `SIDEKICK_AUTO_MEMORY=0`, and is capped by `SIDEKICK_AUTO_MEMORY_MAX` entries. It stores summaries and metadata, not full raw outputs.
+
 ## Knowledge base
 
 The `knowledge` table is the documentation store for Sidekick's agent-facing operational knowledge. `sidekick_knowledge` supports `search`, `get`, `list`, `add`, `update`, and `delete`. The dashboard exposes a read endpoint at `/api/knowledge`.

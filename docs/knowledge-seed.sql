@@ -298,7 +298,7 @@ Examples:
 - sidekick_get key="deploy:host"
 - sidekick_get_by_project project="sidekick"
 
-Use sidekick_context for richer decisions, problems, patterns, session summaries, and recall workflows.',
+Use sidekick_context for richer decisions, problems, patterns, session summaries, automatic memories, and recall workflows. The Agent Bridge records bounded, redacted automatic memory summaries for completed tasks and useful tool calls when SIDEKICK_AUTO_MEMORY is enabled.',
 'memory,kv,context,protocol', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('protocols', 'How To Inspect Recent Tool Activity',

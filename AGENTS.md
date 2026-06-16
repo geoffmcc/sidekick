@@ -15,13 +15,14 @@ The secret sauce is that Sidekick's agent-facing knowledge is not primarily in m
 - **Tool catalog and metadata**: `tools`, `tool_categories`, and `tool_category_map` tables. Use `sidekick_db_query database="sqlite"` when you need exact current tool data.
 - **Persistent key-value memory**: `kv_store` table. Use `sidekick_store`, `sidekick_get`, `sidekick_list_projects`, and `sidekick_get_by_project`.
 - **Named structured documents**: `json_documents` table. Stores documents such as `context`, `cron`, `webhooks`, and `watches`.
+- **Automatic memory**: the `context` document includes bounded, redacted `memories` generated from useful tool calls and completed Agent Bridge tasks. Use `sidekick_context action="recall"` or `sidekick_project` to retrieve them.
 - **Tool activity history**: `tool_logs` table. Use `sidekick_log_query` or SQL for recent tool activity.
 
 Default retrieval order for agents:
 
 1. Search `sidekick_knowledge` for docs, procedures, policies, operations, and architecture.
 2. Query the `tools` tables for exact current tool availability, categories, risk, and args.
-3. Use KV/context tools for project memory and prior decisions.
+3. Use KV/context tools for project memory, prior decisions, and automatic memory summaries.
 4. Read markdown files only when the database entry is missing, stale, or you are editing the docs themselves.
 
 ### How to Query the Knowledge Base

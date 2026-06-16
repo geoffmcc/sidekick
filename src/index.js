@@ -126,7 +126,7 @@ const TOOL_SCHEMAS = {
     outcome: z.string().optional().describe("Session outcome: success, partial, or abandoned (for track_session)"),
     notes: z.string().optional().describe("Additional session notes (for track_session)"),
     query: z.string().optional().describe("Search query (for recall/suggest)"),
-    type: z.string().optional().describe("Context type: decisions, problems, patterns, projects, sessions, or all (default: all)"),
+    type: z.string().optional().describe("Context type: decisions, problems, patterns, projects, sessions, memories, or all (default: all)"),
     limit: z.number().optional().describe("Maximum results to return (default: 10)")
   }),
   sidekick_teach: z.object({

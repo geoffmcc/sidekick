@@ -6,6 +6,7 @@
 |---|---|
 | `src/index.js` | MCP server, auth, sessions, Streamable HTTP, legacy SSE, health endpoint. |
 | `src/tools.js` | Tool implementations, tool definitions, dispatcher, persistence helpers. |
+| `src/memory.js` | Automatic memory capture, bounded retention, and recall helpers. |
 | `src/db.js` | SQLite database layer, migrations, backups, query helpers, FTS/search helpers, snapshots. |
 | `src/pg.js` | Optional PostgreSQL backend for database tools. |
 | `src/redis.js` | Optional Redis client for cache operations. |
