@@ -2,7 +2,7 @@
 
 **Autonomous Agent Platform**
 
-A self-hosted AI agent platform with persistent memory, 70 MCP tools, and the ability to extend itself. Runs on your remote machine, learns from your workflow, and grows its own capabilities—no code changes required.
+A self-hosted AI agent platform with persistent memory, 92+ MCP tools, knowledge base, and the ability to extend itself. Runs on your remote machine, learns from your workflow, and grows its own capabilities—no code changes required.
 
 **How?** A single `AGENTS.md` file that opencode reads on every session start. No plugins, no hooks — just markdown.
 
@@ -39,6 +39,17 @@ copy .env.example .env
 - Install your SSH key for passwordless access
 - Open firewall ports (if UFW is active)
 - Deploy the application and start services
+
+**Optional: Install full infrastructure** (Docker, databases, media tools, etc.):
+```bash
+# SSH into your remote machine
+ssh sidekick@YOUR_REMOTE_IP
+
+# Run the setup script
+sudo bash scripts/setup-tools.sh
+```
+
+This installs PostgreSQL, Redis, Qdrant, InfluxDB, Grafana, and many other tools. See [Optional Infrastructure](#optional-infrastructure) for details.
 
 **Subsequent deploys** are fully automated — no password required.
 
@@ -81,22 +92,28 @@ Most MCP servers are just tool wrappers—they give AI access to specific APIs o
 ### 🧠 Persistent Memory Across Sessions
 Sidekick remembers everything. Your decisions, project context, API responses, workflow patterns—it all persists in a structured KV store organized by project. The AI doesn't start from scratch every session.
 
+### 📚 Knowledge Base
+All documentation, best practices, and project context stored in a searchable database. The AI can query the knowledge base instead of re-reading files, saving tokens and improving accuracy.
+
+### 📊 Built-in Metrics & Monitoring
+Comprehensive metrics collection with Grafana dashboards:
+- System health (CPU, memory, disk, load)
+- Tool usage analytics (call counts, success rates, duration)
+- Service status monitoring
+- Database performance metrics
+- Docker container stats
+- Ollama LLM metrics
+
 ### 🔄 Self-Extending Capabilities
 Teach Sidekick new procedures, and it can generate its own tools. The `sidekick_teach` tool lets you describe a workflow in natural language, and Sidekick creates the implementation. It's not just using tools—it's building them.
 
 ### 🤖 True Autonomous Operation
 The Agent Bridge runs independently from your main AI session. Submit a complex task via the dashboard, and Sidekick will plan, execute, and iterate until it's done—without you babysitting each step.
 
-### 📊 Built-in Intelligence
-- **Context tracking** - Automatically recalls relevant past decisions and patterns
-- **Health monitoring** - Real-time system health checks with scoring
-- **Predictive analysis** - Identifies patterns in your workflow and suggests improvements
-- **Event-driven automation** - Watches for conditions and triggers actions automatically
-
 ### 🔒 Security-First Design
 Every tool output is automatically scanned and redacted for sensitive data (API keys, tokens, passwords). The dashboard has rate limiting, CSRF protection, and audit logging. The agent bridge is isolated and only accessible through the dashboard.
 
-### 🛠️ 70 Specialized Tools
+### 🛠️ 92+ Specialized Tools
 Not just bash and file operations. Sidekick includes tools for:
 - GitHub integration (PRs, issues, releases)
 - Service and process management
@@ -108,7 +125,11 @@ Not just bash and file operations. Sidekick includes tools for:
 - Incident response and forensics
 - Operational runbooks and procedures
 - Dependency analysis and impact assessment
-- **Database operations (query, backup, restore, search, migrations)**
+- Database operations (query, backup, restore, search, migrations)
+- Media processing (OCR, transcription, video/audio conversion)
+- Networking (Cloudflare tunnels, WireGuard, Nginx)
+- Metrics collection and visualization
+- Knowledge base management
 - And much more
 
 **The result:** Sidekick isn't just a tool server—it's an autonomous platform that learns, adapts, and grows with your workflow.
@@ -132,10 +153,14 @@ Sidekick used its own tools to help develop itself. Here's the AI agent debuggin
 |---|---|---|
 | **Remote code execution** | `sidekick_bash` runs commands on a persistent remote machine | Instructions tell the AI when and how to use it |
 | **Persistent memory across sessions** | `sidekick_store` / `sidekick_get` — KV storage that survives restarts | AI knows which keys to store and retrieve |
+| **Knowledge base queries** | `sidekick_knowledge` — Search structured documentation | AI queries DB instead of re-reading files |
+| **Metrics & monitoring** | Grafana dashboards at `:3000` + Metrics tab in dashboard | Real-time system health, tool usage, service status |
 | **Autonomous multi-step tasks** | Agent bridge at `:4099` plans and executes until done | AI knows to delegate complex work to the agent |
 | **Code review** | Ask the AI to review diffs using remote execution tools | Decision tree in AGENTS.md tells the AI *when* to use sidekick tools for review |
 | **GitHub integration** | Stored tokens let sidekick create repos, push code, manage PRs | AGENTS.md tells the AI where to find credentials |
-| **Live monitoring dashboard** | Web UI at `:4098` — system health, activity, KV data, agent tasks | Always accessible, no config needed |
+| **Database operations** | `sidekick_db_*` tools for SQLite and PostgreSQL | Query, backup, restore, search, migrate databases |
+| **Media processing** | `sidekick_ocr`, `sidekick_media`, `sidekick_transcribe` | OCR, video/audio conversion, transcription |
+| **Networking** | `sidekick_tunnel`, `sidekick_wireguard`, `sidekick_nginx` | Cloudflare tunnels, VPN, reverse proxy |
 | **Web scraping from remote** | `sidekick_web_fetch` bypasses local network restrictions | AI knows to use remote machine for fetching when needed |
 | **LLM on demand** | Cloud Groq for speed, local Ollama as fallback | AI knows which to use and when |
 | **File content search** | `sidekick_search` uses ripgrep/grep for fast code search | AI can quickly find code patterns across the codebase |
@@ -157,8 +182,8 @@ Sidekick used its own tools to help develop itself. Here's the AI agent debuggin
 │  git push → github.com/geoffmcc/sidekick               │
 │  ./deploy.ps1 → SSH into remote, git pull, restart     │
 └────────────────────────────────────────────────────────┘
-                          │
-                          ▼
+                           │
+                           ▼
 ┌─ Remote Machine (YOUR_REMOTE_IP) ─────────────────────────┐
 │                                                        │
 │  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐  │
@@ -168,136 +193,101 @@ Sidekick used its own tools to help develop itself. Here's the AI agent debuggin
 │         │                  │                  │          │
 │         └──────────────────┼──────────────────┘          │
 │                            │                             │
-│         ┌──────────────────▼──────────────┐              │
-│         │        Ollama :11434            │              │
-│         │     Model: phi3:mini (2.2GB)    │              │
-│         └─────────────────────────────────┘              │
+│  ┌─────────────────────────▼──────────────────────────┐ │
+│  │              Data & Services Layer                  │ │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐         │ │
+│  │  │ SQLite   │  │ Redis    │  │ Qdrant   │         │ │
+│  │  │ (main DB)│  │ (cache)  │  │ (vector) │         │ │
+│  │  └──────────┘  └──────────┘  └──────────┘         │ │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐         │ │
+│  │  │InfluxDB  │  │ Grafana  │  │ Ollama   │         │ │
+│  │  │ :8086    │  │ :3000    │  │ :11434   │         │ │
+│  │  └──────────┘  └──────────┘  └──────────┘         │ │
+│  └────────────────────────────────────────────────────┘ │
 └────────────────────────────────────────────────────────┘
 ```
 
 *The agent bridge also supports Groq cloud API — when `GROQ_API_KEY` is set, it uses Groq instead of Ollama for near-instant LLM responses.*
 
+### Data Layer
+
+- **SQLite** — Primary database for KV store, tool logs, knowledge base, and metadata
+- **Redis** — Session-scoped caching with TTL support
+- **Qdrant** — Vector database for semantic search and embeddings
+- **InfluxDB** — Time-series metrics collection (system health, tool usage, service status)
+- **Grafana** — Metrics visualization with 6 pre-built dashboards
+
+### LLM Support
+
+- **Ollama** (local) — Multiple models available:
+  - `qwen2.5-coder:7b` — Default, optimized for code tasks
+  - `llama3.1:8b` — General purpose reasoning
+  - `nomic-embed-text` — Embedding model for semantic search
+- **Groq** (cloud) — Fast inference when `GROQ_API_KEY` is set
+
 ## Services & Tools
 
 | Service | Port | Description |
 |---------|------|-------------|
-| **MCP Server** | 4097 | 70 tools: bash, read, write, list, search, git, notify, process, service, archive, cron, github, webhook, context, teach, store, get, list_projects, get_by_project, web_fetch, llm, transform, health, delay, snapshot, watch, secret, parse, diff, hash, validate, template, queue, retry, evolve, orchestrate, predict, debug_tool, fresheyes, batch, cache, summarize, filter, project, tail, diff_files, find, status, extract, anonymize, sandbox, changelog, netdiag, timeline, circuit, baseline, depend, runbook, black_box, respond, db_schema, db_query, db_stats, db_backup, db_restore, log_query, db_export, db_search, db_migrate, db_diff |
-| **Dashboard** | 4098 | Web UI: system health, activity log, KV data, agent tasks |
+| **MCP Server** | 4097 | 92+ tools across 19 categories (see database for full list) |
+| **Dashboard** | 4098 | Web UI: system health, activity log, KV data, agent tasks, tool catalog, metrics |
 | **Agent Bridge** | 4099 | AI agent loop — LLM plans and calls MCP tools autonomously |
-| **Ollama** | 11434 | Local LLM inference (phi3:mini). Fallback when no `GROQ_API_KEY` |
+| **Ollama** | 11434 | Local LLM inference (qwen2.5-coder:7b, llama3.1:8b, nomic-embed-text) |
+| **Redis** | 6379 | Session-scoped caching with TTL |
+| **Qdrant** | 6333 | Vector database for semantic search |
+| **InfluxDB** | 8086 | Time-series metrics (system health, tool usage, service status) |
+| **Grafana** | 3000 | Metrics visualization with 6 pre-built dashboards |
 
 All tools are exposed via the MCP server at `http://YOUR_REMOTE_IP:4097/mcp`.
 
-### New Tools (v1.19) - Database Tools
+### Tool Categories
 
-- **`sidekick_db_schema`** — Inspect database schema: tables, columns, indexes, foreign keys.
-- **`sidekick_db_query`** — Raw SQL with safety limits (readonly by default, row caps, timeout).
-- **`sidekick_db_stats`** — DB size, table sizes, WAL status, cache hit ratio.
-- **`sidekick_db_backup`** — Timestamped backup with gzip compression.
-- **`sidekick_db_restore`** — Restore from backup with integrity check (auto-backup before restore).
-- **`sidekick_log_query`** — Advanced tool_logs filtering by time, tool, source, status.
-- **`sidekick_db_export`** — Export tables to JSON, CSV, or SQL dump.
-- **`sidekick_db_search`** — Full-text search across all tables (auto-creates FTS5 indexes).
-- **`sidekick_db_migrate`** — Schema migrations with versioning and rollback.
-- **`sidekick_db_diff`** — Compare two DB snapshots, show what changed.
+Tools are organized into 19 categories:
+- **Core** — bash, read, write, list, search, web_fetch, llm, respond
+- **Storage** — store, get, list_projects, get_by_project, redis
+- **Database** — db_schema, db_query, db_stats, db_backup, db_restore, db_export, db_search, db_migrate, db_diff, analytics
+- **Git & GitHub** — git, github
+- **Services** — process, service
+- **Scheduling** — cron, delay
+- **Communication** — notify, webhook
+- **Context & Learning** — context, teach, embed, ollama, knowledge
+- **Data Pipeline** — transform, parse, diff, hash, validate, template, extract, anonymize, diff_files
+- **Monitoring** — health, status, watch, baseline, snapshot, timeline, black_box, netdiag, metrics
+- **Workflow** — queue, retry, orchestrate, runbook
+- **Meta** — evolve, predict, debug_tool, fresheyes
+- **Efficiency** — batch, cache, summarize, filter, project, tail, find
+- **Security** — secret, sandbox
+- **Networking** — tunnel, wireguard, nginx
+- **Development** — changelog, depend
+- **Reliability** — circuit
+- **Archive** — archive
+- **Media** — ocr, media, transcribe, download
 
-### New Tools (v1.18) - Operations Platform Expansion
-
-- **`sidekick_anonymize`** — Replace sensitive data with realistic fake values. Consistent mapping, custom patterns, redact safety net.
-- **`sidekick_sandbox`** — Execute operations with automatic file backup and rollback. Safe experimentation on remote systems.
-- **`sidekick_changelog`** — Generate release notes from git history. Groups by type/scope/author, optional LLM summaries.
-- **`sidekick_netdiag`** — Unified network diagnostics: DNS, routing, port scanning, connectivity checks, local listeners.
-- **`sidekick_timeline`** — Build chronological timelines from multiple sources (log.jsonl, journalctl, git, files).
-- **`sidekick_circuit`** — Generic circuit breaker for any tool call. Fast-fail when targets are down, configurable thresholds.
-- **`sidekick_baseline`** — Behavioral baseline and anomaly detection. Learns patterns, detects statistical deviations.
-- **`sidekick_depend`** — Dependency analyzer for npm, systemd services, processes. Trees, reverse deps, impact analysis.
-- **`sidekick_runbook`** — Operational runbook executor with autonomous and guided modes. Verification, rollback, step-by-step.
-- **`sidekick_black_box`** — Incident time capsule capturing full system context. Rate limited (5/day, 7-day TTL, 3 active max).
-
-### New Tools (v1.17) - Token Efficiency
-
-- **`sidekick_batch`** — Execute multiple tool calls in one request to reduce API round-trips (max 20 per batch).
-- **`sidekick_cache`** — Session-scoped caching to avoid redundant operations. Store and retrieve values with TTL.
-- **`sidekick_summarize`** — Summarize large files before returning to reduce token usage. Strategies: head, tail, grep, stats.
-- **`sidekick_filter`** — Filter file contents or directory listings by pattern, date, or size before returning.
-- **`sidekick_project`** — Get complete project context in one call: KV entries, context tracking, recent logs, procedures.
-- **`sidekick_tail`** — Tail recent log entries with filtering. Sources: log.jsonl, journalctl, or any file.
-- **`sidekick_diff_files`** — Compare two files directly without reading both into context. Returns unified diff or summary.
-- **`sidekick_find`** — Advanced file finder: search by name pattern, date range, size range, and content pattern.
-- **`sidekick_status`** — Unified system status: services, disk, memory, load, uptime, top processes in one call.
-- **`sidekick_extract`** — Parse JSON/YAML/INI/XML and extract specific fields by path. Returns only what you need.
-
-### New Tools (v1.15) - Meta-Capabilities
-
-- **`sidekick_evolve`** — Self-modification with safety: analyze tool usage patterns, propose improvements, test and approve changes. Automatically implements approved proposals (creates documentation and teaches procedures). Rate limited to 10 proposals per day. **Requires explicit tool policy restrictions to prevent automatic implementation.**
-- **`sidekick_orchestrate`** — Multi-agent coordination: create task graphs, execute subtasks with dependencies, track progress across all subtasks.
-- **`sidekick_predict`** — Anticipatory intelligence: analyze context and tool patterns, predict needs, track prediction usefulness via feedback.
-
-### New Tools (v1.14) - Workflow & Reliability
-
-- **`sidekick_validate`** — Validate data against JSON Schema using ajv. Returns detailed error messages with paths.
-- **`sidekick_template`** — Render Handlebars templates with data for config generation and dynamic content.
-- **`sidekick_queue`** — Persistent task queue with priorities, status tracking, and automatic retry tracking.
-- **`sidekick_retry`** — Retry wrapper for any tool call with exponential/linear/fixed backoff strategies.
-
-### New Tools (v1.13) - Core Data Utilities
-
-- **`sidekick_parse`** — Parse structured data formats (JSON, YAML, XML, INI, CSV) with auto-detection.
-- **`sidekick_diff`** — Semantic comparison of text, JSON, or YAML with structure-aware diffing.
-- **`sidekick_hash`** — Generate checksums (MD5, SHA1, SHA256, SHA512) for files or data with verification.
-
-### New Tools (v1.12) - Companion Tools Phase 1
-
-- **`sidekick_transform`** — Data manipulation pipeline: filter, extract, sort, format, and map data.
-- **`sidekick_health`** — Composite system health checks with scoring and issue detection.
-
-### New Tools (v1.11) - Companion Tools Phase 2
-
-- **`sidekick_delay`** — One-shot task scheduling: run a tool once at a specific time or after a delay.
-- **`sidekick_snapshot`** — Capture system state and detect drift by comparing snapshots.
-
-### New Tools (v1.10) - Companion Tools Phase 3
-
-- **`sidekick_watch`** — Event-driven monitoring: watch services, processes, endpoints, or files and trigger actions on conditions.
-- **`sidekick_secret`** — Encrypted credential management with AES-256-GCM (requires SIDEKICK_SECRET_KEY in .env).
-
-### New Tools (v1.5)
-
-- **`sidekick_teach`** — Meta-learning and self-extension: teach procedures, generate tools from descriptions, learn from examples, execute learned workflows. Enables sidekick to grow its own capabilities.
-
-### New Tools (v1.4)
-
-- **`sidekick_context`** — Persistent intelligent context management: track projects, decisions, problems, patterns; recall and suggest based on past context. Uses semantic similarity search.
-
-### New Tools (v1.3)
-
-- **`sidekick_cron`** — Schedule recurring tasks: add, list, remove, run jobs. Uses system crontab for scheduling.
-- **`sidekick_github`** — Full GitHub API integration: PRs (list/create/get/merge), issues (list/create/close), commit status, releases, repo info. Uses stored `github_token`.
-- **`sidekick_webhook`** — Receive and manage webhooks: list, get, clear. Webhook endpoint at `POST /api/webhook/:source` on dashboard.
-
-### New Tools (v1.2)
-
-- **`sidekick_process`** — Manage processes: list, top CPU/memory consumers, kill by PID/name, process tree.
-- **`sidekick_service`** — Manage systemd services: start, stop, restart, status, enable, disable, view logs.
-- **`sidekick_archive`** — Create, extract, or list archives (tar.gz, tgz, zip).
-
-### New Tools (v1.1)
-
-- **`sidekick_search`** — Fast file content search using ripgrep (falls back to grep). Supports regex patterns and file filtering.
-- **`sidekick_git`** — Structured git operations: status, diff, log, add, commit, push, pull, branch, checkout, stash. Safer than raw bash for git commands.
-- **`sidekick_notify`** — Send notifications to Discord, Slack (via webhooks), or email (via SMTP). Useful for alerts and monitoring.
+Query the database for the complete tool list:
+```sql
+SELECT t.name, t.description, t.risk, tc.name as category
+FROM tools t
+LEFT JOIN tool_category_map tcm ON t.name = tcm.tool_name
+LEFT JOIN tool_categories tc ON tcm.category_id = tc.id
+WHERE t.enabled = 1 AND t.deprecated = 0
+ORDER BY tc.sort_order, t.name
+```
 
 ## Understanding the Architecture
 
 To avoid confusion, it's important to understand what each component is:
 
-- **Sidekick** = The autonomous agent platform: remote machine + 70 MCP tools + persistent memory + Dashboard + Agent Bridge + self-extending capabilities
+- **Sidekick** = The autonomous agent platform: remote machine + 92+ MCP tools + persistent memory + knowledge base + Dashboard + Agent Bridge + metrics & monitoring + self-extending capabilities
 - **The AI** = The assistant running in opencode (e.g., qwen, Claude, etc.) that uses Sidekick's platform
 - **Agent Bridge** = Sidekick's autonomous agent that runs tasks independently via the Dashboard
+- **Knowledge Base** = Structured documentation stored in SQLite, searchable via `sidekick_knowledge`
+- **Metrics System** = InfluxDB + Grafana for system health, tool usage, and service monitoring
 
 When you call sidekick tools in opencode, you're executing commands on the remote machine. The AI makes the decisions; Sidekick provides the capabilities.
 
 The Agent Bridge is a separate system that can run tasks autonomously, but it's not integrated into the main AI's workflow. It's accessed via the Dashboard's Agent tab or direct API calls.
+
+The Knowledge Base replaces the need for large markdown files. Instead of re-reading AGENTS.md or CONTEXT.md, the AI queries the database for specific information, saving tokens and improving accuracy.
 
 **What Sidekick does NOT do (currently):**
 - It does not provide multi-AI collaboration (the main AI cannot consult the Agent Bridge and get responses back)
@@ -328,9 +318,51 @@ Open `http://YOUR_REMOTE_IP:4098/` in a browser.
 - **System** — uptime, CPU, memory, disk, LLM status, service indicators (MCP, Agent, Ollama)
 - **Activity** — live tool call log with source badges (mcp/agent/dashboard)
 - **Data** — KV store contents with project filtering, age filtering, and expandable previews
+- **Database** — schema browser, query editor, full-text search, migration management
 - **Config** — environment variables (sensitive values redacted)
 - **Agent** — submit tasks for the AI agent to execute autonomously
-- **Tools** — browsable catalog of all 70 tools with search, category filtering, policy status, risk labels, and detailed argument info
+- **Tools** — browsable catalog of all 92+ tools with search, category filtering, policy status, risk labels, and detailed argument info
+- **Metrics** — embedded Grafana dashboards for system health, tool analytics, database performance, Docker containers, and Ollama metrics
+
+### Metrics & Monitoring
+
+Sidekick includes comprehensive metrics collection and visualization:
+
+**Metrics Collection** (runs every minute via cron):
+- System health: CPU, memory, disk, load average
+- Tool usage: call counts, success rates, duration stats per tool
+- Service status: MCP, Dashboard, Agent health
+
+**Grafana Dashboards** (6 pre-built):
+1. **Sidekick Overview** — High-level system metrics and tool usage
+2. **Tool Analytics** — Per-tool performance metrics with dynamic selectors
+3. **System Health** — CPU, memory, disk usage over time
+4. **Database Performance** — Query times, connection counts, cache hit ratios
+5. **Docker Containers** — Container resource usage and health
+6. **Ollama** — LLM request counts, response times, token usage
+
+Access Grafana directly at `http://YOUR_REMOTE_IP:3000/` (credentials: sidekick/sidekick)
+
+### Knowledge Base
+
+Sidekick includes a structured knowledge base for storing and retrieving project documentation:
+
+- **36+ entries** across categories: best-practices, architecture, operations, protocols
+- **Full-text search** with semantic similarity
+- **Auto-migration** from AGENTS.md and CONTEXT.md
+- **Tool**: `sidekick_knowledge` for search, get, list, add, update, delete
+
+Example queries:
+```bash
+# Search for debugging best practices
+sidekick_knowledge action="search" query="debugging"
+
+# List all architecture entries
+sidekick_knowledge action="list" category="architecture"
+
+# Get specific entry
+sidekick_knowledge action="get" id=18
+```
 
 ### Agent Bridge
 
@@ -361,32 +393,37 @@ curl http://YOUR_REMOTE_IP:4099/api/agent/history
 
 > **This is the most important step.** Without this file, Sidekick is just a tool server. With it, Sidekick's tools and instructions are loaded into every opencode session.
 
-Create or edit `~/.config/opencode/AGENTS.md` with the following structure (replace placeholders with your values):
+Sidekick uses a **knowledge-base-first architecture**. Instead of storing all documentation in large markdown files, AGENTS.md points to the knowledge base where all information is stored.
 
-~~~markdown
-# Sidekick Configuration
-
-## Connection
-- IP: YOUR_REMOTE_IP
-- MCP Server: port 4097
-- Dashboard: port 4098
-- Agent Bridge: port 4099
-
-## Credentials
-- GitHub token stored in KV key: `github_token`
-- Use `sidekick_get("github_token")` to retrieve it for GitHub API calls
-
-## Usage
-- `sidekick_bash` — Run commands on the remote machine
-- `sidekick_store` / `sidekick_get` — Persistent KV storage
-- `sidekick_read` / `sidekick_write` — File operations
-- `sidekick_git` — Git operations
-- `task` subagent — Delegate complex multi-step tasks
-~~~
+The AGENTS.md file includes:
+- Connection info (IP, ports, SSH)
+- Knowledge base query examples
+- Tool query examples (SQL to list tools from database)
+- Basic usage instructions
 
 **opencode reads this file automatically on every session start.** No plugins, no hooks, no manual loading — just a markdown file in the right place.
 
-For the full AGENTS.md template with detailed usage guidelines, see [`AGENTS.md`](AGENTS.md) in this repo.
+For the full AGENTS.md template, see [`AGENTS.md`](AGENTS.md) in this repo.
+
+### Knowledge Base Categories
+
+The knowledge base includes entries in these categories:
+- **best-practices** — Interaction policies, debugging, tool selection, token efficiency
+- **architecture** — Services, DB-first architecture, monitoring, tooling
+- **operations** — Deployment, configuration, security, troubleshooting
+- **protocols** — Context recall and other protocols
+
+Query the knowledge base:
+```bash
+# List all categories
+sidekick_knowledge action="list"
+
+# Search for specific topics
+sidekick_knowledge action="search" query="deployment"
+
+# Get entries by category
+sidekick_knowledge action="list" category="best-practices"
+```
 
 ## Daily Workflow
 
@@ -411,6 +448,65 @@ cd /home/sidekick/sidekick
 git pull
 sudo systemctl restart sidekick-mcp sidekick-dashboard sidekick-agent
 ```
+
+## Optional Infrastructure
+
+Sidekick can be extended with additional services for enhanced capabilities:
+
+### Database Services
+
+**PostgreSQL** (optional, alongside SQLite):
+```bash
+sudo systemctl start sidekick-postgres
+```
+- Full SQL database for complex queries and relational data
+- Accessible via `sidekick_db_query` with `database="postgres"`
+
+**Redis** (session caching):
+```bash
+sudo systemctl start sidekick-redis
+```
+- Session-scoped caching with TTL
+- Automatic fallback to in-memory cache if unavailable
+
+**Qdrant** (vector database):
+```bash
+sudo systemctl start sidekick-qdrant
+```
+- Semantic search for `sidekick_context` tool
+- Embedding-based similarity search
+
+### Metrics & Monitoring
+
+**InfluxDB** (time-series database):
+```bash
+sudo systemctl start sidekick-influxdb
+```
+- Stores system metrics, tool usage, service status
+- Metrics collected every minute via cron
+
+**Grafana** (visualization):
+```bash
+sudo systemctl start sidekick-grafana
+```
+- 6 pre-built dashboards
+- Accessible at `http://YOUR_REMOTE_IP:3000/` (sidekick/sidekick)
+- Embedded in Dashboard's Metrics tab
+
+### Install All Services
+
+Run the setup script to install the full tool stack:
+```bash
+sudo bash scripts/setup-tools.sh
+```
+
+This installs:
+- Docker and Docker Compose
+- PostgreSQL, Redis, Qdrant, InfluxDB, Grafana
+- Media tools (ffmpeg, ImageMagick, Tesseract OCR)
+- Development tools (Go, Python packages)
+- Networking tools (Cloudflare tunnels, WireGuard, Nginx)
+- And more...
 
 ## Configuration
 
@@ -474,32 +570,59 @@ This follows the principle of least privilege: after initial setup, the sidekick
 | `SIDEKICK_MCP_TOOL_POLICY` | — | Source-specific tool policy override for MCP clients |
 | `SIDEKICK_DASHBOARD_TOOL_POLICY` | — | Source-specific tool policy override for dashboard-originated calls |
 | `OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama API URL (local fallback) |
+| `OLLAMA_MODEL` | `qwen2.5-coder:7b` | Default Ollama model |
 | `GROQ_API_KEY` | — | Groq API key for cloud LLM (empty = use local Ollama) |
 | `GROQ_MODEL` | `llama3-8b-8192` | Groq model name |
 | `SIDEKICK_MAX_ITERATIONS` | `15` | Max agent loop iterations (safety limit) |
+| `SIDEKICK_POSTGRES_URL` | `postgresql://sidekick:sidekick@127.0.0.1:5432/sidekick` | PostgreSQL connection string |
+| `SIDEKICK_REDIS_URL` | `redis://127.0.0.1:6379` | Redis connection string |
+| `SIDEKICK_QDRANT_URL` | `http://127.0.0.1:6333` | Qdrant vector DB URL |
+| `SIDEKICK_INFLUX_URL` | `http://127.0.0.1:8086` | InfluxDB URL |
+| `SIDEKICK_INFLUX_TOKEN` | `sidekick-influx-token` | InfluxDB authentication token |
+| `SIDEKICK_INFLUX_ORG` | `sidekick` | InfluxDB organization |
+| `SIDEKICK_INFLUX_BUCKET` | `sidekick` | InfluxDB bucket for metrics |
 
 ## Project Structure
 
 ```
 ├── src/
-│   ├── tools.js        Shared tool handlers (extracted from index.js)
+│   ├── tools.js        Shared tool handlers (92+ tools)
 │   ├── index.js        MCP server (session-aware transport management)
-│   ├── dashboard.js    Dashboard web UI (source tagging, Font Awesome icons)
+│   ├── dashboard.js    Dashboard web UI (8 tabs including Metrics)
 │   ├── agent.js        Agent bridge (LLM tool-use loop, direct tool calls)
-│   └── redact.js       Sensitive data redaction
+│   ├── redact.js       Sensitive data redaction
+│   ├── db.js           SQLite database layer
+│   ├── pg.js           PostgreSQL support
+│   ├── redis.js        Redis client for caching
+│   └── qdrant.js       Qdrant vector DB client for semantic search
 ├── scripts/
-│   └── bootstrap.sh    VM bootstrap script (creates user, installs Node.js, etc.)
+│   ├── bootstrap.sh    VM bootstrap script (creates user, installs Node.js, etc.)
+│   ├── setup-tools.sh  Server tooling setup (Docker, databases, media tools, etc.)
+│   ├── collect-metrics.js  Metrics collection script (runs via cron)
+│   └── parse-context.js    Migrate CONTEXT.md to knowledge base
 ├── systemd/
 │   ├── sidekick-mcp.service       MCP server systemd unit
 │   ├── sidekick-dashboard.service Dashboard systemd unit
 │   ├── sidekick-agent.service     Agent bridge systemd unit
+│   ├── sidekick-postgres.service  PostgreSQL Docker wrapper
+│   ├── sidekick-redis.service     Redis Docker wrapper
+│   ├── sidekick-qdrant.service    Qdrant Docker wrapper
+│   ├── sidekick-influxdb.service  InfluxDB Docker wrapper
+│   ├── sidekick-grafana.service   Grafana Docker wrapper
 │   └── sidekick-sudoers           Sudoers config for sidekick user
-├── data/               Runtime data (on remote: logs, KV, conversations)
+├── docker/
+│   └── docker-compose.yml  Docker services (Postgres, Redis, Qdrant, InfluxDB, Grafana)
+├── grafana/
+│   ├── provisioning/       Grafana auto-provisioning configs
+│   └── dashboards/         6 pre-built Grafana dashboards
+├── migrations/
+│   ├── 001_initial_schema.sql  Initial database schema
+│   └── 002_tool_registry.sql   Tool registry and knowledge base tables
+├── data/               Runtime data (on remote: logs, KV, conversations, metrics)
 ├── deploy.ps1          Deploy script (Windows)
 ├── deploy.sh           Deploy script (Linux/Mac)
 ├── .env.example        Environment variable template
-├── AGENTS.md           opencode subagent config
-├── CONTEXT.md          Project context and session notes
+├── AGENTS.md           opencode subagent config (points to knowledge base)
 └── opencode.json       opencode MCP server config
 ```
 
