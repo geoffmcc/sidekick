@@ -858,7 +858,7 @@ app.get("/api/agent/run/:id", (req, res) => {
 app.get("/", (req, res) => {
   const html = fs.readFileSync(path.join(__dirname, "dashboard.html"), "utf-8")
     .replace("__VPS_IP__", VPS_IP);
-  res.type("html; charset=utf-8").send(html);
+  res.set("Content-Type", "text/html; charset=utf-8").send(html);
 });
 
 app.listen(PORT, "0.0.0.0", () => {
