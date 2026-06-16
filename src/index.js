@@ -7,6 +7,7 @@ const { WebStandardStreamableHTTPServerTransport } = require("@modelcontextproto
 const { SSEServerTransport } = require("@modelcontextprotocol/sdk/server/sse.js");
 const { z } = require("zod");
 const { TOOLS, TOOL_DEFS, DATA_DIR, setSource, logToolCall, loadProcedures, enforceToolPolicy, syncToolRegistry } = require("./tools");
+const dbStore = require("./db");
 
 const API_KEY = process.env.SIDEKICK_API_KEY || "sk-sidekick-local-dev";
 const PORT = parseInt(process.env.SIDEKICK_PORT || "4097", 10);
