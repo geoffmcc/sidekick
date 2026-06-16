@@ -89,6 +89,7 @@ const TOOL_RISK = {
   sidekick_embed: "low",
   sidekick_ollama: "low",
   sidekick_tunnel: "medium",
+  sidekick_download: "low",
 };
 
 function getToolRisk(name) {
@@ -8025,6 +8026,50 @@ async function sidekick_tunnel({ action, url, port, name }) {
   }
 }
 
+// --- yt-dlp Tool ---
+
+async function sidekick_download({ url, output, format, audio_only }) {
+  try {
+    if (!url) {
+      return { content: [{ type: "text", text: "Error: url required" }], isError: true };
+    }
+
+    const venvPath = "/home/sidekick/.sidekick-tools/bin/yt-dlp";
+    const ytdlpCmd = fs.existsSync(venvPath) ? venvPath : "yt-dlp";
+    
+    let cmd = `${ytdlpCmd} --no-playlist`;
+    
+    if (audio_only) {
+      cmd += " -x --audio-format mp3";
+    } else if (format) {
+      cmd += ` -f "${format}"`;
+    }
+    
+    if (output) {
+      cmd += ` -o "${output}"`;
+    } else {
+      cmd += ` -o "/tmp/%(title)s.%(ext)s"`;
+    }
+    
+    cmd += ` "${url}"`;
+    
+    const result = execSync(cmd, { timeout: 300000 }).toString();
+    
+    // Try to find the output file
+    const outputMatch = result.match(/\[download\] Destination: (.+)/);
+    const downloadedFile = outputMatch ? outputMatch[1] : null;
+    
+    return { content: [{ type: "text", text: JSON.stringify({
+      status: "success",
+      url: url,
+      output: downloadedFile || "Downloaded",
+      log: result.substring(0, 500)
+    }, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
+  }
+}
+
 const TOOLS = {
   sidekick_bash,
   sidekick_read,
@@ -8104,6 +8149,7 @@ const TOOLS = {
   sidekick_embed,
   sidekick_ollama,
   sidekick_tunnel,
+  sidekick_download,
 };
 
 const TOOL_DEFS = [
@@ -8185,6 +8231,7 @@ const TOOL_DEFS = [
   { name: "sidekick_embed", description: "Generate text embeddings using Ollama", args: { text: "string (text to embed)", model: "string (optional, embedding model - default nomic-embed-text)" } },
   { name: "sidekick_ollama", description: "Manage Ollama models: list, ps, pull, show", args: { action: "string (list|ps|pull|show)", model: "string (optional, model name for pull/show)" } },
   { name: "sidekick_tunnel", description: "Manage Cloudflare tunnels: start, stop, list", args: { action: "string (start|stop|list)", port: "number (local port to expose)", name: "string (optional, tunnel name)" } },
+  { name: "sidekick_download", description: "Download videos/audio from YouTube and 1000+ sites using yt-dlp", args: { url: "string (video URL)", output: "string (optional, output path)", format: "string (optional, video format)", audio_only: "boolean (optional, extract audio only)" } },
 ];
 
 async function callTool(name, args) {

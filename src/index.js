@@ -510,6 +510,12 @@ const TOOL_SCHEMAS = {
     port: z.number().optional().describe("Local port to expose (required for start)"),
     name: z.string().optional().describe("Tunnel name (optional)")
   }),
+  sidekick_download: z.object({
+    url: z.string().describe("Video URL"),
+    output: z.string().optional().describe("Output path"),
+    format: z.string().optional().describe("Video format"),
+    audio_only: z.boolean().optional().describe("Extract audio only")
+  }),
 };
 
 // --- Factory: create fresh McpServer + register tools ---
