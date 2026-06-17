@@ -399,7 +399,8 @@ try {
     branch = $gitBranch
     remote_url = $gitRemote
     deployed_at = $deployTime
-  } | ConvertTo-Json
+  } | ConvertTo-Json -Depth 3
+  $versionData = $versionData -replace "`r`n", "`n"
 
   $versionPath = Join-Path $PROJECT_DIR "version.json"
   # Write UTF-8 without BOM (PowerShell 5.1 Set-Content adds BOM by default)
