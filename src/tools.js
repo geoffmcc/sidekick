@@ -64,6 +64,12 @@ const TOOL_RISK = {
   sidekick_web_fetch: "medium",
   sidekick_llm: "medium",
   sidekick_context: "medium",
+  sidekick_memory_export: "low",
+  sidekick_memory_import: "medium",
+  sidekick_sync_identity: "low",
+  sidekick_sync_export: "low",
+  sidekick_sync_import: "medium",
+  sidekick_sync_diff: "low",
   sidekick_health: "medium",
   sidekick_snapshot: "medium",
   sidekick_retry: "medium",
@@ -135,6 +141,12 @@ const TOOL_CATEGORIES = {
   'sidekick_teach': 'Context & Learning',
   'sidekick_embed': 'Context & Learning',
   'sidekick_ollama': 'Context & Learning',
+  'sidekick_memory_export': 'Context & Learning',
+  'sidekick_memory_import': 'Context & Learning',
+  'sidekick_sync_identity': 'Context & Learning',
+  'sidekick_sync_export': 'Context & Learning',
+  'sidekick_sync_import': 'Context & Learning',
+  'sidekick_sync_diff': 'Context & Learning',
   'sidekick_transform': 'Data Pipeline',
   'sidekick_parse': 'Data Pipeline',
   'sidekick_diff': 'Data Pipeline',
@@ -5325,6 +5337,92 @@ async function sidekick_project({ name, include }) {
   return { content: [{ type: "text", text: JSON.stringify(output, null, 2) }] };
 }
 
+async function sidekick_memory_export({ project, type, include_disabled, automatic_only }) {
+  const options = {};
+  if (project) options.project = project;
+  if (type) options.type = type;
+  if (include_disabled === false) options.includeDisabled = false;
+  if (automatic_only === true) options.automatic = true;
+
+  const result = dbStore.exportMemories(options);
+  return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+}
+
+async function sidekick_memory_import({ data, on_conflict, preserve_ids }) {
+  let parsed;
+  try {
+    parsed = typeof data === "string" ? JSON.parse(data) : data;
+  } catch (e) {
+    return { content: [{ type: "text", text: "Invalid JSON: " + e.message }], isError: true };
+  }
+
+  const options = {
+    onConflict: on_conflict || "merge",
+    preserveIds: preserve_ids === true
+  };
+
+  const result = dbStore.importMemories(parsed, options);
+  const summary = `Import complete: ${result.imported} imported, ${result.updated || 0} updated, ${result.skipped} skipped`;
+  const errors = result.errors?.length ? `\nErrors: ${result.errors.join(", ")}` : "";
+  return { content: [{ type: "text", text: summary + errors }] };
+}
+
+async function sidekick_sync_identity({ action, user_id }) {
+  if (action === "get") {
+    const machineId = dbStore.getMachineId();
+    const userId = dbStore.getUserId();
+    return { content: [{ type: "text", text: JSON.stringify({ machine_id: machineId, user_id: userId }) }] };
+  }
+  
+  if (action === "set_user") {
+    if (!user_id) {
+      return { content: [{ type: "text", text: "user_id required" }], isError: true };
+    }
+    dbStore.setUserId(user_id);
+    return { content: [{ type: "text", text: `User ID set to: ${user_id}` }] };
+  }
+  
+  return { content: [{ type: "text", text: "Invalid action. Use 'get' or 'set_user'" }], isError: true };
+}
+
+async function sidekick_sync_export({ project, since, include_disabled }) {
+  const options = {};
+  if (project) options.project = project;
+  if (since) options.since = since;
+  if (include_disabled === false) options.includeDisabled = false;
+  
+  const data = dbStore.exportForSync(options);
+  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+}
+
+async function sidekick_sync_import({ data, strategy, preserve_ids }) {
+  let parsed;
+  try {
+    parsed = typeof data === "string" ? JSON.parse(data) : data;
+  } catch (e) {
+    return { content: [{ type: "text", text: "Invalid JSON: " + e.message }], isError: true };
+  }
+  
+  const options = {
+    strategy: strategy || "newest",
+    preserveIds: preserve_ids === true
+  };
+  
+  const result = dbStore.importFromSync(parsed, options);
+  const summary = `Sync complete: ${result.imported} imported, ${result.conflicts} conflicts resolved, ${result.skipped} skipped`;
+  const errors = result.errors?.length ? `\nErrors: ${result.errors.join(", ")}` : "";
+  return { content: [{ type: "text", text: summary + errors }] };
+}
+
+async function sidekick_sync_diff({ since }) {
+  if (!since) {
+    return { content: [{ type: "text", text: "since parameter required (ISO timestamp)" }], isError: true };
+  }
+  
+  const diff = dbStore.getSyncDiff(since);
+  return { content: [{ type: "text", text: JSON.stringify(diff, null, 2) }] };
+}
+
 async function sidekick_tail({ source, pattern, lines, since }) {
   const maxLines = lines || 50;
   const re = pattern ? new RegExp(pattern, "i") : null;
@@ -8972,6 +9070,12 @@ const TOOLS = {
   sidekick_summarize,
   sidekick_filter,
   sidekick_project,
+  sidekick_memory_export,
+  sidekick_memory_import,
+  sidekick_sync_identity,
+  sidekick_sync_export,
+  sidekick_sync_import,
+  sidekick_sync_diff,
   sidekick_tail,
   sidekick_diff_files,
   sidekick_find,
@@ -9058,6 +9162,12 @@ const TOOL_DEFS = [
   { name: "sidekick_summarize", description: "Summarize large files before returning to reduce token usage. Strategies: head, tail, grep, stats.", args: { path: "string (file path)", max_lines: "number (optional, default 50)", strategy: "string (optional, head|tail|grep|stats - default head)", pattern: "string (optional, regex for grep strategy)" } },
   { name: "sidekick_filter", description: "Filter file contents or directory listings by pattern, date, or size before returning.", args: { path: "string (file or directory path)", pattern: "string (optional, regex pattern)", after: "string (optional, ISO date for files modified after)", before: "string (optional, ISO date for files modified before)", max_results: "number (optional, default 50)" } },
   { name: "sidekick_project", description: "Get complete project context in one call: KV entries, context tracking, recent logs, procedures.", args: { name: "string (project name)", include: "string (optional, comma-separated: kv,context,logs,procedures - default kv,context)" } },
+  { name: "sidekick_memory_export", description: "Export structured memories to JSON for backup, portability, or machine-to-machine transfer.", args: { project: "string (optional, filter by project)", type: "string (optional, filter by memory type)", include_disabled: "boolean (optional, include disabled memories - default true)", automatic_only: "boolean (optional, only automatic memories - default false)" } },
+  { name: "sidekick_memory_import", description: "Import memories from JSON export. Supports merge (update existing) or skip conflict modes.", args: { data: "string|object (JSON export data or parsed object)", on_conflict: "string (optional, merge|skip - default merge)", preserve_ids: "boolean (optional, preserve original IDs - default false)" } },
+  { name: "sidekick_sync_identity", description: "Manage machine and user identity for cross-machine sync. Get or set machine_id and user_id.", args: { action: "string (get|set_user)", user_id: "string (required for set_user action)" } },
+  { name: "sidekick_sync_export", description: "Export memories for cross-machine sync. Includes origin tracking and sync metadata.", args: { project: "string (optional, filter by project)", since: "string (optional, ISO timestamp - only export memories updated after this time)", include_disabled: "boolean (optional, include disabled memories - default true)" } },
+  { name: "sidekick_sync_import", description: "Import memories from another machine's sync export. Supports conflict resolution strategies.", args: { data: "string|object (sync export data)", strategy: "string (optional, newest|highest_confidence|most_confirmed|merge|skip - default newest)", preserve_ids: "boolean (optional, preserve original IDs - default false)" } },
+  { name: "sidekick_sync_diff", description: "Get list of memories changed since a given timestamp. Useful for incremental sync.", args: { since: "string (ISO timestamp - get changes after this time)" } },
   { name: "sidekick_tail", description: "Tail recent log entries with filtering. Sources: log.jsonl (sidekick logs), journalctl, or any file.", args: { source: "string (log.jsonl, journalctl, or file path)", pattern: "string (optional, regex filter - for journalctl: service name)", lines: "number (optional, default 50)", since: "string (optional, ISO date or relative like 1h, 1d)" } },
   { name: "sidekick_diff_files", description: "Compare two files directly without reading both into context. Returns unified diff or summary.", args: { path_a: "string (first file path)", path_b: "string (second file path)", format: "string (optional, unified|summary - default unified)" } },
   { name: "sidekick_find", description: "Advanced file finder: search by name pattern, date range, size range, and content pattern.", args: { path: "string (directory to search)", name: "string (optional, glob pattern e.g. '*.js')", modified_after: "string (optional, ISO date)", modified_before: "string (optional, ISO date)", size_min: "string (optional, e.g. '1KB', '1MB')", size_max: "string (optional, e.g. '10MB')", content: "string (optional, regex pattern to match file contents)", max_results: "number (optional, default 50)" } },
