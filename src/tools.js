@@ -66,6 +66,7 @@ const TOOL_RISK = {
   sidekick_context: "medium",
   sidekick_memory_export: "low",
   sidekick_memory_import: "medium",
+  sidekick_memory_manage: "medium",
   sidekick_sync_identity: "low",
   sidekick_sync_export: "low",
   sidekick_sync_import: "medium",
@@ -143,6 +144,7 @@ const TOOL_CATEGORIES = {
   'sidekick_ollama': 'Context & Learning',
   'sidekick_memory_export': 'Context & Learning',
   'sidekick_memory_import': 'Context & Learning',
+  'sidekick_memory_manage': 'Context & Learning',
   'sidekick_sync_identity': 'Context & Learning',
   'sidekick_sync_export': 'Context & Learning',
   'sidekick_sync_import': 'Context & Learning',
@@ -5367,6 +5369,63 @@ async function sidekick_memory_import({ data, on_conflict, preserve_ids }) {
   return { content: [{ type: "text", text: summary + errors }] };
 }
 
+async function sidekick_memory_manage({ action, id, confirmed_by, days, reason, limit, project }) {
+  if (action === "confirm") {
+    if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
+    const success = dbStore.confirmMemory(id, confirmed_by || "user");
+    return { content: [{ type: "text", text: success ? `Memory ${id} confirmed` : `Failed to confirm memory ${id}` }] };
+  }
+  
+  if (action === "set_requires_confirmation") {
+    if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
+    const requires = reason !== "false";
+    const success = dbStore.setMemoryRequiresConfirmation(id, requires);
+    return { content: [{ type: "text", text: success ? `Memory ${id} requires_confirmation set to ${requires}` : `Failed to update memory ${id}` }] };
+  }
+  
+  if (action === "delete") {
+    if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
+    const success = dbStore.softDeleteMemory(id, reason || "user_deleted");
+    return { content: [{ type: "text", text: success ? `Memory ${id} soft-deleted` : `Failed to delete memory ${id}` }] };
+  }
+  
+  if (action === "expire") {
+    if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
+    const success = dbStore.expireMemory(id, reason || "manual_expire");
+    return { content: [{ type: "text", text: success ? `Memory ${id} expired` : `Failed to expire memory ${id}` }] };
+  }
+  
+  if (action === "restore") {
+    if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
+    const success = dbStore.restoreMemory(id);
+    return { content: [{ type: "text", text: success ? `Memory ${id} restored` : `Failed to restore memory ${id}` }] };
+  }
+  
+  if (action === "set_auto_expire") {
+    if (!id || !days) return { content: [{ type: "text", text: "id and days required" }], isError: true };
+    const success = dbStore.setAutoExpire(id, days);
+    return { content: [{ type: "text", text: success ? `Memory ${id} will expire in ${days} days` : `Failed to set auto-expire` }] };
+  }
+  
+  if (action === "list_by_state") {
+    if (!id) return { content: [{ type: "text", text: "state required (passed as id param)" }], isError: true };
+    const memories = dbStore.getMemoriesByState(id, { limit: limit || 50, project });
+    return { content: [{ type: "text", text: JSON.stringify({ count: memories.length, memories }, null, 2) }] };
+  }
+  
+  if (action === "pending_confirmations") {
+    const memories = dbStore.getPendingConfirmations({ limit: limit || 50 });
+    return { content: [{ type: "text", text: JSON.stringify({ count: memories.length, memories }, null, 2) }] };
+  }
+  
+  if (action === "process_auto_expirations") {
+    const result = dbStore.processAutoExpirations();
+    return { content: [{ type: "text", text: `Processed auto-expirations: ${result.expired} memories expired` }] };
+  }
+  
+  return { content: [{ type: "text", text: "Invalid action. Use: confirm, set_requires_confirmation, delete, expire, restore, set_auto_expire, list_by_state, pending_confirmations, process_auto_expirations" }], isError: true };
+}
+
 async function sidekick_sync_identity({ action, user_id }) {
   if (action === "get") {
     const machineId = dbStore.getMachineId();
@@ -9072,6 +9131,7 @@ const TOOLS = {
   sidekick_project,
   sidekick_memory_export,
   sidekick_memory_import,
+  sidekick_memory_manage,
   sidekick_sync_identity,
   sidekick_sync_export,
   sidekick_sync_import,
@@ -9164,6 +9224,7 @@ const TOOL_DEFS = [
   { name: "sidekick_project", description: "Get complete project context in one call: KV entries, context tracking, recent logs, procedures.", args: { name: "string (project name)", include: "string (optional, comma-separated: kv,context,logs,procedures - default kv,context)" } },
   { name: "sidekick_memory_export", description: "Export structured memories to JSON for backup, portability, or machine-to-machine transfer.", args: { project: "string (optional, filter by project)", type: "string (optional, filter by memory type)", include_disabled: "boolean (optional, include disabled memories - default true)", automatic_only: "boolean (optional, only automatic memories - default false)" } },
   { name: "sidekick_memory_import", description: "Import memories from JSON export. Supports merge (update existing) or skip conflict modes.", args: { data: "string|object (JSON export data or parsed object)", on_conflict: "string (optional, merge|skip - default merge)", preserve_ids: "boolean (optional, preserve original IDs - default false)" } },
+  { name: "sidekick_memory_manage", description: "Manage memory lifecycle: confirm, delete, expire, restore, set auto-expire, list by state, pending confirmations, process auto-expirations.", args: { action: "string (confirm|set_requires_confirmation|delete|expire|restore|set_auto_expire|list_by_state|pending_confirmations|process_auto_expirations)", id: "string (memory ID, or state name for list_by_state)", confirmed_by: "string (optional, who confirmed - default 'user')", days: "number (for set_auto_expire)", reason: "string (optional, reason for delete/expire)", limit: "number (optional, for list operations - default 50)", project: "string (optional, filter by project for list operations)" } },
   { name: "sidekick_sync_identity", description: "Manage machine and user identity for cross-machine sync. Get or set machine_id and user_id.", args: { action: "string (get|set_user)", user_id: "string (required for set_user action)" } },
   { name: "sidekick_sync_export", description: "Export memories for cross-machine sync. Includes origin tracking and sync metadata.", args: { project: "string (optional, filter by project)", since: "string (optional, ISO timestamp - only export memories updated after this time)", include_disabled: "boolean (optional, include disabled memories - default true)" } },
   { name: "sidekick_sync_import", description: "Import memories from another machine's sync export. Supports conflict resolution strategies.", args: { data: "string|object (sync export data)", strategy: "string (optional, newest|highest_confidence|most_confirmed|merge|skip - default newest)", preserve_ids: "boolean (optional, preserve original IDs - default false)" } },
