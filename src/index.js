@@ -140,6 +140,23 @@ const TOOL_SCHEMAS = {
     on_conflict: z.enum(["merge", "skip"]).optional().describe("Conflict resolution: merge (update existing) or skip (default: merge)"),
     preserve_ids: z.boolean().optional().describe("Preserve original memory IDs (default: false)")
   }),
+  sidekick_sync_identity: z.object({
+    action: z.enum(["get", "set_user"]).describe("Action: get (show identity) or set_user (set user ID)"),
+    user_id: z.string().optional().describe("User ID to set (required for set_user action)")
+  }),
+  sidekick_sync_export: z.object({
+    project: z.string().optional().describe("Filter by project name"),
+    since: z.string().optional().describe("ISO timestamp - only export memories updated after this time"),
+    include_disabled: z.boolean().optional().describe("Include disabled memories (default: true)")
+  }),
+  sidekick_sync_import: z.object({
+    data: z.string().describe("Sync export data from another machine (JSON string or object)"),
+    strategy: z.enum(["newest", "highest_confidence", "most_confirmed", "merge", "skip"]).optional().describe("Conflict resolution strategy (default: newest)"),
+    preserve_ids: z.boolean().optional().describe("Preserve original memory IDs (default: false)")
+  }),
+  sidekick_sync_diff: z.object({
+    since: z.string().describe("ISO timestamp - get changes after this time")
+  }),
   sidekick_teach: z.object({
     action: z.enum(["teach_procedure", "generate_tool", "learn_from_example", "execute", "list", "remove"]).describe("Teach action to perform"),
     name: z.string().optional().describe("Procedure name (required for teach/generate/execute/remove)"),

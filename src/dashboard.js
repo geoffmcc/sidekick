@@ -774,6 +774,78 @@ app.post("/api/memories/expire", (req, res) => {
   }
 });
 
+app.get("/api/sync/identity", (req, res) => {
+  try {
+    const machineId = dbStore.getMachineId();
+    const userId = dbStore.getUserId();
+    res.json({ ok: true, machine_id: machineId, user_id: userId });
+  } catch (error) {
+    res.json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/api/sync/identity", (req, res) => {
+  try {
+    const { user_id } = req.body || {};
+    if (!user_id || typeof user_id !== "string") {
+      return res.json({ ok: false, error: "user_id required" });
+    }
+    dbStore.setUserId(user_id);
+    auditLog(req, "sync_set_user_id", { user_id });
+    res.json({ ok: true, user_id });
+  } catch (error) {
+    res.json({ ok: false, error: error.message });
+  }
+});
+
+app.get("/api/sync/export", (req, res) => {
+  try {
+    const { project, since, include_disabled } = req.query;
+    const options = {};
+    if (project) options.project = project;
+    if (since) options.since = since;
+    if (include_disabled === "false") options.includeDisabled = false;
+    
+    const data = dbStore.exportForSync(options);
+    auditLog(req, "sync_export", { count: data.count, project, since });
+    res.json({ ok: true, data });
+  } catch (error) {
+    res.json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/api/sync/import", (req, res) => {
+  try {
+    const { data, strategy, preserve_ids } = req.body || {};
+    const options = {
+      strategy: strategy || "newest",
+      preserveIds: preserve_ids === true
+    };
+    const result = dbStore.importFromSync(data, options);
+    auditLog(req, "sync_import", { 
+      imported: result.imported, 
+      conflicts: result.conflicts, 
+      strategy 
+    });
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.json({ ok: false, error: error.message });
+  }
+});
+
+app.get("/api/sync/diff", (req, res) => {
+  try {
+    const { since } = req.query;
+    if (!since) {
+      return res.json({ ok: false, error: "since parameter required" });
+    }
+    const diff = dbStore.getSyncDiff(since);
+    res.json({ ok: true, ...diff });
+  } catch (error) {
+    res.json({ ok: false, error: error.message });
+  }
+});
+
 app.get("/api/procedures", (req, res) => {
   const proceduresFile = path.join(DATA_DIR, "procedures.json");
   try {

@@ -689,11 +689,17 @@ function exportMemories(options = {}) {
     created_at: row.created_at,
     updated_at: row.updated_at,
     last_seen_at: row.last_seen_at,
-    expires_at: row.expires_at
+    last_confirmed_at: row.last_confirmed_at,
+    expires_at: row.expires_at,
+    origin_machine_id: row.origin_machine_id,
+    origin_user_id: row.origin_user_id,
+    sync_version: row.sync_version || 1
   }));
 
   return {
-    version: 1,
+    version: 2,
+    machine_id: getMachineId(),
+    user_id: getUserId(),
     exported_at: nowIso(),
     count: memories.length,
     filter: {
@@ -772,8 +778,9 @@ function importMemories(data, options = {}) {
         INSERT INTO memories (
           id, type, project, content, summary, tags, confidence, source, source_tool,
           source_task_id, source_ref, metadata_json, enabled, automatic,
-          times_confirmed, created_at, updated_at, last_seen_at, expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          times_confirmed, created_at, updated_at, last_seen_at, last_confirmed_at,
+          expires_at, origin_machine_id, origin_user_id, sync_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         id,
         mem.type,
@@ -793,7 +800,11 @@ function importMemories(data, options = {}) {
         mem.created_at || ts,
         ts,
         mem.last_seen_at || ts,
-        mem.expires_at || null
+        ts,
+        mem.expires_at || null,
+        mem.origin_machine_id || null,
+        mem.origin_user_id || null,
+        mem.sync_version || 1
       );
       imported++;
     }
@@ -1311,6 +1322,331 @@ function compareSnapshots(snapshotA, snapshotB) {
   return diff;
 }
 
+// === Cross-Machine Sync ===
+
+function getMachineId() {
+  const row = db.prepare("SELECT value FROM meta WHERE key = 'machine_id'").get();
+  if (row) return row.value;
+  
+  const crypto = require("crypto");
+  const machineId = crypto.randomUUID();
+  db.prepare("INSERT INTO meta (key, value) VALUES ('machine_id', ?)").run(machineId);
+  return machineId;
+}
+
+function getUserId() {
+  const row = db.prepare("SELECT value FROM meta WHERE key = 'user_id'").get();
+  return row ? row.value : null;
+}
+
+function setUserId(userId) {
+  db.prepare(`
+    INSERT INTO meta (key, value) VALUES ('user_id', ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).run(userId);
+  return userId;
+}
+
+function exportForSync(options = {}) {
+  if (!hasMemoriesTable()) return { memories: [], exported_at: nowIso() };
+  
+  const machineId = getMachineId();
+  const userId = getUserId();
+  
+  const clauses = [];
+  const params = [];
+  
+  if (options.project) {
+    clauses.push("project = ?");
+    params.push(options.project);
+  }
+  if (options.since) {
+    clauses.push("updated_at > ?");
+    params.push(options.since);
+  }
+  if (options.includeDisabled === false) {
+    clauses.push("enabled = 1");
+  }
+  
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const rows = db.prepare(`
+    SELECT * FROM memories ${where}
+    ORDER BY updated_at DESC
+  `).all(...params);
+  
+  const memories = rows.map(row => ({
+    id: row.id,
+    type: row.type,
+    project: row.project,
+    content: row.content,
+    summary: row.summary,
+    tags: parseJson(row.tags, []),
+    confidence: row.confidence,
+    source: row.source,
+    source_tool: row.source_tool,
+    source_task_id: row.source_task_id,
+    source_ref: row.source_ref,
+    metadata: parseJson(row.metadata_json, {}),
+    enabled: !!row.enabled,
+    automatic: !!row.automatic,
+    times_confirmed: row.times_confirmed,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    last_seen_at: row.last_seen_at,
+    last_confirmed_at: row.last_confirmed_at,
+    expires_at: row.expires_at,
+    origin_machine_id: row.origin_machine_id,
+    origin_user_id: row.origin_user_id,
+    sync_version: row.sync_version || 1
+  }));
+  
+  return {
+    version: 2,
+    machine_id: machineId,
+    user_id: userId,
+    exported_at: nowIso(),
+    count: memories.length,
+    memories
+  };
+}
+
+function resolveConflict(local, remote, strategy = "newest") {
+  switch (strategy) {
+    case "newest":
+      return new Date(remote.updated_at) > new Date(local.updated_at) ? "remote" : "local";
+    
+    case "highest_confidence":
+      if (remote.confidence > local.confidence) return "remote";
+      if (local.confidence > remote.confidence) return "local";
+      return new Date(remote.updated_at) > new Date(local.updated_at) ? "remote" : "local";
+    
+    case "most_confirmed":
+      if (remote.times_confirmed > local.times_confirmed) return "remote";
+      if (local.times_confirmed > remote.times_confirmed) return "local";
+      return new Date(remote.updated_at) > new Date(local.updated_at) ? "remote" : "local";
+    
+    case "merge":
+      return "merge";
+    
+    case "skip":
+      return "skip";
+    
+    default:
+      return "remote";
+  }
+}
+
+function importFromSync(data, options = {}) {
+  if (!hasMemoriesTable()) return { imported: 0, skipped: 0, errors: ["memories table not found"] };
+  if (!data || !Array.isArray(data.memories)) {
+    return { imported: 0, skipped: 0, errors: ["invalid sync data: missing memories array"] };
+  }
+  
+  const ts = nowIso();
+  const localMachineId = getMachineId();
+  const strategy = options.strategy || "newest";
+  
+  let imported = 0;
+  let updated = 0;
+  let skipped = 0;
+  let conflicts = 0;
+  const errors = [];
+  
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const mem of data.memories) {
+      if (!mem.type || !mem.content) {
+        errors.push(`skipped: missing type or content`);
+        skipped++;
+        continue;
+      }
+      
+      const existing = db.prepare(`
+        SELECT * FROM memories
+        WHERE type = ? AND COALESCE(project, '') = COALESCE(?, '') AND content = ?
+        LIMIT 1
+      `).get(mem.type, mem.project || null, mem.content);
+      
+      if (existing) {
+        if (existing.origin_machine_id === localMachineId && mem.origin_machine_id === localMachineId) {
+          skipped++;
+          continue;
+        }
+        
+        const resolution = resolveConflict(existing, mem, strategy);
+        
+        if (resolution === "skip") {
+          skipped++;
+          continue;
+        }
+        
+        if (resolution === "local") {
+          conflicts++;
+          continue;
+        }
+        
+        if (resolution === "merge") {
+          const mergedMeta = {
+            ...parseJson(existing.metadata_json, {}),
+            ...mem.metadata,
+            merged_at: ts,
+            merge_source: "sync"
+          };
+          const mergedConfidence = Math.max(existing.confidence, mem.confidence);
+          const mergedConfirmed = existing.times_confirmed + mem.times_confirmed;
+          
+          db.prepare(`
+            UPDATE memories
+            SET confidence = ?,
+                times_confirmed = ?,
+                metadata_json = ?,
+                sync_version = sync_version + 1,
+                last_synced_at = ?,
+                updated_at = ?
+            WHERE id = ?
+          `).run(
+            mergedConfidence,
+            mergedConfirmed,
+            JSON.stringify(mergedMeta),
+            ts,
+            ts,
+            existing.id
+          );
+          conflicts++;
+          continue;
+        }
+        
+        const remoteMeta = {
+          ...mem.metadata,
+          synced_at: ts,
+          sync_source: "remote",
+          previous_local_id: existing.id
+        };
+        
+        db.prepare(`
+          UPDATE memories
+          SET summary = ?,
+              tags = ?,
+              confidence = ?,
+              source = ?,
+              source_tool = ?,
+              source_task_id = ?,
+              source_ref = ?,
+              metadata_json = ?,
+              enabled = ?,
+              times_confirmed = ?,
+              last_seen_at = ?,
+              last_confirmed_at = ?,
+              origin_machine_id = ?,
+              origin_user_id = ?,
+              sync_version = ?,
+              last_synced_at = ?,
+              updated_at = ?
+          WHERE id = ?
+        `).run(
+          mem.summary || mem.content,
+          JSON.stringify(mem.tags || []),
+          mem.confidence,
+          mem.source || "sync",
+          mem.source_tool || null,
+          mem.source_task_id || null,
+          mem.source_ref || null,
+          JSON.stringify(remoteMeta),
+          mem.enabled === false ? 0 : 1,
+          mem.times_confirmed || 1,
+          mem.last_seen_at || ts,
+          mem.last_confirmed_at || ts,
+          mem.origin_machine_id || data.machine_id,
+          mem.origin_user_id || data.user_id,
+          (mem.sync_version || 1) + 1,
+          ts,
+          ts,
+          existing.id
+        );
+        conflicts++;
+        continue;
+      }
+      
+      const id = options.preserveIds && mem.id ? mem.id : `mem_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+      const metadata = { ...mem.metadata, synced_at: ts, sync_source: "remote" };
+      
+      db.prepare(`
+        INSERT INTO memories (
+          id, type, project, content, summary, tags, confidence, source, source_tool,
+          source_task_id, source_ref, metadata_json, enabled, automatic,
+          times_confirmed, created_at, updated_at, last_seen_at, last_confirmed_at,
+          expires_at, origin_machine_id, origin_user_id, sync_version, last_synced_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        id,
+        mem.type,
+        mem.project || null,
+        mem.content,
+        mem.summary || mem.content,
+        JSON.stringify(mem.tags || []),
+        mem.confidence || 0.5,
+        mem.source || "sync",
+        mem.source_tool || null,
+        mem.source_task_id || null,
+        mem.source_ref || null,
+        JSON.stringify(metadata),
+        mem.enabled === false ? 0 : 1,
+        mem.automatic === false ? 0 : 1,
+        mem.times_confirmed || 1,
+        mem.created_at || ts,
+        ts,
+        mem.last_seen_at || ts,
+        mem.last_confirmed_at || ts,
+        mem.expires_at || null,
+        mem.origin_machine_id || data.machine_id,
+        mem.origin_user_id || data.user_id,
+        mem.sync_version || 1,
+        ts
+      );
+      imported++;
+    }
+    db.exec("COMMIT");
+  } catch (e) {
+    try { db.exec("ROLLBACK"); } catch {}
+    return { imported, updated, skipped, conflicts, errors: [...errors, e.message] };
+  }
+  
+  return { imported, updated, skipped, conflicts, errors };
+}
+
+function getSyncDiff(since, options = {}) {
+  if (!hasMemoriesTable()) return { changes: [], since };
+  
+  const localMachineId = getMachineId();
+  const rows = db.prepare(`
+    SELECT * FROM memories
+    WHERE updated_at > ?
+    ORDER BY updated_at ASC
+  `).all(since);
+  
+  const changes = rows.map(row => ({
+    id: row.id,
+    type: row.type,
+    project: row.project,
+    content: row.content,
+    summary: row.summary,
+    confidence: row.confidence,
+    enabled: !!row.enabled,
+    times_confirmed: row.times_confirmed,
+    updated_at: row.updated_at,
+    origin_machine_id: row.origin_machine_id,
+    is_local: row.origin_machine_id === localMachineId || row.origin_machine_id === null
+  }));
+  
+  return {
+    machine_id: localMachineId,
+    user_id: getUserId(),
+    since,
+    count: changes.length,
+    changes
+  };
+}
+
 
 function getDb() {
   return db;
@@ -1349,6 +1685,13 @@ module.exports = {
   expireStaleMemories,
   calculateMemoryDecay,
   getMemoryStats,
+  getMachineId,
+  getUserId,
+  setUserId,
+  exportForSync,
+  importFromSync,
+  getSyncDiff,
+  resolveConflict,
   executeQuery,
   getTableList,
   getTableInfo,
