@@ -90,7 +90,7 @@ Sidekick is the infrastructure. The AI (running in opencode) uses that infrastru
 Most MCP servers are just tool wrappers—they give AI access to specific APIs or services. Sidekick is fundamentally different:
 
 ### 🧠 Persistent Memory Across Sessions
-Sidekick provides durable project memory through SQLite-backed KV and context tools. Agents can explicitly store decisions, project facts, problems, patterns, and summaries, then retrieve them in later sessions by key, project, or context query. The Agent Bridge also records bounded, redacted summaries of completed tasks and useful tool calls, and loads relevant remembered context before planning a new task.
+Sidekick provides durable project memory through SQLite-backed KV, context, and structured memory tables. Agents can explicitly store decisions, project facts, problems, patterns, and summaries, then retrieve them in later sessions by key, project, or context query. The Agent Bridge also records bounded, redacted structured memories for completed tasks and useful tool calls, then loads relevant remembered context before planning a new task.
 
 ### 📚 Knowledge Base
 All documentation, best practices, and project context stored in a searchable database. The AI can query the knowledge base instead of re-reading files, saving tokens and improving accuracy.

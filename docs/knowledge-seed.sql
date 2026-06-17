@@ -36,6 +36,7 @@ Default retrieval order:
 - tool_categories: category name, icon, and sort_order.
 - tool_category_map: tool-to-category mapping.
 - kv_store: durable key-value memory with project and source metadata.
+- memories: structured automatic and extracted memories with type, project, confidence, source, and confirmation metadata.
 - json_documents: named structured documents such as context, cron, webhooks, and watches.
 - tool_logs: redacted tool activity history.
 - meta: schema metadata including schema_version.
@@ -298,7 +299,9 @@ Examples:
 - sidekick_get key="deploy:host"
 - sidekick_get_by_project project="sidekick"
 
-Use sidekick_context for richer decisions, problems, patterns, session summaries, automatic memories, and recall workflows. The Agent Bridge records bounded, redacted automatic memory summaries for completed tasks and useful tool calls when SIDEKICK_AUTO_MEMORY is enabled.',
+Use sidekick_context for richer decisions, problems, patterns, session summaries, automatic memories, and recall workflows. The Agent Bridge records bounded, redacted automatic memory summaries for completed tasks and useful tool calls when SIDEKICK_AUTO_MEMORY is enabled.
+
+Structured automatic memory is stored primarily in the memories table. The context document keeps compatibility copies for older context views.',
 'memory,kv,context,protocol', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('protocols', 'How To Inspect Recent Tool Activity',
