@@ -388,11 +388,14 @@ function upsertMemory(memory) {
     }
   }
 
+  const newConfidence = Number.isFinite(memory.confidence) ? memory.confidence : 0.5;
+
   const conflictCandidates = existingRows.filter((row) => {
     if (!MEMORY_CONFLICT_TYPES.has(type)) return false;
     const rowMetadata = readMemoryMetadata(row);
     if (rowMetadata.state === "superseded") return false;
     if (String(row.content || "").trim().toLowerCase() === content.toLowerCase()) return false;
+    if (row.confidence > newConfidence) return false;
     return memorySimilarity(content, row.content) >= 0.6;
   });
 
