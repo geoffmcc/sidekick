@@ -17,6 +17,9 @@ const {
   recallMemoryForText,
   formatMemoryRecall
 } = require("../src/memory");
+const dbStore = require("../src/db");
+
+dbStore.runPendingMigrations();
 
 console.log("Test automatic memory capture and recall");
 
@@ -31,6 +34,7 @@ const toolMemory = recordToolCallMemory({
 
 assert.ok(toolMemory, "Tool memory should be stored");
 assert.strictEqual(toolMemory.project, "sidekick", "Project should be inferred from args");
+assert.strictEqual(toolMemory.type, "tool_call", "Tool memory should be stored as structured tool_call memory");
 
 const taskMemory = recordAgentTaskMemory({
   goal: "Check project sidekick service health",
@@ -44,6 +48,7 @@ const taskMemory = recordAgentTaskMemory({
 
 assert.ok(taskMemory, "Agent task memory should be stored");
 assert.strictEqual(taskMemory.memory.project, "sidekick", "Task project should be inferred from goal");
+assert.strictEqual(taskMemory.memory.type, "session", "Agent task memory should be stored as structured session memory");
 
 const ctx = loadContext();
 assert.ok(Array.isArray(ctx.memories), "Context should include memories array");
@@ -53,8 +58,22 @@ assert.ok(ctx.sessions.some(s => s.taskId === "task123"), "Agent task should cre
 
 const recalled = recallMemoryForText("sidekick service health", { limit: 5 });
 assert.ok(recalled.length > 0, "Recall should return relevant memories");
+assert.ok(recalled.some(item => item.structured), "Recall should include table-backed structured memories");
 
 const formatted = formatMemoryRecall(recalled);
 assert.ok(formatted.includes("sidekick"), "Formatted recall should include relevant text");
+
+const beforeDedup = dbStore.searchMemories({ type: "tool_call", project: "sidekick", limit: 20 });
+recordToolCallMemory({
+  name: "sidekick_bash",
+  args: { command: "systemctl status sidekick-mcp", project: "sidekick" },
+  duration: 24,
+  success: true,
+  summary: "sidekick-mcp is active",
+  source: "agent"
+});
+const afterDedup = dbStore.searchMemories({ type: "tool_call", project: "sidekick", limit: 20 });
+assert.strictEqual(afterDedup.length, beforeDedup.length, "Duplicate structured memory should update existing row");
+assert.ok(afterDedup[0].times_confirmed >= 2, "Duplicate structured memory should increment confirmation count");
 
 console.log("Automatic memory tests passed");

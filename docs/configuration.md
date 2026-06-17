@@ -119,7 +119,7 @@ sidekick_evolve({ action: "cleanup", confirm: true })
 
 ## Automatic Memory
 
-Automatic memory is enabled by default. Sidekick stores bounded, redacted summaries of useful tool calls and completed Agent Bridge tasks in the `context` document:
+Automatic memory is enabled by default. Sidekick stores bounded, redacted summaries of useful tool calls and completed Agent Bridge tasks in the `memories` table, with compatibility copies in the `context` document:
 
 ```env
 SIDEKICK_AUTO_MEMORY=1

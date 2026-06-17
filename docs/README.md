@@ -13,6 +13,7 @@ The important runtime pattern is database-first access. `AGENTS.md` is the thin 
 | Documentation, architecture, operations, protocols, best practices | `sidekick_knowledge` | `knowledge` table |
 | Current tool list, args, category, risk, enabled/deprecated state | `sidekick_db_query database="sqlite"` | `tools`, `tool_categories`, `tool_category_map` |
 | Persistent project facts | `sidekick_store`, `sidekick_get`, `sidekick_get_by_project` | `kv_store` |
+| Structured memories, task summaries, facts, preferences, observations | `sidekick_context`, `sidekick_project`, or SQL | `memories`, plus compatibility data in `json_documents.context` |
 | Structured feature documents | Feature tools or `sidekick_db_query` | `json_documents` |
 | Recent tool activity | `sidekick_log_query` | `tool_logs` |
 

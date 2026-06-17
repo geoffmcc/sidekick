@@ -1352,6 +1352,33 @@ async function searchContext(ctx, query, type, limit = 10) {
   }
   
   // Fallback to keyword search
+  if (type === "all" || type === "memories") {
+    const structuredMemories = dbStore.searchMemories({ type: "all", limit: Math.max(limit * 5, 50) });
+    for (const mem of structuredMemories) {
+      const text = `${mem.type || ""} ${mem.project || ""} ${mem.content || ""} ${mem.summary || ""} ${mem.source_tool || ""} ${(mem.tags || []).join(" ")}`;
+      const score = simpleSimilarity(query, text);
+      if (score > 0.1) {
+        results.push({
+          type: "memory",
+          item: {
+            id: mem.id,
+            date: mem.last_seen_at || mem.updated_at,
+            type: mem.type,
+            project: mem.project,
+            summary: mem.summary || mem.content,
+            content: mem.content,
+            tool: mem.source_tool,
+            outcome: mem.metadata?.outcome,
+            confidence: mem.confidence,
+            times_confirmed: mem.times_confirmed,
+            structured: true
+          },
+          score: score * (mem.confidence || 1)
+        });
+      }
+    }
+  }
+
   if (type === "all" || type === "decisions") {
     for (const dec of ctx.decisions) {
       const text = `${dec.context} ${dec.decision} ${dec.reasoning}`;
@@ -1595,7 +1622,7 @@ async function sidekick_context({ action, project, context, decision, reasoning,
       } else if (r.type === "session") {
         return `[Session ${item.id}] ${item.date}\nSummary: ${item.summary}\nTopics: ${(item.topics || []).join(", ")}\nOutcome: ${item.outcome || "N/A"}`;
       } else if (r.type === "memory") {
-        return `[Memory ${item.id}] ${item.date}\nType: ${item.type || "memory"}\nSummary: ${item.summary || "N/A"}\nTool: ${item.tool || "N/A"}\nOutcome: ${item.outcome || "N/A"}`;
+        return `[Memory ${item.id}] ${item.date}\nType: ${item.type || "memory"}\nProject: ${item.project || "N/A"}\nSummary: ${item.summary || item.content || "N/A"}\nTool: ${item.tool || "N/A"}\nOutcome: ${item.outcome || "N/A"}\nConfidence: ${item.confidence || "N/A"}\nConfirmations: ${item.times_confirmed || "N/A"}`;
       }
     }).join("\n\n");
     return { content: [{ type: "text", text: summary }] };
@@ -5265,7 +5292,14 @@ async function sidekick_project({ name, include }) {
   }
   if (sections.includes("context")) {
     const ctx = loadContext();
+    const structuredMemories = dbStore.searchMemories({ project: name, limit: 20 }).map(i => ({
+      type: i.type || "memory",
+      summary: i.summary || i.content,
+      created: i.last_seen_at || i.updated_at,
+      project: i.project
+    }));
     const items = [
+      ...structuredMemories,
       ...(ctx.decisions || []).map(i => ({ type: "decision", summary: i.decision, created: i.date, project: i.project })),
       ...(ctx.problems || []).map(i => ({ type: "problem", summary: i.description, created: i.date, project: i.project })),
       ...(ctx.patterns || []).map(i => ({ type: "pattern", summary: i.description, created: i.date, project: i.project })),
