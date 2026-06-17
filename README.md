@@ -97,17 +97,7 @@ Ask the AI to run any Sidekick tool directly:
 
 The AI executes the tool and returns structured results:
 
-```
-Found 4 results for "debugging":
-
-1. Debugging Workflow (id=55, best-practices) – 6-step workflow: reproduce symptom → check logs → query tool_logs → inspect config → check migrations → store findings. Uses sidekick_black_box and sidekick_fresheyes.
-
-2. Debugging Best Practices (id=19, best-practices) – Always check sidekick_debug_tool action='recall' first before investigating. Store findings with service + issue params. Findings persist 7 days.
-
-3. Token Efficiency Tool Selection Rules (id=22, best-practices) – Full table of MUST USE vs NEVER USE for debugging: use sidekick_debug_tool over repeated file reads/manual context tracking.
-
-4. Knowledge Base Migration Plan (id=17, plan) – Includes debugging best practices as item 3b in the migration plan.
-```
+![Direct tool call](docs/screenshots/usage-direct-tool.png)
 
 ### Complex Multi-Step Tasks
 
@@ -126,6 +116,8 @@ The subagent will:
 ### Conversational Planning
 
 Sidekick works best as a collaborative partner. You can have back-and-forth conversations about plans, architecture, or debugging:
+
+![Conversational planning](docs/screenshots/usage-conversational.png)
 
 ```
 you: "we stored a plan. unfortunately its out of date - what do"
