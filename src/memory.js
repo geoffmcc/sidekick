@@ -15,6 +15,17 @@ const DEFAULT_CONTEXT = {
   memories: []
 };
 
+const TYPE_WEIGHTS = {
+  preference: 1.4,
+  fact: 1.3,
+  decision: 1.2,
+  open_thread: 1.2,
+  procedure: 1.1,
+  session: 1,
+  tool_call: 0.8,
+  observation: 0.7
+};
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -115,6 +126,27 @@ function shouldRememberTool(name, success) {
   return success || name.startsWith("sidekick_db_") || name === "sidekick_bash";
 }
 
+function toStructuredMemory(legacy) {
+  return {
+    type: legacy.type || "observation",
+    project: legacy.project || null,
+    content: legacy.summary || legacy.goal || legacy.tool || "memory",
+    summary: legacy.summary || legacy.goal || legacy.tool || "memory",
+    tags: [
+      legacy.source || null,
+      legacy.tool || null,
+      legacy.outcome || null
+    ].filter(Boolean),
+    confidence: legacy.type === "agent_task" ? 0.75 : 0.55,
+    source: legacy.source || "unknown",
+    source_tool: legacy.tool || null,
+    source_task_id: legacy.taskId || null,
+    source_ref: legacy.id || null,
+    metadata: legacy,
+    automatic: true
+  };
+}
+
 function recordToolCallMemory({ name, args, duration, success, summary, source }) {
   if (!shouldRememberTool(name, success)) return null;
   const ctx = loadContext();
@@ -136,7 +168,9 @@ function recordToolCallMemory({ name, args, duration, success, summary, source }
   touchProject(ctx, project, date);
   pushBounded(ctx.memories, memory, MAX_AUTO_MEMORY);
   saveContext(ctx);
-  return memory;
+  const structured = dbStore.upsertMemory(toStructuredMemory(memory));
+  dbStore.trimAutomaticMemories(MAX_AUTO_MEMORY);
+  return structured || memory;
 }
 
 function compactToolList(steps) {
@@ -197,7 +231,9 @@ function recordAgentTaskMemory({ goal, steps, taskId, status }) {
   pushBounded(ctx.sessions, session, 100);
   pushBounded(ctx.memories, memory, MAX_AUTO_MEMORY);
   saveContext(ctx);
-  return { session, memory };
+  const structured = dbStore.upsertMemory(toStructuredMemory({ ...memory, type: "session" }));
+  dbStore.trimAutomaticMemories(MAX_AUTO_MEMORY);
+  return { session, memory: structured || memory };
 }
 
 function tokens(text) {
@@ -218,6 +254,7 @@ function memoryText(item) {
     item.type,
     item.project,
     item.summary,
+    item.content,
     item.goal,
     item.args,
     item.tool,
@@ -232,7 +269,30 @@ function recallMemoryForText(query, options = {}) {
   const ctx = loadContext();
   const project = options.project || inferProjectFromText(query);
   const limit = Math.max(1, Math.min(Number(options.limit || 5), 20));
+  const structured = dbStore.searchMemories({
+    project,
+    type: options.type || "all",
+    limit: Math.max(limit * 10, 50)
+  }).map(item => ({
+    id: item.id,
+    type: item.type,
+    date: item.last_seen_at || item.updated_at,
+    project: item.project,
+    summary: item.summary || item.content,
+    content: item.content,
+    goal: item.metadata?.goal,
+    args: item.metadata?.args,
+    tool: item.source_tool,
+    tools: item.metadata?.tools,
+    outcome: item.metadata?.outcome,
+    confidence: item.confidence,
+    times_confirmed: item.times_confirmed,
+    source: item.source,
+    structured: true
+  }));
+
   const candidates = [
+    ...structured,
     ...ctx.memories,
     ...ctx.sessions.map(s => ({ ...s, type: "session" })),
     ...ctx.decisions.map(d => ({ ...d, type: "decision", summary: d.decision, notes: d.reasoning })),
@@ -243,7 +303,11 @@ function recallMemoryForText(query, options = {}) {
   const results = candidates
     .map(item => ({ item, score: scoreText(query, memoryText(item)) }))
     .filter(r => r.score > 0)
-    .sort((a, b) => b.score - a.score || String(b.item.date || "").localeCompare(String(a.item.date || "")))
+    .sort((a, b) => {
+      const weightedA = a.score * (TYPE_WEIGHTS[a.item.type] || 1) * (a.item.confidence || 1);
+      const weightedB = b.score * (TYPE_WEIGHTS[b.item.type] || 1) * (b.item.confidence || 1);
+      return weightedB - weightedA || String(b.item.date || "").localeCompare(String(a.item.date || ""));
+    })
     .slice(0, limit)
     .map(r => r.item);
 
@@ -256,9 +320,10 @@ function formatMemoryRecall(items) {
     const label = item.type || "memory";
     const project = item.project ? ` project=${item.project}` : "";
     const date = item.date ? ` ${item.date}` : "";
-    const detail = item.summary || item.goal || item.description || item.decision || "";
+    const confidence = item.structured && item.confidence ? ` confidence=${item.confidence}` : "";
+    const detail = item.summary || item.content || item.goal || item.description || item.decision || "";
     const tools = Array.isArray(item.tools) && item.tools.length ? ` tools=${item.tools.join(",")}` : "";
-    return `- [${label}${project}${date}] ${truncate(detail, 240)}${tools}`;
+    return `- [${label}${project}${date}${confidence}] ${truncate(detail, 240)}${tools}`;
   }).join("\n");
 }
 

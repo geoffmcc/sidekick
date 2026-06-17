@@ -225,6 +225,195 @@ function clearToolLogs() {
   db.prepare("DELETE FROM tool_logs").run();
 }
 
+function normalizeMemoryRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    type: row.type,
+    project: row.project,
+    content: row.content,
+    summary: row.summary,
+    tags: parseJson(row.tags, []),
+    confidence: row.confidence,
+    source: row.source,
+    source_tool: row.source_tool,
+    source_task_id: row.source_task_id,
+    source_ref: row.source_ref,
+    metadata: parseJson(row.metadata_json, {}),
+    enabled: !!row.enabled,
+    automatic: !!row.automatic,
+    times_confirmed: row.times_confirmed,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    last_seen_at: row.last_seen_at,
+    expires_at: row.expires_at
+  };
+}
+
+function hasMemoriesTable() {
+  const row = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='memories'").get();
+  return !!row;
+}
+
+function makeMemoryDedupKey(memory) {
+  return [
+    memory.type || "",
+    memory.project || "",
+    memory.source_tool || "",
+    String(memory.content || "").trim().toLowerCase().slice(0, 500)
+  ].join("\u001f");
+}
+
+function upsertMemory(memory) {
+  if (!hasMemoriesTable()) return null;
+
+  const ts = nowIso();
+  const type = memory.type || "observation";
+  const content = String(memory.content || memory.summary || "").trim();
+  if (!content) return null;
+
+  const project = memory.project || null;
+  const sourceTool = memory.source_tool || memory.tool || null;
+  const dedupKey = makeMemoryDedupKey({ ...memory, type, project, source_tool: sourceTool, content });
+  const existingRows = db.prepare(`
+    SELECT * FROM memories
+    WHERE enabled = 1
+      AND type = ?
+      AND COALESCE(project, '') = COALESCE(?, '')
+      AND COALESCE(source_tool, '') = COALESCE(?, '')
+    ORDER BY updated_at DESC
+    LIMIT 50
+  `).all(type, project, sourceTool);
+
+  for (const row of existingRows) {
+    const rowKey = makeMemoryDedupKey({
+      type: row.type,
+      project: row.project,
+      source_tool: row.source_tool,
+      content: row.content
+    });
+    if (rowKey === dedupKey) {
+      db.prepare(`
+        UPDATE memories
+        SET summary = ?,
+            tags = ?,
+            confidence = MAX(confidence, ?),
+            source = ?,
+            source_task_id = COALESCE(?, source_task_id),
+            source_ref = COALESCE(?, source_ref),
+            metadata_json = ?,
+            times_confirmed = times_confirmed + 1,
+            updated_at = ?,
+            last_seen_at = ?
+        WHERE id = ?
+      `).run(
+        memory.summary || row.summary,
+        JSON.stringify(memory.tags || parseJson(row.tags, [])),
+        Number.isFinite(memory.confidence) ? memory.confidence : row.confidence,
+        memory.source || row.source,
+        memory.source_task_id || null,
+        memory.source_ref || null,
+        JSON.stringify(memory.metadata || parseJson(row.metadata_json, {})),
+        ts,
+        ts,
+        row.id
+      );
+      return normalizeMemoryRow(db.prepare("SELECT * FROM memories WHERE id = ?").get(row.id));
+    }
+  }
+
+  const id = memory.id || `mem_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  db.prepare(`
+    INSERT INTO memories (
+      id, type, project, content, summary, tags, confidence, source, source_tool,
+      source_task_id, source_ref, metadata_json, enabled, automatic,
+      times_confirmed, created_at, updated_at, last_seen_at, expires_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    type,
+    project,
+    content,
+    memory.summary || content,
+    JSON.stringify(memory.tags || []),
+    Number.isFinite(memory.confidence) ? memory.confidence : 0.5,
+    memory.source || null,
+    sourceTool,
+    memory.source_task_id || null,
+    memory.source_ref || null,
+    JSON.stringify(memory.metadata || {}),
+    memory.enabled === false ? 0 : 1,
+    memory.automatic === false ? 0 : 1,
+    Number.isFinite(memory.times_confirmed) ? memory.times_confirmed : 1,
+    memory.created_at || ts,
+    ts,
+    memory.last_seen_at || ts,
+    memory.expires_at || null
+  );
+
+  return normalizeMemoryRow(db.prepare("SELECT * FROM memories WHERE id = ?").get(id));
+}
+
+function searchMemories({ query, project, type, limit = 10, includeDisabled = false } = {}) {
+  if (!hasMemoriesTable()) return [];
+
+  const clauses = [];
+  const params = [];
+  if (!includeDisabled) clauses.push("enabled = 1");
+  if (project) {
+    clauses.push("(project = ? OR project IS NULL)");
+    params.push(project);
+  }
+  if (type && type !== "all") {
+    clauses.push("type = ?");
+    params.push(type);
+  }
+  if (query) {
+    clauses.push("(content LIKE ? OR summary LIKE ? OR tags LIKE ? OR source_tool LIKE ?)");
+    const like = `%${query}%`;
+    params.push(like, like, like, like);
+  }
+
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const rows = db.prepare(`
+    SELECT * FROM memories
+    ${where}
+    ORDER BY confidence DESC, times_confirmed DESC, last_seen_at DESC
+    LIMIT ?
+  `).all(...params, Math.max(1, Math.min(Number(limit) || 10, 100)));
+
+  return rows.map(normalizeMemoryRow);
+}
+
+function listMemories(options = {}) {
+  return searchMemories({ ...options, query: undefined });
+}
+
+function disableMemory(id) {
+  if (!hasMemoriesTable()) return false;
+  const result = db.prepare("UPDATE memories SET enabled = 0, updated_at = ?, last_seen_at = ? WHERE id = ?").run(nowIso(), nowIso(), id);
+  return result.changes > 0;
+}
+
+function trimAutomaticMemories(max) {
+  if (!hasMemoriesTable()) return 0;
+  const limit = Math.max(1, Number(max) || 500);
+  const countRow = db.prepare("SELECT COUNT(*) AS count FROM memories WHERE automatic = 1 AND enabled = 1").get();
+  if (countRow.count <= limit) return 0;
+  const result = db.prepare(`
+    UPDATE memories
+    SET enabled = 0, updated_at = ?
+    WHERE id IN (
+      SELECT id FROM memories
+      WHERE automatic = 1 AND enabled = 1
+      ORDER BY last_seen_at ASC, updated_at ASC
+      LIMIT ?
+    )
+  `).run(nowIso(), countRow.count - limit);
+  return result.changes;
+}
+
 // === Database Tool Helpers ===
 
 function clampLimit(limit) {
@@ -756,6 +945,12 @@ module.exports = {
   appendToolLog,
   readToolLogs,
   clearToolLogs,
+  hasMemoriesTable,
+  upsertMemory,
+  searchMemories,
+  listMemories,
+  disableMemory,
+  trimAutomaticMemories,
   executeQuery,
   getTableList,
   getTableInfo,
