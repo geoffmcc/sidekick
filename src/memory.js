@@ -503,6 +503,68 @@ function formatMemoryRecall(items) {
   }).join("\n");
 }
 
+function buildMemoryBrief(goal, options = {}) {
+  const project = options.project || inferProjectFromText(goal);
+  const maxPerType = options.maxPerType || 3;
+
+  const preferences = dbStore.searchMemories({
+    type: "preference",
+    project,
+    limit: maxPerType
+  }).map(m => m.content || m.summary).filter(Boolean);
+
+  const facts = dbStore.searchMemories({
+    type: "fact",
+    project,
+    limit: maxPerType
+  }).map(m => m.content || m.summary).filter(Boolean);
+
+  const decisions = dbStore.searchMemories({
+    type: "decision",
+    project,
+    limit: maxPerType
+  }).map(m => m.content || m.summary).filter(Boolean);
+
+  const openThreads = dbStore.searchMemories({
+    type: "open_thread",
+    project,
+    limit: maxPerType
+  }).map(m => m.content || m.summary).filter(Boolean);
+
+  const recalled = recallMemoryForText(goal, { project, limit: 5 });
+  const relatedContext = recalled
+    .filter(item => !["preference", "fact", "decision", "open_thread"].includes(item.type))
+    .slice(0, 3)
+    .map(item => item.summary || item.content)
+    .filter(Boolean);
+
+  const sections = [];
+
+  if (preferences.length > 0) {
+    sections.push("## User Preferences\n" + preferences.map(p => `- ${truncate(p, 200)}`).join("\n"));
+  }
+
+  if (facts.length > 0) {
+    sections.push("## Project Facts\n" + facts.map(f => `- ${truncate(f, 200)}`).join("\n"));
+  }
+
+  if (decisions.length > 0) {
+    sections.push("## Recent Decisions\n" + decisions.map(d => `- ${truncate(d, 200)}`).join("\n"));
+  }
+
+  if (openThreads.length > 0) {
+    sections.push("## Unresolved Threads\n" + openThreads.map(t => `- ${truncate(t, 200)}`).join("\n"));
+  }
+
+  if (relatedContext.length > 0) {
+    sections.push("## Related Context\n" + relatedContext.map(c => `- ${truncate(c, 200)}`).join("\n"));
+  }
+
+  if (sections.length === 0) return null;
+
+  return "# Memory Brief\n\n" + sections.join("\n\n");
+}
+
 module.exports = {
   loadContext,
   saveContext,
@@ -511,6 +573,7 @@ module.exports = {
   extractTaskMemories,
   recallMemoryForText,
   formatMemoryRecall,
+  buildMemoryBrief,
   inferProjectFromArgs,
   inferProjectFromText
 };
