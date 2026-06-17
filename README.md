@@ -113,6 +113,12 @@ The subagent will:
 3. Update the plan with completion status
 4. Store the revised version
 
+![Multi-step plan execution](docs/screenshots/usage-multistep-plan.png)
+
+The agent can also send Discord notifications at each milestone so you can track progress without watching the terminal:
+
+![Discord milestone notifications](docs/screenshots/usage-discord-notifications.png)
+
 ### Conversational Planning
 
 Sidekick works best as a collaborative partner. You can have back-and-forth conversations about plans, architecture, or debugging:
@@ -126,6 +132,12 @@ ai:  Found it — KV key persistence_roadmap. It's a 9-step plan (structured ext
 you: "yes"
 ai:  [updates the roadmap with current status]
 ```
+
+### Debugging
+
+Sidekick can diagnose issues across the full stack — backend APIs, frontend JS, database queries, and service health — then present a structured root-cause analysis:
+
+![Debugging root cause analysis](docs/screenshots/usage-debugging.png)
 
 ### Dashboard
 
