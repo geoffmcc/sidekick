@@ -1,6 +1,6 @@
 # Structured Memory Plan
 
-Sidekick's current automatic memory stores bounded, redacted summaries in the `context` JSON document. That is useful continuity, but it is still event memory. The next step is a first-class structured memory layer with durable rows, memory types, confidence, source metadata, deduplication, and better recall.
+Sidekick's automatic memory now stores bounded, redacted summaries in the `memories` SQLite table, with compatibility copies in the `context` JSON document. That is useful continuity, but it is still only the first layer of a fuller memory system. The next step is typed extraction, confidence management, and stronger recall.
 
 ## Goals
 
@@ -29,6 +29,7 @@ This branch implements the first structural pass:
 - Add a `memories` SQLite table through migration `003_structured_memory.sql`.
 - Add DB helpers for upsert, search, listing, and disabling memory rows.
 - Write automatic tool-call and Agent Bridge task memories into the table.
+- Add a heuristic extraction pass that can emit `fact`, `decision`, `preference`, `open_thread`, and `observation` rows from task text.
 - Retain the existing `context.memories` and `context.sessions` writes for backward compatibility.
 - Update automatic recall to search the structured table first, then merge legacy context entries.
 - Add focused tests for table-backed memory storage, deduplication, and recall.
@@ -36,7 +37,7 @@ This branch implements the first structural pass:
 
 ## Later Passes
 
-- Add an LLM/lightweight extractor that converts task transcripts into facts, decisions, preferences, open threads, and procedures.
+- Replace the heuristic extraction rules with a stronger extractor, likely LLM-assisted, that converts task transcripts into facts, decisions, preferences, open threads, and procedures.
 - Add conflict detection instead of silent overwrite when a newer memory contradicts an existing one.
 - Add dashboard review UI for accepted, disabled, and pending memories.
 - Add embeddings or FTS-backed ranking with project, type, confidence, recency, and confirmation weighting.

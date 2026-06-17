@@ -156,6 +156,8 @@ Initial automatic memory writes produce:
 - `session` rows for completed Agent Bridge tasks;
 - `tool_call` rows for useful tool calls.
 
+The extraction pass can also emit `fact`, `decision`, `preference`, `open_thread`, and `observation` rows from agent task text when the content clearly matches those patterns.
+
 Repeated equivalent memories update the existing row and increment `times_confirmed`. Recall uses the structured table first, then merges compatibility entries from the `context` document.
 
 ### `tool_logs`
