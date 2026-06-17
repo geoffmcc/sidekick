@@ -119,6 +119,40 @@ assert.strictEqual(sqlitePreference.metadata.state, "superseded", "Superseded me
 assert.strictEqual(sqlitePreference.metadata.superseded_by, postgresPreference.id, "Superseded row should point to replacement");
 assert.strictEqual(postgresPreference.enabled, true, "Replacement memory should remain enabled");
 
+console.log("Test confidence-aware conflict detection");
+
+const highConfPreference = dbStore.upsertMemory({
+  type: "preference",
+  project: "sidekick",
+  content: "Prefer TypeScript for frontend development",
+  summary: "Prefer TypeScript for frontend development",
+  tags: ["confidence_test"],
+  confidence: 0.9,
+  source: "test",
+  source_tool: "test",
+  metadata: { test: "confidence_conflict" }
+});
+
+const lowConfPreference = dbStore.upsertMemory({
+  type: "preference",
+  project: "sidekick",
+  content: "Prefer TypeScript for backend development",
+  summary: "Prefer TypeScript for backend development",
+  tags: ["confidence_test"],
+  confidence: 0.4,
+  source: "test",
+  source_tool: "test",
+  metadata: { test: "confidence_conflict" }
+});
+
+const allTypeScriptPrefs = dbStore.searchMemories({ type: "preference", project: "sidekick", includeDisabled: true, limit: 20 });
+const highConfTypeScript = allTypeScriptPrefs.find(m => m.id === highConfPreference.id);
+const lowConfTypeScript = allTypeScriptPrefs.find(m => m.id === lowConfPreference.id);
+
+assert.strictEqual(highConfTypeScript.enabled, true, "High-confidence memory should remain enabled");
+assert.strictEqual(lowConfTypeScript.enabled, true, "Low-confidence memory should remain enabled when it cannot supersede");
+assert.notStrictEqual(highConfTypeScript.metadata.state, "superseded", "High-confidence memory should not be superseded");
+
 console.log("Test recall accuracy and bad-memory suppression");
 
 const lowConfFact = dbStore.upsertMemory({
