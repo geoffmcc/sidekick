@@ -160,6 +160,7 @@ function showPage(name){
   if (name === 'system') { loadDashboardSummary(); loadLLM(); loadServices(); }
   if (name === 'activity') loadLogs();
   if (name === 'data') loadKV();
+  if (name === 'memory') loadMemories();
   if (name === 'database') loadDbStats();
   if (name === 'config') loadConfig();
   if (name === 'tools') loadTools();
@@ -1071,6 +1072,241 @@ function importKV() {
     reader.readAsText(file);
   };
   
+  input.click();
+}
+
+// -- Memory -- //
+let allMemories = [];
+
+async function loadMemories() {
+  try {
+    const [memRes, projRes, statsRes] = await Promise.all([
+      authFetch('/api/memories?include_disabled=true&limit=500'),
+      authFetch('/api/memories/projects'),
+      authFetch('/api/memories/stats')
+    ]);
+    const memData = await memRes.json();
+    const projData = await projRes.json();
+    const statsData = await statsRes.json();
+
+    allMemories = memData.memories || [];
+
+    const select = $('memoryProjectFilter');
+    if (select) {
+      const currentVal = select.value;
+      const projects = projData.projects || [];
+      select.innerHTML = '<option value="">All Projects</option>' +
+        projects.map(p => '<option value="' + esc(p) + '">' + esc(p) + '</option>').join('');
+      select.value = currentVal;
+    }
+
+    if (statsData.ok && statsData.stats) {
+      renderMemoryStats(statsData.stats);
+    }
+
+    renderMemories();
+  } catch (e) {
+    apiError('/api/memories', e, 0);
+  }
+}
+
+function renderMemoryStats(stats) {
+  $('memStatsTotal').textContent = stats.total || 0;
+  $('memStatsActive').textContent = stats.active || 0;
+  $('memStatsStale').textContent = stats.stale_count || 0;
+  $('memStatsConfidence').textContent = (stats.avg_confidence || 0).toFixed(2);
+
+  const byType = stats.by_type || {};
+  const typeEntries = Object.entries(byType);
+  if (typeEntries.length > 0) {
+    $('memStatsByType').innerHTML = typeEntries.map(([type, count]) =>
+      '<div><span style="color:#58a6ff">' + esc(type) + '</span>: ' + count + '</div>'
+    ).join('');
+  } else {
+    $('memStatsByType').innerHTML = '<div class="empty">No data</div>';
+  }
+
+  const byProject = stats.by_project || {};
+  const projEntries = Object.entries(byProject);
+  if (projEntries.length > 0) {
+    $('memStatsByProject').innerHTML = projEntries.map(([proj, count]) =>
+      '<div><span style="color:#58a6ff">' + esc(proj) + '</span>: ' + count + '</div>'
+    ).join('');
+  } else {
+    $('memStatsByProject').innerHTML = '<div class="empty">No data</div>';
+  }
+}
+
+async function expireStaleMemories() {
+  if (!confirm('This will disable memories not confirmed in 90 days. Continue?')) return;
+  try {
+    const res = await authFetch('/api/memories/expire', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stale_days: 90 })
+    });
+    const result = await res.json();
+    if (result.ok) {
+      alert('Expired ' + result.expired + ' stale memories');
+      loadMemories();
+    } else {
+      alert('Failed: ' + result.error);
+    }
+  } catch (e) {
+    alert('Failed: ' + e.message);
+  }
+}
+
+function filterMemories() {
+  renderMemories();
+}
+
+function renderMemories() {
+  const search = ($('memorySearch').value || '').toLowerCase();
+  const projectFilter = $('memoryProjectFilter') ? $('memoryProjectFilter').value : '';
+  const typeFilter = $('memoryTypeFilter') ? $('memoryTypeFilter').value : '';
+  const includeDisabled = $('memoryIncludeDisabled') ? $('memoryIncludeDisabled').checked : false;
+
+  let filtered = allMemories.filter(m => {
+    if (!includeDisabled && !m.enabled) return false;
+    if (projectFilter && m.project !== projectFilter) return false;
+    if (typeFilter && m.type !== typeFilter) return false;
+    if (search) {
+      const text = (m.content + ' ' + m.summary + ' ' + (m.tags || []).join(' ')).toLowerCase();
+      if (!text.includes(search)) return false;
+    }
+    return true;
+  });
+
+  filtered.sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+
+  $('memoryCount').textContent = filtered.length;
+
+  const list = $('memoryList');
+  if (filtered.length === 0) {
+    list.innerHTML = '<div class="empty">No memories found</div>';
+    return;
+  }
+
+  list.innerHTML = filtered.map(m => {
+    const typeColors = {
+      fact: '#58a6ff',
+      decision: '#d2a8ff',
+      preference: '#7ee787',
+      procedure: '#ffa657',
+      open_thread: '#f778ba',
+      observation: '#8b949e',
+      session: '#79c0ff',
+      tool_call: '#a5d6ff'
+    };
+    const typeColor = typeColors[m.type] || '#8b949e';
+    const stateBadge = m.state === 'superseded' ? '<span class="memory-state superseded">superseded</span>' : '';
+    const enabledBadge = m.enabled ? '' : '<span class="memory-state disabled">disabled</span>';
+    const confStars = m.confidence >= 0.8 ? '★★★' : m.confidence >= 0.6 ? '★★' : m.confidence >= 0.4 ? '★' : '';
+
+    return '<div class="memory-entry" data-id="' + esc(m.id) + '">' +
+      '<div class="memory-header">' +
+        '<span class="memory-type" style="color:' + typeColor + '">' + esc(m.type) + '</span>' +
+        '<div class="memory-badges">' +
+          (m.project ? '<span class="memory-project">' + esc(m.project) + '</span>' : '') +
+          enabledBadge +
+          stateBadge +
+          (confStars ? '<span class="memory-confidence">' + confStars + '</span>' : '') +
+          '<span class="memory-confirmed">×' + (m.times_confirmed || 1) + '</span>' +
+        '</div>' +
+      '</div>' +
+      '<div class="memory-content">' + esc(m.summary || m.content) + '</div>' +
+      '<div class="memory-footer">' +
+        '<span class="memory-time">' + formatTimeAgo(m.updated_at) + '</span>' +
+        '<div class="memory-actions">' +
+          (m.enabled
+            ? '<button class="btn btn-sm btn-outline" onclick="disableMemory(\'' + esc(m.id) + '\')">Disable</button>'
+            : '<button class="btn btn-sm btn-outline" onclick="enableMemory(\'' + esc(m.id) + '\')">Enable</button>') +
+          '<button class="btn btn-sm btn-danger" onclick="deleteMemory(\'' + esc(m.id) + '\')">Delete</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+async function disableMemory(id) {
+  if (!confirm('Disable this memory?')) return;
+  try {
+    await authFetch('/api/memories/' + encodeURIComponent(id) + '/disable', { method: 'POST' });
+    loadMemories();
+  } catch (e) {
+    alert('Failed to disable: ' + e.message);
+  }
+}
+
+async function enableMemory(id) {
+  try {
+    await authFetch('/api/memories/' + encodeURIComponent(id) + '/enable', { method: 'POST' });
+    loadMemories();
+  } catch (e) {
+    alert('Failed to enable: ' + e.message);
+  }
+}
+
+async function deleteMemory(id) {
+  if (!confirm('Delete this memory permanently?')) return;
+  try {
+    await authFetch('/api/memories/' + encodeURIComponent(id), { method: 'DELETE' });
+    loadMemories();
+  } catch (e) {
+    alert('Failed to delete: ' + e.message);
+  }
+}
+
+async function exportMemories() {
+  try {
+    const res = await authFetch('/api/memories/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ include_disabled: true })
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error);
+
+    const blob = new Blob([JSON.stringify(data.data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'sidekick-memories-' + new Date().toISOString().slice(0, 10) + '.json';
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert('Export failed: ' + e.message);
+  }
+}
+
+function importMemories() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        const res = await authFetch('/api/memories/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data: data, on_conflict: 'merge' })
+        });
+        const result = await res.json();
+        if (!result.ok) throw new Error(result.error);
+        alert('Import complete: ' + result.imported + ' imported, ' + (result.updated || 0) + ' updated, ' + result.skipped + ' skipped');
+        loadMemories();
+      } catch (err) {
+        alert('Import failed: ' + err.message);
+      }
+    };
+    reader.readAsText(file);
+  };
   input.click();
 }
 

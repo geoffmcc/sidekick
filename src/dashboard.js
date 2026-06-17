@@ -627,6 +627,225 @@ app.get("/api/knowledge", (req, res) => {
   }
 });
 
+app.get("/api/memories", (req, res) => {
+  try {
+    const { project, type, include_disabled, limit, query } = req.query;
+    const options = {
+      limit: parseInt(limit) || 100,
+      includeDisabled: include_disabled === "true"
+    };
+    if (project) options.project = project;
+    if (type) options.type = type;
+    if (query) options.query = query;
+
+    const memories = dbStore.searchMemories(options);
+    const formatted = memories.map(m => ({
+      id: m.id,
+      type: m.type,
+      project: m.project,
+      content: m.content,
+      summary: m.summary,
+      tags: m.tags,
+      confidence: m.confidence,
+      enabled: m.enabled,
+      automatic: m.automatic,
+      times_confirmed: m.times_confirmed,
+      state: m.metadata?.state || "active",
+      created_at: m.created_at,
+      updated_at: m.updated_at,
+      last_seen_at: m.last_seen_at
+    }));
+    res.json({ ok: true, memories: formatted, count: formatted.length });
+  } catch (error) {
+    res.json({ ok: false, error: error.message, memories: [] });
+  }
+});
+
+app.get("/api/memories/projects", (req, res) => {
+  try {
+    const db = dbStore.getDb();
+    const rows = db.prepare(`
+      SELECT DISTINCT project FROM memories
+      WHERE project IS NOT NULL AND project != ''
+      ORDER BY project
+    `).all();
+    res.json({ ok: true, projects: rows.map(r => r.project) });
+  } catch (error) {
+    res.json({ ok: false, error: error.message, projects: [] });
+  }
+});
+
+app.get("/api/memories/types", (req, res) => {
+  try {
+    const db = dbStore.getDb();
+    const rows = db.prepare(`
+      SELECT DISTINCT type FROM memories
+      ORDER BY type
+    `).all();
+    res.json({ ok: true, types: rows.map(r => r.type) });
+  } catch (error) {
+    res.json({ ok: false, error: error.message, types: [] });
+  }
+});
+
+app.post("/api/memories/:id/disable", (req, res) => {
+  try {
+    const success = dbStore.disableMemory(req.params.id);
+    auditLog(req, "memory_disable", { id: req.params.id });
+    res.json({ ok: success });
+  } catch (error) {
+    res.json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/api/memories/:id/enable", (req, res) => {
+  try {
+    const db = dbStore.getDb();
+    const result = db.prepare(`
+      UPDATE memories SET enabled = 1, updated_at = datetime('now')
+      WHERE id = ?
+    `).run(req.params.id);
+    auditLog(req, "memory_enable", { id: req.params.id });
+    res.json({ ok: result.changes > 0 });
+  } catch (error) {
+    res.json({ ok: false, error: error.message });
+  }
+});
+
+app.delete("/api/memories/:id", (req, res) => {
+  try {
+    const db = dbStore.getDb();
+    const result = db.prepare(`DELETE FROM memories WHERE id = ?`).run(req.params.id);
+    auditLog(req, "memory_delete", { id: req.params.id });
+    res.json({ ok: result.changes > 0 });
+  } catch (error) {
+    res.json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/api/memories/export", (req, res) => {
+  try {
+    const { project, type, include_disabled } = req.body || {};
+    const options = {};
+    if (project) options.project = project;
+    if (type) options.type = type;
+    if (include_disabled === false) options.includeDisabled = false;
+
+    const result = dbStore.exportMemories(options);
+    auditLog(req, "memory_export", { count: result.count, project, type });
+    res.json({ ok: true, data: result });
+  } catch (error) {
+    res.json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/api/memories/import", (req, res) => {
+  try {
+    const { data, on_conflict, preserve_ids } = req.body || {};
+    const options = {
+      onConflict: on_conflict || "merge",
+      preserveIds: preserve_ids === true
+    };
+    const result = dbStore.importMemories(data, options);
+    auditLog(req, "memory_import", { imported: result.imported, updated: result.updated, skipped: result.skipped });
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.json({ ok: false, error: error.message });
+  }
+});
+
+app.get("/api/memories/stats", (req, res) => {
+  try {
+    const stats = dbStore.getMemoryStats();
+    res.json({ ok: true, stats });
+  } catch (error) {
+    res.json({ ok: false, error: error.message, stats: null });
+  }
+});
+
+app.post("/api/memories/expire", (req, res) => {
+  try {
+    const { stale_days } = req.body || {};
+    const result = dbStore.expireStaleMemories({ staleDays: stale_days });
+    auditLog(req, "memory_expire", { expired: result.expired, stale_days });
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.json({ ok: false, error: error.message });
+  }
+});
+
+app.get("/api/sync/identity", (req, res) => {
+  try {
+    const machineId = dbStore.getMachineId();
+    const userId = dbStore.getUserId();
+    res.json({ ok: true, machine_id: machineId, user_id: userId });
+  } catch (error) {
+    res.json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/api/sync/identity", (req, res) => {
+  try {
+    const { user_id } = req.body || {};
+    if (!user_id || typeof user_id !== "string") {
+      return res.json({ ok: false, error: "user_id required" });
+    }
+    dbStore.setUserId(user_id);
+    auditLog(req, "sync_set_user_id", { user_id });
+    res.json({ ok: true, user_id });
+  } catch (error) {
+    res.json({ ok: false, error: error.message });
+  }
+});
+
+app.get("/api/sync/export", (req, res) => {
+  try {
+    const { project, since, include_disabled } = req.query;
+    const options = {};
+    if (project) options.project = project;
+    if (since) options.since = since;
+    if (include_disabled === "false") options.includeDisabled = false;
+    
+    const data = dbStore.exportForSync(options);
+    auditLog(req, "sync_export", { count: data.count, project, since });
+    res.json({ ok: true, data });
+  } catch (error) {
+    res.json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/api/sync/import", (req, res) => {
+  try {
+    const { data, strategy, preserve_ids } = req.body || {};
+    const options = {
+      strategy: strategy || "newest",
+      preserveIds: preserve_ids === true
+    };
+    const result = dbStore.importFromSync(data, options);
+    auditLog(req, "sync_import", { 
+      imported: result.imported, 
+      conflicts: result.conflicts, 
+      strategy 
+    });
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.json({ ok: false, error: error.message });
+  }
+});
+
+app.get("/api/sync/diff", (req, res) => {
+  try {
+    const { since } = req.query;
+    if (!since) {
+      return res.json({ ok: false, error: "since parameter required" });
+    }
+    const diff = dbStore.getSyncDiff(since);
+    res.json({ ok: true, ...diff });
+  } catch (error) {
+    res.json({ ok: false, error: error.message });
+  }
+});
+
 app.get("/api/procedures", (req, res) => {
   const proceduresFile = path.join(DATA_DIR, "procedures.json");
   try {

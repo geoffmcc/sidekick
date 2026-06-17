@@ -21,6 +21,7 @@
   <a class="active" onclick="showPage('system')" id="nav-system">System</a>
   <a onclick="showPage('activity')" id="nav-activity">Activity</a>
   <a onclick="showPage('data')" id="nav-data">Data</a>
+  <a onclick="showPage('memory')" id="nav-memory">Memory</a>
   <a onclick="showPage('database')" id="nav-database">Database</a>
   <a onclick="showPage('config')" id="nav-config">Config</a>
   <a onclick="showPage('agent')" id="nav-agent">Agent</a>
@@ -156,6 +157,73 @@
     </select>
   </div>
   <div class="card" id="kvList" style="max-height:600px;overflow-y:auto;padding:8px 16px"></div>
+</div>
+
+<!-- Memory Page -->
+<div class="page" id="page-memory">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div class="section-title" style="margin:0">Structured Memories (<span id="memoryCount">0</span>)</div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-sm btn-outline" onclick="expireStaleMemories()" title="Disable memories not confirmed in 90 days"><i class="fas fa-clock"></i> Expire Stale</button>
+      <button class="btn btn-sm btn-outline" onclick="exportMemories()" title="Export memories as JSON"><i class="fas fa-download"></i> Export</button>
+      <button class="btn btn-sm btn-outline" onclick="importMemories()" title="Import memories from JSON"><i class="fas fa-upload"></i> Import</button>
+    </div>
+  </div>
+
+  <div class="grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:4px">Total</div>
+      <div style="font-size:1.4rem;font-weight:700;color:#58a6ff" id="memStatsTotal">--</div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:4px">Active</div>
+      <div style="font-size:1.4rem;font-weight:700;color:#3fb950" id="memStatsActive">--</div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:4px">Stale</div>
+      <div style="font-size:1.4rem;font-weight:700;color:#d29922" id="memStatsStale">--</div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:4px">Avg Confidence</div>
+      <div style="font-size:1.4rem;font-weight:700;color:#c9d1d9" id="memStatsConfidence">--</div>
+    </div>
+  </div>
+
+  <div class="grid" style="grid-template-columns:1fr 1fr;margin-bottom:12px">
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:8px">By Type</div>
+      <div id="memStatsByType" style="font-size:.8rem;color:#c9d1d9;line-height:1.6">--</div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:8px">By Project</div>
+      <div id="memStatsByProject" style="font-size:.8rem;color:#c9d1d9;line-height:1.6">--</div>
+    </div>
+  </div>
+
+  <div class="search-bar">
+    <input type="text" id="memorySearch" placeholder="Search memories..." oninput="filterMemories()">
+    <select id="memoryProjectFilter" onchange="filterMemories()">
+      <option value="">All Projects</option>
+    </select>
+    <select id="memoryTypeFilter" onchange="filterMemories()">
+      <option value="">All Types</option>
+      <option value="fact">Fact</option>
+      <option value="decision">Decision</option>
+      <option value="preference">Preference</option>
+      <option value="procedure">Procedure</option>
+      <option value="open_thread">Open Thread</option>
+      <option value="observation">Observation</option>
+      <option value="session">Session</option>
+      <option value="tool_call">Tool Call</option>
+    </select>
+    <label style="display:flex;align-items:center;gap:4px;font-size:.8rem;color:#8b949e">
+      <input type="checkbox" id="memoryIncludeDisabled" onchange="filterMemories()"> Include disabled
+    </label>
+  </div>
+
+  <div class="card" id="memoryList" style="max-height:600px;overflow-y:auto;padding:8px 16px">
+    <div class="empty">Loading memories...</div>
+  </div>
 </div>
 
 <!-- Config Page -->

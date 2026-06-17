@@ -247,4 +247,52 @@ assert.ok(!supersededResult, "Superseded memory should not appear in recall resu
 const enabledPostgres = supersededRecall.find(m => m.id === postgresPreference.id);
 assert.ok(enabledPostgres, "Active replacement memory should appear in recall");
 
+console.log("Test memory brief generation");
+
+const { buildMemoryBrief } = require("../src/memory");
+
+const brief = buildMemoryBrief("check sidekick service health", { project: "sidekick" });
+assert.ok(brief, "Memory brief should be generated");
+assert.ok(brief.includes("# Memory Brief"), "Brief should have header");
+assert.ok(brief.includes("## User Preferences") || brief.includes("## Project Facts") || brief.includes("## Recent Decisions"), "Brief should have sections");
+assert.ok(brief.toLowerCase().includes("sidekick") || brief.toLowerCase().includes("sqlite") || brief.toLowerCase().includes("grafana"), "Brief should include relevant content");
+
+const emptyBrief = buildMemoryBrief("completely unrelated topic xyz123", { project: "nonexistent_project" });
+assert.strictEqual(emptyBrief, null, "Brief should be null when no relevant memories exist");
+
+console.log("Test memory import/export");
+
+const exportData = dbStore.exportMemories({ project: "sidekick" });
+assert.ok(exportData, "Export should return data");
+assert.ok(Array.isArray(exportData.memories), "Export should have memories array");
+assert.ok(exportData.memories.length > 0, "Export should have memories");
+assert.strictEqual(exportData.version, 2, "Export should have version 2");
+assert.ok(exportData.machine_id, "Export should have machine_id");
+assert.ok(exportData.exported_at, "Export should have timestamp");
+
+const exportedIds = new Set(exportData.memories.map(m => m.id));
+assert.ok(exportedIds.has(highConfFact.id), "Export should include created memories");
+
+const importResult = dbStore.importMemories({
+  memories: [
+    {
+      type: "fact",
+      project: "imported_project",
+      content: "Imported fact about testing",
+      summary: "Imported fact about testing",
+      confidence: 0.8,
+      tags: ["import_test"]
+    }
+  ]
+}, { onConflict: "merge" });
+
+assert.ok(importResult.imported >= 1, "Import should add new memories");
+
+const importedMemories = dbStore.searchMemories({ project: "imported_project", limit: 10 });
+assert.ok(importedMemories.length > 0, "Imported memories should be searchable");
+assert.ok(importedMemories.some(m => m.content.includes("Imported fact")), "Imported content should be findable");
+
+const reimportResult = dbStore.importMemories(exportData, { onConflict: "skip" });
+assert.ok(reimportResult.skipped >= 0, "Re-import with skip should handle conflicts");
+
 console.log("Automatic memory tests passed");

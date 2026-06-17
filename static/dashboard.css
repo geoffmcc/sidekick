@@ -194,3 +194,23 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
 .tool-card-stats{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;padding-top:6px;border-top:1px solid #21262d}
 .tool-card-stats .stat-item{font-size:.72rem;color:#8b949e;font-family:var(--font)}
 .tool-card-stats .stat-item i{margin-right:2px}
+
+/* Memory entries */
+.memory-entry{padding:10px 0;border-bottom:1px solid #21262d;font-size:.82rem}
+.memory-entry:last-child{border-bottom:none}
+.memory-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+.memory-type{font-weight:600;font-family:var(--font);text-transform:uppercase;font-size:.75rem}
+.memory-badges{display:flex;gap:4px;align-items:center;flex-wrap:wrap}
+.memory-project{background:#21262d;color:#58a6ff;padding:2px 8px;border-radius:4px;font-size:.7rem;font-family:var(--font)}
+.memory-state{padding:2px 6px;border-radius:4px;font-size:.65rem;font-weight:600;text-transform:uppercase}
+.memory-state.superseded{background:#4a2d2d;color:#f85149}
+.memory-state.disabled{background:#3d3000;color:#d29922}
+.memory-confidence{color:#ffa657;font-size:.75rem}
+.memory-confirmed{color:#8b949e;font-size:.7rem;font-family:var(--font)}
+.memory-content{color:#c9d1d9;font-family:var(--font);line-height:1.4;margin:4px 0;word-break:break-word}
+.memory-footer{display:flex;justify-content:space-between;align-items:center;margin-top:6px}
+.memory-time{color:#6e7681;font-size:.7rem}
+.memory-actions{display:flex;gap:4px}
+.memory-actions button{background:#21262d;border:1px solid #30363d;color:#8b949e;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:.7rem}
+.memory-actions button:hover{background:#30363d;color:#c9d1d9}
+.memory-actions .btn-danger:hover{background:#da3633;color:#fff;border-color:#da3633}
