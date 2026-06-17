@@ -452,7 +452,7 @@ function upsertMemory(memory) {
     memory.created_at || ts,
     ts,
     memory.last_seen_at || ts,
-    ts,
+    memory.requires_confirmation ? null : ts,
     memory.expires_at || null,
     memory.origin_machine_id || machineId,
     memory.origin_user_id || userId,
