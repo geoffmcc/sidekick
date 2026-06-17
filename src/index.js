@@ -129,6 +129,17 @@ const TOOL_SCHEMAS = {
     type: z.string().optional().describe("Context type: decisions, problems, patterns, projects, sessions, memories, or all (default: all)"),
     limit: z.number().optional().describe("Maximum results to return (default: 10)")
   }),
+  sidekick_memory_export: z.object({
+    project: z.string().optional().describe("Filter by project name"),
+    type: z.string().optional().describe("Filter by memory type (fact, decision, preference, etc.)"),
+    include_disabled: z.boolean().optional().describe("Include disabled memories (default: true)"),
+    automatic_only: z.boolean().optional().describe("Only include automatic memories (default: false)")
+  }),
+  sidekick_memory_import: z.object({
+    data: z.string().describe("JSON export data (string or object)"),
+    on_conflict: z.enum(["merge", "skip"]).optional().describe("Conflict resolution: merge (update existing) or skip (default: merge)"),
+    preserve_ids: z.boolean().optional().describe("Preserve original memory IDs (default: false)")
+  }),
   sidekick_teach: z.object({
     action: z.enum(["teach_procedure", "generate_tool", "learn_from_example", "execute", "list", "remove"]).describe("Teach action to perform"),
     name: z.string().optional().describe("Procedure name (required for teach/generate/execute/remove)"),

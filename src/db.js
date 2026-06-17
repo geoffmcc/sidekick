@@ -502,6 +502,172 @@ function trimAutomaticMemories(max) {
   return result.changes;
 }
 
+// === Memory Import/Export ===
+
+function exportMemories(options = {}) {
+  if (!hasMemoriesTable()) return { memories: [], exported_at: nowIso() };
+
+  const clauses = [];
+  const params = [];
+
+  if (options.project) {
+    clauses.push("project = ?");
+    params.push(options.project);
+  }
+  if (options.type) {
+    clauses.push("type = ?");
+    params.push(options.type);
+  }
+  if (options.includeDisabled === false) {
+    clauses.push("enabled = 1");
+  }
+  if (options.automatic !== undefined) {
+    clauses.push("automatic = ?");
+    params.push(options.automatic ? 1 : 0);
+  }
+
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const rows = db.prepare(`
+    SELECT * FROM memories ${where}
+    ORDER BY updated_at DESC
+  `).all(...params);
+
+  const memories = rows.map(row => ({
+    id: row.id,
+    type: row.type,
+    project: row.project,
+    content: row.content,
+    summary: row.summary,
+    tags: parseJson(row.tags, []),
+    confidence: row.confidence,
+    source: row.source,
+    source_tool: row.source_tool,
+    source_task_id: row.source_task_id,
+    source_ref: row.source_ref,
+    metadata: parseJson(row.metadata_json, {}),
+    enabled: !!row.enabled,
+    automatic: !!row.automatic,
+    times_confirmed: row.times_confirmed,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    last_seen_at: row.last_seen_at,
+    expires_at: row.expires_at
+  }));
+
+  return {
+    version: 1,
+    exported_at: nowIso(),
+    count: memories.length,
+    filter: {
+      project: options.project || null,
+      type: options.type || null,
+      includeDisabled: options.includeDisabled !== false,
+      automatic: options.automatic
+    },
+    memories
+  };
+}
+
+function importMemories(data, options = {}) {
+  if (!hasMemoriesTable()) return { imported: 0, skipped: 0, errors: ["memories table not found"] };
+  if (!data || !Array.isArray(data.memories)) {
+    return { imported: 0, skipped: 0, errors: ["invalid import data: missing memories array"] };
+  }
+
+  const ts = nowIso();
+  let imported = 0;
+  let skipped = 0;
+  let updated = 0;
+  const errors = [];
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const mem of data.memories) {
+      if (!mem.type || !mem.content) {
+        errors.push(`skipped: missing type or content for memory`);
+        skipped++;
+        continue;
+      }
+
+      const existing = db.prepare(`
+        SELECT id, metadata_json, times_confirmed FROM memories
+        WHERE type = ? AND COALESCE(project, '') = COALESCE(?, '') AND content = ?
+        LIMIT 1
+      `).get(mem.type, mem.project || null, mem.content);
+
+      if (existing) {
+        if (options.onConflict === "skip") {
+          skipped++;
+          continue;
+        }
+
+        const existingMeta = parseJson(existing.metadata_json, {});
+        const newMeta = { ...existingMeta, ...(mem.metadata || {}), imported_at: ts, import_source: "import" };
+
+        db.prepare(`
+          UPDATE memories
+          SET summary = ?,
+              tags = ?,
+              confidence = MAX(confidence, ?),
+              metadata_json = ?,
+              times_confirmed = times_confirmed + 1,
+              updated_at = ?,
+              last_seen_at = ?
+          WHERE id = ?
+        `).run(
+          mem.summary || mem.content,
+          JSON.stringify(mem.tags || []),
+          Number.isFinite(mem.confidence) ? mem.confidence : 0.5,
+          JSON.stringify(newMeta),
+          ts,
+          ts,
+          existing.id
+        );
+        updated++;
+        continue;
+      }
+
+      const id = options.preserveIds && mem.id ? mem.id : `mem_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+      const metadata = { ...(mem.metadata || {}), imported_at: ts, import_source: "import" };
+
+      db.prepare(`
+        INSERT INTO memories (
+          id, type, project, content, summary, tags, confidence, source, source_tool,
+          source_task_id, source_ref, metadata_json, enabled, automatic,
+          times_confirmed, created_at, updated_at, last_seen_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        id,
+        mem.type,
+        mem.project || null,
+        mem.content,
+        mem.summary || mem.content,
+        JSON.stringify(mem.tags || []),
+        Number.isFinite(mem.confidence) ? mem.confidence : 0.5,
+        mem.source || "import",
+        mem.source_tool || null,
+        mem.source_task_id || null,
+        mem.source_ref || null,
+        JSON.stringify(metadata),
+        mem.enabled === false ? 0 : 1,
+        mem.automatic === false ? 0 : 1,
+        Number.isFinite(mem.times_confirmed) ? mem.times_confirmed : 1,
+        mem.created_at || ts,
+        ts,
+        mem.last_seen_at || ts,
+        mem.expires_at || null
+      );
+      imported++;
+    }
+    db.exec("COMMIT");
+  } catch (e) {
+    try { db.exec("ROLLBACK"); } catch {}
+    return { imported, skipped, updated, errors: [...errors, e.message] };
+  }
+
+  return { imported, skipped, updated, errors };
+}
+
 // === Database Tool Helpers ===
 
 function clampLimit(limit) {
@@ -1040,6 +1206,8 @@ module.exports = {
   disableMemory,
   trimAutomaticMemories,
   memorySimilarity,
+  exportMemories,
+  importMemories,
   executeQuery,
   getTableList,
   getTableInfo,
