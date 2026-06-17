@@ -761,7 +761,7 @@ function getPendingConfirmations(options = {}) {
   const rows = db.prepare(`
     SELECT * FROM memories
     WHERE requires_confirmation = 1
-      AND state = 'active'
+      AND (state = 'pending' OR state = 'active')
       AND (last_confirmed_at IS NULL OR last_confirmed_at < created_at)
     ORDER BY confidence DESC, created_at DESC
     LIMIT ?

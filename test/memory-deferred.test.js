@@ -79,7 +79,7 @@ const mem3 = dbStore.upsertMemory({
 
 const pending = dbStore.getPendingConfirmations({ limit: 10 });
 assert.ok(pending.length >= 1, "Should have pending confirmations");
-assert.ok(pending.some(m => m.id === mem3.id), "Should include unconfirmed memory");
+assert.ok(pending.some(m => m.id === mem3.id), "Should include unconfirmed mem3");
 console.log("  ✓ Pending confirmations list works");
 
 console.log("Test soft delete");
