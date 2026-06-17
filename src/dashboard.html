@@ -164,8 +164,39 @@
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
     <div class="section-title" style="margin:0">Structured Memories (<span id="memoryCount">0</span>)</div>
     <div style="display:flex;gap:8px">
+      <button class="btn btn-sm btn-outline" onclick="expireStaleMemories()" title="Disable memories not confirmed in 90 days"><i class="fas fa-clock"></i> Expire Stale</button>
       <button class="btn btn-sm btn-outline" onclick="exportMemories()" title="Export memories as JSON"><i class="fas fa-download"></i> Export</button>
       <button class="btn btn-sm btn-outline" onclick="importMemories()" title="Import memories from JSON"><i class="fas fa-upload"></i> Import</button>
+    </div>
+  </div>
+
+  <div class="grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:4px">Total</div>
+      <div style="font-size:1.4rem;font-weight:700;color:#58a6ff" id="memStatsTotal">--</div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:4px">Active</div>
+      <div style="font-size:1.4rem;font-weight:700;color:#3fb950" id="memStatsActive">--</div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:4px">Stale</div>
+      <div style="font-size:1.4rem;font-weight:700;color:#d29922" id="memStatsStale">--</div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:4px">Avg Confidence</div>
+      <div style="font-size:1.4rem;font-weight:700;color:#c9d1d9" id="memStatsConfidence">--</div>
+    </div>
+  </div>
+
+  <div class="grid" style="grid-template-columns:1fr 1fr;margin-bottom:12px">
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:8px">By Type</div>
+      <div id="memStatsByType" style="font-size:.8rem;color:#c9d1d9;line-height:1.6">--</div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="s-label" style="margin-bottom:8px">By Project</div>
+      <div id="memStatsByProject" style="font-size:.8rem;color:#c9d1d9;line-height:1.6">--</div>
     </div>
   </div>
 

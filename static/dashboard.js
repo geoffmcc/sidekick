@@ -1080,12 +1080,14 @@ let allMemories = [];
 
 async function loadMemories() {
   try {
-    const [memRes, projRes] = await Promise.all([
+    const [memRes, projRes, statsRes] = await Promise.all([
       authFetch('/api/memories?include_disabled=true&limit=500'),
-      authFetch('/api/memories/projects')
+      authFetch('/api/memories/projects'),
+      authFetch('/api/memories/stats')
     ]);
     const memData = await memRes.json();
     const projData = await projRes.json();
+    const statsData = await statsRes.json();
 
     allMemories = memData.memories || [];
 
@@ -1098,9 +1100,60 @@ async function loadMemories() {
       select.value = currentVal;
     }
 
+    if (statsData.ok && statsData.stats) {
+      renderMemoryStats(statsData.stats);
+    }
+
     renderMemories();
   } catch (e) {
     apiError('/api/memories', e, 0);
+  }
+}
+
+function renderMemoryStats(stats) {
+  $('memStatsTotal').textContent = stats.total || 0;
+  $('memStatsActive').textContent = stats.active || 0;
+  $('memStatsStale').textContent = stats.stale_count || 0;
+  $('memStatsConfidence').textContent = (stats.avg_confidence || 0).toFixed(2);
+
+  const byType = stats.by_type || {};
+  const typeEntries = Object.entries(byType);
+  if (typeEntries.length > 0) {
+    $('memStatsByType').innerHTML = typeEntries.map(([type, count]) =>
+      '<div><span style="color:#58a6ff">' + esc(type) + '</span>: ' + count + '</div>'
+    ).join('');
+  } else {
+    $('memStatsByType').innerHTML = '<div class="empty">No data</div>';
+  }
+
+  const byProject = stats.by_project || {};
+  const projEntries = Object.entries(byProject);
+  if (projEntries.length > 0) {
+    $('memStatsByProject').innerHTML = projEntries.map(([proj, count]) =>
+      '<div><span style="color:#58a6ff">' + esc(proj) + '</span>: ' + count + '</div>'
+    ).join('');
+  } else {
+    $('memStatsByProject').innerHTML = '<div class="empty">No data</div>';
+  }
+}
+
+async function expireStaleMemories() {
+  if (!confirm('This will disable memories not confirmed in 90 days. Continue?')) return;
+  try {
+    const res = await authFetch('/api/memories/expire', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stale_days: 90 })
+    });
+    const result = await res.json();
+    if (result.ok) {
+      alert('Expired ' + result.expired + ' stale memories');
+      loadMemories();
+    } else {
+      alert('Failed: ' + result.error);
+    }
+  } catch (e) {
+    alert('Failed: ' + e.message);
   }
 }
 

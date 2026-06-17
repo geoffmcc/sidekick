@@ -754,6 +754,26 @@ app.post("/api/memories/import", (req, res) => {
   }
 });
 
+app.get("/api/memories/stats", (req, res) => {
+  try {
+    const stats = dbStore.getMemoryStats();
+    res.json({ ok: true, stats });
+  } catch (error) {
+    res.json({ ok: false, error: error.message, stats: null });
+  }
+});
+
+app.post("/api/memories/expire", (req, res) => {
+  try {
+    const { stale_days } = req.body || {};
+    const result = dbStore.expireStaleMemories({ staleDays: stale_days });
+    auditLog(req, "memory_expire", { expired: result.expired, stale_days });
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.json({ ok: false, error: error.message });
+  }
+});
+
 app.get("/api/procedures", (req, res) => {
   const proceduresFile = path.join(DATA_DIR, "procedures.json");
   try {

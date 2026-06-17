@@ -259,6 +259,7 @@ function normalizeMemoryRow(row) {
     created_at: row.created_at,
     updated_at: row.updated_at,
     last_seen_at: row.last_seen_at,
+    last_confirmed_at: row.last_confirmed_at,
     expires_at: row.expires_at
   };
 }
@@ -370,7 +371,8 @@ function upsertMemory(memory) {
             metadata_json = ?,
             times_confirmed = times_confirmed + 1,
             updated_at = ?,
-            last_seen_at = ?
+            last_seen_at = ?,
+            last_confirmed_at = ?
         WHERE id = ?
       `).run(
         memory.summary || row.summary,
@@ -380,6 +382,7 @@ function upsertMemory(memory) {
         memory.source_task_id || null,
         memory.source_ref || null,
         JSON.stringify(mergedMetadata),
+        ts,
         ts,
         ts,
         row.id
@@ -409,9 +412,9 @@ function upsertMemory(memory) {
     INSERT INTO memories (
       id, type, project, content, summary, tags, confidence, source, source_tool,
       source_task_id, source_ref, metadata_json, enabled, automatic,
-      times_confirmed, created_at, updated_at, last_seen_at, expires_at
+      times_confirmed, created_at, updated_at, last_seen_at, last_confirmed_at, expires_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     type,
@@ -431,6 +434,7 @@ function upsertMemory(memory) {
     memory.created_at || ts,
     ts,
     memory.last_seen_at || ts,
+    ts,
     memory.expires_at || null
   );
 
@@ -500,6 +504,140 @@ function trimAutomaticMemories(max) {
     )
   `).run(nowIso(), countRow.count - limit);
   return result.changes;
+}
+
+// === Memory Lifecycle ===
+
+function expireStaleMemories(options = {}) {
+  if (!hasMemoriesTable()) return { expired: 0 };
+
+  const staleDays = options.staleDays || 90;
+  const ts = nowIso();
+  const cutoffDate = new Date(Date.now() - staleDays * 24 * 60 * 60 * 1000).toISOString();
+
+  const result = db.prepare(`
+    UPDATE memories
+    SET enabled = 0,
+        metadata_json = json_set(COALESCE(metadata_json, '{}'), '$.expired_reason', 'stale'),
+        updated_at = ?
+    WHERE enabled = 1
+      AND (last_confirmed_at IS NULL OR last_confirmed_at < ?)
+      AND (last_seen_at IS NULL OR last_seen_at < ?)
+  `).run(ts, cutoffDate, cutoffDate);
+
+  return { expired: result.changes, cutoff_date: cutoffDate };
+}
+
+function calculateMemoryDecay(memory) {
+  if (!memory) return 0;
+
+  const now = Date.now();
+  const lastConfirmed = memory.last_confirmed_at ? new Date(memory.last_confirmed_at).getTime() : null;
+  const lastSeen = memory.last_seen_at ? new Date(memory.last_seen_at).getTime() : null;
+  const created = memory.created_at ? new Date(memory.created_at).getTime() : now;
+
+  const daysSinceConfirm = lastConfirmed ? (now - lastConfirmed) / (24 * 60 * 60 * 1000) : Infinity;
+  const daysSinceSeen = lastSeen ? (now - lastSeen) / (24 * 60 * 60 * 1000) : Infinity;
+  const ageDays = (now - created) / (24 * 60 * 60 * 1000);
+
+  const baseConfidence = memory.confidence || 0.5;
+  const confirmations = memory.times_confirmed || 1;
+
+  const confirmDecay = Math.exp(-daysSinceConfirm / 180);
+  const seenDecay = Math.exp(-daysSinceSeen / 90);
+  const ageBoost = Math.min(1, ageDays / 30);
+
+  const confirmationWeight = Math.log(confirmations + 1) / Math.log(10);
+  const recencyScore = (confirmDecay * 0.6) + (seenDecay * 0.3) + (ageBoost * 0.1);
+
+  const decayedConfidence = baseConfidence * (0.3 + 0.7 * recencyScore) * (0.5 + 0.5 * confirmationWeight);
+
+  return Math.max(0, Math.min(1, decayedConfidence));
+}
+
+function getMemoryStats() {
+  if (!hasMemoriesTable()) {
+    return {
+      total: 0,
+      active: 0,
+      disabled: 0,
+      superseded: 0,
+      by_type: {},
+      by_project: {},
+      avg_confidence: 0,
+      oldest_unconfirmed: null,
+      stale_count: 0
+    };
+  }
+
+  const total = db.prepare("SELECT COUNT(*) as count FROM memories").get().count;
+  const active = db.prepare("SELECT COUNT(*) as count FROM memories WHERE enabled = 1").get().count;
+  const disabled = total - active;
+
+  const supersededResult = db.prepare(`
+    SELECT COUNT(*) as count FROM memories
+    WHERE metadata_json LIKE '%"state":"superseded"%'
+  `).get();
+  const superseded = supersededResult.count;
+
+  const byTypeRows = db.prepare(`
+    SELECT type, COUNT(*) as count FROM memories
+    WHERE enabled = 1
+    GROUP BY type
+    ORDER BY count DESC
+  `).all();
+  const by_type = {};
+  for (const row of byTypeRows) {
+    by_type[row.type] = row.count;
+  }
+
+  const byProjectRows = db.prepare(`
+    SELECT COALESCE(project, 'global') as project, COUNT(*) as count FROM memories
+    WHERE enabled = 1
+    GROUP BY project
+    ORDER BY count DESC
+  `).all();
+  const by_project = {};
+  for (const row of byProjectRows) {
+    by_project[row.project] = row.count;
+  }
+
+  const avgConfRow = db.prepare(`
+    SELECT AVG(confidence) as avg_conf FROM memories
+    WHERE enabled = 1
+  `).get();
+  const avg_confidence = avgConfRow.avg_conf || 0;
+
+  const oldestUnconfRow = db.prepare(`
+    SELECT id, last_confirmed_at, created_at FROM memories
+    WHERE enabled = 1 AND times_confirmed = 1
+    ORDER BY created_at ASC
+    LIMIT 1
+  `).get();
+  const oldest_unconfirmed = oldestUnconfRow ? {
+    id: oldestUnconfRow.id,
+    created_at: oldestUnconfRow.created_at,
+    days_old: Math.floor((Date.now() - new Date(oldestUnconfRow.created_at).getTime()) / (24 * 60 * 60 * 1000))
+  } : null;
+
+  const staleCutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+  const staleCount = db.prepare(`
+    SELECT COUNT(*) as count FROM memories
+    WHERE enabled = 1
+      AND (last_confirmed_at IS NULL OR last_confirmed_at < ?)
+  `).get(staleCutoff).count;
+
+  return {
+    total,
+    active,
+    disabled,
+    superseded,
+    by_type,
+    by_project,
+    avg_confidence: Math.round(avg_confidence * 100) / 100,
+    oldest_unconfirmed,
+    stale_count: staleCount
+  };
 }
 
 // === Memory Import/Export ===
@@ -1208,6 +1346,9 @@ module.exports = {
   memorySimilarity,
   exportMemories,
   importMemories,
+  expireStaleMemories,
+  calculateMemoryDecay,
+  getMemoryStats,
   executeQuery,
   getTableList,
   getTableInfo,
