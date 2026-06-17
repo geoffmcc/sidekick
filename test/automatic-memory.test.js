@@ -97,4 +97,26 @@ assert.ok(preferences.some(m => m.source_task_id === "task_extract"), "Should st
 assert.ok(facts.some(m => m.source_task_id === "task_extract"), "Should store a fact memory");
 assert.ok(openThreads.some(m => m.source_task_id === "task_extract"), "Should store an open-thread memory");
 
+const conflictTask = recordAgentTaskMemory({
+  goal: "Prefer PostgreSQL for structured memory.",
+  project: "sidekick",
+  taskId: "task_conflict",
+  status: "completed",
+  steps: [
+    { type: "done", text: "Recorded a conflicting preference" }
+  ]
+});
+
+assert.ok(Array.isArray(conflictTask.extracted), "Conflicting task should still extract memories");
+const allPreferences = dbStore.searchMemories({ type: "preference", project: "sidekick", includeDisabled: true, limit: 20 });
+const sqlitePreference = allPreferences.find(m => /sqlite/i.test(m.summary || m.content || ""));
+const postgresPreference = allPreferences.find(m => /postgresql/i.test(m.summary || m.content || ""));
+
+assert.ok(sqlitePreference, "Should retain the original SQLite preference row");
+assert.ok(postgresPreference, "Should store the new PostgreSQL preference row");
+assert.strictEqual(sqlitePreference.enabled, false, "Conflicting older memory should be superseded");
+assert.strictEqual(sqlitePreference.metadata.state, "superseded", "Superseded memory should be marked in metadata");
+assert.strictEqual(sqlitePreference.metadata.superseded_by, postgresPreference.id, "Superseded row should point to replacement");
+assert.strictEqual(postgresPreference.enabled, true, "Replacement memory should remain enabled");
+
 console.log("Automatic memory tests passed");

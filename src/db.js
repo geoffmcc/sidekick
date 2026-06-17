@@ -225,6 +225,19 @@ function clearToolLogs() {
   db.prepare("DELETE FROM tool_logs").run();
 }
 
+const MEMORY_CONFLICT_TYPES = new Set(["fact", "decision", "preference", "procedure", "open_thread", "observation"]);
+
+const MEMORY_STOP_WORDS = new Set([
+  "the", "a", "an", "and", "or", "but", "for", "with", "without", "into", "onto", "from",
+  "to", "of", "in", "on", "at", "by", "it", "is", "are", "was", "were", "be", "been",
+  "being", "this", "that", "these", "those", "i", "we", "you", "they", "he", "she",
+  "prefer", "preferred", "prefers", "keep", "keeps", "kept", "choose", "chooses", "chosen",
+  "use", "uses", "used", "avoid", "avoids", "avoided", "decide", "decides", "decided",
+  "select", "selects", "selected", "choose", "choice", "decision", "follow", "followed",
+  "followup", "follow", "needs", "need", "needed", "todo", "fix", "investigate", "pending",
+  "blocked", "stable", "user", "project", "system", "fact", "preference", "open", "thread",
+]);
+
 function normalizeMemoryRow(row) {
   if (!row) return null;
   return {
@@ -248,6 +261,55 @@ function normalizeMemoryRow(row) {
     last_seen_at: row.last_seen_at,
     expires_at: row.expires_at
   };
+}
+
+function memoryTokens(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, " ")
+    .split(/\s+/)
+    .map(w => w.trim())
+    .filter(Boolean)
+    .filter(w => !MEMORY_STOP_WORDS.has(w) && w.length > 1);
+}
+
+function memorySimilarity(textA, textB) {
+  const a = new Set(memoryTokens(textA));
+  const b = new Set(memoryTokens(textB));
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersection = 0;
+  for (const token of a) {
+    if (b.has(token)) intersection++;
+  }
+  return intersection / Math.max(a.size, b.size);
+}
+
+function readMemoryMetadata(row) {
+  if (!row) return {};
+  if (row.metadata_json !== undefined) {
+    return parseJson(row.metadata_json, {});
+  }
+  return parseJson(row.metadata, {});
+}
+
+function supersedeMemoryRow(row, replacementId, reason, similarity, ts) {
+  const metadata = readMemoryMetadata(row);
+  metadata.state = "superseded";
+  metadata.superseded_by = replacementId;
+  metadata.superseded_at = ts;
+  metadata.supersession_reason = reason;
+  metadata.supersession_similarity = similarity;
+
+  db.prepare(`
+    UPDATE memories
+    SET enabled = 0,
+        metadata_json = ?,
+        updated_at = ?,
+        last_seen_at = ?
+    WHERE id = ?
+  `).run(JSON.stringify(metadata), ts, ts, row.id);
+
+  return normalizeMemoryRow(db.prepare("SELECT * FROM memories WHERE id = ?").get(row.id));
 }
 
 function hasMemoriesTable() {
@@ -274,6 +336,7 @@ function upsertMemory(memory) {
 
   const project = memory.project || null;
   const sourceTool = memory.source_tool || memory.tool || null;
+  const metadata = { ...(memory.metadata || {}) };
   const dedupKey = makeMemoryDedupKey({ ...memory, type, project, source_tool: sourceTool, content });
   const existingRows = db.prepare(`
     SELECT * FROM memories
@@ -293,6 +356,9 @@ function upsertMemory(memory) {
       content: row.content
     });
     if (rowKey === dedupKey) {
+      const rowMetadata = readMemoryMetadata(row);
+      const mergedMetadata = { ...rowMetadata, ...metadata };
+      mergedMetadata.state = rowMetadata.state || "active";
       db.prepare(`
         UPDATE memories
         SET summary = ?,
@@ -313,7 +379,7 @@ function upsertMemory(memory) {
         memory.source || row.source,
         memory.source_task_id || null,
         memory.source_ref || null,
-        JSON.stringify(memory.metadata || parseJson(row.metadata_json, {})),
+        JSON.stringify(mergedMetadata),
         ts,
         ts,
         row.id
@@ -322,7 +388,20 @@ function upsertMemory(memory) {
     }
   }
 
+  const conflictCandidates = existingRows.filter((row) => {
+    if (!MEMORY_CONFLICT_TYPES.has(type)) return false;
+    const rowMetadata = readMemoryMetadata(row);
+    if (rowMetadata.state === "superseded") return false;
+    if (String(row.content || "").trim().toLowerCase() === content.toLowerCase()) return false;
+    return memorySimilarity(content, row.content) >= 0.6;
+  });
+
   const id = memory.id || `mem_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  if (conflictCandidates.length > 0) {
+    metadata.state = "active";
+    metadata.conflicts_with = conflictCandidates.map(row => row.id);
+    metadata.conflict_reason = "similar_content";
+  }
   db.prepare(`
     INSERT INTO memories (
       id, type, project, content, summary, tags, confidence, source, source_tool,
@@ -342,7 +421,7 @@ function upsertMemory(memory) {
     sourceTool,
     memory.source_task_id || null,
     memory.source_ref || null,
-    JSON.stringify(memory.metadata || {}),
+    JSON.stringify(metadata),
     memory.enabled === false ? 0 : 1,
     memory.automatic === false ? 0 : 1,
     Number.isFinite(memory.times_confirmed) ? memory.times_confirmed : 1,
@@ -351,6 +430,12 @@ function upsertMemory(memory) {
     memory.last_seen_at || ts,
     memory.expires_at || null
   );
+
+  if (conflictCandidates.length > 0) {
+    for (const row of conflictCandidates) {
+      supersedeMemoryRow(row, id, "similar_content", memorySimilarity(content, row.content), ts);
+    }
+  }
 
   return normalizeMemoryRow(db.prepare("SELECT * FROM memories WHERE id = ?").get(id));
 }
@@ -951,6 +1036,7 @@ module.exports = {
   listMemories,
   disableMemory,
   trimAutomaticMemories,
+  memorySimilarity,
   executeQuery,
   getTableList,
   getTableInfo,

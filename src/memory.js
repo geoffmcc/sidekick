@@ -273,7 +273,6 @@ function extractTaskMemories({ goal, steps, summary, notes, project, taskId, sta
   const textParts = [
     goal || "",
     summary || "",
-    notes || "",
     ...(steps || []).flatMap(step => [
       step.summary || "",
       step.text || "",
@@ -350,13 +349,13 @@ function getDoneText(steps) {
   return done ? done.text || "" : "";
 }
 
-function recordAgentTaskMemory({ goal, steps, taskId, status }) {
+function recordAgentTaskMemory({ goal, steps, taskId, status, project: projectArg }) {
   if (!AUTO_MEMORY_ENABLED) return null;
   const ctx = loadContext();
   const date = nowIso();
   const tools = compactToolList(steps);
   const doneText = getDoneText(steps);
-  const project = inferProjectFromText(goal) || inferProjectFromArgs((steps || []).find(s => s.args)?.args);
+  const project = projectArg || inferProjectFromText(goal) || inferProjectFromArgs((steps || []).find(s => s.args)?.args);
   const errorCount = (steps || []).filter(s => s.type === "error" || String(s.result || "").startsWith("Error:")).length;
   const outcome = status || (errorCount > 0 ? "partial" : "success");
   const summary = truncate(doneText || goal, 600);
