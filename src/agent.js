@@ -6,7 +6,7 @@ const crypto = require("crypto");
 const EventEmitter = require("events");
 const { execFileSync } = require("child_process");
 const { callTool, DATA_DIR, GROQ_API_KEY, GROQ_MODEL, setSource, loadDelays, saveDelays, loadWatches, saveWatches, getToolDefsForSource } = require("./tools");
-const { recallMemoryForText, formatMemoryRecall, recordAgentTaskMemory, buildMemoryBrief } = require("./memory");
+const { recallMemoryForText, recallMemoryForTextAsync, formatMemoryRecall, recordAgentTaskMemory, buildMemoryBrief } = require("./memory");
 
 const PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 
@@ -580,15 +580,29 @@ async function runAgent(goal, taskId) {
   setSource("agent");
   const steps = [];
   const memoryBrief = buildMemoryBrief(goal);
-  const history = memoryBrief
+
+  let semanticRecall = [];
+  try {
+    semanticRecall = await recallMemoryForTextAsync(goal, { limit: 5 });
+  } catch {}
+
+  const briefParts = [];
+  if (memoryBrief) briefParts.push(memoryBrief);
+  if (semanticRecall.length > 0) {
+    const semanticText = formatMemoryRecall(semanticRecall.filter(r => r.semantic));
+    if (semanticText) briefParts.push("# Semantic Recall\n\n" + semanticText);
+  }
+
+  const combinedBrief = briefParts.length > 0 ? briefParts.join("\n\n") : null;
+  const history = combinedBrief
     ? [
-        { role: "system", content: "Relevant remembered Sidekick context. Use it when helpful, but do not assume it is complete:\n" + memoryBrief },
+        { role: "system", content: "Relevant remembered Sidekick context. Use it when helpful, but do not assume it is complete:\n" + combinedBrief },
         { role: "user", content: goal }
       ]
     : [{ role: "user", content: goal }];
 
   emit(taskId, { type: "step", text: "Analyzing task: " + goal });
-  if (memoryBrief) {
+  if (combinedBrief) {
     emit(taskId, { type: "step", text: "Loaded memory brief with relevant context" });
   }
 

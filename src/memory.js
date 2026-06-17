@@ -1,6 +1,15 @@
 const dbStore = require("./db");
 const { redactSensitive } = require("./redact");
 
+let qdrantClient = null;
+try {
+  qdrantClient = require("./qdrant");
+} catch {}
+
+const OLLAMA_URL = process.env.SIDEKICK_OLLAMA_URL || "http://127.0.0.1:11434";
+const EMBEDDING_MODEL = process.env.SIDEKICK_EMBEDDING_MODEL || "nomic-embed-text";
+const EMBEDDINGS_ENABLED = process.env.SIDEKICK_EMBEDDINGS !== "0";
+
 const PROJECT_RE = /^[a-z][a-z0-9_]*$/;
 const configuredMax = Number(process.env.SIDEKICK_AUTO_MEMORY_MAX || 500);
 const MAX_AUTO_MEMORY = Number.isFinite(configuredMax) ? Math.max(1, configuredMax) : 500;
@@ -252,8 +261,72 @@ function buildMemoryTags(source, extra = []) {
   return [...new Set([source, ...extra].filter(Boolean))];
 }
 
+async function generateEmbedding(text) {
+  if (!EMBEDDINGS_ENABLED || !text) return null;
+  try {
+    const response = await fetch(`${OLLAMA_URL}/api/embeddings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: EMBEDDING_MODEL, prompt: text })
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data.embedding || null;
+  } catch {
+    return null;
+  }
+}
+
+async function storeMemoryEmbedding(memoryId, text, payload) {
+  if (!qdrantClient || !EMBEDDINGS_ENABLED) return false;
+  try {
+    const available = await qdrantClient.isAvailable();
+    if (!available) return false;
+    const embedding = await generateEmbedding(text);
+    if (!embedding) return false;
+    await qdrantClient.upsert(memoryId, embedding, payload);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function searchMemoriesByEmbedding(query, options = {}) {
+  if (!qdrantClient || !EMBEDDINGS_ENABLED) return [];
+  try {
+    const available = await qdrantClient.isAvailable();
+    if (!available) return [];
+    const embedding = await generateEmbedding(query);
+    if (!embedding) return [];
+
+    const filter = {};
+    if (options.project) {
+      filter.must = filter.must || [];
+      filter.must.push({ key: "project", match: { value: options.project } });
+    }
+    if (options.type && options.type !== "all") {
+      filter.must = filter.must || [];
+      filter.must.push({ key: "type", match: { value: options.type } });
+    }
+
+    const results = await qdrantClient.search(embedding, options.limit || 10, Object.keys(filter).length > 0 ? filter : null);
+    return results.map(r => ({
+      id: r.payload?.memory_id,
+      type: r.payload?.type,
+      project: r.payload?.project,
+      content: r.payload?.content,
+      summary: r.payload?.summary,
+      confidence: r.payload?.confidence,
+      score: r.score,
+      semantic: true
+    }));
+  } catch {
+    return [];
+  }
+}
+
 function createStructuredMemory({ type, project, content, summary, tags, confidence, source, sourceTool, sourceTaskId, sourceRef, metadata, automatic = true }) {
-  return dbStore.upsertMemory({
+  const result = dbStore.upsertMemory({
     type,
     project: project || null,
     content: String(content || summary || "").trim(),
@@ -267,6 +340,20 @@ function createStructuredMemory({ type, project, content, summary, tags, confide
     metadata: metadata || {},
     automatic
   });
+
+  if (result && EMBEDDINGS_ENABLED) {
+    const text = [result.content, result.summary, result.project, result.type].filter(Boolean).join(" ");
+    storeMemoryEmbedding(result.id, text, {
+      memory_id: result.id,
+      type: result.type,
+      project: result.project,
+      content: result.content,
+      summary: result.summary,
+      confidence: result.confidence
+    }).catch(() => {});
+  }
+
+  return result;
 }
 
 function extractTaskMemories({ goal, steps, summary, notes, project, taskId, status }) {
@@ -490,6 +577,41 @@ function recallMemoryForText(query, options = {}) {
   return results;
 }
 
+async function recallMemoryForTextAsync(query, options = {}) {
+  const project = options.project || inferProjectFromText(query);
+  const limit = Math.max(1, Math.min(Number(options.limit || 5), 20));
+
+  const semanticResults = await searchMemoriesByEmbedding(query, { project, type: options.type, limit: limit * 2 });
+
+  const keywordResults = recallMemoryForText(query, options);
+
+  const seen = new Set();
+  const merged = [];
+
+  for (const item of semanticResults) {
+    if (!seen.has(item.id)) {
+      seen.add(item.id);
+      merged.push({ ...item, score: item.score || 0, semantic: true });
+    }
+  }
+
+  for (const item of keywordResults) {
+    if (!seen.has(item.id)) {
+      seen.add(item.id);
+      const score = scoreText(query, memoryText(item));
+      merged.push({ ...item, score, semantic: false });
+    }
+  }
+
+  merged.sort((a, b) => {
+    const weightedA = (a.score || 0) * (TYPE_WEIGHTS[a.type] || 1) * (a.confidence || 1);
+    const weightedB = (b.score || 0) * (TYPE_WEIGHTS[b.type] || 1) * (b.confidence || 1);
+    return weightedB - weightedA;
+  });
+
+  return merged.slice(0, limit);
+}
+
 function formatMemoryRecall(items) {
   if (!items || items.length === 0) return "";
   return items.map(item => {
@@ -572,8 +694,10 @@ module.exports = {
   recordAgentTaskMemory,
   extractTaskMemories,
   recallMemoryForText,
+  recallMemoryForTextAsync,
   formatMemoryRecall,
   buildMemoryBrief,
+  generateEmbedding,
   inferProjectFromArgs,
   inferProjectFromText
 };
