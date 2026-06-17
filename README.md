@@ -85,6 +85,64 @@ Every time you open opencode, it automatically reads `~/.config/opencode/AGENTS.
 
 Sidekick is the infrastructure. The AI (running in opencode) uses that infrastructure to help you work. Without `AGENTS.md`, the AI doesn't know Sidekick exists. With it, the AI has persistent remote capabilities.
 
+## Usage
+
+### Direct Tool Calls
+
+Ask the AI to run any Sidekick tool directly:
+
+```
+@sidekick sidekick_knowledge action="search" query="debugging"
+```
+
+The AI executes the tool and returns structured results:
+
+```
+Found 4 results for "debugging":
+
+1. Debugging Workflow (id=55, best-practices) – 6-step workflow: reproduce symptom → check logs → query tool_logs → inspect config → check migrations → store findings. Uses sidekick_black_box and sidekick_fresheyes.
+
+2. Debugging Best Practices (id=19, best-practices) – Always check sidekick_debug_tool action='recall' first before investigating. Store findings with service + issue params. Findings persist 7 days.
+
+3. Token Efficiency Tool Selection Rules (id=22, best-practices) – Full table of MUST USE vs NEVER USE for debugging: use sidekick_debug_tool over repeated file reads/manual context tracking.
+
+4. Knowledge Base Migration Plan (id=17, plan) – Includes debugging best practices as item 3b in the migration plan.
+```
+
+### Complex Multi-Step Tasks
+
+For tasks that require planning, iteration, or multiple tool calls, use the `@sidekick` subagent:
+
+```
+@sidekick update the persistence roadmap to reflect what's been done
+```
+
+The subagent will:
+1. Recall the current plan from KV storage
+2. Check recent commits to see what's shipped
+3. Update the plan with completion status
+4. Store the revised version
+
+### Conversational Planning
+
+Sidekick works best as a collaborative partner. You can have back-and-forth conversations about plans, architecture, or debugging:
+
+```
+you: "we stored a plan. unfortunately its out of date - what do"
+ai:  Found it — KV key persistence_roadmap. It's a 9-step plan (structured extraction, lifecycle, conflicts, recall, prompt brief, review UI, import/export, sync, evaluation).
+     What's out of date? Want me to update it to reflect what's been done (steps 1-3 are largely shipped) and revise the remaining items?
+you: "yes"
+ai:  [updates the roadmap with current status]
+```
+
+### Dashboard
+
+Open `http://YOUR_REMOTE_IP:4098/` for:
+- System health monitoring
+- Tool usage analytics
+- Agent task submission and streaming
+- Memory inspection and management
+
 ## What Makes Sidekick Different?
 
 Most MCP servers are just tool wrappers—they give AI access to specific APIs or services. Sidekick is fundamentally different:
