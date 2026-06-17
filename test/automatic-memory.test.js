@@ -119,4 +119,98 @@ assert.strictEqual(sqlitePreference.metadata.state, "superseded", "Superseded me
 assert.strictEqual(sqlitePreference.metadata.superseded_by, postgresPreference.id, "Superseded row should point to replacement");
 assert.strictEqual(postgresPreference.enabled, true, "Replacement memory should remain enabled");
 
+console.log("Test recall accuracy and bad-memory suppression");
+
+const lowConfFact = dbStore.upsertMemory({
+  type: "fact",
+  project: "sidekick",
+  content: "Grafana visualization tool for metrics",
+  summary: "Grafana visualization tool for metrics",
+  tags: ["recall_test"],
+  confidence: 0.3,
+  source: "test",
+  source_tool: "test",
+  metadata: { test: "recall_accuracy" }
+});
+
+const highConfFact = dbStore.upsertMemory({
+  type: "fact",
+  project: "sidekick",
+  content: "Grafana dashboards visualize system metrics",
+  summary: "Grafana dashboards visualize system metrics",
+  tags: ["recall_test"],
+  confidence: 0.95,
+  source: "test",
+  source_tool: "test",
+  metadata: { test: "recall_accuracy" }
+});
+
+const observation = dbStore.upsertMemory({
+  type: "observation",
+  project: "sidekick",
+  content: "Grafana might support alerting rules",
+  summary: "Grafana might support alerting rules",
+  tags: ["recall_test"],
+  confidence: 0.6,
+  source: "test",
+  source_tool: "test",
+  metadata: { test: "recall_accuracy" }
+});
+
+const otherProjectMem = dbStore.upsertMemory({
+  type: "fact",
+  project: "otherproject",
+  content: "Grafana is also deployed in other project",
+  summary: "Grafana is also deployed in other project",
+  tags: ["recall_test"],
+  confidence: 0.9,
+  source: "test",
+  source_tool: "test",
+  metadata: { test: "recall_accuracy" }
+});
+
+const sidekickFacts = dbStore.searchMemories({ type: "fact", project: "sidekick", limit: 20 });
+
+const grafanaRecall = recallMemoryForText("Grafana metrics visualization sidekick", { project: "sidekick", limit: 10 });
+assert.ok(grafanaRecall.length > 0, "Should recall Grafana-related memories");
+
+const highConfResult = grafanaRecall.find(m => m.id === highConfFact.id);
+const lowConfResult = grafanaRecall.find(m => m.id === lowConfFact.id);
+const observationResult = grafanaRecall.find(m => m.id === observation.id);
+const otherProjectResult = grafanaRecall.find(m => m.id === otherProjectMem.id);
+
+assert.ok(highConfResult, "High-confidence fact should appear in recall");
+assert.ok(!otherProjectResult, "Memory from different project should not appear in project-filtered recall");
+
+if (highConfResult && observationResult) {
+  const highConfIndex = grafanaRecall.indexOf(highConfResult);
+  const observationIndex = grafanaRecall.indexOf(observationResult);
+  assert.ok(highConfIndex < observationIndex, "High-confidence fact should rank higher than observation");
+}
+
+const disabledMem = dbStore.upsertMemory({
+  type: "fact",
+  project: "sidekick",
+  content: "Disabled fact about Grafana alerting configuration",
+  summary: "Disabled fact about Grafana alerting configuration",
+  tags: ["recall_test", "disabled_test"],
+  confidence: 0.8,
+  source: "test",
+  source_tool: "test",
+  metadata: { test: "bad_memory" }
+});
+
+dbStore.disableMemory(disabledMem.id);
+
+const recallAfterDisable = recallMemoryForText("Grafana alerting configuration sidekick", { project: "sidekick", limit: 20 });
+const disabledResult = recallAfterDisable.find(m => m.id === disabledMem.id);
+assert.ok(!disabledResult, "Disabled memory should not appear in recall results");
+
+const supersededRecall = recallMemoryForText("dashboard port sidekick", { project: "sidekick", limit: 20 });
+const supersededResult = supersededRecall.find(m => m.id === sqlitePreference.id);
+assert.ok(!supersededResult, "Superseded memory should not appear in recall results");
+
+const enabledPostgres = supersededRecall.find(m => m.id === postgresPreference.id);
+assert.ok(enabledPostgres, "Active replacement memory should appear in recall");
+
 console.log("Automatic memory tests passed");
