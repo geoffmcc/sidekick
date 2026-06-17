@@ -408,13 +408,18 @@ function upsertMemory(memory) {
     metadata.conflicts_with = conflictCandidates.map(row => row.id);
     metadata.conflict_reason = "similar_content";
   }
+  
+  const machineId = getMachineId();
+  const userId = getUserId();
+  
   db.prepare(`
     INSERT INTO memories (
       id, type, project, content, summary, tags, confidence, source, source_tool,
       source_task_id, source_ref, metadata_json, enabled, automatic,
-      times_confirmed, created_at, updated_at, last_seen_at, last_confirmed_at, expires_at
+      times_confirmed, created_at, updated_at, last_seen_at, last_confirmed_at, expires_at,
+      origin_machine_id, origin_user_id, sync_version
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     type,
@@ -435,7 +440,10 @@ function upsertMemory(memory) {
     ts,
     memory.last_seen_at || ts,
     ts,
-    memory.expires_at || null
+    memory.expires_at || null,
+    memory.origin_machine_id || machineId,
+    memory.origin_user_id || userId,
+    memory.sync_version || 1
   );
 
   if (conflictCandidates.length > 0) {
