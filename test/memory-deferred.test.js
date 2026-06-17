@@ -77,12 +77,7 @@ const mem3 = dbStore.upsertMemory({
   requires_confirmation: true
 });
 
-console.log("  mem3 state:", mem3.state, "requires_confirmation:", mem3.requires_confirmation);
-console.log("  mem3 last_confirmed_at:", mem3.last_confirmed_at, "created_at:", mem3.created_at);
-
 const pending = dbStore.getPendingConfirmations({ limit: 10 });
-console.log("  pending count:", pending.length);
-console.log("  pending ids:", pending.map(m => m.id));
 assert.ok(pending.length >= 1, "Should have pending confirmations");
 assert.ok(pending.some(m => m.id === mem3.id), "Should include unconfirmed mem3");
 console.log("  ✓ Pending confirmations list works");
