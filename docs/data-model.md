@@ -108,7 +108,7 @@ CREATE TABLE memories (
 );
 ```
 
-Supported memory types are `fact`, `decision`, `preference`, `procedure`, `open_thread`, `observation`, `session`, and `tool_call`. The first pass writes automatic `session` and `tool_call` memories. Repeated matching memories update the existing row and increment `times_confirmed` rather than inserting duplicates.
+Supported memory types are `fact`, `decision`, `preference`, `procedure`, `open_thread`, `observation`, `session`, and `tool_call`. The first pass writes automatic `session` and `tool_call` memories and performs simple extraction into `fact`, `decision`, `preference`, `open_thread`, and `observation` rows when task text matches those patterns. Repeated matching memories update the existing row and increment `times_confirmed` rather than inserting duplicates.
 
 Automatic memory is enabled by default, can be disabled with `SIDEKICK_AUTO_MEMORY=0`, and is capped by `SIDEKICK_AUTO_MEMORY_MAX` active automatic rows. It stores redacted summaries and metadata, not full raw outputs.
 

@@ -76,4 +76,25 @@ const afterDedup = dbStore.searchMemories({ type: "tool_call", project: "sidekic
 assert.strictEqual(afterDedup.length, beforeDedup.length, "Duplicate structured memory should update existing row");
 assert.ok(afterDedup[0].times_confirmed >= 2, "Duplicate structured memory should increment confirmation count");
 
+const extractedTask = recordAgentTaskMemory({
+  goal: "I decided to keep LF line endings. Prefer SQLite for structured memory. Follow up on the dashboard review. The database file is sidekick.db.",
+  project: "sidekick",
+  taskId: "task_extract",
+  status: "completed",
+  steps: [
+    { type: "tool", tool: "sidekick_bash", args: { command: "echo structured memory", project: "sidekick" }, result: "ok" },
+    { type: "done", text: "Completed extraction test task" }
+  ]
+});
+
+assert.ok(Array.isArray(extractedTask.extracted), "Task extraction should return extracted memories");
+assert.ok(extractedTask.extracted.length >= 2, "Task extraction should produce structured memories");
+const preferences = dbStore.searchMemories({ type: "preference", project: "sidekick", limit: 10 });
+const facts = dbStore.searchMemories({ type: "fact", project: "sidekick", limit: 10 });
+const openThreads = dbStore.searchMemories({ type: "open_thread", project: "sidekick", limit: 10 });
+
+assert.ok(preferences.some(m => m.source_task_id === "task_extract"), "Should store a preference memory");
+assert.ok(facts.some(m => m.source_task_id === "task_extract"), "Should store a fact memory");
+assert.ok(openThreads.some(m => m.source_task_id === "task_extract"), "Should store an open-thread memory");
+
 console.log("Automatic memory tests passed");

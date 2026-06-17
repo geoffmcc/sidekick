@@ -26,6 +26,58 @@ const TYPE_WEIGHTS = {
   observation: 0.7
 };
 
+const EXTRACTION_RULES = [
+  {
+    type: "preference",
+    confidence: 0.9,
+    patterns: [
+      /\bprefer(?:s|red|ring)?\b/i,
+      /\b(?:use|keep|choose|avoid)\s+(?:sqlite|postgres|postgresql|qdrant|ollama|groq|node|powershell|bash)\b/i,
+      /\bdon't use\b/i,
+      /\bnever use\b/i
+    ]
+  },
+  {
+    type: "decision",
+    confidence: 0.85,
+    patterns: [
+      /\bdecided\b/i,
+      /\bdecision\b/i,
+      /\bchose\b/i,
+      /\bselected\b/i,
+      /\bgoing with\b/i
+    ]
+  },
+  {
+    type: "open_thread",
+    confidence: 0.75,
+    patterns: [
+      /\bTODO\b/i,
+      /\bfollow up\b/i,
+      /\bneeds? to\b/i,
+      /\bblocked\b/i,
+      /\bpending\b/i,
+      /\binvestigate\b/i,
+      /\bfix\b/i
+    ]
+  },
+  {
+    type: "fact",
+    confidence: 0.72,
+    patterns: [
+      /\bis\b/i,
+      /\bare\b/i,
+      /\bhas\b/i,
+      /\bhave\b/i,
+      /\buses\b/i,
+      /\blives in\b/i,
+      /\bstored in\b/i,
+      /\blocated at\b/i,
+      /\bdefault(?:s)? to\b/i
+    ]
+  }
+];
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -181,6 +233,118 @@ function compactToolList(steps) {
   return [...new Set(tools)].slice(0, 12);
 }
 
+function splitStatements(text) {
+  return String(text || "")
+    .split(/[\n\r]+|(?<=[.!?])\s+/)
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+function scoreExtractionStatement(statement, rule) {
+  let score = 0;
+  for (const pattern of rule.patterns) {
+    if (pattern.test(statement)) score++;
+  }
+  return score;
+}
+
+function buildMemoryTags(source, extra = []) {
+  return [...new Set([source, ...extra].filter(Boolean))];
+}
+
+function createStructuredMemory({ type, project, content, summary, tags, confidence, source, sourceTool, sourceTaskId, sourceRef, metadata, automatic = true }) {
+  return dbStore.upsertMemory({
+    type,
+    project: project || null,
+    content: String(content || summary || "").trim(),
+    summary: String(summary || content || "").trim(),
+    tags: tags || [],
+    confidence,
+    source: source || "unknown",
+    source_tool: sourceTool || null,
+    source_task_id: sourceTaskId || null,
+    source_ref: sourceRef || null,
+    metadata: metadata || {},
+    automatic
+  });
+}
+
+function extractTaskMemories({ goal, steps, summary, notes, project, taskId, status }) {
+  const textParts = [
+    goal || "",
+    summary || "",
+    notes || "",
+    ...(steps || []).flatMap(step => [
+      step.summary || "",
+      step.text || "",
+      step.result || "",
+      typeof step.args === "object" ? JSON.stringify(step.args) : ""
+    ])
+  ];
+  const text = textParts.filter(Boolean).join("\n");
+  const statements = [...new Set(splitStatements(text).map(s => truncate(s, 400)).filter(Boolean))];
+  const memories = [];
+  const seen = new Set();
+
+  for (const statement of statements) {
+    for (const rule of EXTRACTION_RULES) {
+      const hits = scoreExtractionStatement(statement, rule);
+      if (hits === 0) continue;
+
+      const normalized = `${rule.type}|${project || ""}|${statement.toLowerCase()}`;
+      if (seen.has(normalized)) continue;
+      seen.add(normalized);
+
+      const inferredProject = project || inferProjectFromText(statement) || inferProjectFromText(goal);
+      const memory = createStructuredMemory({
+        type: rule.type,
+        project: inferredProject,
+        content: statement,
+        summary: statement,
+        tags: buildMemoryTags("auto_extract", [status, taskId ? "task" : null, rule.type]),
+        confidence: Math.min(0.98, rule.confidence + Math.min(hits * 0.03, 0.1)),
+        source: "agent",
+        sourceTool: "sidekick_agent",
+        sourceTaskId: taskId || null,
+        sourceRef: taskId || null,
+        metadata: {
+          goal: truncate(goal || "", 300),
+          statement,
+          extracted_from: "agent_task",
+          status: status || null
+        }
+      });
+      if (memory) memories.push(memory);
+      if (memories.length >= 6) return memories;
+      break;
+    }
+  }
+
+  if (memories.length === 0 && text.trim()) {
+    const inferredProject = project || inferProjectFromText(goal) || inferProjectFromText(text);
+    const observation = createStructuredMemory({
+      type: "observation",
+      project: inferredProject,
+      content: truncate(summary || goal || text, 400),
+      summary: truncate(summary || goal || text, 400),
+      tags: buildMemoryTags("auto_extract", [status]),
+      confidence: 0.55,
+      source: "agent",
+      sourceTool: "sidekick_agent",
+      sourceTaskId: taskId || null,
+      sourceRef: taskId || null,
+      metadata: {
+        goal: truncate(goal || "", 300),
+        extracted_from: "agent_task",
+        status: status || null
+      }
+    });
+    if (observation) memories.push(observation);
+  }
+
+  return memories;
+}
+
 function getDoneText(steps) {
   const done = [...(steps || [])].reverse().find(s => s.type === "done");
   return done ? done.text || "" : "";
@@ -231,9 +395,22 @@ function recordAgentTaskMemory({ goal, steps, taskId, status }) {
   pushBounded(ctx.sessions, session, 100);
   pushBounded(ctx.memories, memory, MAX_AUTO_MEMORY);
   saveContext(ctx);
-  const structured = dbStore.upsertMemory(toStructuredMemory({ ...memory, type: "session" }));
+  const structured = createStructuredMemory({
+    type: "session",
+    project,
+    content: summary,
+    summary,
+    tags: buildMemoryTags("auto_session", tools),
+    confidence: 0.75,
+    source: "agent",
+    sourceTool: "sidekick_agent",
+    sourceTaskId: taskId || null,
+    sourceRef: taskId || null,
+    metadata: { goal: truncate(goal, 400), outcome, tools, notes },
+  });
+  const extracted = extractTaskMemories({ goal, steps, summary, notes, project, taskId, status: outcome });
   dbStore.trimAutomaticMemories(MAX_AUTO_MEMORY);
-  return { session, memory: structured || memory };
+  return { session, memory: structured || memory, extracted };
 }
 
 function tokens(text) {
@@ -332,6 +509,7 @@ module.exports = {
   saveContext,
   recordToolCallMemory,
   recordAgentTaskMemory,
+  extractTaskMemories,
   recallMemoryForText,
   formatMemoryRecall,
   inferProjectFromArgs,

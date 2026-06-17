@@ -706,6 +706,9 @@ async function runAgent(goal, taskId) {
   try {
     const saved = recordAgentTaskMemory({ goal, steps, taskId, status: "completed" });
     if (saved) emit(taskId, { type: "step", text: "Saved automatic memory for this task" });
+    if (saved?.extracted?.length) {
+      emit(taskId, { type: "step", text: `Extracted ${saved.extracted.length} structured memory item(s)` });
+    }
   } catch (e) {
     emit(taskId, { type: "step", text: "Automatic memory save failed: " + e.message });
   }
