@@ -266,7 +266,8 @@ const exportData = dbStore.exportMemories({ project: "sidekick" });
 assert.ok(exportData, "Export should return data");
 assert.ok(Array.isArray(exportData.memories), "Export should have memories array");
 assert.ok(exportData.memories.length > 0, "Export should have memories");
-assert.strictEqual(exportData.version, 1, "Export should have version");
+assert.strictEqual(exportData.version, 2, "Export should have version 2");
+assert.ok(exportData.machine_id, "Export should have machine_id");
 assert.ok(exportData.exported_at, "Export should have timestamp");
 
 const exportedIds = new Set(exportData.memories.map(m => m.id));
