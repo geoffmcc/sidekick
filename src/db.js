@@ -264,7 +264,12 @@ function normalizeMemoryRow(row) {
     origin_machine_id: row.origin_machine_id,
     origin_user_id: row.origin_user_id,
     sync_version: row.sync_version,
-    last_synced_at: row.last_synced_at
+    last_synced_at: row.last_synced_at,
+    state: row.state || "active",
+    requires_confirmation: !!row.requires_confirmation,
+    confirmed_by: row.confirmed_by,
+    deleted_at: row.deleted_at,
+    expired_at: row.expired_at
   };
 }
 
@@ -401,14 +406,18 @@ function upsertMemory(memory) {
     if (!MEMORY_CONFLICT_TYPES.has(type)) return false;
     const rowMetadata = readMemoryMetadata(row);
     if (rowMetadata.state === "superseded") return false;
+    if (row.state === "deleted" || row.state === "expired") return false;
     if (String(row.content || "").trim().toLowerCase() === content.toLowerCase()) return false;
     if (row.confidence > newConfidence) return false;
+    if (row.requires_confirmation && row.state === "confirmed") return false;
     return memorySimilarity(content, row.content) >= 0.6;
   });
 
   const id = memory.id || `mem_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  const initialState = memory.requires_confirmation ? "pending" : "active";
+  
   if (conflictCandidates.length > 0) {
-    metadata.state = "active";
+    metadata.state = initialState;
     metadata.conflicts_with = conflictCandidates.map(row => row.id);
     metadata.conflict_reason = "similar_content";
   }
@@ -421,9 +430,9 @@ function upsertMemory(memory) {
       id, type, project, content, summary, tags, confidence, source, source_tool,
       source_task_id, source_ref, metadata_json, enabled, automatic,
       times_confirmed, created_at, updated_at, last_seen_at, last_confirmed_at, expires_at,
-      origin_machine_id, origin_user_id, sync_version
+      origin_machine_id, origin_user_id, sync_version, state, requires_confirmation
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     type,
@@ -443,11 +452,13 @@ function upsertMemory(memory) {
     memory.created_at || ts,
     ts,
     memory.last_seen_at || ts,
-    ts,
+    memory.requires_confirmation ? null : ts,
     memory.expires_at || null,
     memory.origin_machine_id || machineId,
     memory.origin_user_id || userId,
-    memory.sync_version || 1
+    memory.sync_version || 1,
+    initialState,
+    memory.requires_confirmation ? 1 : 0
   );
 
   if (conflictCandidates.length > 0) {
@@ -650,6 +661,141 @@ function getMemoryStats() {
     oldest_unconfirmed,
     stale_count: staleCount
   };
+}
+
+// === Memory Deferred Features ===
+
+function confirmMemory(id, confirmedBy = "user") {
+  if (!hasMemoriesTable()) return false;
+  const ts = nowIso();
+  const result = db.prepare(`
+    UPDATE memories
+    SET state = 'confirmed',
+        confirmed_by = ?,
+        last_confirmed_at = ?,
+        updated_at = ?
+    WHERE id = ? AND state != 'deleted'
+  `).run(confirmedBy, ts, ts, id);
+  return result.changes > 0;
+}
+
+function setMemoryRequiresConfirmation(id, requires = true) {
+  if (!hasMemoriesTable()) return false;
+  const result = db.prepare(`
+    UPDATE memories
+    SET requires_confirmation = ?
+    WHERE id = ? AND state != 'deleted'
+  `).run(requires ? 1 : 0, id);
+  return result.changes > 0;
+}
+
+function softDeleteMemory(id, reason = "user_deleted") {
+  if (!hasMemoriesTable()) return false;
+  const ts = nowIso();
+  const result = db.prepare(`
+    UPDATE memories
+    SET state = 'deleted',
+        enabled = 0,
+        deleted_at = ?,
+        metadata_json = json_set(COALESCE(metadata_json, '{}'), '$.delete_reason', ?),
+        updated_at = ?
+    WHERE id = ?
+  `).run(ts, reason, ts, id);
+  return result.changes > 0;
+}
+
+function expireMemory(id, reason = "manual_expire") {
+  if (!hasMemoriesTable()) return false;
+  const ts = nowIso();
+  const result = db.prepare(`
+    UPDATE memories
+    SET state = 'expired',
+        enabled = 0,
+        expired_at = ?,
+        metadata_json = json_set(COALESCE(metadata_json, '{}'), '$.expire_reason', ?),
+        updated_at = ?
+    WHERE id = ? AND state != 'deleted'
+  `).run(ts, reason, ts, id);
+  return result.changes > 0;
+}
+
+function restoreMemory(id) {
+  if (!hasMemoriesTable()) return false;
+  const ts = nowIso();
+  const result = db.prepare(`
+    UPDATE memories
+    SET state = 'active',
+        enabled = 1,
+        deleted_at = NULL,
+        expired_at = NULL,
+        updated_at = ?
+    WHERE id = ? AND (state = 'deleted' OR state = 'expired')
+  `).run(ts, id);
+  return result.changes > 0;
+}
+
+function getMemoriesByState(state, options = {}) {
+  if (!hasMemoriesTable()) return [];
+  const limit = options.limit || 100;
+  const project = options.project;
+  
+  let sql = `SELECT * FROM memories WHERE state = ?`;
+  const params = [state];
+  
+  if (project) {
+    sql += ` AND project = ?`;
+    params.push(project);
+  }
+  
+  sql += ` ORDER BY updated_at DESC LIMIT ?`;
+  params.push(limit);
+  
+  const rows = db.prepare(sql).all(...params);
+  return rows.map(normalizeMemoryRow);
+}
+
+function getPendingConfirmations(options = {}) {
+  if (!hasMemoriesTable()) return [];
+  const limit = options.limit || 50;
+  
+  const rows = db.prepare(`
+    SELECT * FROM memories
+    WHERE requires_confirmation = 1
+      AND (state = 'pending' OR state = 'active')
+      AND (last_confirmed_at IS NULL OR last_confirmed_at < created_at)
+    ORDER BY confidence DESC, created_at DESC
+    LIMIT ?
+  `).all(limit);
+  
+  return rows.map(normalizeMemoryRow);
+}
+
+function setAutoExpire(id, daysFromNow) {
+  if (!hasMemoriesTable()) return false;
+  const expireDate = new Date(Date.now() + daysFromNow * 24 * 60 * 60 * 1000).toISOString();
+  const result = db.prepare(`
+    UPDATE memories
+    SET expires_at = ?
+    WHERE id = ? AND state != 'deleted'
+  `).run(expireDate, id);
+  return result.changes > 0;
+}
+
+function processAutoExpirations() {
+  if (!hasMemoriesTable()) return { expired: 0 };
+  const ts = nowIso();
+  const result = db.prepare(`
+    UPDATE memories
+    SET state = 'expired',
+        enabled = 0,
+        expired_at = ?,
+        metadata_json = json_set(COALESCE(metadata_json, '{}'), '$.expire_reason', 'auto_expire'),
+        updated_at = ?
+    WHERE expires_at IS NOT NULL
+      AND expires_at <= ?
+      AND state = 'active'
+  `).run(ts, ts, ts);
+  return { expired: result.changes };
 }
 
 // === Memory Import/Export ===
@@ -1697,6 +1843,15 @@ module.exports = {
   expireStaleMemories,
   calculateMemoryDecay,
   getMemoryStats,
+  confirmMemory,
+  setMemoryRequiresConfirmation,
+  softDeleteMemory,
+  expireMemory,
+  restoreMemory,
+  getMemoriesByState,
+  getPendingConfirmations,
+  setAutoExpire,
+  processAutoExpirations,
   getMachineId,
   getUserId,
   setUserId,

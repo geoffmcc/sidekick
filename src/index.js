@@ -140,6 +140,15 @@ const TOOL_SCHEMAS = {
     on_conflict: z.enum(["merge", "skip"]).optional().describe("Conflict resolution: merge (update existing) or skip (default: merge)"),
     preserve_ids: z.boolean().optional().describe("Preserve original memory IDs (default: false)")
   }),
+  sidekick_memory_manage: z.object({
+    action: z.enum(["confirm", "set_requires_confirmation", "delete", "expire", "restore", "set_auto_expire", "list_by_state", "pending_confirmations", "process_auto_expirations"]).describe("Action to perform"),
+    id: z.string().optional().describe("Memory ID (or state name for list_by_state)"),
+    confirmed_by: z.string().optional().describe("Who confirmed (for confirm action - default 'user')"),
+    days: z.number().optional().describe("Days until expiration (for set_auto_expire)"),
+    reason: z.string().optional().describe("Reason for delete/expire"),
+    limit: z.number().optional().describe("Limit for list operations (default 50)"),
+    project: z.string().optional().describe("Filter by project for list operations")
+  }),
   sidekick_sync_identity: z.object({
     action: z.enum(["get", "set_user"]).describe("Action: get (show identity) or set_user (set user ID)"),
     user_id: z.string().optional().describe("User ID to set (required for set_user action)")
