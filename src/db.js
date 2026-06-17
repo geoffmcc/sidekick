@@ -260,7 +260,11 @@ function normalizeMemoryRow(row) {
     updated_at: row.updated_at,
     last_seen_at: row.last_seen_at,
     last_confirmed_at: row.last_confirmed_at,
-    expires_at: row.expires_at
+    expires_at: row.expires_at,
+    origin_machine_id: row.origin_machine_id,
+    origin_user_id: row.origin_user_id,
+    sync_version: row.sync_version,
+    last_synced_at: row.last_synced_at
   };
 }
 
