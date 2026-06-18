@@ -6,7 +6,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const db = require('./db');
+const { getDb, runPendingMigrations } = require('../src/db');
+
+const db = getDb();
 
 const CONTEXT_FILE = path.join(__dirname, '..', 'CONTEXT.md');
 
@@ -135,6 +137,8 @@ function insertKnowledge(entries) {
 }
 
 function main() {
+  runPendingMigrations();
+
   console.log('Parsing CONTEXT.md...');
   const entries = parseContext();
   console.log(`Found ${entries.length} knowledge entries\n`);
