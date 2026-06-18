@@ -277,6 +277,26 @@ try {
       $changed += $file
     }
 
+    $dashboardHtml = Join-Path $PROJECT_DIR "src\dashboard.html"
+    if (Test-Path $dashboardHtml) {
+      if (-not (Copy-ToVPS $dashboardHtml "$REMOTE_DIR/src/dashboard.html")) {
+        throw "Failed to copy dashboard.html"
+      }
+      $changed += "src/dashboard.html"
+    }
+
+    foreach ($file in @("dashboard.js", "dashboard.css")) {
+      $localPath = Join-Path $PROJECT_DIR "static\$file"
+      if (-not (Test-Path $localPath)) {
+        Write-Host "    Warning: static/$file not found, skipping" -ForegroundColor Yellow
+        continue
+      }
+      if (-not (Copy-ToVPS $localPath "$REMOTE_DIR/static/$file")) {
+        throw "Failed to copy static/$file"
+      }
+      $changed += "static/$file"
+    }
+
     if (-not (Copy-ToVPS (Join-Path $PROJECT_DIR "package.json") "$REMOTE_DIR/package.json")) {
       throw "Failed to copy package.json"
     }
