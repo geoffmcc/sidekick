@@ -124,9 +124,12 @@ Automatic memory is enabled by default. Sidekick stores bounded, redacted summar
 ```env
 SIDEKICK_AUTO_MEMORY=1
 SIDEKICK_AUTO_MEMORY_MAX=500
+SIDEKICK_EMBEDDINGS=1
+SIDEKICK_EMBEDDING_MODEL=nomic-embed-text
+SIDEKICK_OLLAMA_URL=http://127.0.0.1:11434
 ```
 
-Set `SIDEKICK_AUTO_MEMORY=0` to disable automatic memory. Increase or decrease `SIDEKICK_AUTO_MEMORY_MAX` to control how many automatic memory entries are retained.
+Set `SIDEKICK_AUTO_MEMORY=0` to disable automatic memory. Increase or decrease `SIDEKICK_AUTO_MEMORY_MAX` to control how many automatic memory entries are retained. Set `SIDEKICK_EMBEDDINGS=0` to disable semantic memory embeddings; otherwise Sidekick uses Ollama and Qdrant when available.
 
 ## Useful Checks
 

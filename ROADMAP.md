@@ -2,10 +2,10 @@
 
 What's planned for Sidekick.
 
-## Current (v1.19)
+## Current
 
-- 83 built-in MCP tools. Query the `tools` table for the authoritative current list.
-- Live dashboard with 6 tabs (System, Activity, Data, Config, Agent, Tools)
+- 90 built-in MCP tools. Query the `tools` table for the authoritative current list.
+- Live dashboard with 9 tabs (System, Activity, Data, Memory, Database, Config, Agent, Tools, Metrics)
 - Autonomous agent bridge with Groq cloud + local Ollama fallback
 - Persistent KV storage across sessions
 - AGENTS.md integration for persistent collaboration
@@ -25,6 +25,13 @@ What's planned for Sidekick.
 - **sidekick_github** — Full GitHub API integration (PRs, issues, commits, releases)
 - **sidekick_webhook** — Receive and manage webhooks from external services
 - **sidekick_context** — Persistent intelligent context management (track projects, decisions, problems, patterns)
+- **sidekick_memory_export** — Export structured memories
+- **sidekick_memory_import** — Import structured memories
+- **sidekick_memory_manage** — Confirm, delete, expire, restore, and list memory lifecycle state
+- **sidekick_sync_identity** — Manage machine/user identity for memory sync
+- **sidekick_sync_export** — Export memories for cross-machine sync
+- **sidekick_sync_import** — Import synced memories with conflict strategies
+- **sidekick_sync_diff** — List memories changed since a timestamp
 - **sidekick_teach** — Meta-learning and self-extension (teach procedures, generate tools, learn from examples)
 - **sidekick_watch** — Event-driven monitoring (watch services, processes, endpoints, files)
 - **sidekick_secret** — Encrypted credential management with AES-256-GCM
@@ -78,6 +85,23 @@ What's planned for Sidekick.
 
 ## Recently Completed ✅
 
+### v1.20: Structured Memory Completion
+**Status:** COMPLETED
+**Date:** 2026-06-17
+
+**What Was Added:**
+- Memory conflict detection and confidence-aware supersession
+- Memory brief injection before Agent Bridge planning
+- Memory import/export and review UI support
+- Qdrant/Ollama semantic recall when optional services are available
+- Memory lifecycle, confirmation, expiration, soft-delete, restore, and deferred state
+- Cross-machine sync metadata and sync import/export/diff tools
+- Migrations `004_memory_lifecycle.sql`, `005_sync_support.sql`, and `006_memory_deferred.sql`
+
+**Result:**
+- Total tools: 83 -> 90
+- Structured memory is now queryable, reviewable, portable, and sync-aware
+
 ### v1.19: Database Tools and Tool Policy
 **Status:** ✅ COMPLETED
 **Date:** 2026-06-15
@@ -90,7 +114,7 @@ What's planned for Sidekick.
 - Dashboard policy visibility in the Tools tab
 
 **Result:**
-- Total tools: 59 → 70 at this milestone; current built-in total is 83.
+- Total tools: 59 -> 70 at this milestone; current built-in total is 90.
 - High and critical risk tools can be gated without deleting operator capability
 
 ### v1.18: Operations Platform Expansion

@@ -36,7 +36,7 @@ Default retrieval order:
 - tool_categories: category name, icon, and sort_order.
 - tool_category_map: tool-to-category mapping.
 - kv_store: durable key-value memory with project and source metadata.
-- memories: structured automatic and extracted memories with type, project, confidence, source, and confirmation metadata.
+- memories: structured automatic and extracted memories with type, project, confidence, source, confirmation, lifecycle, and sync metadata.
 - json_documents: named structured documents such as context, cron, webhooks, and watches.
 - tool_logs: redacted tool activity history.
 - meta: schema metadata including schema_version.
@@ -64,7 +64,7 @@ Streamable HTTP sessions are held in memory. GET and DELETE require a valid mcp-
 ('architecture', 'Dashboard Behavior',
 'The dashboard in src/dashboard.js serves the HTML app, static assets, dashboard APIs, database inspection APIs, tool metadata APIs, knowledge and procedure APIs, webhook capture, and agent proxy routes.
 
-Important APIs include /api/tools, /api/tool-categories, /api/knowledge, /api/procedures, /api/db/schema, /api/db/query, /api/db/stats, /api/db/search, /api/db/migrations, /api/kv, /api/logs, and /api/agent/*.
+Important APIs include /api/tools, /api/tool-categories, /api/knowledge, /api/procedures, /api/db/schema, /api/db/query, /api/db/stats, /api/db/search, /api/db/migrations, /api/kv, /api/logs, /api/memories, /api/sync/*, and /api/agent/*.
 
 Dashboard protections include optional Basic Auth, optional dashboard IP allowlist, request size limits, same-origin checks for mutating requests, rate limiting, audit logging, and tool-policy checks for dashboard-originated risky actions.',
 'dashboard,api,security,database', 1, 'seed-2026-06-16-current', datetime('now')),
@@ -74,11 +74,11 @@ Dashboard protections include optional Basic Auth, optional dashboard IP allowli
 
 It tries local Ollama first. If Ollama fails and GROQ_API_KEY is set, it falls back to Groq. The loop stops when the LLM returns done, an error occurs, or SIDEKICK_MAX_ITERATIONS is reached.
 
-The Agent Bridge also loads scheduled delays and active watches at startup. It is bound to 127.0.0.1 by default and is normally accessed through the dashboard proxy.',
+The Agent Bridge also loads scheduled delays and active watches at startup. It builds a compact memory brief from structured memories before planning. It is bound to 127.0.0.1 by default and is normally accessed through the dashboard proxy.',
 'agent,autonomous,llm,ollama,groq', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('architecture', 'Data Persistence Boundaries',
-'SQLite is the primary runtime store for shared state. Use it for KV memory, tool logs, the knowledge base, tool registry data, and named JSON documents.
+'SQLite is the primary runtime store for shared state. Use it for KV memory, structured memories, tool logs, the knowledge base, tool registry data, and named JSON documents.
 
 File artifacts still exist where files are the natural representation:
 - data/conversations/*.json for agent transcripts.
@@ -142,7 +142,7 @@ For authenticated MCP health details, send Authorization: Bearer SIDEKICK_API_KE
 'health,operations,diagnostics,curl', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('operations', 'Backup and Restore Guidance',
-'Back up the entire SIDEKICK_DATA_DIR. The highest-value file is sidekick.db because it contains KV memory, tool logs, knowledge entries, tool registry metadata, and named JSON documents.
+'Back up the entire SIDEKICK_DATA_DIR. The highest-value file is sidekick.db because it contains KV memory, structured memories, tool logs, knowledge entries, tool registry metadata, and named JSON documents.
 
 Also protect:
 - secrets.enc if sidekick_secret is used.
@@ -301,7 +301,7 @@ Examples:
 
 Use sidekick_context for richer decisions, problems, patterns, session summaries, automatic memories, and recall workflows. The Agent Bridge records bounded, redacted automatic memory summaries for completed tasks and useful tool calls when SIDEKICK_AUTO_MEMORY is enabled.
 
-Structured automatic memory is stored primarily in the memories table. The context document keeps compatibility copies for older context views.',
+Structured automatic memory is stored primarily in the memories table. The context document keeps compatibility copies for older context views. Use sidekick_memory_export and sidekick_memory_import for portable JSON backups, sidekick_memory_manage for confirmation/delete/expire/restore workflows, and sidekick_sync_* tools for cross-machine memory synchronization. Semantic recall can use Ollama embeddings and Qdrant when available.',
 'memory,kv,context,protocol', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('protocols', 'How To Inspect Recent Tool Activity',

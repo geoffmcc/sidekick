@@ -23,7 +23,7 @@
 | `scripts/bootstrap.sh` | Remote bootstrap helper used by deploy scripts. |
 | `deploy.sh` | Linux/macOS deploy script. |
 | `deploy.ps1` | Windows PowerShell deploy script. |
-| `migrations/` | SQLite schema migrations for core storage, tool registry, categories, and knowledge base. |
+| `migrations/` | SQLite schema migrations for core storage, tool registry, categories, knowledge base, structured memory, lifecycle, and sync metadata. |
 | `test/` | Node.js test suites. |
 
 ## npm scripts
@@ -45,6 +45,7 @@ The supplied tests cover:
 - KV migration behavior;
 - core tools and project metadata;
 - dashboard API behavior;
+- automatic memory, memory lifecycle, cross-machine sync, and deferred memory state;
 - integration workflow for storage and project lookups.
 
 Some future test suites are listed in `test/run-all.js` but not implemented in the supplied tree.

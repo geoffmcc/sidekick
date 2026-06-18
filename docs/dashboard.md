@@ -4,12 +4,13 @@ The dashboard is implemented in `src/dashboard.js` and defaults to port 4098. It
 
 ## Main UI areas
 
-The dashboard frontend is split across `src/dashboard.html`, `static/dashboard.css`, and `static/dashboard.js`. `src/dashboard.js` serves the private HTML shell from the authenticated root route and serves only CSS/JS/font assets through `/static`. The UI is organized around tabs for system status, activity, data, configuration, agent tasks, and tools.
+The dashboard frontend is split across `src/dashboard.html`, `static/dashboard.css`, and `static/dashboard.js`. `src/dashboard.js` serves the private HTML shell from the authenticated root route and serves only CSS/JS/font assets through `/static`. The UI is organized around tabs for system status, activity, data, database, configuration, agent tasks, memory, tools, and metrics.
 
 Typical dashboard functions:
 
 - view recent tool calls from the `tool_logs` table;
 - browse and edit KV entries;
+- inspect and manage structured memories;
 - view system statistics;
 - inspect configured tools;
 - submit autonomous agent tasks;
