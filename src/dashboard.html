@@ -25,6 +25,7 @@
   <a onclick="showPage('database')" id="nav-database">Database</a>
   <a onclick="showPage('config')" id="nav-config">Config</a>
   <a onclick="showPage('agent')" id="nav-agent">Agent</a>
+  <a onclick="showPage('approvals')" id="nav-approvals">Approvals</a>
   <a onclick="showPage('tools')" id="nav-tools">Tools</a>
   <a onclick="showPage('metrics')" id="nav-metrics">Metrics</a>
 </nav>
@@ -245,6 +246,28 @@
   <div style="margin-top:16px">
     <div class="section-title" style="cursor:pointer" onclick="toggleHistory()">History ▼</div>
     <div id="agentHistory" style="display:none;margin-top:8px"></div>
+  </div>
+</div>
+
+<!-- Approvals Page -->
+<div class="page" id="page-approvals">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div class="section-title" style="margin:0">Approval Inbox (<span id="approvalCount">0</span>)</div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-sm btn-outline" onclick="loadApprovals()" title="Refresh approvals"><i class="fas fa-sync"></i> Refresh</button>
+    </div>
+  </div>
+  <div class="search-bar">
+    <select id="approvalStatusFilter" onchange="loadApprovals()">
+      <option value="pending">Pending</option>
+      <option value="">All Statuses</option>
+      <option value="approved">Approved</option>
+      <option value="rejected">Rejected</option>
+      <option value="failed">Failed</option>
+    </select>
+  </div>
+  <div class="card" id="approvalList" style="max-height:650px;overflow-y:auto;padding:8px 16px">
+    <div class="empty">No pending approvals</div>
   </div>
 </div>
 

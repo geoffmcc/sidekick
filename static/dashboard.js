@@ -163,6 +163,7 @@ function showPage(name){
   if (name === 'memory') loadMemories();
   if (name === 'database') loadDbStats();
   if (name === 'config') loadConfig();
+  if (name === 'approvals') loadApprovals();
   if (name === 'tools') loadTools();
   if (name === 'metrics') loadGrafanaDashboard();
 }
@@ -1444,6 +1445,73 @@ function exportRun(id){
     a.click();
     URL.revokeObjectURL(url);
   }).catch(e => apiError('/api/agent/run/' + id, e, 0));
+}
+
+// -- Approvals -- //
+function loadApprovals(){
+  const status = $('approvalStatusFilter') ? $('approvalStatusFilter').value : 'pending';
+  const url = '/api/approvals' + (status ? '?status=' + encodeURIComponent(status) : '');
+  authFetch(url).then(r=>r.json()).then(d=>{
+    const approvals = d.approvals || [];
+    $('approvalCount').textContent = approvals.length;
+    const list = $('approvalList');
+    if (!approvals.length) {
+      list.innerHTML = '<div class="empty">No approvals found</div>';
+      return;
+    }
+    list.innerHTML = approvals.map(a => {
+      const riskClass = a.risk === 'critical' ? 'danger' : a.risk === 'high' ? 'warn' : '';
+      const pending = a.status === 'pending';
+      const requested = a.requested_at ? fmtDate(a.requested_at) : '';
+      const completed = a.completed_at ? '<div><span class="s-label">Completed:</span> ' + esc(fmtDate(a.completed_at)) + '</div>' : '';
+      const result = a.result_preview ? '<pre style="white-space:pre-wrap;margin-top:8px;max-height:140px;overflow:auto">' + esc(a.result_preview) + '</pre>' : '';
+      return '<div class="approval-entry" style="padding:12px 0;border-bottom:1px solid #21262d">' +
+        '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">' +
+          '<div>' +
+            '<div style="font-weight:700;color:#c9d1d9">' + esc(a.tool) + '</div>' +
+            '<div style="font-size:.78rem;color:#8b949e;margin-top:4px">' +
+              '<span class="badge ' + riskClass + '">' + esc(a.risk || 'low') + '</span> ' +
+              '<span class="badge">' + esc(a.source || 'unknown') + '</span> ' +
+              '<span class="badge">' + esc(a.status || 'pending') + '</span>' +
+            '</div>' +
+          '</div>' +
+          (pending ? '<div style="display:flex;gap:8px">' +
+            '<button class="btn btn-sm" onclick="approveRequest(\'' + esc(a.id) + '\')"><i class="fas fa-check"></i> Approve</button>' +
+            '<button class="btn btn-sm btn-outline" onclick="rejectRequest(\'' + esc(a.id) + '\')"><i class="fas fa-times"></i> Reject</button>' +
+          '</div>' : '') +
+        '</div>' +
+        '<div style="font-size:.78rem;color:#8b949e;margin-top:8px;line-height:1.5">' +
+          '<div><span class="s-label">Requested:</span> ' + esc(requested) + '</div>' +
+          '<div><span class="s-label">Reason:</span> ' + esc(a.reason || '') + '</div>' +
+          completed +
+        '</div>' +
+        '<pre style="white-space:pre-wrap;margin-top:8px;max-height:220px;overflow:auto">' + esc(a.args_preview || '{}') + '</pre>' +
+        result +
+      '</div>';
+    }).join('');
+  }).catch(e => apiError('/api/approvals', e, 0));
+}
+
+function approveRequest(id){
+  authFetch('/api/approvals/' + encodeURIComponent(id) + '/approve', { method: 'POST' })
+    .then(r=>r.json())
+    .then(d=>{
+      if (!d.ok) alert(d.error || d.result || 'Approval failed');
+      loadApprovals();
+      loadLogs();
+    })
+    .catch(e => apiError('/api/approvals/' + id + '/approve', e, 0));
+}
+
+function rejectRequest(id){
+  authFetch('/api/approvals/' + encodeURIComponent(id) + '/reject', { method: 'POST' })
+    .then(r=>r.json())
+    .then(d=>{
+      if (!d.ok) alert(d.error || d.result || 'Reject failed');
+      loadApprovals();
+      loadLogs();
+    })
+    .catch(e => apiError('/api/approvals/' + id + '/reject', e, 0));
 }
 
 function clearData(type){

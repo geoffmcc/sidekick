@@ -310,6 +310,49 @@ function policyListMatches(entries, toolName, risk) {
   });
 }
 
+function getApprovalMode(source = currentSource) {
+  const sourceMode = process.env[sourceEnvName(source, "APPROVAL_MODE")];
+  return (sourceMode || process.env.SIDEKICK_APPROVAL_MODE || "off").toLowerCase();
+}
+
+function getApprovalEntries(source, suffixes) {
+  const entries = [];
+  for (const suffix of suffixes) {
+    entries.push(...parsePolicyList(process.env["SIDEKICK_APPROVAL_" + suffix]));
+    entries.push(...parsePolicyList(process.env[sourceEnvName(source, "APPROVAL_" + suffix)]));
+  }
+  return entries;
+}
+
+function getApprovalDecision(toolName, source = currentSource) {
+  const risk = getToolRisk(toolName);
+  const mode = getApprovalMode(source);
+  const requiredEntries = getApprovalEntries(source, ["REQUIRED_TOOLS"]);
+  const exemptEntries = getApprovalEntries(source, ["EXEMPT_TOOLS"]);
+
+  if (mode === "off" || mode === "disabled") {
+    return { required: false, source, mode, risk, reason: "approval mode is off" };
+  }
+
+  if (policyListMatches(exemptEntries, toolName, risk)) {
+    return { required: false, source, mode, risk, reason: "exempt from approval" };
+  }
+
+  if (policyListMatches(requiredEntries, toolName, risk)) {
+    return { required: true, source, mode, risk, reason: "matched approval requirement" };
+  }
+
+  if (mode === "strict" && RISK_ORDER[risk] >= RISK_ORDER.high) {
+    return { required: true, source, mode, risk, reason: "strict mode requires approval for high and critical risk tools" };
+  }
+
+  if (mode === "risky" && risk === "critical") {
+    return { required: true, source, mode, risk, reason: "risky mode requires approval for critical risk tools" };
+  }
+
+  return { required: false, source, mode, risk, reason: "approval not required" };
+}
+
 function getToolPolicyDecision(toolName, source = currentSource) {
   const risk = getToolRisk(toolName);
   const sourceMode = process.env[sourceEnvName(source, "TOOL_POLICY")];
@@ -345,6 +388,116 @@ function enforceToolPolicy(toolName, source = currentSource) {
   };
 }
 
+function loadApprovals() {
+  return dbStore.loadDocument("approvals", []);
+}
+
+function saveApprovals(approvals) {
+  dbStore.setDocument("approvals", approvals || []);
+}
+
+function generateApprovalId() {
+  return "approval_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+}
+
+function approvalPreviewArgs(args) {
+  return redactSensitive(JSON.stringify(args || {}, null, 2)).substring(0, 4000);
+}
+
+function queueApproval(toolName, args, decision) {
+  const approvals = loadApprovals();
+  const now = new Date().toISOString();
+  const item = {
+    id: generateApprovalId(),
+    status: "pending",
+    tool: toolName,
+    risk: decision.risk,
+    source: decision.source,
+    mode: decision.mode,
+    reason: decision.reason,
+    args: args || {},
+    args_preview: approvalPreviewArgs(args),
+    requested_at: now,
+    updated_at: now
+  };
+  approvals.unshift(item);
+  saveApprovals(approvals.slice(0, 500));
+  return item;
+}
+
+function publicApproval(item) {
+  const copy = { ...item };
+  delete copy.args;
+  copy.args_preview = copy.args_preview || approvalPreviewArgs(item.args);
+  return copy;
+}
+
+function listApprovals({ status, limit } = {}) {
+  const max = Math.min(parseInt(limit || "100", 10) || 100, 500);
+  return loadApprovals()
+    .filter(item => !status || item.status === status)
+    .slice(0, max)
+    .map(publicApproval);
+}
+
+async function resolveApproval(id, action, reviewer = "dashboard") {
+  const approvals = loadApprovals();
+  const item = approvals.find(a => a.id === id);
+  if (!item) {
+    return { content: [{ type: "text", text: "Approval not found: " + id }], isError: true };
+  }
+  if (item.status !== "pending") {
+    return { content: [{ type: "text", text: `Approval ${id} is already ${item.status}` }], isError: true };
+  }
+
+  const now = new Date().toISOString();
+  item.reviewed_at = now;
+  item.updated_at = now;
+  item.reviewed_by = reviewer;
+
+  if (action === "reject") {
+    item.status = "rejected";
+    saveApprovals(approvals);
+    return { content: [{ type: "text", text: "Rejected approval: " + id }] };
+  }
+
+  if (action !== "approve") {
+    return { content: [{ type: "text", text: "Invalid approval action: " + action }], isError: true };
+  }
+
+  item.status = "running";
+  saveApprovals(approvals);
+
+  const previousSource = currentSource;
+  currentSource = item.source || "unknown";
+  try {
+    const result = await callTool(item.tool, item.args || {}, { bypassApproval: true, approvalId: id });
+    const latest = loadApprovals();
+    const updated = latest.find(a => a.id === id);
+    if (updated) {
+      updated.status = result.isError ? "failed" : "approved";
+      updated.result_preview = redactSensitive(result.content?.[0]?.text || "").substring(0, 1000);
+      updated.completed_at = new Date().toISOString();
+      updated.updated_at = updated.completed_at;
+      saveApprovals(latest);
+    }
+    return result;
+  } catch (e) {
+    const latest = loadApprovals();
+    const updated = latest.find(a => a.id === id);
+    if (updated) {
+      updated.status = "failed";
+      updated.error = e.message;
+      updated.completed_at = new Date().toISOString();
+      updated.updated_at = updated.completed_at;
+      saveApprovals(latest);
+    }
+    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
+  } finally {
+    currentSource = previousSource;
+  }
+}
+
 function getToolDefsForSource(source = currentSource) {
   try {
     const db = dbStore.getDb();
@@ -358,7 +511,8 @@ function getToolDefsForSource(source = currentSource) {
       // Fallback to in-memory TOOL_DEFS if DB not ready
       return TOOL_DEFS.map(def => {
         const policy = getToolPolicyDecision(def.name, source);
-        return { ...def, risk: policy.risk, enabled: policy.allowed, policy: policy.reason };
+        const approval = getApprovalDecision(def.name, source);
+        return { ...def, risk: policy.risk, enabled: policy.allowed, policy: policy.reason, approval_required: approval.required, approval: approval.reason };
       });
     }
     
@@ -375,6 +529,7 @@ function getToolDefsForSource(source = currentSource) {
     
     return tools.map(tool => {
       const policy = getToolPolicyDecision(tool.name, source);
+      const approval = getApprovalDecision(tool.name, source);
       const args = tool.args_json ? JSON.parse(tool.args_json) : {};
       
       return {
@@ -384,7 +539,9 @@ function getToolDefsForSource(source = currentSource) {
         category: tool.category,
         risk: policy.risk,
         enabled: policy.allowed,
-        policy: policy.reason
+        policy: policy.reason,
+        approval_required: approval.required,
+        approval: approval.reason
       };
     });
   } catch (error) {
@@ -392,7 +549,8 @@ function getToolDefsForSource(source = currentSource) {
     // Fallback to in-memory if DB query fails
     return TOOL_DEFS.map(def => {
       const policy = getToolPolicyDecision(def.name, source);
-      return { ...def, risk: policy.risk, enabled: policy.allowed, policy: policy.reason };
+      const approval = getApprovalDecision(def.name, source);
+      return { ...def, risk: policy.risk, enabled: policy.allowed, policy: policy.reason, approval_required: approval.required, approval: approval.reason };
     });
   }
 }
@@ -442,12 +600,14 @@ function getToolCategoriesWithTools(source = currentSource) {
     
     for (const tool of tools) {
       const policy = getToolPolicyDecision(tool.name, source);
+      const approval = getApprovalDecision(tool.name, source);
       if (tool.category && categoryMap[tool.category]) {
         categoryMap[tool.category].tools.push({
           name: tool.name,
           description: tool.description,
           risk: policy.risk,
-          enabled: policy.allowed
+          enabled: policy.allowed,
+          approval_required: approval.required
         });
       }
     }
@@ -9270,7 +9430,7 @@ const TOOL_DEFS = [
   { name: "sidekick_metrics", description: "Metrics collection and querying with InfluxDB: write metrics, query data, list measurements and fields", args: { action: "string (write|query|list_measurements|list_fields)", measurement: "string (measurement name for write/list_fields)", fields: "object (field values for write)", tags: "object (optional, tags for write)", timestamp: "number (optional, nanosecond timestamp for write)", query: "string (Flux query for query action)", time_range: "string (optional, time range for list_fields, e.g. -30d)" } },
 ];
 
-async function callTool(name, args) {
+async function callTool(name, args, options = {}) {
   const handler = TOOLS[name];
   if (!handler) {
     return { content: [{ type: "text", text: "Unknown tool: " + name }], isError: true };
@@ -9279,6 +9439,15 @@ async function callTool(name, args) {
   if (policyError) {
     logToolCall(name, args, 0, false, policyError.content[0].text);
     return policyError;
+  }
+  if (!options.bypassApproval) {
+    const approval = getApprovalDecision(name, currentSource);
+    if (approval.required) {
+      const item = queueApproval(name, args, approval);
+      const text = `Approval required: ${name} (${approval.risk} risk, source=${approval.source}, mode=${approval.mode}). Queued as ${item.id}. ${approval.reason}.`;
+      logToolCall(name, args, 0, false, text);
+      return { content: [{ type: "text", text }], isError: true, approvalRequired: true, approvalId: item.id };
+    }
   }
   const start = Date.now();
   try {
@@ -9312,6 +9481,9 @@ module.exports = {
   isDangerous,
   getToolRisk,
   getToolPolicyDecision,
+  getApprovalDecision,
+  listApprovals,
+  resolveApproval,
   getToolDefsForSource,
   getToolCategoriesWithTools,
   enforceToolPolicy,
