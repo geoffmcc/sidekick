@@ -282,6 +282,26 @@ if [ "$SCP_MODE" = true ]; then
     changed+=("$f")
   done
 
+  if [ -f "$PROJECT_DIR/src/dashboard.html" ]; then
+    if ! copy_to_vps "$PROJECT_DIR/src/dashboard.html" "$REMOTE_DIR/src/dashboard.html" >/dev/null; then
+      echo -e "\033[31mERROR: Failed to copy dashboard.html\033[0m"
+      exit 1
+    fi
+    changed+=("src/dashboard.html")
+  fi
+
+  for f in dashboard.js dashboard.css; do
+    if [ ! -f "$PROJECT_DIR/static/$f" ]; then
+      echo -e "  \033[33mWarning: static/$f not found, skipping\033[0m"
+      continue
+    fi
+    if ! copy_to_vps "$PROJECT_DIR/static/$f" "$REMOTE_DIR/static/$f" >/dev/null; then
+      echo -e "\033[31mERROR: Failed to copy static/$f\033[0m"
+      exit 1
+    fi
+    changed+=("static/$f")
+  done
+
   if ! copy_to_vps "$PROJECT_DIR/package.json" "$REMOTE_DIR/package.json" >/dev/null; then
     echo -e "\033[31mERROR: Failed to copy package.json\033[0m"
     exit 1

@@ -87,6 +87,17 @@ SIDEKICK_BLOCKED_TOOLS=sidekick_db_restore,sidekick_evolve
 
 Policy lists accept exact tool names and risk selectors such as `risk:high` or `risk:critical`. Source-specific variables are available for `MCP`, `DASHBOARD`, and `AGENT` sources, for example `SIDEKICK_AGENT_TOOL_POLICY` and `SIDEKICK_MCP_BLOCKED_TOOLS`.
 
+Approval mode defaults to `off`, so allowed tools execute immediately. Use it when you want allowed high-risk actions to wait in the dashboard Approvals tab:
+
+```env
+SIDEKICK_APPROVAL_MODE=risky
+SIDEKICK_APPROVAL_REQUIRED_TOOLS=sidekick_evolve,sidekick_db_restore
+SIDEKICK_APPROVAL_EXEMPT_TOOLS=sidekick_bash
+SIDEKICK_AGENT_APPROVAL_MODE=strict
+```
+
+Approval variables support the same source prefixes as tool policy: `SIDEKICK_MCP_APPROVAL_MODE`, `SIDEKICK_DASHBOARD_APPROVAL_REQUIRED_TOOLS`, `SIDEKICK_AGENT_APPROVAL_EXEMPT_TOOLS`, and related required/exempt lists.
+
 ## Evolve Tool Retention
 
 The evolve tool automatically cleans up old proposals to prevent unbounded growth:
