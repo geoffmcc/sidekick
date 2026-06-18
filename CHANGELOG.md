@@ -2,6 +2,61 @@
 
 All notable changes to Sidekick.
 
+## 2026-06-17
+
+### Memory System Complete (PR #19, #20, #21)
+
+The memory system is now fully implemented with all planned features from the persistence roadmap.
+
+#### PR #19: Memory Conflict Detection
+- Token-overlap similarity detection for conflicting memories
+- Automatic supersession with metadata tracking (superseded_by, reason, similarity score)
+- Project-aware conflict matching
+- Confidence-aware supersession (low-confidence can't supersede high-confidence)
+- Dedup-safe extraction (no duplicate goals from notes)
+
+#### PR #20: Memory Phase 2
+- **Memory Brief**: Structured context injected into Agent Bridge before each task (preferences, facts, decisions, open threads, related context)
+- **Import/Export**: JSON-based memory portability with filtering (project, type, disabled, automatic)
+- **Review UI**: New Memory page in dashboard with stats, filtering, management actions, expire stale button
+- **Qdrant Embeddings**: Semantic recall via Ollama nomic-embed-text + Qdrant, merged with keyword search
+- **Memory Lifecycle**: Auto-expiration (90 days stale), confirmation decay scoring, last_confirmed_at tracking, stats dashboard
+- **New MCP Tools**: sidekick_memory_export, sidekick_memory_import
+- **Database Migrations**: 004 (lifecycle), 005 (sync support)
+
+#### PR #21: Memory Deferred Features
+- **State Tracking**: Full lifecycle states (active, pending, confirmed, superseded, expired, deleted)
+- **Confirmation Workflow**: requires_confirmation flag for high-value memories, confirmMemory action with confirmed_by tracking
+- **Soft-Delete & Expiration**: deleted_at/expired_at with reason tracking, restore capability
+- **Auto-Expire**: setAutoExpire and processAutoExpirations for scheduled expiration
+- **New MCP Tool**: sidekick_memory_manage (9 actions: confirm, set_requires_confirmation, delete, expire, restore, set_auto_expire, list_by_state, pending_confirmations, process_auto_expirations)
+- **Database Migration**: 006 (state tracking, confirmation, soft-delete)
+
+#### Cross-Machine Sync
+- Stable machine identity (auto-generated UUID) and user identity (user-configurable)
+- Origin tracking on each memory (origin_machine_id, origin_user_id)
+- Sync metadata (sync_version, last_synced_at)
+- Sync export/import with 5 conflict resolution strategies (newest, highest_confidence, most_confirmed, merge, skip)
+- Incremental sync with since parameter
+- **New MCP Tools**: sidekick_sync_identity, sidekick_sync_export, sidekick_sync_import, sidekick_sync_diff
+
+#### Test Coverage
+- automatic-memory.test.js (297 lines)
+- memory-lifecycle.test.js (140 lines)
+- memory-sync.test.js (213 lines)
+- memory-deferred.test.js (180 lines)
+- **Total: 830 lines of memory tests**
+
+#### Summary
+- Total MCP tools: 83 → 90
+- Database migrations: 001-006
+- All 10 sections of the persistence roadmap complete
+
+### Grafana Fix
+- Removed deprecated Angular plugin (grafana-simple-json-datasource)
+- Fixed alerting provisioning config
+- Fixed data directory permissions
+
 ## 2026-06-15
 
 ### v1.19: Security Policy and Documentation Audit

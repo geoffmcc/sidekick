@@ -1,6 +1,6 @@
 # Tools Reference
 
-This catalog is generated from `TOOL_DEFS` in `src/tools.js`. The current code exports 83 built-in tool handlers. Most tools return MCP content blocks containing text. Errors usually set `isError: true` and include an explanatory text result.
+This catalog is generated from `TOOL_DEFS` in `src/tools.js`. The current code exports 90 built-in tool handlers. Most tools return MCP content blocks containing text. Errors usually set `isError: true` and include an explanatory text result.
 
 Tool definitions exposed by the dashboard API include policy metadata:
 
@@ -108,6 +108,13 @@ Use `SIDEKICK_TOOL_POLICY=restricted` to block high and critical tools by defaul
 | `sidekick_nginx` | Networking | Manage Nginx reverse proxy sites | `{ action: "string", site_name: "string", domain: "string", upstream_port: "number", ssl_email: "string (optional)" }` |
 | `sidekick_knowledge` | Context & Learning | Knowledge base management: search, get, list, add, update, delete entries | `{ action: "string (search|get|list|add|update|delete)", id: "number (optional)", category: "string (optional)", title: "string (optional)", content: "string (optional)", tags: "string (optional)", query: "string (optional)", limit: "number (optional)" }` |
 | `sidekick_metrics` | Monitoring | Metrics collection and querying with InfluxDB | `{ action: "string (write|query|list_measurements|list_fields)", measurement: "string (optional)", fields: "object (optional)", tags: "object (optional)", timestamp: "number (optional)", query: "string (optional)", time_range: "string (optional)" }` |
+| `sidekick_memory_export` | Context & Learning | Export structured memories to JSON for backup, portability, or machine-to-machine transfer | `{ project: "string (optional)", type: "string (optional)", include_disabled: "boolean (optional)", automatic_only: "boolean (optional)" }` |
+| `sidekick_memory_import` | Context & Learning | Import memories from JSON export with merge or skip conflict handling | `{ data: "string|object", on_conflict: "string (optional, merge|skip)", preserve_ids: "boolean (optional)" }` |
+| `sidekick_memory_manage` | Context & Learning | Manage memory lifecycle: confirm, delete, expire, restore, set auto-expire, list by state, pending confirmations, process auto-expirations | `{ action: "string (confirm|set_requires_confirmation|delete|expire|restore|set_auto_expire|list_by_state|pending_confirmations|process_auto_expirations)", id: "string", confirmed_by: "string (optional)", days: "number (optional)", reason: "string (optional)", limit: "number (optional)", project: "string (optional)" }` |
+| `sidekick_sync_identity` | Context & Learning | Manage machine and user identity for cross-machine sync | `{ action: "string (get|set_user)", user_id: "string (optional)" }` |
+| `sidekick_sync_export` | Context & Learning | Export memories for cross-machine sync with origin tracking and sync metadata | `{ project: "string (optional)", since: "string (optional)", include_disabled: "boolean (optional)" }` |
+| `sidekick_sync_import` | Context & Learning | Import memories from another machine with conflict resolution strategies | `{ data: "string|object", strategy: "string (optional, newest|highest_confidence|most_confirmed|merge|skip)", preserve_ids: "boolean (optional)" }` |
+| `sidekick_sync_diff` | Context & Learning | Get list of memories changed since a given timestamp for incremental sync | `{ since: "string" }` |
 
 
 ## Core file, shell, and code operations
@@ -215,6 +222,48 @@ Arguments: `{ action: "string (store|recall|cleanup|start|stop|cache|get|status|
 Get complete project context in one call: KV entries, context tracking, recent logs, procedures.
 
 Arguments: `{ name: "string (project name)", include: "string (optional, comma-separated: kv,context,logs,procedures - default kv,context)" }`
+
+### `sidekick_memory_export`
+
+Export structured memories to JSON for backup, portability, or machine-to-machine transfer.
+
+Arguments: `{ project: "string (optional, filter by project)", type: "string (optional, filter by memory type)", include_disabled: "boolean (optional, include disabled memories - default true)", automatic_only: "boolean (optional, only automatic memories - default false)" }`
+
+### `sidekick_memory_import`
+
+Import memories from JSON export. Supports merge or skip conflict modes.
+
+Arguments: `{ data: "string|object (JSON export data or parsed object)", on_conflict: "string (optional, merge|skip - default merge)", preserve_ids: "boolean (optional, preserve original IDs - default false)" }`
+
+### `sidekick_memory_manage`
+
+Manage memory lifecycle: confirm, delete, expire, restore, set auto-expire, list by state, pending confirmations, and process auto-expirations.
+
+Arguments: `{ action: "string (confirm|set_requires_confirmation|delete|expire|restore|set_auto_expire|list_by_state|pending_confirmations|process_auto_expirations)", id: "string (memory ID, or state name for list_by_state)", confirmed_by: "string (optional, who confirmed - default 'user')", days: "number (for set_auto_expire)", reason: "string (optional, reason for delete/expire)", limit: "number (optional, for list operations - default 50)", project: "string (optional, filter by project for list operations)" }`
+
+### `sidekick_sync_identity`
+
+Manage machine and user identity for cross-machine sync.
+
+Arguments: `{ action: "string (get|set_user)", user_id: "string (required for set_user action)" }`
+
+### `sidekick_sync_export`
+
+Export memories for cross-machine sync with origin tracking and sync metadata.
+
+Arguments: `{ project: "string (optional, filter by project)", since: "string (optional, ISO timestamp - only export memories updated after this time)", include_disabled: "boolean (optional, include disabled memories - default true)" }`
+
+### `sidekick_sync_import`
+
+Import memories from another machine's sync export. Supports conflict resolution strategies.
+
+Arguments: `{ data: "string|object (sync export data)", strategy: "string (optional, newest|highest_confidence|most_confirmed|merge|skip - default newest)", preserve_ids: "boolean (optional, preserve original IDs - default false)" }`
+
+### `sidekick_sync_diff`
+
+Get the list of memories changed since a timestamp for incremental sync.
+
+Arguments: `{ since: "string (ISO timestamp - get changes after this time)" }`
 
 ## AI, learning, and self-extension
 

@@ -28,7 +28,9 @@ Use `sidekick_context` for richer history:
 - `track_session` for session summaries;
 - `recall`, `suggest`, and `summarize` to retrieve prior context.
 
-The Agent Bridge automatically records bounded, redacted memory summaries for completed autonomous tasks and memory-worthy tool calls. It also extracts simple `fact`, `decision`, `preference`, and `open_thread` memories when task text is explicit enough. These automatic memories are stored primarily in the `memories` table, with compatibility copies in the `context` document, capped by `SIDEKICK_AUTO_MEMORY_MAX` and disabled with `SIDEKICK_AUTO_MEMORY=0`. They are meant for continuity, not as complete raw transcripts.
+The Agent Bridge automatically records bounded, redacted memory summaries for completed autonomous tasks and memory-worthy tool calls. It also extracts simple `fact`, `decision`, `preference`, and `open_thread` memories when task text is explicit enough. These automatic memories are stored primarily in the `memories` table, with compatibility copies in the `context` document, capped by `SIDEKICK_AUTO_MEMORY_MAX` and disabled with `SIDEKICK_AUTO_MEMORY=0`. Semantic recall uses Ollama embeddings and Qdrant when available, and can be disabled with `SIDEKICK_EMBEDDINGS=0`. They are meant for continuity, not as complete raw transcripts.
+
+Use `sidekick_memory_export` and `sidekick_memory_import` for portable JSON backups, `sidekick_memory_manage` for confirmation/delete/expire/restore workflows, and the `sidekick_sync_*` tools for cross-machine memory synchronization.
 
 ## Automation
 

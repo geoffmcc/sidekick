@@ -2,7 +2,7 @@
 
 **Autonomous Agent Platform**
 
-A self-hosted AI agent platform with persistent memory, 83 built-in MCP tools, knowledge base, and the ability to extend itself. Runs on your remote machine, keeps explicit project context across sessions, and can grow its own capabilities—no code changes required.
+A self-hosted AI agent platform with persistent memory, 90 built-in MCP tools, knowledge base, and the ability to extend itself. Runs on your remote machine, keeps explicit project context across sessions, and can grow its own capabilities—no code changes required.
 
 **How?** A single `AGENTS.md` file that opencode reads on every session start. No plugins, no hooks — just markdown.
 
@@ -175,7 +175,7 @@ The Agent Bridge runs independently from your main AI session. Submit a complex 
 ### 🔒 Security-First Design
 Every tool output is automatically scanned and redacted for sensitive data (API keys, tokens, passwords). The dashboard has rate limiting, CSRF protection, and audit logging. The agent bridge is isolated and only accessible through the dashboard.
 
-### 🛠️ 83 Built-In Specialized Tools
+### 🛠️ 90 Built-In Specialized Tools
 Not just bash and file operations. Sidekick includes tools for:
 - GitHub integration (PRs, issues, releases)
 - Service and process management
@@ -291,7 +291,7 @@ Sidekick used its own tools to help develop itself. Here's the AI agent debuggin
 
 | Service | Port | Description |
 |---------|------|-------------|
-| **MCP Server** | 4097 | 83 built-in tools across 19 categories (see database for authoritative current list) |
+| **MCP Server** | 4097 | 90 built-in tools across 19 categories (see database for authoritative current list) |
 | **Dashboard** | 4098 | Web UI: system health, activity log, KV data, agent tasks, tool catalog, metrics |
 | **Agent Bridge** | 4099 | AI agent loop — LLM plans and calls MCP tools autonomously |
 | **Ollama** | 11434 | Local LLM inference (qwen2.5-coder:7b, llama3.1:8b, nomic-embed-text) |
@@ -312,7 +312,7 @@ Tools are organized into 19 categories:
 - **Services** — process, service
 - **Scheduling** — cron, delay
 - **Communication** — notify, webhook
-- **Context & Learning** — context, teach, embed, ollama, knowledge
+- **Context & Learning** — context, teach, embed, ollama, memory_export, memory_import, memory_manage, sync_identity, sync_export, sync_import, sync_diff, knowledge
 - **Data Pipeline** — transform, parse, diff, hash, validate, template, extract, anonymize, diff_files
 - **Monitoring** — health, status, watch, baseline, snapshot, timeline, black_box, netdiag, metrics
 - **Workflow** — queue, retry, orchestrate, runbook
@@ -339,7 +339,7 @@ ORDER BY tc.sort_order, t.name
 
 To avoid confusion, it's important to understand what each component is:
 
-- **Sidekick** = The autonomous agent platform: remote machine + 83 built-in MCP tools + persistent memory + knowledge base + Dashboard + Agent Bridge + metrics & monitoring + self-extending capabilities
+- **Sidekick** = The autonomous agent platform: remote machine + 90 built-in MCP tools + persistent memory + knowledge base + Dashboard + Agent Bridge + metrics & monitoring + self-extending capabilities
 - **The AI** = The assistant running in opencode (e.g., qwen, Claude, etc.) that uses Sidekick's platform
 - **Agent Bridge** = Sidekick's autonomous agent that runs tasks independently via the Dashboard
 - **Knowledge Base** = Structured documentation stored in SQLite, searchable via `sidekick_knowledge`
@@ -383,7 +383,7 @@ Open `http://YOUR_REMOTE_IP:4098/` in a browser.
 - **Database** — schema browser, query editor, full-text search, migration management
 - **Config** — environment variables (sensitive values redacted)
 - **Agent** — submit tasks for the AI agent to execute autonomously
-- **Tools** — browsable catalog of all 83 built-in tools with search, category filtering, policy status, risk labels, and detailed argument info
+- **Tools** — browsable catalog of all 90 built-in tools with search, category filtering, policy status, risk labels, and detailed argument info
 - **Metrics** — embedded Grafana dashboards for system health, tool analytics, database performance, Docker containers, and Ollama metrics
 
 ### Metrics & Monitoring
@@ -639,6 +639,9 @@ This follows the principle of least privilege: after initial setup, the sidekick
 | `SIDEKICK_MAX_ITERATIONS` | `15` | Max agent loop iterations (safety limit) |
 | `SIDEKICK_AUTO_MEMORY` | `1` | Enable bounded automatic memory summaries |
 | `SIDEKICK_AUTO_MEMORY_MAX` | `500` | Max retained automatic memory entries |
+| `SIDEKICK_EMBEDDINGS` | `1` | Enable semantic memory embeddings when Ollama/Qdrant are available |
+| `SIDEKICK_EMBEDDING_MODEL` | `nomic-embed-text` | Ollama embedding model for semantic memory recall |
+| `SIDEKICK_OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama URL used by memory embedding helpers |
 | `SIDEKICK_POSTGRES_URL` | `postgresql://sidekick:sidekick@127.0.0.1:5432/sidekick` | PostgreSQL connection string |
 | `SIDEKICK_REDIS_URL` | `redis://127.0.0.1:6379` | Redis connection string |
 | `SIDEKICK_QDRANT_URL` | `http://127.0.0.1:6333` | Qdrant vector DB URL |
@@ -651,10 +654,10 @@ This follows the principle of least privilege: after initial setup, the sidekick
 
 ```
 ├── src/
-│   ├── tools.js        Shared tool handlers (83 built-in tools)
+│   ├── tools.js        Shared tool handlers (90 built-in tools)
 │   ├── memory.js       Automatic memory capture and recall helpers
 │   ├── index.js        MCP server (session-aware transport management)
-│   ├── dashboard.js    Dashboard web UI (8 tabs including Metrics)
+│   ├── dashboard.js    Dashboard web UI (9 tabs including Memory, Database, and Metrics)
 │   ├── agent.js        Agent bridge (LLM tool-use loop, direct tool calls)
 │   ├── redact.js       Sensitive data redaction
 │   ├── db.js           SQLite database layer
@@ -684,7 +687,11 @@ This follows the principle of least privilege: after initial setup, the sidekick
 │   └── dashboards/         6 pre-built Grafana dashboards
 ├── migrations/
 │   ├── 001_initial_schema.sql  Initial database schema
-│   └── 002_tool_registry.sql   Tool registry and knowledge base tables
+│   ├── 002_tool_registry.sql   Tool registry and knowledge base tables
+│   ├── 003_structured_memory.sql Structured memory table
+│   ├── 004_memory_lifecycle.sql Memory confirmation and decay support
+│   ├── 005_sync_support.sql     Cross-machine memory sync metadata
+│   └── 006_memory_deferred.sql  Memory state, confirmation, delete/expire fields
 ├── data/               Runtime data (on remote: logs, KV, conversations, metrics)
 ├── deploy.ps1          Deploy script (Windows)
 ├── deploy.sh           Deploy script (Linux/Mac)

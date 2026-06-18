@@ -104,7 +104,13 @@ The third migration adds:
 
 - `memories`
 
-The `meta` table stores `schema_version`. Migration files live in `migrations/` and use numeric prefixes such as `001_initial_schema.sql`, `002_tool_registry.sql`, and `003_structured_memory.sql`.
+Later migrations extend `memories` with lifecycle, sync, and deferred-review fields:
+
+- `004_memory_lifecycle.sql`: confirmation timestamps, expiry indexes, and decay support.
+- `005_sync_support.sql`: origin machine/user identifiers, sync versioning, and last-sync timestamps.
+- `006_memory_deferred.sql`: state, confirmation requirements, confirmer identity, soft delete, and expiration timestamps.
+
+The `meta` table stores `schema_version`. Migration files live in `migrations/` and use numeric prefixes such as `001_initial_schema.sql` through `006_memory_deferred.sql`.
 
 On MCP startup, `src/index.js` calls:
 
@@ -149,7 +155,7 @@ The `context` document remains a compatibility and session-continuity store. It 
 
 ### `memories`
 
-`memories` stores structured memory rows. Each row has a memory type, project, content, summary, tags, confidence, source metadata, enabled state, automatic flag, confirmation count, timestamps, and optional expiry.
+`memories` stores structured memory rows. Each row has a memory type, project, content, summary, tags, confidence, source metadata, enabled state, automatic flag, confirmation count, lifecycle state, sync metadata, timestamps, and optional expiry.
 
 Initial automatic memory writes produce:
 
@@ -158,7 +164,7 @@ Initial automatic memory writes produce:
 
 The extraction pass can also emit `fact`, `decision`, `preference`, `open_thread`, and `observation` rows from agent task text when the content clearly matches those patterns.
 
-Repeated equivalent memories update the existing row and increment `times_confirmed`. When a new extracted memory is similar enough to an existing active row but not identical, the older row is superseded and disabled with replacement metadata. Recall uses the structured table first, then merges compatibility entries from the `context` document.
+Repeated equivalent memories update the existing row and increment `times_confirmed`. When a new extracted memory is similar enough to an existing active row but not identical, the older row is superseded and disabled with replacement metadata. High-value memories can require confirmation, memories can be soft-deleted, expired, restored, exported/imported, and synced between machines with conflict strategies. Recall uses the structured table first, can merge semantic Qdrant matches when embeddings are available, then merges compatibility entries from the `context` document.
 
 ### `tool_logs`
 
@@ -207,7 +213,7 @@ Current search is a SQLite `LIKE` search across title, content, and tags. It is 
 
 ## 7. Tool System
 
-The current code exports 83 built-in `sidekick_*` tools. A built-in tool has six relevant parts:
+The current code exports 90 built-in `sidekick_*` tools. A built-in tool has six relevant parts:
 
 1. An async handler in `src/tools.js`.
 2. A `TOOLS` map entry.

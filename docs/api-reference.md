@@ -27,6 +27,21 @@ This reference is generated from Express route declarations in `src/index.js`, `
 | `src/dashboard.js` | GET | `/api/tool-categories` | |
 | `src/dashboard.js` | GET | `/api/knowledge` | |
 | `src/dashboard.js` | GET | `/api/procedures` | |
+| `src/dashboard.js` | GET | `/api/memories` | |
+| `src/dashboard.js` | GET | `/api/memories/projects` | |
+| `src/dashboard.js` | GET | `/api/memories/types` | |
+| `src/dashboard.js` | POST | `/api/memories/:id/disable` | |
+| `src/dashboard.js` | POST | `/api/memories/:id/enable` | |
+| `src/dashboard.js` | DELETE | `/api/memories/:id` | |
+| `src/dashboard.js` | POST | `/api/memories/export` | |
+| `src/dashboard.js` | POST | `/api/memories/import` | |
+| `src/dashboard.js` | GET | `/api/memories/stats` | |
+| `src/dashboard.js` | POST | `/api/memories/expire` | |
+| `src/dashboard.js` | GET | `/api/sync/identity` | |
+| `src/dashboard.js` | POST | `/api/sync/identity` | |
+| `src/dashboard.js` | GET | `/api/sync/export` | |
+| `src/dashboard.js` | POST | `/api/sync/import` | |
+| `src/dashboard.js` | GET | `/api/sync/diff` | |
 | `src/dashboard.js` | GET | `/api/db/schema` | |
 | `src/dashboard.js` | POST | `/api/db/query` | |
 | `src/dashboard.js` | GET | `/api/db/stats` | |
@@ -77,7 +92,7 @@ Legacy SSE transport. `/sse` creates an SSE session. `/messages` posts JSON-RPC 
 
 ## Dashboard API summary
 
-The dashboard API includes read endpoints for logs, KV data, system status, dashboard summary, LLM status, services, config, stats, tools, tool categories, knowledge entries, procedures, database schema, database stats, database search, and migration status. `/api/tools` returns risk and policy metadata for each tool. It includes mutating endpoints for KV writes/deletes, database queries/backups, log/data resets, error logging, webhook capture, and agent proxy operations.
+The dashboard API includes read endpoints for logs, KV data, structured memories, sync metadata, system status, dashboard summary, LLM status, services, config, stats, tools, tool categories, knowledge entries, procedures, database schema, database stats, database search, and migration status. `/api/tools` returns risk and policy metadata for each tool. It includes mutating endpoints for KV writes/deletes, memory enable/disable/delete/import/export/expiration, sync identity/import operations, database queries/backups, log/data resets, error logging, webhook capture, and agent proxy operations.
 
 ## Agent API summary
 
