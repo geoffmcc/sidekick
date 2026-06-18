@@ -383,6 +383,7 @@ Open `http://YOUR_REMOTE_IP:4098/` in a browser.
 - **Database** — schema browser, query editor, full-text search, migration management
 - **Config** — environment variables (sensitive values redacted)
 - **Agent** — submit tasks for the AI agent to execute autonomously
+- **Approvals** — review, approve, or reject queued risky actions when approval mode is enabled
 - **Tools** — browsable catalog of all 90 built-in tools with search, category filtering, policy status, risk labels, and detailed argument info
 - **Metrics** — embedded Grafana dashboards for system health, tool analytics, database performance, Docker containers, and Ollama metrics
 
@@ -632,6 +633,9 @@ This follows the principle of least privilege: after initial setup, the sidekick
 | `SIDEKICK_AGENT_TOOL_POLICY` | — | Source-specific tool policy override for the Agent Bridge |
 | `SIDEKICK_MCP_TOOL_POLICY` | — | Source-specific tool policy override for MCP clients |
 | `SIDEKICK_DASHBOARD_TOOL_POLICY` | — | Source-specific tool policy override for dashboard-originated calls |
+| `SIDEKICK_APPROVAL_MODE` | `off` | Optional dashboard approval mode: `off`, `risky`, or `strict` |
+| `SIDEKICK_APPROVAL_REQUIRED_TOOLS` | — | Comma-separated tools or risk selectors that always require approval |
+| `SIDEKICK_APPROVAL_EXEMPT_TOOLS` | — | Comma-separated tools or risk selectors exempt from approval |
 | `OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama API URL (local fallback) |
 | `OLLAMA_MODEL` | `qwen2.5-coder:7b` | Default Ollama model |
 | `GROQ_API_KEY` | — | Groq API key for cloud LLM (empty = use local Ollama) |

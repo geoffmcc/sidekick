@@ -57,6 +57,21 @@ Policy lists accept tool names and risk selectors such as `risk:high` or `risk:c
 
 High and critical tools are not removed from the project because trusted operators need them. For internet-reachable or shared deployments, run the agent and MCP source in `restricted` mode and allow only the tools required for the workflow.
 
+## Approval queue
+
+The approval queue is an optional dashboard review layer for allowed tools. It does not enable tools that policy blocks. The default `SIDEKICK_APPROVAL_MODE=off` preserves existing behavior.
+
+Set `SIDEKICK_APPROVAL_MODE=risky` to queue critical-risk tools for dashboard approval, or `SIDEKICK_APPROVAL_MODE=strict` to queue high and critical tools. Approval lists accept exact tool names and risk selectors, and source-specific variables are available for `MCP`, `DASHBOARD`, and `AGENT` sources:
+
+```env
+SIDEKICK_APPROVAL_MODE=risky
+SIDEKICK_APPROVAL_REQUIRED_TOOLS=sidekick_evolve,sidekick_db_restore
+SIDEKICK_APPROVAL_EXEMPT_TOOLS=sidekick_bash
+SIDEKICK_AGENT_APPROVAL_MODE=strict
+```
+
+Pending requests appear in the dashboard Approvals tab with redacted argument previews. Approving a request executes it under the original source and reuses normal tool-policy enforcement while bypassing only the approval check.
+
 ## Database query safety
 
 The database query tool and dashboard query endpoint default to read-only mode. In that mode they allow single-statement row-returning SQL only (`SELECT`, `WITH`, `EXPLAIN`, and non-mutating `PRAGMA`), reject multi-statement input, and apply bounded row limits. Use `readonly=false` only for deliberate maintenance.
@@ -81,6 +96,7 @@ Recommended safest setup:
 2. Use a strong `SIDEKICK_API_KEY`.
 3. Enable dashboard auth if dashboard is reachable by browser clients.
 4. Set `SIDEKICK_TOOL_POLICY=restricted` for shared or public-facing deployments.
-5. Keep the Agent Bridge private; access it through the dashboard proxy only.
-6. Use HTTPS if crossing an untrusted network.
+5. Enable `SIDEKICK_APPROVAL_MODE=risky` or source-specific approval for autonomous/background actions.
+6. Keep the Agent Bridge private; access it through the dashboard proxy only.
+7. Use HTTPS if crossing an untrusted network.
 7. Back up the data directory but protect backups because they can contain sensitive operational history.

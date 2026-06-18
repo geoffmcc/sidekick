@@ -5,7 +5,7 @@ const path = require("path");
 const os = require("os");
 const { timingSafeCompare } = require("./crypto-utils");
 const { execSync } = require("child_process");
-const { getToolDefsForSource, getToolCategoriesWithTools, enforceToolPolicy } = require("./tools");
+const { getToolDefsForSource, getToolCategoriesWithTools, enforceToolPolicy, listApprovals, resolveApproval } = require("./tools");
 const dbStore = require("./db");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
@@ -594,6 +594,32 @@ app.get("/api/tools", (req, res) => {
 
 app.get("/api/tool-categories", (req, res) => {
   res.json({ categories: getToolCategoriesWithTools("dashboard") });
+});
+
+app.get("/api/approvals", (req, res) => {
+  res.json({ ok: true, approvals: listApprovals({ status: req.query.status, limit: req.query.limit }) });
+});
+
+app.post("/api/approvals/:id/approve", async (req, res) => {
+  try {
+    auditLog(req, "approval.approve", { id: req.params.id });
+    const result = await resolveApproval(req.params.id, "approve", "dashboard");
+    res.json({ ok: !result.isError, result: result.content?.[0]?.text || "" });
+  } catch (error) {
+    logError(req.originalUrl, 500, error, "approvals", req.headers["user-agent"]);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/api/approvals/:id/reject", async (req, res) => {
+  try {
+    auditLog(req, "approval.reject", { id: req.params.id });
+    const result = await resolveApproval(req.params.id, "reject", "dashboard");
+    res.json({ ok: !result.isError, result: result.content?.[0]?.text || "" });
+  } catch (error) {
+    logError(req.originalUrl, 500, error, "approvals", req.headers["user-agent"]);
+    res.status(500).json({ ok: false, error: error.message });
+  }
 });
 
 app.get("/api/knowledge", (req, res) => {
