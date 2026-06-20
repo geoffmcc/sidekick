@@ -688,7 +688,7 @@ function generateSessionId() {
   return "sess-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
 }
 
-async function getTransportForRequest(sessionId, metadata = {}) {
+async function getTransportForRequest(sessionId, metadata = {}, options = {}) {
   logDebug("getTransportForRequest", { requestedSessionId: sessionId, sessionCount: sessions.size });
   
   if (sessionId && sessions.has(sessionId)) {
@@ -705,6 +705,11 @@ async function getTransportForRequest(sessionId, metadata = {}) {
     const replacementId = staleEntry?.replacementId;
     if (replacementId && sessions.has(replacementId)) {
       logDebug("STALE_SESSION_KNOWN_REPLACEMENT", { staleSessionId: sessionId, replacementId });
+      if (options.allowStaleInitialize) {
+        const entry = sessions.get(replacementId);
+        entry.lastAccess = Date.now();
+        return { transport: entry.transport, isNew: false, newSessionId: replacementId, staleRedirect: false, replacedStaleSession: true };
+      }
       return { transport: null, isNew: false, newSessionId: replacementId, staleRedirect: true };
     }
 
@@ -727,6 +732,9 @@ async function getTransportForRequest(sessionId, metadata = {}) {
     }
 
     logDebug("CREATED_REPLACEMENT_SESSION", { staleSessionId: sessionId, newSessionId });
+    if (options.allowStaleInitialize) {
+      return { transport, isNew: true, newSessionId, staleRedirect: false, replacedStaleSession: true };
+    }
     return { transport: null, isNew: true, newSessionId, staleRedirect: true };
   }
 
@@ -742,6 +750,25 @@ async function getTransportForRequest(sessionId, metadata = {}) {
 
   logDebug("CREATED_NEW_TRANSPORT", { newSessionId });
   return { transport, isNew: true, newSessionId };
+}
+
+function sendInvalidSession(res, { sessionId, replacementId = null, message = "MCP session expired or not found. Reconnect and initialize a new session." } = {}) {
+  logDebug("INVALID_SESSION_RESPONSE", { sessionId, replacementId });
+  res.status(404);
+  res.setHeader("Content-Type", "application/json");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Connection", "close");
+  if (replacementId) {
+    res.setHeader("mcp-session-id", replacementId);
+  }
+  res.json({
+    jsonrpc: "2.0",
+    error: {
+      code: -32001,
+      message
+    },
+    id: null
+  });
 }
 
 function registerSession(sessionId, server, transport, metadata = {}) {
@@ -929,24 +956,22 @@ app.post("/mcp", async (req, res) => {
       userAgent: wh["user-agent"],
       clientInfo: req.body?.params?.clientInfo || null
     };
-    const { transport, isNew, newSessionId, staleRedirect } = await getTransportForRequest(sessionId, metadata);
+    const isInitialize = req.body?.method === "initialize";
+    const { transport, isNew, newSessionId, staleRedirect, replacedStaleSession } = await getTransportForRequest(sessionId, metadata, {
+      allowStaleInitialize: isInitialize
+    });
 
     if (staleRedirect) {
-      logDebug("STALE_SESSION_RETURNING_REINIT", { staleSessionId: sessionId, newSessionId });
-      res.status(400);
-      res.setHeader("Content-Type", "application/json");
-      res.setHeader("mcp-session-id", newSessionId);
-      res.json({
-        jsonrpc: "2.0",
-        error: { code: -32001, message: "Session expired. A new session has been created. Please re-initialize using the session ID from the mcp-session-id response header. If this persists, check server logs for initialization errors." },
-        id: null
+      return sendInvalidSession(res, {
+        sessionId,
+        replacementId: newSessionId,
+        message: "MCP session expired. Reconnect and initialize using the mcp-session-id response header."
       });
-      return;
     }
 
     const webReq = new Request("http://127.0.0.1:4097/mcp", {
       method: "POST",
-      headers: wh,
+      headers: replacedStaleSession && newSessionId ? { ...wh, "mcp-session-id": newSessionId } : wh,
       body: body
     });
 
@@ -980,16 +1005,22 @@ app.get("/mcp", async (req, res) => {
     const sessionId = wh["mcp-session-id"] || wh["Mcp-Session-Id"];
     logSession("GET", wh, null);
 
-    if (!sessionId || !sessions.has(sessionId)) {
+    if (!sessionId) {
       logDebug("GET_WITHOUT_SESSION", { sessionId });
-      return res.status(400).json({
-        jsonrpc: "2.0",
-        error: { code: -32000, message: "GET requires a valid mcp-session-id header" },
-        id: null
+      return sendInvalidSession(res, {
+        sessionId,
+        message: "GET requires a valid mcp-session-id header."
       });
     }
 
-    const { transport } = await getTransportForRequest(sessionId);
+    const { transport, newSessionId, staleRedirect } = await getTransportForRequest(sessionId);
+    if (staleRedirect) {
+      return sendInvalidSession(res, {
+        sessionId,
+        replacementId: newSessionId,
+        message: "MCP session expired. Reconnect and initialize using the mcp-session-id response header."
+      });
+    }
 
     const webReq = new Request("http://127.0.0.1:4097/mcp", {
       method: "GET",
@@ -1029,16 +1060,22 @@ app.delete("/mcp", async (req, res) => {
     const sessionId = wh["mcp-session-id"] || wh["Mcp-Session-Id"];
     logSession("DELETE", wh, null);
 
-    if (!sessionId || !sessions.has(sessionId)) {
+    if (!sessionId) {
       logDebug("DELETE_WITHOUT_SESSION", { sessionId });
-      return res.status(400).json({
-        jsonrpc: "2.0",
-        error: { code: -32000, message: "DELETE requires a valid mcp-session-id header" },
-        id: null
+      return sendInvalidSession(res, {
+        sessionId,
+        message: "DELETE requires a valid mcp-session-id header."
       });
     }
 
-    const { transport } = await getTransportForRequest(sessionId);
+    const { transport, newSessionId, staleRedirect } = await getTransportForRequest(sessionId);
+    if (staleRedirect) {
+      return sendInvalidSession(res, {
+        sessionId,
+        replacementId: newSessionId,
+        message: "MCP session expired. The previous session is already gone."
+      });
+    }
 
     const webReq = new Request("http://127.0.0.1:4097/mcp", {
       method: "DELETE",
