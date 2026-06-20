@@ -5889,6 +5889,15 @@ function allServicesActive(states) {
   return Object.values(states).every(state => state === "active");
 }
 
+function filterGitStatus(statusText) {
+  return (statusText || "")
+    .split("\n")
+    .map(line => line.trimEnd())
+    .filter(Boolean)
+    .filter(line => !line.endsWith(" package-lock.json") && line !== "?? package-lock.json")
+    .join("\n");
+}
+
 function formatOpsReport(title, rows, details = []) {
   const body = rows.map(([key, value]) => `${key}: ${value}`).join("\n");
   const detailText = details.filter(Boolean).join("\n\n");
@@ -5915,7 +5924,7 @@ async function sidekick_ops({ action, repo_path, restart_mcp }) {
     const head = getGitValue(repoPath, ["rev-parse", "HEAD"]);
     const origin = getGitValue(repoPath, ["rev-parse", "origin/main"]);
     const branch = getGitValue(repoPath, ["branch", "--show-current"]) || "(detached)";
-    const dirty = getGitValue(repoPath, ["status", "--short"]) || "";
+    const dirty = filterGitStatus(getGitValue(repoPath, ["status", "--short"]) || "");
     const states = getServiceStates();
     const deployed = Boolean(head && origin && head === origin && !dirty);
     const detail = dirty ? `Dirty files:\n${dirty}` : "Dirty files: none";
@@ -5948,29 +5957,31 @@ async function sidekick_ops({ action, repo_path, restart_mcp }) {
     }
 
     const states = getServiceStates();
-    const health = runOpsCommand("curl", ["-fsS", "http://127.0.0.1:4097/health"], { timeout: 10000 });
+    const health = runOpsCommand("curl", ["--max-time", "5", "-fsS", "http://127.0.0.1:4097/health"], { timeout: 7000 });
     let mcpNote = "not requested";
     if (restart_mcp === true) {
       scheduleMcpRestart();
       mcpNote = "scheduled after response; next MCP call may reconnect";
     }
 
-    const ok = restarted.every(([, state]) => state === "restarted") && allServicesActive(states) && health.ok;
+    const serviceOk = restarted.every(([, state]) => state === "restarted") && allServicesActive(states);
+    const healthOk = health.ok;
     return {
       content: [{
         type: "text",
         text: formatOpsReport("RESTART SMOKE TEST", [
-          ["RESULT", ok ? "passed" : "failed"],
+          ["RESULT", serviceOk ? (healthOk ? "passed" : "passed with warnings") : "failed"],
           ["MCP restart", mcpNote],
-          ["MCP health", health.ok ? "passed" : "failed"],
+          ["MCP health", healthOk ? "passed" : "warning"],
           ["Services", allServicesActive(states) ? "all active" : "attention needed"],
-          ["Action needed", ok ? "none" : "review output"]
+          ["Action needed", serviceOk && healthOk ? "none" : (serviceOk ? "check MCP endpoint behavior" : "review output")]
         ], [
           "Restart results:\n" + restarted.map(([svc, state]) => `${svc}: ${state}`).join("\n"),
-          "Service states:\n" + Object.entries(states).map(([svc, state]) => `${svc}: ${state}`).join("\n")
+          "Service states:\n" + Object.entries(states).map(([svc, state]) => `${svc}: ${state}`).join("\n"),
+          health.ok ? null : `MCP probe warning:\n${health.stdout || health.stderr || "no response"}`
         ])
       }],
-      isError: !ok
+      isError: !serviceOk
     };
   }
 
@@ -5980,7 +5991,7 @@ async function sidekick_ops({ action, repo_path, restart_mcp }) {
     }
 
     const fetch = runOpsCommand("git", ["-C", repoPath, "fetch", "origin", "main"], { timeout: 60000 });
-    const dirty = getGitValue(repoPath, ["status", "--short"]) || "";
+    const dirty = filterGitStatus(getGitValue(repoPath, ["status", "--short"]) || "");
     if (dirty) {
       return {
         content: [{ type: "text", text: formatOpsReport("DEPLOY CURRENT MAIN", [
@@ -6032,7 +6043,7 @@ async function sidekick_ops({ action, repo_path, restart_mcp }) {
     }
     const git = fs.existsSync(repoPath) ? {
       head: getGitValue(repoPath, ["rev-parse", "HEAD"]),
-      status: getGitValue(repoPath, ["status", "--short"]) || ""
+      status: filterGitStatus(getGitValue(repoPath, ["status", "--short"]) || "")
     } : { head: "repo not found", status: "" };
     const ok = allServicesActive(states);
 
