@@ -40,7 +40,7 @@ Keep:
 
 Gate by policy rather than deleting:
 
-- `sidekick_bash`, `sidekick_write`, `sidekick_db_restore`, `sidekick_runbook`, `sidekick_sandbox`, `sidekick_evolve`, `sidekick_cron`, `sidekick_delay`, and `sidekick_watch`.
+- `sidekick_bash`, `sidekick_write`, `sidekick_db_restore`, `sidekick_runbook`, `sidekick_ops`, `sidekick_sandbox`, `sidekick_evolve`, `sidekick_cron`, `sidekick_delay`, and `sidekick_watch`.
 - These are useful for trusted operators but too powerful to expose uniformly in every deployment mode.
 
 Consider adding:

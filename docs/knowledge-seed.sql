@@ -373,6 +373,16 @@ The dashboard proxies agent routes to 127.0.0.1:SIDEKICK_AGENT_PORT.',
 - Use sidekick_log_query source="agent" success=false for failed calls.',
 'agent,troubleshooting,llm,operations', 1, 'seed-2026-06-16-current', datetime('now')),
 
+('operations', 'Packaged Operations Workflows',
+'Use sidekick_ops for compact operational verdicts:
+- verify_deployed_commit: fetch origin/main, compare HEAD to origin/main, report dirty files, and check core services.
+- restart_and_smoke_test: restart sidekick-dashboard and sidekick-agent, check MCP health, and optionally schedule sidekick-mcp restart with restart_mcp=true.
+- deploy_current_main: require a clean working tree, fast-forward to origin/main, run npm install --omit=dev, restart dashboard and agent, and schedule MCP restart after the response.
+- incident_snapshot: collect service state, resource status, git state, top processes, and recent service logs.
+
+sidekick_ops is critical risk because it can deploy code and restart services. MCP self-restarts are scheduled after the response so the caller can receive a verdict before reconnecting.',
+'operations,deploy,runbook,workflow,smoke-test,incident', 1, 'seed-2026-06-16-current', datetime('now')),
+
 ('development', 'Adding Built-In Tools',
 'A built-in tool requires coordinated code updates:
 1. Add an async handler in src/tools.js.

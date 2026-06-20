@@ -1,6 +1,6 @@
 const fs = require("fs");
 const path = require("path");
-const { execSync, execFileSync } = require("child_process");
+const { execSync, execFileSync, spawn } = require("child_process");
 const { redactSensitive } = require("./redact");
 const dbStore = require("./db");
 const pgStore = require("./pg");
@@ -44,6 +44,7 @@ const TOOL_RISK = {
   sidekick_write: "critical",
   sidekick_db_restore: "critical",
   sidekick_runbook: "critical",
+  sidekick_ops: "critical",
   sidekick_sandbox: "critical",
   sidekick_evolve: "critical",
   sidekick_process: "high",
@@ -170,6 +171,7 @@ const TOOL_CATEGORIES = {
   'sidekick_retry': 'Workflow',
   'sidekick_orchestrate': 'Workflow',
   'sidekick_runbook': 'Workflow',
+  'sidekick_ops': 'Workflow',
   'sidekick_evolve': 'Meta',
   'sidekick_predict': 'Meta',
   'sidekick_debug_tool': 'Meta',
@@ -5844,6 +5846,218 @@ async function sidekick_status({ include, services }) {
   return { content: [{ type: "text", text: JSON.stringify(output, null, 2) }] };
 }
 
+const SIDEKICK_SERVICES = ["sidekick-mcp", "sidekick-dashboard", "sidekick-agent"];
+
+function defaultRepoPath(repoPath) {
+  return repoPath || process.env.SIDEKICK_REPO_DIR || path.join(__dirname, "..");
+}
+
+function runOpsCommand(command, args, options = {}) {
+  try {
+    const stdout = execFileSync(command, args, {
+      timeout: options.timeout || 30000,
+      encoding: "utf-8",
+      maxBuffer: options.maxBuffer || 10 * 1024 * 1024,
+      cwd: options.cwd
+    });
+    return { ok: true, stdout: stdout.trim(), stderr: "" };
+  } catch (e) {
+    return {
+      ok: false,
+      stdout: String(e.stdout || "").trim(),
+      stderr: String(e.stderr || e.message || "").trim(),
+      status: e.status
+    };
+  }
+}
+
+function getGitValue(repoPath, args) {
+  const result = runOpsCommand("git", ["-C", repoPath, ...args], { timeout: 60000 });
+  return result.ok ? result.stdout : null;
+}
+
+function getServiceStates(services = SIDEKICK_SERVICES) {
+  const states = {};
+  for (const service of services) {
+    const result = runOpsCommand("systemctl", ["is-active", service], { timeout: 5000 });
+    states[service] = result.ok ? result.stdout : (result.stdout || "unknown");
+  }
+  return states;
+}
+
+function allServicesActive(states) {
+  return Object.values(states).every(state => state === "active");
+}
+
+function formatOpsReport(title, rows, details = []) {
+  const body = rows.map(([key, value]) => `${key}: ${value}`).join("\n");
+  const detailText = details.filter(Boolean).join("\n\n");
+  return `${title}\n${body}${detailText ? "\n\n" + detailText : ""}`;
+}
+
+function scheduleMcpRestart(delaySeconds = 2) {
+  const child = spawn("sh", ["-c", `sleep ${Number(delaySeconds) || 2}; sudo systemctl restart sidekick-mcp`], {
+    detached: true,
+    stdio: "ignore"
+  });
+  child.unref();
+}
+
+async function sidekick_ops({ action, repo_path, restart_mcp }) {
+  const repoPath = defaultRepoPath(repo_path);
+
+  if (action === "verify_deployed_commit") {
+    if (!fs.existsSync(repoPath)) {
+      return { content: [{ type: "text", text: "Repository path not found: " + repoPath }], isError: true };
+    }
+
+    const fetch = runOpsCommand("git", ["-C", repoPath, "fetch", "origin", "main"], { timeout: 60000 });
+    const head = getGitValue(repoPath, ["rev-parse", "HEAD"]);
+    const origin = getGitValue(repoPath, ["rev-parse", "origin/main"]);
+    const branch = getGitValue(repoPath, ["branch", "--show-current"]) || "(detached)";
+    const dirty = getGitValue(repoPath, ["status", "--short"]) || "";
+    const states = getServiceStates();
+    const deployed = Boolean(head && origin && head === origin && !dirty);
+    const detail = dirty ? `Dirty files:\n${dirty}` : "Dirty files: none";
+
+    return {
+      content: [{
+        type: "text",
+        text: formatOpsReport("DEPLOY VERIFICATION", [
+          ["DEPLOYED", deployed ? "yes" : "no"],
+          ["Branch", branch],
+          ["HEAD", head || "unknown"],
+          ["origin/main", origin || "unknown"],
+          ["Fetch", fetch.ok ? "ok" : "failed"],
+          ["Services", allServicesActive(states) ? "all active" : "attention needed"],
+          ["Action needed", deployed && allServicesActive(states) ? "none" : "review output"]
+        ], [
+          detail,
+          "Service states:\n" + Object.entries(states).map(([svc, state]) => `${svc}: ${state}`).join("\n")
+        ])
+      }],
+      isError: !deployed || !allServicesActive(states)
+    };
+  }
+
+  if (action === "restart_and_smoke_test") {
+    const restarted = [];
+    for (const service of ["sidekick-dashboard", "sidekick-agent"]) {
+      const result = runOpsCommand("sudo", ["systemctl", "restart", service], { timeout: 30000 });
+      restarted.push([service, result.ok ? "restarted" : "failed"]);
+    }
+
+    const states = getServiceStates();
+    const health = runOpsCommand("curl", ["-fsS", "http://127.0.0.1:4097/health"], { timeout: 10000 });
+    let mcpNote = "not requested";
+    if (restart_mcp === true) {
+      scheduleMcpRestart();
+      mcpNote = "scheduled after response; next MCP call may reconnect";
+    }
+
+    const ok = restarted.every(([, state]) => state === "restarted") && allServicesActive(states) && health.ok;
+    return {
+      content: [{
+        type: "text",
+        text: formatOpsReport("RESTART SMOKE TEST", [
+          ["RESULT", ok ? "passed" : "failed"],
+          ["MCP restart", mcpNote],
+          ["MCP health", health.ok ? "passed" : "failed"],
+          ["Services", allServicesActive(states) ? "all active" : "attention needed"],
+          ["Action needed", ok ? "none" : "review output"]
+        ], [
+          "Restart results:\n" + restarted.map(([svc, state]) => `${svc}: ${state}`).join("\n"),
+          "Service states:\n" + Object.entries(states).map(([svc, state]) => `${svc}: ${state}`).join("\n")
+        ])
+      }],
+      isError: !ok
+    };
+  }
+
+  if (action === "deploy_current_main") {
+    if (!fs.existsSync(repoPath)) {
+      return { content: [{ type: "text", text: "Repository path not found: " + repoPath }], isError: true };
+    }
+
+    const fetch = runOpsCommand("git", ["-C", repoPath, "fetch", "origin", "main"], { timeout: 60000 });
+    const dirty = getGitValue(repoPath, ["status", "--short"]) || "";
+    if (dirty) {
+      return {
+        content: [{ type: "text", text: formatOpsReport("DEPLOY CURRENT MAIN", [
+          ["DEPLOYED", "no"],
+          ["Reason", "working tree is not clean"],
+          ["Action needed", "commit, stash, or remove local changes before deploy"]
+        ], [`Dirty files:\n${dirty}`]) }],
+        isError: true
+      };
+    }
+
+    const merge = runOpsCommand("git", ["-C", repoPath, "merge", "--ff-only", "origin/main"], { timeout: 60000 });
+    const install = runOpsCommand("npm", ["install", "--omit=dev"], { cwd: repoPath, timeout: 120000, maxBuffer: 20 * 1024 * 1024 });
+    const dashboard = runOpsCommand("sudo", ["systemctl", "restart", "sidekick-dashboard"], { timeout: 30000 });
+    const agent = runOpsCommand("sudo", ["systemctl", "restart", "sidekick-agent"], { timeout: 30000 });
+    scheduleMcpRestart();
+
+    const head = getGitValue(repoPath, ["rev-parse", "HEAD"]);
+    const origin = getGitValue(repoPath, ["rev-parse", "origin/main"]);
+    const ok = fetch.ok && merge.ok && install.ok && dashboard.ok && agent.ok && head === origin;
+
+    return {
+      content: [{
+        type: "text",
+        text: formatOpsReport("DEPLOY CURRENT MAIN", [
+          ["DEPLOYED", ok ? "yes" : "no"],
+          ["HEAD", head || "unknown"],
+          ["origin/main", origin || "unknown"],
+          ["Fetch", fetch.ok ? "ok" : "failed"],
+          ["Fast-forward", merge.ok ? "ok" : "failed"],
+          ["npm install --omit=dev", install.ok ? "ok" : "failed"],
+          ["Dashboard restart", dashboard.ok ? "ok" : "failed"],
+          ["Agent restart", agent.ok ? "ok" : "failed"],
+          ["MCP restart", "scheduled after response; next MCP call may reconnect"],
+          ["Action needed", ok ? "run verify_deployed_commit after reconnect" : "review output"]
+        ])
+      }],
+      isError: !ok
+    };
+  }
+
+  if (action === "incident_snapshot") {
+    const states = getServiceStates();
+    const status = await sidekick_status({ include: "services,disk,memory,load,uptime,processes" });
+    const logs = {};
+    for (const service of SIDEKICK_SERVICES) {
+      const result = runOpsCommand("journalctl", ["-u", service, "-n", "25", "--no-pager"], { timeout: 10000, maxBuffer: 2 * 1024 * 1024 });
+      logs[service] = result.ok ? result.stdout : (result.stderr || result.stdout || "unavailable");
+    }
+    const git = fs.existsSync(repoPath) ? {
+      head: getGitValue(repoPath, ["rev-parse", "HEAD"]),
+      status: getGitValue(repoPath, ["status", "--short"]) || ""
+    } : { head: "repo not found", status: "" };
+    const ok = allServicesActive(states);
+
+    return {
+      content: [{
+        type: "text",
+        text: formatOpsReport("INCIDENT SNAPSHOT", [
+          ["RESULT", ok ? "captured" : "captured with service issues"],
+          ["Services", ok ? "all active" : "attention needed"],
+          ["HEAD", git.head || "unknown"],
+          ["Dirty files", git.status ? "yes" : "none"],
+          ["Action needed", ok ? "review logs if symptoms persist" : "review service states and logs"]
+        ], [
+          "Status:\n" + status.content[0].text,
+          git.status ? "Git status:\n" + git.status : "Git status: clean",
+          "Recent logs:\n" + Object.entries(logs).map(([svc, text]) => `--- ${svc} ---\n${text}`).join("\n\n")
+        ])
+      }],
+      isError: !ok
+    };
+  }
+
+  return { content: [{ type: "text", text: "Invalid action. Use: verify_deployed_commit, restart_and_smoke_test, deploy_current_main, incident_snapshot" }], isError: true };
+}
+
 async function sidekick_extract({ path: filePath, fields }) {
   if (!filePath) return { content: [{ type: "text", text: "path required" }], isError: true };
   if (!fs.existsSync(filePath)) {
@@ -9310,6 +9524,7 @@ const TOOLS = {
   sidekick_baseline,
   sidekick_depend,
   sidekick_runbook,
+  sidekick_ops,
   sidekick_black_box,
   sidekick_respond,
   sidekick_db_schema,
@@ -9403,6 +9618,7 @@ const TOOL_DEFS = [
   { name: "sidekick_baseline", description: "Behavioral baseline and anomaly detection. Learns normal patterns and detects statistical deviations.", args: { action: "string (record|learn|check|status|reset)", metric_name: "string (metric identifier)", value: "number (optional, value to record)", source: "string (optional, health|custom|command)", command: "string (optional, command to collect metric)", window: "string (optional, history window - default 7d)", sensitivity: "string (optional, low|medium|high - default medium)" } },
   { name: "sidekick_depend", description: "Dependency analyzer for npm packages, systemd services, and processes. Shows dependency trees, reverse dependencies, and impact analysis.", args: { action: "string (tree|reverse|outdated|impact|orphans)", type: "string (npm|service|process)", target: "string (optional, package, service, or PID)", depth: "number (optional, tree depth - default 5)", format: "string (optional, tree|flat|json - default tree)" } },
   { name: "sidekick_runbook", description: "Operational runbook executor with autonomous and guided modes. Supports verification, rollback, and step-by-step execution.", args: { action: "string (create|start|next|verify|rollback|abort|list|get|delete)", name: "string (optional, runbook name)", mode: "string (optional, autonomous|guided - default autonomous)", steps: "array (optional, step definitions)", runbook_id: "string (optional, instance or definition ID)", step_index: "number (optional, step index)" } },
+  { name: "sidekick_ops", description: "Packaged Sidekick operations workflows for deploy verification, restart smoke tests, deployments, and incident snapshots.", args: { action: "string (verify_deployed_commit|restart_and_smoke_test|deploy_current_main|incident_snapshot)", repo_path: "string (optional, repository path - default current Sidekick repo)", restart_mcp: "boolean (optional, schedule sidekick-mcp restart for restart_and_smoke_test)" } },
   { name: "sidekick_black_box", description: "Incident time capsule: captures full system context (services, processes, logs, disk, network) in one call for debugging. Rate limited.", args: { action: "string (capture|list|get|delete|analyze)", name: "string (optional, incident name)", include: "array (optional, services|processes|logs|disk|network|all - default all)", analyze_with_llm: "boolean (optional, use LLM for analysis - default false)", incident_id: "string (optional, incident ID)" } },
   { name: "sidekick_respond", description: "Return a text response directly without calling other tools. Use this for simple answers or when no tool action is needed.", args: { text: "string (the response text to return)" } },
   { name: "sidekick_db_schema", description: "Inspect database schema: tables, columns, indexes, foreign keys", args: { table: "string (optional, specific table name)", verbose: "boolean (optional, include row counts and detailed info)", database: "string (optional, 'sqlite' or 'postgres' - default sqlite)" } },
