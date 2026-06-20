@@ -18,6 +18,7 @@ const suites = [
   { file: 'test/static-code-quality.test.js', critical: true, description: 'Static safety checks' },
   { file: 'test/security.test.js', critical: true, description: 'Redaction and dangerous command checks' },
   { file: 'test/deploy-scripts.test.js', critical: false, description: 'Deploy script checks' },
+  { file: 'test/mcp-session.test.js', critical: false, description: 'MCP stale session recovery behavior' },
   { file: 'test/tools.test.js', critical: false, description: 'Core tool behavior' },
   { file: 'test/approval.test.js', critical: false, description: 'Approval queue behavior' },
   { file: 'test/new-tools.test.js', critical: false, description: 'Extended tool behavior' },
