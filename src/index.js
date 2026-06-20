@@ -720,33 +720,6 @@ async function getTransportForRequest(sessionId, metadata = {}) {
     registerSession(newSessionId, server, transport, metadata);
     await server.connect(transport);
 
-    // Auto-initialize replacement sessions so they're ready for immediate use
-    try {
-      const initReq = new Request("http://127.0.0.1:4097/mcp", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Accept": "application/json, text/event-stream",
-          "mcp-session-id": newSessionId
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "initialize",
-          params: {
-            protocolVersion: "2024-11-05",
-            capabilities: {},
-            clientInfo: { name: "sidekick-auto-init", version: "1.0" }
-          }
-        })
-      });
-      await transport.handleRequest(initReq);
-      markSessionInitialized(newSessionId);
-      logDebug("AUTO_INITIALIZED_REPLACEMENT", { staleSessionId: sessionId, newSessionId });
-    } catch (initError) {
-      logDebug("AUTO_INIT_FAILED", { newSessionId, error: initError.message });
-    }
-
     staleSessionMap.set(sessionId, { replacementId: newSessionId, createdAt: Date.now() });
     if (staleSessionMap.size > 100) {
       const firstKey = staleSessionMap.keys().next().value;
@@ -766,33 +739,6 @@ async function getTransportForRequest(sessionId, metadata = {}) {
 
   registerSession(newSessionId, server, transport, metadata);
   await server.connect(transport);
-
-  // Auto-initialize fresh sessions so they're ready for immediate use
-  try {
-    const initReq = new Request("http://127.0.0.1:4097/mcp", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/event-stream",
-        "mcp-session-id": newSessionId
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: {
-          protocolVersion: "2024-11-05",
-          capabilities: {},
-          clientInfo: { name: "sidekick-auto-init", version: "1.0" }
-        }
-      })
-    });
-    await transport.handleRequest(initReq);
-    markSessionInitialized(newSessionId);
-    logDebug("AUTO_INITIALIZED_FRESH", { newSessionId });
-  } catch (initError) {
-    logDebug("AUTO_INIT_FAILED", { newSessionId, error: initError.message });
-  }
 
   logDebug("CREATED_NEW_TRANSPORT", { newSessionId });
   return { transport, isNew: true, newSessionId };
@@ -1008,6 +954,9 @@ app.post("/mcp", async (req, res) => {
 
     if (isNew && newSessionId) {
       logDebug("NEW_SESSION_HANDLED", { newSessionId });
+    }
+    if (req.body?.method === "initialize" && webRes.status >= 200 && webRes.status < 300) {
+      markSessionInitialized(newSessionId || sessionId);
     }
 
     res.status(webRes.status);
