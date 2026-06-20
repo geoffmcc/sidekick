@@ -39,6 +39,24 @@ assert.match(
 );
 
 assert.match(
+  toolsJs,
+  /function filterGitStatus\s*\(/,
+  'sidekick_ops should ignore the known package-lock.json noise in deploy checks'
+);
+
+assert.match(
+  toolsJs,
+  /--max-time", "5", "-fsS"/,
+  'sidekick_ops should bound the MCP health probe'
+);
+
+assert.match(
+  toolsJs,
+  /passed with warnings/,
+  'sidekick_ops should downgrade a flaky MCP probe to a warning when services are up'
+);
+
+assert.match(
   indexJs,
   /sidekick_ops:\s*z\.object\(\{[\s\S]*verify_deployed_commit[\s\S]*restart_and_smoke_test[\s\S]*deploy_current_main[\s\S]*incident_snapshot/,
   'MCP schema should expose sidekick_ops actions'
