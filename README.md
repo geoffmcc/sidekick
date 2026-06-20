@@ -2,7 +2,7 @@
 
 **Autonomous Agent Platform**
 
-A self-hosted AI agent platform with persistent memory, 90 built-in MCP tools, knowledge base, and the ability to extend itself. Runs on your remote machine, keeps explicit project context across sessions, and can grow its own capabilities—no code changes required.
+A self-hosted AI agent platform with persistent memory, 91 built-in MCP tools, knowledge base, and the ability to extend itself. Runs on your remote machine, keeps explicit project context across sessions, and can grow its own capabilities—no code changes required.
 
 **How?** A single `AGENTS.md` file that opencode reads on every session start. No plugins, no hooks — just markdown.
 
@@ -175,7 +175,7 @@ The Agent Bridge runs independently from your main AI session. Submit a complex 
 ### 🔒 Security-First Design
 Every tool output is automatically scanned and redacted for sensitive data (API keys, tokens, passwords). The dashboard has rate limiting, CSRF protection, and audit logging. The agent bridge is isolated and only accessible through the dashboard.
 
-### 🛠️ 90 Built-In Specialized Tools
+### 🛠️ 91 Built-In Specialized Tools
 Not just bash and file operations. Sidekick includes tools for:
 - GitHub integration (PRs, issues, releases)
 - Service and process management
@@ -291,7 +291,7 @@ Sidekick used its own tools to help develop itself. Here's the AI agent debuggin
 
 | Service | Port | Description |
 |---------|------|-------------|
-| **MCP Server** | 4097 | 90 built-in tools across 19 categories (see database for authoritative current list) |
+| **MCP Server** | 4097 | 91 built-in tools across 19 categories (see database for authoritative current list) |
 | **Dashboard** | 4098 | Web UI: system health, activity log, KV data, agent tasks, tool catalog, metrics |
 | **Agent Bridge** | 4099 | AI agent loop — LLM plans and calls MCP tools autonomously |
 | **Ollama** | 11434 | Local LLM inference (qwen2.5-coder:7b, llama3.1:8b, nomic-embed-text) |
@@ -339,7 +339,7 @@ ORDER BY tc.sort_order, t.name
 
 To avoid confusion, it's important to understand what each component is:
 
-- **Sidekick** = The autonomous agent platform: remote machine + 90 built-in MCP tools + persistent memory + knowledge base + Dashboard + Agent Bridge + metrics & monitoring + self-extending capabilities
+- **Sidekick** = The autonomous agent platform: remote machine + 91 built-in MCP tools + persistent memory + knowledge base + Dashboard + Agent Bridge + metrics & monitoring + self-extending capabilities
 - **The AI** = The assistant running in opencode (e.g., qwen, Claude, etc.) that uses Sidekick's platform
 - **Agent Bridge** = Sidekick's autonomous agent that runs tasks independently via the Dashboard
 - **Knowledge Base** = Structured documentation stored in SQLite, searchable via `sidekick_knowledge`
@@ -384,7 +384,7 @@ Open `http://YOUR_REMOTE_IP:4098/` in a browser.
 - **Config** — environment variables (sensitive values redacted)
 - **Agent** — submit tasks for the AI agent to execute autonomously
 - **Approvals** — review, approve, or reject queued risky actions when approval mode is enabled
-- **Tools** — browsable catalog of all 90 built-in tools with search, category filtering, policy status, risk labels, and detailed argument info
+- **Tools** — browsable catalog of all 91 built-in tools with search, category filtering, policy status, risk labels, and detailed argument info
 - **Metrics** — embedded Grafana dashboards for system health, tool analytics, database performance, Docker containers, and Ollama metrics
 
 ### Metrics & Monitoring
@@ -658,7 +658,7 @@ This follows the principle of least privilege: after initial setup, the sidekick
 
 ```
 ├── src/
-│   ├── tools.js        Shared tool handlers (90 built-in tools)
+│   ├── tools.js        Shared tool handlers (91 built-in tools)
 │   ├── memory.js       Automatic memory capture and recall helpers
 │   ├── index.js        MCP server (session-aware transport management)
 │   ├── dashboard.js    Dashboard web UI (9 tabs including Memory, Database, and Metrics)

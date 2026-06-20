@@ -442,6 +442,11 @@ const TOOL_SCHEMAS = {
     runbook_id: z.string().optional(),
     step_index: z.number().optional()
   }),
+  sidekick_ops: z.object({
+    action: z.enum(["verify_deployed_commit", "restart_and_smoke_test", "deploy_current_main", "incident_snapshot"]).describe("Packaged operations workflow to run"),
+    repo_path: z.string().optional().describe("Repository path. Defaults to the current Sidekick repo."),
+    restart_mcp: z.boolean().optional().default(false).describe("For restart_and_smoke_test, schedule sidekick-mcp restart after the response.")
+  }),
   sidekick_black_box: z.object({
     action: z.enum(["capture", "list", "get", "delete", "analyze"]),
     name: z.string().optional().describe("Incident name/identifier"),

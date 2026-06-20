@@ -94,3 +94,16 @@ sudo systemctl restart sidekick-mcp sidekick-dashboard sidekick-agent
 ```
 
 If you use the deployment scripts, redeploy from your workstation instead.
+
+## Packaged operations workflows
+
+Use `sidekick_ops` when you need a compact verdict instead of separate raw tool outputs.
+
+Available actions:
+
+- `verify_deployed_commit`: confirms the Sidekick host checkout matches `origin/main`, reports dirty files, and checks core service state.
+- `restart_and_smoke_test`: restarts `sidekick-dashboard` and `sidekick-agent`, checks MCP health, and optionally schedules an MCP restart with `restart_mcp: true`.
+- `deploy_current_main`: requires a clean working tree, fast-forwards to `origin/main`, runs `npm install --omit=dev`, restarts dashboard and agent, and schedules MCP restart after the response.
+- `incident_snapshot`: captures service state, resource status, git state, top processes, and recent service logs.
+
+MCP self-restarts are scheduled after the response so callers can receive a verdict before the MCP transport reconnects.
