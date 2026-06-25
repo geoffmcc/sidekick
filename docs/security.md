@@ -86,7 +86,7 @@ The supplied sudoers file allows the `sidekick` user to run specific systemctl a
 
 ## Secret storage
 
-`sidekick_secret` provides AES-256-GCM encrypted credential management and requires `SIDEKICK_SECRET_KEY`. Store the secret key outside the repository and include it in your host secret management or systemd environment strategy.
+`sidekick_secret` provides AES-256-GCM encrypted credential management and requires `SIDEKICK_SECRET_KEY`. Store the secret key outside the repository and include it in your host secret management or systemd environment strategy. API tokens such as the GitHub PAT used by `sidekick_github` belong in `sidekick_secret` as encrypted secrets, not in KV memory.
 
 ## Exposure recommendations
 
