@@ -192,6 +192,19 @@ Use sidekick_db_backup for SQLite backup. Treat all backups as sensitive operati
 This keeps prompts small and reduces stale documentation drift.',
 'agent,protocol,retrieval,tokens', 1, 'seed-2026-06-16-current', datetime('now')),
 
+('best-practices', 'Proactive Durable Memory Policy',
+'Agents working with Sidekick should proactively store durable findings without waiting for the user to prompt.
+
+Store:
+- project policies and workflow preferences.
+- root causes and operational gotchas.
+- PR and merge rules.
+- credential or setup procedures.
+- decisions likely to matter in future sessions.
+
+Do not store trivial transient status. If unsure, briefly state what will be stored, then store it with a clear key, category, and project when applicable. Prefer sidekick_knowledge for global agent policy and project-scoped KV for project-specific details.',
+'memory,policy,agents,workflow,durable-findings', 1, 'seed-2026-06-16-current', datetime('now')),
+
 ('best-practices', 'Tool Selection Policy',
 'Prefer narrow, structured tools before broad tools:
 - Use sidekick_search, sidekick_find, sidekick_filter, and sidekick_summarize before reading huge files.
