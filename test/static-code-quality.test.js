@@ -23,7 +23,7 @@ function walk(dir) {
 function isTextFile(file) {
   if (excludedFiles.has(path.basename(file))) return false;
   const ext = path.extname(file);
-  return textExtensions.has(ext) || path.basename(file).startsWith('.env');
+  return textExtensions.has(ext);
 }
 
 const files = walk(root).filter(isTextFile);
