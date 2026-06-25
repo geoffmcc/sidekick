@@ -2,7 +2,7 @@
 
 Sidekick is a self-hosted Model Context Protocol server and autonomous assistant platform intended to give opencode a persistent remote working environment. These docs describe the current source tree and migrations, while runtime operational knowledge lives in the SQLite-backed knowledge base.
 
-The project currently exposes three Node.js services and 93 built-in MCP tools. Tool metadata, categories, risk labels, enabled/deprecated state, tool logs, key-value data, structured memories, and the knowledge base are stored in SQLite.
+The project currently exposes three Node.js services and 94 built-in MCP tools. Tool metadata, categories, risk labels, enabled/deprecated state, tool logs, key-value data, structured memories, and the knowledge base are stored in SQLite.
 
 ## Agent Information Access
 

@@ -19,7 +19,8 @@ const {
   TOOLS,
   setSource,
   parseGithubArgs,
-  getGithubArg
+  getGithubArg,
+  missionRoute
 } = tools;
 const { sidekick_store, sidekick_get, sidekick_delete, sidekick_list_projects, sidekick_get_by_project, sidekick_tools } = TOOLS;
 
@@ -46,6 +47,20 @@ console.log('Running Tools Tests...\n');
     assert.strictEqual(getGithubArg(jsonGithubArgs, ['sha', 'ref']), 'abc123', 'Should read JSON ref');
     assert.strictEqual(getGithubArg(parseGithubArgs('28'), ['number']), 28, 'Should preserve numeric legacy args');
     assert.strictEqual(getGithubArg(parseGithubArgs('abc123'), ['sha']), 'abc123', 'Should preserve string legacy args');
+    console.log('✓ Passed\n');
+
+    // Test 2.0c: sidekick_mission deterministic routing
+    console.log('Test 2.0c: sidekick_mission deterministic routing');
+    const deployRoute = missionRoute('deploy current main', 'trusted_vps', { repo_path: '/srv/sidekick' });
+    assert.strictEqual(deployRoute.route, 'deploy', 'Should route deploy intent');
+    assert.strictEqual(deployRoute.recommended_tool, 'sidekick_ops', 'Deploy should route to sidekick_ops');
+    assert.strictEqual(deployRoute.recommended_args.action, 'deploy_current_main', 'Deploy should use deploy_current_main');
+    assert.strictEqual(deployRoute.requires_confirmation, true, 'Deploy should require confirmation');
+    const blockedDeploy = missionRoute('deploy current main', 'production');
+    assert.strictEqual(blockedDeploy.allowed, false, 'Production profile should block direct deploy');
+    const statusRoute = missionRoute('check service health', 'read_only_audit');
+    assert.strictEqual(statusRoute.route, 'status', 'Should route status intent');
+    assert.strictEqual(statusRoute.allowed, true, 'Read-only audit should allow status');
     console.log('✓ Passed\n');
 
     // Test 2.1: sidekick_store with project

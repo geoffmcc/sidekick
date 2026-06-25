@@ -457,6 +457,22 @@ const TOOL_SCHEMAS = {
     repo_path: z.string().optional().describe("Repository path. Defaults to the current Sidekick repo."),
     restart_mcp: z.boolean().optional().default(false).describe("For restart_and_smoke_test, schedule sidekick-mcp restart after the response.")
   }),
+  sidekick_mission: z.object({
+    action: z.enum(["profiles", "route", "preflight", "execute"]).optional().default("route").describe("Mission Control action"),
+    intent: z.string().optional().describe("User goal or operation intent"),
+    profile: z.enum(["read_only_audit", "trusted_vps", "production", "danger_zone"]).optional().default("trusted_vps").describe("Run profile"),
+    confirm: z.boolean().optional().describe("Required true for mutating execute routes"),
+    key: z.string().optional().describe("KV key for delete missions"),
+    project: z.string().optional().describe("Project name for memory missions"),
+    query: z.string().optional().describe("Search query for tool discovery"),
+    include: z.string().optional().describe("Include sections for status/project"),
+    services: z.string().optional().describe("Services for status missions"),
+    repo_path: z.string().optional().describe("Repository path for deploy workflows"),
+    limit: z.number().optional().describe("Result limit"),
+    tool: z.string().optional().describe("Tool filter for logs"),
+    source: z.string().optional().describe("Source filter for logs"),
+    format: z.string().optional().describe("Output format for tool discovery")
+  }),
   sidekick_black_box: z.object({
     action: z.enum(["capture", "list", "get", "delete", "analyze"]),
     name: z.string().optional().describe("Incident name/identifier"),
