@@ -334,6 +334,24 @@ console.log('Test 2.8: deploy.ps1 SSH key generation is correct');
   console.log('✓ SSH key generation syntax correct\n');
 }
 
+// Test 2.9: deploy.ps1 handles failed SSH probes without aborting bootstrap
+console.log('Test 2.9: deploy.ps1 has non-fatal SSH probe handling');
+{
+  assert.ok(
+    deployPs1Content.includes('function Invoke-SSHProbe'),
+    'deploy.ps1 should wrap SSH probes so expected auth failures do not abort fresh bootstrap'
+  );
+  assert.ok(
+    deployPs1Content.includes('$script:ErrorActionPreference = "Continue"'),
+    'deploy.ps1 SSH probe wrapper should temporarily tolerate failed native ssh exits'
+  );
+  assert.ok(
+    deployPs1Content.includes('Invoke-SSHProbe -SshArgs $probeArgs'),
+    'deploy.ps1 should use the non-fatal SSH probe wrapper for connection checks'
+  );
+  console.log('✓ Non-fatal SSH probe handling present\n');
+}
+
 // ============================================================================
 // BOOTSTRAP.SH TESTS
 // ============================================================================
