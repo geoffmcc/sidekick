@@ -1353,7 +1353,30 @@ function syncCrontab(jobs) {
 
 // --- GitHub Tool ---
 
+function parseGithubArgs(extraArgs) {
+  if (extraArgs === undefined || extraArgs === null || extraArgs === "") return {};
+  if (typeof extraArgs === "object") return extraArgs;
+  if (typeof extraArgs !== "string") return { value: extraArgs };
+  const trimmed = extraArgs.trim();
+  if (!trimmed) return {};
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+    return { value: parsed };
+  } catch (e) {
+    return { value: extraArgs };
+  }
+}
+
+function getGithubArg(args, names) {
+  for (const name of names) {
+    if (args[name] !== undefined && args[name] !== null && args[name] !== "") return args[name];
+  }
+  return args.value;
+}
+
 async function sidekick_github({ action, repo, args: extraArgs }) {
+  const parsedArgs = parseGithubArgs(extraArgs);
   let token = process.env.GITHUB_TOKEN;
   
   if (!token) {
@@ -1414,20 +1437,21 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
 
   const actions = {
     pr_list: async () => {
-      const res = await ghRequest("GET", `/repos/${repo}/pulls?state=open`);
+      const state = parsedArgs.state || "open";
+      const res = await ghRequest("GET", `/repos/${repo}/pulls?state=${encodeURIComponent(state)}`);
       if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
       const prs = res.data.map(pr => `#${pr.number} ${pr.title} (${pr.user.login}) - ${pr.html_url}`);
       return { content: [{ type: "text", text: prs.join("\n") || "No open PRs" }] };
     },
     pr_create: async () => {
-      const { title, head, base, body } = JSON.parse(extraArgs || "{}");
+      const { title, head, base, body } = parsedArgs;
       if (!title || !head) return { content: [{ type: "text", text: "title and head required" }], isError: true };
       const res = await ghRequest("POST", `/repos/${repo}/pulls`, { title, head, base: base || "main", body: body || "" });
       if (res.status !== 201) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
       return { content: [{ type: "text", text: `Created PR #${res.data.number}: ${res.data.html_url}` }] };
     },
     pr_get: async () => {
-      const num = extraArgs;
+      const num = getGithubArg(parsedArgs, ["number", "pr", "pull", "pull_number"]);
       if (!num) return { content: [{ type: "text", text: "PR number required" }], isError: true };
       const res = await ghRequest("GET", `/repos/${repo}/pulls/${num}`);
       if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
@@ -1435,9 +1459,10 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
       return { content: [{ type: "text", text: `#${pr.number} ${pr.title}\nState: ${pr.state}\nAuthor: ${pr.user.login}\nURL: ${pr.html_url}\n${pr.body || ""}` }] };
     },
     pr_merge: async () => {
-      const num = extraArgs;
+      const num = getGithubArg(parsedArgs, ["number", "pr", "pull", "pull_number"]);
       if (!num) return { content: [{ type: "text", text: "PR number required" }], isError: true };
-      const res = await ghRequest("PUT", `/repos/${repo}/pulls/${num}/merge`, { merge_method: "squash" });
+      const method = parsedArgs.method || parsedArgs.merge_method || "squash";
+      const res = await ghRequest("PUT", `/repos/${repo}/pulls/${num}/merge`, { merge_method: method });
       if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
       return { content: [{ type: "text", text: `Merged PR #${num}` }] };
     },
@@ -1448,21 +1473,21 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
       return { content: [{ type: "text", text: issues.join("\n") || "No open issues" }] };
     },
     issue_create: async () => {
-      const { title, body } = JSON.parse(extraArgs || "{}");
+      const { title, body } = parsedArgs;
       if (!title) return { content: [{ type: "text", text: "title required" }], isError: true };
       const res = await ghRequest("POST", `/repos/${repo}/issues`, { title, body: body || "" });
       if (res.status !== 201) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
       return { content: [{ type: "text", text: `Created issue #${res.data.number}: ${res.data.html_url}` }] };
     },
     issue_close: async () => {
-      const num = extraArgs;
+      const num = getGithubArg(parsedArgs, ["number", "issue", "issue_number"]);
       if (!num) return { content: [{ type: "text", text: "issue number required" }], isError: true };
       const res = await ghRequest("PATCH", `/repos/${repo}/issues/${num}`, { state: "closed" });
       if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
       return { content: [{ type: "text", text: `Closed issue #${num}` }] };
     },
     commit_status: async () => {
-      const sha = extraArgs;
+      const sha = getGithubArg(parsedArgs, ["sha", "ref", "commit", "commit_sha"]);
       if (!sha) return { content: [{ type: "text", text: "commit SHA required" }], isError: true };
       const res = await ghRequest("GET", `/repos/${repo}/commits/${sha}/status`);
       if (res.status !== 200) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
@@ -1470,7 +1495,7 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
       return { content: [{ type: "text", text: `Overall: ${res.data.state}\n${statuses.join("\n") || "No statuses"}` }] };
     },
     release_create: async () => {
-      const { tag_name, name, body, draft, prerelease } = JSON.parse(extraArgs || "{}");
+      const { tag_name, name, body, draft, prerelease } = parsedArgs;
       if (!tag_name) return { content: [{ type: "text", text: "tag_name required" }], isError: true };
       const res = await ghRequest("POST", `/repos/${repo}/releases`, { tag_name, name: name || tag_name, body: body || "", draft: draft || false, prerelease: prerelease || false });
       if (res.status !== 201) return { content: [{ type: "text", text: JSON.stringify(res.data) }], isError: true };
@@ -9810,6 +9835,8 @@ module.exports = {
   resolveApproval,
   getToolDefsForSource,
   getToolCategoriesWithTools,
+  parseGithubArgs,
+  getGithubArg,
   enforceToolPolicy,
   syncToolRegistry
 };
