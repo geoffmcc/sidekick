@@ -26,6 +26,22 @@ function Run-Remote {
   ssh -i "$SSH_KEY" $SSH_OPTS.Split(' ') "$VPS" "$Cmd" 2>&1
 }
 
+function Invoke-SSHProbe {
+  param([string[]]$SshArgs)
+
+  $previousErrorActionPreference = $ErrorActionPreference
+  try {
+    $script:ErrorActionPreference = "Continue"
+    $output = & ssh @SshArgs 2>&1
+    return @{
+      ExitCode = $LASTEXITCODE
+      Output = ($output -join "`n")
+    }
+  } finally {
+    $script:ErrorActionPreference = $previousErrorActionPreference
+  }
+}
+
 function Copy-ToVPS {
   param([string]$Local, [string]$Remote)
   scp -i "$SSH_KEY" $SSH_OPTS.Split(' ') "$Local" "${VPS}:${Remote}" 2>&1
@@ -58,13 +74,15 @@ function Ensure-SSHKey {
 }
 
 function Test-SSHConnection {
-  $result = ssh -i "$SSH_KEY" $SSH_OPTS.Split(' ') -o ConnectTimeout=5 "$VPS" "echo OK" 2>&1
-  return ($result -match "OK")
+  $probeArgs = @("-i", "$SSH_KEY") + $SSH_OPTS.Split(' ') + @("-o", "ConnectTimeout=5", "$VPS", "echo OK")
+  $result = Invoke-SSHProbe -SshArgs $probeArgs
+  return ($result.ExitCode -eq 0 -and $result.Output -match "OK")
 }
 
 function Test-SidekickUserExists {
-  $result = ssh -i "$SSH_KEY" $SSH_OPTS.Split(' ') -o ConnectTimeout=3 "$VPS" "echo OK" 2>&1
-  return ($result -match "OK")
+  $probeArgs = @("-i", "$SSH_KEY") + $SSH_OPTS.Split(' ') + @("-o", "ConnectTimeout=3", "$VPS", "echo OK")
+  $result = Invoke-SSHProbe -SshArgs $probeArgs
+  return ($result.ExitCode -eq 0 -and $result.Output -match "OK")
 }
 
 function Run-Bootstrap {
@@ -172,8 +190,9 @@ function Run-Bootstrap {
   Write-Host "  Verifying bootstrap..." -ForegroundColor Yellow
   Start-Sleep -Seconds 2
   
-  $result = ssh -i "$SSH_KEY" $SSH_OPTS.Split(' ') -o ConnectTimeout=5 "$VPS" "echo OK" 2>&1
-  if ($result -match "OK") {
+  $probeArgs = @("-i", "$SSH_KEY") + $SSH_OPTS.Split(' ') + @("-o", "ConnectTimeout=5", "$VPS", "echo OK")
+  $result = Invoke-SSHProbe -SshArgs $probeArgs
+  if ($result.ExitCode -eq 0 -and $result.Output -match "OK") {
     Write-Host "  Bootstrap completed successfully" -ForegroundColor Green
     return $true
   }
