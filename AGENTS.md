@@ -73,7 +73,9 @@ sidekick_knowledge action="list" category="best-practices"
 
 **Tool information is stored in the database** and automatically synced on server startup.
 
-To query available tools:
+For broad discovery questions like "what Sidekick tools are available?", use `sidekick_tools action="overview"` first. It returns a grouped manifest and can also search capabilities with `sidekick_tools action="search" query="database schema"`.
+
+For exact current registry rows, query the database:
 ```sql
 SELECT t.name, t.description, t.risk, tc.name as category
 FROM tools t
