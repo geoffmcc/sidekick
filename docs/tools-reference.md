@@ -332,6 +332,8 @@ Arguments: `{ channel: "string", webhook_url: "string (optional)", recipient: "s
 
 GitHub API integration (PRs, issues, commits, releases)
 
+Credentials: `sidekick_github` uses `GITHUB_TOKEN` from the MCP process environment first, then encrypted `sidekick_secret` key `github_token`. Do not store GitHub tokens in KV storage.
+
 Arguments: `{ action: "string", repo: "string", args: "string (optional)" }`
 
 ### `sidekick_webhook`

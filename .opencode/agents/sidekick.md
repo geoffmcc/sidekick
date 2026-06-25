@@ -25,6 +25,7 @@ Sidekick's agent-facing knowledge is stored primarily in SQLite:
 - **Documentation and operating knowledge**: `knowledge` table. Use `sidekick_knowledge` first.
 - **Tool catalog and metadata**: `tools`, `tool_categories`, and `tool_category_map` tables. Use `sidekick_db_query database="sqlite"` when you need exact current tool data.
 - **Persistent key-value memory**: `kv_store` table. Use `sidekick_store`, `sidekick_get`, `sidekick_list_projects`, and `sidekick_get_by_project`.
+- **Secrets and credentials**: Use `sidekick_secret`, not KV. For current credential setup procedures, search `sidekick_knowledge` first.
 - **Named structured documents**: `json_documents` table. Stores documents such as `context`, `cron`, `webhooks`, and `watches`.
 - **Structured memory**: the `memories` table stores bounded, redacted automatic memories with type, project, confidence, source, and confirmation metadata. The `context` document is retained for compatibility and session summaries. Use `sidekick_context action="recall"` or `sidekick_project` to retrieve memory.
 - **Tool activity history**: `tool_logs` table. Use `sidekick_log_query` or SQL for recent tool activity.
