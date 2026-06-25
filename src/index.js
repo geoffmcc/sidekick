@@ -54,6 +54,7 @@ const TOOL_SCHEMAS = {
     category: z.string().optional().describe("Category tag for filtering (e.g. 'mcp', 'tool', 'config')")
   }),
   sidekick_get: z.object({ key: z.string().describe("Storage key to retrieve") }),
+  sidekick_delete: z.object({ key: z.string().describe("Storage key to delete") }),
   sidekick_list: z.object({ path: z.string().optional().default("/home/sidekick").describe("Directory path to list") }),
   sidekick_web_fetch: z.object({
     url: z.string().describe("URL to fetch"),

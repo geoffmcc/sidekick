@@ -184,7 +184,7 @@ Use sidekick_db_backup for SQLite backup. Treat all backups as sensitive operati
 'When an agent needs information about Sidekick:
 1. Search sidekick_knowledge with specific terms.
 2. If the question is about available tools, use sidekick_tools action="overview" or sidekick_tools action="search".
-3. If the question is about project-specific memory, use sidekick_get, sidekick_get_by_project, or sidekick_context.
+3. If the question is about project-specific memory, use sidekick_get, sidekick_delete, sidekick_get_by_project, or sidekick_context.
 4. If the question is about recent activity, use sidekick_log_query.
 5. Query the tools registry tables when exact raw registry rows are needed.
 6. Read markdown files only when the database is missing the answer or when editing documentation.
@@ -244,7 +244,7 @@ Use sidekick_black_box for incident snapshots and sidekick_fresheyes when a seco
 ('best-practices', 'Database Query Safety',
 'sidekick_db_query defaults to readonly mode. In readonly mode it allows single-statement row-returning SQL only, rejects mutating statements and multi-statement input, and applies row limits.
 
-Use readonly=false only for deliberate maintenance. Prefer sidekick_knowledge, sidekick_store/get, and dedicated feature tools for ordinary writes.
+Use readonly=false only for deliberate maintenance. Prefer sidekick_knowledge, sidekick_store/get/delete, and dedicated feature tools for ordinary writes.
 
 Safe examples:
 SELECT id, category, title FROM knowledge WHERE enabled = 1;
@@ -314,6 +314,7 @@ Categories used by the default seed include architecture, operations, best-pract
 Examples:
 - sidekick_store key="deploy:host" value="YOUR_REMOTE_IP" project="sidekick" category="deployment"
 - sidekick_get key="deploy:host"
+- sidekick_delete key="deploy:host"
 - sidekick_get_by_project project="sidekick"
 
 Use sidekick_context for richer decisions, problems, patterns, session summaries, automatic memories, and recall workflows. The Agent Bridge records bounded, redacted automatic memory summaries for completed tasks and useful tool calls when SIDEKICK_AUTO_MEMORY is enabled.

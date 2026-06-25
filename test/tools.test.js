@@ -21,7 +21,7 @@ const {
   parseGithubArgs,
   getGithubArg
 } = tools;
-const { sidekick_store, sidekick_get, sidekick_list_projects, sidekick_get_by_project, sidekick_tools } = TOOLS;
+const { sidekick_store, sidekick_get, sidekick_delete, sidekick_list_projects, sidekick_get_by_project, sidekick_tools } = TOOLS;
 
 console.log('Running Tools Tests...\n');
 (async () => {
@@ -82,8 +82,19 @@ console.log('Running Tools Tests...\n');
     assert.ok(missingResult.content[0].text.includes('Key not found'), 'Should say key not found');
     console.log('✓ Passed\n');
 
-    // Test 2.5: sidekick_list_projects
-    console.log('Test 2.5: sidekick_list_projects');
+    // Test 2.5: sidekick_delete
+    console.log('Test 2.5: sidekick_delete');
+    await sidekick_store({ key: 'delete_me', value: 'temporary', project: 'proj_delete' });
+    const deleteResult = await sidekick_delete({ key: 'delete_me' });
+    assert.ok(deleteResult.content[0].text.includes('Deleted key'), 'Should return deleted message');
+    assert.strictEqual(dbStore.getKV('delete_me'), null, 'Key should be deleted');
+    const deleteMissingResult = await sidekick_delete({ key: 'delete_me' });
+    assert.ok(deleteMissingResult.isError, 'Should return error for missing delete key');
+    assert.ok(deleteMissingResult.content[0].text.includes('Key not found'), 'Should say key not found');
+    console.log('✓ Passed\n');
+
+    // Test 2.6: sidekick_list_projects
+    console.log('Test 2.6: sidekick_list_projects');
     await sidekick_store({ key: 'test3', value: 'data3', project: 'proj1' });
     await sidekick_store({ key: 'test4', value: 'data4', project: 'proj2' });
     await sidekick_store({ key: 'test5', value: 'data5' }); // null project
@@ -95,8 +106,8 @@ console.log('Running Tools Tests...\n');
     assert.ok(projects.includes('proj2'), 'Should include proj2');
     console.log('✓ Passed\n');
 
-    // Test 2.6: sidekick_get_by_project
-    console.log('Test 2.6: sidekick_get_by_project');
+    // Test 2.7: sidekick_get_by_project
+    console.log('Test 2.7: sidekick_get_by_project');
     const proj1Result = await sidekick_get_by_project({ project: 'proj1' });
     const proj1Keys = JSON.parse(proj1Result.content[0].text);
     assert.ok(Array.isArray(proj1Keys), 'Should return array');
@@ -105,23 +116,23 @@ console.log('Running Tools Tests...\n');
     assert.strictEqual(proj1Keys[0].value, 'data3', 'Value should match');
     console.log('✓ Passed\n');
 
-    // Test 2.6b: Get by null project
-    console.log('Test 2.6b: sidekick_get_by_project with null project');
+    // Test 2.7b: Get by null project
+    console.log('Test 2.7b: sidekick_get_by_project with null project');
     const nullProjResult = await sidekick_get_by_project({ project: null });
     const nullProjKeys = JSON.parse(nullProjResult.content[0].text);
     assert.ok(Array.isArray(nullProjKeys), 'Should return array');
     assert.ok(nullProjKeys.length >= 2, 'Should have at least 2 keys (test2 and test5)');
     console.log('✓ Passed\n');
 
-    // Test 2.7: Project naming validation
-    console.log('Test 2.7: Project naming validation');
+    // Test 2.8: Project naming validation
+    console.log('Test 2.8: Project naming validation');
     const invalidResult = await sidekick_store({ key: 'test_invalid', value: 'data', project: 'Invalid-Project' });
     assert.ok(invalidResult.isError, 'Should return error for invalid project name');
     assert.ok(invalidResult.content[0].text.includes('Invalid project name'), 'Should mention invalid project name');
     console.log('✓ Passed\n');
 
-    // Test 2.8: Update existing key preserves created timestamp
-    console.log('Test 2.8: Update existing key preserves created timestamp');
+    // Test 2.9: Update existing key preserves created timestamp
+    console.log('Test 2.9: Update existing key preserves created timestamp');
     await sidekick_store({ key: 'test_update', value: 'original' });
     const kvBefore = dbStore.getKV('test_update');
     const createdBefore = kvBefore.created;
@@ -136,8 +147,8 @@ console.log('Running Tools Tests...\n');
     assert.notStrictEqual(kvAfter.updated, createdBefore, 'Updated should be different');
     console.log('✓ Passed\n');
 
-    // Test 2.9: Update existing key can change project
-    console.log('Test 2.9: Update existing key can change project');
+    // Test 2.10: Update existing key can change project
+    console.log('Test 2.10: Update existing key can change project');
     await sidekick_store({ key: 'test_proj_change', value: 'data', project: 'old_proj' });
     await sidekick_store({ key: 'test_proj_change', value: 'data', project: 'new_proj' });
     const kvProj = dbStore.getKV('test_proj_change');
