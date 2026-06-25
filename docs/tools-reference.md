@@ -337,6 +337,8 @@ Credentials: `sidekick_github` uses `GITHUB_TOKEN` from the MCP process environm
 
 Arguments: `{ action: "string", repo: "string", args: "string (optional)" }`
 
+`args` accepts JSON for structured actions, such as `{"number":28,"method":"merge"}` for `pr_merge` or `{"ref":"<sha>"}` for `commit_status`. Legacy raw values such as `"28"` for PR/issue numbers and `"<sha>"` for commit status are also supported.
+
 ### `sidekick_webhook`
 
 Manage received webhooks (list, get, clear)
