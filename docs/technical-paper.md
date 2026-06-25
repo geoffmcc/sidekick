@@ -63,7 +63,7 @@ Agents should use these access paths:
 | Documentation, policies, best practices, architecture, protocols, operations | `sidekick_knowledge` | `knowledge` |
 | Broad tool overview, grouped manifest, capability search | `sidekick_tools` | `tools`, `tool_categories`, `tool_category_map` |
 | Exact tool list, descriptions, args, risk, enabled/deprecated state | `sidekick_db_query database="sqlite"` | `tools`, `tool_categories`, `tool_category_map` |
-| Project memory and stored facts | `sidekick_store`, `sidekick_get`, `sidekick_list_projects`, `sidekick_get_by_project` | `kv_store` |
+| Project memory and stored facts | `sidekick_store`, `sidekick_get`, `sidekick_delete`, `sidekick_list_projects`, `sidekick_get_by_project` | `kv_store` |
 | Structured memories and task continuity | `sidekick_context`, `sidekick_project`, or SQL | `memories` plus compatibility entries in `json_documents.context` |
 | Structured feature state | feature tools or SQL | `json_documents` |
 | Tool call history | `sidekick_log_query` or SQL | `tool_logs` |
@@ -139,7 +139,7 @@ The value JSON preserves a compatibility shape:
 }
 ```
 
-`sidekick_get` returns only the value for backward compatibility. Project filtering is provided by `sidekick_get_by_project`.
+`sidekick_get` returns only the value for backward compatibility. `sidekick_delete` removes one KV entry by key. Project filtering is provided by `sidekick_get_by_project`.
 
 ### `json_documents`
 
@@ -214,7 +214,7 @@ Current search is a SQLite `LIKE` search across title, content, and tags. It is 
 
 ## 7. Tool System
 
-The current code exports 92 built-in `sidekick_*` tools. A built-in tool has six relevant parts:
+The current code exports 93 built-in `sidekick_*` tools. A built-in tool has six relevant parts:
 
 1. An async handler in `src/tools.js`.
 2. A `TOOLS` map entry.
