@@ -24,9 +24,10 @@ INSERT INTO knowledge (category, title, content, tags, enabled, version_added, u
 
 Default retrieval order:
 1. Use sidekick_knowledge for documentation, policies, operations, protocols, and architecture.
-2. Query the tools registry tables for exact current tool metadata.
-3. Use KV/context tools for project memory and prior decisions.
-4. Read markdown files only when the database entry is missing, stale, or the task is to edit docs.',
+2. Use sidekick_tools for broad tool overview, grouped manifests, and capability search.
+3. Query the tools registry tables for exact current tool metadata.
+4. Use KV/context tools for project memory and prior decisions.
+5. Read markdown files only when the database entry is missing, stale, or the task is to edit docs.',
 'database,agent,access,sqlite,knowledge', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('architecture', 'Authoritative SQLite Tables',
@@ -182,10 +183,11 @@ Use sidekick_db_backup for SQLite backup. Treat all backups as sensitive operati
 ('best-practices', 'Agent Retrieval Protocol',
 'When an agent needs information about Sidekick:
 1. Search sidekick_knowledge with specific terms.
-2. If the question is about available tools, query the tools registry tables.
+2. If the question is about available tools, use sidekick_tools action="overview" or sidekick_tools action="search".
 3. If the question is about project-specific memory, use sidekick_get, sidekick_get_by_project, or sidekick_context.
 4. If the question is about recent activity, use sidekick_log_query.
-5. Read markdown files only when the database is missing the answer or when editing documentation.
+5. Query the tools registry tables when exact raw registry rows are needed.
+6. Read markdown files only when the database is missing the answer or when editing documentation.
 
 This keeps prompts small and reduces stale documentation drift.',
 'agent,protocol,retrieval,tokens', 1, 'seed-2026-06-16-current', datetime('now')),
@@ -270,7 +272,9 @@ High or critical tools include operations that can change files, restore databas
 'tool-policy,risk,security', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('protocols', 'How To Query Current Tool Metadata',
-'Use this SQL through sidekick_db_query database="sqlite" to get the current enabled tool catalog:
+'Use sidekick_tools action="overview" for broad questions such as "what Sidekick tools are available?", "list available tools", "tool overview", or "tool manifest". Use sidekick_tools action="search" query="database schema" to search capabilities.
+
+Use this SQL through sidekick_db_query database="sqlite" when you need exact current registry rows:
 
 SELECT t.name, t.description, t.risk, tc.name as category, t.args_json
 FROM tools t
