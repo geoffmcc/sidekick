@@ -28,6 +28,8 @@ Default retrieval order for agents:
 
 For broad operational intents such as deploy, check status, inspect recent logs, or clean up memory keys, prefer `sidekick_mission` first. It routes through profiled preflight checks and existing safer tools before raw shell.
 
+For `sidekick_knowledge`, `delete` is a soft delete that disables an entry. Use `purge` only when an already-disabled knowledge row should be physically removed.
+
 ### How to Query the Knowledge Base
 
 Use the `sidekick_knowledge` tool to search, list, or retrieve specific entries:

@@ -9568,10 +9568,21 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
     if (action === "delete") {
       if (!id) return { content: [{ type: "text", text: "Error: id is required for delete" }], isError: true };
       db.prepare("UPDATE knowledge SET enabled = 0, updated_at = ? WHERE id = ?").run(now, id);
-      return { content: [{ type: "text", text: `Deleted knowledge entry ${id}` }] };
+      return { content: [{ type: "text", text: `Soft-deleted knowledge entry ${id}` }] };
     }
 
-    return { content: [{ type: "text", text: "Error: Invalid action. Use: search, get, list, add, update, delete" }], isError: true };
+    if (action === "purge") {
+      if (!id) return { content: [{ type: "text", text: "Error: id is required for purge" }], isError: true };
+      const row = db.prepare("SELECT id, enabled FROM knowledge WHERE id = ?").get(id);
+      if (!row) return { content: [{ type: "text", text: "Error: knowledge entry not found" }], isError: true };
+      if (row.enabled) {
+        return { content: [{ type: "text", text: "Error: purge only removes disabled entries. Run action=delete first to soft-delete the entry." }], isError: true };
+      }
+      db.prepare("DELETE FROM knowledge WHERE id = ? AND enabled = 0").run(id);
+      return { content: [{ type: "text", text: `Purged disabled knowledge entry ${id}` }] };
+    }
+
+    return { content: [{ type: "text", text: "Error: Invalid action. Use: search, get, list, add, update, delete, purge" }], isError: true };
   } catch (e) {
     return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
   }
@@ -9914,7 +9925,7 @@ const TOOL_DEFS = [
   { name: "sidekick_download", description: "Download videos/audio from YouTube and 1000+ sites using yt-dlp", args: { url: "string (video URL)", output: "string (optional, output path)", format: "string (optional, video format)", audio_only: "boolean (optional, extract audio only)" } },
   { name: "sidekick_wireguard", description: "Manage WireGuard VPN: status, list_peers, add_peer, remove_peer, generate_keypair", args: { action: "string (status|list_peers|add_peer|remove_peer|generate_keypair)", interface_name: "string (WireGuard interface, e.g. wg0)", peer_name: "string (peer name for add_peer)", public_key: "string (peer public key)", endpoint: "string (optional, peer endpoint IP:port)", allowed_ips: "string (optional, allowed IPs, default 10.0.0.0/24)" } },
   { name: "sidekick_nginx", description: "Manage Nginx reverse proxy: status, list_sites, add_site, remove_site, test_config, reload", args: { action: "string (status|list_sites|add_site|remove_site|test_config|reload)", site_name: "string (site config name)", domain: "string (domain name for add_site)", upstream_port: "number (local port to proxy to)", ssl_email: "string (optional, email for Let's Encrypt)" } },
-  { name: "sidekick_knowledge", description: "Knowledge base management: search, get, list, add, update, delete entries", args: { action: "string (search|get|list|add|update|delete)", id: "number (optional, entry ID for get/update/delete)", category: "string (optional, category for list/add/update)", title: "string (optional, title for add/update)", content: "string (optional, content for add/update)", tags: "string (optional, comma-separated tags for add/update)", query: "string (optional, search query for search)", limit: "number (optional, max results for search/list)" } },
+  { name: "sidekick_knowledge", description: "Knowledge base management: search, get, list, add, update, soft-delete, and purge disabled entries", args: { action: "string (search|get|list|add|update|delete|purge)", id: "number (optional, entry ID for get/update/delete/purge)", category: "string (optional, category for list/add/update)", title: "string (optional, title for add/update)", content: "string (optional, content for add/update)", tags: "string (optional, comma-separated tags for add/update)", query: "string (optional, search query for search)", limit: "number (optional, max results for search/list)" } },
   { name: "sidekick_metrics", description: "Metrics collection and querying with InfluxDB: write metrics, query data, list measurements and fields", args: { action: "string (write|query|list_measurements|list_fields)", measurement: "string (measurement name for write/list_fields)", fields: "object (field values for write)", tags: "object (optional, tags for write)", timestamp: "number (optional, nanosecond timestamp for write)", query: "string (Flux query for query action)", time_range: "string (optional, time range for list_fields, e.g. -30d)" } },
 ];
 
