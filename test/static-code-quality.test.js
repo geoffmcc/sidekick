@@ -34,7 +34,7 @@ const forbidden = [
   { name: 'GitHub fine-grained token', pattern: /github_pat_[A-Za-z0-9_]{40,}/ },
   { name: 'private key block', pattern: /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/ },
   { name: 'AWS access key', pattern: /AKIA[0-9A-Z]{16}/ },
-  { name: 'hardcoded dashboard password from local test data', pattern: new RegExp('dashboard-password-from-local-test-data' + 'dashboard-password-from-local-test-data', 'i') },
+  { name: 'hardcoded dashboard password from local test data', pattern: /dashboard-password-from-local-test-data/i },
 ];
 
 const violations = [];
