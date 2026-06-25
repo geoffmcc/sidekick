@@ -45,6 +45,7 @@ const TOOL_RISK = {
   sidekick_db_restore: "critical",
   sidekick_runbook: "critical",
   sidekick_ops: "critical",
+  sidekick_mission: "critical",
   sidekick_sandbox: "critical",
   sidekick_evolve: "critical",
   sidekick_process: "high",
@@ -176,6 +177,7 @@ const TOOL_CATEGORIES = {
   'sidekick_orchestrate': 'Workflow',
   'sidekick_runbook': 'Workflow',
   'sidekick_ops': 'Workflow',
+  'sidekick_mission': 'Workflow',
   'sidekick_evolve': 'Meta',
   'sidekick_predict': 'Meta',
   'sidekick_debug_tool': 'Meta',
@@ -6043,6 +6045,128 @@ function scheduleMcpRestart(delaySeconds = 2) {
   child.unref();
 }
 
+const MISSION_PROFILES = {
+  read_only_audit: {
+    risk: "low",
+    description: "Read-only inspection. Routes status, logs, tool discovery, project context, and deploy verification.",
+    execute: ["status", "logs", "tools", "project", "verify_deploy"]
+  },
+  trusted_vps: {
+    risk: "high",
+    description: "Trusted single-operator VPS. Allows normal inspection plus deploy_current_main with confirmation.",
+    execute: ["status", "logs", "tools", "project", "verify_deploy", "deploy", "delete_key"]
+  },
+  production: {
+    risk: "critical",
+    description: "Production-like host. Requires confirmation for mutation and defaults deploy requests to verification.",
+    execute: ["status", "logs", "tools", "project", "verify_deploy", "delete_key"]
+  },
+  danger_zone: {
+    risk: "critical",
+    description: "Explicit high-power mode. Allows deploy_current_main and key deletion with confirmation.",
+    execute: ["status", "logs", "tools", "project", "verify_deploy", "deploy", "delete_key"]
+  }
+};
+
+function normalizeMissionIntent(intent) {
+  const text = String(intent || "").toLowerCase();
+  if (!text.trim()) return "unknown";
+  if (/\bdeploy\b|release|rollout|ship/.test(text)) return "deploy";
+  if (/verify.*deploy|deployed.*commit|current.*main|matches.*origin/.test(text)) return "verify_deploy";
+  if (/status|health|uptime|services|disk|memory|load/.test(text)) return "status";
+  if (/log|logs|history|recent activity|tool calls/.test(text)) return "logs";
+  if (/tool|tools|catalog|manifest|available capabilities|what can sidekick do/.test(text)) return "tools";
+  if (/project|memory|context|remember|stored facts/.test(text)) return "project";
+  if (/delete.*key|remove.*key|delete.*kv|remove.*kv/.test(text)) return "delete_key";
+  return "unknown";
+}
+
+function missionRoute(intent, profileName = "trusted_vps", options = {}) {
+  const route = normalizeMissionIntent(intent);
+  const profile = MISSION_PROFILES[profileName] ? profileName : "trusted_vps";
+  const allowed = MISSION_PROFILES[profile].execute.includes(route);
+  const toolMap = {
+    deploy: { tool: "sidekick_ops", args: { action: "deploy_current_main", repo_path: options.repo_path } },
+    verify_deploy: { tool: "sidekick_ops", args: { action: "verify_deployed_commit", repo_path: options.repo_path } },
+    status: { tool: "sidekick_status", args: { include: options.include || "services,disk,memory,load,uptime", services: options.services } },
+    logs: { tool: "sidekick_log_query", args: { limit: options.limit || 20, tool: options.tool, source: options.source } },
+    tools: { tool: "sidekick_tools", args: { action: options.query ? "search" : "overview", query: options.query, format: options.format || "text" } },
+    project: { tool: "sidekick_project", args: { name: options.project || "sidekick", include: options.include || "kv,context" } },
+    delete_key: { tool: "sidekick_delete", args: { key: options.key } }
+  };
+  const recommendation = toolMap[route] || null;
+  const requiresConfirmation = ["deploy", "delete_key"].includes(route);
+  return {
+    intent: intent || "",
+    profile,
+    route,
+    allowed,
+    requires_confirmation: requiresConfirmation,
+    risk: route === "deploy" ? "critical" : (route === "delete_key" ? "medium" : "low"),
+    recommended_tool: recommendation?.tool || null,
+    recommended_args: recommendation?.args || null,
+    reason: route === "unknown"
+      ? "No deterministic route matched. Use sidekick_tools action=search or a narrower tool."
+      : (allowed ? "Route is allowed by profile." : "Route is not allowed by profile.")
+  };
+}
+
+function formatMissionRoute(route) {
+  return [
+    "MISSION ROUTE",
+    `Intent: ${route.intent || "(empty)"}`,
+    `Profile: ${route.profile}`,
+    `Route: ${route.route}`,
+    `Allowed: ${route.allowed ? "yes" : "no"}`,
+    `Risk: ${route.risk}`,
+    `Requires confirmation: ${route.requires_confirmation ? "yes" : "no"}`,
+    `Recommended tool: ${route.recommended_tool || "(none)"}`,
+    `Recommended args: ${route.recommended_args ? JSON.stringify(route.recommended_args) : "(none)"}`,
+    `Reason: ${route.reason}`
+  ].join("\n");
+}
+
+async function sidekick_mission({ action, intent, profile, confirm, key, project, query, include, services, repo_path, limit, tool, source, format }) {
+  const selectedAction = action || "route";
+  if (selectedAction === "profiles") {
+    return { content: [{ type: "text", text: JSON.stringify(MISSION_PROFILES, null, 2) }] };
+  }
+
+  const route = missionRoute(intent, profile, { key, project, query, include, services, repo_path, limit, tool, source, format });
+
+  if (selectedAction === "route") {
+    return { content: [{ type: "text", text: formatMissionRoute(route) }] };
+  }
+
+  if (selectedAction === "preflight") {
+    const checks = [
+      route.route === "unknown" ? "Clarify intent or use sidekick_tools search." : "Intent mapped deterministically.",
+      route.allowed ? "Profile allows this route." : "Profile blocks this route.",
+      route.requires_confirmation ? "Mutation requires confirm=true before execute." : "No mutation confirmation required.",
+      route.recommended_tool ? `Use ${route.recommended_tool}.` : "No tool selected."
+    ];
+    return { content: [{ type: "text", text: JSON.stringify({ ...route, checks }, null, 2) }], isError: !route.allowed || route.route === "unknown" };
+  }
+
+  if (selectedAction === "execute") {
+    if (route.route === "unknown") {
+      return { content: [{ type: "text", text: "No deterministic route matched. Run action=route or action=preflight first." }], isError: true };
+    }
+    if (!route.allowed) {
+      return { content: [{ type: "text", text: `Route ${route.route} is blocked by profile ${route.profile}` }], isError: true };
+    }
+    if (route.requires_confirmation && confirm !== true) {
+      return { content: [{ type: "text", text: `Route ${route.route} requires confirm=true before execution.` }], isError: true };
+    }
+    if (route.route === "delete_key" && !key) {
+      return { content: [{ type: "text", text: "key is required for delete_key missions" }], isError: true };
+    }
+    return callTool(route.recommended_tool, route.recommended_args || {});
+  }
+
+  return { content: [{ type: "text", text: "Invalid action. Allowed: profiles, route, preflight, execute" }], isError: true };
+}
+
 async function sidekick_ops({ action, repo_path, restart_mcp }) {
   const repoPath = defaultRepoPath(repo_path);
 
@@ -9669,6 +9793,7 @@ const TOOLS = {
   sidekick_depend,
   sidekick_runbook,
   sidekick_ops,
+  sidekick_mission,
   sidekick_black_box,
   sidekick_respond,
   sidekick_db_schema,
@@ -9765,6 +9890,7 @@ const TOOL_DEFS = [
   { name: "sidekick_depend", description: "Dependency analyzer for npm packages, systemd services, and processes. Shows dependency trees, reverse dependencies, and impact analysis.", args: { action: "string (tree|reverse|outdated|impact|orphans)", type: "string (npm|service|process)", target: "string (optional, package, service, or PID)", depth: "number (optional, tree depth - default 5)", format: "string (optional, tree|flat|json - default tree)" } },
   { name: "sidekick_runbook", description: "Operational runbook executor with autonomous and guided modes. Supports verification, rollback, and step-by-step execution.", args: { action: "string (create|start|next|verify|rollback|abort|list|get|delete)", name: "string (optional, runbook name)", mode: "string (optional, autonomous|guided - default autonomous)", steps: "array (optional, step definitions)", runbook_id: "string (optional, instance or definition ID)", step_index: "number (optional, step index)" } },
   { name: "sidekick_ops", description: "Packaged Sidekick operations workflows for deploy verification, restart smoke tests, deployments, and incident snapshots.", args: { action: "string (verify_deployed_commit|restart_and_smoke_test|deploy_current_main|incident_snapshot)", repo_path: "string (optional, repository path - default current Sidekick repo)", restart_mcp: "boolean (optional, schedule sidekick-mcp restart for restart_and_smoke_test)" } },
+  { name: "sidekick_mission", description: "Mission Control intent router for Sidekick operations. Profiles, routes, preflights, and executes common intents through safer existing tools before raw shell.", args: { action: "string (profiles|route|preflight|execute - default route)", intent: "string (user goal or operation intent)", profile: "string (read_only_audit|trusted_vps|production|danger_zone - default trusted_vps)", confirm: "boolean (required true for mutating execute routes)", key: "string (optional, KV key for delete missions)", project: "string (optional, project for memory missions)", query: "string (optional, search query for tool discovery)", include: "string (optional, include sections for status/project)", services: "string (optional, services for status)", repo_path: "string (optional, repo for deploy workflows)", limit: "number (optional, result limit)", tool: "string (optional, tool filter for logs)", source: "string (optional, source filter for logs)", format: "string (optional, output format for tool discovery)" } },
   { name: "sidekick_black_box", description: "Incident time capsule: captures full system context (services, processes, logs, disk, network) in one call for debugging. Rate limited.", args: { action: "string (capture|list|get|delete|analyze)", name: "string (optional, incident name)", include: "array (optional, services|processes|logs|disk|network|all - default all)", analyze_with_llm: "boolean (optional, use LLM for analysis - default false)", incident_id: "string (optional, incident ID)" } },
   { name: "sidekick_respond", description: "Return a text response directly without calling other tools. Use this for simple answers or when no tool action is needed.", args: { text: "string (the response text to return)" } },
   { name: "sidekick_db_schema", description: "Inspect database schema: tables, columns, indexes, foreign keys", args: { table: "string (optional, specific table name)", verbose: "boolean (optional, include row counts and detailed info)", database: "string (optional, 'sqlite' or 'postgres' - default sqlite)" } },
@@ -9850,6 +9976,7 @@ module.exports = {
   getToolCategoriesWithTools,
   parseGithubArgs,
   getGithubArg,
+  missionRoute,
   enforceToolPolicy,
   syncToolRegistry
 };

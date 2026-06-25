@@ -1,6 +1,6 @@
 # Tools Reference
 
-This catalog is generated from `TOOL_DEFS` in `src/tools.js`. The current code exports 93 built-in tool handlers. Most tools return MCP content blocks containing text. Errors usually set `isError: true` and include an explanatory text result.
+This catalog is generated from `TOOL_DEFS` in `src/tools.js`. The current code exports 94 built-in tool handlers. Most tools return MCP content blocks containing text. Errors usually set `isError: true` and include an explanatory text result.
 
 Tool definitions exposed by the dashboard API include policy metadata:
 
@@ -14,7 +14,7 @@ Risk is based on what a tool can change or expose, not whether its implementatio
 
 | Risk | Tools | Default recommendation |
 |---|---|---|
-| Critical | `sidekick_bash`, `sidekick_write`, `sidekick_db_restore`, `sidekick_runbook`, `sidekick_ops`, `sidekick_sandbox`, `sidekick_evolve` | Gate in shared or public deployments. Allow only for trusted operators. |
+| Critical | `sidekick_bash`, `sidekick_write`, `sidekick_db_restore`, `sidekick_runbook`, `sidekick_ops`, `sidekick_mission`, `sidekick_sandbox`, `sidekick_evolve` | Gate in shared or public deployments. Allow only for trusted operators. |
 | High | `sidekick_process`, `sidekick_service`, `sidekick_cron`, `sidekick_delay`, `sidekick_watch`, `sidekick_github`, `sidekick_teach`, `sidekick_secret`, `sidekick_db_migrate`, `sidekick_queue`, `sidekick_orchestrate`, `sidekick_wireguard`, `sidekick_nginx` | Block in `restricted` mode unless the workflow needs them. |
 | Medium | `sidekick_notify`, `sidekick_read`, `sidekick_archive`, `sidekick_git`, `sidekick_web_fetch`, `sidekick_llm`, `sidekick_context`, `sidekick_health`, `sidekick_snapshot`, `sidekick_retry`, `sidekick_fresheyes`, `sidekick_batch`, `sidekick_tail`, `sidekick_find`, `sidekick_status`, `sidekick_extract`, `sidekick_changelog`, `sidekick_netdiag`, `sidekick_timeline`, `sidekick_circuit`, `sidekick_baseline`, `sidekick_depend`, `sidekick_black_box`, `sidekick_db_query`, `sidekick_db_backup`, `sidekick_db_export`, `sidekick_redis`, `sidekick_tunnel` | Generally useful, but can expose data or trigger external effects. |
 | Low | `sidekick_tools`, `sidekick_list`, `sidekick_store`, `sidekick_get`, `sidekick_delete`, `sidekick_list_projects`, `sidekick_get_by_project`, `sidekick_search`, `sidekick_webhook`, `sidekick_transform`, `sidekick_parse`, `sidekick_diff`, `sidekick_hash`, `sidekick_validate`, `sidekick_template`, `sidekick_predict`, `sidekick_debug_tool`, `sidekick_cache`, `sidekick_summarize`, `sidekick_filter`, `sidekick_project`, `sidekick_diff_files`, `sidekick_anonymize`, `sidekick_respond`, `sidekick_db_schema`, `sidekick_db_stats`, `sidekick_log_query`, `sidekick_db_search`, `sidekick_db_diff`, `sidekick_ocr`, `sidekick_media`, `sidekick_transcribe`, `sidekick_analytics`, `sidekick_embed`, `sidekick_ollama`, `sidekick_download`, `sidekick_knowledge`, `sidekick_metrics` | Usually safe to expose, subject to data sensitivity. |
@@ -86,6 +86,7 @@ Use `SIDEKICK_TOOL_POLICY=restricted` to block high and critical tools by defaul
 | `sidekick_depend` | Monitoring, diagnostics, and operations | Dependency analyzer for npm packages, systemd services, and processes. Shows dependency trees, reverse dependencies, and impact analysis. | `{ action: "string (tree|reverse|outdated|impact|orphans)", type: "string (npm|service|process)", target: "string (optional, package, service, or PID)", depth: "number (optional, tree depth - default 5)", format: "string (optional, tree|flat|json - default tree)" }` |
 | `sidekick_runbook` | Automation, scheduling, and orchestration | Operational runbook executor with autonomous and guided modes. Supports verification, rollback, and step-by-step execution. | `{ action: "string (create|start|next|verify|rollback|abort|list|get|delete)", name: "string (optional, runbook name)", mode: "string (optional, autonomous|guided - default autonomous)", steps: "array (optional, step definitions)", runbook_id: "string (optional, instance or definition ID)", step_index: "number (optional, step index)" }` |
 | `sidekick_ops` | Automation, scheduling, and orchestration | Packaged Sidekick operations workflows for deploy verification, restart smoke tests, deployments, and incident snapshots. | `{ action: "string (verify_deployed_commit|restart_and_smoke_test|deploy_current_main|incident_snapshot)", repo_path: "string (optional, repository path - default current Sidekick repo)", restart_mcp: "boolean (optional, schedule sidekick-mcp restart for restart_and_smoke_test)" }` |
+| `sidekick_mission` | Automation, scheduling, and orchestration | Mission Control intent router for Sidekick operations. Profiles, routes, preflights, and executes common intents through safer existing tools before raw shell. | `{ action: "string (profiles|route|preflight|execute - default route)", intent: "string", profile: "string (read_only_audit|trusted_vps|production|danger_zone)", confirm: "boolean (required true for mutation)", key: "string (optional)", project: "string (optional)", query: "string (optional)", repo_path: "string (optional)" }` |
 | `sidekick_black_box` | Monitoring, diagnostics, and operations | Incident time capsule: captures full system context (services, processes, logs, disk, network) in one call for debugging. Rate limited. | `{ action: "string (capture|list|get|delete|analyze)", name: "string (optional, incident name)", include: "array (optional, services|processes|logs|disk|network|all - default all)", analyze_with_llm: "boolean (optional, use LLM for analysis - default false)", incident_id: "string (optional, incident ID)" }` |
 | `sidekick_respond` | AI, learning, and self-extension | Return a text response directly without calling other tools. Use this for simple answers or when no tool action is needed. | `{ text: "string (the response text to return)" }` |
 | `sidekick_db_schema` | Database | Inspect database schema: tables, columns, indexes, foreign keys | `{ table: "string (optional, specific table name)", verbose: "boolean (optional, include row counts and detailed info)", database: "string (optional, 'sqlite' or 'postgres' - default sqlite)" }` |
@@ -432,6 +433,19 @@ Actions:
 - `restart_and_smoke_test`: restarts dashboard and agent, checks MCP health, and can schedule an MCP self-restart after the response with `restart_mcp: true`.
 - `deploy_current_main`: requires a clean working tree, fast-forwards to `origin/main`, runs `npm install --omit=dev`, restarts dashboard and agent, and schedules MCP restart after the response.
 - `incident_snapshot`: captures services, resource status, git state, top processes, and recent service logs in one report.
+
+### `sidekick_mission`
+
+Mission Control intent router for Sidekick operations. Profiles, routes, preflights, and executes common intents through safer existing tools before raw shell.
+
+Arguments: `{ action: "string (profiles|route|preflight|execute - default route)", intent: "string", profile: "string (read_only_audit|trusted_vps|production|danger_zone)", confirm: "boolean (required true for mutation)", key: "string (optional)", project: "string (optional)", query: "string (optional)", repo_path: "string (optional)" }`
+
+Profiles:
+
+- `read_only_audit`: inspection only.
+- `trusted_vps`: trusted single-operator host; deploy and key deletion require confirmation.
+- `production`: blocks direct deploy and requires confirmation for mutation.
+- `danger_zone`: explicit high-power mode; deploy and key deletion require confirmation.
 
 ## Data processing and document utilities
 
