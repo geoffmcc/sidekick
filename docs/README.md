@@ -2,7 +2,7 @@
 
 Sidekick is a self-hosted Model Context Protocol server and autonomous assistant platform intended to give opencode a persistent remote working environment. These docs describe the current source tree and migrations, while runtime operational knowledge lives in the SQLite-backed knowledge base.
 
-The project currently exposes three Node.js services and 91 built-in MCP tools. Tool metadata, categories, risk labels, enabled/deprecated state, tool logs, key-value data, structured memories, and the knowledge base are stored in SQLite.
+The project currently exposes three Node.js services and 92 built-in MCP tools. Tool metadata, categories, risk labels, enabled/deprecated state, tool logs, key-value data, structured memories, and the knowledge base are stored in SQLite.
 
 ## Agent Information Access
 
@@ -11,7 +11,8 @@ The important runtime pattern is database-first access. `AGENTS.md` is the thin 
 | Need | Primary access path | Backing location |
 |---|---|---|
 | Documentation, architecture, operations, protocols, best practices | `sidekick_knowledge` | `knowledge` table |
-| Current tool list, args, category, risk, enabled/deprecated state | `sidekick_db_query database="sqlite"` | `tools`, `tool_categories`, `tool_category_map` |
+| Broad tool overview, grouped manifest, capability search | `sidekick_tools` | `tools`, `tool_categories`, `tool_category_map` |
+| Exact tool list, args, category, risk, enabled/deprecated state | `sidekick_db_query database="sqlite"` | `tools`, `tool_categories`, `tool_category_map` |
 | Persistent project facts | `sidekick_store`, `sidekick_get`, `sidekick_get_by_project` | `kv_store` |
 | Structured memories, task summaries, facts, preferences, decisions, open threads, observations | `sidekick_context`, `sidekick_project`, or SQL | `memories`, plus compatibility data in `json_documents.context` |
 | Structured feature documents | Feature tools or `sidekick_db_query` | `json_documents` |

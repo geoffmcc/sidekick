@@ -102,6 +102,7 @@ const TOOL_RISK = {
   sidekick_download: "low",
   sidekick_wireguard: "high",
   sidekick_nginx: "high",
+  sidekick_tools: "low",
   sidekick_knowledge: "low",
   sidekick_metrics: "low",
 };
@@ -109,6 +110,7 @@ const TOOL_RISK = {
 // Tool categories - maps tool names to their category
 const TOOL_CATEGORIES = {
   'sidekick_bash': 'Core',
+  'sidekick_tools': 'Core',
   'sidekick_read': 'Core',
   'sidekick_write': 'Core',
   'sidekick_list': 'Core',
@@ -622,6 +624,99 @@ function getToolCategoriesWithTools(source = currentSource) {
     console.error('[ToolRegistry] Error getting categories:', error.message);
     return [];
   }
+}
+
+function getToolRecordsForSource(source = currentSource) {
+  const defs = getToolDefsForSource(source);
+  return defs.map(def => ({
+    name: def.name,
+    description: def.description,
+    args: def.args || {},
+    category: def.category || TOOL_CATEGORIES[def.name] || "Uncategorized",
+    risk: def.risk || getToolRisk(def.name),
+    enabled: def.enabled !== false,
+    approval_required: def.approval_required === true
+  }));
+}
+
+function groupToolRecords(records) {
+  const grouped = {};
+  for (const tool of records) {
+    const category = tool.category || "Uncategorized";
+    if (!grouped[category]) grouped[category] = [];
+    grouped[category].push(tool);
+  }
+  return Object.keys(grouped).sort().map(category => ({
+    category,
+    tools: grouped[category].sort((a, b) => a.name.localeCompare(b.name))
+  }));
+}
+
+function formatToolOverview(records) {
+  const grouped = groupToolRecords(records);
+  const lines = [`Sidekick tools (${records.length} total)`];
+  for (const group of grouped) {
+    lines.push("", `${group.category} (${group.tools.length})`);
+    for (const tool of group.tools) {
+      const state = tool.enabled ? "" : " disabled";
+      const approval = tool.approval_required ? ", approval required" : "";
+      lines.push(`- ${tool.name} [${tool.risk}${approval}${state}]: ${tool.description}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+async function sidekick_tools({ action, query, name, category, format, include_disabled, limit }) {
+  const selectedAction = action || "overview";
+  const selectedFormat = format || "text";
+  const maxResults = Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 200) : 100;
+  let records = getToolRecordsForSource(currentSource);
+
+  if (!include_disabled) {
+    records = records.filter(tool => tool.enabled);
+  }
+
+  if (category) {
+    const wantedCategory = String(category).toLowerCase();
+    records = records.filter(tool => String(tool.category || "").toLowerCase() === wantedCategory);
+  }
+
+  if (selectedAction === "get") {
+    if (!name) {
+      return { content: [{ type: "text", text: "name is required for action=get" }], isError: true };
+    }
+    const tool = records.find(t => t.name === name);
+    if (!tool) {
+      return { content: [{ type: "text", text: "Tool not found: " + name }], isError: true };
+    }
+    const text = selectedFormat === "json" ? JSON.stringify(tool, null, 2) : formatToolOverview([tool]);
+    return { content: [{ type: "text", text }] };
+  }
+
+  if (selectedAction === "search") {
+    if (!query) {
+      return { content: [{ type: "text", text: "query is required for action=search" }], isError: true };
+    }
+    const terms = String(query).toLowerCase().split(/\s+/).filter(Boolean);
+    records = records.filter(tool => {
+      const haystack = [
+        tool.name,
+        tool.description,
+        tool.category,
+        tool.risk,
+        Object.keys(tool.args || {}).join(" ")
+      ].join(" ").toLowerCase();
+      return terms.every(term => haystack.includes(term));
+    }).slice(0, maxResults);
+  } else if (selectedAction !== "overview") {
+    return { content: [{ type: "text", text: "Invalid action. Allowed: overview, search, get" }], isError: true };
+  }
+
+  const payload = selectedAction === "overview"
+    ? { total: records.length, categories: groupToolRecords(records) }
+    : { total: records.length, tools: records };
+  const text = selectedFormat === "json" ? JSON.stringify(payload, null, 2) : formatToolOverview(records);
+  return { content: [{ type: "text", text }] };
 }
 
 function formatArgs(args) {
@@ -9471,6 +9566,7 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
 
 const TOOLS = {
   sidekick_bash,
+  sidekick_tools,
   sidekick_read,
   sidekick_write,
   sidekick_store,
@@ -9565,6 +9661,7 @@ const TOOLS = {
 
 const TOOL_DEFS = [
   { name: "sidekick_bash", description: "Execute a shell command on the remote machine", args: { command: "string" } },
+  { name: "sidekick_tools", description: "Tool catalog and discovery manifest. Use for broad questions like 'what Sidekick tools are available?', 'list available tools', 'tool overview', or 'tool manifest'. Lists tools grouped by category, searches by capability, and gets exact tool metadata.", args: { action: "string (overview|search|get - default overview)", query: "string (optional, search terms for action=search)", name: "string (optional, tool name for action=get)", category: "string (optional, filter by category)", format: "string (optional, text|json - default text)", include_disabled: "boolean (optional, include policy-disabled tools - default false)", limit: "number (optional, max search results - default 100)" } },
   { name: "sidekick_read", description: "Read a file from the remote filesystem", args: { path: "string" } },
   { name: "sidekick_write", description: "Write content to a file on the remote machine", args: { path: "string", content: "string" } },
   { name: "sidekick_list", description: "List files and directories on the remote machine", args: { path: "string" } },

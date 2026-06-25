@@ -36,6 +36,15 @@ function logDebug(context, data) {
 
 const TOOL_SCHEMAS = {
   sidekick_bash: z.object({ command: z.string().describe("Shell command to execute") }),
+  sidekick_tools: z.object({
+    action: z.enum(["overview", "search", "get"]).optional().default("overview").describe("Catalog action"),
+    query: z.string().optional().describe("Search terms for action=search"),
+    name: z.string().optional().describe("Tool name for action=get"),
+    category: z.string().optional().describe("Filter by category"),
+    format: z.enum(["text", "json"]).optional().default("text").describe("Output format"),
+    include_disabled: z.boolean().optional().describe("Include policy-disabled tools"),
+    limit: z.number().optional().describe("Max search results")
+  }),
   sidekick_read: z.object({ path: z.string().describe("Absolute path to the file to read") }),
   sidekick_write: z.object({ path: z.string().describe("Absolute path to write to"), content: z.string().describe("File content to write") }),
   sidekick_store: z.object({ 

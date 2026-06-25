@@ -61,7 +61,8 @@ Agents should use these access paths:
 | Information need | Tool path | SQLite location |
 |---|---|---|
 | Documentation, policies, best practices, architecture, protocols, operations | `sidekick_knowledge` | `knowledge` |
-| Tool list, descriptions, args, risk, enabled/deprecated state | `sidekick_db_query database="sqlite"` | `tools`, `tool_categories`, `tool_category_map` |
+| Broad tool overview, grouped manifest, capability search | `sidekick_tools` | `tools`, `tool_categories`, `tool_category_map` |
+| Exact tool list, descriptions, args, risk, enabled/deprecated state | `sidekick_db_query database="sqlite"` | `tools`, `tool_categories`, `tool_category_map` |
 | Project memory and stored facts | `sidekick_store`, `sidekick_get`, `sidekick_list_projects`, `sidekick_get_by_project` | `kv_store` |
 | Structured memories and task continuity | `sidekick_context`, `sidekick_project`, or SQL | `memories` plus compatibility entries in `json_documents.context` |
 | Structured feature state | feature tools or SQL | `json_documents` |
@@ -213,7 +214,7 @@ Current search is a SQLite `LIKE` search across title, content, and tags. It is 
 
 ## 7. Tool System
 
-The current code exports 91 built-in `sidekick_*` tools. A built-in tool has six relevant parts:
+The current code exports 92 built-in `sidekick_*` tools. A built-in tool has six relevant parts:
 
 1. An async handler in `src/tools.js`.
 2. A `TOOLS` map entry.
