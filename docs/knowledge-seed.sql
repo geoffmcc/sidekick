@@ -306,6 +306,8 @@ Use this rather than assuming tool lists in markdown are current.',
 - sidekick_knowledge action="list" category="architecture"
 - sidekick_knowledge action="get" id=18
 
+sidekick_knowledge action="delete" is a soft delete that disables an entry. Use action="purge" only to physically remove an already-disabled entry.
+
 Categories used by the default seed include architecture, operations, best-practices, and protocols. Additional categories may exist in a user deployment.',
 'knowledge,protocol,search', 1, 'seed-2026-06-16-current', datetime('now')),
 

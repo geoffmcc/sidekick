@@ -110,7 +110,7 @@ Use `SIDEKICK_TOOL_POLICY=restricted` to block high and critical tools by defaul
 | `sidekick_download` | Media | Download videos/audio using yt-dlp | `{ url: "string", output: "string (optional)", format: "string (optional)", audio_only: "boolean (optional)" }` |
 | `sidekick_wireguard` | Networking | Manage WireGuard VPN peers and keys | `{ action: "string", interface_name: "string", peer_name: "string", public_key: "string", endpoint: "string (optional)", allowed_ips: "string (optional)" }` |
 | `sidekick_nginx` | Networking | Manage Nginx reverse proxy sites | `{ action: "string", site_name: "string", domain: "string", upstream_port: "number", ssl_email: "string (optional)" }` |
-| `sidekick_knowledge` | Context & Learning | Knowledge base management: search, get, list, add, update, delete entries | `{ action: "string (search|get|list|add|update|delete)", id: "number (optional)", category: "string (optional)", title: "string (optional)", content: "string (optional)", tags: "string (optional)", query: "string (optional)", limit: "number (optional)" }` |
+| `sidekick_knowledge` | Context & Learning | Knowledge base management: search, get, list, add, update, soft-delete, and purge disabled entries | `{ action: "string (search|get|list|add|update|delete|purge)", id: "number (optional)", category: "string (optional)", title: "string (optional)", content: "string (optional)", tags: "string (optional)", query: "string (optional)", limit: "number (optional)" }` |
 | `sidekick_metrics` | Monitoring | Metrics collection and querying with InfluxDB | `{ action: "string (write|query|list_measurements|list_fields)", measurement: "string (optional)", fields: "object (optional)", tags: "object (optional)", timestamp: "number (optional)", query: "string (optional)", time_range: "string (optional)" }` |
 | `sidekick_memory_export` | Context & Learning | Export structured memories to JSON for backup, portability, or machine-to-machine transfer | `{ project: "string (optional)", type: "string (optional)", include_disabled: "boolean (optional)", automatic_only: "boolean (optional)" }` |
 | `sidekick_memory_import` | Context & Learning | Import memories from JSON export with merge or skip conflict handling | `{ data: "string|object", on_conflict: "string (optional, merge|skip)", preserve_ids: "boolean (optional)" }` |
@@ -323,7 +323,7 @@ Important tools in this group:
 
 - `sidekick_db_schema`, `sidekick_db_query`, `sidekick_db_stats`, `sidekick_db_backup`, `sidekick_db_restore`, `sidekick_db_export`, `sidekick_db_search`, `sidekick_db_migrate`, and `sidekick_db_diff`.
 - `sidekick_log_query` reads the SQLite `tool_logs` table.
-- `sidekick_knowledge` manages the SQLite `knowledge` table used by `AGENTS.md`.
+- `sidekick_knowledge` manages the SQLite `knowledge` table used by `AGENTS.md`. `delete` is a soft delete that disables an entry; `purge` physically removes an already-disabled entry.
 
 ### Optional services
 
