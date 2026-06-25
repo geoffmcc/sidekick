@@ -17,7 +17,9 @@ const tools = require('../src/tools');
 const dbStore = require('../src/db');
 const { 
   TOOLS,
-  setSource 
+  setSource,
+  parseGithubArgs,
+  getGithubArg
 } = tools;
 const { sidekick_store, sidekick_get, sidekick_list_projects, sidekick_get_by_project, sidekick_tools } = TOOLS;
 
@@ -35,6 +37,15 @@ console.log('Running Tools Tests...\n');
     const toolSearchResult = await sidekick_tools({ action: 'search', query: 'database schema', format: 'json' });
     const toolSearch = JSON.parse(toolSearchResult.content[0].text);
     assert.ok(toolSearch.tools.some(tool => tool.name === 'sidekick_db_schema'), 'Should find tools by broad capability terms');
+    console.log('✓ Passed\n');
+
+    // Test 2.0b: sidekick_github argument parsing
+    console.log('Test 2.0b: sidekick_github argument parsing');
+    const jsonGithubArgs = parseGithubArgs('{"number":28,"method":"merge","ref":"abc123"}');
+    assert.strictEqual(getGithubArg(jsonGithubArgs, ['number']), 28, 'Should read JSON PR number');
+    assert.strictEqual(getGithubArg(jsonGithubArgs, ['sha', 'ref']), 'abc123', 'Should read JSON ref');
+    assert.strictEqual(getGithubArg(parseGithubArgs('28'), ['number']), 28, 'Should preserve numeric legacy args');
+    assert.strictEqual(getGithubArg(parseGithubArgs('abc123'), ['sha']), 'abc123', 'Should preserve string legacy args');
     console.log('✓ Passed\n');
 
     // Test 2.1: sidekick_store with project
