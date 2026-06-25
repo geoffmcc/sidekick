@@ -601,7 +601,7 @@ const TOOL_SCHEMAS = {
     ssl_email: z.string().optional().describe("Email for Let's Encrypt")
   }),
   sidekick_knowledge: z.object({
-    action: z.enum(["search", "get", "list", "add", "update", "delete"]).describe("Knowledge base action"),
+    action: z.enum(["search", "get", "list", "add", "update", "delete", "purge"]).describe("Knowledge base action"),
     id: z.number().optional().describe("Entry ID (for get/update/delete)"),
     category: z.string().optional().describe("Category (for list/add/update)"),
     title: z.string().optional().describe("Title (for add/update)"),

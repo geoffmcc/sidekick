@@ -22,7 +22,7 @@ const {
   getGithubArg,
   missionRoute
 } = tools;
-const { sidekick_store, sidekick_get, sidekick_delete, sidekick_list_projects, sidekick_get_by_project, sidekick_tools } = TOOLS;
+const { sidekick_store, sidekick_get, sidekick_delete, sidekick_list_projects, sidekick_get_by_project, sidekick_tools, sidekick_knowledge } = TOOLS;
 
 console.log('Running Tools Tests...\n');
 (async () => {
@@ -61,6 +61,29 @@ console.log('Running Tools Tests...\n');
     const statusRoute = missionRoute('check service health', 'read_only_audit');
     assert.strictEqual(statusRoute.route, 'status', 'Should route status intent');
     assert.strictEqual(statusRoute.allowed, true, 'Read-only audit should allow status');
+    console.log('✓ Passed\n');
+
+    // Test 2.0d: sidekick_knowledge soft delete and purge
+    console.log('Test 2.0d: sidekick_knowledge soft delete and purge');
+    dbStore.runPendingMigrations();
+    const addKnowledgeResult = await sidekick_knowledge({
+      action: 'add',
+      category: 'test',
+      title: 'Temporary purge test',
+      content: 'temporary content'
+    });
+    const addedId = Number(addKnowledgeResult.content[0].text.match(/id: (\d+)/)[1]);
+    const activePurgeResult = await sidekick_knowledge({ action: 'purge', id: addedId });
+    assert.ok(activePurgeResult.isError, 'Should not purge enabled entries');
+    assert.ok(activePurgeResult.content[0].text.includes('Run action=delete first'), 'Should require soft delete before purge');
+    const softDeleteResult = await sidekick_knowledge({ action: 'delete', id: addedId });
+    assert.ok(softDeleteResult.content[0].text.includes('Soft-deleted'), 'Delete should be explicit soft delete');
+    const disabledRow = dbStore.getDb().prepare('SELECT enabled FROM knowledge WHERE id = ?').get(addedId);
+    assert.strictEqual(disabledRow.enabled, 0, 'Soft-deleted row should remain disabled');
+    const purgeResult = await sidekick_knowledge({ action: 'purge', id: addedId });
+    assert.ok(purgeResult.content[0].text.includes('Purged disabled knowledge entry'), 'Should purge disabled entry');
+    const purgedRow = dbStore.getDb().prepare('SELECT id FROM knowledge WHERE id = ?').get(addedId);
+    assert.strictEqual(purgedRow, undefined, 'Purged row should be physically removed');
     console.log('✓ Passed\n');
 
     // Test 2.1: sidekick_store with project
