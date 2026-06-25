@@ -22,14 +22,38 @@ assert.match(
 
 assert.match(
   toolsJs,
+  /async function sidekick_mission\s*\(/,
+  'sidekick_mission should define a Mission Control workflow tool'
+);
+
+assert.match(
+  toolsJs,
+  /sidekick_mission:\s*"critical"/,
+  'sidekick_mission should be critical risk because it can execute operational workflows'
+);
+
+assert.match(
+  toolsJs,
   /'sidekick_ops':\s*'Workflow'/,
   'sidekick_ops should be categorized as a workflow tool'
 );
 
 assert.match(
   toolsJs,
+  /'sidekick_mission':\s*'Workflow'/,
+  'sidekick_mission should be categorized as a workflow tool'
+);
+
+assert.match(
+  toolsJs,
   /name:\s*"sidekick_ops"[\s\S]*verify_deployed_commit\|restart_and_smoke_test\|deploy_current_main\|incident_snapshot/,
   'sidekick_ops metadata should list the packaged workflow actions'
+);
+
+assert.match(
+  toolsJs,
+  /name:\s*"sidekick_mission"[\s\S]*profiles\|route\|preflight\|execute/,
+  'sidekick_mission metadata should list Mission Control actions'
 );
 
 assert.match(
@@ -60,6 +84,12 @@ assert.match(
   indexJs,
   /sidekick_ops:\s*z\.object\(\{[\s\S]*verify_deployed_commit[\s\S]*restart_and_smoke_test[\s\S]*deploy_current_main[\s\S]*incident_snapshot/,
   'MCP schema should expose sidekick_ops actions'
+);
+
+assert.match(
+  indexJs,
+  /sidekick_mission:\s*z\.object\(\{[\s\S]*profiles[\s\S]*route[\s\S]*preflight[\s\S]*execute/,
+  'MCP schema should expose sidekick_mission actions'
 );
 
 console.log('Operations workflow checks passed\n');

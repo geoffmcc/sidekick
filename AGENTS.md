@@ -26,6 +26,8 @@ Default retrieval order for agents:
 3. Use KV/context tools for project memory, prior decisions, and automatic memory summaries.
 4. Read markdown files only when the database entry is missing, stale, or you are editing the docs themselves.
 
+For broad operational intents such as deploy, check status, inspect recent logs, or clean up memory keys, prefer `sidekick_mission` first. It routes through profiled preflight checks and existing safer tools before raw shell.
+
 ### How to Query the Knowledge Base
 
 Use the `sidekick_knowledge` tool to search, list, or retrieve specific entries:

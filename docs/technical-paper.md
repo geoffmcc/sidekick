@@ -214,7 +214,7 @@ Current search is a SQLite `LIKE` search across title, content, and tags. It is 
 
 ## 7. Tool System
 
-The current code exports 93 built-in `sidekick_*` tools. A built-in tool has six relevant parts:
+The current code exports 94 built-in `sidekick_*` tools. A built-in tool has six relevant parts:
 
 1. An async handler in `src/tools.js`.
 2. A `TOOLS` map entry.
