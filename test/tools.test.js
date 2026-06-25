@@ -19,15 +19,26 @@ const {
   TOOLS,
   setSource 
 } = tools;
-const { sidekick_store, sidekick_get, sidekick_list_projects, sidekick_get_by_project } = TOOLS;
+const { sidekick_store, sidekick_get, sidekick_list_projects, sidekick_get_by_project, sidekick_tools } = TOOLS;
 
 console.log('Running Tools Tests...\n');
-
-// Test 2.1: sidekick_store with project
-console.log('Test 2.1: sidekick_store with project');
 (async () => {
   try {
     setSource('mcp');
+
+    // Test 2.0: sidekick_tools broad catalog overview
+    console.log('Test 2.0: sidekick_tools broad catalog overview');
+    const toolsOverviewResult = await sidekick_tools({ action: 'overview', format: 'json' });
+    const toolsOverview = JSON.parse(toolsOverviewResult.content[0].text);
+    assert.ok(toolsOverview.total > 0, 'Should report available tools');
+    assert.ok(toolsOverview.categories.some(cat => cat.tools.some(tool => tool.name === 'sidekick_tools')), 'Should include sidekick_tools in catalog');
+    const toolSearchResult = await sidekick_tools({ action: 'search', query: 'database schema', format: 'json' });
+    const toolSearch = JSON.parse(toolSearchResult.content[0].text);
+    assert.ok(toolSearch.tools.some(tool => tool.name === 'sidekick_db_schema'), 'Should find tools by broad capability terms');
+    console.log('✓ Passed\n');
+
+    // Test 2.1: sidekick_store with project
+    console.log('Test 2.1: sidekick_store with project');
     const result = await sidekick_store({ key: 'test1', value: 'data1', project: 'myproject' });
     assert.ok(result.content[0].text.includes('Stored'), 'Should return success message');
     
