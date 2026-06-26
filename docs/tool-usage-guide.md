@@ -17,6 +17,8 @@ Prefer `sidekick_search`, `sidekick_summarize`, `sidekick_filter`, `sidekick_fin
 
 ## Persistent memory
 
+Recall project context at the start of work that may depend on prior decisions. Use `sidekick_project name="<project>"` for a broad project brief, or `sidekick_context action="recall" project="<project>" query="<topic>"` for a focused search. Always recall before deployment, incident response, credential or access work, PR/merge/release decisions, database migrations, destructive cleanup, and any task where the user mentions earlier work.
+
 Use `sidekick_store` for durable facts that should survive sessions. Use project names that match `^[a-z][a-z0-9_]*$`. Good project names are lowercase and specific, such as `sidekick`, `jellyfin`, `proxmox_lab`, or `website_redesign`.
 
 Use `sidekick_context` for richer history:
@@ -27,6 +29,10 @@ Use `sidekick_context` for richer history:
 - `track_pattern` for reusable patterns;
 - `track_session` for session summaries;
 - `recall`, `suggest`, and `summarize` to retrieve prior context.
+
+Store durable memory when a future agent would make a better or safer decision from the information. Use `track_decision` for policies, preferences, PR/merge rules, architecture choices, and rationale. Use `track_problem` for incidents, root causes, failed approaches, and fixes. Use `track_pattern` for reusable workflows. Use `track_session` for meaningful end-of-task summaries. Use `sidekick_store` when an exact lookup key is useful, such as hostnames, paths, feature flags, or named operational notes.
+
+Do not store raw secrets, tokens, private keys, passwords, or full sensitive outputs in KV, context, knowledge, or memories. Use `sidekick_secret` for credentials. Do not store transient status, command noise, or facts that are obvious from the current repository. If a note is sensitive but operationally useful, store only the minimum redacted instruction needed for future safety.
 
 The Agent Bridge automatically records bounded, redacted memory summaries for completed autonomous tasks and memory-worthy tool calls. It also extracts simple `fact`, `decision`, `preference`, and `open_thread` memories when task text is explicit enough. These automatic memories are stored primarily in the `memories` table, with compatibility copies in the `context` document, capped by `SIDEKICK_AUTO_MEMORY_MAX` and disabled with `SIDEKICK_AUTO_MEMORY=0`. Semantic recall uses Ollama embeddings and Qdrant when available, and can be disabled with `SIDEKICK_EMBEDDINGS=0`. They are meant for continuity, not as complete raw transcripts.
 

@@ -325,6 +325,31 @@ Use sidekick_context for richer decisions, problems, patterns, session summaries
 Structured automatic memory is stored primarily in the memories table. The context document keeps compatibility copies for older context views. Use sidekick_memory_export and sidekick_memory_import for portable JSON backups, sidekick_memory_manage for confirmation/delete/expire/restore workflows, and sidekick_sync_* tools for cross-machine memory synchronization. Semantic recall can use Ollama embeddings and Qdrant when available.',
 'memory,kv,context,protocol', 1, 'seed-2026-06-16-current', datetime('now')),
 
+('protocols', 'When To Recall And Store Project Context',
+'Agents should recall project memory before work where prior context can change the safe action:
+- deployment, incident response, service operations, or production changes.
+- credential, secret, access, auth, or repository history work.
+- PR review, merge, release, rollback, migration, or destructive cleanup.
+- tasks where the user references earlier work, says "we", "last time", "remember", or asks what is left.
+- confusing state where previous decisions, failed attempts, or operational preferences may matter.
+
+Retrieval order for memory:
+1. Use sidekick_project name="<project>" include="kv,context" for a broad project brief.
+2. Use sidekick_context action="recall" project="<project>" query="<topic>" for focused decisions, problems, patterns, sessions, and automatic memories.
+3. Use sidekick_get or sidekick_get_by_project when an exact key or project KV listing is needed.
+4. Use sidekick_log_query for recent tool activity and sidekick_knowledge for global docs/protocols.
+
+Store durable memory when future agents would make a better or safer decision from the information:
+- track_decision for policies, preferences, PR/merge rules, architecture choices, and rationale.
+- track_problem for incidents, root causes, failed approaches, and fixes.
+- track_pattern for reusable workflows and operating procedures.
+- track_session for meaningful end-of-task summaries.
+- sidekick_store for exact lookup keys such as hostnames, paths, feature flags, or named operational notes.
+- sidekick_knowledge for global Sidekick documentation, policies, and procedures that should apply beyond one project.
+
+Do not store raw secrets, tokens, private keys, passwords, or full sensitive outputs in KV, context, knowledge, or memories. Use sidekick_secret for credentials. Do not store trivial transient status, command noise, or facts obvious from the current repository. If a note is sensitive but operationally useful, store only the minimum redacted instruction needed for future safety.',
+'memory,context,recall,store,protocol,agents', 1, 'seed-2026-06-16-current', datetime('now')),
+
 ('protocols', 'How To Inspect Recent Tool Activity',
 'Use sidekick_log_query for recent tool activity:
 - sidekick_log_query limit=20
