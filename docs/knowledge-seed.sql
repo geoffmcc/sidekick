@@ -486,11 +486,11 @@ Keep AGENTS.md compact and use it as a pointer to the database-first knowledge b
 
 INSERT INTO knowledge (category, title, content, tags, enabled, version_added, updated_at) VALUES
 ('operations', 'Health Check Expectations and Probe Behavior',
-'Use sidekick_health check=services for routine service verification. The known problematic path is check=all, which has produced a null-object error and should be treated as a bug rather than a reliable health verdict.
+'Use sidekick_health check=services for a quick core-service verdict and check=all for a stable composite report covering services, processes, disk, and network. Subcheck command failures retain predictable empty result shapes and appear as issues instead of crashing report rendering.
 
-During deploy and restart smoke checks, an MCP HTTP probe timeout can occur even when sidekick-mcp is active and still serving live tool calls. If that happens, verify the service state and recent logs before treating it as a deployment failure.
+Packaged restart smoke checks probe the MCP /health endpoint asynchronously. This is required because sidekick_ops executes inside the MCP process; a synchronous self-probe blocks the event loop and times out waiting for its own request.
 
-Prefer service-level health and log inspection over a single composite probe when the warning is isolated and the services are otherwise active.',
+Treat an isolated probe warning as diagnostic evidence and verify service state and recent logs, but do not treat the old deterministic self-timeout as expected behavior.',
 'health,operations,mcp,probe,troubleshooting', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('operations', 'Optional Infrastructure Startup Order',

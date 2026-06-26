@@ -1,6 +1,6 @@
 const fs = require("fs");
 const path = require("path");
-const { execSync, execFileSync, spawn } = require("child_process");
+const { execSync, execFile, execFileSync, spawn } = require("child_process");
 const { redactSensitive } = require("./redact");
 const dbStore = require("./db");
 const pgStore = require("./pg");
@@ -3021,25 +3021,39 @@ function saveHealthHistory(history) {
 }
 
 function checkServices(serviceList) {
-  const services = serviceList ? serviceList.split(",").map(s => s.trim()) : ["sidekick-mcp", "sidekick-dashboard", "sidekick-agent"];
+  const services = serviceList
+    ? serviceList.split(",").map(s => s.trim()).filter(Boolean)
+    : ["sidekick-mcp", "sidekick-dashboard", "sidekick-agent"];
   const results = [];
   let healthy = 0;
   for (const svc of services) {
     try {
-      const output = execSync(`systemctl is-active ${svc} 2>&1`, { encoding: "utf-8" }).trim();
+      const output = execFileSync("systemctl", ["is-active", svc], { encoding: "utf-8", timeout: 5000 }).trim();
       const isActive = output === "active";
       results.push({ service: svc, status: output, healthy: isActive });
       if (isActive) healthy++;
     } catch (e) {
-      results.push({ service: svc, status: "unknown", healthy: false, error: e.message });
+      const status = String(e.stdout || "unknown").trim() || "unknown";
+      results.push({ service: svc, status, healthy: false, error: e.message });
     }
   }
-  return { results, score: (healthy / services.length) * 100, healthy, total: services.length };
+  const issues = results.filter(result => !result.healthy).map(result => `Service ${result.service} is ${result.status}`);
+  return {
+    results,
+    score: services.length > 0 ? (healthy / services.length) * 100 : 0,
+    healthy,
+    total: services.length,
+    issues
+  };
 }
 
 function checkProcesses() {
   try {
-    const output = execSync("ps aux --sort=-%cpu | head -11", { encoding: "utf-8" });
+    const output = execFileSync("ps", ["aux", "--sort=-%cpu"], {
+      encoding: "utf-8",
+      timeout: 5000,
+      maxBuffer: 5 * 1024 * 1024
+    });
     const lines = output.trim().split("\n");
     const processes = lines.slice(1).map(line => {
       const parts = line.split(/\s+/);
@@ -3060,22 +3074,26 @@ function checkProcesses() {
       issues: [...highCpu.map(p => `High CPU: ${p.command} (${p.cpu}%)`), ...highMem.map(p => `High MEM: ${p.command} (${p.mem}%)`)]
     };
   } catch (e) {
-    return { results: {}, score: 0, issues: [`Failed to check processes: ${e.message}`] };
+    return {
+      results: { top: [], highCpu: [], highMem: [] },
+      score: 0,
+      issues: [`Failed to check processes: ${e.message}`]
+    };
   }
 }
 
 function checkDisk() {
   try {
-    const output = execSync("df -h --output=source,pcent,target | grep -E '^/dev'", { encoding: "utf-8" });
-    const lines = output.trim().split("\n");
+    const output = execFileSync("df", ["-P"], { encoding: "utf-8", timeout: 5000 });
+    const lines = output.trim().split("\n").slice(1);
     const disks = lines.map(line => {
       const parts = line.split(/\s+/);
       return {
         filesystem: parts[0],
-        usage: parseInt(parts[1]),
-        mount: parts[2]
+        usage: parseInt(parts[4], 10),
+        mount: parts.slice(5).join(" ")
       };
-    });
+    }).filter(disk => Number.isFinite(disk.usage) && disk.mount);
     const critical = disks.filter(d => d.usage > 90);
     const warning = disks.filter(d => d.usage > 80 && d.usage <= 90);
     const score = 100 - (critical.length * 20) - (warning.length * 10);
@@ -3085,40 +3103,60 @@ function checkDisk() {
       issues: [...critical.map(d => `Critical: ${d.mount} at ${d.usage}%`), ...warning.map(d => `Warning: ${d.mount} at ${d.usage}%`)]
     };
   } catch (e) {
-    return { results: {}, score: 0, issues: [`Failed to check disk: ${e.message}`] };
+    return { results: [], score: 0, issues: [`Failed to check disk: ${e.message}`] };
   }
 }
 
 function checkNetwork() {
+  let hasInternet = false;
+  const issues = [];
+  const recommendations = [];
+  const services = ["sidekick-mcp", "sidekick-dashboard", "sidekick-agent"];
+  const servicePorts = {
+    "sidekick-mcp": 4097,
+    "sidekick-dashboard": 4098,
+    "sidekick-agent": 4099
+  };
+
   try {
-    const pingOutput = execSync("ping -c 1 -W 2 8.8.8.8 2>&1", { encoding: "utf-8" });
-    const hasInternet = pingOutput.includes("1 received");
-    const services = ["sidekick-mcp", "sidekick-dashboard", "sidekick-agent"];
-    const ports = {};
-    for (const svc of services) {
-      try {
-        const port = svc === "sidekick-mcp" ? 4097 : svc === "sidekick-dashboard" ? 4098 : 4099;
-        execSync(`ss -tlnp | grep :${port}`, { encoding: "utf-8" });
-        ports[svc] = { port, listening: true };
-      } catch {
-        ports[svc] = { port: svc === "sidekick-mcp" ? 4097 : svc === "sidekick-dashboard" ? 4098 : 4099, listening: false };
-      }
-    }
-    const listeningCount = Object.values(ports).filter(p => p.listening).length;
-    const score = (hasInternet ? 50 : 0) + (listeningCount / services.length) * 50;
-    return {
-      results: { internet: hasInternet, ports },
-      score,
-      issues: hasInternet ? [] : ["No internet connectivity"],
-      recommendations: Object.entries(ports).filter(([_, p]) => !p.listening).map(([svc]) => `${svc} not listening on port ${svc === "sidekick-mcp" ? 4097 : svc === "sidekick-dashboard" ? 4098 : 4099}`)
-    };
-  } catch (e) {
-    return { results: {}, score: 0, issues: [`Failed to check network: ${e.message}`] };
+    execFileSync("ping", ["-c", "1", "-W", "2", "8.8.8.8"], {
+      encoding: "utf-8",
+      timeout: 4000,
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    hasInternet = true;
+  } catch {
+    issues.push("No internet connectivity");
   }
+
+  let listeners = "";
+  try {
+    listeners = execFileSync("ss", ["-tln"], { encoding: "utf-8", timeout: 5000 });
+  } catch (e) {
+    issues.push(`Failed to inspect listening ports: ${e.message}`);
+  }
+
+  const ports = {};
+  for (const service of services) {
+    const port = servicePorts[service];
+    const listening = listeners.split("\n").some(line =>
+      new RegExp(`[:.]${port}(?:\\s|$)`).test(line)
+    );
+    ports[service] = { port, listening };
+    if (!listening) recommendations.push(`${service} not listening on port ${port}`);
+  }
+  const listeningCount = Object.values(ports).filter(port => port.listening).length;
+  const score = (hasInternet ? 50 : 0) + (listeningCount / services.length) * 50;
+  return {
+    results: { internet: hasInternet, ports },
+    score,
+    issues,
+    recommendations
+  };
 }
 
 function checkCustom(commands) {
-  if (!commands) return { results: {}, score: 100, issues: [] };
+  if (!commands) return { results: [], score: 100, issues: [] };
   const cmdList = commands.split(",").map(c => c.trim());
   const results = [];
   let allPassed = true;
@@ -3183,6 +3221,7 @@ async function sidekick_health({ check, services, commands, threshold }) {
       results.services = checkServices(services);
       totalScore += results.services.score;
       totalChecks++;
+      if (results.services.issues) allIssues.push(...results.services.issues);
     } else if (c === "processes") {
       results.processes = checkProcesses();
       totalScore += results.processes.score;
@@ -3235,25 +3274,25 @@ async function sidekick_health({ check, services, commands, threshold }) {
     } else if (c === "processes") {
       output += `- Score: ${results.processes.score.toFixed(0)}/100\n`;
       output += `- Top processes (by CPU):\n`;
-      for (const proc of results.processes.results.top) {
+      for (const proc of results.processes.results?.top || []) {
         output += `  - ${proc.command.substring(0, 40)}: CPU ${proc.cpu}%, MEM ${proc.mem}%\n`;
       }
     } else if (c === "disk") {
       output += `- Score: ${results.disk.score.toFixed(0)}/100\n`;
       output += `- Disk usage:\n`;
-      for (const disk of results.disk.results) {
+      for (const disk of Array.isArray(results.disk.results) ? results.disk.results : []) {
         output += `  - ${disk.mount}: ${disk.usage}%\n`;
       }
     } else if (c === "network") {
       output += `- Score: ${results.network.score.toFixed(0)}/100\n`;
-      output += `- Internet: ${results.network.results.internet ? "✓" : "✗"}\n`;
+      output += `- Internet: ${results.network.results?.internet ? "✓" : "✗"}\n`;
       output += `- Ports:\n`;
-      for (const [svc, info] of Object.entries(results.network.results.ports)) {
+      for (const [svc, info] of Object.entries(results.network.results?.ports || {})) {
         output += `  - ${svc} (${info.port}): ${info.listening ? "listening" : "not listening"}\n`;
       }
     } else if (c === "custom") {
       output += `- Score: ${results.custom.score.toFixed(0)}/100\n`;
-      for (const res of results.custom.results) {
+      for (const res of Array.isArray(results.custom.results) ? results.custom.results : []) {
         output += `  - ${res.command}: ${res.success ? "✓" : "✗"}\n`;
         if (res.output) output += `    ${res.output.substring(0, 100)}\n`;
       }
@@ -6584,6 +6623,24 @@ function runOpsCommand(command, args, options = {}) {
   }
 }
 
+function runOpsCommandAsync(command, args, options = {}) {
+  return new Promise(resolve => {
+    execFile(command, args, {
+      timeout: options.timeout || 30000,
+      encoding: "utf-8",
+      maxBuffer: options.maxBuffer || 10 * 1024 * 1024,
+      cwd: options.cwd
+    }, (error, stdout, stderr) => {
+      resolve({
+        ok: !error,
+        stdout: String(stdout || "").trim(),
+        stderr: String(stderr || error?.message || "").trim(),
+        status: error?.code
+      });
+    });
+  });
+}
+
 function getGitValue(repoPath, args) {
   const result = runOpsCommand("git", ["-C", repoPath, ...args], { timeout: 60000 });
   return result.ok ? result.stdout : null;
@@ -6794,7 +6851,13 @@ async function sidekick_ops({ action, repo_path, restart_mcp }) {
     }
 
     const states = getServiceStates();
-    const health = runOpsCommand("curl", ["--max-time", "5", "-fsS", "http://127.0.0.1:4097/health"], { timeout: 7000 });
+    // This tool runs inside sidekick-mcp. Use an asynchronous child process so
+    // the event loop remains free to answer its own /health request.
+    const health = await runOpsCommandAsync(
+      "curl",
+      ["--max-time", "5", "-fsS", "http://127.0.0.1:4097/health"],
+      { timeout: 7000 }
+    );
     let mcpNote = "not requested";
     if (restart_mcp === true) {
       scheduleMcpRestart();

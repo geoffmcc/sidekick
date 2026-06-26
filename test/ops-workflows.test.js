@@ -76,8 +76,8 @@ assert.match(
 
 assert.match(
   toolsJs,
-  /passed with warnings/,
-  'sidekick_ops should downgrade a flaky MCP probe to a warning when services are up'
+  /await runOpsCommandAsync\s*\(/,
+  'sidekick_ops should probe its own MCP health endpoint asynchronously to avoid blocking the event loop'
 );
 
 assert.match(
