@@ -160,6 +160,12 @@ SIDEKICK_OLLAMA_URL=http://127.0.0.1:11434
 
 Set `SIDEKICK_AUTO_MEMORY=0` to disable automatic memory. Increase or decrease `SIDEKICK_AUTO_MEMORY_MAX` to control how many automatic memory entries are retained. Set `SIDEKICK_EMBEDDINGS=0` to disable semantic memory embeddings; otherwise Sidekick uses Ollama and Qdrant when available.
 
+Memory storage has three lifecycle surfaces:
+
+- KV entries are key-value records. Use `sidekick_delete` to remove a KV key.
+- `sidekick_context` writes compatibility context entries such as decisions, problems, patterns, and `sess_...` sessions into the `context` document. Exact IDs can be recalled with `sidekick_context action="recall" query="<id>"`.
+- Structured memories live in the `memories` table. Use `sidekick_memory_manage` for lifecycle actions. `delete`, `disable`, `expire`, and `restore` also work for legacy context IDs such as `sess_...`; confirmation and auto-expiration actions are structured-memory-only and return a clear unsupported-ID error for legacy context entries.
+
 ## Useful Checks
 
 Check the configured Ollama model:

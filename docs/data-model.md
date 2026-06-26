@@ -162,6 +162,12 @@ The `context` document in `json_documents` stores structured continuity data:
 
 Explicit context entries are written through `sidekick_context`. Automatic memory still mirrors bounded entries into `context.memories` and `context.sessions` for compatibility with older context views, but the `memories` table is the primary queryable store.
 
+Lifecycle operations differ by store:
+
+- `kv_store` entries are deleted with `sidekick_delete`.
+- `json_documents.context` entries are legacy context records. `sidekick_context action=recall` can resolve exact IDs such as `sess_...`; `sidekick_memory_manage` can `delete`, `disable`, `expire`, or `restore` those IDs by marking them inactive in the context document.
+- `memories` table rows support the full structured lifecycle, including confirmation, require-confirmation flags, soft delete, disable, expire, restore, auto-expire, import/export, and sync.
+
 ## Knowledge base
 
 The `knowledge` table is the documentation store for Sidekick's agent-facing operational knowledge. `sidekick_knowledge` supports `search`, `get`, `list`, `add`, `update`, and `delete`. The dashboard exposes a read endpoint at `/api/knowledge`.

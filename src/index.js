@@ -152,7 +152,7 @@ const TOOL_SCHEMAS = {
     preserve_ids: z.boolean().optional().describe("Preserve original memory IDs (default: false)")
   }),
   sidekick_memory_manage: z.object({
-    action: z.enum(["confirm", "set_requires_confirmation", "delete", "expire", "restore", "set_auto_expire", "list_by_state", "pending_confirmations", "process_auto_expirations"]).describe("Action to perform"),
+    action: z.enum(["confirm", "set_requires_confirmation", "delete", "disable", "expire", "restore", "set_auto_expire", "list_by_state", "pending_confirmations", "process_auto_expirations"]).describe("Action to perform"),
     id: z.string().optional().describe("Memory ID (or state name for list_by_state)"),
     confirmed_by: z.string().optional().describe("Who confirmed (for confirm action - default 'user')"),
     days: z.number().optional().describe("Days until expiration (for set_auto_expire)"),

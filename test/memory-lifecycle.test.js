@@ -10,6 +10,8 @@ process.env.SIDEKICK_DATA_DIR = tempDir;
 process.env.SIDEKICK_AUTO_MEMORY = "1";
 
 const dbStore = require("../src/db");
+const { TOOLS } = require("../src/tools");
+const { sidekick_context, sidekick_memory_manage } = TOOLS;
 
 dbStore.runPendingMigrations();
 
@@ -137,4 +139,62 @@ assert.ok(new Date(afterConfirm.last_confirmed_at) >= new Date(beforeConfirm.las
   "last_confirmed_at should update on confirmation");
 console.log("  ✓ Confirmation tracking works");
 
-console.log("\n✅ All lifecycle tests passed");
+(async () => {
+  console.log("Test exact id recall and cross-store lifecycle");
+  const sessionResult = await sidekick_context({
+    action: "track_session",
+    project: "lifecycle_test",
+    summary: "Exact id recall session for lifecycle test",
+    topics: "memory,lifecycle,exact-id",
+    outcome: "success"
+  });
+  const sessionText = sessionResult.content[0].text;
+  const sessionId = sessionText.match(/id: (sess_[^)]+)/)[1];
+  assert.ok(sessionId, "track_session should return a session id");
+
+  const exactRecall = await sidekick_context({ action: "recall", query: sessionId, type: "sessions" });
+  assert.ok(exactRecall.content[0].text.includes(`[Session ${sessionId}]`), "Exact session id recall should find the session");
+
+  const disableSession = await sidekick_memory_manage({ action: "disable", id: sessionId, reason: "test_disable" });
+  assert.ok(!disableSession.isError, "Legacy session disable should succeed");
+  assert.ok(disableSession.content[0].text.includes("disabled"), "Disable should report success");
+
+  const disabledRecall = await sidekick_context({ action: "recall", query: sessionId, type: "sessions" });
+  assert.strictEqual(disabledRecall.content[0].text, "No relevant context found", "Disabled session should not be recalled");
+
+  const restoreSession = await sidekick_memory_manage({ action: "restore", id: sessionId });
+  assert.ok(!restoreSession.isError, "Legacy session restore should succeed");
+  const restoredRecall = await sidekick_context({ action: "recall", query: sessionId, type: "sessions" });
+  assert.ok(restoredRecall.content[0].text.includes(`[Session ${sessionId}]`), "Restored session should be recalled");
+
+  const deleteSession = await sidekick_memory_manage({ action: "delete", id: sessionId, reason: "test_delete" });
+  assert.ok(!deleteSession.isError, "Legacy session delete should succeed");
+  const deletedRecall = await sidekick_context({ action: "recall", query: sessionId, type: "sessions" });
+  assert.strictEqual(deletedRecall.content[0].text, "No relevant context found", "Deleted session should not be recalled");
+
+  const unsupportedConfirm = await sidekick_memory_manage({ action: "confirm", id: sessionId });
+  assert.ok(unsupportedConfirm.isError, "Confirm should return a clear unsupported legacy id error");
+  assert.ok(unsupportedConfirm.content[0].text.includes("legacy context session"), "Unsupported error should identify legacy session");
+
+  const structured = dbStore.upsertMemory({
+    type: "fact",
+    project: "lifecycle_test",
+    content: "Exact structured memory recall works",
+    summary: "Exact structured memory recall works",
+    confidence: 0.8,
+    source: "test",
+    source_tool: "test"
+  });
+  const structuredRecall = await sidekick_context({ action: "recall", query: structured.id, type: "memories" });
+  assert.ok(structuredRecall.content[0].text.includes(`[Memory ${structured.id}]`), "Exact structured memory id recall should work");
+  const disableStructured = await sidekick_memory_manage({ action: "disable", id: structured.id });
+  assert.ok(!disableStructured.isError, "Structured memory disable should succeed");
+  const disabledStructuredRecall = await sidekick_context({ action: "recall", query: structured.id, type: "memories" });
+  assert.strictEqual(disabledStructuredRecall.content[0].text, "No relevant context found", "Disabled structured memory should not be recalled by id");
+  console.log("  ✓ Exact id recall and cross-store lifecycle work");
+
+  console.log("\n✅ All lifecycle tests passed");
+})().catch(error => {
+  console.error(error);
+  process.exit(1);
+});

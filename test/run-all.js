@@ -26,6 +26,9 @@ const suites = [
   { file: 'test/evolve.test.js', critical: false, description: 'Evolve tool and retention behavior' },
   { file: 'test/db-tools.test.js', critical: false, description: 'Database tools behavior' },
   { file: 'test/automatic-memory.test.js', critical: false, description: 'Automatic memory capture and recall' },
+  { file: 'test/memory-lifecycle.test.js', critical: false, description: 'Memory lifecycle behavior' },
+  { file: 'test/memory-deferred.test.js', critical: false, description: 'Deferred memory lifecycle behavior' },
+  { file: 'test/memory-sync.test.js', critical: false, description: 'Memory sync behavior' },
   { file: 'test/integration.test.js', critical: false, description: 'Integration behavior' },
   { file: 'test/dashboard-api.test.js', critical: false, description: 'Dashboard API behavior' },
 ];
