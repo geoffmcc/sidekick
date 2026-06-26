@@ -247,6 +247,11 @@ const TOOL_SCHEMAS = {
     value: z.string().optional().describe("Secret value (for store action)"),
     generate: z.string().optional().describe("Length for rotation (e.g. '32' for 32-char random hex)")
   }),
+  sidekick_security_scan: z.object({
+    path: z.string().optional().describe("Directory to scan (default Sidekick repository)"),
+    max_files: z.number().int().min(1).max(10000).optional().describe("Maximum files to inspect (default 2000, maximum 10000)"),
+    format: z.enum(["text", "json"]).optional().describe("Output format (default text)")
+  }),
   sidekick_parse: z.object({
     input: z.string().describe("Data to parse (string content)"),
     format: z.string().optional().describe("Format: json, yaml, xml, ini, csv (auto-detected if not specified)")

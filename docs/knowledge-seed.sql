@@ -518,4 +518,13 @@ Enabling approvals requires SIDEKICK_SECRET_KEY. Sidekick encrypts full queued a
 Pending approvals expire after SIDEKICK_APPROVAL_TTL_SECONDS, default 3600 seconds. Approval execution rechecks the current tool policy under the original request source and bypasses only the approval check, so a request blocked after queueing remains blocked.',
 'approval,security,tool-policy,encryption,dashboard', 1, 'seed-2026-06-16-current', datetime('now'));
 
+INSERT INTO knowledge (category, title, content, tags, enabled, version_added, updated_at) VALUES
+('best-practices', 'Configuration and Secret Exposure Scanning',
+'Use sidekick_security_scan for a read-only audit before deployments or after configuration changes. It checks for tracked sensitive files, private-key and high-confidence credential signatures, hardcoded sensitive configuration values or fallbacks, generated credential filenames, runtime .env security keys, and permissive sensitive-file modes.
+
+The scanner reports metadata only: paths, configuration key names, line numbers, categories, and severity. It never returns matched secret values. It obeys global and source-specific filesystem path policy, skips denied descendants, ignores runtime data/dependency/documentation/test content, and bounds work with max_files.
+
+Treat findings as inputs to a separate deliberate remediation workflow. Rotate exposed credentials, remove tracked secrets from history, replace hardcoded defaults with secret injection, and restrict file permissions only after reviewing operational impact.',
+'security,secrets,configuration,audit,scan,path-policy', 1, 'seed-2026-06-16-current', datetime('now'));
+
 COMMIT;

@@ -7,6 +7,7 @@ const pgStore = require("./pg");
 const redisStore = require("./redis");
 const qdrantStore = require("./qdrant");
 const { recordToolCallMemory } = require("./memory");
+const { scanSecurityConfig } = require("./security-scan");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
@@ -56,6 +57,7 @@ const TOOL_RISK = {
   sidekick_github: "high",
   sidekick_teach: "high",
   sidekick_secret: "high",
+  sidekick_security_scan: "low",
   sidekick_db_migrate: "high",
   sidekick_queue: "high",
   sidekick_orchestrate: "high",
@@ -192,6 +194,7 @@ const TOOL_CATEGORIES = {
   'sidekick_tail': 'Efficiency',
   'sidekick_find': 'Efficiency',
   'sidekick_secret': 'Security',
+  'sidekick_security_scan': 'Security',
   'sidekick_sandbox': 'Security',
   'sidekick_tunnel': 'Networking',
   'sidekick_wireguard': 'Networking',
@@ -4160,6 +4163,39 @@ async function sidekick_secret({ action, key, value, generate }) {
   }
   
   return { content: [{ type: "text", text: "Unknown action. Use: store, get, delete, list, rotate" }], isError: true };
+}
+
+async function sidekick_security_scan({ path: rootPath, max_files, format } = {}) {
+  const scanRoot = path.resolve(rootPath || process.env.SIDEKICK_REPO_DIR || path.join(__dirname, ".."));
+  const policyError = enforcePathPolicy(scanRoot, "security_scan");
+  if (policyError) return policyError;
+  if (!fs.existsSync(scanRoot) || !fs.statSync(scanRoot).isDirectory()) {
+    return { content: [{ type: "text", text: "Scan directory not found: " + scanRoot }], isError: true };
+  }
+
+  const report = scanSecurityConfig({
+    root: scanRoot,
+    maxFiles: max_files,
+    canAccess: target => getPathPolicyDecision(target, "security_scan").allowed
+  });
+  if (format === "json") {
+    return { content: [{ type: "text", text: JSON.stringify(report, null, 2) }] };
+  }
+
+  const lines = [
+    "SECURITY CONFIG SCAN",
+    "Root: " + report.root,
+    "Files scanned: " + report.files_scanned,
+    "Skipped by path policy: " + report.skipped_by_policy,
+    "Truncated: " + (report.truncated ? "yes" : "no"),
+    `Findings: ${report.findings.length} (critical=${report.counts.critical}, high=${report.counts.high}, medium=${report.counts.medium}, low=${report.counts.low})`
+  ];
+  for (const finding of report.findings) {
+    const location = finding.path + (finding.line ? ":" + finding.line : "");
+    lines.push(`[${finding.severity.toUpperCase()}] ${finding.type} ${location} - ${finding.message}`);
+  }
+  if (report.findings.length === 0) lines.push("No config or secret handling findings.");
+  return { content: [{ type: "text", text: lines.join("\n") }] };
 }
 
 // --- Parse Tool ---
@@ -10358,6 +10394,7 @@ const TOOLS = {
   sidekick_snapshot,
   sidekick_watch,
   sidekick_secret,
+  sidekick_security_scan,
   sidekick_parse,
   sidekick_diff,
   sidekick_hash,
@@ -10456,6 +10493,7 @@ const TOOL_DEFS = [
   { name: "sidekick_snapshot", description: "Capture system state and detect drift by comparing snapshots", args: { action: "string (capture|compare|list|delete)", name: "string (snapshot name)", capture: "string (optional, comma-separated: processes,services,disk,packages,network,files:/path)", compare: "string (optional, baseline snapshot name for compare action)" } },
   { name: "sidekick_watch", description: "Event-driven monitoring: watch services, processes, endpoints, or files and trigger actions on conditions", args: { action: "string (add|list|remove|pause|check)", id: "string (optional, for remove/pause/check)", name: "string (optional, watch name)", source: "string (optional, service|process|endpoint|file)", target: "string (optional, service name, process name, URL, or file path)", condition: "string (optional, e.g. status!=active, not_running, status!=200, content_matches)", interval: "string (optional, e.g. 30s, 5m, 1h)", action_tool: "string (optional, tool to call when triggered)", action_args: "object (optional, args for action tool)", pause: "boolean (optional, true to pause, false to resume)" } },
   { name: "sidekick_secret", description: "Encrypted credential management with AES-256-GCM (requires SIDEKICK_SECRET_KEY in .env)", args: { action: "string (store|get|delete|list|rotate)", key: "string (secret name)", value: "string (optional, for store)", generate: "string (optional, length for rotate, e.g. '32')" } },
+  { name: "sidekick_security_scan", description: "Read-only audit for tracked sensitive files, secret signatures, hardcoded credential settings, runtime .env safety, and sensitive-file permissions. Reports metadata only and never returns secret values.", args: { path: "string (optional, directory to scan - default Sidekick repo)", max_files: "number (optional, bounded 1-10000 - default 2000)", format: "string (optional, text|json - default text)" } },
   { name: "sidekick_parse", description: "Parse structured data formats (JSON, YAML, XML, INI, CSV) with auto-detection", args: { input: "string (data to parse)", format: "string (optional, json|yaml|xml|ini|csv - auto-detected if not specified)" } },
   { name: "sidekick_diff", description: "Semantic comparison of text, JSON, or YAML with structure-aware diffing", args: { old_text: "string (original content)", new_text: "string (modified content)", type: "string (optional, text|json|yaml|auto - default auto)", format: "string (optional, unified|summary|json - default unified)" } },
   { name: "sidekick_hash", description: "Generate checksums (MD5, SHA1, SHA256, SHA512) for files or data with verification", args: { input: "string (optional, data to hash)", path: "string (optional, file path to hash)", algorithm: "string (optional, md5|sha1|sha256|sha512 - default sha256)", verify: "string (optional, expected hash to verify against)" } },
