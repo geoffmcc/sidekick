@@ -860,6 +860,66 @@ function isDangerous(cmd) {
   return DANGEROUS_PATTERNS.some(p => p.test(cmd));
 }
 
+function normalizePolicyPath(filePath) {
+  return path.resolve(String(filePath || ""));
+}
+
+function pathPolicyEntries(source, suffix) {
+  return [
+    ...parsePolicyList(process.env["SIDEKICK_" + suffix]),
+    ...parsePolicyList(process.env[sourceEnvName(source, suffix)])
+  ];
+}
+
+function pathMatchesPolicyEntry(filePath, entry) {
+  const normalizedPath = normalizePolicyPath(filePath);
+  const normalizedEntry = normalizePolicyPath(entry);
+  const relative = path.relative(normalizedEntry, normalizedPath);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function findPathPolicyMatch(entries, filePath) {
+  return entries.find(entry => pathMatchesPolicyEntry(filePath, entry));
+}
+
+function getPathPolicyDecision(filePath, operation = "access", source = currentSource) {
+  const target = normalizePolicyPath(filePath);
+  const allowedEntries = pathPolicyEntries(source, "ALLOWED_PATHS");
+  const deniedEntries = pathPolicyEntries(source, "DENIED_PATHS");
+  const deniedMatch = findPathPolicyMatch(deniedEntries, target);
+
+  if (deniedMatch) {
+    return { allowed: false, source, operation, path: target, reason: "path denied by policy", matched: deniedMatch, list: "denied" };
+  }
+
+  if (allowedEntries.length > 0) {
+    const allowedMatch = findPathPolicyMatch(allowedEntries, target);
+    return {
+      allowed: Boolean(allowedMatch),
+      source,
+      operation,
+      path: target,
+      reason: allowedMatch ? "path allowed by policy" : "path not in allowed paths",
+      matched: allowedMatch || null,
+      list: "allowed"
+    };
+  }
+
+  return { allowed: true, source, operation, path: target, reason: "path policy is open" };
+}
+
+function enforcePathPolicy(filePath, operation = "access") {
+  const decision = getPathPolicyDecision(filePath, operation);
+  if (decision.allowed) return null;
+  return {
+    content: [{
+      type: "text",
+      text: `Path blocked by policy: ${decision.path} (source=${decision.source}, operation=${decision.operation}). ${decision.reason}.`
+    }],
+    isError: true
+  };
+}
+
 async function sidekick_bash({ command }) {
   if (isDangerous(command)) {
     return { content: [{ type: "text", text: "Blocked: command matches a dangerous pattern" }], isError: true };
@@ -873,6 +933,8 @@ async function sidekick_bash({ command }) {
 }
 
 async function sidekick_read({ path: filePath }) {
+  const policyError = enforcePathPolicy(filePath, "read");
+  if (policyError) return policyError;
   if (!fs.existsSync(filePath)) {
     return { content: [{ type: "text", text: "File not found: " + filePath }], isError: true };
   }
@@ -881,6 +943,8 @@ async function sidekick_read({ path: filePath }) {
 }
 
 async function sidekick_write({ path: filePath, content }) {
+  const policyError = enforcePathPolicy(filePath, "write");
+  if (policyError) return policyError;
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, content, "utf-8");
   const stat = fs.statSync(filePath);
@@ -935,6 +999,8 @@ async function sidekick_get_by_project({ project }) {
 }
 
 async function sidekick_list({ path: dirPath }) {
+  const policyError = enforcePathPolicy(dirPath, "read");
+  if (policyError) return policyError;
   if (!fs.existsSync(dirPath)) {
     return { content: [{ type: "text", text: "Path not found: " + dirPath }], isError: true };
   }
@@ -1073,6 +1139,8 @@ function callGroqLLM(prompt, system, temperature) {
 
 async function sidekick_search({ pattern, path: searchPath, include }) {
   const targetPath = searchPath || ".";
+  const policyError = enforcePathPolicy(targetPath, "read");
+  if (policyError) return policyError;
   if (!fs.existsSync(targetPath)) {
     return { content: [{ type: "text", text: "Path not found: " + targetPath }], isError: true };
   }
@@ -1107,13 +1175,16 @@ async function sidekick_search({ pattern, path: searchPath, include }) {
 
 async function sidekick_git({ action, path: repoPath, args: extraArgs }) {
   const repo = repoPath || ".";
-  if (!fs.existsSync(repo)) {
-    return { content: [{ type: "text", text: "Repository path not found: " + repo }], isError: true };
-  }
-  
   const allowedActions = ["status", "diff", "log", "add", "commit", "push", "pull", "branch", "checkout", "stash"];
   if (!allowedActions.includes(action)) {
     return { content: [{ type: "text", text: "Invalid action. Allowed: " + allowedActions.join(", ") }], isError: true };
+  }
+
+  const writeActions = new Set(["add", "commit", "pull", "branch", "checkout", "stash"]);
+  const policyError = enforcePathPolicy(repo, writeActions.has(action) ? "write" : "read");
+  if (policyError) return policyError;
+  if (!fs.existsSync(repo)) {
+    return { content: [{ type: "text", text: "Repository path not found: " + repo }], isError: true };
   }
   
   const cmdArgs = ["-C", repo, action];
@@ -1303,6 +1374,9 @@ async function sidekick_archive({ action, path: sourcePath, output, format }) {
   if (!sourcePath) {
     return { content: [{ type: "text", text: "path required" }], isError: true };
   }
+
+  const sourcePolicyError = enforcePathPolicy(sourcePath, "read");
+  if (sourcePolicyError) return sourcePolicyError;
   
   if (!fs.existsSync(sourcePath)) {
     return { content: [{ type: "text", text: "Path not found: " + sourcePath }], isError: true };
@@ -1315,6 +1389,8 @@ async function sidekick_archive({ action, path: sourcePath, output, format }) {
     if (!output) {
       return { content: [{ type: "text", text: "output required for create" }], isError: true };
     }
+    const outputPolicyError = enforcePathPolicy(output, "write");
+    if (outputPolicyError) return outputPolicyError;
     if (fmt === "tar.gz" || fmt === "tgz") {
       cmd = ["tar", ["-czf", output, "-C", path.dirname(sourcePath), path.basename(sourcePath)]];
     } else if (fmt === "zip") {
@@ -1323,6 +1399,9 @@ async function sidekick_archive({ action, path: sourcePath, output, format }) {
       return { content: [{ type: "text", text: "Invalid format. Use: tar.gz, tgz, or zip" }], isError: true };
     }
   } else if (action === "extract") {
+    const extractTarget = process.cwd();
+    const outputPolicyError = enforcePathPolicy(extractTarget, "write");
+    if (outputPolicyError) return outputPolicyError;
     if (sourcePath.endsWith(".tar.gz") || sourcePath.endsWith(".tgz")) {
       cmd = ["tar", ["-xzf", sourcePath]];
     } else if (sourcePath.endsWith(".zip")) {
@@ -3193,6 +3272,10 @@ async function sidekick_snapshot({ action, name, capture, compare }) {
         snapshot.data.network = captureNetwork();
       } else if (type.startsWith("files:")) {
         const paths = type.substring(6);
+        for (const filePath of paths.split(",").map(p => p.trim()).filter(Boolean)) {
+          const policyError = enforcePathPolicy(filePath, "read");
+          if (policyError) return policyError;
+        }
         snapshot.data.files = captureFiles(paths);
       }
     }
@@ -3462,6 +3545,10 @@ async function sidekick_watch({ action, id, name, source, target, condition, int
     if (!validSources.includes(source)) {
       return { content: [{ type: "text", text: `Invalid source. Use: ${validSources.join(", ")}` }], isError: true };
     }
+    if (source === "file") {
+      const policyError = enforcePathPolicy(target, "read");
+      if (policyError) return policyError;
+    }
     
     const watch = {
       id: generateId("watch"),
@@ -3578,6 +3665,8 @@ async function sidekick_watch({ action, id, name, source, target, condition, int
     } else if (watch.source === "endpoint") {
       checkResult = checkEndpoint(watch.target);
     } else if (watch.source === "file") {
+      const policyError = enforcePathPolicy(watch.target, "read");
+      if (policyError) return policyError;
       checkResult = checkFile(watch.target, watch.condition === "content_matches" ? watch.value : null);
     }
     
@@ -4007,6 +4096,8 @@ async function sidekick_hash({ input, algorithm, verify, path: filePath }) {
   let data;
   
   if (filePath) {
+    const policyError = enforcePathPolicy(filePath, "read");
+    if (policyError) return policyError;
     // Hash a file
     try {
       data = fs.readFileSync(filePath);
@@ -5576,6 +5667,8 @@ async function sidekick_cache({ action, key, ttl, value }) {
 async function sidekick_summarize({ path: filePath, max_lines, strategy, pattern }) {
   const maxLines = max_lines || 50;
   const strat = strategy || "head";
+  const policyError = enforcePathPolicy(filePath, "read");
+  if (policyError) return policyError;
   if (!fs.existsSync(filePath)) {
     return { content: [{ type: "text", text: "File not found: " + filePath }], isError: true };
   }
@@ -5623,6 +5716,8 @@ async function sidekick_summarize({ path: filePath, max_lines, strategy, pattern
 
 async function sidekick_filter({ path: targetPath, pattern, after, before, max_results }) {
   const maxResults = max_results || 50;
+  const policyError = enforcePathPolicy(targetPath, "read");
+  if (policyError) return policyError;
   if (!fs.existsSync(targetPath)) {
     return { content: [{ type: "text", text: "Path not found: " + targetPath }], isError: true };
   }
@@ -5892,6 +5987,8 @@ async function sidekick_tail({ source, pattern, lines, since }) {
       content = e.stdout || e.message;
     }
   } else {
+    const policyError = enforcePathPolicy(source, "read");
+    if (policyError) return policyError;
     if (!fs.existsSync(source)) {
       return { content: [{ type: "text", text: "File not found: " + source }], isError: true };
     }
@@ -5904,6 +6001,10 @@ async function sidekick_tail({ source, pattern, lines, since }) {
 }
 
 async function sidekick_diff_files({ path_a, path_b, format }) {
+  const policyErrorA = enforcePathPolicy(path_a, "read");
+  if (policyErrorA) return policyErrorA;
+  const policyErrorB = enforcePathPolicy(path_b, "read");
+  if (policyErrorB) return policyErrorB;
   if (!fs.existsSync(path_a)) return { content: [{ type: "text", text: "File not found: " + path_a }], isError: true };
   if (!fs.existsSync(path_b)) return { content: [{ type: "text", text: "File not found: " + path_b }], isError: true };
   const contentA = fs.readFileSync(path_a, "utf-8");
@@ -5947,6 +6048,8 @@ async function sidekick_diff_files({ path_a, path_b, format }) {
 
 async function sidekick_find({ path: searchPath, name, modified_after, modified_before, size_min, size_max, content, max_results }) {
   const maxResults = max_results || 50;
+  const policyError = enforcePathPolicy(searchPath, "read");
+  if (policyError) return policyError;
   if (!fs.existsSync(searchPath)) {
     return { content: [{ type: "text", text: "Path not found: " + searchPath }], isError: true };
   }
@@ -6256,6 +6359,8 @@ async function sidekick_mission({ action, intent, profile, confirm, key, project
 
 async function sidekick_ops({ action, repo_path, restart_mcp }) {
   const repoPath = defaultRepoPath(repo_path);
+  const pathPolicyError = enforcePathPolicy(repoPath, action === "deploy_current_main" ? "write" : "read");
+  if (pathPolicyError) return pathPolicyError;
 
   if (action === "verify_deployed_commit") {
     if (!fs.existsSync(repoPath)) {
@@ -6413,6 +6518,8 @@ async function sidekick_ops({ action, repo_path, restart_mcp }) {
 
 async function sidekick_extract({ path: filePath, fields }) {
   if (!filePath) return { content: [{ type: "text", text: "path required" }], isError: true };
+  const policyError = enforcePathPolicy(filePath, "read");
+  if (policyError) return policyError;
   if (!fs.existsSync(filePath)) {
     return { content: [{ type: "text", text: "File not found: " + filePath }], isError: true };
   }
@@ -6756,6 +6863,10 @@ async function sidekick_sandbox({ action, sandbox_name, command, files, auto_bac
     if (auto_backup !== false && filesToBackup.length > 0) {
       for (const f of filesToBackup) {
         try {
+          const readPolicyError = enforcePathPolicy(f, "read");
+          if (readPolicyError) return readPolicyError;
+          const writePolicyError = enforcePathPolicy(f, "write");
+          if (writePolicyError) return writePolicyError;
           const stat = fs.statSync(f);
           if (!stat.isFile()) continue;
           if (stat.size > MAX_BACKUP_FILE_SIZE) {
@@ -6843,6 +6954,15 @@ async function sidekick_sandbox({ action, sandbox_name, command, files, auto_bac
     const restored = [];
     const removed = [];
     const errors = [];
+
+    for (const backup of sb.backups) {
+      const policyError = enforcePathPolicy(backup.original, "write");
+      if (policyError) return policyError;
+    }
+    for (const nf of sb.newFiles) {
+      const policyError = enforcePathPolicy(nf.path, "delete");
+      if (policyError) return policyError;
+    }
 
     for (const backup of sb.backups.reverse()) {
       try {
@@ -6985,6 +7105,8 @@ async function sidekick_changelog({ action, from, to, format, group_by, use_llm,
   const groupBy = group_by || "type";
   const includeType = include || "all";
   const cwd = repoPath || process.cwd();
+  const pathPolicyError = enforcePathPolicy(cwd, action === "save" ? "write" : "read");
+  if (pathPolicyError) return pathPolicyError;
 
   let gitLogCmd = `git log ${from}..${toRef} --pretty=format:"%H|%s|%an|%ad" --date=short`;
   
@@ -8817,6 +8939,10 @@ async function sidekick_db_stats({ detailed, database }) {
 
 async function sidekick_db_backup({ path: destPath, compress }) {
   try {
+    if (destPath) {
+      const policyError = enforcePathPolicy(destPath, "write");
+      if (policyError) return policyError;
+    }
     const result = dbStore.createBackup(destPath, compress !== false);
     return { content: [{ type: "text", text: `Backup created: ${result.path} (${result.size} bytes, compressed: ${result.compressed})` }] };
   } catch (e) {
@@ -8826,6 +8952,8 @@ async function sidekick_db_backup({ path: destPath, compress }) {
 
 async function sidekick_db_restore({ path: backupPath, verify }) {
   try {
+    const policyError = enforcePathPolicy(backupPath, "read");
+    if (policyError) return policyError;
     const result = dbStore.restoreBackup(backupPath, verify !== false);
     return { content: [{ type: "text", text: `Restored from: ${backupPath}\nPre-restore backup: ${result.preBackupPath}` }] };
   } catch (e) {
@@ -8845,6 +8973,10 @@ async function sidekick_log_query({ tool, source, success, since, until, limit }
 async function sidekick_db_export({ table, format, path: outputPath, database }) {
   try {
     const fmt = format || "json";
+    if (outputPath) {
+      const policyError = enforcePathPolicy(outputPath, "write");
+      if (policyError) return policyError;
+    }
     if (database === "postgres") {
       if (table) {
         const data = await pgStore.exportTable(table, fmt);
@@ -8935,6 +9067,14 @@ async function sidekick_db_migrate({ action, version, name }) {
 
 async function sidekick_db_diff({ snapshot_a, snapshot_b, table }) {
   try {
+    if (snapshot_a && snapshot_a !== "current") {
+      const policyError = enforcePathPolicy(snapshot_a, "read");
+      if (policyError) return policyError;
+    }
+    if (snapshot_b && snapshot_b !== "current") {
+      const policyError = enforcePathPolicy(snapshot_b, "read");
+      if (policyError) return policyError;
+    }
     const snapA = snapshot_a === "current" || !snapshot_a ? dbStore.createSnapshot() : JSON.parse(fs.readFileSync(snapshot_a, "utf-8"));
     const snapB = snapshot_b === "current" || !snapshot_b ? dbStore.createSnapshot() : JSON.parse(fs.readFileSync(snapshot_b, "utf-8"));
     
@@ -9014,6 +9154,8 @@ async function sidekick_redis({ action, key, value, ttl, pattern }) {
 
 async function sidekick_ocr({ path: imagePath, language, psm }) {
   try {
+    const policyError = enforcePathPolicy(imagePath, "read");
+    if (policyError) return policyError;
     if (!fs.existsSync(imagePath)) {
       return { content: [{ type: "text", text: `Error: File not found: ${imagePath}` }], isError: true };
     }
@@ -9038,6 +9180,12 @@ async function sidekick_media({ action, input, output, options }) {
   try {
     if (!input) {
       return { content: [{ type: "text", text: "Error: input is required" }], isError: true };
+    }
+    const inputPolicyError = enforcePathPolicy(input, "read");
+    if (inputPolicyError) return inputPolicyError;
+    if (output) {
+      const outputPolicyError = enforcePathPolicy(output, "write");
+      if (outputPolicyError) return outputPolicyError;
     }
 
     if (action === "info") {
@@ -9099,6 +9247,8 @@ async function sidekick_media({ action, input, output, options }) {
 
 async function sidekick_transcribe({ path: audioPath, model, language }) {
   try {
+    const policyError = enforcePathPolicy(audioPath, "read");
+    if (policyError) return policyError;
     if (!fs.existsSync(audioPath)) {
       return { content: [{ type: "text", text: `Error: File not found: ${audioPath}` }], isError: true };
     }
@@ -9146,6 +9296,8 @@ async function sidekick_analytics({ query, file, format }) {
     };
 
     if (file) {
+      const policyError = enforcePathPolicy(file, "read");
+      if (policyError) return policyError;
       if (!fs.existsSync(file)) {
         return { content: [{ type: "text", text: "Error: File not found: " + file }], isError: true };
       }
@@ -9379,6 +9531,9 @@ async function sidekick_download({ url, output, format, audio_only }) {
     if (!url) {
       return { content: [{ type: "text", text: "Error: url required" }], isError: true };
     }
+    const outputTarget = output || "/tmp/%(title)s.%(ext)s";
+    const outputPolicyError = enforcePathPolicy(outputTarget, "write");
+    if (outputPolicyError) return outputPolicyError;
 
     const venvPath = "/home/sidekick/.sidekick-tools/bin/yt-dlp";
     const ytdlpCmd = fs.existsSync(venvPath) ? venvPath : "yt-dlp";
@@ -9391,11 +9546,7 @@ async function sidekick_download({ url, output, format, audio_only }) {
       cmd += ` -f "${format}"`;
     }
     
-    if (output) {
-      cmd += ` -o "${output}"`;
-    } else {
-      cmd += ` -o "/tmp/%(title)s.%(ext)s"`;
-    }
+    cmd += ` -o "${outputTarget}"`;
     
     cmd += ` "${url}"`;
     

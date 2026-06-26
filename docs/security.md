@@ -65,6 +65,20 @@ sidekick_tools({ action: "policy", source: "mcp,dashboard,agent", name: "sidekic
 
 It reports the policy decision, active mode, matching selector when applicable, and approval requirement for each inspected source/tool pair.
 
+## Filesystem path guardrails
+
+Filesystem path guardrails restrict direct file and repository path arguments while preserving open defaults for trusted single-user deployments. Leave these variables unset for current behavior, or set comma-separated absolute paths:
+
+```env
+SIDEKICK_ALLOWED_PATHS=/home/sidekick/sidekick,/home/sidekick/projects
+SIDEKICK_DENIED_PATHS=/home/sidekick/.ssh,/etc
+SIDEKICK_AGENT_ALLOWED_PATHS=/home/sidekick/projects
+```
+
+Allowed entries match the path itself and descendants. Denied entries take precedence over allowed entries. Source-specific variants are available for `MCP`, `DASHBOARD`, and `AGENT`, for example `SIDEKICK_AGENT_DENIED_PATHS`.
+
+The guard applies to direct path arguments on file, archive, search, diff, database export/backup/restore, media, watch, snapshot, changelog, and ops tools. It does not parse arbitrary commands passed to shell-capable tools, so keep `sidekick_bash`, sandbox execution, deploy workflows, and other high-power tools behind tool policy and approval.
+
 ## Approval queue
 
 The approval queue is an optional dashboard review layer for allowed tools. It does not enable tools that policy blocks. The default `SIDEKICK_APPROVAL_MODE=off` preserves existing behavior.
