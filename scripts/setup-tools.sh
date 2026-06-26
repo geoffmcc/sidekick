@@ -71,7 +71,7 @@ else
 fi
 
 # htop, tmux (usually present but verify)
-for pkg in htop tmux jq; do
+for pkg in htop tmux jq zstd; do
   if command -v "$pkg" &>/dev/null; then
     skip "$pkg"
   else
