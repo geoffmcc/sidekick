@@ -449,6 +449,14 @@ After restart, syncToolRegistry writes the updated metadata into the database.',
 'Markdown docs are useful for humans and repository history. The knowledge table is useful for agents at runtime. Keep both aligned when behavior matters operationally.
 
 AGENTS.md should remain compact and mostly point into the knowledge table and tool registry. Long procedural guidance belongs in knowledge entries. Full explanations belong in docs/ and can be mirrored into knowledge as concise operational entries.',
-'development,docs,knowledge,agents', 1, 'seed-2026-06-16-current', datetime('now'));
+'development,docs,knowledge,agents', 1, 'seed-2026-06-16-current', datetime('now')),
+
+('best-practices', 'Agent autonomy for low-risk follow-through',
+'When an agent identifies a low-risk follow-up that is clearly part of the active task, the agent should do it immediately instead of only suggesting it or waiting for a separate go-ahead. This includes updating Sidekick resume keys, cleanup notes, documentation or handoff records, and running reasonable verification commands.
+
+Agents should still ask first before destructive actions, broad refactors, deploys, merges, credential or secret changes, production-impacting operations, or changes that could affect unrelated user work.
+
+Use generic agent language in project policies so the guidance applies across tools and clients, not just one agent implementation. Prefer storing durable operating policies in the Sidekick knowledge base, with AGENTS.md acting as a pointer to retrieve project policy and operating knowledge from the database first.',
+'agent-policy,autonomy,handoff,best-practices', 1, 'seed-2026-06-16-current', datetime('now'));
 
 COMMIT;
