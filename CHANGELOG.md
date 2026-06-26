@@ -10,6 +10,12 @@ All notable changes to Sidekick.
 - Scanner output contains metadata only and obeys filesystem path policy, including denied descendants.
 - Added bounded scanning, text/JSON output, dedicated tests, and database-first operating guidance.
 
+### Health and smoke probes
+
+- Fixed `sidekick_health check=all` report crashes when process, disk, or network commands fail.
+- Replaced the synchronous MCP self-probe with an asynchronous child process so `/health` can respond while `sidekick_ops` is running.
+- Added composite health regression coverage and stable failure result shapes.
+
 ## 2026-06-17
 
 ### Memory System Complete (PR #19, #20, #21)
