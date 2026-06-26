@@ -56,6 +56,18 @@ const TOOL_SCHEMAS = {
   }),
   sidekick_get: z.object({ key: z.string().describe("Storage key to retrieve") }),
   sidekick_delete: z.object({ key: z.string().describe("Storage key to delete") }),
+  sidekick_resume: z.object({
+    action: z.enum(["check", "set", "clear", "list"]).optional().default("check").describe("Resume action"),
+    project: z.string().optional().describe("Project name for check/set/clear"),
+    summary: z.string().optional().describe("Short pending-work summary for action=set"),
+    next_step: z.string().optional().describe("Concrete next step for action=set"),
+    status: z.string().optional().describe("Resume status for action=set (default active)"),
+    branch: z.string().optional().describe("Related branch name for action=set"),
+    url: z.string().optional().describe("Related PR/issue URL for action=set"),
+    notes: z.string().optional().describe("Additional notes for set/clear"),
+    include_cleared: z.boolean().optional().describe("Include cleared/done items for action=list"),
+    format: z.enum(["text", "json"]).optional().default("text").describe("Output format")
+  }),
   sidekick_list: z.object({ path: z.string().optional().default("/home/sidekick").describe("Directory path to list") }),
   sidekick_web_fetch: z.object({
     url: z.string().describe("URL to fetch"),

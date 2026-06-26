@@ -106,6 +106,7 @@ const TOOL_RISK = {
   sidekick_tools: "low",
   sidekick_knowledge: "low",
   sidekick_delete: "low",
+  sidekick_resume: "low",
   sidekick_metrics: "low",
 };
 
@@ -123,6 +124,7 @@ const TOOL_CATEGORIES = {
   'sidekick_store': 'Storage',
   'sidekick_get': 'Storage',
   'sidekick_delete': 'Storage',
+  'sidekick_resume': 'Storage',
   'sidekick_list_projects': 'Storage',
   'sidekick_get_by_project': 'Storage',
   'sidekick_redis': 'Storage',
@@ -978,6 +980,112 @@ async function sidekick_delete({ key }) {
   }
   dbStore.deleteKV(key);
   return { content: [{ type: "text", text: "Deleted key \"" + key + "\"" }] };
+}
+
+const RESUME_DOCUMENT = "resume";
+
+function loadResumeDocument() {
+  const doc = dbStore.loadDocument(RESUME_DOCUMENT, { items: {} });
+  if (!doc || typeof doc !== "object") return { items: {} };
+  doc.items = doc.items && typeof doc.items === "object" ? doc.items : {};
+  return doc;
+}
+
+function saveResumeDocument(doc) {
+  dbStore.setDocument(RESUME_DOCUMENT, {
+    version: 1,
+    updated_at: new Date().toISOString(),
+    items: doc.items || {}
+  });
+}
+
+function activeResumeItems(doc, includeCleared = false) {
+  const items = Object.values(doc.items || {});
+  if (includeCleared) return items;
+  return items.filter(item => !["cleared", "done"].includes(item.status));
+}
+
+function formatResumeItem(item) {
+  return [
+    `Project: ${item.project}`,
+    `Status: ${item.status}`,
+    `Summary: ${item.summary || "(none)"}`,
+    `Next step: ${item.next_step || "(none)"}`,
+    item.branch ? `Branch: ${item.branch}` : null,
+    item.url ? `URL: ${item.url}` : null,
+    item.notes ? `Notes: ${item.notes}` : null,
+    `Updated: ${item.updated_at}`
+  ].filter(Boolean).join("\n");
+}
+
+async function sidekick_resume({ action, project, summary, next_step, status, branch, url, notes, include_cleared, format }) {
+  const selectedAction = action || "check";
+  const selectedFormat = format || "text";
+  const doc = loadResumeDocument();
+
+  if (selectedAction === "list") {
+    const items = activeResumeItems(doc, include_cleared === true)
+      .sort((a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")));
+    const payload = { count: items.length, items };
+    const text = selectedFormat === "json"
+      ? JSON.stringify(payload, null, 2)
+      : (items.length ? items.map(formatResumeItem).join("\n\n---\n\n") : "No pending resume items");
+    return { content: [{ type: "text", text }] };
+  }
+
+  if (!project || !PROJECT_RE.test(project)) {
+    return { content: [{ type: "text", text: "project required and must match /^[a-z][a-z0-9_]*$/" }], isError: true };
+  }
+
+  if (selectedAction === "check") {
+    const item = doc.items[project];
+    if (!item || ["cleared", "done"].includes(item.status)) {
+      return { content: [{ type: "text", text: `No pending resume item for project: ${project}` }] };
+    }
+    const text = selectedFormat === "json" ? JSON.stringify(item, null, 2) : formatResumeItem(item);
+    return { content: [{ type: "text", text }] };
+  }
+
+  if (selectedAction === "set") {
+    if (!summary && !next_step) {
+      return { content: [{ type: "text", text: "summary or next_step required for action=set" }], isError: true };
+    }
+    const now = new Date().toISOString();
+    const existing = doc.items[project] || {};
+    const item = {
+      id: existing.id || generateId("resume"),
+      project,
+      status: status || "active",
+      summary: summary !== undefined ? redactSensitive(summary) : existing.summary || null,
+      next_step: next_step !== undefined ? redactSensitive(next_step) : existing.next_step || null,
+      branch: branch !== undefined ? redactSensitive(branch) : existing.branch || null,
+      url: url !== undefined ? redactSensitive(url) : existing.url || null,
+      notes: notes !== undefined ? redactSensitive(notes) : existing.notes || null,
+      created_at: existing.created_at || now,
+      updated_at: now
+    };
+    doc.items[project] = item;
+    saveResumeDocument(doc);
+    const text = selectedFormat === "json" ? JSON.stringify(item, null, 2) : `Resume set for project: ${project} (${item.id})`;
+    return { content: [{ type: "text", text }] };
+  }
+
+  if (selectedAction === "clear") {
+    const item = doc.items[project];
+    if (!item) {
+      return { content: [{ type: "text", text: `No resume item found for project: ${project}` }], isError: true };
+    }
+    const now = new Date().toISOString();
+    item.status = "cleared";
+    item.cleared_at = now;
+    item.updated_at = now;
+    if (notes !== undefined) item.notes = redactSensitive(notes);
+    saveResumeDocument(doc);
+    const text = selectedFormat === "json" ? JSON.stringify(item, null, 2) : `Resume cleared for project: ${project}`;
+    return { content: [{ type: "text", text }] };
+  }
+
+  return { content: [{ type: "text", text: "Invalid action. Use: check, set, clear, list" }], isError: true };
 }
 
 async function sidekick_list_projects() {
@@ -10119,6 +10227,7 @@ const TOOLS = {
   sidekick_store,
   sidekick_get,
   sidekick_delete,
+  sidekick_resume,
   sidekick_list,
   sidekick_web_fetch,
   sidekick_llm,
@@ -10217,6 +10326,7 @@ const TOOL_DEFS = [
   { name: "sidekick_store", description: "Store a value persistently in KV storage", args: { key: "string", value: "string", project: "string (optional)" } },
   { name: "sidekick_get", description: "Retrieve a stored value from KV storage", args: { key: "string" } },
   { name: "sidekick_delete", description: "Delete a stored value from KV storage by key", args: { key: "string" } },
+  { name: "sidekick_resume", description: "Manage first-class project resume handoffs stored in the resume document. Use to check, set, clear, or list pending work without relying on ad hoc KV keys.", args: { action: "string (check|set|clear|list - default check)", project: "string (required for check/set/clear)", summary: "string (optional, for set)", next_step: "string (optional, for set)", status: "string (optional, for set - default active)", branch: "string (optional, for set)", url: "string (optional, for set)", notes: "string (optional)", include_cleared: "boolean (optional, for list)", format: "string (optional, text|json - default text)" } },
   { name: "sidekick_web_fetch", description: "Fetch a URL from the remote machine", args: { url: "string", method: "string (optional)", headers: "string (optional)", body: "string (optional)" } },
   { name: "sidekick_llm", description: "Ask the LLM (defaults to local Ollama, use provider='groq' for cloud Groq)", args: { prompt: "string", system: "string (optional)", temperature: "number (optional)", provider: "string (optional, 'ollama' or 'groq' - default from SIDEKICK_DEFAULT_LLM env var or 'ollama')" } },
   { name: "sidekick_list_projects", description: "List all unique project names in KV storage", args: {} },
