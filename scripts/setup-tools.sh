@@ -330,11 +330,38 @@ done
 echo ""
 
 # ─────────────────────────────────────────────
-# Phase 8: Ollama — second model
+# Phase 8: Ollama
 # ─────────────────────────────────────────────
-log "Phase 8: Pulling Ollama models..."
+log "Phase 8: Installing Ollama and pulling models..."
 
 if command -v ollama &>/dev/null; then
+  skip "Ollama $(ollama --version 2>/dev/null | head -1)"
+else
+  curl -fsSL https://ollama.com/install.sh | sh
+  pass "Ollama installed"
+fi
+
+if command -v ollama &>/dev/null; then
+  systemctl enable ollama 2>/dev/null || true
+  systemctl start ollama 2>/dev/null || true
+
+  for _ in {1..20}; do
+    if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
+      pass "Ollama service reachable"
+      break
+    fi
+    sleep 1
+  done
+
+  DEFAULT_OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5-coder:7b}"
+  if ollama list 2>/dev/null | grep -q "$DEFAULT_OLLAMA_MODEL"; then
+    skip "$DEFAULT_OLLAMA_MODEL already pulled"
+  else
+    info "Pulling $DEFAULT_OLLAMA_MODEL (this may take a while)..."
+    sudo -u "$USERNAME" ollama pull "$DEFAULT_OLLAMA_MODEL"
+    pass "$DEFAULT_OLLAMA_MODEL pulled"
+  fi
+
   if ollama list 2>/dev/null | grep -q "llama3.1:8b"; then
     skip "llama3.1:8b already pulled"
   else
