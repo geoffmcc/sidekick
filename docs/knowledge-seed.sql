@@ -459,4 +459,54 @@ Agents should still ask first before destructive actions, broad refactors, deplo
 Use generic agent language in project policies so the guidance applies across tools and clients, not just one agent implementation. Prefer storing durable operating policies in the Sidekick knowledge base, with AGENTS.md acting as a pointer to retrieve project policy and operating knowledge from the database first.',
 'agent-policy,autonomy,handoff,best-practices', 1, 'seed-2026-06-16-current', datetime('now'));
 
+INSERT INTO knowledge (category, title, content, tags, enabled, version_added, updated_at) VALUES
+('operations', 'Deployment and Bootstrap Repair',
+'Normal deploys update the application and restart the core Node services. First deploy/bootstrap should install the optional tooling stack by default unless the minimal flag is explicitly passed.
+
+If a first bootstrap misses optional tooling, rerun the tooling install path as a repair step rather than resetting the machine. That repair path should bring up missing Docker-backed services and install missing wrappers without wiping existing bind-mounted data or recreating persistent state.
+
+Never delete docker/data directories or Docker volumes unless an explicit destructive reset is requested.',
+'deploy,recovery,bootstrap,docker,full-stack', 1, 'seed-2026-06-16-current', datetime('now')),
+
+('operations', 'Service Startup and Health',
+'Core health means sidekick-mcp, sidekick-dashboard, and sidekick-agent are active. Optional infrastructure is separate and runs through Docker Compose wrappers: sidekick-postgres, sidekick-redis, sidekick-qdrant, sidekick-influxdb, and sidekick-grafana.
+
+Treat active wrappers and healthy containers as different signals: the wrapper can be active even when a container is not yet ready. For the optional stack, verify docker ps and service logs when a container is missing or unhealthy.
+
+Use the core service checks for routine deploy verification, and inspect optional infrastructure separately when metrics, vector search, persistence, or dashboards are expected.',
+'services,health,startup,docker,grafana', 1, 'seed-2026-06-16-current', datetime('now')),
+
+('operations', 'Resume and Handoff Conventions',
+'Use resume_* keys for project-level handoffs and pending work. Keep the current thread''s remaining work together in one resume record unless a distinct project or phase needs its own handoff.
+
+A resume entry should capture the current summary, the next concrete step, and any branch, URL, or notes needed to continue later. Append new context to the existing handoff instead of replacing unrelated pending work.
+
+Keep AGENTS.md compact and use it as a pointer to the database-first knowledge base and resume records.',
+'handoff,resume,kv,workflow,project-state', 1, 'seed-2026-06-16-current', datetime('now'));
+
+INSERT INTO knowledge (category, title, content, tags, enabled, version_added, updated_at) VALUES
+('operations', 'Health Check Expectations and Probe Behavior',
+'Use sidekick_health check=services for routine service verification. The known problematic path is check=all, which has produced a null-object error and should be treated as a bug rather than a reliable health verdict.
+
+During deploy and restart smoke checks, an MCP HTTP probe timeout can occur even when sidekick-mcp is active and still serving live tool calls. If that happens, verify the service state and recent logs before treating it as a deployment failure.
+
+Prefer service-level health and log inspection over a single composite probe when the warning is isolated and the services are otherwise active.',
+'health,operations,mcp,probe,troubleshooting', 1, 'seed-2026-06-16-current', datetime('now')),
+
+('operations', 'Optional Infrastructure Startup Order',
+'Optional infrastructure runs through Docker Compose wrappers backed by systemd. Start Docker first, then the wrapper services for postgres, redis, qdrant, influxdb, and grafana.
+
+Grafana and InfluxDB should be treated as ready only after their container health checks pass. A wrapper being active is not enough by itself.
+
+If optional services are expected but missing, check docker ps, the wrapper service status, and the wrapper logs before assuming data loss or a broken install.',
+'docker,services,optional,infrastructure,startup,grafana', 1, 'seed-2026-06-16-current', datetime('now')),
+
+('operations', 'Safe Recovery Versus Destructive Reset',
+'Rerun setup-tools or the optional infrastructure install path when the goal is to repair or complete a missing stack. That path should preserve existing bind-mounted data and only create what is missing.
+
+Do not delete data directories, prune volumes, or reinitialize containers unless the user explicitly requests a destructive reset.
+
+If state is missing unexpectedly, verify the deploy path, container startup, and filesystem mounts before changing data.',
+'recovery,data,safety,deploy,reset', 1, 'seed-2026-06-16-current', datetime('now'));
+
 COMMIT;
