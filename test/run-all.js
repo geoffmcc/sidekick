@@ -17,6 +17,7 @@ const suites = [
   { file: 'test/github-setup.test.js', critical: true, description: 'GitHub workflow and package script checks' },
   { file: 'test/static-code-quality.test.js', critical: true, description: 'Static safety checks' },
   { file: 'test/security.test.js', critical: true, description: 'Redaction and dangerous command checks' },
+  { file: 'test/security-scan.test.js', critical: true, description: 'Read-only config and secret scan behavior' },
   { file: 'test/deploy-scripts.test.js', critical: false, description: 'Deploy script checks' },
   { file: 'test/mcp-session.test.js', critical: false, description: 'MCP stale session recovery behavior' },
   { file: 'test/ops-workflows.test.js', critical: false, description: 'Packaged operations workflow metadata' },

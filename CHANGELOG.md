@@ -2,6 +2,14 @@
 
 All notable changes to Sidekick.
 
+## Unreleased
+
+### Security configuration scanner
+
+- Added `sidekick_security_scan`, a read-only audit for tracked sensitive files, credential signatures, hardcoded security settings, runtime `.env` safety, and sensitive-file permissions.
+- Scanner output contains metadata only and obeys filesystem path policy, including denied descendants.
+- Added bounded scanning, text/JSON output, dedicated tests, and database-first operating guidance.
+
 ## 2026-06-17
 
 ### Memory System Complete (PR #19, #20, #21)

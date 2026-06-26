@@ -114,6 +114,18 @@ The supplied sudoers file allows the `sidekick` user to run specific systemctl a
 
 `sidekick_secret` provides AES-256-GCM encrypted credential management and requires `SIDEKICK_SECRET_KEY`. Store the secret key outside the repository and include it in your host secret management or systemd environment strategy. API tokens such as the GitHub PAT used by `sidekick_github` belong in `sidekick_secret` as encrypted secrets, not in KV memory.
 
+## Configuration and secret scanning
+
+Use `sidekick_security_scan` for a read-only audit before deployments or after configuration changes:
+
+```javascript
+sidekick_security_scan({ path: "/home/sidekick/sidekick", format: "text" })
+```
+
+The scanner checks for tracked sensitive files, private-key and high-confidence credential signatures, hardcoded sensitive configuration values or fallbacks, generated credential filenames, runtime `.env` security keys, and permissive sensitive-file modes. It reports paths, key names, line numbers, and severity only; it never returns matched values. Scans obey global and source-specific path policy, skip denied descendants, and are bounded by `max_files`.
+
+Findings are audit results, not automatic mutations. Rotate exposed credentials, remove tracked secrets from history, replace hardcoded defaults with secret injection, and restrict file permissions through a deliberate remediation workflow.
+
 ## Exposure recommendations
 
 Recommended safest setup:
