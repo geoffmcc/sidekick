@@ -86,13 +86,17 @@ The approval queue is an optional dashboard review layer for allowed tools. It d
 Set `SIDEKICK_APPROVAL_MODE=risky` to queue critical-risk tools for dashboard approval, or `SIDEKICK_APPROVAL_MODE=strict` to queue high and critical tools. Approval lists accept exact tool names and risk selectors, and source-specific variables are available for `MCP`, `DASHBOARD`, and `AGENT` sources:
 
 ```env
+SIDEKICK_SECRET_KEY=replace-with-a-strong-random-secret
 SIDEKICK_APPROVAL_MODE=risky
+SIDEKICK_APPROVAL_TTL_SECONDS=3600
 SIDEKICK_APPROVAL_REQUIRED_TOOLS=sidekick_evolve,sidekick_db_restore
 SIDEKICK_APPROVAL_EXEMPT_TOOLS=sidekick_bash
 SIDEKICK_AGENT_APPROVAL_MODE=strict
 ```
 
-Pending requests appear in the dashboard Approvals tab with redacted argument previews. Approving a request executes it under the original source and reuses normal tool-policy enforcement while bypassing only the approval check.
+Pending requests appear in the dashboard Approvals tab with structurally redacted argument previews. Full arguments are encrypted with `SIDEKICK_SECRET_KEY`, never returned by the approval-list API, and discarded after approval, rejection, failure, or expiry. Pending approvals expire after `SIDEKICK_APPROVAL_TTL_SECONDS` (default: one hour). If the secret key is missing, Sidekick refuses to queue the action instead of storing its arguments in plaintext.
+
+Approving a request executes it under the original source and reuses current tool-policy enforcement while bypassing only the approval check. A tool blocked after it was queued therefore remains blocked at execution time.
 
 ## Database query safety
 

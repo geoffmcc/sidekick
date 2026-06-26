@@ -509,4 +509,13 @@ Do not delete data directories, prune volumes, or reinitialize containers unless
 If state is missing unexpectedly, verify the deploy path, container startup, and filesystem mounts before changing data.',
 'recovery,data,safety,deploy,reset', 1, 'seed-2026-06-16-current', datetime('now'));
 
+INSERT INTO knowledge (category, title, content, tags, enabled, version_added, updated_at) VALUES
+('best-practices', 'Approval Queue Security',
+'The approval queue is optional and defaults to off. It applies only to tools already allowed by tool policy; approval never enables a blocked tool. Use risky mode for critical tools or strict mode for high and critical tools, with global or source-specific required and exempt lists.
+
+Enabling approvals requires SIDEKICK_SECRET_KEY. Sidekick encrypts full queued arguments with AES-256-GCM, exposes only structurally redacted previews, and removes payloads after approval, rejection, failure, or expiry. If the encryption key is unavailable, Sidekick refuses to queue a new action rather than storing plaintext.
+
+Pending approvals expire after SIDEKICK_APPROVAL_TTL_SECONDS, default 3600 seconds. Approval execution rechecks the current tool policy under the original request source and bypasses only the approval check, so a request blocked after queueing remains blocked.',
+'approval,security,tool-policy,encryption,dashboard', 1, 'seed-2026-06-16-current', datetime('now'));
+
 COMMIT;
