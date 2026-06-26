@@ -1799,6 +1799,14 @@ async function generateEmbedding(text) {
 
 async function searchContext(ctx, query, type, limit = 10) {
   const results = [];
+  const structuredExact = findStructuredMemoryById(query, type);
+  if (structuredExact) {
+    return [{ type: "memory", item: structuredExact, score: 1 }];
+  }
+  const exact = findContextItemById(ctx, query, type);
+  if (exact && contextItemIsActive(exact.item)) {
+    return [{ type: exact.type, item: exact.item, score: 1 }];
+  }
 
   // Try Qdrant semantic search first, then merge keyword matches so automatic
   // memories in the SQLite context document are always eligible.
@@ -1856,6 +1864,7 @@ async function searchContext(ctx, query, type, limit = 10) {
 
   if (type === "all" || type === "decisions") {
     for (const dec of ctx.decisions) {
+      if (!contextItemIsActive(dec)) continue;
       const text = `${dec.context} ${dec.decision} ${dec.reasoning}`;
       const score = simpleSimilarity(query, text);
       if (score > 0.1) {
@@ -1866,6 +1875,7 @@ async function searchContext(ctx, query, type, limit = 10) {
   
   if (type === "all" || type === "problems") {
     for (const prob of ctx.problems) {
+      if (!contextItemIsActive(prob)) continue;
       const text = `${prob.description} ${prob.solution || ""}`;
       const score = simpleSimilarity(query, text);
       if (score > 0.1) {
@@ -1876,6 +1886,7 @@ async function searchContext(ctx, query, type, limit = 10) {
   
   if (type === "all" || type === "patterns") {
     for (const pat of ctx.patterns) {
+      if (!contextItemIsActive(pat)) continue;
       const text = `${pat.description} ${pat.example || ""}`;
       const score = simpleSimilarity(query, text);
       if (score > 0.1) {
@@ -1886,6 +1897,7 @@ async function searchContext(ctx, query, type, limit = 10) {
   
   if (type === "all" || type === "sessions") {
     for (const sess of (ctx.sessions || [])) {
+      if (!contextItemIsActive(sess)) continue;
       const text = `${sess.summary || ""} ${(sess.topics || []).join(" ")} ${sess.notes || ""}`;
       const score = simpleSimilarity(query, text);
       if (score > 0.1) {
@@ -1896,6 +1908,7 @@ async function searchContext(ctx, query, type, limit = 10) {
 
   if (type === "all" || type === "memories") {
     for (const mem of (ctx.memories || [])) {
+      if (!contextItemIsActive(mem)) continue;
       const text = `${mem.summary || ""} ${mem.goal || ""} ${mem.args || ""} ${mem.tool || ""} ${(mem.tools || []).join(" ")}`;
       const score = simpleSimilarity(query, text);
       if (score > 0.1) {
@@ -1906,6 +1919,114 @@ async function searchContext(ctx, query, type, limit = 10) {
   
   results.sort((a, b) => b.score - a.score);
   return results.slice(0, limit);
+}
+
+const CONTEXT_COLLECTIONS = [
+  { type: "decision", filter: "decisions", key: "decisions" },
+  { type: "problem", filter: "problems", key: "problems" },
+  { type: "pattern", filter: "patterns", key: "patterns" },
+  { type: "session", filter: "sessions", key: "sessions" },
+  { type: "memory", filter: "memories", key: "memories" }
+];
+
+function structuredMemoryToContextItem(mem) {
+  if (!mem || mem.enabled === false || mem.state === "deleted" || mem.state === "expired") return null;
+  return {
+    id: mem.id,
+    date: mem.last_seen_at || mem.updated_at,
+    type: mem.type,
+    project: mem.project,
+    summary: mem.summary || mem.content,
+    content: mem.content,
+    tool: mem.source_tool,
+    outcome: mem.metadata?.outcome,
+    confidence: mem.confidence,
+    times_confirmed: mem.times_confirmed,
+    structured: true
+  };
+}
+
+function findStructuredMemoryById(id, type = "all") {
+  if (!contextTypeMatches(type || "all", { type: "memory", filter: "memories" })) return null;
+  const mem = dbStore.getMemoryById(String(id || "").trim(), { includeDisabled: true });
+  return structuredMemoryToContextItem(mem);
+}
+
+function contextTypeMatches(filter, entry) {
+  return !filter || filter === "all" || filter === entry.filter || filter === entry.type;
+}
+
+function contextItemIsActive(item) {
+  return item && item.enabled !== false && item.state !== "deleted" && item.state !== "disabled" && item.state !== "expired";
+}
+
+function findContextItemById(ctx, id, type = "all") {
+  const wanted = String(id || "").trim();
+  if (!wanted) return null;
+  for (const entry of CONTEXT_COLLECTIONS) {
+    if (!contextTypeMatches(type || "all", entry)) continue;
+    const list = Array.isArray(ctx[entry.key]) ? ctx[entry.key] : [];
+    const index = list.findIndex(item => item && item.id === wanted);
+    if (index >= 0) return { ...entry, item: list[index], index };
+  }
+  return null;
+}
+
+function formatContextRecallResult(type, item) {
+  if (type === "decision") {
+    return `[Decision ${item.id}] ${item.date}\nContext: ${item.context}\nDecision: ${item.decision}\nReasoning: ${item.reasoning || "N/A"}`;
+  }
+  if (type === "problem") {
+    return `[Problem ${item.id}] ${item.date}\nDescription: ${item.description}\nSolution: ${item.solution || "Unresolved"}`;
+  }
+  if (type === "pattern") {
+    return `[Pattern ${item.id}] ${item.date}\nDescription: ${item.description}\nExample: ${item.example || "N/A"}`;
+  }
+  if (type === "session") {
+    return `[Session ${item.id}] ${item.date}\nSummary: ${item.summary}\nTopics: ${(item.topics || []).join(", ")}\nOutcome: ${item.outcome || "N/A"}`;
+  }
+  if (type === "memory") {
+    return `[Memory ${item.id}] ${item.date}\nType: ${item.type || "memory"}\nProject: ${item.project || "N/A"}\nSummary: ${item.summary || item.content || "N/A"}\nTool: ${item.tool || "N/A"}\nOutcome: ${item.outcome || "N/A"}\nConfidence: ${item.confidence || "N/A"}\nConfirmations: ${item.times_confirmed || "N/A"}`;
+  }
+  return `[Context ${item.id}] ${JSON.stringify(item, null, 2)}`;
+}
+
+function updateLegacyContextItem(id, action, reason) {
+  const ctx = loadContext();
+  const found = findContextItemById(ctx, id, "all");
+  if (!found) return { found: false };
+
+  const now = new Date().toISOString();
+  const item = found.item;
+  if (action === "delete") {
+    item.enabled = false;
+    item.state = "deleted";
+    item.deleted_at = now;
+    item.delete_reason = reason || "user_deleted";
+  } else if (action === "disable") {
+    item.enabled = false;
+    item.state = "disabled";
+    item.disabled_at = now;
+    item.disable_reason = reason || "user_disabled";
+  } else if (action === "expire") {
+    item.enabled = false;
+    item.state = "expired";
+    item.expired_at = now;
+    item.expire_reason = reason || "manual_expire";
+  } else if (action === "restore") {
+    item.enabled = true;
+    item.state = "active";
+    item.restored_at = now;
+    delete item.deleted_at;
+    delete item.disabled_at;
+    delete item.expired_at;
+  } else {
+    return { found: true, supported: false, type: found.type };
+  }
+
+  item.updated_at = now;
+  saveContext(ctx);
+  return { found: true, supported: true, type: found.type, id };
 }
 
 async function sidekick_context({ action, project, context, decision, reasoning, problem, solution, pattern, summary, topics, outcome, notes, query, type, limit }) {
@@ -2086,20 +2207,7 @@ async function sidekick_context({ action, project, context, decision, reasoning,
     if (results.length === 0) {
       return { content: [{ type: "text", text: "No relevant context found" }] };
     }
-    const summary = results.map(r => {
-      const item = r.item;
-      if (r.type === "decision") {
-        return `[Decision ${item.id}] ${item.date}\nContext: ${item.context}\nDecision: ${item.decision}\nReasoning: ${item.reasoning || "N/A"}`;
-      } else if (r.type === "problem") {
-        return `[Problem ${item.id}] ${item.date}\nDescription: ${item.description}\nSolution: ${item.solution || "Unresolved"}`;
-      } else if (r.type === "pattern") {
-        return `[Pattern ${item.id}] ${item.date}\nDescription: ${item.description}\nExample: ${item.example || "N/A"}`;
-      } else if (r.type === "session") {
-        return `[Session ${item.id}] ${item.date}\nSummary: ${item.summary}\nTopics: ${(item.topics || []).join(", ")}\nOutcome: ${item.outcome || "N/A"}`;
-      } else if (r.type === "memory") {
-        return `[Memory ${item.id}] ${item.date}\nType: ${item.type || "memory"}\nProject: ${item.project || "N/A"}\nSummary: ${item.summary || item.content || "N/A"}\nTool: ${item.tool || "N/A"}\nOutcome: ${item.outcome || "N/A"}\nConfidence: ${item.confidence || "N/A"}\nConfirmations: ${item.times_confirmed || "N/A"}`;
-      }
-    }).join("\n\n");
+    const summary = results.map(r => formatContextRecallResult(r.type, r.item)).join("\n\n");
     return { content: [{ type: "text", text: summary }] };
   }
 
@@ -5849,39 +5957,69 @@ async function sidekick_memory_import({ data, on_conflict, preserve_ids }) {
 async function sidekick_memory_manage({ action, id, confirmed_by, days, reason, limit, project }) {
   if (action === "confirm") {
     if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
+    const legacy = findContextItemById(loadContext(), id, "all");
+    if (legacy) {
+      return { content: [{ type: "text", text: `Unsupported memory id for confirm: ${id} is a legacy context ${legacy.type}. Use delete, disable, expire, or restore for legacy context entries.` }], isError: true };
+    }
     const success = dbStore.confirmMemory(id, confirmed_by || "user");
-    return { content: [{ type: "text", text: success ? `Memory ${id} confirmed` : `Failed to confirm memory ${id}` }] };
+    return { content: [{ type: "text", text: success ? `Memory ${id} confirmed` : `Memory not found: ${id}` }], isError: !success };
   }
   
   if (action === "set_requires_confirmation") {
     if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
+    const legacy = findContextItemById(loadContext(), id, "all");
+    if (legacy) {
+      return { content: [{ type: "text", text: `Unsupported memory id for set_requires_confirmation: ${id} is a legacy context ${legacy.type}. Structured memories only support confirmation requirements.` }], isError: true };
+    }
     const requires = reason !== "false";
     const success = dbStore.setMemoryRequiresConfirmation(id, requires);
-    return { content: [{ type: "text", text: success ? `Memory ${id} requires_confirmation set to ${requires}` : `Failed to update memory ${id}` }] };
+    return { content: [{ type: "text", text: success ? `Memory ${id} requires_confirmation set to ${requires}` : `Memory not found: ${id}` }], isError: !success };
   }
   
   if (action === "delete") {
     if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
     const success = dbStore.softDeleteMemory(id, reason || "user_deleted");
-    return { content: [{ type: "text", text: success ? `Memory ${id} soft-deleted` : `Failed to delete memory ${id}` }] };
+    if (success) return { content: [{ type: "text", text: `Memory ${id} soft-deleted` }] };
+    const legacy = updateLegacyContextItem(id, "delete", reason || "user_deleted");
+    if (legacy.supported) return { content: [{ type: "text", text: `Legacy context ${legacy.type} ${id} soft-deleted` }] };
+    return { content: [{ type: "text", text: `Memory or context id not found: ${id}` }], isError: true };
+  }
+
+  if (action === "disable") {
+    if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
+    const success = dbStore.disableMemory(id);
+    if (success) return { content: [{ type: "text", text: `Memory ${id} disabled` }] };
+    const legacy = updateLegacyContextItem(id, "disable", reason || "user_disabled");
+    if (legacy.supported) return { content: [{ type: "text", text: `Legacy context ${legacy.type} ${id} disabled` }] };
+    return { content: [{ type: "text", text: `Memory or context id not found: ${id}` }], isError: true };
   }
   
   if (action === "expire") {
     if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
     const success = dbStore.expireMemory(id, reason || "manual_expire");
-    return { content: [{ type: "text", text: success ? `Memory ${id} expired` : `Failed to expire memory ${id}` }] };
+    if (success) return { content: [{ type: "text", text: `Memory ${id} expired` }] };
+    const legacy = updateLegacyContextItem(id, "expire", reason || "manual_expire");
+    if (legacy.supported) return { content: [{ type: "text", text: `Legacy context ${legacy.type} ${id} expired` }] };
+    return { content: [{ type: "text", text: `Memory or context id not found: ${id}` }], isError: true };
   }
   
   if (action === "restore") {
     if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
     const success = dbStore.restoreMemory(id);
-    return { content: [{ type: "text", text: success ? `Memory ${id} restored` : `Failed to restore memory ${id}` }] };
+    if (success) return { content: [{ type: "text", text: `Memory ${id} restored` }] };
+    const legacy = updateLegacyContextItem(id, "restore");
+    if (legacy.supported) return { content: [{ type: "text", text: `Legacy context ${legacy.type} ${id} restored` }] };
+    return { content: [{ type: "text", text: `Memory or context id not found: ${id}` }], isError: true };
   }
   
   if (action === "set_auto_expire") {
     if (!id || !days) return { content: [{ type: "text", text: "id and days required" }], isError: true };
+    const legacy = findContextItemById(loadContext(), id, "all");
+    if (legacy) {
+      return { content: [{ type: "text", text: `Unsupported memory id for set_auto_expire: ${id} is a legacy context ${legacy.type}. Structured memories only support auto-expiration.` }], isError: true };
+    }
     const success = dbStore.setAutoExpire(id, days);
-    return { content: [{ type: "text", text: success ? `Memory ${id} will expire in ${days} days` : `Failed to set auto-expire` }] };
+    return { content: [{ type: "text", text: success ? `Memory ${id} will expire in ${days} days` : `Memory not found: ${id}` }], isError: !success };
   }
   
   if (action === "list_by_state") {
@@ -5900,7 +6038,7 @@ async function sidekick_memory_manage({ action, id, confirmed_by, days, reason, 
     return { content: [{ type: "text", text: `Processed auto-expirations: ${result.expired} memories expired` }] };
   }
   
-  return { content: [{ type: "text", text: "Invalid action. Use: confirm, set_requires_confirmation, delete, expire, restore, set_auto_expire, list_by_state, pending_confirmations, process_auto_expirations" }], isError: true };
+  return { content: [{ type: "text", text: "Invalid action. Use: confirm, set_requires_confirmation, delete, disable, expire, restore, set_auto_expire, list_by_state, pending_confirmations, process_auto_expirations" }], isError: true };
 }
 
 async function sidekick_sync_identity({ action, user_id }) {
@@ -10119,7 +10257,7 @@ const TOOL_DEFS = [
   { name: "sidekick_project", description: "Get complete project context in one call: KV entries, context tracking, recent logs, procedures.", args: { name: "string (project name)", include: "string (optional, comma-separated: kv,context,logs,procedures - default kv,context)" } },
   { name: "sidekick_memory_export", description: "Export structured memories to JSON for backup, portability, or machine-to-machine transfer.", args: { project: "string (optional, filter by project)", type: "string (optional, filter by memory type)", include_disabled: "boolean (optional, include disabled memories - default true)", automatic_only: "boolean (optional, only automatic memories - default false)" } },
   { name: "sidekick_memory_import", description: "Import memories from JSON export. Supports merge (update existing) or skip conflict modes.", args: { data: "string|object (JSON export data or parsed object)", on_conflict: "string (optional, merge|skip - default merge)", preserve_ids: "boolean (optional, preserve original IDs - default false)" } },
-  { name: "sidekick_memory_manage", description: "Manage memory lifecycle: confirm, delete, expire, restore, set auto-expire, list by state, pending confirmations, process auto-expirations.", args: { action: "string (confirm|set_requires_confirmation|delete|expire|restore|set_auto_expire|list_by_state|pending_confirmations|process_auto_expirations)", id: "string (memory ID, or state name for list_by_state)", confirmed_by: "string (optional, who confirmed - default 'user')", days: "number (for set_auto_expire)", reason: "string (optional, reason for delete/expire)", limit: "number (optional, for list operations - default 50)", project: "string (optional, filter by project for list operations)" } },
+  { name: "sidekick_memory_manage", description: "Manage memory lifecycle: confirm, delete, disable, expire, restore, set auto-expire, list by state, pending confirmations, process auto-expirations. Delete, disable, expire, and restore also support legacy context entry IDs such as sessions.", args: { action: "string (confirm|set_requires_confirmation|delete|disable|expire|restore|set_auto_expire|list_by_state|pending_confirmations|process_auto_expirations)", id: "string (memory/context ID, or state name for list_by_state)", confirmed_by: "string (optional, who confirmed - default 'user')", days: "number (for set_auto_expire)", reason: "string (optional, reason for delete/disable/expire)", limit: "number (optional, for list operations - default 50)", project: "string (optional, filter by project for list operations)" } },
   { name: "sidekick_sync_identity", description: "Manage machine and user identity for cross-machine sync. Get or set machine_id and user_id.", args: { action: "string (get|set_user)", user_id: "string (required for set_user action)" } },
   { name: "sidekick_sync_export", description: "Export memories for cross-machine sync. Includes origin tracking and sync metadata.", args: { project: "string (optional, filter by project)", since: "string (optional, ISO timestamp - only export memories updated after this time)", include_disabled: "boolean (optional, include disabled memories - default true)" } },
   { name: "sidekick_sync_import", description: "Import memories from another machine's sync export. Supports conflict resolution strategies.", args: { data: "string|object (sync export data)", strategy: "string (optional, newest|highest_confidence|most_confirmed|merge|skip - default newest)", preserve_ids: "boolean (optional, preserve original IDs - default false)" } },

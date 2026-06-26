@@ -505,6 +505,16 @@ function listMemories(options = {}) {
   return searchMemories({ ...options, query: undefined });
 }
 
+function getMemoryById(id, { includeDisabled = true } = {}) {
+  if (!hasMemoriesTable() || !id) return null;
+  const row = db.prepare(`
+    SELECT * FROM memories
+    WHERE id = ?
+      ${includeDisabled ? "" : "AND enabled = 1"}
+  `).get(id);
+  return normalizeMemoryRow(row);
+}
+
 function disableMemory(id) {
   if (!hasMemoriesTable()) return false;
   const result = db.prepare("UPDATE memories SET enabled = 0, updated_at = ?, last_seen_at = ? WHERE id = ?").run(nowIso(), nowIso(), id);
@@ -1833,6 +1843,7 @@ module.exports = {
   clearToolLogs,
   hasMemoriesTable,
   upsertMemory,
+  getMemoryById,
   searchMemories,
   listMemories,
   disableMemory,

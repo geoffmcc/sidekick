@@ -123,7 +123,7 @@ Filesystem path guardrails are optional and default to open. Use `SIDEKICK_ALLOW
 | `sidekick_metrics` | Monitoring | Metrics collection and querying with InfluxDB | `{ action: "string (write|query|list_measurements|list_fields)", measurement: "string (optional)", fields: "object (optional)", tags: "object (optional)", timestamp: "number (optional)", query: "string (optional)", time_range: "string (optional)" }` |
 | `sidekick_memory_export` | Context & Learning | Export structured memories to JSON for backup, portability, or machine-to-machine transfer | `{ project: "string (optional)", type: "string (optional)", include_disabled: "boolean (optional)", automatic_only: "boolean (optional)" }` |
 | `sidekick_memory_import` | Context & Learning | Import memories from JSON export with merge or skip conflict handling | `{ data: "string|object", on_conflict: "string (optional, merge|skip)", preserve_ids: "boolean (optional)" }` |
-| `sidekick_memory_manage` | Context & Learning | Manage memory lifecycle: confirm, delete, expire, restore, set auto-expire, list by state, pending confirmations, process auto-expirations | `{ action: "string (confirm|set_requires_confirmation|delete|expire|restore|set_auto_expire|list_by_state|pending_confirmations|process_auto_expirations)", id: "string", confirmed_by: "string (optional)", days: "number (optional)", reason: "string (optional)", limit: "number (optional)", project: "string (optional)" }` |
+| `sidekick_memory_manage` | Context & Learning | Manage memory lifecycle: confirm, delete, disable, expire, restore, set auto-expire, list by state, pending confirmations, process auto-expirations | `{ action: "string (confirm|set_requires_confirmation|delete|disable|expire|restore|set_auto_expire|list_by_state|pending_confirmations|process_auto_expirations)", id: "string", confirmed_by: "string (optional)", days: "number (optional)", reason: "string (optional)", limit: "number (optional)", project: "string (optional)" }` |
 | `sidekick_sync_identity` | Context & Learning | Manage machine and user identity for cross-machine sync | `{ action: "string (get|set_user)", user_id: "string (optional)" }` |
 | `sidekick_sync_export` | Context & Learning | Export memories for cross-machine sync with origin tracking and sync metadata | `{ project: "string (optional)", since: "string (optional)", include_disabled: "boolean (optional)" }` |
 | `sidekick_sync_import` | Context & Learning | Import memories from another machine with conflict resolution strategies | `{ data: "string|object", strategy: "string (optional, newest|highest_confidence|most_confirmed|merge|skip)", preserve_ids: "boolean (optional)" }` |
@@ -230,6 +230,8 @@ Persistent intelligent context management (track projects, decisions, problems, 
 
 Arguments: `{ action: "string", project: "string (optional)", context: "string (optional)", decision: "string (optional)", reasoning: "string (optional)", problem: "string (optional)", solution: "string (optional)", pattern: "string (optional)", query: "string (optional)", type: "string (optional: decisions|problems|patterns|projects|sessions|memories|all)", limit: "number (optional)" }`
 
+`recall` accepts exact IDs such as `sess_...` and `mem_...` in addition to keyword queries. Disabled, deleted, and expired context entries are excluded from recall.
+
 ### `sidekick_debug_tool`
 
 Structured debugging cache with persistent storage for cross-session debugging. Store findings, recall past investigations, cleanup old entries.
@@ -256,9 +258,11 @@ Arguments: `{ data: "string|object (JSON export data or parsed object)", on_conf
 
 ### `sidekick_memory_manage`
 
-Manage memory lifecycle: confirm, delete, expire, restore, set auto-expire, list by state, pending confirmations, and process auto-expirations.
+Manage memory lifecycle: confirm, delete, disable, expire, restore, set auto-expire, list by state, pending confirmations, and process auto-expirations.
 
-Arguments: `{ action: "string (confirm|set_requires_confirmation|delete|expire|restore|set_auto_expire|list_by_state|pending_confirmations|process_auto_expirations)", id: "string (memory ID, or state name for list_by_state)", confirmed_by: "string (optional, who confirmed - default 'user')", days: "number (for set_auto_expire)", reason: "string (optional, reason for delete/expire)", limit: "number (optional, for list operations - default 50)", project: "string (optional, filter by project for list operations)" }`
+Arguments: `{ action: "string (confirm|set_requires_confirmation|delete|disable|expire|restore|set_auto_expire|list_by_state|pending_confirmations|process_auto_expirations)", id: "string (memory/context ID, or state name for list_by_state)", confirmed_by: "string (optional, who confirmed - default 'user')", days: "number (for set_auto_expire)", reason: "string (optional, reason for delete/disable/expire)", limit: "number (optional, for list operations - default 50)", project: "string (optional, filter by project for list operations)" }`
+
+Structured memories in the `memories` table support the full lifecycle. Legacy context entries in the `context` document, including `sess_...` session IDs, support `delete`, `disable`, `expire`, and `restore`; structured-only actions return an explicit unsupported-ID error for those IDs.
 
 ### `sidekick_sync_identity`
 
