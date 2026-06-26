@@ -95,6 +95,16 @@ sidekick_tools({ action: "policy", source: "mcp,dashboard,agent", name: "sidekic
 
 The policy inspector reports whether each source/tool decision is allowed or blocked, the active mode, the matching allow/block selector when one applies, and whether approval is required.
 
+Filesystem path guardrails default to open when unset. Set allowed paths to constrain direct file tools to specific directories, and denied paths to block sensitive locations. A path entry matches itself and its descendants; denied paths win over allowed paths.
+
+```env
+SIDEKICK_ALLOWED_PATHS=/home/sidekick/sidekick,/home/sidekick/projects
+SIDEKICK_DENIED_PATHS=/home/sidekick/.ssh,/etc
+SIDEKICK_AGENT_ALLOWED_PATHS=/home/sidekick/projects
+```
+
+The path guard applies to direct file and repo path arguments such as read, write, list, search, archive, hash, summarize, filter, find, extract, diff files, database backup/export/restore paths, media file inputs/outputs, file watches, snapshots, changelog repo paths, and ops repo paths. It does not parse arbitrary shell commands; keep high-power command tools gated with tool policy and approval.
+
 Approval mode defaults to `off`, so allowed tools execute immediately. Use it when you want allowed high-risk actions to wait in the dashboard Approvals tab:
 
 ```env

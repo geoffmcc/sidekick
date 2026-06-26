@@ -22,7 +22,7 @@ const {
   getGithubArg,
   missionRoute
 } = tools;
-const { sidekick_store, sidekick_get, sidekick_delete, sidekick_list_projects, sidekick_get_by_project, sidekick_tools, sidekick_knowledge } = TOOLS;
+const { sidekick_store, sidekick_get, sidekick_delete, sidekick_list_projects, sidekick_get_by_project, sidekick_tools, sidekick_knowledge, sidekick_read, sidekick_write, sidekick_search } = TOOLS;
 
 console.log('Running Tools Tests...\n');
 (async () => {
@@ -106,6 +106,68 @@ console.log('Running Tools Tests...\n');
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
+    }
+    console.log('✓ Passed\n');
+
+    // Test 2.0aa: filesystem path guard
+    console.log('Test 2.0aa: filesystem path guard');
+    const pathEnvKeys = [
+      'SIDEKICK_ALLOWED_PATHS',
+      'SIDEKICK_DENIED_PATHS',
+      'SIDEKICK_AGENT_ALLOWED_PATHS',
+      'SIDEKICK_AGENT_DENIED_PATHS'
+    ];
+    const savedPathEnv = Object.fromEntries(pathEnvKeys.map(key => [key, process.env[key]]));
+    const allowedDir = path.join(TEST_DATA_DIR, 'allowed');
+    const deniedDir = path.join(TEST_DATA_DIR, 'denied');
+    const outsideDir = path.join(TEST_DATA_DIR, 'outside');
+    fs.mkdirSync(allowedDir, { recursive: true });
+    fs.mkdirSync(deniedDir, { recursive: true });
+    fs.mkdirSync(outsideDir, { recursive: true });
+    const allowedFile = path.join(allowedDir, 'ok.txt');
+    const deniedFile = path.join(deniedDir, 'secret.txt');
+    const outsideFile = path.join(outsideDir, 'outside.txt');
+    fs.writeFileSync(allowedFile, 'allowed content', 'utf-8');
+    fs.writeFileSync(deniedFile, 'denied content', 'utf-8');
+    fs.writeFileSync(outsideFile, 'outside content', 'utf-8');
+    try {
+      for (const key of pathEnvKeys) delete process.env[key];
+      setSource('mcp');
+
+      const defaultRead = await sidekick_read({ path: outsideFile });
+      assert.ok(!defaultRead.isError, 'Unset path policy should preserve open filesystem access');
+
+      process.env.SIDEKICK_ALLOWED_PATHS = allowedDir;
+      const allowedRead = await sidekick_read({ path: allowedFile });
+      assert.ok(!allowedRead.isError, 'Allowed path should be readable');
+      const blockedRead = await sidekick_read({ path: outsideFile });
+      assert.ok(blockedRead.isError, 'Path outside allowlist should be blocked');
+      assert.ok(blockedRead.content[0].text.includes('Path blocked by policy'), 'Blocked path should explain policy block');
+
+      const blockedWrite = await sidekick_write({ path: outsideFile, content: 'blocked' });
+      assert.ok(blockedWrite.isError, 'Writes outside allowlist should be blocked');
+      assert.strictEqual(fs.readFileSync(outsideFile, 'utf-8'), 'outside content', 'Blocked write should not modify file');
+
+      process.env.SIDEKICK_DENIED_PATHS = deniedDir;
+      process.env.SIDEKICK_ALLOWED_PATHS = TEST_DATA_DIR;
+      const deniedRead = await sidekick_read({ path: deniedFile });
+      assert.ok(deniedRead.isError, 'Deny list should win over allowlist');
+
+      delete process.env.SIDEKICK_ALLOWED_PATHS;
+      delete process.env.SIDEKICK_DENIED_PATHS;
+      process.env.SIDEKICK_AGENT_ALLOWED_PATHS = allowedDir;
+      setSource('agent');
+      const agentBlockedSearch = await sidekick_search({ pattern: 'outside', path: outsideDir });
+      assert.ok(agentBlockedSearch.isError, 'Source-specific allowed paths should block that source');
+      setSource('mcp');
+      const mcpOpenSearch = await sidekick_search({ pattern: 'outside', path: outsideDir });
+      assert.ok(!mcpOpenSearch.isError, 'Source-specific allowed paths should not affect other sources');
+    } finally {
+      for (const [key, value] of Object.entries(savedPathEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      setSource('mcp');
     }
     console.log('✓ Passed\n');
 

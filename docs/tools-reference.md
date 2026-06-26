@@ -28,6 +28,8 @@ Use `sidekick_tools` with `action="policy"` to inspect effective policy and appr
 sidekick_tools({ action: "policy", source: "mcp,dashboard,agent", name: "sidekick_bash", format: "json" })
 ```
 
+Filesystem path guardrails are optional and default to open. Use `SIDEKICK_ALLOWED_PATHS` and `SIDEKICK_DENIED_PATHS` to constrain direct file and repository path arguments, with source-specific variants such as `SIDEKICK_AGENT_ALLOWED_PATHS`. Denied paths win over allowed paths.
+
 ## Full inventory
 
 | Tool | Category | Description | Argument summary |
