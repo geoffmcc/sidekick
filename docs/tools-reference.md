@@ -1,6 +1,6 @@
 # Tools Reference
 
-This catalog is generated from `TOOL_DEFS` in `src/tools.js`. The current code exports 94 built-in tool handlers. Most tools return MCP content blocks containing text. Errors usually set `isError: true` and include an explanatory text result.
+This catalog is generated from `TOOL_DEFS` in `src/tools.js`. The current code exports 95 built-in tool handlers. Most tools return MCP content blocks containing text. Errors usually set `isError: true` and include an explanatory text result.
 
 Tool definitions exposed by the dashboard API include policy metadata:
 
@@ -18,7 +18,7 @@ Risk is based on what a tool can change or expose, not whether its implementatio
 | Critical | `sidekick_bash`, `sidekick_write`, `sidekick_db_restore`, `sidekick_runbook`, `sidekick_ops`, `sidekick_mission`, `sidekick_sandbox`, `sidekick_evolve` | Gate in shared or public deployments. Allow only for trusted operators. |
 | High | `sidekick_process`, `sidekick_service`, `sidekick_cron`, `sidekick_delay`, `sidekick_watch`, `sidekick_github`, `sidekick_teach`, `sidekick_secret`, `sidekick_db_migrate`, `sidekick_queue`, `sidekick_orchestrate`, `sidekick_wireguard`, `sidekick_nginx` | Block in `restricted` mode unless the workflow needs them. |
 | Medium | `sidekick_notify`, `sidekick_read`, `sidekick_archive`, `sidekick_git`, `sidekick_web_fetch`, `sidekick_llm`, `sidekick_context`, `sidekick_health`, `sidekick_snapshot`, `sidekick_retry`, `sidekick_fresheyes`, `sidekick_batch`, `sidekick_tail`, `sidekick_find`, `sidekick_status`, `sidekick_extract`, `sidekick_changelog`, `sidekick_netdiag`, `sidekick_timeline`, `sidekick_circuit`, `sidekick_baseline`, `sidekick_depend`, `sidekick_black_box`, `sidekick_db_query`, `sidekick_db_backup`, `sidekick_db_export`, `sidekick_redis`, `sidekick_tunnel` | Generally useful, but can expose data or trigger external effects. |
-| Low | `sidekick_tools`, `sidekick_list`, `sidekick_store`, `sidekick_get`, `sidekick_delete`, `sidekick_list_projects`, `sidekick_get_by_project`, `sidekick_search`, `sidekick_webhook`, `sidekick_transform`, `sidekick_parse`, `sidekick_diff`, `sidekick_hash`, `sidekick_validate`, `sidekick_template`, `sidekick_predict`, `sidekick_debug_tool`, `sidekick_cache`, `sidekick_summarize`, `sidekick_filter`, `sidekick_project`, `sidekick_diff_files`, `sidekick_anonymize`, `sidekick_respond`, `sidekick_db_schema`, `sidekick_db_stats`, `sidekick_log_query`, `sidekick_db_search`, `sidekick_db_diff`, `sidekick_ocr`, `sidekick_media`, `sidekick_transcribe`, `sidekick_analytics`, `sidekick_embed`, `sidekick_ollama`, `sidekick_download`, `sidekick_knowledge`, `sidekick_metrics` | Usually safe to expose, subject to data sensitivity. |
+| Low | `sidekick_tools`, `sidekick_list`, `sidekick_store`, `sidekick_get`, `sidekick_delete`, `sidekick_resume`, `sidekick_list_projects`, `sidekick_get_by_project`, `sidekick_search`, `sidekick_webhook`, `sidekick_transform`, `sidekick_parse`, `sidekick_diff`, `sidekick_hash`, `sidekick_validate`, `sidekick_template`, `sidekick_predict`, `sidekick_debug_tool`, `sidekick_cache`, `sidekick_summarize`, `sidekick_filter`, `sidekick_project`, `sidekick_diff_files`, `sidekick_anonymize`, `sidekick_respond`, `sidekick_db_schema`, `sidekick_db_stats`, `sidekick_log_query`, `sidekick_db_search`, `sidekick_db_diff`, `sidekick_ocr`, `sidekick_media`, `sidekick_transcribe`, `sidekick_analytics`, `sidekick_embed`, `sidekick_ollama`, `sidekick_download`, `sidekick_knowledge`, `sidekick_metrics` | Usually safe to expose, subject to data sensitivity. |
 
 Use `SIDEKICK_TOOL_POLICY=restricted` to block high and critical tools by default. Use `SIDEKICK_ALLOWED_TOOLS`, `SIDEKICK_BLOCKED_TOOLS`, and source-specific variants such as `SIDEKICK_AGENT_ALLOWED_TOOLS` for deployment-specific control.
 
@@ -42,6 +42,7 @@ Filesystem path guardrails are optional and default to open. Use `SIDEKICK_ALLOW
 | `sidekick_store` | Persistent memory and project context | Store a value persistently in KV storage | `{ key: "string", value: "string", project: "string (optional)" }` |
 | `sidekick_get` | Persistent memory and project context | Retrieve a stored value from KV storage | `{ key: "string" }` |
 | `sidekick_delete` | Persistent memory and project context | Delete a stored value from KV storage by key | `{ key: "string" }` |
+| `sidekick_resume` | Persistent memory and project context | Manage first-class project resume handoffs stored in the resume document. Use to check, set, clear, or list pending work without relying on ad hoc KV keys. | `{ action: "string (check|set|clear|list - default check)", project: "string (required for check/set/clear)", summary: "string (optional)", next_step: "string (optional)", status: "string (optional)", branch: "string (optional)", url: "string (optional)", notes: "string (optional)", include_cleared: "boolean (optional)", format: "string (optional, text|json - default text)" }` |
 | `sidekick_web_fetch` | Core file, shell, and code operations | Fetch a URL from the remote machine | `{ url: "string", method: "string (optional)", headers: "string (optional)", body: "string (optional)" }` |
 | `sidekick_llm` | AI, learning, and self-extension | Ask the LLM (defaults to local Ollama, use provider='groq' for cloud Groq) | `{ prompt: "string", system: "string (optional)", temperature: "number (optional)", provider: "string (optional, 'ollama' or 'groq' - default from SIDEKICK_DEFAULT_LLM env var or 'ollama')" }` |
 | `sidekick_list_projects` | Persistent memory and project context | List all unique project names in KV storage | `{}` |
@@ -223,6 +224,14 @@ Arguments: `{}`
 Get all keys and values for a specific project
 
 Arguments: `{ project: "string" }`
+
+### `sidekick_resume`
+
+Manage first-class project resume handoffs stored in the `resume` document.
+
+Arguments: `{ action: "string (check|set|clear|list - default check)", project: "string (required for check/set/clear)", summary: "string (optional, for set)", next_step: "string (optional, for set)", status: "string (optional, for set - default active)", branch: "string (optional, for set)", url: "string (optional, for set)", notes: "string (optional)", include_cleared: "boolean (optional, for list)", format: "string (optional, text|json - default text)" }`
+
+Use `check` at session startup, `set` when leaving pending work, `clear` after completing a handoff, and `list` to see all active project resume items.
 
 ### `sidekick_context`
 

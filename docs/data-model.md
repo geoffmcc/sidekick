@@ -9,7 +9,7 @@ Sidekick stores core persistent state in SQLite (`sidekick.db`) under `SIDEKICK_
 | `sidekick.db` (SQLite) | Primary database: KV store, structured memories, tool logs, named JSON documents, tool registry, tool categories, knowledge base, schema metadata. |
 | `audit.jsonl` | Dashboard audit events for mutating API actions. |
 | `dashboard-errors.log` | Frontend or dashboard error reports. |
-| `json_documents` table | Stores named documents such as `cron`, `webhooks`, `context`, and `watches`. Older constant names remain in code for compatibility, but the active load/save path uses this table. |
+| `json_documents` table | Stores named documents such as `cron`, `webhooks`, `context`, `resume`, and `watches`. Older constant names remain in code for compatibility, but the active load/save path uses this table. |
 | `procedures.json` | Learned procedures used by `sidekick_teach`. |
 | `conversations/` | Agent task transcripts. Files older than 30 days are removed on Agent Bridge startup. |
 | Additional tool files | Secrets, snapshots, queues, evolve proposals, orchestrations, predictions, health history, baselines, circuits, runbooks, black-box captures, sandbox metadata, anonymization patterns, and other feature state may be stored by their matching tools. |
@@ -59,6 +59,10 @@ Each row's `value_json` column contains a JSON object:
   "updated": "2026-06-13T00:00:00.000Z"
 }
 ```
+
+## Resume document
+
+The `resume` document in `json_documents` stores first-class project handoffs managed by `sidekick_resume`. Each project has at most one current item with fields such as `summary`, `next_step`, `status`, `branch`, `url`, timestamps, and optional notes. `check` returns the pending item for a project, `set` creates or updates it, `clear` marks it cleared, and `list` shows active items by default.
 
 `sidekick_get` returns only the stored value for backward compatibility. `sidekick_get_by_project` returns key/value pairs for matching project metadata.
 

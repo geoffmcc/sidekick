@@ -19,6 +19,8 @@ Prefer `sidekick_search`, `sidekick_summarize`, `sidekick_filter`, `sidekick_fin
 
 Recall project context at the start of work that may depend on prior decisions. Use `sidekick_project name="<project>"` for a broad project brief, or `sidekick_context action="recall" project="<project>" query="<topic>"` for a focused search. Always recall before deployment, incident response, credential or access work, PR/merge/release decisions, database migrations, destructive cleanup, and any task where the user mentions earlier work.
 
+Check project handoffs at session startup with `sidekick_resume action="check" project="<project>"`. Use `sidekick_resume action="set"` when leaving unfinished work, and `sidekick_resume action="clear"` once the handoff is complete. This replaces ad hoc resume pointers in KV storage.
+
 Use `sidekick_store` for durable facts that should survive sessions. Use project names that match `^[a-z][a-z0-9_]*$`. Good project names are lowercase and specific, such as `sidekick`, `jellyfin`, `proxmox_lab`, or `website_redesign`.
 
 Use `sidekick_context` for richer history:

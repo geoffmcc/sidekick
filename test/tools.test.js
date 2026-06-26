@@ -22,7 +22,7 @@ const {
   getGithubArg,
   missionRoute
 } = tools;
-const { sidekick_store, sidekick_get, sidekick_delete, sidekick_list_projects, sidekick_get_by_project, sidekick_tools, sidekick_knowledge, sidekick_read, sidekick_write, sidekick_search } = TOOLS;
+const { sidekick_store, sidekick_get, sidekick_delete, sidekick_resume, sidekick_list_projects, sidekick_get_by_project, sidekick_tools, sidekick_knowledge, sidekick_read, sidekick_write, sidekick_search } = TOOLS;
 
 console.log('Running Tools Tests...\n');
 (async () => {
@@ -169,6 +169,40 @@ console.log('Running Tools Tests...\n');
       }
       setSource('mcp');
     }
+    console.log('✓ Passed\n');
+
+    // Test 2.0ab: sidekick_resume document-backed handoff
+    console.log('Test 2.0ab: sidekick_resume document-backed handoff');
+    const emptyResume = await sidekick_resume({ action: 'check', project: 'resume_test' });
+    assert.ok(emptyResume.content[0].text.includes('No pending resume item'), 'Missing project resume should be explicit');
+    const invalidResumeProject = await sidekick_resume({ action: 'set', project: 'Invalid-Project', summary: 'bad' });
+    assert.ok(invalidResumeProject.isError, 'Invalid resume project should fail validation');
+    const setResume = await sidekick_resume({
+      action: 'set',
+      project: 'resume_test',
+      summary: 'Finish resume workflow PR',
+      next_step: 'Open the pull request',
+      branch: 'hardening/resume-workflow',
+      url: 'https://example.invalid/pr/1',
+      format: 'json'
+    });
+    const resumeItem = JSON.parse(setResume.content[0].text);
+    assert.strictEqual(resumeItem.project, 'resume_test', 'Resume item should store project');
+    assert.strictEqual(resumeItem.status, 'active', 'Resume item should default to active status');
+    assert.strictEqual(resumeItem.next_step, 'Open the pull request', 'Resume item should store next step');
+    const checkResume = await sidekick_resume({ action: 'check', project: 'resume_test' });
+    assert.ok(checkResume.content[0].text.includes('Finish resume workflow PR'), 'Check should return pending resume summary');
+    const listResume = await sidekick_resume({ action: 'list', format: 'json' });
+    const listedResume = JSON.parse(listResume.content[0].text);
+    assert.ok(listedResume.items.some(item => item.project === 'resume_test'), 'List should include active resume item');
+    const clearResume = await sidekick_resume({ action: 'clear', project: 'resume_test' });
+    assert.ok(clearResume.content[0].text.includes('Resume cleared'), 'Clear should report success');
+    const clearedCheck = await sidekick_resume({ action: 'check', project: 'resume_test' });
+    assert.ok(clearedCheck.content[0].text.includes('No pending resume item'), 'Cleared resume should not be pending');
+    const listActiveAfterClear = JSON.parse((await sidekick_resume({ action: 'list', format: 'json' })).content[0].text);
+    assert.ok(!listActiveAfterClear.items.some(item => item.project === 'resume_test'), 'Default list should hide cleared items');
+    const listCleared = JSON.parse((await sidekick_resume({ action: 'list', include_cleared: true, format: 'json' })).content[0].text);
+    assert.ok(listCleared.items.some(item => item.project === 'resume_test' && item.status === 'cleared'), 'include_cleared should show cleared items');
     console.log('✓ Passed\n');
 
     // Test 2.0b: sidekick_github argument parsing
