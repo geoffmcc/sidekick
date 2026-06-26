@@ -7,6 +7,7 @@ Tool definitions exposed by the dashboard API include policy metadata:
 - `risk`: `low`, `medium`, `high`, or `critical`
 - `enabled`: whether the active source policy allows the tool
 - `policy`: short reason for the policy decision
+- `approval_required`: whether the active source approval policy queues the tool before execution
 
 ## Risk classification
 
@@ -21,12 +22,18 @@ Risk is based on what a tool can change or expose, not whether its implementatio
 
 Use `SIDEKICK_TOOL_POLICY=restricted` to block high and critical tools by default. Use `SIDEKICK_ALLOWED_TOOLS`, `SIDEKICK_BLOCKED_TOOLS`, and source-specific variants such as `SIDEKICK_AGENT_ALLOWED_TOOLS` for deployment-specific control.
 
+Use `sidekick_tools` with `action="policy"` to inspect effective policy and approval decisions without changing configuration:
+
+```javascript
+sidekick_tools({ action: "policy", source: "mcp,dashboard,agent", name: "sidekick_bash", format: "json" })
+```
+
 ## Full inventory
 
 | Tool | Category | Description | Argument summary |
 |---|---|---|---|
 | `sidekick_bash` | Core file, shell, and code operations | Execute a shell command on the remote machine | `{ command: "string" }` |
-| `sidekick_tools` | Core file, shell, and code operations | Tool catalog and discovery manifest. Use for broad questions like "what Sidekick tools are available?", "list available tools", "tool overview", or "tool manifest". Lists tools grouped by category, searches by capability, and gets exact tool metadata. | `{ action: "string (overview|search|get - default overview)", query: "string (optional)", name: "string (optional)", category: "string (optional)", format: "string (optional, text|json - default text)", include_disabled: "boolean (optional)", limit: "number (optional)" }` |
+| `sidekick_tools` | Core file, shell, and code operations | Tool catalog, discovery manifest, and policy inspector. Use for broad questions like "what Sidekick tools are available?", "list available tools", "tool overview", "tool manifest", or "why is this tool blocked?". Lists tools grouped by category, searches by capability, gets exact tool metadata, and inspects effective policy/approval decisions. | `{ action: "string (overview|search|get|policy - default overview)", query: "string (optional)", name: "string (optional)", category: "string (optional)", source: "string (optional)", format: "string (optional, text|json - default text)", include_disabled: "boolean (optional)", limit: "number (optional)" }` |
 | `sidekick_read` | Core file, shell, and code operations | Read a file from the remote filesystem | `{ path: "string" }` |
 | `sidekick_write` | Core file, shell, and code operations | Write content to a file on the remote machine | `{ path: "string", content: "string" }` |
 | `sidekick_list` | Core file, shell, and code operations | List files and directories on the remote machine | `{ path: "string" }` |

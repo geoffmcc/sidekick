@@ -57,6 +57,14 @@ Policy lists accept tool names and risk selectors such as `risk:high` or `risk:c
 
 High and critical tools are not removed from the project because trusted operators need them. For internet-reachable or shared deployments, run the agent and MCP source in `restricted` mode and allow only the tools required for the workflow.
 
+Use the tool policy inspector to verify effective access before and after changing environment variables:
+
+```javascript
+sidekick_tools({ action: "policy", source: "mcp,dashboard,agent", name: "sidekick_bash", format: "json" })
+```
+
+It reports the policy decision, active mode, matching selector when applicable, and approval requirement for each inspected source/tool pair.
+
 ## Approval queue
 
 The approval queue is an optional dashboard review layer for allowed tools. It does not enable tools that policy blocks. The default `SIDEKICK_APPROVAL_MODE=off` preserves existing behavior.
