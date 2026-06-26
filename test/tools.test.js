@@ -40,6 +40,75 @@ console.log('Running Tools Tests...\n');
     assert.ok(toolSearch.tools.some(tool => tool.name === 'sidekick_db_schema'), 'Should find tools by broad capability terms');
     console.log('✓ Passed\n');
 
+    // Test 2.0a: sidekick_tools policy inspector
+    console.log('Test 2.0a: sidekick_tools policy inspector');
+    const policyEnvKeys = [
+      'SIDEKICK_TOOL_POLICY',
+      'SIDEKICK_ALLOWED_TOOLS',
+      'SIDEKICK_BLOCKED_TOOLS',
+      'SIDEKICK_AGENT_TOOL_POLICY',
+      'SIDEKICK_AGENT_ALLOWED_TOOLS',
+      'SIDEKICK_AGENT_BLOCKED_TOOLS',
+      'SIDEKICK_DASHBOARD_APPROVAL_MODE',
+      'SIDEKICK_DASHBOARD_APPROVAL_REQUIRED_TOOLS',
+      'SIDEKICK_DASHBOARD_APPROVAL_EXEMPT_TOOLS'
+    ];
+    const savedPolicyEnv = Object.fromEntries(policyEnvKeys.map(key => [key, process.env[key]]));
+    try {
+      for (const key of policyEnvKeys) delete process.env[key];
+
+      process.env.SIDEKICK_AGENT_TOOL_POLICY = 'restricted';
+      const restrictedPolicyResult = await sidekick_tools({
+        action: 'policy',
+        name: 'sidekick_bash',
+        source: 'agent',
+        format: 'json'
+      });
+      const restrictedPolicy = JSON.parse(restrictedPolicyResult.content[0].text);
+      assert.strictEqual(restrictedPolicy.total, 1, 'Should inspect one source/tool decision');
+      assert.strictEqual(restrictedPolicy.decisions[0].allowed, false, 'Agent restricted mode should block critical tools');
+      assert.strictEqual(restrictedPolicy.decisions[0].policy.reason, 'restricted policy blocks high and critical risk tools');
+
+      process.env.SIDEKICK_AGENT_ALLOWED_TOOLS = 'sidekick_bash';
+      const allowedPolicyResult = await sidekick_tools({
+        action: 'policy',
+        name: 'sidekick_bash',
+        source: 'agent',
+        format: 'json'
+      });
+      const allowedPolicy = JSON.parse(allowedPolicyResult.content[0].text);
+      assert.strictEqual(allowedPolicy.decisions[0].allowed, true, 'Explicit allowlist should allow the tool');
+      assert.strictEqual(allowedPolicy.decisions[0].policy.matched, 'sidekick_bash', 'Should expose matched allowlist selector');
+
+      process.env.SIDEKICK_AGENT_BLOCKED_TOOLS = 'sidekick_bash';
+      const blockedPolicyResult = await sidekick_tools({
+        action: 'policy',
+        name: 'sidekick_bash',
+        source: 'agent',
+        format: 'json'
+      });
+      const blockedPolicy = JSON.parse(blockedPolicyResult.content[0].text);
+      assert.strictEqual(blockedPolicy.decisions[0].allowed, false, 'Blocklist should win over allowlist');
+      assert.strictEqual(blockedPolicy.decisions[0].policy.list, 'blocked', 'Should identify the blocking list');
+
+      process.env.SIDEKICK_DASHBOARD_APPROVAL_MODE = 'strict';
+      const approvalPolicyResult = await sidekick_tools({
+        action: 'policy',
+        name: 'sidekick_service',
+        source: 'dashboard',
+        format: 'json'
+      });
+      const approvalPolicy = JSON.parse(approvalPolicyResult.content[0].text);
+      assert.strictEqual(approvalPolicy.decisions[0].approval_required, true, 'Strict approval mode should require high-risk approval');
+      assert.strictEqual(approvalPolicy.decisions[0].approval.reason, 'strict mode requires approval for high and critical risk tools');
+    } finally {
+      for (const [key, value] of Object.entries(savedPolicyEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+    console.log('✓ Passed\n');
+
     // Test 2.0b: sidekick_github argument parsing
     console.log('Test 2.0b: sidekick_github argument parsing');
     const jsonGithubArgs = parseGithubArgs('{"number":28,"method":"merge","ref":"abc123"}');

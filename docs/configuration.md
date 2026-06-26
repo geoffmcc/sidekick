@@ -87,6 +87,14 @@ SIDEKICK_BLOCKED_TOOLS=sidekick_db_restore,sidekick_evolve
 
 Policy lists accept exact tool names and risk selectors such as `risk:high` or `risk:critical`. Source-specific variables are available for `MCP`, `DASHBOARD`, and `AGENT` sources, for example `SIDEKICK_AGENT_TOOL_POLICY` and `SIDEKICK_MCP_BLOCKED_TOOLS`.
 
+Inspect the effective policy before changing lockdown settings:
+
+```javascript
+sidekick_tools({ action: "policy", source: "mcp,dashboard,agent", name: "sidekick_bash", format: "json" })
+```
+
+The policy inspector reports whether each source/tool decision is allowed or blocked, the active mode, the matching allow/block selector when one applies, and whether approval is required.
+
 Approval mode defaults to `off`, so allowed tools execute immediately. Use it when you want allowed high-risk actions to wait in the dashboard Approvals tab:
 
 ```env

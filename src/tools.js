@@ -312,7 +312,11 @@ function getPolicyEntries(source, suffixes) {
 }
 
 function policyListMatches(entries, toolName, risk) {
-  return entries.some(entry => {
+  return Boolean(findPolicyListMatch(entries, toolName, risk));
+}
+
+function findPolicyListMatch(entries, toolName, risk) {
+  return entries.find(entry => {
     const normalized = entry.toLowerCase();
     return normalized === toolName.toLowerCase() || normalized === ("risk:" + risk);
   });
@@ -342,20 +346,22 @@ function getApprovalDecision(toolName, source = currentSource) {
     return { required: false, source, mode, risk, reason: "approval mode is off" };
   }
 
-  if (policyListMatches(exemptEntries, toolName, risk)) {
-    return { required: false, source, mode, risk, reason: "exempt from approval" };
+  const exemptMatch = findPolicyListMatch(exemptEntries, toolName, risk);
+  if (exemptMatch) {
+    return { required: false, source, mode, risk, reason: "exempt from approval", matched: exemptMatch, list: "exempt" };
   }
 
-  if (policyListMatches(requiredEntries, toolName, risk)) {
-    return { required: true, source, mode, risk, reason: "matched approval requirement" };
+  const requiredMatch = findPolicyListMatch(requiredEntries, toolName, risk);
+  if (requiredMatch) {
+    return { required: true, source, mode, risk, reason: "matched approval requirement", matched: requiredMatch, list: "required" };
   }
 
   if (mode === "strict" && RISK_ORDER[risk] >= RISK_ORDER.high) {
-    return { required: true, source, mode, risk, reason: "strict mode requires approval for high and critical risk tools" };
+    return { required: true, source, mode, risk, reason: "strict mode requires approval for high and critical risk tools", list: "mode" };
   }
 
   if (mode === "risky" && risk === "critical") {
-    return { required: true, source, mode, risk, reason: "risky mode requires approval for critical risk tools" };
+    return { required: true, source, mode, risk, reason: "risky mode requires approval for critical risk tools", list: "mode" };
   }
 
   return { required: false, source, mode, risk, reason: "approval not required" };
@@ -368,17 +374,26 @@ function getToolPolicyDecision(toolName, source = currentSource) {
   const allowedEntries = getPolicyEntries(source, ["ALLOWED_TOOLS"]);
   const blockedEntries = getPolicyEntries(source, ["DISABLED_TOOLS", "BLOCKED_TOOLS"]);
 
-  if (policyListMatches(blockedEntries, toolName, risk)) {
-    return { allowed: false, source, mode, risk, reason: "blocked by tool policy" };
+  const blockedMatch = findPolicyListMatch(blockedEntries, toolName, risk);
+  if (blockedMatch) {
+    return { allowed: false, source, mode, risk, reason: "blocked by tool policy", matched: blockedMatch, list: "blocked" };
   }
 
   if (allowedEntries.length > 0) {
-    const allowed = policyListMatches(allowedEntries, toolName, risk);
-    return { allowed, source, mode, risk, reason: allowed ? "allowed by explicit allowlist" : "not in explicit allowlist" };
+    const allowedMatch = findPolicyListMatch(allowedEntries, toolName, risk);
+    return {
+      allowed: Boolean(allowedMatch),
+      source,
+      mode,
+      risk,
+      reason: allowedMatch ? "allowed by explicit allowlist" : "not in explicit allowlist",
+      matched: allowedMatch,
+      list: "allowed"
+    };
   }
 
   if (mode === "restricted" && RISK_ORDER[risk] >= RISK_ORDER.high) {
-    return { allowed: false, source, mode, risk, reason: "restricted policy blocks high and critical risk tools" };
+    return { allowed: false, source, mode, risk, reason: "restricted policy blocks high and critical risk tools", list: "mode" };
   }
 
   return { allowed: true, source, mode, risk, reason: "allowed" };
@@ -670,19 +685,91 @@ function formatToolOverview(records) {
   return lines.join("\n");
 }
 
-async function sidekick_tools({ action, query, name, category, format, include_disabled, limit }) {
+function normalizePolicySources(source) {
+  if (!source) return ["mcp", "dashboard", "agent"];
+  return String(source).split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+}
+
+function inspectToolPolicy(toolName, source) {
+  const policy = getToolPolicyDecision(toolName, source);
+  const approval = getApprovalDecision(toolName, source);
+  return {
+    source,
+    tool: toolName,
+    risk: policy.risk,
+    allowed: policy.allowed,
+    policy: {
+      mode: policy.mode,
+      allowed: policy.allowed,
+      reason: policy.reason,
+      matched: policy.matched || null,
+      list: policy.list || null
+    },
+    approval_required: approval.required,
+    approval: {
+      mode: approval.mode,
+      required: approval.required,
+      reason: approval.reason,
+      matched: approval.matched || null,
+      list: approval.list || null
+    }
+  };
+}
+
+function buildPolicyInspection(records, sources) {
+  const inspections = [];
+  for (const source of sources) {
+    for (const tool of records) {
+      inspections.push(inspectToolPolicy(tool.name, source));
+    }
+  }
+  return inspections;
+}
+
+function formatPolicyInspection(inspections) {
+  const lines = [`Sidekick tool policy inspection (${inspections.length} decisions)`];
+  for (const item of inspections) {
+    const policyMatch = item.policy.matched ? `, matched ${item.policy.matched}` : "";
+    const approvalMatch = item.approval.matched ? `, matched ${item.approval.matched}` : "";
+    lines.push(
+      `- ${item.source}/${item.tool} [${item.risk}]: ` +
+      `policy ${item.allowed ? "allowed" : "blocked"} (${item.policy.mode}; ${item.policy.reason}${policyMatch}); ` +
+      `approval ${item.approval_required ? "required" : "not required"} (${item.approval.mode}; ${item.approval.reason}${approvalMatch})`
+    );
+  }
+  return lines.join("\n");
+}
+
+async function sidekick_tools({ action, query, name, category, format, include_disabled, limit, source }) {
   const selectedAction = action || "overview";
   const selectedFormat = format || "text";
   const maxResults = Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 200) : 100;
   let records = getToolRecordsForSource(currentSource);
 
-  if (!include_disabled) {
+  if (selectedAction !== "policy" && !include_disabled) {
     records = records.filter(tool => tool.enabled);
   }
 
   if (category) {
     const wantedCategory = String(category).toLowerCase();
     records = records.filter(tool => String(tool.category || "").toLowerCase() === wantedCategory);
+  }
+
+  if (selectedAction === "policy") {
+    if (name) {
+      records = records.filter(t => t.name === name);
+      if (records.length === 0) {
+        return { content: [{ type: "text", text: "Tool not found: " + name }], isError: true };
+      }
+    } else if (include_disabled === false) {
+      records = records.filter(tool => tool.enabled);
+    }
+    records = records.slice(0, maxResults);
+    const sources = normalizePolicySources(source);
+    const inspections = buildPolicyInspection(records, sources);
+    const payload = { total: inspections.length, sources, decisions: inspections };
+    const text = selectedFormat === "json" ? JSON.stringify(payload, null, 2) : formatPolicyInspection(inspections);
+    return { content: [{ type: "text", text }] };
   }
 
   if (selectedAction === "get") {
@@ -713,7 +800,7 @@ async function sidekick_tools({ action, query, name, category, format, include_d
       return terms.every(term => haystack.includes(term));
     }).slice(0, maxResults);
   } else if (selectedAction !== "overview") {
-    return { content: [{ type: "text", text: "Invalid action. Allowed: overview, search, get" }], isError: true };
+    return { content: [{ type: "text", text: "Invalid action. Allowed: overview, search, get, policy" }], isError: true };
   }
 
   const payload = selectedAction === "overview"
@@ -9834,7 +9921,7 @@ const TOOLS = {
 
 const TOOL_DEFS = [
   { name: "sidekick_bash", description: "Execute a shell command on the remote machine", args: { command: "string" } },
-  { name: "sidekick_tools", description: "Tool catalog and discovery manifest. Use for broad questions like 'what Sidekick tools are available?', 'list available tools', 'tool overview', or 'tool manifest'. Lists tools grouped by category, searches by capability, and gets exact tool metadata.", args: { action: "string (overview|search|get - default overview)", query: "string (optional, search terms for action=search)", name: "string (optional, tool name for action=get)", category: "string (optional, filter by category)", format: "string (optional, text|json - default text)", include_disabled: "boolean (optional, include policy-disabled tools - default false)", limit: "number (optional, max search results - default 100)" } },
+  { name: "sidekick_tools", description: "Tool catalog, discovery manifest, and policy inspector. Use for broad questions like 'what Sidekick tools are available?', 'list available tools', 'tool overview', 'tool manifest', or 'why is this tool blocked?'. Lists tools grouped by category, searches by capability, gets exact tool metadata, and inspects effective policy/approval decisions.", args: { action: "string (overview|search|get|policy - default overview)", query: "string (optional, search terms for action=search)", name: "string (optional, tool name for action=get or action=policy)", category: "string (optional, filter by category)", source: "string (optional, comma-separated sources for action=policy; default mcp,dashboard,agent)", format: "string (optional, text|json - default text)", include_disabled: "boolean (optional, include policy-disabled tools - default false; action=policy includes them by default)", limit: "number (optional, max search results - default 100)" } },
   { name: "sidekick_read", description: "Read a file from the remote filesystem", args: { path: "string" } },
   { name: "sidekick_write", description: "Write content to a file on the remote machine", args: { path: "string", content: "string" } },
   { name: "sidekick_list", description: "List files and directories on the remote machine", args: { path: "string" } },
