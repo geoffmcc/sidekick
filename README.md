@@ -634,6 +634,7 @@ This follows the principle of least privilege: after initial setup, the sidekick
 | `SIDEKICK_MCP_TOOL_POLICY` | — | Source-specific tool policy override for MCP clients |
 | `SIDEKICK_DASHBOARD_TOOL_POLICY` | — | Source-specific tool policy override for dashboard-originated calls |
 | `SIDEKICK_APPROVAL_MODE` | `off` | Optional dashboard approval mode: `off`, `risky`, or `strict` |
+| `SIDEKICK_APPROVAL_TTL_SECONDS` | `3600` | Maximum age of a pending approval; approval payloads require `SIDEKICK_SECRET_KEY` |
 | `SIDEKICK_APPROVAL_REQUIRED_TOOLS` | — | Comma-separated tools or risk selectors that always require approval |
 | `SIDEKICK_APPROVAL_EXEMPT_TOOLS` | — | Comma-separated tools or risk selectors exempt from approval |
 | `OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama API URL (local fallback) |

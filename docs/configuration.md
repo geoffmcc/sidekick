@@ -108,13 +108,16 @@ The path guard applies to direct file and repo path arguments such as read, writ
 Approval mode defaults to `off`, so allowed tools execute immediately. Use it when you want allowed high-risk actions to wait in the dashboard Approvals tab:
 
 ```env
+SIDEKICK_SECRET_KEY=replace-with-a-strong-random-secret
 SIDEKICK_APPROVAL_MODE=risky
+SIDEKICK_APPROVAL_TTL_SECONDS=3600
 SIDEKICK_APPROVAL_REQUIRED_TOOLS=sidekick_evolve,sidekick_db_restore
 SIDEKICK_APPROVAL_EXEMPT_TOOLS=sidekick_bash
 SIDEKICK_AGENT_APPROVAL_MODE=strict
 ```
 
 Approval variables support the same source prefixes as tool policy: `SIDEKICK_MCP_APPROVAL_MODE`, `SIDEKICK_DASHBOARD_APPROVAL_REQUIRED_TOOLS`, `SIDEKICK_AGENT_APPROVAL_EXEMPT_TOOLS`, and related required/exempt lists.
+Queued arguments are encrypted with `SIDEKICK_SECRET_KEY`, removed after approval, rejection, failure, or expiry, and never returned by the approval-list API. Pending approvals expire after `SIDEKICK_APPROVAL_TTL_SECONDS` (default: `3600`). If the secret key is missing, Sidekick refuses to queue the action instead of storing its arguments in plaintext.
 
 ## Evolve Tool Retention
 

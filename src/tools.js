@@ -426,12 +426,96 @@ function generateApprovalId() {
 }
 
 function approvalPreviewArgs(args) {
-  return redactSensitive(JSON.stringify(args || {}, null, 2)).substring(0, 4000);
+  function sanitize(value, key = "") {
+    const normalizedKey = String(key).toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (/(password|passwd|passphrase|secret|token|apikey|authorization|cookie|privatekey|credential)/.test(normalizedKey)) {
+      return "[REDACTED]";
+    }
+    if (Array.isArray(value)) return value.map(item => sanitize(item));
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).map(([childKey, childValue]) => [
+        childKey,
+        sanitize(childValue, childKey)
+      ]));
+    }
+    return typeof value === "string" ? redactSensitive(value) : value;
+  }
+
+  return JSON.stringify(sanitize(args || {}), null, 2).substring(0, 4000);
+}
+
+function getApprovalTtlSeconds() {
+  const configured = parseInt(process.env.SIDEKICK_APPROVAL_TTL_SECONDS || "3600", 10);
+  return Number.isFinite(configured) && configured > 0 ? configured : 3600;
+}
+
+function discardApprovalPayload(item) {
+  delete item.args;
+  delete item.args_encrypted;
+  item.payload_discarded_at = new Date().toISOString();
+}
+
+function expireApprovals(approvals, now = Date.now()) {
+  let changed = false;
+  for (const item of approvals) {
+    if (item.status !== "pending") {
+      if (Object.prototype.hasOwnProperty.call(item, "args") || item.args_encrypted) {
+        discardApprovalPayload(item);
+        changed = true;
+      }
+      continue;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(item, "args") && !item.args_encrypted) {
+      try {
+        item.args_encrypted = encryptApprovalArgs(item.args);
+        delete item.args;
+        changed = true;
+      } catch {
+        item.status = "failed";
+        item.error = "Legacy plaintext approval payload discarded because SIDEKICK_SECRET_KEY is unavailable";
+        item.completed_at = new Date(now).toISOString();
+        item.updated_at = item.completed_at;
+        discardApprovalPayload(item);
+        changed = true;
+        continue;
+      }
+    }
+
+    if (!item.expires_at) {
+      const requestedAt = Date.parse(item.requested_at);
+      const baseTime = Number.isFinite(requestedAt) ? requestedAt : now;
+      item.expires_at = new Date(baseTime + (getApprovalTtlSeconds() * 1000)).toISOString();
+      changed = true;
+    }
+    const expiresAt = Date.parse(item.expires_at);
+    if (!Number.isFinite(expiresAt) || expiresAt > now) continue;
+    item.status = "expired";
+    item.expired_at = new Date(now).toISOString();
+    item.updated_at = item.expired_at;
+    discardApprovalPayload(item);
+    changed = true;
+  }
+  return changed;
+}
+
+function encryptApprovalArgs(args) {
+  return encryptSecret(JSON.stringify(args || {}));
+}
+
+function decryptApprovalArgs(item) {
+  if (item.args_encrypted) {
+    return JSON.parse(decryptSecret(item.args_encrypted));
+  }
+  // Backward compatibility for approvals queued before encrypted payloads.
+  if (Object.prototype.hasOwnProperty.call(item, "args")) return item.args || {};
+  throw new Error("Approval payload is missing");
 }
 
 function queueApproval(toolName, args, decision) {
   const approvals = loadApprovals();
   const now = new Date().toISOString();
+  expireApprovals(approvals);
   const item = {
     id: generateApprovalId(),
     status: "pending",
@@ -440,10 +524,11 @@ function queueApproval(toolName, args, decision) {
     source: decision.source,
     mode: decision.mode,
     reason: decision.reason,
-    args: args || {},
+    args_encrypted: encryptApprovalArgs(args),
     args_preview: approvalPreviewArgs(args),
     requested_at: now,
-    updated_at: now
+    updated_at: now,
+    expires_at: new Date(Date.parse(now) + (getApprovalTtlSeconds() * 1000)).toISOString()
   };
   approvals.unshift(item);
   saveApprovals(approvals.slice(0, 500));
@@ -453,13 +538,16 @@ function queueApproval(toolName, args, decision) {
 function publicApproval(item) {
   const copy = { ...item };
   delete copy.args;
+  delete copy.args_encrypted;
   copy.args_preview = copy.args_preview || approvalPreviewArgs(item.args);
   return copy;
 }
 
 function listApprovals({ status, limit } = {}) {
   const max = Math.min(parseInt(limit || "100", 10) || 100, 500);
-  return loadApprovals()
+  const approvals = loadApprovals();
+  if (expireApprovals(approvals)) saveApprovals(approvals);
+  return approvals
     .filter(item => !status || item.status === status)
     .slice(0, max)
     .map(publicApproval);
@@ -467,6 +555,7 @@ function listApprovals({ status, limit } = {}) {
 
 async function resolveApproval(id, action, reviewer = "dashboard") {
   const approvals = loadApprovals();
+  if (expireApprovals(approvals)) saveApprovals(approvals);
   const item = approvals.find(a => a.id === id);
   if (!item) {
     return { content: [{ type: "text", text: "Approval not found: " + id }], isError: true };
@@ -475,13 +564,13 @@ async function resolveApproval(id, action, reviewer = "dashboard") {
     return { content: [{ type: "text", text: `Approval ${id} is already ${item.status}` }], isError: true };
   }
 
-  const now = new Date().toISOString();
-  item.reviewed_at = now;
-  item.updated_at = now;
-  item.reviewed_by = reviewer;
-
   if (action === "reject") {
+    const now = new Date().toISOString();
+    item.reviewed_at = now;
+    item.updated_at = now;
+    item.reviewed_by = reviewer;
     item.status = "rejected";
+    discardApprovalPayload(item);
     saveApprovals(approvals);
     return { content: [{ type: "text", text: "Rejected approval: " + id }] };
   }
@@ -490,13 +579,30 @@ async function resolveApproval(id, action, reviewer = "dashboard") {
     return { content: [{ type: "text", text: "Invalid approval action: " + action }], isError: true };
   }
 
+  let approvalArgs;
+  try {
+    approvalArgs = decryptApprovalArgs(item);
+  } catch (e) {
+    item.status = "failed";
+    item.error = "Approval payload could not be decrypted";
+    item.completed_at = new Date().toISOString();
+    item.updated_at = item.completed_at;
+    discardApprovalPayload(item);
+    saveApprovals(approvals);
+    return { content: [{ type: "text", text: item.error + ": " + e.message }], isError: true };
+  }
+
+  const now = new Date().toISOString();
+  item.reviewed_at = now;
+  item.updated_at = now;
+  item.reviewed_by = reviewer;
   item.status = "running";
   saveApprovals(approvals);
 
   const previousSource = currentSource;
   currentSource = item.source || "unknown";
   try {
-    const result = await callTool(item.tool, item.args || {}, { bypassApproval: true, approvalId: id });
+    const result = await callTool(item.tool, approvalArgs, { bypassApproval: true, approvalId: id });
     const latest = loadApprovals();
     const updated = latest.find(a => a.id === id);
     if (updated) {
@@ -504,6 +610,7 @@ async function resolveApproval(id, action, reviewer = "dashboard") {
       updated.result_preview = redactSensitive(result.content?.[0]?.text || "").substring(0, 1000);
       updated.completed_at = new Date().toISOString();
       updated.updated_at = updated.completed_at;
+      discardApprovalPayload(updated);
       saveApprovals(latest);
     }
     return result;
@@ -515,6 +622,7 @@ async function resolveApproval(id, action, reviewer = "dashboard") {
       updated.error = e.message;
       updated.completed_at = new Date().toISOString();
       updated.updated_at = updated.completed_at;
+      discardApprovalPayload(updated);
       saveApprovals(latest);
     }
     return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
@@ -10428,7 +10536,14 @@ async function callTool(name, args, options = {}) {
   if (!options.bypassApproval) {
     const approval = getApprovalDecision(name, currentSource);
     if (approval.required) {
-      const item = queueApproval(name, args, approval);
+      let item;
+      try {
+        item = queueApproval(name, args, approval);
+      } catch (e) {
+        const text = "Approval queue unavailable: " + e.message;
+        logToolCall(name, args, 0, false, text);
+        return { content: [{ type: "text", text }], isError: true };
+      }
       const text = `Approval required: ${name} (${approval.risk} risk, source=${approval.source}, mode=${approval.mode}). Queued as ${item.id}. ${approval.reason}.`;
       logToolCall(name, args, 0, false, text);
       return { content: [{ type: "text", text }], isError: true, approvalRequired: true, approvalId: item.id };
