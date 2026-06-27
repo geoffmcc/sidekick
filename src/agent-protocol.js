@@ -121,11 +121,24 @@ function buildChatMessages(systemPrompt, messages) {
   ];
 }
 
+function requiresToolUse(goal) {
+  const text = String(goal || "").toLowerCase();
+  if (!text.trim()) return false;
+
+  const localSignals = [
+    /\b(sidekick|tool|tools|project|repo|repository|memory|context|deploy|restart|service|services|health|status|logs?|history|conversation|transcript|task|model|models|ollama|database|db|knowledge)\b/,
+    /\b(list|count|show|inspect|check|look up|lookup|find|fetch|read|open|delete|update|create|merge|deploy|restart)\b.*\b(sidekick|tool|tools|project|repo|repository|service|services|status|logs?|history|memory|context|model|models|ollama|database|db|knowledge)\b/
+  ];
+
+  return localSignals.some(pattern => pattern.test(text));
+}
+
 module.exports = {
   normalizeDecision,
   parseAgentDecision,
   decisionFingerprint,
   trackDecisionRepetition,
   selectBestModelName,
-  buildChatMessages
+  buildChatMessages,
+  requiresToolUse
 };

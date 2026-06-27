@@ -7,7 +7,7 @@ const EventEmitter = require("events");
 const { execFileSync } = require("child_process");
 const { callTool, DATA_DIR, GROQ_API_KEY, GROQ_MODEL, setSource, loadDelays, saveDelays, loadWatches, saveWatches, getToolDefsForSource } = require("./tools");
 const { recallMemoryForTextAsync, formatMemoryRecall, recordAgentTaskMemory, buildMemoryBrief, inferProjectFromText } = require("./memory");
-const { parseAgentDecision, trackDecisionRepetition, selectBestModelName, buildChatMessages } = require("./agent-protocol");
+const { parseAgentDecision, trackDecisionRepetition, selectBestModelName, buildChatMessages, requiresToolUse } = require("./agent-protocol");
 
 const PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 
@@ -320,15 +320,15 @@ function buildSystemPrompt() {
     "You have these tools:\n" + toolDescs;
 }
 
-async function callAgentLLM(messages) {
+async function callLLM(messages, options = {}) {
   try {
-    const result = await callOllamaLLM(messages);
+    const result = await callOllamaLLM(messages, options);
     result.provider = "ollama";
     return result;
   } catch (ollamaErr) {
     if (GROQ_API_KEY) {
       try {
-        const result = await callGroqLLM(messages);
+        const result = await callGroqLLM(messages, options);
         result.provider = "groq";
         result.fallback = true;
         return result;
@@ -340,16 +340,38 @@ async function callAgentLLM(messages) {
   }
 }
 
-function callGroqLLM(messages, attempt = 1) {
+async function callAgentLLM(messages) {
+  return callLLM(messages, { systemPrompt: buildSystemPrompt(), format: "json", temperature: 0.3 });
+}
+
+async function callDirectAnswerLLM(goal, combinedBrief) {
+  const messages = [];
+  if (combinedBrief) {
+    messages.push({
+      role: "system",
+      content: "Relevant remembered Sidekick context. Use it if helpful, but do not assume it is complete:\n" + combinedBrief
+    });
+  }
+  messages.push({ role: "user", content: goal });
+
+  return callLLM(messages, {
+    systemPrompt: "You are a helpful assistant. Answer the user's question directly and succinctly in plain text. Do not use tools, JSON, or mention internal routing. If the answer is not known, say so briefly.",
+    temperature: 0.2
+  });
+}
+
+function callGroqLLM(messages, options = {}, attempt = 1) {
+  const systemPrompt = options.systemPrompt || buildSystemPrompt();
+  const temperature = typeof options.temperature === "number" ? options.temperature : 0.3;
   return new Promise((resolve, reject) => {
     const https = require("https");
     const body = JSON.stringify({
       model: GROQ_MODEL,
       messages: [
-        { role: "system", content: buildSystemPrompt() },
+        { role: "system", content: systemPrompt },
         ...messages.map(m => ({ role: m.role, content: m.content }))
       ],
-      temperature: 0.3
+      temperature
     });
     const req = https.request({
       hostname: "api.groq.com",
@@ -368,7 +390,7 @@ function callGroqLLM(messages, attempt = 1) {
           const parsed = JSON.parse(data);
           if (res.statusCode === 429 && attempt < 5) {
             const wait = Math.min(10000, 1000 * Math.pow(2, attempt));
-            return setTimeout(() => resolve(callGroqLLM(messages, attempt + 1)), wait);
+            return setTimeout(() => resolve(callGroqLLM(messages, options, attempt + 1)), wait);
           }
           if (res.statusCode >= 400) {
             return reject(new Error("Groq: " + (parsed.error?.message || data.substring(0, 200))));
@@ -413,15 +435,18 @@ function detectBestModel() {
   });
 }
 
-function callOllamaLLM(messages) {
+function callOllamaLLM(messages, options = {}) {
   return new Promise((resolve, reject) => {
     const http = require("http");
     detectBestModel().then((model) => {
+      const systemPrompt = options.systemPrompt || buildSystemPrompt();
+      const temperature = typeof options.temperature === "number" ? options.temperature : 0.3;
+      const responseFormat = Object.prototype.hasOwnProperty.call(options, "format") ? options.format : "json";
       const body = JSON.stringify({
         model: model,
-        messages: buildChatMessages(buildSystemPrompt(), messages),
-        format: "json",
-        options: { temperature: 0.3 },
+        messages: buildChatMessages(systemPrompt, messages),
+        ...(responseFormat ? { format: responseFormat } : {}),
+        options: { temperature },
         stream: false
       });
       const req = http.request({
@@ -589,139 +614,158 @@ async function runAgent(goal, taskId) {
   }
 
   const combinedBrief = briefParts.length > 0 ? briefParts.join("\n\n") : null;
-  const history = combinedBrief
-    ? [
-        { role: "system", content: "Relevant remembered Sidekick context. Use it when helpful, but do not assume it is complete:\n" + combinedBrief },
-        { role: "user", content: goal }
-      ]
-    : [{ role: "user", content: goal }];
-
-  emit(taskId, { type: "step", text: "Analyzing task: " + goal });
-  if (combinedBrief) {
-    emit(taskId, { type: "step", text: "Loaded memory brief with relevant context" });
-  }
+  const useTools = requiresToolUse(goal);
 
   let status = "iteration_limit";
   let finalResult = "";
   let terminalError = "";
   let repeatState = { fingerprint: "", repeats: 0 };
 
-  for (let i = 0; i < MAX_ITERATIONS; i++) {
-    let response;
+  emit(taskId, { type: "step", text: "Analyzing task: " + goal });
+  if (combinedBrief) {
+    emit(taskId, { type: "step", text: "Loaded memory brief with relevant context" });
+  }
+
+  if (!useTools) {
     try {
-      response = await callAgentLLM(history);
-      if (i === 0) {
-        emit(taskId, { type: "provider", name: response.provider, model: response.model || "unknown" });
-      }
+      const response = await callDirectAnswerLLM(goal, combinedBrief);
+      emit(taskId, { type: "provider", name: response.provider, model: response.model || "unknown" });
       if (response.fallback) {
         emit(taskId, { type: "fallback", from: "ollama", to: "groq" });
       }
+      finalResult = (response.response || "").trim() || "I couldn't generate an answer.";
+      steps.push({ type: "done", text: finalResult });
+      status = "completed";
     } catch (e) {
       steps.push({ type: "error", text: e.message });
       status = "failed";
       terminalError = "LLM error: " + e.message;
-      break;
     }
+  } else {
+    const history = combinedBrief
+      ? [
+          { role: "system", content: "Relevant remembered Sidekick context. Use it when helpful, but do not assume it is complete:\n" + combinedBrief },
+          { role: "user", content: goal }
+        ]
+      : [{ role: "user", content: goal }];
 
-    const text = (response.response || "").trim();
-    const decision = parseAgentDecision(text);
-    repeatState = trackDecisionRepetition(repeatState, decision);
-
-    if (repeatState.repeated) {
-      if (repeatState.abort) {
-        status = "failed";
-        terminalError = "Agent stopped after repeating the same decision three times";
-        steps.push({ type: "error", text: terminalError });
-        break;
-      }
-      history.push({ role: "assistant", content: text });
-      history.push({
-        role: "user",
-        content: "You repeated the same decision. Do not restate it. Output one valid tool call or a done result as raw JSON now."
-      });
-      continue;
-    }
-
-    if (decision.think) {
-      emit(taskId, { type: "step", text: decision.think });
-      steps.push({ type: "thought", text: decision.think });
-      // Detect hallucinated tool calls in think blocks
-      if (/called\s+sidekick_\w+\s*→/i.test(decision.think) || /stored\s+key/i.test(decision.think)) {
-        history.push({ role: "assistant", content: "Thought: " + decision.think });
-        history.push({ role: "user", content: "You described a tool call but did not execute it. You MUST output a tool call JSON now, not a think block." });
-      } else {
-        history.push({ role: "assistant", content: "Thought: " + decision.think });
-      }
-      continue;
-    }
-
-    if (decision.done) {
-      const result = decision.result || "Task completed";
-      steps.push({ type: "done", text: result });
-      status = "completed";
-      finalResult = result;
-      break;
-    }
-
-    if (decision.tool) {
-      // Tool validation: check if tool exists before calling
-      const availableToolDefs = getToolDefsForSource("agent").filter(t => t.enabled);
-      const validTool = availableToolDefs.find(t => t.name === decision.tool);
-      if (!validTool) {
-        emit(taskId, { type: "step", text: "Unknown tool: " + decision.tool });
-        steps.push({ type: "tool", tool: decision.tool, args: decision.arguments, result: "Error: tool does not exist" });
-        const availableTools = availableToolDefs.map(t => t.name).join(", ");
-        history.push({ role: "assistant", content: "Called " + decision.tool + " → Error: tool does not exist" });
-        history.push({ role: "user", content: "Tool '" + decision.tool + "' does not exist. Available tools: " + availableTools + ". Use sidekick_respond to return text directly, or choose a valid tool from the list." });
-        continue;
-      }
-
-      // Deduplication check: prevent repeated identical tool calls
-      const toolKey = decision.tool + ":" + JSON.stringify(decision.arguments || {});
-      const recentCalls = steps.slice(-3).filter(s => s.type === "tool" && s.tool === decision.tool && JSON.stringify(s.args) === JSON.stringify(decision.arguments || {}));
-      if (recentCalls.length >= 1) {
-        emit(taskId, { type: "step", text: "Blocked: repeated call to " + decision.tool + " with same arguments" });
-        history.push({ role: "assistant", content: "Called " + decision.tool + " → (blocked: already called)" });
-        // Collect all retrieved values from previous get calls
-        const retrievedValues = steps.filter(s => s.type === "tool" && s.tool === "sidekick_get").map(s => s.args.key + "=" + (s.result || "").substring(0, 50)).join(", ");
-        history.push({ role: "user", content: "You already have all the data. Call done NOW with this result: " + retrievedValues + ". Do NOT call any more tools." });
-        continue;
-      }
-
-      emit(taskId, { type: "tool", tool: decision.tool, summary: JSON.stringify(decision.arguments) });
-      steps.push({ type: "tool", tool: decision.tool, args: decision.arguments });
-
-      let result;
+    for (let i = 0; i < MAX_ITERATIONS; i++) {
+      let response;
       try {
-        const toolRes = await callTool(decision.tool, decision.arguments || {});
-        if (toolRes.isError) {
-          result = "Error: " + (toolRes.content?.[0]?.text || "unknown error");
-          // If policy or lookup blocks a tool, provide corrective feedback.
-          if (result.includes("Unknown tool") || result.includes("Tool blocked by policy")) {
-            const availableTools = getToolDefsForSource("agent").filter(t => t.enabled).map(t => t.name).join(", ");
-            result += ". Available tools: " + availableTools + ". Use sidekick_respond to return text directly.";
-          }
-        } else {
-          result = toolRes.content?.[0]?.text || "(empty result)";
+        response = await callAgentLLM(history);
+        if (i === 0) {
+          emit(taskId, { type: "provider", name: response.provider, model: response.model || "unknown" });
+        }
+        if (response.fallback) {
+          emit(taskId, { type: "fallback", from: "ollama", to: "groq" });
         }
       } catch (e) {
-        result = "Call failed: " + e.message;
+        steps.push({ type: "error", text: e.message });
+        status = "failed";
+        terminalError = "LLM error: " + e.message;
+        break;
       }
 
-      const summary = result.substring(0, 500);
-      emit(taskId, { type: "tool", tool: decision.tool, summary: summary.substring(0, 120) });
-      steps[steps.length - 1].result = summary;
-      history.push({ role: "assistant", content: "Called " + decision.tool + " → " + summary.substring(0, 200) });
-      
-      // Special handling for sidekick_respond: automatically transition to done
-      if (decision.tool === "sidekick_respond" && !result.startsWith("Error:")) {
+      const text = (response.response || "").trim();
+      const decision = parseAgentDecision(text);
+      repeatState = trackDecisionRepetition(repeatState, decision);
+
+      if (repeatState.repeated) {
+        if (repeatState.abort) {
+          status = "failed";
+          terminalError = "Agent stopped after repeating the same decision three times";
+          steps.push({ type: "error", text: terminalError });
+          break;
+        }
+        history.push({ role: "assistant", content: text });
+        history.push({
+          role: "user",
+          content: "You repeated the same decision. Do not restate it. Output one valid tool call or a done result as raw JSON now."
+        });
+        continue;
+      }
+
+      if (decision.think) {
+        emit(taskId, { type: "step", text: decision.think });
+        steps.push({ type: "thought", text: decision.think });
+        // Detect hallucinated tool calls in think blocks
+        if (/called\s+sidekick_\w+\s*→/i.test(decision.think) || /stored\s+key/i.test(decision.think)) {
+          history.push({ role: "assistant", content: "Thought: " + decision.think });
+          history.push({ role: "user", content: "You described a tool call but did not execute it. You MUST output a tool call JSON now, not a think block." });
+        } else {
+          history.push({ role: "assistant", content: "Thought: " + decision.think });
+        }
+        continue;
+      }
+
+      if (decision.done) {
+        const result = decision.result || "Task completed";
         steps.push({ type: "done", text: result });
         status = "completed";
         finalResult = result;
         break;
       }
-      
-      history.push({ role: "user", content: "Continue. Use another tool or call done." });
+
+      if (decision.tool) {
+        // Tool validation: check if tool exists before calling
+        const availableToolDefs = getToolDefsForSource("agent").filter(t => t.enabled);
+        const validTool = availableToolDefs.find(t => t.name === decision.tool);
+        if (!validTool) {
+          emit(taskId, { type: "step", text: "Unknown tool: " + decision.tool });
+          steps.push({ type: "tool", tool: decision.tool, args: decision.arguments, result: "Error: tool does not exist" });
+          const availableTools = availableToolDefs.map(t => t.name).join(", ");
+          history.push({ role: "assistant", content: "Called " + decision.tool + " → Error: tool does not exist" });
+          history.push({ role: "user", content: "Tool '" + decision.tool + "' does not exist. Available tools: " + availableTools + ". Use sidekick_respond to return text directly, or choose a valid tool from the list." });
+          continue;
+        }
+
+        // Deduplication check: prevent repeated identical tool calls
+        const toolKey = decision.tool + ":" + JSON.stringify(decision.arguments || {});
+        const recentCalls = steps.slice(-3).filter(s => s.type === "tool" && s.tool === decision.tool && JSON.stringify(s.args) === JSON.stringify(decision.arguments || {}));
+        if (recentCalls.length >= 1) {
+          emit(taskId, { type: "step", text: "Blocked: repeated call to " + decision.tool + " with same arguments" });
+          history.push({ role: "assistant", content: "Called " + decision.tool + " → (blocked: already called)" });
+          // Collect all retrieved values from previous get calls
+          const retrievedValues = steps.filter(s => s.type === "tool" && s.tool === "sidekick_get").map(s => s.args.key + "=" + (s.result || "").substring(0, 50)).join(", ");
+          history.push({ role: "user", content: "You already have all the data. Call done NOW with this result: " + retrievedValues + ". Do NOT call any more tools." });
+          continue;
+        }
+
+        emit(taskId, { type: "tool", tool: decision.tool, summary: JSON.stringify(decision.arguments) });
+        steps.push({ type: "tool", tool: decision.tool, args: decision.arguments });
+
+        let result;
+        try {
+          const toolRes = await callTool(decision.tool, decision.arguments || {});
+          if (toolRes.isError) {
+            result = "Error: " + (toolRes.content?.[0]?.text || "unknown error");
+            // If policy or lookup blocks a tool, provide corrective feedback.
+            if (result.includes("Unknown tool") || result.includes("Tool blocked by policy")) {
+              const availableTools = getToolDefsForSource("agent").filter(t => t.enabled).map(t => t.name).join(", ");
+              result += ". Available tools: " + availableTools + ". Use sidekick_respond to return text directly.";
+            }
+          } else {
+            result = toolRes.content?.[0]?.text || "(empty result)";
+          }
+        } catch (e) {
+          result = "Call failed: " + e.message;
+        }
+
+        const summary = result.substring(0, 500);
+        emit(taskId, { type: "tool", tool: decision.tool, summary: summary.substring(0, 120) });
+        steps[steps.length - 1].result = summary;
+        history.push({ role: "assistant", content: "Called " + decision.tool + " → " + summary.substring(0, 200) });
+        
+        // Special handling for sidekick_respond: automatically transition to done
+        if (decision.tool === "sidekick_respond" && !result.startsWith("Error:")) {
+          steps.push({ type: "done", text: result });
+          status = "completed";
+          finalResult = result;
+          break;
+        }
+        
+        history.push({ role: "user", content: "Continue. Use another tool or call done." });
+      }
     }
   }
 
