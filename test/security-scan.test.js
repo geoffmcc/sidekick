@@ -2,6 +2,7 @@ const assert = require("assert");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { isWindowsMountedPath } = require("../src/security-scan");
 
 const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-security-scan-"));
 const dataDir = path.join(testRoot, "runtime-data");
@@ -21,6 +22,9 @@ function write(relative, content, mode) {
 
 (async () => {
   try {
+    assert.strictEqual(isWindowsMountedPath("/mnt/c/Users/geoff/Projects/sidekick/.env"), true);
+    assert.strictEqual(isWindowsMountedPath("/home/sidekick/.env"), false);
+
     setSource("test");
     write("config.yml", [
       "POSTGRES_PASSWORD: weak-default",
@@ -30,7 +34,7 @@ function write(relative, content, mode) {
     write("package.json", '{"name":"sidekick"}');
     write(".env.example", "SIDEKICK_API_KEY=\n");
     write(".env", [
-      "SIDEKICK_API_KEY=sk-sidekick-local-dev",
+      "SIDEKICK_API_KEY=replace-with-your-sidekick-api-key",
       "SIDEKICK_APPROVAL_MODE=strict",
       "SIDEKICK_SECRET_KEY=",
       "SIDEKICK_DASHBOARD_USER=admin",
@@ -65,7 +69,7 @@ function write(relative, content, mode) {
       item.type === "private_key_material" &&
       item.path === "private.pem"
     ));
-    assert.ok(report.findings.some(item => item.type === "unsafe_api_key"));
+    assert.ok(!report.findings.some(item => item.type === "unsafe_api_key"));
     assert.ok(report.findings.some(item => item.type === "approval_encryption_missing"));
     assert.ok(!result.content[0].text.includes("do-not-return-this-value"));
     assert.ok(!result.content[0].text.includes("fixture-dashboard-pass"));

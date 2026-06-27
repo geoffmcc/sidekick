@@ -12,6 +12,6 @@ datasources:
       defaultBucket: sidekick
       tlsSkipVerify: true
     secureJsonData:
-      token: sidekick-influx-token
+      token: ${SIDEKICK_INFLUX_TOKEN}
     isDefault: true
     editable: true

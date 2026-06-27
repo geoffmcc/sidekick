@@ -11,10 +11,15 @@ const path = require('path');
 const Database = require('better-sqlite3');
 
 const INFLUX_URL = process.env.SIDEKICK_INFLUX_URL || 'http://localhost:8086';
-const INFLUX_TOKEN = process.env.SIDEKICK_INFLUX_TOKEN || 'sidekick-influx-token';
+const INFLUX_TOKEN = process.env.SIDEKICK_INFLUX_TOKEN || '';
 const INFLUX_ORG = process.env.SIDEKICK_INFLUX_ORG || 'sidekick';
 const INFLUX_BUCKET = process.env.SIDEKICK_INFLUX_BUCKET || 'sidekick';
 const DB_PATH = process.env.SIDEKICK_DB_FILE || path.join(__dirname, '..', 'data', 'sidekick.db');
+
+if (!INFLUX_TOKEN || INFLUX_TOKEN === 'sidekick-influx-token') {
+  console.error('SIDEKICK_INFLUX_TOKEN must be set to a non-placeholder value before collecting metrics.');
+  process.exit(1);
+}
 
 // Write metrics to InfluxDB using line protocol
 async function writeMetrics(measurement, tags, fields, timestamp) {

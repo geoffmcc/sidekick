@@ -11,7 +11,10 @@ const dbStore = require("./db");
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const PORT = parseInt(process.env.SIDEKICK_DASHBOARD_PORT || "4098", 10);
 const MCP_PORT = parseInt(process.env.SIDEKICK_PORT || "4097", 10);
-const MCP_API_KEY = process.env.SIDEKICK_API_KEY || "sk-sidekick-local-dev";
+const MCP_API_KEY = process.env.SIDEKICK_API_KEY;
+if (!MCP_API_KEY || MCP_API_KEY === "sk-sidekick-local-dev" || MCP_API_KEY === "sk-your-key-here") {
+  throw new Error("SIDEKICK_API_KEY must be set to a non-placeholder value");
+}
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 

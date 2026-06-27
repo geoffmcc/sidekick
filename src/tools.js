@@ -10284,9 +10284,13 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
 async function sidekick_metrics({ action, measurement, fields, tags, timestamp, query, time_range }) {
   try {
     const INFLUX_URL = process.env.SIDEKICK_INFLUX_URL || 'http://localhost:8086';
-    const INFLUX_TOKEN = process.env.SIDEKICK_INFLUX_TOKEN || 'sidekick-influx-token';
+    const INFLUX_TOKEN = process.env.SIDEKICK_INFLUX_TOKEN || '';
     const INFLUX_ORG = process.env.SIDEKICK_INFLUX_ORG || 'sidekick';
     const INFLUX_BUCKET = process.env.SIDEKICK_INFLUX_BUCKET || 'sidekick';
+
+    if (!INFLUX_TOKEN || INFLUX_TOKEN === 'sidekick-influx-token') {
+      return { content: [{ type: "text", text: "Error: SIDEKICK_INFLUX_TOKEN must be set to a non-placeholder value" }], isError: true };
+    }
 
     if (action === "write") {
       if (!measurement || !fields || typeof fields !== 'object') {

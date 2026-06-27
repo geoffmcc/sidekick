@@ -9,7 +9,10 @@ const { z } = require("zod");
 const { TOOLS, TOOL_DEFS, DATA_DIR, setSource, logToolCall, loadProcedures, enforceToolPolicy, syncToolRegistry } = require("./tools");
 const dbStore = require("./db");
 
-const API_KEY = process.env.SIDEKICK_API_KEY || "sk-sidekick-local-dev";
+const API_KEY = process.env.SIDEKICK_API_KEY;
+if (!API_KEY || API_KEY === "sk-sidekick-local-dev" || API_KEY === "sk-your-key-here") {
+  throw new Error("SIDEKICK_API_KEY must be set to a non-placeholder value");
+}
 const PORT = parseInt(process.env.SIDEKICK_PORT || "4097", 10);
 const ALLOWED_IPS = (process.env.SIDEKICK_ALLOWED_IPS || "").split(",").map(s => s.trim()).filter(Boolean);
 
