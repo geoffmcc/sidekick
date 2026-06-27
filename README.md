@@ -648,6 +648,7 @@ This follows the principle of least privilege: after initial setup, the sidekick
 | `SIDEKICK_EMBEDDINGS` | `1` | Enable semantic memory embeddings when Ollama/Qdrant are available |
 | `SIDEKICK_EMBEDDING_MODEL` | `nomic-embed-text` | Ollama embedding model for semantic memory recall |
 | `SIDEKICK_OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama URL used by memory embedding helpers |
+| `SIDEKICK_AGENT_MODEL` | auto-detected, preferring `llama3.1` | Ollama model used by the Agent Bridge |
 | `SIDEKICK_HEALTHCHECK_URL` | `https://github.com` | HTTPS endpoint used to verify outbound DNS and TLS connectivity |
 | `SIDEKICK_POSTGRES_URL` | `postgresql://sidekick:sidekick@127.0.0.1:5432/sidekick` | PostgreSQL connection string |
 | `SIDEKICK_REDIS_URL` | `redis://127.0.0.1:6379` | Redis connection string |
