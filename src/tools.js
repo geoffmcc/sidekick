@@ -1,5 +1,7 @@
 const fs = require("fs");
 const path = require("path");
+const dns = require("dns");
+const https = require("https");
 const { execSync, execFile, execFileSync, spawn } = require("child_process");
 const { redactSensitive } = require("./redact");
 const dbStore = require("./db");
@@ -3107,10 +3109,66 @@ function checkDisk() {
   }
 }
 
-function checkNetwork() {
-  let hasInternet = false;
+function probeDns(hostname, timeoutMs = 4000) {
+  return new Promise(resolve => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve({ ok: false, host: hostname, error: "Timed out" });
+      }
+    }, timeoutMs);
+
+    dns.lookup(hostname, (error, address) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(error
+        ? { ok: false, host: hostname, error: error.message }
+        : { ok: true, host: hostname, address });
+    });
+  });
+}
+
+function probeHttps(url, timeoutMs = 4000) {
+  return new Promise(resolve => {
+    const started = Date.now();
+    let settled = false;
+    let request;
+
+    const finish = result => {
+      if (settled) return;
+      settled = true;
+      resolve({ url, latencyMs: Date.now() - started, ...result });
+    };
+
+    try {
+      request = https.request(url, { method: "HEAD" }, response => {
+        response.resume();
+        finish({ ok: true, statusCode: response.statusCode });
+      });
+      request.setTimeout(timeoutMs, () => request.destroy(new Error("Timed out")));
+      request.on("error", error => finish({ ok: false, error: error.message }));
+      request.end();
+    } catch (error) {
+      finish({ ok: false, error: error.message });
+    }
+  });
+}
+
+async function checkNetwork(options = {}) {
   const issues = [];
   const recommendations = [];
+  const targetUrl = options.targetUrl || process.env.SIDEKICK_HEALTHCHECK_URL || "https://github.com";
+  let targetHost;
+  try {
+    targetHost = new URL(targetUrl).hostname;
+  } catch {
+    targetHost = "";
+  }
+  const dnsProbe = options.dnsProbe || probeDns;
+  const httpsProbe = options.httpsProbe || probeHttps;
+  const runFile = options.execFileSyncImpl || execFileSync;
   const services = ["sidekick-mcp", "sidekick-dashboard", "sidekick-agent"];
   const servicePorts = {
     "sidekick-mcp": 4097,
@@ -3118,20 +3176,30 @@ function checkNetwork() {
     "sidekick-agent": 4099
   };
 
+  const [dnsResult, httpsResult] = await Promise.all([
+    targetHost
+      ? dnsProbe(targetHost)
+      : Promise.resolve({ ok: false, host: targetHost, error: "Invalid health-check URL" }),
+    httpsProbe(targetUrl)
+  ]);
+  if (!dnsResult.ok) issues.push(`DNS resolution failed for ${targetHost || targetUrl}: ${dnsResult.error}`);
+  if (!httpsResult.ok) issues.push(`Outbound HTTPS failed for ${targetUrl}: ${httpsResult.error}`);
+
+  let icmp = { target: "8.8.8.8", ok: false };
   try {
-    execFileSync("ping", ["-c", "1", "-W", "2", "8.8.8.8"], {
+    runFile("ping", ["-c", "1", "-W", "2", "8.8.8.8"], {
       encoding: "utf-8",
       timeout: 4000,
       stdio: ["ignore", "pipe", "ignore"]
     });
-    hasInternet = true;
-  } catch {
-    issues.push("No internet connectivity");
+    icmp.ok = true;
+  } catch (error) {
+    icmp.error = error.message;
   }
 
   let listeners = "";
   try {
-    listeners = execFileSync("ss", ["-tln"], { encoding: "utf-8", timeout: 5000 });
+    listeners = runFile("ss", ["-tln"], { encoding: "utf-8", timeout: 5000 });
   } catch (e) {
     issues.push(`Failed to inspect listening ports: ${e.message}`);
   }
@@ -3146,9 +3214,17 @@ function checkNetwork() {
     if (!listening) recommendations.push(`${service} not listening on port ${port}`);
   }
   const listeningCount = Object.values(ports).filter(port => port.listening).length;
-  const score = (hasInternet ? 50 : 0) + (listeningCount / services.length) * 50;
+  const score = (dnsResult.ok ? 25 : 0) +
+    (httpsResult.ok ? 25 : 0) +
+    (listeningCount / services.length) * 50;
   return {
-    results: { internet: hasInternet, ports },
+    results: {
+      internet: dnsResult.ok && httpsResult.ok,
+      dns: dnsResult,
+      https: httpsResult,
+      icmp,
+      ports
+    },
     score,
     issues,
     recommendations
@@ -3233,7 +3309,7 @@ async function sidekick_health({ check, services, commands, threshold }) {
       totalChecks++;
       if (results.disk.issues) allIssues.push(...results.disk.issues);
     } else if (c === "network") {
-      results.network = checkNetwork();
+      results.network = await checkNetwork();
       totalScore += results.network.score;
       totalChecks++;
       if (results.network.issues) allIssues.push(...results.network.issues);
@@ -3286,6 +3362,12 @@ async function sidekick_health({ check, services, commands, threshold }) {
     } else if (c === "network") {
       output += `- Score: ${results.network.score.toFixed(0)}/100\n`;
       output += `- Internet: ${results.network.results?.internet ? "✓" : "✗"}\n`;
+      const dnsResult = results.network.results?.dns;
+      const httpsResult = results.network.results?.https;
+      const icmpResult = results.network.results?.icmp;
+      output += `- DNS (${dnsResult?.host || "unknown"}): ${dnsResult?.ok ? "✓" : "✗"}\n`;
+      output += `- HTTPS (${httpsResult?.url || "unknown"}): ${httpsResult?.ok ? `✓ ${httpsResult.statusCode || ""} (${httpsResult.latencyMs}ms)`.trim() : "✗"}\n`;
+      output += `- ICMP (${icmpResult?.target || "unknown"}): ${icmpResult?.ok ? "✓" : "✗"} (informational)\n`;
       output += `- Ports:\n`;
       for (const [svc, info] of Object.entries(results.network.results?.ports || {})) {
         output += `  - ${svc} (${info.port}): ${info.listening ? "listening" : "not listening"}\n`;
@@ -10695,5 +10777,6 @@ module.exports = {
   getGithubArg,
   missionRoute,
   enforceToolPolicy,
-  syncToolRegistry
+  syncToolRegistry,
+  checkNetwork
 };
