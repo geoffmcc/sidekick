@@ -441,7 +441,7 @@ function callOllamaLLM(messages, options = {}) {
     detectBestModel().then((model) => {
       const systemPrompt = options.systemPrompt || buildSystemPrompt();
       const temperature = typeof options.temperature === "number" ? options.temperature : 0.3;
-      const responseFormat = Object.prototype.hasOwnProperty.call(options, "format") ? options.format : "json";
+      const responseFormat = Object.prototype.hasOwnProperty.call(options, "format") ? options.format : undefined;
       const body = JSON.stringify({
         model: model,
         messages: buildChatMessages(systemPrompt, messages),
