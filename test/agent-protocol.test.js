@@ -35,6 +35,9 @@ assert.deepStrictEqual(multilineTool, {
 const thought = parseAgentDecision('{"thought":"Inspect the project first"}');
 assert.deepStrictEqual(thought, { think: "Inspect the project first" });
 
+const responseOnly = parseAgentDecision('{"response":"agent smoke test passed"}');
+assert.deepStrictEqual(responseOnly, { done: true, result: "agent smoke test passed" });
+
 const malformed = parseAgentDecision("not valid JSON");
 assert.deepStrictEqual(malformed, { think: "not valid JSON" });
 

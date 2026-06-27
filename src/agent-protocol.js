@@ -11,6 +11,16 @@ function collectActionArguments(decision) {
 function normalizeDecision(decision) {
   if (!decision || typeof decision !== "object" || Array.isArray(decision)) return null;
 
+  const keys = Object.keys(decision);
+  if (keys.length === 1) {
+    if (typeof decision.response === "string") {
+      return { done: true, result: decision.response };
+    }
+    if (typeof decision.answer === "string") {
+      return { done: true, result: decision.answer };
+    }
+  }
+
   if (typeof decision.tool === "string" && decision.tool) {
     return { tool: decision.tool, arguments: collectActionArguments(decision) };
   }
