@@ -9,6 +9,8 @@ const LOG_PAGE_SIZE = 50;
 const SESSION_GAP_MS = 5 * 60 * 1000;
 let allTools = [];
 let toolCategories = []; // Will be fetched from API
+let toolStats = {};
+let allProcedures = [];
 
 // Authentication helpers
 function getAuthHeader() {
@@ -86,9 +88,11 @@ async function fetchToolCategories() {
     const res = await authFetch('/api/tool-categories');
     const data = await res.json();
     toolCategories = data.categories || [];
+    populateToolCategoryFilter();
   } catch (error) {
     console.error('Failed to fetch tool categories:', error);
     toolCategories = [];
+    populateToolCategoryFilter();
   }
 }
 
@@ -99,6 +103,41 @@ function getToolCategory(toolName) {
     }
   }
   return 'Other';
+}
+
+function populateToolCategoryFilter() {
+  const select = $('toolCategoryFilter');
+  if (!select) return;
+  const currentValue = select.value;
+  const options = ['<option value="">All Categories</option>'];
+  for (const category of toolCategories) {
+    options.push('<option value="' + esc(category.name) + '">' + esc(category.name) + '</option>');
+  }
+  select.innerHTML = options.join('');
+  select.value = toolCategories.some(category => category.name === currentValue) ? currentValue : '';
+}
+
+function isHighRiskTool(tool) {
+  return tool.risk === 'high' || tool.risk === 'critical';
+}
+
+function getToolStateLabel(tool) {
+  if (tool.enabled === false) return 'Blocked';
+  if (tool.approval_required) return 'Approval required';
+  return 'Enabled';
+}
+
+function getRiskBadgeClass(risk) {
+  if (risk === 'critical') return 'danger';
+  if (risk === 'high') return 'warn';
+  return '';
+}
+
+function updateToolSummary(tools) {
+  $('toolSummaryVisible').textContent = tools.length;
+  $('toolSummaryBlocked').textContent = tools.filter(tool => tool.enabled === false).length;
+  $('toolSummaryApproval').textContent = tools.filter(tool => tool.approval_required).length;
+  $('toolSummaryHighRisk').textContent = tools.filter(isHighRiskTool).length;
 }
 
 const SERVICE_ICONS = { 'sidekick-mcp': 'fa-server', 'sidekick-agent': 'fa-robot', 'ollama': 'fa-brain' };
@@ -1759,10 +1798,6 @@ function createBackup() {
   }).catch(e => showToast('Backup failed: ' + e.message, 'error'));
 }
 
-// -- Tools -- //
-let toolStats = {};
-let allProcedures = [];
-
 function loadTools(){
   Promise.all([
     authFetch('/api/tools').then(r=>r.json()),
@@ -1773,6 +1808,7 @@ function loadTools(){
     allTools = toolsData.tools || [];
     allProcedures = procData.procedures || [];
     toolCategories = catData.categories || [];
+    populateToolCategoryFilter();
     toolStats = {};
     (statsData.stats || []).forEach(s => {
       toolStats[s.name] = s;
@@ -1788,9 +1824,15 @@ function filterTools(){
 function renderTools(){
   const search = ($('toolSearch').value || '').toLowerCase();
   const catFilter = $('toolCategoryFilter').value;
+  const policyFilter = $('toolPolicyFilter').value;
   let filtered = allTools;
   if (catFilter) filtered = filtered.filter(t => getToolCategory(t.name) === catFilter);
   if (search) filtered = filtered.filter(t => (t.name + ' ' + t.description).toLowerCase().includes(search));
+  if (policyFilter === 'enabled') filtered = filtered.filter(t => t.enabled !== false);
+  if (policyFilter === 'blocked') filtered = filtered.filter(t => t.enabled === false);
+  if (policyFilter === 'approval') filtered = filtered.filter(t => t.approval_required);
+  if (policyFilter === 'high-risk') filtered = filtered.filter(isHighRiskTool);
+  updateToolSummary(filtered);
   $('toolCount').textContent = filtered.length;
   const container = $('toolList');
   if (!filtered.length) { container.innerHTML = '<div class="empty">No matching tools</div>'; return; }
@@ -1813,12 +1855,15 @@ function renderTools(){
     for (const t of tools) {
       const stats = toolStats[t.name];
       const hasStats = stats && stats.count > 0;
+      const stateLabel = getToolStateLabel(t);
+      const riskClass = getRiskBadgeClass(t.risk);
       html += '<div class="tool-card" onclick="showToolDetail(\'' + esc(t.name) + '\')">';
       html += '<div class="tool-card-name">' + esc(t.name) + '</div>';
       html += '<div class="tool-card-desc">' + esc(t.description) + '</div>';
-      html += '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">';
-      html += '<span style="font-size:.68rem;color:#8b949e;border:1px solid #30363d;border-radius:4px;padding:2px 6px">risk: ' + esc(t.risk || 'low') + '</span>';
-      if (t.enabled === false) html += '<span style="font-size:.68rem;color:#f85149;border:1px solid #5a1f2b;border-radius:4px;padding:2px 6px">blocked</span>';
+      html += '<div class="tool-card-badges">';
+      html += '<span class="badge ' + riskClass + '">risk: ' + esc(t.risk || 'low') + '</span>';
+      html += '<span class="badge ' + (t.enabled === false ? 'danger' : '') + '">' + esc(stateLabel) + '</span>';
+      if (t.approval_required) html += '<span class="badge warn">approval queue</span>';
       html += '</div>';
       if (hasStats) {
         const rate = Math.round(stats.ok / stats.count * 100);
@@ -1876,7 +1921,8 @@ function showToolDetail(name){
   html += '<h3><i class="fas ' + catInfo.icon + '" style="margin-right:8px"></i>' + esc(t.name) + '</h3>';
   html += '<div class="td-desc">' + esc(t.description) + '</div>';
   html += '<div class="td-section"><div class="td-label">Category</div><div style="color:#58a6ff">' + esc(cat) + '</div></div>';
-  html += '<div class="td-section"><div class="td-label">Policy</div><div style="color:' + (t.enabled === false ? '#f85149' : '#3fb950') + '">' + (t.enabled === false ? 'Blocked' : 'Enabled') + ' Â· risk: ' + esc(t.risk || 'low') + '</div><div style="color:#8b949e;margin-top:4px">' + esc(t.policy || '') + '</div></div>';
+  html += '<div class="td-section"><div class="td-label">Policy</div><div style="color:' + (t.enabled === false ? '#f85149' : '#3fb950') + '">' + esc(getToolStateLabel(t)) + ' - risk: ' + esc(t.risk || 'low') + '</div><div style="color:#8b949e;margin-top:4px">' + esc(t.policy || '') + '</div></div>';
+  html += '<div class="td-section"><div class="td-label">Approval</div><div style="color:' + (t.approval_required ? '#d29922' : '#8b949e') + '">' + (t.approval_required ? 'Required before execution' : 'Not required') + '</div><div style="color:#8b949e;margin-top:4px">' + esc(t.approval || '') + '</div></div>';
   if (hasStats) {
     const rate = Math.round(stats.ok / stats.count * 100);
     const rateColor = rate >= 90 ? '#3fb950' : rate >= 70 ? '#d29922' : '#f85149';

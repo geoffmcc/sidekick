@@ -28,6 +28,16 @@ Default retrieval order for agents:
 
 For broad operational intents such as deploy, check status, inspect recent logs, or clean up memory keys, prefer `sidekick_mission` first. It routes through profiled preflight checks and existing safer tools before raw shell.
 
+### Startup Resume Check
+
+At the start of a new Sidekick repo session, check for pending project work before starting a new task:
+
+1. Retrieve `resume_active_sidekick` with `sidekick_get`.
+2. If a value is present, retrieve that key and summarize the pending work to the user.
+3. Ask whether to resume, defer, or clear the pending work.
+
+When `resume_active_sidekick` points to `resume_sidekick_hardening`, say: "I found pending Sidekick work: hardening project, next step is the policy visibility PR. Resume it?"
+
 ### How to Query the Knowledge Base
 
 Use the `sidekick_knowledge` tool to search, list, or retrieve specific entries:

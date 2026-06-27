@@ -174,11 +174,18 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
 .tool-category-header i{font-size:1rem;width:20px;text-align:center}
 .tool-category-header .cat-name{font-size:.9rem;font-weight:600;color:#c9d1d9}
 .tool-category-header .cat-count{font-size:.75rem;color:#8b949e;background:#21262d;padding:2px 8px;border-radius:10px}
+.tool-summary-grid{grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}
+.tool-summary-card{padding:12px}
+.tool-summary-value{font-size:1.5rem;font-weight:700;color:#58a6ff}
+.tool-summary-value.blocked{color:#f85149}
+.tool-summary-value.approval{color:#d29922}
+.tool-summary-value.risk{color:#ffa657}
 .tool-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px;padding:8px 0}
 .tool-card{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:14px;cursor:pointer;transition:border-color 0.15s}
 .tool-card:hover{border-color:#58a6ff}
 .tool-card-name{font-family:var(--font);font-weight:600;color:#58a6ff;font-size:.88rem;margin-bottom:4px}
 .tool-card-desc{color:#8b949e;font-size:.8rem;line-height:1.4;margin-bottom:8px}
+.tool-card-badges{margin-top:8px;display:flex;gap:6px;flex-wrap:wrap}
 .tool-card-args{font-size:.75rem;color:#6e7681;font-family:var(--font);word-break:break-all}
 .tool-card-args .arg-name{color:#ffa657}
 .tool-card-args .arg-opt{color:#484f58}

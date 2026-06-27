@@ -333,10 +333,35 @@
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
     <div class="section-title" style="margin:0">Tool Catalog (<span id="toolCount">0</span>)</div>
   </div>
+  <div class="grid tool-summary-grid" style="margin-bottom:12px">
+    <div class="card tool-summary-card">
+      <div class="s-label" style="margin-bottom:4px">Visible</div>
+      <div class="tool-summary-value" id="toolSummaryVisible">0</div>
+    </div>
+    <div class="card tool-summary-card">
+      <div class="s-label" style="margin-bottom:4px">Blocked</div>
+      <div class="tool-summary-value blocked" id="toolSummaryBlocked">0</div>
+    </div>
+    <div class="card tool-summary-card">
+      <div class="s-label" style="margin-bottom:4px">Approval Required</div>
+      <div class="tool-summary-value approval" id="toolSummaryApproval">0</div>
+    </div>
+    <div class="card tool-summary-card">
+      <div class="s-label" style="margin-bottom:4px">High Risk</div>
+      <div class="tool-summary-value risk" id="toolSummaryHighRisk">0</div>
+    </div>
+  </div>
   <div class="search-bar">
     <input type="text" id="toolSearch" placeholder="Search tools by name or description..." oninput="filterTools()">
     <select id="toolCategoryFilter" onchange="filterTools()">
       <option value="">All Categories</option>
+    </select>
+    <select id="toolPolicyFilter" onchange="filterTools()">
+      <option value="">All Policy States</option>
+      <option value="enabled">Enabled</option>
+      <option value="blocked">Blocked</option>
+      <option value="approval">Approval Required</option>
+      <option value="high-risk">High Risk</option>
     </select>
   </div>
   <div id="toolList"></div>

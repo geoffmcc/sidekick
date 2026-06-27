@@ -46,6 +46,10 @@ function modeString(stat) {
   return (stat.mode & 0o777).toString(8).padStart(3, "0");
 }
 
+function isWindowsMountedPath(filePath) {
+  return /^\/mnt\/[a-z]\//i.test(String(filePath).replace(/\\/g, "/"));
+}
+
 function parseEnvFile(content) {
   const values = new Map();
   for (const rawLine of content.split(/\r?\n/)) {
@@ -166,7 +170,10 @@ function scanSecurityConfig({
         `Sensitive-looking ${kind.replace(/_/g, " ")} is present; verify that it is encrypted, ignored, and still required.`);
     }
 
-    if (kind && process.platform !== "win32" && (stat.mode & 0o077) !== 0) {
+    if (kind &&
+        process.platform !== "win32" &&
+        !isWindowsMountedPath(filePath) &&
+        (stat.mode & 0o077) !== 0) {
       addFinding("high", "sensitive_file_permissions", filePath,
         `Sensitive file permissions are ${modeString(stat)}; restrict group and other access.`);
     }
@@ -231,9 +238,9 @@ function scanSecurityConfig({
         const apiKey = env.get("SIDEKICK_API_KEY") || "";
         const secretKey = env.get("SIDEKICK_SECRET_KEY") || "";
         const approvalMode = (env.get("SIDEKICK_APPROVAL_MODE") || "off").toLowerCase();
-        if (!apiKey || apiKey === "sk-sidekick-local-dev") {
+        if (!apiKey || apiKey === "sk-sidekick-local-dev" || apiKey === "sk-your-key-here") {
           addFinding("critical", "unsafe_api_key", envPath,
-            "SIDEKICK_API_KEY is missing or uses the local-development default.");
+            "SIDEKICK_API_KEY is missing or uses a placeholder or local-development default.");
         }
         if (approvalMode !== "off" && !secretKey) {
           addFinding("critical", "approval_encryption_missing", envPath,
@@ -275,4 +282,4 @@ function scanSecurityConfig({
   };
 }
 
-module.exports = { scanSecurityConfig };
+module.exports = { scanSecurityConfig, isWindowsMountedPath };

@@ -12,7 +12,7 @@ Authorization: Bearer YOUR_SIDEKICK_API_KEY
 
 or as an `api_key` query parameter. Use the header form whenever possible.
 
-The default development value is `sk-sidekick-local-dev`. Change it before any non-local deployment.
+Set `SIDEKICK_API_KEY` to a strong non-placeholder value before starting the MCP server or dashboard.
 
 ## IP allowlists
 

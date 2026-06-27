@@ -14,6 +14,7 @@ process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_DASHBOARD_PORT = '4100';
 process.env.SIDEKICK_DASHBOARD_USER = 'test-user';
 process.env.SIDEKICK_DASHBOARD_PASS = 'test-pass';
+process.env.SIDEKICK_API_KEY = 'test-sidekick-api-key';
 
 // Helper function to make HTTP requests
 function makeRequest(method, path, body = null, optionsOverride = {}) {

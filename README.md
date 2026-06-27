@@ -405,7 +405,7 @@ Sidekick includes comprehensive metrics collection and visualization:
 5. **Docker Containers** — Container resource usage and health
 6. **Ollama** — LLM request counts, response times, token usage
 
-Access Grafana directly at `http://YOUR_REMOTE_IP:3000/` (credentials: sidekick/sidekick)
+Access Grafana directly at `http://YOUR_REMOTE_IP:3000/` using `sidekick` and the configured `SIDEKICK_GRAFANA_ADMIN_PASSWORD`.
 
 ### Knowledge Base
 
@@ -555,7 +555,7 @@ sudo systemctl start sidekick-influxdb
 sudo systemctl start sidekick-grafana
 ```
 - 6 pre-built dashboards
-- Accessible at `http://YOUR_REMOTE_IP:3000/` (sidekick/sidekick)
+- Accessible at `http://YOUR_REMOTE_IP:3000/` using `sidekick` and the configured `SIDEKICK_GRAFANA_ADMIN_PASSWORD`
 - Embedded in Dashboard's Metrics tab
 
 ### Install All Services
@@ -652,7 +652,10 @@ This follows the principle of least privilege: after initial setup, the sidekick
 | `SIDEKICK_REDIS_URL` | `redis://127.0.0.1:6379` | Redis connection string |
 | `SIDEKICK_QDRANT_URL` | `http://127.0.0.1:6333` | Qdrant vector DB URL |
 | `SIDEKICK_INFLUX_URL` | `http://127.0.0.1:8086` | InfluxDB URL |
-| `SIDEKICK_INFLUX_TOKEN` | `sidekick-influx-token` | InfluxDB authentication token |
+| `SIDEKICK_INFLUX_TOKEN` | — | InfluxDB authentication token; required for metrics and Grafana provisioning |
+| `SIDEKICK_POSTGRES_PASSWORD` | — | Required when starting the bundled PostgreSQL container via `docker/docker-compose.yml` |
+| `SIDEKICK_INFLUX_PASSWORD` | — | Required when starting the bundled InfluxDB container via `docker/docker-compose.yml` |
+| `SIDEKICK_GRAFANA_ADMIN_PASSWORD` | — | Required when starting the bundled Grafana container via `docker/docker-compose.yml` |
 | `SIDEKICK_INFLUX_ORG` | `sidekick` | InfluxDB organization |
 | `SIDEKICK_INFLUX_BUCKET` | `sidekick` | InfluxDB bucket for metrics |
 
