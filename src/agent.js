@@ -6,7 +6,7 @@ const crypto = require("crypto");
 const EventEmitter = require("events");
 const { execFileSync } = require("child_process");
 const { callTool, DATA_DIR, GROQ_API_KEY, GROQ_MODEL, setSource, loadDelays, saveDelays, loadWatches, saveWatches, getToolDefsForSource } = require("./tools");
-const { recallMemoryForText, recallMemoryForTextAsync, formatMemoryRecall, recordAgentTaskMemory, buildMemoryBrief } = require("./memory");
+const { recallMemoryForTextAsync, formatMemoryRecall, recordAgentTaskMemory, buildMemoryBrief, inferProjectFromText } = require("./memory");
 const { parseAgentDecision, trackDecisionRepetition, selectBestModelName, buildChatMessages } = require("./agent-protocol");
 
 const PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
@@ -571,12 +571,15 @@ Return ONLY valid JSON.`;
 async function runAgent(goal, taskId) {
   setSource("agent");
   const steps = [];
-  const memoryBrief = buildMemoryBrief(goal);
+  const inferredProject = inferProjectFromText(goal);
+  const memoryBrief = inferredProject ? buildMemoryBrief(goal, { project: inferredProject }) : null;
 
   let semanticRecall = [];
-  try {
-    semanticRecall = await recallMemoryForTextAsync(goal, { limit: 5 });
-  } catch {}
+  if (inferredProject) {
+    try {
+      semanticRecall = await recallMemoryForTextAsync(goal, { project: inferredProject, limit: 5 });
+    } catch {}
+  }
 
   const briefParts = [];
   if (memoryBrief) briefParts.push(memoryBrief);
