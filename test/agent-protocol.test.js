@@ -4,7 +4,8 @@ const {
   decisionFingerprint,
   trackDecisionRepetition,
   selectBestModelName,
-  buildChatMessages
+  buildChatMessages,
+  requiresToolUse
 } = require("../src/agent-protocol");
 
 console.log("Running Agent Bridge protocol tests...\n");
@@ -76,5 +77,10 @@ assert.deepStrictEqual(
     { role: "assistant", content: "answer" }
   ]
 );
+
+assert.strictEqual(requiresToolUse("How many tools does this Sidekick project have?"), true);
+assert.strictEqual(requiresToolUse("List the available Sidekick tools."), true);
+assert.strictEqual(requiresToolUse("What is the capital of France?"), false);
+assert.strictEqual(requiresToolUse("Explain quantum entanglement in simple terms."), false);
 
 console.log("Agent Bridge protocol tests passed");
