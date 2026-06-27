@@ -7,6 +7,7 @@ const EventEmitter = require("events");
 const { execFileSync } = require("child_process");
 const { callTool, DATA_DIR, GROQ_API_KEY, GROQ_MODEL, setSource, loadDelays, saveDelays, loadWatches, saveWatches, getToolDefsForSource } = require("./tools");
 const { recallMemoryForText, recallMemoryForTextAsync, formatMemoryRecall, recordAgentTaskMemory, buildMemoryBrief } = require("./memory");
+const { parseAgentDecision, trackDecisionRepetition, selectBestModelName, buildChatMessages } = require("./agent-protocol");
 
 const PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 
@@ -388,6 +389,8 @@ function callGroqLLM(messages, attempt = 1) {
 
 function detectBestModel() {
   return new Promise((resolve) => {
+    const configuredModel = process.env.SIDEKICK_AGENT_MODEL || "";
+    if (configuredModel) return resolve(configuredModel);
     const http = require("http");
     const req = http.request({
       hostname: "127.0.0.1", port: 11434, path: "/api/tags", method: "GET"
@@ -398,22 +401,7 @@ function detectBestModel() {
         try {
           const parsed = JSON.parse(data);
           const models = parsed.models || [];
-          const names = models.map(m => m.name.toLowerCase());
-          
-          // Priority: coding models > general models
-          const CODING_MODELS = ["qwen2.5-coder", "codellama", "deepseek-coder", "starcoder"];
-          const GENERAL_MODELS = ["llama3", "mistral", "phi3", "gemma"];
-          
-          for (const coding of CODING_MODELS) {
-            const found = names.find(n => n.includes(coding));
-            if (found) return resolve(found);
-          }
-          for (const general of GENERAL_MODELS) {
-            const found = names.find(n => n.includes(general));
-            if (found) return resolve(found);
-          }
-          if (names.length > 0) return resolve(names[0]);
-          resolve("phi3:mini");
+          resolve(selectBestModelName(models.map(m => m.name)));
         } catch {
           resolve("phi3:mini");
         }
@@ -431,13 +419,13 @@ function callOllamaLLM(messages) {
     detectBestModel().then((model) => {
       const body = JSON.stringify({
         model: model,
-        prompt: messages.map(m => (m.role === "system" ? "System: " : "User: ") + m.content).join("\n\n"),
-        system: buildSystemPrompt(),
+        messages: buildChatMessages(buildSystemPrompt(), messages),
+        format: "json",
         options: { temperature: 0.3 },
         stream: false
       });
       const req = http.request({
-        hostname: "127.0.0.1", port: 11434, path: "/api/generate", method: "POST",
+        hostname: "127.0.0.1", port: 11434, path: "/api/chat", method: "POST",
         headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }
       }, (res) => {
         let data = "";
@@ -445,7 +433,11 @@ function callOllamaLLM(messages) {
         res.on("end", () => {
           try {
             const result = JSON.parse(data);
+            if (res.statusCode >= 400 || result.error) {
+              return reject(new Error("Ollama: " + (result.error || data.substring(0, 200))));
+            }
             result.model = model;
+            result.response = result.message?.content || "";
             resolve(result);
           }
           catch { reject(new Error("LLM parse fail: " + data.substring(0, 200))); }
@@ -606,6 +598,11 @@ async function runAgent(goal, taskId) {
     emit(taskId, { type: "step", text: "Loaded memory brief with relevant context" });
   }
 
+  let status = "iteration_limit";
+  let finalResult = "";
+  let terminalError = "";
+  let repeatState = { fingerprint: "", repeats: 0 };
+
   for (let i = 0; i < MAX_ITERATIONS; i++) {
     let response;
     try {
@@ -617,21 +614,30 @@ async function runAgent(goal, taskId) {
         emit(taskId, { type: "fallback", from: "ollama", to: "groq" });
       }
     } catch (e) {
-      emit(taskId, { type: "error", text: "LLM error: " + e.message });
       steps.push({ type: "error", text: e.message });
+      status = "failed";
+      terminalError = "LLM error: " + e.message;
       break;
     }
 
     const text = (response.response || "").trim();
+    const decision = parseAgentDecision(text);
+    repeatState = trackDecisionRepetition(repeatState, decision);
 
-    let decision;
-    for (const line of text.split("\n")) {
-      try {
-        const parsed = JSON.parse(line.trim());
-        if (parsed && typeof parsed === "object") { decision = parsed; break; }
-      } catch {}
+    if (repeatState.repeated) {
+      if (repeatState.abort) {
+        status = "failed";
+        terminalError = "Agent stopped after repeating the same decision three times";
+        steps.push({ type: "error", text: terminalError });
+        break;
+      }
+      history.push({ role: "assistant", content: text });
+      history.push({
+        role: "user",
+        content: "You repeated the same decision. Do not restate it. Output one valid tool call or a done result as raw JSON now."
+      });
+      continue;
     }
-    if (!decision) decision = { think: text };
 
     if (decision.think) {
       emit(taskId, { type: "step", text: decision.think });
@@ -648,8 +654,9 @@ async function runAgent(goal, taskId) {
 
     if (decision.done) {
       const result = decision.result || "Task completed";
-      emit(taskId, { type: "done", text: result });
       steps.push({ type: "done", text: result });
+      status = "completed";
+      finalResult = result;
       break;
     }
 
@@ -658,7 +665,7 @@ async function runAgent(goal, taskId) {
       const availableToolDefs = getToolDefsForSource("agent").filter(t => t.enabled);
       const validTool = availableToolDefs.find(t => t.name === decision.tool);
       if (!validTool) {
-        emit(taskId, { type: "error", text: "Unknown tool: " + decision.tool });
+        emit(taskId, { type: "step", text: "Unknown tool: " + decision.tool });
         steps.push({ type: "tool", tool: decision.tool, args: decision.arguments, result: "Error: tool does not exist" });
         const availableTools = availableToolDefs.map(t => t.name).join(", ");
         history.push({ role: "assistant", content: "Called " + decision.tool + " → Error: tool does not exist" });
@@ -670,7 +677,7 @@ async function runAgent(goal, taskId) {
       const toolKey = decision.tool + ":" + JSON.stringify(decision.arguments || {});
       const recentCalls = steps.slice(-3).filter(s => s.type === "tool" && s.tool === decision.tool && JSON.stringify(s.args) === JSON.stringify(decision.arguments || {}));
       if (recentCalls.length >= 1) {
-        emit(taskId, { type: "error", text: "Blocked: repeated call to " + decision.tool + " with same arguments" });
+        emit(taskId, { type: "step", text: "Blocked: repeated call to " + decision.tool + " with same arguments" });
         history.push({ role: "assistant", content: "Called " + decision.tool + " → (blocked: already called)" });
         // Collect all retrieved values from previous get calls
         const retrievedValues = steps.filter(s => s.type === "tool" && s.tool === "sidekick_get").map(s => s.args.key + "=" + (s.result || "").substring(0, 50)).join(", ");
@@ -705,8 +712,9 @@ async function runAgent(goal, taskId) {
       
       // Special handling for sidekick_respond: automatically transition to done
       if (decision.tool === "sidekick_respond" && !result.startsWith("Error:")) {
-        emit(taskId, { type: "done", text: result });
         steps.push({ type: "done", text: result });
+        status = "completed";
+        finalResult = result;
         break;
       }
       
@@ -714,22 +722,33 @@ async function runAgent(goal, taskId) {
     }
   }
 
-  const transcript = JSON.stringify({ goal, steps, status: "completed", t: new Date().toISOString() });
+  if (status === "iteration_limit") {
+    terminalError = `Agent stopped after ${MAX_ITERATIONS} iterations without a final answer`;
+    steps.push({ type: "error", text: terminalError });
+  }
+
+  const transcript = JSON.stringify({ goal, steps, status, t: new Date().toISOString() });
   fs.writeFileSync(path.join(CONV_DIR, taskId + ".json"), transcript, "utf-8");
 
-  try {
-    const saved = recordAgentTaskMemory({ goal, steps, taskId, status: "completed" });
-    if (saved) emit(taskId, { type: "step", text: "Saved automatic memory for this task" });
-    if (saved?.extracted?.length) {
-      emit(taskId, { type: "step", text: `Extracted ${saved.extracted.length} structured memory item(s)` });
+  if (status === "completed") {
+    try {
+      const saved = recordAgentTaskMemory({ goal, steps, taskId, status });
+      if (saved) emit(taskId, { type: "step", text: "Saved automatic memory for this task" });
+      if (saved?.extracted?.length) {
+        emit(taskId, { type: "step", text: `Extracted ${saved.extracted.length} structured memory item(s)` });
+      }
+    } catch (e) {
+      emit(taskId, { type: "step", text: "Automatic memory save failed: " + e.message });
     }
-  } catch (e) {
-    emit(taskId, { type: "step", text: "Automatic memory save failed: " + e.message });
+
+    await suggestProcedure(goal, steps, taskId);
   }
-  
-  await suggestProcedure(goal, steps, taskId);
-  
-  emit(taskId, { type: "done", text: "Transcript saved" });
+
+  if (status === "completed") {
+    emit(taskId, { type: "done", text: finalResult });
+  } else {
+    emit(taskId, { type: "error", text: terminalError });
+  }
 }
 
 app.post("/api/agent/run", (req, res) => {
