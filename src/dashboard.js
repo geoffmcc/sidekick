@@ -572,7 +572,30 @@ app.delete("/api/kv/:key", (req, res) => {
 });
 
 app.get("/api/stats", (req, res) => {
-  const logs = readLogs();
+  const now = new Date();
+  const since = req.query.since || new Date(Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate(),
+    0,
+    0,
+    0,
+    0
+  )).toISOString();
+  const until = req.query.until || new Date(Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate() + 1,
+    0,
+    0,
+    0,
+    0
+  )).toISOString();
+  const logs = dbStore.queryToolLogs({
+    since,
+    until,
+    limit: 10000
+  });
   const stats = {};
   for (const entry of logs) {
     const name = entry.n;

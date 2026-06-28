@@ -11,6 +11,7 @@ let allTools = [];
 let toolCategories = []; // Will be fetched from API
 let toolStats = {};
 let allProcedures = [];
+let toolStatsWindow = localStorage.getItem('sidekick_toolStatsWindow') || 'local';
 
 // Authentication helpers
 function getAuthHeader() {
@@ -188,6 +189,55 @@ function apiError(url, error, status) {
 
 function $(id){return document.getElementById(id)}
 
+function getToolStatsWindow() {
+  const select = $('toolStatsWindow');
+  if (select && select.value) return select.value;
+  return toolStatsWindow || 'local';
+}
+
+function setToolStatsWindow(value) {
+  toolStatsWindow = value === 'utc' ? 'utc' : 'local';
+  localStorage.setItem('sidekick_toolStatsWindow', toolStatsWindow);
+  const select = $('toolStatsWindow');
+  if (select && select.value !== toolStatsWindow) select.value = toolStatsWindow;
+  if (currentPage === 'system') loadDashboardSummary();
+  if (currentPage === 'tools') loadTools();
+}
+
+function getToolStatsRange(windowMode) {
+  const now = new Date();
+  if (windowMode === 'utc') {
+    return {
+      since: new Date(Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate(),
+        0, 0, 0, 0
+      )).toISOString(),
+      until: new Date(Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate() + 1,
+        0, 0, 0, 0
+      )).toISOString()
+    };
+  }
+  return {
+    since: new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+      0, 0, 0, 0
+    ).toISOString(),
+    until: new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate() + 1,
+      0, 0, 0, 0
+    ).toISOString()
+  };
+}
+
 function showPage(name){
   currentPage = name;
   localStorage.setItem('sidekick_currentPage', name);
@@ -263,6 +313,9 @@ function loadSystem(){
 }
 
 function loadDashboardSummary(){
+  const statsWindow = getToolStatsWindow();
+  const statsRange = getToolStatsRange(statsWindow);
+  const statsQuery = `?since=${encodeURIComponent(statsRange.since)}&until=${encodeURIComponent(statsRange.until)}`;
   // Fetch dashboard summary data
   authFetch('/api/dashboard-summary').then(r=>r.json()).then(d=>{
     if(d.error) return;
@@ -321,7 +374,7 @@ function loadDashboardSummary(){
   }).catch(e => apiError('/api/dashboard-summary', e, 0));
   
   // Fetch tool stats
-  authFetch('/api/stats').then(r=>r.json()).then(d=>{
+  authFetch('/api/stats' + statsQuery).then(r=>r.json()).then(d=>{
     if(d.error || !d.stats) return;
     
     // Calculate totals
@@ -1799,9 +1852,12 @@ function createBackup() {
 }
 
 function loadTools(){
+  const statsWindow = getToolStatsWindow();
+  const statsRange = getToolStatsRange(statsWindow);
+  const statsQuery = `?since=${encodeURIComponent(statsRange.since)}&until=${encodeURIComponent(statsRange.until)}`;
   Promise.all([
     authFetch('/api/tools').then(r=>r.json()),
-    authFetch('/api/stats').then(r=>r.json()),
+    authFetch('/api/stats' + statsQuery).then(r=>r.json()),
     authFetch('/api/procedures').then(r=>r.json()),
     authFetch('/api/tool-categories').then(r=>r.json())
   ]).then(([toolsData, statsData, procData, catData]) => {
@@ -2017,6 +2073,12 @@ function refresh(){
 const savedPage = localStorage.getItem('sidekick_currentPage');
 if (savedPage && savedPage !== 'system') {
   showPage(savedPage);
+}
+
+const toolStatsWindowSelect = $('toolStatsWindow');
+if (toolStatsWindowSelect) {
+  toolStatsWindow = toolStatsWindowSelect.value === 'utc' ? 'utc' : 'local';
+  toolStatsWindowSelect.value = toolStatsWindow;
 }
 
 // Fetch tool categories from API before loading other data

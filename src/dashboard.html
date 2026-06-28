@@ -52,7 +52,13 @@
       </div>
     </div>
     <div class="card" style="padding:12px">
-      <div class="s-label" style="margin-bottom:6px">Tool Usage Today</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px">
+        <div class="s-label">Tool Usage Today</div>
+        <select id="toolStatsWindow" onchange="setToolStatsWindow(this.value)" style="background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:4px 8px;font-size:.75rem">
+          <option value="local">Local day</option>
+          <option value="utc">UTC day</option>
+        </select>
+      </div>
       <div style="font-size:.85rem;color:#c9d1d9;line-height:1.6">
         <div><span id="toolCalls">--</span> calls</div>
         <div><span id="toolSuccess">--</span>% success</div>

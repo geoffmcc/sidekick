@@ -15,6 +15,7 @@ process.env.SIDEKICK_DASHBOARD_PORT = '4100';
 process.env.SIDEKICK_DASHBOARD_USER = 'test-user';
 process.env.SIDEKICK_DASHBOARD_PASS = 'test-pass';
 process.env.SIDEKICK_API_KEY = 'test-sidekick-api-key';
+const dbStore = require('../src/db');
 
 // Helper function to make HTTP requests
 function makeRequest(method, path, body = null, optionsOverride = {}) {
@@ -104,6 +105,70 @@ setTimeout(async () => {
       assert.strictEqual(response.status, 403, 'Should block dashboard DB endpoint by policy');
       if (previousBlocked === undefined) delete process.env.SIDEKICK_DASHBOARD_BLOCKED_TOOLS;
       else process.env.SIDEKICK_DASHBOARD_BLOCKED_TOOLS = previousBlocked;
+      console.log('Passed\n');
+    }
+
+    // Test 3.0d: tool usage stats honor an explicit UTC day window
+    console.log('Test 3.0d: tool usage stats honor an explicit UTC day window');
+    {
+      dbStore.clearToolLogs();
+      const now = new Date();
+      const utcStart = new Date(Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate(),
+        0,
+        0,
+        0,
+        0
+      )).toISOString();
+      const utcEnd = new Date(Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate() + 1,
+        0,
+        0,
+        0,
+        0
+      )).toISOString();
+      const today = now.toISOString();
+      const yesterday = new Date(Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate() - 1,
+        12,
+        0,
+        0,
+        0
+      )).toISOString();
+
+      dbStore.appendToolLog({
+        t: yesterday,
+        n: 'sidekick_old_tool',
+        a: 'value=old',
+        d: 10,
+        ok: true,
+        s: 'yesterday log',
+        src: 'mcp'
+      });
+      dbStore.appendToolLog({
+        t: today,
+        n: 'sidekick_today_tool',
+        a: 'value=today',
+        d: 20,
+        ok: false,
+        s: 'today log',
+        src: 'mcp'
+      });
+
+      const response = await makeRequest('GET', `/api/stats?since=${encodeURIComponent(utcStart)}&until=${encodeURIComponent(utcEnd)}`);
+      assert.strictEqual(response.status, 200, 'Should return 200');
+      const toolStats = Object.fromEntries((response.data.stats || []).map(stat => [stat.name, stat]));
+      assert.ok(!toolStats.sidekick_old_tool, 'Yesterday log should not be counted in today stats');
+      assert.ok(toolStats.sidekick_today_tool, 'Today log should be counted');
+      assert.strictEqual(toolStats.sidekick_today_tool.count, 1, 'Today count should be 1');
+      assert.strictEqual(toolStats.sidekick_today_tool.ok, 0, 'Today success count should be 0');
+      assert.strictEqual(toolStats.sidekick_today_tool.fail, 1, 'Today failure count should be 1');
       console.log('Passed\n');
     }
 
