@@ -101,6 +101,7 @@ const TOOL_RISK = {
   sidekick_media: "low",
   sidekick_transcribe: "low",
   sidekick_analytics: "low",
+  sidekick_insight_report: "low",
   sidekick_embed: "low",
   sidekick_ollama: "low",
   sidekick_tunnel: "medium",
@@ -142,6 +143,7 @@ const TOOL_CATEGORIES = {
   'sidekick_db_migrate': 'Database',
   'sidekick_db_diff': 'Database',
   'sidekick_analytics': 'Database',
+  'sidekick_insight_report': 'Data Pipeline',
   'sidekick_git': 'Git & GitHub',
   'sidekick_github': 'Git & GitHub',
   'sidekick_process': 'Services',
@@ -9880,6 +9882,210 @@ print(result.to_string(index=False))
 }
 
 
+// --- Insight Report Tool ---
+
+const INSIGHT_TEXT_EXTENSIONS = new Set([".txt", ".md", ".markdown", ".log", ".json", ".jsonl", ".yaml", ".yml", ".xml", ".ini", ".csv", ".tsv"]);
+const INSIGHT_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff"]);
+const INSIGHT_MAX_BYTES = 512 * 1024;
+
+function normalizeInsightPaths(paths) {
+  if (Array.isArray(paths)) return paths.map(String).map(s => s.trim()).filter(Boolean);
+  return String(paths || "").split(",").map(s => s.trim()).filter(Boolean);
+}
+
+function inferInsightType(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (INSIGHT_IMAGE_EXTENSIONS.has(ext)) return "image";
+  if ([".csv", ".tsv", ".json", ".jsonl", ".yaml", ".yml", ".xml", ".ini"].includes(ext)) return "data";
+  if (INSIGHT_TEXT_EXTENSIONS.has(ext)) return "text";
+  return "unknown";
+}
+
+function readInsightTextFile(filePath) {
+  const stat = fs.statSync(filePath);
+  const bytesToRead = Math.min(stat.size, INSIGHT_MAX_BYTES);
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(bytesToRead);
+    fs.readSync(fd, buffer, 0, bytesToRead, 0);
+    return {
+      text: buffer.toString("utf-8").replace(/\0/g, ""),
+      truncated: stat.size > INSIGHT_MAX_BYTES,
+      bytes: stat.size
+    };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function summarizeInsightText(text) {
+  const lines = text.split(/\r?\n/);
+  const nonEmpty = lines.map(line => line.trim()).filter(Boolean);
+  const errorLines = nonEmpty.filter(line => /\b(error|failed|exception|fatal|warn|timeout|denied)\b/i.test(line)).slice(0, 8);
+  const counts = new Map();
+  for (const line of nonEmpty) counts.set(line, (counts.get(line) || 0) + 1);
+  const repeated = [...counts.entries()].filter(([, count]) => count > 1).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  return {
+    lines: lines.length,
+    nonEmpty: nonEmpty.length,
+    sample: nonEmpty.slice(0, 6),
+    errorLines,
+    repeated
+  };
+}
+
+function summarizeInsightData(text, filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  const trimmed = text.trim();
+  if ((ext === ".json" || trimmed.startsWith("{") || trimmed.startsWith("[")) && ext !== ".jsonl") {
+    const parsed = JSON.parse(trimmed);
+    if (Array.isArray(parsed)) {
+      const keys = [...new Set(parsed.slice(0, 50).flatMap(row => row && typeof row === "object" && !Array.isArray(row) ? Object.keys(row) : []))];
+      return { format: "json", rows: parsed.length, fields: keys.slice(0, 20), sample: parsed.slice(0, 3) };
+    }
+    return { format: "json", topLevelKeys: Object.keys(parsed || {}).slice(0, 20), sample: parsed };
+  }
+  if (ext === ".jsonl") {
+    const rows = trimmed.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
+    const keys = [...new Set(rows.slice(0, 50).flatMap(row => row && typeof row === "object" && !Array.isArray(row) ? Object.keys(row) : []))];
+    return { format: "jsonl", rows: rows.length, fields: keys.slice(0, 20), sample: rows.slice(0, 3) };
+  }
+  if (ext === ".csv" || ext === ".tsv" || detectFormat(text) === "csv") {
+    const delimiter = ext === ".tsv" ? "\t" : ",";
+    const rows = text.trim().split(/\r?\n/).filter(Boolean);
+    const headers = rows[0] ? rows[0].split(delimiter).map(h => h.trim().replace(/^"(.*)"$/, "$1")) : [];
+    return { format: ext === ".tsv" ? "tsv" : "csv", rows: Math.max(rows.length - 1, 0), columns: headers.length, fields: headers.slice(0, 20), sample: rows.slice(1, 4) };
+  }
+  if (ext === ".yaml" || ext === ".yml") {
+    const parsed = YAML.parse(text);
+    return { format: "yaml", topLevelKeys: parsed && typeof parsed === "object" ? Object.keys(parsed).slice(0, 20) : [], sample: parsed };
+  }
+  if (ext === ".ini") {
+    const parsed = INI.parse(text);
+    return { format: "ini", topLevelKeys: Object.keys(parsed || {}).slice(0, 20), sample: parsed };
+  }
+  if (ext === ".xml") {
+    const parsed = new XMLParser({ ignoreAttributes: false }).parse(text);
+    return { format: "xml", topLevelKeys: parsed && typeof parsed === "object" ? Object.keys(parsed).slice(0, 20) : [], sample: parsed };
+  }
+  return null;
+}
+
+function formatInsightValue(value) {
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  if (!text) return "N/A";
+  return text.length > 220 ? text.slice(0, 217) + "..." : text;
+}
+
+async function collectInsightEvidence(filePath) {
+  const policyError = enforcePathPolicy(filePath, "read");
+  if (policyError) return { path: filePath, error: policyError.content[0].text };
+  if (!fs.existsSync(filePath)) return { path: filePath, error: "File not found" };
+
+  const stat = fs.statSync(filePath);
+  if (!stat.isFile()) return { path: filePath, error: "Path is not a file" };
+
+  const type = inferInsightType(filePath);
+  const evidence = { path: filePath, type, bytes: stat.size, findings: [] };
+
+  if (type === "image") {
+    evidence.findings.push(`image file, ${stat.size} bytes`);
+    const ocr = await sidekick_ocr({ path: filePath });
+    if (ocr.isError) {
+      evidence.findings.push("OCR unavailable: " + ocr.content[0].text.replace(/^Error:\s*/, ""));
+    } else {
+      const text = ocr.content[0].text.trim();
+      evidence.ocrText = text;
+      evidence.findings.push(text && text !== "(no text detected)" ? `OCR text: ${formatInsightValue(text)}` : "OCR found no text");
+    }
+    return evidence;
+  }
+
+  if (type === "unknown") {
+    evidence.findings.push("unsupported file extension for deterministic inspection");
+    return evidence;
+  }
+
+  const file = readInsightTextFile(filePath);
+  evidence.truncated = file.truncated;
+  const textSummary = summarizeInsightText(file.text);
+  evidence.findings.push(`${textSummary.lines} lines, ${textSummary.nonEmpty} non-empty lines${file.truncated ? ", sampled first 512 KiB" : ""}`);
+
+  if (type === "data") {
+    try {
+      const dataSummary = summarizeInsightData(file.text, filePath);
+      if (dataSummary) {
+        evidence.data = dataSummary;
+        if (dataSummary.rows !== undefined) evidence.findings.push(`${dataSummary.format} data with ${dataSummary.rows} rows`);
+        if (dataSummary.fields?.length) evidence.findings.push(`fields: ${dataSummary.fields.join(", ")}`);
+        if (dataSummary.topLevelKeys?.length) evidence.findings.push(`top-level keys: ${dataSummary.topLevelKeys.join(", ")}`);
+      }
+    } catch (e) {
+      evidence.findings.push("data parse failed: " + e.message);
+    }
+  }
+
+  if (textSummary.errorLines.length) evidence.findings.push(`${textSummary.errorLines.length} error/warning-looking lines found`);
+  if (textSummary.repeated.length) evidence.findings.push(`repeated lines: ${textSummary.repeated.map(([line, count]) => `${count}x ${formatInsightValue(line)}`).join("; ")}`);
+  evidence.sample = textSummary.sample;
+  evidence.errorLines = textSummary.errorLines;
+  return evidence;
+}
+
+function formatInsightReport(evidenceItems, title) {
+  const valid = evidenceItems.filter(item => !item.error);
+  const errored = evidenceItems.filter(item => item.error);
+  const lines = [`# ${title || "Insight Report"}`, "", "## Summary"];
+  lines.push(`- Analyzed ${valid.length} file(s); ${errored.length} file(s) had errors.`);
+  const dataCount = valid.filter(item => item.type === "data").length;
+  const imageCount = valid.filter(item => item.type === "image").length;
+  const textCount = valid.filter(item => item.type === "text").length;
+  lines.push(`- Inputs by type: ${textCount} text, ${dataCount} data, ${imageCount} image.`);
+
+  const notable = valid.flatMap(item => item.findings.map(finding => ({ path: item.path, finding })));
+  if (notable.length) {
+    lines.push("", "## Key Findings");
+    for (const item of notable.slice(0, 12)) lines.push(`- ${item.finding} [${item.path}]`);
+  }
+
+  lines.push("", "## Evidence");
+  for (const item of evidenceItems) {
+    lines.push(`- ${item.path}`);
+    if (item.error) {
+      lines.push(`  Error: ${item.error}`);
+      continue;
+    }
+    lines.push(`  Type: ${item.type}; Size: ${item.bytes} bytes`);
+    if (item.sample?.length) lines.push(`  Sample: ${item.sample.map(formatInsightValue).join(" | ")}`);
+    if (item.errorLines?.length) lines.push(`  Error evidence: ${item.errorLines.map(formatInsightValue).join(" | ")}`);
+    if (item.data?.sample) lines.push(`  Data sample: ${formatInsightValue(item.data.sample)}`);
+    if (item.ocrText) lines.push(`  OCR evidence: ${formatInsightValue(item.ocrText)}`);
+  }
+
+  lines.push("", "## Limits");
+  lines.push(`- Text/data files are bounded to the first ${INSIGHT_MAX_BYTES} bytes.`);
+  lines.push("- Findings are deterministic summaries, not LLM interpretation.");
+  return lines.join("\n");
+}
+
+async function sidekick_insight_report({ paths, title }) {
+  try {
+    const selectedPaths = normalizeInsightPaths(paths);
+    if (selectedPaths.length === 0) {
+      return { content: [{ type: "text", text: "Error: paths is required" }], isError: true };
+    }
+    if (selectedPaths.length > 10) {
+      return { content: [{ type: "text", text: "Error: at most 10 paths are supported per report" }], isError: true };
+    }
+    const evidence = [];
+    for (const filePath of selectedPaths) evidence.push(await collectInsightEvidence(filePath));
+    return { content: [{ type: "text", text: formatInsightReport(evidence, title) }] };
+  } catch (e) {
+    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
+  }
+}
+
+
 // --- Embed Tool ---
 
 async function sidekick_embed({ text, model }) {
@@ -10601,6 +10807,7 @@ const TOOLS = {
   sidekick_media,
   sidekick_transcribe,
   sidekick_analytics,
+  sidekick_insight_report,
   sidekick_embed,
   sidekick_ollama,
   sidekick_tunnel,
@@ -10700,6 +10907,7 @@ const TOOL_DEFS = [
   { name: "sidekick_media", description: "Media processing with ffmpeg: convert, extract audio, thumbnails, resize, trim, info", args: { action: "string (info|convert|extract_audio|thumbnail|resize|trim)", input: "string (input file path)", output: "string (optional, output file path)", options: "string (optional, format-specific options)" } },
   { name: "sidekick_transcribe", description: "Transcribe audio/video to text using Whisper", args: { path: "string (audio/video file path)", model: "string (optional, tiny|base|small|medium - default base)", language: "string (optional, language code)" } },
   { name: "sidekick_analytics", description: "Fast analytical queries on CSV/JSON/Parquet files using DuckDB", args: { query: "string (SQL query)", file: "string (optional, data file path - CSV, JSON, or Parquet)", format: "string (optional, file format: csv|json|parquet - auto-detected)" } },
+  { name: "sidekick_insight_report", description: "Create a concise, evidence-backed report from text, data, or image file paths", args: { paths: "string|array (file path, comma-separated paths, or array of paths)", title: "string (optional report title)" } },
   { name: "sidekick_embed", description: "Generate text embeddings using Ollama", args: { text: "string (text to embed)", model: "string (optional, embedding model - default nomic-embed-text)" } },
   { name: "sidekick_ollama", description: "Manage Ollama models: list, ps, pull, show", args: { action: "string (list|ps|pull|show)", model: "string (optional, model name for pull/show)" } },
   { name: "sidekick_tunnel", description: "Manage Cloudflare tunnels: start, stop, list", args: { action: "string (start|stop|list)", port: "number (local port to expose)", name: "string (optional, tunnel name)" } },

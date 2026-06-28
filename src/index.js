@@ -587,6 +587,10 @@ const TOOL_SCHEMAS = {
     file: z.string().optional().describe("Data file path (CSV, JSON, or Parquet)"),
     format: z.string().optional().describe("File format (csv|json|parquet)")
   }),
+  sidekick_insight_report: z.object({
+    paths: z.union([z.string(), z.array(z.string())]).describe("Text, data, or image file path(s) to analyze"),
+    title: z.string().optional().describe("Optional report title")
+  }),
   sidekick_embed: z.object({
     text: z.string().describe("Text to embed"),
     model: z.string().optional().default("nomic-embed-text").describe("Embedding model")
