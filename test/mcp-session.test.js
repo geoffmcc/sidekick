@@ -28,13 +28,25 @@ assert.match(
 assert.match(
   indexJs,
   /allowStalePost:\s*true/,
-  'Stale POST requests should be transparently forwarded on a replacement session'
+  'Stale POST requests should be able to recover on a replacement session'
+);
+
+assert.match(
+  indexJs,
+  /if \(replacedStaleSession && newSessionId && req\.body\?\.method !== "initialize"\) \{\s*return sendInvalidSession\(res, \{[\s\S]*?before retrying this request\./,
+  'Stale non-initialize POST requests should explicitly ask clients to reinitialize instead of hitting an uninitialized replacement server'
+);
+
+assert.doesNotMatch(
+  indexJs,
+  /if \(replacedStaleSession && newSessionId && req\.body\?\.method !== "initialize"\)[\s\S]*?Server not initialized/,
+  'Stale non-initialize POST recovery should not return the generic uninitialized-server error'
 );
 
 assert.match(
   indexJs,
   /replacedStaleSession && newSessionId \? \{ \.\.\.wh, "mcp-session-id": newSessionId \} : wh/,
-  'Replacement-session POST requests should be forwarded with the new session header'
+  'Replacement-session initialize requests should be forwarded with the new session header'
 );
 
 assert.match(
