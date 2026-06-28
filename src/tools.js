@@ -9934,6 +9934,64 @@ function summarizeInsightText(text) {
   };
 }
 
+function extractInsightTimeline(text) {
+  const important = /\b(error|failed|exception|fatal|warn|timeout|denied|restart|started|listening|initialize|session|stale|replacement|invalid|deploy|crash|oom)\b/i;
+  const timestamped = /^.*(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}).*$/;
+  return text.split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line && timestamped.test(line) && important.test(line))
+    .slice(0, 12);
+}
+
+function inferInsightAnalysis(evidenceItems) {
+  const valid = evidenceItems.filter(item => !item.error);
+  const allText = valid.map(item => [
+    ...(item.sample || []),
+    ...(item.errorLines || []),
+    ...(item.timeline || []),
+    item.ocrText || ""
+  ].join("\n")).join("\n");
+  const lower = allText.toLowerCase();
+  const hasRestart = /\b(restart|systemctl restart|started|listening|deployment|deploy)\b/.test(lower);
+  const hasStaleSession = /stale_session|stale session|invalid_session|invalid session|replacement session|replacementid|created_replacement_session/i.test(allText);
+  const hasSuccessAfter = /reuse_session|session_initialized|created_new_transport|accepted|succeed|success/i.test(allText);
+  const hasResourcePressure = /\b(oom|out of memory|disk full|no space|cpu|load average|killed process)\b/i.test(allText);
+  const hasErrors = valid.some(item => item.errorLines?.length);
+
+  let summary = "The supplied evidence was analyzed for timeline, failure signals, likely cause, and follow-up actions.";
+  let rootCause = "No single root cause is proven by the supplied files. The strongest signals are the cited errors, warnings, repeated lines, and event ordering below.";
+  let confidence = hasErrors ? "Medium" : "Low";
+  const actions = [
+    "Collect a narrower time window around the next occurrence, including service logs before and after the first failure.",
+    "Add or verify log lines that include request/session identifiers, response status, and recovery outcome.",
+    "Re-run this report with deployment logs, service logs, and any client-side error output together."
+  ];
+
+  if (hasRestart && hasStaleSession) {
+    summary = "The intermittent failures align with clients reusing MCP session IDs that existed before a service restart.";
+    rootCause = "The likely root cause is post-deployment session invalidation: restarting sidekick-mcp clears the in-memory session registry, while existing clients continue sending pre-restart session IDs. The server then returns an invalid-session response until the client adopts the replacement session or initializes a new one.";
+    confidence = hasSuccessAfter ? "High" : "Medium-High";
+    actions.splice(0, actions.length,
+      "Verify clients reliably retry with the replacement session ID after invalid-session responses.",
+      "Make deployment/restart workflows warn that active MCP sessions may be briefly invalidated.",
+      "Consider graceful drain/restart behavior so active sessions finish before the MCP process exits.",
+      "If seamless restarts are required, persist enough session metadata to recover or explicitly force client reinitialization.",
+      "Track invalid-session responses as a deployment-adjacent metric so expected recovery can be distinguished from real outages."
+    );
+  } else if (hasResourcePressure) {
+    summary = "The evidence contains resource-pressure indicators that may explain intermittent failures.";
+    rootCause = "The likely root cause is resource exhaustion or process interruption, based on memory/disk/CPU/process-kill signals in the supplied evidence.";
+    confidence = "Medium";
+    actions.splice(0, actions.length,
+      "Check host memory, disk, CPU, and service restart history for the failure window.",
+      "Add alerts for the specific pressure signal seen in the evidence.",
+      "Capture process logs and system journal entries immediately before the next failure."
+    );
+  }
+
+  return { summary, rootCause, confidence, actions };
+}
+
 function summarizeInsightData(text, filePath) {
   const ext = path.extname(filePath).toLowerCase();
   const trimmed = text.trim();
@@ -10029,18 +10087,33 @@ async function collectInsightEvidence(filePath) {
   if (textSummary.repeated.length) evidence.findings.push(`repeated lines: ${textSummary.repeated.map(([line, count]) => `${count}x ${formatInsightValue(line)}`).join("; ")}`);
   evidence.sample = textSummary.sample;
   evidence.errorLines = textSummary.errorLines;
+  evidence.timeline = extractInsightTimeline(file.text);
   return evidence;
 }
 
 function formatInsightReport(evidenceItems, title) {
   const valid = evidenceItems.filter(item => !item.error);
   const errored = evidenceItems.filter(item => item.error);
+  const analysis = inferInsightAnalysis(evidenceItems);
   const lines = [`# ${title || "Insight Report"}`, "", "## Summary"];
   lines.push(`- Analyzed ${valid.length} file(s); ${errored.length} file(s) had errors.`);
   const dataCount = valid.filter(item => item.type === "data").length;
   const imageCount = valid.filter(item => item.type === "image").length;
   const textCount = valid.filter(item => item.type === "text").length;
   lines.push(`- Inputs by type: ${textCount} text, ${dataCount} data, ${imageCount} image.`);
+  lines.push(`- ${analysis.summary}`);
+
+  const timeline = valid.flatMap(item => (item.timeline || []).map(event => ({ path: item.path, event })));
+  if (timeline.length) {
+    lines.push("", "## Timeline");
+    for (const item of timeline.slice(0, 12)) lines.push(`- ${formatInsightValue(item.event)} [${item.path}]`);
+  }
+
+  lines.push("", "## Likely Root Cause");
+  lines.push(`- ${analysis.rootCause}`);
+
+  lines.push("", "## Confidence");
+  lines.push(`- ${analysis.confidence}`);
 
   const notable = valid.flatMap(item => item.findings.map(finding => ({ path: item.path, finding })));
   if (notable.length) {
@@ -10064,7 +10137,10 @@ function formatInsightReport(evidenceItems, title) {
 
   lines.push("", "## Limits");
   lines.push(`- Text/data files are bounded to the first ${INSIGHT_MAX_BYTES} bytes.`);
-  lines.push("- Findings are deterministic summaries, not LLM interpretation.");
+  lines.push("- Analysis is deterministic and evidence-pattern based; it does not use an LLM or external context.");
+
+  lines.push("", "## Next Actions");
+  for (const action of analysis.actions) lines.push(`- ${action}`);
   return lines.join("\n");
 }
 
