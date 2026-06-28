@@ -125,9 +125,23 @@ function requiresToolUse(goal) {
   const text = String(goal || "").toLowerCase();
   if (!text.trim()) return false;
 
+  const toolNamePattern = /\bsidekick_[a-z0-9_]+\b/;
+  const localResourcePattern = /\b(tools?|repo|repository|project|memory|context|deploy(?:ment)?|service|services|health|status|logs?|history|conversation|transcript|task|tasks|model|models|ollama|database|db|knowledge|kv|watch(?:es)?|delay(?:s)?)\b/;
+  const localActionPattern = /\b(list|count|show|inspect|check|look up|lookup|find|fetch|get|read|open|delete|remove|update|create|store|save|set|merge|deploy|restart|stop|start|run|recall|search|query)\b/;
+  const exactnessPattern = /\b(current|currently|latest|recent|right now|today|exact|exactly|available|configured|enabled|running|active|pending|in this repo|in the repo|in this project|on disk)\b/;
+  const conceptualPromptPattern = /^(explain|describe|summari[sz]e|compare|brainstorm|suggest|recommend|draft|write|reword|phrase|improve|tune|analyze|review|why\b|how does\b|how should\b)/;
+
+  if (toolNamePattern.test(text)) return true;
+
+  if (conceptualPromptPattern.test(text) && !exactnessPattern.test(text)) {
+    return false;
+  }
+
   const localSignals = [
-    /\b(sidekick|tool|tools|project|repo|repository|memory|context|deploy|restart|service|services|health|status|logs?|history|conversation|transcript|task|model|models|ollama|database|db|knowledge)\b/,
-    /\b(list|count|show|inspect|check|look up|lookup|find|fetch|read|open|delete|update|create|merge|deploy|restart)\b.*\b(sidekick|tool|tools|project|repo|repository|service|services|status|logs?|history|memory|context|model|models|ollama|database|db|knowledge)\b/
+    /\bhow many\b.*\b(tools?|services|models|tasks|memories|watches|delays)\b/,
+    /\b(status|logs?|history|memory|context|database|db|knowledge|repo|repository|project)\b.*\b(current|latest|recent|today|running|active|configured|enabled)\b/,
+    new RegExp(localActionPattern.source + ".*" + localResourcePattern.source),
+    new RegExp(localResourcePattern.source + ".*" + exactnessPattern.source)
   ];
 
   return localSignals.some(pattern => pattern.test(text));
