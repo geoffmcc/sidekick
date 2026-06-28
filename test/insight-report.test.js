@@ -45,6 +45,28 @@ console.log('Running Insight Report Tests...\n');
     assert.ok(report.includes('json data with 2 rows'), 'Should summarize JSON array shape');
     assert.ok(report.includes(logFile), 'Should cite text source path');
     assert.ok(report.includes(csvFile), 'Should cite data source path');
+    assert.ok(report.includes('## Likely Root Cause'), 'Should include interpretive root cause section');
+    assert.ok(report.includes('## Confidence'), 'Should include confidence section');
+    assert.ok(report.includes('## Next Actions'), 'Should include next actions');
+    console.log('✓ Passed\n');
+
+    console.log('Test: sidekick_insight_report - stale session incident analysis');
+    const incidentFile = path.join(TEST_DATA_DIR, 'mcp-incident.md');
+    fs.writeFileSync(incidentFile, [
+      'Jun 28 16:45:26 sidekick sudo: COMMAND=/usr/bin/systemctl restart sidekick-mcp',
+      'Jun 28 16:45:26 sidekick node: Sidekick MCP server listening on port 4097',
+      'Jun 28 16:45:26 sidekick node: STALE_SESSION_CREATING_REPLACEMENT staleSessionId=sess-old',
+      'Jun 28 16:45:26 sidekick node: CREATED_REPLACEMENT_SESSION newSessionId=sess-new',
+      'Jun 28 16:45:26 sidekick node: INVALID_SESSION_RESPONSE sessionId=sess-old replacementId=sess-new',
+      'Jun 28 16:45:59 sidekick node: REUSE_SESSION sessionId=sess-new'
+    ].join('\n'), 'utf-8');
+    const incident = await sidekick_insight_report({ paths: incidentFile, title: 'MCP Incident' });
+    assert.ok(!incident.isError, 'Incident report should succeed');
+    const incidentReport = incident.content[0].text;
+    assert.ok(incidentReport.includes('## Timeline'), 'Should include timeline for timestamped evidence');
+    assert.ok(incidentReport.includes('post-deployment session invalidation'), 'Should infer stale-session root cause');
+    assert.ok(incidentReport.includes('High'), 'Should have high confidence when recovery evidence is present');
+    assert.ok(incidentReport.includes('replacement session ID'), 'Should recommend replacement-session handling');
     console.log('✓ Passed\n');
 
     console.log('Test: sidekick_insight_report - comma-separated paths and missing file');
