@@ -1024,6 +1024,14 @@ app.post("/mcp", async (req, res) => {
       });
     }
 
+    if (replacedStaleSession && newSessionId && req.body?.method !== "initialize") {
+      return sendInvalidSession(res, {
+        sessionId,
+        replacementId: newSessionId,
+        message: "MCP session expired. Reconnect and initialize using the mcp-session-id response header before retrying this request."
+      });
+    }
+
     const webReq = new Request("http://127.0.0.1:4097/mcp", {
       method: "POST",
       headers: replacedStaleSession && newSessionId ? { ...wh, "mcp-session-id": newSessionId } : wh,
