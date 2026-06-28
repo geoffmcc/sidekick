@@ -138,7 +138,7 @@ function requiresToolUse(goal) {
   }
 
   const localSignals = [
-    /\b(how many|which|what)\b.*\b(tools?|services|models|tasks|memories|watches|delays)\b/,
+    /\bhow many\b.*\b(tools?|services|models|tasks|memories|watches|delays)\b/,
     /\b(status|logs?|history|memory|context|database|db|knowledge|repo|repository|project)\b.*\b(current|latest|recent|today|running|active|configured|enabled)\b/,
     new RegExp(localActionPattern.source + ".*" + localResourcePattern.source),
     new RegExp(localResourcePattern.source + ".*" + exactnessPattern.source)

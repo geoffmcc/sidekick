@@ -82,10 +82,13 @@ assert.strictEqual(requiresToolUse("How many tools does this Sidekick project ha
 assert.strictEqual(requiresToolUse("List the available Sidekick tools."), true);
 assert.strictEqual(requiresToolUse("What Sidekick services are currently running?"), true);
 assert.strictEqual(requiresToolUse("Use sidekick_tools to search for database schema helpers."), true);
+assert.strictEqual(requiresToolUse("What Sidekick tools are available?"), true);
 assert.strictEqual(requiresToolUse("Explain how Sidekick memory recall works."), false);
 assert.strictEqual(requiresToolUse("Draft a better prompt for the Sidekick deploy helper."), false);
 assert.strictEqual(requiresToolUse("How should Sidekick phrase a blocked-tool warning?"), false);
 assert.strictEqual(requiresToolUse("Review the Sidekick routing heuristics for edge cases."), false);
+assert.strictEqual(requiresToolUse("What tools should we build next for Sidekick?"), false);
+assert.strictEqual(requiresToolUse("Which models should Sidekick support next?"), false);
 assert.strictEqual(requiresToolUse("What is the capital of France?"), false);
 assert.strictEqual(requiresToolUse("Explain quantum entanglement in simple terms."), false);
 
