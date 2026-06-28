@@ -33,14 +33,14 @@ assert.match(
 
 assert.match(
   indexJs,
-  /if \(replacedStaleSession && newSessionId && req\.body\?\.method !== "initialize"\) \{\s*return sendInvalidSession\(res, \{[\s\S]*?before retrying this request\./,
-  'Stale non-initialize POST requests should explicitly ask clients to reinitialize instead of hitting an uninitialized replacement server'
+  /const activeSessionId = newSessionId \|\| sessionId;[\s\S]*?if \(activeSession && !activeSession\.initialized && req\.body\?\.method !== "initialize"\) \{\s*return sendInvalidSession\(res, \{[\s\S]*?Send initialize before retrying this request\./,
+  'Non-initialize POST requests to uninitialized sessions should explicitly ask clients to initialize instead of hitting the SDK transport'
 );
 
 assert.doesNotMatch(
   indexJs,
-  /if \(replacedStaleSession && newSessionId && req\.body\?\.method !== "initialize"\)[\s\S]*?Server not initialized/,
-  'Stale non-initialize POST recovery should not return the generic uninitialized-server error'
+  /activeSession && !activeSession\.initialized[\s\S]*?Server not initialized/,
+  'Uninitialized-session POST recovery should not return the generic uninitialized-server error'
 );
 
 assert.match(

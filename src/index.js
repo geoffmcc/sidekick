@@ -1024,11 +1024,13 @@ app.post("/mcp", async (req, res) => {
       });
     }
 
-    if (replacedStaleSession && newSessionId && req.body?.method !== "initialize") {
+    const activeSessionId = newSessionId || sessionId;
+    const activeSession = activeSessionId ? sessions.get(activeSessionId) : null;
+    if (activeSession && !activeSession.initialized && req.body?.method !== "initialize") {
       return sendInvalidSession(res, {
         sessionId,
         replacementId: newSessionId,
-        message: "MCP session expired. Reconnect and initialize using the mcp-session-id response header before retrying this request."
+        message: "MCP session is not initialized. Send initialize before retrying this request."
       });
     }
 
