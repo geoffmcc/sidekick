@@ -761,7 +761,7 @@ async function getTransportForRequest(sessionId, metadata = {}, options = {}) {
     const replacementId = staleEntry?.replacementId;
     if (replacementId && sessions.has(replacementId)) {
       logDebug("STALE_SESSION_KNOWN_REPLACEMENT", { staleSessionId: sessionId, replacementId });
-      if (options.allowStaleInitialize) {
+      if (options.allowStalePost) {
         const entry = sessions.get(replacementId);
         entry.lastAccess = Date.now();
         return { transport: entry.transport, isNew: false, newSessionId: replacementId, staleRedirect: false, replacedStaleSession: true };
@@ -788,7 +788,7 @@ async function getTransportForRequest(sessionId, metadata = {}, options = {}) {
     }
 
     logDebug("CREATED_REPLACEMENT_SESSION", { staleSessionId: sessionId, newSessionId });
-    if (options.allowStaleInitialize) {
+    if (options.allowStalePost) {
       return { transport, isNew: true, newSessionId, staleRedirect: false, replacedStaleSession: true };
     }
     return { transport: null, isNew: true, newSessionId, staleRedirect: true };
@@ -1012,9 +1012,8 @@ app.post("/mcp", async (req, res) => {
       userAgent: wh["user-agent"],
       clientInfo: req.body?.params?.clientInfo || null
     };
-    const isInitialize = req.body?.method === "initialize";
     const { transport, isNew, newSessionId, staleRedirect, replacedStaleSession } = await getTransportForRequest(sessionId, metadata, {
-      allowStaleInitialize: isInitialize
+      allowStalePost: true
     });
 
     if (staleRedirect) {
@@ -1041,6 +1040,9 @@ app.post("/mcp", async (req, res) => {
     }
 
     res.status(webRes.status);
+    if (replacedStaleSession && newSessionId) {
+      res.setHeader("mcp-session-id", newSessionId);
+    }
     webRes.headers.forEach((v, k) => { if (k !== "content-encoding" && k !== "content-length") res.setHeader(k, v); });
     const text = await webRes.text();
     if (text) res.send(text);

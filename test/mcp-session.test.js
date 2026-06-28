@@ -27,14 +27,20 @@ assert.match(
 
 assert.match(
   indexJs,
-  /allowStaleInitialize:\s*isInitialize/,
-  'Stale initialize requests should be allowed to bind to a replacement session'
+  /allowStalePost:\s*true/,
+  'Stale POST requests should be transparently forwarded on a replacement session'
 );
 
 assert.match(
   indexJs,
   /replacedStaleSession && newSessionId \? \{ \.\.\.wh, "mcp-session-id": newSessionId \} : wh/,
-  'Replacement-session initialize requests should be forwarded with the new session header'
+  'Replacement-session POST requests should be forwarded with the new session header'
+);
+
+assert.match(
+  indexJs,
+  /if \(replacedStaleSession && newSessionId\) \{\s*res\.setHeader\("mcp-session-id", newSessionId\);\s*\}/,
+  'Recovered stale POST responses should tell clients which replacement session was used'
 );
 
 console.log('MCP session recovery checks passed\n');
