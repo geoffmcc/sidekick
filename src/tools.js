@@ -652,7 +652,7 @@ function getToolDefsForSource(source = currentSource) {
       return TOOL_DEFS.map(def => {
         const policy = getToolPolicyDecision(def.name, source);
         const approval = getApprovalDecision(def.name, source);
-        return { ...def, risk: policy.risk, enabled: policy.allowed, policy: policy.reason, approval_required: approval.required, approval: approval.reason };
+        return { ...def, category: def.category || TOOL_CATEGORIES[def.name] || "Uncategorized", risk: policy.risk, enabled: policy.allowed, policy: policy.reason, approval_required: approval.required, approval: approval.reason };
       });
     }
     
@@ -676,7 +676,7 @@ function getToolDefsForSource(source = currentSource) {
         name: tool.name,
         description: tool.description,
         args: args,
-        category: tool.category,
+        category: tool.category || TOOL_CATEGORIES[tool.name] || "Uncategorized",
         risk: policy.risk,
         enabled: policy.allowed,
         policy: policy.reason,
@@ -690,7 +690,7 @@ function getToolDefsForSource(source = currentSource) {
     return TOOL_DEFS.map(def => {
       const policy = getToolPolicyDecision(def.name, source);
       const approval = getApprovalDecision(def.name, source);
-      return { ...def, risk: policy.risk, enabled: policy.allowed, policy: policy.reason, approval_required: approval.required, approval: approval.reason };
+      return { ...def, category: def.category || TOOL_CATEGORIES[def.name] || "Uncategorized", risk: policy.risk, enabled: policy.allowed, policy: policy.reason, approval_required: approval.required, approval: approval.reason };
     });
   }
 }
@@ -807,14 +807,18 @@ function normalizePolicySources(source) {
   return String(source).split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
 }
 
-function inspectToolPolicy(toolName, source) {
+function inspectToolPolicy(toolInput, source) {
+  const toolName = typeof toolInput === "string" ? toolInput : toolInput.name;
   const policy = getToolPolicyDecision(toolName, source);
   const approval = getApprovalDecision(toolName, source);
   return {
     source,
     tool: toolName,
+    category: typeof toolInput === "string" ? null : toolInput.category || null,
+    description: typeof toolInput === "string" ? null : toolInput.description || null,
     risk: policy.risk,
     allowed: policy.allowed,
+    callable: policy.allowed,
     policy: {
       mode: policy.mode,
       allowed: policy.allowed,
@@ -837,19 +841,52 @@ function buildPolicyInspection(records, sources) {
   const inspections = [];
   for (const source of sources) {
     for (const tool of records) {
-      inspections.push(inspectToolPolicy(tool.name, source));
+      inspections.push(inspectToolPolicy(tool, source));
     }
   }
   return inspections;
 }
 
-function formatPolicyInspection(inspections) {
+function summarizePolicyInspection(inspections) {
+  const summary = {
+    total: inspections.length,
+    sources: {},
+    by_risk: {},
+    blocked: 0,
+    approval_required: 0
+  };
+  for (const item of inspections) {
+    if (!summary.sources[item.source]) {
+      summary.sources[item.source] = { total: 0, allowed: 0, blocked: 0, approval_required: 0, high_risk: 0 };
+    }
+    const sourceSummary = summary.sources[item.source];
+    sourceSummary.total += 1;
+    if (item.allowed) sourceSummary.allowed += 1;
+    else {
+      sourceSummary.blocked += 1;
+      summary.blocked += 1;
+    }
+    if (item.approval_required) {
+      sourceSummary.approval_required += 1;
+      summary.approval_required += 1;
+    }
+    if (RISK_ORDER[item.risk] >= RISK_ORDER.high) sourceSummary.high_risk += 1;
+    summary.by_risk[item.risk] = (summary.by_risk[item.risk] || 0) + 1;
+  }
+  return summary;
+}
+
+function formatPolicyInspection(inspections, summary = summarizePolicyInspection(inspections)) {
   const lines = [`Sidekick tool policy inspection (${inspections.length} decisions)`];
+  for (const [source, counts] of Object.entries(summary.sources)) {
+    lines.push(`Source ${source}: ${counts.allowed} allowed, ${counts.blocked} blocked, ${counts.approval_required} approval required, ${counts.high_risk} high/critical risk`);
+  }
   for (const item of inspections) {
     const policyMatch = item.policy.matched ? `, matched ${item.policy.matched}` : "";
     const approvalMatch = item.approval.matched ? `, matched ${item.approval.matched}` : "";
+    const category = item.category ? `${item.category}/` : "";
     lines.push(
-      `- ${item.source}/${item.tool} [${item.risk}]: ` +
+      `- ${item.source}/${category}${item.tool} [${item.risk}]: ` +
       `policy ${item.allowed ? "allowed" : "blocked"} (${item.policy.mode}; ${item.policy.reason}${policyMatch}); ` +
       `approval ${item.approval_required ? "required" : "not required"} (${item.approval.mode}; ${item.approval.reason}${approvalMatch})`
     );
@@ -884,8 +921,9 @@ async function sidekick_tools({ action, query, name, category, format, include_d
     records = records.slice(0, maxResults);
     const sources = normalizePolicySources(source);
     const inspections = buildPolicyInspection(records, sources);
-    const payload = { total: inspections.length, sources, decisions: inspections };
-    const text = selectedFormat === "json" ? JSON.stringify(payload, null, 2) : formatPolicyInspection(inspections);
+    const summary = summarizePolicyInspection(inspections);
+    const payload = { total: inspections.length, sources, summary, decisions: inspections };
+    const text = selectedFormat === "json" ? JSON.stringify(payload, null, 2) : formatPolicyInspection(inspections, summary);
     return { content: [{ type: "text", text }] };
   }
 
@@ -6770,22 +6808,22 @@ const MISSION_PROFILES = {
   read_only_audit: {
     risk: "low",
     description: "Read-only inspection. Routes status, logs, tool discovery, project context, and deploy verification.",
-    execute: ["status", "logs", "tools", "project", "verify_deploy"]
+    execute: ["status", "logs", "tools", "policy", "project", "verify_deploy"]
   },
   trusted_vps: {
     risk: "high",
     description: "Trusted single-operator VPS. Allows normal inspection plus deploy_current_main with confirmation.",
-    execute: ["status", "logs", "tools", "project", "verify_deploy", "deploy", "delete_key"]
+    execute: ["status", "logs", "tools", "policy", "project", "verify_deploy", "deploy", "delete_key"]
   },
   production: {
     risk: "critical",
     description: "Production-like host. Requires confirmation for mutation and defaults deploy requests to verification.",
-    execute: ["status", "logs", "tools", "project", "verify_deploy", "delete_key"]
+    execute: ["status", "logs", "tools", "policy", "project", "verify_deploy", "delete_key"]
   },
   danger_zone: {
     risk: "critical",
     description: "Explicit high-power mode. Allows deploy_current_main and key deletion with confirmation.",
-    execute: ["status", "logs", "tools", "project", "verify_deploy", "deploy", "delete_key"]
+    execute: ["status", "logs", "tools", "policy", "project", "verify_deploy", "deploy", "delete_key"]
   }
 };
 
@@ -6796,6 +6834,7 @@ function normalizeMissionIntent(intent) {
   if (/verify.*deploy|deployed.*commit|current.*main|matches.*origin/.test(text)) return "verify_deploy";
   if (/status|health|uptime|services|disk|memory|load/.test(text)) return "status";
   if (/log|logs|history|recent activity|tool calls/.test(text)) return "logs";
+  if (/policy|permission|permissions|allowed|blocked|lockdown|approval|approvals|why.*tool|tool.*why|who can call|can call|call what|risk/.test(text)) return "policy";
   if (/tool|tools|catalog|manifest|available capabilities|what can sidekick do/.test(text)) return "tools";
   if (/project|memory|context|remember|stored facts/.test(text)) return "project";
   if (/delete.*key|remove.*key|delete.*kv|remove.*kv/.test(text)) return "delete_key";
@@ -6812,6 +6851,7 @@ function missionRoute(intent, profileName = "trusted_vps", options = {}) {
     status: { tool: "sidekick_status", args: { include: options.include || "services,disk,memory,load,uptime", services: options.services } },
     logs: { tool: "sidekick_log_query", args: { limit: options.limit || 20, tool: options.tool, source: options.source } },
     tools: { tool: "sidekick_tools", args: { action: options.query ? "search" : "overview", query: options.query, format: options.format || "text" } },
+    policy: { tool: "sidekick_tools", args: { action: "policy", name: options.tool, source: options.source, format: options.format || "text", limit: options.limit } },
     project: { tool: "sidekick_project", args: { name: options.project || "sidekick", include: options.include || "kv,context" } },
     delete_key: { tool: "sidekick_delete", args: { key: options.key } }
   };
@@ -11057,6 +11097,8 @@ module.exports = {
   resolveApproval,
   getToolDefsForSource,
   getToolCategoriesWithTools,
+  buildPolicyInspection,
+  summarizePolicyInspection,
   parseGithubArgs,
   getGithubArg,
   missionRoute,

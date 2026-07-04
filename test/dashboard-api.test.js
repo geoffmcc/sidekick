@@ -172,6 +172,20 @@ setTimeout(async () => {
       console.log('Passed\n');
     }
 
+    // Test 3.0e: dashboard exposes summarized tool policy inspection
+    console.log('Test 3.0e: dashboard exposes summarized tool policy inspection');
+    {
+      const response = await makeRequest('GET', '/api/tool-policy?name=sidekick_bash&source=agent&limit=1');
+      assert.strictEqual(response.status, 200, 'Should return 200');
+      assert.strictEqual(response.data.total, 1, 'Should inspect one source/tool decision');
+      assert.strictEqual(response.data.sources[0], 'agent', 'Should honor source filter');
+      assert.strictEqual(response.data.decisions[0].tool, 'sidekick_bash', 'Should honor tool filter');
+      assert.ok(response.data.decisions[0].category, 'Should include category metadata');
+      assert.ok(response.data.decisions[0].description, 'Should include description metadata');
+      assert.ok(response.data.summary.sources.agent, 'Should include per-source policy summary');
+      console.log('Passed\n');
+    }
+
     // Test 3.1: GET /api/kv returns metadata
     console.log('Test 3.1: GET /api/kv returns metadata');
     {

@@ -70,6 +70,12 @@ assert.match(
 
 assert.match(
   toolsJs,
+  /policy:\s*\{\s*tool:\s*"sidekick_tools",\s*args:\s*\{\s*action:\s*"policy"/,
+  'sidekick_mission should route policy inspection through sidekick_tools action=policy'
+);
+
+assert.match(
+  toolsJs,
   /--max-time", "5", "-fsS"/,
   'sidekick_ops should bound the MCP health probe'
 );
