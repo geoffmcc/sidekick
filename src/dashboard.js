@@ -5,7 +5,7 @@ const path = require("path");
 const os = require("os");
 const { timingSafeCompare } = require("./crypto-utils");
 const { execSync } = require("child_process");
-const { getToolDefsForSource, getToolCategoriesWithTools, enforceToolPolicy, listApprovals, resolveApproval } = require("./tools");
+const { getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval } = require("./tools");
 const dbStore = require("./db");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
@@ -616,6 +616,17 @@ app.get("/api/stats", (req, res) => {
 
 app.get("/api/tools", (req, res) => {
   res.json({ tools: getToolDefsForSource("dashboard") });
+});
+
+app.get("/api/tool-policy", (req, res) => {
+  let records = getToolDefsForSource("dashboard");
+  if (req.query.name) records = records.filter(tool => tool.name === req.query.name);
+  if (req.query.name && records.length === 0) return res.status(404).json({ ok: false, error: "Tool not found: " + req.query.name });
+  const limit = Number.parseInt(req.query.limit || "100", 10);
+  records = records.slice(0, Number.isFinite(limit) && limit > 0 ? Math.min(limit, 200) : 100);
+  const sources = String(req.query.source || "mcp,dashboard,agent").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+  const decisions = buildPolicyInspection(records, sources);
+  res.json({ total: decisions.length, sources, summary: summarizePolicyInspection(decisions), decisions });
 });
 
 app.get("/api/tool-categories", (req, res) => {

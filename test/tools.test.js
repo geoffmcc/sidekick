@@ -66,7 +66,11 @@ console.log('Running Tools Tests...\n');
       });
       const restrictedPolicy = JSON.parse(restrictedPolicyResult.content[0].text);
       assert.strictEqual(restrictedPolicy.total, 1, 'Should inspect one source/tool decision');
+      assert.strictEqual(restrictedPolicy.summary.sources.agent.blocked, 1, 'Should summarize blocked decisions by source');
       assert.strictEqual(restrictedPolicy.decisions[0].allowed, false, 'Agent restricted mode should block critical tools');
+      assert.strictEqual(restrictedPolicy.decisions[0].callable, false, 'Blocked tools should not be callable');
+      assert.ok(restrictedPolicy.decisions[0].category, 'Should expose tool category for operator visibility');
+      assert.ok(restrictedPolicy.decisions[0].description, 'Should expose tool description for operator visibility');
       assert.strictEqual(restrictedPolicy.decisions[0].policy.reason, 'restricted policy blocks high and critical risk tools');
 
       process.env.SIDEKICK_AGENT_ALLOWED_TOOLS = 'sidekick_bash';
@@ -78,6 +82,7 @@ console.log('Running Tools Tests...\n');
       });
       const allowedPolicy = JSON.parse(allowedPolicyResult.content[0].text);
       assert.strictEqual(allowedPolicy.decisions[0].allowed, true, 'Explicit allowlist should allow the tool');
+      assert.strictEqual(allowedPolicy.summary.sources.agent.allowed, 1, 'Should summarize allowed decisions by source');
       assert.strictEqual(allowedPolicy.decisions[0].policy.matched, 'sidekick_bash', 'Should expose matched allowlist selector');
 
       process.env.SIDEKICK_AGENT_BLOCKED_TOOLS = 'sidekick_bash';
@@ -226,6 +231,13 @@ console.log('Running Tools Tests...\n');
     const statusRoute = missionRoute('check service health', 'read_only_audit');
     assert.strictEqual(statusRoute.route, 'status', 'Should route status intent');
     assert.strictEqual(statusRoute.allowed, true, 'Read-only audit should allow status');
+    const policyRoute = missionRoute('why is sidekick_bash allowed for agent policy?', 'read_only_audit', { tool: 'sidekick_bash', source: 'agent', format: 'json' });
+    assert.strictEqual(policyRoute.route, 'policy', 'Should route policy visibility intent');
+    assert.strictEqual(policyRoute.allowed, true, 'Read-only audit should allow policy inspection');
+    assert.strictEqual(policyRoute.recommended_tool, 'sidekick_tools', 'Policy should route to sidekick_tools');
+    assert.strictEqual(policyRoute.recommended_args.action, 'policy', 'Policy route should use policy action');
+    assert.strictEqual(policyRoute.recommended_args.name, 'sidekick_bash', 'Policy route should pass requested tool name');
+    assert.strictEqual(policyRoute.recommended_args.source, 'agent', 'Policy route should pass requested source');
     console.log('✓ Passed\n');
 
     // Test 2.0d: sidekick_knowledge soft delete and purge

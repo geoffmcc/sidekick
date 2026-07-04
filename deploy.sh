@@ -200,6 +200,33 @@ test_services_exist() {
   return 0
 }
 
+repair_optional_tools() {
+  if [ "$INSTALL_TOOLS" != true ]; then
+    echo -e "\033[33mSkipping optional server tools (--minimal)\033[0m"
+    return 0
+  fi
+
+  echo ""
+  echo -e "\033[36m--- Repairing Optional Server Tools ---\033[0m"
+  local setup_exists
+  setup_exists=$(run_remote "test -f $REMOTE_DIR/scripts/setup-tools.sh && echo YES || echo NO") || true
+  if [[ "$setup_exists" != *"YES"* ]]; then
+    echo -e "\033[33mOptional tools setup script not present on remote; skipping repair.\033[0m"
+    echo -e "\033[33mRe-run deploy after the repository is synced, or use git deploy mode.\033[0m"
+    return 0
+  fi
+
+  echo -e "\033[32mRunning setup-tools.sh to install/repair optional tooling...\033[0m"
+  if ! run_remote "cd $REMOTE_DIR && sudo -n bash scripts/setup-tools.sh 2>&1"; then
+    echo -e "\033[33mOptional server tools repair was skipped because sudo requires an interactive password.\033[0m"
+    echo -e "\033[33mNormal app deploy will continue.\033[0m"
+    echo -e "\033[33mTo repair optional tools, SSH into the server and run:\033[0m"
+    echo -e "\033[33m  cd /home/sidekick/sidekick && sudo bash scripts/setup-tools.sh\033[0m"
+    return 0
+  fi
+  changed+=("optional-tools")
+}
+
 initialize_remote() {
   echo ""
   echo -e "\033[36m=== Initializing remote server ===\033[0m"
@@ -408,6 +435,8 @@ else
     echo -e "\033[33mNo local .env found, skipping\033[0m"
   fi
 fi
+
+repair_optional_tools
 
 echo ""
 echo -e "\033[36m--- Installing Dependencies ---\033[0m"

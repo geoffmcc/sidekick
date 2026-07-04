@@ -236,6 +236,34 @@ function Initialize-Remote {
   Write-Host "  Remote initialization complete" -ForegroundColor Green
 }
 
+function Repair-OptionalTools {
+  if ($Minimal) {
+    Write-Host "  Skipping optional server tools (-Minimal)" -ForegroundColor Yellow
+    return
+  }
+
+  Write-Host ""
+  Write-Host "--- Repairing Optional Server Tools ---" -ForegroundColor Cyan
+  $setupExists = Run-Remote "test -f $REMOTE_DIR/scripts/setup-tools.sh && echo YES || echo NO"
+  if ($setupExists -notmatch "YES") {
+    Write-Host "  Optional tools setup script not present on remote; skipping repair." -ForegroundColor Yellow
+    Write-Host "  Re-run deploy after the repository is synced, or use git deploy mode." -ForegroundColor Yellow
+    return
+  }
+
+  Write-Host "  Running setup-tools.sh to install/repair optional tooling..." -ForegroundColor Green
+  $setupOutput = Run-Remote "cd $REMOTE_DIR && sudo -n bash scripts/setup-tools.sh 2>&1"
+  Write-Host $setupOutput
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "  Optional server tools repair was skipped because sudo requires an interactive password." -ForegroundColor Yellow
+    Write-Host "  Normal app deploy will continue." -ForegroundColor Yellow
+    Write-Host "  To repair optional tools, SSH into the server and run:" -ForegroundColor Yellow
+    Write-Host "    cd /home/sidekick/sidekick && sudo bash scripts/setup-tools.sh" -ForegroundColor Yellow
+    return
+  }
+  $script:changed += "optional-tools"
+}
+
 $changed = @()
 
 try {
@@ -425,6 +453,8 @@ try {
       Write-Host "  No local .env found, skipping" -ForegroundColor Yellow
     }
   }
+
+  Repair-OptionalTools
 
   # Generate version.json from local git
   Write-Host "  Generating version.json..." -ForegroundColor Green

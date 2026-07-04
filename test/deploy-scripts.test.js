@@ -184,6 +184,36 @@ console.log('Test 1.7: deploy.sh validates local files before bootstrap');
   console.log('✓ Local file validation present\n');
 }
 
+// Test 1.8: deploy.sh repairs optional server tools after sync
+console.log('Test 1.8: deploy.sh repairs optional server tools after sync');
+{
+  assert.ok(
+    deployShContent.includes('repair_optional_tools()'),
+    'deploy.sh should define a post-sync optional tools repair step'
+  );
+  assert.ok(
+    deployShContent.includes('sudo -n bash scripts/setup-tools.sh'),
+    'deploy.sh should run setup-tools.sh from the synced repository using non-interactive sudo'
+  );
+  assert.ok(
+    deployShContent.includes('Skipping optional server tools (--minimal)'),
+    'deploy.sh should make optional tooling skippable with --minimal'
+  );
+  assert.ok(
+    deployShContent.includes('Normal app deploy will continue'),
+    'deploy.sh should continue normal deploy when optional tools repair cannot run'
+  );
+  assert.ok(
+    deployShContent.includes('cd /home/sidekick/sidekick && sudo bash scripts/setup-tools.sh'),
+    'deploy.sh should tell operators how to repair optional tools manually'
+  );
+  assert.ok(
+    deployShContent.lastIndexOf('repair_optional_tools') > deployShContent.indexOf('--- Deploying Files ---'),
+    'deploy.sh should repair optional tools after file deployment'
+  );
+  console.log('✓ Optional tools repair present\n');
+}
+
 // ============================================================================
 // DEPLOY.PS1 TESTS
 // ============================================================================
@@ -350,6 +380,36 @@ console.log('Test 2.9: deploy.ps1 has non-fatal SSH probe handling');
     'deploy.ps1 should use the non-fatal SSH probe wrapper for connection checks'
   );
   console.log('✓ Non-fatal SSH probe handling present\n');
+}
+
+// Test 2.10: deploy.ps1 repairs optional server tools after sync
+console.log('Test 2.10: deploy.ps1 repairs optional server tools after sync');
+{
+  assert.ok(
+    deployPs1Content.includes('function Repair-OptionalTools'),
+    'deploy.ps1 should define a post-sync optional tools repair step'
+  );
+  assert.ok(
+    deployPs1Content.includes('sudo -n bash scripts/setup-tools.sh'),
+    'deploy.ps1 should run setup-tools.sh from the synced repository using non-interactive sudo'
+  );
+  assert.ok(
+    deployPs1Content.includes('Skipping optional server tools (-Minimal)'),
+    'deploy.ps1 should make optional tooling skippable with -Minimal'
+  );
+  assert.ok(
+    deployPs1Content.includes('Normal app deploy will continue'),
+    'deploy.ps1 should continue normal deploy when optional tools repair cannot run'
+  );
+  assert.ok(
+    deployPs1Content.includes('cd /home/sidekick/sidekick && sudo bash scripts/setup-tools.sh'),
+    'deploy.ps1 should tell operators how to repair optional tools manually'
+  );
+  assert.ok(
+    deployPs1Content.lastIndexOf('Repair-OptionalTools') > deployPs1Content.indexOf('--- Deploying Files ---'),
+    'deploy.ps1 should repair optional tools after file deployment'
+  );
+  console.log('✓ Optional tools repair present\n');
 }
 
 // ============================================================================
