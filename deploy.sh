@@ -136,20 +136,21 @@ run_bootstrap() {
   echo -e "    \033[90m✓ bootstrap.sh\033[0m"
   
   echo -e "  \033[33mUploading service files...\033[0m"
-  for svc in sidekick-mcp sidekick-dashboard sidekick-agent; do
-    local svc_local="$PROJECT_DIR/systemd/$svc.service"
-    if [ ! -f "$svc_local" ]; then
-      echo -e "\033[31mERROR: Service file not found: $svc_local\033[0m"
+  for unit_local in "$PROJECT_DIR"/systemd/sidekick-*; do
+    if [ ! -f "$unit_local" ]; then
+      echo -e "\033[31mERROR: Service file not found: $unit_local\033[0m"
       ssh -o ControlPath="$CONTROL_PATH" -O exit "$user@$IP" 2>/dev/null
       exit 1
     fi
+    local unit_name
+    unit_name=$(basename "$unit_local")
     
-    if ! scp -o ControlPath="$CONTROL_PATH" "$svc_local" "$user@$IP:/tmp/$svc.service" 2>&1; then
-      echo -e "\033[31mERROR: Failed to upload $svc.service\033[0m"
+    if ! scp -o ControlPath="$CONTROL_PATH" "$unit_local" "$user@$IP:/tmp/$unit_name" 2>&1; then
+      echo -e "\033[31mERROR: Failed to upload $unit_name\033[0m"
       ssh -o ControlPath="$CONTROL_PATH" -O exit "$user@$IP" 2>/dev/null
       exit 1
     fi
-    echo -e "    \033[90m✓ $svc.service\033[0m"
+    echo -e "    \033[90m✓ $unit_name\033[0m"
   done
   
   # Run bootstrap using control connection (no password prompt)

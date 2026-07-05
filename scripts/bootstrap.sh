@@ -123,10 +123,12 @@ sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-redis, /usr/bin/s
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-qdrant, /usr/bin/systemctl stop sidekick-qdrant, /usr/bin/systemctl restart sidekick-qdrant, /usr/bin/systemctl status sidekick-qdrant
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-influxdb, /usr/bin/systemctl stop sidekick-influxdb, /usr/bin/systemctl restart sidekick-influxdb, /usr/bin/systemctl status sidekick-influxdb
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-grafana, /usr/bin/systemctl stop sidekick-grafana, /usr/bin/systemctl restart sidekick-grafana, /usr/bin/systemctl status sidekick-grafana
+sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-metrics.timer, /usr/bin/systemctl stop sidekick-metrics.timer, /usr/bin/systemctl restart sidekick-metrics.timer, /usr/bin/systemctl status sidekick-metrics.timer
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/journalctl -u sidekick-postgres, /usr/bin/journalctl -u sidekick-redis, /usr/bin/journalctl -u sidekick-qdrant, /usr/bin/journalctl -u sidekick-influxdb, /usr/bin/journalctl -u sidekick-grafana
 
 # Docker management (needed for on-demand services)
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/docker compose -f /home/sidekick/sidekick/docker/docker-compose.yml *
+sidekick ALL=(ALL) NOPASSWD: /usr/bin/docker compose --env-file /home/sidekick/sidekick/.env -f /home/sidekick/sidekick/docker/docker-compose.yml *
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/docker start *, /usr/bin/docker stop *, /usr/bin/docker restart *, /usr/bin/docker ps, /usr/bin/docker logs *
 
 # UFW
@@ -212,12 +214,13 @@ if [ "$INSTALL_SERVICES" = true ]; then
   log "Installing systemd services..."
   
   # Check for service files in /tmp
-  for svc in sidekick-mcp sidekick-dashboard sidekick-agent; do
-    if [ -f "/tmp/$svc.service" ]; then
-      cp "/tmp/$svc.service" "/etc/systemd/system/$svc.service"
-      log "  Installed $svc.service"
+  for unit in /tmp/sidekick-*.service /tmp/sidekick-*.timer; do
+    if [ -f "$unit" ]; then
+      unit_name="$(basename "$unit")"
+      cp "$unit" "/etc/systemd/system/$unit_name"
+      log "  Installed $unit_name"
     else
-      warn "  Service file /tmp/$svc.service not found, skipping"
+      warn "  Service file $unit not found, skipping"
     fi
   done
   
@@ -225,15 +228,25 @@ if [ "$INSTALL_SERVICES" = true ]; then
   systemctl daemon-reload
   log "Systemd daemon reloaded"
   
-  for svc in sidekick-mcp sidekick-dashboard sidekick-agent; do
-    if [ -f "/etc/systemd/system/$svc.service" ]; then
-      systemctl enable "$svc"
-      log "  Enabled $svc"
+  for unit in sidekick-mcp.service sidekick-dashboard.service sidekick-agent.service sidekick-metrics.timer; do
+    if [ -f "/etc/systemd/system/$unit" ]; then
+      if [ "$unit" = "sidekick-metrics.timer" ]; then
+        ENV_FILE="$USER_HOME/sidekick/.env"
+        if [ -f "$ENV_FILE" ] && grep -q '^SIDEKICK_INFLUX_TOKEN=.' "$ENV_FILE" && ! grep -q '^SIDEKICK_INFLUX_TOKEN=sidekick-influx-token$' "$ENV_FILE"; then
+          systemctl enable --now "$unit"
+          log "  Enabled and started $unit"
+        else
+          warn "  Installed $unit but did not enable it; set SIDEKICK_INFLUX_TOKEN first"
+        fi
+      else
+        systemctl enable "$unit"
+        log "  Enabled $unit"
+      fi
     fi
   done
   
   # Clean up temp files
-  rm -f /tmp/sidekick-*.service
+  rm -f /tmp/sidekick-*.service /tmp/sidekick-*.timer
   
   log "Services installed and enabled"
 fi

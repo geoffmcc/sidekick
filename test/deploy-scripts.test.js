@@ -118,8 +118,8 @@ console.log('Test 1.4: deploy.sh has progress indicators');
     'deploy.sh should show checkmark for bootstrap.sh upload'
   );
   assert.ok(
-    deployShContent.includes('✓ $svc.service'),
-    'deploy.sh should show checkmark for service file uploads'
+    deployShContent.includes('✓ $unit_name'),
+    'deploy.sh should show checkmark for systemd unit uploads'
   );
   assert.ok(
     deployShContent.includes('SSH connection established'),
@@ -282,8 +282,8 @@ console.log('Test 2.4: deploy.ps1 has progress indicators');
     'deploy.ps1 should show [ok] for bootstrap.sh upload'
   );
   assert.ok(
-    deployPs1Content.includes('[ok] $svc.service'),
-    'deploy.ps1 should show [ok] for service file uploads'
+    deployPs1Content.includes('[ok] $($_.Name)'),
+    'deploy.ps1 should show [ok] for systemd unit uploads'
   );
   assert.ok(
     deployPs1Content.includes('SSH connection established'),
@@ -482,6 +482,14 @@ console.log('Test 3.4: bootstrap.sh configures sudoers');
   assert.ok(
     bootstrapShContent.includes('systemctl restart sidekick-dashboard'),
     'bootstrap.sh should allow restarting sidekick-dashboard'
+  );
+  assert.ok(
+    bootstrapShContent.includes('systemctl start sidekick-metrics.timer'),
+    'bootstrap.sh should allow starting sidekick-metrics.timer'
+  );
+  assert.ok(
+    bootstrapShContent.includes('docker compose --env-file /home/sidekick/sidekick/.env'),
+    'bootstrap.sh should allow Docker Compose with the repo .env file'
   );
   console.log('✓ Sudoers configuration present\n');
 }

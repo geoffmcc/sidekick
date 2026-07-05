@@ -139,23 +139,21 @@ function Run-Bootstrap {
   Write-Host "    [ok] bootstrap.sh" -ForegroundColor Gray
   
   Write-Host "  Uploading service files..." -ForegroundColor Yellow
-  $services = @("sidekick-mcp", "sidekick-dashboard", "sidekick-agent")
-  foreach ($svc in $services) {
-    $svcLocal = Join-Path $PROJECT_DIR "systemd\$svc.service"
-    if (-not (Test-Path $svcLocal)) {
-      Write-Host "  ERROR: Service file not found: $svcLocal" -ForegroundColor Red
+  Get-ChildItem (Join-Path $PROJECT_DIR "systemd") -Filter "sidekick-*" | ForEach-Object {
+    if (-not (Test-Path $_.FullName)) {
+      Write-Host "  ERROR: Service file not found: $($_.FullName)" -ForegroundColor Red
       ssh -o ControlPath="$ControlPath" -O exit "$User@$IP" 2>$null
       throw "Service file not found"
     }
     
-    $scpResult = scp -o ControlPath="$ControlPath" "$svcLocal" "$User@$IP`:/tmp/$svc.service" 2>&1
+    $scpResult = scp -o ControlPath="$ControlPath" "$($_.FullName)" "$User@$IP`:/tmp/$($_.Name)" 2>&1
     
     if ($LASTEXITCODE -ne 0) {
-      Write-Host "  ERROR: Failed to upload $svc.service" -ForegroundColor Red
+      Write-Host "  ERROR: Failed to upload $($_.Name)" -ForegroundColor Red
       ssh -o ControlPath="$ControlPath" -O exit "$User@$IP" 2>$null
       throw "SCP failed"
     }
-    Write-Host "    [ok] $svc.service" -ForegroundColor Gray
+    Write-Host "    [ok] $($_.Name)" -ForegroundColor Gray
   }
   
   # Run bootstrap using control connection (no password prompt)
