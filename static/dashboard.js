@@ -1,4 +1,4 @@
-let currentPage = 'system';
+let currentPage = 'mission';
 let agentRunning = false;
 let agentStream = null;
 let expandedHistory = {};
@@ -141,8 +141,8 @@ function updateToolSummary(tools) {
   $('toolSummaryHighRisk').textContent = tools.filter(isHighRiskTool).length;
 }
 
-const SERVICE_ICONS = { 'sidekick-mcp': 'fa-server', 'sidekick-agent': 'fa-robot', 'ollama': 'fa-brain' };
-const SERVICE_LABELS = { 'sidekick-mcp': 'MCP', 'sidekick-agent': 'Agent', 'ollama': 'Ollama' };
+const SERVICE_ICONS = { 'sidekick-mcp': 'fa-server', 'sidekick-dashboard': 'fa-gauge-high', 'sidekick-agent': 'fa-robot', 'ollama': 'fa-brain' };
+const SERVICE_LABELS = { 'sidekick-mcp': 'MCP', 'sidekick-dashboard': 'Dashboard', 'sidekick-agent': 'Agent', 'ollama': 'Ollama' };
 const SOURCE_ICONS = { 'agent': 'fa-robot', 'mcp': 'fa-plug', 'unknown': 'fa-circle-question' };
 const SOURCE_COLORS = { 'agent': '#58a6ff', 'mcp': '#bc8cff', 'unknown': '#8b949e' };
 
@@ -246,6 +246,7 @@ function showPage(name){
   $('page-' + name).classList.add('active');
   $('nav-' + name).classList.add('active');
   loadSystem();
+  if (name === 'mission') loadMissionControl();
   if (name === 'system') { loadDashboardSummary(); loadLLM(); loadServices(); }
   if (name === 'activity') loadLogs();
   if (name === 'data') loadKV();
@@ -402,6 +403,116 @@ function loadDashboardSummary(){
         top5.map(s => '<div style="display:flex;justify-content:space-between"><span style="color:#c9d1d9">' + esc(s.name.replace('sidekick_', '')) + '</span><span style="color:#8b949e">' + s.count + '</span></div>').join('');
     }
   }).catch(e => apiError('/api/stats', e, 0));
+}
+
+function loadMissionControl(){
+  const statsRange = getToolStatsRange(getToolStatsWindow());
+  const statsQuery = `?since=${encodeURIComponent(statsRange.since)}&until=${encodeURIComponent(statsRange.until)}`;
+  const requests = [
+    authFetch('/api/dashboard-summary').then(r=>r.json()),
+    authFetch('/api/system').then(r=>r.json()),
+    authFetch('/api/services').then(r=>r.json()),
+    authFetch('/api/stats' + statsQuery).then(r=>r.json()),
+    authFetch('/api/logs?limit=10').then(r=>r.json())
+  ];
+
+  Promise.all(requests).then(([summary, system, services, stats, logs]) => {
+    const now = new Date();
+    $('lastUpdate').textContent = 'updated ' + now.toLocaleTimeString();
+    renderMissionReadiness(summary, services);
+    renderMissionServices(services);
+    renderMissionSystem(system, summary);
+    renderMissionStats(stats);
+    renderMissionActivity(logs);
+    renderMissionAttention(summary, services, system, stats);
+  }).catch(e => apiError('/api/mission-control', e, 0));
+}
+
+function renderMissionReadiness(summary, services){
+  const serviceValues = Object.values((services && services.services) || {});
+  const offlineCount = serviceValues.filter(status => status !== 'active').length;
+  let score = summary && summary.health ? Number(summary.health.score) || 0 : 0;
+  score = Math.max(0, score - offlineCount * 15);
+  const scoreEl = $('missionScore');
+  scoreEl.textContent = score;
+  scoreEl.className = 'mission-score ' + (score >= 80 ? 'ok' : score >= 50 ? 'warn' : 'danger');
+  $('missionScoreLabel').textContent = score >= 80 ? 'Systems nominal' : score >= 50 ? 'Needs attention' : 'Investigate now';
+}
+
+function renderMissionServices(data){
+  const services = (data && data.services) || {};
+  const names = Object.keys(services);
+  const el = $('missionServices');
+  if (!names.length) {
+    el.innerHTML = '<div class="empty">No service data</div>';
+    return;
+  }
+  el.innerHTML = names.map(name => {
+    const active = services[name] === 'active';
+    const icon = SERVICE_ICONS[name] || 'fa-circle';
+    const label = SERVICE_LABELS[name] || name;
+    return '<div class="mission-service ' + (active ? 'ok' : 'danger') + '"><span><i class="fas ' + icon + '"></i> ' + esc(label) + '</span><strong>' + esc(services[name]) + '</strong></div>';
+  }).join('');
+}
+
+function renderMissionSystem(system, summary){
+  if (!system || system.error) return;
+  const cpu = summary && summary.health ? Math.round(summary.health.cpu) + '%' : system.cpu;
+  const mem = system.memory ? system.memory.used + '/' + system.memory.total : '--';
+  const disk = system.disk ? system.disk.free + ' free (' + system.disk.pct + ')' : '--';
+  $('missionCpu').textContent = cpu;
+  $('missionMemory').textContent = mem;
+  $('missionDisk').textContent = disk;
+  $('missionUptime').textContent = system.uptime || '--';
+}
+
+function renderMissionStats(data){
+  const stats = (data && data.stats) || [];
+  let totalCalls = 0;
+  let totalSuccess = 0;
+  for (const s of stats) {
+    totalCalls += s.count || 0;
+    totalSuccess += s.ok || 0;
+  }
+  $('missionToolCalls').textContent = totalCalls;
+  $('missionToolSuccess').textContent = totalCalls ? Math.round(totalSuccess / totalCalls * 100) + '%' : '--';
+  const top = stats.slice(0, 4);
+  $('missionTopTools').innerHTML = top.length ? top.map(s =>
+    '<div class="mission-list-row"><span>' + esc(s.name.replace('sidekick_', '')) + '</span><strong>' + s.count + '</strong></div>'
+  ).join('') : '<div class="empty">No tool traffic yet</div>';
+}
+
+function renderMissionActivity(data){
+  const entries = (data && data.entries) || [];
+  $('missionRecentActivity').innerHTML = entries.length ? entries.slice(0, 6).map(e => {
+    const ok = e.ok ? 'ok' : 'danger';
+    return '<div class="mission-activity ' + ok + '"><div><strong>' + esc(e.n || 'unknown') + '</strong><span>' + esc(fmtTime(e.t)) + '</span></div><p>' + esc((e.s || e.a || '').slice(0, 100)) + '</p></div>';
+  }).join('') : '<div class="empty">No recent activity</div>';
+}
+
+function renderMissionAttention(summary, services, system, stats){
+  const items = [];
+  const serviceEntries = Object.entries((services && services.services) || {});
+  for (const [name, status] of serviceEntries) {
+    if (status !== 'active') items.push({ level: 'danger', title: name + ' is ' + status, detail: 'Open System Health or service logs before running dependent work.' });
+  }
+  const health = summary && summary.health;
+  if (health) {
+    if (health.cpu > 80) items.push({ level: 'warn', title: 'CPU pressure: ' + Math.round(health.cpu) + '%', detail: 'Check active processes if this persists.' });
+    if (health.memory > 80) items.push({ level: 'warn', title: 'Memory pressure: ' + Math.round(health.memory) + '%', detail: 'Agent and model workloads may slow down.' });
+    if (health.disk > 80) items.push({ level: 'warn', title: 'Disk usage: ' + Math.round(health.disk) + '%', detail: 'Review backups, logs, and media before deploys.' });
+  }
+  const failures = ((stats && stats.stats) || []).reduce((sum, s) => sum + (s.fail || 0), 0);
+  if (failures > 0) items.push({ level: 'warn', title: failures + ' failed tool call' + (failures === 1 ? '' : 's') + ' today', detail: 'Open Activity Log for recent failures and outputs.' });
+  const recentErrors = (summary && summary.recentErrors) || [];
+  for (const err of recentErrors.slice(0, 2)) {
+    items.push({ level: 'danger', title: err.tool || 'Recent error', detail: err.summary || 'Tool call failed.' });
+  }
+  if (!system || system.error) items.push({ level: 'danger', title: 'System API unreachable', detail: 'The dashboard could not read system status.' });
+
+  $('missionAttention').innerHTML = items.length ? items.slice(0, 5).map(item =>
+    '<div class="mission-attention ' + item.level + '"><div><strong>' + esc(item.title) + '</strong><p>' + esc(item.detail) + '</p></div></div>'
+  ).join('') : '<div class="mission-attention ok"><div><strong>No immediate action</strong><p>Services are online, resources look healthy, and no recent failures need attention.</p></div></div>';
 }
 
 function formatBytes(bytes){
@@ -2060,18 +2171,22 @@ function showProcedureDetail(name){
 
 // -- Refresh -- //
 function refresh(){
-  // Only refresh if on system page AND tab is visible
-  if (currentPage !== 'system') return;
+  // Only refresh live overview pages AND tab is visible
+  if (currentPage !== 'mission' && currentPage !== 'system') return;
   if (document.hidden) return;
-  
-  const now = new Date();
-  $('lastUpdate').textContent = 'updated ' + now.toLocaleTimeString();
-  loadSystem(); loadDashboardSummary(); loadLLM(); loadServices();
+
+  if (currentPage === 'mission') {
+    loadSystem(); loadServices(); loadMissionControl();
+  } else {
+    const now = new Date();
+    $('lastUpdate').textContent = 'updated ' + now.toLocaleTimeString();
+    loadSystem(); loadDashboardSummary(); loadLLM(); loadServices();
+  }
 }
 
 // Restore last viewed tab
 const savedPage = localStorage.getItem('sidekick_currentPage');
-if (savedPage && savedPage !== 'system') {
+if (savedPage && savedPage !== 'mission') {
   showPage(savedPage);
 }
 
@@ -2083,10 +2198,16 @@ if (toolStatsWindowSelect) {
 
 // Fetch tool categories from API before loading other data
 fetchToolCategories().then(() => {
-  refresh();
-  loadSystem();
-  loadDashboardSummary();
-  loadLLM();
-  loadServices();
+  if (currentPage === 'mission') {
+    loadSystem();
+    loadServices();
+    loadMissionControl();
+  } else {
+    refresh();
+    loadSystem();
+    loadDashboardSummary();
+    loadLLM();
+    loadServices();
+  }
 });
 setInterval(refresh, 10000);
