@@ -113,6 +113,37 @@ nav a.active{color:#58a6ff;border-color:#58a6ff;background:#0d1117}
 .modal textarea:focus{outline:none;border-color:#58a6ff}
 .modal-actions{display:flex;gap:8px;margin-top:16px;justify-content:flex-end}
 footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
+.mission-hero{display:grid;grid-template-columns:1fr auto;gap:16px;align-items:stretch;margin-bottom:14px;padding:18px;border:1px solid #1f6feb;border-radius:12px;background:radial-gradient(circle at top left,rgba(31,111,235,.28),transparent 36%),linear-gradient(135deg,#0d1117,#111827)}
+.mission-kicker{color:#7ee787;font-size:.72rem;text-transform:uppercase;letter-spacing:.12em;margin-bottom:8px}
+.mission-hero h2{color:#c9d1d9;font-size:1.8rem;line-height:1;margin-bottom:8px}
+.mission-hero p{color:#8b949e;font-size:.88rem;max-width:720px;line-height:1.5}
+.mission-score-card{min-width:170px;background:rgba(13,17,23,.78);border:1px solid #30363d;border-radius:10px;padding:14px;text-align:right}
+.mission-score{font-size:2.4rem;font-weight:800;line-height:1;margin:8px 0}
+.mission-score.ok{color:#3fb950}.mission-score.warn{color:#d29922}.mission-score.danger{color:#f85149}
+.mission-score-label{color:#8b949e;font-size:.75rem;text-transform:uppercase}
+.mission-grid{display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:12px}
+.mission-panel{padding:14px;min-height:150px}
+.mission-panel-wide{grid-column:span 2}
+.mission-panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px}
+.mission-muted{color:#6e7681;font-size:.75rem;margin-top:-4px}
+.mission-service-list,.mission-list{display:flex;flex-direction:column;gap:8px}
+.mission-service,.mission-list-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 10px;background:#0d1117;border:1px solid #21262d;border-radius:8px;font-size:.82rem}
+.mission-service span{display:flex;align-items:center;gap:8px;color:#c9d1d9}.mission-service.ok strong{color:#3fb950}.mission-service.danger strong{color:#f85149}
+.mission-metrics{display:grid;gap:8px}
+.mission-metrics div{display:flex;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px solid #21262d;font-size:.82rem}.mission-metrics div:last-child{border-bottom:0}
+.mission-metrics span{color:#8b949e}.mission-metrics strong{color:#c9d1d9;text-align:right}
+.mission-actions{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.mission-action{display:flex;align-items:center;gap:10px;padding:12px;background:#0d1117;border:1px solid #30363d;border-radius:9px;color:#c9d1d9;text-decoration:none;cursor:pointer;font-size:.82rem;text-align:left}
+.mission-action:hover{border-color:#58a6ff;color:#58a6ff}.mission-action i{width:18px;text-align:center;color:#58a6ff}
+.mission-statline{display:flex;align-items:baseline;gap:8px;margin:8px 0}.mission-statline strong{font-size:1.6rem;color:#58a6ff}.mission-statline span{color:#8b949e;font-size:.75rem;text-transform:uppercase}
+.mission-list.compact{margin-top:10px}.mission-list-row span{color:#c9d1d9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.mission-list-row strong{color:#8b949e}
+.mission-attention{padding:11px 12px;border:1px solid #30363d;border-radius:9px;background:#0d1117;border-left-width:3px}
+.mission-attention.ok{border-left-color:#3fb950}.mission-attention.warn{border-left-color:#d29922}.mission-attention.danger{border-left-color:#f85149}
+.mission-attention strong{color:#c9d1d9;font-size:.84rem}.mission-attention p{color:#8b949e;font-size:.76rem;margin-top:4px;line-height:1.45}
+.mission-activity{padding:9px 0;border-bottom:1px solid #21262d}.mission-activity:last-child{border-bottom:0}
+.mission-activity div{display:flex;justify-content:space-between;gap:8px}.mission-activity strong{color:#58a6ff;font-size:.78rem}.mission-activity span{color:#6e7681;font-size:.7rem;white-space:nowrap}.mission-activity p{color:#8b949e;font-size:.74rem;line-height:1.35;margin-top:3px;word-break:break-word}.mission-activity.danger strong{color:#f85149}
+@media(max-width:1050px){.mission-grid{grid-template-columns:1fr 1fr}.mission-panel-wide{grid-column:span 2}}
+@media(max-width:720px){body{padding:12px}nav{overflow-x:auto;padding-bottom:4px}.mission-hero{grid-template-columns:1fr}.mission-score-card{text-align:left}.mission-grid{grid-template-columns:1fr}.mission-panel-wide{grid-column:span 1}}
 .kv-entry{display:flex;flex-direction:column;gap:8px;padding:12px;border-bottom:1px solid #21262d}
 .kv-entry:last-child{border-bottom:none}
 .kv-header{display:flex;justify-content:space-between;align-items:center}

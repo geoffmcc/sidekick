@@ -498,7 +498,7 @@ app.get("/api/llm", (req, res) => {
 });
 
 app.get("/api/services", (req, res) => {
-  const services = ["sidekick-mcp", "sidekick-agent", "ollama"];
+  const services = ["sidekick-mcp", "sidekick-dashboard", "sidekick-agent", "ollama"];
   const status = {};
   for (const svc of services) {
     try {

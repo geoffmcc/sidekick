@@ -18,7 +18,8 @@
 </div>
 
 <nav>
-  <a class="active" onclick="showPage('system')" id="nav-system">System</a>
+  <a class="active" onclick="showPage('mission')" id="nav-mission">Mission Control</a>
+  <a onclick="showPage('system')" id="nav-system">System</a>
   <a onclick="showPage('activity')" id="nav-activity">Activity</a>
   <a onclick="showPage('data')" id="nav-data">Data</a>
   <a onclick="showPage('memory')" id="nav-memory">Memory</a>
@@ -36,8 +37,76 @@
   <div class="status-box"><div class="s-label">Disk</div><div class="s-val" id="s-disk">...</div></div>
 </div>
 
+<!-- Mission Control Page -->
+<div class="page active" id="page-mission">
+  <div class="mission-hero">
+    <div>
+      <div class="mission-kicker">LAN Tools Portal</div>
+      <h2>Mission Control</h2>
+      <p>One screen for Sidekick health, attention items, quick actions, and recent activity.</p>
+    </div>
+    <div class="mission-score-card">
+      <div class="s-label">Readiness</div>
+      <div id="missionScore" class="mission-score">--</div>
+      <div id="missionScoreLabel" class="mission-score-label">Checking systems</div>
+    </div>
+  </div>
+
+  <div class="mission-grid">
+    <div class="card mission-panel mission-panel-wide">
+      <div class="mission-panel-head">
+        <div>
+          <div class="section-title">Attention</div>
+          <div class="mission-muted">Failures, offline services, and resource pressure.</div>
+        </div>
+        <button class="btn btn-sm btn-outline" onclick="loadMissionControl()"><i class="fas fa-sync"></i> Refresh</button>
+      </div>
+      <div id="missionAttention" class="mission-list"><div class="empty">Checking...</div></div>
+    </div>
+
+    <div class="card mission-panel">
+      <div class="section-title">Services</div>
+      <div id="missionServices" class="mission-service-list"><div class="empty">Checking...</div></div>
+    </div>
+
+    <div class="card mission-panel">
+      <div class="section-title">System Loadout</div>
+      <div class="mission-metrics">
+        <div><span>CPU</span><strong id="missionCpu">--</strong></div>
+        <div><span>Memory</span><strong id="missionMemory">--</strong></div>
+        <div><span>Disk</span><strong id="missionDisk">--</strong></div>
+        <div><span>Uptime</span><strong id="missionUptime">--</strong></div>
+      </div>
+    </div>
+
+    <div class="card mission-panel mission-panel-wide">
+      <div class="section-title">Quick Actions</div>
+      <div class="mission-actions">
+        <button class="mission-action" onclick="showPage('system')"><i class="fas fa-heart-pulse"></i><span>System Health</span></button>
+        <button class="mission-action" onclick="showPage('activity')"><i class="fas fa-list-check"></i><span>Activity Log</span></button>
+        <button class="mission-action" onclick="showPage('tools')"><i class="fas fa-screwdriver-wrench"></i><span>Tool Catalog</span></button>
+        <button class="mission-action" onclick="showPage('agent')"><i class="fas fa-robot"></i><span>Ask Agent</span></button>
+        <a class="mission-action" href="http://192.168.1.10:3000" target="_blank"><i class="fas fa-chart-line"></i><span>Grafana</span></a>
+        <a class="mission-action" href="http://192.168.1.10:11434" target="_blank"><i class="fas fa-brain"></i><span>Ollama</span></a>
+      </div>
+    </div>
+
+    <div class="card mission-panel">
+      <div class="section-title">Tool Traffic Today</div>
+      <div class="mission-statline"><strong id="missionToolCalls">--</strong><span>calls</span></div>
+      <div class="mission-statline"><strong id="missionToolSuccess">--</strong><span>success</span></div>
+      <div id="missionTopTools" class="mission-list compact"><div class="empty">No tool traffic yet</div></div>
+    </div>
+
+    <div class="card mission-panel">
+      <div class="section-title">Recent Activity</div>
+      <div id="missionRecentActivity" class="mission-list compact"><div class="empty">Loading...</div></div>
+    </div>
+  </div>
+</div>
+
 <!-- System Page -->
-<div class="page active" id="page-system">
+<div class="page" id="page-system">
   <!-- Row 1: Health, Tool Stats, Storage -->
   <div class="grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
     <div class="card" style="padding:12px">
