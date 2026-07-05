@@ -558,7 +558,7 @@ app.post("/api/quick-actions/:action", (req, res) => {
       const allowedServices = new Set(["sidekick-mcp", "sidekick-dashboard", "sidekick-agent"]);
       const service = String(req.body?.service || "sidekick-mcp");
       if (!allowedServices.has(service)) return res.status(400).json({ ok: false, error: "Unsupported service" });
-      const logs = execSync(`sudo journalctl -u ${service} 2>&1`, { encoding: "utf-8", timeout: 5000 }).trim().split("\n").slice(-40).join("\n");
+      const logs = execSync(`sudo -n /usr/bin/journalctl -u ${service} | tail -40`, { encoding: "utf-8", timeout: 5000 }).trim();
       auditLog(req, "quick-action.service-logs", { service });
       return res.json({ ok: true, action, result: { service, logs } });
     }
