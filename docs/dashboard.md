@@ -30,6 +30,10 @@ If the dashboard is exposed outside a private network, put it behind a reverse p
 
 `GET /api/tools` returns tool metadata for the dashboard, including risk classification and whether the active dashboard policy enables each tool. The Tools tab displays that policy state alongside search, category filtering, and argument details.
 
+## Mission Control Quick Actions
+
+Mission Control includes authenticated quick actions backed by `POST /api/quick-actions/:action`. The first actions are health check, recent failures, deployment info, MCP service logs, and sidekick-agent restart. Service log and restart actions are restricted to explicit service allowlists.
+
 ## Data editing
 
 `GET /api/kv` returns the KV store. `PUT /api/kv/:key` writes or updates one KV entry. `DELETE /api/kv/:key` removes one key. KV entries may be stored as simple legacy strings or as metadata objects with `value`, `project`, `category`, `source`, `created`, and `updated` fields.

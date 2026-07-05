@@ -515,6 +515,51 @@ function renderMissionAttention(summary, services, system, stats){
   ).join('') : '<div class="mission-attention ok"><div><strong>No immediate action</strong><p>Services are online, resources look healthy, and no recent failures need attention.</p></div></div>';
 }
 
+function runQuickAction(action, payload){
+  const resultEl = $('quickActionResult');
+  resultEl.innerHTML = '<div class="empty">Running ' + esc(action.replace(/-/g, ' ')) + '...</div>';
+  authFetch('/api/quick-actions/' + encodeURIComponent(action), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload || {})
+  }).then(r=>r.json()).then(d=>{
+    if (!d.ok) {
+      resultEl.innerHTML = '<div class="quick-action-error">' + esc(d.error || 'Action failed') + '</div>';
+      return;
+    }
+    resultEl.innerHTML = renderQuickActionResult(action, d.result || {});
+    if (action === 'restart-agent' || action === 'health-check') loadMissionControl();
+  }).catch(e=>{
+    resultEl.innerHTML = '<div class="quick-action-error">' + esc(e.message || String(e)) + '</div>';
+    apiError('/api/quick-actions/' + action, e, 0);
+  });
+}
+
+function renderQuickActionResult(action, result){
+  if (action === 'health-check') {
+    const services = Object.entries(result.services || {}).map(([name, status]) =>
+      '<div class="mission-list-row"><span>' + esc(name) + '</span><strong>' + esc(status) + '</strong></div>'
+    ).join('');
+    return '<div class="quick-action-title">Health Check</div><div class="quick-action-grid"><div><span>Uptime</span><strong>' + esc(result.uptime || '--') + '</strong></div><div><span>Load</span><strong>' + esc(result.load || '--') + '</strong></div><div><span>Memory</span><strong>' + esc(result.memory || '--') + '</strong></div><div><span>Disk</span><strong>' + esc(result.disk || '--') + '</strong></div></div><div class="mission-list compact">' + services + '</div>';
+  }
+  if (action === 'recent-failures') {
+    const failures = result.failures || [];
+    if (!failures.length) return '<div class="quick-action-title">Recent Failures</div><div class="mission-attention ok"><div><strong>No recent failures</strong><p>The last scanned tool logs are clean.</p></div></div>';
+    return '<div class="quick-action-title">Recent Failures</div>' + failures.map(f => '<div class="mission-activity danger"><div><strong>' + esc(f.tool || 'unknown') + '</strong><span>' + esc(fmtDate(f.time)) + '</span></div><p>' + esc(f.summary || 'No summary') + '</p></div>').join('');
+  }
+  if (action === 'deployment') {
+    return '<div class="quick-action-title">Deployment</div><div class="quick-action-grid"><div><span>Branch</span><strong>' + esc(result.branch || '--') + '</strong></div><div><span>Commit</span><strong>' + esc(String(result.commit || '--').slice(0, 12)) + '</strong></div><div><span>Deployed</span><strong>' + esc(result.deployedAt || '--') + '</strong></div><div><span>Remote</span><strong>' + esc(result.remote || '--') + '</strong></div></div>';
+  }
+  if (action === 'service-logs') {
+    return '<div class="quick-action-title">' + esc(result.service || 'Service') + ' Logs</div><pre class="quick-action-pre">' + esc(result.logs || 'No logs') + '</pre>';
+  }
+  if (action === 'restart-agent') {
+    const ok = result.status === 'active';
+    return '<div class="quick-action-title">Restart Agent</div><div class="mission-attention ' + (ok ? 'ok' : 'danger') + '"><div><strong>sidekick-agent is ' + esc(result.status || 'unknown') + '</strong><p>Restart command completed.</p></div></div>';
+  }
+  return '<pre class="quick-action-pre">' + esc(JSON.stringify(result, null, 2)) + '</pre>';
+}
+
 function formatBytes(bytes){
   if(bytes === 0) return '0 B';
   const k = 1024;

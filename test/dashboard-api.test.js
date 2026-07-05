@@ -186,6 +186,35 @@ setTimeout(async () => {
       console.log('Passed\n');
     }
 
+    // Test 3.0f: quick actions expose safe dashboard operations
+    console.log('Test 3.0f: quick actions expose safe dashboard operations');
+    {
+      dbStore.clearToolLogs();
+      dbStore.appendToolLog({
+        t: new Date().toISOString(),
+        n: 'sidekick_test_failure',
+        a: 'value=test',
+        d: 5,
+        ok: false,
+        s: 'quick action failure fixture',
+        src: 'mcp'
+      });
+
+      const failuresResponse = await makeRequest('POST', '/api/quick-actions/recent-failures', {});
+      assert.strictEqual(failuresResponse.status, 200, 'Recent failures action should return 200');
+      assert.strictEqual(failuresResponse.data.ok, true, 'Recent failures action should be ok');
+      assert.ok(failuresResponse.data.result.failures.some(f => f.tool === 'sidekick_test_failure'), 'Should include failure fixture');
+
+      const deploymentResponse = await makeRequest('POST', '/api/quick-actions/deployment', {});
+      assert.strictEqual(deploymentResponse.status, 200, 'Deployment action should return 200');
+      assert.strictEqual(deploymentResponse.data.ok, true, 'Deployment action should be ok');
+      assert.ok(deploymentResponse.data.result.branch, 'Deployment action should include branch');
+
+      const unknownResponse = await makeRequest('POST', '/api/quick-actions/not-real', {});
+      assert.strictEqual(unknownResponse.status, 404, 'Unknown quick action should return 404');
+      console.log('Passed\n');
+    }
+
     // Test 3.1: GET /api/kv returns metadata
     console.log('Test 3.1: GET /api/kv returns metadata');
     {

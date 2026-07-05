@@ -510,6 +510,73 @@ app.get("/api/services", (req, res) => {
   res.json({ services: status });
 });
 
+app.post("/api/quick-actions/:action", (req, res) => {
+  const action = req.params.action;
+  try {
+    if (action === "health-check") {
+      const services = ["sidekick-mcp", "sidekick-dashboard", "sidekick-agent", "ollama"];
+      const serviceStatus = {};
+      for (const svc of services) {
+        try {
+          serviceStatus[svc] = execSync(`systemctl is-active ${svc}`, { encoding: "utf-8", timeout: 3000 }).trim();
+        } catch {
+          serviceStatus[svc] = "inactive";
+        }
+      }
+      const uptime = exec("uptime -p");
+      const load = exec("cat /proc/loadavg | awk '{print $1,$2,$3}'");
+      const disk = exec("df -h / | tail -1 | awk '{print $5 \" used, \" $4 \" free\"}'");
+      const memory = exec("free -h | awk '/Mem:/ {print $3 \"/\" $2 \" used\"}'");
+      auditLog(req, "quick-action.health-check", {});
+      return res.json({ ok: true, action, result: { services: serviceStatus, uptime, load, disk, memory } });
+    }
+
+    if (action === "recent-failures") {
+      const failures = dbStore.readToolLogs(200).filter(entry => !entry.ok).slice(0, 8).map(entry => ({
+        time: entry.t,
+        tool: entry.n,
+        source: entry.src || "unknown",
+        summary: (entry.s || "").slice(0, 240)
+      }));
+      auditLog(req, "quick-action.recent-failures", { count: failures.length });
+      return res.json({ ok: true, action, result: { failures } });
+    }
+
+    if (action === "deployment") {
+      const versionFile = path.join(__dirname, "..", "version.json");
+      const version = fs.existsSync(versionFile) ? JSON.parse(fs.readFileSync(versionFile, "utf-8")) : {};
+      auditLog(req, "quick-action.deployment", {});
+      return res.json({ ok: true, action, result: {
+        commit: version.commit || "unknown",
+        branch: version.branch || "unknown",
+        remote: version.remote_url || "unknown",
+        deployedAt: version.deployed_at || "unknown"
+      } });
+    }
+
+    if (action === "service-logs") {
+      const allowedServices = new Set(["sidekick-mcp", "sidekick-dashboard", "sidekick-agent"]);
+      const service = String(req.body?.service || "sidekick-mcp");
+      if (!allowedServices.has(service)) return res.status(400).json({ ok: false, error: "Unsupported service" });
+      const logs = execSync(`sudo journalctl -u ${service} -n 40 --no-pager 2>&1`, { encoding: "utf-8", timeout: 5000 }).trim();
+      auditLog(req, "quick-action.service-logs", { service });
+      return res.json({ ok: true, action, result: { service, logs } });
+    }
+
+    if (action === "restart-agent") {
+      execSync("sudo systemctl restart sidekick-agent", { encoding: "utf-8", timeout: 10000 });
+      const status = exec("systemctl is-active sidekick-agent");
+      auditLog(req, "quick-action.restart-agent", { status });
+      return res.json({ ok: status === "active", action, result: { service: "sidekick-agent", status } });
+    }
+
+    res.status(404).json({ ok: false, error: "Unknown quick action" });
+  } catch (error) {
+    logError(req.originalUrl, 500, error, "mission", req.headers["user-agent"]);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
 app.get("/api/config", (req, res) => {
   const sensitive = ["API_KEY", "PASS", "SECRET", "TOKEN", "PASSWORD"];
   const config = {};

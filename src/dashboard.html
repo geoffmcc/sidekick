@@ -82,13 +82,16 @@
     <div class="card mission-panel mission-panel-wide">
       <div class="section-title">Quick Actions</div>
       <div class="mission-actions">
-        <button class="mission-action" onclick="showPage('system')"><i class="fas fa-heart-pulse"></i><span>System Health</span></button>
-        <button class="mission-action" onclick="showPage('activity')"><i class="fas fa-list-check"></i><span>Activity Log</span></button>
-        <button class="mission-action" onclick="showPage('tools')"><i class="fas fa-screwdriver-wrench"></i><span>Tool Catalog</span></button>
+        <button class="mission-action" onclick="runQuickAction('health-check')"><i class="fas fa-heart-pulse"></i><span>Run Health Check</span></button>
+        <button class="mission-action" onclick="runQuickAction('recent-failures')"><i class="fas fa-triangle-exclamation"></i><span>Recent Failures</span></button>
+        <button class="mission-action" onclick="runQuickAction('deployment')"><i class="fas fa-code-commit"></i><span>Deployment Info</span></button>
+        <button class="mission-action" onclick="runQuickAction('service-logs', { service: 'sidekick-mcp' })"><i class="fas fa-file-lines"></i><span>MCP Logs</span></button>
+        <button class="mission-action" onclick="runQuickAction('restart-agent')"><i class="fas fa-rotate"></i><span>Restart Agent</span></button>
         <button class="mission-action" onclick="showPage('agent')"><i class="fas fa-robot"></i><span>Ask Agent</span></button>
         <a class="mission-action" href="http://192.168.1.10:3000" target="_blank"><i class="fas fa-chart-line"></i><span>Grafana</span></a>
         <a class="mission-action" href="http://192.168.1.10:11434" target="_blank"><i class="fas fa-brain"></i><span>Ollama</span></a>
       </div>
+      <div id="quickActionResult" class="quick-action-result"><div class="empty">Run an action to see results here.</div></div>
     </div>
 
     <div class="card mission-panel">
