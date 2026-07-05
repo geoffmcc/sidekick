@@ -454,6 +454,10 @@ try {
     }
     $changed += "git"
 
+    # Expand environment variable references in provisioning templates
+    Write-Host "  Expanding provisioning templates..." -ForegroundColor Yellow
+    Run-Remote "cd $REMOTE_DIR && test -f .env && set -a && . .env && set +a && for f in grafana/provisioning/datasources/*.yml grafana/provisioning/dashboards/*.yml; do test -f \"`$f\" && envsubst < \"`$f\" > /tmp/`$(basename \"`$f\") && mv /tmp/`$(basename \"`$f\") \"`$f\"; done 2>&1" 2>$null
+
     # Handle .env on first deploy
     $localEnv = Join-Path $PROJECT_DIR ".env"
     if (Test-Path $localEnv) {

@@ -439,6 +439,13 @@ else
   fi
   changed+=("git")
 
+  # Expand environment variable references in provisioning templates
+  echo -e "  \033[33mExpanding provisioning templates...\033[0m"
+  run_remote "cd $REMOTE_DIR && test -f .env && set -a && . .env && set +a && \
+    for f in grafana/provisioning/datasources/*.yml grafana/provisioning/dashboards/*.yml; do \
+      test -f \"\$f\" && envsubst < \"\$f\" > /tmp/\$(basename \"\$f\") && mv /tmp/\$(basename \"\$f\") \"\$f\"; \
+    done 2>&1" || echo -e "  \033[33mWarning: envsubst failed (some provisioning templates may use unexpanded variables)\033[0m"
+
   # Handle .env on first deploy
   if [ -f "$PROJECT_DIR/.env" ]; then
     remote_env_exists=$(run_remote "test -f $REMOTE_DIR/.env && echo YES || echo NO")
