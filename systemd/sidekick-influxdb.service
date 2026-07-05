@@ -8,9 +8,9 @@ Type=oneshot
 RemainAfterExit=yes
 User=root
 WorkingDirectory=/home/sidekick/sidekick/docker
-ExecStart=/usr/bin/docker compose -f /home/sidekick/sidekick/docker/docker-compose.yml up -d influxdb
-ExecStop=/usr/bin/docker compose -f /home/sidekick/sidekick/docker/docker-compose.yml stop influxdb
-ExecStopPost=/usr/bin/docker compose -f /home/sidekick/sidekick/docker/docker-compose.yml rm -f influxdb
+ExecStart=/usr/bin/docker compose --env-file /home/sidekick/sidekick/.env -f /home/sidekick/sidekick/docker/docker-compose.yml up -d influxdb
+ExecStop=/usr/bin/docker compose --env-file /home/sidekick/sidekick/.env -f /home/sidekick/sidekick/docker/docker-compose.yml stop influxdb
+ExecStopPost=/usr/bin/docker compose --env-file /home/sidekick/sidekick/.env -f /home/sidekick/sidekick/docker/docker-compose.yml rm -f influxdb
 TimeoutStartSec=120
 
 [Install]

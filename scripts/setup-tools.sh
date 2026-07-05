@@ -311,12 +311,13 @@ fi
 # Install systemd wrapper services
 SERVICES=("sidekick-postgres" "sidekick-redis" "sidekick-qdrant" "sidekick-influxdb" "sidekick-grafana")
 for svc in "${SERVICES[@]}"; do
-  if [ -f "/etc/systemd/system/$svc.service" ]; then
-    skip "$svc.service exists"
-  else
-    cp "$SCRIPT_DIR/../systemd/$svc.service" "/etc/systemd/system/$svc.service"
-    pass "$svc.service installed"
-  fi
+  cp "$SCRIPT_DIR/../systemd/$svc.service" "/etc/systemd/system/$svc.service"
+  pass "$svc.service installed/updated"
+done
+
+for unit in sidekick-metrics.service sidekick-metrics.timer; do
+  cp "$SCRIPT_DIR/../systemd/$unit" "/etc/systemd/system/$unit"
+  pass "$unit installed/updated"
 done
 
 systemctl daemon-reload
@@ -326,6 +327,14 @@ for svc in "${SERVICES[@]}"; do
   systemctl enable "$svc" 2>/dev/null
   pass "$svc enabled (not started)"
 done
+
+ENV_FILE="/home/$USERNAME/sidekick/.env"
+if [ -f "$ENV_FILE" ] && grep -q '^SIDEKICK_INFLUX_TOKEN=.' "$ENV_FILE" && ! grep -q '^SIDEKICK_INFLUX_TOKEN=sidekick-influx-token$' "$ENV_FILE"; then
+  systemctl enable --now sidekick-metrics.timer 2>/dev/null
+  pass "sidekick-metrics.timer enabled"
+else
+  warn "sidekick-metrics.timer installed but not enabled; set SIDEKICK_INFLUX_TOKEN first"
+fi
 
 echo ""
 
@@ -401,10 +410,12 @@ sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-redis, /usr/bin/s
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-qdrant, /usr/bin/systemctl stop sidekick-qdrant, /usr/bin/systemctl restart sidekick-qdrant, /usr/bin/systemctl status sidekick-qdrant
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-influxdb, /usr/bin/systemctl stop sidekick-influxdb, /usr/bin/systemctl restart sidekick-influxdb, /usr/bin/systemctl status sidekick-influxdb
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-grafana, /usr/bin/systemctl stop sidekick-grafana, /usr/bin/systemctl restart sidekick-grafana, /usr/bin/systemctl status sidekick-grafana
+sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-metrics.timer, /usr/bin/systemctl stop sidekick-metrics.timer, /usr/bin/systemctl restart sidekick-metrics.timer, /usr/bin/systemctl status sidekick-metrics.timer
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/journalctl -u sidekick-postgres, /usr/bin/journalctl -u sidekick-redis, /usr/bin/journalctl -u sidekick-qdrant, /usr/bin/journalctl -u sidekick-influxdb, /usr/bin/journalctl -u sidekick-grafana
 
 # Docker management (needed for on-demand services)
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/docker compose -f /home/sidekick/sidekick/docker/docker-compose.yml *
+sidekick ALL=(ALL) NOPASSWD: /usr/bin/docker compose --env-file /home/sidekick/sidekick/.env -f /home/sidekick/sidekick/docker/docker-compose.yml *
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/docker start *, /usr/bin/docker stop *, /usr/bin/docker restart *, /usr/bin/docker ps, /usr/bin/docker logs *
 
 # UFW

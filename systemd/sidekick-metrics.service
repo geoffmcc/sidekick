@@ -1,0 +1,11 @@
+[Unit]
+Description=Sidekick Metrics Collector
+After=network-online.target sidekick-influxdb.service
+Wants=network-online.target sidekick-influxdb.service
+
+[Service]
+Type=oneshot
+User=sidekick
+WorkingDirectory=/home/sidekick/sidekick
+EnvironmentFile=/home/sidekick/sidekick/.env
+ExecStart=/usr/bin/node /home/sidekick/sidekick/scripts/collect-metrics.js

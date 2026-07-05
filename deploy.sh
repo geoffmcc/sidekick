@@ -136,20 +136,21 @@ run_bootstrap() {
   echo -e "    \033[90m✓ bootstrap.sh\033[0m"
   
   echo -e "  \033[33mUploading service files...\033[0m"
-  for svc in sidekick-mcp sidekick-dashboard sidekick-agent; do
-    local svc_local="$PROJECT_DIR/systemd/$svc.service"
-    if [ ! -f "$svc_local" ]; then
-      echo -e "\033[31mERROR: Service file not found: $svc_local\033[0m"
+  for unit_local in "$PROJECT_DIR"/systemd/sidekick-*; do
+    if [ ! -f "$unit_local" ]; then
+      echo -e "\033[31mERROR: Service file not found: $unit_local\033[0m"
       ssh -o ControlPath="$CONTROL_PATH" -O exit "$user@$IP" 2>/dev/null
       exit 1
     fi
+    local unit_name
+    unit_name=$(basename "$unit_local")
     
-    if ! scp -o ControlPath="$CONTROL_PATH" "$svc_local" "$user@$IP:/tmp/$svc.service" 2>&1; then
-      echo -e "\033[31mERROR: Failed to upload $svc.service\033[0m"
+    if ! scp -o ControlPath="$CONTROL_PATH" "$unit_local" "$user@$IP:/tmp/$unit_name" 2>&1; then
+      echo -e "\033[31mERROR: Failed to upload $unit_name\033[0m"
       ssh -o ControlPath="$CONTROL_PATH" -O exit "$user@$IP" 2>/dev/null
       exit 1
     fi
-    echo -e "    \033[90m✓ $svc.service\033[0m"
+    echo -e "    \033[90m✓ $unit_name\033[0m"
   done
   
   # Run bootstrap using control connection (no password prompt)
@@ -243,7 +244,7 @@ initialize_remote() {
   echo -e "  \033[32mServices verified\033[0m"
 
   echo -e "  \033[33mCreating remote directories...\033[0m"
-  run_remote "mkdir -p $REMOTE_DIR/src $REMOTE_DIR/scripts $REMOTE_DIR/docs $REMOTE_DIR/migrations $REMOTE_DIR/data" >/dev/null
+  run_remote "mkdir -p $REMOTE_DIR/src $REMOTE_DIR/scripts $REMOTE_DIR/docs $REMOTE_DIR/migrations $REMOTE_DIR/systemd $REMOTE_DIR/data" >/dev/null
 
   echo -e "  \033[32mRemote initialization complete\033[0m"
 }
@@ -327,6 +328,26 @@ if [ "$SCP_MODE" = true ]; then
       exit 1
     fi
     changed+=("static/$f")
+  done
+
+  if [ -f "$PROJECT_DIR/docker/docker-compose.yml" ]; then
+    run_remote "mkdir -p $REMOTE_DIR/docker" >/dev/null
+    if ! copy_to_vps "$PROJECT_DIR/docker/docker-compose.yml" "$REMOTE_DIR/docker/docker-compose.yml" >/dev/null; then
+      echo -e "\033[31mERROR: Failed to copy docker/docker-compose.yml\033[0m"
+      exit 1
+    fi
+    changed+=("docker/docker-compose.yml")
+  fi
+
+  for unit_path in "$PROJECT_DIR"/systemd/sidekick-*; do
+    if [ -f "$unit_path" ]; then
+      f=$(basename "$unit_path")
+      if ! copy_to_vps "$PROJECT_DIR/systemd/$f" "$REMOTE_DIR/systemd/$f" >/dev/null; then
+        echo -e "\033[31mERROR: Failed to copy systemd/$f\033[0m"
+        exit 1
+      fi
+      changed+=("systemd/$f")
+    fi
   done
 
   if ! copy_to_vps "$PROJECT_DIR/package.json" "$REMOTE_DIR/package.json" >/dev/null; then

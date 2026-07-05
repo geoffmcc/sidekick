@@ -139,23 +139,21 @@ function Run-Bootstrap {
   Write-Host "    [ok] bootstrap.sh" -ForegroundColor Gray
   
   Write-Host "  Uploading service files..." -ForegroundColor Yellow
-  $services = @("sidekick-mcp", "sidekick-dashboard", "sidekick-agent")
-  foreach ($svc in $services) {
-    $svcLocal = Join-Path $PROJECT_DIR "systemd\$svc.service"
-    if (-not (Test-Path $svcLocal)) {
-      Write-Host "  ERROR: Service file not found: $svcLocal" -ForegroundColor Red
+  Get-ChildItem (Join-Path $PROJECT_DIR "systemd") -Filter "sidekick-*" | ForEach-Object {
+    if (-not (Test-Path $_.FullName)) {
+      Write-Host "  ERROR: Service file not found: $($_.FullName)" -ForegroundColor Red
       ssh -o ControlPath="$ControlPath" -O exit "$User@$IP" 2>$null
       throw "Service file not found"
     }
     
-    $scpResult = scp -o ControlPath="$ControlPath" "$svcLocal" "$User@$IP`:/tmp/$svc.service" 2>&1
+    $scpResult = scp -o ControlPath="$ControlPath" "$($_.FullName)" "$User@$IP`:/tmp/$($_.Name)" 2>&1
     
     if ($LASTEXITCODE -ne 0) {
-      Write-Host "  ERROR: Failed to upload $svc.service" -ForegroundColor Red
+      Write-Host "  ERROR: Failed to upload $($_.Name)" -ForegroundColor Red
       ssh -o ControlPath="$ControlPath" -O exit "$User@$IP" 2>$null
       throw "SCP failed"
     }
-    Write-Host "    [ok] $svc.service" -ForegroundColor Gray
+    Write-Host "    [ok] $($_.Name)" -ForegroundColor Gray
   }
   
   # Run bootstrap using control connection (no password prompt)
@@ -231,7 +229,7 @@ function Initialize-Remote {
   Write-Host "  Services verified" -ForegroundColor Green
 
   Write-Host "  Creating remote directories..." -ForegroundColor Yellow
-  Run-Remote "mkdir -p $REMOTE_DIR/src $REMOTE_DIR/scripts $REMOTE_DIR/docs $REMOTE_DIR/migrations $REMOTE_DIR/data" | Out-Null
+  Run-Remote "mkdir -p $REMOTE_DIR/src $REMOTE_DIR/scripts $REMOTE_DIR/docs $REMOTE_DIR/migrations $REMOTE_DIR/systemd $REMOTE_DIR/data" | Out-Null
 
   Write-Host "  Remote initialization complete" -ForegroundColor Green
 }
@@ -342,6 +340,26 @@ try {
         throw "Failed to copy static/$file"
       }
       $changed += "static/$file"
+    }
+
+    $dockerDir = Join-Path $PROJECT_DIR "docker"
+    $dockerCompose = Join-Path $dockerDir "docker-compose.yml"
+    if (Test-Path $dockerCompose) {
+      Run-Remote "mkdir -p $REMOTE_DIR/docker" | Out-Null
+      if (-not (Copy-ToVPS $dockerCompose "$REMOTE_DIR/docker/docker-compose.yml")) {
+        throw "Failed to copy docker/docker-compose.yml"
+      }
+      $changed += "docker/docker-compose.yml"
+    }
+
+    $systemdDir = Join-Path $PROJECT_DIR "systemd"
+    if (Test-Path $systemdDir) {
+      Get-ChildItem $systemdDir -Filter "sidekick-*" | ForEach-Object {
+        if (-not (Copy-ToVPS $_.FullName "$REMOTE_DIR/systemd/$($_.Name)")) {
+          throw "Failed to copy systemd/$($_.Name)"
+        }
+        $changed += "systemd/$($_.Name)"
+      }
     }
 
     if (-not (Copy-ToVPS (Join-Path $PROJECT_DIR "package.json") "$REMOTE_DIR/package.json")) {
