@@ -7,6 +7,7 @@ const { timingSafeCompare } = require("./crypto-utils");
 const { execSync } = require("child_process");
 const { getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval } = require("./tools");
 const dbStore = require("./db");
+const crypto = require("crypto");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const PORT = parseInt(process.env.SIDEKICK_DASHBOARD_PORT || "4098", 10);
@@ -42,6 +43,34 @@ const DASHBOARD_PASS = process.env.SIDEKICK_DASHBOARD_PASS || "";
 const DASHBOARD_ALLOWED_IPS = (process.env.SIDEKICK_DASHBOARD_ALLOWED_IPS || "").split(",").map(s => s.trim()).filter(Boolean);
 const GRAFANA_USER = process.env.SIDEKICK_GRAFANA_ADMIN_USER || "sidekick";
 const GRAFANA_PASS = process.env.SIDEKICK_GRAFANA_ADMIN_PASSWORD || "";
+
+// Session cookie auth
+const SESSION_SECRET = process.env.SIDEKICK_SECRET_KEY || crypto.randomBytes(32).toString("hex");
+const SESSION_TTL = 86400000; // 24h
+
+function makeSessionToken(user) {
+  const payload = JSON.stringify({ u: user, e: Date.now() + SESSION_TTL });
+  const b64 = Buffer.from(payload).toString("base64");
+  const sig = crypto.createHmac("sha256", SESSION_SECRET).update(b64).digest("hex");
+  return b64 + "." + sig;
+}
+
+function verifySessionToken(token) {
+  try {
+    const dot = token.indexOf(".");
+    if (dot < 0) return null;
+    const b64 = token.slice(0, dot);
+    const sig = token.slice(dot + 1);
+    const expected = crypto.createHmac("sha256", SESSION_SECRET).update(b64).digest("hex");
+    if (sig.length !== expected.length) return null;
+    if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+    const payload = JSON.parse(Buffer.from(b64, "base64").toString());
+    if (payload.e < Date.now()) return null;
+    return payload.u;
+  } catch {
+    return null;
+  }
+}
 
 function ipInRange(ip, cidr) {
   if (!cidr.includes("/")) return ip === cidr;
@@ -199,6 +228,16 @@ app.use((req, res, next) => {
 if (DASHBOARD_USER && DASHBOARD_PASS) {
   app.use((req, res, next) => {
     if (req.path.startsWith('/static/')) return next();
+    // Check session cookie first (browsers always send cookies with iframe sub-resources)
+    const cookie = req.headers.cookie || "";
+    for (const part of cookie.split(";")) {
+      const trimmed = part.trim();
+      if (trimmed.startsWith("sidekick_sid=")) {
+        const user = verifySessionToken(trimmed.slice("sidekick_sid=".length));
+        if (user === DASHBOARD_USER) return next();
+      }
+    }
+    // Fall back to Basic Auth
     const auth = req.headers.authorization;
     if (!auth || !auth.startsWith("Basic ")) {
       res.set("WWW-Authenticate", 'Basic realm="Sidekick Dashboard"');
@@ -208,19 +247,33 @@ if (DASHBOARD_USER && DASHBOARD_PASS) {
     const separator = decoded.indexOf(":");
     const user = separator >= 0 ? decoded.slice(0, separator) : "";
     const pass = separator >= 0 ? decoded.slice(separator + 1) : "";
-    if (timingSafeCompare(user, DASHBOARD_USER) && timingSafeCompare(pass, DASHBOARD_PASS)) return next();
+    if (timingSafeCompare(user, DASHBOARD_USER) && timingSafeCompare(pass, DASHBOARD_PASS)) {
+      // Set session cookie for subsequent requests (including iframe sub-resources)
+      res.setHeader("Set-Cookie", `sidekick_sid=${makeSessionToken(user)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400`);
+      return next();
+    }
     res.set("WWW-Authenticate", 'Basic realm="Sidekick Dashboard"');
     res.status(401).send("Authentication required");
   });
 }
 
+// Grafana auth proxy doesn't create a real session token,
+// so token rotation always 401s. Return a mock success to
+// prevent the SPA from retrying in an infinite loop.
+app.post('/grafana/api/user/auth-tokens/rotate', (req, res) => {
+  res.json({});
+});
+
 app.use('/grafana', (req, res) => {
-  if (!GRAFANA_PASS) return res.status(503).send('Grafana proxy is not configured');
+  if (!GRAFANA_USER) return res.status(503).send('Grafana proxy is not configured');
   const targetPath = req.originalUrl || '/grafana/';
   const headers = { ...req.headers };
   delete headers.host;
   delete headers.cookie;
-  headers.authorization = 'Basic ' + Buffer.from(GRAFANA_USER + ':' + GRAFANA_PASS).toString('base64');
+  delete headers.authorization;
+  // Grafana Auth Proxy: set trusted user header (strip any incoming to prevent spoofing)
+  delete headers['x-webauth-user'];
+  headers['x-webauth-user'] = GRAFANA_USER;
 
   let body = null;
   if (req.body && Object.keys(req.body).length) {
@@ -639,7 +692,7 @@ app.post("/api/quick-actions/:action", (req, res) => {
 });
 
 app.get("/api/metrics/status", (req, res) => {
-  const grafanaConfigured = Boolean(GRAFANA_PASS);
+  const grafanaConfigured = Boolean(GRAFANA_USER);
   const influxToken = process.env.SIDEKICK_INFLUX_TOKEN || "";
   const influxConfigured = Boolean(influxToken && influxToken !== "sidekick-influx-token");
   const status = {
@@ -673,7 +726,7 @@ app.get("/api/metrics/status", (req, res) => {
   } catch {}
 
   const issues = [];
-  if (!status.grafana.configured) issues.push("SIDEKICK_GRAFANA_ADMIN_PASSWORD is not configured for the secure dashboard proxy");
+  if (!status.grafana.configured) issues.push("SIDEKICK_GRAFANA_ADMIN_USER is not configured for the Grafana auth proxy");
   if (!status.grafana.reachable) issues.push("Grafana is not reachable on localhost");
   if (!status.influxdb.configured) issues.push("SIDEKICK_INFLUX_TOKEN is not configured for metrics collection");
   if (!status.influxdb.reachable) issues.push("InfluxDB is not reachable on localhost");
