@@ -231,7 +231,7 @@ function Initialize-Remote {
   Write-Host "  Services verified" -ForegroundColor Green
 
   Write-Host "  Creating remote directories..." -ForegroundColor Yellow
-  Run-Remote "mkdir -p $REMOTE_DIR/src $REMOTE_DIR/scripts $REMOTE_DIR/docs $REMOTE_DIR/migrations $REMOTE_DIR/data" | Out-Null
+  Run-Remote "mkdir -p $REMOTE_DIR/src $REMOTE_DIR/scripts $REMOTE_DIR/docs $REMOTE_DIR/migrations $REMOTE_DIR/systemd $REMOTE_DIR/data" | Out-Null
 
   Write-Host "  Remote initialization complete" -ForegroundColor Green
 }
@@ -342,6 +342,26 @@ try {
         throw "Failed to copy static/$file"
       }
       $changed += "static/$file"
+    }
+
+    $dockerDir = Join-Path $PROJECT_DIR "docker"
+    $dockerCompose = Join-Path $dockerDir "docker-compose.yml"
+    if (Test-Path $dockerCompose) {
+      Run-Remote "mkdir -p $REMOTE_DIR/docker" | Out-Null
+      if (-not (Copy-ToVPS $dockerCompose "$REMOTE_DIR/docker/docker-compose.yml")) {
+        throw "Failed to copy docker/docker-compose.yml"
+      }
+      $changed += "docker/docker-compose.yml"
+    }
+
+    $systemdDir = Join-Path $PROJECT_DIR "systemd"
+    if (Test-Path $systemdDir) {
+      Get-ChildItem $systemdDir -Filter "sidekick-*" | ForEach-Object {
+        if (-not (Copy-ToVPS $_.FullName "$REMOTE_DIR/systemd/$($_.Name)")) {
+          throw "Failed to copy systemd/$($_.Name)"
+        }
+        $changed += "systemd/$($_.Name)"
+      }
     }
 
     if (-not (Copy-ToVPS (Join-Path $PROJECT_DIR "package.json") "$REMOTE_DIR/package.json")) {

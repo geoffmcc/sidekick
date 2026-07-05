@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Sidekick Metrics Collector Every Minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=sidekick-metrics.service
+
+[Install]
+WantedBy=timers.target

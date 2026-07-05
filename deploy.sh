@@ -243,7 +243,7 @@ initialize_remote() {
   echo -e "  \033[32mServices verified\033[0m"
 
   echo -e "  \033[33mCreating remote directories...\033[0m"
-  run_remote "mkdir -p $REMOTE_DIR/src $REMOTE_DIR/scripts $REMOTE_DIR/docs $REMOTE_DIR/migrations $REMOTE_DIR/data" >/dev/null
+  run_remote "mkdir -p $REMOTE_DIR/src $REMOTE_DIR/scripts $REMOTE_DIR/docs $REMOTE_DIR/migrations $REMOTE_DIR/systemd $REMOTE_DIR/data" >/dev/null
 
   echo -e "  \033[32mRemote initialization complete\033[0m"
 }
@@ -327,6 +327,26 @@ if [ "$SCP_MODE" = true ]; then
       exit 1
     fi
     changed+=("static/$f")
+  done
+
+  if [ -f "$PROJECT_DIR/docker/docker-compose.yml" ]; then
+    run_remote "mkdir -p $REMOTE_DIR/docker" >/dev/null
+    if ! copy_to_vps "$PROJECT_DIR/docker/docker-compose.yml" "$REMOTE_DIR/docker/docker-compose.yml" >/dev/null; then
+      echo -e "\033[31mERROR: Failed to copy docker/docker-compose.yml\033[0m"
+      exit 1
+    fi
+    changed+=("docker/docker-compose.yml")
+  fi
+
+  for unit_path in "$PROJECT_DIR"/systemd/sidekick-*; do
+    if [ -f "$unit_path" ]; then
+      f=$(basename "$unit_path")
+      if ! copy_to_vps "$PROJECT_DIR/systemd/$f" "$REMOTE_DIR/systemd/$f" >/dev/null; then
+        echo -e "\033[31mERROR: Failed to copy systemd/$f\033[0m"
+        exit 1
+      fi
+      changed+=("systemd/$f")
+    fi
   done
 
   if ! copy_to_vps "$PROJECT_DIR/package.json" "$REMOTE_DIR/package.json" >/dev/null; then

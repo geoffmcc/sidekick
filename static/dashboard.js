@@ -261,7 +261,29 @@ function showPage(name){
 function loadGrafanaDashboard() {
   const dashboard = $('grafanaDashboard').value;
   const frame = $('grafanaFrame');
-  frame.src = `http://192.168.1.10:3000/d/${dashboard}?orgId=1&kiosk`;
+  loadMetricsStatus();
+  frame.src = `/grafana/d/${dashboard}?orgId=1&kiosk`;
+}
+
+function loadMetricsStatus() {
+  const el = $('metricsStatus');
+  if (!el) return;
+  authFetch('/api/metrics/status').then(r=>r.json()).then(d=>{
+    const checks = [
+      ['Grafana config', d.grafana && d.grafana.configured],
+      ['Grafana reachable', d.grafana && d.grafana.reachable],
+      ['InfluxDB config', d.influxdb && d.influxdb.configured],
+      ['InfluxDB reachable', d.influxdb && d.influxdb.reachable],
+      ['Metrics timer', d.collector && d.collector.timerActive]
+    ];
+    let html = '<div class="metrics-status-row">' + checks.map(([label, ok]) => '<span class="metrics-status-pill ' + (ok ? 'ok' : 'warn') + '">' + esc(label) + ': ' + (ok ? 'ok' : 'needs setup') + '</span>').join('') + '</div>';
+    if (d.issues && d.issues.length) {
+      html += '<div class="metrics-status-issues">' + d.issues.map(issue => '<div>' + esc(issue) + '</div>').join('') + '</div>';
+    }
+    el.innerHTML = html;
+  }).catch(e=>{
+    el.innerHTML = '<div class="quick-action-error">Metrics status unavailable: ' + esc(e.message || String(e)) + '</div>';
+  });
 }
 
 function fmtTime(iso){
@@ -2221,7 +2243,7 @@ function refresh(){
   if (document.hidden) return;
 
   if (currentPage === 'mission') {
-    loadSystem(); loadServices(); loadMissionControl();
+    loadMissionControl();
   } else {
     const now = new Date();
     $('lastUpdate').textContent = 'updated ' + now.toLocaleTimeString();
@@ -2244,8 +2266,6 @@ if (toolStatsWindowSelect) {
 // Fetch tool categories from API before loading other data
 fetchToolCategories().then(() => {
   if (currentPage === 'mission') {
-    loadSystem();
-    loadServices();
     loadMissionControl();
   } else {
     refresh();

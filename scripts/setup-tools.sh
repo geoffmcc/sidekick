@@ -311,12 +311,13 @@ fi
 # Install systemd wrapper services
 SERVICES=("sidekick-postgres" "sidekick-redis" "sidekick-qdrant" "sidekick-influxdb" "sidekick-grafana")
 for svc in "${SERVICES[@]}"; do
-  if [ -f "/etc/systemd/system/$svc.service" ]; then
-    skip "$svc.service exists"
-  else
-    cp "$SCRIPT_DIR/../systemd/$svc.service" "/etc/systemd/system/$svc.service"
-    pass "$svc.service installed"
-  fi
+  cp "$SCRIPT_DIR/../systemd/$svc.service" "/etc/systemd/system/$svc.service"
+  pass "$svc.service installed/updated"
+done
+
+for unit in sidekick-metrics.service sidekick-metrics.timer; do
+  cp "$SCRIPT_DIR/../systemd/$unit" "/etc/systemd/system/$unit"
+  pass "$unit installed/updated"
 done
 
 systemctl daemon-reload
@@ -326,6 +327,14 @@ for svc in "${SERVICES[@]}"; do
   systemctl enable "$svc" 2>/dev/null
   pass "$svc enabled (not started)"
 done
+
+ENV_FILE="/home/$USERNAME/sidekick/.env"
+if [ -f "$ENV_FILE" ] && grep -q '^SIDEKICK_INFLUX_TOKEN=.' "$ENV_FILE" && ! grep -q '^SIDEKICK_INFLUX_TOKEN=sidekick-influx-token$' "$ENV_FILE"; then
+  systemctl enable --now sidekick-metrics.timer 2>/dev/null
+  pass "sidekick-metrics.timer enabled"
+else
+  warn "sidekick-metrics.timer installed but not enabled; set SIDEKICK_INFLUX_TOKEN first"
+fi
 
 echo ""
 

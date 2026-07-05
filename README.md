@@ -392,7 +392,7 @@ Open `http://YOUR_REMOTE_IP:4098/` in a browser.
 
 Sidekick includes comprehensive metrics collection and visualization:
 
-**Metrics Collection** (runs every minute via cron):
+**Metrics Collection** (runs every minute via `sidekick-metrics.timer`):
 - System health: CPU, memory, disk, load average
 - Tool usage: call counts, success rates, duration stats per tool
 - Service status: MCP, Dashboard, Agent health
@@ -548,7 +548,7 @@ sudo systemctl start sidekick-qdrant
 sudo systemctl start sidekick-influxdb
 ```
 - Stores system metrics, tool usage, service status
-- Metrics collected every minute via cron
+- Metrics collected every minute via `sidekick-metrics.timer`
 
 **Grafana** (visualization):
 ```bash
@@ -556,7 +556,7 @@ sudo systemctl start sidekick-grafana
 ```
 - 6 pre-built dashboards
 - Accessible at `http://YOUR_REMOTE_IP:3000/` using `sidekick` and the configured `SIDEKICK_GRAFANA_ADMIN_PASSWORD`
-- Embedded in Dashboard's Metrics tab
+- Embedded in Dashboard's Metrics tab through the authenticated dashboard Grafana proxy
 
 ### Install All Services
 

@@ -142,6 +142,10 @@ footer{text-align:center;font-size:.75rem;color:#484f58;padding:24px 0}
 .quick-action-grid span{display:block;color:#8b949e;font-size:.7rem;text-transform:uppercase;margin-bottom:4px}.quick-action-grid strong{display:block;color:#c9d1d9;font-size:.78rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .quick-action-pre{background:#0d1117;border:1px solid #21262d;border-radius:8px;color:#c9d1d9;font-family:var(--font);font-size:.72rem;line-height:1.45;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:280px;overflow:auto}
 .quick-action-error{color:#f85149;background:#1a0a0a;border:1px solid #8b3434;border-radius:8px;padding:10px;font-size:.8rem}
+.metrics-status-row{display:flex;gap:8px;flex-wrap:wrap}
+.metrics-status-pill{display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;border:1px solid #30363d;font-size:.72rem;color:#8b949e;text-transform:uppercase}
+.metrics-status-pill.ok{color:#3fb950;border-color:#2f6f46}.metrics-status-pill.warn{color:#d29922;border-color:#8b6f2f}
+.metrics-status-issues{margin-top:8px;color:#d29922;font-size:.76rem;line-height:1.45}
 .mission-statline{display:flex;align-items:baseline;gap:8px;margin:8px 0}.mission-statline strong{font-size:1.6rem;color:#58a6ff}.mission-statline span{color:#8b949e;font-size:.75rem;text-transform:uppercase}
 .mission-list.compact{margin-top:10px}.mission-list-row span{color:#c9d1d9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.mission-list-row strong{color:#8b949e}
 .mission-attention{padding:11px 12px;border:1px solid #30363d;border-radius:9px;background:#0d1117;border-left-width:3px}

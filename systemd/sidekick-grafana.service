@@ -8,9 +8,9 @@ Type=oneshot
 RemainAfterExit=yes
 User=root
 WorkingDirectory=/home/sidekick/sidekick/docker
-ExecStart=/usr/bin/docker compose -f /home/sidekick/sidekick/docker/docker-compose.yml up -d grafana
-ExecStop=/usr/bin/docker compose -f /home/sidekick/sidekick/docker/docker-compose.yml stop grafana
-ExecStopPost=/usr/bin/docker compose -f /home/sidekick/sidekick/docker/docker-compose.yml rm -f grafana
+ExecStart=/usr/bin/docker compose --env-file /home/sidekick/sidekick/.env -f /home/sidekick/sidekick/docker/docker-compose.yml up -d grafana
+ExecStop=/usr/bin/docker compose --env-file /home/sidekick/sidekick/.env -f /home/sidekick/sidekick/docker/docker-compose.yml stop grafana
+ExecStopPost=/usr/bin/docker compose --env-file /home/sidekick/sidekick/.env -f /home/sidekick/sidekick/docker/docker-compose.yml rm -f grafana
 TimeoutStartSec=120
 
 [Install]

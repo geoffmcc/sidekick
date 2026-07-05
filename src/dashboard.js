@@ -11,6 +11,7 @@ const dbStore = require("./db");
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const PORT = parseInt(process.env.SIDEKICK_DASHBOARD_PORT || "4098", 10);
 const MCP_PORT = parseInt(process.env.SIDEKICK_PORT || "4097", 10);
+const GRAFANA_PORT = parseInt(process.env.SIDEKICK_GRAFANA_PORT || "3000", 10);
 const MCP_API_KEY = process.env.SIDEKICK_API_KEY;
 if (!MCP_API_KEY || MCP_API_KEY === "sk-sidekick-local-dev" || MCP_API_KEY === "sk-your-key-here") {
   throw new Error("SIDEKICK_API_KEY must be set to a non-placeholder value");
@@ -39,6 +40,8 @@ const VPS_IP = getPublicIP();
 const DASHBOARD_USER = process.env.SIDEKICK_DASHBOARD_USER || "";
 const DASHBOARD_PASS = process.env.SIDEKICK_DASHBOARD_PASS || "";
 const DASHBOARD_ALLOWED_IPS = (process.env.SIDEKICK_DASHBOARD_ALLOWED_IPS || "").split(",").map(s => s.trim()).filter(Boolean);
+const GRAFANA_USER = process.env.SIDEKICK_GRAFANA_ADMIN_USER || "sidekick";
+const GRAFANA_PASS = process.env.SIDEKICK_GRAFANA_ADMIN_PASSWORD || "";
 
 function ipInRange(ip, cidr) {
   if (!cidr.includes("/")) return ip === cidr;
@@ -53,8 +56,8 @@ function ipInRange(ip, cidr) {
 
 // Rate limiting (in-memory, per IP)
 const rateLimit = new Map();
-const RATE_LIMIT_WINDOW = 15 * 60 * 1000; // 15 minutes
-const RATE_LIMIT_MAX = 200;
+const RATE_LIMIT_WINDOW = parseInt(process.env.SIDEKICK_DASHBOARD_RATE_LIMIT_WINDOW_MS || String(15 * 60 * 1000), 10);
+const RATE_LIMIT_MAX = parseInt(process.env.SIDEKICK_DASHBOARD_RATE_LIMIT_MAX || "1500", 10);
 
 function checkRateLimit(ip) {
   const now = Date.now();
@@ -62,6 +65,12 @@ function checkRateLimit(ip) {
   if (timestamps.length >= RATE_LIMIT_MAX) return false;
   timestamps.push(now);
   rateLimit.set(ip, timestamps);
+  return true;
+}
+
+function shouldRateLimit(req) {
+  if (req.path.startsWith('/static/')) return false;
+  if (req.path.startsWith('/grafana/')) return false;
   return true;
 }
 
@@ -157,9 +166,10 @@ if (DASHBOARD_ALLOWED_IPS.length) {
 
 // Rate limiting middleware
 app.use((req, res, next) => {
+  if (!shouldRateLimit(req)) return next();
   const ip = req.ip;
   if (!checkRateLimit(ip)) {
-    return res.status(429).json({ error: 'Too many requests, please try again later' });
+    return res.status(429).json({ error: 'Too many dashboard requests, please wait before refreshing', windowMs: RATE_LIMIT_WINDOW, limit: RATE_LIMIT_MAX });
   }
   next();
 });
@@ -203,6 +213,57 @@ if (DASHBOARD_USER && DASHBOARD_PASS) {
     res.status(401).send("Authentication required");
   });
 }
+
+app.use('/grafana', (req, res) => {
+  if (!GRAFANA_PASS) return res.status(503).send('Grafana proxy is not configured');
+  const targetPath = req.originalUrl || '/grafana/';
+  const headers = { ...req.headers };
+  delete headers.host;
+  delete headers.cookie;
+  headers.authorization = 'Basic ' + Buffer.from(GRAFANA_USER + ':' + GRAFANA_PASS).toString('base64');
+
+  let body = null;
+  if (req.body && Object.keys(req.body).length) {
+    body = JSON.stringify(req.body);
+    headers['content-type'] = 'application/json';
+    headers['content-length'] = Buffer.byteLength(body);
+  }
+
+  const proxyReq = http.request({
+    hostname: '127.0.0.1',
+    port: GRAFANA_PORT,
+    path: targetPath,
+    method: req.method,
+    headers,
+    timeout: 10000
+  }, proxyRes => {
+    res.status(proxyRes.statusCode || 502);
+    for (const [key, value] of Object.entries(proxyRes.headers)) {
+      if (!value) continue;
+      const lower = key.toLowerCase();
+      if (lower === 'transfer-encoding' || lower === 'content-length') continue;
+      if (lower === 'location') {
+        let location = String(value);
+        location = location.replace(/^https?:\/\/[^/]+\/grafana\//, '/grafana/');
+        location = location.replace(/^https?:\/\/[^/]+\//, '/grafana/');
+        if (location.startsWith('/') && !location.startsWith('/grafana/')) location = '/grafana' + location;
+        res.setHeader(key, location);
+        continue;
+      }
+      if (lower === 'set-cookie') continue;
+      res.setHeader(key, value);
+    }
+    proxyRes.pipe(res);
+  });
+  proxyReq.on('timeout', () => proxyReq.destroy(new Error('Grafana proxy timed out')));
+  proxyReq.on('error', error => {
+    logError(req.originalUrl, 502, error, 'grafana', req.headers['user-agent']);
+    if (!res.headersSent) res.status(502).send('Grafana proxy error');
+  });
+  if (body) proxyReq.write(body);
+  else req.pipe(proxyReq);
+  if (body) proxyReq.end();
+});
 
 // --- API ---
 
@@ -575,6 +636,51 @@ app.post("/api/quick-actions/:action", (req, res) => {
     logError(req.originalUrl, 500, error, "mission", req.headers["user-agent"]);
     res.status(500).json({ ok: false, error: error.message });
   }
+});
+
+app.get("/api/metrics/status", (req, res) => {
+  const grafanaConfigured = Boolean(GRAFANA_PASS);
+  const influxToken = process.env.SIDEKICK_INFLUX_TOKEN || "";
+  const influxConfigured = Boolean(influxToken && influxToken !== "sidekick-influx-token");
+  const status = {
+    grafana: {
+      configured: grafanaConfigured,
+      reachable: false
+    },
+    influxdb: {
+      configured: influxConfigured,
+      reachable: false
+    },
+    collector: {
+      timerActive: false,
+      timerEnabled: false
+    }
+  };
+
+  try {
+    const health = execSync(`curl -fsS http://127.0.0.1:${GRAFANA_PORT}/api/health >/dev/null && echo OK || echo FAIL`, { encoding: "utf-8", timeout: 3000 }).trim();
+    status.grafana.reachable = health === "OK";
+  } catch {}
+
+  try {
+    const ping = execSync("curl -fsS http://127.0.0.1:8086/ping >/dev/null && echo OK || echo FAIL", { encoding: "utf-8", timeout: 3000 }).trim();
+    status.influxdb.reachable = ping === "OK";
+  } catch {}
+
+  try {
+    status.collector.timerActive = execSync("systemctl is-active sidekick-metrics.timer 2>/dev/null || true", { encoding: "utf-8", timeout: 3000 }).trim() === "active";
+    status.collector.timerEnabled = execSync("systemctl is-enabled sidekick-metrics.timer 2>/dev/null || true", { encoding: "utf-8", timeout: 3000 }).trim() === "enabled";
+  } catch {}
+
+  const issues = [];
+  if (!status.grafana.configured) issues.push("SIDEKICK_GRAFANA_ADMIN_PASSWORD is not configured for the secure dashboard proxy");
+  if (!status.grafana.reachable) issues.push("Grafana is not reachable on localhost");
+  if (!status.influxdb.configured) issues.push("SIDEKICK_INFLUX_TOKEN is not configured for metrics collection");
+  if (!status.influxdb.reachable) issues.push("InfluxDB is not reachable on localhost");
+  if (!status.collector.timerActive) issues.push("sidekick-metrics.timer is not active");
+  status.ok = issues.length === 0;
+  status.issues = issues;
+  res.json(status);
 });
 
 app.get("/api/config", (req, res) => {

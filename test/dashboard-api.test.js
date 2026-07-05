@@ -215,6 +215,18 @@ setTimeout(async () => {
       console.log('Passed\n');
     }
 
+    // Test 3.0g: metrics status reports safe setup state
+    console.log('Test 3.0g: metrics status reports safe setup state');
+    {
+      const response = await makeRequest('GET', '/api/metrics/status');
+      assert.strictEqual(response.status, 200, 'Metrics status should return 200');
+      assert.ok(response.data.grafana, 'Should include Grafana status');
+      assert.ok(response.data.influxdb, 'Should include InfluxDB status');
+      assert.ok(response.data.collector, 'Should include collector status');
+      assert.ok(Array.isArray(response.data.issues), 'Should include issues array');
+      console.log('Passed\n');
+    }
+
     // Test 3.1: GET /api/kv returns metadata
     console.log('Test 3.1: GET /api/kv returns metadata');
     {

@@ -34,6 +34,12 @@ If the dashboard is exposed outside a private network, put it behind a reverse p
 
 Mission Control includes authenticated quick actions backed by `POST /api/quick-actions/:action`. The first actions are health check, recent failures, deployment info, MCP service logs, and sidekick-agent restart. Service log and restart actions are restricted to explicit service allowlists.
 
+## Metrics
+
+The Metrics tab embeds Grafana through the authenticated dashboard under `/grafana/*`; it does not require enabling anonymous Grafana access. The dashboard proxy authenticates to the local Grafana service with `SIDEKICK_GRAFANA_ADMIN_USER` (default `sidekick`) and `SIDEKICK_GRAFANA_ADMIN_PASSWORD`.
+
+Metrics collection is handled by `sidekick-metrics.timer`, which runs `scripts/collect-metrics.js` every minute with `/home/sidekick/sidekick/.env` loaded. The timer writes to InfluxDB using `SIDEKICK_INFLUX_*` settings.
+
 ## Data editing
 
 `GET /api/kv` returns the KV store. `PUT /api/kv/:key` writes or updates one KV entry. `DELETE /api/kv/:key` removes one key. KV entries may be stored as simple legacy strings or as metadata objects with `value`, `project`, `category`, `source`, `created`, and `updated` fields.
