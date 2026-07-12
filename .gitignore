@@ -6,4 +6,6 @@ docker/data/*
 *.log
 .opencode/
 opencode.json
+opencode.jsonc
 CONTEXT.md
+backups/
