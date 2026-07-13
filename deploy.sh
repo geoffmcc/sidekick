@@ -57,7 +57,7 @@ ensure_ssh_key() {
       echo -e "  \033[33mPublic key missing, regenerating...\033[0m"
       rm -f "$SSH_KEY"
     else
-      return
+      return 0
     fi
   fi
   echo -e "  \033[33mGenerating SSH key...\033[0m"
