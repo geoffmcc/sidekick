@@ -1157,13 +1157,15 @@ function saveResumeDocument(doc) {
 function activeResumeItems(doc, includeCleared = false) {
   const items = Object.values(doc.items || {});
   if (includeCleared) return items;
-  return items.filter(item => !["cleared", "done"].includes(item.status));
+  return items.filter(item => !["cleared", "done", "complete"].includes(item.status));
 }
 
 function formatResumeItem(item) {
   return [
     `Project: ${item.project}`,
     `Status: ${item.status}`,
+    item.plan_name ? `Plan: ${item.plan_name}` : null,
+    item.current_phase ? `Current phase: ${item.current_phase}` : null,
     `Summary: ${item.summary || "(none)"}`,
     `Next step: ${item.next_step || "(none)"}`,
     item.branch ? `Branch: ${item.branch}` : null,
@@ -1173,7 +1175,7 @@ function formatResumeItem(item) {
   ].filter(Boolean).join("\n");
 }
 
-async function sidekick_resume({ action, project, summary, next_step, status, branch, url, notes, include_cleared, format }) {
+async function sidekick_resume({ action, project, summary, next_step, status, branch, url, notes, plan_name, current_phase, include_cleared, format }) {
   const selectedAction = action || "check";
   const selectedFormat = format || "text";
   const doc = loadResumeDocument();
@@ -1194,7 +1196,7 @@ async function sidekick_resume({ action, project, summary, next_step, status, br
 
   if (selectedAction === "check") {
     const item = doc.items[project];
-    if (!item || ["cleared", "done"].includes(item.status)) {
+    if (!item || ["cleared", "done", "complete"].includes(item.status)) {
       return { content: [{ type: "text", text: `No pending resume item for project: ${project}` }] };
     }
     const text = selectedFormat === "json" ? JSON.stringify(item, null, 2) : formatResumeItem(item);
@@ -1216,6 +1218,8 @@ async function sidekick_resume({ action, project, summary, next_step, status, br
       branch: branch !== undefined ? redactSensitive(branch) : existing.branch || null,
       url: url !== undefined ? redactSensitive(url) : existing.url || null,
       notes: notes !== undefined ? redactSensitive(notes) : existing.notes || null,
+      plan_name: plan_name !== undefined ? redactSensitive(plan_name) : existing.plan_name || null,
+      current_phase: current_phase !== undefined ? current_phase : existing.current_phase || null,
       created_at: existing.created_at || now,
       updated_at: now
     };
@@ -11173,7 +11177,7 @@ const TOOL_DEFS = [
   { name: "sidekick_store", description: "Store a value persistently in KV storage", args: { key: "string", value: "string", project: "string (optional)" } },
   { name: "sidekick_get", description: "Retrieve a stored value from KV storage", args: { key: "string" } },
   { name: "sidekick_delete", description: "Delete a stored value from KV storage by key", args: { key: "string" } },
-  { name: "sidekick_resume", description: "Manage first-class project resume handoffs stored in the resume document. Use to check, set, clear, or list pending work without relying on ad hoc KV keys.", args: { action: "string (check|set|clear|list - default check)", project: "string (required for check/set/clear)", summary: "string (optional, for set)", next_step: "string (optional, for set)", status: "string (optional, for set - default active)", branch: "string (optional, for set)", url: "string (optional, for set)", notes: "string (optional)", include_cleared: "boolean (optional, for list)", format: "string (optional, text|json - default text)" } },
+  { name: "sidekick_resume", description: "Manage first-class project resume handoffs stored in the resume document. Use to check, set, clear, or list pending work without relying on ad hoc KV keys.", args: { action: "string (check|set|clear|list - default check)", project: "string (required for check/set/clear)", summary: "string (optional, for set)", next_step: "string (optional, for set)", status: "string (optional, for set - default active)", branch: "string (optional, for set)", url: "string (optional, for set)", notes: "string (optional)", plan_name: "string (optional, for set - descriptive handoff plan name)", current_phase: "number (optional, for set - current phase number within the named plan)", include_cleared: "boolean (optional, for list)", format: "string (optional, text|json - default text)" } },
   { name: "sidekick_web_fetch", description: "Fetch a URL from the remote machine", args: { url: "string", method: "string (optional)", headers: "string (optional)", body: "string (optional)" } },
   { name: "sidekick_llm", description: "Ask the LLM (defaults to local Ollama, use provider='groq' for cloud Groq)", args: { prompt: "string", system: "string (optional)", temperature: "number (optional)", provider: "string (optional, 'ollama' or 'groq' - default from SIDEKICK_DEFAULT_LLM env var or 'ollama')" } },
   { name: "sidekick_list_projects", description: "List all unique project names in KV storage", args: {} },
