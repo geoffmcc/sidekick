@@ -264,19 +264,35 @@ function Repair-OptionalTools {
   $script:changed += "optional-tools"
 }
 
+function Invoke-GitDeployCheck {
+  param([string[]]$GitArgs)
+
+  $previousErrorActionPreference = $ErrorActionPreference
+  try {
+    $script:ErrorActionPreference = "Continue"
+    $output = & git @GitArgs 2>&1
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $script:ErrorActionPreference = $previousErrorActionPreference
+  }
+
+  $text = (($output | ForEach-Object { $_.ToString() }) -join "`n").Trim()
+  if ($exitCode -ne 0) {
+    throw "git $($GitArgs -join ' ') failed: $text"
+  }
+  return $text
+}
+
 function Assert-GitDeploySource {
   $helperLocal = Join-Path $PROJECT_DIR "scripts\git-deploy.js"
   if (-not (Test-Path $helperLocal)) {
     throw "Git deployment helper not found at $helperLocal"
   }
 
-  & git -C $PROJECT_DIR rev-parse --is-inside-work-tree *> $null
-  if ($LASTEXITCODE -ne 0) {
-    throw "Git deploy mode must run from a Git working tree"
-  }
+  Invoke-GitDeployCheck @("-C", $PROJECT_DIR, "rev-parse", "--is-inside-work-tree") | Out-Null
 
-  $branch = (& git -C $PROJECT_DIR branch --show-current).Trim()
-  $originUrl = (& git -C $PROJECT_DIR remote get-url origin).Trim()
+  $branch = Invoke-GitDeployCheck @("-C", $PROJECT_DIR, "branch", "--show-current")
+  $originUrl = Invoke-GitDeployCheck @("-C", $PROJECT_DIR, "remote", "get-url", "origin")
   if ($branch -ne "main") {
     if ([string]::IsNullOrWhiteSpace($branch)) { $branch = "detached" }
     throw "Git deploy mode requires local main; current branch is $branch"
@@ -285,16 +301,13 @@ function Assert-GitDeploySource {
     throw "Git deploy mode requires clean origin $EXPECTED_REPO_URL"
   }
 
-  & git -C $PROJECT_DIR fetch --prune origin main *> $null
-  if ($LASTEXITCODE -ne 0) {
-    throw "Git deploy mode could not fetch origin/main"
-  }
-  $status = (& git -C $PROJECT_DIR status --porcelain) -join "`n"
+  Invoke-GitDeployCheck @("-C", $PROJECT_DIR, "fetch", "--prune", "origin", "main") | Out-Null
+  $status = Invoke-GitDeployCheck @("-C", $PROJECT_DIR, "status", "--porcelain")
   if (-not [string]::IsNullOrWhiteSpace($status)) {
     throw "Git deploy mode requires a clean local working tree"
   }
-  $head = (& git -C $PROJECT_DIR rev-parse HEAD).Trim()
-  $originHead = (& git -C $PROJECT_DIR rev-parse origin/main).Trim()
+  $head = Invoke-GitDeployCheck @("-C", $PROJECT_DIR, "rev-parse", "HEAD")
+  $originHead = Invoke-GitDeployCheck @("-C", $PROJECT_DIR, "rev-parse", "origin/main")
   if ($head -ne $originHead) {
     throw "Git deploy mode requires local main to match origin/main"
   }
