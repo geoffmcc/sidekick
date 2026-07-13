@@ -210,6 +210,114 @@ console.log('Running Tools Tests...\n');
     assert.ok(listCleared.items.some(item => item.project === 'resume_test' && item.status === 'cleared'), 'include_cleared should show cleared items');
     console.log('✓ Passed\n');
 
+    // Test 2.0aba: plan-scoped resume fields and phase numbering
+    console.log('Test 2.0aba: plan-scoped resume fields and phase numbering');
+
+    // --- plan_name and current_phase persistence ---
+    const planResume = await sidekick_resume({
+      action: 'set',
+      project: 'resume_plan_test',
+      summary: 'Scoped handoff plan work',
+      next_step: 'Implement Phase 4',
+      plan_name: 'Nodex Initial Capability Handoff',
+      current_phase: 4,
+      format: 'json'
+    });
+    const planItem = JSON.parse(planResume.content[0].text);
+    assert.strictEqual(planItem.plan_name, 'Nodex Initial Capability Handoff', 'Should store plan_name');
+    assert.strictEqual(planItem.current_phase, 4, 'Should store current_phase as number');
+    assert.strictEqual(planItem.status, 'active', 'New plan should default to active');
+
+    const planCheck = await sidekick_resume({ action: 'check', project: 'resume_plan_test' });
+    assert.ok(planCheck.content[0].text.includes('Nodex Initial Capability Handoff'), 'Check should display plan_name');
+    assert.ok(planCheck.content[0].text.includes('Current phase: 4'), 'Check should display current_phase');
+
+    // --- Same plan continues: phase 4 → 5 ---
+    const continuedPlan = await sidekick_resume({
+      action: 'set',
+      project: 'resume_plan_test',
+      summary: 'Continuing same plan',
+      next_step: 'Implement Phase 5',
+      plan_name: 'Nodex Initial Capability Handoff',
+      current_phase: 5,
+      format: 'json'
+    });
+    const continuedItem = JSON.parse(continuedPlan.content[0].text);
+    assert.strictEqual(continuedItem.plan_name, 'Nodex Initial Capability Handoff', 'Continued plan should keep plan_name');
+    assert.strictEqual(continuedItem.current_phase, 5, 'Continued plan should increment phase');
+    assert.strictEqual(continuedItem.status, 'active', 'Continued plan should stay active');
+
+    // --- Mark a plan complete ---
+    const completeResume = await sidekick_resume({
+      action: 'set',
+      project: 'resume_plan_test',
+      summary: 'All phases complete',
+      next_step: 'None — handoff complete',
+      plan_name: 'Nodex Initial Capability Handoff',
+      current_phase: 13,
+      status: 'complete',
+      format: 'json'
+    });
+    const completeItem = JSON.parse(completeResume.content[0].text);
+    assert.strictEqual(completeItem.status, 'complete', 'Plan should accept complete status');
+
+    // --- Completed plan hidden from active list ---
+    const activeList = await sidekick_resume({ action: 'list', format: 'json' });
+    const activeItems = JSON.parse(activeList.content[0].text);
+    assert.ok(!activeItems.items.some(item => item.project === 'resume_plan_test'), 'Complete plan should not appear in active list');
+
+    // --- Completed plan visible in cleared list ---
+    const clearedList = await sidekick_resume({ action: 'list', include_cleared: true, format: 'json' });
+    const clearedItems = JSON.parse(clearedList.content[0].text);
+    assert.ok(clearedItems.items.some(item => item.project === 'resume_plan_test' && item.status === 'complete'), 'Complete plan should appear when include_cleared is true');
+
+    // --- New plan starts at Phase 1, not derived from completed plan ---
+    const newPlan = await sidekick_resume({
+      action: 'set',
+      project: 'resume_plan_test_new',
+      summary: 'New unrelated work',
+      next_step: 'Implement Phase 1',
+      plan_name: 'Nodex Proxmox Capability Expansion',
+      current_phase: 1,
+      format: 'json'
+    });
+    const newPlanItem = JSON.parse(newPlan.content[0].text);
+    assert.strictEqual(newPlanItem.plan_name, 'Nodex Proxmox Capability Expansion', 'New plan should have new plan_name');
+    assert.strictEqual(newPlanItem.current_phase, 1, 'New plan should start at Phase 1, not Phase 14');
+
+    // --- Multiple plans in same project are independent ---
+    await sidekick_resume({
+      action: 'set',
+      project: 'resume_multiple_plans',
+      summary: 'Plan B work',
+      next_step: 'Implement Phase 3',
+      plan_name: 'Plan B',
+      current_phase: 3,
+      format: 'json'
+    });
+
+    // --- Legacy item without plan_name displays correctly ---
+    const legacyResume = await sidekick_resume({
+      action: 'set',
+      project: 'resume_legacy_test',
+      summary: 'Legacy handoff without explicit plan',
+      next_step: 'Complete remaining work',
+      format: 'json'
+    });
+    const legacyItem = JSON.parse(legacyResume.content[0].text);
+    assert.strictEqual(legacyItem.plan_name, null, 'Legacy item without plan_name should store null');
+    assert.strictEqual(legacyItem.current_phase, null, 'Legacy item without current_phase should store null');
+    const legacyCheck = await sidekick_resume({ action: 'check', project: 'resume_legacy_test' });
+    assert.ok(!legacyCheck.content[0].text.includes('Plan:'), 'Legacy item should not display Plan: without plan_name');
+    assert.ok(!legacyCheck.content[0].text.includes('Current phase:'), 'Legacy item should not display phase without current_phase');
+
+    // Cleanup test projects
+    await sidekick_resume({ action: 'clear', project: 'resume_plan_test' });
+    await sidekick_resume({ action: 'clear', project: 'resume_plan_test_new' });
+    await sidekick_resume({ action: 'clear', project: 'resume_multiple_plans' });
+    await sidekick_resume({ action: 'clear', project: 'resume_legacy_test' });
+    console.log('✓ Passed\n');
+
     // Test 2.0b: sidekick_github argument parsing
     console.log('Test 2.0b: sidekick_github argument parsing');
     const jsonGithubArgs = parseGithubArgs('{"number":28,"method":"merge","ref":"abc123"}');

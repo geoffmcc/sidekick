@@ -481,8 +481,12 @@ Use the core service checks for routine deploy verification, and inspect optiona
 
 A resume entry should capture the current summary, the next concrete step, and any branch, URL, or notes needed to continue later. Append new context to the existing handoff instead of replacing unrelated pending work.
 
+Handoff plans are independent named sequences. Phase numbers are scoped to the named plan, not the project. Never treat the highest phase number found in Git history as the starting point for unrelated work. When starting a new named handoff plan, begin at Phase 1. When continuing an existing plan, determine its last completed phase from stored state and continue its local sequence.
+
+Use sidekick_resume with plan_name and current_phase fields to record the plan identity and current phase. Mark a plan complete with status "complete" or "done" when all phases are finished.
+
 Keep AGENTS.md compact and use it as a pointer to the database-first knowledge base and resume records.',
-'handoff,resume,kv,workflow,project-state', 1, 'seed-2026-06-16-current', datetime('now'));
+'handoff,resume,kv,workflow,project-state,phases,plans', 1, 'seed-2026-06-16-current', datetime('now'));
 
 INSERT INTO knowledge (category, title, content, tags, enabled, version_added, updated_at) VALUES
 ('operations', 'Health Check Expectations and Probe Behavior',
@@ -492,6 +496,22 @@ Packaged restart smoke checks probe the MCP /health endpoint asynchronously. Thi
 
 Treat an isolated probe warning as diagnostic evidence and verify service state and recent logs, but do not treat the old deterministic self-timeout as expected behavior.',
 'health,operations,mcp,probe,troubleshooting', 1, 'seed-2026-06-16-current', datetime('now')),
+
+('protocols', 'Handoff Plan Phase Scoping',
+'Handoff plans are named, independent sequences. Phase numbers are local to each plan and must never be treated as a global project-wide sequence.
+
+Before assigning a phase number:
+1. Determine whether work continues an existing named handoff plan or starts a new plan.
+2. When continuing an existing plan, inspect that plan''s stored state and Git history to find the last completed phase belonging to that specific plan, then continue its local sequence.
+3. When starting a new plan, assign a descriptive plan name and begin at Phase 1.
+4. Never search Git history for the highest Phase N value and increment it for unrelated work.
+
+Use sidekick_resume with plan_name and current_phase fields to record plan identity and phase. Mark complete plans with status "complete".
+
+Treat historical unnamed phase references as belonging to their established historical handoff only when repository context or existing Sidekick state supports that conclusion. Do not rewrite historical commits or records.
+
+When the plan identity is ambiguous, prefer a safe new named plan at Phase 1 over accidental continuation of an unrelated sequence.',
+'handoff,phases,plan,protocol,agents', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('operations', 'Optional Infrastructure Startup Order',
 'Optional infrastructure runs through Docker Compose wrappers backed by systemd. Start Docker first, then the wrapper services for postgres, redis, qdrant, influxdb, and grafana.

@@ -68,6 +68,8 @@ const TOOL_SCHEMAS = {
     branch: z.string().optional().describe("Related branch name for action=set"),
     url: z.string().optional().describe("Related PR/issue URL for action=set"),
     notes: z.string().optional().describe("Additional notes for set/clear"),
+    plan_name: z.string().optional().describe("Descriptive handoff plan name for action=set"),
+    current_phase: z.number().int().positive().optional().describe("Current phase number within the named plan for action=set"),
     include_cleared: z.boolean().optional().describe("Include cleared/done items for action=list"),
     format: z.enum(["text", "json"]).optional().default("text").describe("Output format")
   }),
