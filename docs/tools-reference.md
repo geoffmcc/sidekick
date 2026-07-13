@@ -370,6 +370,36 @@ Arguments: `{ action: "string", repo: "string", args: "string (optional)" }`
 
 `args` accepts JSON for structured actions, such as `{"number":28,"method":"merge"}` for `pr_merge` or `{"ref":"<sha>"}` for `commit_status`. Legacy raw values such as `"28"` for PR/issue numbers and `"<sha>"` for commit status are also supported.
 
+`commit_status` reads GitHub's legacy combined commit status endpoint. It does not include GitHub Actions check runs. Use `sidekick_ci_status` when deciding whether CI is passing.
+
+### `sidekick_ci_status`
+
+Read-only GitHub CI/check-run inspection for a PR head, commit SHA, ref, or branch.
+
+GitHub has two CI result surfaces: legacy commit statuses and modern check runs. Legacy statuses come from integrations that write status contexts. GitHub Actions and many apps publish check runs. `sidekick_ci_status` reads both check runs and legacy statuses, paginates results, and aggregates them into `failure`, `pending`, `success`, or `no_checks`.
+
+Credentials: `sidekick_ci_status` uses `GITHUB_TOKEN` from the MCP process environment first, then encrypted `sidekick_secret` key `github_token`. Do not store GitHub tokens in KV storage. Required permissions are read-only repository metadata plus commit status/check read access; for private repositories, use a token that can read the repository and checks.
+
+Arguments: `{ repo: "owner/repository", pr: "number (optional)", pull_number: "number (optional)", sha: "string (optional)", commit: "string (optional)", ref: "string (optional)", branch: "string (optional)", format: "text|json (optional, default text)" }`
+
+Provide exactly one selector: `pr`/`pull_number`, `sha`/`commit`, or `ref`/`branch`. For PRs, the tool resolves the PR's `head.sha` and inspects that commit, not the PR merge commit.
+
+Example text calls:
+
+```text
+sidekick_ci_status repo="geoffmcc/sidekick" pr=123
+sidekick_ci_status repo="geoffmcc/sidekick" branch="main"
+sidekick_ci_status repo="geoffmcc/sidekick" sha="abc123..."
+```
+
+Example JSON call:
+
+```text
+sidekick_ci_status repo="geoffmcc/sidekick" pr=123 format="json"
+```
+
+JSON output includes `repo`, `requested`, resolved `sha`, `overall`, `summary`, `check_runs`, and `statuses` so agents can make decisions without parsing the human-readable text.
+
 ### `sidekick_webhook`
 
 Manage received webhooks (list, get, clear)

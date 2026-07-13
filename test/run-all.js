@@ -18,6 +18,7 @@ const suites = [
   { file: 'test/static-code-quality.test.js', critical: true, description: 'Static safety checks' },
   { file: 'test/security.test.js', critical: true, description: 'Redaction and dangerous command checks' },
   { file: 'test/security-scan.test.js', critical: true, description: 'Read-only config and secret scan behavior' },
+  { file: 'test/ci-status.test.js', critical: true, description: 'Read-only GitHub CI status aggregation' },
   { file: 'test/health.test.js', critical: true, description: 'Composite health aggregation and stable failure shapes' },
   { file: 'test/agent-protocol.test.js', critical: true, description: 'Agent decision parsing, model selection, and chat roles' },
   { file: 'test/deploy-scripts.test.js', critical: false, description: 'Deploy script checks' },

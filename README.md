@@ -221,6 +221,7 @@ Sidekick used its own tools to help develop itself. Here's the AI agent debuggin
 | **Autonomous multi-step tasks** | Agent bridge at `:4099` plans and executes until done | AI knows to delegate complex work to the agent |
 | **Code review** | Ask the AI to review diffs using remote execution tools | Decision tree in AGENTS.md tells the AI *when* to use sidekick tools for review |
 | **GitHub integration** | `sidekick_github` uses `GITHUB_TOKEN` or encrypted `sidekick_secret` credentials | AGENTS.md tells the AI to query current credential procedures |
+| **GitHub CI inspection** | `sidekick_ci_status` reads check runs plus legacy statuses for a PR head, SHA, ref, or branch | AI can make CI decisions without relying on legacy status-only data |
 | **Database operations** | `sidekick_db_*` tools for SQLite and PostgreSQL | Query, backup, restore, search, migrate databases |
 | **Media processing** | `sidekick_ocr`, `sidekick_media`, `sidekick_transcribe` | OCR, video/audio conversion, transcription |
 | **Networking** | `sidekick_tunnel`, `sidekick_wireguard`, `sidekick_nginx` | Cloudflare tunnels, VPN, reverse proxy |
