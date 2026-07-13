@@ -38,7 +38,7 @@ copy .env.example .env
 - Install and enable systemd services
 - Install your SSH key for passwordless access
 - Open firewall ports (if UFW is active)
-- Deploy the application and start services
+- Deploy the application as a Git checkout at `/home/sidekick/sidekick` and start services
 
 **Optional: Install full infrastructure** (Docker, databases, media tools, etc.):
 ```bash
@@ -51,7 +51,7 @@ sudo bash scripts/setup-tools.sh
 
 This installs PostgreSQL, Redis, Qdrant, InfluxDB, Grafana, and many other tools. See [Optional Infrastructure](#optional-infrastructure) for details.
 
-**Subsequent deploys** are fully automated — no password required.
+**Subsequent deploys** are fully automated — no password required. Normal online deployments fetch `origin/main` from GitHub, fast-forward the remote `main` checkout, and verify that Git push is disabled with `git remote set-url --push origin DISABLED`.
 
 **For automation/CI**, specify the initial user with `-InitialUser`:
 ```powershell
@@ -62,7 +62,7 @@ This installs PostgreSQL, Redis, Qdrant, InfluxDB, Grafana, and many other tools
 ./deploy.sh -IP YOUR_REMOTE_IP -InitialUser ubuntu
 ```
 
-**Airgap/Offline Deploy** — If your remote server cannot reach GitHub (firewall, air-gapped network, etc.), use the `--scp` flag to sync files individually via SSH:
+**Airgap/Offline Deploy** — If your remote server cannot reach GitHub (firewall, air-gapped network, etc.), explicitly use the `--scp` flag to sync files individually via SSH:
 ```powershell
 # Windows
 .\deploy.ps1 -IP "YOUR_REMOTE_IP" -Scp
@@ -70,7 +70,7 @@ This installs PostgreSQL, Redis, Qdrant, InfluxDB, Grafana, and many other tools
 # Linux/Mac
 ./deploy.sh -IP YOUR_REMOTE_IP --scp
 ```
-This uses the original SCP-based approach, copying files one-by-one from your local machine. No internet access required on the remote server.
+This copies files one-by-one from your local machine and does not create a Git working tree. No internet access is required on the remote server, but `sidekick_ops deploy_current_main` requires the normal Git deployment model and will not silently fall back to SCP.
 
 Open `http://YOUR_REMOTE_IP:4098/` in a browser. That's it — Sidekick is live.
 

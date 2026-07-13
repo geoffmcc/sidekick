@@ -6982,9 +6982,23 @@ async function sidekick_status({ include, services }) {
 }
 
 const SIDEKICK_SERVICES = ["sidekick-mcp", "sidekick-dashboard", "sidekick-agent"];
+const SIDEKICK_DEPLOY_REPO_PATH = "/home/sidekick/sidekick";
 
 function defaultRepoPath(repoPath) {
   return repoPath || process.env.SIDEKICK_REPO_DIR || path.join(__dirname, "..");
+}
+
+function deployScriptPath(repoPath) {
+  return path.join(repoPath, "scripts", "git-deploy.js");
+}
+
+function parseOpsJson(result) {
+  if (!result.stdout) return null;
+  try {
+    return JSON.parse(result.stdout);
+  } catch (e) {
+    return null;
+  }
 }
 
 function runOpsCommand(command, args, options = {}) {
@@ -7190,41 +7204,26 @@ async function sidekick_mission({ action, intent, profile, confirm, key, project
 }
 
 async function sidekick_ops({ action, repo_path, restart_mcp }) {
-  const repoPath = defaultRepoPath(repo_path);
+  const repoPath = repo_path || SIDEKICK_DEPLOY_REPO_PATH;
+  if (repoPath !== SIDEKICK_DEPLOY_REPO_PATH) {
+    return { content: [{ type: "text", text: `sidekick_ops deployments are restricted to ${SIDEKICK_DEPLOY_REPO_PATH}` }], isError: true };
+  }
   const pathPolicyError = enforcePathPolicy(repoPath, action === "deploy_current_main" ? "write" : "read");
   if (pathPolicyError) return pathPolicyError;
 
   if (action === "verify_deployed_commit") {
-    if (!fs.existsSync(repoPath)) {
-      return { content: [{ type: "text", text: "Repository path not found: " + repoPath }], isError: true };
-    }
-
-    const fetch = runOpsCommand("git", ["-C", repoPath, "fetch", "origin", "main"], { timeout: 60000 });
-    const head = getGitValue(repoPath, ["rev-parse", "HEAD"]);
-    const origin = getGitValue(repoPath, ["rev-parse", "origin/main"]);
-    const branch = getGitValue(repoPath, ["branch", "--show-current"]) || "(detached)";
-    const dirty = filterGitStatus(getGitValue(repoPath, ["status", "--short"]) || "");
-    const states = getServiceStates();
-    const deployed = Boolean(head && origin && head === origin && !dirty);
-    const detail = dirty ? `Dirty files:\n${dirty}` : "Dirty files: none";
+    const script = deployScriptPath(repoPath);
+    if (!fs.existsSync(script)) return { content: [{ type: "text", text: "Deployment helper not found: " + script }], isError: true };
+    const verify = runOpsCommand("node", [script, "verify"], { timeout: 120000, maxBuffer: 10 * 1024 * 1024 });
+    const parsed = parseOpsJson(verify);
+    const ok = verify.ok && parsed?.status === "ok";
 
     return {
       content: [{
         type: "text",
-        text: formatOpsReport("DEPLOY VERIFICATION", [
-          ["DEPLOYED", deployed ? "yes" : "no"],
-          ["Branch", branch],
-          ["HEAD", head || "unknown"],
-          ["origin/main", origin || "unknown"],
-          ["Fetch", fetch.ok ? "ok" : "failed"],
-          ["Services", allServicesActive(states) ? "all active" : "attention needed"],
-          ["Action needed", deployed && allServicesActive(states) ? "none" : "review output"]
-        ], [
-          detail,
-          "Service states:\n" + Object.entries(states).map(([svc, state]) => `${svc}: ${state}`).join("\n")
-        ])
+        text: JSON.stringify(parsed || { status: "failed", error: verify.stderr || verify.stdout || "verify failed" }, null, 2)
       }],
-      isError: !deployed || !allServicesActive(states)
+      isError: !ok
     };
   }
 
@@ -7271,48 +7270,17 @@ async function sidekick_ops({ action, repo_path, restart_mcp }) {
   }
 
   if (action === "deploy_current_main") {
-    if (!fs.existsSync(repoPath)) {
-      return { content: [{ type: "text", text: "Repository path not found: " + repoPath }], isError: true };
-    }
-
-    const fetch = runOpsCommand("git", ["-C", repoPath, "fetch", "origin", "main"], { timeout: 60000 });
-    const dirty = filterGitStatus(getGitValue(repoPath, ["status", "--short"]) || "");
-    if (dirty) {
-      return {
-        content: [{ type: "text", text: formatOpsReport("DEPLOY CURRENT MAIN", [
-          ["DEPLOYED", "no"],
-          ["Reason", "working tree is not clean"],
-          ["Action needed", "commit, stash, or remove local changes before deploy"]
-        ], [`Dirty files:\n${dirty}`]) }],
-        isError: true
-      };
-    }
-
-    const merge = runOpsCommand("git", ["-C", repoPath, "merge", "--ff-only", "origin/main"], { timeout: 60000 });
-    const install = runOpsCommand("npm", ["install", "--omit=dev"], { cwd: repoPath, timeout: 120000, maxBuffer: 20 * 1024 * 1024 });
-    const dashboard = runOpsCommand("sudo", ["systemctl", "restart", "sidekick-dashboard"], { timeout: 30000 });
-    const agent = runOpsCommand("sudo", ["systemctl", "restart", "sidekick-agent"], { timeout: 30000 });
-    scheduleMcpRestart();
-
-    const head = getGitValue(repoPath, ["rev-parse", "HEAD"]);
-    const origin = getGitValue(repoPath, ["rev-parse", "origin/main"]);
-    const ok = fetch.ok && merge.ok && install.ok && dashboard.ok && agent.ok && head === origin;
+    const script = deployScriptPath(repoPath);
+    if (!fs.existsSync(script)) return { content: [{ type: "text", text: "Deployment helper not found: " + script }], isError: true };
+    const deployResult = runOpsCommand("node", [script, "deploy"], { timeout: 300000, maxBuffer: 20 * 1024 * 1024 });
+    const parsed = parseOpsJson(deployResult);
+    const ok = deployResult.ok && parsed?.status === "ok";
+    if (ok) scheduleMcpRestart();
 
     return {
       content: [{
         type: "text",
-        text: formatOpsReport("DEPLOY CURRENT MAIN", [
-          ["DEPLOYED", ok ? "yes" : "no"],
-          ["HEAD", head || "unknown"],
-          ["origin/main", origin || "unknown"],
-          ["Fetch", fetch.ok ? "ok" : "failed"],
-          ["Fast-forward", merge.ok ? "ok" : "failed"],
-          ["npm install --omit=dev", install.ok ? "ok" : "failed"],
-          ["Dashboard restart", dashboard.ok ? "ok" : "failed"],
-          ["Agent restart", agent.ok ? "ok" : "failed"],
-          ["MCP restart", "scheduled after response; next MCP call may reconnect"],
-          ["Action needed", ok ? "run verify_deployed_commit after reconnect" : "review output"]
-        ])
+        text: JSON.stringify(parsed || { status: "failed", error: deployResult.stderr || deployResult.stdout || "deploy failed" }, null, 2)
       }],
       isError: !ok
     };

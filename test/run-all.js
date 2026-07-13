@@ -22,6 +22,7 @@ const suites = [
   { file: 'test/health.test.js', critical: true, description: 'Composite health aggregation and stable failure shapes' },
   { file: 'test/agent-protocol.test.js', critical: true, description: 'Agent decision parsing, model selection, and chat roles' },
   { file: 'test/deploy-scripts.test.js', critical: false, description: 'Deploy script checks' },
+  { file: 'test/git-deploy.test.js', critical: false, description: 'Read-only Git deployment hardening' },
   { file: 'test/mcp-session.test.js', critical: false, description: 'MCP stale session recovery behavior' },
   { file: 'test/ops-workflows.test.js', critical: false, description: 'Packaged operations workflow metadata' },
   { file: 'test/tools.test.js', critical: false, description: 'Core tool behavior' },

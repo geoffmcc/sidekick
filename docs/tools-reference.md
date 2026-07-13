@@ -484,13 +484,13 @@ Arguments: `{ action: "string (create|start|next|verify|rollback|abort|list|get|
 
 Packaged Sidekick operations workflows for deploy verification, restart smoke tests, deployments, and incident snapshots.
 
-Arguments: `{ action: "string (verify_deployed_commit|restart_and_smoke_test|deploy_current_main|incident_snapshot)", repo_path: "string (optional, repository path - default current Sidekick repo)", restart_mcp: "boolean (optional, schedule sidekick-mcp restart for restart_and_smoke_test)" }`
+Arguments: `{ action: "string (verify_deployed_commit|restart_and_smoke_test|deploy_current_main|incident_snapshot)", repo_path: "string (optional, must be /home/sidekick/sidekick for deploy workflows)", restart_mcp: "boolean (optional, schedule sidekick-mcp restart for restart_and_smoke_test)" }`
 
 Actions:
 
-- `verify_deployed_commit`: fetches `origin/main`, compares `HEAD` to `origin/main`, reports dirty files, and checks Sidekick services.
+- `verify_deployed_commit`: verifies `/home/sidekick/sidekick` is a clean `main` checkout of the expected read-only GitHub repository, confirms the push URL is `DISABLED`, fetches `origin/main`, compares `HEAD` to `origin/main`, and checks Sidekick services.
 - `restart_and_smoke_test`: restarts dashboard and agent, checks MCP health, and can schedule an MCP self-restart after the response with `restart_mcp: true`.
-- `deploy_current_main`: requires a clean working tree, fast-forwards to `origin/main`, runs `npm install --omit=dev`, restarts dashboard and agent, and schedules MCP restart after the response.
+- `deploy_current_main`: deploys only `origin/main` in `/home/sidekick/sidekick`, refuses dirty, staged, ahead, diverged, wrong-branch, wrong-origin, credentialed-origin, or push-enabled states, uses a deployment lock, fast-forwards only, installs production dependencies, seeds knowledge, restarts required services, and schedules MCP restart after the response.
 - `incident_snapshot`: captures services, resource status, git state, top processes, and recent service logs in one report.
 
 ### `sidekick_mission`

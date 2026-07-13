@@ -11,6 +11,8 @@ $ErrorActionPreference = "Stop"
 
 $VPS = "sidekick@$IP"
 $REMOTE_DIR = "/home/sidekick/sidekick"
+$GIT_DEPLOY_HELPER = "/home/sidekick/.sidekick-git-deploy.js"
+$EXPECTED_REPO_URL = "https://github.com/geoffmcc/sidekick.git"
 $SSH_KEY = if ($env:SIDEKICK_SSH_KEY) { $env:SIDEKICK_SSH_KEY } else { Join-Path $env:USERPROFILE ".ssh\sidekick" }
 $SSH_PUB_KEY = "$SSH_KEY.pub"
 $PROJECT_DIR = $PSScriptRoot
@@ -262,7 +264,44 @@ function Repair-OptionalTools {
   $script:changed += "optional-tools"
 }
 
+function Assert-GitDeploySource {
+  $helperLocal = Join-Path $PROJECT_DIR "scripts\git-deploy.js"
+  if (-not (Test-Path $helperLocal)) {
+    throw "Git deployment helper not found at $helperLocal"
+  }
+
+  & git -C $PROJECT_DIR rev-parse --is-inside-work-tree *> $null
+  if ($LASTEXITCODE -ne 0) {
+    throw "Git deploy mode must run from a Git working tree"
+  }
+
+  $branch = (& git -C $PROJECT_DIR branch --show-current).Trim()
+  $originUrl = (& git -C $PROJECT_DIR remote get-url origin).Trim()
+  if ($branch -ne "main") {
+    if ([string]::IsNullOrWhiteSpace($branch)) { $branch = "detached" }
+    throw "Git deploy mode requires local main; current branch is $branch"
+  }
+  if ($originUrl -ne $EXPECTED_REPO_URL -or $originUrl -match "@github\.com") {
+    throw "Git deploy mode requires clean origin $EXPECTED_REPO_URL"
+  }
+
+  & git -C $PROJECT_DIR fetch --prune origin main *> $null
+  if ($LASTEXITCODE -ne 0) {
+    throw "Git deploy mode could not fetch origin/main"
+  }
+  $status = (& git -C $PROJECT_DIR status --porcelain) -join "`n"
+  if (-not [string]::IsNullOrWhiteSpace($status)) {
+    throw "Git deploy mode requires a clean local working tree"
+  }
+  $head = (& git -C $PROJECT_DIR rev-parse HEAD).Trim()
+  $originHead = (& git -C $PROJECT_DIR rev-parse origin/main).Trim()
+  if ($head -ne $originHead) {
+    throw "Git deploy mode requires local main to match origin/main"
+  }
+}
+
 $changed = @()
+$gitModeUsed = $false
 
 try {
   Write-Host "=== Deploying Sidekick to $IP ===" -ForegroundColor Cyan
@@ -306,7 +345,7 @@ try {
   Write-Host "--- Deploying Files ---" -ForegroundColor Cyan
 
   if ($Scp) {
-    Write-Host "  SCP mode: syncing files individually (airgap/offline)" -ForegroundColor Yellow
+    Write-Host "  SCP/offline mode: syncing files individually. This does not create a Git working tree." -ForegroundColor Yellow
 
     Write-Host "  Syncing source files..." -ForegroundColor Green
     $files = @("tools.js", "index.js", "dashboard.js", "agent.js", "memory.js", "redact.js", "env.js", "db.js", "pg.js", "redis.js", "qdrant.js", "crypto-utils.js")
@@ -397,6 +436,7 @@ try {
         if (-not (Copy-ToVPS $localEnv "$REMOTE_DIR/.env")) {
           throw "Failed to copy .env"
         }
+        Run-Remote "chmod 600 $REMOTE_DIR/.env" | Out-Null
         $changed += ".env"
       }
     } else {
@@ -405,75 +445,37 @@ try {
   } else {
     Write-Host "  Git deploy mode" -ForegroundColor Green
 
-    # Detect repo URL from local git remote, fallback to main repo
-    $repoUrl = git -C $PROJECT_DIR remote get-url origin 2>$null
-    if (-not $repoUrl) { $repoUrl = "https://github.com/geoffmcc/sidekick.git" }
-
+    Assert-GitDeploySource
+    $helperLocal = Join-Path $PROJECT_DIR "scripts\git-deploy.js"
+    if (-not (Copy-ToVPS $helperLocal $GIT_DEPLOY_HELPER)) {
+      throw "Failed to upload Git deployment helper"
+    }
+    Run-Remote "chmod 700 $GIT_DEPLOY_HELPER" | Out-Null
     $remoteHasGit = Run-Remote "test -d $REMOTE_DIR/.git && echo YES || echo NO"
-
-    if ($remoteHasGit -match "YES") {
-      Write-Host "  Pulling latest changes..." -ForegroundColor Yellow
-      $pullOutput = Run-Remote "cd $REMOTE_DIR && git pull --ff-only 2>&1"
-      if ($LASTEXITCODE -ne 0) {
-        Write-Host "  ERROR: git pull failed" -ForegroundColor Red
-        Write-Host $pullOutput
-        throw "git pull failed"
+    $gitMode = "deploy"
+    if ($remoteHasGit -notmatch "YES") {
+      $gitMode = "convert"
+      Write-Host "  Converting existing deployment to read-only Git working tree..." -ForegroundColor Yellow
+      $localEnv = Join-Path $PROJECT_DIR ".env"
+      if (Test-Path $localEnv) {
+        $remoteEnvExists = Run-Remote "test -f $REMOTE_DIR/.env && echo YES || echo NO"
+        if ($remoteEnvExists -notmatch "YES") {
+          Write-Host "  Syncing .env before first Git conversion..." -ForegroundColor Green
+          if (-not (Copy-ToVPS $localEnv "$REMOTE_DIR/.env")) {
+            throw "Failed to copy .env"
+          }
+          Run-Remote "chmod 600 $REMOTE_DIR/.env" | Out-Null
+          $changed += ".env"
+        }
       }
-    } else {
-      Write-Host "  Cloning repository..." -ForegroundColor Yellow
-      
-      # Backup existing data and .env before replacing with git clone
-      Write-Host "  Backing up existing data..." -ForegroundColor Yellow
-      Run-Remote "mkdir -p /tmp/sidekick-backup && cp -r $REMOTE_DIR/data /tmp/sidekick-backup/ 2>/dev/null; cp $REMOTE_DIR/.env /tmp/sidekick-backup/ 2>/dev/null; echo DONE" 2>$null
-      
-      # Remove existing directory (git clone requires empty or non-existent dir)
-      Write-Host "  Removing old deployment directory..." -ForegroundColor Yellow
-      $rmOutput = Run-Remote "rm -rf $REMOTE_DIR && mkdir -p $REMOTE_DIR" 2>&1
-      if ($LASTEXITCODE -ne 0) {
-        Write-Host "  ERROR: Failed to remove old directory" -ForegroundColor Red
-        Write-Host $rmOutput
-        throw "Failed to remove old directory"
-      }
-      
-      # Clone fresh
-      $cloneOutput = Run-Remote "git clone '$repoUrl' $REMOTE_DIR 2>&1"
-      if ($LASTEXITCODE -ne 0) {
-        Write-Host "  ERROR: git clone failed" -ForegroundColor Red
-        Write-Host $cloneOutput
-        Write-Host "  Backup preserved at /tmp/sidekick-backup/ on remote" -ForegroundColor Yellow
-        throw "git clone failed"
-      }
-      
-      # Restore data and .env from backup
-      Write-Host "  Restoring data and .env from backup..." -ForegroundColor Yellow
-      Run-Remote "cp -r /tmp/sidekick-backup/data $REMOTE_DIR/ 2>/dev/null; cp /tmp/sidekick-backup/.env $REMOTE_DIR/ 2>/dev/null; echo DONE" 2>$null
-      
-      # Cleanup backup on success
-      Run-Remote "rm -rf /tmp/sidekick-backup" 2>$null
-      Write-Host "  Backup cleaned up" -ForegroundColor Green
+    }
+    $gitDeployOutput = Run-Remote "node $GIT_DEPLOY_HELPER $gitMode 2>&1"
+    Write-Host $gitDeployOutput
+    if ($LASTEXITCODE -ne 0) {
+      throw "Git deployment helper failed"
     }
     $changed += "git"
-
-    # Expand environment variable references in provisioning templates
-    Write-Host "  Expanding provisioning templates..." -ForegroundColor Yellow
-    Run-Remote "cd $REMOTE_DIR && test -f .env && set -a && . .env && set +a && for f in grafana/provisioning/datasources/*.yml grafana/provisioning/dashboards/*.yml; do test -f `$f && cp `$f `$f.bak && envsubst < `$f.bak > `$f && rm `$f.bak; done 2>&1" 2>$null
-
-    # Handle .env on first deploy
-    $localEnv = Join-Path $PROJECT_DIR ".env"
-    if (Test-Path $localEnv) {
-      $remoteEnvExists = Run-Remote "test -f $REMOTE_DIR/.env && echo YES || echo NO"
-      if ($remoteEnvExists -notmatch "YES") {
-        Write-Host "  Syncing .env (first deploy)..." -ForegroundColor Green
-        if (-not (Copy-ToVPS $localEnv "$REMOTE_DIR/.env")) {
-          throw "Failed to copy .env"
-        }
-        $changed += ".env"
-      } else {
-        Write-Host "  Remote .env exists, preserving" -ForegroundColor Yellow
-      }
-    } else {
-      Write-Host "  No local .env found, skipping" -ForegroundColor Yellow
-    }
+    $gitModeUsed = $true
   }
 
   Repair-OptionalTools
@@ -520,34 +522,40 @@ try {
     Write-Host "  Data directory permissions OK ($dataOwner)" -ForegroundColor Green
   }
 
-  Write-Host ""
-  Write-Host "--- Installing Dependencies ---" -ForegroundColor Cyan
-  Write-Host "  Running npm install..." -ForegroundColor Green
-  $npmOutput = Run-Remote "cd $REMOTE_DIR && npm install --omit=dev --no-package-lock 2>&1"
-  if ($LASTEXITCODE -ne 0) {
-    Write-Host "  npm install failed:" -ForegroundColor Red
-    Write-Host $npmOutput
-    throw "npm install failed"
-  }
-
-  Write-Host ""
-  Write-Host "--- Seeding Knowledge Base ---" -ForegroundColor Cyan
-  $seedAvailable = Run-Remote "cd $REMOTE_DIR && npm run 2>/dev/null | grep -q 'seed:knowledge' && echo YES || echo NO"
-  if ($seedAvailable -match "YES") {
-    $seedOutput = Run-Remote "cd $REMOTE_DIR && npm run seed:knowledge 2>&1"
-    Write-Host $seedOutput
-    if ($LASTEXITCODE -ne 0) {
-      throw "knowledge seed failed"
-    }
+  if ($gitModeUsed) {
+    Write-Host ""
+    Write-Host "--- Restarting MCP ---" -ForegroundColor Cyan
+    Restart-SidekickService "sidekick-mcp"
   } else {
-    Write-Host "  Knowledge seed script not present on remote; skipping. Commit/push this change or use -Scp to seed automatically." -ForegroundColor Yellow
-  }
+    Write-Host ""
+    Write-Host "--- Installing Dependencies ---" -ForegroundColor Cyan
+    Write-Host "  Running npm install..." -ForegroundColor Green
+    $npmOutput = Run-Remote "cd $REMOTE_DIR && npm install --omit=dev --no-package-lock 2>&1"
+    if ($LASTEXITCODE -ne 0) {
+      Write-Host "  npm install failed:" -ForegroundColor Red
+      Write-Host $npmOutput
+      throw "npm install failed"
+    }
 
-  Write-Host ""
-  Write-Host "--- Starting Services ---" -ForegroundColor Cyan
-  Restart-SidekickService "sidekick-agent"
-  Restart-SidekickService "sidekick-dashboard"
-  Restart-SidekickService "sidekick-mcp"
+    Write-Host ""
+    Write-Host "--- Seeding Knowledge Base ---" -ForegroundColor Cyan
+    $seedAvailable = Run-Remote "cd $REMOTE_DIR && npm run 2>/dev/null | grep -q 'seed:knowledge' && echo YES || echo NO"
+    if ($seedAvailable -match "YES") {
+      $seedOutput = Run-Remote "cd $REMOTE_DIR && npm run seed:knowledge 2>&1"
+      Write-Host $seedOutput
+      if ($LASTEXITCODE -ne 0) {
+        throw "knowledge seed failed"
+      }
+    } else {
+      Write-Host "  Knowledge seed script not present on remote; skipping. Commit/push this change or use -Scp to seed automatically." -ForegroundColor Yellow
+    }
+
+    Write-Host ""
+    Write-Host "--- Starting Services ---" -ForegroundColor Cyan
+    Restart-SidekickService "sidekick-agent"
+    Restart-SidekickService "sidekick-dashboard"
+    Restart-SidekickService "sidekick-mcp"
+  }
 
   Write-Host ""
   Write-Host "=== Deploy complete ===" -ForegroundColor Cyan
