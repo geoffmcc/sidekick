@@ -133,6 +133,16 @@ const TOOL_SCHEMAS = {
     repo: z.string().describe("Repository in format 'owner/repo'"),
     args: z.string().optional().describe("Additional arguments (JSON string or value depending on action)")
   }),
+  sidekick_ci_status: z.object({
+    repo: z.string().describe("Repository in format 'owner/repo'"),
+    pr: z.union([z.string(), z.number()]).optional().describe("Pull request number"),
+    pull_number: z.union([z.string(), z.number()]).optional().describe("Pull request number"),
+    sha: z.string().optional().describe("Commit SHA"),
+    commit: z.string().optional().describe("Commit SHA"),
+    ref: z.string().optional().describe("Git ref, branch, or SHA"),
+    branch: z.string().optional().describe("Branch name"),
+    format: z.enum(["text", "json"]).optional().describe("Output format (text or json, default text)")
+  }),
   sidekick_webhook: z.object({
     action: z.enum(["list", "get", "clear"]).describe("Webhook action to perform"),
     id: z.string().optional().describe("Webhook ID (required for get)"),
