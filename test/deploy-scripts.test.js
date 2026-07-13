@@ -627,8 +627,8 @@ console.log('Test 5.1: deploy.sh has --scp flag');
     'deploy.sh should have SCP_MODE variable'
   );
   assert.ok(
-    deployShContent.includes('SCP mode'),
-    'deploy.sh should indicate SCP mode to user'
+    deployShContent.includes('SCP/offline mode'),
+    'deploy.sh should indicate explicit SCP/offline mode to user'
   );
   console.log('✓ --scp flag present\n');
 }
@@ -641,52 +641,52 @@ console.log('Test 5.2: deploy.ps1 has -Scp flag');
     'deploy.ps1 should support -Scp switch'
   );
   assert.ok(
-    deployPs1Content.includes('SCP mode'),
-    'deploy.ps1 should indicate SCP mode to user'
+    deployPs1Content.includes('SCP/offline mode'),
+    'deploy.ps1 should indicate explicit SCP/offline mode to user'
   );
   console.log('✓ -Scp flag present\n');
 }
 
-// Test 5.3: deploy.sh has git clone/pull logic
+// Test 5.3: deploy.sh delegates Git deployment to hardened helper
 console.log('Test 5.3: deploy.sh has git deploy logic');
 {
   assert.ok(
-    deployShContent.includes('git clone'),
-    'deploy.sh should have git clone command'
+    deployShContent.includes('scripts/git-deploy.js'),
+    'deploy.sh should upload the Git deployment helper'
   );
   assert.ok(
-    deployShContent.includes('git pull'),
-    'deploy.sh should have git pull command'
+    deployShContent.includes('sidekick-git-deploy.js'),
+    'deploy.sh should run the uploaded Git deployment helper'
   );
   assert.ok(
-    deployShContent.includes('remote get-url origin'),
-    'deploy.sh should detect repo URL from git remote'
+    deployShContent.includes('git_mode="convert"'),
+    'deploy.sh should explicitly select conversion mode for non-Git deployments'
   );
   assert.ok(
-    deployShContent.includes('github.com/geoffmcc/sidekick'),
-    'deploy.sh should have fallback repo URL'
+    !deployShContent.includes('rm -rf $REMOTE_DIR'),
+    'deploy.sh should not destructively remove the live deployment directory'
   );
   console.log('✓ Git deploy logic present\n');
 }
 
-// Test 5.4: deploy.ps1 has git clone/pull logic
+// Test 5.4: deploy.ps1 delegates Git deployment to hardened helper
 console.log('Test 5.4: deploy.ps1 has git deploy logic');
 {
   assert.ok(
-    deployPs1Content.includes('git clone'),
-    'deploy.ps1 should have git clone command'
+    deployPs1Content.includes('scripts\\git-deploy.js'),
+    'deploy.ps1 should upload the Git deployment helper'
   );
   assert.ok(
-    deployPs1Content.includes('git pull'),
-    'deploy.ps1 should have git pull command'
+    deployPs1Content.includes('sidekick-git-deploy.js'),
+    'deploy.ps1 should run the uploaded Git deployment helper'
   );
   assert.ok(
-    deployPs1Content.includes('remote get-url origin'),
-    'deploy.ps1 should detect repo URL from git remote'
+    deployPs1Content.includes('$gitMode = "convert"'),
+    'deploy.ps1 should explicitly select conversion mode for non-Git deployments'
   );
   assert.ok(
-    deployPs1Content.includes('github.com/geoffmcc/sidekick'),
-    'deploy.ps1 should have fallback repo URL'
+    !deployPs1Content.includes('rm -rf $REMOTE_DIR'),
+    'deploy.ps1 should not destructively remove the live deployment directory'
   );
   console.log('✓ Git deploy logic present\n');
 }
@@ -701,54 +701,22 @@ console.log('Test 5.5: bootstrap.sh installs git');
   console.log('✓ Git installation present\n');
 }
 
-// Test 5.6: deploy.sh has backup/restore logic for git clone
+// Test 5.6: deploy.sh removed old /tmp backup conversion path
 console.log('Test 5.6: deploy.sh has backup/restore logic');
 {
   assert.ok(
-    deployShContent.includes('/tmp/sidekick-backup'),
-    'deploy.sh should use /tmp/sidekick-backup for backup'
-  );
-  assert.ok(
-    deployShContent.includes('Backing up existing data'),
-    'deploy.sh should indicate backup step'
-  );
-  assert.ok(
-    deployShContent.includes('Restoring data'),
-    'deploy.sh should indicate restore step'
-  );
-  assert.ok(
-    deployShContent.includes('Backup cleaned up'),
-    'deploy.sh should clean up backup on success'
-  );
-  assert.ok(
-    deployShContent.includes('Backup preserved'),
-    'deploy.sh should preserve backup on failure'
+    !deployShContent.includes('/tmp/sidekick-backup'),
+    'deploy.sh should not use volatile /tmp deployment backups'
   );
   console.log('✓ Backup/restore logic present\n');
 }
 
-// Test 5.7: deploy.ps1 has backup/restore logic for git clone
+// Test 5.7: deploy.ps1 removed old /tmp backup conversion path
 console.log('Test 5.7: deploy.ps1 has backup/restore logic');
 {
   assert.ok(
-    deployPs1Content.includes('/tmp/sidekick-backup'),
-    'deploy.ps1 should use /tmp/sidekick-backup for backup'
-  );
-  assert.ok(
-    deployPs1Content.includes('Backing up existing data'),
-    'deploy.ps1 should indicate backup step'
-  );
-  assert.ok(
-    deployPs1Content.includes('Restoring data'),
-    'deploy.ps1 should indicate restore step'
-  );
-  assert.ok(
-    deployPs1Content.includes('Backup cleaned up'),
-    'deploy.ps1 should clean up backup on success'
-  );
-  assert.ok(
-    deployPs1Content.includes('Backup preserved'),
-    'deploy.ps1 should preserve backup on failure'
+    !deployPs1Content.includes('/tmp/sidekick-backup'),
+    'deploy.ps1 should not use volatile /tmp deployment backups'
   );
   console.log('✓ Backup/restore logic present\n');
 }
@@ -774,11 +742,11 @@ console.log('Test 6.1: Both deploy scripts have SCP flag');
 // Test 6.2: Both deploy scripts have git deploy logic
 console.log('Test 6.2: Both deploy scripts have git deploy logic');
 {
-  const shHasGit = deployShContent.includes('git clone') && deployShContent.includes('git pull');
-  const ps1HasGit = deployPs1Content.includes('git clone') && deployPs1Content.includes('git pull');
+  const shHasGit = deployShContent.includes('scripts/git-deploy.js') && deployShContent.includes('sidekick-git-deploy.js');
+  const ps1HasGit = deployPs1Content.includes('scripts\\git-deploy.js') && deployPs1Content.includes('sidekick-git-deploy.js');
   assert.ok(
     shHasGit && ps1HasGit,
-    'Both scripts should have git clone and pull'
+    'Both scripts should delegate Git deployment to the helper'
   );
   console.log('✓ Git deploy logic consistent\n');
 }
