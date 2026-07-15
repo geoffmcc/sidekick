@@ -273,6 +273,15 @@ function seedServiceDiagnosis({ session = 's1', task = 'task1', src = 'mcp', sta
     assert.ok(!JSON.stringify(observedExecution).includes('ghp_abcdefghijklmnopqrstuvwxyz123456'), 'execution records must redact secrets');
     assert.strictEqual(observedExecution.successCriteriaSatisfied, true);
     assert.strictEqual(dbStore.queryToolLogs({ limit: 20 }).some(entry => entry.execution_id === 'gte_observed_success'), true, 'underlying tool logs should carry execution id');
+    const platformRows = dbStore.getDb().prepare('SELECT execution_id, parent_execution_id, root_execution_id, state, operation_type, tool_name FROM platform_executions WHERE root_execution_id = ? ORDER BY execution_id').all('gte_observed_success');
+    assert.strictEqual(platformRows.length, 3, 'generated execution should create one platform parent and one child per step');
+    assert.ok(platformRows.some(row => row.execution_id === 'gte_observed_success' && row.state === 'completed' && row.operation_type === 'generated_tool'));
+    assert.ok(platformRows.some(row => row.execution_id === 'gte_observed_success:step:1' && row.parent_execution_id === 'gte_observed_success' && row.state === 'completed' && row.tool_name === 'sidekick_respond'));
+    assert.ok(platformRows.some(row => row.execution_id === 'gte_observed_success:step:2' && row.parent_execution_id === 'gte_observed_success' && row.state === 'completed' && row.tool_name === 'sidekick_respond'));
+    const platformEvents = dbStore.getDb().prepare('SELECT event_type FROM platform_execution_events WHERE root_execution_id = ? ORDER BY timestamp').all('gte_observed_success').map(row => row.event_type);
+    assert.ok(platformEvents.includes('execution.created'), 'platform event stream should include creation events');
+    assert.ok(platformEvents.includes('execution.running'), 'platform event stream should include running events');
+    assert.ok(platformEvents.includes('execution.completed'), 'platform event stream should include completion events');
 
     const failedRun = await dynamicTools.callDynamicTool('sidekick_generated_observed_test', { text: 'bad' }, { source: 'mcp', executionId: 'gte_observed_fail', callTool: async (tool, args) => args.text.startsWith('done') ? { isError: true, content: [{ type: 'text', text: 'step failed password=supersecret' }] } : { content: [{ type: 'text', text: 'ok' }] } });
     assert.ok(failedRun.isError, 'failed intermediate step should fail execution');
@@ -280,14 +289,17 @@ function seedServiceDiagnosis({ session = 's1', task = 'task1', src = 'mcp', sta
     assert.strictEqual(failedExecution.state, 'failed');
     assert.strictEqual(failedExecution.successCriteriaSatisfied, false);
     assert.ok(!JSON.stringify(failedExecution).includes('supersecret'), 'failure summaries should be redacted');
+    assert.strictEqual(dbStore.getDb().prepare('SELECT state FROM platform_executions WHERE execution_id = ?').get('gte_observed_fail').state, 'failed');
 
     const cancelRun = await dynamicTools.callDynamicTool('sidekick_generated_observed_test', { text: 'cancel' }, { source: 'dashboard', executionId: 'gte_observed_cancel', callTool: async () => { dynamicTools.cancelExecution('gte_observed_cancel'); return { content: [{ type: 'text', text: 'first ok' }] }; } });
     assert.ok(cancelRun.isError, 'cancelled execution should return an error result');
     assert.strictEqual(dbStore.getGeneratedToolExecution('gte_observed_cancel').state, 'cancelled');
+    assert.strictEqual(dbStore.getDb().prepare('SELECT state FROM platform_executions WHERE execution_id = ?').get('gte_observed_cancel').state, 'cancelled');
 
     const timeoutRun = await dynamicTools.callDynamicTool('sidekick_generated_observed_test', { text: 'slow' }, { source: 'dashboard', executionId: 'gte_observed_timeout', timeoutMs: 1, callTool: () => new Promise(resolve => setTimeout(() => resolve({ content: [{ type: 'text', text: 'late' }] }), 30)) });
     assert.ok(timeoutRun.isError, 'timed out step should fail execution');
     assert.strictEqual(dbStore.getGeneratedToolExecution('gte_observed_timeout').state, 'timed_out');
+    assert.strictEqual(dbStore.getDb().prepare('SELECT state FROM platform_executions WHERE execution_id = ?').get('gte_observed_timeout').state, 'timed_out');
 
     delete require.cache[require.resolve('../src/dynamic-tools')];
     assert.strictEqual(dbStore.getGeneratedToolExecution('gte_observed_success').state, 'succeeded', 'completed executions should persist across module reload');

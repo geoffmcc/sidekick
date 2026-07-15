@@ -69,6 +69,8 @@ Verified problems in the previous Evolve implementation:
 
 The replacement stores generated capabilities and audit history in SQLite. Trial and active capabilities are synced into the normal `tools` registry with names like `sidekick_generated_<descriptive_name>`, registered by the MCP server on startup, and removed from discovery when rejected or deprecated without deleting audit history.
 
+Generated tool invocations also mirror parent and per-step execution state into the additive platform kernel tables (`platform_executions` and `platform_execution_events`). The generated-tool tables remain the compatibility source of truth for existing APIs while the platform records provide the first shared execution graph adapter.
+
 ### Dashboard: `src/dashboard.js`
 
 The dashboard serves a browser UI and JSON API. The server code lives in `src/dashboard.js`, the authenticated HTML shell lives in `src/dashboard.html`, and public CSS/JS assets live under `static/`. It reads the Sidekick data directory, reports system state, allows KV editing and deletion, exposes tool metadata, accepts webhooks, and proxies agent requests to the Agent Bridge.

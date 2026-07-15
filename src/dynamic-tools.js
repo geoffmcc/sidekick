@@ -5,6 +5,7 @@ const dbStore = require("./db");
 const { substitute } = require("./evolve/validator");
 const { summarizeResult, errorCategory } = require("./evolve/common");
 const { redactSensitive } = require("./redact");
+const platformKernel = require("./platform/kernel");
 
 const executionEvents = new EventEmitter();
 executionEvents.setMaxListeners(100);
@@ -105,6 +106,100 @@ function syncStats(capabilityId) {
   return updated;
 }
 
+function platformStepExecutionId(executionId, stepNumber) {
+  return `${executionId}:step:${stepNumber}`;
+}
+
+function platformState(generatedState) {
+  if (generatedState === "succeeded") return "completed";
+  return generatedState;
+}
+
+function safePlatformRecord(operation) {
+  try {
+    return operation();
+  } catch {
+    return null;
+  }
+}
+
+function createPlatformExecution({ id, cap, source, args, timeoutMs, startedAt }) {
+  safePlatformRecord(() => {
+    const execution = platformKernel.createExecution({
+      execution_id: id,
+      root_execution_id: id,
+      operation_type: "generated_tool",
+      tool_name: cap.name,
+      tool_action: "invoke",
+      actor_id: source,
+      client_id: source,
+      trigger_type: source,
+      risk: cap.risk || "medium",
+      approval_state: cap.state === "active" ? "approved" : "trial",
+      started_at: startedAt,
+      trace_id: id,
+      span_id: id,
+      source,
+      correlation_id: id,
+      metadata: {
+        generated_capability_id: cap.id,
+        generated_capability_state: cap.state,
+        args,
+        timeout_ms: timeoutMs,
+        success_criteria: finalCriteria(cap),
+      },
+    });
+    platformKernel.transitionExecution(execution.execution_id, "running", { source, reason: "generated tool invocation started", correlation_id: id });
+  });
+}
+
+function createPlatformStepExecution({ parentId, cap, source, step, stepNumber, args, startedAt }) {
+  const stepExecutionId = platformStepExecutionId(parentId, stepNumber);
+  safePlatformRecord(() => {
+    platformKernel.createExecution({
+      execution_id: stepExecutionId,
+      parent_execution_id: parentId,
+      root_execution_id: parentId,
+      operation_type: "generated_tool_step",
+      tool_name: step.tool,
+      tool_action: "invoke",
+      actor_id: source,
+      client_id: source,
+      trigger_type: "generated_tool",
+      risk: cap.risk || "medium",
+      approval_state: "inherited",
+      started_at: startedAt,
+      trace_id: parentId,
+      span_id: stepExecutionId,
+      source,
+      correlation_id: parentId,
+      metadata: {
+        generated_capability_id: cap.id,
+        generated_tool_name: cap.name,
+        step_number: stepNumber,
+        args,
+      },
+    });
+    platformKernel.transitionExecution(stepExecutionId, "running", { source, reason: "generated tool step started", correlation_id: parentId });
+  });
+  return stepExecutionId;
+}
+
+function finishPlatformExecution(executionId, generatedState, details = {}) {
+  safePlatformRecord(() => {
+    const nextState = platformState(generatedState);
+    platformKernel.transitionExecution(executionId, nextState, {
+      source: details.source,
+      actor_id: details.source,
+      reason: details.reason,
+      result_status: ["completed", "partial"].includes(nextState) ? "success" : "failure",
+      error_category: details.errorCategory || null,
+      result_summary: details.summary || null,
+      correlation_id: details.rootExecutionId || executionId,
+    });
+  });
+}
+
 async function callDynamicTool(name, args, deps) {
   const cap = dbStore.getGeneratedCapabilityByName(name);
   if (!cap || !["trial", "active"].includes(cap.state)) {
@@ -126,6 +221,7 @@ async function callDynamicTool(name, args, deps) {
     timeoutMs,
     startedAt,
   });
+  createPlatformExecution({ id, cap, source, args: redacted(args || {}, sensitiveValues), timeoutMs, startedAt });
   emitExecution(dbStore.getGeneratedToolExecution(id));
   const results = [];
   try {
@@ -139,6 +235,7 @@ async function callDynamicTool(name, args, deps) {
           successCriteriaSatisfied: false,
           errorCategory: "cancelled",
         });
+        finishPlatformExecution(id, "cancelled", { source, reason: "generated tool execution cancelled", summary: "Execution cancelled before step " + (i + 1), errorCategory: "cancelled" });
         emitExecution(cancelled);
         syncStats(cap.id);
         return { content: [{ type: "text", text: JSON.stringify({ execution_id: id, generated_tool: cap.name, state: "cancelled", success: false, results }, null, 2) }], isError: true };
@@ -154,6 +251,7 @@ async function callDynamicTool(name, args, deps) {
         args: redacted(resolvedArgs, sensitiveValues),
         startedAt: stepStartedAt,
       });
+      const platformStepId = createPlatformStepExecution({ parentId: id, cap, source, step, stepNumber: i + 1, args: redacted(resolvedArgs, sensitiveValues), startedAt: stepStartedAt });
       emitExecution(dbStore.getGeneratedToolExecution(id));
       const result = await withTimeout(deps.callTool(step.tool, resolvedArgs, {
         generatedProcedure: cap.name,
@@ -173,6 +271,7 @@ async function callDynamicTool(name, args, deps) {
         errorCategory: result.isError ? (result.timedOut ? "timeout" : errorCategory(summary)) : null,
         success: !result.isError,
       });
+      finishPlatformExecution(platformStepId, state, { source, rootExecutionId: id, reason: "generated tool step completed", summary, errorCategory: result.isError ? (result.timedOut ? "timeout" : errorCategory(summary)) : null });
       results.push({ step: i + 1, tool: step.tool, success: !result.isError, summary, retry_count: 0, error_category: result.isError ? (result.timedOut ? "timeout" : errorCategory(summary)) : null });
       emitExecution(dbStore.getGeneratedToolExecution(id));
       if (result.isError) {
@@ -185,6 +284,7 @@ async function callDynamicTool(name, args, deps) {
           errorCategory: result.timedOut ? "timeout" : errorCategory(summary),
         });
         dbStore.appendGeneratedToolAudit({ capability_id: cap.id, tool_name: cap.name, success: false, args: redacted(args || {}, sensitiveValues), result_summary: summary });
+        finishPlatformExecution(id, finalState, { source, reason: "generated tool execution failed", summary, errorCategory: result.timedOut ? "timeout" : errorCategory(summary) });
         syncStats(cap.id);
         emitExecution(execution);
         return { content: [{ type: "text", text: JSON.stringify({ execution_id: id, generated_tool: cap.name, state: finalState, success: false, failed_step: i + 1, success_criteria_satisfied: false, results }, null, 2) }], isError: true };
@@ -197,6 +297,7 @@ async function callDynamicTool(name, args, deps) {
       successCriteriaSatisfied: true,
     });
     dbStore.appendGeneratedToolAudit({ capability_id: cap.id, tool_name: cap.name, success: true, args: redacted(args || {}, sensitiveValues), result_summary: `Executed ${cap.steps.length} generated steps` });
+    finishPlatformExecution(id, "succeeded", { source, reason: "generated tool execution succeeded", summary: `Executed ${cap.steps.length} generated steps` });
     syncStats(cap.id);
     emitExecution(execution);
     return { content: [{ type: "text", text: JSON.stringify({ execution_id: id, generated_tool: cap.name, state: "succeeded", success: true, success_criteria_satisfied: true, calls_saved: Math.max(cap.steps.length - 1, 0), results }, null, 2) }] };
@@ -212,6 +313,7 @@ function onExecutionEvent(listener) {
 
 function cancelExecution(id) {
   const execution = dbStore.requestGeneratedToolExecutionCancel(id);
+  if (execution) finishPlatformExecution(id, "cancelled", { source: execution.source || "unknown", reason: "generated tool cancellation requested", summary: "Cancellation requested", errorCategory: "cancelled" });
   if (execution) emitExecution(execution);
   return execution;
 }
