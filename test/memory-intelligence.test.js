@@ -1,0 +1,109 @@
+#!/usr/bin/env node
+
+const assert = require("assert");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+
+const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-memory-intel-test-"));
+process.env.SIDEKICK_DATA_DIR = tempDir;
+process.env.SIDEKICK_AUTO_MEMORY = "1";
+process.env.SIDEKICK_EMBEDDINGS = "0";
+
+const dbStore = require("../src/db");
+const { TOOLS } = require("../src/tools");
+
+dbStore.runPendingMigrations();
+
+(async () => {
+  console.log("Test memory intelligence handoff/session APIs");
+
+  const handoffContent = [
+    "Fact: host sidekick-vm runs service sidekick-mcp on port 4097.",
+    "Decision: keep SQLite as the durable memory source because it works without Qdrant.",
+    "Completed: added dashboard memory evidence display.",
+    "Failed: using raw tool logs as durable memory created noisy recall.",
+    "Open problem: SMB direct-path verification remains unresolved.",
+    "Next step: run memory-intelligence validation tests.",
+    "password=super-secret-value"
+  ].join("\n");
+
+  const create = await TOOLS.sidekick_handoff({
+    action: "create",
+    key: "sidekick-handoff-test",
+    project: "sidekick",
+    title: "Memory Intelligence Test Handoff",
+    content: handoffContent,
+    source: "test"
+  });
+  assert.ok(!create.isError, "handoff create should succeed");
+  const createData = JSON.parse(create.content[0].text);
+  assert.ok(createData.handoff.id, "handoff should have an id");
+  assert.ok(createData.handoff.content.includes("super-secret-value"), "full handoff artifact should be preserved");
+  assert.ok(!createData.memories.some(memory => JSON.stringify(memory).includes("super-secret-value")), "secret-looking value should not be extracted into memory payload");
+  assert.ok(createData.memories.some(memory => memory.type === "decision"), "decision memory should be extracted");
+  assert.ok(createData.memories.some(memory => memory.type === "negative"), "negative memory should be extracted");
+  assert.ok(createData.memories.some(memory => memory.type === "open_thread"), "open thread should be extracted");
+
+  const inspect = await TOOLS.sidekick_handoff({ action: "inspect", id: createData.handoff.id });
+  const inspectData = JSON.parse(inspect.content[0].text);
+  assert.ok(inspectData.extracted_memories.length >= createData.memories.length, "inspect should link extracted memories");
+  assert.ok(inspectData.extracted_memories.every(memory => memory.source_ref === createData.handoff.id), "extracted memories should link to handoff source");
+
+  const beforeCount = dbStore.searchMemories({ project: "sidekick", includeDisabled: true, limit: 100 }).length;
+  await TOOLS.sidekick_handoff({ action: "reprocess", id: createData.handoff.id });
+  const afterCount = dbStore.searchMemories({ project: "sidekick", includeDisabled: true, limit: 100 }).length;
+  assert.strictEqual(afterCount, beforeCount, "reprocessing same handoff version should be idempotent");
+
+  const begin = await TOOLS.sidekick_session({
+    action: "begin",
+    goal: "Investigate SMB direct-path verification for project sidekick",
+    project: "sidekick",
+    source: "test",
+    repository: "geoffmcc/sidekick",
+    branch: "feat/memory-intelligence-system"
+  });
+  const beginData = JSON.parse(begin.content[0].text);
+  assert.ok(beginData.session.id, "session begin should create a session");
+  assert.ok(beginData.memory_brief.selected.some(item => /SMB|raw tool logs|SQLite|sidekick-mcp/i.test(item.summary)), "brief should recall relevant handoff-derived memory");
+
+  const otherProjectRecall = await TOOLS.sidekick_memory({ action: "query", query: "sidekick-mcp port", project: "other_project" });
+  const otherData = JSON.parse(otherProjectRecall.content[0].text);
+  assert.ok(!otherData.memories.some(memory => memory.project === "sidekick"), "unrelated project recall should exclude sidekick-scoped memories");
+
+  const end = await TOOLS.sidekick_session({
+    action: "end",
+    id: beginData.session.id,
+    outcome: "success",
+    final_summary: "Memory intelligence session completed",
+    acceptance_state: "accepted",
+    verified_facts: ["Project sidekick memory intelligence tests passed in temp DB"],
+    decisions: ["Use explicit sidekick_handoff ingestion for mutable handoffs"],
+    failed_approaches: ["Do not promote raw tool-log adjacency as durable memory"],
+    follow_ups: ["Add model-assisted extraction after deterministic redaction"]
+  });
+  const endData = JSON.parse(end.content[0].text);
+  assert.ok(endData.memories_created >= 4, "ending session should create supported memories");
+
+  const wrong = await TOOLS.sidekick_memory({ action: "remember", project: "sidekick", type: "fact", content: "Sidekick dashboard runs on port 9999", evidence: "test wrong fact" });
+  const wrongId = JSON.parse(wrong.content[0].text).memory.id;
+  const correction = await TOOLS.sidekick_memory({ action: "correct", id: wrongId, correct_to: "Sidekick dashboard runs on port 4098", reason: "test correction" });
+  const correctionData = JSON.parse(correction.content[0].text);
+  assert.ok(correctionData.replacement.id, "correction should create replacement memory");
+  const old = dbStore.getMemoryById(wrongId, { includeDisabled: true });
+  assert.strictEqual(old.state, "deleted", "corrected old memory should be excluded from current recall");
+
+  const explain = await TOOLS.sidekick_memory({ action: "explain", id: correctionData.replacement.id });
+  const explainData = JSON.parse(explain.content[0].text);
+  assert.ok(explainData.evidence.length >= 1, "explain should return evidence rows");
+
+  const health = await TOOLS.sidekick_memory({ action: "health" });
+  const healthData = JSON.parse(health.content[0].text);
+  assert.ok(healthData.stats.stored_handoffs >= 1, "health should count stored handoffs");
+  assert.ok(healthData.stats.durable_active >= 1, "health should count durable active memories");
+
+  console.log("✅ Memory intelligence tests passed");
+})().catch(error => {
+  console.error(error);
+  process.exit(1);
+});

@@ -35,6 +35,7 @@ const suites = [
   { file: 'test/memory-lifecycle.test.js', critical: false, description: 'Memory lifecycle behavior' },
   { file: 'test/memory-deferred.test.js', critical: false, description: 'Deferred memory lifecycle behavior' },
   { file: 'test/memory-sync.test.js', critical: false, description: 'Memory sync behavior' },
+  { file: 'test/memory-intelligence.test.js', critical: false, description: 'Memory intelligence handoff/session behavior' },
   { file: 'test/integration.test.js', critical: false, description: 'Integration behavior' },
   { file: 'test/dashboard-api.test.js', critical: false, description: 'Dashboard API behavior' },
 ];

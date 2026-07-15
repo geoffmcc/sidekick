@@ -1319,6 +1319,23 @@ app.get("/api/memories", (req, res) => {
       automatic: m.automatic,
       times_confirmed: m.times_confirmed,
       state: m.state || m.metadata?.state || "active",
+      memory_class: m.memory_class,
+      primary_scope_type: m.primary_scope_type,
+      primary_scope_id: m.primary_scope_id,
+      source_type: m.source_type,
+      evidence_excerpt: m.evidence_excerpt,
+      directness: m.directness,
+      source_authority: m.source_authority,
+      confidence_components: m.confidence_components,
+      observed_at: m.observed_at,
+      valid_from: m.valid_from,
+      valid_to: m.valid_to,
+      revalidate_after: m.revalidate_after,
+      pinned: m.pinned,
+      sensitivity: m.sensitivity,
+      current: m.current,
+      supersedes_id: m.supersedes_id,
+      conflict_group: m.conflict_group,
       requires_confirmation: m.requires_confirmation,
       last_confirmed_at: m.last_confirmed_at,
       expires_at: m.expires_at,
@@ -1430,7 +1447,7 @@ app.post("/api/memories/import", (req, res) => {
 
 app.get("/api/memories/stats", (req, res) => {
   try {
-    const stats = dbStore.getMemoryStats();
+    const stats = dbStore.getMemoryIntelligenceStats();
     res.json({ ok: true, stats });
   } catch (error) {
     res.json({ ok: false, error: error.message, stats: null });
@@ -1443,6 +1460,35 @@ app.post("/api/memories/expire", (req, res) => {
     const result = dbStore.expireStaleMemories({ staleDays: stale_days });
     auditLog(req, "memory_expire", { expired: result.expired, stale_days });
     res.json({ ok: true, ...result });
+  } catch (error) {
+    res.json({ ok: false, error: error.message });
+  }
+});
+
+app.get("/api/handoffs", (req, res) => {
+  try {
+    res.json({ ok: true, handoffs: dbStore.listHandoffs({ project: req.query.project, includeArchived: req.query.include_archived === "true", limit: req.query.limit || 50 }) });
+  } catch (error) {
+    res.json({ ok: false, error: error.message, handoffs: [] });
+  }
+});
+
+app.get("/api/handoffs/:id", (req, res) => {
+  try {
+    const handoff = dbStore.getHandoff(req.params.id);
+    if (!handoff) return res.status(404).json({ ok: false, error: "Handoff not found" });
+    const memories = dbStore.searchMemories({ project: handoff.project, includeDisabled: true, limit: 200 }).filter(memory => memory.source_ref === handoff.id || memory.metadata?.handoff_id === handoff.id);
+    res.json({ ok: true, handoff, memories });
+  } catch (error) {
+    res.json({ ok: false, error: error.message });
+  }
+});
+
+app.get("/api/memories/:id/evidence", (req, res) => {
+  try {
+    const memory = dbStore.getMemoryById(req.params.id, { includeDisabled: true });
+    if (!memory) return res.status(404).json({ ok: false, error: "Memory not found" });
+    res.json({ ok: true, memory, evidence: dbStore.getMemoryEvidence(req.params.id) });
   } catch (error) {
     res.json({ ok: false, error: error.message });
   }

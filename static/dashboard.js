@@ -1342,8 +1342,8 @@ function renderMemoryStats(stats) {
   const durableActive = activeLoaded.filter(memory => memory.category !== 'operational').length;
   const operational = activeLoaded.filter(memory => memory.category === 'operational').length;
   $('memStatsTotal').textContent = allMemories.length || stats.total || 0;
-  $('memStatsActive').textContent = durableActive;
-  $('memStatsStale').textContent = operational;
+  $('memStatsActive').textContent = stats.durable_active ?? durableActive;
+  $('memStatsStale').textContent = (stats.revalidation_due ?? stats.stale_count ?? 0) + ' due / ' + (stats.operational_events ?? operational) + ' ops';
   $('memStatsConfidence').textContent = (stats.avg_confidence || 0).toFixed(2);
 
   const byType = stats.by_type || {};
@@ -1459,19 +1459,24 @@ function renderMemoryCard(m) {
   const enabledBadge = m.enabled ? '' : '<span class="memory-state disabled">disabled</span>';
   const stateBadge = m.state && m.state !== 'active' ? '<span class="memory-state ' + esc(m.state) + '">' + esc(m.state) + '</span>' : '';
   const categoryBadge = '<span class="memory-category ' + esc(m.category) + '">' + esc(m.category) + '</span>';
+  const classBadge = m.memory_class ? '<span class="memory-state">' + esc(m.memory_class) + '</span>' : '';
+  const currentBadge = m.current === false ? '<span class="memory-state expired">historical</span>' : '';
   const title = m.summary || m.content || '(empty memory)';
   const content = m.content || '';
   const excerpt = content && content !== title ? '<p class="memory-excerpt">' + esc(content.length > 260 ? content.slice(0, 257) + '...' : content) + '</p>' : '';
+  const scope = (m.primary_scope_type || (m.project ? 'project' : 'global')) + ':' + (m.primary_scope_id || m.project || 'global');
+  const evidence = m.evidence_excerpt ? '<p class="memory-excerpt"><strong>Evidence:</strong> ' + esc(String(m.evidence_excerpt).slice(0, 260)) + '</p>' : '';
   return '<article class="memory-entry memory-' + esc(m.category) + '" data-id="' + attr(m.id) + '">' +
     '<div class="memory-header"><div><span class="memory-type">' + esc(typeLabels[m.type] || m.type) + '</span><div class="memory-content">' + esc(title) + '</div></div>' +
-    '<div class="memory-badges">' + categoryBadge + (m.project ? '<span class="memory-project">' + esc(m.project) + '</span>' : '') + enabledBadge + stateBadge + '<span class="memory-confidence">' + Math.round((m.confidence || 0) * 100) + '%</span><span class="memory-confirmed">×' + (m.times_confirmed || 1) + '</span></div></div>' +
+    '<div class="memory-badges">' + categoryBadge + classBadge + currentBadge + (m.project ? '<span class="memory-project">' + esc(m.project) + '</span>' : '') + enabledBadge + stateBadge + '<span class="memory-confidence">' + Math.round((m.confidence || 0) * 100) + '%</span><span class="memory-confirmed">×' + (m.times_confirmed || 1) + '</span></div></div>' +
     excerpt +
+    evidence +
     '<div class="memory-footer"><span class="memory-time">Updated ' + esc(formatTimeAgo(m.updated_at)) + '</span><span>Source: ' + esc(m.source || 'unknown') + (m.source_tool ? ' / ' + esc(m.source_tool) : '') + '</span><div class="memory-actions">' +
       (m.enabled ? '<button class="btn btn-sm btn-outline" onclick="disableMemory(' + jsArg(m.id) + ')">Disable</button>' : '<button class="btn btn-sm btn-outline" onclick="enableMemory(' + jsArg(m.id) + ')">Enable</button>') +
       '<button class="btn btn-sm btn-danger" onclick="deleteMemory(' + jsArg(m.id) + ')">Delete</button></div></div>' +
     '<details class="detail-block"><summary>Full content and metadata</summary>' +
       '<div class="memory-full">' + esc(m.content || '') + '</div>' +
-      '<div class="meta-grid"><div><span>Created</span><strong>' + esc(m.created_at ? fmtDate(m.created_at) : 'unknown') + '</strong></div><div><span>Last seen</span><strong>' + esc(m.last_seen_at ? fmtDate(m.last_seen_at) : 'unknown') + '</strong></div><div><span>Task</span><strong>' + esc(m.source_task_id || 'none') + '</strong></div><div><span>Importance</span><strong>' + esc(m.importance || 'normal') + '</strong></div><div><span>Expires</span><strong>' + esc(m.expires_at || 'none') + '</strong></div><div><span>Tags</span><strong>' + esc((m.tags || []).join(', ') || 'none') + '</strong></div></div>' +
+      '<div class="meta-grid"><div><span>Created</span><strong>' + esc(m.created_at ? fmtDate(m.created_at) : 'unknown') + '</strong></div><div><span>Observed</span><strong>' + esc(m.observed_at ? fmtDate(m.observed_at) : 'unknown') + '</strong></div><div><span>Valid</span><strong>' + esc((m.valid_from || 'unknown') + ' to ' + (m.valid_to || 'current')) + '</strong></div><div><span>Scope</span><strong>' + esc(scope) + '</strong></div><div><span>Authority</span><strong>' + esc(String(m.source_authority || 'unknown')) + '</strong></div><div><span>Directness</span><strong>' + esc(m.directness || 'unknown') + '</strong></div><div><span>Task</span><strong>' + esc(m.source_task_id || 'none') + '</strong></div><div><span>Importance</span><strong>' + esc(m.importance || 'normal') + '</strong></div><div><span>Expires</span><strong>' + esc(m.expires_at || 'none') + '</strong></div><div><span>Revalidate</span><strong>' + esc(m.revalidate_after || 'none') + '</strong></div><div><span>Tags</span><strong>' + esc((m.tags || []).join(', ') || 'none') + '</strong></div></div>' +
       renderStructuredValue({ id: m.id, type: m.type, category: m.category, state: m.state, automatic: m.automatic, metadata: m.metadata || {} }, { expanded: true }) +
     '</details>' +
   '</article>';

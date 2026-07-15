@@ -9,7 +9,7 @@ const dbStore = require("./db");
 const pgStore = require("./pg");
 const redisStore = require("./redis");
 const qdrantStore = require("./qdrant");
-const { recordToolCallMemory } = require("./memory");
+const { recordToolCallMemory, buildMemoryBrief, recallMemoryForText } = require("./memory");
 const { scanSecurityConfig } = require("./security-scan");
 const dynamicTools = require("./dynamic-tools");
 
@@ -73,6 +73,9 @@ const TOOL_RISK = {
   sidekick_web_fetch: "medium",
   sidekick_llm: "medium",
   sidekick_context: "medium",
+  sidekick_session: "medium",
+  sidekick_handoff: "medium",
+  sidekick_memory: "medium",
   sidekick_memory_export: "low",
   sidekick_memory_import: "medium",
   sidekick_memory_manage: "medium",
@@ -157,6 +160,9 @@ const TOOL_CATEGORIES = {
   'sidekick_notify': 'Communication',
   'sidekick_webhook': 'Communication',
   'sidekick_context': 'Context & Learning',
+  'sidekick_session': 'Context & Learning',
+  'sidekick_handoff': 'Context & Learning',
+  'sidekick_memory': 'Context & Learning',
   'sidekick_teach': 'Context & Learning',
   'sidekick_embed': 'Context & Learning',
   'sidekick_ollama': 'Context & Learning',
@@ -6760,6 +6766,283 @@ async function sidekick_memory_manage({ action, id, confirmed_by, days, reason, 
   return { content: [{ type: "text", text: "Invalid action. Use: confirm, set_requires_confirmation, delete, disable, expire, restore, set_auto_expire, list_by_state, pending_confirmations, process_auto_expirations" }], isError: true };
 }
 
+const HANDOFF_EXTRACTION_VERSION = "handoff-rules-v1";
+
+function jsonText(value) {
+  return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
+}
+
+function normalizeTags(tags) {
+  if (Array.isArray(tags)) return tags.map(String).filter(Boolean);
+  if (typeof tags === "string") return tags.split(",").map(s => s.trim()).filter(Boolean);
+  return [];
+}
+
+function memoryClassForToolType(type) {
+  if (["session", "incident", "deployment", "experiment", "release"].includes(type)) return "episodic";
+  if (type === "procedure") return "procedural";
+  if (type === "open_thread") return "prospective";
+  if (type === "negative") return "negative";
+  if (type === "artifact") return "artifact";
+  if (type === "observation") return "observational";
+  if (type === "working") return "working";
+  return "semantic";
+}
+
+function classifyHandoffLine(line) {
+  const text = String(line || "").trim().replace(/^[-*]\s+/, "");
+  if (!text || text.length < 8) return null;
+  if (/secret|password|token|api[_ -]?key|private key|authorization:/i.test(text)) return null;
+  const lower = text.toLowerCase();
+  if (/^(decision|decided|rationale|chose|selected)\b/.test(lower)) return { type: "decision", memory_class: "semantic", confidence: 0.86 };
+  if (/^(next step|follow up|todo|pending|unresolved|open problem|blocker|blocked|risk)\b/.test(lower)) return { type: "open_thread", memory_class: "prospective", confidence: 0.78, requires_confirmation: false };
+  if (/^(failed|failure|do not|don't|avoid|rejected|dead end|did not work)\b/.test(lower)) return { type: "negative", memory_class: "negative", confidence: 0.78 };
+  if (/^(procedure|runbook|worked command|validation|rollback|steps?)\b/.test(lower)) return { type: "procedure", memory_class: "procedural", confidence: 0.76 };
+  if (/^(completed|done|changed|implemented|fixed|resolved)\b/.test(lower)) return { type: "session", memory_class: "episodic", confidence: 0.72 };
+  if (/^(fact|verified|current|host|service|repo|repository|path|environment|uses|runs|is|are)\b/.test(lower)) return { type: "fact", memory_class: "semantic", confidence: 0.74 };
+  return null;
+}
+
+function extractHandoffMemories(handoff, options = {}) {
+  const project = options.project || handoff.project || null;
+  const lines = String(handoff.redacted_content || handoff.content || "").split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  const created = [];
+  const seen = new Set();
+  for (const line of lines) {
+    const classification = classifyHandoffLine(line);
+    if (!classification) continue;
+    const content = redactSensitive(line.replace(/^(decision|decided|rationale|next step|follow up|todo|pending|unresolved|open problem|blocker|blocked|risk|failed|failure|do not|don't|avoid|rejected|dead end|procedure|runbook|worked command|validation|rollback|completed|done|changed|implemented|fixed|resolved|fact|verified|current)\s*:?\s*/i, "").trim() || line);
+    const fingerprint = `${handoff.id}|${handoff.content_hash}|${classification.type}|${content.toLowerCase()}`;
+    if (seen.has(fingerprint)) continue;
+    seen.add(fingerprint);
+    const memory = dbStore.upsertMemory({
+      type: classification.type,
+      project,
+      content,
+      summary: content,
+      tags: ["handoff", classification.type, handoff.kv_key || handoff.id].filter(Boolean),
+      confidence: classification.confidence,
+      source: "handoff",
+      source_tool: "sidekick_handoff",
+      source_task_id: handoff.task_id || null,
+      source_ref: handoff.id,
+      automatic: true,
+      requires_confirmation: classification.requires_confirmation === true,
+      memory_class: classification.memory_class,
+      primary_scope_type: project ? "project" : "global",
+      primary_scope_id: project,
+      source_type: "handoff",
+      evidence_excerpt: content,
+      extraction_method: HANDOFF_EXTRACTION_VERSION,
+      directness: "direct",
+      source_authority: 6,
+      artifact_hash: handoff.content_hash,
+      fingerprint,
+      metadata: {
+        handoff_id: handoff.id,
+        handoff_key: handoff.kv_key,
+        handoff_version: handoff.version,
+        handoff_hash: handoff.content_hash,
+        extraction_version: HANDOFF_EXTRACTION_VERSION,
+        memory_class: classification.memory_class,
+        source_type: "handoff",
+        evidence_excerpt: content
+      }
+    });
+    if (memory) created.push(memory);
+  }
+  dbStore.updateHandoffExtraction(handoff.id, "processed", HANDOFF_EXTRACTION_VERSION);
+  return created;
+}
+
+function buildScopedMemoryBrief(goal, project, options = {}) {
+  const current = dbStore.searchMemories({ project, type: options.type || "all", limit: options.limit || 30 })
+    .filter(memory => memory.current !== false && memory.state !== "expired" && memory.state !== "deleted")
+    .map(memory => ({
+      id: memory.id,
+      type: memory.type,
+      class: memory.memory_class,
+      scope: `${memory.primary_scope_type || (memory.project ? "project" : "global")}:${memory.primary_scope_id || memory.project || "global"}`,
+      summary: memory.summary || memory.content,
+      confidence: memory.confidence,
+      source: memory.source,
+      source_ref: memory.source_ref,
+      last_verified: memory.last_confirmed_at || memory.last_seen_at,
+      why_selected: project && memory.project === project ? "project scope match" : "global or unscoped match"
+    }));
+  const legacyBrief = buildMemoryBrief(goal || project || "memory", { project }) || null;
+  return {
+    goal: goal || null,
+    project: project || null,
+    selected: current.slice(0, options.limit || 10),
+    sections: legacyBrief,
+    excluded_policy: "Expired, deleted, disabled, superseded, and unrelated project memories are excluded from normal recall.",
+    generated_at: new Date().toISOString()
+  };
+}
+
+async function sidekick_session({ action, id, goal, project, source, working_directory, repository, branch, environment, client_session_id, tags, supplied_context, current_plan, completed_steps, current_hypothesis, evidence, blockers, next_step, artifacts, outcome, final_summary, user_visible_result, acceptance_state, decisions, verified_facts, unresolved_issues, resolved_issues, failed_approaches, procedures_learned, follow_ups, usefulness_feedback, limit }) {
+  if (action === "begin") {
+    if (!goal) return { content: [{ type: "text", text: "goal required" }], isError: true };
+    const brief = buildScopedMemoryBrief(goal, project, { limit: 12 });
+    const session = dbStore.saveTaskSession({ id, goal, project, source: source || currentSource, client_session_id, working_directory, repository, branch, environment, tags: normalizeTags(tags), supplied_context, state: "active", memory_brief: brief });
+    return jsonText({ ok: true, session, memory_brief: brief });
+  }
+  if (["update", "checkpoint"].includes(action)) {
+    if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
+    const existing = dbStore.getTaskSession(id);
+    if (!existing) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
+    const session = dbStore.saveTaskSession({ ...existing, current_plan, completed_steps: completed_steps || existing.completed_steps, current_hypothesis, blockers: blockers || existing.blockers, next_step, artifacts: artifacts || existing.artifacts, state: "active" });
+    return jsonText({ ok: true, session, checkpoint: action === "checkpoint" });
+  }
+  if (action === "end" || action === "abandon") {
+    if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
+    const existing = dbStore.getTaskSession(id);
+    if (!existing) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
+    const state = action === "abandon" ? "abandoned" : "completed";
+    const session = dbStore.saveTaskSession({ ...existing, outcome, final_summary: redactSensitive(final_summary || user_visible_result || outcome || ""), acceptance_state, state, ended_at: new Date().toISOString() });
+    const created = [];
+    const projectName = project || existing.project;
+    const add = (type, values, memoryClass, confidence) => {
+      for (const value of Array.isArray(values) ? values : values ? [values] : []) {
+        const text = redactSensitive(String(value || "").trim());
+        if (!text) continue;
+        const mem = dbStore.upsertMemory({ type, project: projectName, content: text, summary: text, confidence, source: "task_session", source_tool: "sidekick_session", source_task_id: id, source_ref: id, memory_class: memoryClass, evidence_excerpt: text, directness: "direct", source_authority: action === "abandon" ? 4 : 5, metadata: { task_session_id: id, outcome, acceptance_state, usefulness_feedback } });
+        if (mem) created.push(mem);
+      }
+    };
+    if (action !== "abandon" && !["rejected", "failed"].includes(String(acceptance_state || "").toLowerCase())) {
+      add("fact", verified_facts, "semantic", 0.82);
+      add("decision", decisions, "semantic", 0.84);
+      add("procedure", procedures_learned, "procedural", 0.78);
+      add("session", final_summary || user_visible_result, "episodic", 0.74);
+    }
+    add("negative", failed_approaches, "negative", 0.76);
+    add("open_thread", [...(unresolved_issues || []), ...(follow_ups || [])], "prospective", 0.78);
+    add("observation", evidence, "observational", 0.62);
+    return jsonText({ ok: true, session, memories_created: created.length, memories: created });
+  }
+  if (action === "resume" || action === "status") {
+    if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
+    const session = dbStore.getTaskSession(id);
+    if (!session) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
+    return jsonText({ ok: true, session, memory_brief: buildScopedMemoryBrief(session.goal, session.project, { limit: 12 }) });
+  }
+  if (action === "list") return jsonText({ ok: true, sessions: dbStore.listTaskSessions({ project, state: source, limit: limit || 50 }) });
+  return { content: [{ type: "text", text: "Invalid action. Use begin, update, checkpoint, end, abandon, resume, status, list" }], isError: true };
+}
+
+async function sidekick_handoff({ action, id, key, project, title, content, source, task_id, reprocess, include_archived, limit }) {
+  if (action === "create" || action === "update") {
+    const handoffContent = content || (key ? dbStore.getKV(key)?.value : null);
+    if (!handoffContent) return { content: [{ type: "text", text: "content required, or provide key for an existing KV handoff" }], isError: true };
+    if (key && content) dbStore.setKV(key, content, project || dbStore.getKV(key)?.project || null, currentSource, "handoff");
+    const handoff = dbStore.saveHandoff({ id, kv_key: key, project, title, source: source || currentSource, task_id, content: handoffContent, extraction_state: "pending" });
+    const memories = extractHandoffMemories(handoff, { project });
+    return jsonText({ ok: true, handoff: dbStore.getHandoff(handoff.id), memories_created: memories.length, memories });
+  }
+  if (action === "get") {
+    const handoff = dbStore.getHandoff(id || key);
+    if (!handoff) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
+    return jsonText({ ok: true, handoff });
+  }
+  if (action === "list") return jsonText({ ok: true, handoffs: dbStore.listHandoffs({ project, includeArchived: include_archived === true, limit: limit || 50 }) });
+  if (action === "inspect") {
+    const handoff = dbStore.getHandoff(id || key);
+    if (!handoff) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
+    const memories = dbStore.searchMemories({ project: handoff.project, includeDisabled: true, limit: 200 }).filter(m => m.source_ref === handoff.id || m.metadata?.handoff_id === handoff.id);
+    return jsonText({ ok: true, handoff, extracted_memories: memories, extraction_version: HANDOFF_EXTRACTION_VERSION });
+  }
+  if (action === "reprocess") {
+    const handoff = dbStore.getHandoff(id || key);
+    if (!handoff) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
+    const memories = extractHandoffMemories(handoff, { project: project || handoff.project });
+    return jsonText({ ok: true, handoff: dbStore.getHandoff(handoff.id), memories_created_or_confirmed: memories.length, memories });
+  }
+  if (action === "archive") {
+    const ok = dbStore.archiveHandoff(id || key);
+    return { content: [{ type: "text", text: ok ? "Handoff archived" : "Handoff not found" }], isError: !ok };
+  }
+  if (action === "compare") {
+    const handoffs = dbStore.listHandoffs({ project, includeArchived: true, limit: 2 });
+    return jsonText({ ok: true, comparison: handoffs.map(h => ({ id: h.id, key: h.kv_key, version: h.version, hash: h.content_hash, updated_at: h.updated_at })) });
+  }
+  return { content: [{ type: "text", text: "Invalid action. Use create, update, get, list, compare, inspect, reprocess, archive" }], isError: true };
+}
+
+async function sidekick_memory({ action, id, project, type, memory_class, content, summary, scope_type, scope_id, source, evidence, confidence, tags, query, limit, reason, correct_to, fresh_eyes, historical }) {
+  if (action === "remember") {
+    if (!content && !summary) return { content: [{ type: "text", text: "content or summary required" }], isError: true };
+    const text = redactSensitive(content || summary);
+    const memory = dbStore.upsertMemory({
+      type: type || "fact",
+      project: project || null,
+      content: text,
+      summary: redactSensitive(summary || text),
+      tags: normalizeTags(tags),
+      confidence: Number.isFinite(confidence) ? confidence : 0.8,
+      source: source || "explicit",
+      source_tool: "sidekick_memory",
+      automatic: false,
+      memory_class: memory_class || memoryClassForToolType(type || "fact"),
+      primary_scope_type: scope_type || (project ? "project" : "global"),
+      primary_scope_id: scope_id || project || null,
+      evidence_excerpt: redactSensitive(evidence || text),
+      directness: "direct",
+      source_authority: source === "correction" ? 10 : 8,
+      metadata: { user_controlled: true, reason: reason || null }
+    });
+    dbStore.auditMemoryEvent("remember", "memory", memory.id, { project, type: memory.type }, currentSource);
+    return jsonText({ ok: true, memory });
+  }
+  if (action === "query" || action === "list") {
+    const memories = fresh_eyes ? [] : dbStore.searchMemories({ query, project, type: type || "all", limit: limit || 20, includeDisabled: historical === true })
+      .filter(m => historical === true || (m.current !== false && m.state !== "expired" && m.state !== "deleted"));
+    const brief = query ? buildScopedMemoryBrief(query, project, { type: type || "all", limit: limit || 10 }) : null;
+    return jsonText({ ok: true, count: memories.length, memories, brief, fresh_eyes: fresh_eyes === true });
+  }
+  if (action === "get" || action === "explain") {
+    const memory = dbStore.getMemoryById(id, { includeDisabled: true });
+    if (!memory) return { content: [{ type: "text", text: "Memory not found: " + id }], isError: true };
+    return jsonText({ ok: true, memory, evidence: dbStore.getMemoryEvidence(id), why_known: { source: memory.source, source_ref: memory.source_ref, authority: memory.source_authority, confidence: memory.confidence, components: memory.confidence_components } });
+  }
+  if (action === "confirm") return sidekick_memory_manage({ action: "confirm", id, confirmed_by: source || "user" });
+  if (action === "forget") return sidekick_memory_manage({ action: "delete", id, reason: reason || "user_forget" });
+  if (action === "expire") return sidekick_memory_manage({ action: "expire", id, reason: reason || "manual_expire" });
+  if (action === "pin") {
+    const result = dbStore.getDb().prepare("UPDATE memories SET pinned = 1, updated_at = datetime('now') WHERE id = ?").run(id);
+    dbStore.auditMemoryEvent("pin", "memory", id, { reason }, currentSource);
+    return { content: [{ type: "text", text: result.changes ? `Memory ${id} pinned` : `Memory not found: ${id}` }], isError: result.changes === 0 };
+  }
+  if (action === "correct") {
+    if (!id || !correct_to) return { content: [{ type: "text", text: "id and correct_to required" }], isError: true };
+    const old = dbStore.getMemoryById(id, { includeDisabled: true });
+    if (!old) return { content: [{ type: "text", text: "Memory not found: " + id }], isError: true };
+    dbStore.softDeleteMemory(id, reason || "corrected");
+    const replacement = dbStore.upsertMemory({ type: old.type, project: old.project, content: redactSensitive(correct_to), summary: redactSensitive(correct_to), confidence: 0.95, source: "user_correction", source_tool: "sidekick_memory", automatic: false, memory_class: old.memory_class, primary_scope_type: old.primary_scope_type, primary_scope_id: old.primary_scope_id, supersedes_id: id, evidence_excerpt: redactSensitive(correct_to), directness: "direct", source_authority: 10, metadata: { corrected_memory_id: id, correction_reason: reason || null } });
+    dbStore.auditMemoryEvent("correct", "memory", id, { replacement_id: replacement.id, reason }, currentSource);
+    return jsonText({ ok: true, old_memory: id, replacement });
+  }
+  if (action === "health") return jsonText({ ok: true, stats: dbStore.getMemoryIntelligenceStats() });
+  if (action === "conflicts") return jsonText({ ok: true, memories: dbStore.searchMemories({ project, includeDisabled: true, limit: limit || 100 }).filter(m => m.conflict_group || m.metadata?.conflicts_with) });
+  if (action === "backfill") {
+    const keys = Object.entries(dbStore.getAllKV()).map(([key, entry]) => ({ key, ...(entry || {}) }))
+      .filter(entry => (!project || entry.project === project) && /handoff|resume|plan|next[_ -]?step/i.test(`${entry.key} ${entry.category || ""}`))
+      .slice(0, limit || 25);
+    const report = { scanned: keys.length, handoffs: 0, memories: 0, errors: [] };
+    for (const entry of keys) {
+      try {
+        const handoff = dbStore.saveHandoff({ kv_key: entry.key, project: entry.project || project || null, title: entry.key, source: "backfill", content: entry.value, extraction_state: "pending" });
+        const memories = extractHandoffMemories(handoff, { project: entry.project || project || null });
+        report.handoffs++;
+        report.memories += memories.length;
+      } catch (e) { report.errors.push(`${entry.key}: ${e.message}`); }
+    }
+    return jsonText({ ok: true, report });
+  }
+  return { content: [{ type: "text", text: "Invalid action. Use remember, query, explain, list, get, confirm, correct, forget, pin, expire, conflicts, health, backfill" }], isError: true };
+}
+
 async function sidekick_sync_identity({ action, user_id }) {
   if (action === "get") {
     const machineId = dbStore.getMachineId();
@@ -11133,6 +11416,9 @@ const TOOLS = {
   sidekick_ci_status,
   sidekick_webhook,
   sidekick_context,
+  sidekick_session,
+  sidekick_handoff,
+  sidekick_memory,
   sidekick_teach,
   sidekick_transform,
   sidekick_health,
@@ -11234,6 +11520,9 @@ const TOOL_DEFS = [
   { name: "sidekick_ci_status", description: "Read-only GitHub CI/check-run inspection for a PR head, commit SHA, ref, or branch", args: { repo: "string (owner/repository)", pr: "number|string (optional, PR number)", pull_number: "number|string (optional, PR number)", sha: "string (optional, commit SHA)", commit: "string (optional, commit SHA)", ref: "string (optional, branch/ref/SHA)", branch: "string (optional, branch name)", format: "string (optional, text|json - default text)" } },
   { name: "sidekick_webhook", description: "Manage received webhooks (list, get, clear)", args: { action: "string", id: "string (optional)", limit: "number (optional)" } },
   { name: "sidekick_context", description: "Persistent intelligent context management (track projects, decisions, problems, patterns, sessions, automatic memories; recall and suggest based on past context)", args: { action: "string", project: "string (optional)", context: "string (optional)", decision: "string (optional)", reasoning: "string (optional)", problem: "string (optional)", solution: "string (optional)", pattern: "string (optional)", query: "string (optional)", type: "string (optional: decisions|problems|patterns|projects|sessions|memories|all)", limit: "number (optional)" } },
+  { name: "sidekick_session", description: "Explicit task/session memory envelope. Begin, checkpoint, end, abandon, resume, and list scoped work with a purpose-built memory brief.", args: { action: "string (begin|update|checkpoint|end|abandon|resume|status|list)", id: "string (optional task/session id)", goal: "string (required for begin)", project: "string (optional)", source: "string (optional)", working_directory: "string (optional)", repository: "string (optional)", branch: "string (optional)", environment: "string (optional)", tags: "string|array (optional)", current_plan: "string (optional)", completed_steps: "array (optional)", blockers: "array (optional)", next_step: "string (optional)", outcome: "string (optional)", final_summary: "string (optional)", acceptance_state: "string (optional)", verified_facts: "array (optional)", decisions: "array (optional)", failed_approaches: "array (optional)", follow_ups: "array (optional)" } },
+  { name: "sidekick_handoff", description: "First-class handoff storage and ingestion. Preserves full handoff artifacts while extracting redacted, evidence-linked structured memories idempotently.", args: { action: "string (create|update|get|list|compare|inspect|reprocess|archive)", id: "string (optional handoff id)", key: "string (optional KV key)", project: "string (optional)", title: "string (optional)", content: "string (for create/update)", source: "string (optional)", task_id: "string (optional)", include_archived: "boolean (optional)", limit: "number (optional)" } },
+  { name: "sidekick_memory", description: "Typed memory operations: remember, query, explain, correct, forget, pin, expire, inspect conflicts/health, and backfill high-semantic sources such as handoffs.", args: { action: "string (remember|query|explain|list|get|confirm|correct|forget|pin|expire|conflicts|health|backfill)", id: "string (optional memory id)", project: "string (optional)", type: "string (optional)", memory_class: "string (optional semantic|episodic|procedural|working|prospective|negative|relational|artifact|observational|capability)", content: "string (for remember)", summary: "string (optional)", scope_type: "string (optional)", scope_id: "string (optional)", source: "string (optional)", evidence: "string (optional)", confidence: "number (optional)", tags: "string|array (optional)", query: "string (for query)", limit: "number (optional)", correct_to: "string (for correct)", fresh_eyes: "boolean (optional)", historical: "boolean (optional)" } },
   { name: "sidekick_teach", description: "Meta-learning and self-extension: teach procedures, generate tools, learn from examples, execute learned workflows", args: { action: "string", name: "string (optional)", description: "string (optional)", steps: "array (optional)", parameters: "object (optional)", args: "object (optional)", example: "string (optional)", trigger_phrases: "array (optional)", implementation: "string (optional)" } },
   { name: "sidekick_transform", description: "Data manipulation pipeline: filter, extract, sort, format, and map data", args: { action: "string (filter|extract|sort|format|map)", input: "string", pattern: "string (optional, for filter)", field: "string (optional, for extract)", key: "string (optional, for sort/map)", value: "string (optional, for map)", format: "string (optional, for format: json|csv|table|text)" } },
   { name: "sidekick_health", description: "Composite system health checks with scoring and issue detection", args: { check: "string (all|services|processes|disk|network|custom)", services: "string (optional, comma-separated service names)", commands: "string (optional, comma-separated commands for custom check)", threshold: "string (optional, e.g. 'disk>90,mem>80')" } },
