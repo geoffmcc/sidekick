@@ -79,6 +79,8 @@ Dashboard quick actions mirror user-triggered dashboard operations into `platfor
 
 Agent Bridge tasks mirror task lifecycle, tool-call progress, and transcript artifacts into the platform kernel with `operation_type='agent_task'`. Existing agent HTTP APIs, event streams, conversation transcripts, and tool calls remain the compatibility source of truth while platform rows provide shared task visibility.
 
+Memory intelligence operations emit platform events for handoff processing, session lifecycle changes, and explicit remember/correct actions. The memory, handoff, task-session, and audit tables remain the compatibility source of truth while platform events provide cross-subsystem chronology.
+
 ### Dashboard: `src/dashboard.js`
 
 The dashboard serves a browser UI and JSON API. The server code lives in `src/dashboard.js`, the authenticated HTML shell lives in `src/dashboard.html`, and public CSS/JS assets live under `static/`. It reads the Sidekick data directory, reports system state, allows KV editing and deletion, exposes tool metadata, accepts webhooks, and proxies agent requests to the Agent Bridge.

@@ -1070,6 +1070,25 @@ function recordPlatformToolCall(name, argsShape, duration, success, summary, met
   } catch (e) {}
 }
 
+function recordPlatformMemoryEvent(eventType, payload = {}, options = {}) {
+  try {
+    platformKernel.appendEvent({
+      event_type: eventType,
+      source: "memory",
+      actor_id: options.actor || currentSource || "unknown",
+      subject_type: options.subjectType || null,
+      subject_id: options.subjectId || null,
+      project_id: options.project || payload.project || null,
+      task_id: options.taskId || payload.task_id || payload.taskId || null,
+      session_id: options.sessionId || payload.session_id || payload.sessionId || null,
+      severity: options.severity || "info",
+      payload,
+      sensitivity: "normal",
+      correlation_id: options.correlationId || options.taskId || payload.task_id || payload.taskId || options.subjectId || null,
+    });
+  } catch (e) {}
+}
+
 const DANGEROUS_PATTERNS = [
   /\brm\s+-(?:[a-z]*r[a-z]*f|[a-z]*f[a-z]*r)[a-z]*\s+(?:--no-preserve-root\s+)?\/(?:\s|$|[/*])/i,
   /\brm\s+-(?:[a-z]*r[a-z]*f|[a-z]*f[a-z]*r)[a-z]*\s+\/(?:var|etc|home|usr|bin|sbin|lib|lib64|boot|root)(?:\s|$|\/)/i,
@@ -6929,6 +6948,7 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     if (!goal) return { content: [{ type: "text", text: "goal required" }], isError: true };
     const brief = buildScopedMemoryBrief(goal, project, { limit: 12 });
     const session = dbStore.saveTaskSession({ id, goal, project, source: source || currentSource, client_session_id, working_directory, repository, branch, environment, tags: normalizeTags(tags), supplied_context, state: "active", memory_brief: brief });
+    recordPlatformMemoryEvent("memory.session_started", { session_id: session.id, project: session.project, source: session.source, selected_memories: brief.selected.length }, { subjectType: "memory_task_session", subjectId: session.id, project: session.project, taskId: session.id });
     return jsonText({ ok: true, session, memory_brief: brief });
   }
   if (["update", "checkpoint"].includes(action)) {
@@ -6936,6 +6956,7 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     const existing = dbStore.getTaskSession(id);
     if (!existing) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     const session = dbStore.saveTaskSession({ ...existing, current_plan, completed_steps: completed_steps || existing.completed_steps, current_hypothesis, blockers: blockers || existing.blockers, next_step, artifacts: artifacts || existing.artifacts, state: "active" });
+    recordPlatformMemoryEvent(action === "checkpoint" ? "memory.session_checkpointed" : "memory.session_updated", { session_id: session.id, project: session.project, action, completed_steps: Array.isArray(session.completed_steps) ? session.completed_steps.length : 0 }, { subjectType: "memory_task_session", subjectId: session.id, project: session.project, taskId: session.id });
     return jsonText({ ok: true, session, checkpoint: action === "checkpoint" });
   }
   if (action === "end" || action === "abandon") {
@@ -6963,6 +6984,7 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     add("negative", failed_approaches, "negative", 0.76);
     add("open_thread", [...(unresolved_issues || []), ...(follow_ups || [])], "prospective", 0.78);
     add("observation", evidence, "observational", 0.62);
+    recordPlatformMemoryEvent(action === "abandon" ? "memory.session_abandoned" : "memory.session_completed", { session_id: session.id, project: session.project, memories_created: created.length, state: session.state, outcome }, { subjectType: "memory_task_session", subjectId: session.id, project: session.project, taskId: session.id, severity: action === "abandon" ? "warning" : "info" });
     return jsonText({ ok: true, session, memories_created: created.length, memories: created });
   }
   if (action === "resume" || action === "status") {
@@ -6982,6 +7004,7 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
     if (key && content) dbStore.setKV(key, content, project || dbStore.getKV(key)?.project || null, currentSource, "handoff");
     const handoff = dbStore.saveHandoff({ id, kv_key: key, project, title, source: source || currentSource, task_id, content: handoffContent, extraction_state: "pending" });
     const memories = extractHandoffMemories(handoff, { project });
+    recordPlatformMemoryEvent("memory.handoff_processed", { handoff_id: handoff.id, key: handoff.kv_key, project: handoff.project, version: handoff.version, memories_created: memories.length, extraction_state: "processed" }, { subjectType: "memory_handoff", subjectId: handoff.id, project: handoff.project, taskId: handoff.task_id });
     return jsonText({ ok: true, handoff: dbStore.getHandoff(handoff.id), memories_created: memories.length, memories });
   }
   if (action === "get") {
@@ -7000,10 +7023,12 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
     const handoff = dbStore.getHandoff(id || key);
     if (!handoff) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
     const memories = extractHandoffMemories(handoff, { project: project || handoff.project });
+    recordPlatformMemoryEvent("memory.handoff_reprocessed", { handoff_id: handoff.id, key: handoff.kv_key, project: handoff.project, version: handoff.version, memories_created_or_confirmed: memories.length }, { subjectType: "memory_handoff", subjectId: handoff.id, project: handoff.project, taskId: handoff.task_id });
     return jsonText({ ok: true, handoff: dbStore.getHandoff(handoff.id), memories_created_or_confirmed: memories.length, memories });
   }
   if (action === "archive") {
     const ok = dbStore.archiveHandoff(id || key);
+    if (ok) recordPlatformMemoryEvent("memory.handoff_archived", { handoff_id: id || key }, { subjectType: "memory_handoff", subjectId: id || key, project });
     return { content: [{ type: "text", text: ok ? "Handoff archived" : "Handoff not found" }], isError: !ok };
   }
   if (action === "compare") {
@@ -7036,6 +7061,7 @@ async function sidekick_memory({ action, id, project, type, memory_class, conten
       metadata: { user_controlled: true, reason: reason || null }
     });
     dbStore.auditMemoryEvent("remember", "memory", memory.id, { project, type: memory.type }, currentSource);
+    recordPlatformMemoryEvent("memory.remembered", { memory_id: memory.id, project: memory.project, type: memory.type, source: memory.source }, { subjectType: "memory", subjectId: memory.id, project: memory.project });
     return jsonText({ ok: true, memory });
   }
   if (action === "query" || action === "list") {
@@ -7064,6 +7090,7 @@ async function sidekick_memory({ action, id, project, type, memory_class, conten
     dbStore.softDeleteMemory(id, reason || "corrected");
     const replacement = dbStore.upsertMemory({ type: old.type, project: old.project, content: redactSensitive(correct_to), summary: redactSensitive(correct_to), confidence: 0.95, source: "user_correction", source_tool: "sidekick_memory", automatic: false, memory_class: old.memory_class, primary_scope_type: old.primary_scope_type, primary_scope_id: old.primary_scope_id, supersedes_id: id, evidence_excerpt: redactSensitive(correct_to), directness: "direct", source_authority: 10, metadata: { corrected_memory_id: id, correction_reason: reason || null } });
     dbStore.auditMemoryEvent("correct", "memory", id, { replacement_id: replacement.id, reason }, currentSource);
+    recordPlatformMemoryEvent("memory.corrected", { memory_id: id, replacement_id: replacement.id, project: replacement.project, type: replacement.type, reason: reason || null }, { subjectType: "memory", subjectId: replacement.id, project: replacement.project });
     return jsonText({ ok: true, old_memory: id, replacement });
   }
   if (action === "health") return jsonText({ ok: true, stats: dbStore.getMemoryIntelligenceStats() });
@@ -7077,6 +7104,7 @@ async function sidekick_memory({ action, id, project, type, memory_class, conten
       try {
         const handoff = dbStore.saveHandoff({ kv_key: entry.key, project: entry.project || project || null, title: entry.key, source: "backfill", content: entry.value, extraction_state: "pending" });
         const memories = extractHandoffMemories(handoff, { project: entry.project || project || null });
+        recordPlatformMemoryEvent("memory.handoff_backfilled", { handoff_id: handoff.id, key: handoff.kv_key, project: handoff.project, memories_created: memories.length }, { subjectType: "memory_handoff", subjectId: handoff.id, project: handoff.project, taskId: handoff.task_id });
         report.handoffs++;
         report.memories += memories.length;
       } catch (e) { report.errors.push(`${entry.key}: ${e.message}`); }
