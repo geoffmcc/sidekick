@@ -53,6 +53,14 @@ The dashboard serves a browser UI and JSON API. The server code lives in `src/da
 
 It includes dashboard-specific protections: optional Basic Auth, IP allowlist, rate limiting, exact-host CSRF origin checks, audit logging, error logging, and policy-aware tool metadata.
 
+The dashboard separates adjacent data domains instead of rendering every store as a raw event log:
+
+- Activity shows what Sidekick did from `tool_logs`. `/api/logs` returns normalized raw calls plus session summaries. Sessions use real session/task identifiers when present; otherwise a deterministic source-plus-time-window fallback keeps legacy records grouped without inventing unsupported relationships.
+- Data shows what Sidekick stores from `kv_store`. `/api/kv` derives namespace, type, size, preview, project/source metadata, and compact totals. The UI inspector renders structured JSON, plain text, and Markdown-like text safely. KV history is not shown because the backend stores only the current value.
+- Memory shows what Sidekick learned from `memories`. The dashboard categorizes rows as durable, sessions, unresolved, or operational; existing `tool_call` memories stay readable under Operational instead of dominating the default view.
+
+Dashboard-rendered arguments, outputs, KV values, and memory content are escaped in the browser. The API shaping layer applies the existing redaction rules to activity details and KV previews, and destructive KV/memory actions continue to use confirmation flows plus backend authorization checks.
+
 ### Agent Bridge: `src/agent.js`
 
 The Agent Bridge accepts high-level task requests, builds a task transcript, repeatedly chooses tool calls, executes them through `callTool`, and streams progress events. It also loads scheduled delays and watches at startup.

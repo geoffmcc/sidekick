@@ -496,7 +496,7 @@ function searchMemories({ query, project, type, limit = 10, includeDisabled = fa
     ${where}
     ORDER BY confidence DESC, times_confirmed DESC, last_seen_at DESC
     LIMIT ?
-  `).all(...params, Math.max(1, Math.min(Number(limit) || 10, 100)));
+  `).all(...params, Math.max(1, Math.min(Number(limit) || 10, 1000)));
 
   return rows.map(normalizeMemoryRow);
 }

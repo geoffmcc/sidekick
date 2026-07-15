@@ -229,9 +229,9 @@ function recordToolCallMemory({ name, args, duration, success, summary, source }
   touchProject(ctx, project, date);
   pushBounded(ctx.memories, memory, MAX_AUTO_MEMORY);
   saveContext(ctx);
-  const structured = dbStore.upsertMemory(toStructuredMemory(memory));
-  dbStore.trimAutomaticMemories(MAX_AUTO_MEMORY);
-  return structured || memory;
+  // Tool calls are operational telemetry. Keep them in Activity and legacy
+  // bounded context, but do not add new top-level structured memories.
+  return memory;
 }
 
 function compactToolList(steps) {

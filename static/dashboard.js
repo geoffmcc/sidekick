@@ -3,7 +3,12 @@ let agentRunning = false;
 let agentStream = null;
 let expandedHistory = {};
 let allLogs = [];
+let allSessions = [];
+let activitySummary = {};
+let activityView = 'sessions';
 let allKV = [];
+let kvSummary = {};
+let selectedKVKey = null;
 let logPage = 0;
 const LOG_PAGE_SIZE = 50;
 const SESSION_GAP_MS = 5 * 60 * 1000;
@@ -308,6 +313,43 @@ function esc(s){
   return d.innerHTML;
 }
 
+function attr(s){ return esc(String(s || '')).replace(/"/g, '&quot;') }
+function jsArg(s){ return attr(JSON.stringify(String(s || ''))) }
+
+function displayValue(value){
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+  try { return JSON.stringify(value, null, 2); } catch { return String(value); }
+}
+
+function parseMaybeJson(text){
+  if (typeof text !== 'string') return null;
+  const trimmed = text.trim();
+  if (!trimmed || !/^[{\[]/.test(trimmed)) return null;
+  try { return JSON.parse(trimmed); } catch { return null; }
+}
+
+function renderStructuredValue(value, opts){
+  opts = opts || {};
+  const text = displayValue(value);
+  const parsed = typeof value === 'string' ? parseMaybeJson(value) : (typeof value === 'object' && value !== null ? value : null);
+  const rendered = parsed !== null ? JSON.stringify(parsed, null, 2) : text;
+  const cls = parsed !== null ? 'structured-json' : 'structured-text';
+  const long = rendered.length > (opts.limit || 900);
+  const visible = long && !opts.expanded ? rendered.slice(0, opts.limit || 900) + '\n... truncated, expand to view all ...' : rendered;
+  return '<pre class="value-block ' + cls + (long ? ' is-long' : '') + '">' + esc(visible) + '</pre>';
+}
+
+function metric(label, value, detail){
+  return '<div class="metric-card"><span>' + esc(label) + '</span><strong>' + esc(value == null ? '--' : value) + '</strong>' + (detail ? '<small>' + esc(detail) + '</small>' : '') + '</div>';
+}
+
+function formatMs(ms){
+  if (!Number.isFinite(ms)) return '--';
+  if (ms < 1000) return Math.round(ms) + 'ms';
+  return (ms / 1000).toFixed(ms < 10000 ? 1 : 0) + 's';
+}
+
 // -- Services -- //
 function loadServices(){
   authFetch('/api/services').then(r=>r.json()).then(d=>{
@@ -508,7 +550,10 @@ function renderMissionActivity(data){
   const entries = (data && data.entries) || [];
   $('missionRecentActivity').innerHTML = entries.length ? entries.slice(0, 6).map(e => {
     const ok = e.ok ? 'ok' : 'danger';
-    return '<div class="mission-activity ' + ok + '"><div><strong>' + esc(e.n || 'unknown') + '</strong><span>' + esc(fmtTime(e.t)) + '</span></div><p>' + esc((e.s || e.a || '').slice(0, 100)) + '</p></div>';
+    const tool = e.tool || e.n || 'unknown';
+    const time = e.timestamp || e.t;
+    const detail = e.summary || e.result || e.error || e.args || e.s || e.a || '';
+    return '<div class="mission-activity ' + ok + '"><div><strong>' + esc(tool) + '</strong><span>' + esc(time ? fmtTime(time) : '--') + '</span></div><p>' + esc(String(detail).slice(0, 100)) + '</p></div>';
   }).join('') : '<div class="empty">No recent activity</div>';
 }
 
@@ -627,131 +672,128 @@ function loadLLM(){
 
 // -- Activity -- //
 function loadLogs(){
-  authFetch('/api/logs?limit=500').then(r=>r.json()).then(d=>{
+  const container = $('logList');
+  if (container) container.innerHTML = '<div class="empty">Loading activity...</div>';
+  const qs = new URLSearchParams({ limit: '250' });
+  const search = $('logSearch') ? $('logSearch').value.trim() : '';
+  const source = $('logSourceFilter') ? $('logSourceFilter').value : '';
+  const status = $('logStatusFilter') ? $('logStatusFilter').value : '';
+  const tool = $('logToolFilter') ? $('logToolFilter').value.trim() : '';
+  const project = $('logProjectFilter') ? $('logProjectFilter').value.trim() : '';
+  const session = $('logSessionFilter') ? $('logSessionFilter').value.trim() : '';
+  const minDuration = $('logMinDurationFilter') ? $('logMinDurationFilter').value : '';
+  const errorsOnly = $('logErrorsOnly') ? $('logErrorsOnly').checked : false;
+  if (search) qs.set('search', search);
+  if (source) qs.set('source', source);
+  if (status) qs.set('status', status);
+  if (tool) qs.set('tool', tool);
+  if (project) qs.set('project', project);
+  if (session) qs.set('session', session);
+  if (minDuration) qs.set('min_duration', minDuration);
+  if (errorsOnly) qs.set('errors_only', 'true');
+  authFetch('/api/logs?' + qs.toString()).then(r=>r.json()).then(d=>{
     allLogs = d.entries || [];
+    allSessions = d.sessions || [];
+    activitySummary = d.summary || {};
     logPage = 0;
     renderLogs();
-  }).catch(e => apiError('/api/logs', e, 0));
+  }).catch(e => {
+    if (container) container.innerHTML = '<div class="quick-action-error">Activity unavailable: ' + esc(e.message || String(e)) + '</div>';
+    apiError('/api/logs', e, 0);
+  });
 }
 
 function filterLogs(){
-  logPage = 0;
+  loadLogs();
+}
+
+function setActivityView(view){
+  activityView = view === 'raw' ? 'raw' : 'sessions';
+  $('activityViewSessions').classList.toggle('active', activityView === 'sessions');
+  $('activityViewRaw').classList.toggle('active', activityView === 'raw');
+  $('activityViewSessions').setAttribute('aria-selected', activityView === 'sessions' ? 'true' : 'false');
+  $('activityViewRaw').setAttribute('aria-selected', activityView === 'raw' ? 'true' : 'false');
   renderLogs();
 }
 
-function getFilteredLogs(){
-  const search = ($('logSearch').value || '').toLowerCase();
-  const srcFilter = $('logSourceFilter').value;
-  const statusFilter = $('logStatusFilter').value;
-  return allLogs.filter(e => {
-    if (srcFilter && (e.src || 'unknown') !== srcFilter) return false;
-    if (statusFilter === 'ok' && !e.ok) return false;
-    if (statusFilter === 'fail' && e.ok) return false;
-    if (search) {
-      const haystack = (e.n + ' ' + e.a + ' ' + e.s).toLowerCase();
-      if (!haystack.includes(search)) return false;
-    }
-    return true;
-  });
+function renderActivitySummary(){
+  const topTools = (activitySummary.most_used_tools || []).slice(0, 3).map(t => t.tool + ' ×' + t.count).join(', ');
+  $('activitySummary').innerHTML = [
+    metric('Sessions', activitySummary.sessions || 0),
+    metric('Calls', activitySummary.total_calls || 0),
+    metric('Success rate', (activitySummary.success_rate || 0) + '%'),
+    metric('Failures', activitySummary.failures || 0),
+    metric('Median duration', formatMs(activitySummary.median_duration_ms)),
+    metric('Top tools', topTools || 'none')
+  ].join('');
 }
 
-function groupSessions(logs){
-  if (!logs.length) return [];
-  const sessions = [];
-  let current = { entries: [logs[0]], src: logs[0].src || 'unknown', startTime: new Date(logs[0].t).getTime() };
-  for (let i = 1; i < logs.length; i++) {
-    const entry = logs[i];
-    const time = new Date(entry.t).getTime();
-    const src = entry.src || 'unknown';
-    const gap = current.entries[current.entries.length - 1] ? time - new Date(current.entries[current.entries.length - 1].t).getTime() : 0;
-    if (gap <= SESSION_GAP_MS && src === current.src) {
-      current.entries.push(entry);
-    } else {
-      sessions.push(current);
-      current = { entries: [entry], src: src, startTime: time };
-    }
-  }
-  sessions.push(current);
-  return sessions;
+function statusBadge(ok){ return '<span class="log-status ' + (ok ? 'ok' : 'fail') + '">' + (ok ? 'SUCCESS' : 'FAILED') + '</span>'; }
+
+function renderLogDetail(e){
+  return '<article class="log-entry' + (e.ok ? '' : ' error') + '">' +
+    '<div class="log-header"><span class="log-time">' + esc(fmtTime(e.timestamp)) + '</span><span class="log-tool">' + esc(e.tool) + '</span>' + statusBadge(e.ok) + '</div>' +
+    '<div class="meta-line">' +
+      '<span>Source: ' + esc(e.source || 'unknown') + '</span>' +
+      (e.project ? '<span>Project: ' + esc(e.project) + '</span>' : '') +
+      (e.session_id ? '<span>Session: <code>' + esc(e.session_id) + '</code></span>' : '') +
+      (e.task_id ? '<span>Task: <code>' + esc(e.task_id) + '</code></span>' : '') +
+      (Number.isFinite(e.duration_ms) ? '<span>Duration: ' + formatMs(e.duration_ms) + '</span>' : '') +
+    '</div>' +
+    (e.args ? '<details class="detail-block"><summary>Arguments</summary>' + renderStructuredValue(e.args) + '</details>' : '') +
+    (e.result ? '<details class="detail-block"><summary>Result or output</summary>' + renderStructuredValue(e.result) + '</details>' : '') +
+    (e.error ? '<details class="detail-block" open><summary>Error details</summary>' + renderStructuredValue(e.error) + '</details>' : '') +
+  '</article>';
 }
 
 function renderLogs(){
-  const filtered = getFilteredLogs();
-  $('logCount').textContent = filtered.length;
+  $('logCount').textContent = allLogs.length;
+  renderActivitySummary();
   const container = $('logList');
-  if (!filtered.length) { 
-    container.innerHTML = '<div class="empty">No matching activity</div>'; 
+  if (!allLogs.length) {
+    container.innerHTML = '<div class="empty">No matching activity. Activity contains tool calls from MCP, agent, dashboard, and automation sources; adjust filters or run a task to populate it.</div>';
     return; 
   }
-
-  const sessions = groupSessions(filtered);
-  const visibleSessions = sessions.slice(0, logPage + 1);
+  if (activityView === 'raw') {
+    container.innerHTML = allLogs.map(renderLogDetail).join('');
+    return;
+  }
+  if (!allSessions.length) {
+    container.innerHTML = '<div class="empty">Session grouping returned no sessions, showing raw calls instead.</div>' + allLogs.map(renderLogDetail).join('');
+    return;
+  }
+  const visibleSessions = allSessions.slice(0, (logPage + 1) * 25);
   let html = '';
-
   visibleSessions.forEach((session, si) => {
-    const src = session.src;
+    const src = session.source || 'unknown';
     const icon = SOURCE_ICONS[src] || SOURCE_ICONS['unknown'];
     const color = SOURCE_COLORS[src] || SOURCE_COLORS['unknown'];
-    const startTime = fmtDate(session.entries[0].t);
-    const endTime = fmtDate(session.entries[session.entries.length - 1].t);
-    const timeRange = startTime === endTime ? startTime : startTime + ' - ' + endTime.split(' ')[1];
-
-    html += '<div class="session-group">';
-    html += '<div class="session-header">';
+    const timeRange = fmtDate(session.start_time) + (session.end_time && session.end_time !== session.start_time ? ' - ' + fmtTime(session.end_time) : '');
+    const tools = (session.tools || []).slice(0, 6).join(', ');
+    const title = session.summary || tools || (session.call_count + ' activity calls');
+    const subtitle = [timeRange, session.project ? 'project ' + session.project : '', session.grouping === 'time_source_fallback' ? 'fallback grouping' : session.grouping].filter(Boolean).join(' · ');
+    html += '<section class="session-group">';
+    html += '<button class="session-header" aria-expanded="false" type="button">';
     html += '<i class="fas ' + icon + '" style="color:' + color + '"></i>';
-    html += '<span class="session-time">' + esc(timeRange) + '</span>';
-    html += '<span class="session-count">' + session.entries.length + ' calls</span>';
-    html += '<span class="session-src">' + esc(src) + '</span>';
-    html += '</div>';
-    html += '<div class="session-body" id="session-' + si + '">';
-    
-    session.entries.forEach(e => {
-      const errClass = e.ok ? '' : ' error';
-      const statusClass = e.ok ? 'ok' : 'fail';
-      const statusText = e.ok ? 'OK' : 'FAIL';
-      
-      html += '<div class="log-entry' + errClass + '">';
-      html += '<div class="log-header">';
-      html += '<span class="log-time">' + fmtTime(e.t) + '</span>';
-      html += '<span class="log-tool">' + esc(e.n) + '</span>';
-      html += '<span class="log-status ' + statusClass + '">' + statusText + '</span>';
-      html += '</div>';
-      
-      // Show arguments
-      if (e.a) {
-        html += '<div class="log-args">' + esc(e.a) + '</div>';
-      }
-      
-      // Show result (expandable)
-      if (e.s) {
-        const resultId = 'result-' + Math.random().toString(36).substr(2, 9);
-        html += '<div class="log-result" id="' + resultId + '" data-result-id="' + resultId + '">';
-        html += esc(e.s);
-        html += '</div>';
-      }
-      
-      html += '</div>';
-    });
-    
-    html += '</div></div>';
+    html += '<span class="session-main"><strong>' + esc(src) + ' activity</strong><small>Click to expand timeline</small></span>';
+    html += '<span class="session-count">' + session.call_count + ' calls</span>';
+    html += statusBadge(session.failure_count === 0);
+    html += '</button>';
+    html += '<div class="session-visible-summary"><strong>' + esc(title) + '</strong><p>' + esc(subtitle) + '</p></div>';
+    html += '<div class="session-meta"><span>' + esc(src) + '</span>' + (session.project ? '<span>' + esc(session.project) + '</span>' : '') + '<span>' + esc(session.grouping === 'time_source_fallback' ? 'fallback grouping' : session.grouping) + '</span><span>' + esc(tools || 'no tools') + '</span><span>' + session.success_count + ' ok / ' + session.failure_count + ' failed</span><span>' + formatMs(session.duration_ms) + '</span></div>';
+    html += '<div class="session-body" id="session-' + si + '">' + (session.entries || []).map(renderLogDetail).join('') + '</div></section>';
   });
-
-  if (visibleSessions.length < sessions.length) {
-    html += '<button class="load-more" onclick="loadMoreLogs()">Show more sessions (' + (sessions.length - visibleSessions.length) + ' remaining)</button>';
+  if (visibleSessions.length < allSessions.length) {
+    html += '<button class="load-more" onclick="loadMoreLogs()">Show more sessions (' + (allSessions.length - visibleSessions.length) + ' remaining)</button>';
   }
-
   container.innerHTML = html;
-
-  container.querySelectorAll('.log-result[data-result-id]').forEach(el => {
-    el.addEventListener('click', function() {
-      this.classList.toggle('expanded');
-    });
-  });
-
   container.querySelectorAll('.session-header').forEach((el, idx) => {
     el.addEventListener('click', function() {
-      const body = this.nextElementSibling;
-      if (body) body.classList.toggle('open');
+      const panel = this.parentElement.querySelector('.session-body');
+      if (panel) {
+        panel.classList.toggle('open');
+        this.setAttribute('aria-expanded', panel.classList.contains('open') ? 'true' : 'false');
+      }
     });
   });
 }
@@ -770,19 +812,24 @@ function loadMoreLogs(){
 
 // -- Data -- //
 function loadKV(){
-  Promise.all([
-    authFetch('/api/kv').then(r=>r.json()),
-    authFetch('/api/kv/projects').then(r=>r.json())
-  ]).then(([kvData, projData]) => {
+  authFetch('/api/kv').then(r=>r.json()).then(kvData => {
     allKV = kvData.entries || [];
+    kvSummary = kvData.summary || {};
     
     const select = $('kvProjectFilter');
     if (select) {
       const currentVal = select.value;
-      const projects = projData.projects || [];
+      const projects = kvData.projects || [];
       select.innerHTML = '<option value="">All Projects</option>' +
-        projects.map(p => p === null ? '<option value="null">Global</option>' : '<option value="' + esc(p) + '">' + esc(p) + '</option>').join('');
+        '<option value="null">Global</option>' + projects.map(p => '<option value="' + esc(p) + '">' + esc(p) + '</option>').join('');
       select.value = currentVal;
+    }
+    const nsSelect = $('kvNamespaceFilter');
+    if (nsSelect) {
+      const currentVal = nsSelect.value;
+      const namespaces = kvData.namespaces || [];
+      nsSelect.innerHTML = '<option value="">All Namespaces</option>' + namespaces.map(ns => '<option value="' + esc(ns) + '">' + esc(ns) + '</option>').join('');
+      nsSelect.value = currentVal;
     }
     
     renderKV();
@@ -796,16 +843,17 @@ function filterKV(){
 function renderKV(){
   const search = ($('kvSearch').value || '').toLowerCase();
   const projectFilter = $('kvProjectFilter') ? $('kvProjectFilter').value : '';
+  const namespaceFilter = $('kvNamespaceFilter') ? $('kvNamespaceFilter').value : '';
+  const typeFilter = $('kvTypeFilter') ? $('kvTypeFilter').value : '';
   const ageFilter = $('kvAgeFilter') ? $('kvAgeFilter').value : 'all';
   
   let filtered = allKV.filter(e => {
-    // Project filter
     if (projectFilter) {
       if (projectFilter === 'null' && e.project !== null) return false;
       if (projectFilter !== 'null' && e.project !== projectFilter) return false;
     }
-    
-    // Age filter
+    if (namespaceFilter && e.namespace !== namespaceFilter) return false;
+    if (typeFilter && e.data_type !== typeFilter) return false;
     if (ageFilter !== 'all') {
       const updated = new Date(e.updated);
       const now = new Date();
@@ -816,169 +864,65 @@ function renderKV(){
       if (ageFilter === 'week' && diffDays > 7) return false;
       if (ageFilter === 'month' && diffDays > 30) return false;
     }
-    
-    // Search filter
     if (!search) return true;
-    return (e.key + ' ' + String(e.value)).toLowerCase().includes(search);
+    return [e.key, e.value_text, e.preview, e.namespace, e.project, e.source, e.data_type].join(' ').toLowerCase().includes(search);
   });
   
-  // Sort by updated date (newest first)
   filtered.sort((a, b) => new Date(b.updated) - new Date(a.updated));
-  
   $('kvCount').textContent = filtered.length;
-  
-  // Render Recently Updated section (top 5 entries updated in last 24 hours)
-  const now = new Date();
-  const recentEntries = allKV.filter(e => {
-    const updated = new Date(e.updated);
-    const diffMs = now - updated;
-    const diffHours = diffMs / (1000 * 60 * 60);
-    return diffHours <= 24;
-  }).sort((a, b) => new Date(b.updated) - new Date(a.updated)).slice(0, 5);
-  
-  const recentSection = $('recentlyUpdatedSection');
-  const recentList = $('recentlyUpdatedList');
-  
-  if (recentEntries.length > 0) {
-    recentSection.style.display = 'block';
-    recentList.innerHTML = recentEntries.map(e => {
-      const projectBadge = e.project 
-        ? '<span class="kv-project">' + esc(e.project) + '</span>' 
-        : '<span class="kv-project">global</span>';
-      
-      const sourceBadge = e.source 
-        ? '<span class="kv-source ' + esc(e.source) + '">' + esc(e.source) + '</span>' 
-        : '';
-      
-      const updatedAgo = formatTimeAgo(e.updated);
-      const valuePreview = String(e.value).substring(0, 100);
-      const hasMore = String(e.value).length > 100;
-      
-      const sizeBytes = new Blob([JSON.stringify(e.value)]).size;
-      const sizeStr = formatBytes(sizeBytes);
-      
-      return '<div class="kv-entry" data-key="' + esc(e.key).replace(/"/g, '&quot;') + '">' +
-        '<div class="kv-header">' +
-          '<span class="kv-key">' + esc(e.key) + '</span>' +
-          '<div class="kv-badges">' +
-            projectBadge +
-            sourceBadge +
-            '<span class="kv-size">' + sizeStr + '</span>' +
-          '</div>' +
-        '</div>' +
-        '<div class="kv-timestamps">' +
-          '<span><i class="fas fa-edit"></i> Updated ' + updatedAgo + '</span>' +
-        '</div>' +
-        '<div class="kv-value-preview" data-action="view">' +
-          esc(valuePreview) + (hasMore ? '...' : '') +
-        '</div>' +
-      '</div>';
-    }).join('');
-    
-    // Add click handlers for recently updated entries
-    recentList.querySelectorAll('.kv-entry').forEach(entry => {
-      const key = entry.dataset.key;
-      entry.querySelector('[data-action="view"]').addEventListener('click', () => showValueModal(key));
-    });
-  } else {
-    recentSection.style.display = 'none';
-  }
+  $('kvSummary').innerHTML = [
+    metric('Entries', kvSummary.total_entries || allKV.length),
+    metric('Projects', kvSummary.projects || 0),
+    metric('Stored size', formatBytes(kvSummary.total_size || 0)),
+    metric('Changed 24h', kvSummary.recently_changed || 0),
+    metric('Namespaces', kvSummary.namespaces || 0)
+  ].join('');
   
   const list = $('kvList');
   if (!filtered.length) { 
-    list.innerHTML = '<div class="empty">No matching data</div>'; 
+    list.innerHTML = '<div class="empty">No matching data. Data contains Sidekick KV entries such as project handoffs, server facts, config summaries, cache records, and task state.</div>';
+    renderKVInspector(null);
     return; 
   }
-  
-  // Group by project
-  const grouped = {};
-  filtered.forEach(e => {
-    const project = e.project || 'Global';
-    if (!grouped[project]) grouped[project] = [];
-    grouped[project].push(e);
+  if (!selectedKVKey || !filtered.some(e => e.key === selectedKVKey)) selectedKVKey = filtered[0].key;
+  list.innerHTML = filtered.map(e => renderKVRow(e)).join('');
+  list.querySelectorAll('.kv-row').forEach(row => {
+    row.addEventListener('click', () => selectKV(row.dataset.key));
+    row.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectKV(row.dataset.key); } });
   });
-  
-  // Sort projects: Global first, then alphabetically
-  const sortedProjects = Object.keys(grouped).sort((a, b) => {
-    if (a === 'Global') return -1;
-    if (b === 'Global') return 1;
-    return a.localeCompare(b);
-  });
-  
-  let html = '';
-  sortedProjects.forEach(project => {
-    const entries = grouped[project];
-    const projectId = 'project-' + project.toLowerCase().replace(/[^a-z0-9]/g, '-');
-    
-    html += '<div class="kv-project-section">';
-    html += '<div class="kv-project-header" onclick="toggleProjectSection(\'' + esc(projectId) + '\')">';
-    html += '<i class="fas fa-chevron-right kv-project-toggle" id="' + projectId + '-toggle"></i>';
-    html += '<span class="kv-project-name">' + esc(project) + '</span>';
-    html += '<span class="kv-project-count">' + entries.length + ' entries</span>';
-    html += '</div>';
-    html += '<div class="kv-project-entries" id="' + projectId + '-entries" style="display:none">';
-    
-    entries.forEach(e => {
-      const projectBadge = e.project 
-        ? '<span class="kv-project">' + esc(e.project) + '</span>' 
-        : '<span class="kv-project">global</span>';
-      
-      const sourceBadge = e.source 
-        ? '<span class="kv-source ' + esc(e.source) + '">' + esc(e.source) + '</span>' 
-        : '';
-      
-      const createdAgo = formatTimeAgo(e.created);
-      const updatedAgo = formatTimeAgo(e.updated);
-      const isUpdated = e.created !== e.updated;
-      
-      const valuePreview = String(e.value).substring(0, 300);
-      const hasMore = String(e.value).length > 300;
-      
-      // Calculate entry size
-      const sizeBytes = new Blob([JSON.stringify(e.value)]).size;
-      const sizeStr = formatBytes(sizeBytes);
-      
-      html += '<div class="kv-entry" data-key="' + esc(e.key).replace(/"/g, '&quot;') + '">' +
-        '<div class="kv-header">' +
-          '<span class="kv-key">' + esc(e.key) + '</span>' +
-          '<div class="kv-badges">' +
-            projectBadge +
-            sourceBadge +
-            '<span class="kv-size">' + sizeStr + '</span>' +
-          '</div>' +
-        '</div>' +
-        '<div class="kv-timestamps">' +
-          '<span><i class="fas fa-plus-circle"></i> Created ' + createdAgo + '</span>' +
-          (isUpdated ? '<span><i class="fas fa-edit"></i> Updated ' + updatedAgo + '</span>' : '') +
-        '</div>' +
-        '<div class="kv-value-preview" data-action="view">' +
-          esc(valuePreview) + (hasMore ? '...' : '') +
-        '</div>' +
-        '<div class="kv-actions">' +
-          '<button data-action="edit" title="Edit">' +
-            '<i class="fas fa-edit"></i>' +
-          '</button>' +
-          '<button class="del" data-action="delete" title="Delete">' +
-            '<i class="fas fa-trash"></i>' +
-          '</button>' +
-        '</div>' +
-      '</div>';
-    });
-    
-    html += '</div>';
-    html += '</div>';
-  });
-  
-  list.innerHTML = html;
-
-  // Add event listeners
-  list.querySelectorAll('.kv-entry').forEach(entry => {
-    const key = entry.dataset.key;
-    entry.querySelector('[data-action="view"]').addEventListener('click', () => showValueModal(key));
-    entry.querySelector('[data-action="edit"]').addEventListener('click', () => openEditModal(key));
-    entry.querySelector('[data-action="delete"]').addEventListener('click', () => deleteKV(key));
-  });
+  renderKVInspector(allKV.find(e => e.key === selectedKVKey));
 }
+
+function renderKVRow(e){
+  return '<button type="button" class="kv-row' + (e.key === selectedKVKey ? ' selected' : '') + '" data-key="' + attr(e.key) + '">' +
+    '<span class="kv-row-main"><strong>' + esc(e.key) + '</strong><small>' + esc(e.preview || '(empty)') + '</small></span>' +
+    '<span class="kv-row-meta"><span>' + esc(e.namespace || 'global') + '</span><span>' + esc(e.project || 'global') + '</span><span>' + esc(e.data_type) + '</span><span>' + formatBytes(e.size || 0) + '</span></span>' +
+  '</button>';
+}
+
+function selectKV(key){
+  selectedKVKey = key;
+  renderKV();
+}
+
+function renderKVInspector(entry){
+  const el = $('kvInspector');
+  if (!entry) { el.innerHTML = '<div class="empty">Select an entry to inspect its value, metadata, and safe actions.</div>'; return; }
+  const valueText = displayValue(entry.value);
+  const looksMarkdown = typeof entry.value === 'string' && /(^#\s|\n#{1,6}\s|\n[-*]\s|```)/m.test(entry.value);
+  el.innerHTML = '<div class="inspector-head"><div><div class="section-title">Inspector</div><h3>' + esc(entry.key) + '</h3></div><div class="kv-actions"><button onclick="copyText(' + jsArg(entry.key) + ')">Copy key</button><button onclick="copySelectedKVValue()">Copy value</button><button onclick="openEditModal(' + jsArg(entry.key) + ')">Edit</button><button class="del" onclick="deleteKV(' + jsArg(entry.key) + ')">Delete</button></div></div>' +
+    '<div class="meta-grid"><div><span>Namespace</span><strong>' + esc(entry.namespace || 'global') + '</strong></div><div><span>Project</span><strong>' + esc(entry.project || 'global') + '</strong></div><div><span>Source</span><strong>' + esc(entry.source || 'unknown') + '</strong></div><div><span>Type</span><strong>' + esc(entry.data_type) + '</strong></div><div><span>Size</span><strong>' + formatBytes(entry.size || 0) + '</strong></div><div><span>Updated</span><strong>' + esc(entry.updated ? formatTimeAgo(entry.updated) : 'unknown') + '</strong></div></div>' +
+    (looksMarkdown ? '<details class="detail-block"><summary>Markdown text</summary>' + renderMarkdownPreview(entry.value) + '</details>' : '') +
+    '<details class="detail-block" open><summary>Structured value</summary>' + renderStructuredValue(entry.value, { limit: 4000, expanded: valueText.length < 4000 }) + '</details>' +
+    '<details class="detail-block"><summary>Raw metadata</summary>' + renderStructuredValue({ key: entry.key, project: entry.project, source: entry.source, namespace: entry.namespace, created: entry.created, updated: entry.updated, size: entry.size, data_type: entry.data_type }, { expanded: true }) + '</details>';
+}
+
+function renderMarkdownPreview(text){
+  return '<div class="markdown-preview">' + esc(text).replace(/^### (.*)$/gm, '<strong>$1</strong>').replace(/^## (.*)$/gm, '<strong>$1</strong>').replace(/^# (.*)$/gm, '<strong>$1</strong>').replace(/\n/g, '<br>') + '</div>';
+}
+
+function copyText(text){ navigator.clipboard.writeText(text).then(() => showToast('Copied', 'success')).catch(() => showToast('Copy failed', 'error')); }
+function copySelectedKVValue(){ const entry = allKV.find(e => e.key === selectedKVKey); if (entry) copyText(displayValue(entry.value)); }
 
 function toggleProjectSection(projectId) {
   const entries = document.getElementById(projectId + '-entries');
@@ -1082,7 +1026,7 @@ function openEditModal(key){
   const entry = allKV.find(e => e.key === key);
   if (!entry) return;
   $('editKey').textContent = key;
-  $('editValue').value = String(entry.value);
+  $('editValue').value = displayValue(entry.value);
   $('editProject').value = entry.project || '';
   $('editModal').classList.add('active');
   $('editModal').dataset.key = key;
@@ -1107,7 +1051,7 @@ function saveKVEdit(){
 
 function deleteKV(key){
   const entry = allKV.find(e => e.key === key);
-  const valuePreview = entry ? String(entry.value).substring(0, 50) : '';
+  const valuePreview = entry ? displayValue(entry.value).substring(0, 50) : '';
   const project = entry?.project || 'Global';
   
   showConfirmModal({
@@ -1348,6 +1292,7 @@ function importKV() {
 
 // -- Memory -- //
 let allMemories = [];
+let memoryCategory = 'durable';
 
 async function loadMemories() {
   try {
@@ -1370,6 +1315,13 @@ async function loadMemories() {
         projects.map(p => '<option value="' + esc(p) + '">' + esc(p) + '</option>').join('');
       select.value = currentVal;
     }
+    const sourceSelect = $('memorySourceFilter');
+    if (sourceSelect) {
+      const currentVal = sourceSelect.value;
+      const sources = [...new Set(allMemories.map(m => m.source).filter(Boolean))].sort();
+      sourceSelect.innerHTML = '<option value="">All Sources</option>' + sources.map(source => '<option value="' + esc(source) + '">' + esc(source) + '</option>').join('');
+      sourceSelect.value = currentVal;
+    }
 
     if (statsData.ok && statsData.stats) {
       renderMemoryStats(statsData.stats);
@@ -1382,9 +1334,12 @@ async function loadMemories() {
 }
 
 function renderMemoryStats(stats) {
-  $('memStatsTotal').textContent = stats.total || 0;
-  $('memStatsActive').textContent = stats.active || 0;
-  $('memStatsStale').textContent = stats.stale_count || 0;
+  const activeLoaded = allMemories.filter(memory => memory.enabled);
+  const durableActive = activeLoaded.filter(memory => memory.category !== 'operational').length;
+  const operational = activeLoaded.filter(memory => memory.category === 'operational').length;
+  $('memStatsTotal').textContent = allMemories.length || stats.total || 0;
+  $('memStatsActive').textContent = durableActive;
+  $('memStatsStale').textContent = operational;
   $('memStatsConfidence').textContent = (stats.avg_confidence || 0).toFixed(2);
 
   const byType = stats.by_type || {};
@@ -1432,18 +1387,38 @@ function filterMemories() {
   renderMemories();
 }
 
+function setMemoryCategory(category) {
+  memoryCategory = category || 'durable';
+  ['Durable', 'Sessions', 'Unresolved', 'Operational', 'All'].forEach(name => {
+    const id = 'memoryCategory' + name;
+    const active = name.toLowerCase() === memoryCategory;
+    if ($(id)) {
+      $(id).classList.toggle('active', active);
+      $(id).setAttribute('aria-selected', active ? 'true' : 'false');
+    }
+  });
+  renderMemories();
+}
+
 function renderMemories() {
   const search = ($('memorySearch').value || '').toLowerCase();
   const projectFilter = $('memoryProjectFilter') ? $('memoryProjectFilter').value : '';
   const typeFilter = $('memoryTypeFilter') ? $('memoryTypeFilter').value : '';
+  const sourceFilter = $('memorySourceFilter') ? $('memorySourceFilter').value : '';
+  const importanceFilter = $('memoryImportanceFilter') ? $('memoryImportanceFilter').value : '';
+  const unresolvedOnly = $('memoryUnresolvedOnly') ? $('memoryUnresolvedOnly').checked : false;
   const includeDisabled = $('memoryIncludeDisabled') ? $('memoryIncludeDisabled').checked : false;
 
   let filtered = allMemories.filter(m => {
     if (!includeDisabled && !m.enabled) return false;
+    if (memoryCategory !== 'all' && m.category !== memoryCategory) return false;
     if (projectFilter && m.project !== projectFilter) return false;
     if (typeFilter && m.type !== typeFilter) return false;
+    if (sourceFilter && m.source !== sourceFilter) return false;
+    if (importanceFilter && m.importance !== importanceFilter) return false;
+    if (unresolvedOnly && !(m.category === 'unresolved' || m.state === 'pending' || m.type === 'open_thread')) return false;
     if (search) {
-      const text = (m.content + ' ' + m.summary + ' ' + (m.tags || []).join(' ')).toLowerCase();
+      const text = [m.content, m.summary, (m.tags || []).join(' '), m.source, m.source_tool, m.source_task_id, m.category].join(' ').toLowerCase();
       if (!text.includes(search)) return false;
     }
     return true;
@@ -1455,49 +1430,47 @@ function renderMemories() {
 
   const list = $('memoryList');
   if (filtered.length === 0) {
-    list.innerHTML = '<div class="empty">No memories found</div>';
+    list.innerHTML = '<div class="empty">No memories found. Durable Memory is for facts, decisions, preferences, procedures, observations, and unresolved items. Tool-call telemetry remains available under Operational.</div>';
     return;
   }
 
-  list.innerHTML = filtered.map(m => {
-    const typeColors = {
-      fact: '#58a6ff',
-      decision: '#d2a8ff',
-      preference: '#7ee787',
-      procedure: '#ffa657',
-      open_thread: '#f778ba',
-      observation: '#8b949e',
-      session: '#79c0ff',
-      tool_call: '#a5d6ff'
-    };
-    const typeColor = typeColors[m.type] || '#8b949e';
-    const stateBadge = m.state === 'superseded' ? '<span class="memory-state superseded">superseded</span>' : '';
-    const enabledBadge = m.enabled ? '' : '<span class="memory-state disabled">disabled</span>';
-    const confStars = m.confidence >= 0.8 ? '★★★' : m.confidence >= 0.6 ? '★★' : m.confidence >= 0.4 ? '★' : '';
+  const groups = [];
+  for (const memory of filtered) {
+    const label = memory.type || memory.category || 'memory';
+    let group = groups.find(item => item.label === label);
+    if (!group) {
+      group = { label, items: [] };
+      groups.push(group);
+    }
+    group.items.push(memory);
+  }
+  list.innerHTML = groups.map(group =>
+    '<section class="memory-type-section"><div class="memory-type-heading"><span>' + esc(group.label.replace(/_/g, ' ')) + '</span><strong>' + group.items.length + '</strong></div>' +
+    group.items.map(renderMemoryCard).join('') + '</section>'
+  ).join('');
+}
 
-    return '<div class="memory-entry" data-id="' + esc(m.id) + '">' +
-      '<div class="memory-header">' +
-        '<span class="memory-type" style="color:' + typeColor + '">' + esc(m.type) + '</span>' +
-        '<div class="memory-badges">' +
-          (m.project ? '<span class="memory-project">' + esc(m.project) + '</span>' : '') +
-          enabledBadge +
-          stateBadge +
-          (confStars ? '<span class="memory-confidence">' + confStars + '</span>' : '') +
-          '<span class="memory-confirmed">×' + (m.times_confirmed || 1) + '</span>' +
-        '</div>' +
-      '</div>' +
-      '<div class="memory-content">' + esc(m.summary || m.content) + '</div>' +
-      '<div class="memory-footer">' +
-        '<span class="memory-time">' + formatTimeAgo(m.updated_at) + '</span>' +
-        '<div class="memory-actions">' +
-          (m.enabled
-            ? '<button class="btn btn-sm btn-outline" onclick="disableMemory(\'' + esc(m.id) + '\')">Disable</button>'
-            : '<button class="btn btn-sm btn-outline" onclick="enableMemory(\'' + esc(m.id) + '\')">Enable</button>') +
-          '<button class="btn btn-sm btn-danger" onclick="deleteMemory(\'' + esc(m.id) + '\')">Delete</button>' +
-        '</div>' +
-      '</div>' +
-    '</div>';
-  }).join('');
+function renderMemoryCard(m) {
+  const typeLabels = { open_thread: 'unresolved', tool_call: 'tool call', agent_task: 'agent task' };
+  const enabledBadge = m.enabled ? '' : '<span class="memory-state disabled">disabled</span>';
+  const stateBadge = m.state && m.state !== 'active' ? '<span class="memory-state ' + esc(m.state) + '">' + esc(m.state) + '</span>' : '';
+  const categoryBadge = '<span class="memory-category ' + esc(m.category) + '">' + esc(m.category) + '</span>';
+  const title = m.summary || m.content || '(empty memory)';
+  const content = m.content || '';
+  const excerpt = content && content !== title ? '<p class="memory-excerpt">' + esc(content.length > 260 ? content.slice(0, 257) + '...' : content) + '</p>' : '';
+  return '<article class="memory-entry memory-' + esc(m.category) + '" data-id="' + attr(m.id) + '">' +
+    '<div class="memory-header"><div><span class="memory-type">' + esc(typeLabels[m.type] || m.type) + '</span><div class="memory-content">' + esc(title) + '</div></div>' +
+    '<div class="memory-badges">' + categoryBadge + (m.project ? '<span class="memory-project">' + esc(m.project) + '</span>' : '') + enabledBadge + stateBadge + '<span class="memory-confidence">' + Math.round((m.confidence || 0) * 100) + '%</span><span class="memory-confirmed">×' + (m.times_confirmed || 1) + '</span></div></div>' +
+    excerpt +
+    '<div class="memory-footer"><span class="memory-time">Updated ' + esc(formatTimeAgo(m.updated_at)) + '</span><span>Source: ' + esc(m.source || 'unknown') + (m.source_tool ? ' / ' + esc(m.source_tool) : '') + '</span><div class="memory-actions">' +
+      (m.enabled ? '<button class="btn btn-sm btn-outline" onclick="disableMemory(' + jsArg(m.id) + ')">Disable</button>' : '<button class="btn btn-sm btn-outline" onclick="enableMemory(' + jsArg(m.id) + ')">Enable</button>') +
+      '<button class="btn btn-sm btn-danger" onclick="deleteMemory(' + jsArg(m.id) + ')">Delete</button></div></div>' +
+    '<details class="detail-block"><summary>Full content and metadata</summary>' +
+      '<div class="memory-full">' + esc(m.content || '') + '</div>' +
+      '<div class="meta-grid"><div><span>Created</span><strong>' + esc(m.created_at ? fmtDate(m.created_at) : 'unknown') + '</strong></div><div><span>Last seen</span><strong>' + esc(m.last_seen_at ? fmtDate(m.last_seen_at) : 'unknown') + '</strong></div><div><span>Task</span><strong>' + esc(m.source_task_id || 'none') + '</strong></div><div><span>Importance</span><strong>' + esc(m.importance || 'normal') + '</strong></div><div><span>Expires</span><strong>' + esc(m.expires_at || 'none') + '</strong></div><div><span>Tags</span><strong>' + esc((m.tags || []).join(', ') || 'none') + '</strong></div></div>' +
+      renderStructuredValue({ id: m.id, type: m.type, category: m.category, state: m.state, automatic: m.automatic, metadata: m.metadata || {} }, { expanded: true }) +
+    '</details>' +
+  '</article>';
 }
 
 async function disableMemory(id) {
