@@ -7,6 +7,7 @@ const { timingSafeCompare } = require("./crypto-utils");
 const { execSync } = require("child_process");
 const { TOOLS, setSource, getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval } = require("./tools");
 const dbStore = require("./db");
+const { allowedActions } = require("./evolve/lifecycle");
 const { redactSensitive } = require("./redact");
 const crypto = require("crypto");
 
@@ -1088,6 +1089,9 @@ app.get("/api/evolve", (req, res) => {
       success_count: cap.successCount,
       failure_count: cap.failureCount,
       duplicate_reasons: cap.duplicateReasons || [],
+      quality_gates: cap.qualityGates || null,
+      score_breakdown: cap.scoreBreakdown || null,
+      allowed_actions: allowedActions(cap),
     }))
   });
 });
