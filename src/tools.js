@@ -13,6 +13,7 @@ const { recordToolCallMemory, buildMemoryBrief, recallMemoryForText } = require(
 const { scanSecurityConfig } = require("./security-scan");
 const dynamicTools = require("./dynamic-tools");
 const blackbox = require("./blackbox");
+const platformKernel = require("./platform/kernel");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
@@ -1017,6 +1018,7 @@ function logToolCall(name, args, duration, success, summary, metadata = {}) {
       retry: Boolean(metadata.retry),
       generated_procedure: metadata.generatedProcedure || metadata.generated_procedure || null
     });
+    recordPlatformToolCall(name, argsShape, Math.round(duration), success, redactedSummary, metadata);
     recordToolCallMemory({
       name,
       args,
@@ -1024,6 +1026,46 @@ function logToolCall(name, args, duration, success, summary, metadata = {}) {
       success,
       summary: redactedSummary,
       source: currentSource
+    });
+  } catch (e) {}
+}
+
+function recordPlatformToolCall(name, argsShape, duration, success, summary, metadata = {}) {
+  try {
+    if (currentSource !== "mcp") return;
+    if (metadata.generatedProcedure || metadata.generated_procedure) return;
+    const startedAt = new Date(Date.now() - Math.max(Number(duration) || 0, 0)).toISOString();
+    const execution = platformKernel.createExecution({
+      execution_id: metadata.executionId || metadata.execution_id || undefined,
+      parent_execution_id: metadata.parentId || metadata.parent_id || null,
+      root_execution_id: metadata.rootExecutionId || metadata.root_execution_id || metadata.correlationId || metadata.correlation_id || metadata.executionId || metadata.execution_id || undefined,
+      task_id: metadata.taskId || metadata.task_id || metadata.requestId || metadata.request_id || null,
+      session_id: metadata.sessionId || metadata.session_id || process.env.SIDEKICK_SESSION_ID || null,
+      project_id: metadata.project || process.env.SIDEKICK_PROJECT || null,
+      actor_id: "mcp",
+      client_id: "mcp",
+      trigger_type: "mcp",
+      operation_type: "tool_call",
+      tool_name: name,
+      tool_action: argsShape && typeof argsShape.action === "string" ? argsShape.action : null,
+      risk: getToolRisk(name),
+      started_at: startedAt,
+      source: "mcp",
+      correlation_id: metadata.correlationId || metadata.correlation_id || metadata.executionId || metadata.execution_id || null,
+      metadata: {
+        args_shape: argsShape,
+        duration_ms: duration,
+        legacy_tool_log: true,
+      },
+    });
+    platformKernel.transitionExecution(execution.execution_id, "running", { source: "mcp", reason: "MCP tool call started", correlation_id: execution.root_execution_id });
+    platformKernel.transitionExecution(execution.execution_id, success ? "completed" : "failed", {
+      source: "mcp",
+      reason: success ? "MCP tool call completed" : "MCP tool call failed",
+      result_status: success ? "success" : "failure",
+      error_category: success ? null : evolveCommon.errorCategory(summary),
+      result_summary: summary,
+      correlation_id: execution.root_execution_id,
     });
   } catch (e) {}
 }

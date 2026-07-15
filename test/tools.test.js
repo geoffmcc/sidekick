@@ -18,6 +18,7 @@ const dbStore = require('../src/db');
 const { 
   TOOLS,
   setSource,
+  logToolCall,
   parseGithubArgs,
   getGithubArg,
   missionRoute
@@ -112,6 +113,35 @@ console.log('Running Tools Tests...\n');
         else process.env[key] = value;
       }
     }
+    console.log('✓ Passed\n');
+
+    console.log('Test 2.0ac: MCP tool logs mirror into platform executions');
+    const beforeLogs = dbStore.queryToolLogs({ tool: 'sidekick_status', source: 'mcp', limit: 100 }).length;
+    logToolCall('sidekick_status', { action: 'status' }, 12, true, 'status ok', { sessionId: 'sess_test_platform', taskId: 'task_test_platform', project: 'sidekick' });
+    const afterLogs = dbStore.queryToolLogs({ tool: 'sidekick_status', source: 'mcp', limit: 100 });
+    assert.strictEqual(afterLogs.length, beforeLogs + 1, 'Existing tool_logs behavior should be preserved');
+    const platformRow = dbStore.getDb().prepare(`
+      SELECT execution_id, state, operation_type, tool_name, tool_action, actor_id, session_id, task_id, project_id
+      FROM platform_executions
+      WHERE tool_name = 'sidekick_status'
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `).get();
+    assert.ok(platformRow, 'MCP tool log should create a platform execution');
+    assert.strictEqual(platformRow.state, 'completed');
+    assert.strictEqual(platformRow.operation_type, 'tool_call');
+    assert.strictEqual(platformRow.tool_action, 'status');
+    assert.strictEqual(platformRow.actor_id, 'mcp');
+    assert.strictEqual(platformRow.session_id, 'sess_test_platform');
+    assert.strictEqual(platformRow.task_id, 'task_test_platform');
+    assert.strictEqual(platformRow.project_id, 'sidekick');
+    const platformEvents = dbStore.getDb().prepare('SELECT event_type FROM platform_execution_events WHERE execution_id = ? ORDER BY timestamp').all(platformRow.execution_id).map(row => row.event_type);
+    assert.ok(platformEvents.includes('execution.created'));
+    assert.ok(platformEvents.includes('execution.running'));
+    assert.ok(platformEvents.includes('execution.completed'));
+    logToolCall('sidekick_generated_double_mirror_guard', { text: 'hello' }, 3, true, 'generated ok', { generatedProcedure: 'sidekick_generated_double_mirror_guard' });
+    const generatedMirror = dbStore.getDb().prepare("SELECT COUNT(*) AS count FROM platform_executions WHERE tool_name = 'sidekick_generated_double_mirror_guard'").get();
+    assert.strictEqual(generatedMirror.count, 0, 'Generated tool logs should not be double-mirrored by tool_logs adapter');
     console.log('✓ Passed\n');
 
     // Test 2.0aa: filesystem path guard
