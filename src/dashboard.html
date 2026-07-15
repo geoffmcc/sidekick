@@ -21,6 +21,7 @@
   <a class="active" onclick="showPage('mission')" id="nav-mission">Mission Control</a>
   <a onclick="showPage('system')" id="nav-system">System</a>
   <a onclick="showPage('activity')" id="nav-activity">Activity</a>
+  <a onclick="showPage('blackbox')" id="nav-blackbox">Black Box</a>
   <a onclick="showPage('data')" id="nav-data">Data</a>
   <a onclick="showPage('memory')" id="nav-memory">Memory</a>
   <a onclick="showPage('database')" id="nav-database">Database</a>
@@ -218,6 +219,51 @@
     <label class="inline-check"><input type="checkbox" id="logErrorsOnly" onchange="filterLogs()"> Errors only</label>
   </div>
   <div id="logList" class="activity-list"></div>
+</div>
+
+<!-- Black Box Page -->
+<div class="page" id="page-blackbox">
+  <div class="blackbox-hero">
+    <div>
+      <div class="mission-kicker">Incident Evidence</div>
+      <h2>Black Box</h2>
+      <p>Capture configured incident context, inspect sources, compare before and after states, and keep evidence linked to analysis.</p>
+    </div>
+    <div class="blackbox-actions">
+      <select id="blackboxProfile" aria-label="Capture profile">
+        <option value="quick">Quick</option>
+        <option value="standard" selected>Standard</option>
+        <option value="deep">Deep</option>
+        <option value="network">Network</option>
+        <option value="sidekick">Sidekick</option>
+        <option value="repository">Repository</option>
+      </select>
+      <button class="btn" onclick="startBlackboxCapture()"><i class="fas fa-camera"></i> Capture</button>
+    </div>
+  </div>
+  <div id="blackboxProgress" class="blackbox-progress"><div class="empty">No capture running.</div></div>
+  <div class="metric-strip" id="blackboxSummary"></div>
+  <div class="search-bar">
+    <input type="text" id="blackboxSearch" placeholder="Search incidents, evidence, errors, services..." oninput="loadBlackbox()" aria-label="Search Black Box incidents">
+    <select id="blackboxStateFilter" onchange="loadBlackbox()">
+      <option value="">All states</option>
+      <option value="open">Open</option>
+      <option value="investigating">Investigating</option>
+      <option value="diagnosed">Diagnosed</option>
+      <option value="resolved">Resolved</option>
+      <option value="archived">Archived</option>
+    </select>
+    <button class="btn btn-sm btn-outline" onclick="loadBlackbox()"><i class="fas fa-sync"></i> Refresh</button>
+  </div>
+  <div class="blackbox-layout">
+    <div class="card blackbox-list-card">
+      <div class="section-title">Incidents</div>
+      <div id="blackboxIncidentList" class="blackbox-list"><div class="empty">Loading incidents...</div></div>
+    </div>
+    <div class="card blackbox-detail-card">
+      <div id="blackboxDetail"><div class="empty">Select an incident to inspect captured evidence.</div></div>
+    </div>
+  </div>
 </div>
 
 <!-- Data Page -->

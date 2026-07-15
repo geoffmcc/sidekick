@@ -11,6 +11,7 @@ const dbStore = require("./db");
 const { allowedActions } = require("./evolve/lifecycle");
 const { redactSensitive } = require("./redact");
 const crypto = require("crypto");
+const blackbox = require("./blackbox");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const PORT = parseInt(process.env.SIDEKICK_DASHBOARD_PORT || "4098", 10);
@@ -329,6 +330,14 @@ function readLogs() {
 
 function readKV() {
   return dbStore.loadKV({});
+}
+
+function blackboxJson(res, fn) {
+  try {
+    res.json(fn());
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
 }
 
 function writeKV(data) {
@@ -1076,6 +1085,96 @@ app.get("/api/tool-policy", (req, res) => {
 app.get("/api/tool-categories", (req, res) => {
   res.json({ categories: getToolCategoriesWithTools("dashboard") });
 });
+
+app.get("/api/blackbox/profiles", (req, res) => {
+  res.json({ profiles: blackbox.PROFILE_INFO });
+});
+
+app.get("/api/blackbox/storage", (req, res) => blackboxJson(res, () => blackbox.storageStatus()));
+
+app.get("/api/blackbox/incidents", (req, res) => blackboxJson(res, () => ({ incidents: blackbox.listIncidents(req.query) })));
+
+app.post("/api/blackbox/capture", async (req, res) => {
+  try {
+    const capture = await blackbox.captureIncident({ ...(req.body || {}), source: "dashboard", requested_by: "dashboard" });
+    auditLog(req, 'blackbox.capture', { incident_id: capture.incident_id, capture_id: capture.id, state: capture.state });
+    res.json({ ok: true, capture });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+app.get("/api/blackbox/incidents/:id", (req, res) => blackboxJson(res, () => {
+  const incident = blackbox.getIncident(req.params.id, { includeTimeline: true, includeAnalysis: true });
+  if (!incident) {
+    res.status(404);
+    return { error: "Incident not found" };
+  }
+  return { incident };
+}));
+
+app.patch("/api/blackbox/incidents/:id", (req, res) => blackboxJson(res, () => {
+  const incident = blackbox.updateIncident(req.params.id, req.body || {}, "dashboard");
+  auditLog(req, 'blackbox.update', { incident_id: req.params.id, updates: Object.keys(req.body || {}) });
+  return { ok: true, incident };
+}));
+
+app.delete("/api/blackbox/incidents/:id", (req, res) => blackboxJson(res, () => {
+  const ok = blackbox.deleteIncident(req.params.id, "dashboard");
+  auditLog(req, 'blackbox.delete', { incident_id: req.params.id, ok });
+  return { ok };
+}));
+
+app.get("/api/blackbox/incidents/:id/timeline", (req, res) => blackboxJson(res, () => ({ timeline: blackbox.getTimeline(req.params.id) })));
+
+app.get("/api/blackbox/incidents/:id/export", (req, res) => blackboxJson(res, () => ({ export: blackbox.exportIncident(req.params.id, { format: req.query.format || "json" }) })));
+
+app.post("/api/blackbox/incidents/:id/analyze", async (req, res) => {
+  try {
+    const analysis = await blackbox.analyzeIncident(req.params.id, { ...(req.body || {}), actor: "dashboard" });
+    auditLog(req, 'blackbox.analyze', { incident_id: req.params.id, analysis_id: analysis.id });
+    res.json({ ok: true, analysis });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/api/blackbox/incidents/:id/notes", (req, res) => blackboxJson(res, () => {
+  const note = blackbox.addNote(req.params.id, { ...(req.body || {}), source: "dashboard" });
+  auditLog(req, 'blackbox.note', { incident_id: req.params.id, note_id: note.id });
+  return { ok: true, note };
+}));
+
+app.get("/api/blackbox/captures/:id", (req, res) => blackboxJson(res, () => ({ capture: blackbox.getCapture(req.params.id, { includeSources: true }) })));
+
+app.post("/api/blackbox/captures/:id/cancel", (req, res) => blackboxJson(res, () => blackbox.cancelCapture(req.params.id)));
+
+app.get("/api/blackbox/captures/:id/stream", (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive'
+  });
+  res.write(`event: snapshot\ndata: ${JSON.stringify(blackbox.captureStatus(req.params.id))}\n\n`);
+  const unsubscribe = blackbox.subscribeCapture(req.params.id, event => {
+    res.write(`event: progress\ndata: ${JSON.stringify(event)}\n\n`);
+  });
+  req.on('close', unsubscribe);
+});
+
+app.get("/api/blackbox/sources/:id", (req, res) => blackboxJson(res, () => ({ source: blackbox.getSource(req.params.id, { offset: Number(req.query.offset || 0), limit: Number(req.query.limit || 65536) }) })));
+
+app.get("/api/blackbox/search", (req, res) => blackboxJson(res, () => ({ results: blackbox.searchIncidents(req.query.q || req.query.query || "", req.query) })));
+
+app.get("/api/blackbox/compare", (req, res) => blackboxJson(res, () => blackbox.compareCaptures(req.query.a, req.query.b)));
+
+app.get("/api/blackbox/purge-preview", (req, res) => blackboxJson(res, () => blackbox.purgePreview()));
+
+app.post("/api/blackbox/purge", (req, res) => blackboxJson(res, () => {
+  const result = blackbox.purgeExpired({ confirm: !!(req.body && req.body.confirm) });
+  auditLog(req, 'blackbox.purge', result);
+  return result;
+}));
 
 app.get("/api/evolve", (req, res) => {
   const capabilities = dbStore.listGeneratedCapabilities({ includeInactive: true }).map(cap => ["trial", "active"].includes(cap.state) ? (dbStore.syncGeneratedCapabilityStats(cap.id) || cap) : cap);

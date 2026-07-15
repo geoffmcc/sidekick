@@ -18,6 +18,9 @@ let toolStats = {};
 let allProcedures = [];
 let toolStatsWindow = localStorage.getItem('sidekick_toolStatsWindow') || 'local';
 let evolveExecutionStreams = {};
+let allBlackboxIncidents = [];
+let selectedBlackboxIncident = null;
+let blackboxStream = null;
 
 // Authentication helpers
 function getAuthHeader() {
@@ -255,6 +258,7 @@ function showPage(name){
   if (name === 'mission') loadMissionControl();
   if (name === 'system') { loadDashboardSummary(); loadLLM(); loadServices(); }
   if (name === 'activity') loadLogs();
+  if (name === 'blackbox') loadBlackbox();
   if (name === 'data') loadKV();
   if (name === 'memory') loadMemories();
   if (name === 'database') loadDbStats();
@@ -2394,6 +2398,244 @@ function showProcedureDetail(name){
   const existing = document.querySelector('.tool-detail-overlay');
   if (existing) existing.remove();
   document.body.insertAdjacentHTML('beforeend', html);
+}
+
+async function loadBlackbox(){
+  const list = $('blackboxIncidentList');
+  const detail = $('blackboxDetail');
+  if (!list) return;
+  const params = new URLSearchParams();
+  const q = $('blackboxSearch') ? $('blackboxSearch').value.trim() : '';
+  const state = $('blackboxStateFilter') ? $('blackboxStateFilter').value : '';
+  if (q) params.set('search', q);
+  if (state) params.set('lifecycle_state', state);
+  try {
+    const [incidentsRes, storageRes] = await Promise.all([
+      authFetch('/api/blackbox/incidents?' + params.toString()),
+      authFetch('/api/blackbox/storage')
+    ]);
+    const incidentsData = await incidentsRes.json();
+    const storage = await storageRes.json();
+    allBlackboxIncidents = incidentsData.incidents || [];
+    renderBlackboxSummary(storage);
+    renderBlackboxIncidentList();
+    if (selectedBlackboxIncident && allBlackboxIncidents.some(i => i.id === selectedBlackboxIncident)) {
+      await showBlackboxIncident(selectedBlackboxIncident);
+    } else if (!allBlackboxIncidents.length && detail) {
+      detail.innerHTML = '<div class="empty">No Black Box incidents yet. Run a capture to create incident evidence.</div>';
+    }
+  } catch (error) {
+    apiError('/api/blackbox/incidents', error);
+    list.innerHTML = '<div class="quick-action-error">Failed to load Black Box incidents: ' + esc(error.message) + '</div>';
+  }
+}
+
+function renderBlackboxSummary(storage){
+  const box = $('blackboxSummary');
+  if (!box) return;
+  box.innerHTML = [
+    ['Incidents', storage.incidents || 0, 'stored records'],
+    ['Captures', storage.captures || 0, (storage.active_captures || 0) + ' active'],
+    ['Sources', storage.sources || 0, (storage.observations || 0) + ' observations'],
+    ['Artifacts', formatBytes(storage.artifact_bytes || 0), (storage.artifact_count || 0) + ' files']
+  ].map(item => '<div class="metric-card"><span>' + esc(item[0]) + '</span><strong>' + esc(item[1]) + '</strong><small>' + esc(item[2]) + '</small></div>').join('');
+}
+
+function renderBlackboxIncidentList(){
+  const list = $('blackboxIncidentList');
+  if (!list) return;
+  if (!allBlackboxIncidents.length) {
+    list.innerHTML = '<div class="empty">No matching incidents.</div>';
+    return;
+  }
+  list.innerHTML = allBlackboxIncidents.map(inc => {
+    const cls = inc.id === selectedBlackboxIncident ? ' selected' : '';
+    const expiry = inc.pinned ? 'pinned' : (inc.expires_at ? 'expires ' + new Date(inc.expires_at).toLocaleDateString() : 'no expiry');
+    return '<button class="blackbox-incident' + cls + '" onclick="showBlackboxIncident(\'' + esc(inc.id) + '\')">'
+      + '<span><strong>' + esc(inc.title || inc.id) + '</strong><small>' + esc(inc.id) + ' · ' + esc(inc.host || 'unknown host') + '</small></span>'
+      + '<span class="blackbox-badges"><em>' + esc(inc.lifecycle_state) + '</em><em>' + esc(inc.severity || 'unknown') + '</em><em>' + esc(expiry) + '</em></span>'
+      + '</button>';
+  }).join('');
+}
+
+async function showBlackboxIncident(id){
+  selectedBlackboxIncident = id;
+  renderBlackboxIncidentList();
+  const detail = $('blackboxDetail');
+  if (!detail) return;
+  detail.innerHTML = '<div class="empty">Loading incident...</div>';
+  try {
+    const res = await authFetch('/api/blackbox/incidents/' + encodeURIComponent(id));
+    const data = await res.json();
+    if (!data.incident) throw new Error(data.error || 'Incident not found');
+    renderBlackboxDetail(data.incident);
+  } catch (error) {
+    detail.innerHTML = '<div class="quick-action-error">' + esc(error.message) + '</div>';
+  }
+}
+
+function renderBlackboxDetail(incident){
+  const captures = incident.captures || [];
+  const latest = captures[0];
+  let html = '<div class="blackbox-overview">';
+  html += '<div><div class="mission-kicker">' + esc(incident.id) + '</div><h3>' + esc(incident.title) + '</h3><p>' + esc(incident.description || 'No description recorded.') + '</p></div>';
+  html += '<div class="blackbox-state"><span>' + esc(incident.lifecycle_state) + '</span><small>' + esc(incident.severity || 'unknown') + '</small></div>';
+  html += '</div>';
+  html += '<div class="blackbox-toolbar">';
+  html += '<button class="btn btn-sm btn-outline" onclick="analyzeBlackboxIncident(\'' + esc(incident.id) + '\')"><i class="fas fa-magnifying-glass-chart"></i> Analyze</button>';
+  html += '<button class="btn btn-sm btn-outline" onclick="pinBlackboxIncident(\'' + esc(incident.id) + '\')"><i class="fas fa-thumbtack"></i> Pin</button>';
+  html += '<button class="btn btn-sm btn-outline" onclick="exportBlackboxIncident(\'' + esc(incident.id) + '\')"><i class="fas fa-download"></i> Export</button>';
+  html += '</div>';
+  html += '<div class="meta-grid">'
+    + '<div><span>Host</span><strong>' + esc(incident.host || 'unknown') + '</strong></div>'
+    + '<div><span>Detected</span><strong>' + esc(incident.detected_at ? new Date(incident.detected_at).toLocaleString() : 'unknown') + '</strong></div>'
+    + '<div><span>Retention</span><strong>' + esc((incident.pinned ? 'pinned' : incident.retention_class) || 'standard') + '</strong></div>'
+    + '<div><span>Expires</span><strong>' + esc(incident.expires_at ? new Date(incident.expires_at).toLocaleString() : 'never') + '</strong></div>'
+    + '</div>';
+  if (latest) html += renderBlackboxCapture(latest);
+  html += renderBlackboxAnalysis(incident.analyses || []);
+  html += renderBlackboxTimeline(incident.timeline || []);
+  $('blackboxDetail').innerHTML = html;
+  if (latest) loadBlackboxSources(latest.id);
+}
+
+function renderBlackboxCapture(capture){
+  let html = '<div class="td-section"><div class="td-label">Latest Capture</div>';
+  html += '<div class="blackbox-capture-head"><strong>' + esc(capture.id) + '</strong><span class="badge ' + (capture.state === 'completed' ? '' : 'warn') + '">' + esc(capture.state) + '</span><span>' + esc(capture.profile) + '</span><span>' + esc(capture.succeeded_count + '/' + capture.source_count + ' succeeded') + '</span><span>' + esc(formatBytes(capture.total_bytes || 0)) + '</span></div>';
+  html += '<div id="blackboxSources" class="blackbox-source-grid"><div class="empty">Loading sources...</div></div>';
+  html += '</div>';
+  return html;
+}
+
+async function loadBlackboxSources(captureId){
+  const box = $('blackboxSources');
+  if (!box) return;
+  try {
+    const res = await authFetch('/api/blackbox/captures/' + encodeURIComponent(captureId));
+    const data = await res.json();
+    const sources = data.capture && data.capture.sources ? data.capture.sources : [];
+    if (!sources.length) {
+      box.innerHTML = '<div class="empty">No sources recorded.</div>';
+      return;
+    }
+    box.innerHTML = sources.map(source => '<button class="blackbox-source ' + esc(source.state) + '" onclick="openBlackboxSource(\'' + esc(source.id) + '\')">'
+      + '<strong>' + esc(source.display_name) + '</strong><small>' + esc(source.category || 'Source') + ' · ' + esc(source.duration_ms || 0) + 'ms · exit ' + esc(source.exit_code === null ? 'n/a' : source.exit_code) + '</small>'
+      + '<span>' + sourceBadges(source) + '</span></button>').join('');
+  } catch (error) {
+    box.innerHTML = '<div class="quick-action-error">' + esc(error.message) + '</div>';
+  }
+}
+
+function sourceBadges(source){
+  const badges = ['<em>' + esc(source.state) + '</em>'];
+  if (source.timed_out) badges.push('<em>timeout</em>');
+  if (source.truncated) badges.push('<em>truncated</em>');
+  if (source.redaction_count) badges.push('<em>redacted</em>');
+  if (source.error_category) badges.push('<em>' + esc(source.error_category) + '</em>');
+  return badges.join('');
+}
+
+async function openBlackboxSource(sourceId){
+  try {
+    const res = await authFetch('/api/blackbox/sources/' + encodeURIComponent(sourceId) + '?limit=131072');
+    const data = await res.json();
+    const s = data.source;
+    let html = '<div class="tool-detail-overlay active" onclick="if(event.target===this)this.classList.remove(\'active\')"><div class="tool-detail blackbox-source-detail">';
+    html += '<h3>' + esc(s.display_name) + '</h3>';
+    html += '<div class="meta-grid"><div><span>Source</span><strong>' + esc(s.source_key) + '</strong></div><div><span>State</span><strong>' + esc(s.state) + '</strong></div><div><span>Duration</span><strong>' + esc(s.duration_ms || 0) + 'ms</strong></div><div><span>Hash</span><strong>' + esc((s.content_hash || '').slice(0, 16)) + '</strong></div></div>';
+    html += '<div class="td-section"><div class="td-label">Collector</div><div class="quick-action-pre">' + esc(s.command + ' ' + (s.arguments_preview || []).join(' ')) + '</div></div>';
+    if (s.error_message) html += '<div class="quick-action-error">' + esc(s.error_message) + '</div>';
+    html += '<div class="tab-switch"><button class="active">Stdout</button><button>Stderr</button><button>Normalized</button></div>';
+    html += '<div class="value-block is-long">' + esc(s.stdout || '') + '</div>';
+    if (s.stderr) html += '<div class="td-section"><div class="td-label">Stderr</div><div class="value-block is-long">' + esc(s.stderr) + '</div></div>';
+    html += '<div class="td-section"><div class="td-label">Normalized</div><div class="value-block">' + esc(JSON.stringify(s.normalized || {}, null, 2)) + '</div></div>';
+    html += '<div style="margin-top:16px;text-align:right"><button class="btn btn-outline" onclick="this.closest(\'.tool-detail-overlay\').remove()">Close</button></div>';
+    html += '</div></div>';
+    const existing = document.querySelector('.tool-detail-overlay');
+    if (existing) existing.remove();
+    document.body.insertAdjacentHTML('beforeend', html);
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
+function renderBlackboxAnalysis(analyses){
+  if (!analyses.length) return '<div class="td-section"><div class="td-label">Analysis</div><div class="empty">No analysis yet. Run analysis to produce evidence-cited findings.</div></div>';
+  const latest = analyses[0];
+  let html = '<div class="td-section"><div class="td-label">Analysis</div><div class="blackbox-analysis">';
+  html += '<strong>' + esc(latest.summary || 'Analysis') + '</strong><p>' + esc(latest.diagnosis || 'No diagnosis recorded.') + '</p>';
+  html += '<div class="blackbox-finding-list">';
+  for (const finding of latest.findings || []) html += '<div><span>' + esc(finding.severity || 'info') + '</span>' + esc(finding.claim || '') + '<small> cites ' + esc((finding.source_ids || []).join(', ')) + '</small></div>';
+  html += '</div></div></div>';
+  return html;
+}
+
+function renderBlackboxTimeline(timeline){
+  if (!timeline.length) return '';
+  return '<div class="td-section"><div class="td-label">Timeline</div><div class="blackbox-timeline">' + timeline.slice(-30).map(ev => '<div><span>' + esc(ev.created_at ? new Date(ev.created_at).toLocaleTimeString() : '') + '</span><strong>' + esc(ev.event_type) + '</strong><small>' + esc(ev.reason || ev.new_state || '') + '</small></div>').join('') + '</div></div>';
+}
+
+async function startBlackboxCapture(){
+  const profile = $('blackboxProfile') ? $('blackboxProfile').value : 'standard';
+  const progress = $('blackboxProgress');
+  progress.innerHTML = '<div class="blackbox-progress-title">Starting capture...</div>';
+  try {
+    const res = await authFetch('/api/blackbox/capture', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profile, name: 'Dashboard capture ' + new Date().toLocaleString() })
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Capture failed');
+    const cap = data.capture;
+    progress.innerHTML = '<div class="blackbox-progress-title">Capture ' + esc(cap.state) + ': ' + esc(cap.succeeded_count + '/' + cap.source_count) + ' sources completed</div>';
+    selectedBlackboxIncident = cap.incident_id;
+    await loadBlackbox();
+  } catch (error) {
+    progress.innerHTML = '<div class="quick-action-error">' + esc(error.message) + '</div>';
+  }
+}
+
+async function analyzeBlackboxIncident(id){
+  try {
+    const res = await authFetch('/api/blackbox/incidents/' + encodeURIComponent(id) + '/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Analysis failed');
+    showToast('Analysis recorded with evidence citations', 'info');
+    await showBlackboxIncident(id);
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
+async function pinBlackboxIncident(id){
+  try {
+    await authFetch('/api/blackbox/incidents/' + encodeURIComponent(id), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned: true, retention_class: 'pinned' }) });
+    showToast('Incident pinned', 'info');
+    await loadBlackbox();
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
+async function exportBlackboxIncident(id){
+  try {
+    const res = await authFetch('/api/blackbox/incidents/' + encodeURIComponent(id) + '/export?format=markdown');
+    const data = await res.json();
+    const text = typeof data.export === 'string' ? data.export : JSON.stringify(data.export, null, 2);
+    const existing = document.querySelector('.tool-detail-overlay');
+    if (existing) existing.remove();
+    document.body.insertAdjacentHTML('beforeend', '<div class="tool-detail-overlay active" onclick="if(event.target===this)this.remove()"><div class="tool-detail"><h3>Export Preview</h3><div class="value-block is-long">' + esc(text) + '</div><div style="margin-top:16px;text-align:right"><button class="btn btn-outline" onclick="this.closest(\'.tool-detail-overlay\').remove()">Close</button></div></div></div>');
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
+function formatBytes(value){
+  const n = Number(value || 0);
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return Math.round(n / 1024) + ' KB';
+  return (n / 1024 / 1024).toFixed(1) + ' MB';
 }
 
 // -- Refresh -- //

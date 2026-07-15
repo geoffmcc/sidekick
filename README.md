@@ -317,6 +317,10 @@ Tools are organized into 19 categories:
 - **Context & Learning** — context, teach, embed, ollama, memory_export, memory_import, memory_manage, sync_identity, sync_export, sync_import, sync_diff, knowledge
 - **Data Pipeline** — transform, parse, diff, hash, validate, template, extract, anonymize, diff_files
 - **Monitoring** — health, status, watch, baseline, snapshot, timeline, black_box, netdiag, metrics
+
+### Black Box Incident Explorer
+
+`sidekick_black_box` stores profiled incident captures as structured SQLite records with source-level artifacts, observations, timelines, evidence-cited analysis, search, comparison, retention controls, and dashboard inspection. See `docs/blackbox.md` for profiles, schema, dashboard behavior, retention, export, and security notes.
 - **Workflow** — queue, retry, orchestrate, runbook
 - **Meta** — evolve, predict, debug_tool, fresheyes
 - **Efficiency** — batch, cache, summarize, filter, project, tail, find

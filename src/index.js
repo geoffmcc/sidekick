@@ -581,11 +581,39 @@ const TOOL_SCHEMAS = {
     format: z.string().optional().describe("Output format for tool discovery")
   }),
   sidekick_black_box: z.object({
-    action: z.enum(["capture", "list", "get", "delete", "analyze"]),
-    name: z.string().optional().describe("Incident name/identifier"),
-    include: z.array(z.enum(["services", "processes", "logs", "disk", "network", "all"])).optional().default(["all"]),
+    action: z.enum([
+      "capture", "capture_status", "cancel_capture", "list", "get", "delete", "analyze",
+      "list_incidents", "get_incident", "list_captures", "get_capture", "list_sources", "get_source",
+      "search", "compare", "add_note", "update_incident", "verify", "pin", "extend_retention",
+      "archive", "export", "storage_status", "purge_preview", "purge", "profiles"
+    ]),
+    name: z.string().optional().describe("Incident name/title"),
+    title: z.string().optional().describe("Incident title"),
+    description: z.string().optional().describe("Incident description"),
+    project: z.string().optional(),
+    environment: z.string().optional(),
+    severity: z.string().optional(),
+    lifecycle_state: z.string().optional(),
+    tags: z.array(z.string()).optional(),
+    profile: z.enum(["quick", "standard", "deep", "network", "service", "sidekick", "repository", "custom"]).optional(),
+    include: z.array(z.string()).optional().default(["all"]).describe("Legacy sections or collector keys"),
     analyze_with_llm: z.boolean().optional().default(false),
-    incident_id: z.string().optional()
+    use_llm: z.boolean().optional().default(true),
+    incident_id: z.string().optional(),
+    capture_id: z.string().optional(),
+    compare_capture_id: z.string().optional(),
+    source_id: z.string().optional(),
+    query: z.string().optional(),
+    note: z.string().optional(),
+    content: z.string().optional(),
+    note_type: z.string().optional(),
+    retention_class: z.string().optional(),
+    reason: z.string().optional(),
+    format: z.enum(["json", "markdown"]).optional(),
+    raw: z.boolean().optional(),
+    offset: z.number().optional(),
+    limit: z.number().optional(),
+    confirm: z.boolean().optional().default(false)
   }),
   sidekick_respond: z.object({
     text: z.string().describe("The response text to return")
