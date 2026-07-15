@@ -162,8 +162,9 @@ async function sidekick_evolve(args = {}, deps = {}) {
   if (action === "activate_trial") return sidekick_evolve({ ...args, action: "approve" }, deps);
   if (action === "promote") {
     if (!args.id) return error("id required");
-    const item = dbStore.getGeneratedCapability(args.id) || dbStore.getGeneratedCapabilityByName(args.id);
+    let item = dbStore.getGeneratedCapability(args.id) || dbStore.getGeneratedCapabilityByName(args.id);
     if (!item) return error(`Evolve capability not found: ${args.id}`);
+    item = dbStore.syncGeneratedCapabilityStats(item.id) || item;
     if (item.state !== "trial") return error(`Can only promote trial tools (current state: ${item.state})`);
     if ((item.successCount || 0) < 1) return error("Cannot promote before at least one successful trial invocation");
     if (!allowedActions(item).promote) return error("Promote is not allowed until a trial invocation succeeds");

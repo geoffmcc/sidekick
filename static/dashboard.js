@@ -17,6 +17,7 @@ let toolCategories = []; // Will be fetched from API
 let toolStats = {};
 let allProcedures = [];
 let toolStatsWindow = localStorage.getItem('sidekick_toolStatsWindow') || 'local';
+let evolveExecutionStreams = {};
 
 // Authentication helpers
 function getAuthHeader() {
@@ -739,6 +740,8 @@ function renderLogDetail(e){
       (e.project ? '<span>Project: ' + esc(e.project) + '</span>' : '') +
       (e.session_id ? '<span>Session: <code>' + esc(e.session_id) + '</code></span>' : '') +
       (e.task_id ? '<span>Task: <code>' + esc(e.task_id) + '</code></span>' : '') +
+      (e.execution_id ? '<span>Generated execution: <code>' + esc(e.execution_id) + '</code></span>' : '') +
+      (e.generated_activity ? '<span class="badge">generated-tool activity</span>' : '') +
       (Number.isFinite(e.duration_ms) ? '<span>Duration: ' + formatMs(e.duration_ms) + '</span>' : '') +
     '</div>' +
     (e.args ? '<details class="detail-block"><summary>Arguments</summary>' + renderStructuredValue(e.args) + '</details>' : '') +
@@ -776,7 +779,7 @@ function renderLogs(){
     html += '<section class="session-group">';
     html += '<button class="session-header" aria-expanded="false" type="button">';
     html += '<i class="fas ' + icon + '" style="color:' + color + '"></i>';
-    html += '<span class="session-main"><strong>' + esc(src) + ' activity</strong><small>Click to expand timeline</small></span>';
+    html += '<span class="session-main"><strong>' + esc(session.grouping === 'generated_execution' ? 'generated-tool activity' : src + ' activity') + '</strong><small>Click to expand timeline</small></span>';
     html += '<span class="session-count">' + session.call_count + ' calls</span>';
     html += statusBadge(session.failure_count === 0);
     html += '</button>';
@@ -1714,6 +1717,96 @@ function rejectEvolve(id){ evolveAction(id, 'reject', { reason: prompt('Reject r
 function deprecateEvolve(id){ evolveAction(id, 'deprecate', { reason: prompt('Deprecation reason?', 'unused') || 'unused' }); }
 function feedbackEvolve(id, useful){ evolveAction(id, 'feedback', { useful: useful, notes: useful ? 'dashboard useful vote' : 'dashboard not-useful vote' }); }
 
+function promptEvolveArgs(item){
+  const schema = item.schema || { type: 'object', properties: item.inferred_parameters || {}, required: [] };
+  const example = {};
+  Object.entries(schema.properties || {}).forEach(([name, def]) => {
+    if (def.default !== undefined) example[name] = def.default;
+    else if (Array.isArray(def.examples) && def.examples.length) example[name] = def.examples[0];
+    else example[name] = def.type === 'number' ? 1 : def.type === 'boolean' ? true : '';
+  });
+  const value = prompt('Arguments JSON for ' + item.proposed_tool_name, JSON.stringify(example, null, 2));
+  if (value === null) return null;
+  try { return JSON.parse(value || '{}'); } catch (e) { alert('Invalid JSON: ' + e.message); return null; }
+}
+
+function runEvolveTrial(id, index){
+  const item = (window._evolveItems || [])[index];
+  if (!item) return alert('Candidate data not loaded');
+  const args = promptEvolveArgs(item);
+  if (args === null) return;
+  authFetch('/api/evolve/' + encodeURIComponent(id) + '/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ args })
+  }).then(r=>r.json()).then(d=>{
+    if (!d.ok) return alert(d.error || 'Run failed');
+    watchEvolveExecution(d.execution_id);
+    loadEvolve();
+  }).catch(e => apiError('/api/evolve/' + id + '/run', e, 0));
+}
+
+function watchEvolveExecution(id){
+  if (!id) return;
+  if (evolveExecutionStreams[id]) evolveExecutionStreams[id].close();
+  const target = $('evolveExecutionWatch');
+  if (target) target.innerHTML = '<div class="empty">Watching execution ' + esc(id) + '...</div>';
+  const stream = new EventSource('/api/evolve/executions/' + encodeURIComponent(id) + '/stream');
+  evolveExecutionStreams[id] = stream;
+  stream.addEventListener('execution', ev => {
+    const execution = JSON.parse(ev.data);
+    renderEvolveExecution(execution);
+    if (['succeeded','failed','cancelled','timed_out'].includes(execution.state)) {
+      stream.close();
+      delete evolveExecutionStreams[id];
+      loadEvolve();
+    }
+  });
+  stream.onerror = () => {
+    stream.close();
+    delete evolveExecutionStreams[id];
+    loadEvolveExecution(id);
+  };
+}
+
+function loadEvolveExecution(id){
+  authFetch('/api/evolve/executions/' + encodeURIComponent(id)).then(r=>r.json()).then(d=>{
+    if (d.ok) renderEvolveExecution(d.execution);
+  }).catch(e => apiError('/api/evolve/executions/' + id, e, 0));
+}
+
+function cancelEvolveExecution(id){
+  authFetch('/api/evolve/executions/' + encodeURIComponent(id) + '/cancel', { method: 'POST' }).then(r=>r.json()).then(d=>{
+    if (!d.ok) alert(d.error || 'Cancel failed');
+    if (d.execution) renderEvolveExecution(d.execution);
+    loadEvolve();
+  }).catch(e => apiError('/api/evolve/executions/' + id + '/cancel', e, 0));
+}
+
+function openExecutionActivity(id){
+  currentPage = 'activity';
+  location.hash = 'activity';
+  showPage('activity');
+  if ($('logSessionFilter')) $('logSessionFilter').value = id;
+  loadLogs();
+}
+
+function renderEvolveExecution(execution){
+  const target = $('evolveExecutionWatch');
+  if (!target || !execution) return;
+  const running = ['queued','running'].includes(execution.state);
+  const steps = (execution.steps || []).map(step =>
+    '<tr><td>' + esc(step.step_number) + '</td><td><code>' + esc(step.tool_name) + '</code></td><td><pre style="white-space:pre-wrap;max-width:260px">' + esc(JSON.stringify(step.args || {}, null, 2)) + '</pre></td><td>' + esc(step.started_at ? fmtTime(step.started_at) : '-') + '</td><td>' + esc(formatMs(step.duration_ms)) + '</td><td>' + esc(step.result_summary || '') + '</td><td>' + esc(step.retry_count || 0) + '</td><td>' + esc(step.error_category || '') + '</td><td>' + esc(step.success === null ? step.state : (step.success ? 'ok' : 'failed')) + '</td></tr>'
+  ).join('');
+  target.innerHTML = '<div class="card" style="margin:12px 0">' +
+    '<div style="display:flex;justify-content:space-between;gap:12px;align-items:center"><div><strong>Execution <code>' + esc(execution.id) + '</code></strong><div style="margin-top:4px"><span class="badge">' + esc(execution.state) + '</span> <span class="badge">source=' + esc(execution.source || 'unknown') + '</span></div></div>' +
+    '<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn btn-sm btn-outline" onclick="openExecutionActivity(\'' + esc(execution.id) + '\')">Open in Activity</button>' + (running ? '<button class="btn btn-sm btn-outline" onclick="cancelEvolveExecution(\'' + esc(execution.id) + '\')">Cancel</button>' : '') + '</div></div>' +
+    '<div style="margin-top:10px;color:#8b949e;font-size:.8rem">Success criteria: ' + esc(execution.success_criteria || 'All generated workflow steps must complete successfully') + ' · satisfied=' + esc(execution.success_criteria_satisfied === null ? 'pending' : execution.success_criteria_satisfied) + '</div>' +
+    '<div style="margin-top:10px;color:#8b949e;font-size:.8rem">Final summary: ' + esc(execution.final_summary || '') + '</div>' +
+    '<div style="overflow:auto;margin-top:10px"><table class="data-table"><thead><tr><th>#</th><th>Tool</th><th>Args</th><th>Start</th><th>Duration</th><th>Summary</th><th>Retries</th><th>Error</th><th>Status</th></tr></thead><tbody>' + (steps || '<tr><td colspan="9" class="empty">No steps yet</td></tr>') + '</tbody></table></div>' +
+  '</div>';
+}
+
 function renderEvolveParams(params){
   const names = Object.keys(params || {});
   if (!names.length) return '<span class="empty">No parameters inferred</span>';
@@ -1726,12 +1819,13 @@ function loadEvolve(){
   list.innerHTML = '<div class="empty">Loading Evolve candidates...</div>';
   authFetch('/api/evolve').then(r=>r.json()).then(d=>{
     const items = d.capabilities || [];
+    window._evolveItems = items;
     $('evolveCount').textContent = items.length;
     if (!items.length) {
       list.innerHTML = '<div class="empty">No Evolve candidates yet. Run Analyze Logs after repeated successful workflows exist.</div>';
       return;
     }
-    list.innerHTML = items.map(item => {
+    list.innerHTML = items.map((item, index) => {
       const state = item.lifecycle_state || 'candidate';
       const active = state === 'trial' || state === 'active';
       const validation = item.validation_status || 'not_validated';
@@ -1741,6 +1835,8 @@ function loadEvolve(){
         allowed.validate ? '<button class="btn btn-sm" onclick="validateEvolve(\'' + esc(item.id) + '\')">Validate</button>' : '',
         allowed.approve ? '<button class="btn btn-sm" onclick="approveEvolve(\'' + esc(item.id) + '\')">Approve Trial</button>' : '',
         allowed.promote ? '<button class="btn btn-sm" onclick="promoteEvolve(\'' + esc(item.id) + '\')">Promote</button>' : '',
+        active ? '<button class="btn btn-sm" onclick="runEvolveTrial(\'' + esc(item.id) + '\',' + index + ')">Run Trial</button>' : '',
+        active && item.recent_executions && item.recent_executions.length ? '<button class="btn btn-sm btn-outline" onclick="watchEvolveExecution(\'' + esc(item.recent_executions[0].id) + '\')">Watch Executions</button>' : '',
         allowed.reject ? '<button class="btn btn-sm btn-outline" onclick="rejectEvolve(\'' + esc(item.id) + '\')">Reject</button>' : '',
         allowed.deprecate ? '<button class="btn btn-sm btn-outline" onclick="deprecateEvolve(\'' + esc(item.id) + '\')">Deprecate</button>' : '',
         '<button class="btn btn-sm btn-outline" onclick="feedbackEvolve(\'' + esc(item.id) + '\', true)">Useful</button>',
@@ -1766,7 +1862,8 @@ function loadEvolve(){
         '<div style="margin-top:10px"><span class="s-label">Parameters:</span> ' + renderEvolveParams(item.inferred_parameters || {}) + '</div>' +
         (item.score_breakdown ? '<div style="margin-top:8px;color:#8b949e;font-size:.78rem">Score: ' + esc(JSON.stringify(item.score_breakdown)) + '</div>' : '') +
         (item.duplicate_reasons && item.duplicate_reasons.length ? '<div class="agent-err" style="margin-top:8px">Duplicate signals: ' + esc(item.duplicate_reasons.join(', ')) + '</div>' : '') +
-        '<div style="margin-top:10px;color:#8b949e;font-size:.78rem">Trial results: use=' + esc(item.use_count || 0) + ', ok=' + esc(item.success_count || 0) + ', fail=' + esc(item.failure_count || 0) + (trial.length ? ', recent=' + esc(trial.map(t => t.success ? 'ok' : 'fail').join(',')) : '') + '</div>' +
+        '<div style="margin-top:10px;color:#8b949e;font-size:.78rem">Trial executions: use=' + esc(item.use_count || 0) + ', ok=' + esc(item.success_count || 0) + ', fail=' + esc(item.failure_count || 0) + (trial.length ? ', legacy audit=' + esc(trial.map(t => t.success ? 'ok' : 'fail').join(',')) : '') + '</div>' +
+        (item.recent_executions && item.recent_executions.length ? '<div style="margin-top:8px;color:#8b949e;font-size:.78rem">Recent executions: ' + item.recent_executions.map(ex => '<button class="btn btn-sm btn-outline" onclick="watchEvolveExecution(\'' + esc(ex.id) + '\')">' + esc(ex.state) + ' ' + esc(fmtTime(ex.created_at)) + '</button>').join(' ') + '</div>' : '') +
       '</div>';
     }).join('');
   }).catch(e => {

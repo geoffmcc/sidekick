@@ -15,6 +15,8 @@ process.env.SIDEKICK_DASHBOARD_PORT = '4100';
 process.env.SIDEKICK_DASHBOARD_USER = 'test-user';
 process.env.SIDEKICK_DASHBOARD_PASS = 'test-pass';
 process.env.SIDEKICK_API_KEY = 'test-sidekick-api-key';
+process.env.SIDEKICK_TOOL_POLICY = 'open';
+process.env.SIDEKICK_APPROVAL_MODE = 'off';
 const dbStore = require('../src/db');
 
 // Helper function to make HTTP requests
@@ -262,6 +264,18 @@ setTimeout(async () => {
         s: 'gamma ok',
         src: 'mcp'
       });
+      dbStore.appendToolLog({
+        t: '2026-01-01T00:20:00.000Z',
+        n: 'sidekick_respond',
+        a: 'text=generated',
+        d: 12,
+        ok: true,
+        s: 'generated ok',
+        src: 'dashboard',
+        execution_id: 'gte-dashboard-activity',
+        generated_procedure: 'sidekick_generated_observed_test',
+        step_number: 1
+      });
 
       const response = await makeRequest('GET', '/api/logs?limit=20');
       assert.strictEqual(response.status, 200, 'Should return 200');
@@ -273,8 +287,9 @@ setTimeout(async () => {
       assert.strictEqual(taskSession.call_count, 2, 'Task session should contain two calls');
       assert.strictEqual(taskSession.failure_count, 1, 'Task session should count failures');
       assert.ok(response.data.sessions.some(session => session.grouping === 'time_source_fallback'), 'Should expose deterministic fallback grouping');
-      assert.strictEqual(response.data.summary.total_calls, 3, 'Should summarize total calls');
+      assert.strictEqual(response.data.summary.total_calls, 4, 'Should summarize total calls');
       assert.strictEqual(response.data.summary.failures, 1, 'Should summarize failures');
+      assert.ok(response.data.entries.some(entry => entry.generated_activity && entry.execution_id === 'gte-dashboard-activity'), 'Should label generated-tool activity');
       assert.ok(!JSON.stringify(response.data).includes('sk-abcdefghijklmnopqrstuvwx'), 'Should redact sensitive values');
       console.log('Passed\n');
     }
@@ -286,6 +301,48 @@ setTimeout(async () => {
       assert.strictEqual(failures.status, 200, 'Should return 200');
       assert.strictEqual(failures.data.entries.length, 1, 'Should filter to one failed call');
       assert.strictEqual(failures.data.entries[0].tool, 'sidekick_beta', 'Should return matching tool');
+      const execution = await makeRequest('GET', '/api/logs?session=gte-dashboard-activity');
+      assert.strictEqual(execution.status, 200, 'Execution activity filter should return 200');
+      assert.strictEqual(execution.data.entries.length, 1, 'Execution filter should return complete correlated execution');
+      assert.strictEqual(execution.data.sessions[0].grouping, 'generated_execution', 'Execution activity should use generated execution grouping');
+      console.log('Passed\n');
+    }
+
+    console.log('Test 3.0k: dashboard can run a generated trial tool and persist execution history');
+    {
+      dbStore.saveGeneratedCapability({
+        id: 'cand_dashboard_run',
+        name: 'sidekick_generated_dashboard_run',
+        title: 'dashboard run',
+        description: 'Dashboard generated run test',
+        state: 'trial',
+        evidence: [],
+        evidenceCount: 1,
+        successRate: 1,
+        usefulnessScore: 0,
+        parameters: { text: { type: 'string', required: true } },
+        schema: { type: 'object', additionalProperties: false, properties: { text: { type: 'string' } }, required: ['text'] },
+        steps: [{ tool: 'sidekick_respond', args: { text: '{{text}}' } }, { tool: 'sidekick_respond', args: { text: 'done {{text}}' } }],
+        risk: 'low',
+        version: 1,
+        useCount: 0,
+        successCount: 0,
+        failureCount: 0,
+        estimatedCallsSaved: 0,
+        userFeedback: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+      dbStore.syncGeneratedToolRegistry();
+      const run = await makeRequest('POST', '/api/evolve/cand_dashboard_run/run', { args: { text: 'from dashboard' } });
+      assert.strictEqual(run.status, 200, 'Run endpoint should return 200');
+      assert.ok(run.data.execution_id, 'Run endpoint should return execution id');
+      await new Promise(resolve => setTimeout(resolve, 120));
+      const execution = dbStore.getGeneratedToolExecution(run.data.execution_id);
+      assert.strictEqual(execution.state, 'succeeded', 'Dashboard execution should complete successfully');
+      assert.strictEqual(execution.source, 'dashboard', 'Execution source should be dashboard');
+      assert.strictEqual(execution.steps.length, 2, 'Execution should persist step history');
+      assert.strictEqual(dbStore.syncGeneratedCapabilityStats('cand_dashboard_run').successCount, 1, 'Trial stats should count real execution');
       console.log('Passed\n');
     }
 
