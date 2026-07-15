@@ -77,6 +77,8 @@ Black Box captures also mirror capture lifecycle, source progress, and redacted 
 
 Dashboard quick actions mirror user-triggered dashboard operations into `platform_executions` with `operation_type='dashboard_action'`. Existing HTTP responses, audit logs, and dashboard behavior remain the compatibility source of truth while platform rows provide shared visibility for UI-initiated actions.
 
+Agent Bridge tasks mirror task lifecycle, tool-call progress, and transcript artifacts into the platform kernel with `operation_type='agent_task'`. Existing agent HTTP APIs, event streams, conversation transcripts, and tool calls remain the compatibility source of truth while platform rows provide shared task visibility.
+
 ### Dashboard: `src/dashboard.js`
 
 The dashboard serves a browser UI and JSON API. The server code lives in `src/dashboard.js`, the authenticated HTML shell lives in `src/dashboard.html`, and public CSS/JS assets live under `static/`. It reads the Sidekick data directory, reports system state, allows KV editing and deletion, exposes tool metadata, accepts webhooks, and proxies agent requests to the Agent Bridge.

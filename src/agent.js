@@ -8,6 +8,8 @@ const { execFileSync } = require("child_process");
 const { callTool, DATA_DIR, GROQ_API_KEY, GROQ_MODEL, setSource, loadDelays, saveDelays, loadWatches, saveWatches, getToolDefsForSource } = require("./tools");
 const { recallMemoryForTextAsync, formatMemoryRecall, recordAgentTaskMemory, buildMemoryBrief, inferProjectFromText } = require("./memory");
 const { parseAgentDecision, trackDecisionRepetition, selectBestModelName, buildChatMessages, requiresToolUse } = require("./agent-protocol");
+const platformKernel = require("./platform/kernel");
+const { redactSensitive } = require("./redact");
 
 const PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 
@@ -481,6 +483,94 @@ function emit(taskId, data) {
   if (ee) ee.emit("data", data);
 }
 
+function startAgentExecution(goal, taskId, project) {
+  try {
+    const execution = platformKernel.createExecution({
+      task_id: taskId,
+      project_id: project || null,
+      actor_id: "agent",
+      client_id: "agent-bridge",
+      trigger_type: "agent",
+      operation_type: "agent_task",
+      tool_name: "sidekick_agent",
+      tool_action: "run",
+      resource_scope: project || "agent",
+      environment: process.env.SIDEKICK_ENVIRONMENT || null,
+      risk: "medium",
+      source: "agent",
+      correlation_id: taskId,
+      metadata: { goal_summary: redactSensitive(String(goal || "")).slice(0, 300) },
+    });
+    return platformKernel.transitionExecution(execution.execution_id, "running", { source: "agent", reason: "agent task started" });
+  } catch {
+    return null;
+  }
+}
+
+function appendAgentExecutionEvent(execution, eventType, payload = {}, severity = "info") {
+  if (!execution) return;
+  try {
+    platformKernel.appendEvent({
+      event_type: eventType,
+      source: "agent",
+      actor_id: execution.actor_id,
+      execution_id: execution.execution_id,
+      root_execution_id: execution.root_execution_id,
+      task_id: execution.task_id,
+      session_id: execution.session_id,
+      project_id: execution.project_id,
+      environment: execution.environment,
+      severity,
+      payload,
+      correlation_id: execution.root_execution_id,
+    });
+  } catch {
+    // Platform observability must not interrupt agent task execution.
+  }
+}
+
+function finishAgentExecution(execution, status, details = {}) {
+  if (!execution) return;
+  const state = status === "completed" ? "completed" : status === "iteration_limit" ? "timed_out" : "failed";
+  try {
+    platformKernel.transitionExecution(execution.execution_id, state, {
+      source: "agent",
+      actor_id: execution.actor_id,
+      result_status: status,
+      error_category: details.error_category || null,
+      result_summary: details.result_summary || null,
+      reason: details.reason || null,
+    });
+  } catch {
+    // Platform observability must not interrupt agent task execution.
+  }
+}
+
+function registerAgentTranscript(execution, transcriptPath, taskId, status) {
+  if (!execution || !transcriptPath) return;
+  try {
+    const stat = fs.statSync(transcriptPath);
+    platformKernel.registerArtifact({
+      execution_id: execution.execution_id,
+      task_id: execution.task_id,
+      project_id: execution.project_id,
+      producer: "agent",
+      type: "agent_transcript",
+      name: `${taskId}.json`,
+      storage_ref: path.relative(DATA_DIR, transcriptPath),
+      content_type: "application/json",
+      byte_size: stat.size,
+      sensitivity: "sensitive",
+      redaction_state: "unknown",
+      source: "agent",
+      correlation_id: execution.root_execution_id,
+      metadata: { status },
+    });
+  } catch {
+    // Transcript remains available through the existing conversation store.
+  }
+}
+
 function suggestGroqLLM(prompt, attempt = 1) {
   return new Promise((resolve, reject) => {
     const https = require("https");
@@ -597,6 +687,7 @@ async function runAgent(goal, taskId) {
   setSource("agent");
   const steps = [];
   const inferredProject = inferProjectFromText(goal);
+  const platformExecution = startAgentExecution(goal, taskId, inferredProject);
   const memoryBrief = inferredProject ? buildMemoryBrief(goal, { project: inferredProject }) : null;
 
   let semanticRecall = [];
@@ -622,8 +713,10 @@ async function runAgent(goal, taskId) {
   let repeatState = { fingerprint: "", repeats: 0 };
 
   emit(taskId, { type: "step", text: "Analyzing task: " + goal });
+  appendAgentExecutionEvent(platformExecution, "agent.task_started", { task_id: taskId, project: inferredProject, use_tools: useTools });
   if (combinedBrief) {
     emit(taskId, { type: "step", text: "Loaded memory brief with relevant context" });
+    appendAgentExecutionEvent(platformExecution, "agent.memory_brief_loaded", { task_id: taskId, project: inferredProject });
   }
 
   if (!useTools) {
@@ -732,6 +825,7 @@ async function runAgent(goal, taskId) {
         }
 
         emit(taskId, { type: "tool", tool: decision.tool, summary: JSON.stringify(decision.arguments) });
+        appendAgentExecutionEvent(platformExecution, "agent.tool_started", { task_id: taskId, tool: decision.tool, argument_keys: Object.keys(decision.arguments || {}) });
         steps.push({ type: "tool", tool: decision.tool, args: decision.arguments });
 
         let result;
@@ -753,6 +847,7 @@ async function runAgent(goal, taskId) {
 
         const summary = result.substring(0, 500);
         emit(taskId, { type: "tool", tool: decision.tool, summary: summary.substring(0, 120) });
+        appendAgentExecutionEvent(platformExecution, "agent.tool_completed", { task_id: taskId, tool: decision.tool, ok: !result.startsWith("Error:") && !result.startsWith("Call failed:"), summary: redactSensitive(summary).substring(0, 200) }, result.startsWith("Error:") || result.startsWith("Call failed:") ? "error" : "info");
         steps[steps.length - 1].result = summary;
         history.push({ role: "assistant", content: "Called " + decision.tool + " → " + summary.substring(0, 200) });
         
@@ -775,7 +870,9 @@ async function runAgent(goal, taskId) {
   }
 
   const transcript = JSON.stringify({ goal, steps, status, t: new Date().toISOString() });
-  fs.writeFileSync(path.join(CONV_DIR, taskId + ".json"), transcript, "utf-8");
+  const transcriptPath = path.join(CONV_DIR, taskId + ".json");
+  fs.writeFileSync(transcriptPath, transcript, "utf-8");
+  registerAgentTranscript(platformExecution, transcriptPath, taskId, status);
 
   if (status === "completed") {
     try {
@@ -796,6 +893,7 @@ async function runAgent(goal, taskId) {
   } else {
     emit(taskId, { type: "error", text: terminalError });
   }
+  finishAgentExecution(platformExecution, status, { result_summary: status === "completed" ? finalResult : terminalError, reason: terminalError || "agent task completed", error_category: status === "completed" ? null : status });
 }
 
 app.post("/api/agent/run", (req, res) => {
