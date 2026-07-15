@@ -81,6 +81,8 @@ Agent Bridge tasks mirror task lifecycle, tool-call progress, and transcript art
 
 Memory intelligence operations emit platform events for handoff processing, session lifecycle changes, and explicit remember/correct actions. The memory, handoff, task-session, and audit tables remain the compatibility source of truth while platform events provide cross-subsystem chronology.
 
+Approval requests mirror queue, approval, rejection, expiry, and terminal execution outcomes into the platform kernel with `operation_type='approval_request'`. Encrypted approval payloads and existing approval status remain in `json_documents('approvals')`; platform rows contain only lifecycle metadata and redacted result summaries.
+
 ### Dashboard: `src/dashboard.js`
 
 The dashboard serves a browser UI and JSON API. The server code lives in `src/dashboard.js`, the authenticated HTML shell lives in `src/dashboard.html`, and public CSS/JS assets live under `static/`. It reads the Sidekick data directory, reports system state, allows KV editing and deletion, exposes tool metadata, accepts webhooks, and proxies agent requests to the Agent Bridge.
