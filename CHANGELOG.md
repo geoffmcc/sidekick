@@ -4,6 +4,14 @@ All notable changes to Sidekick.
 
 ## Unreleased
 
+### Evolve workflow learning and dynamic tools
+
+- Replaced the legacy LLM-confidence Evolve flow with deterministic workflow mining, candidate scoring, validation, explicit lifecycle states, trial activation, promotion, feedback, and deprecation.
+- Added redacted telemetry fields for source/session/task boundaries, normalized argument shape, fingerprints, errors, retries, generated-procedure calls, and result summaries.
+- Added DB-backed generated capability and generated-tool audit tables plus dynamic registry sync for `sidekick_generated_<name>` tools.
+- Added focused tests for chronology, false cross-session sequences, retries/failures, parameter inference, validation, dynamic discovery, persistence, deprecation, audit retention, feedback, and legacy procedure compatibility.
+- Corrected documentation to distinguish stored procedures, generated dynamic MCP tools, and native built-in tools.
+
 ### Security configuration scanner
 
 - Added `sidekick_security_scan`, a read-only audit for tracked sensitive files, credential signatures, hardcoded security settings, runtime `.env` safety, and sensitive-file permissions.

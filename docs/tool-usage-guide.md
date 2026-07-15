@@ -68,4 +68,4 @@ Use `sidekick_llm` for direct model calls. Use `sidekick_fresheyes` when the mai
 
 ## Self-extension
 
-Use `sidekick_teach` to define reusable procedures. Use `sidekick_evolve` only with care: it is designed for analyzing, proposing, testing, and approving self-modification-style changes.
+Use `sidekick_teach` to define reusable procedures composed from existing tools. Use `sidekick_evolve` only with care: it mines repeated successful workflows, validates parameterized procedures, and manages explicit trial/active generated-tool lifecycle states.

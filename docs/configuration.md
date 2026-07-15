@@ -119,35 +119,21 @@ SIDEKICK_AGENT_APPROVAL_MODE=strict
 Approval variables support the same source prefixes as tool policy: `SIDEKICK_MCP_APPROVAL_MODE`, `SIDEKICK_DASHBOARD_APPROVAL_REQUIRED_TOOLS`, `SIDEKICK_AGENT_APPROVAL_EXEMPT_TOOLS`, and related required/exempt lists.
 Queued arguments are encrypted with `SIDEKICK_SECRET_KEY`, removed after approval, rejection, failure, or expiry, and never returned by the approval-list API. Pending approvals expire after `SIDEKICK_APPROVAL_TTL_SECONDS` (default: `3600`). If the secret key is missing, Sidekick refuses to queue the action instead of storing its arguments in plaintext.
 
-## Evolve Tool Retention
+## Evolve Workflow Learning
 
-The evolve tool automatically cleans up old proposals to prevent unbounded growth:
+`sidekick_evolve` stores candidates, generated capabilities, validation results, usefulness counters, and generated-tool audit history in SQLite. Cleanup no longer deletes approved/rejected evidence by default because audit history is needed to explain why a capability exists or was deprecated.
 
-```env
-SIDEKICK_EVOLVE_RETENTION_DAYS=30
-```
+Use lifecycle actions instead of deleting records:
 
-**What gets cleaned up:**
-- Rejected, test_failed, and rejected_low_confidence proposals older than retention period
-- Non-pending queue entries older than retention period
-
-**What's kept forever:**
-- All approved proposals (valuable historical record)
-- Recent proposals (< retention days)
-- Pending queue entries
-
-**Automatic cleanup triggers:**
-- File size > 100KB, OR
-- Total proposals > 50
-
-**Manual cleanup:**
 ```javascript
-// Preview what would be deleted
-sidekick_evolve({ action: "cleanup" })
-
-// Actually delete old entries
-sidekick_evolve({ action: "cleanup", confirm: true })
+sidekick_evolve({ action: "analyze" })
+sidekick_evolve({ action: "validate", id: "cand_..." })
+sidekick_evolve({ action: "approve", id: "cand_...", approver: "operator" })
+sidekick_evolve({ action: "promote", id: "cand_..." })
+sidekick_evolve({ action: "deprecate", id: "cand_...", reason: "unused" })
 ```
+
+Trial and active generated tools are discoverable as `sidekick_generated_<name>` after registry sync and MCP server startup. Deprecated or rejected generated tools are removed from discovery but retain audit history.
 
 ## Automatic Memory
 

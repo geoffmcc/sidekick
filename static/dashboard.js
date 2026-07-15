@@ -255,6 +255,7 @@ function showPage(name){
   if (name === 'config') loadConfig();
   if (name === 'approvals') loadApprovals();
   if (name === 'tools') loadTools();
+  if (name === 'evolve') loadEvolve();
   if (name === 'metrics') loadGrafanaDashboard();
 }
 
@@ -1715,6 +1716,88 @@ function exportRun(id){
     a.click();
     URL.revokeObjectURL(url);
   }).catch(e => apiError('/api/agent/run/' + id, e, 0));
+}
+
+// -- Evolve -- //
+function evolveAction(id, action, body){
+  const url = id ? '/api/evolve/' + encodeURIComponent(id) + '/' + action : '/api/evolve/' + action;
+  return authFetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {})
+  }).then(r=>r.json()).then(d=>{
+    if (!d.ok) alert(d.error || d.result || (action + ' failed'));
+    loadEvolve();
+    loadTools();
+    return d;
+  }).catch(e => apiError(url, e, 0));
+}
+
+function runEvolveAnalyze(){ evolveAction(null, 'analyze'); }
+function validateEvolve(id){ evolveAction(id, 'validate'); }
+function approveEvolve(id){ evolveAction(id, 'approve', { approver: 'dashboard' }); }
+function promoteEvolve(id){ evolveAction(id, 'promote'); }
+function rejectEvolve(id){ evolveAction(id, 'reject', { reason: prompt('Reject reason?', 'not useful') || 'not useful' }); }
+function deprecateEvolve(id){ evolveAction(id, 'deprecate', { reason: prompt('Deprecation reason?', 'unused') || 'unused' }); }
+function feedbackEvolve(id, useful){ evolveAction(id, 'feedback', { useful: useful, notes: useful ? 'dashboard useful vote' : 'dashboard not-useful vote' }); }
+
+function renderEvolveParams(params){
+  const names = Object.keys(params || {});
+  if (!names.length) return '<span class="empty">No parameters inferred</span>';
+  return names.map(name => '<span class="badge">' + esc(name) + ':' + esc((params[name] && params[name].type) || 'string') + '</span>').join(' ');
+}
+
+function loadEvolve(){
+  const list = $('evolveList');
+  if (!list) return;
+  list.innerHTML = '<div class="empty">Loading Evolve candidates...</div>';
+  authFetch('/api/evolve').then(r=>r.json()).then(d=>{
+    const items = d.capabilities || [];
+    $('evolveCount').textContent = items.length;
+    if (!items.length) {
+      list.innerHTML = '<div class="empty">No Evolve candidates yet. Run Analyze Logs after repeated successful workflows exist.</div>';
+      return;
+    }
+    list.innerHTML = items.map(item => {
+      const state = item.lifecycle_state || 'candidate';
+      const active = state === 'trial' || state === 'active';
+      const validation = item.validation_status || 'not_validated';
+      const trial = item.recent_trial_results || [];
+      const controls = [
+        validation === 'not_validated' || validation === 'failed' ? '<button class="btn btn-sm" onclick="validateEvolve(\'' + esc(item.id) + '\')">Validate</button>' : '',
+        state === 'awaiting_approval' || state === 'validated' || state === 'candidate' ? '<button class="btn btn-sm" onclick="approveEvolve(\'' + esc(item.id) + '\')">Approve Trial</button>' : '',
+        state === 'trial' ? '<button class="btn btn-sm" onclick="promoteEvolve(\'' + esc(item.id) + '\')">Promote</button>' : '',
+        !['rejected','deprecated'].includes(state) ? '<button class="btn btn-sm btn-outline" onclick="rejectEvolve(\'' + esc(item.id) + '\')">Reject</button>' : '',
+        active ? '<button class="btn btn-sm btn-outline" onclick="deprecateEvolve(\'' + esc(item.id) + '\')">Deprecate</button>' : '',
+        '<button class="btn btn-sm btn-outline" onclick="feedbackEvolve(\'' + esc(item.id) + '\', true)">Useful</button>',
+        '<button class="btn btn-sm btn-outline" onclick="feedbackEvolve(\'' + esc(item.id) + '\', false)">Not Useful</button>'
+      ].filter(Boolean).join(' ');
+      return '<div class="card" style="margin-bottom:12px">' +
+        '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">' +
+          '<div>' +
+            '<div style="font-weight:700;color:#c9d1d9">' + esc(item.candidate_title || item.proposed_tool_name) + '</div>' +
+            '<div style="font-size:.78rem;color:#8b949e;margin-top:4px"><code>' + esc(item.proposed_tool_name) + '</code></div>' +
+          '</div>' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">' + controls + '</div>' +
+        '</div>' +
+        '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">' +
+          '<span class="badge">' + esc(state) + '</span>' +
+          '<span class="badge">risk=' + esc(item.risk || 'medium') + '</span>' +
+          '<span class="badge">evidence=' + esc(item.evidence_count || 0) + '</span>' +
+          '<span class="badge">success=' + esc(Math.round((item.success_rate || 0) * 100)) + '%</span>' +
+          '<span class="badge">score=' + esc(item.usefulness_score || 0) + '</span>' +
+          '<span class="badge">calls saved=' + esc(item.estimated_calls_saved || 0) + '</span>' +
+          '<span class="badge">validation=' + esc(validation) + '</span>' +
+        '</div>' +
+        '<div style="margin-top:10px"><span class="s-label">Parameters:</span> ' + renderEvolveParams(item.inferred_parameters || {}) + '</div>' +
+        (item.duplicate_reasons && item.duplicate_reasons.length ? '<div class="agent-err" style="margin-top:8px">Duplicate signals: ' + esc(item.duplicate_reasons.join(', ')) + '</div>' : '') +
+        '<div style="margin-top:10px;color:#8b949e;font-size:.78rem">Trial results: use=' + esc(item.use_count || 0) + ', ok=' + esc(item.success_count || 0) + ', fail=' + esc(item.failure_count || 0) + (trial.length ? ', recent=' + esc(trial.map(t => t.success ? 'ok' : 'fail').join(',')) : '') + '</div>' +
+      '</div>';
+    }).join('');
+  }).catch(e => {
+    list.innerHTML = '<div class="agent-err">Failed to load Evolve data</div>';
+    apiError('/api/evolve', e, 0);
+  });
 }
 
 // -- Approvals -- //

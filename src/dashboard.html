@@ -28,6 +28,7 @@
   <a onclick="showPage('agent')" id="nav-agent">Agent</a>
   <a onclick="showPage('approvals')" id="nav-approvals">Approvals</a>
   <a onclick="showPage('tools')" id="nav-tools">Tools</a>
+  <a onclick="showPage('evolve')" id="nav-evolve">Evolve</a>
   <a onclick="showPage('metrics')" id="nav-metrics">Metrics</a>
 </nav>
 <div class="status-row">
@@ -443,6 +444,18 @@
     </select>
   </div>
   <div id="toolList"></div>
+</div>
+
+<!-- Evolve Page -->
+<div class="page" id="page-evolve">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div>
+      <div class="section-title" style="margin:0">Evolve Workflow Learning (<span id="evolveCount">0</span>)</div>
+      <div style="color:#8b949e;font-size:.82rem;margin-top:4px">Candidates are evidence-backed workflows. Only trial/active generated tools are callable MCP tools.</div>
+    </div>
+    <button class="btn btn-sm" onclick="runEvolveAnalyze()"><i class="fas fa-magnifying-glass-chart"></i> Analyze Logs</button>
+  </div>
+  <div id="evolveList"></div>
 </div>
 
 <!-- Metrics Page -->
