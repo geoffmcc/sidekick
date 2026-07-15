@@ -28,6 +28,7 @@ const suites = [
   { file: 'test/tools.test.js', critical: false, description: 'Core tool behavior' },
   { file: 'test/approval.test.js', critical: false, description: 'Approval queue behavior' },
   { file: 'test/new-tools.test.js', critical: false, description: 'Extended tool behavior' },
+  { file: 'test/blackbox.test.js', critical: false, description: 'Structured Black Box incident evidence behavior' },
   { file: 'test/insight-report.test.js', critical: false, description: 'Insight report tool behavior' },
   { file: 'test/evolve.test.js', critical: false, description: 'Evolve tool and retention behavior' },
   { file: 'test/db-tools.test.js', critical: false, description: 'Database tools behavior' },

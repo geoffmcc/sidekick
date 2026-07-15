@@ -2191,7 +2191,6 @@ function setupFTS5() {
     try {
       db.exec(`
         CREATE VIRTUAL TABLE IF NOT EXISTS ${ftsTableName} USING fts5(
-          rowid UNINDEXED,
           ${textColumns.map(c => c.name).join(", ")}
         );
         

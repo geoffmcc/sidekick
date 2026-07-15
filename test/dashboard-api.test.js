@@ -294,6 +294,47 @@ setTimeout(async () => {
       console.log('Passed\n');
     }
 
+    // Test 3.0ha: Black Box dashboard API exposes incidents, sources, analysis, and retention
+    console.log('Test 3.0ha: Black Box dashboard API exposes incident evidence');
+    {
+      const capture = await makeRequest('POST', '/api/blackbox/capture', { name: 'dashboard blackbox fixture', include: ['system.identity'] });
+      assert.strictEqual(capture.status, 200, 'Capture endpoint should return 200');
+      assert.strictEqual(capture.data.ok, true, 'Capture endpoint should be ok');
+      assert.ok(capture.data.capture.incident_id, 'Capture should return incident id');
+      const incidentId = capture.data.capture.incident_id;
+      const captureId = capture.data.capture.id;
+
+      const incidents = await makeRequest('GET', '/api/blackbox/incidents?search=dashboard%20blackbox');
+      assert.strictEqual(incidents.status, 200, 'Incident list should return 200');
+      assert.ok(incidents.data.incidents.some(incident => incident.id === incidentId), 'Incident list should include fixture');
+
+      const detail = await makeRequest('GET', `/api/blackbox/incidents/${incidentId}`);
+      assert.strictEqual(detail.status, 200, 'Incident detail should return 200');
+      assert.ok(detail.data.incident.timeline.length > 0, 'Incident detail should include timeline');
+
+      const captureDetail = await makeRequest('GET', `/api/blackbox/captures/${captureId}`);
+      assert.strictEqual(captureDetail.status, 200, 'Capture detail should return 200');
+      assert.ok(captureDetail.data.capture.sources.length > 0, 'Capture detail should include source summaries');
+      const sourceId = captureDetail.data.capture.sources[0].id;
+
+      const source = await makeRequest('GET', `/api/blackbox/sources/${sourceId}`);
+      assert.strictEqual(source.status, 200, 'Source detail should return 200');
+      assert.ok(source.data.source.content_hash, 'Source detail should include content hash');
+
+      const analysis = await makeRequest('POST', `/api/blackbox/incidents/${incidentId}/analyze`, {});
+      assert.strictEqual(analysis.status, 200, 'Analysis endpoint should return 200');
+      assert.ok(analysis.data.analysis.cited_source_ids.includes(sourceId), 'Analysis should cite source evidence');
+
+      const pinned = await makeRequest('PATCH', `/api/blackbox/incidents/${incidentId}`, { pinned: true, retention_class: 'pinned' });
+      assert.strictEqual(pinned.status, 200, 'Retention update should return 200');
+      assert.strictEqual(pinned.data.incident.pinned, true, 'Incident should be pinned');
+
+      const storage = await makeRequest('GET', '/api/blackbox/storage');
+      assert.strictEqual(storage.status, 200, 'Storage endpoint should return 200');
+      assert.ok(storage.data.incidents >= 1, 'Storage status should count incidents');
+      console.log('Passed\n');
+    }
+
     // Test 3.0i: activity API filters on real fields
     console.log('Test 3.0i: activity API filters on real fields');
     {

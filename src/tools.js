@@ -12,6 +12,7 @@ const qdrantStore = require("./qdrant");
 const { recordToolCallMemory, buildMemoryBrief, recallMemoryForText } = require("./memory");
 const { scanSecurityConfig } = require("./security-scan");
 const dynamicTools = require("./dynamic-tools");
+const blackbox = require("./blackbox");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
@@ -9703,285 +9704,80 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
   return { content: [{ type: "text", text: "Unknown action. Use: create, start, next, verify, rollback, abort, list, get, delete" }], isError: true };
 }
 
-const BLACKBOX_FILE = path.join(DATA_DIR, "blackbox.json");
-const BLACKBOX_DIR = path.join(DATA_DIR, "blackbox");
-const MAX_BLACKBOX_PER_DAY = 5;
-const BLACKBOX_TTL_DAYS = 7;
-const MAX_BLACKBOX_ACTIVE = 3;
-const MAX_BLACKBOX_COMMANDS = 10;
-
-fs.mkdirSync(BLACKBOX_DIR, { recursive: true });
-
-function loadBlackbox() {
+async function sidekick_black_box(args = {}) {
+  const action = args.action || "list";
   try {
-    if (fs.existsSync(BLACKBOX_FILE)) {
-      return JSON.parse(fs.readFileSync(BLACKBOX_FILE, "utf8"));
+    if (action === "list" || action === "list_incidents") {
+      const incidents = blackbox.listIncidents(args);
+      if (action === "list") {
+        if (!incidents.length) return { content: [{ type: "text", text: "No incidents captured" }] };
+        const list = incidents.map(inc => `${inc.id}: ${inc.title} (${inc.lifecycle_state}, ${inc.severity}, expires ${inc.expires_at || "never"})`).join("\n");
+        return { content: [{ type: "text", text: `Incidents (${incidents.length}):\n\n${list}` }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify({ incidents }, null, 2) }] };
     }
-  } catch {}
-  return { incidents: {} };
-}
 
-function saveBlackbox(data) {
-  fs.writeFileSync(BLACKBOX_FILE, JSON.stringify(data, null, 2));
-}
-
-function purgeExpiredIncidents(data) {
-  const now = Date.now();
-  const ttlMs = BLACKBOX_TTL_DAYS * 24 * 60 * 60 * 1000;
-  let purged = 0;
-  for (const [id, incident] of Object.entries(data.incidents)) {
-    if (now - incident.captured > ttlMs) {
-      const incidentPath = path.join(BLACKBOX_DIR, id);
-      try { fs.rmSync(incidentPath, { recursive: true, force: true }); } catch {}
-      delete data.incidents[id];
-      purged++;
+    if (action === "get" || action === "get_incident") {
+      if (!args.incident_id) return { content: [{ type: "text", text: "incident_id required" }], isError: true };
+      const incident = blackbox.getIncident(args.incident_id, { includeTimeline: true, includeAnalysis: true });
+      if (!incident) return { content: [{ type: "text", text: `Incident not found: ${args.incident_id}` }], isError: true };
+      if (action === "get" && args.raw !== false) {
+        const firstCapture = (incident.captures || [])[0];
+        const sources = firstCapture ? blackbox.listSources(firstCapture.id).map(source => blackbox.getSource(source.id, { limit: 32768 })) : [];
+        const raw = [`# Black Box Incident ${incident.id}`, `Title: ${incident.title}`, `State: ${incident.lifecycle_state}`, ""];
+        for (const source of sources) raw.push(`## ${source.display_name} (${source.state})`, source.stdout || "", source.stderr ? `\nSTDERR:\n${source.stderr}` : "");
+        return { content: [{ type: "text", text: raw.join("\n") }] };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(incident, null, 2) }] };
     }
+
+    if (action === "capture") {
+      const capture = await blackbox.captureIncident({ ...args, source: currentSource });
+      let payload = {
+        incident_id: capture.incident_id,
+        capture_id: capture.id,
+        state: capture.state,
+        profile: capture.profile,
+        source_count: capture.source_count,
+        succeeded_count: capture.succeeded_count,
+        failed_count: capture.failed_count,
+        timed_out_count: capture.timed_out_count,
+        truncated_count: capture.truncated_count,
+        total_bytes: capture.total_bytes,
+        sources: (capture.sources || []).map(source => ({ id: source.id, key: source.source_key, state: source.state, duration_ms: source.duration_ms, exit_code: source.exit_code, timed_out: source.timed_out, truncated: source.truncated }))
+      };
+      if (args.analyze_with_llm) payload.analysis = await blackbox.analyzeIncident(capture.incident_id, { capture_id: capture.id, llm: sidekick_llm, actor: currentSource });
+      return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
+    }
+
+    if (action === "capture_status") return { content: [{ type: "text", text: JSON.stringify(blackbox.captureStatus(args.capture_id), null, 2) }] };
+    if (action === "cancel_capture") return { content: [{ type: "text", text: JSON.stringify(blackbox.cancelCapture(args.capture_id), null, 2) }] };
+    if (action === "list_captures") return { content: [{ type: "text", text: JSON.stringify({ captures: blackbox.listCaptures(args.incident_id) }, null, 2) }] };
+    if (action === "get_capture") return { content: [{ type: "text", text: JSON.stringify(blackbox.getCapture(args.capture_id, { includeSources: true }), null, 2) }] };
+    if (action === "list_sources") return { content: [{ type: "text", text: JSON.stringify({ sources: blackbox.listSources(args.capture_id) }, null, 2) }] };
+    if (action === "get_source") return { content: [{ type: "text", text: JSON.stringify(blackbox.getSource(args.source_id, { offset: args.offset, limit: args.limit }), null, 2) }] };
+    if (action === "search") return { content: [{ type: "text", text: JSON.stringify({ results: blackbox.searchIncidents(args.query, args) }, null, 2) }] };
+    if (action === "analyze") return { content: [{ type: "text", text: JSON.stringify(await blackbox.analyzeIncident(args.incident_id, { capture_id: args.capture_id, llm: args.use_llm === false ? null : sidekick_llm, actor: currentSource }), null, 2) }] };
+    if (action === "compare") return { content: [{ type: "text", text: JSON.stringify(blackbox.compareCaptures(args.capture_id, args.compare_capture_id), null, 2) }] };
+    if (action === "add_note") return { content: [{ type: "text", text: JSON.stringify(blackbox.addNote(args.incident_id, { content: args.note || args.content, type: args.note_type, source: currentSource }), null, 2) }] };
+    if (action === "update_incident") return { content: [{ type: "text", text: JSON.stringify(blackbox.updateIncident(args.incident_id, args, currentSource), null, 2) }] };
+    if (action === "pin") return { content: [{ type: "text", text: JSON.stringify(blackbox.updateIncident(args.incident_id, { pinned: true, retention_class: "pinned", reason: args.reason }, currentSource), null, 2) }] };
+    if (action === "extend_retention") return { content: [{ type: "text", text: JSON.stringify(blackbox.updateIncident(args.incident_id, { retention_class: args.retention_class || "important", reason: args.reason }, currentSource), null, 2) }] };
+    if (action === "archive") return { content: [{ type: "text", text: JSON.stringify(blackbox.updateIncident(args.incident_id, { lifecycle_state: "archived", retention_class: "archive", reason: args.reason }, currentSource), null, 2) }] };
+    if (action === "export") return { content: [{ type: "text", text: typeof blackbox.exportIncident(args.incident_id, args) === "string" ? blackbox.exportIncident(args.incident_id, args) : JSON.stringify(blackbox.exportIncident(args.incident_id, args), null, 2) }] };
+    if (action === "delete") {
+      if (!args.incident_id) return { content: [{ type: "text", text: "incident_id required" }], isError: true };
+      if (!blackbox.deleteIncident(args.incident_id, currentSource)) return { content: [{ type: "text", text: `Incident not found: ${args.incident_id}` }], isError: true };
+      return { content: [{ type: "text", text: `Deleted incident: ${args.incident_id}` }] };
+    }
+    if (action === "storage_status") return { content: [{ type: "text", text: JSON.stringify(blackbox.storageStatus(), null, 2) }] };
+    if (action === "purge_preview") return { content: [{ type: "text", text: JSON.stringify(blackbox.purgePreview(), null, 2) }] };
+    if (action === "purge") return { content: [{ type: "text", text: JSON.stringify(blackbox.purgeExpired({ confirm: !!args.confirm }), null, 2) }] };
+    if (action === "profiles") return { content: [{ type: "text", text: JSON.stringify(blackbox.PROFILE_INFO, null, 2) }] };
+    return { content: [{ type: "text", text: "Unknown action. Use: capture, capture_status, cancel_capture, list_incidents, get_incident, list_captures, get_capture, list_sources, get_source, search, analyze, compare, add_note, update_incident, pin, extend_retention, archive, export, delete, storage_status, purge_preview, purge, profiles" }], isError: true };
+  } catch (e) {
+    return { content: [{ type: "text", text: e.message }], isError: true };
   }
-  return purged;
-}
-
-function generateIncidentId() {
-  return "bb_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-}
-
-async function sidekick_black_box({ action, name, include, analyze_with_llm, incident_id }) {
-  const data = loadBlackbox();
-  purgeExpiredIncidents(data);
-
-  if (action === "list") {
-    const entries = Object.entries(data.incidents);
-    if (entries.length === 0) {
-      return { content: [{ type: "text", text: "No incidents captured" }] };
-    }
-    const list = entries.map(([id, inc]) => {
-      const age = Math.round((Date.now() - inc.captured) / 1000 / 60);
-      return `${id}: ${inc.name || "unnamed"} (${age}min ago, ${inc.sources.length} sources)`;
-    }).join("\n");
-    return { content: [{ type: "text", text: `Incidents (${entries.length}/${MAX_BLACKBOX_ACTIVE}):\n\n${list}` }] };
-  }
-
-  if (action === "get") {
-    if (!incident_id) {
-      return { content: [{ type: "text", text: "incident_id required" }], isError: true };
-    }
-    const incident = data.incidents[incident_id];
-    if (!incident) {
-      return { content: [{ type: "text", text: `Incident not found: ${incident_id}` }], isError: true };
-    }
-    const incidentPath = path.join(BLACKBOX_DIR, incident_id);
-    let content = "";
-    try {
-      content = fs.readFileSync(incidentPath, "utf8");
-    } catch (e) {
-      return { content: [{ type: "text", text: `Failed to read incident data: ${e.message}` }], isError: true };
-    }
-    return { content: [{ type: "text", text: content }] };
-  }
-
-  if (action === "delete") {
-    if (!incident_id) {
-      return { content: [{ type: "text", text: "incident_id required" }], isError: true };
-    }
-    if (!data.incidents[incident_id]) {
-      return { content: [{ type: "text", text: `Incident not found: ${incident_id}` }], isError: true };
-    }
-    const incidentPath = path.join(BLACKBOX_DIR, incident_id);
-    try { fs.rmSync(incidentPath, { recursive: true, force: true }); } catch {}
-    delete data.incidents[incident_id];
-    saveBlackbox(data);
-    return { content: [{ type: "text", text: `Deleted incident: ${incident_id}` }] };
-  }
-
-  if (action === "capture") {
-    const today = new Date().toISOString().split("T")[0];
-    const todayIncidents = Object.values(data.incidents).filter(inc => {
-      const incDate = new Date(inc.captured).toISOString().split("T")[0];
-      return incDate === today;
-    });
-
-    if (todayIncidents.length >= MAX_BLACKBOX_PER_DAY) {
-      return { content: [{ type: "text", text: `Rate limit exceeded: max ${MAX_BLACKBOX_PER_DAY} captures per day` }], isError: true };
-    }
-
-    if (Object.keys(data.incidents).length >= MAX_BLACKBOX_ACTIVE) {
-      return { content: [{ type: "text", text: `Max active incidents reached (${MAX_BLACKBOX_ACTIVE}). Delete old incidents or wait for TTL expiry.` }], isError: true };
-    }
-
-    const id = generateIncidentId();
-    const incidentName = name || `incident_${Date.now()}`;
-    const sources = include && include[0] !== "all" ? include : ["services", "processes", "logs", "disk", "network"];
-    
-    let commandCount = 0;
-    const checkLimit = () => {
-      commandCount++;
-      if (commandCount > MAX_BLACKBOX_COMMANDS) {
-        throw new Error(`Exceeded max commands per capture (${MAX_BLACKBOX_COMMANDS})`);
-      }
-    };
-
-    let content = `# Incident Report: ${incidentName}\n`;
-    content += `ID: ${id}\n`;
-    content += `Time: ${new Date().toISOString()}\n`;
-    content += `Sources: ${sources.join(", ")}\n\n`;
-
-    try {
-      if (sources.includes("services")) {
-        checkLimit();
-        content += "## Services\n\n";
-        try {
-          const result = execSync("systemctl list-units --type=service --no-pager --state=running", {
-            encoding: "utf8",
-            timeout: 5000,
-            stdio: ["pipe", "pipe", "pipe"]
-          });
-          content += result + "\n";
-        } catch (e) {
-          content += `Failed to get services: ${e.message}\n`;
-        }
-      }
-
-      if (sources.includes("processes")) {
-        checkLimit();
-        content += "## Top Processes\n\n";
-        try {
-          const result = execSync("ps aux --sort=-%cpu | head -20", {
-            encoding: "utf8",
-            timeout: 5000,
-            stdio: ["pipe", "pipe", "pipe"]
-          });
-          content += result + "\n";
-        } catch (e) {
-          content += `Failed to get processes: ${e.message}\n`;
-        }
-      }
-
-      if (sources.includes("logs")) {
-        checkLimit();
-        content += "## Recent Logs (journalctl)\n\n";
-        try {
-          const result = execSync("journalctl -n 100 --no-pager", {
-            encoding: "utf8",
-            timeout: 5000,
-            stdio: ["pipe", "pipe", "pipe"]
-          });
-          content += result + "\n";
-        } catch (e) {
-          content += `Failed to get journalctl: ${e.message}\n`;
-        }
-
-        checkLimit();
-        content += "## Recent Tool Calls (log.jsonl)\n\n";
-        try {
-          const toolLogs = dbStore.readToolLogs(100);
-          content += toolLogs.map(l =>
-            l.t + " [" + (l.ok ? "OK" : "ERR") + "] " + l.n + ": " + l.s
-          ).join("\n") + "\n";
-        } catch (e) {
-          content += `Failed to read tool logs: ${e.message}\n`;
-        }
-      }
-
-      if (sources.includes("disk")) {
-        checkLimit();
-        content += "## Disk Usage\n\n";
-        try {
-          const result = execSync("df -h", {
-            encoding: "utf8",
-            timeout: 5000,
-            stdio: ["pipe", "pipe", "pipe"]
-          });
-          content += result + "\n";
-        } catch (e) {
-          content += `Failed to get disk: ${e.message}\n`;
-        }
-      }
-
-      if (sources.includes("network")) {
-        checkLimit();
-        content += "## Network Listeners\n\n";
-        try {
-          const result = execSync("ss -tlnp", {
-            encoding: "utf8",
-            timeout: 5000,
-            stdio: ["pipe", "pipe", "pipe"]
-          });
-          content += result + "\n";
-        } catch (e) {
-          content += `Failed to get network: ${e.message}\n`;
-        }
-      }
-    } catch (e) {
-      content += `\n\nCapture error: ${e.message}\n`;
-    }
-
-    const incidentPath = path.join(BLACKBOX_DIR, id);
-    fs.writeFileSync(incidentPath, content);
-
-    data.incidents[id] = {
-      name: incidentName,
-      captured: Date.now(),
-      sources,
-      size: content.length
-    };
-    saveBlackbox(data);
-
-    let result = `Incident captured: ${id}\n`;
-    result += `Name: ${incidentName}\n`;
-    result += `Sources: ${sources.join(", ")}\n`;
-    result += `Size: ${content.length} bytes\n`;
-    result += `Commands executed: ${commandCount}\n`;
-
-    if (analyze_with_llm) {
-      try {
-        const summaryPrompt = `Analyze this incident report and identify potential issues or anomalies:\n\n${content.substring(0, 5000)}`;
-        const llmResult = await sidekick_llm({
-          prompt: summaryPrompt,
-          system: "You are a senior systems engineer analyzing an incident report. Identify key issues, anomalies, and potential root causes. Be concise and actionable.",
-          temperature: 0.3
-        });
-        if (llmResult.content && llmResult.content[0]) {
-          result += `\n## LLM Analysis\n\n${llmResult.content[0].text}`;
-        }
-      } catch (e) {
-        result += `\nLLM analysis failed: ${e.message}`;
-      }
-    }
-
-    return { content: [{ type: "text", text: result }] };
-  }
-
-  if (action === "analyze") {
-    if (!incident_id) {
-      return { content: [{ type: "text", text: "incident_id required" }], isError: true };
-    }
-    const incident = data.incidents[incident_id];
-    if (!incident) {
-      return { content: [{ type: "text", text: `Incident not found: ${incident_id}` }], isError: true };
-    }
-    const incidentPath = path.join(BLACKBOX_DIR, incident_id);
-    let content = "";
-    try {
-      content = fs.readFileSync(incidentPath, "utf8");
-    } catch (e) {
-      return { content: [{ type: "text", text: `Failed to read incident data: ${e.message}` }], isError: true };
-    }
-
-    try {
-      const summaryPrompt = `Analyze this incident report and identify potential issues or anomalies:\n\n${content.substring(0, 5000)}`;
-      const llmResult = await sidekick_llm({
-        prompt: summaryPrompt,
-        system: "You are a senior systems engineer analyzing an incident report. Identify key issues, anomalies, and potential root causes. Be concise and actionable.",
-        temperature: 0.3
-      });
-      if (llmResult.content && llmResult.content[0]) {
-        return { content: [{ type: "text", text: `## LLM Analysis for ${incident_id}\n\n${llmResult.content[0].text}` }] };
-      }
-    } catch (e) {
-      return { content: [{ type: "text", text: `LLM analysis failed: ${e.message}` }], isError: true };
-    }
-  }
-
-  return { content: [{ type: "text", text: "Unknown action. Use: capture, list, get, delete, analyze" }], isError: true };
 }
 
 // Simple respond tool for agent to return text without calling other tools
@@ -11571,7 +11367,7 @@ const TOOL_DEFS = [
   { name: "sidekick_runbook", description: "Operational runbook executor with autonomous and guided modes. Supports verification, rollback, and step-by-step execution.", args: { action: "string (create|start|next|verify|rollback|abort|list|get|delete)", name: "string (optional, runbook name)", mode: "string (optional, autonomous|guided - default autonomous)", steps: "array (optional, step definitions)", runbook_id: "string (optional, instance or definition ID)", step_index: "number (optional, step index)" } },
   { name: "sidekick_ops", description: "Packaged Sidekick operations workflows for deploy verification, restart smoke tests, deployments, and incident snapshots.", args: { action: "string (verify_deployed_commit|restart_and_smoke_test|deploy_current_main|incident_snapshot)", repo_path: "string (optional, repository path - default current Sidekick repo)", restart_mcp: "boolean (optional, schedule sidekick-mcp restart for restart_and_smoke_test)" } },
   { name: "sidekick_mission", description: "Mission Control intent router for Sidekick operations. Profiles, routes, preflights, and executes common intents through safer existing tools before raw shell.", args: { action: "string (profiles|route|preflight|execute - default route)", intent: "string (user goal or operation intent)", profile: "string (read_only_audit|trusted_vps|production|danger_zone - default trusted_vps)", confirm: "boolean (required true for mutating execute routes)", key: "string (optional, KV key for delete missions)", project: "string (optional, project for memory missions)", query: "string (optional, search query for tool discovery)", include: "string (optional, include sections for status/project)", services: "string (optional, services for status)", repo_path: "string (optional, repo for deploy workflows)", limit: "number (optional, result limit)", tool: "string (optional, tool filter for logs)", source: "string (optional, source filter for logs)", format: "string (optional, output format for tool discovery)" } },
-  { name: "sidekick_black_box", description: "Incident time capsule: captures full system context (services, processes, logs, disk, network) in one call for debugging. Rate limited.", args: { action: "string (capture|list|get|delete|analyze)", name: "string (optional, incident name)", include: "array (optional, services|processes|logs|disk|network|all - default all)", analyze_with_llm: "boolean (optional, use LLM for analysis - default false)", incident_id: "string (optional, incident ID)" } },
+  { name: "sidekick_black_box", description: "Structured Black Box incident evidence system: captures profiled system context, stores searchable incidents/captures/sources/observations, supports live status, evidence-cited analysis, comparison, retention, export, and legacy list/get/delete compatibility.", args: { action: "string (capture|capture_status|cancel_capture|list|list_incidents|get|get_incident|list_captures|get_capture|list_sources|get_source|search|analyze|compare|add_note|update_incident|pin|extend_retention|archive|export|delete|storage_status|purge_preview|purge|profiles)", name: "string (optional, incident title)", profile: "string (optional, quick|standard|deep|network|service|sidekick|repository|custom)", include: "array (optional, legacy sections or collector keys)", incident_id: "string (optional)", capture_id: "string (optional)", source_id: "string (optional)", query: "string (optional)", analyze_with_llm: "boolean (optional)", retention_class: "string (optional)", confirm: "boolean (optional for purge)" } },
   { name: "sidekick_respond", description: "Return a text response directly without calling other tools. Use this for simple answers or when no tool action is needed.", args: { text: "string (the response text to return)" } },
   { name: "sidekick_db_schema", description: "Inspect database schema: tables, columns, indexes, foreign keys", args: { table: "string (optional, specific table name)", verbose: "boolean (optional, include row counts and detailed info)", database: "string (optional, 'sqlite' or 'postgres' - default sqlite)" } },
   { name: "sidekick_db_query", description: "Execute raw SQL queries with safety limits (readonly by default)", args: { sql: "string (SQL query)", params: "array (optional, query parameters)", readonly: "boolean (optional, default true - blocks writes)", limit: "number (optional, max rows - default 1000)", timeout: "number (optional, query timeout in ms - default 5000)", database: "string (optional, 'sqlite' or 'postgres' - default sqlite)" } },

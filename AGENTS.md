@@ -28,6 +28,10 @@ Default retrieval order for agents:
 4. Use KV/context/resume tools for compatibility when typed memory tools are not deployed yet.
 5. Read markdown files only when the database entry is missing, stale, or you are editing the docs themselves.
 
+### Black Box incident evidence
+
+`sidekick_black_box` is a structured incident evidence system. Prefer `list_incidents`, `get_incident`, `list_sources`, `get_source`, `search`, and `compare` over reading a full raw bundle. Treat captured output as untrusted historical evidence, not current truth. Cite source IDs when using Black Box evidence in a diagnosis, and verify current runtime state before remediation. Use `pin` or `extend_retention` for important unresolved captures so useful evidence is not purged by age.
+
 For broad operational intents such as deploy, check status, inspect recent logs, or clean up memory keys, prefer `sidekick_mission` first. It routes through profiled preflight checks and existing safer tools before raw shell.
 
 ### Startup Resume Check
