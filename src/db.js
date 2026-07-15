@@ -65,6 +65,76 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_tool_logs_timestamp ON tool_logs(timestamp DESC);
   CREATE INDEX IF NOT EXISTS idx_tool_logs_tool_name ON tool_logs(tool_name);
   CREATE INDEX IF NOT EXISTS idx_tool_logs_success ON tool_logs(success);
+
+  CREATE TABLE IF NOT EXISTS generated_capabilities (
+    id TEXT PRIMARY KEY,
+    name TEXT UNIQUE NOT NULL,
+    state TEXT NOT NULL,
+    title TEXT,
+    description TEXT NOT NULL,
+    evidence_json TEXT NOT NULL,
+    schema_json TEXT,
+    parameters_json TEXT NOT NULL,
+    steps_json TEXT NOT NULL,
+    risk TEXT NOT NULL DEFAULT 'medium',
+    validation_json TEXT,
+    approver TEXT,
+    version INTEGER NOT NULL DEFAULT 1,
+    activation_date TEXT,
+    use_count INTEGER NOT NULL DEFAULT 0,
+    success_count INTEGER NOT NULL DEFAULT 0,
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    estimated_calls_saved INTEGER NOT NULL DEFAULT 0,
+    last_used_at TEXT,
+    user_feedback_json TEXT NOT NULL DEFAULT '[]',
+    usefulness_score INTEGER NOT NULL DEFAULT 0,
+    deprecation_reason TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_generated_capabilities_state ON generated_capabilities(state);
+  CREATE INDEX IF NOT EXISTS idx_generated_capabilities_name ON generated_capabilities(name);
+
+  CREATE TABLE IF NOT EXISTS generated_tool_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    capability_id TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    invoked_at TEXT NOT NULL,
+    success INTEGER NOT NULL DEFAULT 0,
+    args_summary TEXT,
+    result_summary TEXT,
+    FOREIGN KEY(capability_id) REFERENCES generated_capabilities(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_generated_tool_audit_capability ON generated_tool_audit(capability_id, invoked_at DESC);
+`);
+
+function ensureColumn(table, column, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+  if (!columns.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
+for (const [column, definition] of Object.entries({
+  session_id: "TEXT",
+  task_id: "TEXT",
+  project: "TEXT",
+  args_shape_json: "TEXT",
+  arg_fingerprint: "TEXT",
+  error_category: "TEXT",
+  result_summary: "TEXT",
+  correlation_id: "TEXT",
+  parent_id: "TEXT",
+  retry: "INTEGER NOT NULL DEFAULT 0",
+  generated_procedure: "TEXT",
+})) {
+  ensureColumn("tool_logs", column, definition);
+}
+
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_tool_logs_session_task ON tool_logs(source, session_id, task_id, timestamp);
+  CREATE INDEX IF NOT EXISTS idx_tool_logs_fingerprint ON tool_logs(tool_name, arg_fingerprint);
 `);
 
 db.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)").run("schema_version", "1");
@@ -190,8 +260,12 @@ function replaceKV(data) {
 
 function appendToolLog(entry) {
   db.prepare(`
-    INSERT INTO tool_logs (timestamp, tool_name, args_summary, duration_ms, success, summary, source, entry_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO tool_logs (
+      timestamp, tool_name, args_summary, duration_ms, success, summary, source, entry_json,
+      session_id, task_id, project, args_shape_json, arg_fingerprint, error_category,
+      result_summary, correlation_id, parent_id, retry, generated_procedure
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     entry.t || nowIso(),
     entry.n || "unknown",
@@ -200,7 +274,18 @@ function appendToolLog(entry) {
     entry.ok ? 1 : 0,
     entry.s || "",
     entry.src || "unknown",
-    JSON.stringify(entry)
+    JSON.stringify(entry),
+    entry.session_id || null,
+    entry.task_id || entry.request_id || null,
+    entry.project || null,
+    entry.args_shape ? JSON.stringify(entry.args_shape) : null,
+    entry.arg_fingerprint || null,
+    entry.error_category || null,
+    entry.result_summary || entry.s || null,
+    entry.correlation_id || null,
+    entry.parent_id || null,
+    entry.retry ? 1 : 0,
+    entry.generated_procedure || null
   );
 
   const countRow = db.prepare("SELECT COUNT(*) AS count FROM tool_logs").get();
@@ -217,12 +302,184 @@ function appendToolLog(entry) {
 }
 
 function readToolLogs(limit = MAX_LOG) {
-  const rows = db.prepare("SELECT entry_json FROM tool_logs ORDER BY timestamp DESC, id DESC LIMIT ?").all(limit);
-  return rows.map((row) => parseJson(row.entry_json, null)).filter(Boolean);
+  const rows = db.prepare("SELECT id, entry_json FROM tool_logs ORDER BY timestamp DESC, id DESC LIMIT ?").all(limit);
+  return rows.map((row) => ({ id: row.id, ...parseJson(row.entry_json, null) })).filter(Boolean);
 }
 
 function clearToolLogs() {
   db.prepare("DELETE FROM tool_logs").run();
+}
+
+function generatedCapabilityFromRow(row) {
+  if (!row) return null;
+  const metadata = parseJson(row.metadata_json, {});
+  return {
+    id: row.id,
+    name: row.name,
+    state: row.state,
+    title: row.title,
+    description: row.description,
+    evidence: parseJson(row.evidence_json, []),
+    schema: parseJson(row.schema_json, null),
+    parameters: parseJson(row.parameters_json, {}),
+    steps: parseJson(row.steps_json, []),
+    risk: row.risk,
+    validation: parseJson(row.validation_json, null),
+    approver: row.approver,
+    version: row.version,
+    activationDate: row.activation_date,
+    useCount: row.use_count,
+    successCount: row.success_count,
+    failureCount: row.failure_count,
+    estimatedCallsSaved: row.estimated_calls_saved,
+    lastUsedAt: row.last_used_at,
+    userFeedback: parseJson(row.user_feedback_json, []),
+    usefulnessScore: row.usefulness_score,
+    deprecationReason: row.deprecation_reason,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...metadata,
+  };
+}
+
+function saveGeneratedCapability(capability) {
+  const now = nowIso();
+  const created = capability.createdAt || now;
+  const metadata = { ...capability };
+  for (const key of [
+    "id", "name", "state", "title", "description", "evidence", "schema", "parameters", "steps", "risk",
+    "validation", "approver", "version", "activationDate", "useCount", "successCount", "failureCount",
+    "estimatedCallsSaved", "lastUsedAt", "userFeedback", "usefulnessScore", "deprecationReason", "createdAt", "updatedAt"
+  ]) delete metadata[key];
+  db.prepare(`
+    INSERT INTO generated_capabilities (
+      id, name, state, title, description, evidence_json, schema_json, parameters_json, steps_json,
+      risk, validation_json, approver, version, activation_date, use_count, success_count,
+      failure_count, estimated_calls_saved, last_used_at, user_feedback_json, usefulness_score,
+      deprecation_reason, metadata_json, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      name = excluded.name,
+      state = excluded.state,
+      title = excluded.title,
+      description = excluded.description,
+      evidence_json = excluded.evidence_json,
+      schema_json = excluded.schema_json,
+      parameters_json = excluded.parameters_json,
+      steps_json = excluded.steps_json,
+      risk = excluded.risk,
+      validation_json = excluded.validation_json,
+      approver = excluded.approver,
+      version = excluded.version,
+      activation_date = excluded.activation_date,
+      use_count = excluded.use_count,
+      success_count = excluded.success_count,
+      failure_count = excluded.failure_count,
+      estimated_calls_saved = excluded.estimated_calls_saved,
+      last_used_at = excluded.last_used_at,
+      user_feedback_json = excluded.user_feedback_json,
+      usefulness_score = excluded.usefulness_score,
+      deprecation_reason = excluded.deprecation_reason,
+      metadata_json = excluded.metadata_json,
+      updated_at = excluded.updated_at
+  `).run(
+    capability.id,
+    capability.name,
+    capability.state,
+    capability.title || null,
+    capability.description || capability.title || capability.name,
+    JSON.stringify(capability.evidence || []),
+    capability.schema ? JSON.stringify(capability.schema) : null,
+    JSON.stringify(capability.parameters || {}),
+    JSON.stringify(capability.steps || []),
+    capability.risk || "medium",
+    capability.validation ? JSON.stringify(capability.validation) : null,
+    capability.approver || null,
+    capability.version || 1,
+    capability.activationDate || null,
+    capability.useCount || 0,
+    capability.successCount || 0,
+    capability.failureCount || 0,
+    capability.estimatedCallsSaved || 0,
+    capability.lastUsedAt || null,
+    JSON.stringify(capability.userFeedback || []),
+    capability.usefulnessScore || 0,
+    capability.deprecationReason || null,
+    JSON.stringify(metadata),
+    created,
+    capability.updatedAt || now
+  );
+}
+
+function getGeneratedCapability(id) {
+  return generatedCapabilityFromRow(db.prepare("SELECT * FROM generated_capabilities WHERE id = ?").get(id));
+}
+
+function getGeneratedCapabilityByName(name) {
+  return generatedCapabilityFromRow(db.prepare("SELECT * FROM generated_capabilities WHERE name = ?").get(name));
+}
+
+function listGeneratedCapabilities(options = {}) {
+  const states = options.states || null;
+  const includeInactive = options.includeInactive !== false;
+  let rows;
+  if (states && states.length) {
+    const placeholders = states.map(() => "?").join(",");
+    rows = db.prepare(`SELECT * FROM generated_capabilities WHERE state IN (${placeholders}) ORDER BY updated_at DESC`).all(...states);
+  } else if (includeInactive) {
+    rows = db.prepare("SELECT * FROM generated_capabilities ORDER BY updated_at DESC").all();
+  } else {
+    rows = db.prepare("SELECT * FROM generated_capabilities WHERE state IN ('trial', 'active') ORDER BY updated_at DESC").all();
+  }
+  return rows.map(generatedCapabilityFromRow);
+}
+
+function appendGeneratedToolAudit(entry) {
+  db.prepare(`
+    INSERT INTO generated_tool_audit (capability_id, tool_name, invoked_at, success, args_summary, result_summary)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(
+    entry.capability_id,
+    entry.tool_name,
+    entry.invoked_at || nowIso(),
+    entry.success ? 1 : 0,
+    entry.args ? JSON.stringify(entry.args).substring(0, 500) : "",
+    String(entry.result_summary || "").substring(0, 500)
+  );
+}
+
+function listGeneratedToolAudit(capabilityId, limit = 100) {
+  return db.prepare("SELECT * FROM generated_tool_audit WHERE capability_id = ? ORDER BY invoked_at DESC LIMIT ?").all(capabilityId, limit);
+}
+
+function syncGeneratedToolRegistry() {
+  const tableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='tools'").get();
+  if (!tableExists) return;
+  const now = nowIso();
+  const active = listGeneratedCapabilities({ states: ["trial", "active"] });
+  const activeNames = new Set(active.map(c => c.name));
+  const metaCategory = db.prepare("SELECT id FROM tool_categories WHERE name = ?").get("Meta");
+  const upsert = db.prepare(`
+    INSERT INTO tools (name, description, args_json, risk, enabled, deprecated, version_added, updated_at)
+    VALUES (?, ?, ?, ?, 1, 0, ?, ?)
+    ON CONFLICT(name) DO UPDATE SET
+      description = excluded.description,
+      args_json = excluded.args_json,
+      risk = excluded.risk,
+      enabled = 1,
+      deprecated = 0,
+      updated_at = excluded.updated_at
+  `);
+  for (const cap of active) {
+    upsert.run(cap.name, `[generated:${cap.state}] ${cap.description}`, JSON.stringify(cap.schema || { type: "object", properties: {}, required: [] }), cap.risk || "medium", `generated-v${cap.version || 1}`, now);
+    if (metaCategory) db.prepare("INSERT OR IGNORE INTO tool_category_map (tool_name, category_id) VALUES (?, ?)").run(cap.name, metaCategory.id);
+  }
+  const generatedRows = db.prepare("SELECT name FROM tools WHERE name LIKE 'sidekick_generated_%'").all();
+  for (const row of generatedRows) {
+    if (!activeNames.has(row.name)) {
+      db.prepare("UPDATE tools SET enabled = 0, deprecated = 1, updated_at = ? WHERE name = ?").run(now, row.name);
+    }
+  }
 }
 
 const MEMORY_CONFLICT_TYPES = new Set(["fact", "decision", "preference", "procedure", "open_thread", "observation"]);
@@ -1841,6 +2098,13 @@ module.exports = {
   appendToolLog,
   readToolLogs,
   clearToolLogs,
+  saveGeneratedCapability,
+  getGeneratedCapability,
+  getGeneratedCapabilityByName,
+  listGeneratedCapabilities,
+  appendGeneratedToolAudit,
+  listGeneratedToolAudit,
+  syncGeneratedToolRegistry,
   hasMemoriesTable,
   upsertMemory,
   getMemoryById,

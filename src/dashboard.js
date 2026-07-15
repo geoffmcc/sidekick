@@ -5,7 +5,7 @@ const path = require("path");
 const os = require("os");
 const { timingSafeCompare } = require("./crypto-utils");
 const { execSync } = require("child_process");
-const { getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval } = require("./tools");
+const { TOOLS, setSource, getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval } = require("./tools");
 const dbStore = require("./db");
 const crypto = require("crypto");
 
@@ -858,6 +858,51 @@ app.get("/api/tool-policy", (req, res) => {
 app.get("/api/tool-categories", (req, res) => {
   res.json({ categories: getToolCategoriesWithTools("dashboard") });
 });
+
+app.get("/api/evolve", (req, res) => {
+  const capabilities = dbStore.listGeneratedCapabilities({ includeInactive: true });
+  res.json({
+    ok: true,
+    capabilities: capabilities.map(cap => ({
+      id: cap.id,
+      candidate_title: cap.title,
+      proposed_tool_name: cap.name,
+      lifecycle_state: cap.state,
+      evidence_count: cap.evidenceCount || (cap.evidence || []).length,
+      success_rate: cap.successRate,
+      usefulness_score: cap.usefulnessScore,
+      estimated_calls_saved: cap.estimatedCallsSaved,
+      risk: cap.risk,
+      inferred_parameters: cap.parameters,
+      validation_status: cap.validation ? (cap.validation.passed ? "passed" : "failed") : "not_validated",
+      recent_trial_results: dbStore.listGeneratedToolAudit(cap.id, 5),
+      use_count: cap.useCount,
+      success_count: cap.successCount,
+      failure_count: cap.failureCount,
+      duplicate_reasons: cap.duplicateReasons || [],
+    }))
+  });
+});
+
+async function evolveDashboardAction(req, res, action, extra = {}) {
+  try {
+    setSource("dashboard");
+    auditLog(req, `evolve.${action}`, { id: req.params.id || req.body?.id || null });
+    const result = await TOOLS.sidekick_evolve({ action, id: req.params.id || req.body?.id, ...(req.body || {}), ...extra });
+    res.json({ ok: !result.isError, result: result.content?.[0]?.text || "" });
+  } catch (error) {
+    logError(req.originalUrl, 500, error, "evolve", req.headers["user-agent"]);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+}
+
+app.post("/api/evolve/analyze", (req, res) => evolveDashboardAction(req, res, "analyze"));
+app.post("/api/evolve/:id/validate", (req, res) => evolveDashboardAction(req, res, "validate"));
+app.post("/api/evolve/:id/approve", (req, res) => evolveDashboardAction(req, res, "approve", { approver: "dashboard" }));
+app.post("/api/evolve/:id/promote", (req, res) => evolveDashboardAction(req, res, "promote"));
+app.post("/api/evolve/:id/reject", (req, res) => evolveDashboardAction(req, res, "reject"));
+app.post("/api/evolve/:id/deprecate", (req, res) => evolveDashboardAction(req, res, "deprecate"));
+app.post("/api/evolve/:id/feedback", (req, res) => evolveDashboardAction(req, res, "feedback"));
 
 app.get("/api/approvals", (req, res) => {
   res.json({ ok: true, approvals: listApprovals({ status: req.query.status, limit: req.query.limit }) });

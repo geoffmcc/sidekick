@@ -47,6 +47,28 @@ Important exported values include:
 - `logToolCall(...)`: writes redacted tool activity to the `tool_logs` SQLite table.
 - `setSource(source)`: records whether a call came from MCP, dashboard, agent, or another path.
 
+### Evolve and dynamic tools
+
+The Evolve implementation is intentionally split out of the large tool module:
+
+- `src/evolve/analyzer.js` restores chronological log order, segments calls by source/session/task/inactivity gap, rejects retries and failure loops, and mines repeated successful multi-tool workflows.
+- `src/evolve/validator.js` validates inferred schemas, referenced tools, recursive parameter substitution, security constraints, and dry-run/mock execution plans.
+- `src/evolve/lifecycle.js` owns generated capability state transitions: `observed`, `candidate`, `validated`, `awaiting_approval`, `trial`, `active`, `deprecated`, `rejected`, and `failed_validation`.
+- `src/evolve/index.js` implements the `sidekick_evolve` action interface.
+- `src/dynamic-tools.js` loads approved trial/active generated capabilities from SQLite, exposes schemas for MCP registration, executes approved procedure steps, and records audit/usefulness counters.
+
+Verified problems in the previous Evolve implementation:
+
+- Tool logs were read newest-first while adjacent entries were interpreted as forward chronological sequences.
+- Sequence mining crossed unrelated global logs without source, session, task, project, or inactivity boundaries.
+- Analysis used only tool names, not safe argument shape, result summary, success/failure, retries, or generated-call metadata.
+- Procedure testing echoed proposal text in a sandbox instead of validating schemas, tool references, substitution, policy, or execution behavior.
+- Approved workflow/config proposals had no reliable implementation path; procedure approvals were converted by another LLM prompt and stored behind `sidekick_teach`.
+- Generated capabilities were not independent discoverable MCP tools with a stable schema; legacy procedures were only registered as `sidekick_<procedure>` at server construction.
+- Documentation and tool descriptions overstated self-extension by calling proposals and procedures generated tools.
+
+The replacement stores generated capabilities and audit history in SQLite. Trial and active capabilities are synced into the normal `tools` registry with names like `sidekick_generated_<descriptive_name>`, registered by the MCP server on startup, and removed from discovery when rejected or deprecated without deleting audit history.
+
 ### Dashboard: `src/dashboard.js`
 
 The dashboard serves a browser UI and JSON API. The server code lives in `src/dashboard.js`, the authenticated HTML shell lives in `src/dashboard.html`, and public CSS/JS assets live under `static/`. It reads the Sidekick data directory, reports system state, allows KV editing and deletion, exposes tool metadata, accepts webhooks, and proxies agent requests to the Agent Bridge.
@@ -65,6 +87,6 @@ The MCP server tracks sessions in memory. Sessions include the MCP server instan
 
 ## Shared storage
 
-All services use the same `SIDEKICK_DATA_DIR`. By default, this is `data/` relative to the project during local development, and `/home/sidekick/sidekick/data` in the example deployment. Core KV, structured memories, tool logs, tool catalog data, knowledge base entries, and named JSON documents are stored in SQLite (`sidekick.db`). Some feature-specific artifacts still use files: agent transcripts, audit/error logs, secrets, snapshots, queues, runbooks, baselines, and similar operational bundles.
+All services use the same `SIDEKICK_DATA_DIR`. By default, this is `data/` relative to the project during local development, and `/home/sidekick/sidekick/data` in the example deployment. Core KV, structured memories, tool logs, generated Evolve capabilities, generated-tool audit history, tool catalog data, knowledge base entries, and named JSON documents are stored in SQLite (`sidekick.db`). Some feature-specific artifacts still use files: agent transcripts, audit/error logs, secrets, snapshots, queues, runbooks, baselines, and similar operational bundles.
 
 Back up both `sidekick.db` and the surrounding data directory. Keep logs trimmed, protect backups as sensitive operational data, and avoid using the KV store as a large application database.

@@ -166,8 +166,8 @@ Comprehensive metrics collection with Grafana dashboards:
 - Docker container stats
 - Ollama LLM metrics
 
-### 🔄 Self-Extending Capabilities
-Teach Sidekick new procedures, and it can generate its own tools. The `sidekick_teach` tool lets you describe a workflow in natural language, and Sidekick creates the implementation. It's not just using tools—it's building them.
+### 🔄 Evidence-Driven Workflow Learning
+Sidekick can learn repeated successful workflows from redacted tool telemetry. `sidekick_teach` stores reusable procedures composed from existing tools. `sidekick_evolve` mines repeated bounded workflows, infers safe parameters, validates the procedure, and only after explicit approval exposes trial or active generated capabilities as namespaced MCP tools such as `sidekick_generated_<name>`.
 
 ### 🤖 True Autonomous Operation
 The Agent Bridge runs independently from your main AI session. Submit a complex task via the dashboard, and Sidekick will plan, execute, and iterate until it's done—without you babysitting each step.
@@ -237,7 +237,7 @@ Sidekick used its own tools to help develop itself. Here's the AI agent debuggin
 | **GitHub automation** | `sidekick_github` manages PRs, issues, releases via API | AI can automate PR workflows, track issues, create releases |
 | **Webhook integration** | `sidekick_webhook` receives and stores external webhooks | AI can react to GitHub events, CI/CD pipelines, external alerts |
 | **Persistent context** | `sidekick_context` tracks projects, decisions, problems, patterns | AI can recall past context, get suggestions, maintain continuity across sessions |
-| **Self-extension** | `sidekick_teach` teaches procedures, generates tools, learns from examples | AI can grow its own capabilities without code changes |
+| **Workflow learning** | `sidekick_teach` stores procedures; `sidekick_evolve` promotes validated repeated workflows into trial/active generated MCP tools | AI can reuse proven workflows without confusing proposals with callable tools |
 
 ## Architecture
 
@@ -371,7 +371,7 @@ The Knowledge Base replaces the need for large markdown files. Instead of re-rea
 
 The dashboard auth and IP whitelist are disabled by default (empty env var = no restriction). Set them in `.env` before exposing to the internet. For shared or public-facing deployments, set `SIDEKICK_TOOL_POLICY=restricted` and explicitly allow only the high-risk tools your workflow needs.
 
-**⚠️ Evolve Tool Warning:** The `sidekick_evolve` tool can automatically implement approved proposals (creating documentation files and teaching procedures). If your tool policy is `open`, evolve will execute these implementations without additional approval. For shared or public-facing deployments, set `SIDEKICK_TOOL_POLICY=restricted` to require explicit tool allowlisting before evolve can create or use tools.
+**Evolve Tool Warning:** `sidekick_evolve` is critical-risk because it can approve and expose generated workflow tools. It does not treat free-text proposals as callable tools and generated capabilities must pass validation before trial activation. For shared or public-facing deployments, set `SIDEKICK_TOOL_POLICY=restricted` and require approval for `sidekick_evolve` and high-risk generated tools.
 
 ## Dashboard & Agent Bridge
 

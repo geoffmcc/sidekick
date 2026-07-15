@@ -7,6 +7,7 @@ const { WebStandardStreamableHTTPServerTransport } = require("@modelcontextproto
 const { SSEServerTransport } = require("@modelcontextprotocol/sdk/server/sse.js");
 const { z } = require("zod");
 const { TOOLS, TOOL_DEFS, DATA_DIR, setSource, logToolCall, loadProcedures, enforceToolPolicy, syncToolRegistry } = require("./tools");
+const dynamicTools = require("./dynamic-tools");
 const dbStore = require("./db");
 
 const API_KEY = process.env.SIDEKICK_API_KEY;
@@ -307,9 +308,14 @@ const TOOL_SCHEMAS = {
     initial_delay: z.number().optional().describe("Initial delay in milliseconds (default: 1000)")
   }),
   sidekick_evolve: z.object({
-    action: z.enum(["analyze", "propose", "list", "test", "approve", "reject", "report", "sync_docs", "cleanup"]).describe("Evolve action"),
-    id: z.string().optional().describe("Proposal ID (for test/approve/reject)"),
-    proposal: z.string().optional().describe("Proposal description (for propose) or 'auto' for LLM generation"),
+    action: z.enum(["analyze", "candidates", "inspect", "propose", "validate", "test", "approve", "activate_trial", "promote", "reject", "revise", "deprecate", "feedback", "report", "list", "cleanup"]).describe("Evolve action"),
+    id: z.string().optional().describe("Candidate or generated capability ID/name"),
+    proposal: z.string().optional().describe("Deprecated legacy proposal text"),
+    approver: z.string().optional().describe("Approver identity for approve/activate_trial"),
+    useful: z.boolean().optional().describe("Feedback: true if useful, false if not"),
+    notes: z.string().optional().describe("Feedback or lifecycle notes"),
+    reason: z.string().optional().describe("Reject/deprecate reason"),
+    limit: z.number().optional().describe("Number of logs to analyze"),
     approve: z.boolean().optional().describe("Deprecated - use action=approve"),
     test: z.boolean().optional().describe("Deprecated - use action=test"),
     confirm: z.coerce.boolean().optional().describe("For cleanup action - actually delete old entries")
@@ -738,6 +744,34 @@ function createMcpServer() {
         return result;
       } catch (e) {
         logToolCall(toolName, args, Date.now() - start, false, e.message);
+        throw e;
+      }
+    });
+  }
+
+  const dynamicSchemas = dynamicTools.getDynamicToolSchemas();
+  for (const def of dynamicTools.getDynamicToolDefs()) {
+    if (TOOL_SCHEMAS[def.name]) continue;
+    server.registerTool(def.name, {
+      description: def.description,
+      inputSchema: dynamicSchemas[def.name]
+    }, async (args, extra) => {
+      setSource("mcp");
+      const start = Date.now();
+      try {
+        const policyError = enforceToolPolicy(def.name, "mcp");
+        if (policyError) {
+          logToolCall(def.name, args, Date.now() - start, false, policyError.content[0].text, { generatedProcedure: def.name });
+          return policyError;
+        }
+        const result = await dynamicTools.callDynamicTool(def.name, args, { callTool: require("./tools").callTool });
+        logToolCall(def.name, args, Date.now() - start, !result.isError,
+          result.content?.[0]?.text?.substring(0, 80) || "(ok)",
+          { generatedProcedure: def.name, correlationId: def.capabilityId }
+        );
+        return result;
+      } catch (e) {
+        logToolCall(def.name, args, Date.now() - start, false, e.message, { generatedProcedure: def.name, correlationId: def.capabilityId });
         throw e;
       }
     });

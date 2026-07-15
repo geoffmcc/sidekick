@@ -4,12 +4,14 @@ const dns = require("dns");
 const https = require("https");
 const { execSync, execFile, execFileSync, spawn } = require("child_process");
 const { redactSensitive } = require("./redact");
+const evolveCommon = require("./evolve/common");
 const dbStore = require("./db");
 const pgStore = require("./pg");
 const redisStore = require("./redis");
 const qdrantStore = require("./qdrant");
 const { recordToolCallMemory } = require("./memory");
 const { scanSecurityConfig } = require("./security-scan");
+const dynamicTools = require("./dynamic-tools");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
@@ -218,6 +220,8 @@ const TOOL_CATEGORIES = {
 };
 
 function getToolRisk(name) {
+  const generated = dbStore.getGeneratedCapabilityByName(name);
+  if (generated) return generated.risk || "medium";
   return TOOL_RISK[name] || "low";
 }
 
@@ -239,7 +243,8 @@ function syncToolRegistry() {
     }
     
     // Get all current tools from code
-    const codeTools = new Set(TOOL_DEFS.map(t => t.name));
+    const dynamicNames = new Set(dbStore.listGeneratedCapabilities({ states: ["trial", "active"] }).map(t => t.name));
+    const codeTools = new Set([...TOOL_DEFS.map(t => t.name), ...dynamicNames]);
     
     // Get all tools from database
     const dbTools = db.prepare("SELECT name, deprecated FROM tools").all();
@@ -299,7 +304,8 @@ function syncToolRegistry() {
       }
     }
     
-    console.log(`[ToolRegistry] Synced ${TOOL_DEFS.length} tools to database`);
+    dbStore.syncGeneratedToolRegistry();
+    console.log(`[ToolRegistry] Synced ${TOOL_DEFS.length} built-in tools and ${dynamicNames.size} generated tools to database`);
   } catch (error) {
     console.error('[ToolRegistry] Error syncing tool registry:', error.message);
   }
@@ -978,9 +984,10 @@ function formatArgs(args) {
   return parts.join(", ");
 }
 
-function logToolCall(name, args, duration, success, summary) {
+function logToolCall(name, args, duration, success, summary, metadata = {}) {
   try {
-    const redactedSummary = redactSensitive(String(summary).substring(0, 200));
+    const redactedSummary = evolveCommon.summarizeResult(summary);
+    const argsShape = evolveCommon.normalizeArgs(args || {});
     dbStore.appendToolLog({
       t: new Date().toISOString(),
       n: name,
@@ -988,7 +995,18 @@ function logToolCall(name, args, duration, success, summary) {
       d: Math.round(duration),
       ok: success,
       s: redactedSummary,
-      src: currentSource
+      src: currentSource,
+      session_id: metadata.sessionId || metadata.session_id || process.env.SIDEKICK_SESSION_ID || null,
+      task_id: metadata.taskId || metadata.task_id || metadata.requestId || metadata.request_id || null,
+      project: metadata.project || process.env.SIDEKICK_PROJECT || null,
+      args_shape: argsShape,
+      arg_fingerprint: evolveCommon.fingerprint(argsShape),
+      error_category: success ? null : evolveCommon.errorCategory(redactedSummary),
+      result_summary: redactedSummary,
+      correlation_id: metadata.correlationId || metadata.correlation_id || null,
+      parent_id: metadata.parentId || metadata.parent_id || null,
+      retry: Boolean(metadata.retry),
+      generated_procedure: metadata.generatedProcedure || metadata.generated_procedure || null
     });
     recordToolCallMemory({
       name,
@@ -1015,6 +1033,13 @@ const DANGEROUS_PATTERNS = [
 
 function isDangerous(cmd) {
   return DANGEROUS_PATTERNS.some(p => p.test(cmd));
+}
+
+function windowsPathToWslPath(value) {
+  const text = String(value || "");
+  const match = text.match(/^([A-Za-z]):[\\/](.*)$/);
+  if (!match) return text;
+  return "/mnt/" + match[1].toLowerCase() + "/" + match[2].replace(/\\/g, "/");
 }
 
 function normalizePolicyPath(filePath) {
@@ -1453,15 +1478,26 @@ async function sidekick_git({ action, path: repoPath, args: extraArgs }) {
   if (!fs.existsSync(repo)) {
     return { content: [{ type: "text", text: "Repository path not found: " + repo }], isError: true };
   }
-  
-  const cmdArgs = ["-C", repo, action];
+
+  const gitFile = path.join(repo, ".git");
+  let gitEnv = process.env;
+  let cmdArgs = ["-C", repo, action];
+  if (fs.existsSync(gitFile) && fs.statSync(gitFile).isFile()) {
+    const content = fs.readFileSync(gitFile, "utf-8").trim();
+    const match = content.match(/^gitdir:\s*(.+)$/i);
+    if (match) {
+      const gitDir = windowsPathToWslPath(match[1].trim());
+      gitEnv = { ...process.env, GIT_DIR: gitDir, GIT_WORK_TREE: repo };
+      cmdArgs = [action];
+    }
+  }
   if (extraArgs) {
     const parsed = extraArgs.split(/\s+/).filter(Boolean);
     cmdArgs.push(...parsed);
   }
   
   try {
-    const stdout = execFileSync("git", cmdArgs, { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
+    const stdout = execFileSync("git", cmdArgs, { cwd: repo, env: gitEnv, timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
     return { content: [{ type: "text", text: redactSensitive(stdout || "(empty output)") }] };
   } catch (e) {
     return { content: [{ type: "text", text: redactSensitive("Exit code: " + e.status + "\n" + (e.stderr || e.stdout || "")) }], isError: true };
@@ -5468,7 +5504,10 @@ function evolveProcessQueue(evolve) {
   return next || null;
 }
 
-async function sidekick_evolve({ action, id, proposal, approve, test, confirm }) {
+async function sidekick_evolve(args = {}) {
+  const evolveImpl = require("./evolve");
+  return evolveImpl.sidekick_evolve(args, { TOOL_DEFS, loadProcedures });
+
   const evolve = loadEvolve();
   const now = new Date().toISOString();
   const today = now.split("T")[0];
@@ -11208,7 +11247,7 @@ const TOOL_DEFS = [
   { name: "sidekick_template", description: "Render Handlebars templates with data", args: { template: "string (Handlebars template)", data: "string|object (template data)" } },
   { name: "sidekick_queue", description: "Persistent task queue with priorities", args: { action: "string (add|list|process|remove|clear)", id: "number (optional, task id for remove)", tool: "string (optional, tool name for add)", args: "object (optional, tool args for add)", priority: "number (optional, priority for add, default 0)", status: "string (optional, status filter for list/clear)" } },
   { name: "sidekick_retry", description: "Retry tool calls with exponential backoff", args: { tool: "string (tool to retry)", args: "object (optional, tool args)", max_attempts: "number (optional, default 3)", backoff: "string (optional, exponential|linear|fixed, default exponential)", initial_delay: "number (optional, ms, default 1000)" } },
-  { name: "sidekick_evolve", description: "Self-modification with safety: LLM-powered proposals, sandbox testing, confidence filtering, auto-apply docs, configurable retention", args: { action: "string (analyze|propose|list|test|approve|reject|report|sync_docs|cleanup)", id: "string (optional, proposal id for test/approve/reject)", proposal: "string (optional, proposal description or 'auto' for LLM generation)", approve: "boolean (optional, deprecated - use action=approve)", test: "boolean (optional, deprecated - use action=test)", confirm: "boolean (optional, for cleanup action - actually delete old entries)" } },
+  { name: "sidekick_evolve", description: "Evidence-driven workflow learning and generated-tool lifecycle management. Mines successful bounded workflows, validates parameterized procedures, and exposes approved trial/active generated tools through normal discovery.", args: { action: "string (analyze|candidates|inspect|validate|approve|activate_trial|promote|reject|deprecate|feedback|report|cleanup)", id: "string (optional, candidate/generated capability id or name)", approver: "string (optional)", useful: "boolean (optional, for feedback)", notes: "string (optional)", reason: "string (optional)", limit: "number (optional, logs to analyze)" } },
   { name: "sidekick_orchestrate", description: "Multi-agent coordination: create task graphs, execute subtasks with dependencies, track progress", args: { action: "string (create|execute|list|status|cancel)", id: "number (optional, task id for execute/status/cancel)", task_name: "string (optional, task name for create)", subtasks: "array (optional, subtask definitions for create)", dependencies: "object (optional, dependency map for create)", timeout: "number (optional, timeout in ms, default 1800000)" } },
   { name: "sidekick_predict", description: "Anticipatory intelligence: analyze patterns, predict needs, track prediction usefulness", args: { action: "string (analyze|list|feedback|suggest)", id: "string (optional, prediction id for feedback)", feedback: "boolean (optional, true if useful, false if not)" } },
   { name: "sidekick_debug_tool", description: "Structured debugging cache with persistent storage for cross-session debugging. Store findings, recall past investigations, cleanup old entries.", args: { action: "string (store|recall|cleanup|start|stop|cache|get|status|clear)", session_name: "string (optional, session identifier for legacy actions)", key: "string (optional, cache key for get/cache, or debug key for cleanup)", value: "string (optional, value to cache/store)", service: "string (optional, service name for store/recall)", issue: "string (optional, issue description for store)", redact: "boolean (optional, default true - set false to skip redaction)" } },
@@ -11271,7 +11310,8 @@ const TOOL_DEFS = [
 
 async function callTool(name, args, options = {}) {
   const handler = TOOLS[name];
-  if (!handler) {
+  const isGeneratedTool = !handler && dynamicTools.isDynamicTool(name);
+  if (!handler && !isGeneratedTool) {
     return { content: [{ type: "text", text: "Unknown tool: " + name }], isError: true };
   }
   const policyError = enforceToolPolicy(name, currentSource);
@@ -11297,10 +11337,13 @@ async function callTool(name, args, options = {}) {
   }
   const start = Date.now();
   try {
-    const result = await handler(args);
+    const result = isGeneratedTool
+      ? await dynamicTools.callDynamicTool(name, args, { callTool })
+      : await handler(args);
     const success = !result.isError;
     logToolCall(name, args, Date.now() - start, success,
-      result.content?.[0]?.text?.substring(0, 80) || "(ok)"
+      result.content?.[0]?.text?.substring(0, 80) || "(ok)",
+      options
     );
     return result;
   } catch (e) {
