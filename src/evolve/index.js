@@ -1,6 +1,6 @@
 const dbStore = require("../db");
 const { detectCandidates } = require("./analyzer");
-const { candidateToCapability, validateCapability, transition, usefulness } = require("./lifecycle");
+const { candidateToCapability, validateCapability, transition, usefulness, allowedActions } = require("./lifecycle");
 
 function text(payload) {
   return { content: [{ type: "text", text: typeof payload === "string" ? payload : JSON.stringify(payload, null, 2) }] };
@@ -24,7 +24,30 @@ function toolContext(deps) {
   };
 }
 
+function isLegacyAdjacencyCandidate(item) {
+  const paramCount = Object.keys(item.parameters || {}).length;
+  const title = String(item.title || "").toLowerCase();
+  const description = String(item.description || "").toLowerCase();
+  const genericName = /(?:^|_)(?:bash|github|status|resume|get|store|debug_tool)(?:_|$)/.test(item.name || "");
+  return (title.includes(" then ") || description.startsWith("repeated successful workflow:")) && (paramCount === 0 || genericName);
+}
+
+function retireLegacyAdjacencyCandidates() {
+  const retired = [];
+  for (const item of dbStore.listGeneratedCapabilities({ includeInactive: true })) {
+    if (!["candidate", "validated", "awaiting_approval", "trial", "active"].includes(item.state)) continue;
+    if (!isLegacyAdjacencyCandidate(item)) continue;
+    item.deprecationReason = "Retired by semantic Evolve analyzer: low-level adjacent tool/action chain without coherent reusable task identity";
+    transition(item, ["trial", "active"].includes(item.state) ? "deprecated" : "rejected", { reason: item.deprecationReason, migration: "semantic-candidate-quality-gates" });
+    dbStore.saveGeneratedCapability(item);
+    retired.push(item.id);
+  }
+  if (retired.length) dbStore.syncGeneratedToolRegistry();
+  return retired;
+}
+
 function refreshCandidates(deps, options = {}) {
+  const retired = retireLegacyAdjacencyCandidates();
   const logs = dbStore.readToolLogs(options.limit || 2000);
   const candidates = detectCandidates(logs, toolContext(deps), options);
   const stored = [];
@@ -35,7 +58,7 @@ function refreshCandidates(deps, options = {}) {
     dbStore.saveGeneratedCapability(capability);
     stored.push(capability);
   }
-  return { observedLogCount: logs.length, candidatesFound: candidates.length, stored: stored.length, candidates };
+  return { observedLogCount: logs.length, candidatesFound: candidates.length, stored: stored.length, retired, rejected: candidates.diagnostics || {}, candidates };
 }
 
 function formatList(items) {
@@ -57,6 +80,8 @@ async function sidekick_evolve(args = {}, deps = {}) {
     const result = refreshCandidates(deps, args);
     return text({
       observations: { logs_analyzed: result.observedLogCount, candidates_found: result.candidatesFound, new_candidates_stored: result.stored },
+      retired_legacy_candidates: result.retired,
+      rejected_trace_diagnostics: result.rejected,
       candidates: result.candidates.slice(0, 10).map(c => ({
         id: c.id,
         title: c.title,
@@ -67,6 +92,7 @@ async function sidekick_evolve(args = {}, deps = {}) {
         duplicate: c.duplicate,
         duplicate_reasons: c.duplicateReasons,
         parameters: c.parameters,
+        quality_gates: c.qualityGates,
         score_breakdown: c.scoreBreakdown,
       })),
     });
@@ -124,11 +150,8 @@ async function sidekick_evolve(args = {}, deps = {}) {
     if (!args.id) return error("id required");
     const item = dbStore.getGeneratedCapability(args.id) || dbStore.getGeneratedCapabilityByName(args.id);
     if (!item) return error(`Evolve capability not found: ${args.id}`);
-    if (!item.validation || !item.validation.passed) validateCapability(item, deps.TOOL_DEFS || []);
-    if (!item.validation.passed) {
-      dbStore.saveGeneratedCapability(item);
-      return error(`Validation failed; not approved: ${JSON.stringify(item.validation.checks, null, 2)}`);
-    }
+    if (!item.validation || !item.validation.passed || item.state !== "awaiting_approval") return error(`Cannot approve trial before validation passes and state is awaiting_approval (current state: ${item.state})`);
+    if (!allowedActions(item).approve) return error("Approve Trial is not allowed for this capability state");
     item.approver = args.approver || "user";
     transition(item, "trial", { approver: item.approver, reason: "explicit approval" });
     item.activationDate = new Date().toISOString();
@@ -143,6 +166,7 @@ async function sidekick_evolve(args = {}, deps = {}) {
     if (!item) return error(`Evolve capability not found: ${args.id}`);
     if (item.state !== "trial") return error(`Can only promote trial tools (current state: ${item.state})`);
     if ((item.successCount || 0) < 1) return error("Cannot promote before at least one successful trial invocation");
+    if (!allowedActions(item).promote) return error("Promote is not allowed until a trial invocation succeeds");
     transition(item, "active", { reason: "trial success promoted" });
     dbStore.saveGeneratedCapability(item);
     dbStore.syncGeneratedToolRegistry();
@@ -199,10 +223,11 @@ async function sidekick_evolve(args = {}, deps = {}) {
       totals: items.reduce((acc, item) => { acc[item.state] = (acc[item.state] || 0) + 1; return acc; }, {}),
       dynamic_tools: items.filter(i => i.state === "trial" || i.state === "active").map(i => ({ name: i.name, state: i.state, use_count: i.useCount, success_count: i.successCount, failure_count: i.failureCount, usefulness_score: i.usefulnessScore })),
       candidates: items.filter(i => ["candidate", "validated", "awaiting_approval"].includes(i.state)).length,
+      rejected_or_deprecated_legacy: items.filter(isLegacyAdjacencyCandidate).filter(i => ["rejected", "deprecated"].includes(i.state)).length,
     });
   }
   if (action === "cleanup") return text("Evolve cleanup now retains DB audit history; use reject/deprecate instead of deleting evidence.");
   return error("Unknown action. Use: analyze, candidates, inspect, validate, approve, activate_trial, promote, reject, deprecate, feedback, report, cleanup");
 }
 
-module.exports = { sidekick_evolve, refreshCandidates };
+module.exports = { sidekick_evolve, refreshCandidates, retireLegacyAdjacencyCandidates, isLegacyAdjacencyCandidate };

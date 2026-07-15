@@ -5,6 +5,19 @@ const STATES = new Set([
   "deprecated", "rejected", "failed_validation"
 ]);
 
+function allowedActions(capability) {
+  const state = capability.state || "candidate";
+  const validationPassed = Boolean(capability.validation && capability.validation.passed);
+  return {
+    validate: ["candidate", "failed_validation"].includes(state),
+    approve: state === "awaiting_approval" && validationPassed,
+    promote: state === "trial" && (capability.successCount || 0) >= 1,
+    reject: !["rejected", "deprecated", "active"].includes(state),
+    deprecate: ["trial", "active"].includes(state),
+    feedback: true,
+  };
+}
+
 function transition(capability, nextState, metadata = {}) {
   if (!STATES.has(nextState)) throw new Error(`Invalid Evolve lifecycle state: ${nextState}`);
   const now = new Date().toISOString();
@@ -39,7 +52,7 @@ function candidateToCapability(candidate) {
     useCount: 0,
     successCount: 0,
     failureCount: 0,
-    estimatedCallsSaved: 0,
+    estimatedCallsSaved: candidate.estimatedCallsSaved || 0,
     lastUsedAt: null,
     userFeedback: [],
     deprecationReason: null,
@@ -79,6 +92,7 @@ function usefulness(capability) {
 
 module.exports = {
   STATES,
+  allowedActions,
   transition,
   candidateToCapability,
   validateCapability,

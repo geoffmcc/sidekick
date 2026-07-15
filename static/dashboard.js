@@ -1736,12 +1736,13 @@ function loadEvolve(){
       const active = state === 'trial' || state === 'active';
       const validation = item.validation_status || 'not_validated';
       const trial = item.recent_trial_results || [];
+      const allowed = item.allowed_actions || {};
       const controls = [
-        validation === 'not_validated' || validation === 'failed' ? '<button class="btn btn-sm" onclick="validateEvolve(\'' + esc(item.id) + '\')">Validate</button>' : '',
-        state === 'awaiting_approval' || state === 'validated' || state === 'candidate' ? '<button class="btn btn-sm" onclick="approveEvolve(\'' + esc(item.id) + '\')">Approve Trial</button>' : '',
-        state === 'trial' ? '<button class="btn btn-sm" onclick="promoteEvolve(\'' + esc(item.id) + '\')">Promote</button>' : '',
-        !['rejected','deprecated'].includes(state) ? '<button class="btn btn-sm btn-outline" onclick="rejectEvolve(\'' + esc(item.id) + '\')">Reject</button>' : '',
-        active ? '<button class="btn btn-sm btn-outline" onclick="deprecateEvolve(\'' + esc(item.id) + '\')">Deprecate</button>' : '',
+        allowed.validate ? '<button class="btn btn-sm" onclick="validateEvolve(\'' + esc(item.id) + '\')">Validate</button>' : '',
+        allowed.approve ? '<button class="btn btn-sm" onclick="approveEvolve(\'' + esc(item.id) + '\')">Approve Trial</button>' : '',
+        allowed.promote ? '<button class="btn btn-sm" onclick="promoteEvolve(\'' + esc(item.id) + '\')">Promote</button>' : '',
+        allowed.reject ? '<button class="btn btn-sm btn-outline" onclick="rejectEvolve(\'' + esc(item.id) + '\')">Reject</button>' : '',
+        allowed.deprecate ? '<button class="btn btn-sm btn-outline" onclick="deprecateEvolve(\'' + esc(item.id) + '\')">Deprecate</button>' : '',
         '<button class="btn btn-sm btn-outline" onclick="feedbackEvolve(\'' + esc(item.id) + '\', true)">Useful</button>',
         '<button class="btn btn-sm btn-outline" onclick="feedbackEvolve(\'' + esc(item.id) + '\', false)">Not Useful</button>'
       ].filter(Boolean).join(' ');
@@ -1763,6 +1764,7 @@ function loadEvolve(){
           '<span class="badge">validation=' + esc(validation) + '</span>' +
         '</div>' +
         '<div style="margin-top:10px"><span class="s-label">Parameters:</span> ' + renderEvolveParams(item.inferred_parameters || {}) + '</div>' +
+        (item.score_breakdown ? '<div style="margin-top:8px;color:#8b949e;font-size:.78rem">Score: ' + esc(JSON.stringify(item.score_breakdown)) + '</div>' : '') +
         (item.duplicate_reasons && item.duplicate_reasons.length ? '<div class="agent-err" style="margin-top:8px">Duplicate signals: ' + esc(item.duplicate_reasons.join(', ')) + '</div>' : '') +
         '<div style="margin-top:10px;color:#8b949e;font-size:.78rem">Trial results: use=' + esc(item.use_count || 0) + ', ok=' + esc(item.success_count || 0) + ', fail=' + esc(item.failure_count || 0) + (trial.length ? ', recent=' + esc(trial.map(t => t.success ? 'ok' : 'fail').join(',')) : '') + '</div>' +
       '</div>';

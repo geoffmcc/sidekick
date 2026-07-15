@@ -14,13 +14,14 @@ delete require.cache[require.resolve('../src/tools')];
 
 const dbStore = require('../src/db');
 dbStore.runPendingMigrations();
-const { chronologicalLogs, segmentLogs, detectCandidates } = require('../src/evolve/analyzer');
+const { chronologicalLogs, segmentLogs, detectCandidates, classifyOperation, scoreCandidate } = require('../src/evolve/analyzer');
 const { substitute, validateCandidate } = require('../src/evolve/validator');
-const { candidateToCapability, validateCapability, transition } = require('../src/evolve/lifecycle');
+const { candidateToCapability, validateCapability, transition, allowedActions } = require('../src/evolve/lifecycle');
+const { refreshCandidates } = require('../src/evolve');
 const dynamicTools = require('../src/dynamic-tools');
 const { TOOLS, TOOL_DEFS, callTool, setSource, loadProcedures } = require('../src/tools');
 
-function log({ t, n, src = 'mcp', session = 's1', task = 'task1', ok = true, shape = {}, retry = false, generated = false, summary = 'ok' }) {
+function log({ t, n, src = 'mcp', session = 's1', task = 'task1', ok = true, shape = {}, args = null, retry = false, generated = false, summary = 'ok' }) {
   dbStore.appendToolLog({
     t,
     n,
@@ -29,6 +30,7 @@ function log({ t, n, src = 'mcp', session = 's1', task = 'task1', ok = true, sha
     s: summary,
     session_id: session,
     task_id: task,
+    args,
     args_shape: shape,
     arg_fingerprint: 'fp-' + JSON.stringify(shape).length,
     retry,
@@ -36,10 +38,10 @@ function log({ t, n, src = 'mcp', session = 's1', task = 'task1', ok = true, sha
   });
 }
 
-function seedWorkflow({ session = 's1', task = 'task1', src = 'mcp', start = 0, ok = true, retry = false, shape = '<path>' } = {}) {
+function seedServiceDiagnosis({ session = 's1', task = 'task1', src = 'mcp', start = 0, ok = true, retry = false, service = 'sidekick-mcp' } = {}) {
   const base = Date.parse('2026-01-01T00:00:00.000Z') + start;
-  log({ t: new Date(base).toISOString(), n: 'sidekick_read', src, session, task, ok, retry, shape: { path: shape } });
-  log({ t: new Date(base + 1000).toISOString(), n: 'sidekick_hash', src, session, task, ok, retry, shape: { path: shape, algorithm: 'sha256' } });
+  log({ t: new Date(base).toISOString(), n: 'sidekick_bash', src, session, task, ok, retry, args: { command: `systemctl status ${service}` }, shape: { command: 'systemctl status <service>' }, summary: ok ? 'service active' : 'service failed' });
+  log({ t: new Date(base + 1000).toISOString(), n: 'sidekick_bash', src, session, task, ok, retry, args: { command: `journalctl -u ${service} -n 80 --no-pager` }, shape: { command: 'journalctl -u <service>' }, summary: ok ? 'logs inspected successfully' : 'journalctl error' });
 }
 
 (async () => {
@@ -66,7 +68,7 @@ function seedWorkflow({ session = 's1', task = 'task1', src = 'mcp', start = 0, 
     ];
     assert.strictEqual(segmentLogs(boundaryLogs, { inactivityGapMs: 30 * 60 * 1000 }).length, 3);
 
-    console.log('Test: failed loops and retries do not become candidates');
+    console.log('Test: adjacent generic tools and retries do not become candidates');
     const failed = [];
     for (let i = 0; i < 4; i++) {
       failed.push({ t: `2026-01-01T00:00:0${i}.000Z`, n: 'sidekick_read', src: 'mcp', session_id: `f${i}`, task_id: 't', ok: false, args_shape: { path: '<path>' } });
@@ -76,33 +78,69 @@ function seedWorkflow({ session = 's1', task = 'task1', src = 'mcp', start = 0, 
     const retried = failed.map(r => ({ ...r, ok: true, retry: true }));
     assert.strictEqual(detectCandidates(retried, { builtIns: TOOL_DEFS.map(t => t.name) }).length, 0);
 
-    console.log('Test: equivalent traces become one parameterized candidate');
-    dbStore.clearToolLogs();
-    seedWorkflow({ session: 's1', task: 'a', start: 0 });
-    seedWorkflow({ session: 's2', task: 'a', start: 10000 });
-    seedWorkflow({ session: 's3', task: 'a', start: 20000 });
-    const candidates = detectCandidates(dbStore.readToolLogs(100), { builtIns: TOOL_DEFS.map(t => t.name), procedures: [], generated: [], pending: [] });
-    assert.ok(candidates.length >= 1, 'expected at least one mined candidate');
-    const candidate = candidates[0];
-    assert.ok(candidate.steps.some(step => JSON.stringify(step.args).includes('{{path}}')), 'path marker should become a parameter');
-    assert.ok(candidate.parameters.path, 'path parameter inferred');
+    const adjacency = [];
+    for (let i = 0; i < 3; i++) {
+      adjacency.push({ t: `2026-01-01T00:01:0${i}.000Z`, n: 'sidekick_status', src: 'mcp', session_id: `a${i}`, task_id: 't', ok: true, args_shape: {} });
+      adjacency.push({ t: `2026-01-01T00:01:1${i}.000Z`, n: 'sidekick_bash', src: 'mcp', session_id: `a${i}`, task_id: 't', ok: true, args: { command: 'pwd' }, args_shape: { command: 'pwd' } });
+    }
+    assert.strictEqual(detectCandidates(adjacency, { builtIns: TOOL_DEFS.map(t => t.name) }).length, 0, 'status then bash must not become a candidate');
 
-    console.log('Test: different arguments produce distinct signatures when constants differ');
+    const plumbing = [];
+    for (let i = 0; i < 3; i++) {
+      plumbing.push({ t: `2026-01-01T00:02:0${i}.000Z`, n: 'sidekick_resume', src: 'mcp', session_id: `p${i}`, task_id: 't', ok: true, args_shape: { action: 'check' } });
+      plumbing.push({ t: `2026-01-01T00:02:1${i}.000Z`, n: 'sidekick_get', src: 'mcp', session_id: `p${i}`, task_id: 't', ok: true, args_shape: { key: '<key>' } });
+      plumbing.push({ t: `2026-01-01T00:02:2${i}.000Z`, n: 'sidekick_store', src: 'mcp', session_id: `p${i}`, task_id: 't', ok: true, args_shape: { key: '<key>' } });
+    }
+    assert.strictEqual(segmentLogs(plumbing).length, 0, 'resume/get/store activity should be filtered before grouping');
+
+    const generatedLoop = [];
+    for (let i = 0; i < 3; i++) {
+      generatedLoop.push({ t: `2026-01-01T00:03:0${i}.000Z`, n: 'sidekick_generated_service_diagnosis', src: 'mcp', session_id: `g${i}`, task_id: 't', ok: true, generated_procedure: 'sidekick_generated_service_diagnosis', args_shape: { service: '<service>' } });
+      generatedLoop.push({ t: `2026-01-01T00:03:1${i}.000Z`, n: 'sidekick_bash', src: 'mcp', session_id: `g${i}`, task_id: 't', ok: true, generated_procedure: 'sidekick_generated_service_diagnosis', args: { command: 'systemctl status sidekick-mcp' }, args_shape: { command: 'systemctl status <service>' } });
+    }
+    assert.strictEqual(detectCandidates(generatedLoop, { builtIns: TOOL_DEFS.map(t => t.name) }).length, 0, 'generated tool executions must not recursively mine candidates');
+
+    console.log('Test: bash operation semantics are classified from normalized arguments');
+    const classified = classifyOperation({ name: 'sidekick_bash', args: { command: 'systemctl status sidekick-mcp' }, argsShape: {}, success: true });
+    assert.strictEqual(classified.kind, 'service_status');
+    assert.strictEqual(classified.params.service, 'sidekick-mcp');
+
+    console.log('Test: multiple service-diagnosis traces become one parameterized candidate');
     dbStore.clearToolLogs();
-    seedWorkflow({ session: 'a1', start: 0, shape: '<path>' });
-    log({ t: '2026-01-01T00:00:20.000Z', n: 'sidekick_read', session: 'b1', task: 'x', shape: { path: '<path>' } });
-    log({ t: '2026-01-01T00:00:21.000Z', n: 'sidekick_hash', session: 'b1', task: 'x', shape: { path: '<path>', algorithm: 'sha1' } });
-    const split = detectCandidates(dbStore.readToolLogs(100), { builtIns: TOOL_DEFS.map(t => t.name) }, { minOccurrences: 1, minScore: 1 });
-    assert.ok(new Set(split.map(c => JSON.stringify(c.steps))).size >= 2);
+    seedServiceDiagnosis({ session: 's1', task: 'a', start: 0, service: 'sidekick-mcp' });
+    seedServiceDiagnosis({ session: 's2', task: 'a', start: 10000, service: 'sidekick-dashboard' });
+    seedServiceDiagnosis({ session: 's3', task: 'a', start: 20000, service: 'sidekick-agent' });
+    const candidates = detectCandidates(dbStore.readToolLogs(100), { builtIns: TOOL_DEFS.map(t => t.name), procedures: [], generated: [], pending: [] });
+    assert.strictEqual(candidates.length, 1, 'expected one semantic mined candidate');
+    const candidate = candidates[0];
+    assert.strictEqual(candidate.title, 'Diagnose a systemd service');
+    assert.ok(candidate.steps.some(step => JSON.stringify(step.args).includes('{{service}}')), 'service marker should become a parameter');
+    assert.ok(candidate.parameters.service, 'service parameter inferred');
+    assert.ok(candidate.qualityGates.semanticTask);
+    assert.ok(candidate.scoreBreakdown.parameters > 0);
+
+    console.log('Test: failed tasks do not receive successful workflow candidates');
+    dbStore.clearToolLogs();
+    seedServiceDiagnosis({ session: 'f1', start: 0, ok: false, service: 'sidekick-mcp' });
+    seedServiceDiagnosis({ session: 'f2', start: 10000, ok: false, service: 'sidekick-dashboard' });
+    seedServiceDiagnosis({ session: 'f3', start: 20000, ok: false, service: 'sidekick-agent' });
+    assert.strictEqual(detectCandidates(dbStore.readToolLogs(100), { builtIns: TOOL_DEFS.map(t => t.name) }).length, 0);
+
+    console.log('Test: no-parameter and zero-savings candidates are score-limited');
+    const scoreTraces = [{ completion: { confidence: 'inferred' } }, { completion: { confidence: 'inferred' } }, { completion: { confidence: 'inferred' } }];
+    const noParam = scoreCandidate({ traces: scoreTraces, successRate: 1, parameters: {}, family: { title: 'Fixed task' }, duplicatePenalty: 0, riskPenalty: 0, estimatedCallsSaved: 1 });
+    assert.ok(noParam.score <= 60, 'no-parameter score must be capped');
+    const zeroSavings = scoreCandidate({ traces: scoreTraces, successRate: 1, parameters: { service: { type: 'string' } }, family: { title: 'Task' }, duplicatePenalty: 0, riskPenalty: 0, estimatedCallsSaved: 0 });
+    assert.ok(zeroSavings.score <= 50, 'zero-calls-saved score must be capped');
 
     console.log('Test: duplicate detection penalizes existing procedures/generated tools');
     const dup = detectCandidates(dbStore.readToolLogs(100), {
       builtIns: TOOL_DEFS.map(t => t.name),
-      procedures: ['read_then_hash'],
-      generated: ['sidekick_generated_read_then_hash'],
+      procedures: ['service_diagnosis'],
+      generated: ['sidekick_generated_service_diagnosis'],
       pending: [],
     }, { minOccurrences: 1, minScore: 1 });
-    assert.ok(dup.some(c => c.duplicate || c.scoreBreakdown.duplicatePenalty > 0));
+    assert.ok(dup.every(c => c.duplicate || c.scoreBreakdown.duplicatePenalty > 0));
 
     console.log('Test: nested substitution and schema validation');
     const nested = substitute({ a: ['{{path}}', { b: '{{port}}' }] }, { path: '/tmp/x', port: 8080 });
@@ -122,21 +160,44 @@ function seedWorkflow({ session = 's1', task = 'task1', src = 'mcp', start = 0, 
 
     console.log('Test: sidekick_evolve lifecycle requires validation and approval before trial');
     dbStore.clearToolLogs();
-    seedWorkflow({ session: 'l1', start: 0 });
-    seedWorkflow({ session: 'l2', start: 10000 });
-    seedWorkflow({ session: 'l3', start: 20000 });
+    seedServiceDiagnosis({ session: 'l1', start: 0, service: 'sidekick-mcp' });
+    seedServiceDiagnosis({ session: 'l2', start: 10000, service: 'sidekick-dashboard' });
+    seedServiceDiagnosis({ session: 'l3', start: 20000, service: 'sidekick-agent' });
     const analyze = await TOOLS.sidekick_evolve({ action: 'analyze', limit: 100 });
     assert.ok(!analyze.isError, analyze.content[0].text);
     const stored = dbStore.listGeneratedCapabilities({ includeInactive: true });
     assert.ok(stored.length >= 1);
     const id = stored[0].id;
+    const forgedApprove = await TOOLS.sidekick_evolve({ action: 'approve', id, approver: 'test' });
+    assert.ok(forgedApprove.isError, 'unvalidated candidates cannot enter trial');
+    assert.strictEqual(dbStore.getGeneratedCapability(id).state, 'candidate');
     const validated = await TOOLS.sidekick_evolve({ action: 'validate', id });
     assert.ok(!validated.isError, validated.content[0].text);
+    assert.ok(allowedActions(dbStore.getGeneratedCapability(id)).approve, 'validated candidate should allow trial approval');
     const approved = await TOOLS.sidekick_evolve({ action: 'approve', id, approver: 'test' });
     assert.ok(!approved.isError, approved.content[0].text);
     assert.strictEqual(dbStore.getGeneratedCapability(id).state, 'trial');
     const promoteBeforeUse = await TOOLS.sidekick_evolve({ action: 'promote', id });
     assert.ok(promoteBeforeUse.isError, 'trial cannot promote before a successful invocation');
+
+    console.log('Test: old adjacency candidates are retired safely');
+    const junk = candidateToCapability({
+      id: 'cand_junk_adjacency',
+      proposedToolName: 'sidekick_generated_bash_then_github',
+      title: 'bash then github',
+      description: 'Repeated successful workflow: sidekick_bash -> sidekick_github',
+      state: 'candidate',
+      evidence: [{ sessionId: 'old' }],
+      evidenceCount: 3,
+      successRate: 1,
+      score: 89,
+      parameters: {},
+      steps: [{ tool: 'sidekick_bash', args: { command: 'pwd' } }, { tool: 'sidekick_github', args: { action: 'repo_info' } }],
+      risk: 'high',
+    });
+    dbStore.saveGeneratedCapability(junk);
+    refreshCandidates({ TOOL_DEFS, loadProcedures }, { limit: 100 });
+    assert.strictEqual(dbStore.getGeneratedCapability('cand_junk_adjacency').state, 'rejected');
 
     console.log('Test: dynamic discovery, trial invocation, promotion, persistence, deprecation, audit retention');
     const manualCap = candidateToCapability({
@@ -181,6 +242,13 @@ function seedWorkflow({ session = 's1', task = 'task1', src = 'mcp', start = 0, 
     console.log('Test: backward compatibility with existing stored procedures');
     await TOOLS.sidekick_teach({ action: 'teach_procedure', name: 'legacy_echo', description: 'legacy', parameters: { text: { type: 'string', required: true } }, steps: [{ tool: 'sidekick_respond', args: { text: '{{text}}' } }] });
     assert.ok(loadProcedures().legacy_echo, 'legacy procedure still stored/readable');
+
+    console.log('Test: frontend controls reflect backend allowed transitions');
+    const dashboardJs = fs.readFileSync(path.join(__dirname, '..', 'static', 'dashboard.js'), 'utf8');
+    assert.ok(dashboardJs.includes('const allowed = item.allowed_actions || {}'), 'dashboard should use backend allowed_actions');
+    assert.ok(dashboardJs.includes('allowed.approve ?'), 'approve control should be gated by allowed_actions');
+    assert.ok(dashboardJs.includes('allowed.promote ?'), 'promote control should be gated by allowed_actions');
+    assert.ok(!dashboardJs.includes("state === 'awaiting_approval' || state === 'validated' || state === 'candidate' ? '<button class=\"btn btn-sm\" onclick=\"approveEvolve"), 'approve button must not be shown for unvalidated candidates');
 
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
     console.log('\nAll Evolve Tests Passed!');
