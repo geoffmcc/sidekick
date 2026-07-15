@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const zlib = require("zlib");
+const crypto = require("crypto");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const DB_FILE = process.env.SIDEKICK_DB_FILE || path.join(DATA_DIR, "sidekick.db");
@@ -194,6 +195,24 @@ function parseJson(value, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function stableHash(value) {
+  return crypto.createHash("sha256").update(String(value || "")).digest("hex");
+}
+
+function stableId(prefix, value) {
+  return `${prefix}_${stableHash(value).slice(0, 20)}`;
+}
+
+function hasTable(name) {
+  const row = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(name);
+  return !!row;
+}
+
+function tableColumns(table) {
+  if (!hasTable(table)) return new Set();
+  return new Set(db.prepare(`PRAGMA table_info(${quoteIdentifier(table)})`).all().map(c => c.name));
 }
 
 function getDocument(name, fallback) {
@@ -737,6 +756,7 @@ const MEMORY_STOP_WORDS = new Set([
 
 function normalizeMemoryRow(row) {
   if (!row) return null;
+  const metadata = parseJson(row.metadata_json, {});
   return {
     id: row.id,
     type: row.type,
@@ -749,7 +769,7 @@ function normalizeMemoryRow(row) {
     source_tool: row.source_tool,
     source_task_id: row.source_task_id,
     source_ref: row.source_ref,
-    metadata: parseJson(row.metadata_json, {}),
+    metadata,
     enabled: !!row.enabled,
     automatic: !!row.automatic,
     times_confirmed: row.times_confirmed,
@@ -766,7 +786,28 @@ function normalizeMemoryRow(row) {
     requires_confirmation: !!row.requires_confirmation,
     confirmed_by: row.confirmed_by,
     deleted_at: row.deleted_at,
-    expired_at: row.expired_at
+    expired_at: row.expired_at,
+    memory_class: row.memory_class || metadata.memory_class || "semantic",
+    primary_scope_type: row.primary_scope_type || metadata.primary_scope_type || (row.project ? "project" : "global"),
+    primary_scope_id: row.primary_scope_id || row.project || metadata.primary_scope_id || null,
+    source_type: row.source_type || row.source || null,
+    evidence_excerpt: row.evidence_excerpt || metadata.evidence_excerpt || null,
+    extraction_method: row.extraction_method || metadata.extraction_method || null,
+    directness: row.directness || metadata.directness || "direct",
+    source_authority: row.source_authority ?? metadata.source_authority ?? null,
+    confidence_components: parseJson(row.confidence_json, metadata.confidence_components || {}),
+    recorded_at: row.recorded_at || row.created_at,
+    source_timestamp: row.source_timestamp || null,
+    observed_at: row.observed_at || row.last_seen_at,
+    valid_from: row.valid_from || row.created_at,
+    valid_to: row.valid_to || null,
+    revalidate_after: row.revalidate_after || null,
+    pinned: !!row.pinned,
+    sensitivity: row.sensitivity || "normal",
+    current: row.current !== undefined ? !!row.current : row.enabled !== false,
+    supersedes_id: row.supersedes_id || null,
+    conflict_group: row.conflict_group || null,
+    fingerprint: row.fingerprint || null
   };
 }
 
@@ -817,6 +858,113 @@ function supersedeMemoryRow(row, replacementId, reason, similarity, ts) {
   `).run(JSON.stringify(metadata), ts, ts, row.id);
 
   return normalizeMemoryRow(db.prepare("SELECT * FROM memories WHERE id = ?").get(row.id));
+}
+
+function memoryClassForType(type) {
+  if (["session", "incident", "deployment", "experiment", "release"].includes(type)) return "episodic";
+  if (type === "procedure") return "procedural";
+  if (type === "open_thread") return "prospective";
+  if (type === "negative") return "negative";
+  if (type === "artifact") return "artifact";
+  if (type === "observation") return "observational";
+  if (type === "working") return "working";
+  return "semantic";
+}
+
+function sourceAuthorityFor(sourceType, directness) {
+  const source = String(sourceType || "").toLowerCase();
+  if (source.includes("correction") || source.includes("user")) return 10;
+  if (source.includes("verified")) return 9;
+  if (source.includes("config") || source.includes("registry")) return 8;
+  if (source.includes("handoff")) return 6;
+  if (source.includes("agent") || source.includes("task")) return directness === "inferred" ? 4 : 5;
+  if (source.includes("tool")) return 2;
+  return 5;
+}
+
+function confidenceComponents(memory, authority, directness) {
+  const directnessScore = directness === "direct" ? 1 : directness === "derived" ? 0.75 : 0.55;
+  const authorityScore = Math.max(0, Math.min(1, Number(authority || 5) / 10));
+  const confirmationScore = Math.min(1, Math.log((memory.times_confirmed || 1) + 1) / Math.log(6));
+  return {
+    directness: directnessScore,
+    authority: authorityScore,
+    confirmations: confirmationScore,
+    supplied_confidence: Number.isFinite(memory.confidence) ? memory.confidence : 0.5
+  };
+}
+
+function applyMemoryIntelligenceFields(id, memory, ts) {
+  const columns = tableColumns("memories");
+  if (!columns.has("memory_class")) return;
+  const metadata = memory.metadata || {};
+  const memoryClass = memory.memory_class || metadata.memory_class || memoryClassForType(memory.type || "observation");
+  const scopeType = memory.primary_scope_type || metadata.primary_scope_type || (memory.project ? "project" : "global");
+  const scopeId = memory.primary_scope_id || metadata.primary_scope_id || memory.project || null;
+  const sourceType = memory.source_type || metadata.source_type || memory.source || "unknown";
+  const directness = memory.directness || metadata.directness || "direct";
+  const authority = Number.isFinite(memory.source_authority) ? memory.source_authority : sourceAuthorityFor(sourceType, directness);
+  const evidence = memory.evidence_excerpt || metadata.evidence_excerpt || memory.summary || memory.content || "";
+  const components = memory.confidence_components || confidenceComponents(memory, authority, directness);
+  const validTo = memory.valid_to || metadata.valid_to || memory.expires_at || null;
+  const fingerprint = memory.fingerprint || stableHash([memory.type, scopeType, scopeId, memory.content || memory.summary].join("|"));
+
+  db.prepare(`
+    UPDATE memories SET
+      memory_class = ?, primary_scope_type = ?, primary_scope_id = ?, source_type = ?,
+      evidence_excerpt = ?, extraction_method = ?, directness = ?, source_authority = ?,
+      confidence_json = ?, recorded_at = COALESCE(recorded_at, ?), source_timestamp = COALESCE(?, source_timestamp),
+      observed_at = COALESCE(?, observed_at), valid_from = COALESCE(?, valid_from), valid_to = COALESCE(?, valid_to),
+      revalidate_after = COALESCE(?, revalidate_after), pinned = ?, sensitivity = ?, current = ?,
+      supersedes_id = COALESCE(?, supersedes_id), conflict_group = COALESCE(?, conflict_group), fingerprint = ?
+    WHERE id = ?
+  `).run(
+    memoryClass,
+    scopeType,
+    scopeId,
+    sourceType,
+    evidence ? String(evidence).slice(0, 1000) : null,
+    memory.extraction_method || metadata.extraction_method || null,
+    directness,
+    authority,
+    JSON.stringify(components),
+    memory.recorded_at || ts,
+    memory.source_timestamp || metadata.source_timestamp || null,
+    memory.observed_at || metadata.observed_at || ts,
+    memory.valid_from || metadata.valid_from || ts,
+    validTo,
+    memory.revalidate_after || metadata.revalidate_after || null,
+    memory.pinned ? 1 : 0,
+    memory.sensitivity || metadata.sensitivity || "normal",
+    memory.current === false ? 0 : 1,
+    memory.supersedes_id || metadata.supersedes_id || null,
+    memory.conflict_group || metadata.conflict_group || null,
+    fingerprint,
+    id
+  );
+
+  if (hasTable("memory_evidence") && evidence) {
+    const evidenceId = stableId("ev", `${id}|${sourceType}|${evidence}`);
+    db.prepare(`
+      INSERT OR IGNORE INTO memory_evidence (
+        id, memory_id, source_type, source_id, source_location, source_timestamp,
+        artifact_hash, evidence_excerpt, extraction_method, directness, authority, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      evidenceId,
+      id,
+      sourceType,
+      memory.source_ref || memory.source_task_id || metadata.source_id || null,
+      memory.source_location || metadata.source_location || null,
+      memory.source_timestamp || metadata.source_timestamp || null,
+      memory.artifact_hash || metadata.artifact_hash || null,
+      String(evidence).slice(0, 1000),
+      memory.extraction_method || metadata.extraction_method || null,
+      directness,
+      authority,
+      ts
+    );
+  }
 }
 
 function hasMemoriesTable() {
@@ -893,6 +1041,7 @@ function upsertMemory(memory) {
         ts,
         row.id
       );
+      applyMemoryIntelligenceFields(row.id, { ...memory, type, project, source_tool: sourceTool, content, metadata: mergedMetadata }, ts);
       return normalizeMemoryRow(db.prepare("SELECT * FROM memories WHERE id = ?").get(row.id));
     }
   }
@@ -964,6 +1113,7 @@ function upsertMemory(memory) {
     }
   }
 
+  applyMemoryIntelligenceFields(id, { ...memory, type, project, source_tool: sourceTool, content }, ts);
   return normalizeMemoryRow(db.prepare("SELECT * FROM memories WHERE id = ?").get(id));
 }
 
@@ -1303,6 +1453,251 @@ function processAutoExpirations() {
       AND state = 'active'
   `).run(ts, ts, ts);
   return { expired: result.changes };
+}
+
+// === Memory Intelligence Foundations ===
+
+function auditMemoryEvent(eventType, targetType, targetId, details = {}, actor = "system") {
+  if (!hasTable("memory_audit_events")) return null;
+  const result = db.prepare(`
+    INSERT INTO memory_audit_events (event_type, target_type, target_id, actor, details_json, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(eventType, targetType, targetId || null, actor || "system", JSON.stringify(details || {}), nowIso());
+  return result.lastInsertRowid;
+}
+
+function saveHandoff({ id, kv_key, project, title, source, task_id, content, previous_id, extraction_state, extraction_version }) {
+  if (!hasTable("memory_handoffs")) throw new Error("memory_handoffs table is not available; run migrations");
+  const ts = nowIso();
+  const redacted = require("./redact").redactSensitive(String(content || ""));
+  const hash = stableHash(redacted);
+  const existing = kv_key ? db.prepare("SELECT * FROM memory_handoffs WHERE kv_key = ?").get(kv_key) : null;
+  const existingByHash = db.prepare("SELECT * FROM memory_handoffs WHERE content_hash = ? AND COALESCE(project, '') = COALESCE(?, '') ORDER BY version DESC LIMIT 1").get(hash, project || null);
+  if (existing && existing.content_hash === hash) {
+    db.prepare(`
+      UPDATE memory_handoffs SET updated_at = ?, extraction_state = COALESCE(?, extraction_state), extraction_version = COALESCE(?, extraction_version)
+      WHERE id = ?
+    `).run(ts, extraction_state || null, extraction_version || null, existing.id);
+    return getHandoff(existing.id);
+  }
+  if (!existing && existingByHash) return normalizeHandoffRow(existingByHash);
+
+  const handoffId = id || stableId("handoff", `${kv_key || project || "global"}|${hash}`);
+  const version = existing ? Number(existing.version || 1) + 1 : 1;
+  db.prepare(`
+    INSERT INTO memory_handoffs (
+      id, kv_key, project, title, source, task_id, version, previous_id, content_hash,
+      content, redacted_content, extraction_state, extraction_version, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      kv_key = excluded.kv_key,
+      project = excluded.project,
+      title = excluded.title,
+      source = excluded.source,
+      task_id = excluded.task_id,
+      version = excluded.version,
+      previous_id = excluded.previous_id,
+      content_hash = excluded.content_hash,
+      content = excluded.content,
+      redacted_content = excluded.redacted_content,
+      extraction_state = excluded.extraction_state,
+      extraction_version = excluded.extraction_version,
+      updated_at = excluded.updated_at
+  `).run(
+    handoffId,
+    kv_key || null,
+    project || null,
+    title || kv_key || "handoff",
+    source || "handoff",
+    task_id || null,
+    version,
+    previous_id || existing?.id || null,
+    hash,
+    String(content || ""),
+    redacted,
+    extraction_state || "pending",
+    extraction_version || null,
+    existing?.created_at || ts,
+    ts
+  );
+  auditMemoryEvent(existing ? "handoff_updated" : "handoff_created", "handoff", handoffId, { kv_key, project, version, content_hash: hash }, source || "system");
+  return getHandoff(handoffId);
+}
+
+function normalizeHandoffRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    kv_key: row.kv_key,
+    project: row.project,
+    title: row.title,
+    source: row.source,
+    task_id: row.task_id,
+    version: row.version,
+    previous_id: row.previous_id,
+    content_hash: row.content_hash,
+    content: row.content,
+    redacted_content: row.redacted_content,
+    extraction_state: row.extraction_state,
+    extraction_version: row.extraction_version,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    archived_at: row.archived_at
+  };
+}
+
+function getHandoff(idOrKey) {
+  if (!hasTable("memory_handoffs")) return null;
+  const row = db.prepare("SELECT * FROM memory_handoffs WHERE id = ? OR kv_key = ?").get(idOrKey, idOrKey);
+  return normalizeHandoffRow(row);
+}
+
+function listHandoffs({ project, includeArchived = false, limit = 50 } = {}) {
+  if (!hasTable("memory_handoffs")) return [];
+  const clauses = [];
+  const params = [];
+  if (project) { clauses.push("project = ?"); params.push(project); }
+  if (!includeArchived) clauses.push("archived_at IS NULL");
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const rows = db.prepare(`SELECT * FROM memory_handoffs ${where} ORDER BY updated_at DESC LIMIT ?`).all(...params, Math.max(1, Math.min(Number(limit) || 50, 500)));
+  return rows.map(normalizeHandoffRow);
+}
+
+function updateHandoffExtraction(id, state, extractionVersion) {
+  if (!hasTable("memory_handoffs")) return false;
+  const result = db.prepare("UPDATE memory_handoffs SET extraction_state = ?, extraction_version = ?, updated_at = ? WHERE id = ?").run(state, extractionVersion || null, nowIso(), id);
+  return result.changes > 0;
+}
+
+function archiveHandoff(id, reason = "archived") {
+  if (!hasTable("memory_handoffs")) return false;
+  const ts = nowIso();
+  const result = db.prepare("UPDATE memory_handoffs SET archived_at = ?, updated_at = ? WHERE id = ? OR kv_key = ?").run(ts, ts, id, id);
+  if (result.changes > 0) auditMemoryEvent("handoff_archived", "handoff", id, { reason }, "user");
+  return result.changes > 0;
+}
+
+function saveTaskSession(session) {
+  if (!hasTable("memory_task_sessions")) throw new Error("memory_task_sessions table is not available; run migrations");
+  const ts = nowIso();
+  const id = session.id || `task_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  db.prepare(`
+    INSERT INTO memory_task_sessions (
+      id, goal, project, source, client_session_id, working_directory, repository, branch,
+      environment, tags_json, supplied_context, state, current_plan, current_hypothesis,
+      completed_steps_json, blockers_json, next_step, artifacts_json, outcome,
+      final_summary, acceptance_state, memory_brief_json, created_at, updated_at, ended_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      goal = COALESCE(excluded.goal, goal), project = COALESCE(excluded.project, project),
+      source = COALESCE(excluded.source, source), client_session_id = COALESCE(excluded.client_session_id, client_session_id),
+      working_directory = COALESCE(excluded.working_directory, working_directory), repository = COALESCE(excluded.repository, repository),
+      branch = COALESCE(excluded.branch, branch), environment = COALESCE(excluded.environment, environment),
+      tags_json = excluded.tags_json, supplied_context = COALESCE(excluded.supplied_context, supplied_context),
+      state = excluded.state, current_plan = COALESCE(excluded.current_plan, current_plan),
+      current_hypothesis = COALESCE(excluded.current_hypothesis, current_hypothesis), completed_steps_json = excluded.completed_steps_json,
+      blockers_json = excluded.blockers_json, next_step = COALESCE(excluded.next_step, next_step), artifacts_json = excluded.artifacts_json,
+      outcome = COALESCE(excluded.outcome, outcome), final_summary = COALESCE(excluded.final_summary, final_summary),
+      acceptance_state = COALESCE(excluded.acceptance_state, acceptance_state), memory_brief_json = COALESCE(excluded.memory_brief_json, memory_brief_json),
+      updated_at = excluded.updated_at, ended_at = COALESCE(excluded.ended_at, ended_at)
+  `).run(
+    id,
+    session.goal || "task",
+    session.project || null,
+    session.source || null,
+    session.client_session_id || null,
+    session.working_directory || null,
+    session.repository || null,
+    session.branch || null,
+    session.environment || null,
+    JSON.stringify(session.tags || []),
+    session.supplied_context || null,
+    session.state || "active",
+    session.current_plan || null,
+    session.current_hypothesis || null,
+    JSON.stringify(session.completed_steps || []),
+    JSON.stringify(session.blockers || []),
+    session.next_step || null,
+    JSON.stringify(session.artifacts || []),
+    session.outcome || null,
+    session.final_summary || null,
+    session.acceptance_state || null,
+    session.memory_brief ? JSON.stringify(session.memory_brief) : null,
+    session.created_at || ts,
+    ts,
+    session.ended_at || null
+  );
+  auditMemoryEvent("task_session_saved", "task_session", id, { state: session.state || "active", project: session.project || null }, session.source || "system");
+  return getTaskSession(id);
+}
+
+function normalizeTaskSessionRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    goal: row.goal,
+    project: row.project,
+    source: row.source,
+    client_session_id: row.client_session_id,
+    working_directory: row.working_directory,
+    repository: row.repository,
+    branch: row.branch,
+    environment: row.environment,
+    tags: parseJson(row.tags_json, []),
+    supplied_context: row.supplied_context,
+    state: row.state,
+    current_plan: row.current_plan,
+    current_hypothesis: row.current_hypothesis,
+    completed_steps: parseJson(row.completed_steps_json, []),
+    blockers: parseJson(row.blockers_json, []),
+    next_step: row.next_step,
+    artifacts: parseJson(row.artifacts_json, []),
+    outcome: row.outcome,
+    final_summary: row.final_summary,
+    acceptance_state: row.acceptance_state,
+    memory_brief: parseJson(row.memory_brief_json, null),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    ended_at: row.ended_at
+  };
+}
+
+function getTaskSession(id) {
+  if (!hasTable("memory_task_sessions")) return null;
+  return normalizeTaskSessionRow(db.prepare("SELECT * FROM memory_task_sessions WHERE id = ?").get(id));
+}
+
+function listTaskSessions({ project, state, limit = 50 } = {}) {
+  if (!hasTable("memory_task_sessions")) return [];
+  const clauses = [];
+  const params = [];
+  if (project) { clauses.push("project = ?"); params.push(project); }
+  if (state) { clauses.push("state = ?"); params.push(state); }
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  return db.prepare(`SELECT * FROM memory_task_sessions ${where} ORDER BY updated_at DESC LIMIT ?`).all(...params, Math.max(1, Math.min(Number(limit) || 50, 500))).map(normalizeTaskSessionRow);
+}
+
+function getMemoryEvidence(memoryId) {
+  if (!hasTable("memory_evidence")) return [];
+  return db.prepare("SELECT * FROM memory_evidence WHERE memory_id = ? ORDER BY created_at DESC").all(memoryId);
+}
+
+function getMemoryIntelligenceStats() {
+  const stats = getMemoryStats();
+  if (!hasMemoriesTable()) return stats;
+  const count = sql => db.prepare(sql).get().count;
+  stats.durable_active = count("SELECT COUNT(*) AS count FROM memories WHERE enabled = 1 AND COALESCE(memory_class, 'semantic') NOT IN ('working') AND type NOT IN ('tool_call')");
+  stats.pending_review = count("SELECT COUNT(*) AS count FROM memories WHERE enabled = 1 AND state = 'pending'");
+  stats.conflicting = count("SELECT COUNT(*) AS count FROM memories WHERE enabled = 1 AND (conflict_group IS NOT NULL OR metadata_json LIKE '%conflicts_with%')");
+  stats.expired = count("SELECT COUNT(*) AS count FROM memories WHERE state = 'expired' OR (expires_at IS NOT NULL AND expires_at <= datetime('now'))");
+  stats.revalidation_due = count("SELECT COUNT(*) AS count FROM memories WHERE enabled = 1 AND revalidate_after IS NOT NULL AND revalidate_after <= datetime('now')");
+  stats.working_memory = count("SELECT COUNT(*) AS count FROM memories WHERE enabled = 1 AND COALESCE(memory_class, '') = 'working'");
+  stats.prospective_open = count("SELECT COUNT(*) AS count FROM memories WHERE enabled = 1 AND (COALESCE(memory_class, '') = 'prospective' OR type = 'open_thread')");
+  stats.operational_events = hasTable("tool_logs") ? count("SELECT COUNT(*) AS count FROM tool_logs") : 0;
+  stats.stored_handoffs = hasTable("memory_handoffs") ? count("SELECT COUNT(*) AS count FROM memory_handoffs WHERE archived_at IS NULL") : 0;
+  stats.entities = hasTable("memory_entities") ? count("SELECT COUNT(*) AS count FROM memory_entities WHERE active = 1") : 0;
+  stats.task_sessions = hasTable("memory_task_sessions") ? count("SELECT COUNT(*) AS count FROM memory_task_sessions") : 0;
+  return stats;
 }
 
 // === Memory Import/Export ===
@@ -2377,6 +2772,18 @@ module.exports = {
   getPendingConfirmations,
   setAutoExpire,
   processAutoExpirations,
+  auditMemoryEvent,
+  saveHandoff,
+  getHandoff,
+  listHandoffs,
+  updateHandoffExtraction,
+  archiveHandoff,
+  saveTaskSession,
+  getTaskSession,
+  listTaskSessions,
+  getMemoryEvidence,
+  getMemoryIntelligenceStats,
+  stableHash,
   getMachineId,
   getUserId,
   setUserId,
