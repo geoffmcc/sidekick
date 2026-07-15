@@ -12,6 +12,7 @@ const { allowedActions } = require("./evolve/lifecycle");
 const { redactSensitive } = require("./redact");
 const crypto = require("crypto");
 const blackbox = require("./blackbox");
+const platformKernel = require("./platform/kernel");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const PORT = parseInt(process.env.SIDEKICK_DASHBOARD_PORT || "4098", 10);
@@ -135,6 +136,52 @@ function auditLog(req, action, details) {
   };
   const line = JSON.stringify(entry) + '\n';
   fs.appendFileSync(AUDIT_LOG, line);
+}
+
+function dashboardActor(req) {
+  const auth = req.headers.authorization;
+  if (auth && auth.startsWith('Basic ')) return Buffer.from(auth.slice(6), 'base64').toString().split(':')[0];
+  return 'anonymous';
+}
+
+function startDashboardExecution(req, action) {
+  try {
+    const execution = platformKernel.createExecution({
+      actor_id: dashboardActor(req),
+      client_id: req.ip,
+      trigger_type: "dashboard",
+      operation_type: "dashboard_action",
+      tool_name: "sidekick_dashboard",
+      tool_action: action,
+      resource_scope: req.originalUrl || req.path,
+      environment: process.env.SIDEKICK_ENVIRONMENT || null,
+      risk: action === "restart-agent" ? "high" : "low",
+      source: "dashboard",
+      metadata: {
+        method: req.method,
+        path: req.originalUrl || req.path,
+      },
+    });
+    return platformKernel.transitionExecution(execution.execution_id, "running", { source: "dashboard", reason: "dashboard action started" });
+  } catch {
+    return null;
+  }
+}
+
+function finishDashboardExecution(execution, state, details = {}) {
+  if (!execution) return;
+  try {
+    platformKernel.transitionExecution(execution.execution_id, state, {
+      source: "dashboard",
+      actor_id: execution.actor_id,
+      result_status: details.result_status || state,
+      error_category: details.error_category || null,
+      result_summary: details.result_summary || null,
+      reason: details.reason || null,
+    });
+  } catch {
+    // Dashboard actions should not fail because platform observability is unavailable.
+  }
 }
 
 // Error logging
@@ -853,6 +900,7 @@ app.get("/api/services", (req, res) => {
 
 app.post("/api/quick-actions/:action", (req, res) => {
   const action = req.params.action;
+  const execution = startDashboardExecution(req, action);
   try {
     if (action === "health-check") {
       const services = ["sidekick-mcp", "sidekick-dashboard", "sidekick-agent", "ollama"];
@@ -869,6 +917,7 @@ app.post("/api/quick-actions/:action", (req, res) => {
       const disk = exec("df -h / | tail -1 | awk '{print $5 \" used, \" $4 \" free\"}'");
       const memory = exec("free -h | awk '/Mem:/ {print $3 \"/\" $2 \" used\"}'");
       auditLog(req, "quick-action.health-check", {});
+      finishDashboardExecution(execution, "completed", { result_status: "success", result_summary: "dashboard health check completed" });
       return res.json({ ok: true, action, result: { services: serviceStatus, uptime, load, disk, memory } });
     }
 
@@ -880,6 +929,7 @@ app.post("/api/quick-actions/:action", (req, res) => {
         summary: (entry.s || "").slice(0, 240)
       }));
       auditLog(req, "quick-action.recent-failures", { count: failures.length });
+      finishDashboardExecution(execution, "completed", { result_status: "success", result_summary: `dashboard recent failures returned ${failures.length} entries` });
       return res.json({ ok: true, action, result: { failures } });
     }
 
@@ -887,6 +937,7 @@ app.post("/api/quick-actions/:action", (req, res) => {
       const versionFile = path.join(__dirname, "..", "version.json");
       const version = fs.existsSync(versionFile) ? JSON.parse(fs.readFileSync(versionFile, "utf-8")) : {};
       auditLog(req, "quick-action.deployment", {});
+      finishDashboardExecution(execution, "completed", { result_status: "success", result_summary: "dashboard deployment metadata returned" });
       return res.json({ ok: true, action, result: {
         commit: version.commit || "unknown",
         branch: version.branch || "unknown",
@@ -898,9 +949,13 @@ app.post("/api/quick-actions/:action", (req, res) => {
     if (action === "service-logs") {
       const allowedServices = new Set(["sidekick-mcp", "sidekick-dashboard", "sidekick-agent"]);
       const service = String(req.body?.service || "sidekick-mcp");
-      if (!allowedServices.has(service)) return res.status(400).json({ ok: false, error: "Unsupported service" });
+      if (!allowedServices.has(service)) {
+        finishDashboardExecution(execution, "failed", { result_status: "invalid_request", error_category: "unsupported_service", result_summary: `Unsupported service: ${service}` });
+        return res.status(400).json({ ok: false, error: "Unsupported service" });
+      }
       const logs = execSync(`sudo -n /usr/bin/journalctl -u ${service} | tail -40`, { encoding: "utf-8", timeout: 5000 }).trim();
       auditLog(req, "quick-action.service-logs", { service });
+      finishDashboardExecution(execution, "completed", { result_status: "success", result_summary: `dashboard service logs returned for ${service}` });
       return res.json({ ok: true, action, result: { service, logs } });
     }
 
@@ -908,11 +963,14 @@ app.post("/api/quick-actions/:action", (req, res) => {
       execSync("sudo systemctl restart sidekick-agent", { encoding: "utf-8", timeout: 10000 });
       const status = exec("systemctl is-active sidekick-agent");
       auditLog(req, "quick-action.restart-agent", { status });
+      finishDashboardExecution(execution, status === "active" ? "completed" : "failed", { result_status: status === "active" ? "success" : "failed", result_summary: `sidekick-agent restart status: ${status}` });
       return res.json({ ok: status === "active", action, result: { service: "sidekick-agent", status } });
     }
 
+    finishDashboardExecution(execution, "failed", { result_status: "not_found", error_category: "unknown_action", result_summary: `Unknown quick action: ${action}` });
     res.status(404).json({ ok: false, error: "Unknown quick action" });
   } catch (error) {
+    finishDashboardExecution(execution, "failed", { result_status: "error", error_category: "dashboard_action_error", result_summary: error.message, reason: error.message });
     logError(req.originalUrl, 500, error, "mission", req.headers["user-agent"]);
     res.status(500).json({ ok: false, error: error.message });
   }
