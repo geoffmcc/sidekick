@@ -1224,6 +1224,82 @@ function recordPlatformApprovalEvent(item, eventType, payload = {}, options = {}
   } catch (e) {}
 }
 
+function createScheduledPlatformExecution(kind, item, options = {}) {
+  try {
+    const execution = platformKernel.createExecution({
+      parent_execution_id: options.parentExecutionId || null,
+      root_execution_id: options.rootExecutionId || options.parentExecutionId || undefined,
+      actor_id: options.actor || currentSource || "unknown",
+      client_id: options.client || currentSource || null,
+      trigger_type: options.triggerType || kind,
+      operation_type: options.operationType || `${kind}_operation`,
+      tool_name: options.toolName || item.tool || item.action_tool || null,
+      tool_action: options.toolAction || null,
+      risk: options.risk || "medium",
+      deadline_at: options.deadlineAt || item.when || null,
+      source: options.source || kind,
+      correlation_id: options.correlationId || item.id,
+      metadata: {
+        kind,
+        id: item.id,
+        name: item.name || null,
+        status: item.status || null,
+        ...options.metadata,
+      },
+    });
+    if (options.attach !== false) item.platform_execution_id = execution.execution_id;
+    if (options.state && options.state !== "created") {
+      platformKernel.transitionExecution(execution.execution_id, options.state, {
+        source: options.source || kind,
+        actor_id: options.actor || currentSource || "unknown",
+        reason: options.reason || `${kind} ${options.state}`,
+        correlation_id: options.correlationId || item.id,
+      });
+    }
+    return execution;
+  } catch (e) {
+    return null;
+  }
+}
+
+function transitionScheduledPlatformExecution(kind, item, state, details = {}) {
+  try {
+    if (!item.platform_execution_id) return;
+    platformKernel.transitionExecution(item.platform_execution_id, state, {
+      source: details.source || kind,
+      actor_id: details.actor || currentSource || "unknown",
+      reason: details.reason,
+      result_status: details.result_status,
+      error_category: details.error_category,
+      result_summary: details.result_summary,
+      correlation_id: details.correlationId || item.id,
+    });
+  } catch (e) {}
+}
+
+function appendScheduledPlatformEvent(kind, item, eventType, payload = {}, options = {}) {
+  try {
+    platformKernel.appendEvent({
+      event_type: eventType,
+      source: options.source || kind,
+      actor_id: options.actor || currentSource || "unknown",
+      subject_type: kind,
+      subject_id: item.id,
+      execution_id: options.executionId || item.platform_execution_id || null,
+      root_execution_id: options.rootExecutionId || item.platform_execution_id || null,
+      severity: options.severity || "info",
+      payload: {
+        kind,
+        id: item.id,
+        name: item.name || null,
+        status: item.status || null,
+        ...payload,
+      },
+      correlation_id: options.correlationId || item.id,
+    });
+  } catch (e) {}
+}
+
 const DANGEROUS_PATTERNS = [
   /\brm\s+-(?:[a-z]*r[a-z]*f|[a-z]*f[a-z]*r)[a-z]*\s+(?:--no-preserve-root\s+)?\/(?:\s|$|[/*])/i,
   /\brm\s+-(?:[a-z]*r[a-z]*f|[a-z]*f[a-z]*r)[a-z]*\s+\/(?:var|etc|home|usr|bin|sbin|lib|lib64|boot|root)(?:\s|$|\/)/i,
@@ -1967,9 +2043,17 @@ async function sidekick_cron({ action, name, schedule, command, id }) {
       lastRun: null,
       lastResult: null
     };
+    createScheduledPlatformExecution("cron", newJob, {
+      operationType: "cron_job",
+      state: "queued",
+      risk: "high",
+      metadata: { schedule: newJob.schedule },
+      reason: "cron job scheduled",
+    });
     jobs.push(newJob);
     saveCronJobs(jobs);
     syncCrontab(jobs);
+    appendScheduledPlatformEvent("cron", newJob, "schedule.cron.added", { schedule: newJob.schedule });
     return { content: [{ type: "text", text: "Added cron job: " + name + " (id: " + newJob.id + ")" }] };
   }
 
@@ -1992,6 +2076,12 @@ async function sidekick_cron({ action, name, schedule, command, id }) {
       return { content: [{ type: "text", text: "Job not found" }], isError: true };
     }
     const removed = jobs.splice(idx, 1)[0];
+    transitionScheduledPlatformExecution("cron", removed, "cancelled", {
+      reason: "cron job removed",
+      result_status: "removed",
+      result_summary: `Removed cron job ${removed.name}`,
+    });
+    appendScheduledPlatformEvent("cron", removed, "schedule.cron.removed", {});
     saveCronJobs(jobs);
     syncCrontab(jobs);
     return { content: [{ type: "text", text: "Removed job: " + removed.name }] };
@@ -2005,16 +2095,41 @@ async function sidekick_cron({ action, name, schedule, command, id }) {
     if (!job) {
       return { content: [{ type: "text", text: "Job not found" }], isError: true };
     }
+    const execution = createScheduledPlatformExecution("cron", job, {
+      attach: false,
+      operationType: "cron_run",
+      state: "running",
+      risk: "high",
+      reason: "cron job run started",
+      metadata: { cron_job_id: job.id, schedule: job.schedule },
+    });
     try {
       const stdout = execSync(job.command, { timeout: 300000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
       job.lastRun = new Date().toISOString();
       job.lastResult = "success";
       saveCronJobs(jobs);
+      if (execution) platformKernel.transitionExecution(execution.execution_id, "completed", {
+        source: "cron",
+        actor_id: currentSource || "unknown",
+        reason: "cron job run completed",
+        result_status: "success",
+        result_summary: stdout || "(empty output)",
+        correlation_id: job.id,
+      });
       return { content: [{ type: "text", text: redactSensitive(stdout || "(empty output)") }] };
     } catch (e) {
       job.lastRun = new Date().toISOString();
       job.lastResult = "error";
       saveCronJobs(jobs);
+      if (execution) platformKernel.transitionExecution(execution.execution_id, "failed", {
+        source: "cron",
+        actor_id: currentSource || "unknown",
+        reason: "cron job run failed",
+        result_status: "failure",
+        error_category: evolveCommon.errorCategory(e.message),
+        result_summary: e.stderr || e.stdout || e.message,
+        correlation_id: job.id,
+      });
       return { content: [{ type: "text", text: redactSensitive("Error: " + (e.stderr || e.stdout || e.message)) }], isError: true };
     }
   }
@@ -4018,9 +4133,18 @@ async function sidekick_delay({ action, id, when, name, tool, args }) {
       created: now,
       status: "pending"
     };
+    createScheduledPlatformExecution("delay", delay, {
+      operationType: "delay_task",
+      state: "queued",
+      risk: getToolRisk(tool),
+      deadlineAt: delay.when,
+      metadata: { target_tool: tool },
+      reason: "delay scheduled",
+    });
     
     delays.push(delay);
     saveDelays(delays);
+    appendScheduledPlatformEvent("delay", delay, "schedule.delay.added", { when: delay.when, tool: delay.tool });
     
     const msUntil = executeAt.getTime() - Date.now();
     const minutes = Math.round(msUntil / 60000);
@@ -4088,6 +4212,12 @@ async function sidekick_delay({ action, id, when, name, tool, args }) {
     
     delay.status = "cancelled";
     delay.cancelledAt = now;
+    transitionScheduledPlatformExecution("delay", delay, "cancelled", {
+      reason: "delay cancelled",
+      result_status: "cancelled",
+      result_summary: `Cancelled delay ${id}`,
+    });
+    appendScheduledPlatformEvent("delay", delay, "schedule.delay.cancelled", { cancelled_at: delay.cancelledAt });
     saveDelays(delays);
     
     return { content: [{ type: "text", text: `Cancelled delay: ${id}` }] };
@@ -4109,20 +4239,39 @@ async function sidekick_delay({ action, id, when, name, tool, args }) {
     
     delay.status = "running";
     delay.startedAt = now;
+    transitionScheduledPlatformExecution("delay", delay, "running", { reason: "delay execution started" });
     saveDelays(delays);
     
     try {
-      const result = await callTool(delay.tool, delay.args);
-      delay.status = "completed";
+      const result = await callTool(delay.tool, delay.args, {
+        parentId: delay.platform_execution_id || null,
+        rootExecutionId: delay.platform_execution_id || null,
+        correlationId: delay.id,
+      });
+      delay.status = result.isError ? "failed" : "completed";
       delay.completedAt = new Date().toISOString();
       delay.result = result.content?.[0]?.text?.substring(0, 200) || "ok";
+      transitionScheduledPlatformExecution("delay", delay, result.isError ? "failed" : "completed", {
+        reason: result.isError ? "delay execution failed" : "delay execution completed",
+        result_status: result.isError ? "failure" : "success",
+        error_category: result.isError ? evolveCommon.errorCategory(delay.result) : null,
+        result_summary: delay.result,
+      });
+      appendScheduledPlatformEvent("delay", delay, result.isError ? "schedule.delay.failed" : "schedule.delay.completed", { completed_at: delay.completedAt }, { severity: result.isError ? "error" : "info" });
       saveDelays(delays);
-      
+      if (result.isError) return { content: [{ type: "text", text: `Delay ${id} failed:\n\n${result.content?.[0]?.text || "error"}` }], isError: true };
       return { content: [{ type: "text", text: `Executed delay ${id}:\n\n${result.content?.[0]?.text || "ok"}` }] };
     } catch (e) {
       delay.status = "failed";
       delay.completedAt = new Date().toISOString();
       delay.error = e.message;
+      transitionScheduledPlatformExecution("delay", delay, "failed", {
+        reason: "delay execution threw",
+        result_status: "failure",
+        error_category: evolveCommon.errorCategory(e.message),
+        result_summary: e.message,
+      });
+      appendScheduledPlatformEvent("delay", delay, "schedule.delay.failed", { error: e.message }, { severity: "error" });
       saveDelays(delays);
       
       return { content: [{ type: "text", text: `Delay ${id} failed: ${e.message}` }], isError: true };
@@ -4506,7 +4655,7 @@ function evaluateCondition(watch, checkResult) {
   return false;
 }
 
-async function executeWatchAction(watch, checkResult) {
+async function executeWatchAction(watch, checkResult, metadata = {}) {
   const { action_tool, action_args } = watch;
   if (!action_tool) return;
   
@@ -4520,9 +4669,10 @@ async function executeWatchAction(watch, checkResult) {
   }
   
   try {
-    await callTool(action_tool, args);
+    return await callTool(action_tool, args, metadata);
   } catch (e) {
     console.error(`Watch ${watch.id} action failed: ${e.message}`);
+    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
   }
 }
 
@@ -4559,9 +4709,17 @@ async function sidekick_watch({ action, id, name, source, target, condition, int
       lastTriggered: null,
       triggerCount: 0
     };
+    createScheduledPlatformExecution("watch", watch, {
+      operationType: "watch_monitor",
+      state: "queued",
+      risk: getToolRisk(watch.action_tool),
+      metadata: { source: watch.source, target: watch.target, condition: watch.condition, interval: watch.interval, action_tool: watch.action_tool },
+      reason: "watch scheduled",
+    });
     
     watches.push(watch);
     saveWatches(watches);
+    appendScheduledPlatformEvent("watch", watch, "schedule.watch.added", { source: watch.source, target: watch.target, condition: watch.condition, interval: watch.interval });
     
     try {
       const http = require("http");
@@ -4619,7 +4777,13 @@ async function sidekick_watch({ action, id, name, source, target, condition, int
       return { content: [{ type: "text", text: `Watch not found: ${id}` }], isError: true };
     }
     
-    watches.splice(idx, 1);
+    const removed = watches.splice(idx, 1)[0];
+    transitionScheduledPlatformExecution("watch", removed, "cancelled", {
+      reason: "watch removed",
+      result_status: "removed",
+      result_summary: `Removed watch ${id}`,
+    });
+    appendScheduledPlatformEvent("watch", removed, "schedule.watch.removed", {});
     saveWatches(watches);
     
     return { content: [{ type: "text", text: `Removed watch: ${id}` }] };
@@ -4636,6 +4800,11 @@ async function sidekick_watch({ action, id, name, source, target, condition, int
     }
     
     watch.status = pause ? "paused" : "active";
+    transitionScheduledPlatformExecution("watch", watch, pause ? "blocked" : "queued", {
+      reason: pause ? "watch paused" : "watch resumed",
+      result_status: pause ? "paused" : "active",
+    });
+    appendScheduledPlatformEvent("watch", watch, pause ? "schedule.watch.paused" : "schedule.watch.resumed", {});
     saveWatches(watches);
     
     return { content: [{ type: "text", text: `${pause ? "Paused" : "Resumed"} watch: ${id}` }] };
@@ -4664,13 +4833,46 @@ async function sidekick_watch({ action, id, name, source, target, condition, int
       checkResult = checkFile(watch.target, watch.condition === "content_matches" ? watch.value : null);
     }
     
+    const checkExecution = createScheduledPlatformExecution("watch", watch, {
+      attach: false,
+      parentExecutionId: watch.platform_execution_id || null,
+      rootExecutionId: watch.platform_execution_id || null,
+      operationType: "watch_check",
+      state: "running",
+      risk: getToolRisk(watch.action_tool),
+      metadata: { source: watch.source, target: watch.target, condition: watch.condition },
+      reason: "watch check started",
+    });
     const triggered = evaluateCondition(watch, checkResult);
     
     watch.lastCheck = now;
     if (triggered) {
       watch.lastTriggered = now;
       watch.triggerCount++;
-      await executeWatchAction(watch, checkResult);
+      appendScheduledPlatformEvent("watch", watch, "schedule.watch.triggered", { check_result: checkResult }, { executionId: checkExecution?.execution_id, rootExecutionId: watch.platform_execution_id || checkExecution?.root_execution_id });
+      const actionResult = await executeWatchAction(watch, checkResult, {
+        parentId: checkExecution?.execution_id || watch.platform_execution_id || null,
+        rootExecutionId: watch.platform_execution_id || checkExecution?.root_execution_id || null,
+        correlationId: watch.id,
+      });
+      if (checkExecution) platformKernel.transitionExecution(checkExecution.execution_id, actionResult?.isError ? "failed" : "completed", {
+        source: "watch",
+        actor_id: currentSource || "unknown",
+        reason: actionResult?.isError ? "watch action failed" : "watch action completed",
+        result_status: actionResult?.isError ? "failure" : "success",
+        error_category: actionResult?.isError ? evolveCommon.errorCategory(actionResult.content?.[0]?.text || "watch action failed") : null,
+        result_summary: actionResult?.content?.[0]?.text || "watch triggered",
+        correlation_id: watch.id,
+      });
+    } else if (checkExecution) {
+      platformKernel.transitionExecution(checkExecution.execution_id, "completed", {
+        source: "watch",
+        actor_id: currentSource || "unknown",
+        reason: "watch check completed without trigger",
+        result_status: "not_triggered",
+        result_summary: `Watch ${watch.id} did not trigger`,
+        correlation_id: watch.id,
+      });
     }
     saveWatches(watches);
     
@@ -9705,6 +9907,7 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
 
     const instanceId = generateRunbookId();
     data.instances[instanceId] = {
+      id: instanceId,
       definitionId: rbId,
       status: "running",
       currentStep: 0,
@@ -9712,6 +9915,13 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
       started: Date.now(),
       results: []
     };
+    createScheduledPlatformExecution("runbook", data.instances[instanceId], {
+      operationType: "runbook_execution",
+      state: "running",
+      risk: "critical",
+      metadata: { definition_id: rbId, mode: execMode, steps: rb.steps.length, runbook_name: rb.name },
+      reason: "runbook started",
+    });
     saveRunbooks(data);
 
     if (execMode === "autonomous") {
@@ -9719,13 +9929,16 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
       for (let i = 0; i < rb.steps.length; i++) {
         const step = rb.steps[i];
         output += `Step ${i + 1}/${rb.steps.length}: ${step.name}\n`;
+        appendScheduledPlatformEvent("runbook", data.instances[instanceId], "runbook.step_started", { step: i, name: step.name });
         try {
           const result = execSync(step.command, { encoding: "utf8", timeout: STEP_TIMEOUT_MS, stdio: ["pipe", "pipe", "pipe"] });
           output += `  ✓ Success\n`;
+          appendScheduledPlatformEvent("runbook", data.instances[instanceId], "runbook.step_completed", { step: i, name: step.name });
           if (step.verify_command) {
             try {
               const verifyResult = execSync(step.verify_command, { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"] });
               output += `  ✓ Verified\n`;
+              appendScheduledPlatformEvent("runbook", data.instances[instanceId], "runbook.step_verified", { step: i, name: step.name });
             } catch (e) {
               output += `  ✗ Verification failed: ${e.message}\n`;
               if (step.rollback) {
@@ -9738,6 +9951,12 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
                 }
               }
               data.instances[instanceId].status = "failed";
+              transitionScheduledPlatformExecution("runbook", data.instances[instanceId], "failed", {
+                reason: "runbook verification failed",
+                result_status: "failure",
+                error_category: evolveCommon.errorCategory(e.message),
+                result_summary: output,
+              });
               saveRunbooks(data);
               return { content: [{ type: "text", text: output }], isError: true };
             }
@@ -9756,11 +9975,22 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
           }
           data.instances[instanceId].status = "failed";
           data.instances[instanceId].currentStep = i;
+          transitionScheduledPlatformExecution("runbook", data.instances[instanceId], "failed", {
+            reason: "runbook step failed",
+            result_status: "failure",
+            error_category: evolveCommon.errorCategory(e.message),
+            result_summary: output,
+          });
           saveRunbooks(data);
           return { content: [{ type: "text", text: output }], isError: true };
         }
       }
       data.instances[instanceId].status = "completed";
+      transitionScheduledPlatformExecution("runbook", data.instances[instanceId], "completed", {
+        reason: "runbook completed",
+        result_status: "success",
+        result_summary: output,
+      });
       saveRunbooks(data);
       output += `\n✓ Runbook completed successfully`;
       return { content: [{ type: "text", text: output }] };
@@ -9775,8 +10005,18 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
         data.instances[instanceId].results.push({ step: 0, success: true, output: result });
         if (rb.steps.length > 1) {
           output += `\nUse action="next" with runbook_id="${instanceId}" to continue`;
+          transitionScheduledPlatformExecution("runbook", data.instances[instanceId], "waiting", {
+            reason: "guided runbook waiting for next step",
+            result_status: "waiting",
+            result_summary: output,
+          });
         } else {
           data.instances[instanceId].status = "completed";
+          transitionScheduledPlatformExecution("runbook", data.instances[instanceId], "completed", {
+            reason: "guided runbook completed",
+            result_status: "success",
+            result_summary: output,
+          });
           output += `\n✓ Runbook completed`;
         }
       } catch (e) {
@@ -9785,6 +10025,12 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
           output += `Use action="rollback" with runbook_id="${instanceId}" to rollback`;
         }
         data.instances[instanceId].status = "failed";
+        transitionScheduledPlatformExecution("runbook", data.instances[instanceId], "failed", {
+          reason: "guided runbook step failed",
+          result_status: "failure",
+          error_category: evolveCommon.errorCategory(e.message),
+          result_summary: output,
+        });
       }
       saveRunbooks(data);
       return { content: [{ type: "text", text: output }] };
@@ -9799,6 +10045,7 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
     if (!instance) {
       return { content: [{ type: "text", text: "Instance not found" }], isError: true };
     }
+    if (!instance.id) instance.id = runbook_id;
     if (instance.mode !== "guided") {
       return { content: [{ type: "text", text: "Instance is not in guided mode" }], isError: true };
     }
@@ -9808,8 +10055,14 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
     }
 
     instance.currentStep++;
+    transitionScheduledPlatformExecution("runbook", instance, "running", { reason: "guided runbook next step started" });
     if (instance.currentStep >= rb.steps.length) {
       instance.status = "completed";
+      transitionScheduledPlatformExecution("runbook", instance, "completed", {
+        reason: "guided runbook completed",
+        result_status: "success",
+        result_summary: "Runbook completed",
+      });
       saveRunbooks(data);
       return { content: [{ type: "text", text: `✓ Runbook completed` }] };
     }
@@ -9817,14 +10070,26 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
     const step = rb.steps[instance.currentStep];
     let output = `Step ${instance.currentStep + 1}/${rb.steps.length}: ${step.name}\n`;
     output += `Command: ${step.command}\n`;
+    appendScheduledPlatformEvent("runbook", instance, "runbook.step_started", { step: instance.currentStep, name: step.name });
     try {
       const result = execSync(step.command, { encoding: "utf8", timeout: STEP_TIMEOUT_MS, stdio: ["pipe", "pipe", "pipe"] });
       output += `Result: ${result.substring(0, 500)}\n`;
       instance.results.push({ step: instance.currentStep, success: true, output: result });
+      appendScheduledPlatformEvent("runbook", instance, "runbook.step_completed", { step: instance.currentStep, name: step.name });
       if (instance.currentStep < rb.steps.length - 1) {
         output += `\nUse action="next" to continue`;
+        transitionScheduledPlatformExecution("runbook", instance, "waiting", {
+          reason: "guided runbook waiting for next step",
+          result_status: "waiting",
+          result_summary: output,
+        });
       } else {
         instance.status = "completed";
+        transitionScheduledPlatformExecution("runbook", instance, "completed", {
+          reason: "guided runbook completed",
+          result_status: "success",
+          result_summary: output,
+        });
         output += `\n✓ Runbook completed`;
       }
     } catch (e) {
@@ -9833,6 +10098,12 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
         output += `Use action="rollback" to rollback`;
       }
       instance.status = "failed";
+      transitionScheduledPlatformExecution("runbook", instance, "failed", {
+        reason: "guided runbook step failed",
+        result_status: "failure",
+        error_category: evolveCommon.errorCategory(e.message),
+        result_summary: output,
+      });
     }
     saveRunbooks(data);
     return { content: [{ type: "text", text: output }] };
@@ -9846,6 +10117,7 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
     if (!instance) {
       return { content: [{ type: "text", text: "Instance not found" }], isError: true };
     }
+    if (!instance.id) instance.id = runbook_id;
     const rb = data.definitions[instance.definitionId];
     if (!rb) {
       return { content: [{ type: "text", text: "Runbook definition not found" }], isError: true };
@@ -9870,12 +10142,14 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
     if (!instance) {
       return { content: [{ type: "text", text: "Instance not found" }], isError: true };
     }
+    if (!instance.id) instance.id = runbook_id;
     const rb = data.definitions[instance.definitionId];
     if (!rb) {
       return { content: [{ type: "text", text: "Runbook definition not found" }], isError: true };
     }
 
     let output = `Rolling back runbook: ${runbook_id}\n\n`;
+    transitionScheduledPlatformExecution("runbook", instance, "rolling_back", { reason: "runbook rollback started" });
     for (let i = instance.currentStep; i >= 0; i--) {
       const step = rb.steps[i];
       if (step.rollback) {
@@ -9889,6 +10163,11 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
       }
     }
     instance.status = "rolled_back";
+    transitionScheduledPlatformExecution("runbook", instance, "rolled_back", {
+      reason: "runbook rollback completed",
+      result_status: "rolled_back",
+      result_summary: output,
+    });
     saveRunbooks(data);
     return { content: [{ type: "text", text: output }] };
   }
@@ -9901,7 +10180,13 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
     if (!instance) {
       return { content: [{ type: "text", text: "Instance not found" }], isError: true };
     }
+    if (!instance.id) instance.id = runbook_id;
     instance.status = "aborted";
+    transitionScheduledPlatformExecution("runbook", instance, "cancelled", {
+      reason: "runbook aborted",
+      result_status: "aborted",
+      result_summary: `Aborted runbook: ${runbook_id}`,
+    });
     saveRunbooks(data);
     return { content: [{ type: "text", text: `Aborted runbook: ${runbook_id}` }] };
   }
@@ -11665,6 +11950,9 @@ module.exports = {
   getApprovalDecision,
   listApprovals,
   resolveApproval,
+  createScheduledPlatformExecution,
+  transitionScheduledPlatformExecution,
+  appendScheduledPlatformEvent,
   getToolDefsForSource,
   getToolCategoriesWithTools,
   buildPolicyInspection,

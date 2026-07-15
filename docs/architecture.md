@@ -83,6 +83,8 @@ Memory intelligence operations emit platform events for handoff processing, sess
 
 Approval requests mirror queue, approval, rejection, expiry, and terminal execution outcomes into the platform kernel with `operation_type='approval_request'`. Encrypted approval payloads and existing approval status remain in `json_documents('approvals')`; platform rows contain only lifecycle metadata and redacted result summaries.
 
+Schedulers and guided operational workflows mirror definitions and execution attempts into the platform kernel. Cron jobs, delays, watches, and runbook instances keep their existing JSON/document stores as compatibility sources of truth while platform executions/events provide shared visibility for queued work, checks, triggers, manual runs, timer-fired background runs, step progress, completion, cancellation, and failures.
+
 ### Dashboard: `src/dashboard.js`
 
 The dashboard serves a browser UI and JSON API. The server code lives in `src/dashboard.js`, the authenticated HTML shell lives in `src/dashboard.html`, and public CSS/JS assets live under `static/`. It reads the Sidekick data directory, reports system state, allows KV editing and deletion, exposes tool metadata, accepts webhooks, and proxies agent requests to the Agent Bridge.
