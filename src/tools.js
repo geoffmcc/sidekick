@@ -516,6 +516,12 @@ function expireApprovals(approvals, now = Date.now()) {
     item.status = "expired";
     item.expired_at = new Date(now).toISOString();
     item.updated_at = item.expired_at;
+    transitionPlatformApproval(item, "timed_out", {
+      reason: "approval expired",
+      result_status: "expired",
+      result_summary: `Approval expired for ${item.tool}`,
+    });
+    recordPlatformApprovalEvent(item, "approval.expired", { expired_at: item.expired_at }, { severity: "warning" });
     discardApprovalPayload(item);
     changed = true;
   }
@@ -553,6 +559,7 @@ function queueApproval(toolName, args, decision) {
     updated_at: now,
     expires_at: new Date(Date.parse(now) + (getApprovalTtlSeconds() * 1000)).toISOString()
   };
+  recordPlatformApprovalQueued(item);
   approvals.unshift(item);
   saveApprovals(approvals.slice(0, 500));
   return item;
@@ -593,6 +600,13 @@ async function resolveApproval(id, action, reviewer = "dashboard") {
     item.updated_at = now;
     item.reviewed_by = reviewer;
     item.status = "rejected";
+    transitionPlatformApproval(item, "cancelled", {
+      actor_id: reviewer,
+      reason: "approval rejected",
+      result_status: "rejected",
+      result_summary: `Approval rejected for ${item.tool}`,
+    });
+    recordPlatformApprovalEvent(item, "approval.rejected", { reviewed_at: now, reviewed_by: reviewer }, { actor_id: reviewer, severity: "warning" });
     discardApprovalPayload(item);
     saveApprovals(approvals);
     return { content: [{ type: "text", text: "Rejected approval: " + id }] };
@@ -610,6 +624,14 @@ async function resolveApproval(id, action, reviewer = "dashboard") {
     item.error = "Approval payload could not be decrypted";
     item.completed_at = new Date().toISOString();
     item.updated_at = item.completed_at;
+    transitionPlatformApproval(item, "failed", {
+      actor_id: reviewer,
+      reason: "approval payload could not be decrypted",
+      result_status: "failure",
+      error_category: "approval_payload_decrypt_failed",
+      result_summary: item.error,
+    });
+    recordPlatformApprovalEvent(item, "approval.failed", { error: item.error }, { actor_id: reviewer, severity: "error" });
     discardApprovalPayload(item);
     saveApprovals(approvals);
     return { content: [{ type: "text", text: item.error + ": " + e.message }], isError: true };
@@ -620,12 +642,21 @@ async function resolveApproval(id, action, reviewer = "dashboard") {
   item.updated_at = now;
   item.reviewed_by = reviewer;
   item.status = "running";
+  transitionPlatformApproval(item, "ready", { actor_id: reviewer, reason: "approval granted" });
+  transitionPlatformApproval(item, "running", { actor_id: reviewer, reason: "approved tool execution started" });
+  recordPlatformApprovalEvent(item, "approval.approved", { reviewed_at: now, reviewed_by: reviewer }, { actor_id: reviewer });
   saveApprovals(approvals);
 
   const previousSource = currentSource;
   currentSource = item.source || "unknown";
   try {
-    const result = await callTool(item.tool, approvalArgs, { bypassApproval: true, approvalId: id });
+    const result = await callTool(item.tool, approvalArgs, {
+      bypassApproval: true,
+      approvalId: id,
+      parentId: item.platform_execution_id || null,
+      rootExecutionId: item.platform_execution_id || null,
+      correlationId: item.id,
+    });
     const latest = loadApprovals();
     const updated = latest.find(a => a.id === id);
     if (updated) {
@@ -633,6 +664,17 @@ async function resolveApproval(id, action, reviewer = "dashboard") {
       updated.result_preview = redactSensitive(result.content?.[0]?.text || "").substring(0, 1000);
       updated.completed_at = new Date().toISOString();
       updated.updated_at = updated.completed_at;
+      transitionPlatformApproval(updated, result.isError ? "failed" : "completed", {
+        actor_id: reviewer,
+        reason: result.isError ? "approved tool execution failed" : "approved tool execution completed",
+        result_status: result.isError ? "failure" : "success",
+        error_category: result.isError ? evolveCommon.errorCategory(updated.result_preview) : null,
+        result_summary: updated.result_preview,
+      });
+      recordPlatformApprovalEvent(updated, result.isError ? "approval.failed" : "approval.completed", {
+        completed_at: updated.completed_at,
+        result_preview: updated.result_preview,
+      }, { actor_id: reviewer, severity: result.isError ? "error" : "info" });
       discardApprovalPayload(updated);
       saveApprovals(latest);
     }
@@ -645,6 +687,14 @@ async function resolveApproval(id, action, reviewer = "dashboard") {
       updated.error = e.message;
       updated.completed_at = new Date().toISOString();
       updated.updated_at = updated.completed_at;
+      transitionPlatformApproval(updated, "failed", {
+        actor_id: reviewer,
+        reason: "approved tool execution threw",
+        result_status: "failure",
+        error_category: evolveCommon.errorCategory(e.message),
+        result_summary: e.message,
+      });
+      recordPlatformApprovalEvent(updated, "approval.failed", { error: e.message }, { actor_id: reviewer, severity: "error" });
       discardApprovalPayload(updated);
       saveApprovals(latest);
     }
@@ -1085,6 +1135,91 @@ function recordPlatformMemoryEvent(eventType, payload = {}, options = {}) {
       payload,
       sensitivity: "normal",
       correlation_id: options.correlationId || options.taskId || payload.task_id || payload.taskId || options.subjectId || null,
+    });
+  } catch (e) {}
+}
+
+function recordPlatformApprovalQueued(item) {
+  try {
+    const execution = platformKernel.createExecution({
+      actor_id: item.source || "unknown",
+      client_id: item.source || null,
+      trigger_type: "approval",
+      operation_type: "approval_request",
+      tool_name: item.tool,
+      risk: item.risk || "unknown",
+      approval_state: "pending",
+      deadline_at: item.expires_at || null,
+      source: "approvals",
+      correlation_id: item.id,
+      metadata: {
+        approval_id: item.id,
+        approval_mode: item.mode,
+        approval_reason: item.reason,
+      },
+    });
+    item.platform_execution_id = execution.execution_id;
+    platformKernel.transitionExecution(execution.execution_id, "awaiting_approval", {
+      source: "approvals",
+      actor_id: item.source || "unknown",
+      reason: "approval requested",
+      correlation_id: item.id,
+    });
+    platformKernel.appendEvent({
+      event_type: "approval.requested",
+      source: "approvals",
+      actor_id: item.source || "unknown",
+      subject_type: "approval",
+      subject_id: item.id,
+      execution_id: execution.execution_id,
+      root_execution_id: execution.root_execution_id,
+      payload: {
+        approval_id: item.id,
+        tool: item.tool,
+        risk: item.risk,
+        source: item.source,
+        mode: item.mode,
+        reason: item.reason,
+        expires_at: item.expires_at,
+      },
+      correlation_id: item.id,
+    });
+  } catch (e) {}
+}
+
+function transitionPlatformApproval(item, state, details = {}) {
+  try {
+    if (!item.platform_execution_id) return;
+    platformKernel.transitionExecution(item.platform_execution_id, state, {
+      source: "approvals",
+      actor_id: details.actor_id || item.reviewed_by || item.source || "unknown",
+      reason: details.reason,
+      result_status: details.result_status,
+      error_category: details.error_category,
+      result_summary: details.result_summary,
+      correlation_id: item.id,
+    });
+  } catch (e) {}
+}
+
+function recordPlatformApprovalEvent(item, eventType, payload = {}, options = {}) {
+  try {
+    platformKernel.appendEvent({
+      event_type: eventType,
+      source: "approvals",
+      actor_id: options.actor_id || item.reviewed_by || item.source || "unknown",
+      subject_type: "approval",
+      subject_id: item.id,
+      execution_id: item.platform_execution_id || null,
+      root_execution_id: item.platform_execution_id || null,
+      severity: options.severity || "info",
+      payload: {
+        approval_id: item.id,
+        tool: item.tool,
+        status: item.status,
+        ...payload,
+      },
+      correlation_id: item.id,
     });
   } catch (e) {}
 }
