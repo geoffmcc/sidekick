@@ -6,6 +6,7 @@ const os = require("os");
 const { timingSafeCompare } = require("./crypto-utils");
 const { execSync } = require("child_process");
 const { TOOLS, setSource, getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval } = require("./tools");
+const dynamicTools = require("./dynamic-tools");
 const dbStore = require("./db");
 const { allowedActions } = require("./evolve/lifecycle");
 const { redactSensitive } = require("./redact");
@@ -378,6 +379,7 @@ function normalizeLogEntry(entry, index = 0) {
   const project = raw.project || raw.p || null;
   const sessionId = raw.session_id || raw.sessionId || raw.sid || null;
   const taskId = raw.task_id || raw.taskId || raw.tid || null;
+  const executionId = raw.execution_id || raw.executionId || ((raw.correlation_id && String(raw.generated_procedure || "").startsWith("sidekick_generated_")) ? raw.correlation_id : null);
   const duration = Number.isFinite(raw.d) ? Math.round(raw.d) : Number.isFinite(raw.duration_ms) ? Math.round(raw.duration_ms) : null;
   const success = raw.ok === undefined ? raw.success !== false : !!raw.ok;
   return {
@@ -396,12 +398,17 @@ function normalizeLogEntry(entry, index = 0) {
     project,
     session_id: sessionId,
     task_id: taskId,
+    execution_id: executionId,
+    generated_procedure: raw.generated_procedure || raw.generatedProcedure || null,
+    generated_activity: Boolean(raw.generated_procedure || raw.generatedProcedure || String(tool).startsWith("sidekick_generated_")),
+    step_number: raw.step_number || raw.stepNumber || null,
     resource: raw.resource || raw.file || raw.path || raw.command || null,
     summary: summarizeValue(raw.s || result || error || tool, 260)
   };
 }
 
 function sessionKeyForLog(log, previous) {
+  if (log.execution_id) return { key: `execution:${log.execution_id}`, method: "generated_execution" };
   if (log.session_id) return { key: `session:${log.session_id}`, method: "session_id" };
   if (log.task_id) return { key: `task:${log.task_id}`, method: "task_id" };
   const time = new Date(log.timestamp || 0).getTime();
@@ -430,6 +437,7 @@ function buildActivitySessions(rawLogs) {
         project: log.project,
         task_id: log.task_id,
         session_id: log.session_id,
+        execution_id: log.execution_id,
         start_time: log.timestamp,
         end_time: log.timestamp,
         entries: []
@@ -602,8 +610,9 @@ app.get("/api/logs", (req, res) => {
   if (req.query.status === "failure") entries = entries.filter(entry => !entry.ok);
   if (req.query.tool) entries = entries.filter(entry => entry.tool === req.query.tool);
   if (req.query.project) entries = entries.filter(entry => entry.project === req.query.project);
-  if (req.query.session) entries = entries.filter(entry => entry.session_id === req.query.session || entry.task_id === req.query.session || entry.id.includes(req.query.session));
+  if (req.query.session) entries = entries.filter(entry => entry.session_id === req.query.session || entry.task_id === req.query.session || entry.execution_id === req.query.session || String(entry.id).includes(req.query.session));
   if (req.query.task) entries = entries.filter(entry => entry.task_id === req.query.task);
+  if (req.query.execution) entries = entries.filter(entry => entry.execution_id === req.query.execution);
   if (req.query.min_duration) {
     const minDuration = Number(req.query.min_duration);
     if (Number.isFinite(minDuration)) entries = entries.filter(entry => Number(entry.duration_ms || 0) >= minDuration);
@@ -1069,7 +1078,7 @@ app.get("/api/tool-categories", (req, res) => {
 });
 
 app.get("/api/evolve", (req, res) => {
-  const capabilities = dbStore.listGeneratedCapabilities({ includeInactive: true });
+  const capabilities = dbStore.listGeneratedCapabilities({ includeInactive: true }).map(cap => ["trial", "active"].includes(cap.state) ? (dbStore.syncGeneratedCapabilityStats(cap.id) || cap) : cap);
   res.json({
     ok: true,
     capabilities: capabilities.map(cap => ({
@@ -1083,8 +1092,10 @@ app.get("/api/evolve", (req, res) => {
       estimated_calls_saved: cap.estimatedCallsSaved,
       risk: cap.risk,
       inferred_parameters: cap.parameters,
+      schema: cap.schema,
       validation_status: cap.validation ? (cap.validation.passed ? "passed" : "failed") : "not_validated",
       recent_trial_results: dbStore.listGeneratedToolAudit(cap.id, 5),
+      recent_executions: dbStore.listGeneratedToolExecutions({ capabilityId: cap.id, limit: 5 }).map(shapeExecution),
       use_count: cap.useCount,
       success_count: cap.successCount,
       failure_count: cap.failureCount,
@@ -1115,6 +1126,111 @@ app.post("/api/evolve/:id/promote", (req, res) => evolveDashboardAction(req, res
 app.post("/api/evolve/:id/reject", (req, res) => evolveDashboardAction(req, res, "reject"));
 app.post("/api/evolve/:id/deprecate", (req, res) => evolveDashboardAction(req, res, "deprecate"));
 app.post("/api/evolve/:id/feedback", (req, res) => evolveDashboardAction(req, res, "feedback"));
+
+function shapeExecution(execution) {
+  if (!execution) return null;
+  return {
+    id: execution.id,
+    capability_id: execution.capabilityId,
+    tool_name: execution.toolName,
+    state: execution.state,
+    source: execution.source,
+    args: execution.args,
+    success_criteria: execution.successCriteria,
+    success_criteria_satisfied: execution.successCriteriaSatisfied,
+    final_summary: execution.finalSummary,
+    error_category: execution.errorCategory,
+    cancel_requested: execution.cancelRequested,
+    timeout_ms: execution.timeoutMs,
+    started_at: execution.startedAt,
+    completed_at: execution.completedAt,
+    created_at: execution.createdAt,
+    updated_at: execution.updatedAt,
+    activity_url: `#activity?execution=${encodeURIComponent(execution.id)}`,
+    steps: (execution.steps || []).map(step => ({
+      id: step.id,
+      execution_id: step.executionId,
+      step_number: step.stepNumber,
+      tool_name: step.toolName,
+      state: step.state,
+      args: step.args,
+      started_at: step.startedAt,
+      completed_at: step.completedAt,
+      duration_ms: step.durationMs,
+      result_summary: step.resultSummary,
+      retry_count: step.retryCount,
+      error_category: step.errorCategory,
+      success: step.success,
+    }))
+  };
+}
+
+app.get("/api/evolve/executions", (req, res) => {
+  const executions = dbStore.listGeneratedToolExecutions({ capabilityId: req.query.capability_id, limit: req.query.limit }).map(shapeExecution);
+  res.json({ ok: true, executions });
+});
+
+app.get("/api/evolve/executions/:executionId", (req, res) => {
+  const execution = dbStore.getGeneratedToolExecution(req.params.executionId);
+  if (!execution) return res.status(404).json({ ok: false, error: "Execution not found" });
+  res.json({ ok: true, execution: shapeExecution(execution) });
+});
+
+app.post("/api/evolve/:id/run", (req, res) => {
+  const cap = dbStore.getGeneratedCapability(req.params.id) || dbStore.getGeneratedCapabilityByName(req.params.id);
+  if (!cap || !["trial", "active"].includes(cap.state)) return res.status(400).json({ ok: false, error: "Generated tool is not trial or active" });
+  const executionId = `gte_${Date.now().toString(36)}_${crypto.randomBytes(6).toString("hex")}`;
+  const timeoutMs = Number(req.body?.timeout_ms || 0) || null;
+  setSource("dashboard");
+  dbStore.createGeneratedToolExecution({
+    id: executionId,
+    capabilityId: cap.id,
+    toolName: cap.name,
+    state: "queued",
+    source: "dashboard",
+    args: req.body?.args || {},
+    successCriteria: cap.successCriteria || "All generated workflow steps must complete successfully",
+    timeoutMs,
+  });
+  setImmediate(async () => {
+    try {
+      await dynamicTools.callDynamicTool(cap.name, req.body?.args || {}, { callTool: require("./tools").callTool, source: "dashboard", executionId, timeoutMs });
+    } catch (error) {
+      dbStore.updateGeneratedToolExecution(executionId, {
+        state: "failed",
+        completedAt: new Date().toISOString(),
+        finalSummary: redactSensitive(error.message),
+        errorCategory: "error",
+        successCriteriaSatisfied: false,
+      });
+    }
+  });
+  auditLog(req, "evolve.run", { id: cap.id, execution_id: executionId });
+  res.json({ ok: true, execution_id: executionId, execution: shapeExecution(dbStore.getGeneratedToolExecution(executionId)) });
+});
+
+app.post("/api/evolve/executions/:executionId/cancel", (req, res) => {
+  const execution = dynamicTools.cancelExecution(req.params.executionId);
+  if (!execution) return res.status(404).json({ ok: false, error: "Execution not found" });
+  auditLog(req, "evolve.cancel", { execution_id: execution.id });
+  res.json({ ok: true, execution: shapeExecution(execution) });
+});
+
+app.get("/api/evolve/executions/:executionId/stream", (req, res) => {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive"
+  });
+  const send = execution => {
+    if (execution.id !== req.params.executionId) return;
+    res.write(`event: execution\ndata: ${JSON.stringify(shapeExecution(execution))}\n\n`);
+  };
+  const current = dbStore.getGeneratedToolExecution(req.params.executionId);
+  if (current) res.write(`event: execution\ndata: ${JSON.stringify(shapeExecution(current))}\n\n`);
+  const off = dynamicTools.onExecutionEvent(send);
+  req.on("close", off);
+});
 
 app.get("/api/approvals", (req, res) => {
   res.json({ ok: true, approvals: listApprovals({ status: req.query.status, limit: req.query.limit }) });

@@ -1005,6 +1005,8 @@ function logToolCall(name, args, duration, success, summary, metadata = {}) {
       result_summary: redactedSummary,
       correlation_id: metadata.correlationId || metadata.correlation_id || null,
       parent_id: metadata.parentId || metadata.parent_id || null,
+      execution_id: metadata.executionId || metadata.execution_id || null,
+      step_number: metadata.stepNumber || metadata.step_number || null,
       retry: Boolean(metadata.retry),
       generated_procedure: metadata.generatedProcedure || metadata.generated_procedure || null
     });
@@ -11338,7 +11340,7 @@ async function callTool(name, args, options = {}) {
   const start = Date.now();
   try {
     const result = isGeneratedTool
-      ? await dynamicTools.callDynamicTool(name, args, { callTool })
+      ? await dynamicTools.callDynamicTool(name, args, { callTool, source: currentSource, executionId: options.executionId, timeoutMs: options.timeoutMs })
       : await handler(args);
     const success = !result.isError;
     logToolCall(name, args, Date.now() - start, success,
@@ -11347,7 +11349,7 @@ async function callTool(name, args, options = {}) {
     );
     return result;
   } catch (e) {
-    logToolCall(name, args, Date.now() - start, false, e.message);
+    logToolCall(name, args, Date.now() - start, false, e.message, options);
     return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
   }
 }

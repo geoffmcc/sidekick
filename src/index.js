@@ -764,7 +764,7 @@ function createMcpServer() {
           logToolCall(def.name, args, Date.now() - start, false, policyError.content[0].text, { generatedProcedure: def.name });
           return policyError;
         }
-        const result = await dynamicTools.callDynamicTool(def.name, args, { callTool: require("./tools").callTool });
+        const result = await dynamicTools.callDynamicTool(def.name, args, { callTool: require("./tools").callTool, source: "mcp" });
         logToolCall(def.name, args, Date.now() - start, !result.isError,
           result.content?.[0]?.text?.substring(0, 80) || "(ok)",
           { generatedProcedure: def.name, correlationId: def.capabilityId }

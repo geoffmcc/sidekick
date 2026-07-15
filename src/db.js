@@ -109,6 +109,50 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_generated_tool_audit_capability ON generated_tool_audit(capability_id, invoked_at DESC);
+
+  CREATE TABLE IF NOT EXISTS generated_tool_executions (
+    id TEXT PRIMARY KEY,
+    capability_id TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    state TEXT NOT NULL,
+    source TEXT,
+    args_json TEXT NOT NULL DEFAULT '{}',
+    success_criteria TEXT,
+    success_criteria_satisfied INTEGER,
+    final_summary TEXT,
+    error_category TEXT,
+    cancel_requested INTEGER NOT NULL DEFAULT 0,
+    timeout_ms INTEGER,
+    started_at TEXT,
+    completed_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY(capability_id) REFERENCES generated_capabilities(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_generated_tool_executions_capability ON generated_tool_executions(capability_id, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_generated_tool_executions_state ON generated_tool_executions(state);
+
+  CREATE TABLE IF NOT EXISTS generated_tool_execution_steps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    execution_id TEXT NOT NULL,
+    step_number INTEGER NOT NULL,
+    tool_name TEXT NOT NULL,
+    state TEXT NOT NULL,
+    args_json TEXT NOT NULL DEFAULT '{}',
+    started_at TEXT,
+    completed_at TEXT,
+    duration_ms INTEGER,
+    result_summary TEXT,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    error_category TEXT,
+    success INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY(execution_id) REFERENCES generated_tool_executions(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_generated_tool_execution_steps_execution ON generated_tool_execution_steps(execution_id, step_number);
 `);
 
 function ensureColumn(table, column, definition) {
@@ -450,6 +494,202 @@ function appendGeneratedToolAudit(entry) {
 
 function listGeneratedToolAudit(capabilityId, limit = 100) {
   return db.prepare("SELECT * FROM generated_tool_audit WHERE capability_id = ? ORDER BY invoked_at DESC LIMIT ?").all(capabilityId, limit);
+}
+
+function executionFromRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    capabilityId: row.capability_id,
+    toolName: row.tool_name,
+    state: row.state,
+    source: row.source,
+    args: parseJson(row.args_json, {}),
+    successCriteria: row.success_criteria,
+    successCriteriaSatisfied: row.success_criteria_satisfied === null || row.success_criteria_satisfied === undefined ? null : Boolean(row.success_criteria_satisfied),
+    finalSummary: row.final_summary,
+    errorCategory: row.error_category,
+    cancelRequested: Boolean(row.cancel_requested),
+    timeoutMs: row.timeout_ms,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    steps: [],
+  };
+}
+
+function executionStepFromRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    executionId: row.execution_id,
+    stepNumber: row.step_number,
+    toolName: row.tool_name,
+    state: row.state,
+    args: parseJson(row.args_json, {}),
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    durationMs: row.duration_ms,
+    resultSummary: row.result_summary,
+    retryCount: row.retry_count || 0,
+    errorCategory: row.error_category,
+    success: row.success === null || row.success === undefined ? null : Boolean(row.success),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function createGeneratedToolExecution(execution) {
+  const now = nowIso();
+  db.prepare(`
+    INSERT OR REPLACE INTO generated_tool_executions (
+      id, capability_id, tool_name, state, source, args_json, success_criteria,
+      timeout_ms, started_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    execution.id,
+    execution.capabilityId,
+    execution.toolName,
+    execution.state || "queued",
+    execution.source || null,
+    JSON.stringify(execution.args || {}),
+    execution.successCriteria || null,
+    execution.timeoutMs || null,
+    execution.startedAt || null,
+    execution.createdAt || now,
+    execution.updatedAt || now
+  );
+  return getGeneratedToolExecution(execution.id);
+}
+
+function updateGeneratedToolExecution(id, patch = {}) {
+  const current = getGeneratedToolExecution(id);
+  if (!current) return null;
+  const next = { ...current, ...patch, updatedAt: nowIso() };
+  db.prepare(`
+    UPDATE generated_tool_executions SET
+      state = ?, source = ?, args_json = ?, success_criteria = ?, success_criteria_satisfied = ?,
+      final_summary = ?, error_category = ?, cancel_requested = ?, timeout_ms = ?, started_at = ?,
+      completed_at = ?, updated_at = ?
+    WHERE id = ?
+  `).run(
+    next.state,
+    next.source || null,
+    JSON.stringify(next.args || {}),
+    next.successCriteria || null,
+    next.successCriteriaSatisfied === null || next.successCriteriaSatisfied === undefined ? null : (next.successCriteriaSatisfied ? 1 : 0),
+    next.finalSummary || null,
+    next.errorCategory || null,
+    next.cancelRequested ? 1 : 0,
+    next.timeoutMs || null,
+    next.startedAt || null,
+    next.completedAt || null,
+    next.updatedAt,
+    id
+  );
+  return getGeneratedToolExecution(id);
+}
+
+function addGeneratedToolExecutionStep(step) {
+  const now = nowIso();
+  const info = db.prepare(`
+    INSERT INTO generated_tool_execution_steps (
+      execution_id, step_number, tool_name, state, args_json, started_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    step.executionId,
+    step.stepNumber,
+    step.toolName,
+    step.state || "queued",
+    JSON.stringify(step.args || {}),
+    step.startedAt || null,
+    step.createdAt || now,
+    step.updatedAt || now
+  );
+  return getGeneratedToolExecutionStep(info.lastInsertRowid);
+}
+
+function updateGeneratedToolExecutionStep(id, patch = {}) {
+  const current = getGeneratedToolExecutionStep(id);
+  if (!current) return null;
+  const next = { ...current, ...patch, updatedAt: nowIso() };
+  db.prepare(`
+    UPDATE generated_tool_execution_steps SET
+      state = ?, args_json = ?, started_at = ?, completed_at = ?, duration_ms = ?,
+      result_summary = ?, retry_count = ?, error_category = ?, success = ?, updated_at = ?
+    WHERE id = ?
+  `).run(
+    next.state,
+    JSON.stringify(next.args || {}),
+    next.startedAt || null,
+    next.completedAt || null,
+    Number.isFinite(next.durationMs) ? Math.round(next.durationMs) : null,
+    next.resultSummary || null,
+    next.retryCount || 0,
+    next.errorCategory || null,
+    next.success === null || next.success === undefined ? null : (next.success ? 1 : 0),
+    next.updatedAt,
+    id
+  );
+  return getGeneratedToolExecutionStep(id);
+}
+
+function getGeneratedToolExecutionStep(id) {
+  return executionStepFromRow(db.prepare("SELECT * FROM generated_tool_execution_steps WHERE id = ?").get(id));
+}
+
+function getGeneratedToolExecution(id) {
+  const execution = executionFromRow(db.prepare("SELECT * FROM generated_tool_executions WHERE id = ?").get(id));
+  if (!execution) return null;
+  execution.steps = db.prepare("SELECT * FROM generated_tool_execution_steps WHERE execution_id = ? ORDER BY step_number, id").all(id).map(executionStepFromRow);
+  return execution;
+}
+
+function listGeneratedToolExecutions(options = {}) {
+  const limit = Math.min(Number(options.limit) || 50, 200);
+  let rows;
+  if (options.capabilityId) {
+    rows = db.prepare("SELECT * FROM generated_tool_executions WHERE capability_id = ? ORDER BY created_at DESC LIMIT ?").all(options.capabilityId, limit);
+  } else {
+    rows = db.prepare("SELECT * FROM generated_tool_executions ORDER BY created_at DESC LIMIT ?").all(limit);
+  }
+  return rows.map(row => getGeneratedToolExecution(row.id)).filter(Boolean);
+}
+
+function requestGeneratedToolExecutionCancel(id) {
+  return updateGeneratedToolExecution(id, { cancelRequested: true, state: "cancelled", completedAt: nowIso(), finalSummary: "Cancellation requested" });
+}
+
+function generatedExecutionStats(capabilityId) {
+  const row = db.prepare(`
+    SELECT
+      COUNT(*) AS use_count,
+      SUM(CASE WHEN state = 'succeeded' THEN 1 ELSE 0 END) AS success_count,
+      SUM(CASE WHEN state IN ('failed', 'timed_out', 'cancelled') THEN 1 ELSE 0 END) AS failure_count,
+      SUM(CASE WHEN state = 'succeeded' THEN 1 ELSE 0 END) AS estimated_calls_saved
+    FROM generated_tool_executions
+    WHERE capability_id = ? AND state IN ('succeeded', 'failed', 'timed_out', 'cancelled')
+  `).get(capabilityId);
+  return {
+    useCount: row.use_count || 0,
+    successCount: row.success_count || 0,
+    failureCount: row.failure_count || 0,
+    estimatedCallsSaved: row.estimated_calls_saved || 0,
+  };
+}
+
+function syncGeneratedCapabilityStats(capabilityId) {
+  const cap = getGeneratedCapability(capabilityId);
+  if (!cap) return null;
+  const stats = generatedExecutionStats(capabilityId);
+  cap.useCount = stats.useCount;
+  cap.successCount = stats.successCount;
+  cap.failureCount = stats.failureCount;
+  cap.estimatedCallsSaved = stats.estimatedCallsSaved;
+  cap.lastUsedAt = db.prepare("SELECT completed_at FROM generated_tool_executions WHERE capability_id = ? AND completed_at IS NOT NULL ORDER BY completed_at DESC LIMIT 1").get(capabilityId)?.completed_at || cap.lastUsedAt;
+  saveGeneratedCapability(cap);
+  return cap;
 }
 
 function syncGeneratedToolRegistry() {
@@ -2104,6 +2344,16 @@ module.exports = {
   listGeneratedCapabilities,
   appendGeneratedToolAudit,
   listGeneratedToolAudit,
+  createGeneratedToolExecution,
+  updateGeneratedToolExecution,
+  addGeneratedToolExecutionStep,
+  updateGeneratedToolExecutionStep,
+  getGeneratedToolExecution,
+  getGeneratedToolExecutionStep,
+  listGeneratedToolExecutions,
+  requestGeneratedToolExecutionCancel,
+  generatedExecutionStats,
+  syncGeneratedCapabilityStats,
   syncGeneratedToolRegistry,
   hasMemoriesTable,
   upsertMemory,

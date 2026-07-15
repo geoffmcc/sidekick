@@ -177,6 +177,8 @@ function seedServiceDiagnosis({ session = 's1', task = 'task1', src = 'mcp', sta
     const approved = await TOOLS.sidekick_evolve({ action: 'approve', id, approver: 'test' });
     assert.ok(!approved.isError, approved.content[0].text);
     assert.strictEqual(dbStore.getGeneratedCapability(id).state, 'trial');
+    assert.strictEqual(dbStore.getGeneratedCapability(id).useCount, 0, 'approval must not execute or increment use count');
+    assert.strictEqual(dbStore.listGeneratedToolExecutions({ capabilityId: id }).length, 0, 'approval must not create executions');
     const promoteBeforeUse = await TOOLS.sidekick_evolve({ action: 'promote', id });
     assert.ok(promoteBeforeUse.isError, 'trial cannot promote before a successful invocation');
 
@@ -225,6 +227,12 @@ function seedServiceDiagnosis({ session = 's1', task = 'task1', src = 'mcp', sta
     const dynResult = await callTool('sidekick_generated_echo_test', { text: 'hello' });
     assert.ok(!dynResult.isError, dynResult.content[0].text);
     assert.strictEqual(dbStore.getGeneratedCapability('cand_dynamic_test').successCount, 1);
+    const dynPayload = JSON.parse(dynResult.content[0].text);
+    assert.ok(dynPayload.execution_id, 'MCP-triggered generated execution should return an execution id');
+    const dynExecution = dbStore.getGeneratedToolExecution(dynPayload.execution_id);
+    assert.strictEqual(dynExecution.state, 'succeeded');
+    assert.strictEqual(dynExecution.steps.length, 1);
+    assert.strictEqual(dynExecution.successCriteriaSatisfied, true);
     const promoted = await TOOLS.sidekick_evolve({ action: 'promote', id: 'cand_dynamic_test' });
     assert.ok(!promoted.isError, promoted.content[0].text);
     assert.ok(dbStore.getGeneratedCapabilityByName('sidekick_generated_echo_test'));
@@ -233,6 +241,60 @@ function seedServiceDiagnosis({ session = 's1', task = 'task1', src = 'mcp', sta
     dbStore.syncGeneratedToolRegistry();
     assert.ok(!dynamicTools.getDynamicToolDefs().some(t => t.name === 'sidekick_generated_echo_test'));
     assert.ok(dbStore.listGeneratedToolAudit('cand_dynamic_test').length >= 1, 'audit history retained');
+
+    console.log('Test: generated execution observability records steps, events, redaction, failure, cancellation, and timeout');
+    const observedCap = candidateToCapability({
+      id: 'cand_observed_test',
+      proposedToolName: 'sidekick_generated_observed_test',
+      title: 'observed test',
+      description: 'Exercise generated execution observability',
+      state: 'candidate',
+      evidence: [{ sessionId: 'manual' }],
+      evidenceCount: 3,
+      successRate: 1,
+      score: 80,
+      parameters: { text: { type: 'string', required: true }, secret: { type: 'string', required: false } },
+      steps: [{ tool: 'sidekick_respond', args: { text: '{{text}} {{secret}}' } }, { tool: 'sidekick_respond', args: { text: 'done {{text}}' } }],
+      risk: 'low',
+    });
+    validateCapability(observedCap, TOOL_DEFS);
+    transition(observedCap, 'trial', { approver: 'test' });
+    observedCap.schema = observedCap.validation.schema;
+    dbStore.saveGeneratedCapability(observedCap);
+    const events = [];
+    const off = dynamicTools.onExecutionEvent(execution => events.push(execution.state));
+    const observedRun = await dynamicTools.callDynamicTool('sidekick_generated_observed_test', { text: 'hello', secret: 'ghp_abcdefghijklmnopqrstuvwxyz123456' }, { source: 'dashboard', callTool, executionId: 'gte_observed_success' });
+    off();
+    assert.ok(!observedRun.isError, observedRun.content[0].text);
+    assert.ok(events.includes('running') && events.includes('succeeded'), 'live progress events should include running and succeeded');
+    const observedExecution = dbStore.getGeneratedToolExecution('gte_observed_success');
+    assert.strictEqual(observedExecution.source, 'dashboard');
+    assert.strictEqual(observedExecution.steps.length, 2, 'parent execution should have child step records');
+    assert.ok(!JSON.stringify(observedExecution).includes('ghp_abcdefghijklmnopqrstuvwxyz123456'), 'execution records must redact secrets');
+    assert.strictEqual(observedExecution.successCriteriaSatisfied, true);
+    assert.strictEqual(dbStore.queryToolLogs({ limit: 20 }).some(entry => entry.execution_id === 'gte_observed_success'), true, 'underlying tool logs should carry execution id');
+
+    const failedRun = await dynamicTools.callDynamicTool('sidekick_generated_observed_test', { text: 'bad' }, { source: 'mcp', executionId: 'gte_observed_fail', callTool: async (tool, args) => args.text.startsWith('done') ? { isError: true, content: [{ type: 'text', text: 'step failed password=supersecret' }] } : { content: [{ type: 'text', text: 'ok' }] } });
+    assert.ok(failedRun.isError, 'failed intermediate step should fail execution');
+    const failedExecution = dbStore.getGeneratedToolExecution('gte_observed_fail');
+    assert.strictEqual(failedExecution.state, 'failed');
+    assert.strictEqual(failedExecution.successCriteriaSatisfied, false);
+    assert.ok(!JSON.stringify(failedExecution).includes('supersecret'), 'failure summaries should be redacted');
+
+    const cancelRun = await dynamicTools.callDynamicTool('sidekick_generated_observed_test', { text: 'cancel' }, { source: 'dashboard', executionId: 'gte_observed_cancel', callTool: async () => { dynamicTools.cancelExecution('gte_observed_cancel'); return { content: [{ type: 'text', text: 'first ok' }] }; } });
+    assert.ok(cancelRun.isError, 'cancelled execution should return an error result');
+    assert.strictEqual(dbStore.getGeneratedToolExecution('gte_observed_cancel').state, 'cancelled');
+
+    const timeoutRun = await dynamicTools.callDynamicTool('sidekick_generated_observed_test', { text: 'slow' }, { source: 'dashboard', executionId: 'gte_observed_timeout', timeoutMs: 1, callTool: () => new Promise(resolve => setTimeout(() => resolve({ content: [{ type: 'text', text: 'late' }] }), 30)) });
+    assert.ok(timeoutRun.isError, 'timed out step should fail execution');
+    assert.strictEqual(dbStore.getGeneratedToolExecution('gte_observed_timeout').state, 'timed_out');
+
+    delete require.cache[require.resolve('../src/dynamic-tools')];
+    assert.strictEqual(dbStore.getGeneratedToolExecution('gte_observed_success').state, 'succeeded', 'completed executions should persist across module reload');
+    const stats = dbStore.syncGeneratedCapabilityStats('cand_observed_test');
+    assert.strictEqual(stats.useCount, 4, 'trial stats should come from completed executions');
+    assert.strictEqual(stats.successCount, 1);
+    assert.strictEqual(stats.failureCount, 3);
 
     console.log('Test: feedback usefulness scoring');
     const feedback = await TOOLS.sidekick_evolve({ action: 'feedback', id: 'cand_dynamic_test', useful: true, notes: 'worked' });
