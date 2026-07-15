@@ -44,6 +44,8 @@ dbStore.runPendingMigrations();
   assert.ok(createData.memories.some(memory => memory.type === "decision"), "decision memory should be extracted");
   assert.ok(createData.memories.some(memory => memory.type === "negative"), "negative memory should be extracted");
   assert.ok(createData.memories.some(memory => memory.type === "open_thread"), "open thread should be extracted");
+  const handoffEvent = dbStore.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_type = 'memory.handoff_processed' AND subject_id = ?").get(createData.handoff.id);
+  assert.ok(handoffEvent, "handoff processing should emit a platform memory event");
 
   const inspect = await TOOLS.sidekick_handoff({ action: "inspect", id: createData.handoff.id });
   const inspectData = JSON.parse(inspect.content[0].text);
@@ -66,6 +68,8 @@ dbStore.runPendingMigrations();
   const beginData = JSON.parse(begin.content[0].text);
   assert.ok(beginData.session.id, "session begin should create a session");
   assert.ok(beginData.memory_brief.selected.some(item => /SMB|raw tool logs|SQLite|sidekick-mcp/i.test(item.summary)), "brief should recall relevant handoff-derived memory");
+  const beginEvent = dbStore.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_type = 'memory.session_started' AND subject_id = ?").get(beginData.session.id);
+  assert.ok(beginEvent, "session begin should emit a platform memory event");
 
   const otherProjectRecall = await TOOLS.sidekick_memory({ action: "query", query: "sidekick-mcp port", project: "other_project" });
   const otherData = JSON.parse(otherProjectRecall.content[0].text);
@@ -84,12 +88,18 @@ dbStore.runPendingMigrations();
   });
   const endData = JSON.parse(end.content[0].text);
   assert.ok(endData.memories_created >= 4, "ending session should create supported memories");
+  const endEvent = dbStore.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_type = 'memory.session_completed' AND subject_id = ?").get(beginData.session.id);
+  assert.ok(endEvent, "session end should emit a platform memory event");
 
   const wrong = await TOOLS.sidekick_memory({ action: "remember", project: "sidekick", type: "fact", content: "Sidekick dashboard runs on port 9999", evidence: "test wrong fact" });
   const wrongId = JSON.parse(wrong.content[0].text).memory.id;
   const correction = await TOOLS.sidekick_memory({ action: "correct", id: wrongId, correct_to: "Sidekick dashboard runs on port 4098", reason: "test correction" });
   const correctionData = JSON.parse(correction.content[0].text);
   assert.ok(correctionData.replacement.id, "correction should create replacement memory");
+  const rememberEvent = dbStore.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_type = 'memory.remembered' AND subject_id = ?").get(wrongId);
+  assert.ok(rememberEvent, "explicit remember should emit a platform memory event");
+  const correctEvent = dbStore.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_type = 'memory.corrected' AND subject_id = ?").get(correctionData.replacement.id);
+  assert.ok(correctEvent, "memory correction should emit a platform memory event");
   const old = dbStore.getMemoryById(wrongId, { includeDisabled: true });
   assert.strictEqual(old.state, "deleted", "corrected old memory should be excluded from current recall");
 

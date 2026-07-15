@@ -13,8 +13,9 @@ assert.ok(fs.existsSync(workflowPath), 'Missing .github/workflows/ci.yml');
 const workflow = fs.readFileSync(workflowPath, 'utf8');
 assert.match(workflow, /on:\s*\n\s*push:/, 'Workflow should run on push');
 assert.match(workflow, /pull_request:/, 'Workflow should run on pull requests');
-assert.match(workflow, /actions\/checkout@v4/, 'Workflow should use checkout@v4');
-assert.match(workflow, /actions\/setup-node@v4/, 'Workflow should use setup-node@v4');
+assert.match(workflow, /actions\/checkout@v5/, 'Workflow should use checkout@v5');
+assert.match(workflow, /actions\/setup-node@v5/, 'Workflow should use setup-node@v5');
+assert.match(workflow, /node-version:\s*\[22\.x,\s*24\.x\]/, 'Workflow should test Node 22.x and 24.x');
 assert.match(workflow, /npm run test:ci/, 'Workflow should run npm run test:ci');
 assert.ok(!/dashboard-password-from-local-test-data|ghp_|github_pat_|BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY/.test(workflow), 'Workflow must not contain obvious secrets');
 
