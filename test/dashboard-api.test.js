@@ -206,6 +206,10 @@ setTimeout(async () => {
       assert.strictEqual(failuresResponse.status, 200, 'Recent failures action should return 200');
       assert.strictEqual(failuresResponse.data.ok, true, 'Recent failures action should be ok');
       assert.ok(failuresResponse.data.result.failures.some(f => f.tool === 'sidekick_test_failure'), 'Should include failure fixture');
+      const failuresExecution = dbStore.getDb().prepare("SELECT * FROM platform_executions WHERE operation_type = 'dashboard_action' AND tool_action = 'recent-failures' ORDER BY updated_at DESC LIMIT 1").get();
+      assert.ok(failuresExecution, 'Recent failures action should create a platform execution');
+      assert.strictEqual(failuresExecution.tool_name, 'sidekick_dashboard', 'Dashboard execution should identify dashboard source');
+      assert.strictEqual(failuresExecution.state, 'completed', 'Successful dashboard action should complete');
 
       const deploymentResponse = await makeRequest('POST', '/api/quick-actions/deployment', {});
       assert.strictEqual(deploymentResponse.status, 200, 'Deployment action should return 200');
@@ -214,6 +218,10 @@ setTimeout(async () => {
 
       const unknownResponse = await makeRequest('POST', '/api/quick-actions/not-real', {});
       assert.strictEqual(unknownResponse.status, 404, 'Unknown quick action should return 404');
+      const unknownExecution = dbStore.getDb().prepare("SELECT * FROM platform_executions WHERE operation_type = 'dashboard_action' AND tool_action = 'not-real' ORDER BY updated_at DESC LIMIT 1").get();
+      assert.ok(unknownExecution, 'Unknown quick action should still create a platform execution');
+      assert.strictEqual(unknownExecution.state, 'failed', 'Unknown quick action should fail the platform execution');
+      assert.strictEqual(unknownExecution.error_category, 'unknown_action', 'Unknown quick action should classify the error');
       console.log('Passed\n');
     }
 
