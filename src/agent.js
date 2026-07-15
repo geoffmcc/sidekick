@@ -5,7 +5,7 @@ const path = require("path");
 const crypto = require("crypto");
 const EventEmitter = require("events");
 const { execFileSync } = require("child_process");
-const { callTool, DATA_DIR, GROQ_API_KEY, GROQ_MODEL, setSource, loadDelays, saveDelays, loadWatches, saveWatches, getToolDefsForSource } = require("./tools");
+const { callTool, DATA_DIR, GROQ_API_KEY, GROQ_MODEL, setSource, loadDelays, saveDelays, loadWatches, saveWatches, getToolDefsForSource, transitionScheduledPlatformExecution, appendScheduledPlatformEvent, createScheduledPlatformExecution } = require("./tools");
 const { recallMemoryForTextAsync, formatMemoryRecall, recordAgentTaskMemory, buildMemoryBrief, inferProjectFromText } = require("./memory");
 const { parseAgentDecision, trackDecisionRepetition, selectBestModelName, buildChatMessages, requiresToolUse } = require("./agent-protocol");
 const platformKernel = require("./platform/kernel");
@@ -54,18 +54,31 @@ async function executeDelay(delay) {
   
   current.status = "running";
   current.startedAt = new Date().toISOString();
+  transitionScheduledPlatformExecution("delay", current, "running", { source: "agent", actor: "agent", reason: "scheduled delay execution started" });
   saveDelays(delays);
   
   console.log(`Executing delay ${delay.id}: ${delay.tool}`);
   
   try {
-    const result = await callTool(delay.tool, delay.args || {});
+    const result = await callTool(delay.tool, delay.args || {}, {
+      parentId: current.platform_execution_id || null,
+      rootExecutionId: current.platform_execution_id || null,
+      correlationId: delay.id,
+    });
     const delaysAfter = loadDelays();
     const updated = delaysAfter.find(d => d.id === delay.id);
     if (updated) {
-      updated.status = "completed";
+      updated.status = result.isError ? "failed" : "completed";
       updated.completedAt = new Date().toISOString();
       updated.result = result.content?.[0]?.text?.substring(0, 200) || "ok";
+      transitionScheduledPlatformExecution("delay", updated, result.isError ? "failed" : "completed", {
+        source: "agent",
+        actor: "agent",
+        reason: result.isError ? "scheduled delay execution failed" : "scheduled delay execution completed",
+        result_status: result.isError ? "failure" : "success",
+        result_summary: updated.result,
+      });
+      appendScheduledPlatformEvent("delay", updated, result.isError ? "schedule.delay.failed" : "schedule.delay.completed", { completed_at: updated.completedAt }, { source: "agent", actor: "agent", severity: result.isError ? "error" : "info" });
       saveDelays(delaysAfter);
     }
     console.log(`Delay ${delay.id} completed`);
@@ -76,6 +89,14 @@ async function executeDelay(delay) {
       updated.status = "failed";
       updated.completedAt = new Date().toISOString();
       updated.error = e.message;
+      transitionScheduledPlatformExecution("delay", updated, "failed", {
+        source: "agent",
+        actor: "agent",
+        reason: "scheduled delay execution threw",
+        result_status: "failure",
+        result_summary: e.message,
+      });
+      appendScheduledPlatformEvent("delay", updated, "schedule.delay.failed", { error: e.message }, { source: "agent", actor: "agent", severity: "error" });
       saveDelays(delaysAfter);
     }
     console.error(`Delay ${delay.id} failed: ${e.message}`);
@@ -177,7 +198,7 @@ function evaluateWatchCondition(watch, checkResult) {
   return false;
 }
 
-async function executeWatchAction(watch, checkResult) {
+async function executeWatchAction(watch, checkResult, metadata = {}) {
   const { action_tool, action_args } = watch;
   if (!action_tool) return;
   
@@ -191,9 +212,10 @@ async function executeWatchAction(watch, checkResult) {
   }
   
   try {
-    await callTool(action_tool, args);
+    return await callTool(action_tool, args, metadata);
   } catch (e) {
     console.error(`Watch ${watch.id} action failed: ${e.message}`);
+    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
   }
 }
 
@@ -217,6 +239,18 @@ async function checkWatch(watch) {
   }
   
   const triggered = evaluateWatchCondition(watch, checkResult);
+  const checkExecution = createScheduledPlatformExecution("watch", watch, {
+    attach: false,
+    parentExecutionId: watch.platform_execution_id || null,
+    rootExecutionId: watch.platform_execution_id || null,
+    operationType: "watch_check",
+    state: "running",
+    source: "agent",
+    actor: "agent",
+    risk: "medium",
+    metadata: { source: watch.source, target: watch.target, condition: watch.condition },
+    reason: "scheduled watch check started",
+  });
   
   const watchesAfter = loadWatches();
   const updated = watchesAfter.find(w => w.id === watch.id);
@@ -227,8 +261,29 @@ async function checkWatch(watch) {
       updated.triggerCount = (updated.triggerCount || 0) + 1;
       saveWatches(watchesAfter);
       console.log(`Watch ${watch.id} triggered: ${watch.source} ${watch.target} (${watch.condition})`);
-      await executeWatchAction(watch, checkResult);
+      appendScheduledPlatformEvent("watch", updated, "schedule.watch.triggered", { check_result: checkResult }, { source: "agent", actor: "agent", executionId: checkExecution?.execution_id, rootExecutionId: watch.platform_execution_id || checkExecution?.root_execution_id });
+      const actionResult = await executeWatchAction(watch, checkResult, {
+        parentId: checkExecution?.execution_id || watch.platform_execution_id || null,
+        rootExecutionId: watch.platform_execution_id || checkExecution?.root_execution_id || null,
+        correlationId: watch.id,
+      });
+      if (checkExecution) platformKernel.transitionExecution(checkExecution.execution_id, actionResult?.isError ? "failed" : "completed", {
+        source: "agent",
+        actor_id: "agent",
+        reason: actionResult?.isError ? "scheduled watch action failed" : "scheduled watch action completed",
+        result_status: actionResult?.isError ? "failure" : "success",
+        result_summary: actionResult?.content?.[0]?.text || "watch triggered",
+        correlation_id: watch.id,
+      });
     } else {
+      if (checkExecution) platformKernel.transitionExecution(checkExecution.execution_id, "completed", {
+        source: "agent",
+        actor_id: "agent",
+        reason: "scheduled watch check completed without trigger",
+        result_status: "not_triggered",
+        result_summary: `Watch ${watch.id} did not trigger`,
+        correlation_id: watch.id,
+      });
       saveWatches(watchesAfter);
     }
   }
