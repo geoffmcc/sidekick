@@ -26,6 +26,7 @@ delete require.cache[require.resolve('../src/blackbox')];
 delete require.cache[require.resolve('../src/tools')];
 const blackbox = require('../src/blackbox');
 const { TOOLS } = require('../src/tools');
+const dbStore = require('../src/db');
 
 console.log('Running Black Box Tests...\n');
 
@@ -51,6 +52,14 @@ console.log('Running Black Box Tests...\n');
     const sources = blackbox.listSources(capture.id);
     assert.strictEqual(sources.length, 1, 'Source should be stored');
     assert.ok(sources[0].content_hash, 'Source should have content hash');
+    const platformExecution = dbStore.getDb().prepare("SELECT * FROM platform_executions WHERE incident_id = ? AND operation_type = 'incident_capture'").get(capture.incident_id);
+    assert.ok(platformExecution, 'Capture should create a platform execution');
+    assert.strictEqual(platformExecution.tool_name, 'sidekick_black_box', 'Platform execution should identify the Black Box tool');
+    assert.strictEqual(platformExecution.state, capture.state, 'Platform execution should mirror final capture state');
+    assert.ok(platformExecution.artifact_count >= 1, 'Capture artifacts should be linked to platform execution');
+    const platformEvents = dbStore.getDb().prepare('SELECT event_type FROM platform_execution_events WHERE execution_id = ? ORDER BY timestamp ASC').all(platformExecution.execution_id).map(row => row.event_type);
+    assert.ok(platformEvents.includes('blackbox.source_started'), 'Platform events should include source start');
+    assert.ok(platformEvents.includes('blackbox.source_completed'), 'Platform events should include source completion');
     console.log('Passed\n');
 
     console.log('Test BB.3: source detail, search, deterministic analysis, and export are evidence-linked');
