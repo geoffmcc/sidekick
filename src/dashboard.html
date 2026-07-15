@@ -6,7 +6,7 @@
 <title>Sidekick Dashboard</title>
 <link rel="stylesheet" href="/static/fontawesome/css/all.min.css">
 <link rel="stylesheet" href="/static/fonts/jetbrains-mono/jetbrains-mono.css">
-<link rel="stylesheet" href="/static/dashboard.css">
+<link rel="stylesheet" href="/static/dashboard.css?v=dashboard-ux-preview-4">
 </head>
 <body>
 <div class="header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;padding-bottom:12px;border-bottom:1px solid #21262d">
@@ -183,33 +183,50 @@
 <!-- Activity Page -->
 <div class="page" id="page-activity">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-    <div class="section-title" style="margin:0">Activity Log (<span id="logCount">0</span>)</div>
+    <div>
+      <div class="section-title" style="margin:0">Activity (<span id="logCount">0</span>)</div>
+      <div class="sub">What Sidekick did, grouped into sessions by real IDs when present and deterministic time/source windows otherwise.</div>
+    </div>
     <div style="display:flex;gap:8px">
       <button class="btn btn-sm btn-outline" onclick="clearData('logs')" title="Clear activity log"><i class="fas fa-trash"></i> Clear Log</button>
       <button class="btn btn-sm btn-outline" onclick="clearData('all')" title="Clear all data"><i class="fas fa-trash-alt"></i> Clear All</button>
     </div>
   </div>
+  <div class="tab-switch" role="tablist" aria-label="Activity views">
+    <button class="active" id="activityViewSessions" onclick="setActivityView('sessions')" role="tab" aria-selected="true">Sessions</button>
+    <button id="activityViewRaw" onclick="setActivityView('raw')" role="tab" aria-selected="false">Raw Calls</button>
+  </div>
+  <div class="metric-strip" id="activitySummary"></div>
   <div class="search-bar">
-    <input type="text" id="logSearch" placeholder="Search tool name, args, or output..." oninput="filterLogs()">
+    <input type="text" id="logSearch" placeholder="Search tool, args, output, project, session..." oninput="filterLogs()" aria-label="Search activity">
     <select id="logSourceFilter" onchange="filterLogs()">
       <option value="">All Sources</option>
       <option value="mcp">MCP</option>
       <option value="agent">Agent</option>
+      <option value="dashboard">Dashboard</option>
       <option value="unknown">Unknown</option>
     </select>
     <select id="logStatusFilter" onchange="filterLogs()">
       <option value="">All Status</option>
-      <option value="ok">OK</option>
-      <option value="fail">Failed</option>
+      <option value="success">Success</option>
+      <option value="failure">Failed</option>
     </select>
+    <input type="text" id="logToolFilter" placeholder="Tool" oninput="filterLogs()" aria-label="Filter by tool">
+    <input type="text" id="logProjectFilter" placeholder="Project" oninput="filterLogs()" aria-label="Filter by project">
+    <input type="text" id="logSessionFilter" placeholder="Session or task" oninput="filterLogs()" aria-label="Filter by session or task">
+    <input type="number" id="logMinDurationFilter" placeholder="Min ms" min="0" oninput="filterLogs()" aria-label="Minimum duration">
+    <label class="inline-check"><input type="checkbox" id="logErrorsOnly" onchange="filterLogs()"> Errors only</label>
   </div>
-  <div id="logList" style="max-height:600px;overflow-y:auto"></div>
+  <div id="logList" class="activity-list"></div>
 </div>
 
 <!-- Data Page -->
 <div class="page" id="page-data">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-    <div class="section-title" style="margin:0">Stored Data (<span id="kvCount">0</span>)</div>
+    <div>
+      <div class="section-title" style="margin:0">Stored Data (<span id="kvCount">0</span>)</div>
+      <div class="sub">What Sidekick stores in persistent key-value data.</div>
+    </div>
     <div style="display:flex;gap:8px">
       <button class="btn btn-sm" onclick="showNewEntryModal()" title="Create new KV entry"><i class="fas fa-plus"></i> New Entry</button>
       <button class="btn btn-sm btn-outline" onclick="exportKV()" title="Export all KV data as JSON"><i class="fas fa-download"></i> Export</button>
@@ -217,17 +234,23 @@
       <button class="btn btn-sm btn-outline" onclick="clearData('kv')" title="Clear all KV data"><i class="fas fa-trash"></i> Clear KV</button>
     </div>
   </div>
-  
-  <!-- Recently Updated Section -->
-  <div id="recentlyUpdatedSection" style="display:none;margin-bottom:16px">
-    <div class="section-title" style="margin-bottom:8px"><i class="fas fa-clock"></i> Recently Updated</div>
-    <div class="card" id="recentlyUpdatedList" style="padding:8px 16px"></div>
-  </div>
-  
+  <div class="metric-strip" id="kvSummary"></div>
   <div class="search-bar">
-    <input type="text" id="kvSearch" placeholder="Search keys or values..." oninput="filterKV()">
+    <input type="text" id="kvSearch" placeholder="Search keys, values, namespace..." oninput="filterKV()" aria-label="Search stored data">
     <select id="kvProjectFilter" onchange="filterKV()">
       <option value="">All Projects</option>
+    </select>
+    <select id="kvNamespaceFilter" onchange="filterKV()">
+      <option value="">All Namespaces</option>
+    </select>
+    <select id="kvTypeFilter" onchange="filterKV()">
+      <option value="">All Types</option>
+      <option value="string">String</option>
+      <option value="object">Object</option>
+      <option value="array">Array</option>
+      <option value="number">Number</option>
+      <option value="boolean">Boolean</option>
+      <option value="null">Null</option>
     </select>
     <select id="kvAgeFilter" onchange="filterKV()">
       <option value="all">All Time</option>
@@ -236,32 +259,45 @@
       <option value="month">This Month</option>
     </select>
   </div>
-  <div class="card" id="kvList" style="max-height:600px;overflow-y:auto;padding:8px 16px"></div>
+  <div class="data-browser">
+    <div class="card data-list" id="kvList"><div class="empty">Loading data...</div></div>
+    <aside class="card data-inspector" id="kvInspector" aria-live="polite"><div class="empty">Select an entry to inspect its value, metadata, and safe actions.</div></aside>
+  </div>
 </div>
 
 <!-- Memory Page -->
 <div class="page" id="page-memory">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-    <div class="section-title" style="margin:0">Structured Memories (<span id="memoryCount">0</span>)</div>
+    <div>
+      <div class="section-title" style="margin:0">Memory (<span id="memoryCount">0</span>)</div>
+      <div class="sub">What Sidekick learned and should remember. Operational tool-call records are available, but not selected by default.</div>
+    </div>
     <div style="display:flex;gap:8px">
       <button class="btn btn-sm btn-outline" onclick="expireStaleMemories()" title="Disable memories not confirmed in 90 days"><i class="fas fa-clock"></i> Expire Stale</button>
       <button class="btn btn-sm btn-outline" onclick="exportMemories()" title="Export memories as JSON"><i class="fas fa-download"></i> Export</button>
       <button class="btn btn-sm btn-outline" onclick="importMemories()" title="Import memories from JSON"><i class="fas fa-upload"></i> Import</button>
     </div>
   </div>
+  <div class="tab-switch" role="tablist" aria-label="Memory categories">
+    <button class="active" id="memoryCategoryDurable" onclick="setMemoryCategory('durable')" role="tab" aria-selected="true">Durable</button>
+    <button id="memoryCategorySessions" onclick="setMemoryCategory('sessions')" role="tab" aria-selected="false">Sessions</button>
+    <button id="memoryCategoryUnresolved" onclick="setMemoryCategory('unresolved')" role="tab" aria-selected="false">Unresolved</button>
+    <button id="memoryCategoryOperational" onclick="setMemoryCategory('operational')" role="tab" aria-selected="false">Operational</button>
+    <button id="memoryCategoryAll" onclick="setMemoryCategory('all')" role="tab" aria-selected="false">All</button>
+  </div>
 
   <div class="grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">
     <div class="card" style="padding:12px">
-      <div class="s-label" style="margin-bottom:4px">Total</div>
+      <div class="s-label" style="margin-bottom:4px">Loaded</div>
       <div style="font-size:1.4rem;font-weight:700;color:#58a6ff" id="memStatsTotal">--</div>
     </div>
     <div class="card" style="padding:12px">
-      <div class="s-label" style="margin-bottom:4px">Active</div>
+      <div class="s-label" style="margin-bottom:4px">Durable Active</div>
       <div style="font-size:1.4rem;font-weight:700;color:#3fb950" id="memStatsActive">--</div>
     </div>
     <div class="card" style="padding:12px">
-      <div class="s-label" style="margin-bottom:4px">Stale</div>
-      <div style="font-size:1.4rem;font-weight:700;color:#d29922" id="memStatsStale">--</div>
+      <div class="s-label" style="margin-bottom:4px">Operational</div>
+      <div style="font-size:1.4rem;font-weight:700;color:#8b949e" id="memStatsStale">--</div>
     </div>
     <div class="card" style="padding:12px">
       <div class="s-label" style="margin-bottom:4px">Avg Confidence</div>
@@ -281,7 +317,7 @@
   </div>
 
   <div class="search-bar">
-    <input type="text" id="memorySearch" placeholder="Search memories..." oninput="filterMemories()">
+    <input type="text" id="memorySearch" placeholder="Search memories, tags, source..." oninput="filterMemories()" aria-label="Search memories">
     <select id="memoryProjectFilter" onchange="filterMemories()">
       <option value="">All Projects</option>
     </select>
@@ -296,12 +332,22 @@
       <option value="session">Session</option>
       <option value="tool_call">Tool Call</option>
     </select>
+    <select id="memorySourceFilter" onchange="filterMemories()">
+      <option value="">All Sources</option>
+    </select>
+    <select id="memoryImportanceFilter" onchange="filterMemories()">
+      <option value="">All Importance</option>
+      <option value="high">High</option>
+      <option value="normal">Normal</option>
+      <option value="low">Low</option>
+    </select>
+    <label class="inline-check"><input type="checkbox" id="memoryUnresolvedOnly" onchange="filterMemories()"> Unresolved only</label>
     <label style="display:flex;align-items:center;gap:4px;font-size:.8rem;color:#8b949e">
       <input type="checkbox" id="memoryIncludeDisabled" onchange="filterMemories()"> Include disabled
     </label>
   </div>
 
-  <div class="card" id="memoryList" style="max-height:600px;overflow-y:auto;padding:8px 16px">
+  <div class="card" id="memoryList" style="max-height:700px;overflow-y:auto;padding:8px 16px">
     <div class="empty">Loading memories...</div>
   </div>
 </div>
@@ -537,6 +583,6 @@
 
 <footer>refreshes every 10s</footer>
 
-<script src="/static/dashboard.js"></script>
+<script src="/static/dashboard.js?v=dashboard-ux-preview-4"></script>
 </body>
 </html>

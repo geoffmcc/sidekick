@@ -380,8 +380,9 @@ The dashboard auth and IP whitelist are disabled by default (empty env var = no 
 Open `http://YOUR_REMOTE_IP:4098/` in a browser.
 
 - **System** — uptime, CPU, memory, disk, LLM status, service indicators (MCP, Agent, Ollama)
-- **Activity** — live tool call log with source badges (mcp/agent/dashboard)
-- **Data** — KV store contents with project filtering, age filtering, and expandable previews
+- **Activity** — operational telemetry for what Sidekick did. The default view groups tool calls into sessions using real session/task identifiers when present, with deterministic time/source fallback grouping when they are not available. Raw calls remain available for audit/debugging with filters for source, status, tool, project, session/task, duration, errors, and text search.
+- **Data** — practical KV browser for what Sidekick stores. Entries include namespace, project, source, size, type, timestamps, previews, totals, and a persistent inspector with structured JSON/plain-text/Markdown-safe rendering plus guarded edit/delete actions.
+- **Memory** — durable knowledge for what Sidekick learned and should remember. Facts, decisions, preferences, procedures, observations, unresolved items, and session summaries are separated from operational/tool-call records so telemetry does not dominate the default memory experience.
 - **Database** — schema browser, query editor, full-text search, migration management
 - **Config** — environment variables (sensitive values redacted)
 - **Agent** — submit tasks for the AI agent to execute autonomously

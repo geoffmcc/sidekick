@@ -7,6 +7,7 @@ const { timingSafeCompare } = require("./crypto-utils");
 const { execSync } = require("child_process");
 const { TOOLS, setSource, getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval } = require("./tools");
 const dbStore = require("./db");
+const { redactSensitive } = require("./redact");
 const crypto = require("crypto");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
@@ -332,6 +333,184 @@ function writeKV(data) {
   dbStore.replaceKV(data || {});
 }
 
+const ACTIVITY_FALLBACK_GAP_MS = 5 * 60 * 1000;
+
+function safeString(value) {
+  if (value === undefined || value === null) return "";
+  if (typeof value === "string") return redactSensitive(value);
+  try {
+    return redactSensitive(JSON.stringify(value, null, 2));
+  } catch {
+    return redactSensitive(String(value));
+  }
+}
+
+function summarizeValue(value, max = 220) {
+  const text = safeString(value).replace(/\s+/g, " ").trim();
+  return text.length > max ? text.slice(0, max - 3) + "..." : text;
+}
+
+function valueType(value) {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
+function valueSize(value) {
+  return Buffer.byteLength(safeString(value), "utf8");
+}
+
+function inferNamespace(key) {
+  const text = String(key || "");
+  const match = text.match(/^([a-z][a-z0-9_-]{1,40})[:/_-]/i);
+  return match ? match[1].toLowerCase() : "global";
+}
+
+function normalizeLogEntry(entry, index = 0) {
+  const raw = entry && typeof entry === "object" ? entry : {};
+  const timestamp = raw.t || raw.timestamp || null;
+  const tool = raw.n || raw.tool || raw.tool_name || "unknown";
+  const args = raw.args !== undefined ? raw.args : (raw.arguments !== undefined ? raw.arguments : raw.a || "");
+  const result = raw.result !== undefined ? raw.result : raw.output !== undefined ? raw.output : raw.s || "";
+  const error = raw.error || raw.err || (!raw.ok && raw.s ? raw.s : "");
+  const source = raw.src || raw.source || "unknown";
+  const project = raw.project || raw.p || null;
+  const sessionId = raw.session_id || raw.sessionId || raw.sid || null;
+  const taskId = raw.task_id || raw.taskId || raw.tid || null;
+  const duration = Number.isFinite(raw.d) ? Math.round(raw.d) : Number.isFinite(raw.duration_ms) ? Math.round(raw.duration_ms) : null;
+  const success = raw.ok === undefined ? raw.success !== false : !!raw.ok;
+  return {
+    id: raw.id || `${timestamp || "log"}-${tool}-${index}`,
+    timestamp,
+    tool,
+    status: success ? "success" : "failure",
+    ok: success,
+    duration_ms: duration,
+    args: safeString(args),
+    result: safeString(result),
+    error: safeString(error),
+    source,
+    agent: raw.agent || null,
+    client: raw.client || null,
+    project,
+    session_id: sessionId,
+    task_id: taskId,
+    resource: raw.resource || raw.file || raw.path || raw.command || null,
+    summary: summarizeValue(raw.s || result || error || tool, 260)
+  };
+}
+
+function sessionKeyForLog(log, previous) {
+  if (log.session_id) return { key: `session:${log.session_id}`, method: "session_id" };
+  if (log.task_id) return { key: `task:${log.task_id}`, method: "task_id" };
+  const time = new Date(log.timestamp || 0).getTime();
+  const previousTime = previous ? new Date(previous.timestamp || 0).getTime() : NaN;
+  const sameFallback = previous && !previous.session_id && !previous.task_id && previous.source === log.source && Number.isFinite(time) && Number.isFinite(previousTime) && Math.abs(time - previousTime) <= ACTIVITY_FALLBACK_GAP_MS;
+  if (sameFallback) return { key: previous._sessionKey, method: "time_source_fallback" };
+  return { key: `fallback:${log.source}:${log.timestamp || time}`, method: "time_source_fallback" };
+}
+
+function buildActivitySessions(rawLogs) {
+  const normalized = rawLogs.map(normalizeLogEntry).sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
+  const sessions = [];
+  const byKey = new Map();
+  let previous = null;
+
+  for (const log of normalized) {
+    const sessionInfo = sessionKeyForLog(log, previous);
+    log._sessionKey = sessionInfo.key;
+    let session = byKey.get(sessionInfo.key);
+    if (!session) {
+      session = {
+        id: sessionInfo.key,
+        grouping: sessionInfo.method,
+        source: log.source,
+        agent: log.agent || log.client || null,
+        project: log.project,
+        task_id: log.task_id,
+        session_id: log.session_id,
+        start_time: log.timestamp,
+        end_time: log.timestamp,
+        entries: []
+      };
+      byKey.set(sessionInfo.key, session);
+      sessions.push(session);
+    }
+    session.entries.push(log);
+    session.end_time = log.timestamp || session.end_time;
+    if (!session.project && log.project) session.project = log.project;
+    previous = log;
+  }
+
+  for (const session of sessions) {
+    const entries = session.entries;
+    const tools = [...new Set(entries.map(e => e.tool).filter(Boolean))];
+    const failures = entries.filter(e => !e.ok).length;
+    const durations = entries.map(e => e.duration_ms).filter(Number.isFinite);
+    const startMs = new Date(session.start_time || 0).getTime();
+    const endMs = new Date(session.end_time || 0).getTime();
+    const summarySource = entries.find(e => e.summary && e.summary !== e.tool);
+    session.duration_ms = Number.isFinite(startMs) && Number.isFinite(endMs) ? Math.max(0, endMs - startMs) : null;
+    session.call_count = entries.length;
+    session.success_count = entries.length - failures;
+    session.failure_count = failures;
+    session.warning_count = entries.filter(e => /warn|warning/i.test(e.summary || "")).length;
+    session.tools = tools;
+    session.status = failures ? "failure" : "success";
+    session.avg_duration_ms = durations.length ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length) : null;
+    session.summary = summarySource ? summarySource.summary : `${entries.length} ${entries.length === 1 ? "tool call" : "tool calls"}${tools.length ? ` using ${tools.slice(0, 4).join(", ")}` : ""}`;
+  }
+
+  return sessions.sort((a, b) => new Date(b.start_time || 0) - new Date(a.start_time || 0));
+}
+
+function summarizeActivity(sessions, calls) {
+  const total = calls.length;
+  const successes = calls.filter(call => call.ok).length;
+  const failures = total - successes;
+  const durations = calls.map(call => call.duration_ms).filter(Number.isFinite).sort((a, b) => a - b);
+  const toolCounts = new Map();
+  for (const call of calls) toolCounts.set(call.tool, (toolCounts.get(call.tool) || 0) + 1);
+  const mostUsedTools = [...toolCounts.entries()].map(([tool, count]) => ({ tool, count })).sort((a, b) => b.count - a.count).slice(0, 6);
+  const longestCalls = [...calls].filter(call => Number.isFinite(call.duration_ms)).sort((a, b) => b.duration_ms - a.duration_ms).slice(0, 5);
+  return {
+    sessions: sessions.length,
+    total_calls: total,
+    success_rate: total ? Math.round((successes / total) * 100) : 0,
+    failures,
+    avg_duration_ms: durations.length ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length) : null,
+    median_duration_ms: durations.length ? durations[Math.floor(durations.length / 2)] : null,
+    most_used_tools: mostUsedTools,
+    longest_calls: longestCalls
+  };
+}
+
+function shapeKvEntry(key, entry) {
+  const isEnvelope = entry && typeof entry === "object" && !Array.isArray(entry) && Object.prototype.hasOwnProperty.call(entry, "value");
+  const value = isEnvelope ? entry.value : entry;
+  return {
+    key,
+    value,
+    value_text: safeString(value),
+    preview: summarizeValue(value, 180),
+    project: isEnvelope ? entry.project || null : null,
+    source: isEnvelope ? entry.source || null : null,
+    category: isEnvelope ? entry.category || null : null,
+    namespace: inferNamespace(key),
+    size: valueSize(value),
+    data_type: valueType(value),
+    created: isEnvelope ? entry.created || null : null,
+    updated: isEnvelope ? entry.updated || null : null
+  };
+}
+
+function memoryCategory(memory) {
+  if (memory.type === "tool_call" || memory.source_tool && memory.type === "observation" && memory.source_tool !== "sidekick_agent") return "operational";
+  if (memory.type === "session" || memory.type === "agent_task") return "sessions";
+  if (memory.type === "open_thread" || memory.state === "pending") return "unresolved";
+  return "durable";
+}
+
 function exec(cmd, opts = {}) {
   try {
     return execSync(cmd, { encoding: "utf-8", timeout: 5000, ...opts }).trim();
@@ -415,21 +594,50 @@ function seedKV() {
 }
 
 app.get("/api/logs", (req, res) => {
-  const logs = readLogs();
-  const limit = Math.min(parseInt(req.query.limit) || 100, 500);
-  res.json({ entries: logs.slice(0, limit), total: logs.length });
+  const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
+  let entries = readLogs().slice(0, limit).map(normalizeLogEntry);
+  if (req.query.source) entries = entries.filter(entry => entry.source === req.query.source);
+  if (req.query.status === "success") entries = entries.filter(entry => entry.ok);
+  if (req.query.status === "failure") entries = entries.filter(entry => !entry.ok);
+  if (req.query.tool) entries = entries.filter(entry => entry.tool === req.query.tool);
+  if (req.query.project) entries = entries.filter(entry => entry.project === req.query.project);
+  if (req.query.session) entries = entries.filter(entry => entry.session_id === req.query.session || entry.task_id === req.query.session || entry.id.includes(req.query.session));
+  if (req.query.task) entries = entries.filter(entry => entry.task_id === req.query.task);
+  if (req.query.min_duration) {
+    const minDuration = Number(req.query.min_duration);
+    if (Number.isFinite(minDuration)) entries = entries.filter(entry => Number(entry.duration_ms || 0) >= minDuration);
+  }
+  if (req.query.errors_only === "true") entries = entries.filter(entry => !entry.ok || entry.error);
+  if (req.query.search) {
+    const needle = String(req.query.search).toLowerCase();
+    entries = entries.filter(entry => [entry.tool, entry.args, entry.result, entry.error, entry.summary, entry.source, entry.project, entry.session_id, entry.task_id].join(" ").toLowerCase().includes(needle));
+  }
+  const sessions = buildActivitySessions(entries);
+  res.json({ entries, sessions, summary: summarizeActivity(sessions, entries), total: entries.length, fallback_grouping_ms: ACTIVITY_FALLBACK_GAP_MS });
 });
 
 app.get("/api/kv", (req, res) => {
   const kv = readKV();
-  const entries = Object.entries(kv).map(([key, entry]) => {
-    if (typeof entry === 'object' && entry !== null && 'value' in entry) {
-      return { key, value: entry.value, project: entry.project, source: entry.source, created: entry.created, updated: entry.updated };
-    } else {
-      return { key, value: entry, project: null, source: null, created: null, updated: null };
-    }
+  const entries = Object.entries(kv).map(([key, entry]) => shapeKvEntry(key, entry));
+  const namespaces = [...new Set(entries.map(entry => entry.namespace))].sort();
+  const projects = [...new Set(entries.map(entry => entry.project).filter(Boolean))].sort();
+  const totalSize = entries.reduce((sum, entry) => sum + entry.size, 0);
+  const recentCutoff = Date.now() - 24 * 60 * 60 * 1000;
+  const recentlyChanged = entries.filter(entry => entry.updated && new Date(entry.updated).getTime() >= recentCutoff).length;
+  res.json({
+    entries,
+    total: entries.length,
+    summary: {
+      total_entries: entries.length,
+      projects: projects.length,
+      total_size: totalSize,
+      recently_changed: recentlyChanged,
+      namespaces: namespaces.length,
+      largest_entries: [...entries].sort((a, b) => b.size - a.size).slice(0, 5).map(entry => ({ key: entry.key, size: entry.size }))
+    },
+    namespaces,
+    projects
   });
-  res.json({ entries, total: entries.length });
 });
 
 app.get("/api/system", (req, res) => {
@@ -976,15 +1184,27 @@ app.get("/api/memories", (req, res) => {
     const formatted = memories.map(m => ({
       id: m.id,
       type: m.type,
+      category: memoryCategory(m),
       project: m.project,
       content: m.content,
       summary: m.summary,
       tags: m.tags,
       confidence: m.confidence,
+      importance: m.metadata?.importance || (m.confidence >= 0.8 ? "high" : m.confidence >= 0.55 ? "normal" : "low"),
+      source: m.source,
+      source_tool: m.source_tool,
+      source_task_id: m.source_task_id,
+      source_ref: m.source_ref,
       enabled: m.enabled,
       automatic: m.automatic,
       times_confirmed: m.times_confirmed,
-      state: m.metadata?.state || "active",
+      state: m.state || m.metadata?.state || "active",
+      requires_confirmation: m.requires_confirmation,
+      last_confirmed_at: m.last_confirmed_at,
+      expires_at: m.expires_at,
+      deleted_at: m.deleted_at,
+      expired_at: m.expired_at,
+      metadata: m.metadata || {},
       created_at: m.created_at,
       updated_at: m.updated_at,
       last_seen_at: m.last_seen_at

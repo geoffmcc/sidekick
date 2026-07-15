@@ -227,6 +227,113 @@ setTimeout(async () => {
       console.log('Passed\n');
     }
 
+    // Test 3.0h: activity API exposes sessions, raw call detail, metrics, and redaction
+    console.log('Test 3.0h: activity API exposes session-oriented data');
+    {
+      dbStore.clearToolLogs();
+      dbStore.appendToolLog({
+        t: '2026-01-01T00:00:00.000Z',
+        n: 'sidekick_alpha',
+        a: 'project=alpha, token=sk-abcdefghijklmnopqrstuvwx',
+        d: 20,
+        ok: true,
+        s: 'alpha ok',
+        src: 'agent',
+        taskId: 'task-1',
+        project: 'alpha'
+      });
+      dbStore.appendToolLog({
+        t: '2026-01-01T00:00:02.000Z',
+        n: 'sidekick_beta',
+        a: 'value=2',
+        d: 40,
+        ok: false,
+        s: 'beta failed',
+        src: 'agent',
+        taskId: 'task-1',
+        project: 'alpha'
+      });
+      dbStore.appendToolLog({
+        t: '2026-01-01T00:10:00.000Z',
+        n: 'sidekick_gamma',
+        a: 'value=3',
+        d: 10,
+        ok: true,
+        s: 'gamma ok',
+        src: 'mcp'
+      });
+
+      const response = await makeRequest('GET', '/api/logs?limit=20');
+      assert.strictEqual(response.status, 200, 'Should return 200');
+      assert.ok(Array.isArray(response.data.sessions), 'Should include sessions');
+      assert.ok(Array.isArray(response.data.entries), 'Should include raw entries');
+      const taskSession = response.data.sessions.find(session => session.task_id === 'task-1');
+      assert.ok(taskSession, 'Should group by real task id');
+      assert.strictEqual(taskSession.grouping, 'task_id', 'Should identify real grouping method');
+      assert.strictEqual(taskSession.call_count, 2, 'Task session should contain two calls');
+      assert.strictEqual(taskSession.failure_count, 1, 'Task session should count failures');
+      assert.ok(response.data.sessions.some(session => session.grouping === 'time_source_fallback'), 'Should expose deterministic fallback grouping');
+      assert.strictEqual(response.data.summary.total_calls, 3, 'Should summarize total calls');
+      assert.strictEqual(response.data.summary.failures, 1, 'Should summarize failures');
+      assert.ok(!JSON.stringify(response.data).includes('sk-abcdefghijklmnopqrstuvwx'), 'Should redact sensitive values');
+      console.log('Passed\n');
+    }
+
+    // Test 3.0i: activity API filters on real fields
+    console.log('Test 3.0i: activity API filters on real fields');
+    {
+      const failures = await makeRequest('GET', '/api/logs?status=failure&source=agent&project=alpha&min_duration=30');
+      assert.strictEqual(failures.status, 200, 'Should return 200');
+      assert.strictEqual(failures.data.entries.length, 1, 'Should filter to one failed call');
+      assert.strictEqual(failures.data.entries[0].tool, 'sidekick_beta', 'Should return matching tool');
+      console.log('Passed\n');
+    }
+
+    // Test 3.0j: memory API separates durable and operational categories
+    console.log('Test 3.0j: memory API separates durable and operational categories');
+    {
+      const db = dbStore.getDb();
+      for (const migration of ['003_structured_memory.sql', '004_memory_lifecycle.sql', '005_sync_support.sql', '006_memory_deferred.sql']) {
+        try {
+          db.exec(fs.readFileSync(path.join(__dirname, '..', 'migrations', migration), 'utf8'));
+        } catch (error) {
+          if (!/duplicate column name|already exists/i.test(error.message)) throw error;
+        }
+      }
+      dbStore.upsertMemory({
+        id: 'mem-dashboard-fact',
+        type: 'fact',
+        project: 'alpha',
+        content: 'Alpha uses deterministic session grouping.',
+        summary: 'Alpha session grouping fact',
+        confidence: 0.9,
+        source: 'test',
+        automatic: false
+      });
+      dbStore.upsertMemory({
+        id: 'mem-dashboard-tool',
+        type: 'tool_call',
+        project: 'alpha',
+        content: 'sidekick_alpha succeeded',
+        summary: 'Tool call record',
+        confidence: 0.5,
+        source: 'agent',
+        source_tool: 'sidekick_alpha',
+        automatic: true
+      });
+      const response = await makeRequest('GET', '/api/memories?include_disabled=true&limit=500');
+      assert.strictEqual(response.status, 200, 'Should return 200');
+      const fact = response.data.memories.find(memory => memory.id === 'mem-dashboard-fact');
+      const tool = response.data.memories.find(memory => memory.id === 'mem-dashboard-tool');
+      assert.ok(fact, 'Should include durable memory');
+      assert.ok(tool, 'Should include operational memory');
+      assert.strictEqual(fact.category, 'durable', 'Facts should be durable');
+      assert.strictEqual(tool.category, 'operational', 'Tool calls should be operational');
+      assert.strictEqual(fact.importance, 'high', 'Importance should derive from confidence');
+      assert.strictEqual(tool.source_tool, 'sidekick_alpha', 'Should expose source tool metadata');
+      console.log('Passed\n');
+    }
+
     // Test 3.1: GET /api/kv returns metadata
     console.log('Test 3.1: GET /api/kv returns metadata');
     {
@@ -248,6 +355,10 @@ setTimeout(async () => {
       assert.strictEqual(entry.project, 'testproj', 'Project should match');
       assert.ok(entry.created, 'Should have created');
       assert.ok(entry.updated, 'Should have updated');
+      assert.strictEqual(entry.data_type, 'string', 'Should include data type');
+      assert.ok(Number.isFinite(entry.size), 'Should include size');
+      assert.ok(entry.preview, 'Should include preview');
+      assert.ok(response.data.summary.total_entries >= 1, 'Should include summary totals');
       console.log('✓ Passed\n');
     }
 

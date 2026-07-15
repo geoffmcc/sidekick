@@ -34,7 +34,8 @@ const toolMemory = recordToolCallMemory({
 
 assert.ok(toolMemory, "Tool memory should be stored");
 assert.strictEqual(toolMemory.project, "sidekick", "Project should be inferred from args");
-assert.strictEqual(toolMemory.type, "tool_call", "Tool memory should be stored as structured tool_call memory");
+assert.strictEqual(toolMemory.type, "tool_call", "Tool memory should be retained in bounded legacy context");
+assert.strictEqual(dbStore.searchMemories({ type: "tool_call", project: "sidekick", limit: 20 }).length, 0, "Tool calls should not create new structured memory rows");
 
 const taskMemory = recordAgentTaskMemory({
   goal: "Check project sidekick service health",
@@ -63,7 +64,6 @@ assert.ok(recalled.some(item => item.structured), "Recall should include table-b
 const formatted = formatMemoryRecall(recalled);
 assert.ok(formatted.includes("sidekick"), "Formatted recall should include relevant text");
 
-const beforeDedup = dbStore.searchMemories({ type: "tool_call", project: "sidekick", limit: 20 });
 recordToolCallMemory({
   name: "sidekick_bash",
   args: { command: "systemctl status sidekick-mcp", project: "sidekick" },
@@ -72,9 +72,8 @@ recordToolCallMemory({
   summary: "sidekick-mcp is active",
   source: "agent"
 });
-const afterDedup = dbStore.searchMemories({ type: "tool_call", project: "sidekick", limit: 20 });
-assert.strictEqual(afterDedup.length, beforeDedup.length, "Duplicate structured memory should update existing row");
-assert.ok(afterDedup[0].times_confirmed >= 2, "Duplicate structured memory should increment confirmation count");
+const afterToolCalls = dbStore.searchMemories({ type: "tool_call", project: "sidekick", limit: 20 });
+assert.strictEqual(afterToolCalls.length, 0, "Repeated tool calls should stay out of structured memory");
 
 const extractedTask = recordAgentTaskMemory({
   goal: "I decided to keep LF line endings. Prefer SQLite for structured memory. Follow up on the dashboard review. The database file is sidekick.db.",
