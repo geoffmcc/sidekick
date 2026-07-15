@@ -73,6 +73,8 @@ Generated tool invocations also mirror parent and per-step execution state into 
 
 Direct MCP tool calls are mirrored from `logToolCall(...)` into the same platform kernel tables for non-generated tool activity. The legacy `tool_logs` table remains the compatibility source for existing Activity views and Evolve mining while the platform rows provide execution graph correlation.
 
+Black Box captures also mirror capture lifecycle, source progress, and redacted source artifacts into the platform kernel. The Black Box incident/capture/source tables and artifact files remain the compatibility source of truth while `platform_executions`, `platform_execution_events`, and `platform_artifacts` provide shared execution graph visibility.
+
 ### Dashboard: `src/dashboard.js`
 
 The dashboard serves a browser UI and JSON API. The server code lives in `src/dashboard.js`, the authenticated HTML shell lives in `src/dashboard.html`, and public CSS/JS assets live under `static/`. It reads the Sidekick data directory, reports system state, allows KV editing and deletion, exposes tool metadata, accepts webhooks, and proxies agent requests to the Agent Bridge.

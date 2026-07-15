@@ -6,6 +6,7 @@ const { execFile } = require("child_process");
 const EventEmitter = require("events");
 const { redactSensitive } = require("./redact");
 const dbStore = require("./db");
+const platformKernel = require("./platform/kernel");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const LEGACY_BLACKBOX_FILE = path.join(DATA_DIR, "blackbox.json");
@@ -344,6 +345,104 @@ function emitProgress(captureId, event) {
   });
 }
 
+function captureRisk(profile) {
+  return PROFILE_INFO[profile]?.risk || "medium";
+}
+
+function platformCaptureExecution(options = {}) {
+  try {
+    const execution = platformKernel.createExecution({
+      task_id: options.task_id,
+      session_id: options.session_id || process.env.SIDEKICK_SESSION_ID || null,
+      project_id: options.project || null,
+      incident_id: options.incident_id,
+      actor_id: options.requested_by || options.source || "blackbox",
+      client_id: options.source || null,
+      trigger_type: options.trigger || "manual",
+      operation_type: "incident_capture",
+      tool_name: "sidekick_black_box",
+      tool_action: "capture",
+      resource_scope: options.profile || "standard",
+      environment: options.environment || process.env.SIDEKICK_ENVIRONMENT || null,
+      risk: captureRisk(options.profile),
+      source: "blackbox",
+      correlation_id: options.correlation_id,
+      metadata: {
+        capture_id: options.capture_id,
+        capture_type: options.capture_type || "initial",
+        profile: options.profile,
+        requested_sources: options.requested_sources || [],
+      },
+    });
+    return platformKernel.transitionExecution(execution.execution_id, "running", { source: "blackbox", reason: "capture started" });
+  } catch {
+    return null;
+  }
+}
+
+function appendPlatformCaptureEvent(execution, eventType, payload = {}, severity = "info") {
+  if (!execution) return;
+  try {
+    platformKernel.appendEvent({
+      event_type: eventType,
+      source: "blackbox",
+      actor_id: execution.actor_id,
+      execution_id: execution.execution_id,
+      root_execution_id: execution.root_execution_id,
+      task_id: execution.task_id,
+      session_id: execution.session_id,
+      project_id: execution.project_id,
+      environment: execution.environment,
+      incident_id: execution.incident_id,
+      severity,
+      payload,
+      correlation_id: execution.root_execution_id,
+    });
+  } catch {
+    // Platform observability must not break incident evidence capture.
+  }
+}
+
+function transitionPlatformCapture(execution, state, details = {}) {
+  if (!execution) return;
+  try {
+    platformKernel.transitionExecution(execution.execution_id, state, { source: "blackbox", actor_id: execution.actor_id, ...details });
+  } catch {
+    // Platform observability must not break incident evidence capture.
+  }
+}
+
+function registerPlatformArtifact(execution, artifact, details = {}) {
+  if (!execution || !artifact?.path) return;
+  try {
+    platformKernel.registerArtifact({
+      execution_id: execution.execution_id,
+      task_id: execution.task_id,
+      session_id: execution.session_id,
+      project_id: execution.project_id,
+      producer: "blackbox",
+      type: "blackbox_source_artifact",
+      name: details.name || path.basename(artifact.path),
+      storage_ref: path.relative(DATA_DIR, artifact.path),
+      content_type: "text/plain",
+      byte_size: artifact.bytes,
+      content_hash: artifact.hash,
+      sensitivity: "sensitive",
+      redaction_state: "redacted",
+      source: "blackbox",
+      correlation_id: execution.root_execution_id,
+      metadata: {
+        incident_id: details.incident_id,
+        capture_id: details.capture_id,
+        source_id: details.source_id,
+        stream: details.stream,
+      },
+    });
+  } catch {
+    // Platform artifact registration is best-effort until the kernel is authoritative.
+  }
+}
+
 function migrateLegacy() {
   const db = dbStore.getDb();
   if (!fs.existsSync(LEGACY_BLACKBOX_FILE)) return { imported: 0, errors: [] };
@@ -550,7 +649,7 @@ function extractObservations(sourceKey, text, sourceId, captureId) {
   return observations;
 }
 
-async function runCollector(incidentId, captureId, collector, index, total) {
+async function runCollector(incidentId, captureId, collector, index, total, platformExecution) {
   const db = dbStore.getDb();
   const sourceId = `${captureId}_${collector.key.replace(/[^A-Za-z0-9_.:-]/g, "_")}`;
   const startedAt = nowIso();
@@ -563,6 +662,7 @@ async function runCollector(incidentId, captureId, collector, index, total) {
     ) VALUES (?, ?, ?, ?, ?, ?, 'command', ?, ?, ?, 'running', ?)
   `).run(sourceId, captureId, incidentId, collector.key, collector.display, collector.category, collector.program, json(collector.args || []), startedAt, timeoutMs);
   emitProgress(captureId, { type: "source_started", incident_id: incidentId, source_id: sourceId, source_key: collector.key, display_name: collector.display, completed: index, total, state: "running" });
+  appendPlatformCaptureEvent(platformExecution, "blackbox.source_started", { incident_id: incidentId, capture_id: captureId, source_id: sourceId, source_key: collector.key, display_name: collector.display, index, total });
   const start = Date.now();
   let stdout = Buffer.alloc(0);
   let stderr = Buffer.alloc(0);
@@ -596,6 +696,8 @@ async function runCollector(incidentId, captureId, collector, index, total) {
   if (out.truncated || err.truncated) state = state === "completed" ? "partial" : state;
   const stdoutArtifact = writeArtifact(incidentId, captureId, sourceId, "stdout", out.text);
   const stderrArtifact = err.text ? writeArtifact(incidentId, captureId, sourceId, "stderr", err.text) : null;
+  registerPlatformArtifact(platformExecution, stdoutArtifact, { incident_id: incidentId, capture_id: captureId, source_id: sourceId, stream: "stdout", name: `${sourceId}.stdout.txt` });
+  if (stderrArtifact) registerPlatformArtifact(platformExecution, stderrArtifact, { incident_id: incidentId, capture_id: captureId, source_id: sourceId, stream: "stderr", name: `${sourceId}.stderr.txt` });
   const completedAt = nowIso();
   const duration = Date.now() - start;
   const observations = extractObservations(collector.key, stdoutArtifact.safe_content, sourceId, captureId);
@@ -632,6 +734,7 @@ async function runCollector(incidentId, captureId, collector, index, total) {
     insertObs.run(obs.id, obs.capture_id, obs.source_id, obs.observation_type, obs.subject, json(obs.value), obs.unit, obs.severity, obs.observed_at, obs.validity, obs.directness, obs.evidence_ref, obs.fingerprint);
   }
   emitProgress(captureId, { type: "source_completed", incident_id: incidentId, source_id: sourceId, source_key: collector.key, display_name: collector.display, completed: index + 1, total, state, duration_ms: duration, error_category: errorCategory });
+  appendPlatformCaptureEvent(platformExecution, "blackbox.source_completed", { incident_id: incidentId, capture_id: captureId, source_id: sourceId, source_key: collector.key, state, duration_ms: duration, error_category: errorCategory, observations: observations.length }, state === "failed" || state === "timed_out" ? "error" : "info");
   return { sourceId, state, timedOut, truncated: out.truncated || err.truncated, bytes: stdoutArtifact.bytes + (stderrArtifact ? stderrArtifact.bytes : 0), observations: observations.length };
 }
 
@@ -689,6 +792,7 @@ async function captureIncident(options = {}) {
   const captureId = options.capture_id ? safeId(options.capture_id, "capture id") : newId("cap");
   const profile = options.profile || (Array.isArray(options.include) && options.include.length ? "custom" : "standard");
   const collectors = collectorsFor({ include: options.include, profile });
+  const platformExecution = platformCaptureExecution({ ...options, incident_id: incidentId, capture_id: captureId, profile, requested_sources: collectors.map(c => c.key) });
   const db = dbStore.getDb();
   const startedAt = nowIso();
   db.prepare(`
@@ -707,13 +811,15 @@ async function captureIncident(options = {}) {
       const active = activeCaptures.get(captureId);
       if (active && active.cancel) {
         errorSummary = "Capture cancelled";
+        appendPlatformCaptureEvent(platformExecution, "blackbox.capture_cancelled", { incident_id: incidentId, capture_id: captureId, completed: results.length, total: collectors.length }, "warning");
         break;
       }
       if (Date.now() - start > (options.total_timeout_ms || DEFAULT_TOTAL_TIMEOUT_MS)) {
         errorSummary = "Capture total timeout exceeded";
+        appendPlatformCaptureEvent(platformExecution, "blackbox.capture_timeout", { incident_id: incidentId, capture_id: captureId, completed: results.length, total: collectors.length }, "error");
         break;
       }
-      results.push(await runCollector(incidentId, captureId, collectors[i], i, collectors.length));
+      results.push(await runCollector(incidentId, captureId, collectors[i], i, collectors.length, platformExecution));
     }
   } finally {
     activeCaptures.delete(captureId);
@@ -737,6 +843,7 @@ async function captureIncident(options = {}) {
   `).run(completedAt, state, Date.now() - start, succeeded, failed, timedOut, truncated, totalBytes, errorSummary, captureId);
   db.prepare("UPDATE blackbox_incidents SET updated_at = ?, last_accessed_at = ? WHERE id = ?").run(completedAt, completedAt, incidentId);
   emitProgress(captureId, { type: "capture_completed", incident_id: incidentId, state, completed: results.length, total: collectors.length, duration_ms: Date.now() - start, error_summary: errorSummary });
+  transitionPlatformCapture(platformExecution, state, { result_status: state === "completed" ? "success" : state, error_category: errorSummary ? state : null, result_summary: `Black Box capture ${state}: ${succeeded}/${collectors.length} sources completed`, reason: errorSummary || "capture completed" });
   return getCapture(captureId, { includeSources: true });
 }
 
