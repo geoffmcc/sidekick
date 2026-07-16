@@ -311,6 +311,29 @@ function approvalPreviewArgs(args) {
   return JSON.stringify(sanitize(args || {}), null, 2).substring(0, 4000);
 }
 
+function canonicalizeApprovalValue(value) {
+  if (Array.isArray(value)) return value.map(canonicalizeApprovalValue);
+  if (value && typeof value === "object") {
+    return Object.keys(value).sort().reduce((out, key) => {
+      if (Object.prototype.propertyIsEnumerable.call(value, key)) out[key] = canonicalizeApprovalValue(value[key]);
+      return out;
+    }, {});
+  }
+  return value;
+}
+
+function canonicalApprovalJson(args) {
+  return JSON.stringify(canonicalizeApprovalValue(args || {}));
+}
+
+function approvalArgsHash(args) {
+  return crypto.createHash("sha256").update(canonicalApprovalJson(args)).digest("hex");
+}
+
+function cloneApprovalArgs(args) {
+  return JSON.parse(canonicalApprovalJson(args));
+}
+
 function getApprovalTtlSeconds() {
   const configured = parseInt(process.env.SIDEKICK_APPROVAL_TTL_SECONDS || "3600", 10);
   return Number.isFinite(configured) && configured > 0 ? configured : 3600;
@@ -373,21 +396,24 @@ function expireApprovals(approvals, now = Date.now()) {
 }
 
 function encryptApprovalArgs(args) {
-  return encryptSecret(JSON.stringify(args || {}));
+  return encryptSecret(canonicalApprovalJson(args || {}));
 }
 
 function decryptApprovalArgs(item) {
   if (item.args_encrypted) {
-    return JSON.parse(decryptSecret(item.args_encrypted));
+    const args = JSON.parse(decryptSecret(item.args_encrypted));
+    if (item.args_hash && approvalArgsHash(args) !== item.args_hash) throw new Error("Approval payload authentication failed");
+    return cloneApprovalArgs(args);
   }
   // Backward compatibility for approvals queued before encrypted payloads.
   if (Object.prototype.hasOwnProperty.call(item, "args")) return item.args || {};
   throw new Error("Approval payload is missing");
 }
 
-function queueApproval(toolName, args, decision) {
+function queueApproval(toolName, args, decision, context = {}) {
   const approvals = loadApprovals();
   const now = new Date().toISOString();
+  const storedArgs = cloneApprovalArgs(args || {});
   expireApprovals(approvals);
   const item = {
     id: generateApprovalId(),
@@ -395,10 +421,12 @@ function queueApproval(toolName, args, decision) {
     tool: toolName,
     risk: decision.risk,
     source: decision.source,
+    requester: context.actor || decision.source || null,
     mode: decision.mode,
     reason: decision.reason,
-    args_encrypted: encryptApprovalArgs(args),
-    args_preview: approvalPreviewArgs(args),
+    args_encrypted: encryptApprovalArgs(storedArgs),
+    args_hash: approvalArgsHash(storedArgs),
+    args_preview: approvalPreviewArgs(storedArgs),
     requested_at: now,
     updated_at: now,
     expires_at: new Date(Date.parse(now) + (getApprovalTtlSeconds() * 1000)).toISOString()
@@ -461,100 +489,113 @@ async function resolveApproval(id, action, reviewer = "dashboard") {
     return { content: [{ type: "text", text: "Invalid approval action: " + action }], isError: true };
   }
 
-  let approvalArgs;
-  try {
-    approvalArgs = decryptApprovalArgs(item);
-  } catch (e) {
-    item.status = "failed";
-    item.error = "Approval payload could not be decrypted";
-    item.completed_at = new Date().toISOString();
-    item.updated_at = item.completed_at;
-    transitionPlatformApproval(item, "failed", {
-      actor_id: reviewer,
-      reason: "approval payload could not be decrypted",
-      result_status: "failure",
-      error_category: "approval_payload_decrypt_failed",
-      result_summary: item.error,
-    });
-    recordPlatformApprovalEvent(item, "approval.failed", { error: item.error }, { actor_id: reviewer, severity: "error" });
-    discardApprovalPayload(item);
+  return require("./tools/dispatcher").executeApprovedTool({ approvalId: id, reviewer, source: reviewer });
+}
+
+function claimApprovalExecution({ approvalId, reviewer = "dashboard", source } = {}) {
+  const db = dbStore.getDb();
+  return db.transaction(() => {
+    const approvals = loadApprovals();
+    if (expireApprovals(approvals)) saveApprovals(approvals);
+    const item = approvals.find(a => a.id === approvalId);
+    if (!item) return { content: [{ type: "text", text: "Approval not found: " + approvalId }], isError: true, code: "approval_not_found" };
+    if (item.status !== "pending") return { content: [{ type: "text", text: `Approval ${approvalId} is already ${item.status}` }], isError: true, code: "approval_not_executable" };
+
+    const expiresAt = Date.parse(item.expires_at);
+    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+      item.status = "expired";
+      item.expired_at = new Date().toISOString();
+      item.updated_at = item.expired_at;
+      discardApprovalPayload(item);
+      saveApprovals(approvals);
+      return { content: [{ type: "text", text: `Approval ${approvalId} is already expired` }], isError: true, code: "approval_expired" };
+    }
+
+    let approvalArgs;
+    try {
+      approvalArgs = decryptApprovalArgs(item);
+    } catch (e) {
+      item.status = "failed";
+      item.error = "Approval payload could not be authenticated or decrypted";
+      item.completed_at = new Date().toISOString();
+      item.updated_at = item.completed_at;
+      transitionPlatformApproval(item, "failed", {
+        actor_id: reviewer,
+        reason: item.error,
+        result_status: "failure",
+        error_category: "approval_payload_decrypt_failed",
+        result_summary: item.error,
+      });
+      recordPlatformApprovalEvent(item, "approval.failed", { error: item.error }, { actor_id: reviewer, severity: "error" });
+      discardApprovalPayload(item);
+      saveApprovals(approvals);
+      return { content: [{ type: "text", text: item.error }], isError: true, code: "approval_payload_invalid" };
+    }
+
+    const currentRisk = getToolRisk(item.tool);
+    if (!RISK_LEVELS.includes(currentRisk)) {
+      item.status = "failed";
+      item.error = "Approved tool has invalid risk classification";
+      item.completed_at = new Date().toISOString();
+      item.updated_at = item.completed_at;
+      saveApprovals(approvals);
+      return { content: [{ type: "text", text: item.error }], isError: true, code: "risk_unclassified" };
+    }
+
+    const now = new Date().toISOString();
+    item.reviewed_at = now;
+    item.updated_at = now;
+    item.reviewed_by = reviewer;
+    item.status = "executing";
+    item.execution_started_at = now;
+    item.execution_source = source || item.source || "unknown";
+    item.execution_args_hash = approvalArgsHash(approvalArgs);
+    transitionPlatformApproval(item, "ready", { actor_id: reviewer, reason: "approval granted" });
+    transitionPlatformApproval(item, "running", { actor_id: reviewer, reason: "approved tool execution started" });
+    recordPlatformApprovalEvent(item, "approval.approved", { reviewed_at: now, reviewed_by: reviewer }, { actor_id: reviewer });
     saveApprovals(approvals);
-    return { content: [{ type: "text", text: item.error + ": " + e.message }], isError: true };
-  }
-
-  const now = new Date().toISOString();
-  item.reviewed_at = now;
-  item.updated_at = now;
-  item.reviewed_by = reviewer;
-  item.status = "running";
-  transitionPlatformApproval(item, "ready", { actor_id: reviewer, reason: "approval granted" });
-  transitionPlatformApproval(item, "running", { actor_id: reviewer, reason: "approved tool execution started" });
-  recordPlatformApprovalEvent(item, "approval.approved", { reviewed_at: now, reviewed_by: reviewer }, { actor_id: reviewer });
-  saveApprovals(approvals);
-
-  const previousSource = getCurrentSource();
-  setSource(item.source || "unknown");
-  try {
-    const result = await callTool(item.tool, approvalArgs, {
+    return {
+      approvalId,
+      tool: item.tool,
+      args: approvalArgs,
+      argsHash: item.execution_args_hash,
       source: item.source || "unknown",
-      bypassApproval: true,
-      approvalId: id,
+      requester: item.requester || null,
       parentId: item.platform_execution_id || null,
       rootExecutionId: item.platform_execution_id || null,
-      correlationId: item.id,
-    });
-    const latest = loadApprovals();
-    const updated = latest.find(a => a.id === id);
-    if (updated) {
-      updated.status = result.isError ? "failed" : "approved";
-      updated.result_preview = redactSensitive(result.content?.[0]?.text || "").substring(0, 1000);
-      updated.completed_at = new Date().toISOString();
-      updated.updated_at = updated.completed_at;
-      transitionPlatformApproval(updated, result.isError ? "failed" : "completed", {
-        actor_id: reviewer,
-        reason: result.isError ? "approved tool execution failed" : "approved tool execution completed",
-        result_status: result.isError ? "failure" : "success",
-        error_category: result.isError ? evolveCommon.errorCategory(updated.result_preview) : null,
-        result_summary: updated.result_preview,
-      });
-      recordPlatformApprovalEvent(updated, result.isError ? "approval.failed" : "approval.completed", {
-        completed_at: updated.completed_at,
-        result_preview: updated.result_preview,
-      }, { actor_id: reviewer, severity: result.isError ? "error" : "info" });
-      recordPlatformChangeSet(updated, result.isError ? "failed" : "approved", {
-        actor_id: reviewer,
-        reason: result.isError ? "approved tool execution failed" : "approved tool execution completed",
-        args: approvalArgs || {},
-        result_summary: updated.result_preview,
-      });
-      discardApprovalPayload(updated);
-      saveApprovals(latest);
-    }
-    return result;
-  } catch (e) {
-    const latest = loadApprovals();
-    const updated = latest.find(a => a.id === id);
-    if (updated) {
-      updated.status = "failed";
-      updated.error = e.message;
-      updated.completed_at = new Date().toISOString();
-      updated.updated_at = updated.completed_at;
-      transitionPlatformApproval(updated, "failed", {
-        actor_id: reviewer,
-        reason: "approved tool execution threw",
-        result_status: "failure",
-        error_category: evolveCommon.errorCategory(e.message),
-        result_summary: e.message,
-      });
-      recordPlatformApprovalEvent(updated, "approval.failed", { error: e.message }, { actor_id: reviewer, severity: "error" });
-      recordPlatformChangeSet(updated, "failed", { actor_id: reviewer, reason: "approved tool execution threw", args: approvalArgs || {}, result_summary: e.message });
-      discardApprovalPayload(updated);
-      saveApprovals(latest);
-    }
-    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
-  } finally {
-    setSource(previousSource);
-  }
+    };
+  })();
+}
+
+function finalizeApprovalExecution({ approvalId, reviewer = "dashboard", result, args } = {}) {
+  const approvals = loadApprovals();
+  const updated = approvals.find(a => a.id === approvalId);
+  if (!updated) return null;
+  if (updated.status !== "executing") return publicApproval(updated);
+  updated.status = result?.isError ? "failed" : "approved";
+  updated.result_preview = redactSensitive(result?.content?.[0]?.text || "").substring(0, 1000);
+  updated.completed_at = new Date().toISOString();
+  updated.updated_at = updated.completed_at;
+  transitionPlatformApproval(updated, result?.isError ? "failed" : "completed", {
+    actor_id: reviewer,
+    reason: result?.isError ? "approved tool execution failed" : "approved tool execution completed",
+    result_status: result?.isError ? "failure" : "success",
+    error_category: result?.isError ? evolveCommon.errorCategory(updated.result_preview) : null,
+    result_summary: updated.result_preview,
+  });
+  recordPlatformApprovalEvent(updated, result?.isError ? "approval.failed" : "approval.completed", {
+    completed_at: updated.completed_at,
+    result_preview: updated.result_preview,
+  }, { actor_id: reviewer, severity: result?.isError ? "error" : "info" });
+  recordPlatformChangeSet(updated, result?.isError ? "failed" : "approved", {
+    actor_id: reviewer,
+    reason: result?.isError ? "approved tool execution failed" : "approved tool execution completed",
+    args: args || {},
+    result_summary: updated.result_preview,
+  });
+  discardApprovalPayload(updated);
+  saveApprovals(approvals);
+  return publicApproval(updated);
 }
 
 function getToolDefsForSource(source = getCurrentSource()) {
@@ -11780,6 +11821,8 @@ module.exports = {
   listApprovals,
   queueApproval,
   resolveApproval,
+  claimApprovalExecution,
+  finalizeApprovalExecution,
   createScheduledPlatformExecution,
   transitionScheduledPlatformExecution,
   appendScheduledPlatformEvent,

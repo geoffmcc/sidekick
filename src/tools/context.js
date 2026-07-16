@@ -31,7 +31,7 @@ function createExecutionContext(input = {}) {
     project: input.project || parent?.project || process.env.SIDEKICK_PROJECT || null,
     toolName: input.toolName || input.tool_name || null,
     approvalId: input.approvalId || input.approval_id || parent?.approvalId || null,
-    approvalBypass: input.bypassApproval === true || input.approvalBypass === true,
+    approvedExecution: input.approvedExecution === true || parent?.approvedExecution === true,
     generatedProcedure: input.generatedProcedure || input.generated_procedure || parent?.generatedProcedure || null,
     executionId: input.executionId || input.execution_id || parent?.executionId || null,
     rootExecutionId: input.rootExecutionId || input.root_execution_id || parent?.rootExecutionId || input.executionId || input.execution_id || null,

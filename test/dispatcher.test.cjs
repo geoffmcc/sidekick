@@ -18,6 +18,7 @@ delete require.cache[require.resolve('../src/tools')];
 delete require.cache[require.resolve('../src/db')];
 
 const tools = require('../src/tools');
+const legacy = require('../src/tools-legacy');
 const db = require('../src/db');
 const { dispatchTool } = tools;
 const { createRegistry } = require('../src/tools/registry');
@@ -68,7 +69,8 @@ console.log('Running Dispatcher Tests...');
     };
     result = await dispatchTool({ descriptor: slowDescriptor, args: {}, context: { source: 'test', timeoutMs: 5 } });
     assert.ok(result.isError, 'timeout should fail');
-    assert.strictEqual(result.code, 'timeout');
+    assert.strictEqual(result.code, 'timed_out_operation_may_continue');
+    assert.ok(result.operationMayContinue, 'timeout should not claim legacy handler termination');
 
     const controller = new AbortController();
     controller.abort();
@@ -100,8 +102,69 @@ console.log('Running Dispatcher Tests...');
       { name: 'dup', description: 'two', schema: z.object({}), risk: 'low', category: 'Test', handler: async () => ({ content: [] }) },
     ]), /Duplicate tool descriptor/, 'duplicate descriptors should fail');
     assert.throws(() => createRegistry([
+      { name: 'one', aliases: ['two'], description: 'one', schema: z.object({}), risk: 'low', category: 'Test', handler: async () => ({ content: [] }) },
+      { name: 'two', description: 'two', schema: z.object({}), risk: 'low', category: 'Test', handler: async () => ({ content: [] }) },
+    ]), /Duplicate tool alias/, 'alias before canonical collision should fail');
+    assert.throws(() => createRegistry([
+      { name: 'two', description: 'two', schema: z.object({}), risk: 'low', category: 'Test', handler: async () => ({ content: [] }) },
+      { name: 'one', aliases: ['two'], description: 'one', schema: z.object({}), risk: 'low', category: 'Test', handler: async () => ({ content: [] }) },
+    ]), /Duplicate tool alias/, 'canonical before alias collision should fail');
+    assert.throws(() => createRegistry([
+      { name: 'one', aliases: ['shared'], description: 'one', schema: z.object({}), risk: 'low', category: 'Test', handler: async () => ({ content: [] }) },
+      { name: 'two', aliases: ['shared'], description: 'two', schema: z.object({}), risk: 'low', category: 'Test', handler: async () => ({ content: [] }) },
+    ]), /Duplicate tool alias/, 'duplicate aliases should fail');
+    assert.doesNotThrow(() => createRegistry([
+      { name: 'self_alias', aliases: ['self_alias'], description: 'self', schema: z.object({}), risk: 'low', category: 'Test', handler: async () => ({ content: [] }) },
+    ]), 'self alias should be allowed');
+    assert.throws(() => createRegistry([
       { name: 'bad_risk', description: 'bad', schema: z.object({}), category: 'Test', handler: async () => ({ content: [] }) },
     ]), /missing risk/, 'missing risk should fail');
+
+    const originalPolicy = legacy.enforceToolPolicy;
+    let invoked = false;
+    legacy.enforceToolPolicy = () => { throw new Error('policy failed with Bearer ghp_abcdefghijklmnopqrstuvwxyz123456'); };
+    result = await dispatchTool({ descriptor: { name: 'policy_throw_test', description: 'policy throw', schema: z.object({}), risk: 'low', category: 'Test', handler: async () => { invoked = true; return { content: [] }; } }, args: {}, context: { source: 'test' } });
+    assert.ok(result.isError);
+    assert.strictEqual(result.code, 'policy_evaluation_failed');
+    assert.strictEqual(invoked, false, 'handler must not run after policy exception');
+    assert.ok(!result.content[0].text.includes('ghp_'), 'policy errors should be sanitized');
+    legacy.enforceToolPolicy = originalPolicy;
+
+    const originalApproval = legacy.getApprovalDecision;
+    process.env.SIDEKICK_APPROVAL_MODE = 'risky';
+    legacy.getApprovalDecision = () => { throw new Error('approval failed password=hunter2'); };
+    result = await dispatchTool({ descriptor: { name: 'approval_throw_test', description: 'approval throw', schema: z.object({}), risk: 'low', category: 'Test', handler: async () => ({ content: [] }) }, args: {}, context: { source: 'test' } });
+    assert.ok(result.isError);
+    assert.strictEqual(result.code, 'approval_evaluation_failed');
+    assert.ok(!result.content[0].text.includes('hunter2'), 'approval errors should be sanitized');
+    legacy.getApprovalDecision = originalApproval;
+    process.env.SIDEKICK_APPROVAL_MODE = 'off';
+
+    const originalLog = legacy.logToolCall;
+    legacy.logToolCall = () => { throw new Error('audit failed Authorization: Bearer secret-token'); };
+    result = await dispatchTool({ descriptor: { name: 'audit_throw_test', description: 'audit throw', schema: z.object({}), risk: 'low', category: 'Test', handler: async () => ({ content: [{ type: 'text', text: 'audit ok' }] }) }, args: {}, context: { source: 'test' } });
+    assert.strictEqual(result.content[0].text, 'audit ok', 'audit failure should not become handler failure');
+    assert.strictEqual(result.auditFailed, true, 'audit failure should be observable');
+    legacy.logToolCall = originalLog;
+
+    result = await dispatchTool({ descriptor: { name: 'sanitize_throw_test', description: 'sanitize throw', schema: z.object({}), risk: 'low', category: 'Test', handler: async () => { throw new Error('boom Authorization: Bearer secret-token\n    at secret (/tmp/secret.js:1:2)'); } }, args: {}, context: { source: 'test' } });
+    assert.ok(result.isError);
+    assert.strictEqual(result.code, 'handler_error');
+    assert.ok(!result.content[0].text.includes('secret-token'));
+    assert.ok(!result.content[0].text.includes('/tmp/secret.js'));
+
+    db.saveGeneratedCapability({
+      id: 'cap_dispatcher_shadow_respond',
+      name: 'respond',
+      state: 'active',
+      title: 'Shadow respond',
+      description: 'Should not shadow builtin',
+      risk: 'low',
+      schema: { type: 'object', properties: {}, required: [] },
+      steps: [{ tool: 'sidekick_respond', args: { text: 'generated shadow' } }],
+    });
+    result = await dispatchTool({ name: 'respond', args: { text: 'builtin wins' }, context: { source: 'mcp', requestId: 'req_shadow' } });
+    assert.strictEqual(result.content[0].text, 'builtin wins', 'generated tool must not silently shadow builtin');
 
     db.saveGeneratedCapability({
       id: 'cap_dispatcher_bad_risk',

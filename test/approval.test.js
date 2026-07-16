@@ -66,13 +66,23 @@ console.log('Running Approval Tests...\n');
     assert.ok(!requestedEvent.payload_json.includes('visible-looking-value'));
     console.log('Passed\n');
 
+    console.log('Test 2b: ordinary caller cannot bypass approval with option flags');
+    result = await tools.callTool('sidekick_respond', { text: 'forged bypass' }, { bypassApproval: true, approvalBypass: true, source: 'mcp' });
+    assert.ok(result.isError);
+    assert.strictEqual(result.code, 'approval_required');
+    assert.notStrictEqual(result.content[0].text, 'forged bypass');
+    const forgedBypassId = result.approvalId;
+    result = await tools.resolveApproval(forgedBypassId, 'reject', 'test');
+    assert.strictEqual(result.isError, undefined);
+    console.log('Passed\n');
+
     console.log('Test 3: approving a queued request executes it');
     result = await tools.resolveApproval(approvals[0].id, 'approve', 'test');
     assert.strictEqual(result.isError, undefined);
     assert.strictEqual(result.content[0].text, 'queued');
     approvals = tools.listApprovals({ status: 'approved' });
     assert.strictEqual(approvals.length, 1);
-    const completedApproval = db.loadDocument('approvals', [])[0];
+    const completedApproval = db.loadDocument('approvals', []).find(item => item.id === approvals[0].id);
     assert.ok(!Object.prototype.hasOwnProperty.call(completedApproval, 'args_encrypted'));
     const completedExecution = db.getDb().prepare('SELECT * FROM platform_executions WHERE execution_id = ?').get(completedApproval.platform_execution_id);
     assert.strictEqual(completedExecution.state, 'completed');
@@ -82,6 +92,51 @@ console.log('Running Approval Tests...\n');
     assert.strictEqual(childExecution.root_execution_id, completedApproval.platform_execution_id);
     const completedEvent = db.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_type = 'approval.completed' AND subject_id = ?").get(completedApproval.id);
     assert.ok(completedEvent);
+    console.log('Passed\n');
+
+    console.log('Test 3b: approval uses stored arguments despite caller mutation');
+    const mutableArgs = { text: 'before mutation', nested: { token: 'ghp_abcdefghijklmnopqrstuvwxyz123456' } };
+    result = await tools.callTool('sidekick_respond', mutableArgs, { source: 'mcp' });
+    const mutationApprovalId = result.approvalId;
+    mutableArgs.text = 'after mutation';
+    mutableArgs.nested.token = 'changed-token';
+    result = await tools.resolveApproval(mutationApprovalId, 'approve', 'test');
+    assert.strictEqual(result.isError, undefined);
+    assert.strictEqual(result.content[0].text, 'before mutation');
+    console.log('Passed\n');
+
+    console.log('Test 3c: approval replay and concurrent duplicate execution are blocked');
+    result = await tools.callTool('sidekick_respond', { text: 'single execution' }, { source: 'mcp' });
+    const replayApprovalId = result.approvalId;
+    const [firstRun, secondRun] = await Promise.all([
+      tools.resolveApproval(replayApprovalId, 'approve', 'test'),
+      tools.resolveApproval(replayApprovalId, 'approve', 'test'),
+    ]);
+    const successes = [firstRun, secondRun].filter(item => !item.isError);
+    const failures = [firstRun, secondRun].filter(item => item.isError);
+    assert.strictEqual(successes.length, 1);
+    assert.strictEqual(failures.length, 1);
+    result = await tools.resolveApproval(replayApprovalId, 'approve', 'test');
+    assert.ok(result.isError);
+    assert.ok(result.content[0].text.includes('already approved') || result.content[0].text.includes('already executing'));
+    console.log('Passed\n');
+
+    console.log('Test 3d: tampered stored arguments fail authentication');
+    result = await tools.callTool('sidekick_respond', { text: 'tamper me' }, { source: 'mcp' });
+    const tamperApprovalId = result.approvalId;
+    const tamperedApprovals = db.loadDocument('approvals', []);
+    const tampered = tamperedApprovals.find(item => item.id === tamperApprovalId);
+    tampered.args_hash = '0'.repeat(64);
+    db.setDocument('approvals', tamperedApprovals);
+    result = await tools.resolveApproval(tamperApprovalId, 'approve', 'test');
+    assert.ok(result.isError);
+    assert.strictEqual(result.code, 'approval_payload_invalid');
+    console.log('Passed\n');
+
+    console.log('Test 3e: invented approval IDs cannot execute');
+    result = await require('../src/tools/dispatcher').executeApprovedTool({ approvalId: 'approval_does_not_exist', reviewer: 'test' });
+    assert.ok(result.isError);
+    assert.strictEqual(result.code, 'approval_not_found');
     console.log('Passed\n');
 
     console.log('Test 4: exempt tool bypasses approval');
@@ -100,8 +155,8 @@ console.log('Running Approval Tests...\n');
     result = await tools.resolveApproval(blockedApprovalId, 'approve', 'test');
     assert.ok(result.isError);
     assert.ok(result.content[0].text.includes('Tool blocked by policy'));
-    assert.strictEqual(tools.listApprovals({ status: 'failed' }).length, 1);
     const blockedApproval = db.loadDocument('approvals', []).find(item => item.id === blockedApprovalId);
+    assert.strictEqual(blockedApproval.status, 'failed');
     const blockedExecution = db.getDb().prepare('SELECT * FROM platform_executions WHERE execution_id = ?').get(blockedApproval.platform_execution_id);
     assert.strictEqual(blockedExecution.state, 'failed');
     assert.strictEqual(blockedExecution.result_status, 'failure');

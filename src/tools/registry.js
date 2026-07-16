@@ -39,14 +39,27 @@ function createRegistry(descriptors) {
   const byName = new Map();
   const aliases = new Map();
   const normalized = descriptors.map(normalizeDescriptor);
+  const canonicalOwners = new Map();
   for (const descriptor of normalized) {
     const canonical = canonicalName(descriptor.name);
-    if (byName.has(canonical)) throw new Error(`Duplicate tool descriptor: ${canonical}`);
+    if (canonicalOwners.has(canonical)) throw new Error(`Duplicate tool descriptor: ${canonical}`);
+    canonicalOwners.set(canonical, descriptor.name);
+  }
+  for (const descriptor of normalized) {
+    for (const alias of descriptor.aliases || []) {
+      const normalizedAlias = canonicalName(alias);
+      const canonicalOwner = canonicalOwners.get(normalizedAlias);
+      if (canonicalOwner && canonicalOwner !== descriptor.name) throw new Error(`Duplicate tool alias: ${normalizedAlias}`);
+      if (aliases.has(normalizedAlias) && aliases.get(normalizedAlias) !== descriptor.name) throw new Error(`Duplicate tool alias: ${normalizedAlias}`);
+      aliases.set(normalizedAlias, descriptor.name);
+    }
+  }
+  for (const descriptor of normalized) {
+    const canonical = canonicalName(descriptor.name);
     byName.set(canonical, descriptor);
     for (const alias of descriptor.aliases || []) {
       const normalizedAlias = canonicalName(alias);
-      if (byName.has(normalizedAlias) || aliases.has(normalizedAlias)) throw new Error(`Duplicate tool alias: ${normalizedAlias}`);
-      aliases.set(normalizedAlias, descriptor.name);
+      if (normalizedAlias !== canonical) aliases.set(normalizedAlias, descriptor.name);
     }
   }
   const ordered = Object.freeze([...byName.values()].sort((a, b) => a.name.localeCompare(b.name)));
