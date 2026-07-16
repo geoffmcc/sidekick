@@ -26,7 +26,7 @@ function getDynamicToolDefs() {
     name: cap.name,
     description: `[generated:${cap.state}] ${cap.description}`,
     args: cap.schema || { type: "object", properties: {}, required: [] },
-    risk: cap.risk || "medium",
+    risk: cap.risk || null,
     category: "Meta",
     generated: true,
     version: cap.version || 1,

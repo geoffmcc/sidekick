@@ -69,6 +69,33 @@ const TOOL_RISK = {
   wireguard: "high",
   nginx: "high",
   tools: "low",
+  respond: "low",
+  list: "low",
+  store: "low",
+  get: "low",
+  list_projects: "low",
+  get_by_project: "low",
+  search: "low",
+  webhook: "low",
+  transform: "low",
+  parse: "low",
+  diff: "low",
+  hash: "low",
+  validate: "low",
+  template: "low",
+  predict: "low",
+  debug_tool: "low",
+  cache: "low",
+  summarize: "low",
+  filter: "low",
+  project: "low",
+  diff_files: "low",
+  anonymize: "low",
+  db_schema: "low",
+  db_stats: "low",
+  log_query: "low",
+  db_search: "low",
+  db_diff: "low",
   knowledge: "low",
   compute: "medium",
   compute_nodes: "medium",
@@ -197,7 +224,9 @@ function normalizeToolName(name) {
 }
 
 function getStaticToolRisk(name) {
-  return TOOL_RISK[normalizeToolName(name)] || "low";
+  const risk = TOOL_RISK[normalizeToolName(name)];
+  if (!risk) throw new Error(`Missing risk metadata for tool: ${normalizeToolName(name)}`);
+  return risk;
 }
 
 function getStaticToolCategory(name) {

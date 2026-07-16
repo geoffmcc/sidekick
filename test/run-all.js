@@ -28,6 +28,7 @@ const suites = [
   { file: 'test/ops-workflows.test.js', critical: false, description: 'Packaged operations workflow metadata' },
   { file: 'test/platform-kernel.test.js', critical: false, description: 'Unified execution, event, and artifact primitives' },
   { file: 'test/tools.test.js', critical: false, description: 'Core tool behavior' },
+  { file: 'test/dispatcher.test.cjs', critical: false, description: 'Centralized tool dispatcher behavior' },
   { file: 'test/tool-registry-contract.test.cjs', critical: false, description: 'Tool registry contract and descriptor coverage' },
   { file: 'test/approval.test.js', critical: false, description: 'Approval queue behavior' },
   { file: 'test/scheduler-platform.test.js', critical: false, description: 'Scheduler and runbook platform adapters' },

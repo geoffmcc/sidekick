@@ -53,7 +53,7 @@ const toolsFacadePath = path.join(root, 'src', 'tools.js');
 const toolsLegacyPath = path.join(root, 'src', 'tools-legacy.js');
 const toolsFacade = fs.readFileSync(toolsFacadePath, 'utf8');
 const toolsLegacy = fs.readFileSync(toolsLegacyPath, 'utf8');
-assert.match(toolsFacade, /module\.exports\s*=\s*require\("\.\/tools-legacy"\)/, 'tools.js should remain a compatibility facade');
+assert.match(toolsFacade, /module\.exports\s*=\s*require\("\.\/tools\/index"\)/, 'tools.js should remain a compatibility facade to the authoritative tool layer');
 assert.match(toolsLegacy, /function isDangerous\s*\(/, 'tools-legacy.js should define isDangerous during migration');
 assert.match(toolsLegacy, /module\.exports\s*=\s*\{[\s\S]*isDangerous/, 'tools-legacy.js should export isDangerous for security tests');
 

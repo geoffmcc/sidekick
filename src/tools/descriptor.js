@@ -14,7 +14,8 @@ function normalizeDescriptor(input) {
   if (!description) throw new Error(`Tool descriptor ${name} is missing description`);
   if (typeof input.handler !== "function") throw new Error(`Tool descriptor ${name} is missing handler`);
   if (!isZodSchema(input.schema)) throw new Error(`Tool descriptor ${name} is missing Zod schema`);
-  const risk = input.risk || "low";
+  const risk = input.risk;
+  if (!risk) throw new Error(`Tool descriptor ${name} is missing risk`);
   if (!RISK_LEVELS.includes(risk)) throw new Error(`Tool descriptor ${name} has invalid risk: ${risk}`);
   const category = String(input.category || "Uncategorized").trim() || "Uncategorized";
   return Object.freeze({
@@ -24,6 +25,15 @@ function normalizeDescriptor(input) {
     args: input.args || {},
     risk,
     category,
+    source: input.source || "builtin",
+    family: input.family || null,
+    aliases: Object.freeze([...(input.aliases || [])]),
+    version: input.version || null,
+    provenance: input.provenance || null,
+    approval: input.approval || null,
+    capabilities: Object.freeze([...(input.capabilities || [])]),
+    visibility: input.visibility || "public",
+    result: input.result || null,
     handler: input.handler,
   });
 }
