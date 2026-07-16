@@ -49,9 +49,12 @@ for (const file of files) {
 
 assert.deepStrictEqual(violations, [], 'Secret/static violations found:\n' + violations.join('\n'));
 
-const toolsPath = path.join(root, 'src', 'tools.js');
-const tools = fs.readFileSync(toolsPath, 'utf8');
-assert.match(tools, /function isDangerous\s*\(/, 'tools.js should define isDangerous');
-assert.match(tools, /module\.exports\s*=\s*\{[\s\S]*isDangerous/, 'tools.js should export isDangerous for security tests');
+const toolsFacadePath = path.join(root, 'src', 'tools.js');
+const toolsLegacyPath = path.join(root, 'src', 'tools-legacy.js');
+const toolsFacade = fs.readFileSync(toolsFacadePath, 'utf8');
+const toolsLegacy = fs.readFileSync(toolsLegacyPath, 'utf8');
+assert.match(toolsFacade, /module\.exports\s*=\s*require\("\.\/tools-legacy"\)/, 'tools.js should remain a compatibility facade');
+assert.match(toolsLegacy, /function isDangerous\s*\(/, 'tools-legacy.js should define isDangerous during migration');
+assert.match(toolsLegacy, /module\.exports\s*=\s*\{[\s\S]*isDangerous/, 'tools-legacy.js should export isDangerous for security tests');
 
 console.log(`✓ Scanned ${files.length} text files for basic CI safety checks\n`);
