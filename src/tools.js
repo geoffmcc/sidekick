@@ -607,6 +607,7 @@ async function resolveApproval(id, action, reviewer = "dashboard") {
       result_summary: `Approval rejected for ${item.tool}`,
     });
     recordPlatformApprovalEvent(item, "approval.rejected", { reviewed_at: now, reviewed_by: reviewer }, { actor_id: reviewer, severity: "warning" });
+    recordPlatformChangeSet(item, "rejected", { actor_id: reviewer, reason: "approval rejected", args: {} });
     discardApprovalPayload(item);
     saveApprovals(approvals);
     return { content: [{ type: "text", text: "Rejected approval: " + id }] };
@@ -675,6 +676,12 @@ async function resolveApproval(id, action, reviewer = "dashboard") {
         completed_at: updated.completed_at,
         result_preview: updated.result_preview,
       }, { actor_id: reviewer, severity: result.isError ? "error" : "info" });
+      recordPlatformChangeSet(updated, result.isError ? "failed" : "approved", {
+        actor_id: reviewer,
+        reason: result.isError ? "approved tool execution failed" : "approved tool execution completed",
+        args: approvalArgs || {},
+        result_summary: updated.result_preview,
+      });
       discardApprovalPayload(updated);
       saveApprovals(latest);
     }
@@ -695,6 +702,7 @@ async function resolveApproval(id, action, reviewer = "dashboard") {
         result_summary: e.message,
       });
       recordPlatformApprovalEvent(updated, "approval.failed", { error: e.message }, { actor_id: reviewer, severity: "error" });
+      recordPlatformChangeSet(updated, "failed", { actor_id: reviewer, reason: "approved tool execution threw", args: approvalArgs || {}, result_summary: e.message });
       discardApprovalPayload(updated);
       saveApprovals(latest);
     }
@@ -1241,6 +1249,26 @@ function recordPlatformApprovalEvent(item, eventType, payload = {}, options = {}
       correlation_id: item.id,
     });
   } catch (e) {}
+}
+
+function recordPlatformChangeSet(item, decision, details = {}) {
+  try {
+    return platformKernel.createChangeSet({
+      execution_id: item.platform_execution_id || null,
+      approval_id: item.id,
+      tool_name: item.tool,
+      tool_action: details.tool_action || null,
+      operation_type: "approval",
+      state: decision,
+      actor_id: details.actor_id || item.reviewed_by || item.source || "unknown",
+      decision,
+      reason: details.reason || null,
+      args: details.args || item.args || {},
+      result_summary: details.result_summary || null,
+      project_id: details.project || null,
+      source: "approvals",
+    });
+  } catch (e) { return null; }
 }
 
 function createScheduledPlatformExecution(kind, item, options = {}) {

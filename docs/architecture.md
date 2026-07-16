@@ -102,6 +102,22 @@ Adapters use the guard-first pattern:
 
 Guard failures never block tool execution — they prevent platform state divergence. The kernel continues to validate transitions at the database level via `ALLOWED_TRANSITIONS`, and the guard adds pre-flight checks that adapters use to avoid redundant or conflicting state changes.
 
+### Capability/RBAC and immutable change-set approvals
+
+The platform kernel provides capability-based access control and tamper-evident approval records:
+
+- `grantCapability({ actor_id, capability, project_id, granted_by, expires_at })` creates a capability grant. Capabilities are scoped by actor and optionally by project, with optional expiry.
+- `revokeCapability(capabilityId, { revoked_by, reason })` soft-revokes a capability by setting `revoked_at`. Revoked capabilities are no longer active.
+- `checkCapability(actorId, capability, projectId)` returns the active capability record if the actor has the capability (respecting project scope and expiry), or `null` if not.
+- `platformGuard` integrates capability checks: when `options.capability` and `options.actor_id` are provided, it validates the capability before allowing the operation.
+
+Immutable change-set approvals provide tamper-evident records:
+
+- `createChangeSet({ approval_id, tool_name, actor_id, decision, args })` records an approval decision with a SHA-256 content hash computed from the operation parameters. The hash binds the decision to the specific tool, actor, and arguments.
+- `verifyChangeSet(changeSetId)` recomputes the hash from stored parameters and returns `{ valid: true/false }`. A mismatch indicates the record has been tampered with.
+- `getChangeSetsByApproval(approvalId)` returns all change-set records for an approval, providing a complete audit trail of decisions.
+- Change-set records are linked to executions and produce `changeset.approved`, `changeset.rejected`, and `changeset.failed` events in the platform event log.
+
 ### Dashboard: `src/dashboard.js`
 
 The dashboard serves a browser UI and JSON API. The server code lives in `src/dashboard.js`, the authenticated HTML shell lives in `src/dashboard.html`, and public CSS/JS assets live under `static/`. It reads the Sidekick data directory, reports system state, allows KV editing and deletion, exposes tool metadata, accepts webhooks, and proxies agent requests to the Agent Bridge.
