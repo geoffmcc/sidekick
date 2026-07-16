@@ -18,7 +18,8 @@ const DEFAULT_TOTAL_TIMEOUT_MS = Number(process.env.SIDEKICK_BLACKBOX_TOTAL_TIME
 const DEFAULT_DAILY_LIMIT = Number(process.env.SIDEKICK_BLACKBOX_DAILY_LIMIT || 20);
 const DEFAULT_MAX_INCIDENTS = Number(process.env.SIDEKICK_BLACKBOX_MAX_INCIDENTS || 500);
 const DEFAULT_MAX_BYTES = Number(process.env.SIDEKICK_BLACKBOX_MAX_BYTES || 512 * 1024 * 1024);
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 11;
+const CAPTURE_STATES = ["queued", "capturing", "completed", "partial", "cancelled", "timed_out", "failed_preflight", "blocked", "no_evidence"];
 
 fs.mkdirSync(BLACKBOX_DIR, { recursive: true, mode: 0o750 });
 
@@ -194,7 +195,9 @@ function ensureSchema() {
       correlation_id TEXT,
       cancel_requested INTEGER NOT NULL DEFAULT 0,
       error_summary TEXT,
-      capture_version INTEGER NOT NULL DEFAULT 2,
+      capture_version INTEGER NOT NULL DEFAULT 3,
+      diagnostics_json TEXT NOT NULL DEFAULT '{}',
+      retry_of TEXT,
       FOREIGN KEY(incident_id) REFERENCES blackbox_incidents(id) ON DELETE CASCADE
     );
 
@@ -318,6 +321,7 @@ function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_blackbox_links_incident ON blackbox_links(incident_id, link_type);
     INSERT OR REPLACE INTO meta (key, value) VALUES ('blackbox_schema_version', '${SCHEMA_VERSION}');
   `);
+  migrateSchema();
   migrateLegacy();
 }
 
@@ -443,6 +447,17 @@ function registerPlatformArtifact(execution, artifact, details = {}) {
   }
 }
 
+function migrateSchema() {
+  const db = dbStore.getDb();
+  const versionRow = db.prepare("SELECT value FROM meta WHERE key = 'blackbox_schema_version'").get();
+  const currentVersion = versionRow ? Number(versionRow.value) : 0;
+  if (currentVersion < 11) {
+    try { db.exec("ALTER TABLE blackbox_captures ADD COLUMN diagnostics_json TEXT NOT NULL DEFAULT '{}'"); } catch {}
+    try { db.exec("ALTER TABLE blackbox_captures ADD COLUMN retry_of TEXT"); } catch {}
+    db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('blackbox_schema_version', ?)").run(11);
+  }
+}
+
 function migrateLegacy() {
   const db = dbStore.getDb();
   if (!fs.existsSync(LEGACY_BLACKBOX_FILE)) return { imported: 0, errors: [] };
@@ -540,7 +555,11 @@ const COLLECTORS = {
   "network.dns": { display: "DNS configuration", category: "Network", program: "resolvectl", args: ["status"], profile: ["deep", "network"], timeout: 5000 },
   "containers.docker": { display: "Docker containers", category: "Containers", program: "docker", args: ["ps", "--format", "json"], profile: ["deep"], timeout: 5000 },
   "repo.git_status": { display: "Repository status", category: "Repository", program: "git", args: ["status", "--short", "--branch"], profile: ["repository"], timeout: 5000 },
-  "repo.git_log": { display: "Recent commits", category: "Repository", program: "git", args: ["log", "--oneline", "-10"], profile: ["repository"], timeout: 5000 }
+  "repo.git_log": { display: "Recent commits", category: "Repository", program: "git", args: ["log", "--oneline", "-15"], profile: ["repository"], timeout: 5000 },
+  "repo.git_remote": { display: "Remote summary", category: "Repository", program: "git", args: ["remote", "-v"], profile: ["repository"], timeout: 3000 },
+  "repo.git_diff_stat": { display: "Diff statistics", category: "Repository", program: "git", args: ["diff", "--stat", "HEAD"], profile: ["repository"], timeout: 5000, limit: 64 * 1024 },
+  "repo.node_version": { display: "Node.js version", category: "Repository", program: "node", args: ["--version"], profile: ["repository", "sidekick"], timeout: 3000 },
+  "repo.npm_version": { display: "npm version", category: "Repository", program: "npm", args: ["--version"], profile: ["repository", "sidekick"], timeout: 3000 }
 };
 
 const PROFILE_INFO = {
@@ -564,11 +583,15 @@ function collectorsFor(options = {}) {
   const include = Array.isArray(options.include) ? options.include.filter(Boolean) : [];
   const profile = options.profile || (include.length ? "custom" : "standard");
   const selected = new Set();
+  const diagnostics = { requested_profile: options.profile || null, resolved_profile: profile, include_used: include, collector_selection_path: null, rejected: [] };
   if (include.includes("all")) {
+    diagnostics.collector_selection_path = "all_filter";
+    const filterProfile = (options.profile && PROFILE_INFO[options.profile]) ? options.profile : "standard";
     for (const [key, collector] of Object.entries(COLLECTORS)) {
-      if ((collector.profile || []).includes("standard")) selected.add(key);
+      if ((collector.profile || []).includes(filterProfile)) selected.add(key);
     }
   } else if (include.length) {
+    diagnostics.collector_selection_path = "explicit_include";
     const legacyMap = {
       services: ["services.failed", "services.running"],
       processes: ["processes.top"],
@@ -578,12 +601,20 @@ function collectorsFor(options = {}) {
     };
     for (const item of include) {
       if (COLLECTORS[item]) selected.add(item);
+      else diagnostics.rejected.push({ key: item, reason: "unknown_collector" });
       for (const mapped of legacyMap[item] || []) selected.add(mapped);
     }
   } else {
-    for (const key of PROFILE_INFO[profile]?.collectors || PROFILE_INFO.standard.collectors) selected.add(key);
+    diagnostics.collector_selection_path = "profile_collectors";
+    for (const key of PROFILE_INFO[profile]?.collectors || []) selected.add(key);
+    if (!PROFILE_INFO[profile]) {
+      diagnostics.rejected.push({ key: profile, reason: "unknown_profile" });
+    }
   }
-  return [...selected].map(key => ({ key, ...COLLECTORS[key] })).filter(c => c.program);
+  const collectors = [...selected].map(key => ({ key, ...COLLECTORS[key] })).filter(c => c.program);
+  diagnostics.selected_count = collectors.length;
+  diagnostics.selected_keys = collectors.map(c => c.key);
+  return { collectors, diagnostics };
 }
 
 function normalizeRows(text) {
@@ -790,19 +821,58 @@ async function captureIncident(options = {}) {
   if (!rateLimitOk()) throw new Error(`Rate limit exceeded: max ${getRetentionConfig().dailyCaptureRate} captures per day`);
   const incidentId = options.incident_id ? safeId(options.incident_id, "incident id") : createIncident(options);
   const captureId = options.capture_id ? safeId(options.capture_id, "capture id") : newId("cap");
-  const profile = options.profile || (Array.isArray(options.include) && options.include.length ? "custom" : "standard");
-  const collectors = collectorsFor({ include: options.include, profile });
-  const platformExecution = platformCaptureExecution({ ...options, incident_id: incidentId, capture_id: captureId, profile, requested_sources: collectors.map(c => c.key) });
+  const requestedProfile = options.profile || "standard";
+  if (!PROFILE_INFO[requestedProfile]) {
+    throw new Error(`Unknown Black Box profile: ${requestedProfile}. Valid profiles: ${Object.keys(PROFILE_INFO).join(", ")}`);
+  }
+  const { collectors, diagnostics: collectorDiagnostics } = collectorsFor({ include: options.include, profile: requestedProfile });
   const db = dbStore.getDb();
   const startedAt = nowIso();
+  const captureDiagnostics = {
+    requested_profile: requestedProfile,
+    resolved_profile: collectorDiagnostics.resolved_profile,
+    collector_selection_path: collectorDiagnostics.collector_selection_path,
+    include_used: collectorDiagnostics.include_used,
+    collectors_selected: collectorDiagnostics.selected_keys,
+    collectors_rejected: collectorDiagnostics.rejected,
+    repository_path: options.repository_path || null,
+    working_directory: options.working_directory || process.cwd(),
+    project: options.project || null,
+    resolved_at: startedAt
+  };
+  if (collectors.length === 0 && !options.include) {
+    const finalState = "no_evidence";
+    db.prepare(`
+      INSERT INTO blackbox_captures (
+        id, incident_id, capture_type, trigger, requested_sources_json, profile, started_at, completed_at, state,
+        source_count, requested_by, task_id, session_id, correlation_id, error_summary, diagnostics_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
+    `).run(captureId, incidentId, options.capture_type || "initial", options.trigger || "manual", json([]), requestedProfile, startedAt, startedAt, finalState, options.requested_by || options.source || "mcp", options.task_id || null, options.session_id || process.env.SIDEKICK_SESSION_ID || null, options.correlation_id || null, `Profile '${requestedProfile}' resolved to zero collectors`, json(captureDiagnostics));
+    insertEvent({ incidentId, captureId, eventType: "capture.failed_preflight", actor: options.source || "mcp", newState: finalState, reason: `Profile '${requestedProfile}' resolved to zero collectors`, metadata: captureDiagnostics });
+    db.prepare("UPDATE blackbox_incidents SET updated_at = ? WHERE id = ?").run(startedAt, incidentId);
+    return getCapture(captureId, { includeSources: true });
+  }
+  if (collectors.length === 0 && options.include && options.include.length) {
+    const finalState = "blocked";
+    db.prepare(`
+      INSERT INTO blackbox_captures (
+        id, incident_id, capture_type, trigger, requested_sources_json, profile, started_at, completed_at, state,
+        source_count, requested_by, task_id, session_id, correlation_id, error_summary, diagnostics_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
+    `).run(captureId, incidentId, options.capture_type || "initial", options.trigger || "manual", json(options.include), requestedProfile, startedAt, startedAt, finalState, options.requested_by || options.source || "mcp", options.task_id || null, options.session_id || process.env.SIDEKICK_SESSION_ID || null, options.correlation_id || null, "All requested collectors were rejected or unknown", json(captureDiagnostics));
+    insertEvent({ incidentId, captureId, eventType: "capture.blocked", actor: options.source || "mcp", newState: finalState, reason: "All requested collectors were rejected or unknown", metadata: captureDiagnostics });
+    db.prepare("UPDATE blackbox_incidents SET updated_at = ? WHERE id = ?").run(startedAt, incidentId);
+    return getCapture(captureId, { includeSources: true });
+  }
+  const platformExecution = platformCaptureExecution({ ...options, incident_id: incidentId, capture_id: captureId, profile: requestedProfile, requested_sources: collectors.map(c => c.key) });
   db.prepare(`
     INSERT INTO blackbox_captures (
       id, incident_id, capture_type, trigger, requested_sources_json, profile, started_at, state,
-      source_count, requested_by, task_id, session_id, correlation_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'capturing', ?, ?, ?, ?, ?)
-  `).run(captureId, incidentId, options.capture_type || "initial", options.trigger || "manual", json(collectors.map(c => c.key)), profile, startedAt, collectors.length, options.requested_by || options.source || "mcp", options.task_id || null, options.session_id || process.env.SIDEKICK_SESSION_ID || null, options.correlation_id || null);
+      source_count, requested_by, task_id, session_id, correlation_id, diagnostics_json, retry_of
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'capturing', ?, ?, ?, ?, ?, ?, ?)
+  `).run(captureId, incidentId, options.capture_type || "initial", options.trigger || "manual", json(collectors.map(c => c.key)), requestedProfile, startedAt, collectors.length, options.requested_by || options.source || "mcp", options.task_id || null, options.session_id || process.env.SIDEKICK_SESSION_ID || null, options.correlation_id || null, json(captureDiagnostics), options.retry_of || null);
   activeCaptures.set(captureId, { cancel: false, startedAt, incidentId });
-  emitProgress(captureId, { type: "capture_started", incident_id: incidentId, state: "capturing", completed: 0, total: collectors.length, profile });
+  emitProgress(captureId, { type: "capture_started", incident_id: incidentId, state: "capturing", completed: 0, total: collectors.length, profile: requestedProfile, diagnostics: { selected: collectorDiagnostics.selected_keys, rejected: collectorDiagnostics.rejected } });
   const start = Date.now();
   const results = [];
   let errorSummary = null;
@@ -830,19 +900,27 @@ async function captureIncident(options = {}) {
   const failed = results.filter(r => !["completed", "partial"].includes(r.state)).length;
   const incomplete = results.length < collectors.length;
   let state = "completed";
-  if (errorSummary && /cancel/i.test(errorSummary)) state = "cancelled";
+  if (results.length === 0) state = "no_evidence";
+  else if (errorSummary && /cancel/i.test(errorSummary)) state = "cancelled";
   else if (errorSummary && /timeout/i.test(errorSummary)) state = "timed_out";
   else if (failed || timedOut || truncated || incomplete || results.some(r => r.state === "partial")) state = "partial";
+  if (state === "completed" && succeeded === 0 && results.length > 0) state = "no_evidence";
   const completedAt = nowIso();
   const totalBytes = results.reduce((sum, r) => sum + r.bytes, 0);
+  captureDiagnostics.succeeded = succeeded;
+  captureDiagnostics.failed = failed;
+  captureDiagnostics.timed_out = timedOut;
+  captureDiagnostics.truncated = truncated;
+  captureDiagnostics.total_bytes = totalBytes;
+  captureDiagnostics.final_state = state;
   db.prepare(`
     UPDATE blackbox_captures
     SET completed_at = ?, state = ?, duration_ms = ?, succeeded_count = ?, failed_count = ?, timed_out_count = ?,
-        truncated_count = ?, total_bytes = ?, error_summary = ?
+        truncated_count = ?, total_bytes = ?, error_summary = ?, diagnostics_json = ?
     WHERE id = ?
-  `).run(completedAt, state, Date.now() - start, succeeded, failed, timedOut, truncated, totalBytes, errorSummary, captureId);
+  `).run(completedAt, state, Date.now() - start, succeeded, failed, timedOut, truncated, totalBytes, errorSummary || (state === "no_evidence" ? "No sources produced usable evidence" : null), json(captureDiagnostics), captureId);
   db.prepare("UPDATE blackbox_incidents SET updated_at = ?, last_accessed_at = ? WHERE id = ?").run(completedAt, completedAt, incidentId);
-  emitProgress(captureId, { type: "capture_completed", incident_id: incidentId, state, completed: results.length, total: collectors.length, duration_ms: Date.now() - start, error_summary: errorSummary });
+  emitProgress(captureId, { type: "capture_completed", incident_id: incidentId, state, completed: results.length, total: collectors.length, duration_ms: Date.now() - start, error_summary: errorSummary, diagnostics: { succeeded, failed, timed_out: timedOut } });
   transitionPlatformCapture(platformExecution, state, { result_status: state === "completed" ? "success" : state, error_category: errorSummary ? state : null, result_summary: `Black Box capture ${state}: ${succeeded}/${collectors.length} sources completed`, reason: errorSummary || "capture completed" });
   return getCapture(captureId, { includeSources: true });
 }
@@ -923,7 +1001,9 @@ function captureFromRow(row) {
     correlation_id: row.correlation_id,
     cancel_requested: !!row.cancel_requested,
     error_summary: row.error_summary,
-    capture_version: row.capture_version
+    capture_version: row.capture_version,
+    diagnostics: parseJson(row.diagnostics_json, {}),
+    retry_of: row.retry_of || null
   };
 }
 
@@ -1224,6 +1304,9 @@ async function analyzeIncident(incidentId, options = {}) {
   if (!incident) throw new Error(`Incident not found: ${incidentId}`);
   const capture = options.capture_id ? getCapture(options.capture_id, { includeSources: true }) : getCapture((incident.captures || [])[0]?.id, { includeSources: true });
   if (!capture) throw new Error("No capture available for analysis");
+  if (["no_evidence", "blocked", "failed_preflight"].includes(capture.state) || (!capture.source_count || capture.source_count === 0)) {
+    throw new Error(`Cannot analyze capture ${capture.id}: state is '${capture.state || "unknown"}' with ${capture.source_count || 0} sources. Retry the capture with a valid profile first.`);
+  }
   const sources = listSources(capture.id);
   const observations = listObservations(capture.id);
   const excerpts = sources.slice(0, 12).map(source => {
@@ -1386,6 +1469,81 @@ function subscribeCapture(captureId, onEvent) {
   return () => progressBus.off(eventName, onEvent);
 }
 
+function validateProfiles() {
+  const results = { valid: true, profiles: {}, errors: [] };
+  for (const [profileKey, profile] of Object.entries(PROFILE_INFO)) {
+    if (profileKey === "custom") continue;
+    const entry = { id: profileKey, title: profile.title, collector_count: profile.collectors.length, collectors: [...profile.collectors], missing_collectors: [], warnings: [] };
+    if (!profile.title) { entry.warnings.push("missing_title"); results.errors.push(`${profileKey}: missing title`); }
+    if (profile.estimated_duration_ms === null || profile.estimated_duration_ms === undefined) entry.warnings.push("missing_timeout");
+    if (profile.estimated_bytes === null || profile.estimated_bytes === undefined) entry.warnings.push("missing_estimated_bytes");
+    if (!profile.risk) entry.warnings.push("missing_risk");
+    for (const collectorId of profile.collectors) {
+      if (!COLLECTORS[collectorId]) { entry.missing_collectors.push(collectorId); results.errors.push(`${profileKey}: references missing collector '${collectorId}'`); results.valid = false; }
+    }
+    const uniqueCollectors = new Set(profile.collectors);
+    if (uniqueCollectors.size !== profile.collectors.length) entry.warnings.push("duplicate_collectors");
+    if (profile.collectors.length === 0) { entry.warnings.push("zero_collectors"); results.errors.push(`${profileKey}: has zero collectors`); results.valid = false; }
+    results.profiles[profileKey] = entry;
+  }
+  return results;
+}
+
+function blackboxHealth() {
+  const validation = validateProfiles();
+  const db = dbStore.getDb();
+  const recentEmptyCaptures = db.prepare("SELECT id, incident_id, state, profile, diagnostics_json FROM blackbox_captures WHERE (state = 'no_evidence' OR state = 'blocked' OR state = 'failed_preflight') AND started_at > ? ORDER BY started_at DESC LIMIT 10").all(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString());
+  return {
+    healthy: validation.valid && recentEmptyCaptures.length === 0,
+    profile_validation: validation,
+    recent_failed_captures: recentEmptyCaptures.map(c => ({ id: c.id, incident_id: c.incident_id, state: c.state, profile: c.profile, diagnostics: parseJson(c.diagnostics_json, {}) })),
+    collector_count: Object.keys(COLLECTORS).length,
+    profile_count: Object.keys(PROFILE_INFO).length - 1,
+    schema_version: SCHEMA_VERSION,
+    timestamp: nowIso()
+  };
+}
+
+async function retryCapture(captureId, options = {}) {
+  ensureSchema();
+  safeId(captureId, "capture id");
+  const original = getCapture(captureId, { includeSources: true });
+  if (!original) throw new Error(`Original capture not found: ${captureId}`);
+  const incident = getIncident(original.incident_id);
+  if (!incident) throw new Error(`Incident not found: ${original.incident_id}`);
+  const retryOptions = {
+    incident_id: original.incident_id,
+    profile: options.profile || original.profile,
+    include: options.include || undefined,
+    capture_type: "retry",
+    trigger: "retry",
+    requested_by: options.requested_by || "retry",
+    source: options.source || "retry",
+    retry_of: captureId,
+    repository_path: options.repository_path || original.diagnostics?.repository_path || null,
+    project: options.project || original.diagnostics?.project || null,
+    task_id: options.task_id || original.task_id || null,
+    session_id: options.session_id || original.session_id || null
+  };
+  return captureIncident(retryOptions);
+}
+
+function repairEmptyCapture(captureId) {
+  ensureSchema();
+  safeId(captureId, "capture id");
+  const capture = getCapture(captureId);
+  if (!capture) throw new Error(`Capture not found: ${captureId}`);
+  if (capture.state !== "completed" || capture.source_count > 0) {
+    return { repaired: false, reason: `Capture ${captureId} is in state '${capture.state}' with ${capture.source_count} sources; no repair needed` };
+  }
+  const db = dbStore.getDb();
+  const newState = "no_evidence";
+  const diagnostics = { ...capture.diagnostics, repaired_from: "completed", repaired_to: newState, repaired_at: nowIso(), repair_reason: "Legacy empty capture migrated to correct failure state" };
+  db.prepare("UPDATE blackbox_captures SET state = ?, error_summary = ?, diagnostics_json = ? WHERE id = ?").run(newState, "Empty capture repaired: originally completed with zero sources", json(diagnostics), captureId);
+  insertEvent({ incidentId: capture.incident_id, captureId, eventType: "capture.repaired", actor: "system", previousState: "completed", newState, reason: "Legacy empty capture migrated to correct failure state", metadata: { original_state: "completed", diagnostics } });
+  return { repaired: true, from: "completed", to: newState, capture_id: captureId };
+}
+
 ensureSchema();
 
 module.exports = {
@@ -1394,6 +1552,8 @@ module.exports = {
   LEGACY_BLACKBOX_DIR,
   PROFILE_INFO,
   COLLECTORS,
+  CAPTURE_STATES,
+  SCHEMA_VERSION,
   ensureSchema,
   migrateLegacy,
   captureIncident,
@@ -1420,5 +1580,10 @@ module.exports = {
   deleteIncident,
   recordAgentUse,
   subscribeCapture,
-  getRetentionConfig
+  getRetentionConfig,
+  validateProfiles,
+  blackboxHealth,
+  retryCapture,
+  repairEmptyCapture,
+  collectorsFor
 };

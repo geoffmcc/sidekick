@@ -596,7 +596,7 @@ const TOOL_SCHEMAS = {
     lifecycle_state: z.string().optional(),
     tags: z.array(z.string()).optional(),
     profile: z.enum(["quick", "standard", "deep", "network", "service", "sidekick", "repository", "custom"]).optional(),
-    include: z.array(z.string()).optional().default(["all"]).describe("Legacy sections or collector keys"),
+    include: z.array(z.string()).optional().describe("Legacy sections or collector keys"),
     analyze_with_llm: z.boolean().optional().default(false),
     use_llm: z.boolean().optional().default(true),
     incident_id: z.string().optional(),

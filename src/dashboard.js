@@ -1148,6 +1148,8 @@ app.get("/api/blackbox/profiles", (req, res) => {
   res.json({ profiles: blackbox.PROFILE_INFO });
 });
 
+app.get("/api/blackbox/health", (req, res) => blackboxJson(res, () => blackbox.blackboxHealth()));
+
 app.get("/api/blackbox/storage", (req, res) => blackboxJson(res, () => blackbox.storageStatus()));
 
 app.get("/api/blackbox/incidents", (req, res) => blackboxJson(res, () => ({ incidents: blackbox.listIncidents(req.query) })));
@@ -1189,6 +1191,13 @@ app.get("/api/blackbox/incidents/:id/export", (req, res) => blackboxJson(res, ()
 
 app.post("/api/blackbox/incidents/:id/analyze", async (req, res) => {
   try {
+    const incident = blackbox.getIncident(req.params.id, { includeCaptures: true });
+    if (!incident) { res.status(404).json({ ok: false, error: "Incident not found" }); return; }
+    const latestCapture = (incident.captures || [])[0];
+    if (!latestCapture || ["no_evidence", "blocked", "failed_preflight"].includes(latestCapture.state) || !latestCapture.source_count) {
+      res.status(400).json({ ok: false, error: `Cannot analyze: latest capture is in state '${latestCapture?.state || "none"}' with ${latestCapture?.source_count || 0} sources. Retry the capture first.` });
+      return;
+    }
     const analysis = await blackbox.analyzeIncident(req.params.id, { ...(req.body || {}), actor: "dashboard" });
     auditLog(req, 'blackbox.analyze', { incident_id: req.params.id, analysis_id: analysis.id });
     res.json({ ok: true, analysis });
@@ -1206,6 +1215,22 @@ app.post("/api/blackbox/incidents/:id/notes", (req, res) => blackboxJson(res, ()
 app.get("/api/blackbox/captures/:id", (req, res) => blackboxJson(res, () => ({ capture: blackbox.getCapture(req.params.id, { includeSources: true }) })));
 
 app.post("/api/blackbox/captures/:id/cancel", (req, res) => blackboxJson(res, () => blackbox.cancelCapture(req.params.id)));
+
+app.post("/api/blackbox/captures/:id/retry", async (req, res) => {
+  try {
+    const capture = await blackbox.retryCapture(req.params.id, { ...(req.body || {}), source: "dashboard", requested_by: "dashboard" });
+    auditLog(req, 'blackbox.retry', { original_capture_id: req.params.id, new_capture_id: capture.id, state: capture.state });
+    res.json({ ok: true, capture });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/api/blackbox/captures/:id/repair", (req, res) => blackboxJson(res, () => {
+  const result = blackbox.repairEmptyCapture(req.params.id);
+  auditLog(req, 'blackbox.repair', { capture_id: req.params.id, ...result });
+  return result;
+}));
 
 app.get("/api/blackbox/captures/:id/stream", (req, res) => {
   res.writeHead(200, {

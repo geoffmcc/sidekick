@@ -2477,12 +2477,13 @@ async function showBlackboxIncident(id){
 function renderBlackboxDetail(incident){
   const captures = incident.captures || [];
   const latest = captures[0];
+  const isAnalyzable = latest && latest.source_count > 0 && !['no_evidence', 'blocked', 'failed_preflight'].includes(latest.state);
   let html = '<div class="blackbox-overview">';
   html += '<div><div class="mission-kicker">' + esc(incident.id) + '</div><h3>' + esc(incident.title) + '</h3><p>' + esc(incident.description || 'No description recorded.') + '</p></div>';
   html += '<div class="blackbox-state"><span>' + esc(incident.lifecycle_state) + '</span><small>' + esc(incident.severity || 'unknown') + '</small></div>';
   html += '</div>';
   html += '<div class="blackbox-toolbar">';
-  html += '<button class="btn btn-sm btn-outline" onclick="analyzeBlackboxIncident(\'' + esc(incident.id) + '\')"><i class="fas fa-magnifying-glass-chart"></i> Analyze</button>';
+  html += '<button class="btn btn-sm btn-outline" onclick="analyzeBlackboxIncident(\'' + esc(incident.id) + '\')"' + (isAnalyzable ? '' : ' disabled title="No analyzable evidence available"') + '><i class="fas fa-magnifying-glass-chart"></i> Analyze</button>';
   html += '<button class="btn btn-sm btn-outline" onclick="pinBlackboxIncident(\'' + esc(incident.id) + '\')"><i class="fas fa-thumbtack"></i> Pin</button>';
   html += '<button class="btn btn-sm btn-outline" onclick="exportBlackboxIncident(\'' + esc(incident.id) + '\')"><i class="fas fa-download"></i> Export</button>';
   html += '</div>';
@@ -2500,8 +2501,22 @@ function renderBlackboxDetail(incident){
 }
 
 function renderBlackboxCapture(capture){
+  const isFailed = ['no_evidence', 'blocked', 'failed_preflight'].includes(capture.state);
+  const isEmpty = capture.source_count === 0 || capture.succeeded_count === 0;
   let html = '<div class="td-section"><div class="td-label">Latest Capture</div>';
+  if (isFailed || isEmpty) {
+    html += '<div class="blackbox-failure-banner"><strong>Capture ' + esc(capture.state) + '</strong><span>' + esc(capture.error_summary || 'No sources produced usable evidence') + '</span>';
+    const diag = capture.diagnostics || {};
+    if (diag.requested_profile || diag.collector_selection_path) {
+      html += '<div class="blackbox-diagnostics"><small>Profile: ' + esc(diag.requested_profile || 'unknown') + ' → ' + esc(diag.resolved_profile || 'unknown') + ' | Path: ' + esc(diag.collector_selection_path || 'unknown') + ' | Selected: ' + (diag.selected_count || 0) + ' collectors</small>';
+      if (diag.collectors_rejected && diag.collectors_rejected.length) html += '<small>Rejected: ' + esc(diag.collectors_rejected.map(r => r.key + ' (' + r.reason + ')').join(', ')) + '</small>';
+      html += '</div>';
+    }
+    html += '<button class="btn btn-sm btn-outline" onclick="retryBlackboxCapture(\'' + esc(capture.id) + '\', \'' + esc(capture.incident_id) + '\')"><i class="fas fa-rotate-right"></i> Retry Capture</button>';
+    html += '</div>';
+  }
   html += '<div class="blackbox-capture-head"><strong>' + esc(capture.id) + '</strong><span class="badge ' + (capture.state === 'completed' ? '' : 'warn') + '">' + esc(capture.state) + '</span><span>' + esc(capture.profile) + '</span><span>' + esc(capture.succeeded_count + '/' + capture.source_count + ' succeeded') + '</span><span>' + esc(formatBytes(capture.total_bytes || 0)) + '</span></div>';
+  if (capture.retry_of) html += '<div class="blackbox-retry-link"><small>Retry of: ' + esc(capture.retry_of) + '</small></div>';
   html += '<div id="blackboxSources" class="blackbox-source-grid"><div class="empty">Loading sources...</div></div>';
   html += '</div>';
   return html;
@@ -2593,6 +2608,26 @@ async function startBlackboxCapture(){
     await loadBlackbox();
   } catch (error) {
     progress.innerHTML = '<div class="quick-action-error">' + esc(error.message) + '</div>';
+  }
+}
+
+async function retryBlackboxCapture(captureId, incidentId){
+  const progress = $('blackboxProgress');
+  if (progress) progress.innerHTML = '<div class="blackbox-progress-title">Retrying capture...</div>';
+  try {
+    const res = await authFetch('/api/blackbox/captures/' + encodeURIComponent(captureId) + '/retry', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Retry failed');
+    const cap = data.capture;
+    if (progress) progress.innerHTML = '<div class="blackbox-progress-title">Retry capture ' + esc(cap.state) + ': ' + esc(cap.succeeded_count + '/' + cap.source_count) + ' sources completed</div>';
+    selectedBlackboxIncident = cap.incident_id;
+    await loadBlackbox();
+  } catch (error) {
+    if (progress) progress.innerHTML = '<div class="quick-action-error">' + esc(error.message) + '</div>';
   }
 }
 
