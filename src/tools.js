@@ -1084,9 +1084,26 @@ function recordPlatformToolCall(name, argsShape, duration, success, summary, met
   try {
     if (currentSource !== "mcp") return;
     if (metadata.generatedProcedure || metadata.generated_procedure) return;
+    const execId = metadata.executionId || metadata.execution_id || null;
+    const guard = platformKernel.platformGuard(execId, null, {
+      operation_type: "tool_call",
+      tool_name: name,
+      allowConcurrent: true,
+    });
+    if (guard.execution && execId) {
+      platformKernel.transitionExecution(execId, success ? "completed" : "failed", {
+        source: "mcp",
+        reason: success ? "MCP tool call completed" : "MCP tool call failed",
+        result_status: success ? "success" : "failure",
+        error_category: success ? null : evolveCommon.errorCategory(summary),
+        result_summary: summary,
+        correlation_id: guard.execution.root_execution_id,
+      });
+      return;
+    }
     const startedAt = new Date(Date.now() - Math.max(Number(duration) || 0, 0)).toISOString();
     const execution = platformKernel.createExecution({
-      execution_id: metadata.executionId || metadata.execution_id || undefined,
+      execution_id: execId || undefined,
       parent_execution_id: metadata.parentId || metadata.parent_id || null,
       root_execution_id: metadata.rootExecutionId || metadata.root_execution_id || metadata.correlationId || metadata.correlation_id || metadata.executionId || metadata.execution_id || undefined,
       task_id: metadata.taskId || metadata.task_id || metadata.requestId || metadata.request_id || null,
@@ -1190,6 +1207,8 @@ function recordPlatformApprovalQueued(item) {
 function transitionPlatformApproval(item, state, details = {}) {
   try {
     if (!item.platform_execution_id) return;
+    const guard = platformKernel.platformGuard(item.platform_execution_id, null, { allowTerminal: state === "failed" || state === "timed_out" });
+    if (!guard.allowed && guard.reason === "terminal_state") return;
     platformKernel.transitionExecution(item.platform_execution_id, state, {
       source: "approvals",
       actor_id: details.actor_id || item.reviewed_by || item.source || "unknown",
@@ -1226,6 +1245,19 @@ function recordPlatformApprovalEvent(item, eventType, payload = {}, options = {}
 
 function createScheduledPlatformExecution(kind, item, options = {}) {
   try {
+    if (!options.allowConcurrent) {
+      const guard = platformKernel.platformGuard(null, null, {
+        operation_type: options.operationType || `${kind}_operation`,
+        tool_name: options.toolName || item.tool || item.action_tool || null,
+        project_id: options.projectId || null,
+        dedupe_key: item.id || null,
+        allowConcurrent: false,
+      });
+      if (!guard.allowed && guard.reason === "concurrent_execution" && guard.execution) {
+        if (options.attach !== false) item.platform_execution_id = guard.execution.execution_id;
+        return guard.execution;
+      }
+    }
     const execution = platformKernel.createExecution({
       parent_execution_id: options.parentExecutionId || null,
       root_execution_id: options.rootExecutionId || options.parentExecutionId || undefined,
@@ -1265,6 +1297,8 @@ function createScheduledPlatformExecution(kind, item, options = {}) {
 function transitionScheduledPlatformExecution(kind, item, state, details = {}) {
   try {
     if (!item.platform_execution_id) return;
+    const guard = platformKernel.platformGuard(item.platform_execution_id, null, { allowTerminal: false });
+    if (!guard.allowed) return;
     platformKernel.transitionExecution(item.platform_execution_id, state, {
       source: details.source || kind,
       actor_id: details.actor || currentSource || "unknown",

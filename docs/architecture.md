@@ -85,6 +85,23 @@ Approval requests mirror queue, approval, rejection, expiry, and terminal execut
 
 Schedulers and guided operational workflows mirror definitions and execution attempts into the platform kernel. Cron jobs, delays, watches, and runbook instances keep their existing JSON/document stores as compatibility sources of truth while platform executions/events provide shared visibility for queued work, checks, triggers, manual runs, timer-fired background runs, step progress, completion, cancellation, and failures.
 
+### Authoritative execution control: `platformGuard` and `findActiveExecution`
+
+The platform kernel provides guard-first primitives that adapters use before starting or transitioning work:
+
+- `platformGuard(executionId, expectedState, options)` validates an execution exists, is in the expected state, and is not terminal before allowing operations. Without an execution ID, it queries for concurrent active executions by `operation_type`, `tool_name`, `project_id`, or `dedupe_key` and blocks duplicates when `allowConcurrent: false`.
+- `findActiveExecution(query)` returns non-terminal executions matching the query filters, enabling adapters to detect overlapping work.
+- `TERMINAL_STATES` is exported so adapters can reason about lifecycle boundaries.
+
+Adapters use the guard-first pattern:
+
+- `recordPlatformToolCall` checks for an existing execution before creating a new one, preventing duplicate tool-call records when metadata carries an execution ID.
+- `transitionPlatformApproval` validates the execution is not terminal before transitioning, silently returning for already-terminal approvals.
+- `createScheduledPlatformExecution` checks for concurrent active executions of the same operation type before creating new schedule/delay/watch/runbook records.
+- `transitionScheduledPlatformExecution` validates the execution is not terminal before transitioning.
+
+Guard failures never block tool execution — they prevent platform state divergence. The kernel continues to validate transitions at the database level via `ALLOWED_TRANSITIONS`, and the guard adds pre-flight checks that adapters use to avoid redundant or conflicting state changes.
+
 ### Dashboard: `src/dashboard.js`
 
 The dashboard serves a browser UI and JSON API. The server code lives in `src/dashboard.js`, the authenticated HTML shell lives in `src/dashboard.html`, and public CSS/JS assets live under `static/`. It reads the Sidekick data directory, reports system state, allows KV editing and deletion, exposes tool metadata, accepts webhooks, and proxies agent requests to the Agent Bridge.

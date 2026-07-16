@@ -29,6 +29,7 @@ const suites = [
   { file: 'test/tools.test.js', critical: false, description: 'Core tool behavior' },
   { file: 'test/approval.test.js', critical: false, description: 'Approval queue behavior' },
   { file: 'test/scheduler-platform.test.js', critical: false, description: 'Scheduler and runbook platform adapters' },
+  { file: 'test/execution-control.test.js', critical: false, description: 'Platform guard and state-machine enforcement' },
   { file: 'test/new-tools.test.js', critical: false, description: 'Extended tool behavior' },
   { file: 'test/blackbox.test.js', critical: false, description: 'Structured Black Box incident evidence behavior' },
   { file: 'test/insight-report.test.js', critical: false, description: 'Insight report tool behavior' },
