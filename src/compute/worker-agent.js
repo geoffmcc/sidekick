@@ -10,10 +10,12 @@ const SERVER_URL = process.env.SIDEKICK_URL || process.env.SIDEKICK_SERVER_URL |
 const ENROLLMENT_TOKEN = process.env.SIDEKICK_ENROLL_TOKEN || process.env.COMPUTE_TOKEN || "";
 const NODE_ID = process.env.SIDEKICK_NODE_ID || `node_${crypto.randomBytes(8).toString("hex")}`;
 const DISPLAY_NAME = process.env.SIDEKICK_NODE_NAME || os.hostname();
-const HEARTBEAT_MS = parseInt(process.env.SIDEKICK_HEARTBEAT_MS || "30000", 10);
-const POLL_MS = parseInt(process.env.SIDEKICK_WORKER_POLL_MS || "2000", 10);
-const LEASE_MS = parseInt(process.env.SIDEKICK_WORKER_LEASE_MS || "300000", 10);
-const MAX_CONCURRENT_JOBS = parseInt(process.env.SIDEKICK_WORKER_CONCURRENCY || "1", 10);
+const HEARTBEAT_MS = boundedInt(process.env.SIDEKICK_HEARTBEAT_MS, 30000, 1000, 300000);
+const POLL_MS = boundedInt(process.env.SIDEKICK_WORKER_POLL_MS, 2000, 100, 60000);
+const LEASE_MS = boundedInt(process.env.SIDEKICK_WORKER_LEASE_MS, 300000, 30000, 1800000);
+const MAX_CONCURRENT_JOBS = boundedInt(process.env.SIDEKICK_WORKER_CONCURRENCY, 1, 1, 16);
+const MAX_RETRY_MS = boundedInt(process.env.SIDEKICK_WORKER_MAX_RETRY_MS, 30000, 1000, 300000);
+const SHUTDOWN_GRACE_MS = boundedInt(process.env.SIDEKICK_WORKER_SHUTDOWN_GRACE_MS, 10000, 1000, 120000);
 const WORKER_VERSION = require("../../package.json").version || "0.0.0";
 const PROTOCOL_VERSION = "1";
 const CONFIG_PATH = process.env.SIDEKICK_WORKER_CONFIG || path.join(os.homedir(), ".sidekick", "worker-credential.json");
@@ -21,11 +23,25 @@ const CONFIG_PATH = process.env.SIDEKICK_WORKER_CONFIG || path.join(os.homedir()
 let workerId = null;
 let credential = null;
 let running = true;
+let shuttingDown = false;
+let heartbeatTimer = null;
 const activeJobs = new Set();
+const activeJobPromises = new Set();
 
 function log(msg) { console.log(`[worker-agent] ${new Date().toISOString()} ${redact(msg)}`); }
 function redact(value) { return String(value || "").replace(/(wksec_|enroll_)[A-Za-z0-9_-]+/g, "[REDACTED]"); }
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+function boundedInt(value, fallback, min, max) {
+  const parsed = parseInt(value || String(fallback), 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, parsed));
+}
+
+function jitteredBackoff(baseMs, attempt = 0) {
+  const base = Math.min(MAX_RETRY_MS, Math.max(POLL_MS, baseMs) * Math.pow(2, attempt));
+  const jitter = Math.floor(base * 0.2 * Math.random());
+  return Math.min(MAX_RETRY_MS, base + jitter);
+}
 
 function credentialHeaders() {
   return workerId && credential ? { Authorization: `Bearer ${workerId}:${credential}` } : {};
@@ -38,7 +54,7 @@ function httpRequest(method, requestPath, body, extraHeaders = {}) {
     const bodyStr = body ? JSON.stringify(body) : null;
     const headers = { "Content-Type": "application/json", ...extraHeaders };
     if (bodyStr) headers["Content-Length"] = Buffer.byteLength(bodyStr);
-    const req = mod.request({ hostname: url.hostname, port: url.port, path: url.pathname, method, headers }, (res) => {
+    const req = mod.request({ hostname: url.hostname, port: url.port, path: `${url.pathname}${url.search}`, method, headers }, (res) => {
       let data = "";
       res.on("data", c => { data += c; if (data.length > 2 * 1024 * 1024) req.destroy(new Error("Response too large")); });
       res.on("end", () => {
@@ -53,25 +69,104 @@ function httpRequest(method, requestPath, body, extraHeaders = {}) {
   });
 }
 
+async function requestWithRetry(method, requestPath, body, extraHeaders = {}, options = {}) {
+  const attempts = options.attempts || 3;
+  let lastErr;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const result = await httpRequest(method, requestPath, body, extraHeaders);
+      if (![408, 429, 500, 502, 503, 504].includes(result.status)) return result;
+      lastErr = new Error(`HTTP ${result.status}: ${result.data?.error || "transient server error"}`);
+    } catch (e) {
+      lastErr = e;
+    }
+    if (attempt < attempts - 1 && running) await sleep(jitteredBackoff(POLL_MS, attempt));
+  }
+  throw lastErr;
+}
+
 function collectSystemInfo() {
   const cpus = os.cpus();
-  const accelerators = [];
-  if (process.env.CUDA_VISIBLE_DEVICES !== undefined || process.env.NVIDIA_VISIBLE_DEVICES !== undefined) accelerators.push({ type: "cuda", visible: process.env.CUDA_VISIBLE_DEVICES || process.env.NVIDIA_VISIBLE_DEVICES });
-  if (process.env.ROCR_VISIBLE_DEVICES !== undefined || process.env.HSA_OVERRIDE_GFX_VERSION !== undefined) accelerators.push({ type: "rocm", visible: process.env.ROCR_VISIBLE_DEVICES || process.env.HSA_OVERRIDE_GFX_VERSION });
-  if (process.platform === "darwin" && os.arch() === "arm64") accelerators.push({ type: "metal", arch: os.arch() });
   return {
+    nodeId: NODE_ID,
+    displayName: DISPLAY_NAME,
+    workerVersion: WORKER_VERSION,
+    protocolVersion: PROTOCOL_VERSION,
+    platform: process.platform,
+    osType: os.type(),
+    osRelease: os.release(),
+    nodeVersion: process.version,
     architecture: os.arch(),
     cpuInfo: `${cpus[0]?.model || "unknown"} x${cpus.length}`,
+    cpuCount: cpus.length,
     memoryBytes: os.totalmem(),
-    accelerators,
+    accelerators: configuredAccelerators(),
     providers: configuredProviders(),
     executors: configuredExecutors(),
+    modelInventory: configuredModelInventory(),
+    limits: configuredLimits(),
+    health: configuredHealth(),
   };
+}
+
+function parseJsonEnv(name, fallback) {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed === null ? fallback : parsed;
+  } catch {
+    return fallback;
+  }
+}
+
+function safeString(value, max = 160) {
+  return String(value || "").replace(/[\0\r\n]/g, " ").slice(0, max);
+}
+
+function sanitizeEndpoint(endpoint) {
+  if (!endpoint) return undefined;
+  try {
+    const url = new URL(endpoint);
+    url.username = "";
+    url.password = "";
+    url.hash = "";
+    return url.toString().slice(0, 300);
+  } catch {
+    return safeString(endpoint, 300);
+  }
+}
+
+function normalizeCapabilities(value, fallback = ["chat", "generate", "embeddings"]) {
+  const source = Array.isArray(value) ? value : fallback;
+  return source.map(v => safeString(v, 40)).filter(Boolean).slice(0, 16);
+}
+
+function configuredAccelerators() {
+  const configured = parseJsonEnv("SIDEKICK_WORKER_ACCELERATORS_JSON", []);
+  const accelerators = Array.isArray(configured) ? configured.slice(0, 16).map(item => ({
+    type: safeString(item.type || item.name || "unknown", 40),
+    vendor: item.vendor ? safeString(item.vendor, 80) : undefined,
+    name: item.name ? safeString(item.name, 120) : undefined,
+    memoryBytes: Number.isFinite(Number(item.memoryBytes || item.memory_bytes)) ? Number(item.memoryBytes || item.memory_bytes) : undefined,
+  })).filter(a => a.type) : [];
+  if (process.env.CUDA_VISIBLE_DEVICES !== undefined || process.env.NVIDIA_VISIBLE_DEVICES !== undefined) accelerators.push({ type: "cuda", visible: safeString(process.env.CUDA_VISIBLE_DEVICES || process.env.NVIDIA_VISIBLE_DEVICES || "all", 80) });
+  if (process.env.ROCR_VISIBLE_DEVICES !== undefined || process.env.HSA_OVERRIDE_GFX_VERSION !== undefined) accelerators.push({ type: "rocm", visible: safeString(process.env.ROCR_VISIBLE_DEVICES || process.env.HSA_OVERRIDE_GFX_VERSION || "all", 80) });
+  if (process.platform === "darwin" && os.arch() === "arm64") accelerators.push({ type: "metal", arch: os.arch() });
+  if (!accelerators.length) accelerators.push({ type: "cpu", arch: os.arch() });
+  return accelerators;
 }
 
 function configuredProviders() {
   const providers = [{ type: "mock", endpoint: "in-process" }];
-  if (process.env.OLLAMA_URL) providers.push({ type: "ollama", endpoint: process.env.OLLAMA_URL });
+  const configured = parseJsonEnv("SIDEKICK_WORKER_BACKENDS_JSON", []);
+  if (Array.isArray(configured)) {
+    for (const item of configured.slice(0, 16)) {
+      const type = safeString(item.type || item.provider || item.name, 40);
+      if (type) providers.push({ type, endpoint: sanitizeEndpoint(item.endpoint || item.url), status: safeString(item.status || "configured", 40) });
+    }
+  }
+  if (process.env.OLLAMA_URL) providers.push({ type: "ollama", endpoint: sanitizeEndpoint(process.env.OLLAMA_URL), status: "configured" });
   return providers;
 }
 
@@ -81,10 +176,49 @@ function configuredExecutors() {
   return executors;
 }
 
+function configuredModelInventory() {
+  const models = [{ name: "deterministic-test", provider: "mock", capabilities: ["chat", "generate", "embeddings"] }];
+  const configured = parseJsonEnv("SIDEKICK_WORKER_MODELS_JSON", []);
+  if (Array.isArray(configured)) {
+    for (const item of configured.slice(0, 64)) {
+      const name = safeString(item.name || item.model, 160);
+      if (name) models.push({
+        name,
+        provider: safeString(item.provider || item.backend || "unknown", 80),
+        capabilities: normalizeCapabilities(item.capabilities, ["chat", "generate"]),
+        contextWindow: Number.isFinite(Number(item.contextWindow || item.context_window)) ? Number(item.contextWindow || item.context_window) : undefined,
+      });
+    }
+  }
+  if (process.env.OLLAMA_MODEL) models.push({ name: safeString(process.env.OLLAMA_MODEL, 160), provider: "ollama", capabilities: ["chat", "generate"] });
+  return models;
+}
+
+function configuredLimits() {
+  return { maxConcurrentJobs: MAX_CONCURRENT_JOBS, leaseMs: LEASE_MS, maxResultBytes: 512 * 1024 };
+}
+
+function configuredHealth() {
+  return {
+    status: "healthy",
+    checkedAt: new Date().toISOString(),
+    nodeVersion: process.version,
+    platform: process.platform,
+    protocolVersion: PROTOCOL_VERSION,
+    backends: configuredProviders().map(p => ({ type: p.type, endpoint: p.endpoint, status: p.status || "configured" })),
+  };
+}
+
 function loadCredential() {
   try {
+    const stat = fs.statSync(CONFIG_PATH);
+    if (!stat.isFile()) return false;
+    if (process.platform !== "win32" && (stat.mode & 0o077)) {
+      fs.chmodSync(CONFIG_PATH, 0o600);
+      log(`Tightened worker credential file permissions at ${CONFIG_PATH}`);
+    }
     const parsed = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
-    if (parsed.workerId && parsed.credential) {
+    if (/^wk_[A-Za-z0-9_-]+$/.test(parsed.workerId || "") && /^wksec_[A-Za-z0-9_-]+$/.test(parsed.credential || "")) {
       workerId = parsed.workerId;
       credential = parsed.credential;
       return true;
@@ -95,7 +229,11 @@ function loadCredential() {
 
 function saveCredential(worker, secret) {
   fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify({ workerId: worker.workerId, nodeId: worker.nodeId, credential: secret }, null, 2), { mode: 0o600 });
+  if (process.platform !== "win32") fs.chmodSync(path.dirname(CONFIG_PATH), 0o700);
+  const tempPath = `${CONFIG_PATH}.${process.pid}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify({ workerId: worker.workerId, nodeId: worker.nodeId, credential: secret }, null, 2), { mode: 0o600 });
+  if (process.platform !== "win32") fs.chmodSync(tempPath, 0o600);
+  fs.renameSync(tempPath, CONFIG_PATH);
 }
 
 async function enrollIfNeeded() {
@@ -106,7 +244,7 @@ async function enrollIfNeeded() {
   if (!ENROLLMENT_TOKEN) throw new Error("No enrollment token. Set SIDEKICK_ENROLL_TOKEN for first enrollment.");
   const sysInfo = collectSystemInfo();
   log(`Enrolling with ${SERVER_URL} as ${DISPLAY_NAME} (${NODE_ID})`);
-  const result = await httpRequest("POST", "/compute/enroll", {
+  const result = await requestWithRetry("POST", "/compute/enrollment/exchange", {
     token: ENROLLMENT_TOKEN,
     nodeId: NODE_ID,
     displayName: DISPLAY_NAME,
@@ -117,6 +255,9 @@ async function enrollIfNeeded() {
     accelerators: sysInfo.accelerators,
     providers: sysInfo.providers,
     executors: sysInfo.executors,
+    modelInventory: sysInfo.modelInventory,
+    limits: sysInfo.limits,
+    health: sysInfo.health,
     workerVersion: WORKER_VERSION,
     protocolVersion: PROTOCOL_VERSION,
   });
@@ -130,30 +271,39 @@ async function enrollIfNeeded() {
 async function sendHeartbeat() {
   const sysInfo = collectSystemInfo();
   const memUsage = process.memoryUsage();
-  const result = await httpRequest("POST", "/compute/heartbeat", {
+  const result = await requestWithRetry("POST", "/compute/worker/heartbeat", {
     utilization: { cpuLoad: os.loadavg()[0] / os.cpus().length, memoryUsed: os.totalmem() - os.freemem(), memoryTotal: os.totalmem(), uptime: os.uptime(), processMemory: memUsage.rss },
     currentJobs: activeJobs.size,
     providers: sysInfo.providers,
     executors: sysInfo.executors,
     accelerators: sysInfo.accelerators,
+    modelInventory: sysInfo.modelInventory,
+    limits: sysInfo.limits,
+    health: sysInfo.health,
     workerVersion: WORKER_VERSION,
   }, credentialHeaders());
   if (result.status !== 200 || !result.data.ok) log(`Heartbeat failed: ${result.data.error || result.status}`);
 }
 
 async function claimLoop() {
+  let errorAttempt = 0;
   while (running) {
     try {
       if (activeJobs.size < MAX_CONCURRENT_JOBS) {
-        const result = await httpRequest("POST", "/compute/jobs/claim", { leaseDurationMs: LEASE_MS }, credentialHeaders());
-        if (result.status === 200 && result.data.claimed) handleJob(result.data.job, result.data.leaseId).catch(e => log(`Job error: ${e.message}`));
+        const result = await requestWithRetry("POST", "/compute/worker/jobs/claim", { leaseDurationMs: LEASE_MS }, credentialHeaders(), { attempts: 2 });
+        errorAttempt = 0;
+        if (result.status === 200 && result.data.claimed) {
+          const jobPromise = handleJob(result.data.job, result.data.leaseId).catch(e => log(`Job error: ${e.message}`));
+          activeJobPromises.add(jobPromise);
+          jobPromise.finally(() => activeJobPromises.delete(jobPromise));
+        }
         else await sleep(POLL_MS);
       } else {
         await sleep(POLL_MS);
       }
     } catch (e) {
       log(`Claim loop error: ${e.message}`);
-      await sleep(POLL_MS * 2);
+      await sleep(jitteredBackoff(POLL_MS, errorAttempt++));
     }
   }
 }
@@ -162,23 +312,92 @@ async function handleJob(job, leaseId) {
   activeJobs.add(job.jobId);
   let renewTimer = null;
   try {
-    await httpRequest("POST", `/compute/jobs/${job.jobId}/start`, { leaseId }, credentialHeaders());
-    renewTimer = setInterval(() => httpRequest("POST", `/compute/jobs/${job.jobId}/renew`, { leaseId, leaseDurationMs: LEASE_MS }, credentialHeaders()).catch(() => {}), Math.max(5000, Math.floor(LEASE_MS / 3)));
-    await httpRequest("POST", `/compute/jobs/${job.jobId}/progress`, { leaseId, progressPercent: 25, progressMessage: "started" }, credentialHeaders());
-    const result = await executeJob(job);
-    await httpRequest("POST", `/compute/jobs/${job.jobId}/complete`, { leaseId, result }, credentialHeaders());
+    await assertOk(requestWithRetry("POST", `/compute/worker/jobs/${job.jobId}/start`, { leaseId }, credentialHeaders()), "start");
+    renewTimer = setInterval(() => requestWithRetry("POST", `/compute/worker/jobs/${job.jobId}/renew`, { leaseId, leaseDurationMs: LEASE_MS }, credentialHeaders(), { attempts: 2 }).catch(e => log(`Renew failed for ${job.jobId}: ${e.message}`)), Math.max(5000, Math.floor(LEASE_MS / 3)));
+    await assertOk(requestWithRetry("POST", `/compute/worker/jobs/${job.jobId}/progress`, { leaseId, progressPercent: 25, progressMessage: "started" }, credentialHeaders()), "progress");
+    const cancellationCheck = () => checkCancellation(job.jobId, leaseId);
+    const result = await executeJob(job, cancellationCheck);
+    if (await cancellationCheck()) {
+      await acknowledgeCancellation(job.jobId, leaseId);
+      log(`Acknowledged cancellation for job ${job.jobId}`);
+      return;
+    }
+    const resultContent = typeof result.content === "string" ? result.content : JSON.stringify(result).slice(0, 1000);
+    const resultArtifact = await publishResultArtifact(job.jobId, leaseId, resultContent);
+    const completed = await requestWithRetry("POST", `/compute/worker/jobs/${job.jobId}/complete`, {
+      leaseId,
+      result,
+      artifactIds: [resultArtifact.artifactId],
+    }, credentialHeaders());
+    if (completed.status === 409) {
+      log(`Job ${job.jobId} was no longer completable: ${completed.data.error || completed.status}`);
+      return;
+    }
+    await assertOk(Promise.resolve(completed), "complete");
     log(`Completed job ${job.jobId}`);
   } catch (e) {
-    await httpRequest("POST", `/compute/jobs/${job.jobId}/fail`, { leaseId, errorCategory: "worker_error", errorMessage: e.message }, credentialHeaders()).catch(() => {});
-    log(`Failed job ${job.jobId}: ${e.message}`);
+    if (/cancellation requested/i.test(e.message)) {
+      await acknowledgeCancellation(job.jobId, leaseId);
+      log(`Acknowledged cancellation for job ${job.jobId}`);
+    } else if (shuttingDown) log(`Leaving job ${job.jobId} leased during graceful shutdown`);
+    else await requestWithRetry("POST", `/compute/worker/jobs/${job.jobId}/fail`, { leaseId, errorCategory: "worker_error", errorMessage: e.message }, credentialHeaders(), { attempts: 2 }).catch(() => {});
+    if (!/cancellation requested/i.test(e.message)) log(`Failed job ${job.jobId}: ${e.message}`);
   } finally {
     if (renewTimer) clearInterval(renewTimer);
     activeJobs.delete(job.jobId);
   }
 }
 
-async function executeJob(job) {
+async function checkCancellation(jobId, leaseId) {
+  try {
+    const result = await requestWithRetry("POST", `/compute/worker/jobs/${jobId}/cancellation`, { leaseId }, credentialHeaders(), { attempts: 1 });
+    return result.status === 200 && !!result.data?.cancellation?.cancelled;
+  } catch {
+    return false;
+  }
+}
+
+async function acknowledgeCancellation(jobId, leaseId) {
+  await requestWithRetry("POST", `/compute/worker/jobs/${jobId}/cancellation/ack`, { leaseId }, credentialHeaders(), { attempts: 2 }).catch(() => {});
+}
+
+async function publishResultArtifact(jobId, leaseId, content) {
+  const hash = crypto.createHash("sha256").update(content).digest("hex");
+  const upload = await assertOk(requestWithRetry("POST", `/compute/worker/jobs/${jobId}/artifacts/upload`, {
+    leaseId,
+    name: "result.txt",
+    content,
+    contentType: "text/plain",
+    artifactType: "result",
+    contentHash: hash,
+    sizeBytes: Buffer.byteLength(content),
+  }, credentialHeaders()), "artifact upload");
+  const finalize = await assertOk(requestWithRetry("POST", `/compute/worker/jobs/${jobId}/artifacts/${upload.data.artifact.artifactId}/finalize`, {
+    leaseId,
+    contentHash: hash,
+    sizeBytes: Buffer.byteLength(content),
+  }, credentialHeaders()), "artifact finalize");
+  return finalize.data.artifact;
+}
+
+async function assertOk(resultPromise, action) {
+  const result = await resultPromise;
+  if (result.status < 200 || result.status >= 300 || result.data?.ok === false) {
+    throw new Error(`${action} failed (${result.status}): ${result.data?.error || "unknown"}`);
+  }
+  return result;
+}
+
+async function executeJob(job, shouldCancel = async () => false) {
   const payload = job.requestPayload || {};
+  const delayMs = Math.max(0, Math.min(30000, Number(payload.delayMs || payload.delay_ms || 0)));
+  let remainingDelay = delayMs;
+  while (remainingDelay > 0) {
+    if (await shouldCancel()) throw new Error("Job cancellation requested");
+    const chunk = Math.min(250, remainingDelay);
+    await sleep(chunk);
+    remainingDelay -= chunk;
+  }
   if (job.capability === "embeddings" || job.jobType === "embeddings" || job.jobType === "embedding") {
     const text = String(payload.input || payload.text || "");
     return { embedding: deterministicEmbedding(text), model: payload.model || "deterministic-test" };
@@ -207,14 +426,31 @@ async function main() {
   log(`Starting worker agent v${WORKER_VERSION}`);
   await enrollIfNeeded();
   await sendHeartbeat().catch(e => log(`Initial heartbeat failed: ${e.message}`));
-  const heartbeatTimer = setInterval(() => sendHeartbeat().catch(e => log(`Heartbeat error: ${e.message}`)), HEARTBEAT_MS);
-  process.on("SIGINT", () => { running = false; clearInterval(heartbeatTimer); log("Shutting down"); });
-  process.on("SIGTERM", () => { running = false; clearInterval(heartbeatTimer); log("Shutting down"); });
+  heartbeatTimer = setInterval(() => sendHeartbeat().catch(e => log(`Heartbeat error: ${e.message}`)), HEARTBEAT_MS);
+  process.on("SIGINT", () => requestShutdown("SIGINT"));
+  process.on("SIGTERM", () => requestShutdown("SIGTERM"));
   await claimLoop();
+  await waitForActiveJobs();
+}
+
+function requestShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  running = false;
+  if (heartbeatTimer) clearInterval(heartbeatTimer);
+  log(`Shutting down after ${signal}`);
+}
+
+async function waitForActiveJobs() {
+  if (!activeJobPromises.size) return;
+  const timeout = sleep(SHUTDOWN_GRACE_MS).then(() => "timeout");
+  const finished = Promise.allSettled(Array.from(activeJobPromises)).then(() => "finished");
+  const outcome = await Promise.race([timeout, finished]);
+  if (outcome === "timeout") log(`Shutdown grace expired with ${activeJobPromises.size} active job(s)`);
 }
 
 if (require.main === module) {
   main().catch(e => { console.error(`[worker-agent] ${redact(e.message)}`); process.exit(1); });
 }
 
-module.exports = { collectSystemInfo, deterministicEmbedding, executeJob };
+module.exports = { collectSystemInfo, deterministicEmbedding, executeJob, boundedInt, jitteredBackoff, redact };

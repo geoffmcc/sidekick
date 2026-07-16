@@ -28,6 +28,10 @@ function ensureSchema() {
       accelerators_json TEXT NOT NULL DEFAULT '[]',
       providers_json TEXT NOT NULL DEFAULT '[]',
       executors_json TEXT NOT NULL DEFAULT '[]',
+      model_inventory_json TEXT NOT NULL DEFAULT '[]',
+      limits_json TEXT NOT NULL DEFAULT '{}',
+      health_json TEXT NOT NULL DEFAULT '{}',
+      last_health_check TEXT,
       worker_version TEXT,
       trust_level TEXT NOT NULL DEFAULT 'trusted',
       state TEXT NOT NULL DEFAULT 'offline',
@@ -72,6 +76,10 @@ function ensureSchema() {
   ensureColumn("compute_workers", "credential_hash", "TEXT");
   ensureColumn("compute_workers", "credential_rotated_at", "TEXT");
   ensureColumn("compute_workers", "protocol_version", "TEXT NOT NULL DEFAULT '1'");
+  ensureColumn("compute_workers", "model_inventory_json", "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn("compute_workers", "limits_json", "TEXT NOT NULL DEFAULT '{}'");
+  ensureColumn("compute_workers", "health_json", "TEXT NOT NULL DEFAULT '{}'");
+  ensureColumn("compute_workers", "last_health_check", "TEXT");
 }
 
 function ensureColumn(table, column, definition) {
@@ -93,6 +101,10 @@ function rowToWorker(row) {
     accelerators: parseJson(row.accelerators_json, []),
     providers: parseJson(row.providers_json, []),
     executors: parseJson(row.executors_json, []),
+    modelInventory: parseJson(row.model_inventory_json, []),
+    limits: parseJson(row.limits_json, {}),
+    health: parseJson(row.health_json, {}),
+    lastHealthCheck: row.last_health_check,
     workerVersion: row.worker_version,
     trustLevel: row.trust_level,
     state: row.state,
@@ -147,7 +159,7 @@ function consumeEnrollmentToken(token, workerId) {
   };
 }
 
-function enrollWorker({ nodeId, displayName, platform, architecture, cpuInfo, memoryBytes, accelerators, providers, executors, workerVersion, publicKey, enrollmentToken, protocolVersion = "1" }) {
+function enrollWorker({ nodeId, displayName, platform, architecture, cpuInfo, memoryBytes, accelerators, providers, executors, modelInventory, limits, health, workerVersion, publicKey, enrollmentToken, protocolVersion = "1" }) {
   ensureSchema();
   const tokenData = consumeEnrollmentToken(enrollmentToken, nodeId);
   const workerId = generateId("wk");
@@ -157,13 +169,15 @@ function enrollWorker({ nodeId, displayName, platform, architecture, cpuInfo, me
     INSERT INTO compute_workers (
       worker_id, node_id, display_name, platform, architecture, cpu_info,
       memory_bytes, accelerators_json, providers_json, executors_json,
+      model_inventory_json, limits_json, health_json, last_health_check,
       worker_version, trust_level, state, max_concurrent_jobs, enrolled_at,
       enrollment_token_hash, credential_hash, credential_rotated_at, public_key, protocol_version
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'online', ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'online', ?, ?, ?, ?, ?, ?, ?)
   `).run(
     workerId, nodeId, displayName, platform, architecture || null,
     cpuInfo || null, memoryBytes || 0, json(accelerators || []),
     json(providers || []), json(executors || []),
+    json(modelInventory || []), json(limits || {}), json(health || {}), health ? nowIso() : null,
     workerVersion || null, tokenData.trustLevel,
     tokenData.maxConcurrentJobs, nowIso(),
     hashToken(enrollmentToken), hashToken(credential), nowIso(), publicKey || null, String(protocolVersion || "1")
@@ -232,6 +246,9 @@ function updateWorker(workerId, updates) {
   if (updates.accelerators !== undefined) { fields.push("accelerators_json = ?"); params.push(json(updates.accelerators)); }
   if (updates.providers !== undefined) { fields.push("providers_json = ?"); params.push(json(updates.providers)); }
   if (updates.executors !== undefined) { fields.push("executors_json = ?"); params.push(json(updates.executors)); }
+  if (updates.modelInventory !== undefined) { fields.push("model_inventory_json = ?"); params.push(json(updates.modelInventory)); }
+  if (updates.limits !== undefined) { fields.push("limits_json = ?"); params.push(json(updates.limits)); }
+  if (updates.health !== undefined) { fields.push("health_json = ?"); params.push(json(updates.health)); fields.push("last_health_check = ?"); params.push(nowIso()); }
   if (updates.utilization !== undefined) { fields.push("utilization_json = ?"); params.push(json(updates.utilization)); }
   if (updates.workerVersion !== undefined) { fields.push("worker_version = ?"); params.push(updates.workerVersion); }
   if (fields.length === 0) return getWorker(workerId);

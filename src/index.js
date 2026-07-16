@@ -823,7 +823,7 @@ const TOOL_SCHEMAS = {
   compute_jobs: z.object({
     action: z.enum(["list", "get", "create", "cancel", "stats", "artifacts"]).describe("Job action"),
     job_id: z.string().optional().describe("Job ID"),
-    job_type: z.string().optional().describe("Job type (inference|embedding|transcription|custom)"),
+    job_type: z.string().optional().describe("Job type (chat|generate|embeddings)"),
     model: z.string().optional().describe("Model name"),
     prompt: z.string().optional().describe("Prompt"),
     provider: z.string().optional().describe("Preferred provider"),
@@ -833,9 +833,9 @@ const TOOL_SCHEMAS = {
   }),
   compute_route: z.object({
     action: z.enum(["explain", "list_rules", "create_rule", "delete_rule"]).describe("Routing action"),
-    workload_class: z.string().optional().describe("Workload class for explain"),
+    workload_class: z.string().optional().describe("Workload class for explain (chat|generate|embeddings)"),
     capabilities_required: z.string().optional().describe("Comma-separated capabilities for explain"),
-    data_classification: z.string().optional().describe("Data classification for explain"),
+    data_classification: z.string().optional().describe("Data classification for explain (public|internal|private)"),
     trust_level: z.string().optional().describe("Trust level for explain"),
     rule_id: z.string().optional().describe("Routing rule ID"),
     rule_name: z.string().optional().describe("Rule name for create_rule"),
@@ -1168,7 +1168,7 @@ app.get("/health", (req, res) => {
 });
 
 app.use((req, res, next) => {
-  if (req.path.startsWith("/compute/")) return next();
+  if (isComputeAuthBypassPath(req.path)) return next();
   const token = getBearerOrQueryToken(req);
   if (!timingSafeCompare(token, API_KEY)) {
     return res.status(401).json({ error: "Unauthorized" });
@@ -1427,11 +1427,51 @@ try {
 }
 
 const compute = require("./compute");
+let platformKernelForComputeAudit = null;
+try { platformKernelForComputeAudit = require("./platform/kernel"); } catch {}
+const computeEnrollmentRateLimit = new Map();
 
 function sendComputeError(res, error, status = 400) {
   const code = error.code || "COMPUTE_ERROR";
   const message = String(error.message || "Compute error").replace(/(wksec_|enroll_)[A-Za-z0-9_-]+/g, "[REDACTED]");
   res.status(status).json({ ok: false, error: message, code });
+}
+
+function auditComputeEvent(eventType, { actor = "compute", subjectType, subjectId, payload = {}, severity = "info" } = {}) {
+  if (!platformKernelForComputeAudit) return;
+  try {
+    platformKernelForComputeAudit.appendEvent({
+      event_type: eventType,
+      source: "compute",
+      actor_id: actor,
+      subject_type: subjectType,
+      subject_id: subjectId,
+      severity,
+      payload,
+      sensitivity: "normal",
+      redaction_state: "redacted",
+      correlation_id: subjectId || undefined,
+    });
+  } catch {}
+}
+
+function enforceEnrollmentRateLimit(req, res, next) {
+  const key = req.ip || req.socket?.remoteAddress || "unknown";
+  const now = Date.now();
+  const windowMs = 60_000;
+  const current = computeEnrollmentRateLimit.get(key) || [];
+  const recent = current.filter(ts => now - ts < windowMs);
+  if (recent.length >= 20) return res.status(429).json({ ok: false, error: "enrollment rate limit exceeded" });
+  recent.push(now);
+  computeEnrollmentRateLimit.set(key, recent);
+  next();
+}
+
+function requireComputeJsonContent(req, res, next) {
+  if (["POST", "PUT", "PATCH"].includes(req.method) && !req.is("application/json")) {
+    return res.status(415).json({ ok: false, error: "compute protocol requires application/json" });
+  }
+  next();
 }
 
 function requireAdmin(req, res, next) {
@@ -1463,8 +1503,22 @@ function requireWorker(req, res, next) {
   next();
 }
 
-// Compute worker REST endpoints. Enrollment uses one-time token; all other worker routes require worker credentials.
-app.post("/compute/enrollment-tokens", express.json({ limit: "16kb" }), requireAdmin, (req, res) => {
+function isComputeAuthBypassPath(pathname) {
+  if (pathname === "/compute/enrollment/exchange" || pathname === "/compute/enroll") return true;
+  if (pathname.startsWith("/compute/worker/")) return true;
+  const legacyWorkerPaths = [
+    "/compute/heartbeat",
+    "/compute/capabilities",
+    "/compute/credentials/rotate",
+    "/compute/jobs/claim",
+  ];
+  if (legacyWorkerPaths.includes(pathname)) return true;
+  return /^\/compute\/jobs\/[^/]+\/(start|renew|progress|complete|fail)$/.test(pathname)
+    || /^\/compute\/jobs\/[^/]+\/cancellation(\/ack)?$/.test(pathname)
+    || /^\/compute\/jobs\/[^/]+\/artifacts\/(upload|[^/]+\/finalize)$/.test(pathname);
+}
+
+function createEnrollmentTokenHandler(req, res) {
   try {
     const body = req.body || {};
     const token = compute.workerManager.createEnrollmentToken({
@@ -1475,11 +1529,12 @@ app.post("/compute/enrollment-tokens", express.json({ limit: "16kb" }), requireA
       expiresInMs: body.expiresInMs || body.expires_in_ms || 3600000,
       createdBy: "admin-http",
     });
+    auditComputeEvent("compute.enrollment_token.created", { actor: "admin-http", subjectType: "compute_enrollment_token", subjectId: token.tokenId, payload: { display_name: body.displayName || body.display_name || null } });
     res.json({ ok: true, ...token, message: "Token created. The token value is returned only once." });
   } catch (e) { sendComputeError(res, e, 400); }
-});
+}
 
-app.post("/compute/enroll", express.json({ limit: "64kb" }), (req, res) => {
+function enrollWorkerHandler(req, res) {
   try {
     const { token, nodeId, displayName, platform, architecture, cpuInfo, memoryBytes, accelerators, providers, executors, workerVersion, publicKey, protocolVersion } = req.body || {};
     if (!token || !nodeId || !displayName || !platform) {
@@ -1488,19 +1543,27 @@ app.post("/compute/enroll", express.json({ limit: "64kb" }), (req, res) => {
     if (protocolVersion && String(protocolVersion) !== "1") return res.status(426).json({ ok: false, error: "unsupported worker protocol version", supported: ["1"] });
     const enrolled = compute.workerManager.enrollWorker({
       nodeId, displayName, platform, architecture, cpuInfo, memoryBytes,
-      accelerators, providers, executors, workerVersion, publicKey, enrollmentToken: token, protocolVersion,
+      accelerators, providers, executors,
+      modelInventory: req.body?.modelInventory || req.body?.model_inventory,
+      limits: req.body?.limits,
+      health: req.body?.health || req.body?.backendHealth || req.body?.backend_health,
+      workerVersion, publicKey, enrollmentToken: token, protocolVersion,
     });
+    auditComputeEvent("compute.worker.enrolled", { actor: enrolled.worker.workerId, subjectType: "compute_worker", subjectId: enrolled.worker.workerId, payload: { node_id: nodeId, protocol_version: protocolVersion || "1" } });
     res.json({ ok: true, worker: enrolled.worker, credential: enrolled.credential, credentialType: "worker-bearer-v1" });
   } catch (e) {
     sendComputeError(res, e, 400);
   }
-});
+}
 
-app.post("/compute/heartbeat", express.json({ limit: "32kb" }), requireWorker, (req, res) => {
+function heartbeatHandler(req, res) {
   try {
     const { utilization, currentJobs, providers, executors, accelerators, workerVersion } = req.body || {};
-    if (providers || executors || accelerators || workerVersion) {
-      compute.workerManager.updateWorker(req.computeWorker.workerId, { providers, executors, accelerators, workerVersion });
+    const modelInventory = req.body?.modelInventory || req.body?.model_inventory;
+    const limits = req.body?.limits;
+    const health = req.body?.health || req.body?.backendHealth || req.body?.backend_health;
+    if (providers || executors || accelerators || workerVersion || modelInventory || limits || health) {
+      compute.workerManager.updateWorker(req.computeWorker.workerId, { providers, executors, accelerators, workerVersion, modelInventory, limits, health });
     }
     const worker = compute.workerManager.heartbeat(req.computeWorker.workerId, { utilization, currentJobs });
     if (!worker) return res.status(404).json({ error: "Worker not found" });
@@ -1508,25 +1571,35 @@ app.post("/compute/heartbeat", express.json({ limit: "32kb" }), requireWorker, (
   } catch (e) {
     sendComputeError(res, e, 400);
   }
-});
+}
 
-app.post("/compute/capabilities", express.json({ limit: "64kb" }), requireWorker, (req, res) => {
+function capabilitiesHandler(req, res) {
   try {
     const { providers, executors, accelerators, maxConcurrentJobs, workerVersion } = req.body || {};
-    const worker = compute.workerManager.updateWorker(req.computeWorker.workerId, { providers, executors, accelerators, maxConcurrentJobs, workerVersion });
+    const worker = compute.workerManager.updateWorker(req.computeWorker.workerId, {
+      providers,
+      executors,
+      accelerators,
+      maxConcurrentJobs,
+      workerVersion,
+      modelInventory: req.body?.modelInventory || req.body?.model_inventory,
+      limits: req.body?.limits,
+      health: req.body?.health || req.body?.backendHealth || req.body?.backend_health,
+    });
     res.json({ ok: true, worker });
   } catch (e) { sendComputeError(res, e, 400); }
-});
+}
 
-app.post("/compute/credentials/rotate", express.json({ limit: "8kb" }), requireWorker, (req, res) => {
+function rotateCredentialHandler(req, res) {
   try {
     const result = compute.workerManager.rotateCredential(req.computeWorker.workerId);
     if (!result) return res.status(404).json({ ok: false, error: "worker not found" });
+    auditComputeEvent("compute.worker.credential_rotated", { actor: req.computeWorker.workerId, subjectType: "compute_worker", subjectId: req.computeWorker.workerId });
     res.json({ ok: true, worker: result.worker, credential: result.credential, credentialType: "worker-bearer-v1" });
   } catch (e) { sendComputeError(res, e, 400); }
-});
+}
 
-app.post("/compute/jobs", express.json({ limit: "256kb" }), requireAdmin, (req, res) => {
+function createJobHandler(req, res) {
   try {
     const body = req.body || {};
     if (!body.jobType && !body.job_type) return res.status(400).json({ ok: false, error: "jobType is required" });
@@ -1539,72 +1612,236 @@ app.post("/compute/jobs", express.json({ limit: "256kb" }), requireAdmin, (req, 
       sessionId: body.sessionId || body.session_id,
       requestingActor: "admin",
       dataClassification: body.dataClassification || body.data_classification || "private",
+      protocolVersion: body.protocolVersion || body.protocol_version || "1",
       capabilityRequirements: body.capabilityRequirements || body.capability_requirements || {},
       routingPreferences: body.routingPreferences || body.routing_preferences || {},
+      retryPolicy: body.retryPolicy || body.retry_policy || {},
+      resourceRequirements: body.resourceRequirements || body.resource_requirements || {},
+      artifactExpectations: body.artifactExpectations || body.artifact_expectations || [],
+      outputLimits: body.outputLimits || body.output_limits || {},
       requestPayload: body.requestPayload || body.request_payload || {},
+      priority: body.priority,
+      expiresAt: body.expiresAt || body.expires_at,
       maxAttempts: body.maxAttempts || body.max_attempts || 3,
       timeoutMs: body.timeoutMs || body.timeout_ms,
       idempotencyKey: body.idempotencyKey || body.idempotency_key,
     });
     res.json({ ok: true, job });
   } catch (e) { sendComputeError(res, e, 400); }
-});
+}
 
-app.get("/compute/jobs/:jobId", requireAdmin, (req, res) => {
+function listJobsHandler(req, res) {
+  try {
+    const jobs = compute.jobManager.listJobs({
+      status: req.query?.status,
+      jobType: req.query?.jobType || req.query?.job_type,
+      project: req.query?.project,
+      providerId: req.query?.providerId || req.query?.provider_id,
+      workerId: req.query?.workerId || req.query?.worker_id,
+      capability: req.query?.capability,
+      limit: req.query?.limit ? Math.min(200, Math.max(1, Number(req.query.limit) || 50)) : 50,
+    });
+    res.json({ ok: true, jobs, stats: compute.jobManager.getJobStats() });
+  } catch (e) { sendComputeError(res, e, 400); }
+}
+
+function getJobHandler(req, res) {
   const job = compute.jobManager.getJob(req.params.jobId);
   if (!job) return res.status(404).json({ ok: false, error: "job not found" });
-  res.json({ ok: true, job, artifacts: compute.jobManager.listArtifacts(req.params.jobId) });
-});
+  res.json({ ok: true, job, attempts: compute.jobManager.listAttempts(req.params.jobId), artifacts: compute.jobManager.listArtifacts(req.params.jobId) });
+}
 
-app.post("/compute/jobs/:jobId/cancel", express.json({ limit: "8kb" }), requireAdmin, (req, res) => {
-  try { res.json({ ok: true, job: compute.jobManager.cancelJob(req.params.jobId, { actor: "admin", reason: req.body?.reason || "cancelled" }) }); }
+function cancelJobHandler(req, res) {
+  try { const job = compute.jobManager.cancelJob(req.params.jobId, { actor: "admin", reason: req.body?.reason || "cancelled" }); auditComputeEvent("compute.job.cancelled", { actor: "admin", subjectType: "compute_job", subjectId: req.params.jobId, payload: { reason: req.body?.reason || "cancelled" }, severity: "warning" }); res.json({ ok: true, job }); }
   catch (e) { sendComputeError(res, e, 400); }
-});
+}
 
-app.post("/compute/jobs/claim", express.json({ limit: "16kb" }), requireWorker, (req, res) => {
+function claimJobHandler(req, res) {
   try {
     const claimed = compute.jobManager.claimNextJob(req.computeWorker, { leaseDurationMs: req.body?.leaseDurationMs || req.body?.lease_duration_ms || 300000 });
     res.json({ ok: true, claimed: !!claimed, ...(claimed || {}) });
   } catch (e) { sendComputeError(res, e, 400); }
-});
+}
 
-app.post("/compute/jobs/:jobId/start", express.json({ limit: "16kb" }), requireWorker, (req, res) => {
+function startJobHandler(req, res) {
   try { res.json({ ok: true, job: compute.jobManager.startLeasedJob(req.params.jobId, req.computeWorker.workerId, req.body?.leaseId || req.body?.lease_id) }); }
   catch (e) { sendComputeError(res, e, 409); }
-});
+}
 
-app.post("/compute/jobs/:jobId/renew", express.json({ limit: "16kb" }), requireWorker, (req, res) => {
+function renewJobHandler(req, res) {
   try { res.json({ ok: true, job: compute.jobManager.renewLease(req.params.jobId, req.body?.leaseId || req.body?.lease_id, req.body?.leaseDurationMs || req.body?.lease_duration_ms || 300000) }); }
   catch (e) { sendComputeError(res, e, 409); }
-});
+}
 
-app.post("/compute/jobs/:jobId/progress", express.json({ limit: "16kb" }), requireWorker, (req, res) => {
+function progressJobHandler(req, res) {
   try { res.json({ ok: true, job: compute.jobManager.updateProgress(req.params.jobId, req.computeWorker.workerId, req.body?.leaseId || req.body?.lease_id, req.body || {}) }); }
   catch (e) { sendComputeError(res, e, 409); }
-});
+}
 
-app.post("/compute/jobs/:jobId/complete", express.json({ limit: "512kb" }), requireWorker, (req, res) => {
+function cancellationStatusHandler(req, res) {
+  try { res.json({ ok: true, cancellation: compute.jobManager.getCancellationStatus(req.params.jobId, req.computeWorker.workerId, req.body?.leaseId || req.body?.lease_id || req.query?.leaseId || req.query?.lease_id) }); }
+  catch (e) { sendComputeError(res, e, 409); }
+}
+
+function cancellationAckHandler(req, res) {
+  try { res.json({ ok: true, job: compute.jobManager.acknowledgeCancellation(req.params.jobId, req.computeWorker.workerId, req.body?.leaseId || req.body?.lease_id) }); }
+  catch (e) { sendComputeError(res, e, 409); }
+}
+
+function completeJobHandler(req, res) {
   try { res.json({ ok: true, job: compute.jobManager.completeJob(req.params.jobId, req.computeWorker.workerId, req.body?.leaseId || req.body?.lease_id, req.body || {}) }); }
   catch (e) { sendComputeError(res, e, 409); }
-});
+}
 
-app.post("/compute/jobs/:jobId/fail", express.json({ limit: "64kb" }), requireWorker, (req, res) => {
+function uploadArtifactHandler(req, res) {
+  try {
+    const artifact = compute.jobManager.uploadArtifact(req.params.jobId, req.computeWorker.workerId, req.body?.leaseId || req.body?.lease_id, req.body || {});
+    res.json({ ok: true, artifact });
+  } catch (e) { sendComputeError(res, e, 409); }
+}
+
+function finalizeArtifactHandler(req, res) {
+  try {
+    const artifact = compute.jobManager.finalizeArtifact(req.params.jobId, req.computeWorker.workerId, req.body?.leaseId || req.body?.lease_id, req.params.artifactId, req.body || {});
+    res.json({ ok: true, artifact });
+  } catch (e) { sendComputeError(res, e, 409); }
+}
+
+function failJobHandler(req, res) {
   try { res.json({ ok: true, job: compute.jobManager.failJob(req.params.jobId, req.computeWorker.workerId, req.body?.leaseId || req.body?.lease_id, req.body || {}) }); }
   catch (e) { sendComputeError(res, e, 409); }
-});
+}
 
-app.post("/compute/recover", express.json({ limit: "8kb" }), requireAdmin, (req, res) => {
+function recoverJobsHandler(req, res) {
   try { res.json({ ok: true, recovered: compute.jobManager.recoverExpiredLeases() }); }
   catch (e) { sendComputeError(res, e, 500); }
-});
+}
 
-app.get("/compute/health", (req, res) => {
+function retryJobHandler(req, res) {
+  try { const job = compute.jobManager.retryJob(req.params.jobId, { actor: "admin", reason: req.body?.reason || "retry_requested" }); auditComputeEvent("compute.job.retry_requested", { actor: "admin", subjectType: "compute_job", subjectId: req.params.jobId, payload: { reason: req.body?.reason || "retry_requested" } }); res.json({ ok: true, job }); }
+  catch (e) { sendComputeError(res, e, 400); }
+}
+
+function listWorkersHandler(req, res) {
+  try { res.json({ ok: true, workers: compute.workerManager.listWorkers(req.query || {}) }); }
+  catch (e) { sendComputeError(res, e, 400); }
+}
+
+function getWorkerHandler(req, res) {
+  const worker = compute.workerManager.getWorker(req.params.workerId);
+  if (!worker) return res.status(404).json({ ok: false, error: "worker not found" });
+  res.json({ ok: true, worker });
+}
+
+function disableWorkerHandler(req, res) {
+  try {
+    const worker = compute.workerManager.updateWorker(req.params.workerId, { state: "maintenance", maintenanceMode: true });
+    if (!worker) return res.status(404).json({ ok: false, error: "worker not found" });
+    auditComputeEvent("compute.worker.disabled", { actor: "admin", subjectType: "compute_worker", subjectId: req.params.workerId, payload: { reason: req.body?.reason || null }, severity: "warning" });
+    res.json({ ok: true, worker });
+  } catch (e) { sendComputeError(res, e, 400); }
+}
+
+function enableWorkerHandler(req, res) {
+  try {
+    const worker = compute.workerManager.updateWorker(req.params.workerId, { state: "offline", maintenanceMode: false });
+    if (!worker) return res.status(404).json({ ok: false, error: "worker not found" });
+    auditComputeEvent("compute.worker.enabled", { actor: "admin", subjectType: "compute_worker", subjectId: req.params.workerId, payload: { reason: req.body?.reason || null } });
+    res.json({ ok: true, worker });
+  } catch (e) { sendComputeError(res, e, 400); }
+}
+
+function revokeWorkerHandler(req, res) {
+  try {
+    const worker = compute.workerManager.revokeWorker(req.params.workerId, req.body?.reason || "admin_revoked");
+    if (!worker) return res.status(404).json({ ok: false, error: "worker not found" });
+    auditComputeEvent("compute.worker.revoked", { actor: "admin", subjectType: "compute_worker", subjectId: req.params.workerId, payload: { reason: req.body?.reason || "admin_revoked" }, severity: "warning" });
+    res.json({ ok: true, worker });
+  } catch (e) { sendComputeError(res, e, 400); }
+}
+
+function adminRotateWorkerCredentialHandler(req, res) {
+  try {
+    const result = compute.workerManager.rotateCredential(req.params.workerId);
+    if (!result) return res.status(404).json({ ok: false, error: "worker not found" });
+    auditComputeEvent("compute.worker.credential_rotated", { actor: "admin", subjectType: "compute_worker", subjectId: req.params.workerId });
+    res.json({ ok: true, worker: result.worker, credential: result.credential, credentialType: "worker-bearer-v1" });
+  } catch (e) { sendComputeError(res, e, 400); }
+}
+
+function computeHealthHandler(req, res) {
   try {
     res.json({ ok: true, overview: compute.overview() });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
-});
+}
+
+// Canonical compute route groups. Enrollment exchange is public but validates a one-time token;
+// worker routes require scoped worker credentials; admin routes require the Sidekick API key.
+app.use("/compute", requireComputeJsonContent);
+const computeEnrollmentRouter = express.Router();
+computeEnrollmentRouter.post("/tokens", express.json({ limit: "16kb" }), requireAdmin, createEnrollmentTokenHandler);
+computeEnrollmentRouter.post("/exchange", express.json({ limit: "64kb" }), enforceEnrollmentRateLimit, enrollWorkerHandler);
+app.use("/compute/enrollment", computeEnrollmentRouter);
+
+const computeWorkerRouter = express.Router();
+computeWorkerRouter.use(requireWorker);
+computeWorkerRouter.post("/heartbeat", express.json({ limit: "32kb" }), heartbeatHandler);
+computeWorkerRouter.post("/capabilities", express.json({ limit: "64kb" }), capabilitiesHandler);
+computeWorkerRouter.post("/credentials/rotate", express.json({ limit: "8kb" }), rotateCredentialHandler);
+computeWorkerRouter.post("/jobs/claim", express.json({ limit: "16kb" }), claimJobHandler);
+computeWorkerRouter.post("/jobs/:jobId/start", express.json({ limit: "16kb" }), startJobHandler);
+computeWorkerRouter.post("/jobs/:jobId/renew", express.json({ limit: "16kb" }), renewJobHandler);
+computeWorkerRouter.post("/jobs/:jobId/progress", express.json({ limit: "16kb" }), progressJobHandler);
+computeWorkerRouter.post("/jobs/:jobId/cancellation", express.json({ limit: "16kb" }), cancellationStatusHandler);
+computeWorkerRouter.post("/jobs/:jobId/cancellation/ack", express.json({ limit: "16kb" }), cancellationAckHandler);
+computeWorkerRouter.post("/jobs/:jobId/artifacts/upload", express.json({ limit: "512kb" }), uploadArtifactHandler);
+computeWorkerRouter.post("/jobs/:jobId/artifacts/:artifactId/finalize", express.json({ limit: "64kb" }), finalizeArtifactHandler);
+computeWorkerRouter.post("/jobs/:jobId/complete", express.json({ limit: "512kb" }), completeJobHandler);
+computeWorkerRouter.post("/jobs/:jobId/fail", express.json({ limit: "64kb" }), failJobHandler);
+app.use("/compute/worker", computeWorkerRouter);
+
+const computeAdminRouter = express.Router();
+computeAdminRouter.use(requireAdmin);
+computeAdminRouter.get("/workers", listWorkersHandler);
+computeAdminRouter.get("/workers/:workerId", getWorkerHandler);
+computeAdminRouter.post("/workers/:workerId/disable", express.json({ limit: "8kb" }), disableWorkerHandler);
+computeAdminRouter.post("/workers/:workerId/enable", express.json({ limit: "8kb" }), enableWorkerHandler);
+computeAdminRouter.post("/workers/:workerId/revoke", express.json({ limit: "8kb" }), revokeWorkerHandler);
+computeAdminRouter.post("/workers/:workerId/credentials/rotate", express.json({ limit: "8kb" }), adminRotateWorkerCredentialHandler);
+computeAdminRouter.post("/jobs", express.json({ limit: "256kb" }), createJobHandler);
+computeAdminRouter.get("/jobs", listJobsHandler);
+computeAdminRouter.get("/jobs/:jobId", getJobHandler);
+computeAdminRouter.post("/jobs/:jobId/cancel", express.json({ limit: "8kb" }), cancelJobHandler);
+computeAdminRouter.post("/jobs/:jobId/retry", express.json({ limit: "8kb" }), retryJobHandler);
+computeAdminRouter.post("/recover", express.json({ limit: "8kb" }), recoverJobsHandler);
+computeAdminRouter.get("/health", computeHealthHandler);
+app.use("/compute/admin", computeAdminRouter);
+
+// Compatibility aliases for the initial compute HTTP protocol. These remain explicitly authenticated
+// and are covered by the narrow global-auth bypass above only where worker/enrollment credentials differ.
+app.post("/compute/enrollment-tokens", express.json({ limit: "16kb" }), requireAdmin, createEnrollmentTokenHandler);
+app.post("/compute/enroll", express.json({ limit: "64kb" }), enforceEnrollmentRateLimit, enrollWorkerHandler);
+app.post("/compute/heartbeat", express.json({ limit: "32kb" }), requireWorker, heartbeatHandler);
+app.post("/compute/capabilities", express.json({ limit: "64kb" }), requireWorker, capabilitiesHandler);
+app.post("/compute/credentials/rotate", express.json({ limit: "8kb" }), requireWorker, rotateCredentialHandler);
+app.post("/compute/jobs", express.json({ limit: "256kb" }), requireAdmin, createJobHandler);
+app.get("/compute/jobs", requireAdmin, listJobsHandler);
+app.get("/compute/jobs/:jobId", requireAdmin, getJobHandler);
+app.post("/compute/jobs/:jobId/cancel", express.json({ limit: "8kb" }), requireAdmin, cancelJobHandler);
+app.post("/compute/jobs/claim", express.json({ limit: "16kb" }), requireWorker, claimJobHandler);
+app.post("/compute/jobs/:jobId/start", express.json({ limit: "16kb" }), requireWorker, startJobHandler);
+app.post("/compute/jobs/:jobId/renew", express.json({ limit: "16kb" }), requireWorker, renewJobHandler);
+app.post("/compute/jobs/:jobId/progress", express.json({ limit: "16kb" }), requireWorker, progressJobHandler);
+app.post("/compute/jobs/:jobId/cancellation", express.json({ limit: "16kb" }), requireWorker, cancellationStatusHandler);
+app.post("/compute/jobs/:jobId/cancellation/ack", express.json({ limit: "16kb" }), requireWorker, cancellationAckHandler);
+app.post("/compute/jobs/:jobId/artifacts/upload", express.json({ limit: "512kb" }), requireWorker, uploadArtifactHandler);
+app.post("/compute/jobs/:jobId/artifacts/:artifactId/finalize", express.json({ limit: "64kb" }), requireWorker, finalizeArtifactHandler);
+app.post("/compute/jobs/:jobId/complete", express.json({ limit: "512kb" }), requireWorker, completeJobHandler);
+app.post("/compute/jobs/:jobId/fail", express.json({ limit: "64kb" }), requireWorker, failJobHandler);
+app.post("/compute/recover", express.json({ limit: "8kb" }), requireAdmin, recoverJobsHandler);
+app.get("/compute/health", requireAdmin, computeHealthHandler);
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log("Sidekick MCP server listening on port " + PORT);

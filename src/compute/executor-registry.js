@@ -144,36 +144,6 @@ const builtinExecutors = [
       return { durationMs: Date.now() - start, tokensEstimate: 0, content: "No inference service available" };
     },
   },
-  {
-    type: "audio.transcribe",
-    version: "1",
-    description: "Transcribe audio using available transcription runtime",
-    risk: "medium",
-    capabilities: ["audio", "transcription"],
-    platforms: ["linux", "darwin", "win32"],
-    inputSchema: { path: "string", model: "string", language: "string" },
-    outputSchema: { text: "string", duration: "number" },
-    resourceLimits: { maxConcurrent: 1, memoryBytes: 2 * 1024 * 1024 * 1024 },
-    timeout: 600000,
-    dataClassifications: ["public", "internal", "private"],
-    async execute(context, input) {
-      if (context.bash) {
-        const { execSync } = require("child_process");
-        try {
-          const model = input.model || "base";
-          const langArg = input.language ? ` --language ${input.language}` : "";
-          const result = execSync(
-            `whisper "${input.path}" --model ${model}${langArg} --output_format txt --output_dir /tmp 2>/dev/null && cat /tmp/*.txt`,
-            { timeout: 600000, encoding: "utf-8" }
-          );
-          return { text: result.trim(), source: "whisper-cli" };
-        } catch (e) {
-          return { text: "", error: e.message, source: "whisper-cli" };
-        }
-      }
-      return { text: "", error: "No bash context available", source: "unavailable" };
-    },
-  },
 ];
 
 for (const def of builtinExecutors) {

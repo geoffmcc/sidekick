@@ -8,5 +8,6 @@ docker/data/*
 opencode.json
 opencode.jsonc
 CONTEXT.md
+docs/workplans/
 backups/
 version.json
