@@ -64,6 +64,7 @@ console.log('Running Dashboard API Tests...\n');
 // Start dashboard server
 delete require.cache[require.resolve('../src/dashboard')];
 const dashboard = require('../src/dashboard');
+const compute = require('../src/compute');
 
 // Wait for server to start
 setTimeout(async () => {
@@ -225,8 +226,40 @@ setTimeout(async () => {
       console.log('Passed\n');
     }
 
-    // Test 3.0g: metrics status reports safe setup state
-    console.log('Test 3.0g: metrics status reports safe setup state');
+    // Test 3.0g: dashboard compute API exposes overview, jobs, attempts, and artifacts
+    console.log('Test 3.0g: dashboard compute API exposes overview, jobs, attempts, and artifacts');
+    {
+      compute.initialize();
+      const job = compute.jobManager.createJob({ jobType: 'chat', capability: 'chat', requestPayload: { prompt: 'dashboard compute' } });
+      const attemptId = compute.jobManager.createAttempt(job.jobId, { workerId: 'wk_dashboard', leaseId: 'lease_dashboard' });
+      compute.jobManager.updateAttempt(attemptId, { status: 'running' });
+      compute.jobManager.createArtifact(job.jobId, { attemptId, workerId: 'wk_dashboard', leaseId: 'lease_dashboard', artifactType: 'result', name: 'result.txt', contentType: 'text/plain', contentHash: 'abc123', sizeBytes: 12, state: 'finalized' });
+
+      const overview = await makeRequest('GET', '/api/compute');
+      assert.strictEqual(overview.status, 200, 'Compute overview should return 200');
+      assert.strictEqual(overview.data.ok, true, 'Compute overview should be ok');
+      assert.ok(overview.data.overview.jobs.total >= 1, 'Compute overview should include job totals');
+
+      const jobs = await makeRequest('GET', '/api/compute/jobs?limit=5');
+      assert.strictEqual(jobs.status, 200, 'Compute jobs should return 200');
+      assert.ok(jobs.data.jobs.some(j => j.jobId === job.jobId), 'Compute jobs should include fixture job');
+      assert.ok(jobs.data.stats.attempts >= 1, 'Compute jobs should include attempt stats');
+      assert.ok(jobs.data.stats.artifacts.finalized >= 1, 'Compute jobs should include artifact stats');
+
+      const detail = await makeRequest('GET', '/api/compute/jobs/' + encodeURIComponent(job.jobId));
+      assert.strictEqual(detail.status, 200, 'Compute job detail should return 200');
+      assert.strictEqual(detail.data.job.jobId, job.jobId, 'Compute job detail should include job');
+      assert.strictEqual(detail.data.attempts[0].attemptId, attemptId, 'Compute job detail should include attempts');
+      assert.strictEqual(detail.data.artifacts[0].artifactType, 'result', 'Compute job detail should include artifacts');
+
+      const workers = await makeRequest('GET', '/api/compute/workers');
+      assert.strictEqual(workers.status, 200, 'Compute workers should return 200');
+      assert.strictEqual(workers.data.ok, true, 'Compute workers should be ok');
+      console.log('Passed\n');
+    }
+
+    // Test 3.0h: metrics status reports safe setup state
+    console.log('Test 3.0h: metrics status reports safe setup state');
     {
       const response = await makeRequest('GET', '/api/metrics/status');
       assert.strictEqual(response.status, 200, 'Metrics status should return 200');

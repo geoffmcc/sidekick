@@ -149,13 +149,13 @@ console.log('Compute.4: JobManager');
 test('createJob stores and returns job', () => {
   jobManager.ensureSchema();
   const j = jobManager.createJob({
-    jobType: 'inference',
+    jobType: 'chat',
     capability: 'chat',
     requestPayload: { model: 'llama3.1:8b', prompt: 'Hello world' }
   });
   assertOk(j.jobId, 'has jobId');
   assertEqual(j.status, 'queued');
-  assertEqual(j.jobType, 'inference');
+  assertEqual(j.jobType, 'chat');
   assertEqual(j.attempt, 0);
 });
 
@@ -185,7 +185,7 @@ test('transitionJob running->completed', () => {
 });
 
 test('cancelJob moves to cancelled', () => {
-  const j = jobManager.createJob({ jobType: 'inference', capability: 'test', requestPayload: {} });
+  const j = jobManager.createJob({ jobType: 'chat', capability: 'chat', requestPayload: {} });
   const cancelled = jobManager.transitionJob(j.jobId, 'cancelled', { cancelReason: 'test' });
   assertEqual(cancelled.status, 'cancelled');
 });

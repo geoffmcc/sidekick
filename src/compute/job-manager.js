@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const dbStore = require("../db");
 const { JOB_STATES, JOB_TERMINAL_STATES, JOB_TRANSITIONS, JobError, LeaseExpiredError } = require("./errors");
+const { validateJobContract } = require("./job-contract");
 let platformKernel = null;
 try { platformKernel = require("../platform/kernel"); } catch {}
 
@@ -26,9 +27,17 @@ function ensureSchema() {
       parent_execution_id TEXT,
       requesting_actor TEXT,
       data_classification TEXT NOT NULL DEFAULT 'private',
+      protocol_version TEXT NOT NULL DEFAULT '1',
       capability_requirements_json TEXT NOT NULL DEFAULT '{}',
       routing_preferences_json TEXT NOT NULL DEFAULT '{}',
+      retry_policy_json TEXT NOT NULL DEFAULT '{}',
+      resource_requirements_json TEXT NOT NULL DEFAULT '{}',
+      artifact_expectations_json TEXT NOT NULL DEFAULT '[]',
+      output_limits_json TEXT NOT NULL DEFAULT '{}',
+      scheduling_diagnostics_json TEXT NOT NULL DEFAULT '{}',
       request_payload_json TEXT NOT NULL DEFAULT '{}',
+      priority INTEGER NOT NULL DEFAULT 50,
+      expires_at TEXT,
       selected_provider_id TEXT,
       selected_model_id TEXT,
       selected_worker_id TEXT,
@@ -40,6 +49,7 @@ function ensureSchema() {
       status TEXT NOT NULL DEFAULT 'created',
       progress_percent INTEGER NOT NULL DEFAULT 0,
       progress_message TEXT,
+      retry_after TEXT,
       result_json TEXT,
       result_hash TEXT,
       error_category TEXT,
@@ -104,6 +114,10 @@ function ensureSchema() {
       content_type TEXT,
       content_hash TEXT,
       size_bytes INTEGER,
+      worker_id TEXT,
+      lease_id TEXT,
+      state TEXT NOT NULL DEFAULT 'finalized',
+      finalized_at TEXT,
       sensitivity TEXT NOT NULL DEFAULT 'private',
       retention_days INTEGER,
       metadata_json TEXT NOT NULL DEFAULT '{}',
@@ -113,12 +127,27 @@ function ensureSchema() {
   `);
   ensureColumn("compute_jobs", "cancel_requested_at", "TEXT");
   ensureColumn("compute_jobs", "cancel_requested_by", "TEXT");
+  ensureColumn("compute_jobs", "cancel_acknowledged_at", "TEXT");
+  ensureColumn("compute_jobs", "cancel_acknowledged_by", "TEXT");
   ensureColumn("compute_jobs", "idempotency_key", "TEXT");
+  ensureColumn("compute_jobs", "protocol_version", "TEXT NOT NULL DEFAULT '1'");
+  ensureColumn("compute_jobs", "priority", "INTEGER NOT NULL DEFAULT 50");
+  ensureColumn("compute_jobs", "expires_at", "TEXT");
+  ensureColumn("compute_jobs", "retry_policy_json", "TEXT NOT NULL DEFAULT '{}'");
+  ensureColumn("compute_jobs", "resource_requirements_json", "TEXT NOT NULL DEFAULT '{}'");
+  ensureColumn("compute_jobs", "artifact_expectations_json", "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn("compute_jobs", "output_limits_json", "TEXT NOT NULL DEFAULT '{}'");
+  ensureColumn("compute_jobs", "retry_after", "TEXT");
+  ensureColumn("compute_jobs", "scheduling_diagnostics_json", "TEXT NOT NULL DEFAULT '{}'");
   ensureColumn("compute_job_attempts", "progress_percent", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("compute_job_attempts", "progress_message", "TEXT");
   ensureColumn("compute_job_attempts", "lease_acquired_at", "TEXT");
   ensureColumn("compute_job_attempts", "lease_expires_at", "TEXT");
   ensureColumn("compute_job_attempts", "execution_id", "TEXT");
+  ensureColumn("compute_artifacts", "worker_id", "TEXT");
+  ensureColumn("compute_artifacts", "lease_id", "TEXT");
+  ensureColumn("compute_artifacts", "state", "TEXT NOT NULL DEFAULT 'finalized'");
+  ensureColumn("compute_artifacts", "finalized_at", "TEXT");
 }
 
 function ensureColumn(table, column, definition) {
@@ -141,9 +170,17 @@ function rowToJob(row) {
     parentExecutionId: row.parent_execution_id,
     requestingActor: row.requesting_actor,
     dataClassification: row.data_classification,
+    protocolVersion: row.protocol_version || "1",
     capabilityRequirements: parseJson(row.capability_requirements_json, {}),
     routingPreferences: parseJson(row.routing_preferences_json, {}),
+    retryPolicy: parseJson(row.retry_policy_json, {}),
+    resourceRequirements: parseJson(row.resource_requirements_json, {}),
+    artifactExpectations: parseJson(row.artifact_expectations_json, []),
+    outputLimits: parseJson(row.output_limits_json, {}),
+    schedulingDiagnostics: parseJson(row.scheduling_diagnostics_json, {}),
     requestPayload: parseJson(row.request_payload_json, {}),
+    priority: row.priority,
+    expiresAt: row.expires_at,
     selectedProviderId: row.selected_provider_id,
     selectedModelId: row.selected_model_id,
     selectedWorkerId: row.selected_worker_id,
@@ -155,6 +192,7 @@ function rowToJob(row) {
     status: row.status,
     progressPercent: row.progress_percent,
     progressMessage: row.progress_message,
+    retryAfter: row.retry_after,
     result: parseJson(row.result_json, null),
     resultHash: row.result_hash,
     errorCategory: row.error_category,
@@ -171,9 +209,91 @@ function rowToJob(row) {
     cancelReason: row.cancel_reason,
     cancelRequestedAt: row.cancel_requested_at,
     cancelRequestedBy: row.cancel_requested_by,
+    cancelAcknowledgedAt: row.cancel_acknowledged_at,
+    cancelAcknowledgedBy: row.cancel_acknowledged_by,
     idempotencyKey: row.idempotency_key,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function rowToArtifact(row) {
+  if (!row) return null;
+  return {
+    artifactId: row.artifact_id,
+    artifact_id: row.artifact_id,
+    jobId: row.job_id,
+    job_id: row.job_id,
+    attemptId: row.attempt_id,
+    attempt_id: row.attempt_id,
+    workerId: row.worker_id,
+    worker_id: row.worker_id,
+    leaseId: row.lease_id,
+    lease_id: row.lease_id,
+    artifactType: row.artifact_type,
+    artifact_type: row.artifact_type,
+    name: row.name,
+    storagePath: row.storage_path,
+    storage_path: row.storage_path,
+    storageRef: row.storage_ref,
+    storage_ref: row.storage_ref,
+    contentType: row.content_type,
+    content_type: row.content_type,
+    contentHash: row.content_hash,
+    content_hash: row.content_hash,
+    sizeBytes: row.size_bytes,
+    size_bytes: row.size_bytes,
+    state: row.state || "finalized",
+    finalizedAt: row.finalized_at,
+    finalized_at: row.finalized_at,
+    sensitivity: row.sensitivity,
+    retentionDays: row.retention_days,
+    metadata: parseJson(row.metadata_json, {}),
+    createdAt: row.created_at,
+  };
+}
+
+function rowToAttempt(row) {
+  if (!row) return null;
+  return {
+    attemptId: row.attempt_id,
+    attempt_id: row.attempt_id,
+    jobId: row.job_id,
+    job_id: row.job_id,
+    attemptNumber: row.attempt_number,
+    attempt_number: row.attempt_number,
+    providerId: row.provider_id,
+    provider_id: row.provider_id,
+    modelId: row.model_id,
+    model_id: row.model_id,
+    workerId: row.worker_id,
+    worker_id: row.worker_id,
+    leaseId: row.lease_id,
+    lease_id: row.lease_id,
+    status: row.status,
+    startedAt: row.started_at,
+    started_at: row.started_at,
+    completedAt: row.completed_at,
+    completed_at: row.completed_at,
+    durationMs: row.duration_ms,
+    duration_ms: row.duration_ms,
+    progressPercent: row.progress_percent,
+    progress_percent: row.progress_percent,
+    progressMessage: row.progress_message,
+    progress_message: row.progress_message,
+    leaseAcquiredAt: row.lease_acquired_at,
+    lease_acquired_at: row.lease_acquired_at,
+    leaseExpiresAt: row.lease_expires_at,
+    lease_expires_at: row.lease_expires_at,
+    executionId: row.execution_id,
+    execution_id: row.execution_id,
+    errorCategory: row.error_category,
+    error_category: row.error_category,
+    errorMessage: row.error_message,
+    error_message: row.error_message,
+    metadata: parseJson(row.metadata_json, {}),
+    createdAt: row.created_at,
+    created_at: row.created_at,
   };
 }
 
@@ -188,11 +308,17 @@ function createJob({
   rootExecutionId, parentExecutionId, requestingActor,
   dataClassification = "private",
   capabilityRequirements = {}, routingPreferences = {},
+  retryPolicy = {}, resourceRequirements = {}, artifactExpectations = [], outputLimits = {},
   requestPayload = {}, approvalRequired = false,
-  maxAttempts = 3, timeoutMs,
+  maxAttempts = 3, timeoutMs, priority = 50, expiresAt, protocolVersion = "1",
   idempotencyKey,
 }) {
   ensureSchema();
+  const validated = validateJobContract({ protocolVersion, jobType, capability, requestPayload, capabilityRequirements, routingPreferences, retryPolicy, resourceRequirements, artifactExpectations, outputLimits, priority, timeoutMs, expiresAt });
+  jobType = validated.jobType;
+  capability = validated.capability;
+  protocolVersion = validated.protocolVersion;
+  priority = validated.priority;
   const jobId = generateId("job");
   const inputHash = hashJson(requestPayload);
   const initialStatus = approvalRequired ? "waiting_for_approval" : "queued";
@@ -205,16 +331,18 @@ function createJob({
     INSERT INTO compute_jobs (
       job_id, job_type, capability, source, project, task_id, session_id,
       root_execution_id, parent_execution_id, requesting_actor,
-      data_classification, capability_requirements_json, routing_preferences_json,
-      request_payload_json, max_attempts, status, approval_required, input_hash, timeout_ms,
+      data_classification, protocol_version, capability_requirements_json, routing_preferences_json,
+      retry_policy_json, resource_requirements_json, artifact_expectations_json, output_limits_json,
+      request_payload_json, priority, expires_at, max_attempts, status, approval_required, input_hash, timeout_ms,
       idempotency_key
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     jobId, jobType, capability, source || null, project || null,
     taskId || null, sessionId || null, rootExecutionId || null,
     parentExecutionId || null, requestingActor || null,
-    dataClassification, json(capabilityRequirements), json(routingPreferences),
-    json(requestPayload), maxAttempts, initialStatus,
+    dataClassification, protocolVersion, json(capabilityRequirements), json(routingPreferences),
+    json(retryPolicy), json(resourceRequirements), json(artifactExpectations), json(outputLimits),
+    json(requestPayload), priority, expiresAt || null, maxAttempts, initialStatus,
     approvalRequired ? 1 : 0, inputHash, timeoutMs || null,
     idempotencyKey || null
   );
@@ -225,15 +353,36 @@ function createJob({
 }
 
 function workerCanRunJob(worker, job) {
-  if (!worker || worker.state !== "online" || worker.maintenanceMode || worker.currentJobs >= worker.maxConcurrentJobs) return false;
+  return workerCompatibility(worker, job).ok;
+}
+
+function workerCompatibility(worker, job) {
+  const reasons = [];
+  if (!worker) return { ok: false, reasons: ["worker_missing"] };
+  if (worker.state !== "online") reasons.push(`state:${worker.state}`);
+  if (worker.maintenanceMode) reasons.push("maintenance_mode");
+  if (worker.protocolVersion !== "1") reasons.push(`protocol:${worker.protocolVersion || "missing"}`);
+  if (worker.currentJobs >= worker.maxConcurrentJobs) reasons.push("concurrency_limit");
+  if (worker.lastHeartbeat && Date.now() - new Date(worker.lastHeartbeat).getTime() > 120000) reasons.push("heartbeat_stale");
   const executors = parseMaybeArray(worker.executors).map(e => typeof e === "string" ? e : (e.type || e.name)).filter(Boolean);
   const providers = parseMaybeArray(worker.providers).map(p => typeof p === "string" ? p : (p.type || p.providerType || p.name)).filter(Boolean);
+  const modelInventory = parseMaybeArray(worker.modelInventory).map(m => typeof m === "string" ? m : (m.name || m.model || m.providerModelName)).filter(Boolean);
   const requiredExecutor = job.capabilityRequirements?.executor || job.requestPayload?.executor;
-  if (requiredExecutor && !executors.includes(requiredExecutor)) return false;
+  const requiredModel = job.requestPayload?.model || job.capabilityRequirements?.model;
+  if (requiredExecutor && !executors.includes(requiredExecutor)) reasons.push(`executor_missing:${requiredExecutor}`);
+  if (requiredModel && modelInventory.length > 0 && !modelInventory.includes(requiredModel)) reasons.push(`model_missing:${requiredModel}`);
+  let capabilityOk = false;
   if (["chat", "generate", "embedding", "embeddings", "inference"].includes(job.jobType) || ["chat", "generate", "embeddings"].includes(job.capability)) {
-    if (executors.includes("mock.inference") || executors.includes("ollama.inference") || providers.includes("mock") || providers.includes("ollama")) return true;
+    capabilityOk = executors.includes("mock.inference") || executors.includes("ollama.inference") || providers.includes("mock") || providers.includes("ollama");
   }
-  return executors.includes(job.jobType) || executors.includes(job.capability);
+  capabilityOk = capabilityOk || executors.includes(job.jobType) || executors.includes(job.capability);
+  if (!capabilityOk) reasons.push(`capability_missing:${job.capability || job.jobType}`);
+  return { ok: reasons.length === 0, reasons };
+}
+
+function recordSchedulingDiagnostics(db, jobId, diagnostics) {
+  db.prepare("UPDATE compute_jobs SET scheduling_diagnostics_json = ?, updated_at = ? WHERE job_id = ?")
+    .run(json(diagnostics), nowIso(), jobId);
 }
 
 function createPlatformExecutionForJob(job, workerId) {
@@ -283,10 +432,15 @@ function claimNextJob(worker, { leaseDurationMs = 300000 } = {}) {
   const db = dbStore.getDb();
   db.exec("BEGIN IMMEDIATE");
   try {
-    const rows = db.prepare("SELECT * FROM compute_jobs WHERE status = 'queued' AND attempt < max_attempts ORDER BY created_at ASC LIMIT 50").all();
+    releaseRetryWaitJobs(db);
+    const rows = db.prepare("SELECT * FROM compute_jobs WHERE status = 'queued' AND attempt < max_attempts AND (expires_at IS NULL OR expires_at > ?) ORDER BY priority ASC, created_at ASC LIMIT 50").all(nowIso());
     for (const row of rows) {
       const job = rowToJob(row);
-      if (!workerCanRunJob(worker, job)) continue;
+      const compatibility = workerCompatibility(worker, job);
+      if (!compatibility.ok) {
+        recordSchedulingDiagnostics(db, job.jobId, { selected: false, workerId: worker.workerId, rejected: [{ workerId: worker.workerId, reasons: compatibility.reasons }], checkedAt: nowIso() });
+        continue;
+      }
       const leaseId = generateId("lease");
       const now = nowIso();
       const leaseExpires = new Date(Date.now() + leaseDurationMs).toISOString();
@@ -303,6 +457,7 @@ function claimNextJob(worker, { leaseDurationMs = 300000 } = {}) {
         INSERT INTO compute_job_attempts (attempt_id, job_id, attempt_number, worker_id, lease_id, status, lease_acquired_at, lease_expires_at, execution_id)
         VALUES (?, ?, ?, ?, ?, 'leased', ?, ?, ?)
       `).run(attemptId, job.jobId, leased.attempt, worker.workerId, leaseId, now, leaseExpires, executionId || null);
+      recordSchedulingDiagnostics(db, job.jobId, { selected: true, workerId: worker.workerId, reasons: ["compatible"], checkedAt: now });
       db.prepare("UPDATE compute_workers SET current_jobs = current_jobs + 1, updated_at = ? WHERE worker_id = ?").run(now, worker.workerId);
       db.exec("COMMIT");
       emitComputeEvent("compute.job_leased", leased, { worker_id: worker.workerId, lease_id: leaseId, attempt_id: attemptId });
@@ -314,6 +469,21 @@ function claimNextJob(worker, { leaseDurationMs = 300000 } = {}) {
     try { db.exec("ROLLBACK"); } catch {}
     throw e;
   }
+}
+
+function releaseRetryWaitJobs(db = dbStore.getDb()) {
+  const now = nowIso();
+  db.prepare("UPDATE compute_jobs SET status = 'queued', queued_at = ?, updated_at = ?, retry_after = NULL WHERE status = 'retry_wait' AND retry_after <= ?")
+    .run(now, now, now);
+}
+
+function retryDelayMs(job) {
+  const policy = job.retryPolicy || {};
+  const base = Number(policy.backoffMs || policy.initialBackoffMs || 1000);
+  const max = Number(policy.maxBackoffMs || 60000);
+  const attemptIndex = Math.max(0, Number(job.attempt || 1) - 1);
+  const delay = Math.min(max, base * Math.pow(2, attemptIndex));
+  return Math.max(0, Number.isFinite(delay) ? delay : 1000);
 }
 
 function getJob(jobId) {
@@ -411,12 +581,12 @@ function recoverExpiredLeases() {
   const rows = db.prepare("SELECT * FROM compute_jobs WHERE status IN ('leased', 'running') AND lease_expires_at < ?").all(now);
   for (const row of rows) {
     const exhausted = row.attempt >= row.max_attempts;
-    const nextStatus = exhausted ? "dead_letter" : "queued";
+    const nextStatus = exhausted ? "dead_letter" : "retry_wait";
     db.prepare(`
       UPDATE compute_jobs SET status = ?, lease_id = NULL, lease_expires_at = NULL, lease_renewed_at = NULL,
-        selected_worker_id = NULL, error_category = ?, error_message = ?, queued_at = CASE WHEN ? = 'queued' THEN ? ELSE queued_at END, updated_at = ?
+        selected_worker_id = NULL, error_category = ?, error_message = ?, retry_after = ?, updated_at = ?
       WHERE job_id = ?
-    `).run(nextStatus, exhausted ? "attempts_exhausted" : "lease_expired", "Worker lease expired", nextStatus, now, now, row.job_id);
+    `).run(nextStatus, exhausted ? "attempts_exhausted" : "lease_expired", "Worker lease expired", exhausted ? null : new Date(Date.now() + retryDelayMs(rowToJob(row))).toISOString(), now, row.job_id);
     db.prepare("UPDATE compute_job_attempts SET status = ?, completed_at = ?, error_category = 'lease_expired', error_message = 'Worker lease expired' WHERE job_id = ? AND lease_id = ?")
       .run(exhausted ? "dead_letter" : "expired", now, row.job_id, row.lease_id);
     if (row.selected_worker_id) db.prepare("UPDATE compute_workers SET current_jobs = MAX(current_jobs - 1, 0), updated_at = ? WHERE worker_id = ?").run(now, row.selected_worker_id);
@@ -464,12 +634,13 @@ function updateProgress(jobId, workerId, leaseId, { progressPercent, progressMes
   return getJob(jobId);
 }
 
-function completeJob(jobId, workerId, leaseId, { result = {}, artifacts = [] } = {}) {
+function completeJob(jobId, workerId, leaseId, { result = {}, artifacts = [], artifactIds = [], artifact_ids = [] } = {}) {
   ensureSchema();
   const job = getJob(jobId);
   if (!job) throw new JobError("Job not found", "JOB_NOT_FOUND", { jobId });
   if (job.status === "completed") return job;
   assertLeaseOwner(jobId, workerId, leaseId, ["leased", "starting", "running"]);
+  validateCompletionArtifacts(jobId, workerId, leaseId, artifactIds.length ? artifactIds : artifact_ids);
   const db = dbStore.getDb();
   const now = nowIso();
   db.exec("BEGIN IMMEDIATE");
@@ -498,20 +669,30 @@ function completeJob(jobId, workerId, leaseId, { result = {}, artifacts = [] } =
   return completed;
 }
 
+function validateCompletionArtifacts(jobId, workerId, leaseId, artifactIds) {
+  for (const artifactId of parseMaybeArray(artifactIds).slice(0, 20)) {
+    const artifact = getArtifact(String(artifactId));
+    if (!artifact || artifact.jobId !== jobId) throw new JobError("Artifact not found", "ARTIFACT_NOT_FOUND", { jobId, artifactId });
+    if (artifact.workerId !== workerId || artifact.leaseId !== leaseId) throw new LeaseExpiredError(jobId, leaseId);
+    if (artifact.state !== "finalized") throw new JobError("Artifact is not finalized", "ARTIFACT_NOT_FINALIZED", { jobId, artifactId });
+  }
+}
+
 function failJob(jobId, workerId, leaseId, { errorCategory = "worker_error", errorMessage = "Worker reported failure" } = {}) {
   ensureSchema();
   assertLeaseOwner(jobId, workerId, leaseId, ["leased", "starting", "running"]);
   const db = dbStore.getDb();
   const current = getJob(jobId);
-  const nextStatus = current.attempt >= current.maxAttempts ? "dead_letter" : "queued";
+  const nextStatus = current.attempt >= current.maxAttempts ? "dead_letter" : "retry_wait";
+  const retryAfter = nextStatus === "retry_wait" ? new Date(Date.now() + retryDelayMs(current)).toISOString() : null;
   const now = nowIso();
   db.prepare(`
     UPDATE compute_jobs SET status = ?, lease_id = NULL, lease_expires_at = NULL, lease_renewed_at = NULL, selected_worker_id = NULL,
-      error_category = ?, error_message = ?, queued_at = CASE WHEN ? = 'queued' THEN ? ELSE queued_at END, updated_at = ?
+      error_category = ?, error_message = ?, retry_after = ?, updated_at = ?
     WHERE job_id = ? AND lease_id = ?
-  `).run(nextStatus, String(errorCategory).slice(0, 80), String(errorMessage).slice(0, 1000), nextStatus, now, now, jobId, leaseId);
+  `).run(nextStatus, String(errorCategory).slice(0, 80), String(errorMessage).slice(0, 1000), retryAfter, now, jobId, leaseId);
   db.prepare("UPDATE compute_job_attempts SET status = ?, completed_at = ?, error_category = ?, error_message = ? WHERE job_id = ? AND lease_id = ?")
-    .run(nextStatus === "queued" ? "failed" : "dead_letter", now, String(errorCategory).slice(0, 80), String(errorMessage).slice(0, 1000), jobId, leaseId);
+    .run(nextStatus === "retry_wait" ? "failed" : "dead_letter", now, String(errorCategory).slice(0, 80), String(errorMessage).slice(0, 1000), jobId, leaseId);
   db.prepare("UPDATE compute_workers SET current_jobs = MAX(current_jobs - 1, 0), updated_at = ? WHERE worker_id = ?").run(now, workerId);
   const job = getJob(jobId);
   emitComputeEvent("compute.job_failed", job, { worker_id: workerId, lease_id: leaseId, next_status: nextStatus }, "warning");
@@ -537,42 +718,157 @@ function cancelJob(jobId, { actor = "admin", reason = "cancelled" } = {}) {
   return cancelled;
 }
 
+function getCancellationStatus(jobId, workerId, leaseId) {
+  ensureSchema();
+  const job = getJob(jobId);
+  if (!job) throw new JobError("Job not found", "JOB_NOT_FOUND", { jobId });
+  if (job.selectedWorkerId !== workerId || job.leaseId !== leaseId) throw new LeaseExpiredError(jobId, leaseId);
+  return {
+    cancelled: job.status === "cancelled" || job.status === "cancelling" || !!job.cancelRequestedAt,
+    status: job.status,
+    reason: job.cancelReason || null,
+    requestedAt: job.cancelRequestedAt || null,
+    requestedBy: job.cancelRequestedBy || null,
+    acknowledgedAt: job.cancelAcknowledgedAt || null,
+  };
+}
+
+function acknowledgeCancellation(jobId, workerId, leaseId) {
+  ensureSchema();
+  const status = getCancellationStatus(jobId, workerId, leaseId);
+  if (!status.cancelled) throw new JobError("Job cancellation has not been requested", "CANCEL_NOT_REQUESTED", { jobId });
+  const now = nowIso();
+  dbStore.getDb().prepare("UPDATE compute_jobs SET cancel_acknowledged_at = COALESCE(cancel_acknowledged_at, ?), cancel_acknowledged_by = COALESCE(cancel_acknowledged_by, ?), updated_at = ? WHERE job_id = ?")
+    .run(now, workerId, now, jobId);
+  const job = getJob(jobId);
+  emitComputeEvent("compute.job_cancel_acknowledged", job, { worker_id: workerId, lease_id: leaseId }, "warning");
+  return job;
+}
+
+function retryJob(jobId, { actor = "admin", reason = "retry_requested" } = {}) {
+  ensureSchema();
+  const db = dbStore.getDb();
+  const job = getJob(jobId);
+  if (!job) throw new JobError("Job not found", "JOB_NOT_FOUND", { jobId });
+  if (!["failed", "expired", "dead_letter", "cancelled"].includes(job.status)) {
+    throw new JobError("Job is not retryable", "NOT_RETRYABLE", { jobId, status: job.status });
+  }
+  const now = nowIso();
+  db.prepare(`
+    UPDATE compute_jobs SET status = 'queued', lease_id = NULL, lease_expires_at = NULL, lease_renewed_at = NULL,
+      selected_worker_id = NULL, progress_percent = 0, progress_message = NULL, retry_after = NULL, error_category = NULL,
+      error_message = NULL, queued_at = ?, updated_at = ?, max_attempts = MAX(max_attempts, attempt + 1)
+    WHERE job_id = ?
+  `).run(now, now, jobId);
+  const retried = getJob(jobId);
+  emitComputeEvent("compute.job_retry_requested", retried, { actor, reason }, "info");
+  return retried;
+}
+
 function createVerifiedArtifact(jobId, leaseId, workerId, artifact, executionId) {
-  const sizeBytes = Number(artifact.sizeBytes || artifact.size_bytes || 0);
-  if (!Number.isFinite(sizeBytes) || sizeBytes < 0 || sizeBytes > 10 * 1024 * 1024) throw new JobError("Artifact size invalid or too large", "ARTIFACT_SIZE", { jobId });
-  const content = artifact.content !== undefined ? Buffer.from(String(artifact.content), "utf8") : null;
-  const contentHash = artifact.contentHash || artifact.content_hash || (content ? crypto.createHash("sha256").update(content).digest("hex") : null);
-  if (content && artifact.contentHash && artifact.contentHash !== contentHash) throw new JobError("Artifact hash mismatch", "ARTIFACT_HASH_MISMATCH", { jobId });
-  const attempt = dbStore.getDb().prepare("SELECT attempt_id FROM compute_job_attempts WHERE job_id = ? AND lease_id = ? ORDER BY created_at DESC LIMIT 1").get(jobId, leaseId);
+  assertLeaseOwner(jobId, workerId, leaseId, ["leased", "starting", "running", "completed"]);
+  const normalized = normalizeArtifact(jobId, artifact);
+  const attempt = currentAttempt(jobId, leaseId);
   const artifactId = createArtifact(jobId, {
+    ...normalized,
     attemptId: attempt?.attempt_id,
-    artifactType: artifact.artifactType || artifact.type || "result",
-    name: String(artifact.name || "artifact.txt").slice(0, 160),
-    storageRef: artifact.storageRef || artifact.storage_ref || null,
-    contentType: artifact.contentType || artifact.content_type || "text/plain",
-    contentHash,
-    sizeBytes: sizeBytes || (content ? content.length : 0),
-    sensitivity: artifact.sensitivity || "private",
-    metadata: { workerId, verified: true },
+    workerId,
+    leaseId,
+    state: "finalized",
+    finalizedAt: nowIso(),
+    storageRef: normalized.storageRef || `compute/${jobId}/${generateId("artifact")}`,
+    metadata: { ...normalized.metadata, workerId, verified: true, inline: true },
   });
+  const finalized = getArtifact(artifactId);
   if (platformKernel && executionId) {
     try {
       platformKernel.registerArtifact({
-        type: artifact.artifactType || artifact.type || "compute-result",
-        name: artifact.name || artifactId,
+        type: finalized.artifactType || "compute-result",
+        name: finalized.name || artifactId,
         execution_id: executionId,
         producer: workerId,
-        storage_ref: artifact.storageRef || artifact.storage_ref || `compute/${jobId}/${artifactId}`,
-        content_type: artifact.contentType || artifact.content_type || "text/plain",
-        byte_size: sizeBytes || (content ? content.length : 0),
-        content_hash: contentHash,
-        sensitivity: artifact.sensitivity || "normal",
+        storage_ref: finalized.storageRef || `compute/${jobId}/${artifactId}`,
+        content_type: finalized.contentType || "text/plain",
+        byte_size: finalized.sizeBytes || 0,
+        content_hash: finalized.contentHash,
+        sensitivity: finalized.sensitivity || "normal",
         verification: { hash_verified: true },
         source: "compute",
       });
     } catch {}
   }
   return artifactId;
+}
+
+function normalizeArtifact(jobId, artifact) {
+  const content = artifact.content !== undefined ? Buffer.from(String(artifact.content), "utf8") : null;
+  const explicitSize = artifact.sizeBytes || artifact.size_bytes;
+  const sizeBytes = explicitSize !== undefined ? Number(explicitSize) : (content ? content.length : 0);
+  if (!Number.isFinite(sizeBytes) || sizeBytes < 0 || sizeBytes > 10 * 1024 * 1024) throw new JobError("Artifact size invalid or too large", "ARTIFACT_SIZE", { jobId });
+  const computedHash = content ? crypto.createHash("sha256").update(content).digest("hex") : null;
+  const providedHash = artifact.contentHash || artifact.content_hash;
+  const contentHash = providedHash || computedHash;
+  if (content && providedHash && providedHash !== computedHash) throw new JobError("Artifact hash mismatch", "ARTIFACT_HASH_MISMATCH", { jobId });
+  return {
+    artifactType: String(artifact.artifactType || artifact.type || "result").slice(0, 80),
+    name: String(artifact.name || "artifact.txt").replace(/[\0\r\n]/g, " ").slice(0, 160),
+    storagePath: artifact.storagePath || artifact.storage_path || null,
+    storageRef: artifact.storageRef || artifact.storage_ref || null,
+    contentType: String(artifact.contentType || artifact.content_type || "text/plain").slice(0, 120),
+    contentHash,
+    sizeBytes,
+    sensitivity: String(artifact.sensitivity || "private").slice(0, 40),
+    retentionDays: artifact.retentionDays || artifact.retention_days,
+    metadata: artifact.metadata || {},
+  };
+}
+
+function currentAttempt(jobId, leaseId) {
+  return dbStore.getDb().prepare("SELECT attempt_id FROM compute_job_attempts WHERE job_id = ? AND lease_id = ? ORDER BY created_at DESC LIMIT 1").get(jobId, leaseId);
+}
+
+function uploadArtifact(jobId, workerId, leaseId, artifact = {}) {
+  ensureSchema();
+  assertLeaseOwner(jobId, workerId, leaseId, ["leased", "starting", "running"]);
+  const normalized = normalizeArtifact(jobId, artifact);
+  const attempt = currentAttempt(jobId, leaseId);
+  const artifactId = createArtifact(jobId, {
+    ...normalized,
+    attemptId: attempt?.attempt_id,
+    workerId,
+    leaseId,
+    state: "uploaded",
+    storageRef: normalized.storageRef || `compute/${jobId}/uploads/${generateId("upload")}`,
+    metadata: { ...normalized.metadata, workerId, verified: false },
+  });
+  emitComputeEvent("compute.artifact_uploaded", getJob(jobId), { worker_id: workerId, lease_id: leaseId, artifact_id: artifactId });
+  return getArtifact(artifactId);
+}
+
+function getArtifact(artifactId) {
+  ensureSchema();
+  return rowToArtifact(dbStore.getDb().prepare("SELECT * FROM compute_artifacts WHERE artifact_id = ?").get(artifactId));
+}
+
+function finalizeArtifact(jobId, workerId, leaseId, artifactId, { contentHash, content_hash, sizeBytes, size_bytes } = {}) {
+  ensureSchema();
+  assertLeaseOwner(jobId, workerId, leaseId, ["leased", "starting", "running"]);
+  const db = dbStore.getDb();
+  const artifact = rowToArtifact(db.prepare("SELECT * FROM compute_artifacts WHERE artifact_id = ? AND job_id = ?").get(artifactId, jobId));
+  if (!artifact) throw new JobError("Artifact not found", "ARTIFACT_NOT_FOUND", { jobId, artifactId });
+  if (artifact.workerId !== workerId || artifact.leaseId !== leaseId) throw new LeaseExpiredError(jobId, leaseId);
+  if (artifact.state === "finalized") return artifact;
+  const expectedHash = contentHash || content_hash;
+  const expectedSize = sizeBytes || size_bytes;
+  if (expectedHash && artifact.contentHash && expectedHash !== artifact.contentHash) throw new JobError("Artifact hash mismatch", "ARTIFACT_HASH_MISMATCH", { jobId, artifactId });
+  if (expectedSize !== undefined && Number(expectedSize) !== Number(artifact.sizeBytes || 0)) throw new JobError("Artifact size mismatch", "ARTIFACT_SIZE_MISMATCH", { jobId, artifactId });
+  const now = nowIso();
+  const updated = db.prepare("UPDATE compute_artifacts SET state = 'finalized', finalized_at = ?, metadata_json = ? WHERE artifact_id = ? AND job_id = ? AND state = 'uploaded'")
+    .run(now, json({ ...artifact.metadata, verified: true, finalizedBy: workerId }), artifactId, jobId);
+  if (updated.changes !== 1) return getArtifact(artifactId);
+  const finalized = getArtifact(artifactId);
+  emitComputeEvent("compute.artifact_finalized", getJob(jobId), { worker_id: workerId, lease_id: leaseId, artifact_id: artifactId });
+  return finalized;
 }
 
 function createAttempt(jobId, { providerId, modelId, workerId, leaseId }) {
@@ -608,23 +904,29 @@ function updateAttempt(attemptId, updates) {
   db.prepare(`UPDATE compute_job_attempts SET ${fields.join(", ")} WHERE attempt_id = ?`).run(...params);
 }
 
-function createArtifact(jobId, { attemptId, artifactType, name, storagePath, storageRef, contentType, contentHash, sizeBytes, sensitivity = "private", retentionDays, metadata = {} }) {
+function createArtifact(jobId, { attemptId, workerId, leaseId, artifactType, name, storagePath, storageRef, contentType, contentHash, sizeBytes, state = "finalized", finalizedAt, sensitivity = "private", retentionDays, metadata = {} }) {
   ensureSchema();
   const db = dbStore.getDb();
   const artifactId = generateId("art");
   db.prepare(`
     INSERT INTO compute_artifacts (
       artifact_id, job_id, attempt_id, artifact_type, name, storage_path, storage_ref,
-      content_type, content_hash, size_bytes, sensitivity, retention_days, metadata_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(artifactId, jobId, attemptId || null, artifactType, name, storagePath || null, storageRef || null, contentType || null, contentHash || null, sizeBytes || 0, sensitivity, retentionDays || null, json(metadata));
+      content_type, content_hash, size_bytes, worker_id, lease_id, state, finalized_at, sensitivity, retention_days, metadata_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(artifactId, jobId, attemptId || null, artifactType, name, storagePath || null, storageRef || null, contentType || null, contentHash || null, sizeBytes || 0, workerId || null, leaseId || null, state, finalizedAt || (state === "finalized" ? nowIso() : null), sensitivity, retentionDays || null, json(metadata));
   return artifactId;
 }
 
 function listArtifacts(jobId) {
   ensureSchema();
   const db = dbStore.getDb();
-  return db.prepare("SELECT * FROM compute_artifacts WHERE job_id = ? ORDER BY created_at").all(jobId);
+  return db.prepare("SELECT * FROM compute_artifacts WHERE job_id = ? ORDER BY created_at").all(jobId).map(rowToArtifact);
+}
+
+function listAttempts(jobId) {
+  ensureSchema();
+  const db = dbStore.getDb();
+  return db.prepare("SELECT * FROM compute_job_attempts WHERE job_id = ? ORDER BY attempt_number, created_at").all(jobId).map(rowToAttempt);
 }
 
 function getJobStats() {
@@ -637,8 +939,14 @@ function getJobStats() {
     SELECT job_type, COUNT(*) as count FROM compute_jobs GROUP BY job_type
   `).all();
   const total = db.prepare("SELECT COUNT(*) as count FROM compute_jobs").get();
+  const activeLeases = db.prepare("SELECT COUNT(*) as count FROM compute_jobs WHERE lease_id IS NOT NULL AND status IN ('leased','starting','running')").get();
+  const attempts = db.prepare("SELECT COUNT(*) as count FROM compute_job_attempts").get();
+  const artifacts = db.prepare("SELECT state, COUNT(*) as count FROM compute_artifacts GROUP BY state").all();
   return {
     total: total?.count || 0,
+    activeLeases: activeLeases?.count || 0,
+    attempts: attempts?.count || 0,
+    artifacts: Object.fromEntries(artifacts.map(a => [a.state || "unknown", a.count])),
     byStatus: Object.fromEntries(stats.map(s => [s.status, s.count])),
     byType: Object.fromEntries(byType.map(t => [t.job_type, t.count])),
   };
@@ -660,10 +968,17 @@ module.exports = {
   completeJob,
   failJob,
   cancelJob,
+  getCancellationStatus,
+  acknowledgeCancellation,
+  retryJob,
+  uploadArtifact,
+  finalizeArtifact,
+  getArtifact,
   createAttempt,
   updateAttempt,
   createArtifact,
   listArtifacts,
+  listAttempts,
   getJobStats,
   rowToJob,
 };
