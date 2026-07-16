@@ -139,6 +139,84 @@ console.log('Running Approval Tests...\n');
     assert.strictEqual(result.code, 'approval_not_found');
     console.log('Passed\n');
 
+    console.log('Test 3f: approval claims are leased and ownership-checked');
+    result = await tools.callTool('sidekick_respond', { text: 'lease me' }, { source: 'mcp' });
+    const leaseApprovalId = result.approvalId;
+    const claim = tools.claimApprovalExecution({ approvalId: leaseApprovalId, reviewer: 'test' });
+    assert.strictEqual(claim.isError, undefined);
+    assert.ok(claim.operationId);
+    assert.ok(claim.executorId);
+    let storedLease = db.loadDocument('approvals', []).find(item => item.id === leaseApprovalId);
+    assert.strictEqual(storedLease.status, 'executing');
+    assert.ok(storedLease.lease_expires_at);
+    result = tools.claimApprovalExecution({ approvalId: leaseApprovalId, reviewer: 'test' });
+    assert.ok(result.isError);
+    assert.strictEqual(result.code, 'approval_lease_active');
+    result = tools.renewApprovalLease({ approvalId: leaseApprovalId, operationId: claim.operationId, executorId: 'wrong-executor' });
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.reason, 'lease_owner_mismatch');
+    result = tools.finalizeApprovalExecution({ approvalId: leaseApprovalId, reviewer: 'test', operationId: claim.operationId, executorId: 'wrong-executor', result: { content: [{ type: 'text', text: 'wrong' }] }, args: claim.args });
+    assert.strictEqual(result.finalizeRejected, true);
+    tools.finalizeApprovalExecution({ approvalId: leaseApprovalId, reviewer: 'test', operationId: claim.operationId, executorId: claim.executorId, result: { content: [{ type: 'text', text: 'lease ok' }] }, args: claim.args });
+    storedLease = db.loadDocument('approvals', []).find(item => item.id === leaseApprovalId);
+    assert.strictEqual(storedLease.status, 'approved');
+    console.log('Passed\n');
+
+    console.log('Test 3g: stale high-risk leases require reconciliation and low-risk can be recovered only by policy');
+    result = await tools.callTool('sidekick_respond', { text: 'stale high' }, { source: 'mcp' });
+    const staleHighId = result.approvalId;
+    const staleHighClaim = tools.claimApprovalExecution({ approvalId: staleHighId, reviewer: 'test' });
+    let staleApprovals = db.loadDocument('approvals', []);
+    let staleHigh = staleApprovals.find(item => item.id === staleHighId);
+    staleHigh.risk = 'critical';
+    staleHigh.lease_expires_at = new Date(Date.now() - 1000).toISOString();
+    db.setDocument('approvals', staleApprovals);
+    result = tools.claimApprovalExecution({ approvalId: staleHighId, reviewer: 'test', allowStaleReclaim: true });
+    assert.ok(result.isError);
+    assert.strictEqual(result.code, 'reconciliation_required');
+    staleHigh = db.loadDocument('approvals', []).find(item => item.id === staleHighId);
+    assert.strictEqual(staleHigh.status, 'reconciliation_required');
+    assert.strictEqual(staleHigh.reconciliation_status, 'manual_review');
+
+    result = await tools.callTool('sidekick_respond', { text: 'timeout reconcile' }, { source: 'mcp', timeoutMs: 5 });
+    const timeoutApprovalId = result.approvalId;
+    const timeoutClaim = tools.claimApprovalExecution({ approvalId: timeoutApprovalId, reviewer: 'test' });
+    assert.strictEqual(timeoutClaim.timeoutMs, 5);
+    tools.finalizeApprovalExecution({
+      approvalId: timeoutApprovalId,
+      reviewer: 'test',
+      operationId: timeoutClaim.operationId,
+      executorId: timeoutClaim.executorId,
+      args: timeoutClaim.args,
+      result: {
+        content: [{ type: 'text', text: 'Timed out after 5ms; cancellation was requested but the operation may still be running' }],
+        isError: true,
+        code: 'timed_out_operation_may_continue',
+        operationMayContinue: true,
+        operationId: timeoutClaim.operationId,
+        idempotencyKey: timeoutClaim.idempotencyKey,
+      },
+    });
+    const timeoutStored = db.loadDocument('approvals', []).find(item => item.id === timeoutApprovalId);
+    assert.strictEqual(timeoutStored.status, 'reconciliation_required');
+    assert.strictEqual(timeoutStored.reconciliation_status, 'manual_review');
+    assert.strictEqual(timeoutStored.operation_id, timeoutClaim.operationId);
+
+    result = await tools.callTool('sidekick_respond', { text: 'stale low' }, { source: 'mcp' });
+    const staleLowId = result.approvalId;
+    tools.claimApprovalExecution({ approvalId: staleLowId, reviewer: 'test' });
+    staleApprovals = db.loadDocument('approvals', []);
+    const staleLow = staleApprovals.find(item => item.id === staleLowId);
+    staleLow.risk = 'low';
+    staleLow.lease_expires_at = new Date(Date.now() - 1000).toISOString();
+    db.setDocument('approvals', staleApprovals);
+    const recovered = tools.recoverStaleApprovals({ allowLowRiskRetry: true });
+    assert.ok(recovered.some(item => item.id === staleLowId));
+    assert.strictEqual(db.loadDocument('approvals', []).find(item => item.id === staleLowId).status, 'pending');
+    result = await tools.resolveApproval(staleLowId, 'reject', 'test');
+    assert.strictEqual(result.isError, undefined);
+    console.log('Passed\n');
+
     console.log('Test 4: exempt tool bypasses approval');
     process.env.SIDEKICK_APPROVAL_EXEMPT_TOOLS = 'sidekick_respond';
     result = await tools.callTool('sidekick_respond', { text: 'exempt' });

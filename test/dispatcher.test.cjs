@@ -20,7 +20,7 @@ delete require.cache[require.resolve('../src/db')];
 const tools = require('../src/tools');
 const legacy = require('../src/tools-legacy');
 const db = require('../src/db');
-const { dispatchTool } = tools;
+const { dispatchTool, dispatchTestTool, callMcpTool, callAgentTool, callDashboardTool } = tools;
 const { createRegistry } = require('../src/tools/registry');
 const { createExecutionContext, getExecutionContext } = require('../src/tools/context');
 
@@ -31,6 +31,17 @@ console.log('Running Dispatcher Tests...');
     let result = await dispatchTool({ name: 'sidekick_respond', args: { text: 'ok' }, context: { source: 'mcp', requestId: 'req_success' } });
     assert.strictEqual(result.isError, undefined, 'known tool should execute');
     assert.strictEqual(result.content[0].text, 'ok');
+
+    result = await dispatchTool({ name: 'sidekick_respond', args: { text: 'forged source' }, context: { source: 'dashboard', requestId: 'req_forged_source' } });
+    assert.strictEqual(result.isError, undefined, 'generic caller should still execute low-risk tool');
+    assert.ok(db.queryToolLogs({ tool: 'sidekick_respond', source: 'mcp', success: true, limit: 20 }).some(row => row.task_id === 'req_forged_source'), 'generic source input should not establish dashboard identity');
+
+    await callAgentTool('sidekick_respond', { text: 'agent source' }, { requestId: 'req_agent_source' });
+    await callDashboardTool('sidekick_respond', { text: 'dashboard source' }, { requestId: 'req_dashboard_source' });
+    await callMcpTool('sidekick_respond', { text: 'mcp source' }, { requestId: 'req_mcp_source' });
+    assert.ok(db.queryToolLogs({ tool: 'sidekick_respond', source: 'agent', success: true, limit: 20 }).some(row => row.task_id === 'req_agent_source'), 'agent wrapper should establish agent identity');
+    assert.ok(db.queryToolLogs({ tool: 'sidekick_respond', source: 'dashboard', success: true, limit: 20 }).some(row => row.task_id === 'req_dashboard_source'), 'dashboard wrapper should establish dashboard identity');
+    assert.ok(db.queryToolLogs({ tool: 'sidekick_respond', source: 'mcp', success: true, limit: 20 }).some(row => row.task_id === 'req_mcp_source'), 'mcp wrapper should establish mcp identity');
 
     result = await dispatchTool({ name: 'sidekick_missing', args: {}, context: { source: 'mcp', requestId: 'req_unknown' } });
     assert.ok(result.isError, 'unknown tool should fail');
@@ -68,13 +79,16 @@ console.log('Running Dispatcher Tests...');
       handler: () => new Promise(resolve => setTimeout(() => resolve({ content: [{ type: 'text', text: 'late' }] }), 50)),
     };
     result = await dispatchTool({ descriptor: slowDescriptor, args: {}, context: { source: 'test', timeoutMs: 5 } });
+    assert.ok(result.isError, 'production descriptor injection should fail');
+    assert.strictEqual(result.code, 'descriptor_injection_denied');
+    result = await dispatchTestTool({ descriptor: slowDescriptor, args: {}, context: { source: 'test', timeoutMs: 5 } });
     assert.ok(result.isError, 'timeout should fail');
     assert.strictEqual(result.code, 'timed_out_operation_may_continue');
     assert.ok(result.operationMayContinue, 'timeout should not claim legacy handler termination');
 
     const controller = new AbortController();
     controller.abort();
-    result = await dispatchTool({ descriptor: slowDescriptor, args: {}, context: { source: 'test', signal: controller.signal } });
+    result = await dispatchTestTool({ descriptor: slowDescriptor, args: {}, context: { source: 'test', signal: controller.signal } });
     assert.ok(result.isError, 'cancelled signal should fail');
     assert.strictEqual(result.code, 'cancelled');
 
@@ -91,8 +105,8 @@ console.log('Running Dispatcher Tests...');
       },
     };
     const [a, b] = await Promise.all([
-      dispatchTool({ descriptor: contextDescriptor, args: { label: 'a' }, context: { source: 'agent', requestId: 'req_a' } }),
-      dispatchTool({ descriptor: contextDescriptor, args: { label: 'b' }, context: { source: 'dashboard', requestId: 'req_b' } }),
+      dispatchTestTool({ descriptor: contextDescriptor, args: { label: 'a' }, context: { source: 'agent', requestId: 'req_a' } }),
+      dispatchTestTool({ descriptor: contextDescriptor, args: { label: 'b' }, context: { source: 'dashboard', requestId: 'req_b' } }),
     ]);
     assert.strictEqual(a.content[0].text, 'a:agent:req_a', 'concurrent context A should not leak');
     assert.strictEqual(b.content[0].text, 'b:dashboard:req_b', 'concurrent context B should not leak');
@@ -123,7 +137,7 @@ console.log('Running Dispatcher Tests...');
     const originalPolicy = legacy.enforceToolPolicy;
     let invoked = false;
     legacy.enforceToolPolicy = () => { throw new Error('policy failed with Bearer ghp_abcdefghijklmnopqrstuvwxyz123456'); };
-    result = await dispatchTool({ descriptor: { name: 'policy_throw_test', description: 'policy throw', schema: z.object({}), risk: 'low', category: 'Test', handler: async () => { invoked = true; return { content: [] }; } }, args: {}, context: { source: 'test' } });
+    result = await dispatchTestTool({ descriptor: { name: 'policy_throw_test', description: 'policy throw', schema: z.object({}), risk: 'low', category: 'Test', handler: async () => { invoked = true; return { content: [] }; } }, args: {}, context: { source: 'test' } });
     assert.ok(result.isError);
     assert.strictEqual(result.code, 'policy_evaluation_failed');
     assert.strictEqual(invoked, false, 'handler must not run after policy exception');
@@ -133,7 +147,7 @@ console.log('Running Dispatcher Tests...');
     const originalApproval = legacy.getApprovalDecision;
     process.env.SIDEKICK_APPROVAL_MODE = 'risky';
     legacy.getApprovalDecision = () => { throw new Error('approval failed password=hunter2'); };
-    result = await dispatchTool({ descriptor: { name: 'approval_throw_test', description: 'approval throw', schema: z.object({}), risk: 'low', category: 'Test', handler: async () => ({ content: [] }) }, args: {}, context: { source: 'test' } });
+    result = await dispatchTestTool({ descriptor: { name: 'approval_throw_test', description: 'approval throw', schema: z.object({}), risk: 'low', category: 'Test', handler: async () => ({ content: [] }) }, args: {}, context: { source: 'test' } });
     assert.ok(result.isError);
     assert.strictEqual(result.code, 'approval_evaluation_failed');
     assert.ok(!result.content[0].text.includes('hunter2'), 'approval errors should be sanitized');
@@ -142,12 +156,12 @@ console.log('Running Dispatcher Tests...');
 
     const originalLog = legacy.logToolCall;
     legacy.logToolCall = () => { throw new Error('audit failed Authorization: Bearer secret-token'); };
-    result = await dispatchTool({ descriptor: { name: 'audit_throw_test', description: 'audit throw', schema: z.object({}), risk: 'low', category: 'Test', handler: async () => ({ content: [{ type: 'text', text: 'audit ok' }] }) }, args: {}, context: { source: 'test' } });
+    result = await dispatchTestTool({ descriptor: { name: 'audit_throw_test', description: 'audit throw', schema: z.object({}), risk: 'low', category: 'Test', handler: async () => ({ content: [{ type: 'text', text: 'audit ok' }] }) }, args: {}, context: { source: 'test' } });
     assert.strictEqual(result.content[0].text, 'audit ok', 'audit failure should not become handler failure');
     assert.strictEqual(result.auditFailed, true, 'audit failure should be observable');
     legacy.logToolCall = originalLog;
 
-    result = await dispatchTool({ descriptor: { name: 'sanitize_throw_test', description: 'sanitize throw', schema: z.object({}), risk: 'low', category: 'Test', handler: async () => { throw new Error('boom Authorization: Bearer secret-token\n    at secret (/tmp/secret.js:1:2)'); } }, args: {}, context: { source: 'test' } });
+    result = await dispatchTestTool({ descriptor: { name: 'sanitize_throw_test', description: 'sanitize throw', schema: z.object({}), risk: 'low', category: 'Test', handler: async () => { throw new Error('boom Authorization: Bearer secret-token\n    at secret (/tmp/secret.js:1:2)'); } }, args: {}, context: { source: 'test' } });
     assert.ok(result.isError);
     assert.strictEqual(result.code, 'handler_error');
     assert.ok(!result.content[0].text.includes('secret-token'));

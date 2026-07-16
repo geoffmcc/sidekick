@@ -4,10 +4,22 @@ const dbStore = require("../db");
 const { stripSidekickPrefix } = require("../core/tool-name");
 const { RISK_LEVELS } = require("./metadata");
 const { buildBuiltinRegistry } = require("./registry");
-const { createExecutionContext, childContext, runWithContext, dispatcherMetadata } = require("./context");
+const {
+  createExecutionContext,
+  createMcpExecutionContext,
+  createAgentExecutionContext,
+  createDashboardExecutionContext,
+  createInternalExecutionContext,
+  createApprovalExecutionContext,
+  createTestExecutionContext,
+  childContext,
+  runWithContext,
+  dispatcherMetadata,
+} = require("./context");
 const { normalizeResult, errorResult, sanitizeText } = require("./result");
 
 const APPROVED_EXECUTION_CAPABILITY = Symbol("sidekick.approvedExecution");
+const TEST_DESCRIPTOR_CAPABILITY = Symbol("sidekick.testDescriptorExecution");
 
 function clonePlain(value) {
   if (value == null || typeof value !== "object") return value;
@@ -88,7 +100,7 @@ function withTimeoutAndCancellation(handler, args, runtime, context) {
     if (timeoutMs && timeoutMs > 0) {
       timer = setTimeout(() => {
         if (controller) controller.abort();
-        finish(resolve)(errorResult(`Timed out after ${timeoutMs}ms; cancellation was requested but the operation may still be running`, "timed_out_operation_may_continue", { timedOut: true, operationMayContinue: true }));
+        finish(resolve)(errorResult(`Timed out after ${timeoutMs}ms; cancellation was requested but the operation may still be running`, "timed_out_operation_may_continue", { timedOut: true, operationMayContinue: true, operationId: context.operationId, idempotencyKey: context.idempotencyKey }));
       }, timeoutMs);
     }
     if (callerSignal) {
@@ -172,9 +184,13 @@ function isApprovedInternal(request) {
 
 async function dispatchCore(request, context, started) {
   const registry = getBuiltinRegistry();
-  const name = request.name || request.descriptor?.name;
+  if (request.descriptor && request.internalCapability !== TEST_DESCRIPTOR_CAPABILITY) {
+    const result = errorResult("Caller-provided descriptors are not accepted by production dispatch", "descriptor_injection_denied");
+    return log(request.name || request.descriptor.name || "unknown", request.args || {}, started, result, context);
+  }
+  const name = request.name || (request.internalCapability === TEST_DESCRIPTOR_CAPABILITY ? request.descriptor?.name : null);
   const canonical = stripSidekickPrefix(name || "");
-  let descriptor = request.descriptor || registry.get(canonical);
+  let descriptor = request.internalCapability === TEST_DESCRIPTOR_CAPABILITY ? request.descriptor : registry.get(canonical);
   if (!descriptor) {
     const dynamicDescriptor = resolveDynamicDescriptor(name || canonical);
     if (dynamicDescriptor?.error) {
@@ -212,26 +228,44 @@ async function executeApprovedTool({ approvalId, reviewer = "system", source } =
     return errorResult("Approval execution could not be claimed", "approval_execution_failed");
   }
   if (claim?.isError) return claim;
-  const result = await dispatchTool({
-    name: claim.tool,
-    args: claim.args,
-    context: {
-      source: claim.source,
-      actor: reviewer,
-      approvalId,
-      parentId: claim.parentId || null,
-      rootExecutionId: claim.rootExecutionId || null,
-      correlationId: approvalId,
-      approvedExecution: true,
-    },
-    internalCapability: APPROVED_EXECUTION_CAPABILITY,
-  });
+  let renewalTimer = null;
+  const renew = () => legacy.renewApprovalLease({ approvalId, operationId: claim.operationId, executorId: claim.executorId });
+  renewalTimer = setInterval(() => {
+    const renewed = renew();
+    if (!renewed.ok) console.error(JSON.stringify({ level: "error", event: "approval.lease_renew_failed", approvalId, operationId: claim.operationId, reason: renewed.reason }));
+  }, 30000);
+  let result;
   try {
-    legacy.finalizeApprovalExecution({ approvalId, reviewer, result, args: claim.args });
+    result = await dispatchTool({
+      name: claim.tool,
+      args: claim.args,
+      context: createApprovalExecutionContext({
+        actor: reviewer,
+        approvalId,
+        operationId: claim.operationId,
+        idempotencyKey: claim.idempotencyKey,
+        executionId: claim.operationId,
+        timeoutMs: claim.timeoutMs,
+        parentId: claim.parentId || null,
+        rootExecutionId: claim.rootExecutionId || null,
+        correlationId: approvalId,
+        approvedExecution: true,
+      }),
+      internalCapability: APPROVED_EXECUTION_CAPABILITY,
+    });
+    result.operationId = result.operationId || claim.operationId;
+    result.idempotencyKey = result.idempotencyKey || claim.idempotencyKey;
+    legacy.finalizeApprovalExecution({ approvalId, reviewer, result, args: claim.args, operationId: claim.operationId, executorId: claim.executorId });
   } catch (e) {
-    return { ...result, auditFailed: true, auditErrorCode: "approval_finalization_failed" };
+    return { ...(result || errorResult("Approval execution failed", "approval_execution_failed")), auditFailed: true, auditErrorCode: "approval_finalization_failed", operationId: claim.operationId };
+  } finally {
+    if (renewalTimer) clearInterval(renewalTimer);
   }
   return result;
+}
+
+async function dispatchTestTool({ descriptor, args = {}, context = {} } = {}) {
+  return dispatchTool({ descriptor, args, context: createTestExecutionContext(context), internalCapability: TEST_DESCRIPTOR_CAPABILITY });
 }
 
 async function dispatchTool(input, maybeArgs, maybeContext) {
@@ -255,4 +289,20 @@ async function callTool(name, args, options = {}) {
   return dispatchTool({ name, args, context: createExecutionContext(options), options });
 }
 
-module.exports = { dispatchTool, callTool, executeApprovedTool, getHandlerMap, getBuiltinRegistry };
+async function callMcpTool(name, args, options = {}) {
+  return dispatchTool({ name, args, context: createMcpExecutionContext(options), options });
+}
+
+async function callAgentTool(name, args, options = {}) {
+  return dispatchTool({ name, args, context: createAgentExecutionContext(options), options });
+}
+
+async function callDashboardTool(name, args, options = {}) {
+  return dispatchTool({ name, args, context: createDashboardExecutionContext(options), options });
+}
+
+async function callInternalTool(name, args, options = {}) {
+  return dispatchTool({ name, args, context: createInternalExecutionContext(options), options });
+}
+
+module.exports = { dispatchTool, dispatchTestTool, callTool, callMcpTool, callAgentTool, callDashboardTool, callInternalTool, executeApprovedTool, getHandlerMap, getBuiltinRegistry };

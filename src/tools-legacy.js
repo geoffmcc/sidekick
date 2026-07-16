@@ -339,10 +339,78 @@ function getApprovalTtlSeconds() {
   return Number.isFinite(configured) && configured > 0 ? configured : 3600;
 }
 
+function getApprovalLeaseSeconds() {
+  const configured = parseInt(process.env.SIDEKICK_APPROVAL_LEASE_SECONDS || "300", 10);
+  if (!Number.isFinite(configured)) return 300;
+  return Math.min(Math.max(configured, 30), 3600);
+}
+
+function generateOperationId() {
+  return "op_" + Date.now().toString(36) + "_" + crypto.randomBytes(8).toString("hex");
+}
+
+function generateExecutorId() {
+  return `${process.pid || "pid"}_${crypto.randomBytes(6).toString("hex")}`;
+}
+
+function leaseExpiresAt(nowMs = Date.now()) {
+  return new Date(nowMs + getApprovalLeaseSeconds() * 1000).toISOString();
+}
+
+function isLeaseExpired(item, nowMs = Date.now()) {
+  const expires = Date.parse(item.lease_expires_at || item.execution_lease_expires_at || "");
+  return !Number.isFinite(expires) || expires <= nowMs;
+}
+
+function approvalNeedsManualReconciliation(item) {
+  const risk = item.risk || getToolRisk(item.tool);
+  return risk === "high" || risk === "critical" || !["low", "medium"].includes(risk);
+}
+
 function discardApprovalPayload(item) {
   delete item.args;
   delete item.args_encrypted;
   item.payload_discarded_at = new Date().toISOString();
+}
+
+function markApprovalReconciliationRequired(item, reason, reviewer = "system") {
+  const now = new Date().toISOString();
+  item.status = "reconciliation_required";
+  item.reconciliation_status = "manual_review";
+  item.failure_reason = reason;
+  item.updated_at = now;
+  item.completed_at = item.completed_at || now;
+  transitionPlatformApproval(item, "failed", {
+    actor_id: reviewer,
+    reason,
+    result_status: "reconciliation_required",
+    error_category: "reconciliation_required",
+    result_summary: reason,
+  });
+  recordPlatformApprovalEvent(item, "approval.reconciliation_required", { reason, operation_id: item.operation_id || null }, { actor_id: reviewer, severity: "warning" });
+  recordApprovalRecoveryEvent(item, "reconciliation_required", reason);
+}
+
+function recordApprovalRecoveryEvent(item, eventType, reason) {
+  try {
+    const db = dbStore.getDb();
+    const exists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='approval_execution_recovery_events'").get();
+    if (!exists) return;
+    db.prepare(`
+      INSERT INTO approval_execution_recovery_events (
+        id, approval_id, operation_id, executor_id, event_type, reconciliation_status, reason, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "aere_" + Date.now().toString(36) + "_" + crypto.randomBytes(6).toString("hex"),
+      item.id,
+      item.operation_id || null,
+      item.executor_id || null,
+      eventType,
+      item.reconciliation_status || null,
+      reason || null,
+      new Date().toISOString()
+    );
+  } catch {}
 }
 
 function expireApprovals(approvals, now = Date.now()) {
@@ -427,6 +495,7 @@ function queueApproval(toolName, args, decision, context = {}) {
     args_encrypted: encryptApprovalArgs(storedArgs),
     args_hash: approvalArgsHash(storedArgs),
     args_preview: approvalPreviewArgs(storedArgs),
+    timeout_ms: context.timeoutMs || context.timeout_ms || null,
     requested_at: now,
     updated_at: now,
     expires_at: new Date(Date.parse(now) + (getApprovalTtlSeconds() * 1000)).toISOString()
@@ -492,13 +561,23 @@ async function resolveApproval(id, action, reviewer = "dashboard") {
   return require("./tools/dispatcher").executeApprovedTool({ approvalId: id, reviewer, source: reviewer });
 }
 
-function claimApprovalExecution({ approvalId, reviewer = "dashboard", source } = {}) {
+function claimApprovalExecution({ approvalId, reviewer = "dashboard", source, allowStaleReclaim = false } = {}) {
   const db = dbStore.getDb();
   return db.transaction(() => {
     const approvals = loadApprovals();
     if (expireApprovals(approvals)) saveApprovals(approvals);
     const item = approvals.find(a => a.id === approvalId);
     if (!item) return { content: [{ type: "text", text: "Approval not found: " + approvalId }], isError: true, code: "approval_not_found" };
+    if (item.status === "executing") {
+      if (!isLeaseExpired(item)) return { content: [{ type: "text", text: `Approval ${approvalId} is already executing` }], isError: true, code: "approval_lease_active" };
+      if (!allowStaleReclaim || approvalNeedsManualReconciliation(item)) {
+        markApprovalReconciliationRequired(item, "Approval execution lease expired; outcome requires reconciliation before retry", reviewer);
+        saveApprovals(approvals);
+        return { content: [{ type: "text", text: `Approval ${approvalId} requires reconciliation before retry` }], isError: true, code: "reconciliation_required" };
+      }
+      item.status = "pending";
+      item.reconciliation_status = "reclaimed_for_retry";
+    }
     if (item.status !== "pending") return { content: [{ type: "text", text: `Approval ${approvalId} is already ${item.status}` }], isError: true, code: "approval_not_executable" };
 
     const expiresAt = Date.parse(item.expires_at);
@@ -543,11 +622,20 @@ function claimApprovalExecution({ approvalId, reviewer = "dashboard", source } =
     }
 
     const now = new Date().toISOString();
+    const operationId = item.operation_id || generateOperationId();
+    const executorId = generateExecutorId();
     item.reviewed_at = now;
     item.updated_at = now;
     item.reviewed_by = reviewer;
     item.status = "executing";
+    item.operation_id = operationId;
+    item.executor_id = executorId;
     item.execution_started_at = now;
+    item.claimed_at = now;
+    item.heartbeat_at = now;
+    item.lease_expires_at = leaseExpiresAt(Date.parse(now));
+    item.attempt_count = Number(item.attempt_count || 0) + 1;
+    item.reconciliation_status = "not_required";
     item.execution_source = source || item.source || "unknown";
     item.execution_args_hash = approvalArgsHash(approvalArgs);
     transitionPlatformApproval(item, "ready", { actor_id: reviewer, reason: "approval granted" });
@@ -556,6 +644,9 @@ function claimApprovalExecution({ approvalId, reviewer = "dashboard", source } =
     saveApprovals(approvals);
     return {
       approvalId,
+      operationId,
+      executorId,
+      idempotencyKey: `approval:${approvalId}:${operationId}`,
       tool: item.tool,
       args: approvalArgs,
       argsHash: item.execution_args_hash,
@@ -563,16 +654,62 @@ function claimApprovalExecution({ approvalId, reviewer = "dashboard", source } =
       requester: item.requester || null,
       parentId: item.platform_execution_id || null,
       rootExecutionId: item.platform_execution_id || null,
+      timeoutMs: item.timeout_ms || null,
     };
   })();
 }
 
-function finalizeApprovalExecution({ approvalId, reviewer = "dashboard", result, args } = {}) {
+function renewApprovalLease({ approvalId, operationId, executorId } = {}) {
+  const approvals = loadApprovals();
+  const item = approvals.find(a => a.id === approvalId);
+  if (!item || item.status !== "executing") return { ok: false, reason: "not_executing" };
+  if (item.operation_id !== operationId || item.executor_id !== executorId) return { ok: false, reason: "lease_owner_mismatch" };
+  const now = new Date().toISOString();
+  item.heartbeat_at = now;
+  item.lease_expires_at = leaseExpiresAt(Date.parse(now));
+  item.updated_at = now;
+  recordPlatformApprovalEvent(item, "approval.lease_renewed", { operation_id: operationId, lease_expires_at: item.lease_expires_at }, { actor_id: item.reviewed_by || item.source || "unknown" });
+  saveApprovals(approvals);
+  return { ok: true, lease_expires_at: item.lease_expires_at };
+}
+
+function recoverStaleApprovals({ allowLowRiskRetry = false, now = Date.now() } = {}) {
+  const approvals = loadApprovals();
+  const recovered = [];
+  for (const item of approvals) {
+    if (item.status !== "executing" || !isLeaseExpired(item, now)) continue;
+    if (allowLowRiskRetry && !approvalNeedsManualReconciliation(item)) {
+      item.status = "pending";
+      item.reconciliation_status = "safe_to_retry";
+      item.updated_at = new Date(now).toISOString();
+      recordPlatformApprovalEvent(item, "approval.lease_recovered", { operation_id: item.operation_id || null, status: item.status }, { severity: "warning" });
+      recordApprovalRecoveryEvent(item, "lease_recovered", "Stale low-risk approval returned to pending by recovery policy");
+    } else {
+      markApprovalReconciliationRequired(item, "Stale approval execution lease requires manual reconciliation", "recovery");
+    }
+    recovered.push(publicApproval(item));
+  }
+  if (recovered.length > 0) saveApprovals(approvals);
+  return recovered;
+}
+
+function finalizeApprovalExecution({ approvalId, reviewer = "dashboard", result, args, operationId, executorId } = {}) {
   const approvals = loadApprovals();
   const updated = approvals.find(a => a.id === approvalId);
   if (!updated) return null;
   if (updated.status !== "executing") return publicApproval(updated);
-  updated.status = result?.isError ? "failed" : "approved";
+  if (updated.operation_id !== operationId || updated.executor_id !== executorId) {
+    recordPlatformApprovalEvent(updated, "approval.finalize_rejected", { reason: "lease_owner_mismatch", operation_id: operationId || null }, { actor_id: reviewer, severity: "error" });
+    return { ...publicApproval(updated), finalizeRejected: true, reason: "lease_owner_mismatch" };
+  }
+  if (isLeaseExpired(updated) && result?.isError && result?.operationMayContinue) {
+    markApprovalReconciliationRequired(updated, "Timed out operation may still be running; final outcome unknown", reviewer);
+  } else if (result?.isError && result?.operationMayContinue) {
+    markApprovalReconciliationRequired(updated, "Timed out operation may still be running; final outcome unknown", reviewer);
+  } else {
+    updated.status = result?.isError ? "failed" : "approved";
+    updated.reconciliation_status = "not_required";
+  }
   updated.result_preview = redactSensitive(result?.content?.[0]?.text || "").substring(0, 1000);
   updated.completed_at = new Date().toISOString();
   updated.updated_at = updated.completed_at;
@@ -976,7 +1113,8 @@ function logToolCall(name, args, duration, success, summary, metadata = {}) {
 
 function recordPlatformToolCall(name, argsShape, duration, success, summary, metadata = {}) {
   try {
-    if (getCurrentSource() !== "mcp") return;
+    const currentSource = getCurrentSource();
+    if (!["mcp", "approval"].includes(currentSource)) return;
     if (metadata.generatedProcedure || metadata.generated_procedure) return;
     const execId = metadata.executionId || metadata.execution_id || null;
     const guard = platformKernel.platformGuard(execId, null, {
@@ -986,8 +1124,8 @@ function recordPlatformToolCall(name, argsShape, duration, success, summary, met
     });
     if (guard.execution && execId) {
       platformKernel.transitionExecution(execId, success ? "completed" : "failed", {
-        source: "mcp",
-        reason: success ? "MCP tool call completed" : "MCP tool call failed",
+        source: currentSource,
+        reason: success ? `${currentSource} tool call completed` : `${currentSource} tool call failed`,
         result_status: success ? "success" : "failure",
         error_category: success ? null : evolveCommon.errorCategory(summary),
         result_summary: summary,
@@ -1003,15 +1141,15 @@ function recordPlatformToolCall(name, argsShape, duration, success, summary, met
       task_id: metadata.taskId || metadata.task_id || metadata.requestId || metadata.request_id || null,
       session_id: metadata.sessionId || metadata.session_id || process.env.SIDEKICK_SESSION_ID || null,
       project_id: metadata.project || process.env.SIDEKICK_PROJECT || null,
-      actor_id: "mcp",
-      client_id: "mcp",
-      trigger_type: "mcp",
+      actor_id: currentSource,
+      client_id: currentSource,
+      trigger_type: currentSource,
       operation_type: "tool_call",
       tool_name: name,
       tool_action: argsShape && typeof argsShape.action === "string" ? argsShape.action : null,
       risk: getToolRisk(name),
       started_at: startedAt,
-      source: "mcp",
+      source: currentSource,
       correlation_id: metadata.correlationId || metadata.correlation_id || metadata.executionId || metadata.execution_id || null,
       metadata: {
         args_shape: argsShape,
@@ -1019,10 +1157,10 @@ function recordPlatformToolCall(name, argsShape, duration, success, summary, met
         legacy_tool_log: true,
       },
     });
-    platformKernel.transitionExecution(execution.execution_id, "running", { source: "mcp", reason: "MCP tool call started", correlation_id: execution.root_execution_id });
+    platformKernel.transitionExecution(execution.execution_id, "running", { source: currentSource, reason: `${currentSource} tool call started`, correlation_id: execution.root_execution_id });
     platformKernel.transitionExecution(execution.execution_id, success ? "completed" : "failed", {
-      source: "mcp",
-      reason: success ? "MCP tool call completed" : "MCP tool call failed",
+      source: currentSource,
+      reason: success ? `${currentSource} tool call completed` : `${currentSource} tool call failed`,
       result_status: success ? "success" : "failure",
       error_category: success ? null : evolveCommon.errorCategory(summary),
       result_summary: summary,
@@ -11822,6 +11960,8 @@ module.exports = {
   queueApproval,
   resolveApproval,
   claimApprovalExecution,
+  renewApprovalLease,
+  recoverStaleApprovals,
   finalizeApprovalExecution,
   createScheduledPlatformExecution,
   transitionScheduledPlatformExecution,

@@ -5,7 +5,7 @@ const path = require("path");
 const os = require("os");
 const { timingSafeCompare } = require("./crypto-utils");
 const { execFileSync } = require("child_process");
-const { callTool, setSource, getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval } = require("./tools");
+const { callDashboardTool, getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval } = require("./tools");
 const dynamicTools = require("./dynamic-tools");
 const dbStore = require("./db");
 const { allowedActions } = require("./evolve/lifecycle");
@@ -1536,7 +1536,7 @@ app.get("/api/evolve", (req, res) => {
 async function evolveDashboardAction(req, res, action, extra = {}) {
   try {
     auditLog(req, `evolve.${action}`, { id: req.params.id || req.body?.id || null });
-    const result = await callTool("evolve", { action, id: req.params.id || req.body?.id, ...(req.body || {}), ...extra }, { source: "dashboard", actor: "dashboard" });
+    const result = await callDashboardTool("evolve", { action, id: req.params.id || req.body?.id, ...(req.body || {}), ...extra }, { actor: "dashboard" });
     res.json({ ok: !result.isError, result: result.content?.[0]?.text || "" });
   } catch (error) {
     logError(req.originalUrl, 500, error, "evolve", req.headers["user-agent"]);
@@ -1618,7 +1618,7 @@ app.post("/api/evolve/:id/run", (req, res) => {
   });
   setImmediate(async () => {
     try {
-      await callTool(cap.name, req.body?.args || {}, { source: "dashboard", actor: "dashboard", executionId, timeoutMs });
+      await callDashboardTool(cap.name, req.body?.args || {}, { actor: "dashboard", executionId, timeoutMs });
     } catch (error) {
       dbStore.updateGeneratedToolExecution(executionId, {
         state: "failed",
