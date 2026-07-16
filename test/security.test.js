@@ -458,6 +458,21 @@ console.log('Test 3.4: Tool definitions include policy metadata');
   assert.ok(bash, 'Should include bash definition');
   assert.ok(bash.risk, 'Should include risk');
   assert.strictEqual(typeof bash.enabled, 'boolean', 'Should include enabled boolean');
+
+  const expectedRisk = {
+    health: 'high',
+    baseline: 'high',
+    netdiag: 'high',
+    tunnel: 'high',
+    analytics: 'medium',
+    wireguard: 'high',
+    nginx: 'high'
+  };
+  for (const [name, risk] of Object.entries(expectedRisk)) {
+    const tool = defs.find(d => d.name === name);
+    assert.ok(tool, `Should include ${name} definition`);
+    assert.strictEqual(tool.risk, risk, `${name} risk should reflect command or infrastructure effects`);
+  }
   console.log('Passed\n');
 }
 

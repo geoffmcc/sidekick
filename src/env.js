@@ -13,3 +13,11 @@ if (fs.existsSync(envPath)) {
     }
   });
 }
+
+const packageJson = require("../package.json");
+const requiredNode = packageJson.engines?.node || ">=22.0.0";
+const minMajor = Number(requiredNode.match(/>=\s*(\d+)/)?.[1] || 22);
+const currentMajor = Number(process.versions.node.split(".")[0]);
+if (Number.isFinite(minMajor) && currentMajor < minMajor) {
+  throw new Error(`Unsupported Node.js runtime ${process.version}; Sidekick requires ${requiredNode}`);
+}

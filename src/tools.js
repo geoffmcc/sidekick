@@ -16,6 +16,7 @@ const dynamicTools = require("./dynamic-tools");
 const blackbox = require("./blackbox");
 const platformKernel = require("./platform/kernel");
 const { stripSidekickPrefix } = require("./core/tool-name");
+const { validAllowedIps, validDomainName, validDownloadFormat, validIdentifier, validLangCode, validPort, validScale, validTimestamp, validWhisperModel, validWireGuardEndpoint, validWireGuardPublicKey } = require("./core/command-validation");
 const computeTools = require("./compute/tools");
 let inferenceService = null;
 try { inferenceService = require("./compute/inference-service"); } catch {}
@@ -50,36 +51,6 @@ function safeExecFileSync(command, args, options = {}) {
     maxBuffer: options.maxBuffer || 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"],
   });
-}
-
-function validLangCode(value, fallback = "eng") {
-  const lang = value || fallback;
-  if (!/^[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8})?$/.test(lang)) throw new Error("Invalid language code");
-  return lang;
-}
-
-function validWhisperModel(value) {
-  const model = value || "base";
-  if (!/^(tiny|base|small|medium|large|large-v[123])$/.test(model)) throw new Error("Invalid transcription model");
-  return model;
-}
-
-function validTimestamp(value, fallback = "00:00:01") {
-  const ts = value || fallback;
-  if (!/^\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?$/.test(ts)) throw new Error("Invalid timestamp; use HH:MM:SS[.mmm]");
-  return ts;
-}
-
-function validScale(value, fallback = "800:-1") {
-  const scale = value || fallback;
-  if (!/^-?\d{1,5}:-?\d{1,5}$/.test(scale)) throw new Error("Invalid scale; use WIDTH:HEIGHT");
-  return scale;
-}
-
-function validDownloadFormat(value) {
-  if (!value) return null;
-  if (!/^[A-Za-z0-9_.,:+\-/\[\]=<>]+$/.test(value) || value.length > 120) throw new Error("Invalid download format");
-  return value;
 }
 
 let currentSource = "unknown";
@@ -129,7 +100,7 @@ const TOOL_RISK = {
   sync_export: "low",
   sync_import: "medium",
   sync_diff: "low",
-  health: "medium",
+  health: "high",
   snapshot: "medium",
   retry: "medium",
   fresheyes: "medium",
@@ -139,10 +110,10 @@ const TOOL_RISK = {
   status: "medium",
   extract: "medium",
   changelog: "medium",
-  netdiag: "medium",
+  netdiag: "high",
   timeline: "medium",
   circuit: "medium",
-  baseline: "medium",
+  baseline: "high",
   depend: "medium",
   black_box: "medium",
   db_query: "medium",
@@ -152,11 +123,11 @@ const TOOL_RISK = {
   ocr: "medium",
   media: "medium",
   transcribe: "medium",
-  analytics: "low",
+  analytics: "medium",
   insight_report: "low",
   embed: "low",
   ollama: "low",
-  tunnel: "medium",
+  tunnel: "high",
   download: "medium",
   wireguard: "high",
   nginx: "high",
@@ -2271,7 +2242,7 @@ function syncCrontab(jobs) {
   try {
     const enabledJobs = jobs.filter(j => j.enabled);
     if (enabledJobs.length === 0) {
-      execSync('crontab -r 2>/dev/null || true', { encoding: "utf-8" });
+      try { execFileSync("crontab", ["-r"], { encoding: "utf-8" }); } catch {}
       return;
     }
     const lines = enabledJobs.map(j => {
@@ -2279,7 +2250,7 @@ function syncCrontab(jobs) {
       return `${j.schedule} ${script} # sidekick:${j.id}`;
     });
     const crontabContent = lines.join("\n") + "\n";
-    execSync(`echo ${JSON.stringify(crontabContent)} | crontab -`, { encoding: "utf-8" });
+    execFileSync("crontab", ["-"], { input: crontabContent, encoding: "utf-8" });
   } catch (e) {
     // Silently fail if crontab not available
   }
@@ -4422,7 +4393,7 @@ if (!fs.existsSync(SNAPSHOTS_DIR)) {
 
 function captureProcesses() {
   try {
-    const output = execSync("ps aux --sort=-%mem", { encoding: "utf-8" });
+    const output = execFileSync("ps", ["aux", "--sort=-%mem"], { encoding: "utf-8" });
     const lines = output.trim().split("\n");
     return lines.slice(1).map(line => {
       const parts = line.split(/\s+/);
@@ -4441,7 +4412,7 @@ function captureProcesses() {
 
 function captureServices() {
   try {
-    const output = execSync("systemctl list-units --type=service --state=running --no-pager", { encoding: "utf-8" });
+    const output = execFileSync("systemctl", ["list-units", "--type=service", "--state=running", "--no-pager"], { encoding: "utf-8" });
     const lines = output.trim().split("\n").slice(1, -5);
     return lines.map(line => {
       const parts = line.trim().split(/\s+/);
@@ -4460,7 +4431,7 @@ function captureServices() {
 
 function captureDisk() {
   try {
-    const output = execSync("df -h --output=source,size,used,avail,pcent,target", { encoding: "utf-8" });
+    const output = execFileSync("df", ["-h", "--output=source,size,used,avail,pcent,target"], { encoding: "utf-8" });
     const lines = output.trim().split("\n");
     return lines.slice(1).map(line => {
       const parts = line.trim().split(/\s+/);
@@ -4495,7 +4466,7 @@ function captureFiles(filePaths) {
 
 function capturePackages() {
   try {
-    const output = execSync("dpkg -l | grep '^ii' | awk '{print $2, $3}'", { encoding: "utf-8" });
+    const output = execFileSync("dpkg-query", ["-W", "-f=${Package} ${Version}\n"], { encoding: "utf-8" });
     return output.trim().split("\n").map(line => {
       const [name, version] = line.split(" ");
       return { name, version };
@@ -4507,11 +4478,12 @@ function capturePackages() {
 
 function captureNetwork() {
   try {
-    const interfaces = execSync("ip -o link show | awk '{print $2}' | tr -d ':'", { encoding: "utf-8" }).trim().split("\n");
+    const interfaces = execFileSync("ip", ["-o", "link", "show"], { encoding: "utf-8" }).trim().split("\n").map(line => line.split(":")[1]?.trim()).filter(Boolean);
     const result = {};
     for (const iface of interfaces) {
       try {
-        const ip = execSync(`ip -o -4 addr show ${iface} | awk '{print $4}'`, { encoding: "utf-8" }).trim();
+        const output = execFileSync("ip", ["-o", "-4", "addr", "show", iface], { encoding: "utf-8" }).trim();
+        const ip = output.match(/\binet\s+(\S+)/)?.[1] || "none";
         result[iface] = { ip };
       } catch {
         result[iface] = { ip: "none" };
@@ -7840,11 +7812,14 @@ function formatOpsReport(title, rows, details = []) {
 }
 
 function scheduleMcpRestart(delaySeconds = 2) {
-  const child = spawn("sh", ["-c", `sleep ${Number(delaySeconds) || 2}; sudo systemctl restart sidekick-mcp`], {
-    detached: true,
-    stdio: "ignore"
-  });
-  child.unref();
+  const delayMs = Math.max(0, (Number(delaySeconds) || 2) * 1000);
+  setTimeout(() => {
+    const child = spawn("sudo", ["systemctl", "restart", "sidekick-mcp"], {
+      detached: true,
+      stdio: "ignore"
+    });
+    child.unref();
+  }, delayMs).unref();
 }
 
 const MISSION_PROFILES = {
@@ -8682,11 +8657,9 @@ async function sidekick_changelog({ action, from, to, format, group_by, use_llm,
   const pathPolicyError = enforcePathPolicy(cwd, action === "save" ? "write" : "read");
   if (pathPolicyError) return pathPolicyError;
 
-  let gitLogCmd = `git log ${from}..${toRef} --pretty=format:"%H|%s|%an|%ad" --date=short`;
-  
   let logOutput = "";
   try {
-    logOutput = execSync(gitLogCmd, { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], cwd });
+    logOutput = execFileSync("git", ["log", `${from}..${toRef}`, "--pretty=format:%H|%s|%an|%ad", "--date=short"], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], cwd });
   } catch (e) {
     return { content: [{ type: "text", text: `Git log failed: ${e.message}\n\nMake sure you're in a git repository and the refs exist.` }], isError: true };
   }
@@ -9043,7 +9016,7 @@ function parseLogJsonlLine(line) {
 }
 
 function parseGitLogLine(line) {
-  const match = line.match(/^(\S+)\s+(\S+)\s+(.+)$/);
+  const match = line.match(/^(\S+)\t(.+?)\t(.+)$/);
   if (!match) return null;
   const [_, hash, date, message] = match;
   return {
@@ -9052,6 +9025,26 @@ function parseGitLogLine(line) {
     severity: "info",
     summary: `${hash.substring(0, 7)}: ${message.substring(0, 150)}`
   };
+}
+
+function findRecentFiles(root, startTime, limit = 50) {
+  const results = [];
+  function walk(dir) {
+    if (results.length >= limit) return;
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (results.length >= limit) break;
+      if (entry.name === "node_modules" || entry.name === ".git") continue;
+      const fullPath = path.join(dir, entry.name);
+      let stat;
+      try { stat = fs.statSync(fullPath); } catch { continue; }
+      if (entry.isDirectory()) walk(fullPath);
+      else if (entry.isFile() && stat.mtime >= startTime) results.push({ file: fullPath, stat });
+    }
+  }
+  walk(root);
+  return results;
 }
 
 async function sidekick_timeline({ action, since, until, sources, pattern, severity, format, max_events }) {
@@ -9090,7 +9083,7 @@ async function sidekick_timeline({ action, since, until, sources, pattern, sever
   if (useSources.includes("journalctl")) {
     try {
       const sinceStr = startTime.toISOString();
-      const result = execSync(`journalctl --since "${sinceStr}" --no-pager -n 500`, { 
+      const result = execFileSync("journalctl", ["--since", sinceStr, "--no-pager", "-n", "500"], {
         encoding: "utf8", 
         timeout: 10000,
         stdio: ["pipe", "pipe", "pipe"] 
@@ -9111,7 +9104,7 @@ async function sidekick_timeline({ action, since, until, sources, pattern, sever
   if (useSources.includes("git")) {
     try {
       const sinceDate = startTime.toISOString();
-      const result = execSync(`git log --since="${sinceDate}" --pretty=format:"%H %ad %s" --date=iso -n 100`, {
+      const result = execFileSync("git", ["log", `--since=${sinceDate}`, "--pretty=format:%H%x09%ad%x09%s", "--date=iso", "-n", "100"], {
         encoding: "utf8",
         timeout: 10000,
         cwd: "/home/sidekick/sidekick",
@@ -9127,23 +9120,13 @@ async function sidekick_timeline({ action, since, until, sources, pattern, sever
 
   if (useSources.includes("files")) {
     try {
-      const minutes = Math.ceil((Date.now() - startTime.getTime()) / 60000);
-      const result = execSync(`find /home/sidekick/sidekick -type f -mmin -${minutes} -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null | head -50`, {
-        encoding: "utf8",
-        timeout: 10000,
-        stdio: ["pipe", "pipe", "pipe"]
-      });
-      const files = result.trim().split("\n").filter(Boolean);
-      for (const file of files) {
-        try {
-          const stat = fs.statSync(file);
-          events.push({
-            timestamp: stat.mtime.toISOString(),
-            source: "files",
-            severity: "info",
-            summary: `Modified: ${file}`
-          });
-        } catch {}
+      for (const { file, stat } of findRecentFiles("/home/sidekick/sidekick", startTime, 50)) {
+        events.push({
+          timestamp: stat.mtime.toISOString(),
+          source: "files",
+          severity: "info",
+          summary: `Modified: ${file}`
+        });
       }
     } catch {}
   }
@@ -9549,7 +9532,7 @@ async function sidekick_depend({ action, type, target, depth, format }) {
     if (type === "npm") {
       const cwd = target || process.cwd();
       try {
-        const result = execSync(`npm ls --depth=${maxDepth} --json`, { 
+        const result = execFileSync("npm", ["ls", `--depth=${maxDepth}`, "--json"], {
           encoding: "utf8", 
           cwd,
           timeout: 10000,
@@ -9586,7 +9569,7 @@ async function sidekick_depend({ action, type, target, depth, format }) {
         return { content: [{ type: "text", text: "target required for service tree" }], isError: true };
       }
       try {
-        const result = execSync(`systemctl list-dependencies ${shellEscape(target)} --no-pager`, {
+        const result = execFileSync("systemctl", ["list-dependencies", validIdentifier(target, "service name", 128), "--no-pager"], {
           encoding: "utf8",
           timeout: 5000,
           stdio: ["pipe", "pipe", "pipe"]
@@ -9600,7 +9583,8 @@ async function sidekick_depend({ action, type, target, depth, format }) {
     if (type === "process") {
       const pid = target || "1";
       try {
-        const result = execSync(`pstree -p ${shellEscape(pid)}`, {
+        if (!/^\d+$/.test(String(pid))) throw new Error("Invalid PID");
+        const result = execFileSync("pstree", ["-p", String(pid)], {
           encoding: "utf8",
           timeout: 5000,
           stdio: ["pipe", "pipe", "pipe"]
@@ -9622,7 +9606,7 @@ async function sidekick_depend({ action, type, target, depth, format }) {
     if (type === "npm") {
       const cwd = process.cwd();
       try {
-        const result = execSync(`npm ls --all --json`, {
+        const result = execFileSync("npm", ["ls", "--all", "--json"], {
           encoding: "utf8",
           cwd,
           timeout: 15000,
@@ -9657,7 +9641,7 @@ async function sidekick_depend({ action, type, target, depth, format }) {
 
     if (type === "service") {
       try {
-        const result = execSync(`systemctl list-dependencies --reverse ${shellEscape(target)} --no-pager`, {
+        const result = execFileSync("systemctl", ["list-dependencies", "--reverse", validIdentifier(target, "service name", 128), "--no-pager"], {
           encoding: "utf8",
           timeout: 5000,
           stdio: ["pipe", "pipe", "pipe"]
@@ -9670,7 +9654,8 @@ async function sidekick_depend({ action, type, target, depth, format }) {
 
     if (type === "process") {
       try {
-        const result = execSync(`ps -o pid,ppid,comm --ppid ${shellEscape(target)}`, {
+        if (!/^\d+$/.test(String(target))) throw new Error("Invalid PID");
+        const result = execFileSync("ps", ["-o", "pid,ppid,comm", "--ppid", String(target)], {
           encoding: "utf8",
           timeout: 5000,
           stdio: ["pipe", "pipe", "pipe"]
@@ -9690,7 +9675,7 @@ async function sidekick_depend({ action, type, target, depth, format }) {
     }
     const cwd = target || process.cwd();
     try {
-      const result = execSync(`npm outdated --json`, {
+      const result = execFileSync("npm", ["outdated", "--json"], {
         encoding: "utf8",
         cwd,
         timeout: 15000,
@@ -9727,7 +9712,7 @@ async function sidekick_depend({ action, type, target, depth, format }) {
     
     if (type === "npm") {
       try {
-        const result = execSync(`npm ls --all --json`, {
+        const result = execFileSync("npm", ["ls", "--all", "--json"], {
           encoding: "utf8",
           cwd: process.cwd(),
           timeout: 15000,
@@ -9762,7 +9747,7 @@ async function sidekick_depend({ action, type, target, depth, format }) {
       }
     } else if (type === "service") {
       try {
-        const result = execSync(`systemctl list-dependencies --reverse ${shellEscape(target)} --no-pager`, {
+        const result = execFileSync("systemctl", ["list-dependencies", "--reverse", validIdentifier(target, "service name", 128), "--no-pager"], {
           encoding: "utf8",
           timeout: 5000,
           stdio: ["pipe", "pipe", "pipe"]
@@ -9795,7 +9780,7 @@ async function sidekick_depend({ action, type, target, depth, format }) {
       const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
       const declared = Object.keys(pkg.dependencies || {});
       
-      const result = execSync(`npm ls --depth=0 --json`, {
+      const result = execFileSync("npm", ["ls", "--depth=0", "--json"], {
         encoding: "utf8",
         cwd,
         timeout: 10000,
@@ -10739,7 +10724,7 @@ async function sidekick_analytics({ query, file, format }) {
       const tmpFile = path.join(os.tmpdir(), "sidekick_analytics_" + Date.now() + ".py");
       try {
         fs.writeFileSync(tmpFile, pyScript);
-        return execSync(pythonCmd + " " + tmpFile + " 2>&1", { timeout: 60000 }).toString();
+        return execFileSync(pythonCmd, [tmpFile], { timeout: 60000, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
       } finally {
         try { fs.unlinkSync(tmpFile); } catch (e) {}
       }
@@ -11200,29 +11185,36 @@ async function sidekick_tunnel({ action, url, port, name }) {
       if (!port) {
         return { content: [{ type: "text", text: "Error: port required" }], isError: true };
       }
-      const tunnelName = name || `tunnel-${Date.now()}`;
-      const cmd = `cloudflared tunnel --url http://localhost:${port} --name ${tunnelName} > /tmp/${tunnelName}.log 2>&1 &`;
-      execSync(cmd, { timeout: 5000 });
+      const tunnelName = name ? validIdentifier(name, "tunnel name") : `tunnel-${Date.now()}`;
+      const localPort = validPort(port);
+      const logPath = path.join("/tmp", `${tunnelName}.log`);
+      const logFd = fs.openSync(logPath, "a");
+      const child = spawn("cloudflared", ["tunnel", "--url", `http://localhost:${localPort}`, "--name", tunnelName], {
+        detached: true,
+        stdio: ["ignore", logFd, logFd]
+      });
+      child.unref();
+      fs.closeSync(logFd);
       // Wait a moment for tunnel to establish
       await new Promise(resolve => setTimeout(resolve, 3000));
       // Try to get the tunnel URL from logs
       try {
-        const logContent = fs.readFileSync(`/tmp/${tunnelName}.log`, 'utf8');
+        const logContent = fs.readFileSync(logPath, 'utf8');
         const urlMatch = logContent.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
         const tunnelUrl = urlMatch ? urlMatch[0] : null;
         return { content: [{ type: "text", text: JSON.stringify({
           name: tunnelName,
-          port: port,
+          port: localPort,
           url: tunnelUrl,
           status: "started",
-          log: `/tmp/${tunnelName}.log`
+          log: logPath
         }, null, 2) }] };
       } catch (e) {
         return { content: [{ type: "text", text: JSON.stringify({
           name: tunnelName,
-          port: port,
+          port: localPort,
           status: "started",
-          note: "Tunnel started but URL not yet available. Check logs with: cat /tmp/" + tunnelName + ".log"
+          note: "Tunnel started but URL not yet available. Check logs at " + logPath
         }, null, 2) }] };
       }
     }
@@ -11231,17 +11223,18 @@ async function sidekick_tunnel({ action, url, port, name }) {
       if (!name) {
         return { content: [{ type: "text", text: "Error: tunnel name required" }], isError: true };
       }
+      const tunnelName = validIdentifier(name, "tunnel name");
       try {
-        execSync(`pkill -f "cloudflared tunnel.*--name ${name}"`, { timeout: 5000 });
-        return { content: [{ type: "text", text: `Stopped tunnel: ${name}` }] };
+        execFileSync("pkill", ["-f", `cloudflared tunnel.*--name ${tunnelName}`], { timeout: 5000 });
+        return { content: [{ type: "text", text: `Stopped tunnel: ${tunnelName}` }] };
       } catch (e) {
-        return { content: [{ type: "text", text: `Tunnel not found or already stopped: ${name}` }] };
+        return { content: [{ type: "text", text: `Tunnel not found or already stopped: ${tunnelName}` }] };
       }
     }
 
     if (action === "list") {
       try {
-        const result = execSync('ps aux | grep "cloudflared tunnel" | grep -v grep', { timeout: 5000 }).toString();
+        const result = execFileSync("ps", ["aux"], { timeout: 5000, encoding: "utf-8" });
         const tunnels = result.split('\n').filter(line => line.trim()).map(line => {
           const nameMatch = line.match(/--name\s+(\S+)/);
           const portMatch = line.match(/--url\s+http:\/\/localhost:(\d+)/);
@@ -11250,7 +11243,7 @@ async function sidekick_tunnel({ action, url, port, name }) {
             port: portMatch ? portMatch[1] : "unknown",
             pid: line.split(/\s+/)[1]
           };
-        });
+        }).filter(tunnel => tunnel.name !== "unknown" || tunnel.port !== "unknown");
         return { content: [{ type: "text", text: JSON.stringify(tunnels, null, 2) }] };
       } catch (e) {
         return { content: [{ type: "text", text: "No active tunnels" }] };
@@ -11308,7 +11301,7 @@ async function sidekick_download({ url, output, format, audio_only }) {
 async function sidekick_wireguard({ action, interface_name, peer_name, public_key, endpoint, allowed_ips }) {
   try {
     if (action === "status") {
-      const result = execSync("sudo wg show all 2>&1", { timeout: 5000 }).toString();
+      const result = execFileSync("sudo", ["wg", "show", "all"], { timeout: 5000, encoding: "utf-8" });
       if (!result.trim()) {
         return { content: [{ type: "text", text: "No WireGuard interfaces found" }] };
       }
@@ -11319,7 +11312,8 @@ async function sidekick_wireguard({ action, interface_name, peer_name, public_ke
       if (!interface_name) {
         return { content: [{ type: "text", text: "Error: interface_name required" }], isError: true };
       }
-      const result = execSync(`sudo wg show ${interface_name} peers 2>&1`, { timeout: 5000 }).toString();
+      const iface = validIdentifier(interface_name, "interface name", 32);
+      const result = execFileSync("sudo", ["wg", "show", iface, "peers"], { timeout: 5000, encoding: "utf-8" });
       const peers = result.trim().split('\n').filter(line => line && !line.startsWith('Warning')).map(line => {
         const parts = line.split('\t');
         return {
@@ -11338,22 +11332,30 @@ async function sidekick_wireguard({ action, interface_name, peer_name, public_ke
       if (!interface_name || !peer_name || !public_key) {
         return { content: [{ type: "text", text: "Error: interface_name, peer_name, and public_key required" }], isError: true };
       }
-      const cmd = `sudo wg set ${interface_name} peer ${public_key} allowed-ips ${allowed_ips || '10.0.0.0/24'}${endpoint ? ` endpoint ${endpoint}` : ''}`;
-      execSync(cmd, { timeout: 5000 });
-      return { content: [{ type: "text", text: `Added peer ${peer_name} to ${interface_name}` }] };
+      const iface = validIdentifier(interface_name, "interface name", 32);
+      const peerName = validIdentifier(peer_name, "peer name");
+      const key = validWireGuardPublicKey(public_key);
+      const ips = validAllowedIps(allowed_ips);
+      const peerEndpoint = validWireGuardEndpoint(endpoint);
+      const args = ["wg", "set", iface, "peer", key, "allowed-ips", ips];
+      if (peerEndpoint) args.push("endpoint", peerEndpoint);
+      execFileSync("sudo", args, { timeout: 5000 });
+      return { content: [{ type: "text", text: `Added peer ${peerName} to ${iface}` }] };
     }
 
     if (action === "remove_peer") {
       if (!interface_name || !public_key) {
         return { content: [{ type: "text", text: "Error: interface_name and public_key required" }], isError: true };
       }
-      execSync(`sudo wg set ${interface_name} peer ${public_key} remove`, { timeout: 5000 });
-      return { content: [{ type: "text", text: `Removed peer from ${interface_name}` }] };
+      const iface = validIdentifier(interface_name, "interface name", 32);
+      const key = validWireGuardPublicKey(public_key);
+      execFileSync("sudo", ["wg", "set", iface, "peer", key, "remove"], { timeout: 5000 });
+      return { content: [{ type: "text", text: `Removed peer from ${iface}` }] };
     }
 
     if (action === "generate_keypair") {
-      const privateKey = execSync("wg genkey", { timeout: 5000 }).toString().trim();
-      const publicKey = execSync(`echo "${privateKey}" | wg pubkey`, { timeout: 5000 }).toString().trim();
+      const privateKey = execFileSync("wg", ["genkey"], { timeout: 5000, encoding: "utf-8" }).trim();
+      const publicKey = execFileSync("wg", ["pubkey"], { input: privateKey + "\n", timeout: 5000, encoding: "utf-8" }).trim();
       return { content: [{ type: "text", text: JSON.stringify({ private_key: privateKey, public_key: publicKey }, null, 2) }] };
     }
 
@@ -11368,13 +11370,12 @@ async function sidekick_wireguard({ action, interface_name, peer_name, public_ke
 async function sidekick_nginx({ action, site_name, domain, upstream_port, ssl_email }) {
   try {
     if (action === "status") {
-      const result = execSync("sudo systemctl status nginx 2>&1 | head -20", { timeout: 5000 }).toString();
+      const result = execFileSync("sudo", ["systemctl", "status", "nginx", "--no-pager"], { timeout: 5000, encoding: "utf-8" });
       return { content: [{ type: "text", text: result }] };
     }
 
     if (action === "list_sites") {
-      const result = execSync("ls -1 /etc/nginx/sites-enabled/ 2>&1", { timeout: 5000 }).toString();
-      const sites = result.trim().split('\n').filter(s => s && s !== 'default');
+      const sites = fs.readdirSync("/etc/nginx/sites-enabled").filter(s => s && s !== "default");
       return { content: [{ type: "text", text: JSON.stringify(sites, null, 2) }] };
     }
 
@@ -11382,13 +11383,16 @@ async function sidekick_nginx({ action, site_name, domain, upstream_port, ssl_em
       if (!site_name || !domain || !upstream_port) {
         return { content: [{ type: "text", text: "Error: site_name, domain, and upstream_port required" }], isError: true };
       }
+      const siteName = validIdentifier(site_name, "site name");
+      const domainName = validDomainName(domain);
+      const proxyPort = validPort(upstream_port, "upstream port");
       
       const config = `server {
     listen 80;
-    server_name ${domain};
+    server_name ${domainName};
 
     location / {
-        proxy_pass http://127.0.0.1:${upstream_port};
+        proxy_pass http://127.0.0.1:${proxyPort};
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
@@ -11397,19 +11401,24 @@ async function sidekick_nginx({ action, site_name, domain, upstream_port, ssl_em
     }
 }`;
 
-      fs.writeFileSync(`/tmp/${site_name}`, config);
-      execSync(`sudo mv /tmp/${site_name} /etc/nginx/sites-available/${site_name}`);
-      execSync(`sudo ln -sf /etc/nginx/sites-available/${site_name} /etc/nginx/sites-enabled/${site_name}`);
+      const tmpPath = path.join("/tmp", siteName);
+      const availablePath = `/etc/nginx/sites-available/${siteName}`;
+      const enabledPath = `/etc/nginx/sites-enabled/${siteName}`;
+      fs.writeFileSync(tmpPath, config);
+      execFileSync("sudo", ["install", "-m", "0644", tmpPath, availablePath], { timeout: 5000 });
+      execFileSync("sudo", ["ln", "-sf", availablePath, enabledPath], { timeout: 5000 });
       
       // Test config
-      const testResult = execSync("sudo nginx -t 2>&1", { timeout: 5000 }).toString();
-      if (testResult.includes('successful')) {
-        execSync("sudo systemctl reload nginx 2>&1", { timeout: 5000 });
-        return { content: [{ type: "text", text: `Added site ${site_name} for ${domain} -> port ${upstream_port}` }] };
-      } else {
-        // Rollback
-        execSync(`sudo rm -f /etc/nginx/sites-enabled/${site_name} /etc/nginx/sites-available/${site_name}`);
-        return { content: [{ type: "text", text: `Error: Invalid nginx config: ${testResult}` }], isError: true };
+      try {
+        execFileSync("sudo", ["nginx", "-t"], { timeout: 5000, stdio: ["ignore", "pipe", "pipe"] });
+        execFileSync("sudo", ["systemctl", "reload", "nginx"], { timeout: 5000 });
+        return { content: [{ type: "text", text: `Added site ${siteName} for ${domainName} -> port ${proxyPort}` }] };
+      } catch (e) {
+        execFileSync("sudo", ["rm", "-f", enabledPath, availablePath], { timeout: 5000 });
+        const detail = (e.stderr || e.stdout || e.message || "").toString();
+        return { content: [{ type: "text", text: `Error: Invalid nginx config: ${detail}` }], isError: true };
+      } finally {
+        try { fs.unlinkSync(tmpPath); } catch {}
       }
     }
 
@@ -11417,18 +11426,23 @@ async function sidekick_nginx({ action, site_name, domain, upstream_port, ssl_em
       if (!site_name) {
         return { content: [{ type: "text", text: "Error: site_name required" }], isError: true };
       }
-      execSync(`sudo rm -f /etc/nginx/sites-enabled/${site_name} /etc/nginx/sites-available/${site_name}`);
-      execSync("sudo systemctl reload nginx 2>&1", { timeout: 5000 });
-      return { content: [{ type: "text", text: `Removed site ${site_name}` }] };
+      const siteName = validIdentifier(site_name, "site name");
+      execFileSync("sudo", ["rm", "-f", `/etc/nginx/sites-enabled/${siteName}`, `/etc/nginx/sites-available/${siteName}`], { timeout: 5000 });
+      execFileSync("sudo", ["systemctl", "reload", "nginx"], { timeout: 5000 });
+      return { content: [{ type: "text", text: `Removed site ${siteName}` }] };
     }
 
     if (action === "test_config") {
-      const result = execSync("sudo nginx -t 2>&1", { timeout: 5000 }).toString();
-      return { content: [{ type: "text", text: result }] };
+      try {
+        execFileSync("sudo", ["nginx", "-t"], { timeout: 5000, stdio: ["ignore", "pipe", "pipe"] });
+        return { content: [{ type: "text", text: "nginx config test passed" }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: (e.stderr || e.stdout || e.message).toString() }], isError: true };
+      }
     }
 
     if (action === "reload") {
-      execSync("sudo systemctl reload nginx 2>&1", { timeout: 5000 });
+      execFileSync("sudo", ["systemctl", "reload", "nginx"], { timeout: 5000 });
       return { content: [{ type: "text", text: "Nginx reloaded" }] };
     }
 

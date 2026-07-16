@@ -3,6 +3,7 @@ const fs = require('fs');
 const http = require('http');
 const path = require('path');
 const { spawn } = require('child_process');
+const packageJson = require('../package.json');
 
 const TEST_DIR = path.join(__dirname, 'test-data-compute-protocol');
 const API_KEY = 'sk-test-compute-protocol-key';
@@ -99,6 +100,12 @@ async function main() {
   try {
     await waitForServer(child);
     const admin = { Authorization: `Bearer ${API_KEY}` };
+
+    const healthRes = await request('GET', '/health');
+    assert.strictEqual(healthRes.status, 200, 'health endpoint is reachable');
+    assert.strictEqual(healthRes.data.version, packageJson.version, 'health version matches package version');
+    assert.strictEqual(healthRes.data.runtime.node, process.version, 'health runtime reports Node version');
+    assert.strictEqual(healthRes.data.runtime.requiredNode, packageJson.engines.node, 'health runtime reports package Node requirement');
 
     assert.strictEqual((await request('GET', '/compute/unprotected-test')).status, 401, 'unknown compute route fails closed without auth');
     assert.strictEqual((await request('POST', '/compute/enrollment/exchange', { token: 'x' }, { 'Content-Type': 'text/plain' })).status, 415, 'compute protocol rejects non-json content type');

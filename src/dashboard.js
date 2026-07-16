@@ -4,7 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const { timingSafeCompare } = require("./crypto-utils");
-const { execSync } = require("child_process");
+const { execFileSync } = require("child_process");
 const { TOOLS, setSource, getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval } = require("./tools");
 const dynamicTools = require("./dynamic-tools");
 const dbStore = require("./db");
@@ -44,6 +44,68 @@ function getPublicIP() {
   return 'unknown';
 }
 const VPS_IP = getPublicIP();
+
+function runCommand(program, args = [], opts = {}) {
+  try {
+    return execFileSync(program, args, { encoding: "utf-8", timeout: 5000, ...opts }).trim();
+  } catch { return "?"; }
+}
+
+function parseMemInfo() {
+  try {
+    return Object.fromEntries(fs.readFileSync("/proc/meminfo", "utf-8").split("\n").filter(Boolean).map(line => {
+      const match = line.match(/^([^:]+):\s+(\d+)\s*(\w+)?/);
+      return match ? [match[1], { value: Number(match[2]), unit: match[3] || "" }] : null;
+    }).filter(Boolean));
+  } catch { return {}; }
+}
+
+function formatKb(entry) {
+  if (!entry || !Number.isFinite(entry.value)) return "?";
+  if (entry.unit === "kB") return `${entry.value} kB`;
+  return String(entry.value);
+}
+
+function parseDiskRoot() {
+  const output = runCommand("df", ["-h", "/"]);
+  const line = output.split("\n")[1] || "";
+  const parts = line.trim().split(/\s+/);
+  return {
+    total: parts[1] || "?",
+    used: parts[2] || "?",
+    free: parts[3] || "?",
+    pct: parts[4] || "?"
+  };
+}
+
+function parseLoadAverage() {
+  try {
+    return fs.readFileSync("/proc/loadavg", "utf-8").trim().split(/\s+/).slice(0, 3).join(" ");
+  } catch { return os.loadavg().map(n => n.toFixed(2)).join(" "); }
+}
+
+function systemctlStatus(unit, action = "is-active") {
+  const status = runCommand("systemctl", [action, unit], { timeout: 3000 });
+  return status === "?" ? "inactive" : status;
+}
+
+function systemSnapshot() {
+  const memInfo = parseMemInfo();
+  const totalKb = memInfo.MemTotal?.value || 0;
+  const availableKb = memInfo.MemAvailable?.value || 0;
+  const usedKb = totalKb && availableKb ? totalKb - availableKb : 0;
+  const memPct = totalKb ? Math.round((usedKb / totalKb) * 100) : 0;
+  const disk = parseDiskRoot();
+  const cpuPct = Number((os.loadavg()[0] || 0).toFixed(2));
+  return {
+    uptime: runCommand("uptime", ["-p"]),
+    memory: { total: formatKb(memInfo.MemTotal), used: usedKb ? `${usedKb} kB` : "?", free: formatKb(memInfo.MemAvailable), pct: `${memPct}%`, pctNumber: memPct },
+    disk,
+    cpu: `${cpuPct}%`,
+    cpuNumber: cpuPct,
+    load: parseLoadAverage()
+  };
+}
 
 const DASHBOARD_USER = process.env.SIDEKICK_DASHBOARD_USER || "";
 const DASHBOARD_PASS = process.env.SIDEKICK_DASHBOARD_PASS || "";
@@ -578,12 +640,6 @@ function memoryCategory(memory) {
   return "durable";
 }
 
-function exec(cmd, opts = {}) {
-  try {
-    return execSync(cmd, { encoding: "utf-8", timeout: 5000, ...opts }).trim();
-  } catch { return "?"; }
-}
-
 function seedKV() {
   const kv = readKV();
   const repoRoot = path.join(__dirname, "..");
@@ -599,46 +655,46 @@ function seedKV() {
   } catch {}
 
   const seed = {
-    "server:hostname": exec("hostname"),
-    "server:os": exec('lsb_release -d -s 2>/dev/null || . /etc/os-release && echo "$PRETTY_NAME"'),
-    "server:kernel": exec("uname -r"),
-    "server:arch": exec("uname -m"),
-    "server:cpu": exec(`grep 'model name' /proc/cpuinfo | head -1 | cut -d: -f2 | xargs`),
-    "server:memory_total": exec(`grep MemTotal /proc/meminfo | awk '{print $2 " " $3}'`),
-    "server:swap_total": exec(`grep SwapTotal /proc/meminfo | awk '{print $2 " " $3}'`),
-    "server:disk_total_root": exec("df -h / | tail -1 | awk '{print $2}'"),
-    "server:processes": exec("ps aux | wc -l"),
-    "server:uptime_at_start": exec("uptime -p"),
+    "server:hostname": os.hostname(),
+    "server:os": (() => { try { const osRelease = fs.readFileSync("/etc/os-release", "utf-8"); return osRelease.match(/^PRETTY_NAME="?([^"\n]+)"?/m)?.[1] || os.type(); } catch { return os.type(); } })(),
+    "server:kernel": os.release(),
+    "server:arch": os.arch(),
+    "server:cpu": os.cpus()[0]?.model || "?",
+    "server:memory_total": formatKb(parseMemInfo().MemTotal),
+    "server:swap_total": formatKb(parseMemInfo().SwapTotal),
+    "server:disk_total_root": parseDiskRoot().total,
+    "server:processes": (() => { const ps = runCommand("ps", ["-e", "--no-headers"]); return ps === "?" ? "?" : String(ps.split("\n").filter(Boolean).length); })(),
+    "server:uptime_at_start": runCommand("uptime", ["-p"]),
 
-    "network:public_ip": exec("curl -s ifconfig.me 2>/dev/null || echo ?"),
-    "network:private_ip": exec("hostname -I | awk '{print $1}'"),
-    "network:interfaces": exec("ip -o link show | awk -F': ' '{print $2}' | paste -sd,"),
-    "network:dns": exec(`grep nameserver /etc/resolv.conf | awk '{print $2}' | paste -sd,`),
-    "network:gateway": exec("ip route | grep default | awk '{print $3}'"),
+    "network:public_ip": getPublicIP(),
+    "network:private_ip": getPublicIP(),
+    "network:interfaces": Object.keys(os.networkInterfaces()).join(","),
+    "network:dns": (() => { try { return fs.readFileSync("/etc/resolv.conf", "utf-8").split("\n").map(line => line.match(/^nameserver\s+(\S+)/)?.[1]).filter(Boolean).join(","); } catch { return "?"; } })(),
+    "network:gateway": (() => { const route = runCommand("ip", ["route", "show", "default"]); return route.match(/\bvia\s+(\S+)/)?.[1] || "?"; })(),
 
-    "services:sidekick-mcp": exec("systemctl is-active sidekick-mcp"),
-    "services:sidekick-dashboard": exec("systemctl is-active sidekick-dashboard"),
-    "services:sidekick-agent": exec("systemctl is-active sidekick-agent"),
-    "services:ollama": exec("systemctl is-active ollama"),
+    "services:sidekick-mcp": systemctlStatus("sidekick-mcp"),
+    "services:sidekick-dashboard": systemctlStatus("sidekick-dashboard"),
+    "services:sidekick-agent": systemctlStatus("sidekick-agent"),
+    "services:ollama": systemctlStatus("ollama"),
 
-    "security:ufw": exec("systemctl is-active ufw"),
-    "security:fail2ban": exec("systemctl is-active fail2ban"),
+    "security:ufw": systemctlStatus("ufw"),
+    "security:fail2ban": systemctlStatus("fail2ban"),
     "security:ssh_port": (() => { try { const c = fs.readFileSync("/etc/ssh/sshd_config","utf-8").match(/^Port\s+(\d+)/m); return c ? c[1] : "22"; } catch { return "22"; } })(),
     "security:last_login": "[redacted on startup]",
     "security:failed_logins": "[redacted on startup]",
 
-    "software:node_version": exec("node --version"),
-    "software:npm_version": exec("npm --version"),
-    "software:ollama_version": exec("ollama --version 2>/dev/null || echo not found"),
-    "software:python_version": exec("python3 --version 2>/dev/null || echo not found"),
+    "software:node_version": process.version,
+    "software:npm_version": runCommand("npm", ["--version"]),
+    "software:ollama_version": runCommand("ollama", ["--version"]),
+    "software:python_version": runCommand("python3", ["--version"]),
 
     "deploy:git_commit": versionInfo.commit || "?",
     "deploy:branch": versionInfo.branch || "?",
     "deploy:remote_url": versionInfo.remote_url || "?",
     "deploy:initialized": now,
 
-    "config:timezone": exec("timedatectl show -p Timezone --value 2>/dev/null || echo UTC"),
-    "config:locale": exec(`grep LANG= /etc/default/locale 2>/dev/null | cut -d= -f2 || echo C.UTF-8`),
+    "config:timezone": runCommand("timedatectl", ["show", "-p", "Timezone", "--value"]),
+    "config:locale": (() => { try { return fs.readFileSync("/etc/default/locale", "utf-8").match(/^LANG=(.+)$/m)?.[1] || "C.UTF-8"; } catch { return "C.UTF-8"; } })(),
     "config:env": process.env.NODE_ENV || "production",
   };
 
@@ -710,20 +766,13 @@ app.get("/api/kv", (req, res) => {
 
 app.get("/api/system", (req, res) => {
   try {
-    const uptime = execSync("uptime -p", { encoding: "utf-8", timeout: 5000 }).trim();
-    const mem = execSync("free -h | grep Mem", { encoding: "utf-8", timeout: 5000 }).trim().split(/\s+/);
-    const disk = execSync("df -h / | tail -1", { encoding: "utf-8", timeout: 5000 }).trim().split(/\s+/);
-    const cpu = execSync("top -bn1 | grep 'Cpu(s)' | awk '{print $2}'", { encoding: "utf-8", timeout: 5000 }).trim();
-    const load = execSync("cat /proc/loadavg | awk '{print $1,$2,$3}'", { encoding: "utf-8", timeout: 5000 }).trim();
-    const diskFree = disk.length >= 4 ? disk[3] : "?";
-    const diskTotal = disk.length >= 2 ? disk[1] : "?";
-    const diskPct = disk.length >= 5 ? disk[4] : "?";
+    const snapshot = systemSnapshot();
     res.json({
-      uptime,
-      memory: { total: mem[1] || "?", used: mem[2] || "?", free: mem[3] || "?", pct: mem[4] || "?" },
-      disk: { total: diskTotal, free: diskFree, pct: diskPct },
-      cpu: cpu || "0%",
-      load
+      uptime: snapshot.uptime,
+      memory: { total: snapshot.memory.total, used: snapshot.memory.used, free: snapshot.memory.free, pct: snapshot.memory.pct },
+      disk: { total: snapshot.disk.total, free: snapshot.disk.free, pct: snapshot.disk.pct },
+      cpu: snapshot.cpu,
+      load: snapshot.load
     });
   } catch (e) {
     res.json({ error: e.message });
@@ -733,13 +782,10 @@ app.get("/api/system", (req, res) => {
 app.get("/api/dashboard-summary", async (req, res) => {
   try {
     // Health score calculation
-    const mem = execSync("free -h | grep Mem", { encoding: "utf-8", timeout: 5000 }).trim().split(/\s+/);
-    const disk = execSync("df -h / | tail -1", { encoding: "utf-8", timeout: 5000 }).trim().split(/\s+/);
-    const cpu = execSync("top -bn1 | grep 'Cpu(s)' | awk '{print $2}'", { encoding: "utf-8", timeout: 5000 }).trim();
-    
-    const cpuPct = parseFloat(cpu) || 0;
-    const memPct = mem.length >= 5 ? parseFloat(mem[4]) || 0 : 0;
-    const diskPct = disk.length >= 5 ? parseFloat(disk[4]) || 0 : 0;
+    const snapshot = systemSnapshot();
+    const cpuPct = snapshot.cpuNumber;
+    const memPct = snapshot.memory.pctNumber;
+    const diskPct = parseFloat(snapshot.disk.pct) || 0;
     
     // Calculate health score (100 = perfect, deduct for high usage)
     let healthScore = 100;
@@ -795,8 +841,7 @@ app.get("/api/dashboard-summary", async (req, res) => {
     
     let agentStatus = "idle";
     try {
-      const agentStatusRes = execSync("curl -s http://127.0.0.1:4099/api/agent/status 2>/dev/null || echo '{}'", { encoding: "utf-8", timeout: 3000 }).trim();
-      const agentData = JSON.parse(agentStatusRes);
+      const agentData = await getJsonFromLocalService(AGENT_PORT, "/api/agent/status");
       if (agentData.activeTasks > 0) {
         agentStatus = `running (${agentData.activeTasks})`;
       }
@@ -891,11 +936,7 @@ app.get("/api/services", (req, res) => {
   const services = ["sidekick-mcp", "sidekick-dashboard", "sidekick-agent", "ollama"];
   const status = {};
   for (const svc of services) {
-    try {
-      status[svc] = execSync(`systemctl is-active ${svc}`, { encoding: "utf-8", timeout: 3000 }).trim();
-    } catch {
-      status[svc] = "inactive";
-    }
+    status[svc] = systemctlStatus(svc);
   }
   res.json({ services: status });
 });
@@ -908,16 +949,13 @@ app.post("/api/quick-actions/:action", (req, res) => {
       const services = ["sidekick-mcp", "sidekick-dashboard", "sidekick-agent", "ollama"];
       const serviceStatus = {};
       for (const svc of services) {
-        try {
-          serviceStatus[svc] = execSync(`systemctl is-active ${svc}`, { encoding: "utf-8", timeout: 3000 }).trim();
-        } catch {
-          serviceStatus[svc] = "inactive";
-        }
+        serviceStatus[svc] = systemctlStatus(svc);
       }
-      const uptime = exec("uptime -p");
-      const load = exec("cat /proc/loadavg | awk '{print $1,$2,$3}'");
-      const disk = exec("df -h / | tail -1 | awk '{print $5 \" used, \" $4 \" free\"}'");
-      const memory = exec("free -h | awk '/Mem:/ {print $3 \"/\" $2 \" used\"}'");
+      const snapshot = systemSnapshot();
+      const uptime = snapshot.uptime;
+      const load = snapshot.load;
+      const disk = `${snapshot.disk.pct} used, ${snapshot.disk.free} free`;
+      const memory = `${snapshot.memory.used}/${snapshot.memory.total} used`;
       auditLog(req, "quick-action.health-check", {});
       finishDashboardExecution(execution, "completed", { result_status: "success", result_summary: "dashboard health check completed" });
       return res.json({ ok: true, action, result: { services: serviceStatus, uptime, load, disk, memory } });
@@ -955,15 +993,15 @@ app.post("/api/quick-actions/:action", (req, res) => {
         finishDashboardExecution(execution, "failed", { result_status: "invalid_request", error_category: "unsupported_service", result_summary: `Unsupported service: ${service}` });
         return res.status(400).json({ ok: false, error: "Unsupported service" });
       }
-      const logs = execSync(`sudo -n /usr/bin/journalctl -u ${service} | tail -40`, { encoding: "utf-8", timeout: 5000 }).trim();
+      const logs = runCommand("sudo", ["-n", "/usr/bin/journalctl", "-u", service, "-n", "40", "--no-pager"]);
       auditLog(req, "quick-action.service-logs", { service });
       finishDashboardExecution(execution, "completed", { result_status: "success", result_summary: `dashboard service logs returned for ${service}` });
       return res.json({ ok: true, action, result: { service, logs } });
     }
 
     if (action === "restart-agent") {
-      execSync("sudo systemctl restart sidekick-agent", { encoding: "utf-8", timeout: 10000 });
-      const status = exec("systemctl is-active sidekick-agent");
+      runCommand("sudo", ["systemctl", "restart", "sidekick-agent"], { timeout: 10000 });
+      const status = systemctlStatus("sidekick-agent");
       auditLog(req, "quick-action.restart-agent", { status });
       finishDashboardExecution(execution, status === "active" ? "completed" : "failed", { result_status: status === "active" ? "success" : "failed", result_summary: `sidekick-agent restart status: ${status}` });
       return res.json({ ok: status === "active", action, result: { service: "sidekick-agent", status } });
@@ -978,7 +1016,7 @@ app.post("/api/quick-actions/:action", (req, res) => {
   }
 });
 
-app.get("/api/metrics/status", (req, res) => {
+app.get("/api/metrics/status", async (req, res) => {
   const grafanaConfigured = Boolean(GRAFANA_USER);
   const influxToken = process.env.SIDEKICK_INFLUX_TOKEN || "";
   const influxConfigured = Boolean(influxToken && influxToken !== "sidekick-influx-token");
@@ -998,18 +1036,25 @@ app.get("/api/metrics/status", (req, res) => {
   };
 
   try {
-    const health = execSync(`curl -fsS http://127.0.0.1:${GRAFANA_PORT}/api/health >/dev/null && echo OK || echo FAIL`, { encoding: "utf-8", timeout: 3000 }).trim();
-    status.grafana.reachable = health === "OK";
+    await getJsonFromLocalService(GRAFANA_PORT, "/api/health");
+    status.grafana.reachable = true;
   } catch {}
 
   try {
-    const ping = execSync("curl -fsS http://127.0.0.1:8086/ping >/dev/null && echo OK || echo FAIL", { encoding: "utf-8", timeout: 3000 }).trim();
-    status.influxdb.reachable = ping === "OK";
+    await new Promise((resolve, reject) => {
+      const req = http.get({ hostname: "127.0.0.1", port: 8086, path: "/ping", timeout: 3000 }, res => {
+        res.resume();
+        res.statusCode >= 200 && res.statusCode < 500 ? resolve() : reject(new Error(`HTTP ${res.statusCode}`));
+      });
+      req.on("timeout", () => req.destroy(new Error("timeout")));
+      req.on("error", reject);
+    });
+    status.influxdb.reachable = true;
   } catch {}
 
   try {
-    status.collector.timerActive = execSync("systemctl is-active sidekick-metrics.timer 2>/dev/null || true", { encoding: "utf-8", timeout: 3000 }).trim() === "active";
-    status.collector.timerEnabled = execSync("systemctl is-enabled sidekick-metrics.timer 2>/dev/null || true", { encoding: "utf-8", timeout: 3000 }).trim() === "enabled";
+    status.collector.timerActive = systemctlStatus("sidekick-metrics.timer", "is-active") === "active";
+    status.collector.timerEnabled = systemctlStatus("sidekick-metrics.timer", "is-enabled") === "enabled";
   } catch {}
 
   const issues = [];

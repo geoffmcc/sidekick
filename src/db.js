@@ -2302,12 +2302,27 @@ function runMigration(name, upSql, downSql) {
   return { success: true, version: targetVersion };
 }
 
-function listMigrations() {
+function getValidatedMigrationFiles() {
   if (!fs.existsSync(MIGRATIONS_DIR)) return [];
-  
   const files = fs.readdirSync(MIGRATIONS_DIR)
     .filter(f => f.endsWith(".sql"))
     .sort();
+  const seen = new Set();
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const match = file.match(/^(\d{3})_[A-Za-z0-9_]+\.sql$/);
+    if (!match) throw new Error(`Invalid migration filename: ${file}`);
+    const version = parseInt(match[1], 10);
+    if (seen.has(version)) throw new Error(`Duplicate migration version: ${match[1]}`);
+    seen.add(version);
+    const expected = i + 1;
+    if (version !== expected) throw new Error(`Migration versions must be contiguous: expected ${String(expected).padStart(3, "0")}, found ${match[1]} in ${file}`);
+  }
+  return files;
+}
+
+function listMigrations() {
+  const files = getValidatedMigrationFiles();
   
   const currentVersion = getMigrationVersion();
   

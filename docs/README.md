@@ -54,6 +54,7 @@ sqlite3 data/sidekick.db "SELECT COUNT(*) FROM knowledge WHERE version_added = '
 | `agent-bridge.md` | Autonomous task runner behavior, task history, streaming, delays, and watches. |
 | `data-model.md` | SQLite schema, JSON document storage, remaining file-backed state, backups, and migrations. |
 | `security.md` | Authentication, IP allowlists, redaction, command safety, dashboard protections, and risk notes. |
+| `predict.md` | Predict evidence sources, lifecycle, confidence behavior, privacy boundaries, and tests. |
 | `operations.md` | Day-to-day service commands, health checks, troubleshooting, backups, and maintenance. |
 | `development.md` | Source layout, testing, extension workflow, and implementation notes. |
 | `api-reference.md` | HTTP endpoint reference for MCP, Dashboard, and Agent services. |
