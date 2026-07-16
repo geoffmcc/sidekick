@@ -71,7 +71,7 @@ console.log('Running Black Box Tests...\n');
     assert.ok(Array.isArray(analysis.cited_source_ids), 'Analysis should include cited source IDs');
     assert.ok(analysis.cited_source_ids.length > 0, 'Analysis should cite evidence sources');
     const exported = blackbox.exportIncident(capture.incident_id, { format: 'json' });
-    assert.strictEqual(exported.schema_version, 10, 'Export should include schema version');
+    assert.strictEqual(exported.schema_version, 11, 'Export should include schema version');
     assert.ok(exported.incident.captures[0].sources[0].content_hash, 'Export should include artifact hashes');
     console.log('Passed\n');
 
