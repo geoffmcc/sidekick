@@ -417,8 +417,62 @@ function registerArtifact(input = {}) {
   return dbStore.getDb().prepare("SELECT * FROM platform_artifacts WHERE artifact_id = ?").get(artifactId);
 }
 
+function findActiveExecution(query = {}) {
+  ensurePlatformKernelSchema();
+  const conditions = ["state NOT IN ('completed','partial','failed','cancelled','timed_out','rolled_back','rollback_failed')"];
+  const params = [];
+  if (query.operation_type) { conditions.push("operation_type = ?"); params.push(query.operation_type); }
+  if (query.tool_name) { conditions.push("tool_name = ?"); params.push(query.tool_name); }
+  if (query.project_id) { conditions.push("project_id = ?"); params.push(query.project_id); }
+  if (query.session_id) { conditions.push("session_id = ?"); params.push(query.session_id); }
+  if (query.task_id) { conditions.push("task_id = ?"); params.push(query.task_id); }
+  if (query.dedupe_key) {
+    conditions.push("execution_id IN (SELECT execution_id FROM platform_execution_events WHERE dedupe_key = ?)");
+    params.push(query.dedupe_key);
+  }
+  if (query.metadata_key && query.metadata_value) {
+    conditions.push("json_extract(metadata_json, ?) = ?");
+    params.push(`$.${query.metadata_key}`, query.metadata_value);
+  }
+  const where = conditions.join(" AND ");
+  const rows = dbStore.getDb().prepare(`SELECT * FROM platform_executions WHERE ${where} ORDER BY updated_at DESC LIMIT 10`).all(...params);
+  return rows.map(normalizeExecution);
+}
+
+function platformGuard(executionId, expectedState, options = {}) {
+  ensurePlatformKernelSchema();
+  if (executionId) {
+    const execution = getExecution(executionId);
+    if (!execution) return { allowed: false, reason: "execution_not_found", execution: null };
+    if (expectedState && execution.state !== expectedState) {
+      return { allowed: false, reason: "wrong_state", expected: expectedState, actual: execution.state, execution };
+    }
+    if (TERMINAL_STATES.has(execution.state) && !options.allowTerminal) {
+      return { allowed: false, reason: "terminal_state", actual: execution.state, execution };
+    }
+    return { allowed: true, execution };
+  }
+  if (options.operation_type || options.tool_name) {
+    const active = findActiveExecution({
+      operation_type: options.operation_type,
+      tool_name: options.tool_name,
+      project_id: options.project_id,
+      session_id: options.session_id,
+      dedupe_key: options.dedupe_key,
+      metadata_key: options.metadata_key,
+      metadata_value: options.metadata_value,
+    });
+    if (active.length > 0 && !options.allowConcurrent) {
+      return { allowed: false, reason: "concurrent_execution", active, execution: active[0] };
+    }
+    return { allowed: true, execution: null, active };
+  }
+  return { allowed: true, execution: null };
+}
+
 module.exports = {
   EXECUTION_STATES,
+  TERMINAL_STATES,
   ALLOWED_TRANSITIONS,
   ensurePlatformKernelSchema,
   validateTransition,
@@ -427,4 +481,6 @@ module.exports = {
   transitionExecution,
   appendEvent,
   registerArtifact,
+  findActiveExecution,
+  platformGuard,
 };
