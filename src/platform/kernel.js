@@ -162,6 +162,42 @@ function ensurePlatformKernelSchema() {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_events_dedupe ON platform_execution_events(dedupe_key) WHERE dedupe_key IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_platform_artifacts_execution ON platform_artifacts(execution_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_platform_transitions_execution ON platform_execution_transitions(execution_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS platform_capabilities (
+      capability_id TEXT PRIMARY KEY,
+      actor_id TEXT NOT NULL,
+      capability TEXT NOT NULL,
+      project_id TEXT,
+      granted_by TEXT,
+      granted_at TEXT NOT NULL,
+      expires_at TEXT,
+      revoked_at TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_capabilities_actor ON platform_capabilities(actor_id, capability, project_id) WHERE revoked_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_platform_capabilities_actor_scan ON platform_capabilities(actor_id, revoked_at);
+
+    CREATE TABLE IF NOT EXISTS platform_change_sets (
+      change_set_id TEXT PRIMARY KEY,
+      execution_id TEXT,
+      approval_id TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      tool_action TEXT,
+      operation_type TEXT NOT NULL,
+      state TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      previous_hash TEXT,
+      actor_id TEXT NOT NULL,
+      decision TEXT NOT NULL,
+      reason TEXT,
+      args_snapshot_json TEXT NOT NULL DEFAULT '{}',
+      result_summary TEXT,
+      created_at TEXT NOT NULL,
+      metadata_json TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX IF NOT EXISTS idx_platform_change_sets_approval ON platform_change_sets(approval_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_platform_change_sets_execution ON platform_change_sets(execution_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_platform_change_sets_hash ON platform_change_sets(content_hash);
   `);
 }
 
@@ -441,6 +477,10 @@ function findActiveExecution(query = {}) {
 
 function platformGuard(executionId, expectedState, options = {}) {
   ensurePlatformKernelSchema();
+  if (options.capability && options.actor_id) {
+    const cap = checkCapability(options.actor_id, options.capability, options.project_id);
+    if (!cap) return { allowed: false, reason: "missing_capability", capability: options.capability, actor_id: options.actor_id };
+  }
   if (executionId) {
     const execution = getExecution(executionId);
     if (!execution) return { allowed: false, reason: "execution_not_found", execution: null };
@@ -470,6 +510,121 @@ function platformGuard(executionId, expectedState, options = {}) {
   return { allowed: true, execution: null };
 }
 
+function grantCapability(input = {}) {
+  ensurePlatformKernelSchema();
+  const capId = input.capability_id || newId("cap");
+  const ts = input.granted_at || nowIso();
+  const db = dbStore.getDb();
+  db.prepare(`
+    INSERT INTO platform_capabilities (capability_id, actor_id, capability, project_id, granted_by, granted_at, expires_at, metadata_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(capId, input.actor_id, input.capability, input.project_id || null, input.granted_by || null, ts, input.expires_at || null, json(input.metadata || {}));
+  appendEvent({
+    event_type: "capability.granted",
+    source: input.source || "platform",
+    actor_id: input.granted_by || "system",
+    subject_type: "capability",
+    subject_id: capId,
+    project_id: input.project_id,
+    payload: { actor_id: input.actor_id, capability: input.capability, expires_at: input.expires_at || null },
+    correlation_id: capId,
+  });
+  return db.prepare("SELECT * FROM platform_capabilities WHERE capability_id = ?").get(capId);
+}
+
+function revokeCapability(capabilityId, details = {}) {
+  ensurePlatformKernelSchema();
+  const ts = details.revoked_at || nowIso();
+  const cap = dbStore.getDb().prepare("SELECT * FROM platform_capabilities WHERE capability_id = ?").get(capabilityId);
+  if (!cap) return null;
+  dbStore.getDb().prepare("UPDATE platform_capabilities SET revoked_at = ? WHERE capability_id = ? AND revoked_at IS NULL").run(ts, capabilityId);
+  appendEvent({
+    event_type: "capability.revoked",
+    source: details.source || "platform",
+    actor_id: details.revoked_by || "system",
+    subject_type: "capability",
+    subject_id: capabilityId,
+    project_id: cap.project_id,
+    payload: { actor_id: cap.actor_id, capability: cap.capability, reason: details.reason || null },
+    correlation_id: capabilityId,
+  });
+  return dbStore.getDb().prepare("SELECT * FROM platform_capabilities WHERE capability_id = ?").get(capabilityId);
+}
+
+function checkCapability(actorId, capability, projectId) {
+  ensurePlatformKernelSchema();
+  const ts = nowIso();
+  const conditions = ["actor_id = ?", "capability = ?", "revoked_at IS NULL"];
+  const params = [actorId, capability];
+  if (projectId) { conditions.push("(project_id = ? OR project_id IS NULL)"); params.push(projectId); }
+  else { conditions.push("project_id IS NULL"); }
+  conditions.push("(expires_at IS NULL OR expires_at > ?)");
+  params.push(ts);
+  const cap = dbStore.getDb().prepare(`SELECT * FROM platform_capabilities WHERE ${conditions.join(" AND ")} LIMIT 1`).get(...params);
+  return cap || null;
+}
+
+function createChangeSet(input = {}) {
+  ensurePlatformKernelSchema();
+  const changeSetId = input.change_set_id || newId("cs");
+  const ts = input.created_at || nowIso();
+  const contentHash = input.content_hash || crypto.createHash("sha256").update(JSON.stringify({
+    tool_name: input.tool_name || null,
+    tool_action: input.tool_action || null,
+    operation_type: input.operation_type || "approval",
+    actor_id: input.actor_id,
+    decision: input.decision,
+    args: input.args || {},
+  })).digest("hex");
+  const db = dbStore.getDb();
+  db.prepare(`
+    INSERT INTO platform_change_sets (
+      change_set_id, execution_id, approval_id, tool_name, tool_action, operation_type,
+      state, content_hash, previous_hash, actor_id, decision, reason,
+      args_snapshot_json, result_summary, created_at, metadata_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    changeSetId, input.execution_id || null, input.approval_id, input.tool_name || null,
+    input.tool_action || null, input.operation_type || "approval", input.state || "approved",
+    contentHash, input.previous_hash || null, input.actor_id, input.decision,
+    input.reason || null, json(input.args || {}), input.result_summary || null,
+    ts, json(input.metadata || {})
+  );
+  appendEvent({
+    event_type: `changeset.${input.decision || "approved"}`,
+    source: input.source || "platform",
+    actor_id: input.actor_id,
+    subject_type: "change_set",
+    subject_id: changeSetId,
+    execution_id: input.execution_id || null,
+    project_id: input.project_id || null,
+    payload: { approval_id: input.approval_id, tool_name: input.tool_name, decision: input.decision, content_hash: contentHash },
+    correlation_id: changeSetId,
+  });
+  return dbStore.getDb().prepare("SELECT * FROM platform_change_sets WHERE change_set_id = ?").get(changeSetId);
+}
+
+function verifyChangeSet(changeSetId) {
+  ensurePlatformKernelSchema();
+  const cs = dbStore.getDb().prepare("SELECT * FROM platform_change_sets WHERE change_set_id = ?").get(changeSetId);
+  if (!cs) return { valid: false, reason: "not_found" };
+  const recomputed = crypto.createHash("sha256").update(JSON.stringify({
+    tool_name: cs.tool_name,
+    tool_action: cs.tool_action,
+    operation_type: cs.operation_type,
+    actor_id: cs.actor_id,
+    decision: cs.decision,
+    args: JSON.parse(cs.args_snapshot_json || "{}"),
+  })).digest("hex");
+  if (recomputed !== cs.content_hash) return { valid: false, reason: "hash_mismatch", expected: recomputed, actual: cs.content_hash, change_set: cs };
+  return { valid: true, change_set: cs };
+}
+
+function getChangeSetsByApproval(approvalId) {
+  ensurePlatformKernelSchema();
+  return dbStore.getDb().prepare("SELECT * FROM platform_change_sets WHERE approval_id = ? ORDER BY created_at ASC").all(approvalId);
+}
+
 module.exports = {
   EXECUTION_STATES,
   TERMINAL_STATES,
@@ -483,4 +638,10 @@ module.exports = {
   registerArtifact,
   findActiveExecution,
   platformGuard,
+  grantCapability,
+  revokeCapability,
+  checkCapability,
+  createChangeSet,
+  verifyChangeSet,
+  getChangeSetsByApproval,
 };
