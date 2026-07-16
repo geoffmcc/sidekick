@@ -173,6 +173,25 @@ Generated platform documentation:
 
 - `generatePlatformDocs()` produces a comprehensive snapshot of platform state including execution counts, event counts, artifact counts, workflow counts, runner counts, workspace counts, model counts, extension counts, capability counts, change-set counts, execution state breakdown, recent events (24h), active models, active extensions, and a list of all platform tables.
 
+### Backup/restore and release maturity
+
+The platform kernel provides backup/restore operations and release tracking:
+
+- `createBackup({ name, type, tables, compression })` creates a backup record with automatic row counts for all platform tables. Backups start in `created` state.
+- `getBackup(backupId)` retrieves backup details with parsed tables and row counts.
+- `completeBackup(backupId, { file_path, file_size_bytes, checksum })` marks backup as completed with file metadata.
+- `restoreBackup(backupId)` marks backup as restored.
+- `listBackups({ state, type, limit })` filters and lists backups.
+- Backups emit `backup.created`, `backup.completed`, and `backup.restored` events.
+
+Release maturity tracking:
+
+- `createRelease({ version, codename, description, changelog, breaking_changes, deprecations, upgrade_notes, migration_version })` creates a release in draft state.
+- `getRelease(releaseId)` and `getReleaseByVersion(version)` retrieve release details with parsed changelog and breaking changes.
+- `publishRelease(releaseId)` transitions from draft to published.
+- `listReleases({ state, limit })` filters and lists releases.
+- Releases emit `release.created` and `release.published` events.
+
 ### Dashboard: `src/dashboard.js`
 
 The dashboard serves a browser UI and JSON API. The server code lives in `src/dashboard.js`, the authenticated HTML shell lives in `src/dashboard.html`, and public CSS/JS assets live under `static/`. It reads the Sidekick data directory, reports system state, allows KV editing and deletion, exposes tool metadata, accepts webhooks, and proxies agent requests to the Agent Bridge.

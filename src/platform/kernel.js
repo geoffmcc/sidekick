@@ -326,6 +326,45 @@ function ensurePlatformKernelSchema() {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_extension_name ON platform_extensions(name);
     CREATE INDEX IF NOT EXISTS idx_platform_extension_state ON platform_extensions(state, registered_at DESC);
     CREATE INDEX IF NOT EXISTS idx_platform_extension_type ON platform_extensions(type, state);
+
+    CREATE TABLE IF NOT EXISTS platform_releases (
+      release_id TEXT PRIMARY KEY,
+      version TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'draft',
+      codename TEXT,
+      description TEXT,
+      changelog_json TEXT NOT NULL DEFAULT '[]',
+      migration_version INTEGER,
+      breaking_changes_json TEXT NOT NULL DEFAULT '[]',
+      deprecations_json TEXT NOT NULL DEFAULT '[]',
+      upgrade_notes TEXT,
+      released_by TEXT,
+      released_at TEXT,
+      created_at TEXT NOT NULL,
+      metadata_json TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_release_version ON platform_releases(version);
+    CREATE INDEX IF NOT EXISTS idx_platform_release_state ON platform_releases(state, released_at DESC);
+
+    CREATE TABLE IF NOT EXISTS platform_backups (
+      backup_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'created',
+      type TEXT NOT NULL DEFAULT 'full',
+      tables_included_json TEXT NOT NULL DEFAULT '[]',
+      row_counts_json TEXT NOT NULL DEFAULT '{}',
+      file_path TEXT,
+      file_size_bytes INTEGER,
+      checksum TEXT,
+      compression TEXT DEFAULT 'none',
+      created_at TEXT NOT NULL,
+      completed_at TEXT,
+      restored_at TEXT,
+      expires_at TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX IF NOT EXISTS idx_platform_backup_state ON platform_backups(state, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_platform_backup_type ON platform_backups(type, state);
   `);
 }
 
@@ -1091,8 +1130,98 @@ function generatePlatformDocs() {
     recent_events_24h: recentEvents,
     active_models: activeModels,
     active_extensions: activeExtensions,
-    tables: ["platform_executions", "platform_execution_events", "platform_artifacts", "platform_execution_transitions", "platform_capabilities", "platform_change_sets", "platform_workflows", "platform_workflow_steps", "platform_runner_sessions", "platform_project_workspaces", "platform_model_registry", "platform_extensions"],
+    tables: ["platform_executions", "platform_execution_events", "platform_artifacts", "platform_execution_transitions", "platform_capabilities", "platform_change_sets", "platform_workflows", "platform_workflow_steps", "platform_runner_sessions", "platform_project_workspaces", "platform_model_registry", "platform_extensions", "platform_releases", "platform_backups"],
   };
+}
+
+function createBackup(input = {}) {
+  ensurePlatformKernelSchema();
+  const ts = nowIso();
+  const backupId = newId("backup");
+  const tables = input.tables || ["platform_executions", "platform_execution_events", "platform_artifacts", "platform_execution_transitions", "platform_capabilities", "platform_change_sets", "platform_workflows", "platform_workflow_steps", "platform_runner_sessions", "platform_project_workspaces", "platform_model_registry", "platform_extensions", "platform_releases"];
+  const db = dbStore.getDb();
+  const rowCounts = {};
+  for (const table of tables) {
+    try { rowCounts[table] = db.prepare(`SELECT COUNT(*) as cnt FROM ${table}`).get().cnt; } catch { rowCounts[table] = 0; }
+  }
+  dbStore.getDb().prepare("INSERT INTO platform_backups (backup_id, name, state, type, tables_included_json, row_counts_json, compression, created_at, metadata_json) VALUES (?, ?, 'created', ?, ?, ?, ?, ?, ?)").run(backupId, input.name || `backup_${Date.now()}`, input.type || "full", json(tables), json(rowCounts), input.compression || "none", ts, json(input.metadata));
+  appendEvent({ event_type: "backup.created", source: input.source || "platform", actor_id: input.actor_id, subject_type: "backup", subject_id: backupId, payload: { name: input.name, type: input.type || "full", table_count: tables.length }, correlation_id: backupId });
+  return dbStore.getDb().prepare("SELECT * FROM platform_backups WHERE backup_id = ?").get(backupId);
+}
+
+function getBackup(backupId) {
+  ensurePlatformKernelSchema();
+  const row = dbStore.getDb().prepare("SELECT * FROM platform_backups WHERE backup_id = ?").get(backupId);
+  if (!row) return null;
+  return { ...row, tables_included: parseJson(row.tables_included_json, []), row_counts: parseJson(row.row_counts_json, {}), metadata: parseJson(row.metadata_json, {}) };
+}
+
+function completeBackup(backupId, details = {}) {
+  ensurePlatformKernelSchema();
+  const ts = details.timestamp || nowIso();
+  dbStore.getDb().prepare("UPDATE platform_backups SET state = 'completed', completed_at = ?, file_path = ?, file_size_bytes = ?, checksum = ? WHERE backup_id = ?").run(ts, details.file_path || null, details.file_size_bytes || null, details.checksum || null, backupId);
+  appendEvent({ event_type: "backup.completed", source: details.source || "platform", actor_id: details.actor_id, subject_type: "backup", subject_id: backupId, payload: { file_path: details.file_path, file_size_bytes: details.file_size_bytes }, correlation_id: backupId });
+  return dbStore.getDb().prepare("SELECT * FROM platform_backups WHERE backup_id = ?").get(backupId);
+}
+
+function restoreBackup(backupId, details = {}) {
+  ensurePlatformKernelSchema();
+  const ts = details.timestamp || nowIso();
+  dbStore.getDb().prepare("UPDATE platform_backups SET state = 'restored', restored_at = ? WHERE backup_id = ?").run(ts, backupId);
+  appendEvent({ event_type: "backup.restored", source: details.source || "platform", actor_id: details.actor_id, subject_type: "backup", subject_id: backupId, payload: { restored_from: backupId }, correlation_id: backupId });
+  return dbStore.getDb().prepare("SELECT * FROM platform_backups WHERE backup_id = ?").get(backupId);
+}
+
+function listBackups(filters = {}) {
+  ensurePlatformKernelSchema();
+  let query = "SELECT * FROM platform_backups WHERE 1=1";
+  const params = [];
+  if (filters.state) { query += " AND state = ?"; params.push(filters.state); }
+  if (filters.type) { query += " AND type = ?"; params.push(filters.type); }
+  query += " ORDER BY created_at DESC";
+  if (filters.limit) { query += " LIMIT ?"; params.push(filters.limit); }
+  return dbStore.getDb().prepare(query).all(...params).map(row => ({ ...row, tables_included: parseJson(row.tables_included_json, []), row_counts: parseJson(row.row_counts_json, {}), metadata: parseJson(row.metadata_json, {}) }));
+}
+
+function createRelease(input = {}) {
+  ensurePlatformKernelSchema();
+  const ts = nowIso();
+  const releaseId = newId("release");
+  dbStore.getDb().prepare("INSERT INTO platform_releases (release_id, version, state, codename, description, changelog_json, migration_version, breaking_changes_json, deprecations_json, upgrade_notes, released_by, created_at, metadata_json) VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(releaseId, input.version, input.codename || null, input.description || null, json(input.changelog || []), input.migration_version || null, json(input.breaking_changes || []), json(input.deprecations || []), input.upgrade_notes || null, input.released_by || "system", ts, json(input.metadata));
+  appendEvent({ event_type: "release.created", source: input.source || "platform", actor_id: input.released_by, subject_type: "release", subject_id: releaseId, payload: { version: input.version, codename: input.codename }, correlation_id: releaseId });
+  return dbStore.getDb().prepare("SELECT * FROM platform_releases WHERE release_id = ?").get(releaseId);
+}
+
+function getRelease(releaseId) {
+  ensurePlatformKernelSchema();
+  const row = dbStore.getDb().prepare("SELECT * FROM platform_releases WHERE release_id = ?").get(releaseId);
+  if (!row) return null;
+  return { ...row, changelog: parseJson(row.changelog_json, []), breaking_changes: parseJson(row.breaking_changes_json, []), deprecations: parseJson(row.deprecations_json, []), metadata: parseJson(row.metadata_json, {}) };
+}
+
+function getReleaseByVersion(version) {
+  ensurePlatformKernelSchema();
+  const row = dbStore.getDb().prepare("SELECT * FROM platform_releases WHERE version = ?").get(version);
+  if (!row) return null;
+  return { ...row, changelog: parseJson(row.changelog_json, []), breaking_changes: parseJson(row.breaking_changes_json, []), deprecations: parseJson(row.deprecations_json, []), metadata: parseJson(row.metadata_json, {}) };
+}
+
+function publishRelease(releaseId, details = {}) {
+  ensurePlatformKernelSchema();
+  const ts = details.timestamp || nowIso();
+  dbStore.getDb().prepare("UPDATE platform_releases SET state = 'published', released_at = ? WHERE release_id = ?").run(ts, releaseId);
+  appendEvent({ event_type: "release.published", source: details.source || "platform", actor_id: details.actor_id, subject_type: "release", subject_id: releaseId, payload: {}, correlation_id: releaseId });
+  return dbStore.getDb().prepare("SELECT * FROM platform_releases WHERE release_id = ?").get(releaseId);
+}
+
+function listReleases(filters = {}) {
+  ensurePlatformKernelSchema();
+  let query = "SELECT * FROM platform_releases WHERE 1=1";
+  const params = [];
+  if (filters.state) { query += " AND state = ?"; params.push(filters.state); }
+  query += " ORDER BY created_at DESC";
+  if (filters.limit) { query += " LIMIT ?"; params.push(filters.limit); }
+  return dbStore.getDb().prepare(query).all(...params).map(row => ({ ...row, changelog: parseJson(row.changelog_json, []), breaking_changes: parseJson(row.breaking_changes_json, []), deprecations: parseJson(row.deprecations_json, []), metadata: parseJson(row.metadata_json, {}) }));
 }
 
 module.exports = {
@@ -1148,4 +1277,14 @@ module.exports = {
   recordExtensionUsage,
   listExtensions,
   generatePlatformDocs,
+  createBackup,
+  getBackup,
+  completeBackup,
+  restoreBackup,
+  listBackups,
+  createRelease,
+  getRelease,
+  getReleaseByVersion,
+  publishRelease,
+  listReleases,
 };
