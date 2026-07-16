@@ -18,7 +18,8 @@ const platformKernel = require("./platform/kernel");
 const { stripSidekickPrefix } = require("./core/tool-name");
 const { validAllowedIps, validDomainName, validDownloadFormat, validIdentifier, validLangCode, validPort, validScale, validTimestamp, validWhisperModel, validWireGuardEndpoint, validWireGuardPublicKey } = require("./core/command-validation");
 const computeTools = require("./compute/tools");
-const { TOOL_RISK, TOOL_CATEGORIES } = require("./tools/metadata");
+const { TOOL_RISK, TOOL_CATEGORIES, RISK_LEVELS } = require("./tools/metadata");
+const toolContext = require("./tools/context");
 let inferenceService = null;
 try { inferenceService = require("./compute/inference-service"); } catch {}
 
@@ -54,10 +55,15 @@ function safeExecFileSync(command, args, options = {}) {
   });
 }
 
-let currentSource = "unknown";
+let compatibilitySource = "unknown";
 
 function setSource(source) {
-  currentSource = source;
+  compatibilitySource = source || "unknown";
+  toolContext.setExecutionSource(compatibilitySource);
+}
+
+function getCurrentSource() {
+  return toolContext.getExecutionSource() || compatibilitySource || "unknown";
 }
 
 const RISK_ORDER = { low: 1, medium: 2, high: 3, critical: 4 };
@@ -65,9 +71,9 @@ const RISK_ORDER = { low: 1, medium: 2, high: 3, critical: 4 };
 // Tool categories - maps tool names to their category
 function getToolRisk(name) {
   const generated = dbStore.getGeneratedCapabilityByName(name);
-  if (generated) return generated.risk || "medium";
+  if (generated) return RISK_LEVELS.includes(generated.risk) ? generated.risk : "critical";
   const canonical = stripSidekickPrefix(name);
-  return TOOL_RISK[canonical] || "low";
+  return TOOL_RISK[canonical] || "critical";
 }
 
 // Sync tool registry from code to database
@@ -185,7 +191,7 @@ function findPolicyListMatch(entries, toolName, risk) {
   });
 }
 
-function getApprovalMode(source = currentSource) {
+function getApprovalMode(source = getCurrentSource()) {
   const sourceMode = process.env[sourceEnvName(source, "APPROVAL_MODE")];
   return (sourceMode || process.env.SIDEKICK_APPROVAL_MODE || "off").toLowerCase();
 }
@@ -199,7 +205,7 @@ function getApprovalEntries(source, suffixes) {
   return entries;
 }
 
-function getApprovalDecision(toolName, source = currentSource) {
+function getApprovalDecision(toolName, source = getCurrentSource()) {
   const risk = getToolRisk(toolName);
   const mode = getApprovalMode(source);
   const requiredEntries = getApprovalEntries(source, ["REQUIRED_TOOLS"]);
@@ -230,7 +236,7 @@ function getApprovalDecision(toolName, source = currentSource) {
   return { required: false, source, mode, risk, reason: "approval not required" };
 }
 
-function getToolPolicyDecision(toolName, source = currentSource) {
+function getToolPolicyDecision(toolName, source = getCurrentSource()) {
   const risk = getToolRisk(toolName);
   const sourceMode = process.env[sourceEnvName(source, "TOOL_POLICY")];
   const mode = (sourceMode || process.env.SIDEKICK_TOOL_POLICY || "open").toLowerCase();
@@ -262,7 +268,7 @@ function getToolPolicyDecision(toolName, source = currentSource) {
   return { allowed: true, source, mode, risk, reason: "allowed" };
 }
 
-function enforceToolPolicy(toolName, source = currentSource) {
+function enforceToolPolicy(toolName, source = getCurrentSource()) {
   const decision = getToolPolicyDecision(toolName, source);
   if (decision.allowed) return null;
   return {
@@ -486,10 +492,11 @@ async function resolveApproval(id, action, reviewer = "dashboard") {
   recordPlatformApprovalEvent(item, "approval.approved", { reviewed_at: now, reviewed_by: reviewer }, { actor_id: reviewer });
   saveApprovals(approvals);
 
-  const previousSource = currentSource;
-  currentSource = item.source || "unknown";
+  const previousSource = getCurrentSource();
+  setSource(item.source || "unknown");
   try {
     const result = await callTool(item.tool, approvalArgs, {
+      source: item.source || "unknown",
       bypassApproval: true,
       approvalId: id,
       parentId: item.platform_execution_id || null,
@@ -546,11 +553,11 @@ async function resolveApproval(id, action, reviewer = "dashboard") {
     }
     return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
   } finally {
-    currentSource = previousSource;
+    setSource(previousSource);
   }
 }
 
-function getToolDefsForSource(source = currentSource) {
+function getToolDefsForSource(source = getCurrentSource()) {
   try {
     const db = dbStore.getDb();
 
@@ -608,7 +615,7 @@ function getToolDefsForSource(source = currentSource) {
 }
 
 // Get all tool categories with their tools
-function getToolCategoriesWithTools(source = currentSource) {
+function getToolCategoriesWithTools(source = getCurrentSource()) {
   try {
     const db = dbStore.getDb();
 
@@ -674,7 +681,7 @@ function getToolCategoriesWithTools(source = currentSource) {
   }
 }
 
-function getToolRecordsForSource(source = currentSource) {
+function getToolRecordsForSource(source = getCurrentSource()) {
   const defs = getToolDefsForSource(source);
   return defs.map(def => ({
     name: def.name,
@@ -810,7 +817,7 @@ async function sidekick_tools({ action, query, name, category, format, include_d
   const selectedAction = action || "overview";
   const selectedFormat = format || "text";
   const maxResults = Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 200) : 100;
-  let records = getToolRecordsForSource(currentSource);
+  let records = getToolRecordsForSource(getCurrentSource());
 
   if (selectedAction !== "policy" && !include_disabled) {
     records = records.filter(tool => tool.enabled);
@@ -899,7 +906,7 @@ function logToolCall(name, args, duration, success, summary, metadata = {}) {
       d: Math.round(duration),
       ok: success,
       s: redactedSummary,
-      src: currentSource,
+      src: getCurrentSource(),
       session_id: metadata.sessionId || metadata.session_id || process.env.SIDEKICK_SESSION_ID || null,
       task_id: metadata.taskId || metadata.task_id || metadata.requestId || metadata.request_id || null,
       project: metadata.project || process.env.SIDEKICK_PROJECT || null,
@@ -921,14 +928,14 @@ function logToolCall(name, args, duration, success, summary, metadata = {}) {
       duration,
       success,
       summary: redactedSummary,
-      source: currentSource
+      source: getCurrentSource()
     });
   } catch (e) {}
 }
 
 function recordPlatformToolCall(name, argsShape, duration, success, summary, metadata = {}) {
   try {
-    if (currentSource !== "mcp") return;
+    if (getCurrentSource() !== "mcp") return;
     if (metadata.generatedProcedure || metadata.generated_procedure) return;
     const execId = metadata.executionId || metadata.execution_id || null;
     const guard = platformKernel.platformGuard(execId, null, {
@@ -988,7 +995,7 @@ function recordPlatformMemoryEvent(eventType, payload = {}, options = {}) {
     platformKernel.appendEvent({
       event_type: eventType,
       source: "memory",
-      actor_id: options.actor || currentSource || "unknown",
+      actor_id: options.actor || getCurrentSource() || "unknown",
       subject_type: options.subjectType || null,
       subject_id: options.subjectId || null,
       project_id: options.project || payload.project || null,
@@ -1127,8 +1134,8 @@ function createScheduledPlatformExecution(kind, item, options = {}) {
     const execution = platformKernel.createExecution({
       parent_execution_id: options.parentExecutionId || null,
       root_execution_id: options.rootExecutionId || options.parentExecutionId || undefined,
-      actor_id: options.actor || currentSource || "unknown",
-      client_id: options.client || currentSource || null,
+      actor_id: options.actor || getCurrentSource() || "unknown",
+      client_id: options.client || getCurrentSource() || null,
       trigger_type: options.triggerType || kind,
       operation_type: options.operationType || `${kind}_operation`,
       tool_name: options.toolName || item.tool || item.action_tool || null,
@@ -1149,7 +1156,7 @@ function createScheduledPlatformExecution(kind, item, options = {}) {
     if (options.state && options.state !== "created") {
       platformKernel.transitionExecution(execution.execution_id, options.state, {
         source: options.source || kind,
-        actor_id: options.actor || currentSource || "unknown",
+        actor_id: options.actor || getCurrentSource() || "unknown",
         reason: options.reason || `${kind} ${options.state}`,
         correlation_id: options.correlationId || item.id,
       });
@@ -1167,7 +1174,7 @@ function transitionScheduledPlatformExecution(kind, item, state, details = {}) {
     if (!guard.allowed) return;
     platformKernel.transitionExecution(item.platform_execution_id, state, {
       source: details.source || kind,
-      actor_id: details.actor || currentSource || "unknown",
+      actor_id: details.actor || getCurrentSource() || "unknown",
       reason: details.reason,
       result_status: details.result_status,
       error_category: details.error_category,
@@ -1182,7 +1189,7 @@ function appendScheduledPlatformEvent(kind, item, eventType, payload = {}, optio
     platformKernel.appendEvent({
       event_type: eventType,
       source: options.source || kind,
-      actor_id: options.actor || currentSource || "unknown",
+      actor_id: options.actor || getCurrentSource() || "unknown",
       subject_type: kind,
       subject_id: item.id,
       execution_id: options.executionId || item.platform_execution_id || null,
@@ -1245,7 +1252,7 @@ function findPathPolicyMatch(entries, filePath) {
   return entries.find(entry => pathMatchesPolicyEntry(filePath, entry));
 }
 
-function getPathPolicyDecision(filePath, operation = "access", source = currentSource) {
+function getPathPolicyDecision(filePath, operation = "access", source = getCurrentSource()) {
   const target = normalizePolicyPath(filePath);
   const allowedEntries = pathPolicyEntries(source, "ALLOWED_PATHS");
   const deniedEntries = pathPolicyEntries(source, "DENIED_PATHS");
@@ -1320,7 +1327,7 @@ async function sidekick_store({ key, value, project, category }) {
   }
 
   const existing = dbStore.getKV(key);
-  dbStore.setKV(key, value, project !== undefined ? project : (existing?.project || null), currentSource, category !== undefined ? category : (existing?.category || null));
+  dbStore.setKV(key, value, project !== undefined ? project : (existing?.project || null), getCurrentSource(), category !== undefined ? category : (existing?.category || null));
 
   return { content: [{ type: "text", text: "Stored key \"" + key + "\" (" + value.length + " chars)" }] };
 }
@@ -2022,7 +2029,7 @@ async function sidekick_cron({ action, name, schedule, command, id }) {
       saveCronJobs(jobs);
       if (execution) platformKernel.transitionExecution(execution.execution_id, "completed", {
         source: "cron",
-        actor_id: currentSource || "unknown",
+        actor_id: getCurrentSource() || "unknown",
         reason: "cron job run completed",
         result_status: "success",
         result_summary: stdout || "(empty output)",
@@ -2035,7 +2042,7 @@ async function sidekick_cron({ action, name, schedule, command, id }) {
       saveCronJobs(jobs);
       if (execution) platformKernel.transitionExecution(execution.execution_id, "failed", {
         source: "cron",
-        actor_id: currentSource || "unknown",
+        actor_id: getCurrentSource() || "unknown",
         reason: "cron job run failed",
         result_status: "failure",
         error_category: evolveCommon.errorCategory(e.message),
@@ -4770,7 +4777,7 @@ async function sidekick_watch({ action, id, name, source, target, condition, int
       });
       if (checkExecution) platformKernel.transitionExecution(checkExecution.execution_id, actionResult?.isError ? "failed" : "completed", {
         source: "watch",
-        actor_id: currentSource || "unknown",
+        actor_id: getCurrentSource() || "unknown",
         reason: actionResult?.isError ? "watch action failed" : "watch action completed",
         result_status: actionResult?.isError ? "failure" : "success",
         error_category: actionResult?.isError ? evolveCommon.errorCategory(actionResult.content?.[0]?.text || "watch action failed") : null,
@@ -4780,7 +4787,7 @@ async function sidekick_watch({ action, id, name, source, target, condition, int
     } else if (checkExecution) {
       platformKernel.transitionExecution(checkExecution.execution_id, "completed", {
         source: "watch",
-        actor_id: currentSource || "unknown",
+        actor_id: getCurrentSource() || "unknown",
         reason: "watch check completed without trigger",
         result_status: "not_triggered",
         result_summary: `Watch ${watch.id} did not trigger`,
@@ -6366,7 +6373,7 @@ async function sidekick_debug_tool({ action, session_name, key, value, service, 
 
     const storedValue = shouldRedact ? redactSensitive(value) : value;
 
-    dbStore.setKV(debugKey, storedValue, "debug", currentSource, "debug");
+    dbStore.setKV(debugKey, storedValue, "debug", getCurrentSource(), "debug");
     return { content: [{ type: "text", text: `Stored debug finding: ${debugKey} (${storedValue.length} chars)` }] };
   }
 
@@ -7097,7 +7104,7 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
   if (action === "begin") {
     if (!goal) return { content: [{ type: "text", text: "goal required" }], isError: true };
     const brief = buildScopedMemoryBrief(goal, project, { limit: 12 });
-    const session = dbStore.saveTaskSession({ id, goal, project, source: source || currentSource, client_session_id, working_directory, repository, branch, environment, tags: normalizeTags(tags), supplied_context, state: "active", memory_brief: brief });
+    const session = dbStore.saveTaskSession({ id, goal, project, source: source || getCurrentSource(), client_session_id, working_directory, repository, branch, environment, tags: normalizeTags(tags), supplied_context, state: "active", memory_brief: brief });
     recordPlatformMemoryEvent("memory.session_started", { session_id: session.id, project: session.project, source: session.source, selected_memories: brief.selected.length }, { subjectType: "memory_task_session", subjectId: session.id, project: session.project, taskId: session.id });
     return jsonText({ ok: true, session, memory_brief: brief });
   }
@@ -7151,8 +7158,8 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
   if (action === "create" || action === "update") {
     const handoffContent = content || (key ? dbStore.getKV(key)?.value : null);
     if (!handoffContent) return { content: [{ type: "text", text: "content required, or provide key for an existing KV handoff" }], isError: true };
-    if (key && content) dbStore.setKV(key, content, project || dbStore.getKV(key)?.project || null, currentSource, "handoff");
-    const handoff = dbStore.saveHandoff({ id, kv_key: key, project, title, source: source || currentSource, task_id, content: handoffContent, extraction_state: "pending" });
+    if (key && content) dbStore.setKV(key, content, project || dbStore.getKV(key)?.project || null, getCurrentSource(), "handoff");
+    const handoff = dbStore.saveHandoff({ id, kv_key: key, project, title, source: source || getCurrentSource(), task_id, content: handoffContent, extraction_state: "pending" });
     const memories = extractHandoffMemories(handoff, { project });
     recordPlatformMemoryEvent("memory.handoff_processed", { handoff_id: handoff.id, key: handoff.kv_key, project: handoff.project, version: handoff.version, memories_created: memories.length, extraction_state: "processed" }, { subjectType: "memory_handoff", subjectId: handoff.id, project: handoff.project, taskId: handoff.task_id });
     return jsonText({ ok: true, handoff: dbStore.getHandoff(handoff.id), memories_created: memories.length, memories });
@@ -7210,7 +7217,7 @@ async function sidekick_memory({ action, id, project, type, memory_class, conten
       source_authority: source === "correction" ? 10 : 8,
       metadata: { user_controlled: true, reason: reason || null }
     });
-    dbStore.auditMemoryEvent("remember", "memory", memory.id, { project, type: memory.type }, currentSource);
+    dbStore.auditMemoryEvent("remember", "memory", memory.id, { project, type: memory.type }, getCurrentSource());
     recordPlatformMemoryEvent("memory.remembered", { memory_id: memory.id, project: memory.project, type: memory.type, source: memory.source }, { subjectType: "memory", subjectId: memory.id, project: memory.project });
     return jsonText({ ok: true, memory });
   }
@@ -7230,7 +7237,7 @@ async function sidekick_memory({ action, id, project, type, memory_class, conten
   if (action === "expire") return sidekick_memory_manage({ action: "expire", id, reason: reason || "manual_expire" });
   if (action === "pin") {
     const result = dbStore.getDb().prepare("UPDATE memories SET pinned = 1, updated_at = datetime('now') WHERE id = ?").run(id);
-    dbStore.auditMemoryEvent("pin", "memory", id, { reason }, currentSource);
+    dbStore.auditMemoryEvent("pin", "memory", id, { reason }, getCurrentSource());
     return { content: [{ type: "text", text: result.changes ? `Memory ${id} pinned` : `Memory not found: ${id}` }], isError: result.changes === 0 };
   }
   if (action === "correct") {
@@ -7239,7 +7246,7 @@ async function sidekick_memory({ action, id, project, type, memory_class, conten
     if (!old) return { content: [{ type: "text", text: "Memory not found: " + id }], isError: true };
     dbStore.softDeleteMemory(id, reason || "corrected");
     const replacement = dbStore.upsertMemory({ type: old.type, project: old.project, content: redactSensitive(correct_to), summary: redactSensitive(correct_to), confidence: 0.95, source: "user_correction", source_tool: "sidekick_memory", automatic: false, memory_class: old.memory_class, primary_scope_type: old.primary_scope_type, primary_scope_id: old.primary_scope_id, supersedes_id: id, evidence_excerpt: redactSensitive(correct_to), directness: "direct", source_authority: 10, metadata: { corrected_memory_id: id, correction_reason: reason || null } });
-    dbStore.auditMemoryEvent("correct", "memory", id, { replacement_id: replacement.id, reason }, currentSource);
+    dbStore.auditMemoryEvent("correct", "memory", id, { replacement_id: replacement.id, reason }, getCurrentSource());
     recordPlatformMemoryEvent("memory.corrected", { memory_id: id, replacement_id: replacement.id, project: replacement.project, type: replacement.type, reason: reason || null }, { subjectType: "memory", subjectId: replacement.id, project: replacement.project });
     return jsonText({ ok: true, old_memory: id, replacement });
   }
@@ -10048,7 +10055,7 @@ async function sidekick_black_box(args = {}) {
     }
 
     if (action === "capture") {
-      const capture = await blackbox.captureIncident({ ...args, source: currentSource });
+      const capture = await blackbox.captureIncident({ ...args, source: getCurrentSource() });
       let payload = {
         incident_id: capture.incident_id,
         capture_id: capture.id,
@@ -10062,7 +10069,7 @@ async function sidekick_black_box(args = {}) {
         total_bytes: capture.total_bytes,
         sources: (capture.sources || []).map(source => ({ id: source.id, key: source.source_key, state: source.state, duration_ms: source.duration_ms, exit_code: source.exit_code, timed_out: source.timed_out, truncated: source.truncated }))
       };
-      if (args.analyze_with_llm) payload.analysis = await blackbox.analyzeIncident(capture.incident_id, { capture_id: capture.id, llm: sidekick_llm, actor: currentSource });
+      if (args.analyze_with_llm) payload.analysis = await blackbox.analyzeIncident(capture.incident_id, { capture_id: capture.id, llm: sidekick_llm, actor: getCurrentSource() });
       return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
     }
 
@@ -10073,17 +10080,17 @@ async function sidekick_black_box(args = {}) {
     if (action === "list_sources") return { content: [{ type: "text", text: JSON.stringify({ sources: blackbox.listSources(args.capture_id) }, null, 2) }] };
     if (action === "get_source") return { content: [{ type: "text", text: JSON.stringify(blackbox.getSource(args.source_id, { offset: args.offset, limit: args.limit }), null, 2) }] };
     if (action === "search") return { content: [{ type: "text", text: JSON.stringify({ results: blackbox.searchIncidents(args.query, args) }, null, 2) }] };
-    if (action === "analyze") return { content: [{ type: "text", text: JSON.stringify(await blackbox.analyzeIncident(args.incident_id, { capture_id: args.capture_id, llm: args.use_llm === false ? null : sidekick_llm, actor: currentSource }), null, 2) }] };
+    if (action === "analyze") return { content: [{ type: "text", text: JSON.stringify(await blackbox.analyzeIncident(args.incident_id, { capture_id: args.capture_id, llm: args.use_llm === false ? null : sidekick_llm, actor: getCurrentSource() }), null, 2) }] };
     if (action === "compare") return { content: [{ type: "text", text: JSON.stringify(blackbox.compareCaptures(args.capture_id, args.compare_capture_id), null, 2) }] };
-    if (action === "add_note") return { content: [{ type: "text", text: JSON.stringify(blackbox.addNote(args.incident_id, { content: args.note || args.content, type: args.note_type, source: currentSource }), null, 2) }] };
-    if (action === "update_incident") return { content: [{ type: "text", text: JSON.stringify(blackbox.updateIncident(args.incident_id, args, currentSource), null, 2) }] };
-    if (action === "pin") return { content: [{ type: "text", text: JSON.stringify(blackbox.updateIncident(args.incident_id, { pinned: true, retention_class: "pinned", reason: args.reason }, currentSource), null, 2) }] };
-    if (action === "extend_retention") return { content: [{ type: "text", text: JSON.stringify(blackbox.updateIncident(args.incident_id, { retention_class: args.retention_class || "important", reason: args.reason }, currentSource), null, 2) }] };
-    if (action === "archive") return { content: [{ type: "text", text: JSON.stringify(blackbox.updateIncident(args.incident_id, { lifecycle_state: "archived", retention_class: "archive", reason: args.reason }, currentSource), null, 2) }] };
+    if (action === "add_note") return { content: [{ type: "text", text: JSON.stringify(blackbox.addNote(args.incident_id, { content: args.note || args.content, type: args.note_type, source: getCurrentSource() }), null, 2) }] };
+    if (action === "update_incident") return { content: [{ type: "text", text: JSON.stringify(blackbox.updateIncident(args.incident_id, args, getCurrentSource()), null, 2) }] };
+    if (action === "pin") return { content: [{ type: "text", text: JSON.stringify(blackbox.updateIncident(args.incident_id, { pinned: true, retention_class: "pinned", reason: args.reason }, getCurrentSource()), null, 2) }] };
+    if (action === "extend_retention") return { content: [{ type: "text", text: JSON.stringify(blackbox.updateIncident(args.incident_id, { retention_class: args.retention_class || "important", reason: args.reason }, getCurrentSource()), null, 2) }] };
+    if (action === "archive") return { content: [{ type: "text", text: JSON.stringify(blackbox.updateIncident(args.incident_id, { lifecycle_state: "archived", retention_class: "archive", reason: args.reason }, getCurrentSource()), null, 2) }] };
     if (action === "export") return { content: [{ type: "text", text: typeof blackbox.exportIncident(args.incident_id, args) === "string" ? blackbox.exportIncident(args.incident_id, args) : JSON.stringify(blackbox.exportIncident(args.incident_id, args), null, 2) }] };
     if (action === "delete") {
       if (!args.incident_id) return { content: [{ type: "text", text: "incident_id required" }], isError: true };
-      if (!blackbox.deleteIncident(args.incident_id, currentSource)) return { content: [{ type: "text", text: `Incident not found: ${args.incident_id}` }], isError: true };
+      if (!blackbox.deleteIncident(args.incident_id, getCurrentSource())) return { content: [{ type: "text", text: `Incident not found: ${args.incident_id}` }], isError: true };
       return { content: [{ type: "text", text: `Deleted incident: ${args.incident_id}` }] };
     }
     if (action === "storage_status") return { content: [{ type: "text", text: JSON.stringify(blackbox.storageStatus(), null, 2) }] };
@@ -10094,14 +10101,6 @@ async function sidekick_black_box(args = {}) {
   } catch (e) {
     return { content: [{ type: "text", text: e.message }], isError: true };
   }
-}
-
-// Simple respond tool for agent to return text without calling other tools
-async function sidekick_respond({ text }) {
-  if (!text) {
-    return { content: [{ type: "text", text: "text parameter required" }], isError: true };
-  }
-  return { content: [{ type: "text", text: text }] };
 }
 
 // --- Database Tools ---
@@ -11613,7 +11612,6 @@ const TOOLS = {
   ops: sidekick_ops,
   mission: sidekick_mission,
   black_box: sidekick_black_box,
-  respond: sidekick_respond,
   db_schema: sidekick_db_schema,
   db_query: sidekick_db_query,
   db_stats: sidekick_db_stats,
@@ -11757,48 +11755,7 @@ const TOOL_DEFS = [
 ];
 
 async function callTool(name, args, options = {}) {
-  const lookupName = stripSidekickPrefix(name);
-  const handler = TOOLS[lookupName];
-  const isGeneratedTool = !handler && dynamicTools.isDynamicTool(name);
-  if (!handler && !isGeneratedTool) {
-    return { content: [{ type: "text", text: "Unknown tool: " + name }], isError: true };
-  }
-  const policyError = enforceToolPolicy(name, currentSource);
-  if (policyError) {
-    logToolCall(name, args, 0, false, policyError.content[0].text);
-    return policyError;
-  }
-  if (!options.bypassApproval) {
-    const approval = getApprovalDecision(name, currentSource);
-    if (approval.required) {
-      let item;
-      try {
-        item = queueApproval(name, args, approval);
-      } catch (e) {
-        const text = "Approval queue unavailable: " + e.message;
-        logToolCall(name, args, 0, false, text);
-        return { content: [{ type: "text", text }], isError: true };
-      }
-      const text = `Approval required: ${name} (${approval.risk} risk, source=${approval.source}, mode=${approval.mode}). Queued as ${item.id}. ${approval.reason}.`;
-      logToolCall(name, args, 0, false, text);
-      return { content: [{ type: "text", text }], isError: true, approvalRequired: true, approvalId: item.id };
-    }
-  }
-  const start = Date.now();
-  try {
-    const result = isGeneratedTool
-      ? await dynamicTools.callDynamicTool(name, args, { callTool, source: currentSource, executionId: options.executionId, timeoutMs: options.timeoutMs })
-      : await handler(args);
-    const success = !result.isError;
-    logToolCall(name, args, Date.now() - start, success,
-      result.content?.[0]?.text?.substring(0, 80) || "(ok)",
-      options
-    );
-    return result;
-  } catch (e) {
-    logToolCall(name, args, Date.now() - start, false, e.message, options);
-    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
-  }
+  return require("./tools/dispatcher").dispatchTool({ name, args, context: options });
 }
 
 module.exports = {
@@ -11821,6 +11778,7 @@ module.exports = {
   getToolPolicyDecision,
   getApprovalDecision,
   listApprovals,
+  queueApproval,
   resolveApproval,
   createScheduledPlatformExecution,
   transitionScheduledPlatformExecution,

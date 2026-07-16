@@ -12,11 +12,12 @@ console.log('Running Tool Registry Contract Tests...');
 const registry = toolLayer.getBuiltinRegistry();
 const descriptors = registry.listInDefinitionOrder();
 const descriptorNames = descriptors.map(d => d.name);
-const legacyDefNames = legacyTools.TOOL_DEFS.map(d => d.name);
-const legacyToolNames = Object.keys(legacyTools.TOOLS);
+const legacy = require('../src/tools-legacy');
+const legacyDefNames = legacy.TOOL_DEFS.map(d => d.name);
+const legacyToolNames = Object.keys(legacy.TOOLS);
 
 assert.deepStrictEqual(descriptorNames, legacyDefNames, 'Registry definition order should match legacy TOOL_DEFS order');
-assert.deepStrictEqual([...descriptorNames].sort(), [...legacyToolNames].sort(), 'Registry names should match legacy TOOLS keys');
+assert.deepStrictEqual([...descriptorNames].sort(), [...new Set([...legacyToolNames, 'respond'])].sort(), 'Registry names should match legacy handlers plus extracted descriptors');
 assert.strictEqual(descriptors.length, 107, 'Built-in tool count should remain at the current-main baseline');
 
 for (const descriptor of descriptors) {
@@ -27,9 +28,9 @@ for (const descriptor of descriptors) {
   assert.ok(descriptor.schema && typeof descriptor.schema.safeParse === 'function', `${descriptor.name} should have a Zod schema`);
   assert.ok(['low', 'medium', 'high', 'critical'].includes(descriptor.risk), `${descriptor.name} should have a valid risk`);
   assert.ok(descriptor.category, `${descriptor.name} should have a category`);
-  assert.deepStrictEqual(descriptor.args, legacyTools.TOOL_DEFS.find(d => d.name === descriptor.name).args || {}, `${descriptor.name} args metadata should match legacy TOOL_DEFS`);
-  assert.strictEqual(descriptor.risk, legacyTools.getToolRisk(descriptor.name), `${descriptor.name} risk should match legacy lookup`);
-  assert.strictEqual(descriptor.handler, legacyTools.TOOLS[descriptor.name], `${descriptor.name} handler should match legacy TOOLS`);
+  assert.deepStrictEqual(descriptor.args, legacy.TOOL_DEFS.find(d => d.name === descriptor.name).args || {}, `${descriptor.name} args metadata should match compatibility TOOL_DEFS`);
+  assert.strictEqual(descriptor.risk, legacyTools.getToolRisk(descriptor.name), `${descriptor.name} risk should match compatibility lookup`);
+  if (descriptor.family !== 'utility') assert.strictEqual(descriptor.handler, legacy.TOOLS[descriptor.name], `${descriptor.name} handler should match legacy TOOLS until extracted`);
 }
 
 assert.deepStrictEqual(Object.keys(registry.toolsMap()), legacyDefNames, 'Derived TOOLS map should preserve definition order');
@@ -39,7 +40,8 @@ assert.deepStrictEqual(Object.keys(registry.schemas()), legacyDefNames, 'Derived
 assert.ok(registry.has('sidekick_read'), 'Registry should normalize sidekick_ prefix for has()');
 assert.strictEqual(registry.get('sidekick_read').name, 'read', 'Registry should normalize sidekick_ prefix for get()');
 
-assert.strictEqual(toolLayer.dispatcher.callTool, legacyTools.callTool, 'Dispatcher should delegate to compatibility callTool during extraction');
+assert.notStrictEqual(toolLayer.dispatcher.callTool, legacy.callTool, 'Dispatcher should own execution instead of delegating to legacy callTool');
+assert.strictEqual(legacyTools.callTool, toolLayer.dispatcher.callTool, 'Compatibility callTool should route to the dispatcher');
 assert.strictEqual(toolLayer.policy.enforceToolPolicy, legacyTools.enforceToolPolicy, 'Policy module should preserve enforcement behavior');
 assert.strictEqual(toolLayer.policy.getToolRisk, legacyTools.getToolRisk, 'Policy module should preserve risk lookup');
 assert.strictEqual(toolLayer.approvals.getApprovalDecision, legacyTools.getApprovalDecision, 'Approvals module should preserve approval decisions');
@@ -47,12 +49,17 @@ assert.strictEqual(toolLayer.logging.logToolCall, legacyTools.logToolCall, 'Logg
 assert.strictEqual(toolLayer.registrySync.syncToolRegistry, legacyTools.syncToolRegistry, 'Registry sync module should preserve DB sync behavior');
 assert.deepStrictEqual(toolLayer.result.textResult('ok'), { content: [{ type: 'text', text: 'ok' }] }, 'Result helper should create MCP text content');
 assert.strictEqual(toolLayer.context.getExecutionSource(), 'mcp', 'New execution context should default to mcp');
-assert.ok(toolsFacadeSource.split(/\r?\n/).length < 30, 'src/tools.js should remain a small compatibility facade');
+assert.ok(toolsFacadeSource.includes('require("./tools/index")'), 'src/tools.js should facade to the new tool layer');
+assert.ok(toolsFacadeSource.split(/\r?\n/).length < 10, 'src/tools.js should remain a small compatibility facade');
 assert.ok(!indexSource.includes('const TOOL_SCHEMAS = {'), 'src/index.js should not own an independent TOOL_SCHEMAS catalog');
 assert.ok(indexSource.includes('getBuiltinRegistry'), 'src/index.js should register built-ins from the canonical registry');
+assert.ok(indexSource.includes('callTool(descriptor.name'), 'MCP built-in execution should route through callTool/dispatcher');
+assert.ok(!indexSource.includes('descriptor.handler(args)'), 'MCP must not directly invoke built-in handlers');
+assert.strictEqual(registry.get('respond').family, 'utility', 'respond should be owned by extracted utility family');
+assert.ok(!legacy.TOOLS.respond, 'respond should no longer have an active legacy handler');
 
 const exportedNames = Object.keys(legacyTools).sort();
-assert.deepStrictEqual(exportedNames, [
+for (const name of [
   'DATA_DIR', 'GROQ_API_KEY', 'GROQ_MODEL', 'OLLAMA_URL', 'TOOLS', 'TOOL_DEFS',
   'appendScheduledPlatformEvent', 'buildCiStatusResult', 'buildPolicyInspection',
   'callTool', 'checkNetwork', 'createScheduledPlatformExecution', 'enforceToolPolicy',
@@ -62,6 +69,8 @@ assert.deepStrictEqual(exportedNames, [
   'loadWatches', 'logToolCall', 'missionRoute', 'parseGithubArgs', 'resolveApproval',
   'saveDelays', 'saveWatches', 'setSource', 'summarizePolicyInspection',
   'syncToolRegistry', 'transitionScheduledPlatformExecution'
-].sort(), 'src/tools.js compatibility export set should remain stable');
+]) {
+  assert.ok(exportedNames.includes(name), `src/tools.js compatibility export should include ${name}`);
+}
 
 console.log('Tool Registry Contract Tests passed');

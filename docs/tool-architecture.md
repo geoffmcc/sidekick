@@ -1,74 +1,140 @@
 # Tool Architecture
 
-Sidekick's built-in tools are moving from a monolithic implementation file to a descriptor-driven tool layer.
+Sidekick tools execute through a descriptor registry and a centralized dispatcher. `src/tools-legacy.js` still contains most migrated-in-place handlers, but it is no longer the authoritative execution path.
 
-## Canonical Descriptor
+## Descriptor Model
 
-Each built-in tool is represented as a validated descriptor:
+Each tool has one normalized descriptor with its public name, description, Zod input schema, handler, explicit risk, category, origin, optional family, aliases, and policy-facing metadata.
 
-```js
-{
-  name: "read",
-  description: "Read a file from the remote filesystem",
-  schema: z.object({ path: z.string() }),
-  args: { path: "string" },
-  risk: "medium",
-  category: "Core",
-  handler: readTool,
-}
-```
+Descriptors are validated by `src/tools/descriptor.js`. Validation rejects empty names, invalid names, missing descriptions, missing handlers, missing schemas, missing risks, and risks outside the supported vocabulary: `low`, `medium`, `high`, `critical`.
 
-The descriptor validator rejects duplicate names, missing handlers, empty descriptions, missing Zod schemas, and invalid risk values. Compatibility `TOOLS`, `TOOL_DEFS`, schema maps, risk lookup, and category lookup are derived from descriptor inputs.
+`src/tools/families/utility.js` is the first extracted descriptor-owned family. It owns the `respond` handler, schema, risk, category, and compatibility metadata. The legacy `TOOL_DEFS` row remains only as an ordering anchor while MCP ordering compatibility is preserved.
 
-## Current Module Boundaries
+## Registry Lifecycle
 
-- `src/tools.js` is the compatibility facade. It intentionally preserves the historical CommonJS export set.
-- `src/tools-legacy.js` contains the legacy handlers while domain extraction proceeds.
-- `src/tools/index.js` is the new registry-aware tool-layer entry point.
-- `src/tools/descriptor.js` validates and normalizes descriptors.
-- `src/tools/registry.js` builds the built-in registry.
-- `src/tools/schemas/index.js` owns MCP input schemas.
-- `src/tools/metadata.js` owns built-in risk and category metadata.
-- `src/tools/dispatcher.js` is the policy-enforced call boundary.
-- `src/tools/policy.js`, `src/tools/approvals.js`, `src/tools/logging.js`, and `src/tools/registry-sync.js` expose centralized policy, approval, logging, and registry-sync interfaces.
+`src/tools/registry.js` builds the built-in registry from descriptor data. During migration it adapts legacy definitions into descriptors and substitutes extracted family descriptors at their legacy order position.
+
+The registry rejects duplicate canonical names and duplicate aliases. Built-in tools cannot be shadowed by generated tools; generated tools are resolved only when no built-in descriptor exists for the canonical name.
+
+Compatibility maps are derived from the registry:
+
+- `TOOLS`
+- `TOOL_DEFS`
+- schema lookup
+- MCP definitions
+- risk and category metadata for catalog display
+
+New production code should depend on `src/tools/index.js`, `dispatchTool`, or `callTool`, not on `src/tools-legacy.js`.
 
 ## Dispatcher Pipeline
 
-Normal tool execution should use `callTool` rather than raw handler invocation. The dispatcher path is responsible for prefix normalization, policy checks, approval handling, dynamic tool dispatch, execution timing, result handling, and logging.
+`src/tools/dispatcher.js` owns the runtime execution pipeline for production tool calls.
 
-Raw handler invocation is limited to controlled MCP registration and tests. Nested execution, procedures, schedules, retries, batches, and generated tools should call through the dispatcher so policy and logging remain consistent.
+Pipeline order:
 
-## MCP Registration
+1. Resolve the canonical tool name or explicit test descriptor.
+2. Create or inherit request-scoped execution context.
+3. Look up the built-in descriptor or generated-tool descriptor.
+4. Reject unknown tools and unclassified generated tools.
+5. Validate arguments with the descriptor Zod schema.
+6. Evaluate tool policy for the request source.
+7. Evaluate approval requirements.
+8. Queue approval or continue with an approved/bypassed request.
+9. Invoke the descriptor handler.
+10. Apply timeout and cancellation boundaries where provided.
+11. Normalize success, validation, policy, approval, timeout, cancellation, and handler errors.
+12. Log the invocation with redacted summaries and context metadata.
+13. Let legacy platform/activity mirroring preserve dashboard compatibility.
 
-`src/index.js` registers built-in tools from `getBuiltinRegistry().listInDefinitionOrder()`. It no longer owns an independent `TOOL_SCHEMAS` object. Dynamic tools and taught procedures still register separately and are excluded when their names collide with built-ins.
+Production transports must not directly invoke `descriptor.handler`, legacy handlers, or `dynamicTools.callDynamicTool`. They call `callTool` or `dispatchTool`.
 
-## Dynamic Tools And Procedures
+## Request-Scoped Context
 
-Dynamic tools are not merged into the built-in registry because their metadata is untrusted runtime data. They continue to use the dynamic-tool registry and receive an injected `callTool` dependency for nested calls.
+`src/tools/context.js` uses `AsyncLocalStorage` for request-scoped source and invocation metadata. The compatibility `setSource` API remains for old tests and legacy helper calls, but dispatcher-created context is authoritative for tool execution.
 
-Taught procedures remain registered at MCP startup from stored procedure definitions. Procedure execution still goes through the existing `teach` tool path.
+Context fields include source, request ID, trace/correlation ID, invocation ID, parent invocation, actor, auth identity, session ID, task ID, project, tool name, approval ID, generated procedure name, execution IDs, timeout, cancellation signal, and security metadata.
 
-## Compute Delegation
+Nested calls inherit the intended context fields and receive dispatcher-created invocation metadata. Concurrent calls do not share source or request identity.
 
-Compute remains implemented under `src/compute/`. The generic tool layer treats Compute tools as descriptors whose handlers delegate to `src/compute/tools.js`; it must not import worker agents, dashboard code, or scheduling internals.
+## Policy And Approval Boundary
 
-## Adding A Built-In Tool
+Policy and approval decisions are evaluated in the dispatcher for all tool execution surfaces.
 
-During the migration, add the handler in the appropriate domain module, then add one descriptor containing the name, description, schema, args metadata, risk, category, and handler.
+Approval behavior remains compatible with the existing dashboard approval workflow:
 
-Add focused tests for valid invocation, invalid arguments, policy block behavior, result shape, logging when applicable, and dashboard/MCP visibility through the registry contract.
+- Required approvals queue encrypted payloads.
+- Approval previews are redacted.
+- Approval execution re-enters the dispatcher with `bypassApproval` and the approval ID.
+- Current policy is rechecked when an approval executes.
+- Expired, rejected, and failed approvals are audited through existing platform records.
 
-Adding a normal tool should not require editing separate central handler, schema, risk, category, and definition maps.
+Approval cannot be bypassed by using MCP, dashboard generated-tool runs, agent execution, scheduler execution, generated-tool nested steps, or legacy `callTool` compatibility APIs.
 
-## Dependency Rules
+## Risk Behavior
 
-Allowed direction:
+Built-in descriptors must have explicit risk metadata. Missing built-in risk metadata fails registry construction.
 
-```text
-domain handlers -> shared services/interfaces
-registry -> descriptors + handlers
-dispatcher -> registry + policy + approvals + logging
-MCP adapter -> registry + dispatcher
-```
+Generated tools are untrusted runtime data. Missing or invalid generated risk does not default to `low` or `medium`; dispatcher execution fails closed with `risk_unclassified` until the generated capability has a valid risk.
 
-Domain handlers should not import `src/tools.js` to call other tools. Use an injected dispatcher/call service for nested execution.
+Legacy compatibility risk lookup returns `critical` for unknown tools so old policy inspection does not fail open.
+
+## Invocation Surfaces
+
+Current production surfaces and routing:
+
+- MCP built-ins in `src/index.js`: register definitions from descriptors and call `callTool`.
+- MCP taught procedures: call `callTool("teach", ...)`.
+- MCP generated tools: call `callTool(def.name, ...)`.
+- Agent tasks and scheduled delay/watch actions in `src/agent.js`: call `callTool` with `source: "agent"`.
+- Dashboard evolve actions and generated-tool runs in `src/dashboard.js`: call `callTool` with `source: "dashboard"`.
+- Legacy internal tool-to-tool calls in `src/tools-legacy.js`: local `callTool` delegates to the dispatcher.
+- Generated/evolved tool steps in `src/dynamic-tools.js`: receive injected `callTool`, which is the dispatcher compatibility API.
+
+Dashboard database API routes still use policy checks as HTTP route guards for dashboard-specific endpoints; they do not directly execute MCP tool handlers.
+
+## Result And Error Model
+
+Dispatcher results preserve MCP-compatible `{ content: [{ type: "text", text }] }` responses. Errors include `isError: true` and normalized codes such as:
+
+- `unknown_tool`
+- `validation_failed`
+- `policy_denied`
+- `approval_required`
+- `approval_queue_unavailable`
+- `risk_unclassified`
+- `timeout`
+- `cancelled`
+- `handler_error`
+- `dispatcher_internal_error`
+
+Responses and logs use existing redaction helpers and avoid raw stack traces or secret-bearing authorization strings.
+
+## Adding Or Migrating A Tool
+
+For new descriptor-owned tools:
+
+1. Add the handler and descriptors in a focused family module under `src/tools/families/`.
+2. Include schema, args metadata, explicit risk, category, source, and family.
+3. Add the family descriptors to `src/tools/registry.js`.
+4. Remove the live legacy handler when safe.
+5. Keep any needed legacy definition row only as a temporary ordering anchor.
+6. Add dispatcher-level tests for success, validation failure, policy denial, approval behavior when relevant, logging, and compatibility exports.
+
+Handlers should not implement their own policy or approval logic. Handlers that need nested tools should use an injected or imported dispatcher call path, not raw handler maps.
+
+## Remaining Legacy Work
+
+Most handlers still live in `src/tools-legacy.js`. Remaining migration should proceed by coherent families, such as read-only data utilities, memory tools, or database inspection tools. Avoid migrating destructive infrastructure tools until their security behavior is fully characterized.
+
+The compatibility layer remains to preserve external clients, existing generated/evolved tools, dashboard catalogs, approval workflows, and tool logs during gradual extraction.
+
+## Tests
+
+Tool architecture tests live in:
+
+- `test/tool-registry-contract.test.cjs`
+- `test/dispatcher.test.cjs`
+- `test/approval.test.js`
+- existing dashboard, agent, compute, generated-tool, and security suites
+
+Tests assert descriptor completeness, duplicate rejection, fail-closed risk behavior, dispatcher result normalization, approval behavior, concurrency-safe context, MCP routing through `callTool`, and extracted-family compatibility.

@@ -6,7 +6,7 @@ const { McpServer } = require("@modelcontextprotocol/sdk/server/mcp.js");
 const { WebStandardStreamableHTTPServerTransport } = require("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js");
 const { SSEServerTransport } = require("@modelcontextprotocol/sdk/server/sse.js");
 const { z } = require("zod");
-const { TOOLS, DATA_DIR, setSource, logToolCall, loadProcedures, enforceToolPolicy, syncToolRegistry } = require("./tools");
+const { DATA_DIR, callTool, loadProcedures, syncToolRegistry } = require("./tools");
 const { getBuiltinRegistry } = require("./tools/index");
 const dynamicTools = require("./dynamic-tools");
 const { stripSidekickPrefix } = require("./core/tool-name");
@@ -80,23 +80,7 @@ function createMcpServer() {
       description: descriptor.description,
       inputSchema: descriptor.schema
     }, async (args, extra) => {
-      setSource("mcp");
-      const start = Date.now();
-      try {
-        const policyError = enforceToolPolicy(descriptor.name, "mcp");
-        if (policyError) {
-          logToolCall(descriptor.name, args, Date.now() - start, false, policyError.content[0].text);
-          return policyError;
-        }
-        const result = await descriptor.handler(args);
-        logToolCall(descriptor.name, args, Date.now() - start, !result.isError,
-          result.content?.[0]?.text?.substring(0, 80) || "(ok)"
-        );
-        return result;
-      } catch (e) {
-        logToolCall(descriptor.name, args, Date.now() - start, false, e.message);
-        throw e;
-      }
+      return callTool(descriptor.name, args, { source: "mcp", requestId: extra?.requestInfo?.requestId });
     });
   }
 
@@ -111,23 +95,7 @@ function createMcpServer() {
       description: `[procedure] ${proc.description}${paramDesc}`,
       inputSchema: paramSchema
     }, async (args, extra) => {
-      setSource("mcp");
-      const start = Date.now();
-      try {
-        const policyError = enforceToolPolicy("teach", "mcp");
-        if (policyError) {
-          logToolCall(internalName, args, Date.now() - start, false, policyError.content[0].text);
-          return policyError;
-        }
-        const result = await TOOLS.teach({ action: "execute", name: procName, args });
-        logToolCall(internalName, args, Date.now() - start, !result.isError,
-          result.content?.[0]?.text?.substring(0, 80) || "(ok)"
-        );
-        return result;
-      } catch (e) {
-        logToolCall(internalName, args, Date.now() - start, false, e.message);
-        throw e;
-      }
+      return callTool("teach", { action: "execute", name: procName, args }, { source: "mcp", requestId: extra?.requestInfo?.requestId, generatedProcedure: internalName });
     });
   }
 
@@ -139,24 +107,7 @@ function createMcpServer() {
       description: def.description,
       inputSchema: dynamicSchemas[def.name]
     }, async (args, extra) => {
-      setSource("mcp");
-      const start = Date.now();
-      try {
-        const policyError = enforceToolPolicy(def.name, "mcp");
-        if (policyError) {
-          logToolCall(def.name, args, Date.now() - start, false, policyError.content[0].text, { generatedProcedure: def.name });
-          return policyError;
-        }
-        const result = await dynamicTools.callDynamicTool(def.name, args, { callTool: require("./tools").callTool, source: "mcp" });
-        logToolCall(def.name, args, Date.now() - start, !result.isError,
-          result.content?.[0]?.text?.substring(0, 80) || "(ok)",
-          { generatedProcedure: def.name, correlationId: def.capabilityId }
-        );
-        return result;
-      } catch (e) {
-        logToolCall(def.name, args, Date.now() - start, false, e.message, { generatedProcedure: def.name, correlationId: def.capabilityId });
-        throw e;
-      }
+      return callTool(def.name, args, { source: "mcp", requestId: extra?.requestInfo?.requestId, generatedProcedure: def.name, correlationId: def.capabilityId });
     });
   }
 

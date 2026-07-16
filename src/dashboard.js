@@ -5,7 +5,7 @@ const path = require("path");
 const os = require("os");
 const { timingSafeCompare } = require("./crypto-utils");
 const { execFileSync } = require("child_process");
-const { TOOLS, setSource, getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval } = require("./tools");
+const { callTool, setSource, getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval } = require("./tools");
 const dynamicTools = require("./dynamic-tools");
 const dbStore = require("./db");
 const { allowedActions } = require("./evolve/lifecycle");
@@ -1535,9 +1535,8 @@ app.get("/api/evolve", (req, res) => {
 
 async function evolveDashboardAction(req, res, action, extra = {}) {
   try {
-    setSource("dashboard");
     auditLog(req, `evolve.${action}`, { id: req.params.id || req.body?.id || null });
-    const result = await TOOLS.sidekick_evolve({ action, id: req.params.id || req.body?.id, ...(req.body || {}), ...extra });
+    const result = await callTool("evolve", { action, id: req.params.id || req.body?.id, ...(req.body || {}), ...extra }, { source: "dashboard", actor: "dashboard" });
     res.json({ ok: !result.isError, result: result.content?.[0]?.text || "" });
   } catch (error) {
     logError(req.originalUrl, 500, error, "evolve", req.headers["user-agent"]);
@@ -1607,7 +1606,6 @@ app.post("/api/evolve/:id/run", (req, res) => {
   if (!cap || !["trial", "active"].includes(cap.state)) return res.status(400).json({ ok: false, error: "Generated tool is not trial or active" });
   const executionId = `gte_${Date.now().toString(36)}_${crypto.randomBytes(6).toString("hex")}`;
   const timeoutMs = Number(req.body?.timeout_ms || 0) || null;
-  setSource("dashboard");
   dbStore.createGeneratedToolExecution({
     id: executionId,
     capabilityId: cap.id,
@@ -1620,7 +1618,7 @@ app.post("/api/evolve/:id/run", (req, res) => {
   });
   setImmediate(async () => {
     try {
-      await dynamicTools.callDynamicTool(cap.name, req.body?.args || {}, { callTool: require("./tools").callTool, source: "dashboard", executionId, timeoutMs });
+      await callTool(cap.name, req.body?.args || {}, { source: "dashboard", actor: "dashboard", executionId, timeoutMs });
     } catch (error) {
       dbStore.updateGeneratedToolExecution(executionId, {
         state: "failed",

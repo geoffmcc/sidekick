@@ -15,14 +15,25 @@ function getBuiltinRegistry() {
   return buildBuiltinRegistry({
     toolDefs: legacy.TOOL_DEFS,
     handlers: legacy.TOOLS,
-    riskForTool: legacy.getToolRisk,
     categoryForTool: metadata.getStaticToolCategory,
     schemas: schemas.TOOL_SCHEMAS,
   });
 }
 
+function getCompatibilityToolMap() {
+  return getBuiltinRegistry().toolsMap();
+}
+
+function getCompatibilityToolDefs() {
+  return getBuiltinRegistry().toolDefs();
+}
+
 module.exports = {
   ...legacy,
+  TOOLS: getCompatibilityToolMap(),
+  TOOL_DEFS: getCompatibilityToolDefs(),
+  callTool: dispatcher.callTool,
+  dispatchTool: dispatcher.dispatchTool,
   getBuiltinRegistry,
   buildBuiltinRegistry,
   createRegistry,

@@ -586,9 +586,6 @@ const TOOL_SCHEMAS = {
     limit: z.number().optional(),
     confirm: z.boolean().optional().default(false)
   }),
-  respond: z.object({
-    text: z.string().describe("The response text to return")
-  }),
   db_schema: z.object({
     table: z.string().optional().describe("Specific table name (optional)"),
     verbose: z.boolean().optional().describe("Include row counts and detailed info"),
