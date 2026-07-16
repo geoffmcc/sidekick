@@ -768,6 +768,84 @@ const TOOL_SCHEMAS = {
     query: z.string().optional().describe("Flux query (for query action)"),
     time_range: z.string().optional().describe("Time range for list_fields (e.g. -30d)")
   }),
+  compute: z.object({
+    action: z.enum(["overview", "init"]).describe("Compute action")
+  }),
+  compute_nodes: z.object({
+    action: z.enum(["list", "get", "heartbeat", "revoke", "maintenance", "stats", "create_token", "list_tokens", "enroll"]).describe("Worker node action"),
+    node_id: z.string().optional().describe("Worker node ID"),
+    token: z.string().optional().describe("Enrollment token"),
+    display_name: z.string().optional().describe("Worker or token display name"),
+    platform: z.string().optional().describe("Worker platform"),
+    architecture: z.string().optional().describe("Worker architecture"),
+    cpu_info: z.string().optional().describe("Worker CPU info"),
+    memory_bytes: z.number().optional().describe("Worker memory in bytes"),
+    accelerators: z.array(z.any()).optional().describe("Worker accelerator descriptors"),
+    providers: z.array(z.any()).optional().describe("Worker provider descriptors"),
+    executors: z.array(z.any()).optional().describe("Worker executor descriptors"),
+    worker_version: z.string().optional().describe("Worker agent version"),
+    public_key: z.string().optional().describe("Worker public key"),
+    trust_level: z.string().optional().describe("Worker trust level"),
+    allowed_data_classifications: z.array(z.string()).optional().describe("Allowed data classifications for token"),
+    max_concurrent_jobs: z.number().optional().describe("Maximum concurrent jobs for enrolled worker"),
+    expires_in_ms: z.number().optional().describe("Enrollment token lifetime in milliseconds"),
+    created_by: z.string().optional().describe("Enrollment token creator"),
+    reason: z.string().optional().describe("Revoke reason"),
+    enable: z.boolean().optional().describe("Enable/disable maintenance"),
+    state: z.string().optional().describe("Filter by worker state for list"),
+    hardware_type: z.string().optional().describe("Filter by hardware_type for list"),
+    provider: z.string().optional().describe("Filter by provider for list")
+  }),
+  compute_providers: z.object({
+    action: z.enum(["list", "get", "create", "update", "delete", "health", "health_all"]).describe("Provider action"),
+    provider_id: z.string().optional().describe("Provider ID"),
+    name: z.string().optional().describe("Provider name"),
+    type: z.string().optional().describe("Provider type (ollama|openai|vllm|llamacpp|mlx|mock)"),
+    base_url: z.string().optional().describe("Base URL"),
+    api_key: z.string().optional().describe("API key"),
+    priority: z.number().optional().describe("Priority (lower=higher)"),
+    enabled: z.boolean().optional().describe("Enable/disable provider")
+  }),
+  compute_models: z.object({
+    action: z.enum(["list", "get", "create", "update", "delete", "discover"]).describe("Model action"),
+    model_id: z.string().optional().describe("Model ID"),
+    provider_id: z.string().optional().describe("Provider ID filter"),
+    model_name: z.string().optional().describe("Model name"),
+    provider_model_name: z.string().optional().describe("Model name on provider"),
+    family: z.string().optional().describe("Model family"),
+    parameter_count: z.string().optional().describe("Parameter count (e.g. 7b, 13b)"),
+    context_length: z.number().optional().describe("Context window size"),
+    supports_vision: z.boolean().optional().describe("Supports vision"),
+    supports_tools: z.boolean().optional().describe("Supports tool calling"),
+    supports_embedding: z.boolean().optional().describe("Supports embedding"),
+    min_vram_gb: z.number().optional().describe("Minimum VRAM required")
+  }),
+  compute_jobs: z.object({
+    action: z.enum(["list", "get", "create", "cancel", "stats", "artifacts"]).describe("Job action"),
+    job_id: z.string().optional().describe("Job ID"),
+    job_type: z.string().optional().describe("Job type (inference|embedding|transcription|custom)"),
+    model: z.string().optional().describe("Model name"),
+    prompt: z.string().optional().describe("Prompt"),
+    provider: z.string().optional().describe("Preferred provider"),
+    max_retries: z.number().optional().describe("Max retry attempts"),
+    timeout_ms: z.number().optional().describe("Timeout in milliseconds"),
+    status: z.string().optional().describe("Filter by status")
+  }),
+  compute_route: z.object({
+    action: z.enum(["explain", "list_rules", "create_rule", "delete_rule"]).describe("Routing action"),
+    workload_class: z.string().optional().describe("Workload class for explain"),
+    capabilities_required: z.string().optional().describe("Comma-separated capabilities for explain"),
+    data_classification: z.string().optional().describe("Data classification for explain"),
+    trust_level: z.string().optional().describe("Trust level for explain"),
+    rule_id: z.string().optional().describe("Routing rule ID"),
+    rule_name: z.string().optional().describe("Rule name for create_rule"),
+    priority: z.number().optional().describe("Rule priority"),
+    description: z.string().optional().describe("Rule description"),
+    preferred_providers: z.array(z.string()).optional().describe("Preferred provider IDs"),
+    preferred_models: z.array(z.string()).optional().describe("Preferred model IDs"),
+    fallback_providers: z.array(z.string()).optional().describe("Fallback provider IDs"),
+    max_latency_ms: z.number().optional().describe("Max latency requirement")
+  }),
 };
 
 // --- Factory: create fresh McpServer + register tools ---
@@ -1335,6 +1413,55 @@ try {
 
 // Sync tool registry from code to database on startup
 syncToolRegistry();
+
+// Initialize compute subsystem (providers, models, routing, health monitoring)
+try {
+  const compute = require("./compute");
+  compute.initialize();
+  console.log("[Compute] Subsystem initialized");
+} catch (e) {
+  console.error("[Compute] Init failed (non-fatal):", e.message);
+}
+
+// Compute worker REST endpoints (lightweight, no MCP session required)
+app.post("/compute/enroll", express.json({ limit: "64kb" }), (req, res) => {
+  try {
+    const { token, nodeId, displayName, platform, architecture, cpuInfo, memoryBytes, accelerators, providers, executors, workerVersion, publicKey } = req.body || {};
+    if (!token || !nodeId || !displayName || !platform) {
+      return res.status(400).json({ error: "token, nodeId, displayName, and platform are required" });
+    }
+    const compute = require("./compute");
+    const worker = compute.workerManager.enrollWorker({
+      nodeId, displayName, platform, architecture, cpuInfo, memoryBytes,
+      accelerators, providers, executors, workerVersion, publicKey, enrollmentToken: token,
+    });
+    res.json({ ok: true, worker });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.post("/compute/heartbeat", express.json({ limit: "32kb" }), (req, res) => {
+  try {
+    const { workerId, utilization, currentJobs } = req.body || {};
+    if (!workerId) return res.status(400).json({ error: "workerId is required" });
+    const compute = require("./compute");
+    const worker = compute.workerManager.heartbeat(workerId, { utilization, currentJobs });
+    if (!worker) return res.status(404).json({ error: "Worker not found" });
+    res.json({ ok: true, worker });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.get("/compute/health", (req, res) => {
+  try {
+    const compute = require("./compute");
+    res.json({ ok: true, overview: compute.overview() });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log("Sidekick MCP server listening on port " + PORT);

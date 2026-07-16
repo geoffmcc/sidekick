@@ -50,6 +50,7 @@ const suites = [
   { file: 'test/memory-intelligence.test.js', critical: false, description: 'Memory intelligence handoff/session behavior' },
   { file: 'test/integration.test.js', critical: false, description: 'Integration behavior' },
   { file: 'test/dashboard-api.test.js', critical: false, description: 'Dashboard API behavior' },
+  { file: 'test/compute.test.js', critical: false, description: 'Compute provider-neutral inference and job system' },
 ];
 
 const requested = process.argv.slice(2);
