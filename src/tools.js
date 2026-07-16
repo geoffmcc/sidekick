@@ -5,6 +5,7 @@ const https = require("https");
 const { execSync, execFile, execFileSync, spawn } = require("child_process");
 const { redactSensitive } = require("./redact");
 const evolveCommon = require("./evolve/common");
+const predictEngine = require("./predict");
 const dbStore = require("./db");
 const pgStore = require("./pg");
 const redisStore = require("./redis");
@@ -6362,199 +6363,99 @@ async function sidekick_orchestrate({ action, id, task_name, subtasks, dependenc
   return { content: [{ type: "text", text: "Unknown action. Use: create, execute, list, status, cancel" }], isError: true };
 }
 
-// --- Predict Tool ---
+// --- Predict Tool (delegates to src/predict.js) ---
 
-const PREDICT_FILE = path.join(DATA_DIR, "predict.json");
-
-function loadPredict() {
-  if (!fs.existsSync(PREDICT_FILE)) return { predictions: [], feedback: [] };
+async function sidekick_predict({ action, id, type, project, session_id, task_id, feedback, outcome, limit, status, confidence, maxAge }) {
   try {
-    return JSON.parse(fs.readFileSync(PREDICT_FILE, "utf-8"));
-  } catch {
-    return { predictions: [], feedback: [] };
-  }
-}
-
-function savePredict(predict) {
-  fs.writeFileSync(PREDICT_FILE, JSON.stringify(predict, null, 2));
-}
-
-function analyzeContextPatterns() {
-  const CONTEXT_FILE = path.join(DATA_DIR, "context.json");
-  if (!fs.existsSync(CONTEXT_FILE)) return [];
-  
-  try {
-    const context = JSON.parse(fs.readFileSync(CONTEXT_FILE, "utf-8"));
-    const patterns = [];
-    
-    // Analyze decision patterns
-    if (context.decisions && context.decisions.length > 0) {
-      const projectDecisions = {};
-      for (const dec of context.decisions) {
-        if (dec.project) {
-          if (!projectDecisions[dec.project]) projectDecisions[dec.project] = [];
-          projectDecisions[dec.project].push(dec);
-        }
-      }
-      
-      for (const [project, decisions] of Object.entries(projectDecisions)) {
-        if (decisions.length >= 3) {
-          patterns.push({
-            type: "decision_pattern",
-            project,
-            count: decisions.length,
-            prediction: `Project "${project}" has ${decisions.length} decisions. More decisions likely needed.`,
-            confidence: 0.7
-          });
-        }
-      }
+    const validActions = ["analyze", "list", "get", "feedback", "outcome", "dismiss", "explain", "status", "suggest", "migrate"];
+    if (!action || !validActions.includes(action)) {
+      return { content: [{ type: "text", text: `Invalid action. Use: ${validActions.join(", ")}` }], isError: true };
     }
-    
-    // Analyze problem patterns
-    if (context.problems && context.problems.length > 0) {
-      const unresolved = context.problems.filter(p => !p.resolved);
-      if (unresolved.length > 0) {
-        patterns.push({
-          type: "unresolved_problems",
-          count: unresolved.length,
-          prediction: `${unresolved.length} unresolved problems. Consider addressing these.`,
-          confidence: 0.9
-        });
-      }
-    }
-    
-    return patterns;
-  } catch {
-    return [];
-  }
-}
 
-function analyzeToolPatterns() {
-  const logs = dbStore.readToolLogs(1000);
-  if (!logs || logs.length === 0) return [];
-  
-  try {
-    const patterns = [];
-    
-    // Find most used tools
-    const toolCounts = {};
-    for (const log of logs) {
-      toolCounts[log.n] = (toolCounts[log.n] || 0) + 1;
+    // Deprecated alias: suggest -> list top predictions
+    if (action === "suggest") {
+      action = "list";
     }
-    
-    const topTools = Object.entries(toolCounts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5);
-    
-    if (topTools.length > 0) {
-      patterns.push({
-        type: "frequent_tools",
-        tools: topTools,
-        prediction: `Most used tools: ${topTools.map(([t, c]) => `${t} (${c})`).join(", ")}. These are critical to your workflow.`,
-        confidence: 0.8
+
+    if (action === "analyze") {
+      const result = predictEngine.analyze({ project, session_id, task_id, maxAge: maxAge || "7d" });
+      return jsonText(result);
+    }
+
+    if (action === "list") {
+      const preds = predictEngine.listPredictions({ status, type, project, session_id, task_id, confidence, limit });
+      return jsonText({ ok: true, count: preds.length, predictions: preds });
+    }
+
+    if (action === "get") {
+      if (!id) return { content: [{ type: "text", text: "id required for get" }], isError: true };
+      const pred = predictEngine.getPrediction(id);
+      if (!pred) return { content: [{ type: "text", text: `Prediction not found: ${id}` }], isError: true };
+      const evidence = predictEngine.getPredictionEvidence(id);
+      const fb = predictEngine.getPredictionFeedback(id);
+      return jsonText({ ok: true, prediction: pred, evidence, feedback: fb });
+    }
+
+    if (action === "feedback") {
+      if (!id) return { content: [{ type: "text", text: "id required for feedback" }], isError: true };
+      if (!feedback) return { content: [{ type: "text", text: "feedback required (useful|not_useful|incorrect|already_known|acted_on|dismissed)" }], isError: true };
+      const result = predictEngine.recordFeedback(id, feedback, project);
+      return jsonText(result);
+    }
+
+    if (action === "outcome") {
+      if (!id) return { content: [{ type: "text", text: "id required for outcome" }], isError: true };
+      if (!outcome) return { content: [{ type: "text", text: "outcome required (confirmed|did_not_occur|action_succeeded|action_failed|expired|superseded|unresolved)" }], isError: true };
+      const result = predictEngine.recordOutcome(id, outcome);
+      return jsonText(result);
+    }
+
+    if (action === "dismiss") {
+      if (!id) return { content: [{ type: "text", text: "id required for dismiss" }], isError: true };
+      const result = predictEngine.dismissPrediction(id);
+      return jsonText(result);
+    }
+
+    if (action === "explain") {
+      if (!id) return { content: [{ type: "text", text: "id required for explain" }], isError: true };
+      const pred = predictEngine.getPrediction(id);
+      if (!pred) return { content: [{ type: "text", text: `Prediction not found: ${id}` }], isError: true };
+      const evidence = predictEngine.getPredictionEvidence(id);
+      return jsonText({
+        ok: true,
+        prediction_id: pred.id,
+        type: pred.type,
+        subject: pred.subject,
+        explanation: pred.explanation,
+        probability: pred.probability,
+        confidence: pred.confidence,
+        score_breakdown: pred.score_breakdown,
+        observation_count: pred.observation_count,
+        evidence: evidence.map(e => ({
+          source_type: e.source_type,
+          source_id: e.source_id,
+          summary: e.summary,
+          timestamp: e.source_timestamp
+        })),
+        created_at: pred.created_at,
+        expires_at: pred.expires_at,
+        rule_version: pred.rule_version
       });
     }
-    
-    // Find error patterns
-    const errors = logs.filter(l => !l.ok);
-    if (errors.length > logs.length * 0.1) {
-      patterns.push({
-        type: "error_rate",
-        errorCount: errors.length,
-        totalCount: logs.length,
-        prediction: `Error rate: ${((errors.length / logs.length) * 100).toFixed(1)}%. Consider investigating frequent errors.`,
-        confidence: 0.85
-      });
-    }
-    
-    return patterns;
-  } catch {
-    return [];
-  }
-}
 
-async function sidekick_predict({ action, id, feedback, useful }) {
-  const predict = loadPredict();
-  const now = new Date().toISOString();
-  
-  if (action === "analyze") {
-    const contextPatterns = analyzeContextPatterns();
-    const toolPatterns = analyzeToolPatterns();
-    
-    const allPatterns = [...contextPatterns, ...toolPatterns];
-    
-    if (allPatterns.length === 0) {
-      return { content: [{ type: "text", text: "No patterns detected yet. Continue using the system to build patterns." }] };
+    if (action === "status") {
+      return jsonText(predictEngine.engineStatus());
     }
-    
-    const predictions = allPatterns.map((p, idx) => ({
-      id: generateId("pred"),
-      ...p,
-      created: now,
-      feedback: null
-    }));
-    
-    predict.predictions = predictions;
-    savePredict(predict);
-    
-    const report = predictions.map(p => 
-      `ID: ${p.id}\nType: ${p.type}\nConfidence: ${(p.confidence * 100).toFixed(0)}%\nPrediction: ${p.prediction}`
-    ).join("\n\n");
-    
-    return { content: [{ type: "text", text: `# Predictions (${predictions.length})\n\n${report}` }] };
+
+    if (action === "migrate") {
+      const result = predictEngine.migrateLegacy();
+      return jsonText({ ok: true, ...result });
+    }
+
+    return { content: [{ type: "text", text: "Unknown action" }], isError: true };
+  } catch (e) {
+    return { content: [{ type: "text", text: `Predict error: ${e.message}` }], isError: true };
   }
-  
-  if (action === "list") {
-    if (predict.predictions.length === 0) {
-      return { content: [{ type: "text", text: "No predictions yet. Run 'analyze' first." }] };
-    }
-    
-    const list = predict.predictions.map(p => 
-      `ID: ${p.id}\nType: ${p.type}\nConfidence: ${(p.confidence * 100).toFixed(0)}%\nPrediction: ${p.prediction.substring(0, 100)}${p.prediction.length > 100 ? "..." : ""}\nFeedback: ${p.feedback || "none"}`
-    ).join("\n\n");
-    
-    return { content: [{ type: "text", text: `# Predictions (${predict.predictions.length})\n\n${list}` }] };
-  }
-  
-  if (action === "feedback") {
-    if (!id || feedback === undefined) {
-      return { content: [{ type: "text", text: "id and feedback (true/false) required" }], isError: true };
-    }
-    
-    const prediction = predict.predictions.find(p => p.id === id);
-    if (!prediction) {
-      return { content: [{ type: "text", text: `Prediction not found: ${id}` }], isError: true };
-    }
-    
-    prediction.feedback = feedback ? "useful" : "not_useful";
-    prediction.feedbackAt = now;
-    
-    predict.feedback.push({
-      predictionId: id,
-      useful: feedback,
-      timestamp: now
-    });
-    
-    savePredict(predict);
-    
-    return { content: [{ type: "text", text: `Feedback recorded for ${id}: ${feedback ? "useful" : "not useful"}` }] };
-  }
-  
-  if (action === "suggest") {
-    const usefulPredictions = predict.predictions.filter(p => p.feedback === "useful");
-    
-    if (usefulPredictions.length === 0) {
-      return { content: [{ type: "text", text: "No useful predictions yet. Provide feedback on predictions to improve suggestions." }] };
-    }
-    
-    const suggestions = usefulPredictions.map(p => 
-      `- ${p.prediction} (confidence: ${(p.confidence * 100).toFixed(0)}%)`
-    ).join("\n");
-    
-    return { content: [{ type: "text", text: `# Suggestions Based on Past Predictions\n\n${suggestions}` }] };
-  }
-  
-  return { content: [{ type: "text", text: "Unknown action. Use: analyze, list, feedback, suggest" }], isError: true };
 }
 
 // Debug tool implementation - uses persistent KV store for cross-session debugging
@@ -11888,7 +11789,7 @@ const TOOL_DEFS = [
   { name: "sidekick_retry", description: "Retry tool calls with exponential backoff", args: { tool: "string (tool to retry)", args: "object (optional, tool args)", max_attempts: "number (optional, default 3)", backoff: "string (optional, exponential|linear|fixed, default exponential)", initial_delay: "number (optional, ms, default 1000)" } },
   { name: "sidekick_evolve", description: "Evidence-driven workflow learning and generated-tool lifecycle management. Mines successful bounded workflows, validates parameterized procedures, and exposes approved trial/active generated tools through normal discovery.", args: { action: "string (analyze|candidates|inspect|validate|approve|activate_trial|promote|reject|deprecate|feedback|report|cleanup)", id: "string (optional, candidate/generated capability id or name)", approver: "string (optional)", useful: "boolean (optional, for feedback)", notes: "string (optional)", reason: "string (optional)", limit: "number (optional, logs to analyze)" } },
   { name: "sidekick_orchestrate", description: "Multi-agent coordination: create task graphs, execute subtasks with dependencies, track progress", args: { action: "string (create|execute|list|status|cancel)", id: "number (optional, task id for execute/status/cancel)", task_name: "string (optional, task name for create)", subtasks: "array (optional, subtask definitions for create)", dependencies: "object (optional, dependency map for create)", timeout: "number (optional, timeout in ms, default 1800000)" } },
-  { name: "sidekick_predict", description: "Anticipatory intelligence: analyze patterns, predict needs, track prediction usefulness", args: { action: "string (analyze|list|feedback|suggest)", id: "string (optional, prediction id for feedback)", feedback: "boolean (optional, true if useful, false if not)" } },
+  { name: "sidekick_predict", description: "Evidence-backed prediction and decision-support engine. Analyzes tool history, memories, handoffs, incidents, and workflows to identify likely next actions, failure risks, missing prerequisites, relevant context, incident recurrence, and automation opportunities.", args: { action: "string (analyze|list|get|feedback|outcome|dismiss|explain|status|suggest|migrate)", id: "string (optional, prediction ID)", type: "string (optional, filter by type)", project: "string (optional, project scope)", session_id: "string (optional)", task_id: "string (optional)", feedback: "string (optional, useful|not_useful|incorrect|already_known|acted_on|dismissed)", outcome: "string (optional, confirmed|did_not_occur|action_succeeded|action_failed|expired|superseded|unresolved)", limit: "number (optional, max results - default 20)", status: "string (optional, filter by status)", confidence: "string (optional, filter by confidence)", maxAge: "string (optional, analysis window - default 7d)" } },
   { name: "sidekick_debug_tool", description: "Structured debugging cache with persistent storage for cross-session debugging. Store findings, recall past investigations, cleanup old entries.", args: { action: "string (store|recall|cleanup|start|stop|cache|get|status|clear)", session_name: "string (optional, session identifier for legacy actions)", key: "string (optional, cache key for get/cache, or debug key for cleanup)", value: "string (optional, value to cache/store)", service: "string (optional, service name for store/recall)", issue: "string (optional, issue description for store)", redact: "boolean (optional, default true - set false to skip redaction)" } },
   { name: "sidekick_fresheyes", description: "Get a fresh perspective from Sidekick's LLM (Grok) on a problem. Sends sanitized context for independent analysis", args: { problem: "string (problem description)", context: "string (optional, relevant context)", files: "array (optional, files analyzed)", hypotheses: "array (optional, current hypotheses)", full_response: "boolean (optional, return full response vs key insights)" } },
   { name: "sidekick_batch", description: "Execute multiple tool calls in one request to reduce API round-trips. Max 20 calls per batch.", args: { calls: "array (array of { tool: string, args: object })" } },

@@ -38,6 +38,8 @@ const suites = [
   { file: 'test/new-tools.test.js', critical: false, description: 'Extended tool behavior' },
   { file: 'test/blackbox.test.js', critical: false, description: 'Structured Black Box incident evidence behavior' },
   { file: 'test/blackbox-lifecycle.test.js', critical: false, description: 'Black Box capture lifecycle, profile validation, and empty capture prevention' },
+  { file: 'test/predict.test.js', critical: false, description: 'Predict tool and scoring engine behavior' },
+  { file: 'test/predict-lifecycle.test.js', critical: false, description: 'Predict lifecycle, dedup, expiration, and feedback behavior' },
   { file: 'test/insight-report.test.js', critical: false, description: 'Insight report tool behavior' },
   { file: 'test/evolve.test.js', critical: false, description: 'Evolve tool and retention behavior' },
   { file: 'test/db-tools.test.js', critical: false, description: 'Database tools behavior' },

@@ -266,6 +266,7 @@ function showPage(name){
   if (name === 'approvals') loadApprovals();
   if (name === 'tools') loadTools();
   if (name === 'evolve') loadEvolve();
+  if (name === 'predict') { loadPredictStatus(); loadPredict(); }
   if (name === 'metrics') loadGrafanaDashboard();
 }
 
@@ -1878,6 +1879,198 @@ function loadEvolve(){
   }).catch(e => {
     list.innerHTML = '<div class="agent-err">Failed to load Evolve data</div>';
     apiError('/api/evolve', e, 0);
+  });
+}
+
+// -- Predict -- //
+const PREDICT_TYPE_LABELS = {
+  likely_next_action: 'Next Action', failure_risk: 'Failure Risk', missing_prerequisite: 'Missing Prerequisite',
+  context_relevance: 'Context', incident_recurrence: 'Incident Risk', automation_opportunity: 'Automation',
+  handoff_pending: 'Handoff', unknown: 'Unknown'
+};
+const PREDICT_STATUS_COLORS = {
+  active: '#3fb950', expired: '#8b949e', superseded: '#a371f7', dismissed: '#f85149',
+  confirmed: '#3fb950', did_not_occur: '#f0883e', unresolved: '#f85149'
+};
+const PREDICT_CONFIDENCE_COLORS = {
+  very_high: '#3fb950', high: '#58a6ff', medium: '#a371f7', low: '#f0883e', none: '#8b949e'
+};
+
+function loadPredictStatus() {
+  authFetch('/api/predict/status').then(r => r.json()).then(d => {
+    const el = $('predictStatus');
+    if (!el) return;
+    const total = d.total || 0;
+    const active = d.active || 0;
+    const detectors = (d.detectors || []).filter(x => x.enabled).length;
+    const lastAnalyzed = d.last_analyzed ? fmtDate(d.last_analyzed) : 'never';
+    el.innerHTML = '<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:.82rem;color:#8b949e">' +
+      '<span>Total: <strong style="color:#c9d1d9">' + total + '</strong></span>' +
+      '<span>Active: <strong style="color:#3fb950">' + active + '</strong></span>' +
+      '<span>Detectors: <strong style="color:#c9d1d9">' + detectors + '/7</strong></span>' +
+      '<span>Last analysis: <strong style="color:#c9d1d9">' + lastAnalyzed + '</strong></span>' +
+      '<span>Retention: <strong style="color:#c9d1d9">' + (d.retention_days || 30) + 'd</strong></span>' +
+    '</div>';
+  });
+}
+
+function loadPredict() {
+  const list = $('predictList');
+  if (!list) return;
+  list.innerHTML = '<div class="empty">Loading predictions...</div>';
+  const status = $('predictStatusFilter') ? $('predictStatusFilter').value : 'active';
+  const type = $('predictTypeFilter') ? $('predictTypeFilter').value : '';
+  const confidence = $('predictConfidenceFilter') ? $('predictConfidenceFilter').value : '';
+  let url = '/api/predict?limit=50';
+  if (status) url += '&status=' + encodeURIComponent(status);
+  if (type) url += '&type=' + encodeURIComponent(type);
+  if (confidence) url += '&confidence=' + encodeURIComponent(confidence);
+  authFetch(url).then(r => r.json()).then(d => {
+    const items = d.predictions || [];
+    $('predictCount').textContent = items.length;
+    const detail = $('predictDetail');
+    if (detail) detail.style.display = 'none';
+    if (!items.length) {
+      list.innerHTML = '<div class="empty">No predictions found. Click Analyze to generate predictions.</div>';
+      return;
+    }
+    list.innerHTML = items.map(p => {
+      const typeLabel = PREDICT_TYPE_LABELS[p.type] || p.type;
+      const statusColor = PREDICT_STATUS_COLORS[p.status] || '#8b949e';
+      const confColor = PREDICT_CONFIDENCE_COLORS[p.confidence] || '#8b949e';
+      const pct = Math.round((p.probability || 0) * 100);
+      const progressWidth = Math.min(100, Math.max(5, pct));
+      return '<div class="card" style="margin-bottom:10px;padding:12px;cursor:pointer" onclick="showPredictDetail(\'' + esc(p.id) + '\')">' +
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">' +
+          '<div style="flex:1">' +
+            '<div style="font-weight:600;color:#c9d1d9">' + esc(p.subject || p.type) + '</div>' +
+            '<div style="color:#8b949e;font-size:.78rem;margin-top:4px;line-height:1.5">' + esc(p.explanation || '').substring(0, 200) + (p.explanation && p.explanation.length > 200 ? '...' : '') + '</div>' +
+          '</div>' +
+          '<div style="text-align:right;min-width:90px">' +
+            '<div style="font-size:.78rem;color:#8b949e">' + typeLabel + '</div>' +
+            '<div style="font-size:1.1rem;font-weight:700;color:' + confColor + '">' + pct + '%</div>' +
+          '</div>' +
+        '</div>' +
+        '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
+          '<span class="badge" style="border-color:' + statusColor + '">' + esc(p.status) + '</span>' +
+          '<span class="badge" style="border-color:' + confColor + '">confidence=' + esc(p.confidence) + '</span>' +
+          '<span class="badge">observations=' + esc(p.observation_count || 0) + '</span>' +
+          (p.project ? '<span class="badge">' + esc(p.project) + '</span>' : '') +
+          '<div style="flex:1"></div>' +
+          '<div style="width:80px;height:6px;background:#21262d;border-radius:3px;overflow:hidden">' +
+            '<div style="height:100%;width:' + progressWidth + '%;background:' + confColor + ';border-radius:3px"></div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  }).catch(e => {
+    list.innerHTML = '<div class="agent-err">Failed to load predictions</div>';
+    apiError('/api/predict', e, 0);
+  });
+}
+
+function showPredictDetail(id) {
+  const detail = $('predictDetail');
+  if (!detail) return;
+  detail.style.display = 'block';
+  detail.innerHTML = '<div class="empty">Loading prediction details...</div>';
+  authFetch('/api/predict/' + encodeURIComponent(id)).then(r => r.json()).then(d => {
+    const p = d.prediction;
+    if (!p) { detail.innerHTML = '<div class="agent-err">Prediction not found</div>'; return; }
+    const evidence = d.evidence || [];
+    const feedback = d.feedback || [];
+    const typeLabel = PREDICT_TYPE_LABELS[p.type] || p.type;
+    const pct = Math.round((p.probability || 0) * 100);
+    const breakdown = p.score_breakdown || {};
+    detail.innerHTML = '<div class="card" style="padding:16px;margin-bottom:12px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">' +
+        '<div>' +
+          '<div style="font-size:.78rem;color:#8b949e">' + typeLabel + ' &middot; ' + esc(p.id) + '</div>' +
+          '<div style="font-size:1.1rem;font-weight:700;color:#c9d1d9;margin-top:4px">' + esc(p.subject || p.type) + '</div>' +
+        '</div>' +
+        '<div style="text-align:right">' +
+          '<div style="font-size:1.5rem;font-weight:700;color:#58a6ff">' + pct + '%</div>' +
+          '<div style="font-size:.78rem;color:#8b949e">' + esc(p.confidence) + ' confidence</div>' +
+        '</div>' +
+      '</div>' +
+      '<div style="color:#c9d1d9;line-height:1.6;margin-bottom:12px">' + esc(p.explanation || 'No explanation') + '</div>' +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">' +
+        '<span class="badge" style="border-color:' + (PREDICT_STATUS_COLORS[p.status] || '#8b949e') + '">' + esc(p.status) + '</span>' +
+        '<span class="badge">observations=' + esc(p.observation_count || 0) + '</span>' +
+        (p.project ? '<span class="badge">' + esc(p.project) + '</span>' : '') +
+        (p.session_id ? '<span class="badge">session=' + esc(p.session_id.substring(0, 12)) + '</span>' : '') +
+        '<span class="badge">rule=' + esc(p.rule_version || 'none') + '</span>' +
+      '</div>' +
+      (Object.keys(breakdown).length ? '<div style="margin-bottom:12px"><div style="font-size:.78rem;color:#8b949e;margin-bottom:6px">Score Breakdown</div><pre style="background:#161b22;padding:8px;border-radius:4px;font-size:.78rem;color:#c9d1d9;overflow-x:auto;white-space:pre-wrap">' + esc(JSON.stringify(breakdown, null, 2)) + '</pre></div>' : '') +
+      (evidence.length ? '<div style="margin-bottom:12px"><div style="font-size:.78rem;color:#8b949e;margin-bottom:6px">Evidence (' + evidence.length + ')</div>' + evidence.map(e =>
+        '<div style="padding:6px 8px;border-left:3px solid #30363d;margin-bottom:4px;font-size:.78rem">' +
+          '<div><span class="badge">' + esc(e.source_type) + '</span> ' + (e.source_id ? '<code>' + esc(e.source_id) + '</code>' : '') + (e.timestamp ? ' <span style="color:#8b949e">' + esc(fmtTime(e.timestamp)) + '</span>' : '') + '</div>' +
+          '<div style="color:#c9d1d9;margin-top:2px">' + esc(e.summary || '') + '</div>' +
+        '</div>'
+      ).join('') : '</div>') +
+      (feedback.length ? '<div style="margin-bottom:12px"><div style="font-size:.78rem;color:#8b949e;margin-bottom:6px">Feedback (' + feedback.length + ')</div>' + feedback.map(f =>
+        '<div style="padding:4px 0;font-size:.78rem"><span class="badge" style="border-color:' + (f.feedback === 'useful' ? '#3fb950' : f.feedback === 'not_useful' ? '#f85149' : '#f0883e') + '">' + esc(f.feedback) + '</span> ' + (f.created_at ? '<span style="color:#8b949e">' + esc(fmtTime(f.created_at)) + '</span>' : '') + (f.context ? ' <span style="color:#8b949e">' + esc(f.context) + '</span>' : '') + '</div>'
+      ).join('') : '</div>') +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+        '<button class="btn btn-sm" onclick="predictFeedback(\'' + esc(p.id) + '\',\'useful\')">Useful</button>' +
+        '<button class="btn btn-sm" onclick="predictFeedback(\'' + esc(p.id) + '\',\'not_useful\')">Not Useful</button>' +
+        '<button class="btn btn-sm" onclick="predictFeedback(\'' + esc(p.id) + '\',\'acted_on\')">Acted On</button>' +
+        '<button class="btn btn-sm" onclick="predictOutcome(\'' + esc(p.id) + '\',\'confirmed\')">Confirmed</button>' +
+        '<button class="btn btn-sm" onclick="predictOutcome(\'' + esc(p.id) + '\',\'did_not_occur\')">Did Not Occur</button>' +
+        '<button class="btn btn-sm btn-outline" onclick="predictDismiss(\'' + esc(p.id) + '\')">Dismiss</button>' +
+        '<button class="btn btn-sm btn-outline" onclick="predictBack()">Back to list</button>' +
+      '</div>' +
+    '</div>';
+  }).catch(e => {
+    detail.innerHTML = '<div class="agent-err">Failed to load prediction details</div>';
+  });
+}
+
+function predictFeedback(id, feedback) {
+  authFetch('/api/predict/' + encodeURIComponent(id) + '/feedback', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ feedback })
+  }).then(r => r.json()).then(d => {
+    if (d.ok !== false) { showPredictDetail(id); loadPredictStatus(); } else { alert('Error: ' + (d.error || 'unknown')); }
+  }).catch(e => alert('Failed'));
+}
+
+function predictOutcome(id, outcome) {
+  authFetch('/api/predict/' + encodeURIComponent(id) + '/outcome', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ outcome })
+  }).then(r => r.json()).then(d => {
+    if (d.ok !== false) { showPredictDetail(id); loadPredictStatus(); } else { alert('Error: ' + (d.error || 'unknown')); }
+  }).catch(e => alert('Failed'));
+}
+
+function predictDismiss(id) {
+  if (!confirm('Dismiss this prediction?')) return;
+  authFetch('/api/predict/' + encodeURIComponent(id) + '/dismiss', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }
+  }).then(r => r.json()).then(d => {
+    if (d.ok !== false) { predictBack(); loadPredict(); loadPredictStatus(); } else { alert('Error: ' + (d.error || 'unknown')); }
+  }).catch(e => alert('Failed'));
+}
+
+function predictBack() {
+  const detail = $('predictDetail');
+  const list = $('predictList');
+  if (detail) detail.style.display = 'none';
+  if (list) list.style.display = 'block';
+  loadPredict();
+}
+
+function runPredictAnalyze() {
+  const btn = document.querySelector('#page-predict .btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Analyzing...'; }
+  authFetch('/api/predict/analyze', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({})
+  }).then(r => r.json()).then(d => {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-magnifying-glass-chart"></i> Analyze'; }
+    loadPredictStatus();
+    loadPredict();
+  }).catch(e => {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-magnifying-glass-chart"></i> Analyze'; }
+    alert('Analysis failed');
   });
 }
 

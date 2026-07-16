@@ -397,9 +397,18 @@ const TOOL_SCHEMAS = {
     timeout: z.number().optional().describe("Timeout in milliseconds (default: 1800000)")
   }),
   sidekick_predict: z.object({
-    action: z.enum(["analyze", "list", "feedback", "suggest"]).describe("Predict action"),
-    id: z.string().optional().describe("Prediction ID (for feedback)"),
-    feedback: z.boolean().optional().describe("True if prediction was useful, false if not (for feedback)")
+    action: z.enum(["analyze", "list", "get", "feedback", "outcome", "dismiss", "explain", "status", "suggest", "migrate"]).describe("Predict action"),
+    id: z.string().optional().describe("Prediction ID"),
+    type: z.string().optional().describe("Filter by prediction type"),
+    project: z.string().optional().describe("Project scope"),
+    session_id: z.string().optional().describe("Session ID"),
+    task_id: z.string().optional().describe("Task ID"),
+    feedback: z.string().optional().describe("Feedback value (useful|not_useful|incorrect|already_known|acted_on|dismissed)"),
+    outcome: z.string().optional().describe("Outcome value (confirmed|did_not_occur|action_succeeded|action_failed|expired|superseded|unresolved)"),
+    limit: z.number().optional().describe("Max results (default 20, max 100)"),
+    status: z.string().optional().describe("Filter by status (active|expired|superseded|dismissed|confirmed|did_not_occur)"),
+    confidence: z.string().optional().describe("Filter by confidence (none|low|medium|high|very_high)"),
+    maxAge: z.string().optional().describe("Analysis window (default 7d)")
   }),
   sidekick_debug_tool: z.object({
     action: z.enum(["store", "recall", "cleanup", "start", "stop", "cache", "get", "status", "clear"]).describe("Debug action"),
