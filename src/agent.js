@@ -10,6 +10,8 @@ const { recallMemoryForTextAsync, formatMemoryRecall, recordAgentTaskMemory, bui
 const { parseAgentDecision, trackDecisionRepetition, selectBestModelName, buildChatMessages, requiresToolUse } = require("./agent-protocol");
 const platformKernel = require("./platform/kernel");
 const { redactSensitive } = require("./redact");
+let inferenceService = null;
+try { inferenceService = require("./compute/inference-service"); } catch {}
 
 const PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 
@@ -378,6 +380,30 @@ function buildSystemPrompt() {
 }
 
 async function callLLM(messages, options = {}) {
+  if (inferenceService) {
+    try {
+      const chatMessages = messages.map(m => ({ role: m.role, content: m.content }));
+      const result = await inferenceService.chat({
+        messages: chatMessages,
+        temperature: typeof options.temperature === "number" ? options.temperature : 0.3,
+        format: options.format,
+        preferences: { allowFallback: true },
+      }, { systemPrompt: options.systemPrompt || buildSystemPrompt() });
+      return { response: result.content || "", model: result.modelId || "unknown", provider: result.providerId || "unknown" };
+    } catch (e) {
+      if (GROQ_API_KEY) {
+        try {
+          const result = await callGroqLLM(messages, options);
+          result.provider = "groq";
+          result.fallback = true;
+          return result;
+        } catch (groqErr) {
+          throw new Error("Compute failed: " + e.message + " | Groq fallback failed: " + groqErr.message);
+        }
+      }
+      throw e;
+    }
+  }
   try {
     const result = await callOllamaLLM(messages, options);
     result.provider = "ollama";

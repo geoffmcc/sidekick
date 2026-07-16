@@ -6,6 +6,9 @@ try {
   qdrantClient = require("./qdrant");
 } catch {}
 
+let inferenceService = null;
+try { inferenceService = require("./compute/inference-service"); } catch {}
+
 const OLLAMA_URL = process.env.SIDEKICK_OLLAMA_URL || "http://127.0.0.1:11434";
 const EMBEDDING_MODEL = process.env.SIDEKICK_EMBEDDING_MODEL || "nomic-embed-text";
 const EMBEDDINGS_ENABLED = process.env.SIDEKICK_EMBEDDINGS !== "0";
@@ -263,6 +266,18 @@ function buildMemoryTags(source, extra = []) {
 
 async function generateEmbedding(text) {
   if (!EMBEDDINGS_ENABLED || !text) return null;
+  if (inferenceService) {
+    try {
+      const result = await inferenceService.embed({
+        input: text,
+        model: EMBEDDING_MODEL,
+        preferences: { allowFallback: true },
+      });
+      return result.embedding || null;
+    } catch {
+      return null;
+    }
+  }
   try {
     const response = await fetch(`${OLLAMA_URL}/api/embeddings`, {
       method: "POST",

@@ -16,6 +16,9 @@ const dynamicTools = require("./dynamic-tools");
 const blackbox = require("./blackbox");
 const platformKernel = require("./platform/kernel");
 const { stripSidekickPrefix } = require("./core/tool-name");
+const computeTools = require("./compute/tools");
+let inferenceService = null;
+try { inferenceService = require("./compute/inference-service"); } catch {}
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
@@ -120,6 +123,12 @@ const TOOL_RISK = {
   nginx: "high",
   tools: "low",
   knowledge: "low",
+  compute: "medium",
+  compute_nodes: "medium",
+  compute_providers: "medium",
+  compute_models: "low",
+  compute_jobs: "medium",
+  compute_route: "medium",
   delete: "low",
   resume: "low",
   metrics: "low",
@@ -227,6 +236,12 @@ const TOOL_CATEGORIES = {
   'download': 'Media',
   'knowledge': 'Context & Learning',
   'metrics': 'Monitoring',
+  'compute': 'Compute',
+  'compute_nodes': 'Compute',
+  'compute_providers': 'Compute',
+  'compute_models': 'Compute',
+  'compute_jobs': 'Compute',
+  'compute_route': 'Compute',
 };
 
 function getToolRisk(name) {
@@ -1691,9 +1706,21 @@ async function sidekick_web_fetch({ url: targetUrl, method, headers, body }) {
 }
 
 async function sidekick_llm({ prompt, system, temperature, provider }) {
+  if (inferenceService) {
+    try {
+      const result = await inferenceService.chat({
+        messages: [{ role: "user", content: prompt }],
+        temperature: temperature || 0.7,
+        preferences: { allowFallback: true },
+        ...(provider ? { preferences: { providerId: provider, allowFallback: true } } : {}),
+      }, { systemPrompt: system });
+      return { content: [{ type: "text", text: result.content || JSON.stringify(result) }] };
+    } catch (e) {
+      return { content: [{ type: "text", text: "LLM error: " + e.message }], isError: true };
+    }
+  }
   const defaultProvider = process.env.SIDEKICK_DEFAULT_LLM || "ollama";
   const useGroq = (provider || defaultProvider) === "groq";
-  
   if (useGroq && GROQ_API_KEY) {
     return callGroqLLM(prompt, system, temperature);
   }
@@ -11016,14 +11043,24 @@ async function sidekick_insight_report({ paths, title }) {
 async function sidekick_embed({ text, model }) {
   try {
     const m = model || "nomic-embed-text";
+    if (inferenceService) {
+      try {
+        const result = await inferenceService.embed({
+          input: text,
+          model: m,
+          preferences: { allowFallback: true },
+        });
+        return { content: [{ type: "text", text: JSON.stringify({ embedding: result.embedding, dimensions: result.dimensions || result.embedding?.length, model: m }, null, 2) }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: "Embedding error: " + e.message }], isError: true };
+      }
+    }
     const ollamaUrl = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
-
     const response = await fetch(`${ollamaUrl}/api/embeddings`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: m, prompt: text }),
     });
-
     if (!response.ok) {
       const errText = await response.text();
       if (response.status === 404) {
@@ -11031,7 +11068,6 @@ async function sidekick_embed({ text, model }) {
       }
       return { content: [{ type: "text", text: `Error: Ollama request failed (${response.status}): ${errText}` }], isError: true };
     }
-
     const data = await response.json();
     return { content: [{ type: "text", text: JSON.stringify({ embedding: data.embedding, dimensions: data.embedding?.length, model: m }, null, 2) }] };
   } catch (e) {
@@ -11745,6 +11781,12 @@ const TOOLS = {
   nginx: sidekick_nginx,
   knowledge: sidekick_knowledge,
   metrics: sidekick_metrics,
+  compute: computeTools.sidekick_compute,
+  compute_nodes: computeTools.sidekick_compute_nodes,
+  compute_providers: computeTools.sidekick_compute_providers,
+  compute_models: computeTools.sidekick_compute_models,
+  compute_jobs: computeTools.sidekick_compute_jobs,
+  compute_route: computeTools.sidekick_compute_route,
 };
 
 const TOOL_DEFS = [
@@ -11849,6 +11891,12 @@ const TOOL_DEFS = [
   { name: "nginx", description: "Manage Nginx reverse proxy: status, list_sites, add_site, remove_site, test_config, reload", args: { action: "string (status|list_sites|add_site|remove_site|test_config|reload)", site_name: "string (site config name)", domain: "string (domain name for add_site)", upstream_port: "number (local port to proxy to)", ssl_email: "string (optional, email for Let's Encrypt)" } },
   { name: "knowledge", description: "Knowledge base management: search, get, list, add, update, soft-delete, and purge disabled entries", args: { action: "string (search|get|list|add|update|delete|purge)", id: "number (optional, entry ID for get/update/delete/purge)", category: "string (optional, category for list/add/update)", title: "string (optional, title for add/update)", content: "string (optional, content for add/update)", tags: "string (optional, comma-separated tags for add/update)", query: "string (optional, search query for search)", limit: "number (optional, max results for search/list)" } },
   { name: "metrics", description: "Metrics collection and querying with InfluxDB: write metrics, query data, list measurements and fields", args: { action: "string (write|query|list_measurements|list_fields)", measurement: "string (measurement name for write/list_fields)", fields: "object (field values for write)", tags: "object (optional, tags for write)", timestamp: "number (optional, nanosecond timestamp for write)", query: "string (Flux query for query action)", time_range: "string (optional, time range for list_fields, e.g. -30d)" } },
+  { name: "compute", description: "Sidekick Compute: provider-neutral inference and compute system. List providers, check health, get system overview.", args: { action: "string (overview|init)" } },
+  { name: "compute_nodes", description: "Manage compute worker nodes: list, get, heartbeat, revoke, maintenance mode, stats", args: { action: "string (list|get|heartbeat|revoke|maintenance|stats)", node_id: "string (worker node ID for get/heartbeat/revoke/maintenance)", reason: "string (optional, revoke reason)", enable: "boolean (optional, enable/disable maintenance)", status: "string (optional, filter by status for list)", hardware_type: "string (optional, filter by hardware_type for list)", provider: "string (optional, filter by provider for list)" } },
+  { name: "compute_providers", description: "Manage compute providers (Ollama, OpenAI, vLLM, etc.): list, get, create, update, delete, health check", args: { action: "string (list|get|create|update|delete|health|health_all)", provider_id: "string (provider ID for get/update/delete/health)", name: "string (provider name for create/update)", type: "string (provider type for create: ollama|openai|vllm|llamacpp|mlx|mock)", base_url: "string (base URL for create/update)", api_key: "string (optional, API key for create/update)", priority: "number (optional, priority for create/update, lower=higher priority)", enabled: "boolean (optional, enable/disable for update)" } },
+  { name: "compute_models", description: "Manage compute models: list, get, create, update, delete, discover from providers", args: { action: "string (list|get|create|update|delete|discover)", model_id: "string (model ID for get/update/delete)", provider_id: "string (filter models by provider for list)", model_name: "string (model name for create/update)", provider_model_name: "string (model name on provider for create/update)", family: "string (optional, model family)", parameter_count: "string (optional, e.g. 7b, 13b, 70b)", context_length: "number (optional, context window size)", supports_vision: "boolean (optional)", supports_tools: "boolean (optional)", supports_embedding: "boolean (optional)", min_vram_gb: "number (optional, minimum VRAM required)" } },
+  { name: "compute_jobs", description: "Manage compute jobs: list, get, create, cancel, view stats and artifacts", args: { action: "string (list|get|create|cancel|stats|artifacts)", job_id: "string (job ID for get/cancel/artifacts)", job_type: "string (job type for create: inference|embedding|transcription|custom)", model: "string (model name for create)", prompt: "string (prompt for create)", provider: "string (optional, preferred provider for create)", max_retries: "number (optional, max retry attempts for create)", timeout_ms: "number (optional, timeout in milliseconds for create)", status: "string (optional, filter by status for list)" } },
+  { name: "compute_route", description: "Explain routing decisions and manage routing rules: explain why a model/provider would be chosen, list/create/delete rules", args: { action: "string (explain|list_rules|create_rule|delete_rule)", workload_class: "string (inference|embedding|transcription|custom for explain)", capabilities_required: "string (comma-separated capabilities for explain)", data_classification: "string (public|internal|confidential|restricted for explain)", trust_level: "string (untrusted|community|known|trusted|internal for explain)", rule_id: "string (routing rule ID for delete_rule)", rule_name: "string (rule name for create_rule)", priority: "number (rule priority for create_rule, lower=higher)", description: "string (optional, rule description for create_rule)", preferred_providers: "array (preferred provider IDs for create_rule)", preferred_models: "array (preferred model IDs for create_rule)", fallback_providers: "array (optional, fallback provider IDs for create_rule)", max_latency_ms: "number (optional, max latency requirement for create_rule)" } },
 ];
 
 async function callTool(name, args, options = {}) {
