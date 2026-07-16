@@ -1,10 +1,14 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const { getBuiltinRegistry } = require('../src/tools/index');
 
 const root = path.join(__dirname, '..');
-const toolsJs = fs.readFileSync(path.join(root, 'src', 'tools.js'), 'utf8');
-const indexJs = fs.readFileSync(path.join(root, 'src', 'index.js'), 'utf8');
+const toolsJs = fs.readFileSync(path.join(root, 'src', 'tools-legacy.js'), 'utf8');
+const schemasJs = fs.readFileSync(path.join(root, 'src', 'tools', 'schemas', 'index.js'), 'utf8');
+const registry = getBuiltinRegistry();
+const ops = registry.get('ops');
+const mission = registry.get('mission');
 
 console.log('Running operations workflow tests...\n');
 
@@ -15,8 +19,8 @@ assert.match(
 );
 
 assert.match(
-  toolsJs,
-  /ops:\s*"critical"/,
+  ops && ops.risk,
+  /^critical$/,
   'ops should be critical risk because it can deploy and restart services'
 );
 
@@ -27,20 +31,20 @@ assert.match(
 );
 
 assert.match(
-  toolsJs,
-  /mission:\s*"critical"/,
+  mission && mission.risk,
+  /^critical$/,
   'mission should be critical risk because it can execute operational workflows'
 );
 
 assert.match(
-  toolsJs,
-  /'ops':\s*'Workflow'/,
+  ops && ops.category,
+  /^Workflow$/,
   'ops should be categorized as a workflow tool'
 );
 
 assert.match(
-  toolsJs,
-  /'mission':\s*'Workflow'/,
+  mission && mission.category,
+  /^Workflow$/,
   'mission should be categorized as a workflow tool'
 );
 
@@ -87,13 +91,13 @@ assert.match(
 );
 
 assert.match(
-  indexJs,
+  schemasJs,
   /ops:\s*z\.object\(\{[\s\S]*verify_deployed_commit[\s\S]*restart_and_smoke_test[\s\S]*deploy_current_main[\s\S]*incident_snapshot/,
   'MCP schema should expose ops actions'
 );
 
 assert.match(
-  indexJs,
+  schemasJs,
   /mission:\s*z\.object\(\{[\s\S]*profiles[\s\S]*route[\s\S]*preflight[\s\S]*execute/,
   'MCP schema should expose mission actions'
 );

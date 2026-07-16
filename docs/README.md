@@ -48,7 +48,8 @@ sqlite3 data/sidekick.db "SELECT COUNT(*) FROM knowledge WHERE version_added = '
 | `installation.md` | Fresh install, deployment scripts, manual systemd setup, and opencode config. |
 | `configuration.md` | Environment variables, ports, LLM settings, data directory, and auth settings. |
 | `compute.md` | Sidekick Compute architecture, worker protocol, artifacts, cancellation, tests, and non-goals. |
-| `tools-reference.md` | Complete tool inventory generated from `src/tools.js`. |
+| `tools-reference.md` | Complete tool inventory generated from the built-in tool registry. |
+| `tool-architecture.md` | Built-in tool descriptor, registry, dispatcher, policy, and compatibility architecture. |
 | `tool-usage-guide.md` | Practical usage patterns and examples for important tool groups. |
 | `dashboard.md` | Dashboard UI, API routes, webhooks, data editing, reset endpoints, and agent proxy. |
 | `agent-bridge.md` | Autonomous task runner behavior, task history, streaming, delays, and watches. |
