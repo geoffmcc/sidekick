@@ -1232,6 +1232,90 @@ app.get("/api/compute/jobs/:jobId", (req, res) => {
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+function computeInstallInfo(req, enrollmentToken) {
+  const serverUrl = new URL(`${req.protocol}://${req.get("host")}`);
+  serverUrl.port = String(MCP_PORT);
+  const baseUrl = serverUrl.origin;
+  const pkg = (() => {
+    try { return require(path.join(__dirname, "..", "package.json")); } catch { return {}; }
+  })();
+  const tokenArg = enrollmentToken ? ` --token ${enrollmentToken}` : " --token <enrollment-token>";
+  return {
+    workerVersion: pkg.version || "dev",
+    protocolVersion: "1",
+    baseUrl,
+    commands: {
+      linux: `sidekick-compute-worker enroll --server ${baseUrl}${tokenArg} --service systemd`,
+      macos: `sidekick-compute-worker enroll --server ${baseUrl}${tokenArg} --service launchd`,
+      windows: `sidekick-compute-worker.exe enroll --server ${baseUrl}${tokenArg} --service windows-service`,
+      source: `node src/compute/worker-agent.js enroll --server ${baseUrl}${tokenArg}`,
+    },
+    notes: [
+      "Use a platform release artifact when available; the source command is for development checkouts.",
+      "Enrollment tokens are single-use and should be pasted only on the worker machine being added.",
+    ],
+  };
+}
+
+app.get("/api/compute/install", (req, res) => {
+  try { res.json({ ok: true, install: computeInstallInfo(req) }); }
+  catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post("/api/compute/enrollment-tokens", (req, res) => {
+  try {
+    compute.initialize();
+    const body = req.body || {};
+    const token = compute.workerManager.createEnrollmentToken({
+      displayName: body.displayName || body.display_name,
+      trustLevel: body.trustLevel || body.trust_level || "trusted",
+      allowedDataClassifications: body.allowedDataClassifications || body.allowed_data_classifications || ["public", "internal", "private"],
+      maxConcurrentJobs: Math.min(16, Math.max(1, Number(body.maxConcurrentJobs || body.max_concurrent_jobs || 2))),
+      expiresInMs: Math.min(7 * 24 * 60 * 60 * 1000, Math.max(60 * 1000, Number(body.expiresInMs || body.expires_in_ms || 3600000))),
+      createdBy: "dashboard",
+    });
+    auditLog(req, "compute.enrollment_token.created", { tokenId: token.tokenId, displayName: body.displayName || body.display_name || null });
+    res.json({ ok: true, ...token, install: computeInstallInfo(req, token.token) });
+  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+});
+
+app.post("/api/compute/workers/:workerId/:action", (req, res) => {
+  try {
+    compute.initialize();
+    const action = req.params.action;
+    let worker;
+    if (action === "disable") worker = compute.workerManager.updateWorker(req.params.workerId, { state: "maintenance", maintenanceMode: true });
+    else if (action === "enable") worker = compute.workerManager.updateWorker(req.params.workerId, { state: "offline", maintenanceMode: false });
+    else if (action === "revoke") worker = compute.workerManager.revokeWorker(req.params.workerId, req.body?.reason || "dashboard_revoked");
+    else return res.status(404).json({ ok: false, error: "unknown worker action" });
+    if (!worker) return res.status(404).json({ ok: false, error: "worker not found" });
+    auditLog(req, `compute.worker.${action}`, { workerId: req.params.workerId, reason: req.body?.reason || null });
+    res.json({ ok: true, worker });
+  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+});
+
+app.post("/api/compute/jobs/:jobId/:action", (req, res) => {
+  try {
+    compute.initialize();
+    const action = req.params.action;
+    let job;
+    if (action === "cancel") job = compute.jobManager.cancelJob(req.params.jobId, { actor: "dashboard", reason: req.body?.reason || "dashboard_cancelled" });
+    else if (action === "retry") job = compute.jobManager.retryJob(req.params.jobId, { actor: "dashboard", reason: req.body?.reason || "dashboard_retry" });
+    else return res.status(404).json({ ok: false, error: "unknown job action" });
+    auditLog(req, `compute.job.${action}`, { jobId: req.params.jobId, reason: req.body?.reason || null });
+    res.json({ ok: true, job });
+  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+});
+
+app.post("/api/compute/recover", (req, res) => {
+  try {
+    compute.initialize();
+    const recovered = compute.jobManager.recoverExpiredLeases();
+    auditLog(req, "compute.jobs.recover", { recovered });
+    res.json({ ok: true, recovered });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 app.get("/api/blackbox/profiles", (req, res) => {
   res.json({ profiles: blackbox.PROFILE_INFO });
 });

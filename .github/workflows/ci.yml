@@ -34,3 +34,6 @@ jobs:
 
     - name: Run tests
       run: npm run test:ci
+
+    - name: Verify worker package
+      run: npm pack --dry-run

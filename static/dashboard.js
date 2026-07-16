@@ -266,6 +266,7 @@ function showPage(name){
   if (name === 'approvals') loadApprovals();
   if (name === 'tools') loadTools();
   if (name === 'evolve') loadEvolve();
+  if (name === 'compute') loadCompute();
   if (name === 'predict') { loadPredictStatus(); loadPredict(); }
   if (name === 'metrics') loadGrafanaDashboard();
 }
@@ -1880,6 +1881,185 @@ function loadEvolve(){
     list.innerHTML = '<div class="agent-err">Failed to load Evolve data</div>';
     apiError('/api/evolve', e, 0);
   });
+}
+
+// -- Compute -- //
+function loadCompute(){
+  loadComputeOverview();
+  loadComputeWorkers();
+  loadComputeJobs();
+}
+
+function loadComputeOverview(){
+  const el = $('computeSummary');
+  if (!el) return;
+  authFetch('/api/compute').then(r=>r.json()).then(d=>{
+    const o = d.overview || {};
+    const workers = o.workers || {};
+    const jobs = o.jobs || {};
+    const providers = o.providers || {};
+    el.innerHTML = [
+      metric('Workers online', workers.online || 0, (workers.total || 0) + ' total'),
+      metric('Jobs total', jobs.total || 0, 'queued ' + (jobs.byStatus?.queued || 0) + ', running ' + (jobs.byStatus?.running || 0)),
+      metric('Completed', jobs.byStatus?.completed || 0, 'failed ' + (jobs.byStatus?.failed || 0)),
+      metric('Providers healthy', providers.healthy || 0, (providers.total || 0) + ' configured'),
+      metric('Executors', o.executors || 0, (o.routing?.rulesCount || 0) + ' routing rules')
+    ].join('');
+  }).catch(e=>{
+    el.innerHTML = '<div class="quick-action-error">Compute overview unavailable: ' + esc(e.message || String(e)) + '</div>';
+  });
+}
+
+function loadComputeWorkers(){
+  const el = $('computeWorkers');
+  if (!el) return;
+  el.innerHTML = '<div class="empty">Loading workers...</div>';
+  authFetch('/api/compute/workers').then(r=>r.json()).then(d=>{
+    const workers = d.workers || [];
+    $('computeWorkerCount').textContent = workers.length;
+    if (!workers.length) {
+      el.innerHTML = '<div class="empty">No workers enrolled yet. Create an enrollment token to add one.</div>';
+      return;
+    }
+    el.innerHTML = workers.map(renderComputeWorker).join('');
+  }).catch(e=>{
+    el.innerHTML = '<div class="agent-err">Failed to load workers</div>';
+    apiError('/api/compute/workers', e, 0);
+  });
+}
+
+function renderComputeWorker(w){
+  const accelerators = (w.accelerators || []).map(a => a.name || a.type || a.vendor || JSON.stringify(a)).filter(Boolean);
+  const models = Array.isArray(w.modelInventory) ? w.modelInventory.length : 0;
+  const statusClass = w.state === 'online' ? 'ok' : (w.state === 'revoked' ? 'danger' : 'warn');
+  const lastHeartbeat = w.lastHeartbeat ? fmtDate(w.lastHeartbeat) : 'never';
+  const utilization = w.utilization && Object.keys(w.utilization).length ? renderStructuredValue(w.utilization, { limit: 180 }) : '<div class="empty">No utilization yet</div>';
+  return '<div class="compute-row">' +
+    '<div class="compute-row-main">' +
+      '<div><strong>' + esc(w.displayName || w.nodeId || w.workerId) + '</strong> <span class="badge ' + statusClass + '">' + esc(w.state || 'unknown') + '</span></div>' +
+      '<small>' + esc(w.platform || 'unknown') + (w.architecture ? ' / ' + esc(w.architecture) : '') + ' / last heartbeat ' + esc(lastHeartbeat) + '</small>' +
+      '<div class="compute-badges">' +
+        '<span>jobs ' + esc(w.currentJobs || 0) + '/' + esc(w.maxConcurrentJobs || 1) + '</span>' +
+        '<span>trust ' + esc(w.trustLevel || 'unknown') + '</span>' +
+        '<span>models ' + esc(models) + '</span>' +
+        (accelerators.length ? '<span>' + esc(accelerators.join(', ')) + '</span>' : '<span>cpu</span>') +
+      '</div>' +
+      '<details class="detail-block"><summary>Utilization and health</summary>' + utilization + renderStructuredValue(w.health || {}, { limit: 260 }) + '</details>' +
+    '</div>' +
+    '<div class="compute-row-actions">' +
+      (w.state === 'maintenance' ? '<button class="btn btn-sm" onclick="computeWorkerAction(' + jsArg(w.workerId) + ',\'enable\')">Enable</button>' : '<button class="btn btn-sm btn-outline" onclick="computeWorkerAction(' + jsArg(w.workerId) + ',\'disable\')">Maintenance</button>') +
+      (w.state !== 'revoked' ? '<button class="btn btn-sm btn-danger" onclick="computeWorkerAction(' + jsArg(w.workerId) + ',\'revoke\')">Revoke</button>' : '') +
+    '</div>' +
+  '</div>';
+}
+
+function loadComputeJobs(){
+  const el = $('computeJobs');
+  if (!el) return;
+  const status = $('computeJobStatus') ? $('computeJobStatus').value : '';
+  let url = '/api/compute/jobs?limit=50';
+  if (status) url += '&status=' + encodeURIComponent(status);
+  el.innerHTML = '<div class="empty">Loading jobs...</div>';
+  authFetch(url).then(r=>r.json()).then(d=>{
+    const jobs = d.jobs || [];
+    $('computeJobCount').textContent = jobs.length;
+    if (!jobs.length) {
+      el.innerHTML = '<div class="empty">No jobs match this filter.</div>';
+      return;
+    }
+    el.innerHTML = jobs.map(renderComputeJob).join('');
+  }).catch(e=>{
+    el.innerHTML = '<div class="agent-err">Failed to load jobs</div>';
+    apiError('/api/compute/jobs', e, 0);
+  });
+}
+
+function renderComputeJob(j){
+  const statusClass = j.status === 'completed' ? 'ok' : (j.status === 'failed' || j.status === 'cancelled' ? 'danger' : 'warn');
+  const created = j.createdAt ? fmtDate(j.createdAt) : '';
+  const prompt = j.requestPayload?.prompt || j.requestPayload?.input || j.progressMessage || j.errorMessage || '';
+  const canCancel = !['completed','failed','cancelled'].includes(j.status);
+  const canRetry = ['failed','cancelled'].includes(j.status);
+  return '<div class="compute-row compact-row">' +
+    '<button class="compute-job-button" onclick="showComputeJob(' + jsArg(j.jobId) + ')">' +
+      '<strong>' + esc(j.jobType || j.capability || 'job') + '</strong>' +
+      '<small>' + esc(j.jobId) + ' / ' + esc(created) + '</small>' +
+      (prompt ? '<span>' + esc(String(prompt).slice(0, 140)) + '</span>' : '') +
+    '</button>' +
+    '<div class="compute-job-state">' +
+      '<span class="badge ' + statusClass + '">' + esc(j.status || 'unknown') + '</span>' +
+      '<span>' + esc(j.progressPercent || 0) + '%</span>' +
+      (canCancel ? '<button class="btn btn-sm btn-outline" onclick="computeJobAction(' + jsArg(j.jobId) + ',\'cancel\')">Cancel</button>' : '') +
+      (canRetry ? '<button class="btn btn-sm" onclick="computeJobAction(' + jsArg(j.jobId) + ',\'retry\')">Retry</button>' : '') +
+    '</div>' +
+  '</div>';
+}
+
+function showComputeJob(id){
+  const el = $('computeJobDetail');
+  if (!el) return;
+  el.innerHTML = '<div class="empty">Loading job details...</div>';
+  authFetch('/api/compute/jobs/' + encodeURIComponent(id)).then(r=>r.json()).then(d=>{
+    if (!d.job) { el.innerHTML = '<div class="agent-err">Job not found</div>'; return; }
+    el.innerHTML = '<div class="card compute-detail-card">' +
+      '<div class="compute-panel-head"><div><div class="section-title">Job Detail</div><div class="sub">' + esc(d.job.jobId) + '</div></div><button class="btn btn-sm btn-outline" onclick="$(\'computeJobDetail\').innerHTML=\'\'">Close</button></div>' +
+      renderStructuredValue(d.job, { limit: 1600, expanded: true }) +
+      '<div class="section-title">Attempts</div>' + (d.attempts && d.attempts.length ? d.attempts.map(a => renderStructuredValue(a, { limit: 700 })).join('') : '<div class="empty">No attempts</div>') +
+      '<div class="section-title">Artifacts</div>' + (d.artifacts && d.artifacts.length ? d.artifacts.map(a => renderStructuredValue(a, { limit: 700 })).join('') : '<div class="empty">No artifacts</div>') +
+    '</div>';
+  }).catch(e=>{
+    el.innerHTML = '<div class="agent-err">Failed to load job detail</div>';
+  });
+}
+
+function createComputeEnrollment(){
+  const result = $('computeEnrollmentResult');
+  const body = {
+    displayName: $('computeEnrollName').value || 'sidekick-worker',
+    trustLevel: $('computeEnrollTrust').value || 'trusted',
+    maxConcurrentJobs: Number($('computeEnrollJobs').value || 2),
+    expiresInMs: Number($('computeEnrollTtl').value || 3600000)
+  };
+  result.innerHTML = '<div class="empty">Creating token...</div>';
+  authFetch('/api/compute/enrollment-tokens', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r=>r.json()).then(d=>{
+    if (d.ok === false) throw new Error(d.error || 'token creation failed');
+    const commands = d.install?.commands || {};
+    result.innerHTML = '<div class="compute-token-warning">Token value is shown once. Store it only on the worker machine.</div>' +
+      '<div class="compute-token-value">' + esc(d.token) + '</div>' +
+      '<div class="compute-command-list">' + Object.entries(commands).map(([name, command]) =>
+        '<div><strong>' + esc(name) + '</strong><pre>' + esc(command) + '</pre></div>'
+      ).join('') + '</div>' +
+      '<div class="sub">Expires ' + esc(fmtDate(d.expiresAt)) + '. Worker protocol ' + esc(d.install?.protocolVersion || '1') + '.</div>';
+  }).catch(e=>{
+    result.innerHTML = '<div class="quick-action-error">Enrollment failed: ' + esc(e.message || String(e)) + '</div>';
+  });
+}
+
+function computeWorkerAction(workerId, action){
+  if ((action === 'revoke') && !confirm('Revoke this worker credential? This cannot be undone from the worker.')) return;
+  authFetch('/api/compute/workers/' + encodeURIComponent(workerId) + '/' + action, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: 'dashboard_' + action }) }).then(r=>r.json()).then(d=>{
+    if (d.ok === false) throw new Error(d.error || action + ' failed');
+    showToast('Worker ' + action + ' complete', 'success');
+    loadCompute();
+  }).catch(e=>alert('Worker action failed: ' + (e.message || String(e))));
+}
+
+function computeJobAction(jobId, action){
+  if ((action === 'cancel') && !confirm('Cancel this compute job?')) return;
+  authFetch('/api/compute/jobs/' + encodeURIComponent(jobId) + '/' + action, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: 'dashboard_' + action }) }).then(r=>r.json()).then(d=>{
+    if (d.ok === false) throw new Error(d.error || action + ' failed');
+    showToast('Job ' + action + ' complete', 'success');
+    loadCompute();
+    showComputeJob(jobId);
+  }).catch(e=>alert('Job action failed: ' + (e.message || String(e))));
+}
+
+function recoverComputeJobs(){
+  authFetch('/api/compute/recover', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then(r=>r.json()).then(d=>{
+    if (d.ok === false) throw new Error(d.error || 'recovery failed');
+    showToast('Recovered ' + (d.recovered || 0) + ' expired leases', 'success');
+    loadCompute();
+  }).catch(e=>alert('Recovery failed: ' + (e.message || String(e))));
 }
 
 // -- Predict -- //

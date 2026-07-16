@@ -258,6 +258,55 @@ setTimeout(async () => {
       console.log('Passed\n');
     }
 
+    // Test 3.0gb: dashboard compute API supports enrollment and admin controls
+    console.log('Test 3.0gb: dashboard compute API supports enrollment and admin controls');
+    {
+      const suffix = Date.now().toString(36);
+      const tokenResponse = await makeRequest('POST', '/api/compute/enrollment-tokens', { displayName: 'dashboard-worker-' + suffix, expiresInMs: 600000, maxConcurrentJobs: 1 });
+      assert.strictEqual(tokenResponse.status, 200, 'Enrollment token endpoint should return 200');
+      assert.ok(tokenResponse.data.token, 'Enrollment token should be returned once');
+      assert.ok(tokenResponse.data.install.commands.linux.includes(tokenResponse.data.token), 'Install command should include token');
+      assert.ok(tokenResponse.data.install.commands.linux.includes('127.0.0.1:4097'), 'Install command should point at MCP port');
+      assert.ok(tokenResponse.data.install.commands.windows.includes('/api') === false, 'Install command should point at server root');
+
+      const enrolled = compute.workerManager.enrollWorker({
+        nodeId: 'dashboard-node-' + suffix,
+        displayName: 'dashboard-worker-' + suffix,
+        platform: 'linux',
+        architecture: 'x64',
+        executors: [{ type: 'mock.inference', capabilities: ['chat'] }],
+        enrollmentToken: tokenResponse.data.token,
+        protocolVersion: '1'
+      });
+      const workerId = enrolled.worker.workerId;
+
+      const disabled = await makeRequest('POST', `/api/compute/workers/${workerId}/disable`, { reason: 'dashboard-test' });
+      assert.strictEqual(disabled.status, 200, 'Worker disable should return 200');
+      assert.strictEqual(disabled.data.worker.state, 'maintenance', 'Worker should enter maintenance');
+
+      const enabled = await makeRequest('POST', `/api/compute/workers/${workerId}/enable`, { reason: 'dashboard-test' });
+      assert.strictEqual(enabled.status, 200, 'Worker enable should return 200');
+      assert.strictEqual(enabled.data.worker.maintenanceMode, false, 'Worker maintenance mode should clear');
+
+      const job = compute.jobManager.createJob({ jobType: 'chat', capability: 'chat', requestPayload: { prompt: 'dashboard cancel retry' } });
+      const cancelled = await makeRequest('POST', `/api/compute/jobs/${job.jobId}/cancel`, { reason: 'dashboard-test' });
+      assert.strictEqual(cancelled.status, 200, 'Job cancel should return 200');
+      assert.strictEqual(cancelled.data.job.status, 'cancelled', 'Job should be cancelled');
+
+      const retried = await makeRequest('POST', `/api/compute/jobs/${job.jobId}/retry`, { reason: 'dashboard-test' });
+      assert.strictEqual(retried.status, 200, 'Job retry should return 200');
+      assert.strictEqual(retried.data.job.status, 'queued', 'Job should be queued after retry');
+
+      const recovered = await makeRequest('POST', '/api/compute/recover', {});
+      assert.strictEqual(recovered.status, 200, 'Recover endpoint should return 200');
+      assert.ok(Number.isInteger(recovered.data.recovered), 'Recover should return recovered lease count');
+
+      const revoked = await makeRequest('POST', `/api/compute/workers/${workerId}/revoke`, { reason: 'dashboard-test' });
+      assert.strictEqual(revoked.status, 200, 'Worker revoke should return 200');
+      assert.strictEqual(revoked.data.worker.state, 'revoked', 'Worker should be revoked');
+      console.log('Passed\n');
+    }
+
     // Test 3.0h: metrics status reports safe setup state
     console.log('Test 3.0h: metrics status reports safe setup state');
     {

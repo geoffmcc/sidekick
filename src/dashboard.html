@@ -30,6 +30,7 @@
   <a onclick="showPage('approvals')" id="nav-approvals">Approvals</a>
   <a onclick="showPage('tools')" id="nav-tools">Tools</a>
   <a onclick="showPage('evolve')" id="nav-evolve">Evolve</a>
+  <a onclick="showPage('compute')" id="nav-compute">Compute</a>
   <a onclick="showPage('predict')" id="nav-predict">Predict</a>
   <a onclick="showPage('metrics')" id="nav-metrics">Metrics</a>
 </nav>
@@ -550,6 +551,71 @@
   </div>
   <div id="evolveExecutionWatch"></div>
   <div id="evolveList"></div>
+</div>
+
+<!-- Compute Page -->
+<div class="page" id="page-compute">
+  <div class="compute-hero">
+    <div>
+      <div class="mission-kicker">Sidekick Compute</div>
+      <h2>Worker Fleet</h2>
+      <p>Enroll local GPUs and CPUs as trusted workers, watch jobs move through the queue, and control stuck or retired nodes from one place.</p>
+    </div>
+    <div class="compute-actions">
+      <button class="btn" onclick="createComputeEnrollment()"><i class="fas fa-key"></i> Create Enrollment</button>
+      <button class="btn btn-outline" onclick="loadCompute()"><i class="fas fa-sync"></i> Refresh</button>
+    </div>
+  </div>
+  <div class="metric-strip" id="computeSummary"></div>
+  <div class="compute-layout">
+    <div class="card compute-panel">
+      <div class="compute-panel-head">
+        <div>
+          <div class="section-title">Enroll A Worker</div>
+          <div class="sub">Tokens are shown once. Paste one into the worker installer or CLI on the machine you are adding.</div>
+        </div>
+      </div>
+      <div class="compute-form-grid">
+        <label>Display name<input id="computeEnrollName" type="text" placeholder="windows-rtx-5070"></label>
+        <label>Trust level<select id="computeEnrollTrust"><option value="trusted">Trusted</option><option value="known">Known</option><option value="community">Community</option></select></label>
+        <label>Max jobs<input id="computeEnrollJobs" type="number" min="1" max="16" value="2"></label>
+        <label>Expires in<select id="computeEnrollTtl"><option value="3600000">1 hour</option><option value="21600000">6 hours</option><option value="86400000">24 hours</option></select></label>
+      </div>
+      <div id="computeEnrollmentResult" class="compute-token-box"><div class="empty">Create a token to see installer commands.</div></div>
+    </div>
+    <div class="card compute-panel">
+      <div class="compute-panel-head">
+        <div>
+          <div class="section-title">Workers (<span id="computeWorkerCount">0</span>)</div>
+          <div class="sub">State, health, accelerators, and administrative controls.</div>
+        </div>
+      </div>
+      <div id="computeWorkers" class="compute-list"><div class="empty">Loading workers...</div></div>
+    </div>
+    <div class="card compute-panel compute-panel-wide">
+      <div class="compute-panel-head">
+        <div>
+          <div class="section-title">Jobs (<span id="computeJobCount">0</span>)</div>
+          <div class="sub">Recent queue, lease, progress, retry, cancellation, and artifact status.</div>
+        </div>
+        <div class="search-bar compact">
+          <select id="computeJobStatus" onchange="loadComputeJobs()">
+            <option value="">All statuses</option>
+            <option value="created">Created</option>
+            <option value="queued">Queued</option>
+            <option value="leased">Leased</option>
+            <option value="running">Running</option>
+            <option value="completed">Completed</option>
+            <option value="failed">Failed</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+          <button class="btn btn-sm btn-outline" onclick="recoverComputeJobs()">Recover Leases</button>
+        </div>
+      </div>
+      <div id="computeJobs" class="compute-list"><div class="empty">Loading jobs...</div></div>
+      <div id="computeJobDetail" class="compute-detail"></div>
+    </div>
+  </div>
 </div>
 
 <!-- Predict Page -->
