@@ -10,6 +10,10 @@ const { TOOLS, TOOL_DEFS, DATA_DIR, setSource, logToolCall, loadProcedures, enfo
 const dynamicTools = require("./dynamic-tools");
 const { stripSidekickPrefix } = require("./core/tool-name");
 const dbStore = require("./db");
+const packageJson = require("../package.json");
+
+const APP_VERSION = packageJson.version || "0.0.0";
+const NODE_REQUIREMENT = packageJson.engines?.node || "unspecified";
 
 const API_KEY = process.env.SIDEKICK_API_KEY;
 if (!API_KEY || API_KEY === "sk-sidekick-local-dev" || API_KEY === "sk-your-key-here") {
@@ -872,7 +876,7 @@ function buildProcedureSchema(parameters) {
 function createMcpServer() {
   const server = new McpServer({
     name: "sidekick-mcp-server",
-    version: "1.0.0"
+    version: APP_VERSION
   }, {
     capabilities: { tools: {} }
   });
@@ -1149,7 +1153,11 @@ app.get("/health", (req, res) => {
     uptimeHuman: uptimeStr,
     sessions: sessions.size,
     staleMappings: staleSessionMap.size,
-    version: "1.0.0",
+    version: APP_VERSION,
+    runtime: {
+      node: process.version,
+      requiredNode: NODE_REQUIREMENT
+    },
     timestamp: new Date().toISOString()
   };
 
