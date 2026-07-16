@@ -34,6 +34,7 @@ const suites = [
   { file: 'test/workflow-runner.test.js', critical: false, description: 'Durable workflow engine and isolated runner sessions' },
   { file: 'test/workspace-model.test.js', critical: false, description: 'Project workspaces and model registry' },
   { file: 'test/extension-docs.test.js', critical: false, description: 'Extension system and generated platform docs' },
+  { file: 'test/backup-release.test.js', critical: false, description: 'Backup/restore and release maturity' },
   { file: 'test/new-tools.test.js', critical: false, description: 'Extended tool behavior' },
   { file: 'test/blackbox.test.js', critical: false, description: 'Structured Black Box incident evidence behavior' },
   { file: 'test/insight-report.test.js', critical: false, description: 'Insight report tool behavior' },
