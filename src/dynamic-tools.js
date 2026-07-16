@@ -42,7 +42,9 @@ function getDynamicToolSchemas() {
 }
 
 function isDynamicTool(name) {
-  return Boolean(dbStore.getGeneratedCapabilityByName(name));
+  if (dbStore.getGeneratedCapabilityByName(name)) return true;
+  if (name.startsWith("sidekick_")) return Boolean(dbStore.getGeneratedCapabilityByName(name.slice(9)));
+  return Boolean(dbStore.getGeneratedCapabilityByName("sidekick_" + name));
 }
 
 function executionId() {
@@ -201,7 +203,9 @@ function finishPlatformExecution(executionId, generatedState, details = {}) {
 }
 
 async function callDynamicTool(name, args, deps) {
-  const cap = dbStore.getGeneratedCapabilityByName(name);
+  let cap = dbStore.getGeneratedCapabilityByName(name);
+  if (!cap && name.startsWith("sidekick_")) cap = dbStore.getGeneratedCapabilityByName(name.slice(9));
+  if (!cap && !name.startsWith("sidekick_")) cap = dbStore.getGeneratedCapabilityByName("sidekick_" + name);
   if (!cap || !["trial", "active"].includes(cap.state)) {
     return { content: [{ type: "text", text: `Generated tool is not active: ${name}` }], isError: true };
   }

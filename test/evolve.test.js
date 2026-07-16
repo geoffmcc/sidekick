@@ -148,12 +148,12 @@ function seedServiceDiagnosis({ session = 's1', task = 'task1', src = 'mcp', sta
     const validation = validateCandidate({
       state: 'candidate',
       parameters: { path: { type: 'string', required: true }, port: { type: 'number', required: false } },
-      steps: [{ tool: 'sidekick_read', args: { path: '{{path}}' } }, { tool: 'sidekick_hash', args: { path: '{{path}}' } }],
+      steps: [{ tool: 'read', args: { path: '{{path}}' } }, { tool: 'hash', args: { path: '{{path}}' } }],
     }, TOOL_DEFS);
     assert.ok(validation.passed, JSON.stringify(validation));
 
     console.log('Test: unsafe and missing-tool validation rejection');
-    const unsafe = validateCandidate({ parameters: { path: { type: 'string', required: true } }, steps: [{ tool: 'sidekick_bash', args: { command: 'rm -rf {{path}}' } }, { tool: 'missing_tool', args: {} }] }, TOOL_DEFS);
+    const unsafe = validateCandidate({ parameters: { path: { type: 'string', required: true } }, steps: [{ tool: 'bash', args: { command: 'rm -rf {{path}}' } }, { tool: 'missing_tool', args: {} }] }, TOOL_DEFS);
     assert.ok(!unsafe.passed);
     assert.ok(!unsafe.checks.steps.passed);
     assert.ok(!unsafe.checks.security.passed);
@@ -163,23 +163,23 @@ function seedServiceDiagnosis({ session = 's1', task = 'task1', src = 'mcp', sta
     seedServiceDiagnosis({ session: 'l1', start: 0, service: 'sidekick-mcp' });
     seedServiceDiagnosis({ session: 'l2', start: 10000, service: 'sidekick-dashboard' });
     seedServiceDiagnosis({ session: 'l3', start: 20000, service: 'sidekick-agent' });
-    const analyze = await TOOLS.sidekick_evolve({ action: 'analyze', limit: 100 });
+    const analyze = await TOOLS.evolve({ action: 'analyze', limit: 100 });
     assert.ok(!analyze.isError, analyze.content[0].text);
     const stored = dbStore.listGeneratedCapabilities({ includeInactive: true });
     assert.ok(stored.length >= 1);
     const id = stored[0].id;
-    const forgedApprove = await TOOLS.sidekick_evolve({ action: 'approve', id, approver: 'test' });
+    const forgedApprove = await TOOLS.evolve({ action: 'approve', id, approver: 'test' });
     assert.ok(forgedApprove.isError, 'unvalidated candidates cannot enter trial');
     assert.strictEqual(dbStore.getGeneratedCapability(id).state, 'candidate');
-    const validated = await TOOLS.sidekick_evolve({ action: 'validate', id });
+    const validated = await TOOLS.evolve({ action: 'validate', id });
     assert.ok(!validated.isError, validated.content[0].text);
     assert.ok(allowedActions(dbStore.getGeneratedCapability(id)).approve, 'validated candidate should allow trial approval');
-    const approved = await TOOLS.sidekick_evolve({ action: 'approve', id, approver: 'test' });
+    const approved = await TOOLS.evolve({ action: 'approve', id, approver: 'test' });
     assert.ok(!approved.isError, approved.content[0].text);
     assert.strictEqual(dbStore.getGeneratedCapability(id).state, 'trial');
     assert.strictEqual(dbStore.getGeneratedCapability(id).useCount, 0, 'approval must not execute or increment use count');
     assert.strictEqual(dbStore.listGeneratedToolExecutions({ capabilityId: id }).length, 0, 'approval must not create executions');
-    const promoteBeforeUse = await TOOLS.sidekick_evolve({ action: 'promote', id });
+    const promoteBeforeUse = await TOOLS.evolve({ action: 'promote', id });
     assert.ok(promoteBeforeUse.isError, 'trial cannot promote before a successful invocation');
 
     console.log('Test: old adjacency candidates are retired safely');
@@ -233,10 +233,10 @@ function seedServiceDiagnosis({ session = 's1', task = 'task1', src = 'mcp', sta
     assert.strictEqual(dynExecution.state, 'succeeded');
     assert.strictEqual(dynExecution.steps.length, 1);
     assert.strictEqual(dynExecution.successCriteriaSatisfied, true);
-    const promoted = await TOOLS.sidekick_evolve({ action: 'promote', id: 'cand_dynamic_test' });
+    const promoted = await TOOLS.evolve({ action: 'promote', id: 'cand_dynamic_test' });
     assert.ok(!promoted.isError, promoted.content[0].text);
     assert.ok(dbStore.getGeneratedCapabilityByName('sidekick_generated_echo_test'));
-    const deprecated = await TOOLS.sidekick_evolve({ action: 'deprecate', id: 'cand_dynamic_test', reason: 'test complete' });
+    const deprecated = await TOOLS.evolve({ action: 'deprecate', id: 'cand_dynamic_test', reason: 'test complete' });
     assert.ok(!deprecated.isError, deprecated.content[0].text);
     dbStore.syncGeneratedToolRegistry();
     assert.ok(!dynamicTools.getDynamicToolDefs().some(t => t.name === 'sidekick_generated_echo_test'));
@@ -309,12 +309,12 @@ function seedServiceDiagnosis({ session = 's1', task = 'task1', src = 'mcp', sta
     assert.strictEqual(stats.failureCount, 3);
 
     console.log('Test: feedback usefulness scoring');
-    const feedback = await TOOLS.sidekick_evolve({ action: 'feedback', id: 'cand_dynamic_test', useful: true, notes: 'worked' });
+    const feedback = await TOOLS.evolve({ action: 'feedback', id: 'cand_dynamic_test', useful: true, notes: 'worked' });
     assert.ok(!feedback.isError, feedback.content[0].text);
     assert.ok(dbStore.getGeneratedCapability('cand_dynamic_test').userFeedback.length === 1);
 
     console.log('Test: backward compatibility with existing stored procedures');
-    await TOOLS.sidekick_teach({ action: 'teach_procedure', name: 'legacy_echo', description: 'legacy', parameters: { text: { type: 'string', required: true } }, steps: [{ tool: 'sidekick_respond', args: { text: '{{text}}' } }] });
+    await TOOLS.teach({ action: 'teach_procedure', name: 'legacy_echo', description: 'legacy', parameters: { text: { type: 'string', required: true } }, steps: [{ tool: 'sidekick_respond', args: { text: '{{text}}' } }] });
     assert.ok(loadProcedures().legacy_echo, 'legacy procedure still stored/readable');
 
     console.log('Test: frontend controls reflect backend allowed transitions');

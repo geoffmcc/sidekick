@@ -12,7 +12,7 @@ process.on('exit', () => fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true
 
 delete require.cache[require.resolve('../src/tools')];
 const { TOOLS, TOOL_DEFS, getToolRisk } = require('../src/tools');
-const { sidekick_ci_status } = TOOLS;
+const { ci_status } = TOOLS;
 
 function installGithubMock(routes) {
   const original = https.request;
@@ -82,7 +82,7 @@ function baseRoutes(ref, checkRuns, statuses) {
 
 async function getJson(args, routes) {
   return withMock(routes, async () => {
-    const result = await sidekick_ci_status({ repo: 'geoffmcc/sidekick', format: 'json', ...args });
+    const result = await ci_status({ repo: 'geoffmcc/sidekick', format: 'json', ...args });
     assert.ok(!result.isError, result.content[0].text);
     return JSON.parse(result.content[0].text);
   });
@@ -97,7 +97,7 @@ console.log('Running CI Status Tests...\n');
       'GET /repos/geoffmcc/sidekick/pulls/12': { body: { head: { sha: 'headsha123' } } },
       ...baseRoutes('headsha123', [{ name: 'test', status: 'completed', conclusion: 'success' }], [])
     }, async (mock) => {
-      const result = await sidekick_ci_status({ repo: 'geoffmcc/sidekick', pr: 12, format: 'json' });
+      const result = await ci_status({ repo: 'geoffmcc/sidekick', pr: 12, format: 'json' });
       assert.ok(!result.isError, result.content[0].text);
       const data = JSON.parse(result.content[0].text);
       assert.strictEqual(data.sha, 'headsha123');
@@ -178,7 +178,7 @@ console.log('Running CI Status Tests...\n');
         body: statusesBody([{ context: 'legacy2', state: 'success' }])
       }
     }, async () => {
-      const result = await sidekick_ci_status({ repo: 'geoffmcc/sidekick', sha: 'abc123', format: 'json' });
+      const result = await ci_status({ repo: 'geoffmcc/sidekick', sha: 'abc123', format: 'json' });
       const pageData = JSON.parse(result.content[0].text);
       assert.strictEqual(pageData.summary.total, 4);
       assert.strictEqual(pageData.check_runs.length, 2);
@@ -186,17 +186,17 @@ console.log('Running CI Status Tests...\n');
     });
 
     console.log('Test 12: invalid repository');
-    let result = await sidekick_ci_status({ repo: 'badrepo', sha: 'abc123' });
+    let result = await ci_status({ repo: 'badrepo', sha: 'abc123' });
     assert.ok(result.isError);
     assert.ok(result.content[0].text.includes('Invalid repository'));
 
     console.log('Test 13: missing revision selector');
-    result = await sidekick_ci_status({ repo: 'geoffmcc/sidekick' });
+    result = await ci_status({ repo: 'geoffmcc/sidekick' });
     assert.ok(result.isError);
     assert.ok(result.content[0].text.includes('Exactly one revision selector'));
 
     console.log('Test 14: conflicting selectors');
-    result = await sidekick_ci_status({ repo: 'geoffmcc/sidekick', pr: 1, sha: 'abc123' });
+    result = await ci_status({ repo: 'geoffmcc/sidekick', pr: 1, sha: 'abc123' });
     assert.ok(result.isError);
     assert.ok(result.content[0].text.includes('Conflicting revision selectors'));
 
@@ -204,7 +204,7 @@ console.log('Running CI Status Tests...\n');
     await withMock({
       'GET /repos/geoffmcc/sidekick/commits/abc123/check-runs?per_page=100': { status: 401, body: { message: 'Bad credentials' } }
     }, async () => {
-      const authResult = await sidekick_ci_status({ repo: 'geoffmcc/sidekick', sha: 'abc123' });
+      const authResult = await ci_status({ repo: 'geoffmcc/sidekick', sha: 'abc123' });
       assert.ok(authResult.isError);
       assert.ok(authResult.content[0].text.includes('Bad credentials'));
     });
@@ -213,7 +213,7 @@ console.log('Running CI Status Tests...\n');
     await withMock({
       'GET /repos/geoffmcc/sidekick/commits/abc123/check-runs?per_page=100': { status: 403, body: { message: 'API rate limit exceeded' } }
     }, async () => {
-      const rateResult = await sidekick_ci_status({ repo: 'geoffmcc/sidekick', sha: 'abc123' });
+      const rateResult = await ci_status({ repo: 'geoffmcc/sidekick', sha: 'abc123' });
       assert.ok(rateResult.isError);
       assert.ok(rateResult.content[0].text.includes('rate limit'));
     });
@@ -231,14 +231,14 @@ console.log('Running CI Status Tests...\n');
     await withMock({
       'GET /repos/geoffmcc/sidekick/commits/abc123/check-runs?per_page=100': { status: 500, body: { message: `token ${process.env.GITHUB_TOKEN} leaked` } }
     }, async () => {
-      const redacted = await sidekick_ci_status({ repo: 'geoffmcc/sidekick', sha: 'abc123' });
+      const redacted = await ci_status({ repo: 'geoffmcc/sidekick', sha: 'abc123' });
       assert.ok(redacted.isError);
       assert.ok(!redacted.content[0].text.includes(process.env.GITHUB_TOKEN));
     });
 
     console.log('Test 19: tool registration and low risk');
-    assert.ok(TOOL_DEFS.some(def => def.name === 'sidekick_ci_status'));
-    assert.strictEqual(getToolRisk('sidekick_ci_status'), 'low');
+    assert.ok(TOOL_DEFS.some(def => def.name === 'ci_status'));
+    assert.strictEqual(getToolRisk('ci_status'), 'low');
 
     console.log('\n✓ CI Status Tests Passed');
   } catch (err) {

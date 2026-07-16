@@ -454,8 +454,8 @@ console.log('Test 3.3: Disabled tools override open policy');
 console.log('Test 3.4: Tool definitions include policy metadata');
 {
   const defs = getToolDefsForSource('dashboard');
-  const bash = defs.find(d => d.name === 'sidekick_bash');
-  assert.ok(bash, 'Should include sidekick_bash definition');
+  const bash = defs.find(d => d.name === 'bash');
+  assert.ok(bash, 'Should include bash definition');
   assert.ok(bash.risk, 'Should include risk');
   assert.strictEqual(typeof bash.enabled, 'boolean', 'Should include enabled boolean');
   console.log('Passed\n');

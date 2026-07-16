@@ -125,7 +125,7 @@ function requiresToolUse(goal) {
   const text = String(goal || "").toLowerCase();
   if (!text.trim()) return false;
 
-  const toolNamePattern = /\bsidekick_[a-z0-9_]+\b/;
+  const toolNamePattern = /\b(?:sidekick_[a-z0-9_]+|(?:web_fetch|ci_status|security_scan|black_box|db_query|db_schema|db_stats|db_backup|db_restore|db_export|db_search|db_migrate|db_diff|debug_tool|diff_files|log_query|insight_report|memory_export|memory_import|memory_manage|sync_identity|sync_export|sync_import|sync_diff|list_projects|get_by_project|runbook|evolve|orchestrate|predict|sandbox|netdiag|timeline|circuit|baseline|tunnel|nginx|redis|ocr|embed|transcribe|download|wireguard|knowledge|handoff|fresheyes|respond|anonymize|changelog|depend))\b/;
   const localResourcePattern = /\b(tools?|repo|repository|project|memory|context|deploy(?:ment)?|service|services|health|status|logs?|history|conversation|transcript|task|tasks|model|models|ollama|database|db|knowledge|kv|watch(?:es)?|delay(?:s)?)\b/;
   const localActionPattern = /\b(list|count|show|inspect|check|look up|lookup|find|fetch|get|read|open|delete|remove|update|create|store|save|set|merge|deploy|restart|stop|start|run|recall|search|query)\b/;
   const exactnessPattern = /\b(current|currently|latest|recent|right now|today|exact|exactly|available|configured|enabled|running|active|pending|in this repo|in the repo|in this project|on disk)\b/;

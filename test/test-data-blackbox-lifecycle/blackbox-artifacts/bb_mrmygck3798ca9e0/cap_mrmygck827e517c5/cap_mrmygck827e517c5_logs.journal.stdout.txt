@@ -1,0 +1,120 @@
+Jul 15 23:33:22 ok-computer kernel: ------------[ cut here ]------------
+Jul 15 23:33:22 ok-computer kernel: memcpy: detected field-spanning write (size 4) of single field "current_pos" at drivers/hv/dxgkrnl/dxgvmbus.c:3095 (size 0)
+Jul 15 23:33:22 ok-computer kernel: WARNING: CPU: 6 PID: 252 at drivers/hv/dxgkrnl/dxgvmbus.c:3095 dxgvmb_send_wait_sync_object_gpu+0x271/0x290
+Jul 15 23:33:22 ok-computer kernel: Modules linked in: intel_rapl_msr intel_rapl_common kvm_intel kvm irqbypass sch_fq_codel autofs4 br_netfilter bridge stp llc ip_tables tun
+Jul 15 23:33:22 ok-computer kernel: CPU: 6 UID: 1000 PID: 252 Comm: Xwayland Not tainted 6.18.33.1-microsoft-standard-WSL2 #1 PREEMPT(none) 
+Jul 15 23:33:22 ok-computer kernel: RIP: 0010:dxgvmb_send_wait_sync_object_gpu+0x271/0x290
+Jul 15 23:33:22 ok-computer kernel: Code: a2 fe ff ff b8 ea ff ff ff eb 8d 31 c9 48 c7 c2 98 45 a8 ab 4c 89 ee 48 c7 c7 60 d3 9b ab c6 05 44 72 6a 01 01 e8 cf a4 25 ff <0f> 0b 4c 8b 85 60 ff ff ff e9 9f fe ff ff e8 fc d3 31 00 66 66 2e
+Jul 15 23:33:22 ok-computer kernel: RSP: 0018:ffffd0d284ce7be8 EFLAGS: 00010282
+Jul 15 23:33:22 ok-computer kernel: RAX: 0000000000000000 RBX: ffffd0d285125038 RCX: 0000000000000027
+Jul 15 23:33:22 ok-computer kernel: RDX: ffff8e7aae79cd08 RSI: 0000000000000001 RDI: ffff8e7aae79cd00
+Jul 15 23:33:22 ok-computer kernel: RBP: ffffd0d284ce7ca0 R08: 0000000000000000 R09: 0000000000000003
+Jul 15 23:33:22 ok-computer kernel: R10: ffffd0d284ce7a58 R11: ffffffffac553708 R12: 0000000000000001
+Jul 15 23:33:22 ok-computer kernel: R13: 0000000000000004 R14: 0000000000000008 R15: 0000000000000008
+Jul 15 23:33:22 ok-computer kernel: FS:  00007af28014ef40(0000) GS:ffff8e7b01b47000(0000) knlGS:0000000000000000
+Jul 15 23:33:22 ok-computer kernel: CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+Jul 15 23:33:22 ok-computer kernel: CR2: 00007af27d9221e0 CR3: 000000010671c003 CR4: 0000000000b72ef0
+Jul 15 23:33:22 ok-computer kernel: Call Trace:
+Jul 15 23:33:22 ok-computer kernel:  <TASK>
+Jul 15 23:33:22 ok-computer kernel:  dxgkio_submit_wait_to_hwqueue+0x133/0x2e0
+Jul 15 23:33:22 ok-computer kernel:  dxgk_ioctl+0x66/0x110
+Jul 15 23:33:22 ok-computer kernel:  dxgk_unlocked_ioctl+0x12/0x20
+Jul 15 23:33:22 ok-computer kernel:  __x64_sys_ioctl+0xa1/0xf0
+Jul 15 23:33:22 ok-computer kernel:  x64_sys_call+0x102c/0x20f0
+Jul 15 23:33:22 ok-computer kernel:  do_syscall_64+0x73/0x990
+Jul 15 23:33:22 ok-computer kernel:  ? _raw_spin_unlock_irq+0x12/0x40
+Jul 15 23:33:22 ok-computer kernel:  ? dxgglobal_remove_host_event+0x66/0x70
+Jul 15 23:33:22 ok-computer kernel:  ? dxgkio_wait_sync_object_cpu+0x2ae/0x3f0
+Jul 15 23:33:22 ok-computer kernel:  ? __rseq_handle_notify_resume+0xaf/0x490
+Jul 15 23:33:22 ok-computer kernel:  ? dxgk_ioctl+0x66/0x110
+Jul 15 23:33:22 ok-computer kernel:  ? exit_to_user_mode_loop+0xc4/0x100
+Jul 15 23:33:22 ok-computer kernel:  ? do_syscall_64+0x28a/0x990
+Jul 15 23:33:22 ok-computer kernel:  entry_SYSCALL_64_after_hwframe+0x76/0x7e
+Jul 15 23:33:22 ok-computer kernel: RIP: 0033:0x7af280a7d7aa
+Jul 15 23:33:22 ok-computer kernel: Code: f3 0f 1e fa 55 48 89 e5 48 8d 45 10 48 89 55 e0 48 89 45 c0 48 8d 45 d0 48 89 45 c8 b8 10 00 00 00 c7 45 b8 10 00 00 00 0f 05 <89> c2 3d 00 f0 ff ff 77 0d 89 d0 5d c3 66 0f 1f 84 00 00 00 00 00
+Jul 15 23:33:22 ok-computer kernel: RSP: 002b:00007ffd3aabb0b0 EFLAGS: 00000246 ORIG_RAX: 0000000000000010
+Jul 15 23:33:22 ok-computer kernel: RAX: ffffffffffffffda RBX: 000063daf04987b0 RCX: 00007af280a7d7aa
+Jul 15 23:33:22 ok-computer kernel: RDX: 00007ffd3aabb0d8 RSI: 00000000c0184736 RDI: 0000000000000007
+Jul 15 23:33:22 ok-computer kernel: RBP: 00007ffd3aabb0b0 R08: 000063daf01aa058 R09: 000063daf065b5d0
+Jul 15 23:33:22 ok-computer kernel: R10: 0000000000000200 R11: 0000000000000246 R12: 0000000000000001
+Jul 15 23:33:22 ok-computer kernel: R13: 000063daf04987b0 R14: 00007af27ae3b080 R15: 00007ffd3aabb2ec
+Jul 15 23:33:22 ok-computer kernel:  </TASK>
+Jul 15 23:33:22 ok-computer kernel: ---[ end trace 0000000000000000 ]---
+Jul 15 23:33:23 ok-computer kernel: wireguard: WireGuard 1.0.0 loaded. See www.wireguard.com for information.
+Jul 15 23:33:23 ok-computer kernel: wireguard: Copyright (C) 2015-2019 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
+Jul 15 23:33:23 ok-computer wsl-pro-service[189]: WARNING Daemon: could not connect to Windows Agent: could not get address: could not read agent port file "/mnt/c/Users/geoff/.ubuntupro/.address": open /mnt/c/Users/geoff/.ubuntupro/.address: no such file or directory
+Jul 15 23:33:23 ok-computer landscape-config[180]: Registered:    False
+Jul 15 23:33:23 ok-computer landscape-config[180]: Config Path:   /etc/landscape/client.conf
+Jul 15 23:33:23 ok-computer landscape-config[180]: Data Path      /var/lib/landscape/client
+Jul 15 23:33:23 ok-computer systemd[1]: landscape-client.service: Skipped due to 'exec-condition'.
+Jul 15 23:33:23 ok-computer systemd[1]: Condition check resulted in landscape-client.service - Landscape client daemons being skipped.
+Jul 15 23:33:23 ok-computer systemd[1]: landscape-client.service: Consumed 290ms CPU time over 550ms wall clock time, 70.5M memory peak.
+Jul 15 23:33:23 ok-computer systemd[1]: Reached target multi-user.target - Multi-User System.
+Jul 15 23:33:23 ok-computer systemd[1]: Reached target graphical.target - Graphical Interface.
+Jul 15 23:33:23 ok-computer systemd[1]: Startup finished in 928ms.
+Jul 15 23:33:23 ok-computer login[352]: pam_unix(login:session): session opened for user geoffrey(uid=1000) by geoffrey(uid=0)
+Jul 15 23:33:23 ok-computer systemd[1]: Created slice user-1000.slice - User Slice of UID 1000.
+Jul 15 23:33:23 ok-computer systemd[1]: Starting user-runtime-dir@1000.service - User Runtime Directory /run/user/1000...
+Jul 15 23:33:23 ok-computer systemd-logind[186]: New session 'c1' of user 'geoffrey' with class 'user' and type 'tty'.
+Jul 15 23:33:23 ok-computer systemd[1]: Finished user-runtime-dir@1000.service - User Runtime Directory /run/user/1000.
+Jul 15 23:33:23 ok-computer systemd[1]: Starting user@1000.service - User Manager for UID 1000...
+Jul 15 23:33:23 ok-computer (systemd)[394]: pam_unix(systemd-user:session): session opened for user geoffrey(uid=1000) by geoffrey(uid=0)
+Jul 15 23:33:23 ok-computer systemd-logind[186]: New session 'c2' of user 'geoffrey' with class 'manager' and type 'unspecified'.
+Jul 15 23:33:23 ok-computer systemd[394]: Queued start job for default target default.target.
+Jul 15 23:33:23 ok-computer systemd[394]: Created slice app.slice - User Application Slice.
+Jul 15 23:33:23 ok-computer systemd-journald[43]: File /var/log/journal/beb4eab8def94a65849e21fc5dfd15a7/user-1000.journal corrupted or uncleanly shut down, renaming and replacing.
+Jul 15 23:33:23 ok-computer systemd[394]: Started launchpadlib-cache-clean.timer - Clean up old files in the Launchpadlib cache.
+Jul 15 23:33:23 ok-computer systemd[394]: Started ubuntu-insights-collect.timer - "Run Ubuntu-Insights collect 5 mins after boot and every month relative to the activation time".
+Jul 15 23:33:23 ok-computer systemd[394]: Started ubuntu-insights-upload.timer - "Run Ubuntu-Insights upload 8 mins after boot and every week relative to the activation time".
+Jul 15 23:33:23 ok-computer systemd[394]: Reached target paths.target - Paths.
+Jul 15 23:33:23 ok-computer systemd[394]: Reached target timers.target - Timers.
+Jul 15 23:33:23 ok-computer systemd[394]: Starting dbus.socket - D-Bus User Message Bus Socket...
+Jul 15 23:33:23 ok-computer systemd[394]: Listening on dirmngr.socket - GnuPG network certificate management daemon.
+Jul 15 23:33:23 ok-computer systemd[394]: Listening on gpg-agent-browser.socket - GnuPG cryptographic agent and passphrase cache (access for web browsers).
+Jul 15 23:33:23 ok-computer systemd[394]: Listening on gpg-agent-extra.socket - GnuPG cryptographic agent and passphrase cache (restricted).
+Jul 15 23:33:23 ok-computer systemd[394]: Starting gpg-agent-ssh.socket - GnuPG cryptographic agent (ssh-agent emulation)...
+Jul 15 23:33:23 ok-computer systemd[394]: Starting gpg-agent.socket - GnuPG cryptographic agent and passphrase cache...
+Jul 15 23:33:23 ok-computer systemd[394]: Listening on keyboxd.socket - GnuPG public key management service.
+Jul 15 23:33:23 ok-computer systemd[394]: Listening on pk-debconf-helper.socket - debconf communication socket.
+Jul 15 23:33:23 ok-computer systemd[394]: Listening on snapd.session-agent.socket - REST API socket for snapd user session agent.
+Jul 15 23:33:23 ok-computer systemd[394]: Starting ssh-agent.socket - OpenSSH Agent socket...
+Jul 15 23:33:23 ok-computer systemd[394]: Listening on systemd-ask-password.socket - Query the User Interactively for a Password.
+Jul 15 23:33:23 ok-computer systemd[394]: Starting wslg-session.service - WSLg user service...
+Jul 15 23:33:23 ok-computer systemd[394]: Listening on dbus.socket - D-Bus User Message Bus Socket.
+Jul 15 23:33:23 ok-computer systemd[394]: Listening on gpg-agent.socket - GnuPG cryptographic agent and passphrase cache.
+Jul 15 23:33:23 ok-computer systemd[394]: Listening on ssh-agent.socket - OpenSSH Agent socket.
+Jul 15 23:33:23 ok-computer systemd[394]: Listening on gpg-agent-ssh.socket - GnuPG cryptographic agent (ssh-agent emulation).
+Jul 15 23:33:23 ok-computer systemd[394]: Reached target sockets.target - Sockets.
+Jul 15 23:33:23 ok-computer systemd[394]: Reached target basic.target - Basic System.
+Jul 15 23:33:23 ok-computer systemd[394]: Reached target default.target - Main User Target.
+Jul 15 23:33:23 ok-computer systemd[1]: Started user@1000.service - User Manager for UID 1000.
+Jul 15 23:33:23 ok-computer systemd[1]: Started session-c1.scope - Session c1 of User geoffrey.
+Jul 15 23:33:23 ok-computer systemd[394]: Finished wslg-session.service - WSLg user service.
+Jul 15 23:33:23 ok-computer systemd[394]: Startup finished in 81ms.
+Jul 15 23:33:23 ok-computer systemd[1]: dmesg.service: Deactivated successfully.
+Jul 15 23:33:23 ok-computer systemd[1]: dmesg.service: Consumed 355ms CPU time over 1.126s wall clock time, 774M memory peak.
+Jul 15 23:33:24 ok-computer wsl-pro-service[189]: WARNING Daemon: could not connect to Windows Agent: could not get address: could not read agent port file "/mnt/c/Users/geoff/.ubuntupro/.address": open /mnt/c/Users/geoff/.ubuntupro/.address: no such file or directory
+Jul 15 23:33:26 ok-computer wsl-pro-service[189]: WARNING Daemon: could not connect to Windows Agent: could not get address: could not read agent port file "/mnt/c/Users/geoff/.ubuntupro/.address": open /mnt/c/Users/geoff/.ubuntupro/.address: no such file or directory
+Jul 15 23:33:27 ok-computer snapd[185]: standby.go:101: standby conditions met, initiating standby...
+Jul 15 23:33:27 ok-computer snapd[185]: daemon.go:556: gracefully waiting for running hooks
+Jul 15 23:33:27 ok-computer snapd[185]: daemon.go:558: done waiting for running hooks
+Jul 15 23:33:29 ok-computer chronyd[244]: Selected source 185.125.190.123 (2.ntp.ubuntu.com)
+Jul 15 23:33:29 ok-computer chronyd[244]: System clock wrong by 3.547152 seconds
+Jul 15 23:33:29 ok-computer chronyd[244]: Could not step system clock
+Jul 15 23:33:30 ok-computer wsl-pro-service[189]: WARNING Daemon: could not connect to Windows Agent: could not get address: could not read agent port file "/mnt/c/Users/geoff/.ubuntupro/.address": open /mnt/c/Users/geoff/.ubuntupro/.address: no such file or directory
+Jul 15 23:33:30 ok-computer snapd[185]: standby.go:121: standby monitoring stop requested
+Jul 15 23:33:30 ok-computer snapd[185]: overlord.go:558: Released state lock file
+Jul 15 23:33:30 ok-computer snapd[185]: daemon stop requested to wait for socket activation
+Jul 15 23:33:30 ok-computer systemd[1]: snapd.service: Deactivated successfully.
+Jul 15 23:33:31 ok-computer chronyd[244]: Could not step system clock
+Jul 15 23:33:38 ok-computer wsl-pro-service[189]: WARNING Daemon: could not connect to Windows Agent: could not get address: could not read agent port file "/mnt/c/Users/geoff/.ubuntupro/.address": open /mnt/c/Users/geoff/.ubuntupro/.address: no such file or directory
+Jul 15 23:33:52 ok-computer systemd[1]: systemd-timedated.service: Deactivated successfully.
+Jul 15 23:33:54 ok-computer wsl-pro-service[189]: WARNING Daemon: could not connect to Windows Agent: could not get address: could not read agent port file "/mnt/c/Users/geoff/.ubuntupro/.address": open /mnt/c/Users/geoff/.ubuntupro/.address: no such file or directory
+Jul 15 23:33:58 ok-computer crontab[596]: (geoffrey) REPLACE (geoffrey)
+Jul 15 23:34:01 ok-computer cron[176]: (geoffrey) RELOAD (crontabs/geoffrey)
+Jul 15 23:34:01 ok-computer CRON[620]: pam_unix(cron:session): session opened for user geoffrey(uid=1000) by geoffrey(uid=0)
+Jul 15 23:34:01 ok-computer CRON[622]: (geoffrey) CMD (cd /home/sidekick/sidekick && printf cron-ok >> /mnt/c/Users/geoff/Projects/sidekick/test/test-scheduler-platform-data/cron-mrmyfwhbjtoo.log 2>&1 # sidekick:mrmyfwhbjtoo)
+Jul 15 23:34:01 ok-computer CRON[620]: (CRON) info (No MTA installed, discarding output)
+Jul 15 23:34:01 ok-computer CRON[620]: pam_unix(cron:session): session closed for user geoffrey
+Jul 15 23:34:09 ok-computer unknown: WSL (215) ERROR: CheckConnection: getaddrinfo() failed: -5
+Jul 15 23:34:09 ok-computer kernel: hv_balloon: Max. dynamic memory size: 16236 MB

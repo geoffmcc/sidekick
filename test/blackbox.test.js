@@ -89,15 +89,15 @@ console.log('Running Black Box Tests...\n');
     console.log('Passed\n');
 
     console.log('Test BB.5: MCP compatibility and structured actions');
-    const mcpCapture = await TOOLS.sidekick_black_box({ action: 'capture', name: 'mcp fixture', include: ['system.identity'] });
+    const mcpCapture = await TOOLS.black_box({ action: 'capture', name: 'mcp fixture', include: ['system.identity'] });
     assert.ok(!mcpCapture.isError, 'MCP capture should succeed');
     const payload = JSON.parse(mcpCapture.content[0].text);
     assert.ok(payload.incident_id && payload.capture_id, 'MCP capture should return structured IDs');
-    const mcpGet = await TOOLS.sidekick_black_box({ action: 'get_incident', incident_id: payload.incident_id });
+    const mcpGet = await TOOLS.black_box({ action: 'get_incident', incident_id: payload.incident_id });
     assert.ok(!mcpGet.isError, 'MCP get_incident should succeed');
-    const mcpSource = await TOOLS.sidekick_black_box({ action: 'get_source', source_id: payload.sources[0].id, limit: 4096 });
+    const mcpSource = await TOOLS.black_box({ action: 'get_source', source_id: payload.sources[0].id, limit: 4096 });
     assert.ok(!mcpSource.isError, 'MCP get_source should expose explicit source detail');
-    await TOOLS.sidekick_black_box({ action: 'delete', incident_id: payload.incident_id });
+    await TOOLS.black_box({ action: 'delete', incident_id: payload.incident_id });
     console.log('Passed\n');
 
     console.log('All Black Box tests passed.');

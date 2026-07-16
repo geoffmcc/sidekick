@@ -49,7 +49,7 @@ function write(relative, content, mode) {
       privateKeyFooter
     ].join("\n"), 0o600);
 
-    const result = await TOOLS.sidekick_security_scan({
+    const result = await TOOLS.security_scan({
       path: testRoot,
       format: "json",
       max_files: 100
@@ -80,13 +80,13 @@ function write(relative, content, mode) {
 
     write("denied/credentials.yml", "PASSWORD: must-not-appear");
     process.env.SIDEKICK_DENIED_PATHS = path.join(testRoot, "denied");
-    const descendantFiltered = await TOOLS.sidekick_security_scan({ path: testRoot, format: "json" });
+    const descendantFiltered = await TOOLS.security_scan({ path: testRoot, format: "json" });
     const filteredReport = JSON.parse(descendantFiltered.content[0].text);
     assert.ok(filteredReport.skipped_by_policy > 0);
     assert.ok(!filteredReport.findings.some(item => item.path.startsWith("denied/")));
 
     process.env.SIDEKICK_DENIED_PATHS = testRoot;
-    const blocked = await TOOLS.sidekick_security_scan({ path: testRoot });
+    const blocked = await TOOLS.security_scan({ path: testRoot });
     assert.ok(blocked.isError);
     assert.ok(blocked.content[0].text.includes("Path blocked by policy"));
     delete process.env.SIDEKICK_DENIED_PATHS;

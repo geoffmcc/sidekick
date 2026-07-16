@@ -24,19 +24,19 @@ console.log('Test 4.1: Full workflow - store, list projects, get by project');
       TOOLS,
       setSource 
     } = tools;
-    const { sidekick_store, sidekick_get, sidekick_list_projects, sidekick_get_by_project } = TOOLS;
+    const { store, get, list_projects, get_by_project } = TOOLS;
 
     setSource('mcp');
 
     // Store 5 keys across 3 projects
-    await sidekick_store({ key: 'key1', value: 'val1', project: 'proj_a' });
-    await sidekick_store({ key: 'key2', value: 'val2', project: 'proj_a' });
-    await sidekick_store({ key: 'key3', value: 'val3', project: 'proj_b' });
-    await sidekick_store({ key: 'key4', value: 'val4', project: 'proj_c' });
-    await sidekick_store({ key: 'key5', value: 'val5' }); // null project
+    await store({ key: 'key1', value: 'val1', project: 'proj_a' });
+    await store({ key: 'key2', value: 'val2', project: 'proj_a' });
+    await store({ key: 'key3', value: 'val3', project: 'proj_b' });
+    await store({ key: 'key4', value: 'val4', project: 'proj_c' });
+    await store({ key: 'key5', value: 'val5' }); // null project
 
     // List projects
-    const projectsResult = await sidekick_list_projects();
+    const projectsResult = await list_projects();
     const projects = JSON.parse(projectsResult.content[0].text);
     assert.ok(projects.includes('proj_a'), 'Should include proj_a');
     assert.ok(projects.includes('proj_b'), 'Should include proj_b');
@@ -44,7 +44,7 @@ console.log('Test 4.1: Full workflow - store, list projects, get by project');
     console.log('✓ Projects listed correctly');
 
     // Get by project
-    const projAResult = await sidekick_get_by_project({ project: 'proj_a' });
+    const projAResult = await get_by_project({ project: 'proj_a' });
     const projAKeys = JSON.parse(projAResult.content[0].text);
     assert.strictEqual(projAKeys.length, 2, 'proj_a should have 2 keys');
     assert.ok(projAKeys.find(k => k.key === 'key1'), 'Should find key1');
@@ -52,7 +52,7 @@ console.log('Test 4.1: Full workflow - store, list projects, get by project');
     console.log('✓ Get by project works');
 
     // Get individual key (backward compatibility)
-    const getResult = await sidekick_get({ key: 'key1' });
+    const getResult = await get({ key: 'key1' });
     assert.strictEqual(getResult.content[0].text, 'val1', 'Should return just value');
     console.log('✓ Backward compatibility maintained');
 
@@ -71,7 +71,7 @@ console.log('Test 4.1: Full workflow - store, list projects, get by project');
       // Perform multiple concurrent stores
       const promises = [];
       for (let i = 0; i < 10; i++) {
-        promises.push(tools3.TOOLS.sidekick_store({ 
+        promises.push(tools3.TOOLS.store({ 
           key: `concurrent_${i}`, 
           value: `value_${i}`, 
           project: i % 2 === 0 ? 'even' : 'odd' 
@@ -80,11 +80,11 @@ console.log('Test 4.1: Full workflow - store, list projects, get by project');
       await Promise.all(promises);
 
       // Verify all were stored using get_by_project
-      const evenResult = await tools3.TOOLS.sidekick_get_by_project({ project: 'even' });
+      const evenResult = await tools3.TOOLS.get_by_project({ project: 'even' });
       const evenKeys = JSON.parse(evenResult.content[0].text);
       assert.strictEqual(evenKeys.length, 5, 'Should have 5 even keys');
       
-      const oddResult = await tools3.TOOLS.sidekick_get_by_project({ project: 'odd' });
+      const oddResult = await tools3.TOOLS.get_by_project({ project: 'odd' });
       const oddKeys = JSON.parse(oddResult.content[0].text);
       assert.strictEqual(oddKeys.length, 5, 'Should have 5 odd keys');
       
@@ -100,10 +100,10 @@ console.log('Test 4.1: Full workflow - store, list projects, get by project');
 
       // Store a large value (1MB)
       const largeValue = 'x'.repeat(1024 * 1024);
-      await tools4.TOOLS.sidekick_store({ key: 'large_key', value: largeValue, project: 'large' });
+      await tools4.TOOLS.store({ key: 'large_key', value: largeValue, project: 'large' });
 
       // Retrieve it
-      const result = await tools4.TOOLS.sidekick_get({ key: 'large_key' });
+      const result = await tools4.TOOLS.get({ key: 'large_key' });
       assert.strictEqual(result.content[0].text.length, largeValue.length, 'Large value should be preserved');
       
       console.log('✓ Large values handled correctly');
@@ -116,13 +116,13 @@ console.log('Test 4.1: Full workflow - store, list projects, get by project');
       delete require.cache[require.resolve('../src/tools')];
       const tools5 = require('../src/tools');
 
-      await tools5.TOOLS.sidekick_store({ 
+      await tools5.TOOLS.store({ 
         key: 'special-key_with.dots:and@chars', 
         value: 'value with "quotes" and \'apostrophes\' and\nnewlines',
         project: 'special'
       });
 
-      const result = await tools5.TOOLS.sidekick_get({ key: 'special-key_with.dots:and@chars' });
+      const result = await tools5.TOOLS.get({ key: 'special-key_with.dots:and@chars' });
       assert.ok(result.content[0].text.includes('quotes'), 'Should preserve quotes');
       assert.ok(result.content[0].text.includes('newlines'), 'Should preserve newlines');
       

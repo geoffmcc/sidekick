@@ -75,7 +75,7 @@ function securityReview(candidate) {
   if (SECRET_KEY_RE.test(text)) failures.push("steps reference sensitive-looking argument names");
   if (UNSAFE_COMMAND_RE.test(text)) failures.push("parameter appears inside shell metacharacter context");
   for (const step of candidate.steps || []) {
-    if (step.tool === "sidekick_bash" && /sudo|rm\s+-rf|mkfs|dd\s+.*of=|curl\s+.*\|\s*(?:bash|sh)/i.test(stableStringify(step.args))) {
+    if (step.tool === "bash" && /sudo|rm\s+-rf|mkfs|dd\s+.*of=|curl\s+.*\|\s*(?:bash|sh)/i.test(stableStringify(step.args))) {
       failures.push("destructive or privileged shell pattern detected");
     }
     if (/commit|push|deploy/i.test(stableStringify(step.args))) warnings.push("git/deploy-like action requires strict approval policy");

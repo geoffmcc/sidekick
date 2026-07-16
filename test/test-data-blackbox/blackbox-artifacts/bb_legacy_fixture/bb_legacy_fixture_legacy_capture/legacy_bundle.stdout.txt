@@ -1,0 +1,3 @@
+# legacy payload
+TOKEN=[REDACTED]
+service failed

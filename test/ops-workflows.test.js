@@ -16,8 +16,8 @@ assert.match(
 
 assert.match(
   toolsJs,
-  /sidekick_ops:\s*"critical"/,
-  'sidekick_ops should be critical risk because it can deploy and restart services'
+  /ops:\s*"critical"/,
+  'ops should be critical risk because it can deploy and restart services'
 );
 
 assert.match(
@@ -28,32 +28,32 @@ assert.match(
 
 assert.match(
   toolsJs,
-  /sidekick_mission:\s*"critical"/,
-  'sidekick_mission should be critical risk because it can execute operational workflows'
+  /mission:\s*"critical"/,
+  'mission should be critical risk because it can execute operational workflows'
 );
 
 assert.match(
   toolsJs,
-  /'sidekick_ops':\s*'Workflow'/,
-  'sidekick_ops should be categorized as a workflow tool'
+  /'ops':\s*'Workflow'/,
+  'ops should be categorized as a workflow tool'
 );
 
 assert.match(
   toolsJs,
-  /'sidekick_mission':\s*'Workflow'/,
-  'sidekick_mission should be categorized as a workflow tool'
+  /'mission':\s*'Workflow'/,
+  'mission should be categorized as a workflow tool'
 );
 
 assert.match(
   toolsJs,
-  /name:\s*"sidekick_ops"[\s\S]*verify_deployed_commit\|restart_and_smoke_test\|deploy_current_main\|incident_snapshot/,
-  'sidekick_ops metadata should list the packaged workflow actions'
+  /name:\s*"ops"[\s\S]*verify_deployed_commit\|restart_and_smoke_test\|deploy_current_main\|incident_snapshot/,
+  'ops metadata should list the packaged workflow actions'
 );
 
 assert.match(
   toolsJs,
-  /name:\s*"sidekick_mission"[\s\S]*profiles\|route\|preflight\|execute/,
-  'sidekick_mission metadata should list Mission Control actions'
+  /name:\s*"mission"[\s\S]*profiles\|route\|preflight\|execute/,
+  'mission metadata should list Mission Control actions'
 );
 
 assert.match(
@@ -70,8 +70,8 @@ assert.match(
 
 assert.match(
   toolsJs,
-  /policy:\s*\{\s*tool:\s*"sidekick_tools",\s*args:\s*\{\s*action:\s*"policy"/,
-  'sidekick_mission should route policy inspection through sidekick_tools action=policy'
+  /policy:\s*\{\s*tool:\s*"tools",\s*args:\s*\{\s*action:\s*"policy"/,
+  'mission should route policy inspection through tools action=policy'
 );
 
 assert.match(
@@ -88,14 +88,14 @@ assert.match(
 
 assert.match(
   indexJs,
-  /sidekick_ops:\s*z\.object\(\{[\s\S]*verify_deployed_commit[\s\S]*restart_and_smoke_test[\s\S]*deploy_current_main[\s\S]*incident_snapshot/,
-  'MCP schema should expose sidekick_ops actions'
+  /ops:\s*z\.object\(\{[\s\S]*verify_deployed_commit[\s\S]*restart_and_smoke_test[\s\S]*deploy_current_main[\s\S]*incident_snapshot/,
+  'MCP schema should expose ops actions'
 );
 
 assert.match(
   indexJs,
-  /sidekick_mission:\s*z\.object\(\{[\s\S]*profiles[\s\S]*route[\s\S]*preflight[\s\S]*execute/,
-  'MCP schema should expose sidekick_mission actions'
+  /mission:\s*z\.object\(\{[\s\S]*profiles[\s\S]*route[\s\S]*preflight[\s\S]*execute/,
+  'MCP schema should expose mission actions'
 );
 
 console.log('Operations workflow checks passed\n');

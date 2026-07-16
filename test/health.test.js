@@ -13,7 +13,7 @@ const { TOOLS, setSource, checkNetwork } = require("../src/tools");
   try {
     setSource("test");
 
-    const all = await TOOLS.sidekick_health({ check: "all" });
+    const all = await TOOLS.health({ check: "all" });
     assert.ok(!all.isError);
     assert.ok(all.content[0].text.includes("Health Check Report"));
     assert.ok(all.content[0].text.includes("## Services"));
@@ -42,7 +42,7 @@ const { TOOLS, setSource, checkNetwork } = require("../src/tools");
     assert.strictEqual(network.results.icmp.ok, false);
     assert.deepStrictEqual(network.issues, []);
 
-    const custom = await TOOLS.sidekick_health({ check: "custom" });
+    const custom = await TOOLS.health({ check: "custom" });
     assert.ok(!custom.isError);
     assert.ok(custom.content[0].text.includes("## Custom"));
 

@@ -10,7 +10,7 @@ process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 
 delete require.cache[require.resolve('../src/tools')];
 const { TOOLS, setSource } = require('../src/tools');
-const { sidekick_insight_report, sidekick_tools } = TOOLS;
+const { insight_report, tools } = TOOLS;
 
 console.log('Running Insight Report Tests...\n');
 
@@ -31,8 +31,8 @@ console.log('Running Insight Report Tests...\n');
     fs.writeFileSync(csvFile, 'name,count\napi,3\nworker,7\n', 'utf-8');
     fs.writeFileSync(jsonFile, JSON.stringify([{ id: 1, status: 'ok' }, { id: 2, status: 'failed' }]), 'utf-8');
 
-    console.log('Test: sidekick_insight_report - combined text and data report');
-    const result = await sidekick_insight_report({
+    console.log('Test: insight_report - combined text and data report');
+    const result = await insight_report({
       paths: [logFile, csvFile, jsonFile],
       title: 'Test Insight Report'
     });
@@ -50,7 +50,7 @@ console.log('Running Insight Report Tests...\n');
     assert.ok(report.includes('## Next Actions'), 'Should include next actions');
     console.log('✓ Passed\n');
 
-    console.log('Test: sidekick_insight_report - stale session incident analysis');
+    console.log('Test: insight_report - stale session incident analysis');
     const incidentFile = path.join(TEST_DATA_DIR, 'mcp-incident.md');
     fs.writeFileSync(incidentFile, [
       'Jun 28 16:45:26 sidekick sudo: COMMAND=/usr/bin/systemctl restart sidekick-mcp',
@@ -60,7 +60,7 @@ console.log('Running Insight Report Tests...\n');
       'Jun 28 16:45:26 sidekick node: INVALID_SESSION_RESPONSE sessionId=sess-old replacementId=sess-new',
       'Jun 28 16:45:59 sidekick node: REUSE_SESSION sessionId=sess-new'
     ].join('\n'), 'utf-8');
-    const incident = await sidekick_insight_report({ paths: incidentFile, title: 'MCP Incident' });
+    const incident = await insight_report({ paths: incidentFile, title: 'MCP Incident' });
     assert.ok(!incident.isError, 'Incident report should succeed');
     const incidentReport = incident.content[0].text;
     assert.ok(incidentReport.includes('## Timeline'), 'Should include timeline for timestamped evidence');
@@ -69,25 +69,25 @@ console.log('Running Insight Report Tests...\n');
     assert.ok(incidentReport.includes('replacement session ID'), 'Should recommend replacement-session handling');
     console.log('✓ Passed\n');
 
-    console.log('Test: sidekick_insight_report - comma-separated paths and missing file');
+    console.log('Test: insight_report - comma-separated paths and missing file');
     const missing = path.join(TEST_DATA_DIR, 'missing.txt');
-    const mixed = await sidekick_insight_report({ paths: `${logFile},${missing}` });
+    const mixed = await insight_report({ paths: `${logFile},${missing}` });
     assert.ok(!mixed.isError, 'Missing input should be captured as report evidence, not fail the whole report');
     assert.ok(mixed.content[0].text.includes('1 file(s) had errors'), 'Should count file errors');
     assert.ok(mixed.content[0].text.includes('File not found'), 'Should include missing file evidence');
     console.log('✓ Passed\n');
 
-    console.log('Test: sidekick_insight_report - missing paths');
-    const empty = await sidekick_insight_report({});
+    console.log('Test: insight_report - missing paths');
+    const empty = await insight_report({});
     assert.ok(empty.isError, 'Missing paths should fail validation');
     assert.ok(empty.content[0].text.includes('paths is required'), 'Should explain missing paths');
     console.log('✓ Passed\n');
 
-    console.log('Test: sidekick_tools catalog includes insight report');
-    const catalog = await sidekick_tools({ action: 'get', name: 'sidekick_insight_report', format: 'json' });
+    console.log('Test: tools catalog includes insight report');
+    const catalog = await tools({ action: 'get', name: 'insight_report', format: 'json' });
     assert.ok(!catalog.isError, 'Catalog lookup should succeed');
     const tool = JSON.parse(catalog.content[0].text);
-    assert.strictEqual(tool.name, 'sidekick_insight_report', 'Catalog should include tool name');
+    assert.strictEqual(tool.name, 'insight_report', 'Catalog should include tool name');
     assert.strictEqual(tool.category, 'Data Pipeline', 'Tool should be categorized as Data Pipeline');
     assert.strictEqual(tool.risk, 'low', 'Tool should be low risk');
     console.log('✓ Passed\n');

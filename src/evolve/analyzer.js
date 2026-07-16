@@ -3,7 +3,7 @@ const { fingerprint, normalizeArgs, stableStringify, slugify } = require("./comm
 const DEFAULT_GAP_MS = 30 * 60 * 1000;
 const MIN_STEPS = 2;
 const INTERNAL_TOOL_RE = /^(?:sidekick_)?(?:resume|get|store|status|debug_tool|cache|delay|queue|generated_resume|evolve)$/;
-const GENERATED_TOOL_RE = /^sidekick_generated_/;
+const GENERATED_TOOL_RE = /^(?:sidekick_)?generated_/;
 const SUPPORTING_KINDS = new Set(["file_read", "file_hash", "memory", "unknown_readonly"]);
 
 function parseTime(value) {
@@ -114,27 +114,28 @@ function classifyBash(record) {
 }
 
 function classifyOperation(record) {
-  if (record.name === "sidekick_bash") return classifyBash(record);
-  if (record.name === "sidekick_service") {
+  const name = record.name.replace(/^sidekick_/, "");
+  if (name === "bash") return classifyBash(record);
+  if (name === "service") {
     const action = arg(record, "action");
     const service = arg(record, "service");
     if (["status", "logs"].includes(action)) return { kind: action === "logs" ? "service_logs" : "service_status", risk: "read-only", params: { service }, normalized: `service ${action} <service>` };
     if (["restart", "start", "stop", "enable", "disable"].includes(action)) return { kind: "service_mutation", risk: "privileged", params: { service, action }, normalized: "service mutation <service>" };
   }
-  if (record.name === "sidekick_netdiag") return { kind: "reachability_check", risk: "network-read", params: { target: arg(record, "target"), port_range: arg(record, "port_range") }, normalized: "network diagnostic <target>" };
-  if (record.name === "sidekick_web_fetch") {
+  if (name === "netdiag") return { kind: "reachability_check", risk: "network-read", params: { target: arg(record, "target"), port_range: arg(record, "port_range") }, normalized: "network diagnostic <target>" };
+  if (name === "web_fetch") {
     const parsed = parseUrl(arg(record, "url"));
     return { kind: "reachability_check", risk: "network-read", params: parsed || { url: arg(record, "url") }, normalized: "fetch <url>" };
   }
-  if (record.name === "sidekick_github") {
+  if (name === "github") {
     const action = arg(record, "action");
     const readonly = /^(repo_info|pr_get|pr_list|issue_list|commit_status)$/i.test(String(action || ""));
     return { kind: readonly ? "github_inspection" : "github_mutation", risk: readonly ? "remote-read" : "remote-modification", params: { action, repo: arg(record, "repo") }, normalized: `github ${action || "operation"}` };
   }
-  if (record.name === "sidekick_read") return { kind: "file_read", risk: "read-only", params: { path: arg(record, "path") }, normalized: "read file <path>" };
-  if (record.name === "sidekick_hash") return { kind: "file_hash", risk: "read-only", params: { path: arg(record, "path"), algorithm: arg(record, "algorithm") }, normalized: "hash file <path>" };
-  if (/write|delete|restore|kill|flush|remove/i.test(record.name)) return { kind: "local_mutation", risk: "local-modification", params: {}, normalized: record.name };
-  return { kind: "unknown", risk: "unknown", params: {}, normalized: record.name };
+  if (name === "read") return { kind: "file_read", risk: "read-only", params: { path: arg(record, "path") }, normalized: "read file <path>" };
+  if (name === "hash") return { kind: "file_hash", risk: "read-only", params: { path: arg(record, "path"), algorithm: arg(record, "algorithm") }, normalized: "hash file <path>" };
+  if (/write|delete|restore|kill|flush|remove/i.test(name)) return { kind: "local_mutation", risk: "local-modification", params: {}, normalized: name };
+  return { kind: "unknown", risk: "unknown", params: {}, normalized: name };
 }
 
 function semanticFamily(operations) {
@@ -203,11 +204,12 @@ function inferFamilyParameters(traces, family) {
 
 function operationToStep(operation, record, parameters) {
   const p = name => parameters[name] ? `{{${name}}}` : operation.params[name];
-  if (record.name === "sidekick_bash") {
-    if (operation.kind === "service_status") return { tool: "sidekick_bash", args: { command: `systemctl status ${p("service")}` } };
-    if (operation.kind === "service_logs") return { tool: "sidekick_bash", args: { command: `journalctl -u ${p("service")} -n 80 --no-pager` } };
-    if (operation.kind === "repository_status") return { tool: "sidekick_bash", args: { command: `git -C ${p("repository_path")} status --short --branch` } };
-    if (operation.kind === "reachability_check") return { tool: "sidekick_bash", args: { command: `curl -fsS ${p("protocol")}://${p("host")}:${p("port")}` } };
+  const name = record.name.replace(/^sidekick_/, "");
+  if (name === "bash") {
+    if (operation.kind === "service_status") return { tool: "bash", args: { command: `systemctl status ${p("service")}` } };
+    if (operation.kind === "service_logs") return { tool: "bash", args: { command: `journalctl -u ${p("service")} -n 80 --no-pager` } };
+    if (operation.kind === "repository_status") return { tool: "bash", args: { command: `git -C ${p("repository_path")} status --short --branch` } };
+    if (operation.kind === "reachability_check") return { tool: "bash", args: { command: `curl -fsS ${p("protocol")}://${p("host")}:${p("port")}` } };
   }
   const args = normalizeArgs(record.args || record.argsShape || {});
   for (const [name] of Object.entries(parameters)) {
@@ -286,8 +288,8 @@ function duplicateReasonsFor(toolName, existing = {}) {
   const generated = new Set(existing.generated || []);
   const pending = new Set(existing.pending || []);
   const reasons = [];
-  const baseName = toolName.replace(/^sidekick_generated_/, "");
-  if (builtIns.has(toolName) || builtIns.has(`sidekick_${baseName}`)) reasons.push("built-in tool name collision");
+  const baseName = toolName.replace(/^(?:sidekick_)?generated_/, "");
+  if (builtIns.has(toolName) || builtIns.has(baseName)) reasons.push("built-in tool name collision");
   if (procedures.has(baseName) || procedures.has(toolName)) reasons.push("existing procedure covers this task");
   if (generated.has(toolName)) reasons.push("generated tool already exists");
   if (pending.has(toolName)) reasons.push("pending Evolve candidate exists");
@@ -344,7 +346,7 @@ function detectCandidates(logs, existing = {}, options = {}) {
       for (const trace of traces) reject("zero estimated savings", trace, diagnostics);
       continue;
     }
-    const toolName = `sidekick_generated_${slugify(familyKey)}`.slice(0, 80);
+    const toolName = `generated_${slugify(familyKey)}`.slice(0, 80);
     const duplicateReasons = duplicateReasonsFor(toolName, existing);
     const duplicatePenalty = duplicateReasons.length ? 35 : 0;
     const risk = riskFromOperations(successes.flatMap(t => t.operations));

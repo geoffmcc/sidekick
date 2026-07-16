@@ -16,16 +16,16 @@ const { TOOLS, setSource } = require('../src/tools');
 const dbStore = require('../src/db');
 
 const {
-  sidekick_db_schema,
-  sidekick_db_query,
-  sidekick_db_stats,
-  sidekick_db_backup,
-  sidekick_db_restore,
-  sidekick_log_query,
-  sidekick_db_export,
-  sidekick_db_search,
-  sidekick_db_migrate,
-  sidekick_db_diff,
+  db_schema,
+  db_query,
+  db_stats,
+  db_backup,
+  db_restore,
+  log_query,
+  db_export,
+  db_search,
+  db_migrate,
+  db_diff,
 } = TOOLS;
 
 console.log('Running Database Tools Tests...\n');
@@ -34,8 +34,8 @@ console.log('Running Database Tools Tests...\n');
   setSource('test');
 
   // --- db_schema ---
-  console.log('Test: sidekick_db_schema - list all tables');
-  const schemaResult = await sidekick_db_schema({});
+  console.log('Test: db_schema - list all tables');
+  const schemaResult = await db_schema({});
   assert.ok(!schemaResult.isError, 'Should succeed');
   const tables = JSON.parse(schemaResult.content[0].text);
   assert.ok(Array.isArray(tables), 'Should return array');
@@ -43,8 +43,8 @@ console.log('Running Database Tools Tests...\n');
   assert.ok(tables.some(t => t.name === 'tool_logs'), 'Should include tool_logs');
   console.log('✓ Passed\n');
 
-  console.log('Test: sidekick_db_schema - specific table');
-  const tableResult = await sidekick_db_schema({ table: 'kv_store' });
+  console.log('Test: db_schema - specific table');
+  const tableResult = await db_schema({ table: 'kv_store' });
   assert.ok(!tableResult.isError, 'Should succeed');
   const tableInfo = JSON.parse(tableResult.content[0].text);
   assert.strictEqual(tableInfo.table, 'kv_store', 'Should be kv_store');
@@ -52,8 +52,8 @@ console.log('Running Database Tools Tests...\n');
   assert.ok(tableInfo.columns.some(c => c.name === 'key'), 'Should have key column');
   console.log('✓ Passed\n');
 
-  console.log('Test: sidekick_db_schema - verbose');
-  const verboseResult = await sidekick_db_schema({ verbose: true });
+  console.log('Test: db_schema - verbose');
+  const verboseResult = await db_schema({ verbose: true });
   assert.ok(!verboseResult.isError, 'Should succeed');
   const detailed = JSON.parse(verboseResult.content[0].text);
   assert.ok(Array.isArray(detailed), 'Should return array');
@@ -61,46 +61,46 @@ console.log('Running Database Tools Tests...\n');
   console.log('✓ Passed\n');
 
   // --- db_query ---
-  console.log('Test: sidekick_db_query - readonly SELECT');
-  const queryResult = await sidekick_db_query({ sql: 'SELECT * FROM kv_store' });
+  console.log('Test: db_query - readonly SELECT');
+  const queryResult = await db_query({ sql: 'SELECT * FROM kv_store' });
   assert.ok(!queryResult.isError, 'Should succeed');
   const rows = JSON.parse(queryResult.content[0].text);
   assert.ok(Array.isArray(rows), 'Should return array');
   console.log('✓ Passed\n');
 
-  console.log('Test: sidekick_db_query - readonly blocks INSERT');
-  const writeResult = await sidekick_db_query({ sql: "INSERT INTO kv_store (key, value_json) VALUES ('hack', '{}')" });
+  console.log('Test: db_query - readonly blocks INSERT');
+  const writeResult = await db_query({ sql: "INSERT INTO kv_store (key, value_json) VALUES ('hack', '{}')" });
   assert.ok(writeResult.isError, 'Should block write in readonly mode');
   assert.ok(writeResult.content[0].text.includes('readonly'), 'Should mention readonly');
   console.log('✓ Passed\n');
 
-  console.log('Test: sidekick_db_query - readonly blocks DROP');
-  const dropResult = await sidekick_db_query({ sql: 'DROP TABLE kv_store' });
+  console.log('Test: db_query - readonly blocks DROP');
+  const dropResult = await db_query({ sql: 'DROP TABLE kv_store' });
   assert.ok(dropResult.isError, 'Should block DROP in readonly mode');
   console.log('✓ Passed\n');
 
-  console.log('Test: sidekick_db_query - readonly blocks mutating PRAGMA');
-  const pragmaResult = await sidekick_db_query({ sql: 'PRAGMA journal_mode = DELETE' });
+  console.log('Test: db_query - readonly blocks mutating PRAGMA');
+  const pragmaResult = await db_query({ sql: 'PRAGMA journal_mode = DELETE' });
   assert.ok(pragmaResult.isError, 'Should block mutating PRAGMA in readonly mode');
   console.log('Passed\n');
 
-  console.log('Test: sidekick_db_query - readonly blocks multiple statements');
-  const multiResult = await sidekick_db_query({ sql: 'SELECT * FROM kv_store; DELETE FROM kv_store' });
+  console.log('Test: db_query - readonly blocks multiple statements');
+  const multiResult = await db_query({ sql: 'SELECT * FROM kv_store; DELETE FROM kv_store' });
   assert.ok(multiResult.isError, 'Should block multiple statements in readonly mode');
   console.log('Passed\n');
 
-  console.log('Test: sidekick_db_query - readonly allows safe PRAGMA');
-  const safePragmaResult = await sidekick_db_query({ sql: 'PRAGMA table_info(kv_store)' });
+  console.log('Test: db_query - readonly allows safe PRAGMA');
+  const safePragmaResult = await db_query({ sql: 'PRAGMA table_info(kv_store)' });
   assert.ok(!safePragmaResult.isError, 'Should allow safe PRAGMA in readonly mode');
   console.log('Passed\n');
 
-  console.log('Test: sidekick_db_query - readonly blocks mutating WITH statements');
-  const withDeleteResult = await sidekick_db_query({ sql: "WITH rows AS (SELECT key FROM kv_store) DELETE FROM kv_store WHERE key IN (SELECT key FROM rows)" });
+  console.log('Test: db_query - readonly blocks mutating WITH statements');
+  const withDeleteResult = await db_query({ sql: "WITH rows AS (SELECT key FROM kv_store) DELETE FROM kv_store WHERE key IN (SELECT key FROM rows)" });
   assert.ok(withDeleteResult.isError, 'Should block mutating WITH statement in readonly mode');
   console.log('Passed\n');
 
-  console.log('Test: sidekick_db_query - with params');
-  const paramResult = await sidekick_db_query({
+  console.log('Test: db_query - with params');
+  const paramResult = await db_query({
     sql: 'SELECT * FROM kv_store WHERE key = ?',
     params: ['nonexistent']
   });
@@ -109,16 +109,16 @@ console.log('Running Database Tools Tests...\n');
   assert.strictEqual(paramRows.length, 0, 'Should return empty array');
   console.log('✓ Passed\n');
 
-  console.log('Test: sidekick_db_query - with limit');
-  const limitResult = await sidekick_db_query({ sql: 'SELECT * FROM tool_logs', limit: 5 });
+  console.log('Test: db_query - with limit');
+  const limitResult = await db_query({ sql: 'SELECT * FROM tool_logs', limit: 5 });
   assert.ok(!limitResult.isError, 'Should succeed');
   const limitRows = JSON.parse(limitResult.content[0].text);
   assert.ok(limitRows.length <= 5, 'Should respect limit');
   console.log('✓ Passed\n');
 
   // --- db_stats ---
-  console.log('Test: sidekick_db_stats - basic');
-  const statsResult = await sidekick_db_stats({});
+  console.log('Test: db_stats - basic');
+  const statsResult = await db_stats({});
   assert.ok(!statsResult.isError, 'Should succeed');
   const stats = JSON.parse(statsResult.content[0].text);
   assert.ok(stats.dbSize !== undefined, 'Should have dbSize');
@@ -127,70 +127,70 @@ console.log('Running Database Tools Tests...\n');
   assert.ok(stats.totalTables > 0, 'Should have tables');
   console.log('✓ Passed\n');
 
-  console.log('Test: sidekick_db_stats - detailed');
-  const detailedStatsResult = await sidekick_db_stats({ detailed: true });
+  console.log('Test: db_stats - detailed');
+  const detailedStatsResult = await db_stats({ detailed: true });
   assert.ok(!detailedStatsResult.isError, 'Should succeed');
   const detailedStats = JSON.parse(detailedStatsResult.content[0].text);
   assert.ok(Array.isArray(detailedStats.tables), 'Should have tables array');
   console.log('✓ Passed\n');
 
   // --- db_backup ---
-  console.log('Test: sidekick_db_backup - create backup');
-  const backupResult = await sidekick_db_backup({ compress: false });
+  console.log('Test: db_backup - create backup');
+  const backupResult = await db_backup({ compress: false });
   assert.ok(!backupResult.isError, 'Should succeed');
   assert.ok(backupResult.content[0].text.includes('Backup created'), 'Should confirm backup');
   console.log('✓ Passed\n');
 
   // --- log_query ---
-  console.log('Test: sidekick_log_query - no filters');
-  const logResult = await sidekick_log_query({ limit: 10 });
+  console.log('Test: log_query - no filters');
+  const logResult = await log_query({ limit: 10 });
   assert.ok(!logResult.isError, 'Should succeed');
   const logs = JSON.parse(logResult.content[0].text);
   assert.ok(Array.isArray(logs), 'Should return array');
   assert.ok(logs.length <= 10, 'Should respect limit');
   console.log('✓ Passed\n');
 
-  console.log('Test: sidekick_log_query - filter by tool');
-  const toolLogResult = await sidekick_log_query({ tool: 'sidekick_db_schema', limit: 50 });
+  console.log('Test: log_query - filter by tool');
+  const toolLogResult = await log_query({ tool: 'db_schema', limit: 50 });
   assert.ok(!toolLogResult.isError, 'Should succeed');
   const toolLogs = JSON.parse(toolLogResult.content[0].text);
   assert.ok(Array.isArray(toolLogs), 'Should return array');
   for (const log of toolLogs) {
-    assert.strictEqual(log.n, 'sidekick_db_schema', 'Should only have db_schema entries');
+    assert.strictEqual(log.n, 'db_schema', 'Should only have db_schema entries');
   }
   console.log('✓ Passed\n');
 
-  console.log('Test: sidekick_log_query - filter by success');
-  const successLogResult = await sidekick_log_query({ success: true, limit: 50 });
+  console.log('Test: log_query - filter by success');
+  const successLogResult = await log_query({ success: true, limit: 50 });
   assert.ok(!successLogResult.isError, 'Should succeed');
   const successLogs = JSON.parse(successLogResult.content[0].text);
   assert.ok(Array.isArray(successLogs), 'Should return array');
   console.log('✓ Passed\n');
 
   // --- db_export ---
-  console.log('Test: sidekick_db_export - JSON single table');
-  const exportResult = await sidekick_db_export({ table: 'meta', format: 'json' });
+  console.log('Test: db_export - JSON single table');
+  const exportResult = await db_export({ table: 'meta', format: 'json' });
   assert.ok(!exportResult.isError, 'Should succeed');
   const exported = JSON.parse(exportResult.content[0].text);
   assert.ok(Array.isArray(exported), 'Should return array');
   console.log('✓ Passed\n');
 
-  console.log('Test: sidekick_db_export - CSV format');
-  const csvResult = await sidekick_db_export({ table: 'meta', format: 'csv' });
+  console.log('Test: db_export - CSV format');
+  const csvResult = await db_export({ table: 'meta', format: 'csv' });
   assert.ok(!csvResult.isError, 'Should succeed');
   assert.ok(typeof csvResult.content[0].text === 'string', 'Should return string');
   console.log('✓ Passed\n');
 
-  console.log('Test: sidekick_db_export - SQL format');
-  const sqlResult = await sidekick_db_export({ table: 'meta', format: 'sql' });
+  console.log('Test: db_export - SQL format');
+  const sqlResult = await db_export({ table: 'meta', format: 'sql' });
   assert.ok(!sqlResult.isError, 'Should succeed');
   assert.ok(typeof sqlResult.content[0].text === 'string', 'Should return string');
   console.log('✓ Passed\n');
 
   // --- db_search ---
-  console.log('Test: sidekick_db_search - basic search');
+  console.log('Test: db_search - basic search');
   try {
-    const searchResult = await sidekick_db_search({ query: 'schema_version', limit: 10 });
+    const searchResult = await db_search({ query: 'schema_version', limit: 10 });
     assert.ok(!searchResult.isError, 'Should succeed');
     const searchRows = JSON.parse(searchResult.content[0].text);
     assert.ok(Array.isArray(searchRows), 'Should return array');
@@ -201,41 +201,41 @@ console.log('Running Database Tools Tests...\n');
   }
 
   // --- db_migrate ---
-  console.log('Test: sidekick_db_migrate - status');
-  const migrateStatusResult = await sidekick_db_migrate({ action: 'status' });
+  console.log('Test: db_migrate - status');
+  const migrateStatusResult = await db_migrate({ action: 'status' });
   assert.ok(!migrateStatusResult.isError, 'Should succeed');
   const migrateStatus = JSON.parse(migrateStatusResult.content[0].text);
   assert.ok(migrateStatus.currentVersion !== undefined, 'Should have currentVersion');
   assert.ok(Array.isArray(migrateStatus.migrations), 'Should have migrations array');
   console.log('✓ Passed\n');
 
-  console.log('Test: sidekick_db_migrate - list');
-  const migrateListResult = await sidekick_db_migrate({ action: 'list' });
+  console.log('Test: db_migrate - list');
+  const migrateListResult = await db_migrate({ action: 'list' });
   assert.ok(!migrateListResult.isError, 'Should succeed');
   const migrateList = JSON.parse(migrateListResult.content[0].text);
   assert.ok(Array.isArray(migrateList), 'Should return array');
   console.log('✓ Passed\n');
 
   // --- db_diff ---
-  console.log('Test: sidekick_db_diff - current vs current');
-  const diffResult = await sidekick_db_diff({});
+  console.log('Test: db_diff - current vs current');
+  const diffResult = await db_diff({});
   assert.ok(!diffResult.isError, 'Should succeed');
   const diff = JSON.parse(diffResult.content[0].text);
   assert.ok(diff.summary !== undefined, 'Should have summary');
   assert.ok(diff.details !== undefined, 'Should have details');
   console.log('✓ Passed\n');
 
-  console.log('Test: sidekick_db_diff - specific table');
-  const tableDiffResult = await sidekick_db_diff({ table: 'kv_store' });
+  console.log('Test: db_diff - specific table');
+  const tableDiffResult = await db_diff({ table: 'kv_store' });
   assert.ok(!tableDiffResult.isError, 'Should succeed');
   const tableDiff = JSON.parse(tableDiffResult.content[0].text);
   assert.ok(tableDiff.kv_store !== undefined, 'Should have kv_store key');
   console.log('✓ Passed\n');
 
   // --- Error cases ---
-  console.log('Test: sidekick_db_schema - nonexistent table');
+  console.log('Test: db_schema - nonexistent table');
   try {
-    const badTableResult = await sidekick_db_schema({ table: 'nonexistent_table_xyz' });
+    const badTableResult = await db_schema({ table: 'nonexistent_table_xyz' });
     assert.ok(badTableResult.isError, 'Should error for nonexistent table');
     console.log('✓ Passed\n');
   } catch (err) {

@@ -234,7 +234,7 @@ try {
   assert.doesNotMatch(deployPs1, /rm -rf \$REMOTE_DIR/, 'deploy.ps1 should not destructively remove live directory');
   assert.match(toolsJs, /SIDEKICK_DEPLOY_REPO_PATH = "\/home\/sidekick\/sidekick"/, 'sidekick_ops should use fixed deployment path');
   assert.match(toolsJs, /deployScriptPath\(repoPath\)/, 'sidekick_ops should delegate to git deployment helper');
-  assert.match(indexJs, /sidekick_ops:\s*z\.object/, 'sidekick_ops schema should remain registered');
+  assert.match(indexJs, /ops:\s*z\.object/, 'ops schema should remain registered');
 
   console.log('Git deployment hardening tests passed\n');
 } finally {

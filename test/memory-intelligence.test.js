@@ -28,7 +28,7 @@ dbStore.runPendingMigrations();
     "password=super-secret-value"
   ].join("\n");
 
-  const create = await TOOLS.sidekick_handoff({
+  const create = await TOOLS.handoff({
     action: "create",
     key: "sidekick-handoff-test",
     project: "sidekick",
@@ -47,17 +47,17 @@ dbStore.runPendingMigrations();
   const handoffEvent = dbStore.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_type = 'memory.handoff_processed' AND subject_id = ?").get(createData.handoff.id);
   assert.ok(handoffEvent, "handoff processing should emit a platform memory event");
 
-  const inspect = await TOOLS.sidekick_handoff({ action: "inspect", id: createData.handoff.id });
+  const inspect = await TOOLS.handoff({ action: "inspect", id: createData.handoff.id });
   const inspectData = JSON.parse(inspect.content[0].text);
   assert.ok(inspectData.extracted_memories.length >= createData.memories.length, "inspect should link extracted memories");
   assert.ok(inspectData.extracted_memories.every(memory => memory.source_ref === createData.handoff.id), "extracted memories should link to handoff source");
 
   const beforeCount = dbStore.searchMemories({ project: "sidekick", includeDisabled: true, limit: 100 }).length;
-  await TOOLS.sidekick_handoff({ action: "reprocess", id: createData.handoff.id });
+  await TOOLS.handoff({ action: "reprocess", id: createData.handoff.id });
   const afterCount = dbStore.searchMemories({ project: "sidekick", includeDisabled: true, limit: 100 }).length;
   assert.strictEqual(afterCount, beforeCount, "reprocessing same handoff version should be idempotent");
 
-  const begin = await TOOLS.sidekick_session({
+  const begin = await TOOLS.session({
     action: "begin",
     goal: "Investigate SMB direct-path verification for project sidekick",
     project: "sidekick",
@@ -71,11 +71,11 @@ dbStore.runPendingMigrations();
   const beginEvent = dbStore.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_type = 'memory.session_started' AND subject_id = ?").get(beginData.session.id);
   assert.ok(beginEvent, "session begin should emit a platform memory event");
 
-  const otherProjectRecall = await TOOLS.sidekick_memory({ action: "query", query: "sidekick-mcp port", project: "other_project" });
+  const otherProjectRecall = await TOOLS.memory({ action: "query", query: "sidekick-mcp port", project: "other_project" });
   const otherData = JSON.parse(otherProjectRecall.content[0].text);
   assert.ok(!otherData.memories.some(memory => memory.project === "sidekick"), "unrelated project recall should exclude sidekick-scoped memories");
 
-  const end = await TOOLS.sidekick_session({
+  const end = await TOOLS.session({
     action: "end",
     id: beginData.session.id,
     outcome: "success",
@@ -91,9 +91,9 @@ dbStore.runPendingMigrations();
   const endEvent = dbStore.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_type = 'memory.session_completed' AND subject_id = ?").get(beginData.session.id);
   assert.ok(endEvent, "session end should emit a platform memory event");
 
-  const wrong = await TOOLS.sidekick_memory({ action: "remember", project: "sidekick", type: "fact", content: "Sidekick dashboard runs on port 9999", evidence: "test wrong fact" });
+  const wrong = await TOOLS.memory({ action: "remember", project: "sidekick", type: "fact", content: "Sidekick dashboard runs on port 9999", evidence: "test wrong fact" });
   const wrongId = JSON.parse(wrong.content[0].text).memory.id;
-  const correction = await TOOLS.sidekick_memory({ action: "correct", id: wrongId, correct_to: "Sidekick dashboard runs on port 4098", reason: "test correction" });
+  const correction = await TOOLS.memory({ action: "correct", id: wrongId, correct_to: "Sidekick dashboard runs on port 4098", reason: "test correction" });
   const correctionData = JSON.parse(correction.content[0].text);
   assert.ok(correctionData.replacement.id, "correction should create replacement memory");
   const rememberEvent = dbStore.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_type = 'memory.remembered' AND subject_id = ?").get(wrongId);
@@ -103,11 +103,11 @@ dbStore.runPendingMigrations();
   const old = dbStore.getMemoryById(wrongId, { includeDisabled: true });
   assert.strictEqual(old.state, "deleted", "corrected old memory should be excluded from current recall");
 
-  const explain = await TOOLS.sidekick_memory({ action: "explain", id: correctionData.replacement.id });
+  const explain = await TOOLS.memory({ action: "explain", id: correctionData.replacement.id });
   const explainData = JSON.parse(explain.content[0].text);
   assert.ok(explainData.evidence.length >= 1, "explain should return evidence rows");
 
-  const health = await TOOLS.sidekick_memory({ action: "health" });
+  const health = await TOOLS.memory({ action: "health" });
   const healthData = JSON.parse(health.content[0].text);
   assert.ok(healthData.stats.stored_handoffs >= 1, "health should count stored handoffs");
   assert.ok(healthData.stats.durable_active >= 1, "health should count durable active memories");
