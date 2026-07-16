@@ -3,10 +3,14 @@
   "version": "1.0.0",
   "description": "Sidekick — Autonomous Agent Platform",
   "main": "src/index.js",
+  "bin": {
+    "sidekick-compute-worker": "src/compute/worker-agent.js"
+  },
   "scripts": {
     "start": "node src/index.js",
     "dashboard": "node src/dashboard.js",
     "agent": "node src/agent.js",
+    "package:worker": "mkdir -p dist && npm pack --pack-destination dist",
     "seed:knowledge": "node scripts/seed-knowledge.js",
     "test": "node test/run-all.js",
     "test:ci": "node test/run-all.js",

@@ -6,6 +6,8 @@ const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
 
+applyCliArgs(process.argv.slice(2));
+
 const SERVER_URL = process.env.SIDEKICK_URL || process.env.SIDEKICK_SERVER_URL || "http://127.0.0.1:4097";
 const ENROLLMENT_TOKEN = process.env.SIDEKICK_ENROLL_TOKEN || process.env.COMPUTE_TOKEN || "";
 const NODE_ID = process.env.SIDEKICK_NODE_ID || `node_${crypto.randomBytes(8).toString("hex")}`;
@@ -27,6 +29,48 @@ let shuttingDown = false;
 let heartbeatTimer = null;
 const activeJobs = new Set();
 const activeJobPromises = new Set();
+
+function applyCliArgs(args) {
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log(`Usage: sidekick-compute-worker [enroll|run] [options]
+
+Options:
+  --server <url>       Sidekick MCP server URL, for example http://10.47.20.20:4097
+  --token <token>      One-time enrollment token for first enrollment
+  --name <name>        Worker display name
+  --node-id <id>       Stable node ID for this machine
+  --config <path>      Credential file path
+  --concurrency <n>    Maximum concurrent jobs, 1-16
+  --service <type>     Accepted for installer scripts; service registration is platform packaging
+`);
+    process.exit(0);
+  }
+  const command = args[0] && !args[0].startsWith("-") ? args.shift() : "run";
+  if (!["run", "enroll"].includes(command)) {
+    console.error(`Unknown worker command: ${command}`);
+    process.exit(2);
+  }
+  const map = {
+    "--server": "SIDEKICK_SERVER_URL",
+    "--token": "SIDEKICK_ENROLL_TOKEN",
+    "--name": "SIDEKICK_NODE_NAME",
+    "--node-id": "SIDEKICK_NODE_ID",
+    "--config": "SIDEKICK_WORKER_CONFIG",
+    "--concurrency": "SIDEKICK_WORKER_CONCURRENCY",
+  };
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--service") { i++; continue; }
+    const envName = map[arg];
+    if (!envName) continue;
+    const value = args[++i];
+    if (!value) {
+      console.error(`Missing value for ${arg}`);
+      process.exit(2);
+    }
+    process.env[envName] = value;
+  }
+}
 
 function log(msg) { console.log(`[worker-agent] ${new Date().toISOString()} ${redact(msg)}`); }
 function redact(value) { return String(value || "").replace(/(wksec_|enroll_)[A-Za-z0-9_-]+/g, "[REDACTED]"); }

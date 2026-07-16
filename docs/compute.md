@@ -44,6 +44,18 @@ The worker agent in `src/compute/worker-agent.js` can be configured with:
 - `SIDEKICK_WORKER_CONCURRENCY`
 - `SIDEKICK_WORKER_SHUTDOWN_GRACE_MS`
 
+The same agent is exposed as the package binary `sidekick-compute-worker`. The dashboard Compute page generates enrollment commands like:
+
+```bash
+sidekick-compute-worker enroll --server http://<sidekick-host>:4097 --token <enrollment-token> --service systemd
+```
+
+The `--service` flag is accepted so platform installers can pass a common command shape. Service registration itself belongs to platform packaging or deployment scripts. For development checkouts, this source command is equivalent:
+
+```bash
+node src/compute/worker-agent.js enroll --server http://<sidekick-host>:4097 --token <enrollment-token>
+```
+
 The agent validates persisted credentials, writes them atomically, and tightens POSIX file permissions where the filesystem supports it. On Windows-mounted WSL paths, the mount may report broader mode bits even when Node writes with `0600`.
 
 ## Hardware, Backends, And Models
@@ -116,12 +128,24 @@ The worker agent checks cancellation during cancellable waits. When cancellation
 
 The MCP server exposes compute admin APIs under `/compute/admin/*`.
 
+The dashboard has a first-class Compute page for fleet status, enrollment, worker controls, recent jobs, job details, cancellation, retry, and expired lease recovery.
+
 The dashboard backend exposes authenticated read APIs under:
 
 - `/api/compute`
 - `/api/compute/workers`
 - `/api/compute/jobs`
 - `/api/compute/jobs/:jobId`
+
+It exposes authenticated dashboard mutations under:
+
+- `POST /api/compute/enrollment-tokens`
+- `POST /api/compute/workers/:workerId/disable`
+- `POST /api/compute/workers/:workerId/enable`
+- `POST /api/compute/workers/:workerId/revoke`
+- `POST /api/compute/jobs/:jobId/cancel`
+- `POST /api/compute/jobs/:jobId/retry`
+- `POST /api/compute/recover`
 
 Job detail includes attempts and artifacts. Job stats include status counts, type counts, active lease count, attempt count, and artifact counts by state.
 
