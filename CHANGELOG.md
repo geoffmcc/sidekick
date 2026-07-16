@@ -4,6 +4,10 @@ All notable changes to Sidekick.
 
 ## Unreleased
 
+### Licensing
+
+- Sidekick is now licensed under the GNU General Public License v3.0 only (`GPL-3.0-only`).
+
 ### Evolve workflow learning and dynamic tools
 
 - Replaced the legacy LLM-confidence Evolve flow with deterministic workflow mining, candidate scoring, validation, explicit lifecycle states, trial activation, promotion, feedback, and deprecation.

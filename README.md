@@ -750,7 +750,9 @@ That's it. Sidekick is live.
 
 ---
 
-**License:** MIT · See [LICENSE](LICENSE) for details.
+**License:** GNU General Public License v3.0 only (`GPL-3.0-only`) · See [LICENSE](LICENSE) for details.
+
+**Copyright:** © 2026 Geoffrey McClinsey.
 
 **Contributing:** PRs welcome.
 
