@@ -155,6 +155,24 @@ The model registry tracks available LLM models and their capabilities:
 - `recordModelUsage(modelId)` increments usage counter and updates last-used timestamp.
 - Models emit `model.registered` and `model.deprecated` events.
 
+### Extension system and generated platform docs
+
+The platform kernel provides a plugin/extension system and auto-generated documentation:
+
+- `registerExtension({ name, version, type, author, description, entry_point, capabilities, dependencies, config_schema, config, hooks })` registers an extension. Extensions start in `registered` state.
+- `getExtension(extensionId)` and `getExtensionByName(name)` retrieve extension details with parsed capabilities, dependencies, config, and hooks.
+- `activateExtension(extensionId)` transitions from `registered` to `active`.
+- `deactivateExtension(extensionId, { reason })` transitions from `active` to `deactivated`.
+- `uninstallExtension(extensionId, { reason })` transitions to `uninstalled` with a warning event.
+- `updateExtensionConfig(extensionId, config)` updates the extension's configuration.
+- `recordExtensionUsage(extensionId)` increments usage counter and updates last-used timestamp.
+- `listExtensions({ state, type, limit })` filters and lists registered extensions.
+- Extensions emit `extension.registered`, `extension.activated`, `extension.deactivated`, and `extension.uninstalled` events.
+
+Generated platform documentation:
+
+- `generatePlatformDocs()` produces a comprehensive snapshot of platform state including execution counts, event counts, artifact counts, workflow counts, runner counts, workspace counts, model counts, extension counts, capability counts, change-set counts, execution state breakdown, recent events (24h), active models, active extensions, and a list of all platform tables.
+
 ### Dashboard: `src/dashboard.js`
 
 The dashboard serves a browser UI and JSON API. The server code lives in `src/dashboard.js`, the authenticated HTML shell lives in `src/dashboard.html`, and public CSS/JS assets live under `static/`. It reads the Sidekick data directory, reports system state, allows KV editing and deletion, exposes tool metadata, accepts webhooks, and proxies agent requests to the Agent Bridge.

@@ -299,6 +299,33 @@ function ensurePlatformKernelSchema() {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_model_name_provider ON platform_model_registry(name, provider);
     CREATE INDEX IF NOT EXISTS idx_platform_model_state ON platform_model_registry(state, registered_at DESC);
+
+    CREATE TABLE IF NOT EXISTS platform_extensions (
+      extension_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      version TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'registered',
+      type TEXT NOT NULL DEFAULT 'plugin',
+      author TEXT,
+      description TEXT,
+      entry_point TEXT,
+      capabilities_json TEXT NOT NULL DEFAULT '[]',
+      dependencies_json TEXT NOT NULL DEFAULT '[]',
+      config_schema_json TEXT NOT NULL DEFAULT '{}',
+      config_json TEXT NOT NULL DEFAULT '{}',
+      hooks_json TEXT NOT NULL DEFAULT '[]',
+      registered_at TEXT NOT NULL,
+      activated_at TEXT,
+      deactivated_at TEXT,
+      uninstalled_at TEXT,
+      last_used_at TEXT,
+      usage_count INTEGER NOT NULL DEFAULT 0,
+      error_count INTEGER NOT NULL DEFAULT 0,
+      metadata_json TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_extension_name ON platform_extensions(name);
+    CREATE INDEX IF NOT EXISTS idx_platform_extension_state ON platform_extensions(state, registered_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_platform_extension_type ON platform_extensions(type, state);
   `);
 }
 
@@ -969,6 +996,105 @@ function recordModelUsage(modelId) {
   return dbStore.getDb().prepare("SELECT * FROM platform_model_registry WHERE model_id = ?").get(modelId);
 }
 
+function registerExtension(input = {}) {
+  ensurePlatformKernelSchema();
+  const ts = nowIso();
+  const extId = newId("ext");
+  dbStore.getDb().prepare("INSERT INTO platform_extensions (extension_id, name, version, state, type, author, description, entry_point, capabilities_json, dependencies_json, config_schema_json, config_json, hooks_json, registered_at, metadata_json) VALUES (?, ?, ?, 'registered', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(extId, input.name, input.version || "1.0.0", input.type || "plugin", input.author || null, input.description || null, input.entry_point || null, json(input.capabilities), json(input.dependencies), json(input.config_schema), json(input.config), json(input.hooks), ts, json(input.metadata));
+  appendEvent({ event_type: "extension.registered", source: input.source || "platform", actor_id: input.author, subject_type: "extension", subject_id: extId, payload: { name: input.name, version: input.version || "1.0.0", type: input.type || "plugin" }, correlation_id: extId });
+  return dbStore.getDb().prepare("SELECT * FROM platform_extensions WHERE extension_id = ?").get(extId);
+}
+
+function getExtension(extensionId) {
+  ensurePlatformKernelSchema();
+  const row = dbStore.getDb().prepare("SELECT * FROM platform_extensions WHERE extension_id = ?").get(extensionId);
+  if (!row) return null;
+  return { ...row, capabilities: parseJson(row.capabilities_json, []), dependencies: parseJson(row.dependencies_json, []), config_schema: parseJson(row.config_schema_json, {}), config: parseJson(row.config_json, {}), hooks: parseJson(row.hooks_json, []), metadata: parseJson(row.metadata_json, {}) };
+}
+
+function getExtensionByName(name) {
+  ensurePlatformKernelSchema();
+  const row = dbStore.getDb().prepare("SELECT * FROM platform_extensions WHERE name = ?").get(name);
+  if (!row) return null;
+  return { ...row, capabilities: parseJson(row.capabilities_json, []), dependencies: parseJson(row.dependencies_json, []), config_schema: parseJson(row.config_schema_json, {}), config: parseJson(row.config_json, {}), hooks: parseJson(row.hooks_json, []), metadata: parseJson(row.metadata_json, {}) };
+}
+
+function activateExtension(extensionId, details = {}) {
+  ensurePlatformKernelSchema();
+  const ts = details.timestamp || nowIso();
+  dbStore.getDb().prepare("UPDATE platform_extensions SET state = 'active', activated_at = ? WHERE extension_id = ? AND state = 'registered'").run(ts, extensionId);
+  appendEvent({ event_type: "extension.activated", source: details.source || "platform", actor_id: details.actor_id, subject_type: "extension", subject_id: extensionId, payload: {}, correlation_id: extensionId });
+  return dbStore.getDb().prepare("SELECT * FROM platform_extensions WHERE extension_id = ?").get(extensionId);
+}
+
+function deactivateExtension(extensionId, details = {}) {
+  ensurePlatformKernelSchema();
+  const ts = details.timestamp || nowIso();
+  dbStore.getDb().prepare("UPDATE platform_extensions SET state = 'deactivated', deactivated_at = ? WHERE extension_id = ? AND state = 'active'").run(ts, extensionId);
+  appendEvent({ event_type: "extension.deactivated", source: details.source || "platform", actor_id: details.actor_id, subject_type: "extension", subject_id: extensionId, payload: { reason: details.reason }, correlation_id: extensionId });
+  return dbStore.getDb().prepare("SELECT * FROM platform_extensions WHERE extension_id = ?").get(extensionId);
+}
+
+function uninstallExtension(extensionId, details = {}) {
+  ensurePlatformKernelSchema();
+  const ts = details.timestamp || nowIso();
+  dbStore.getDb().prepare("UPDATE platform_extensions SET state = 'uninstalled', uninstalled_at = ? WHERE extension_id = ?").run(ts, extensionId);
+  appendEvent({ event_type: "extension.uninstalled", source: details.source || "platform", actor_id: details.actor_id, subject_type: "extension", subject_id: extensionId, payload: { reason: details.reason }, severity: "warning", correlation_id: extensionId });
+  return dbStore.getDb().prepare("SELECT * FROM platform_extensions WHERE extension_id = ?").get(extensionId);
+}
+
+function updateExtensionConfig(extensionId, config = {}) {
+  ensurePlatformKernelSchema();
+  dbStore.getDb().prepare("UPDATE platform_extensions SET config_json = ? WHERE extension_id = ?").run(json(config), extensionId);
+  return dbStore.getDb().prepare("SELECT * FROM platform_extensions WHERE extension_id = ?").get(extensionId);
+}
+
+function recordExtensionUsage(extensionId) {
+  ensurePlatformKernelSchema();
+  const ts = nowIso();
+  dbStore.getDb().prepare("UPDATE platform_extensions SET usage_count = usage_count + 1, last_used_at = ? WHERE extension_id = ?").run(ts, extensionId);
+  return dbStore.getDb().prepare("SELECT * FROM platform_extensions WHERE extension_id = ?").get(extensionId);
+}
+
+function listExtensions(filters = {}) {
+  ensurePlatformKernelSchema();
+  let query = "SELECT * FROM platform_extensions WHERE 1=1";
+  const params = [];
+  if (filters.state) { query += " AND state = ?"; params.push(filters.state); }
+  if (filters.type) { query += " AND type = ?"; params.push(filters.type); }
+  query += " ORDER BY registered_at DESC";
+  if (filters.limit) { query += " LIMIT ?"; params.push(filters.limit); }
+  return dbStore.getDb().prepare(query).all(...params).map(row => ({ ...row, capabilities: parseJson(row.capabilities_json, []), dependencies: parseJson(row.dependencies_json, []), config_schema: parseJson(row.config_schema_json, {}), config: parseJson(row.config_json, {}), hooks: parseJson(row.hooks_json, []), metadata: parseJson(row.metadata_json, {}) }));
+}
+
+function generatePlatformDocs() {
+  ensurePlatformKernelSchema();
+  const db = dbStore.getDb();
+  const execCount = db.prepare("SELECT COUNT(*) as cnt FROM platform_executions").get().cnt;
+  const eventCount = db.prepare("SELECT COUNT(*) as cnt FROM platform_execution_events").get().cnt;
+  const artifactCount = db.prepare("SELECT COUNT(*) as cnt FROM platform_artifacts").get().cnt;
+  const workflowCount = db.prepare("SELECT COUNT(*) as cnt FROM platform_workflows").get().cnt;
+  const runnerCount = db.prepare("SELECT COUNT(*) as cnt FROM platform_runner_sessions").get().cnt;
+  const workspaceCount = db.prepare("SELECT COUNT(*) as cnt FROM platform_project_workspaces").get().cnt;
+  const modelCount = db.prepare("SELECT COUNT(*) as cnt FROM platform_model_registry").get().cnt;
+  const extensionCount = db.prepare("SELECT COUNT(*) as cnt FROM platform_extensions").get().cnt;
+  const capabilityCount = db.prepare("SELECT COUNT(*) as cnt FROM platform_capabilities").get().cnt;
+  const changeSetCount = db.prepare("SELECT COUNT(*) as cnt FROM platform_change_sets").get().cnt;
+  const states = db.prepare("SELECT state, COUNT(*) as cnt FROM platform_executions GROUP BY state ORDER BY cnt DESC").all();
+  const recentEvents = db.prepare("SELECT event_type, COUNT(*) as cnt FROM platform_execution_events WHERE timestamp > datetime('now', '-24h') GROUP BY event_type ORDER BY cnt DESC LIMIT 10").all();
+  const activeModels = db.prepare("SELECT name, provider, usage_count FROM platform_model_registry WHERE state = 'registered' ORDER BY usage_count DESC LIMIT 5").all();
+  const activeExtensions = db.prepare("SELECT name, type, state, usage_count FROM platform_extensions WHERE state = 'active' ORDER BY usage_count DESC LIMIT 5").all();
+  return {
+    generated_at: nowIso(),
+    summary: { executions: execCount, events: eventCount, artifacts: artifactCount, workflows: workflowCount, runners: runnerCount, workspaces: workspaceCount, models: modelCount, extensions: extensionCount, capabilities: capabilityCount, change_sets: changeSetCount },
+    execution_states: states,
+    recent_events_24h: recentEvents,
+    active_models: activeModels,
+    active_extensions: activeExtensions,
+    tables: ["platform_executions", "platform_execution_events", "platform_artifacts", "platform_execution_transitions", "platform_capabilities", "platform_change_sets", "platform_workflows", "platform_workflow_steps", "platform_runner_sessions", "platform_project_workspaces", "platform_model_registry", "platform_extensions"],
+  };
+}
+
 module.exports = {
   EXECUTION_STATES,
   TERMINAL_STATES,
@@ -1012,4 +1138,14 @@ module.exports = {
   listModels,
   deprecateModel,
   recordModelUsage,
+  registerExtension,
+  getExtension,
+  getExtensionByName,
+  activateExtension,
+  deactivateExtension,
+  uninstallExtension,
+  updateExtensionConfig,
+  recordExtensionUsage,
+  listExtensions,
+  generatePlatformDocs,
 };
