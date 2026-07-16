@@ -255,6 +255,50 @@ function ensurePlatformKernelSchema() {
       metadata_json TEXT NOT NULL DEFAULT '{}'
     );
     CREATE INDEX IF NOT EXISTS idx_platform_runner_sessions_state ON platform_runner_sessions(state, started_at DESC);
+
+    CREATE TABLE IF NOT EXISTS platform_project_workspaces (
+      workspace_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'active',
+      config_json TEXT NOT NULL DEFAULT '{}',
+      secrets_json TEXT NOT NULL DEFAULT '{}',
+      environment TEXT,
+      resource_limits_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      archived_at TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_workspaces_project ON platform_project_workspaces(project_id) WHERE state = 'active';
+    CREATE INDEX IF NOT EXISTS idx_platform_workspaces_owner ON platform_project_workspaces(owner_id, state);
+    CREATE INDEX IF NOT EXISTS idx_platform_workspaces_state ON platform_project_workspaces(state, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS platform_model_registry (
+      model_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      version TEXT,
+      state TEXT NOT NULL DEFAULT 'registered',
+      capabilities_json TEXT NOT NULL DEFAULT '[]',
+      context_window INTEGER,
+      max_output_tokens INTEGER,
+      supports_streaming INTEGER NOT NULL DEFAULT 0,
+      supports_vision INTEGER NOT NULL DEFAULT 0,
+      supports_tools INTEGER NOT NULL DEFAULT 1,
+      cost_per_1k_input REAL,
+      cost_per_1k_output REAL,
+      rate_limit_rpm INTEGER,
+      registered_by TEXT,
+      registered_at TEXT NOT NULL,
+      deprecated_at TEXT,
+      last_used_at TEXT,
+      usage_count INTEGER NOT NULL DEFAULT 0,
+      metadata_json TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_model_name_provider ON platform_model_registry(name, provider);
+    CREATE INDEX IF NOT EXISTS idx_platform_model_state ON platform_model_registry(state, registered_at DESC);
   `);
 }
 
@@ -830,6 +874,101 @@ function getRunnerSession(runnerId) {
   return { ...row, resource_limits: parseJson(row.resource_limits_json, {}), resource_usage: parseJson(row.resource_usage_json, {}), metadata: parseJson(row.metadata_json, {}) };
 }
 
+function createProjectWorkspace(input = {}) {
+  ensurePlatformKernelSchema();
+  const ts = nowIso();
+  const wsId = newId("ws");
+  dbStore.getDb().prepare("INSERT INTO platform_project_workspaces (workspace_id, name, project_id, owner_id, state, config_json, secrets_json, environment, resource_limits_json, created_at, updated_at, metadata_json) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)").run(wsId, input.name || input.project_id, input.project_id, input.owner_id || "system", json(input.config), json(input.secrets), input.environment || "default", json(input.resource_limits), ts, ts, json(input.metadata));
+  appendEvent({ event_type: "workspace.created", source: input.source || "platform", actor_id: input.owner_id, subject_type: "workspace", subject_id: wsId, project_id: input.project_id, payload: { name: input.name || input.project_id }, correlation_id: wsId });
+  return dbStore.getDb().prepare("SELECT * FROM platform_project_workspaces WHERE workspace_id = ?").get(wsId);
+}
+
+function getProjectWorkspace(workspaceId) {
+  ensurePlatformKernelSchema();
+  const row = dbStore.getDb().prepare("SELECT * FROM platform_project_workspaces WHERE workspace_id = ?").get(workspaceId);
+  if (!row) return null;
+  return { ...row, config: parseJson(row.config_json, {}), secrets: parseJson(row.secrets_json, {}), resource_limits: parseJson(row.resource_limits_json, {}), metadata: parseJson(row.metadata_json, {}) };
+}
+
+function getWorkspaceByProject(projectId) {
+  ensurePlatformKernelSchema();
+  const row = dbStore.getDb().prepare("SELECT * FROM platform_project_workspaces WHERE project_id = ? AND state = 'active'").get(projectId);
+  if (!row) return null;
+  return { ...row, config: parseJson(row.config_json, {}), secrets: parseJson(row.secrets_json, {}), resource_limits: parseJson(row.resource_limits_json, {}), metadata: parseJson(row.metadata_json, {}) };
+}
+
+function updateProjectWorkspace(workspaceId, updates = {}) {
+  ensurePlatformKernelSchema();
+  const ts = nowIso();
+  const existing = dbStore.getDb().prepare("SELECT * FROM platform_project_workspaces WHERE workspace_id = ?").get(workspaceId);
+  if (!existing) throw new Error(`Workspace ${workspaceId} not found`);
+  const config = updates.config !== undefined ? json(updates.config) : existing.config_json;
+  const secrets = updates.secrets !== undefined ? json(updates.secrets) : existing.secrets_json;
+  const environment = updates.environment || existing.environment;
+  const resourceLimits = updates.resource_limits !== undefined ? json(updates.resource_limits) : existing.resource_limits_json;
+  const metadata = updates.metadata !== undefined ? json(updates.metadata) : existing.metadata_json;
+  dbStore.getDb().prepare("UPDATE platform_project_workspaces SET config_json = ?, secrets_json = ?, environment = ?, resource_limits_json = ?, metadata_json = ?, updated_at = ? WHERE workspace_id = ?").run(config, secrets, environment, resourceLimits, metadata, ts, workspaceId);
+  appendEvent({ event_type: "workspace.updated", source: updates.source || "platform", actor_id: updates.actor_id, subject_type: "workspace", subject_id: workspaceId, payload: { updated_fields: Object.keys(updates) }, correlation_id: workspaceId });
+  return dbStore.getDb().prepare("SELECT * FROM platform_project_workspaces WHERE workspace_id = ?").get(workspaceId);
+}
+
+function archiveProjectWorkspace(workspaceId, details = {}) {
+  ensurePlatformKernelSchema();
+  const ts = details.timestamp || nowIso();
+  dbStore.getDb().prepare("UPDATE platform_project_workspaces SET state = 'archived', archived_at = ?, updated_at = ? WHERE workspace_id = ?").run(ts, ts, workspaceId);
+  appendEvent({ event_type: "workspace.archived", source: details.source || "platform", actor_id: details.actor_id, subject_type: "workspace", subject_id: workspaceId, payload: {}, correlation_id: workspaceId });
+  return dbStore.getDb().prepare("SELECT * FROM platform_project_workspaces WHERE workspace_id = ?").get(workspaceId);
+}
+
+function registerModel(input = {}) {
+  ensurePlatformKernelSchema();
+  const ts = nowIso();
+  const modelId = newId("model");
+  dbStore.getDb().prepare("INSERT INTO platform_model_registry (model_id, name, provider, version, state, capabilities_json, context_window, max_output_tokens, supports_streaming, supports_vision, supports_tools, cost_per_1k_input, cost_per_1k_output, rate_limit_rpm, registered_by, registered_at, metadata_json) VALUES (?, ?, ?, ?, 'registered', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(modelId, input.name, input.provider, input.version || null, json(input.capabilities), input.context_window || null, input.max_output_tokens || null, input.supports_streaming ? 1 : 0, input.supports_vision ? 1 : 0, input.supports_tools !== false ? 1 : 0, input.cost_per_1k_input || null, input.cost_per_1k_output || null, input.rate_limit_rpm || null, input.registered_by || "system", ts, json(input.metadata));
+  appendEvent({ event_type: "model.registered", source: input.source || "platform", actor_id: input.registered_by, subject_type: "model", subject_id: modelId, payload: { name: input.name, provider: input.provider }, correlation_id: modelId });
+  return dbStore.getDb().prepare("SELECT * FROM platform_model_registry WHERE model_id = ?").get(modelId);
+}
+
+function getModel(modelId) {
+  ensurePlatformKernelSchema();
+  const row = dbStore.getDb().prepare("SELECT * FROM platform_model_registry WHERE model_id = ?").get(modelId);
+  if (!row) return null;
+  return { ...row, capabilities: parseJson(row.capabilities_json, []), supports_streaming: !!row.supports_streaming, supports_vision: !!row.supports_vision, supports_tools: !!row.supports_tools, metadata: parseJson(row.metadata_json, {}) };
+}
+
+function getModelByName(name, provider) {
+  ensurePlatformKernelSchema();
+  const row = dbStore.getDb().prepare("SELECT * FROM platform_model_registry WHERE name = ? AND provider = ?").get(name, provider);
+  if (!row) return null;
+  return { ...row, capabilities: parseJson(row.capabilities_json, []), supports_streaming: !!row.supports_streaming, supports_vision: !!row.supports_vision, supports_tools: !!row.supports_tools, metadata: parseJson(row.metadata_json, {}) };
+}
+
+function listModels(filters = {}) {
+  ensurePlatformKernelSchema();
+  let query = "SELECT * FROM platform_model_registry WHERE 1=1";
+  const params = [];
+  if (filters.state) { query += " AND state = ?"; params.push(filters.state); }
+  if (filters.provider) { query += " AND provider = ?"; params.push(filters.provider); }
+  query += " ORDER BY registered_at DESC";
+  if (filters.limit) { query += " LIMIT ?"; params.push(filters.limit); }
+  return dbStore.getDb().prepare(query).all(...params).map(row => ({ ...row, capabilities: parseJson(row.capabilities_json, []), supports_streaming: !!row.supports_streaming, supports_vision: !!row.supports_vision, supports_tools: !!row.supports_tools, metadata: parseJson(row.metadata_json, {}) }));
+}
+
+function deprecateModel(modelId, details = {}) {
+  ensurePlatformKernelSchema();
+  const ts = details.timestamp || nowIso();
+  dbStore.getDb().prepare("UPDATE platform_model_registry SET state = 'deprecated', deprecated_at = ? WHERE model_id = ?").run(ts, modelId);
+  appendEvent({ event_type: "model.deprecated", source: details.source || "platform", actor_id: details.actor_id, subject_type: "model", subject_id: modelId, payload: { reason: details.reason }, severity: "warning", correlation_id: modelId });
+  return dbStore.getDb().prepare("SELECT * FROM platform_model_registry WHERE model_id = ?").get(modelId);
+}
+
+function recordModelUsage(modelId) {
+  ensurePlatformKernelSchema();
+  const ts = nowIso();
+  dbStore.getDb().prepare("UPDATE platform_model_registry SET usage_count = usage_count + 1, last_used_at = ? WHERE model_id = ?").run(ts, modelId);
+  return dbStore.getDb().prepare("SELECT * FROM platform_model_registry WHERE model_id = ?").get(modelId);
+}
+
 module.exports = {
   EXECUTION_STATES,
   TERMINAL_STATES,
@@ -862,4 +1001,15 @@ module.exports = {
   completeRunnerSession,
   terminateRunnerSession,
   getRunnerSession,
+  createProjectWorkspace,
+  getProjectWorkspace,
+  getWorkspaceByProject,
+  updateProjectWorkspace,
+  archiveProjectWorkspace,
+  registerModel,
+  getModel,
+  getModelByName,
+  listModels,
+  deprecateModel,
+  recordModelUsage,
 };

@@ -136,6 +136,25 @@ Runner sessions provide isolated execution contexts:
 - `completeRunnerSession(runnerId)` and `terminateRunnerSession(runnerId, { reason })` manage runner lifecycle.
 - Runner sessions emit `runner.created`, `runner.completed`, and `runner.terminated` events.
 
+### Project workspaces and model registry
+
+The platform kernel provides isolated project environments and model management:
+
+- `createProjectWorkspace({ name, project_id, owner_id, config, secrets, resource_limits })` creates an isolated project workspace with its own configuration, secrets, and resource limits. Workspaces start in `active` state.
+- `getProjectWorkspace(workspaceId)` and `getWorkspaceByProject(projectId)` retrieve workspace details with parsed config/secrets.
+- `updateProjectWorkspace(workspaceId, { config, secrets, resource_limits })` updates workspace configuration.
+- `archiveProjectWorkspace(workspaceId)` transitions to `archived` state, excluding from active lookups.
+- Workspaces emit `workspace.created`, `workspace.updated`, and `workspace.archived` events.
+
+The model registry tracks available LLM models and their capabilities:
+
+- `registerModel({ name, provider, version, capabilities, context_window, supports_streaming, supports_vision, supports_tools, cost_per_1k_input, cost_per_1k_output, rate_limit_rpm })` registers a model with its specifications.
+- `getModel(modelId)` and `getModelByName(name, provider)` retrieve model details with parsed capabilities.
+- `listModels({ state, provider, limit })` filters and lists registered models.
+- `deprecateModel(modelId, { reason })` transitions to `deprecated` state with a warning event.
+- `recordModelUsage(modelId)` increments usage counter and updates last-used timestamp.
+- Models emit `model.registered` and `model.deprecated` events.
+
 ### Dashboard: `src/dashboard.js`
 
 The dashboard serves a browser UI and JSON API. The server code lives in `src/dashboard.js`, the authenticated HTML shell lives in `src/dashboard.html`, and public CSS/JS assets live under `static/`. It reads the Sidekick data directory, reports system state, allows KV editing and deletion, exposes tool metadata, accepts webhooks, and proxies agent requests to the Agent Bridge.
