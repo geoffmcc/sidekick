@@ -1,6 +1,6 @@
 # Tool Architecture
 
-Sidekick tools execute through a descriptor registry and a centralized dispatcher. `src/tools-legacy.js` still contains most migrated-in-place handlers, but it is no longer the authoritative execution path.
+Sidekick's current built-in registry contains 107 tools across 20 categories. Tools execute through a descriptor registry and centralized dispatcher. `src/tools-legacy.js` still contains most migrated-in-place handlers, but it is no longer the authoritative execution path.
 
 ## Descriptor Model
 
