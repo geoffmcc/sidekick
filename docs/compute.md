@@ -44,17 +44,19 @@ The worker agent in `src/compute/worker-agent.js` can be configured with:
 - `SIDEKICK_WORKER_CONCURRENCY`
 - `SIDEKICK_WORKER_SHUTDOWN_GRACE_MS`
 
-The same agent is exposed as the package binary `sidekick-compute-worker`. The dashboard Compute page generates enrollment commands like:
+The worker entry point in this repository is:
+
+```bash
+node src/compute/worker-agent.js enroll --server http://<sidekick-host>:4097 --token <enrollment-token>
+```
+
+The dashboard may display the intended packaged command shape:
 
 ```bash
 sidekick-compute-worker enroll --server http://<sidekick-host>:4097 --token <enrollment-token> --service systemd
 ```
 
-The `--service` flag is accepted so platform installers can pass a common command shape. Service registration itself belongs to platform packaging or deployment scripts. For development checkouts, this source command is equivalent:
-
-```bash
-node src/compute/worker-agent.js enroll --server http://<sidekick-host>:4097 --token <enrollment-token>
-```
+Full disclosure: the current repository `package.json` does not yet publish a `sidekick-compute-worker` `bin` entry, and the accepted `--service` flag does not itself install a Windows service, macOS launch agent, or systemd unit. Use the source command from a checkout unless a platform-specific package or installer has provided the binary and service registration.
 
 The agent validates persisted credentials, writes them atomically, and tightens POSIX file permissions where the filesystem supports it. On Windows-mounted WSL paths, the mount may report broader mode bits even when Node writes with `0600`.
 

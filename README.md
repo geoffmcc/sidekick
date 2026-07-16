@@ -2,13 +2,17 @@
 
 **Autonomous Agent Platform**
 
-A self-hosted AI agent platform with persistent memory, 96 built-in MCP tools, knowledge base, and the ability to extend itself. Runs on your remote machine, keeps explicit project context across sessions, and can grow its own capabilities—no code changes required.
+A self-hosted AI agent platform with 107 built-in MCP tools, persistent structured memory, searchable knowledge, autonomous workflows, and distributed model compute. Runs on your remote machine, keeps explicit project context across sessions, and can expose approved generated capabilities without modifying the built-in registry.
 
-**How?** A single `AGENTS.md` file that opencode reads on every session start. No plugins, no hooks — just markdown.
-
-![Sidekick Dashboard](docs/screenshots/dashboard-system.png)
+**How?** Connect a compatible MCP client to Sidekick, then optionally adapt the included `AGENTS.md` template so the client knows how to use its persistent tools and knowledge.
 
 > **Note:** This project was developed using its own remote execution tools — the AI assistant used Sidekick's infrastructure to help build and test the very system it runs on.
+
+## Refactor Status and Compatibility Disclosure
+
+> **Full disclosure:** Sidekick's tool runtime is partway through a deliberate modular migration. The descriptor registry, centralized dispatcher, request-scoped context, schema validation, source-aware policy, approval enforcement, redaction, and audit logging are now the authoritative production execution path. However, most mature tool handlers still reside in `src/tools-legacy.js` behind compatibility adapters. New tool families belong under `src/tools/families/`, and legacy families are being extracted incrementally to preserve behavior and avoid a risky all-at-once rewrite. The execution and security boundary is modular today; complete implementation decomposition is not yet finished. See [`docs/tool-architecture.md`](docs/tool-architecture.md) for the current boundary and remaining migration work.
+
+Canonical MCP tool names are unprefixed, such as `bash`, `knowledge`, and `compute_jobs`. The runtime still recognizes older `sidekick_`-prefixed names as compatibility aliases, but new documentation, policies, and integrations should use the bare names.
 
 ## Quick Start
 
@@ -33,7 +37,7 @@ copy .env.example .env
 **First deploy to a fresh VM:** The script will automatically:
 - Prompt for the initial SSH user (e.g., ubuntu, admin, root)
 - Prompt for the initial user's password (once)
-- Create the sidekick user and install Node.js 20 LTS
+- Create the sidekick user and install Node.js 22
 - Configure sudo permissions for service management
 - Install and enable systemd services
 - Install your SSH key for passwordless access
@@ -70,82 +74,69 @@ This installs PostgreSQL, Redis, Qdrant, InfluxDB, Grafana, and many other tools
 # Linux/Mac
 ./deploy.sh -IP YOUR_REMOTE_IP --scp
 ```
-This copies files one-by-one from your local machine and does not create a Git working tree. No internet access is required on the remote server, but `sidekick_ops deploy_current_main` requires the normal Git deployment model and will not silently fall back to SCP.
+This copies files one-by-one from your local machine and does not create a Git working tree. No internet access is required on the remote server, but `ops deploy_current_main` requires the normal Git deployment model and will not silently fall back to SCP.
 
 Open `http://YOUR_REMOTE_IP:4098/` in a browser. That's it — Sidekick is live.
 
 ## How It Works
 
-Every time you open opencode, it automatically reads `~/.config/opencode/AGENTS.md` and loads whatever instructions are in it into the AI's context. Sidekick provides the infrastructure — remote execution tools, persistent memory, and an autonomous agent — that the AI can use.
+Sidekick exposes its tool catalog through the Model Context Protocol. Any compatible MCP client can connect to the Streamable HTTP endpoint with a bearer token. The included `AGENTS.md` file is an optional, portable bootstrap template for clients that support persistent project or agent instructions.
 
-1. **You open opencode** — it reads `AGENTS.md`
-2. **Sidekick's tools and instructions are loaded** — the AI now knows about the remote machine, the tools, and how to use them
-3. **You work** — the AI can call sidekick tools to execute commands on the remote machine, store/retrieve persistent data, or you can submit tasks to the autonomous Agent Bridge via the dashboard
-4. **Session ends** — but anything stored in Sidekick's KV persists for next time
+1. **An MCP client connects** — it authenticates to the Sidekick MCP server on port 4097.
+2. **Sidekick publishes the available tool catalog** — policy, risk, and approval rules are applied for the request source.
+3. **The assistant or agent calls tools** — it can operate the remote machine, query knowledge, store durable context, or submit work to the Agent Bridge.
+4. **State persists** — approved memories, project data, workflows, logs, and knowledge remain available after the client session ends.
 
-Sidekick is the infrastructure. The AI (running in opencode) uses that infrastructure to help you work. Without `AGENTS.md`, the AI doesn't know Sidekick exists. With it, the AI has persistent remote capabilities.
+Sidekick provides the persistent infrastructure; the connected assistant or agent decides when and how to use it. Exact prompting and automatic instruction-file loading depend on the MCP client.
 
 ## Usage
 
-### Direct Tool Calls
+Exact invocation syntax varies by MCP client. At the protocol level, a direct call identifies a tool and supplies its arguments. For example:
 
-Ask the AI to run any Sidekick tool directly:
-
+```json
+{
+  "name": "knowledge",
+  "arguments": {
+    "action": "search",
+    "query": "debugging"
+  }
+}
 ```
-@sidekick sidekick_knowledge action="search" query="debugging"
-```
-
-The AI executes the tool and returns structured results:
-
-![Direct tool call](docs/screenshots/usage-direct-tool.png)
 
 ### Complex Multi-Step Tasks
 
-For tasks that require planning, iteration, or multiple tool calls, use the `@sidekick` subagent:
+A connected agent can combine multiple Sidekick tools to complete longer tasks. For example, an agent updating a stored project roadmap could:
 
-```
-@sidekick update the persistence roadmap to reflect what's been done
-```
+1. Recall the current plan from persistent storage.
+2. Inspect recent commits and CI results.
+3. Update the plan with completion status and remaining work.
+4. Store a handoff or revised plan for the next session.
 
-The subagent will:
-1. Recall the current plan from KV storage
-2. Check recent commits to see what's shipped
-3. Update the plan with completion status
-4. Store the revised version
-
-![Multi-step plan execution](docs/screenshots/usage-multistep-plan.png)
-
-The agent can also send Discord notifications at each milestone so you can track progress without watching the terminal:
-
-![Discord milestone notifications](docs/screenshots/usage-discord-notifications.png)
+The same workflow can emit notifications, create durable task records, or run through the Agent Bridge when autonomous execution is appropriate.
 
 ### Conversational Planning
 
-Sidekick works best as a collaborative partner. You can have back-and-forth conversations about plans, architecture, or debugging:
+Sidekick supports continuity across ordinary conversations because project facts, decisions, procedures, and handoffs can be retrieved in later sessions:
 
-![Conversational planning](docs/screenshots/usage-conversational.png)
-
-```
-you: "we stored a plan. unfortunately its out of date - what do"
-ai:  Found it — KV key persistence_roadmap. It's a 9-step plan (structured extraction, lifecycle, conflicts, recall, prompt brief, review UI, import/export, sync, evaluation).
-     What's out of date? Want me to update it to reflect what's been done (steps 1-3 are largely shipped) and revise the remaining items?
-you: "yes"
-ai:  [updates the roadmap with current status]
+```text
+you: "We stored a plan, but it is now out of date."
+agent: "I found the current project roadmap and recent implementation history. I can reconcile the completed work and revise the remaining steps."
+you: "Update it."
+agent: [reviews current evidence, updates the roadmap, and stores the revised handoff]
 ```
 
 ### Debugging
 
-Sidekick can diagnose issues across the full stack — backend APIs, frontend JS, database queries, and service health — then present a structured root-cause analysis:
-
-![Debugging root cause analysis](docs/screenshots/usage-debugging.png)
+Sidekick can combine source inspection, logs, database queries, service health, incident captures, and evidence-backed analysis to diagnose issues across the stack. Tool calls still pass through the same validation, policy, approval, redaction, and audit boundary.
 
 ### Dashboard
 
 Open `http://YOUR_REMOTE_IP:4098/` for:
 - System health monitoring
-- Tool usage analytics
+- Tool usage analytics and activity inspection
 - Agent task submission and streaming
-- Memory inspection and management
+- Persistent data and structured memory management
+- Approvals, tool catalog, Compute workers, jobs, and artifacts
 
 ## What Makes Sidekick Different?
 
@@ -167,21 +158,24 @@ Comprehensive metrics collection with Grafana dashboards:
 - Ollama LLM metrics
 
 ### 🔄 Evidence-Driven Workflow Learning
-Sidekick can learn repeated successful workflows from redacted tool telemetry. `sidekick_teach` stores reusable procedures composed from existing tools. `sidekick_evolve` mines repeated bounded workflows, infers safe parameters, validates the procedure, and only after explicit approval exposes trial or active generated capabilities as namespaced MCP tools such as `sidekick_generated_<name>`.
+Sidekick can learn repeated successful workflows from redacted tool telemetry. `teach` stores reusable procedures composed from existing tools. `evolve` mines repeated bounded workflows, infers safe parameters, validates the procedure, and only after explicit approval exposes trial or active generated capabilities as namespaced MCP tools such as `generated_<name>`.
 
 ### 🤖 True Autonomous Operation
 The Agent Bridge runs independently from your main AI session. Submit a complex task via the dashboard, and Sidekick will plan, execute, and iterate until it's done—without you babysitting each step.
 
+### 🖥️ Distributed Compute
+Sidekick Compute enrolls authenticated worker agents and routes allowlisted `chat`, `generate`, and `embeddings` jobs across registered workers, providers, and models. It includes scoped worker credentials, job leases, progress, cancellation, retry/recovery, artifacts, health reporting, routing rules, and dashboard controls. It is intentionally not an arbitrary remote shell or a general-purpose GPU batch system.
+
 ### 🔒 Security-First Design
 Every tool output is automatically scanned and redacted for sensitive data (API keys, tokens, passwords). The dashboard has rate limiting, CSRF protection, and audit logging. The agent bridge is isolated and only accessible through the dashboard.
 
-### 🛠️ 96 Built-In Specialized Tools
+### 🛠️ 107 Built-In Specialized Tools
 Not just bash and file operations. Sidekick includes tools for:
-- GitHub integration (PRs, issues, releases)
+- GitHub integration and read-only CI/check-run inspection
 - Service and process management
 - Scheduled tasks and monitoring
-- Data transformation and validation
-- Multi-agent orchestration
+- Data transformation, validation, analytics, and evidence-backed reports
+- Durable workflows, task sessions, handoffs, and orchestration
 - Encrypted credential management
 - Read-only configuration and secret exposure scanning
 - Network diagnostics and troubleshooting
@@ -192,52 +186,45 @@ Not just bash and file operations. Sidekick includes tools for:
 - Media processing (OCR, transcription, video/audio conversion)
 - Networking (Cloudflare tunnels, WireGuard, Nginx)
 - Metrics collection and visualization
-- Knowledge base management
+- Knowledge base and structured memory management
+- Distributed allowlisted model jobs through enrolled Compute workers
 - And much more
 
 **The result:** Sidekick isn't just a tool server—it's an autonomous platform that learns, adapts, and grows with your workflow.
 
 ## Self-Debugging in Action
 
-Sidekick used its own tools to help develop itself. Here's the AI agent debugging Sidekick from within opencode:
-
-**Testing the debug tool's store/cleanup/recall cycle:**
-![Debug tool testing](docs/screenshots/debug-tool-testing.png)
-
-**Diagnosing its own hallucination problem with `sidekick_fresheyes`:**
-![Fresh eyes analysis](docs/screenshots/fresh-eyes-analysis.png)
-
-**Investigating why the self-improvement tool isn't working:**
-![Evolve debugging](docs/screenshots/evolve-debugging.png)
+Sidekick has used its own tools to test storage and recall behavior, investigate agent failure patterns with `fresheyes`, and diagnose Evolve workflow problems. These checks use the same public tool surface, dispatcher, policy, approval, redaction, and audit paths available to other connected clients.
 
 ## What You Can Achieve
 
-| Capability | How | Why AGENTS.md Matters |
+| Capability | How | Why agent guidance helps |
 |---|---|---|
-| **Remote code execution** | `sidekick_bash` runs commands on a persistent remote machine | Instructions tell the AI when and how to use it |
-| **Persistent memory across sessions** | `sidekick_store` / `sidekick_get` — KV storage that survives restarts | AI knows which keys to store and retrieve |
-| **Knowledge base queries** | `sidekick_knowledge` — Search structured documentation | AI queries DB instead of re-reading files |
+| **Remote code execution** | `bash` runs commands on a persistent remote machine | Instructions tell the AI when and how to use it |
+| **Persistent memory across sessions** | `store` / `get` — KV storage that survives restarts | AI knows which keys to store and retrieve |
+| **Knowledge base queries** | `knowledge` — Search structured documentation | AI queries DB instead of re-reading files |
 | **Metrics & monitoring** | Grafana dashboards at `:3000` + Metrics tab in dashboard | Real-time system health, tool usage, service status |
 | **Autonomous multi-step tasks** | Agent bridge at `:4099` plans and executes until done | AI knows to delegate complex work to the agent |
 | **Code review** | Ask the AI to review diffs using remote execution tools | Decision tree in AGENTS.md tells the AI *when* to use sidekick tools for review |
-| **GitHub integration** | `sidekick_github` uses `GITHUB_TOKEN` or encrypted `sidekick_secret` credentials | AGENTS.md tells the AI to query current credential procedures |
-| **GitHub CI inspection** | `sidekick_ci_status` reads check runs plus legacy statuses for a PR head, SHA, ref, or branch | AI can make CI decisions without relying on legacy status-only data |
-| **Database operations** | `sidekick_db_*` tools for SQLite and PostgreSQL | Query, backup, restore, search, migrate databases |
-| **Media processing** | `sidekick_ocr`, `sidekick_media`, `sidekick_transcribe` | OCR, video/audio conversion, transcription |
-| **Networking** | `sidekick_tunnel`, `sidekick_wireguard`, `sidekick_nginx` | Cloudflare tunnels, VPN, reverse proxy |
-| **Web scraping from remote** | `sidekick_web_fetch` bypasses local network restrictions | AI knows to use remote machine for fetching when needed |
+| **GitHub integration** | `github` uses `GITHUB_TOKEN` or encrypted `secret` credentials | AGENTS.md tells the AI to query current credential procedures |
+| **GitHub CI inspection** | `ci_status` reads check runs plus legacy statuses for a PR head, SHA, ref, or branch | AI can make CI decisions without relying on legacy status-only data |
+| **Database operations** | `db_*` tools for SQLite and PostgreSQL | Query, backup, restore, search, migrate databases |
+| **Media processing** | `ocr`, `media`, `transcribe` | OCR, video/audio conversion, transcription |
+| **Networking** | `tunnel`, `wireguard`, `nginx` | Cloudflare tunnels, VPN, reverse proxy |
+| **Web scraping from remote** | `web_fetch` bypasses local network restrictions | AI knows to use remote machine for fetching when needed |
 | **LLM on demand** | Cloud Groq for speed, local Ollama as fallback | AI knows which to use and when |
-| **File content search** | `sidekick_search` uses ripgrep/grep for fast code search | AI can quickly find code patterns across the codebase |
-| **Git operations** | `sidekick_git` provides structured git commands | AI can check status, diff, log, commit, push, pull safely |
-| **Notifications** | `sidekick_notify` sends alerts to Discord, Slack, or email | AI can alert you when tasks complete or errors occur |
-| **Process management** | `sidekick_process` lists, monitors, and kills processes | AI can troubleshoot high CPU/memory or kill hung processes |
-| **Service management** | `sidekick_service` controls systemd services safely | AI can restart services, check status, view logs |
-| **Archive operations** | `sidekick_archive` creates/extracts tar.gz and zip files | AI can backup data, deploy archives, manage backups |
-| **Scheduled tasks** | `sidekick_cron` schedules recurring jobs via crontab | AI can set up automated health checks, backups, monitoring |
-| **GitHub automation** | `sidekick_github` manages PRs, issues, releases via API | AI can automate PR workflows, track issues, create releases |
-| **Webhook integration** | `sidekick_webhook` receives and stores external webhooks | AI can react to GitHub events, CI/CD pipelines, external alerts |
-| **Persistent context** | `sidekick_context` tracks projects, decisions, problems, patterns | AI can recall past context, get suggestions, maintain continuity across sessions |
-| **Workflow learning** | `sidekick_teach` stores procedures; `sidekick_evolve` promotes validated repeated workflows into trial/active generated MCP tools | AI can reuse proven workflows without confusing proposals with callable tools |
+| **Distributed model jobs** | `compute_*` manages enrolled workers, providers, models, routing, jobs, and artifacts | AI can route allowlisted inference work without exposing arbitrary worker-side shell execution |
+| **File content search** | `search` uses ripgrep/grep for fast code search | AI can quickly find code patterns across the codebase |
+| **Git operations** | `git` provides structured git commands | AI can check status, diff, log, commit, push, pull safely |
+| **Notifications** | `notify` sends alerts to Discord, Slack, or email | AI can alert you when tasks complete or errors occur |
+| **Process management** | `process` lists, monitors, and kills processes | AI can troubleshoot high CPU/memory or kill hung processes |
+| **Service management** | `service` controls systemd services safely | AI can restart services, check status, view logs |
+| **Archive operations** | `archive` creates/extracts tar.gz and zip files | AI can backup data, deploy archives, manage backups |
+| **Scheduled tasks** | `cron` schedules recurring jobs via crontab | AI can set up automated health checks, backups, monitoring |
+| **GitHub automation** | `github` manages PRs, issues, releases via API | AI can automate PR workflows, track issues, create releases |
+| **Webhook integration** | `webhook` receives and stores external webhooks | AI can react to GitHub events, CI/CD pipelines, external alerts |
+| **Persistent context** | `context` tracks projects, decisions, problems, patterns | AI can recall past context, get suggestions, maintain continuity across sessions |
+| **Workflow learning** | `teach` stores procedures; `evolve` promotes validated repeated workflows into trial/active generated MCP tools | AI can reuse proven workflows without confusing proposals with callable tools |
 
 ## Architecture
 
@@ -271,7 +258,7 @@ Sidekick used its own tools to help develop itself. Here's the AI agent debuggin
 └────────────────────────────────────────────────────────┘
 ```
 
-*The agent bridge also supports Groq cloud API — when `GROQ_API_KEY` is set, it uses Groq instead of Ollama for near-instant LLM responses.*
+*The Agent Bridge supports the Groq cloud API when `GROQ_API_KEY` is configured. Sidekick Compute workers are separate enrolled processes that connect to scoped `/compute/worker/*` routes on the MCP service; they are not additional always-on services inside the three-process core.*
 
 ### Data Layer
 
@@ -293,8 +280,8 @@ Sidekick used its own tools to help develop itself. Here's the AI agent debuggin
 
 | Service | Port | Description |
 |---------|------|-------------|
-| **MCP Server** | 4097 | 96 built-in tools across 19 categories (see database for authoritative current list) |
-| **Dashboard** | 4098 | Web UI: system health, activity log, KV data, agent tasks, tool catalog, metrics |
+| **MCP Server** | 4097 | 107 built-in tools across 20 categories; approved generated tools may add runtime entries |
+| **Dashboard** | 4098 | Web UI for system health, activity, data, memory, approvals, tools, Compute, agent tasks, and metrics |
 | **Agent Bridge** | 4099 | AI agent loop — LLM plans and calls MCP tools autonomously |
 | **Ollama** | 11434 | Local LLM inference (qwen2.5-coder:7b, llama3.1:8b, nomic-embed-text) |
 | **Redis** | 6379 | Session-scoped caching with TTL |
@@ -306,22 +293,18 @@ All tools are exposed via the MCP server at `http://YOUR_REMOTE_IP:4097/mcp`.
 
 ### Tool Categories
 
-Tools are organized into 19 categories:
-- **Core** — bash, read, write, list, search, web_fetch, llm, respond
-- **Storage** — store, get, list_projects, get_by_project, redis
-- **Database** — db_schema, db_query, db_stats, db_backup, db_restore, db_export, db_search, db_migrate, db_diff, analytics
-- **Git & GitHub** — git, github
+The 107 built-in tools are organized into 20 categories:
+- **Core** — bash, tools, read, write, list, search, web_fetch, llm, respond
+- **Storage** — store, get, delete, resume, list_projects, get_by_project, redis
+- **Database** — db_schema, db_query, db_stats, db_backup, db_restore, db_export, log_query, db_search, db_migrate, db_diff, analytics
+- **Git & GitHub** — git, github, ci_status
 - **Services** — process, service
 - **Scheduling** — cron, delay
 - **Communication** — notify, webhook
-- **Context & Learning** — context, teach, embed, ollama, memory_export, memory_import, memory_manage, sync_identity, sync_export, sync_import, sync_diff, knowledge
-- **Data Pipeline** — transform, parse, diff, hash, validate, template, extract, anonymize, diff_files
+- **Context & Learning** — context, session, handoff, memory, teach, embed, ollama, memory_export, memory_import, memory_manage, sync_identity, sync_export, sync_import, sync_diff, knowledge
+- **Data Pipeline** — transform, parse, diff, hash, validate, template, extract, anonymize, diff_files, insight_report
 - **Monitoring** — health, status, watch, baseline, snapshot, timeline, black_box, netdiag, metrics
-
-### Black Box Incident Explorer
-
-`sidekick_black_box` stores profiled incident captures as structured SQLite records with source-level artifacts, observations, timelines, evidence-cited analysis, search, comparison, retention controls, and dashboard inspection. See `docs/blackbox.md` for profiles, schema, dashboard behavior, retention, export, and security notes.
-- **Workflow** — queue, retry, orchestrate, runbook
+- **Workflow** — queue, retry, orchestrate, runbook, ops, mission
 - **Meta** — evolve, predict, debug_tool, fresheyes
 - **Efficiency** — batch, cache, summarize, filter, project, tail, find
 - **Security** — secret, security_scan, sandbox
@@ -330,6 +313,11 @@ Tools are organized into 19 categories:
 - **Reliability** — circuit
 - **Archive** — archive
 - **Media** — ocr, media, transcribe, download
+- **Compute** — compute, compute_nodes, compute_providers, compute_models, compute_jobs, compute_route
+
+### Black Box Incident Explorer
+
+`black_box` stores profiled incident captures as structured SQLite records with source-level artifacts, observations, timelines, evidence-cited analysis, search, comparison, retention controls, and dashboard inspection. See [`docs/blackbox.md`](docs/blackbox.md) for profiles, schema, dashboard behavior, retention, export, and security notes.
 
 Query the database for the complete tool list:
 ```sql
@@ -345,22 +333,25 @@ ORDER BY tc.sort_order, t.name
 
 To avoid confusion, it's important to understand what each component is:
 
-- **Sidekick** = The autonomous agent platform: remote machine + 96 built-in MCP tools + persistent memory + knowledge base + Dashboard + Agent Bridge + metrics & monitoring + self-extending capabilities
-- **The AI** = The assistant running in opencode (e.g., qwen, Claude, etc.) that uses Sidekick's platform
-- **Agent Bridge** = Sidekick's autonomous agent that runs tasks independently via the Dashboard
-- **Knowledge Base** = Structured documentation stored in SQLite, searchable via `sidekick_knowledge`
+- **Sidekick** = The self-hosted agent platform: 107 built-in MCP tools + persistent memory + knowledge base + Dashboard + Agent Bridge + metrics + approved generated capabilities + Sidekick Compute
+- **The assistant or agent** = Any compatible MCP client, coding assistant, or automation agent that uses Sidekick's platform
+- **Tool runtime** = The descriptor registry and dispatcher that validate, authorize, approve, execute, redact, and audit tool calls across MCP, dashboard, agent, scheduler, and generated-tool paths
+- **Agent Bridge** = Sidekick's autonomous task runner, accessed through the Dashboard and API
+- **Knowledge Base** = Structured documentation stored in SQLite, searchable via `knowledge`
+- **Sidekick Compute** = The allowlisted worker/provider/model/job system for distributed inference workloads
 - **Metrics System** = InfluxDB + Grafana for system health, tool usage, and service monitoring
 
-When you call sidekick tools in opencode, you're executing commands on the remote machine. The AI makes the decisions; Sidekick provides the capabilities.
+When a connected client calls Sidekick tools, the work executes through Sidekick on the remote machine. The assistant or agent chooses the operation; Sidekick supplies and governs the capability.
 
 The Agent Bridge is a separate system that can run tasks autonomously, but it's not integrated into the main AI's workflow. It's accessed via the Dashboard's Agent tab or direct API calls.
 
 The Knowledge Base replaces the need for large markdown files. Instead of re-reading AGENTS.md or CONTEXT.md, the AI queries the database for specific information, saving tokens and improving accuracy.
 
-**What Sidekick does NOT do (currently):**
-- It does not provide multi-AI collaboration (the main AI cannot consult the Agent Bridge and get responses back)
-- It does not make decisions on its own (the AI in opencode makes all decisions)
-- It is not a separate AI entity (it's infrastructure that the AI uses)
+**Current boundaries:**
+- Sidekick Compute accepts only versioned, allowlisted model workloads; it is not arbitrary worker-side command execution.
+- Evolve does not silently activate free-form code. Generated capabilities must pass validation and approval before trial or active exposure.
+- The Agent Bridge acts only on submitted tasks, schedules, or watches and remains bounded by tool policy, approvals, iteration limits, and the same dispatcher used by other execution paths.
+- The handler migration out of `src/tools-legacy.js` is still in progress, as disclosed above.
 
 ## Security
 
@@ -375,7 +366,7 @@ The Knowledge Base replaces the need for large markdown files. Instead of re-rea
 
 The dashboard auth and IP whitelist are disabled by default (empty env var = no restriction). Set them in `.env` before exposing to the internet. For shared or public-facing deployments, set `SIDEKICK_TOOL_POLICY=restricted` and explicitly allow only the high-risk tools your workflow needs.
 
-**Evolve Tool Warning:** `sidekick_evolve` is critical-risk because it can approve and expose generated workflow tools. It does not treat free-text proposals as callable tools and generated capabilities must pass validation before trial activation. For shared or public-facing deployments, set `SIDEKICK_TOOL_POLICY=restricted` and require approval for `sidekick_evolve` and high-risk generated tools.
+**Evolve Tool Warning:** `evolve` is critical-risk because it can approve and expose generated workflow tools. It does not treat free-text proposals as callable tools and generated capabilities must pass validation before trial activation. For shared or public-facing deployments, set `SIDEKICK_TOOL_POLICY=restricted` and require approval for `evolve` and high-risk generated tools.
 
 ## Dashboard & Agent Bridge
 
@@ -391,7 +382,8 @@ Open `http://YOUR_REMOTE_IP:4098/` in a browser.
 - **Config** — environment variables (sensitive values redacted)
 - **Agent** — submit tasks for the AI agent to execute autonomously
 - **Approvals** — review, approve, or reject queued risky actions when approval mode is enabled
-- **Tools** — browsable catalog of all 96 built-in tools with search, category filtering, policy status, risk labels, and detailed argument info
+- **Tools** — browsable catalog of all 107 built-in tools plus approved generated tools, with search, category filtering, policy status, risk labels, and detailed argument info
+- **Compute** — enrolled workers, providers, models, routing, jobs, artifacts, cancellation, retry, and lease recovery
 - **Metrics** — embedded Grafana dashboards for system health, tool analytics, database performance, Docker containers, and Ollama metrics
 
 ### Metrics & Monitoring
@@ -421,18 +413,18 @@ Sidekick includes a structured knowledge base for storing and retrieving project
 - **Database-backed live content** that can include imported, custom, or migrated entries beyond the packaged seed
 - **Full-text search** with semantic similarity
 - **Manual import helper** for migrating CONTEXT.md into structured knowledge entries
-- **Tool**: `sidekick_knowledge` for search, get, list, add, update, delete
+- **Tool**: `knowledge` for search, get, list, add, update, delete
 
 Example queries:
 ```bash
 # Search for debugging best practices
-sidekick_knowledge action="search" query="debugging"
+knowledge action="search" query="debugging"
 
 # List all architecture entries
-sidekick_knowledge action="list" category="architecture"
+knowledge action="list" category="architecture"
 
 # Get specific entry
-sidekick_knowledge action="get" id=18
+knowledge action="get" id=18
 ```
 
 ### Agent Bridge
@@ -460,21 +452,17 @@ curl http://YOUR_REMOTE_IP:4099/api/agent/stream/{taskId}
 curl http://YOUR_REMOTE_IP:4099/api/agent/history
 ```
 
-## Setting Up AGENTS.md
+## Optional Agent Bootstrap with AGENTS.md
 
-> **This is the most important step.** Without this file, Sidekick is just a tool server. With it, Sidekick's tools and instructions are loaded into every opencode session.
+`AGENTS.md` is a portable bootstrap template for clients and agents that support persistent instructions. It is not required by the MCP protocol and is not the primary documentation store. Its purpose is to point an agent toward Sidekick's connection details, searchable knowledge, current tool registry, and project continuity data.
 
-Sidekick uses a **knowledge-base-first architecture**. Instead of storing all documentation in large markdown files, AGENTS.md points to the knowledge base where all information is stored.
+The template includes:
+- Connection and endpoint guidance
+- Knowledge-base query examples
+- Tool catalog and registry query examples
+- Basic operating and safety instructions
 
-The AGENTS.md file includes:
-- Connection info (IP, ports, SSH)
-- Knowledge base query examples
-- Tool query examples (SQL to list tools from database)
-- Basic usage instructions
-
-**opencode reads this file automatically on every session start.** No plugins, no hooks, no manual loading — just a markdown file in the right place.
-
-For the full AGENTS.md template, see [`AGENTS.md`](AGENTS.md) in this repo.
+Automatic loading behavior depends on the client. Copy, import, or adapt [`AGENTS.md`](AGENTS.md) using the instruction mechanism supported by your chosen MCP client.
 
 ### Knowledge Base Categories
 
@@ -487,13 +475,13 @@ The knowledge base includes entries in these categories:
 Query the knowledge base:
 ```bash
 # List all categories
-sidekick_knowledge action="list"
+knowledge action="list"
 
 # Search for specific topics
-sidekick_knowledge action="search" query="deployment"
+knowledge action="search" query="deployment"
 
 # Get entries by category
-sidekick_knowledge action="list" category="best-practices"
+knowledge action="list" category="best-practices"
 ```
 
 ## Daily Workflow
@@ -531,7 +519,7 @@ Sidekick can be extended with additional services for enhanced capabilities:
 sudo systemctl start sidekick-postgres
 ```
 - Full SQL database for complex queries and relational data
-- Accessible via `sidekick_db_query` with `database="postgres"`
+- Accessible via `db_query` with `database="postgres"`
 
 **Redis** (session caching):
 ```bash
@@ -544,7 +532,7 @@ sudo systemctl start sidekick-redis
 ```bash
 sudo systemctl start sidekick-qdrant
 ```
-- Semantic search for `sidekick_context` tool
+- Semantic search for `context` tool
 - Embedding-based similarity search
 
 ### Metrics & Monitoring
@@ -671,17 +659,26 @@ This follows the principle of least privilege: after initial setup, the sidekick
 
 ```
 ├── src/
-│   ├── tools.js        Shared tool handlers (96 built-in tools)
-│   ├── memory.js       Automatic memory capture and recall helpers
-│   ├── index.js        MCP server (session-aware transport management)
-│   ├── dashboard.js    Dashboard web UI (9 tabs including Memory, Database, and Metrics)
-│   ├── agent.js        Agent bridge (LLM tool-use loop, direct tool calls)
-│   ├── redact.js       Sensitive data redaction
-│   ├── db.js           SQLite database layer
-│   ├── pg.js           PostgreSQL support
-│   ├── redis.js        Redis client for caching
-│   ├── qdrant.js       Qdrant vector DB client for semantic search
-│   └── crypto-utils.js Timing-safe comparison helpers
+│   ├── tools.js            Compatibility re-export for the modular tool runtime
+│   ├── tools/
+│   │   ├── index.js        Public tool facade and compatibility exports
+│   │   ├── registry.js     Descriptor registry for built-in tools
+│   │   ├── dispatcher.js   Authoritative validation, policy, approval, execution, and audit path
+│   │   ├── context.js      Request-scoped execution context
+│   │   └── families/       Descriptor-owned extracted tool families
+│   ├── tools-legacy.js     Remaining legacy handler implementations behind dispatcher adapters
+│   ├── compute/            Worker, provider, model, job, routing, lease, and artifact system
+│   ├── platform/           Shared execution, event, workflow, runner, workspace, and release kernel
+│   ├── memory.js           Automatic memory capture and recall helpers
+│   ├── index.js            MCP server, sessions, tool registration, and Compute HTTP routes
+│   ├── dashboard.js        Dashboard web UI and management API
+│   ├── agent.js            Agent Bridge task loop, streaming, delays, and watches
+│   ├── redact.js           Sensitive data redaction
+│   ├── db.js               SQLite database layer
+│   ├── pg.js               PostgreSQL support
+│   ├── redis.js            Redis client for caching
+│   ├── qdrant.js           Qdrant vector DB client for semantic search
+│   └── crypto-utils.js     Timing-safe comparison helpers
 ├── scripts/
 │   ├── bootstrap.sh    VM bootstrap script (creates user, installs Node.js, etc.)
 │   ├── setup-tools.sh  Server tooling setup (Docker, databases, media tools, etc.)
@@ -713,8 +710,7 @@ This follows the principle of least privilege: after initial setup, the sidekick
 ├── deploy.ps1          Deploy script (Windows)
 ├── deploy.sh           Deploy script (Linux/Mac)
 ├── .env.example        Environment variable template
-├── AGENTS.md           Agent bootstrap instructions (points to knowledge base)
-└── opencode.json       opencode MCP server config
+└── AGENTS.md           Optional portable agent bootstrap template
 ```
 
 ## Troubleshooting

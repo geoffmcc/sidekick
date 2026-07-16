@@ -1,51 +1,54 @@
 # Architecture
 
-Sidekick is a three-process Node.js application with a shared SQLite database and data directory.
+Sidekick has three core Node.js services sharing a SQLite database and data directory, plus optional enrolled Compute worker processes.
 
 ```text
-opencode / MCP client
+MCP client / agent
         |
         | Bearer token
         v
-MCP Server :4097  ---- loads/registers tools ----> src/tools.js
-        |
-        | SQLite sidekick.db + selected JSON/JSONL artifacts
-        v
-Persistent data directory
-
-Browser
+MCP Server :4097
         |
         v
-Dashboard :4098 ---- proxy ----> Agent Bridge :4099
+src/tools/index.js -> descriptor registry -> centralized dispatcher
+        |                                  |
+        |                                  +-> policy / approvals / redaction / audit
+        +-> extracted family handlers or tools-legacy compatibility handlers
+        |
+        +-> SQLite sidekick.db + selected artifacts
 
-Agent Bridge :4099 ---- calls ----> src/tools.js
+Browser -> Dashboard :4098 -> Agent Bridge :4099 -> centralized dispatcher
+
+Enrolled Compute worker -> scoped /compute/worker/* protocol on :4097
 ```
 
 ## Service boundaries
 
 ### MCP server: `src/index.js`
 
-The MCP server creates an `McpServer` from `@modelcontextprotocol/sdk`, registers the Sidekick tool definitions, and serves them over:
+The MCP server creates an `McpServer` from `@modelcontextprotocol/sdk`, registers built-in and approved generated tool definitions, and serves them over:
 
 - `POST /mcp`, `GET /mcp`, and `DELETE /mcp` for Streamable HTTP;
 - `GET /sse` and `POST /messages` for legacy SSE clients;
-- `GET /health` for diagnostics.
+- `GET /health` for diagnostics;
+- authenticated `/compute/enrollment/*`, `/compute/worker/*`, and `/compute/admin/*` routes for Sidekick Compute.
 
-The server requires `Authorization: Bearer <SIDEKICK_API_KEY>` or `?api_key=<key>` for MCP routes. It can also enforce `SIDEKICK_ALLOWED_IPS`. Tool calls are checked against the active tool policy before execution.
+The server requires `Authorization: Bearer <SIDEKICK_API_KEY>` or `?api_key=<key>` for MCP and administrative routes and can enforce `SIDEKICK_ALLOWED_IPS`. Worker protocol routes use scoped worker credentials, while enrollment exchange uses one-time enrollment tokens.
 
-### Tool implementation: `src/tools.js`
+### Tool runtime: `src/tools/`
 
-The tool module owns most application behavior. It loads configuration, ensures the data directory exists, implements tool handlers, redacts sensitive output, logs tool calls, syncs the tool registry into SQLite, and persists state through the SQLite document layer or tool-specific files.
+`src/tools.js` is now a compatibility re-export to `src/tools/index.js`; it is not the implementation monolith or an alternate production execution path. The modular runtime is divided into:
 
-Important exported values include:
+- `descriptor.js` for normalized tool descriptors;
+- `registry.js` for built-in descriptor registration and alias resolution;
+- `dispatcher.js` for authoritative validation, policy, approvals, execution, timeout/cancellation handling, result normalization, and audit logging;
+- `context.js` for request-scoped execution identity through `AsyncLocalStorage`;
+- `approvals.js`, `policy.js`, `logging.js`, `result.js`, and `registry-sync.js` for focused boundary responsibilities;
+- `schemas/`, `metadata.js`, and `families/` for schemas, explicit risk/category metadata, and extracted descriptor-owned tool families.
 
-- `TOOLS`: map of tool name to handler function.
-- `TOOL_DEFS`: dashboard-facing catalog of tool names, descriptions, and argument summaries.
-- `getToolDefsForSource(source)`: policy-aware catalog including risk and enabled status.
-- `callTool(name, args)`: central dispatcher used by the agent and wrapper tools; enforces tool policy.
-- `syncToolRegistry()`: upserts `TOOL_DEFS` into the database on MCP startup and marks removed tools deprecated.
-- `logToolCall(...)`: writes redacted tool activity to the `tool_logs` SQLite table.
-- `setSource(source)`: records whether a call came from MCP, dashboard, agent, or another path.
+The current built-in registry contains 107 tools across 20 categories. Most mature handler implementations still reside in `src/tools-legacy.js`, but production transports and nested compatibility calls enter them through the dispatcher. This is a deliberate compatibility stage of the ongoing modular migration, not a second ungoverned execution path.
+
+Important compatibility exports from `src/tools/index.js` include `TOOLS`, `TOOL_DEFS`, `callTool`, source-specific call wrappers, policy/approval helpers, logging helpers, and registry synchronization. New production code should use the source-specific dispatcher wrappers rather than directly invoking handlers or relying on the legacy `setSource` compatibility setter.
 
 ### Evolve and dynamic tools
 
@@ -54,7 +57,7 @@ The Evolve implementation is intentionally split out of the large tool module:
 - `src/evolve/analyzer.js` restores chronological log order, segments calls by source/session/task/inactivity gap, rejects retries and failure loops, and mines repeated successful multi-tool workflows.
 - `src/evolve/validator.js` validates inferred schemas, referenced tools, recursive parameter substitution, security constraints, and dry-run/mock execution plans.
 - `src/evolve/lifecycle.js` owns generated capability state transitions: `observed`, `candidate`, `validated`, `awaiting_approval`, `trial`, `active`, `deprecated`, `rejected`, and `failed_validation`.
-- `src/evolve/index.js` implements the `sidekick_evolve` action interface.
+- `src/evolve/index.js` implements the `evolve` action interface.
 - `src/dynamic-tools.js` loads approved trial/active generated capabilities from SQLite, exposes schemas for MCP registration, executes approved procedure steps, and records audit/usefulness counters.
 
 Verified problems in the previous Evolve implementation:
@@ -63,11 +66,11 @@ Verified problems in the previous Evolve implementation:
 - Sequence mining crossed unrelated global logs without source, session, task, project, or inactivity boundaries.
 - Analysis used only tool names, not safe argument shape, result summary, success/failure, retries, or generated-call metadata.
 - Procedure testing echoed proposal text in a sandbox instead of validating schemas, tool references, substitution, policy, or execution behavior.
-- Approved workflow/config proposals had no reliable implementation path; procedure approvals were converted by another LLM prompt and stored behind `sidekick_teach`.
-- Generated capabilities were not independent discoverable MCP tools with a stable schema; legacy procedures were only registered as `sidekick_<procedure>` at server construction.
+- Approved workflow/config proposals had no reliable implementation path; procedure approvals were converted by another LLM prompt and stored behind `teach`.
+- Generated capabilities were not independent discoverable MCP tools with a stable schema; legacy procedures were registered ad hoc at server construction rather than through first-class descriptors and lifecycle records.
 - Documentation and tool descriptions overstated self-extension by calling proposals and procedures generated tools.
 
-The replacement stores generated capabilities and audit history in SQLite. Trial and active capabilities are synced into the normal `tools` registry with names like `sidekick_generated_<descriptive_name>`, registered by the MCP server on startup, and removed from discovery when rejected or deprecated without deleting audit history.
+The replacement stores generated capabilities and audit history in SQLite. Trial and active capabilities are synced into the normal `tools` registry with names like `generated_<descriptive_name>`, registered by the MCP server on startup, and removed from discovery when rejected or deprecated without deleting audit history.
 
 Generated tool invocations also mirror parent and per-step execution state into the additive platform kernel tables (`platform_executions` and `platform_execution_events`). The generated-tool tables remain the compatibility source of truth for existing APIs while the platform records provide the first shared execution graph adapter.
 

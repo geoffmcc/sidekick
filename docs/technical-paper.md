@@ -2,7 +2,7 @@
 
 ## Abstract
 
-Sidekick is a self-hosted remote agent platform built around the Model Context Protocol (MCP). It gives opencode and other MCP clients access to a long-lived remote machine with persistent memory, a searchable knowledge base, a database-backed tool registry, a browser dashboard, and an autonomous Agent Bridge.
+Sidekick is a self-hosted remote agent platform built around the Model Context Protocol (MCP). It gives compatible MCP clients and automation agents access to a long-lived remote machine with persistent memory, a searchable knowledge base, a database-backed tool registry, a browser dashboard, and an autonomous Agent Bridge.
 
 The current architecture is database-first. SQLite is the runtime source of truth for key-value memory, tool logs, named JSON documents, tool metadata, tool categories, and the knowledge base. `AGENTS.md` remains the activation layer: it tells agents how to connect and where to query, but it intentionally points agents into the database instead of trying to carry all documentation in prompt-loaded markdown.
 
@@ -10,7 +10,7 @@ The current architecture is database-first. SQLite is the runtime source of trut
 
 Sidekick is optimized for a trusted operator who wants an AI assistant to keep continuity across sessions and operate a remote machine. The goals are:
 
-- Provide one MCP endpoint that exposes operational tools to opencode.
+- Provide one MCP endpoint that exposes operational tools to compatible clients and agents.
 - Keep project knowledge and instructions durable across AI sessions.
 - Make current tool metadata queryable without reading source files.
 - Let operators inspect and manage the system through a dashboard.
@@ -36,7 +36,7 @@ Optional supporting services include Redis, PostgreSQL, Qdrant, InfluxDB, Grafan
 
 ## 3. Activation Model
 
-The key integration point is `AGENTS.md`. opencode reads this file at session startup. `AGENTS.md` tells the assistant:
+An optional integration layer is `AGENTS.md`, a portable bootstrap template for clients that support persistent instructions. It tells the assistant or agent:
 
 - where the MCP server is;
 - how to query the knowledge base;
@@ -60,18 +60,18 @@ Agents should use these access paths:
 
 | Information need | Tool path | SQLite location |
 |---|---|---|
-| Documentation, policies, best practices, architecture, protocols, operations | `sidekick_knowledge` | `knowledge` |
-| Broad tool overview, grouped manifest, capability search | `sidekick_tools` | `tools`, `tool_categories`, `tool_category_map` |
-| Exact tool list, descriptions, args, risk, enabled/deprecated state | `sidekick_db_query database="sqlite"` | `tools`, `tool_categories`, `tool_category_map` |
-| Project memory and stored facts | `sidekick_store`, `sidekick_get`, `sidekick_delete`, `sidekick_list_projects`, `sidekick_get_by_project` | `kv_store` |
-| Structured memories and task continuity | `sidekick_context`, `sidekick_project`, or SQL | `memories` plus compatibility entries in `json_documents.context` |
+| Documentation, policies, best practices, architecture, protocols, operations | `knowledge` | `knowledge` |
+| Broad tool overview, grouped manifest, capability search | `tools` | `tools`, `tool_categories`, `tool_category_map` |
+| Exact tool list, descriptions, args, risk, enabled/deprecated state | `db_query database="sqlite"` | `tools`, `tool_categories`, `tool_category_map` |
+| Project memory and stored facts | `store`, `get`, `delete`, `list_projects`, `get_by_project` | `kv_store` |
+| Structured memories and task continuity | `context`, `project`, or SQL | `memories` plus compatibility entries in `json_documents.context` |
 | Structured feature state | feature tools or SQL | `json_documents` |
-| Tool call history | `sidekick_log_query` or SQL | `tool_logs` |
-| Schema and migration status | `sidekick_db_schema`, `sidekick_db_migrate` | `meta` plus migration files |
+| Tool call history | `log_query` or SQL | `tool_logs` |
+| Schema and migration status | `db_schema`, `db_migrate` | `meta` plus migration files |
 
 Default retrieval order:
 
-1. Query `sidekick_knowledge` for the topic.
+1. Query `knowledge` for the topic.
 2. Query the tool registry tables for exact tool metadata.
 3. Query KV/context/structured memory state for project-specific continuity.
 4. Use source markdown only when authoring docs or resolving a missing/stale database entry.
@@ -139,7 +139,7 @@ The value JSON preserves a compatibility shape:
 }
 ```
 
-`sidekick_get` returns only the value for backward compatibility. `sidekick_delete` removes one KV entry by key. Project filtering is provided by `sidekick_get_by_project`.
+`get` returns only the value for backward compatibility. `delete` removes one KV entry by key. Project filtering is provided by `get_by_project`.
 
 ### `json_documents`
 
@@ -152,7 +152,7 @@ The value JSON preserves a compatibility shape:
 
 Some constants in code still have old file names for compatibility and readability, but the active load/save path for these documents is `dbStore.loadDocument()` and `dbStore.setDocument()`.
 
-The `context` document remains a compatibility and session-continuity store. It contains explicit `sidekick_context` entries for projects, decisions, problems, patterns, and sessions, plus mirrored automatic memory summaries. The first-class queryable store for automatic memory is now the `memories` table.
+The `context` document remains a compatibility and session-continuity store. It contains explicit `context` entries for projects, decisions, problems, patterns, and sessions, plus mirrored automatic memory summaries. The first-class queryable store for automatic memory is now the `memories` table.
 
 ### `memories`
 
@@ -174,7 +174,7 @@ Repeated equivalent memories update the existing row and increment `times_confir
 This table powers:
 
 - dashboard activity views;
-- `sidekick_log_query`;
+- `log_query`;
 - metrics collection;
 - operational analysis of recent tool behavior.
 
@@ -182,7 +182,7 @@ Retention is controlled by `SIDEKICK_MAX_LOG`.
 
 ### `tools`, `tool_categories`, and `tool_category_map`
 
-These tables are the database-backed tool registry. The registry is synced from `TOOL_DEFS`, `TOOL_RISK`, and `TOOL_CATEGORIES` in `src/tools.js`.
+These tables are the database-backed tool registry. Built-in descriptors are assembled through `src/tools/index.js` and `src/tools/registry.js`, with explicit risk/category metadata under `src/tools/metadata.js`; compatibility definitions are synchronized into SQLite on startup.
 
 The `tools` table contains:
 
@@ -201,7 +201,7 @@ The MCP server marks code-removed tools as deprecated instead of deleting them, 
 
 `knowledge` stores documentation and operational knowledge. Each entry has category, title, content, tags, enabled status, version metadata, and update timestamp.
 
-`sidekick_knowledge` supports:
+`knowledge` supports:
 
 - `search`
 - `get`
@@ -214,36 +214,21 @@ Current search is a SQLite `LIKE` search across title, content, and tags. It is 
 
 ## 7. Tool System
 
-The current code exports 94 built-in `sidekick_*` tools. A built-in tool has six relevant parts:
+Current `main` contains 107 built-in tools across 20 categories. Canonical MCP names are unprefixed; older `sidekick_`-prefixed forms are compatibility aliases. Approved trial/active generated capabilities may add runtime tools beyond that built-in count.
 
-1. An async handler in `src/tools.js`.
-2. A `TOOLS` map entry.
-3. A `TOOL_DEFS` metadata entry.
-4. A Zod schema in `TOOL_SCHEMAS` in `src/index.js`.
-5. A category mapping in `TOOL_CATEGORIES`.
-6. A risk label in `TOOL_RISK`, or default `low`.
+The authoritative execution path is descriptor- and dispatcher-based:
 
-The tool categories currently include:
+1. A tool descriptor supplies its canonical name, description, argument metadata, Zod schema, handler, explicit risk, category, source, and family.
+2. `src/tools/registry.js` validates descriptors, rejects duplicates, and resolves aliases.
+3. `src/tools/dispatcher.js` creates or inherits request context, validates arguments, applies source-aware policy and approvals, invokes the handler, applies timeout/cancellation boundaries, normalizes/redacts results, and persists audit activity.
+4. MCP, dashboard, Agent Bridge, scheduler, generated-tool, and legacy nested-call surfaces all use dispatcher entry points rather than invoking handlers directly.
+5. The registry is synchronized into SQLite for dashboard discovery, policy inspection, and deprecation history.
 
-- Core
-- Storage
-- Database
-- Git & GitHub
-- Services
-- Scheduling
-- Communication
-- Context & Learning
-- Data Pipeline
-- Monitoring
-- Workflow
-- Meta
-- Efficiency
-- Security
-- Networking
-- Development
-- Reliability
-- Archive
-- Media
+`src/tools.js` is a compatibility re-export to `src/tools/index.js`. Most established handlers still reside in `src/tools-legacy.js` behind adapters while coherent families are extracted into `src/tools/families/`. The production execution/security boundary is modular, but handler decomposition is not yet complete.
+
+Built-in categories are Core, Storage, Database, Git & GitHub, Services, Scheduling, Communication, Context & Learning, Data Pipeline, Monitoring, Workflow, Meta, Efficiency, Security, Networking, Development, Reliability, Archive, Media, and Compute.
+
+Built-in risk metadata is explicit and registry construction fails when it is missing. Generated tools also fail closed when their risk is absent or invalid; they do not inherit a permissive default.
 
 Tool policy is source-aware. `getToolDefsForSource(source)` reads tool metadata from the database, applies policy for the source, and returns each tool with `risk`, `enabled`, and `policy` fields.
 
@@ -326,12 +311,12 @@ Current LLM behavior in `agent.js` is code-truth specific:
 - It emits provider and fallback events to the stream.
 - It detects installed Ollama models and prefers coding models such as `qwen2.5-coder`, then general models, then a fallback.
 
-The `sidekick_llm` tool has its own provider selection behavior and can use `SIDEKICK_DEFAULT_LLM`.
+The `llm` tool has its own provider selection behavior and can use `SIDEKICK_DEFAULT_LLM`.
 
 The Agent Bridge also loads and executes:
 
-- one-shot delays created by `sidekick_delay`;
-- recurring watches created by `sidekick_watch`.
+- one-shot delays created by `delay`;
+- recurring watches created by `watch`.
 
 ## 11. Persistence Files Outside SQLite
 
@@ -339,7 +324,7 @@ SQLite is the primary state store, but file artifacts remain where appropriate:
 
 - `data/conversations/*.json`: agent transcripts.
 - `data/procedures.json`: learned procedures dynamically registered as tools after restart.
-- `data/secrets.enc`: encrypted secrets managed by `sidekick_secret`.
+- `data/secrets.enc`: encrypted secrets managed by `secret`.
 - `data/audit.jsonl`: dashboard mutation audit log.
 - `data/dashboard-errors.log`: dashboard/frontend error log.
 - snapshots, queues, evolve proposals, orchestrations, predictions, health history, circuits, baselines, runbooks, black-box captures, sandbox metadata, and anonymization patterns.
@@ -354,8 +339,8 @@ The rule of thumb for new features is:
 
 Sidekick can use additional services when installed:
 
-- PostgreSQL for `sidekick_db_*` tools with `database="postgres"`.
-- Redis for `sidekick_redis` and cache workflows.
+- PostgreSQL for `db_*` tools with `database="postgres"`.
+- Redis for `redis` and cache workflows.
 - Qdrant for semantic context search.
 - InfluxDB for metrics.
 - Grafana for dashboards.
@@ -368,7 +353,7 @@ The optional services are not required for the core MCP, dashboard, SQLite, or k
 
 ## 13. Metrics and Monitoring
 
-Metrics collection is handled by `scripts/collect-metrics.js` and the `sidekick_metrics` tool. The script reads:
+Metrics collection is handled by `scripts/collect-metrics.js` and the `metrics` tool. The script reads:
 
 - system metrics;
 - tool usage from SQLite `tool_logs`;
@@ -452,17 +437,11 @@ In `restricted` mode, high and critical tools are blocked unless explicitly allo
 
 ## 16. Development Workflow
 
-Adding a built-in tool requires coordinated updates:
+New built-in tools should be added as descriptor-owned family modules under `src/tools/families/` with an explicit schema, risk, category, source, family, handler, tests, and documentation. The family is then registered through `src/tools/registry.js`.
 
-1. Add handler in `src/tools.js`.
-2. Add to `TOOLS`.
-3. Add to `TOOL_DEFS`.
-4. Add risk/category metadata in `src/tools.js`.
-5. Add Zod schema in `src/index.js`.
-6. Add tests.
-7. Update docs or knowledge entries.
+Migrating an existing tool requires preserving its public name, schema, result shape, risk, category, policy and approval behavior, and activity-log compatibility. The legacy handler should be removed only after descriptor/dispatcher and compatibility tests pass. Production code must not bypass the dispatcher by invoking a descriptor or legacy handler directly.
 
-Because the registry syncs to the database on MCP startup, code metadata becomes queryable through the dashboard and `sidekick_db_query` after restart.
+The registry syncs to SQLite on MCP startup, so current built-in and approved generated metadata becomes queryable through the dashboard, `tools`, and `db_query` after restart.
 
 Tests live under `test/` and are run with:
 
@@ -472,17 +451,19 @@ npm test
 
 ## 17. Current Trade-Offs
 
+The modular tool migration is intentionally incomplete. The dispatcher, registry, context, policy, approval, redaction, and audit boundaries are authoritative, but most mature handlers remain in `src/tools-legacy.js` to preserve compatibility while family-by-family extraction continues.
+
 SQLite has replaced the old full-file KV/log bottleneck for core state, but not every feature artifact has moved into the database. This is intentional where files are natural outputs, but shared mutable state should continue moving toward SQLite or another transactional backend.
 
 The knowledge base uses simple SQLite search rather than a complex retrieval stack. This keeps it predictable and easy to operate, but ranking and semantic search are limited.
 
-The Agent Bridge is autonomous but local and bounded. It is useful for delegated tasks, but it is not a second always-on collaborator integrated into the main opencode session.
+The Agent Bridge is autonomous but local and bounded. It is useful for delegated tasks, but it is not a second always-on collaborator automatically integrated into a connected client session.
 
 The tool surface is broad by design. This makes Sidekick powerful for trusted operators, but deployments exposed beyond a private trusted network should use restrictive tool policy, strong credentials, and network controls.
 
 ## 18. Summary
 
-Sidekick's current architecture is best understood as a database-backed remote operations layer for AI agents. The markdown files activate and document the system, but the runtime knowledge path is SQLite:
+Sidekick's current architecture is best understood as a self-hosted agent platform with a centralized governed tool runtime, durable data and workflow services, and optional distributed model compute. The markdown files activate and document the system, but the runtime knowledge path is SQLite:
 
 - `knowledge` for docs and operational guidance;
 - `tools` and category tables for tool discovery;

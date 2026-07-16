@@ -5,7 +5,16 @@
 | Path | Purpose |
 |---|---|
 | `src/index.js` | MCP server, auth, sessions, Streamable HTTP, legacy SSE, health endpoint. |
-| `src/tools.js` | Tool implementations, tool definitions, dispatcher, persistence helpers. |
+| `src/tools.js` | Compatibility re-export to `src/tools/index.js`. |
+| `src/tools/index.js` | Public tool facade, compatibility exports, built-in registry construction, and source-specific dispatcher wrappers. |
+| `src/tools/descriptor.js` | Tool descriptor normalization and validation. |
+| `src/tools/registry.js` | Built-in descriptor registry and alias resolution. |
+| `src/tools/dispatcher.js` | Authoritative schema, policy, approval, execution, cancellation, result, and audit boundary. |
+| `src/tools/context.js` | Request-scoped source, actor, session, task, project, trace, approval, and cancellation context. |
+| `src/tools/families/` | Descriptor-owned extracted tool families. |
+| `src/tools-legacy.js` | Remaining legacy handler implementations behind compatibility adapters during the modular migration. |
+| `src/compute/` | Compute worker, provider, model, router, job, lease, cancellation, recovery, and artifact implementation. |
+| `src/platform/` | Shared execution/event kernel, durable workflows, runners, workspaces, models, extensions, backups, and releases. |
 | `src/memory.js` | Automatic memory capture, bounded retention, and recall helpers. |
 | `src/db.js` | SQLite database layer, migrations, backups, query helpers, FTS/search helpers, snapshots. |
 | `src/pg.js` | Optional PostgreSQL backend for database tools. |
@@ -38,42 +47,21 @@ The test runner is `node test/run-all.js`.
 
 ## Test coverage in this tree
 
-The supplied tests cover:
+The test suite covers the registry/descriptor contract, centralized dispatcher, approvals and recovery, authentication and redaction, core tools, memory and handoffs, dashboard APIs, generated tools, platform execution adapters, Compute protocol/jobs/workers/artifacts, deployment behavior, and integration workflows. Specialized suites can also be run directly from `test/`; `npm test` remains the authoritative aggregate check.
 
-- redaction, authentication, and dangerous command handling;
-- deployment script structure;
-- KV migration behavior;
-- core tools and project metadata;
-- dashboard API behavior;
-- automatic memory, memory lifecycle, cross-machine sync, and deferred memory state;
-- integration workflow for storage and project lookups.
+## Adding or migrating a tool
 
-Some future test suites are listed in `test/run-all.js` but not implemented in the supplied tree.
+New built-in tools should be descriptor-owned rather than added directly to `src/tools-legacy.js`:
 
-## Adding a tool
+1. Add the handler and descriptor in a focused family module under `src/tools/families/`.
+2. Provide a Zod schema, human-readable argument metadata, explicit risk, category, source, and family.
+3. Register the descriptor family in `src/tools/registry.js`.
+4. Add dispatcher-level tests for success, validation failure, policy denial, approvals when relevant, redaction/logging, and compatibility exports.
+5. Update the generated/reference documentation and knowledge seed where needed.
 
-A normal built-in tool addition requires changes in these places:
+When migrating an existing legacy tool, preserve its public name, schema, result shape, risk, category, policy behavior, approval behavior, and tool-log compatibility. Remove the live legacy handler only after the extracted family passes the existing contract and security tests.
 
-1. Add an async handler function in `src/tools.js`.
-2. Add the handler to the `TOOLS` map.
-3. Add a user-facing entry to `TOOL_DEFS`.
-4. Add a category mapping in `TOOL_CATEGORIES` in `src/tools.js`.
-5. Add a risk entry in `TOOL_RISK` if the default `low` classification is not correct.
-6. Add a Zod schema in `TOOL_SCHEMAS` in `src/index.js` so MCP clients know the input shape.
-7. Add tests for success and failure cases.
-8. Update documentation.
-
-Tool handlers should return MCP-style content:
-
-```js
-return { content: [{ type: "text", text: "result text" }] };
-```
-
-For errors:
-
-```js
-return { content: [{ type: "text", text: "error text" }], isError: true };
-```
+Handlers must not implement alternate policy or approval bypasses. Nested tool execution should use an injected or exported dispatcher call path, never a raw handler map.
 
 ## Implementation notes
 

@@ -85,7 +85,7 @@ systemctl status sidekick-dashboard
 systemctl status sidekick-agent
 ```
 
-## opencode MCP configuration
+## MCP client configuration
 
 Use Streamable HTTP with the MCP server URL and bearer token. A typical config shape is:
 
