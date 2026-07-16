@@ -1,11 +1,15 @@
 const crypto = require("crypto");
 const dbStore = require("../db");
 const { JOB_STATES, JOB_TERMINAL_STATES, JOB_TRANSITIONS, JobError, LeaseExpiredError } = require("./errors");
+let platformKernel = null;
+try { platformKernel = require("../platform/kernel"); } catch {}
 
 function nowIso() { return new Date().toISOString(); }
 function generateId(prefix) { return `${prefix}_${Date.now().toString(36)}_${crypto.randomBytes(6).toString("hex")}`; }
 function parseJson(value, fallback) { try { return value ? JSON.parse(value) : fallback; } catch { return fallback; } }
 function json(value) { return JSON.stringify(value || {}); }
+function hashJson(value) { return crypto.createHash("sha256").update(json(value)).digest("hex"); }
+function parseMaybeArray(value) { return Array.isArray(value) ? value : []; }
 
 function ensureSchema() {
   const db = dbStore.getDb();
@@ -107,6 +111,20 @@ function ensureSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_compute_artifacts_job ON compute_artifacts(job_id);
   `);
+  ensureColumn("compute_jobs", "cancel_requested_at", "TEXT");
+  ensureColumn("compute_jobs", "cancel_requested_by", "TEXT");
+  ensureColumn("compute_jobs", "idempotency_key", "TEXT");
+  ensureColumn("compute_job_attempts", "progress_percent", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("compute_job_attempts", "progress_message", "TEXT");
+  ensureColumn("compute_job_attempts", "lease_acquired_at", "TEXT");
+  ensureColumn("compute_job_attempts", "lease_expires_at", "TEXT");
+  ensureColumn("compute_job_attempts", "execution_id", "TEXT");
+}
+
+function ensureColumn(table, column, definition) {
+  const db = dbStore.getDb();
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+  if (!columns.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
 function rowToJob(row) {
@@ -151,6 +169,9 @@ function rowToJob(row) {
     completedAt: row.completed_at,
     cancelledAt: row.cancelled_at,
     cancelReason: row.cancel_reason,
+    cancelRequestedAt: row.cancel_requested_at,
+    cancelRequestedBy: row.cancel_requested_by,
+    idempotencyKey: row.idempotency_key,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -169,31 +190,130 @@ function createJob({
   capabilityRequirements = {}, routingPreferences = {},
   requestPayload = {}, approvalRequired = false,
   maxAttempts = 3, timeoutMs,
+  idempotencyKey,
 }) {
   ensureSchema();
   const jobId = generateId("job");
-  const inputHash = crypto.createHash("sha256").update(json(requestPayload)).digest("hex").substring(0, 16);
+  const inputHash = hashJson(requestPayload);
   const initialStatus = approvalRequired ? "waiting_for_approval" : "queued";
   const db = dbStore.getDb();
+  if (idempotencyKey) {
+    const existing = db.prepare("SELECT * FROM compute_jobs WHERE idempotency_key = ?").get(idempotencyKey);
+    if (existing) return rowToJob(existing);
+  }
   db.prepare(`
     INSERT INTO compute_jobs (
       job_id, job_type, capability, source, project, task_id, session_id,
       root_execution_id, parent_execution_id, requesting_actor,
       data_classification, capability_requirements_json, routing_preferences_json,
-      request_payload_json, max_attempts, status, approval_required, input_hash, timeout_ms
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      request_payload_json, max_attempts, status, approval_required, input_hash, timeout_ms,
+      idempotency_key
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     jobId, jobType, capability, source || null, project || null,
     taskId || null, sessionId || null, rootExecutionId || null,
     parentExecutionId || null, requestingActor || null,
     dataClassification, json(capabilityRequirements), json(routingPreferences),
     json(requestPayload), maxAttempts, initialStatus,
-    approvalRequired ? 1 : 0, inputHash, timeoutMs || null
+    approvalRequired ? 1 : 0, inputHash, timeoutMs || null,
+    idempotencyKey || null
   );
   if (initialStatus === "queued") {
     db.prepare("UPDATE compute_jobs SET queued_at = ? WHERE job_id = ?").run(nowIso(), jobId);
   }
   return getJob(jobId);
+}
+
+function workerCanRunJob(worker, job) {
+  if (!worker || worker.state !== "online" || worker.maintenanceMode || worker.currentJobs >= worker.maxConcurrentJobs) return false;
+  const executors = parseMaybeArray(worker.executors).map(e => typeof e === "string" ? e : (e.type || e.name)).filter(Boolean);
+  const providers = parseMaybeArray(worker.providers).map(p => typeof p === "string" ? p : (p.type || p.providerType || p.name)).filter(Boolean);
+  const requiredExecutor = job.capabilityRequirements?.executor || job.requestPayload?.executor;
+  if (requiredExecutor && !executors.includes(requiredExecutor)) return false;
+  if (["chat", "generate", "embedding", "embeddings", "inference"].includes(job.jobType) || ["chat", "generate", "embeddings"].includes(job.capability)) {
+    if (executors.includes("mock.inference") || executors.includes("ollama.inference") || providers.includes("mock") || providers.includes("ollama")) return true;
+  }
+  return executors.includes(job.jobType) || executors.includes(job.capability);
+}
+
+function createPlatformExecutionForJob(job, workerId) {
+  if (!platformKernel) return null;
+  try {
+    const execution = platformKernel.createExecution({
+      execution_id: job.rootExecutionId || undefined,
+      task_id: job.taskId,
+      session_id: job.sessionId,
+      project_id: job.project,
+      actor_id: workerId || job.requestingActor || "compute",
+      trigger_type: "compute",
+      operation_type: "compute_job",
+      tool_name: "compute",
+      tool_action: job.capability || job.jobType,
+      state: "created",
+      risk: job.dataClassification === "public" ? "low" : "medium",
+      metadata: { job_id: job.jobId, job_type: job.jobType, capability: job.capability },
+      source: "compute",
+    });
+    return execution?.execution_id || null;
+  } catch { return null; }
+}
+
+function emitComputeEvent(eventType, job, payload = {}, severity = "info") {
+  if (!platformKernel || !job?.rootExecutionId) return;
+  try {
+    platformKernel.appendEvent({
+      event_type: eventType,
+      source: "compute",
+      execution_id: job.rootExecutionId,
+      root_execution_id: job.rootExecutionId,
+      project_id: job.project,
+      task_id: job.taskId,
+      session_id: job.sessionId,
+      subject_type: "compute_job",
+      subject_id: job.jobId,
+      severity,
+      payload,
+      correlation_id: job.rootExecutionId,
+    });
+  } catch {}
+}
+
+function claimNextJob(worker, { leaseDurationMs = 300000 } = {}) {
+  ensureSchema();
+  const db = dbStore.getDb();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const rows = db.prepare("SELECT * FROM compute_jobs WHERE status = 'queued' AND attempt < max_attempts ORDER BY created_at ASC LIMIT 50").all();
+    for (const row of rows) {
+      const job = rowToJob(row);
+      if (!workerCanRunJob(worker, job)) continue;
+      const leaseId = generateId("lease");
+      const now = nowIso();
+      const leaseExpires = new Date(Date.now() + leaseDurationMs).toISOString();
+      const executionId = job.rootExecutionId || createPlatformExecutionForJob(job, worker.workerId);
+      const result = db.prepare(`
+        UPDATE compute_jobs SET status = 'leased', lease_id = ?, lease_expires_at = ?, lease_renewed_at = ?,
+          selected_worker_id = ?, attempt = attempt + 1, updated_at = ?, root_execution_id = COALESCE(root_execution_id, ?)
+        WHERE job_id = ? AND status = 'queued' AND attempt < max_attempts
+      `).run(leaseId, leaseExpires, now, worker.workerId, now, executionId, job.jobId);
+      if (result.changes !== 1) continue;
+      const leased = rowToJob(db.prepare("SELECT * FROM compute_jobs WHERE job_id = ?").get(job.jobId));
+      const attemptId = generateId("attempt");
+      db.prepare(`
+        INSERT INTO compute_job_attempts (attempt_id, job_id, attempt_number, worker_id, lease_id, status, lease_acquired_at, lease_expires_at, execution_id)
+        VALUES (?, ?, ?, ?, ?, 'leased', ?, ?, ?)
+      `).run(attemptId, job.jobId, leased.attempt, worker.workerId, leaseId, now, leaseExpires, executionId || null);
+      db.prepare("UPDATE compute_workers SET current_jobs = current_jobs + 1, updated_at = ? WHERE worker_id = ?").run(now, worker.workerId);
+      db.exec("COMMIT");
+      emitComputeEvent("compute.job_leased", leased, { worker_id: worker.workerId, lease_id: leaseId, attempt_id: attemptId });
+      return { job: getJob(job.jobId), attemptId, leaseId };
+    }
+    db.exec("COMMIT");
+    return null;
+  } catch (e) {
+    try { db.exec("ROLLBACK"); } catch {}
+    throw e;
+  }
 }
 
 function getJob(jobId) {
@@ -272,28 +392,187 @@ function renewLease(jobId, leaseId, leaseDurationMs = 300000) {
   const db = dbStore.getDb();
   const job = getJob(jobId);
   if (!job) throw new JobError("Job not found", "JOB_NOT_FOUND", { jobId });
-  if (job.leaseId !== leaseId) throw new LeaseExpiredError(jobId, leaseId);
+  if (job.leaseId !== leaseId || (job.leaseExpiresAt && new Date(job.leaseExpiresAt) < new Date())) throw new LeaseExpiredError(jobId, leaseId);
   if (job.status !== "leased" && job.status !== "running") {
     throw new JobError("Job is not in a leaseable state", "NOT_LEASABLE", { jobId, status: job.status });
   }
   const now = nowIso();
   const newExpires = new Date(Date.now() + leaseDurationMs).toISOString();
-  db.prepare("UPDATE compute_jobs SET lease_expires_at = ?, lease_renewed_at = ?, updated_at = ? WHERE job_id = ?")
-    .run(newExpires, now, now, jobId);
+  db.prepare("UPDATE compute_jobs SET lease_expires_at = ?, lease_renewed_at = ?, updated_at = ? WHERE job_id = ? AND lease_id = ?")
+    .run(newExpires, now, now, jobId, leaseId);
+  db.prepare("UPDATE compute_job_attempts SET lease_expires_at = ? WHERE job_id = ? AND lease_id = ?").run(newExpires, jobId, leaseId);
   return getJob(jobId);
 }
 
-function checkLeaseExpiration() {
+function recoverExpiredLeases() {
   ensureSchema();
   const db = dbStore.getDb();
   const now = nowIso();
-  const expired = db.prepare(
-    "SELECT job_id FROM compute_jobs WHERE status IN ('leased', 'running') AND lease_expires_at < ?"
-  ).all(now);
-  for (const { job_id } of expired) {
-    try { transitionJob(job_id, "expired"); } catch {}
+  const rows = db.prepare("SELECT * FROM compute_jobs WHERE status IN ('leased', 'running') AND lease_expires_at < ?").all(now);
+  for (const row of rows) {
+    const exhausted = row.attempt >= row.max_attempts;
+    const nextStatus = exhausted ? "dead_letter" : "queued";
+    db.prepare(`
+      UPDATE compute_jobs SET status = ?, lease_id = NULL, lease_expires_at = NULL, lease_renewed_at = NULL,
+        selected_worker_id = NULL, error_category = ?, error_message = ?, queued_at = CASE WHEN ? = 'queued' THEN ? ELSE queued_at END, updated_at = ?
+      WHERE job_id = ?
+    `).run(nextStatus, exhausted ? "attempts_exhausted" : "lease_expired", "Worker lease expired", nextStatus, now, now, row.job_id);
+    db.prepare("UPDATE compute_job_attempts SET status = ?, completed_at = ?, error_category = 'lease_expired', error_message = 'Worker lease expired' WHERE job_id = ? AND lease_id = ?")
+      .run(exhausted ? "dead_letter" : "expired", now, row.job_id, row.lease_id);
+    if (row.selected_worker_id) db.prepare("UPDATE compute_workers SET current_jobs = MAX(current_jobs - 1, 0), updated_at = ? WHERE worker_id = ?").run(now, row.selected_worker_id);
   }
-  return expired.length;
+  return rows.length;
+}
+
+function checkLeaseExpiration() { return recoverExpiredLeases(); }
+
+function assertLeaseOwner(jobId, workerId, leaseId, allowedStates = ["leased", "starting", "running"]) {
+  const job = getJob(jobId);
+  if (!job) throw new JobError("Job not found", "JOB_NOT_FOUND", { jobId });
+  if (job.selectedWorkerId !== workerId || job.leaseId !== leaseId) throw new LeaseExpiredError(jobId, leaseId);
+  if (job.leaseExpiresAt && new Date(job.leaseExpiresAt) < new Date()) throw new LeaseExpiredError(jobId, leaseId);
+  if (!allowedStates.includes(job.status)) throw new JobError("Job is not in an allowed state", "INVALID_STATE", { jobId, status: job.status });
+  return job;
+}
+
+function startLeasedJob(jobId, workerId, leaseId) {
+  ensureSchema();
+  const job = assertLeaseOwner(jobId, workerId, leaseId, ["leased", "starting", "running"]);
+  if (job.status === "running") return job;
+  if (job.status === "leased") transitionJob(jobId, "starting");
+  const running = transitionJob(jobId, "running");
+  const db = dbStore.getDb();
+  db.prepare("UPDATE compute_job_attempts SET status = 'running', started_at = COALESCE(started_at, ?) WHERE job_id = ? AND lease_id = ?").run(nowIso(), jobId, leaseId);
+  if (platformKernel && running.rootExecutionId) {
+    try { platformKernel.transitionExecution(running.rootExecutionId, "running", { source: "compute", actor_id: workerId, reason: "worker started job" }); } catch {}
+  }
+  emitComputeEvent("compute.job_started", running, { worker_id: workerId, lease_id: leaseId });
+  return running;
+}
+
+function updateProgress(jobId, workerId, leaseId, { progressPercent, progressMessage }) {
+  ensureSchema();
+  const percent = Math.max(0, Math.min(100, Number.isFinite(Number(progressPercent)) ? Math.floor(Number(progressPercent)) : 0));
+  const message = progressMessage ? String(progressMessage).slice(0, 500) : null;
+  const job = assertLeaseOwner(jobId, workerId, leaseId, ["leased", "starting", "running", "cancelling"]);
+  const db = dbStore.getDb();
+  db.prepare("UPDATE compute_jobs SET progress_percent = ?, progress_message = ?, updated_at = ? WHERE job_id = ? AND lease_id = ?")
+    .run(percent, message, nowIso(), jobId, leaseId);
+  db.prepare("UPDATE compute_job_attempts SET progress_percent = ?, progress_message = ? WHERE job_id = ? AND lease_id = ?")
+    .run(percent, message, jobId, leaseId);
+  emitComputeEvent("compute.job_progress", job, { worker_id: workerId, progress_percent: percent, progress_message: message });
+  return getJob(jobId);
+}
+
+function completeJob(jobId, workerId, leaseId, { result = {}, artifacts = [] } = {}) {
+  ensureSchema();
+  const job = getJob(jobId);
+  if (!job) throw new JobError("Job not found", "JOB_NOT_FOUND", { jobId });
+  if (job.status === "completed") return job;
+  assertLeaseOwner(jobId, workerId, leaseId, ["leased", "starting", "running"]);
+  const db = dbStore.getDb();
+  const now = nowIso();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const update = db.prepare(`
+      UPDATE compute_jobs SET status = 'completed', progress_percent = 100, result_json = ?, result_hash = ?, completed_at = ?, updated_at = ?
+      WHERE job_id = ? AND selected_worker_id = ? AND lease_id = ? AND status IN ('leased','starting','running')
+    `).run(json(result), hashJson(result), now, now, jobId, workerId, leaseId);
+    if (update.changes !== 1) throw new LeaseExpiredError(jobId, leaseId);
+    db.prepare("UPDATE compute_job_attempts SET status = 'completed', completed_at = ?, result_json = ?, result_hash = ? WHERE job_id = ? AND lease_id = ?")
+      .run(now, json(result), hashJson(result), jobId, leaseId);
+    db.prepare("UPDATE compute_workers SET current_jobs = MAX(current_jobs - 1, 0), updated_at = ? WHERE worker_id = ?").run(now, workerId);
+    db.exec("COMMIT");
+  } catch (e) {
+    try { db.exec("ROLLBACK"); } catch {}
+    throw e;
+  }
+  const completed = getJob(jobId);
+  for (const artifact of parseMaybeArray(artifacts).slice(0, 10)) {
+    createVerifiedArtifact(jobId, leaseId, workerId, artifact, completed.rootExecutionId);
+  }
+  if (platformKernel && completed.rootExecutionId) {
+    try { platformKernel.transitionExecution(completed.rootExecutionId, "completed", { source: "compute", actor_id: workerId, result_status: "success", result_summary: "compute job completed" }); } catch {}
+  }
+  emitComputeEvent("compute.job_completed", completed, { worker_id: workerId, lease_id: leaseId });
+  return completed;
+}
+
+function failJob(jobId, workerId, leaseId, { errorCategory = "worker_error", errorMessage = "Worker reported failure" } = {}) {
+  ensureSchema();
+  assertLeaseOwner(jobId, workerId, leaseId, ["leased", "starting", "running"]);
+  const db = dbStore.getDb();
+  const current = getJob(jobId);
+  const nextStatus = current.attempt >= current.maxAttempts ? "dead_letter" : "queued";
+  const now = nowIso();
+  db.prepare(`
+    UPDATE compute_jobs SET status = ?, lease_id = NULL, lease_expires_at = NULL, lease_renewed_at = NULL, selected_worker_id = NULL,
+      error_category = ?, error_message = ?, queued_at = CASE WHEN ? = 'queued' THEN ? ELSE queued_at END, updated_at = ?
+    WHERE job_id = ? AND lease_id = ?
+  `).run(nextStatus, String(errorCategory).slice(0, 80), String(errorMessage).slice(0, 1000), nextStatus, now, now, jobId, leaseId);
+  db.prepare("UPDATE compute_job_attempts SET status = ?, completed_at = ?, error_category = ?, error_message = ? WHERE job_id = ? AND lease_id = ?")
+    .run(nextStatus === "queued" ? "failed" : "dead_letter", now, String(errorCategory).slice(0, 80), String(errorMessage).slice(0, 1000), jobId, leaseId);
+  db.prepare("UPDATE compute_workers SET current_jobs = MAX(current_jobs - 1, 0), updated_at = ? WHERE worker_id = ?").run(now, workerId);
+  const job = getJob(jobId);
+  emitComputeEvent("compute.job_failed", job, { worker_id: workerId, lease_id: leaseId, next_status: nextStatus }, "warning");
+  return job;
+}
+
+function cancelJob(jobId, { actor = "admin", reason = "cancelled" } = {}) {
+  ensureSchema();
+  const db = dbStore.getDb();
+  const job = getJob(jobId);
+  if (!job) throw new JobError("Job not found", "JOB_NOT_FOUND", { jobId });
+  if (JOB_TERMINAL_STATES.has(job.status)) return job;
+  const now = nowIso();
+  db.prepare("UPDATE compute_jobs SET status = 'cancelled', cancelled_at = ?, cancel_reason = ?, cancel_requested_at = ?, cancel_requested_by = ?, updated_at = ? WHERE job_id = ?")
+    .run(now, String(reason).slice(0, 500), now, String(actor).slice(0, 120), now, jobId);
+  if (job.leaseId) db.prepare("UPDATE compute_job_attempts SET status = 'cancelled', completed_at = ? WHERE job_id = ? AND lease_id = ?").run(now, jobId, job.leaseId);
+  if (job.selectedWorkerId) db.prepare("UPDATE compute_workers SET current_jobs = MAX(current_jobs - 1, 0), updated_at = ? WHERE worker_id = ?").run(now, job.selectedWorkerId);
+  const cancelled = getJob(jobId);
+  if (platformKernel && cancelled.rootExecutionId) {
+    try { platformKernel.transitionExecution(cancelled.rootExecutionId, "cancelled", { source: "compute", actor_id: actor, reason }); } catch {}
+  }
+  emitComputeEvent("compute.job_cancelled", cancelled, { actor, reason }, "warning");
+  return cancelled;
+}
+
+function createVerifiedArtifact(jobId, leaseId, workerId, artifact, executionId) {
+  const sizeBytes = Number(artifact.sizeBytes || artifact.size_bytes || 0);
+  if (!Number.isFinite(sizeBytes) || sizeBytes < 0 || sizeBytes > 10 * 1024 * 1024) throw new JobError("Artifact size invalid or too large", "ARTIFACT_SIZE", { jobId });
+  const content = artifact.content !== undefined ? Buffer.from(String(artifact.content), "utf8") : null;
+  const contentHash = artifact.contentHash || artifact.content_hash || (content ? crypto.createHash("sha256").update(content).digest("hex") : null);
+  if (content && artifact.contentHash && artifact.contentHash !== contentHash) throw new JobError("Artifact hash mismatch", "ARTIFACT_HASH_MISMATCH", { jobId });
+  const attempt = dbStore.getDb().prepare("SELECT attempt_id FROM compute_job_attempts WHERE job_id = ? AND lease_id = ? ORDER BY created_at DESC LIMIT 1").get(jobId, leaseId);
+  const artifactId = createArtifact(jobId, {
+    attemptId: attempt?.attempt_id,
+    artifactType: artifact.artifactType || artifact.type || "result",
+    name: String(artifact.name || "artifact.txt").slice(0, 160),
+    storageRef: artifact.storageRef || artifact.storage_ref || null,
+    contentType: artifact.contentType || artifact.content_type || "text/plain",
+    contentHash,
+    sizeBytes: sizeBytes || (content ? content.length : 0),
+    sensitivity: artifact.sensitivity || "private",
+    metadata: { workerId, verified: true },
+  });
+  if (platformKernel && executionId) {
+    try {
+      platformKernel.registerArtifact({
+        type: artifact.artifactType || artifact.type || "compute-result",
+        name: artifact.name || artifactId,
+        execution_id: executionId,
+        producer: workerId,
+        storage_ref: artifact.storageRef || artifact.storage_ref || `compute/${jobId}/${artifactId}`,
+        content_type: artifact.contentType || artifact.content_type || "text/plain",
+        byte_size: sizeBytes || (content ? content.length : 0),
+        content_hash: contentHash,
+        sensitivity: artifact.sensitivity || "normal",
+        verification: { hash_verified: true },
+        source: "compute",
+      });
+    } catch {}
+  }
+  return artifactId;
 }
 
 function createAttempt(jobId, { providerId, modelId, workerId, leaseId }) {
@@ -372,8 +651,15 @@ module.exports = {
   listJobs,
   transitionJob,
   leaseJob,
+  claimNextJob,
   renewLease,
   checkLeaseExpiration,
+  recoverExpiredLeases,
+  startLeasedJob,
+  updateProgress,
+  completeJob,
+  failJob,
+  cancelJob,
   createAttempt,
   updateAttempt,
   createArtifact,

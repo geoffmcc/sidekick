@@ -17,6 +17,7 @@ const suites = [
   { file: 'test/github-setup.test.js', critical: true, description: 'GitHub workflow and package script checks' },
   { file: 'test/static-code-quality.test.js', critical: true, description: 'Static safety checks' },
   { file: 'test/security.test.js', critical: true, description: 'Redaction and dangerous command checks' },
+  { file: 'test/structured-tools-security.test.js', critical: true, description: 'Structured command-backed tool hardening' },
   { file: 'test/security-scan.test.js', critical: true, description: 'Read-only config and secret scan behavior' },
   { file: 'test/ci-status.test.js', critical: true, description: 'Read-only GitHub CI status aggregation' },
   { file: 'test/health.test.js', critical: true, description: 'Composite health aggregation and stable failure shapes' },
@@ -51,6 +52,7 @@ const suites = [
   { file: 'test/integration.test.js', critical: false, description: 'Integration behavior' },
   { file: 'test/dashboard-api.test.js', critical: false, description: 'Dashboard API behavior' },
   { file: 'test/compute.test.js', critical: false, description: 'Compute provider-neutral inference and job system' },
+  { file: 'test/compute-protocol.test.js', critical: false, description: 'Compute authenticated worker protocol integration' },
 ];
 
 const requested = process.argv.slice(2);

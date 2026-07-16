@@ -82,7 +82,7 @@ async function sidekick_compute_nodes({ action, node_id, ...args }) {
         if (!args.token || !node_id || !args.display_name || !args.platform) {
           return err("token, node_id, display_name, and platform required");
         }
-        const worker = compute.workerManager.enrollWorker({
+        const enrolled = compute.workerManager.enrollWorker({
           nodeId: node_id,
           displayName: args.display_name,
           platform: args.platform,
@@ -96,7 +96,7 @@ async function sidekick_compute_nodes({ action, node_id, ...args }) {
           publicKey: args.public_key,
           enrollmentToken: args.token,
         });
-        return ok(worker);
+        return ok({ ...enrolled.worker, credential: enrolled.credential, credentialType: "worker-bearer-v1" });
       }
       default: return err("Unknown action: " + action + ". Valid: list, get, heartbeat, revoke, maintenance, stats, create_token, list_tokens, enroll");
     }
@@ -182,12 +182,24 @@ async function sidekick_compute_jobs({ action, job_id, ...args }) {
         return j ? ok(j) : err("Job not found");
       }
       case "create": {
-        const j = compute.jobManager.createJob(args);
+        const j = compute.jobManager.createJob({
+          jobType: args.job_type || args.jobType,
+          capability: args.capability || args.job_type || args.jobType,
+          requestPayload: args.request_payload || args.requestPayload || args,
+          project: args.project,
+          source: "mcp",
+          dataClassification: args.data_classification || args.dataClassification || "private",
+          capabilityRequirements: args.capability_requirements || args.capabilityRequirements || {},
+          routingPreferences: args.routing_preferences || args.routingPreferences || {},
+          maxAttempts: args.max_attempts || args.maxAttempts || 3,
+          timeoutMs: args.timeout_ms || args.timeoutMs,
+          idempotencyKey: args.idempotency_key || args.idempotencyKey,
+        });
         return ok(j);
       }
       case "cancel": {
         if (!job_id) return err("job_id required");
-        const j = compute.jobManager.transitionJob(job_id, "cancelled", { cancelReason: args.reason || "user_cancelled" });
+        const j = compute.jobManager.cancelJob(job_id, { actor: args.actor || "mcp", reason: args.reason || "user_cancelled" });
         return ok(j);
       }
       case "stats": return ok(compute.jobManager.getJobStats());

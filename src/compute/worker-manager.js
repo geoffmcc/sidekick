@@ -7,6 +7,12 @@ function generateId(prefix) { return `${prefix}_${Date.now().toString(36)}_${cry
 function parseJson(value, fallback) { try { return value ? JSON.parse(value) : fallback; } catch { return fallback; } }
 function json(value) { return JSON.stringify(value || {}); }
 function hashToken(token) { return crypto.createHash("sha256").update(token).digest("hex"); }
+function generateSecret() { return "wksec_" + crypto.randomBytes(32).toString("base64url"); }
+function safeEqual(a, b) {
+  const left = Buffer.from(String(a || ""));
+  const right = Buffer.from(String(b || ""));
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
 
 function ensureSchema() {
   const db = dbStore.getDb();
@@ -35,6 +41,8 @@ function ensureSchema() {
       revoked_at TEXT,
       enrolled_at TEXT NOT NULL DEFAULT (datetime('now')),
       enrollment_token_hash TEXT,
+      credential_hash TEXT,
+      credential_rotated_at TEXT,
       public_key TEXT,
       metadata_json TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -61,6 +69,15 @@ function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_compute_enrollment_hash ON compute_enrollment_tokens(token_hash);
     CREATE INDEX IF NOT EXISTS idx_compute_enrollment_expires ON compute_enrollment_tokens(expires_at);
   `);
+  ensureColumn("compute_workers", "credential_hash", "TEXT");
+  ensureColumn("compute_workers", "credential_rotated_at", "TEXT");
+  ensureColumn("compute_workers", "protocol_version", "TEXT NOT NULL DEFAULT '1'");
+}
+
+function ensureColumn(table, column, definition) {
+  const db = dbStore.getDb();
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+  if (!columns.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
 function rowToWorker(row) {
@@ -88,7 +105,10 @@ function rowToWorker(row) {
     revocationReason: row.revocation_reason,
     revokedAt: row.revoked_at,
     enrolledAt: row.enrolled_at,
+    credentialRotatedAt: row.credential_rotated_at,
+    protocolVersion: row.protocol_version || "1",
     hasPublicKey: !!row.public_key,
+    hasCredential: !!row.credential_hash,
     metadata: parseJson(row.metadata_json, {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -127,27 +147,50 @@ function consumeEnrollmentToken(token, workerId) {
   };
 }
 
-function enrollWorker({ nodeId, displayName, platform, architecture, cpuInfo, memoryBytes, accelerators, providers, executors, workerVersion, publicKey, enrollmentToken }) {
+function enrollWorker({ nodeId, displayName, platform, architecture, cpuInfo, memoryBytes, accelerators, providers, executors, workerVersion, publicKey, enrollmentToken, protocolVersion = "1" }) {
   ensureSchema();
   const tokenData = consumeEnrollmentToken(enrollmentToken, nodeId);
   const workerId = generateId("wk");
+  const credential = generateSecret();
   const db = dbStore.getDb();
   db.prepare(`
     INSERT INTO compute_workers (
       worker_id, node_id, display_name, platform, architecture, cpu_info,
       memory_bytes, accelerators_json, providers_json, executors_json,
       worker_version, trust_level, state, max_concurrent_jobs, enrolled_at,
-      enrollment_token_hash, public_key
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'online', ?, ?, ?, ?)
+      enrollment_token_hash, credential_hash, credential_rotated_at, public_key, protocol_version
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'online', ?, ?, ?, ?, ?, ?, ?)
   `).run(
     workerId, nodeId, displayName, platform, architecture || null,
     cpuInfo || null, memoryBytes || 0, json(accelerators || []),
     json(providers || []), json(executors || []),
     workerVersion || null, tokenData.trustLevel,
     tokenData.maxConcurrentJobs, nowIso(),
-    hashToken(enrollmentToken), publicKey || null
+    hashToken(enrollmentToken), hashToken(credential), nowIso(), publicKey || null, String(protocolVersion || "1")
   );
-  return getWorker(workerId);
+  const worker = getWorker(workerId);
+  return { ...worker, worker, credential };
+}
+
+function authenticateWorker(workerId, credential) {
+  ensureSchema();
+  if (!workerId || !credential) return null;
+  const db = dbStore.getDb();
+  const row = db.prepare("SELECT * FROM compute_workers WHERE worker_id = ?").get(workerId);
+  if (!row || !row.credential_hash || row.state === "revoked") return null;
+  if (!safeEqual(row.credential_hash, hashToken(credential))) return null;
+  return rowToWorker(row);
+}
+
+function rotateCredential(workerId) {
+  ensureSchema();
+  const credential = generateSecret();
+  const db = dbStore.getDb();
+  const result = db.prepare("UPDATE compute_workers SET credential_hash = ?, credential_rotated_at = ?, updated_at = ? WHERE worker_id = ? AND state != 'revoked'")
+    .run(hashToken(credential), nowIso(), nowIso(), workerId);
+  if (result.changes !== 1) return null;
+  const worker = getWorker(workerId);
+  return { ...worker, worker, credential };
 }
 
 function getWorker(workerId) {
@@ -190,6 +233,7 @@ function updateWorker(workerId, updates) {
   if (updates.providers !== undefined) { fields.push("providers_json = ?"); params.push(json(updates.providers)); }
   if (updates.executors !== undefined) { fields.push("executors_json = ?"); params.push(json(updates.executors)); }
   if (updates.utilization !== undefined) { fields.push("utilization_json = ?"); params.push(json(updates.utilization)); }
+  if (updates.workerVersion !== undefined) { fields.push("worker_version = ?"); params.push(updates.workerVersion); }
   if (fields.length === 0) return getWorker(workerId);
   fields.push("updated_at = ?");
   params.push(nowIso());
@@ -256,6 +300,8 @@ module.exports = {
   createEnrollmentToken,
   consumeEnrollmentToken,
   enrollWorker,
+  authenticateWorker,
+  rotateCredential,
   getWorker,
   getWorkerByNodeId,
   listWorkers,

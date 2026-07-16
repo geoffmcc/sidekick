@@ -60,6 +60,27 @@ test('analyze empty data', () => {
   assertOk(typeof result.duration_ms === 'number', 'result has duration_ms');
   assertOk(Array.isArray(result.predictions), 'predictions is array');
   assertOk(Array.isArray(result.detectors), 'detectors is array');
+  assertEqual(result.predictions.length, 0, 'insufficient evidence produces no predictions');
+});
+
+console.log('Predict.2b: analyze produces useful next-action prediction from tool history');
+test('analyze deterministic next action', () => {
+  for (let i = 0; i < 3; i++) {
+    dbStore.appendToolLog({ t: new Date(Date.now() + i * 1000).toISOString(), n: 'knowledge', ok: true, src: 'mcp', session_id: `predict-session-${i}`, project: 'predict_project', s: 'searched docs' });
+    dbStore.appendToolLog({ t: new Date(Date.now() + i * 1000 + 500).toISOString(), n: 'tools', ok: true, src: 'mcp', session_id: `predict-session-${i}`, project: 'predict_project', s: 'inspected tool catalog' });
+  }
+  const result = predictEngine.analyze({ project: 'predict_project' });
+  assertOk(result.ok === true, 'analysis ok');
+  assertOk(result.predictions.length >= 1, 'created at least one prediction');
+  const next = result.predictions.find(p => p.type === 'next_action');
+  assertOk(next, 'has next_action prediction');
+  assertOk(next.subject.includes('knowledge') && next.subject.includes('tools'), 'prediction is grounded in expected sequence');
+  assertEqual(next.confidence, 'medium', 'three observations produce medium confidence');
+  assertOk(next.observation_count >= 3, 'observation count recorded');
+  const evidence = predictEngine.getPredictionEvidence(next.id);
+  assertOk(evidence.length >= 1, 'evidence stored');
+  const duplicate = predictEngine.analyze({ project: 'predict_project' });
+  assertEqual(duplicate.created, 0, 'duplicate analysis is suppressed');
 });
 
 console.log('Predict.3: listPredictions returns array');

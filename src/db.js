@@ -2289,8 +2289,15 @@ function runMigration(name, upSql, downSql) {
     return { skipped: true, reason: "Migration already applied" };
   }
   
-  db.exec(upSql);
-  db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(String(targetVersion));
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.exec(upSql);
+    db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(String(targetVersion));
+    db.exec("COMMIT");
+  } catch (error) {
+    try { db.exec("ROLLBACK"); } catch {}
+    throw error;
+  }
   
   return { success: true, version: targetVersion };
 }
@@ -2329,8 +2336,15 @@ function runPendingMigrations() {
     const sql = fs.readFileSync(migrationPath, "utf-8");
     
     try {
-      db.exec(sql);
-      db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(String(migration.version));
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        db.exec(sql);
+        db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(String(migration.version));
+        db.exec("COMMIT");
+      } catch (error) {
+        try { db.exec("ROLLBACK"); } catch {}
+        throw error;
+      }
       applied.push({ file: migration.file, version: migration.version });
     } catch (error) {
       console.error(`[Migration] Failed to apply ${migration.file}:`, error.message);

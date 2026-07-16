@@ -13,6 +13,8 @@ function initialize() {
   modelRegistry.ensureSchema();
   workerManager.ensureSchema();
   jobManager.ensureSchema();
+  jobManager.recoverExpiredLeases();
+  workerManager.checkWorkersOffline();
   try {
     const dbStore = require("../db");
     const db = dbStore.getDb();

@@ -202,7 +202,7 @@ function applyContradictionPenalty(baseRate, contradictionCount, totalMatches) {
 function calculateConfidence(score, sampleSize) {
   if (sampleSize >= MIN_OBSERVATIONS_FOR_VERY_HIGH_CONFIDENCE && score >= 0.8) return "very_high";
   if (sampleSize >= MIN_OBSERVATIONS_FOR_HIGH_CONFIDENCE && score >= 0.7) return "high";
-  if (sampleSize >= MIN_OBSERVATIONS_FOR_PREDICTIONS && score >= 0.4) return "medium";
+  if (sampleSize >= MIN_OBSERVATIONS_FOR_PREDICTION && score >= 0.4) return "medium";
   if (sampleSize >= 1) return "low";
   return "none";
 }
