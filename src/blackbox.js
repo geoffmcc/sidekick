@@ -449,13 +449,15 @@ function registerPlatformArtifact(execution, artifact, details = {}) {
 
 function migrateSchema() {
   const db = dbStore.getDb();
-  const versionRow = db.prepare("SELECT value FROM meta WHERE key = 'blackbox_schema_version'").get();
-  const currentVersion = versionRow ? Number(versionRow.value) : 0;
-  if (currentVersion < 11) {
-    try { db.exec("ALTER TABLE blackbox_captures ADD COLUMN diagnostics_json TEXT NOT NULL DEFAULT '{}'"); } catch {}
-    try { db.exec("ALTER TABLE blackbox_captures ADD COLUMN retry_of TEXT"); } catch {}
-    db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('blackbox_schema_version', ?)").run(11);
-  }
+  try {
+    const cols = db.prepare("PRAGMA table_info(blackbox_captures)").all().map(c => c.name);
+    if (!cols.includes("diagnostics_json")) {
+      db.exec("ALTER TABLE blackbox_captures ADD COLUMN diagnostics_json TEXT NOT NULL DEFAULT '{}'");
+    }
+    if (!cols.includes("retry_of")) {
+      db.exec("ALTER TABLE blackbox_captures ADD COLUMN retry_of TEXT");
+    }
+  } catch {}
 }
 
 function migrateLegacy() {
