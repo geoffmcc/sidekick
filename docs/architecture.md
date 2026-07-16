@@ -118,6 +118,24 @@ Immutable change-set approvals provide tamper-evident records:
 - `getChangeSetsByApproval(approvalId)` returns all change-set records for an approval, providing a complete audit trail of decisions.
 - Change-set records are linked to executions and produce `changeset.approved`, `changeset.rejected`, and `changeset.failed` events in the platform event log.
 
+### Durable workflow engine and isolated runner sessions
+
+The platform kernel provides durable workflow state and isolated execution contexts:
+
+- `createWorkflow({ name, steps, created_by })` creates a workflow definition with ordered steps. Each step has a `tool_name`, `args`, and optional `max_retries`. Workflows start in `defined` state.
+- `startWorkflow(workflowId)` transitions from `defined`/`paused` to `running`.
+- `advanceWorkflow(workflowId)` marks the current step as `running` and emits `workflow.step_started`.
+- `completeWorkflowStep(workflowId, stepId, { result_summary, error, shouldRetry })` completes or fails a step. On success, `current_step` increments and the workflow auto-completes when the last step finishes. On retry, the step resets to `pending`.
+- `checkpointWorkflow(workflowId, checkpoint)` persists arbitrary checkpoint data for crash recovery.
+- `pauseWorkflow(workflowId)` and `failWorkflow(workflowId, { reason })` manage workflow lifecycle.
+
+Runner sessions provide isolated execution contexts:
+
+- `createRunnerSession({ resource_limits })` creates an active runner with optional resource limits.
+- `updateRunnerHeartbeat(runnerId, usage)` records resource usage and heartbeat.
+- `completeRunnerSession(runnerId)` and `terminateRunnerSession(runnerId, { reason })` manage runner lifecycle.
+- Runner sessions emit `runner.created`, `runner.completed`, and `runner.terminated` events.
+
 ### Dashboard: `src/dashboard.js`
 
 The dashboard serves a browser UI and JSON API. The server code lives in `src/dashboard.js`, the authenticated HTML shell lives in `src/dashboard.html`, and public CSS/JS assets live under `static/`. It reads the Sidekick data directory, reports system state, allows KV editing and deletion, exposes tool metadata, accepts webhooks, and proxies agent requests to the Agent Bridge.
