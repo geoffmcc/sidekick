@@ -43,6 +43,45 @@ function shellEscape(arg) {
   return "'" + arg.replace(/'/g, "'\\''") + "'";
 }
 
+function safeExecFileSync(command, args, options = {}) {
+  return execFileSync(command, args, {
+    timeout: options.timeout || 30000,
+    encoding: options.encoding || "utf8",
+    maxBuffer: options.maxBuffer || 1024 * 1024,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+function validLangCode(value, fallback = "eng") {
+  const lang = value || fallback;
+  if (!/^[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8})?$/.test(lang)) throw new Error("Invalid language code");
+  return lang;
+}
+
+function validWhisperModel(value) {
+  const model = value || "base";
+  if (!/^(tiny|base|small|medium|large|large-v[123])$/.test(model)) throw new Error("Invalid transcription model");
+  return model;
+}
+
+function validTimestamp(value, fallback = "00:00:01") {
+  const ts = value || fallback;
+  if (!/^\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?$/.test(ts)) throw new Error("Invalid timestamp; use HH:MM:SS[.mmm]");
+  return ts;
+}
+
+function validScale(value, fallback = "800:-1") {
+  const scale = value || fallback;
+  if (!/^-?\d{1,5}:-?\d{1,5}$/.test(scale)) throw new Error("Invalid scale; use WIDTH:HEIGHT");
+  return scale;
+}
+
+function validDownloadFormat(value) {
+  if (!value) return null;
+  if (!/^[A-Za-z0-9_.,:+\-/\[\]=<>]+$/.test(value) || value.length > 120) throw new Error("Invalid download format");
+  return value;
+}
+
 let currentSource = "unknown";
 
 function setSource(source) {
@@ -110,15 +149,15 @@ const TOOL_RISK = {
   db_backup: "medium",
   db_export: "medium",
   redis: "medium",
-  ocr: "low",
-  media: "low",
-  transcribe: "low",
+  ocr: "medium",
+  media: "medium",
+  transcribe: "medium",
   analytics: "low",
   insight_report: "low",
   embed: "low",
   ollama: "low",
   tunnel: "medium",
-  download: "low",
+  download: "medium",
   wireguard: "high",
   nginx: "high",
   tools: "low",
@@ -10573,10 +10612,14 @@ async function sidekick_ocr({ path: imagePath, language, psm }) {
       return { content: [{ type: "text", text: `Error: File not found: ${imagePath}` }], isError: true };
     }
 
-    const lang = language || "eng";
-    const psmFlag = psm !== undefined ? `--psm ${psm}` : "";
-    const cmd = `tesseract "${imagePath}" stdout -l ${lang} ${psmFlag} 2>/dev/null`;
-    const result = execSync(cmd, { timeout: 30000 }).toString().trim();
+    const lang = validLangCode(language, "eng");
+    const args = [imagePath, "stdout", "-l", lang];
+    if (psm !== undefined) {
+      const parsedPsm = Number(psm);
+      if (!Number.isInteger(parsedPsm) || parsedPsm < 0 || parsedPsm > 13) throw new Error("Invalid OCR page segmentation mode");
+      args.push("--psm", String(parsedPsm));
+    }
+    const result = safeExecFileSync("tesseract", args, { timeout: 30000 }).trim();
 
     return { content: [{ type: "text", text: result || "(no text detected)" }] };
   } catch (e) {
@@ -10602,48 +10645,42 @@ async function sidekick_media({ action, input, output, options }) {
     }
 
     if (action === "info") {
-      const cmd = `ffprobe -v quiet -print_format json -show_format -show_streams "${input}" 2>/dev/null`;
-      const result = execSync(cmd, { timeout: 15000 }).toString();
+      const result = safeExecFileSync("ffprobe", ["-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", input], { timeout: 15000 });
       return { content: [{ type: "text", text: result }] };
     }
 
     if (action === "convert") {
       if (!output) return { content: [{ type: "text", text: "Error: output is required for convert" }], isError: true };
-      const opts = options || "";
-      const cmd = `ffmpeg -y -i "${input}" ${opts} "${output}" 2>&1`;
-      execSync(cmd, { timeout: 300000 });
+      if (options) throw new Error("Raw media options are no longer accepted; use typed actions such as resize, thumbnail, extract_audio, or trim");
+      safeExecFileSync("ffmpeg", ["-y", "-i", input, output], { timeout: 300000, maxBuffer: 2 * 1024 * 1024 });
       return { content: [{ type: "text", text: `Converted: ${input} -> ${output}` }] };
     }
 
     if (action === "extract_audio") {
       if (!output) return { content: [{ type: "text", text: "Error: output is required for extract_audio" }], isError: true };
-      const opts = options || "-vn -acodec libmp3lame -q:a 2";
-      const cmd = `ffmpeg -y -i "${input}" ${opts} "${output}" 2>&1`;
-      execSync(cmd, { timeout: 300000 });
+      if (options) throw new Error("Raw media options are no longer accepted for extract_audio");
+      safeExecFileSync("ffmpeg", ["-y", "-i", input, "-vn", "-acodec", "libmp3lame", "-q:a", "2", output], { timeout: 300000, maxBuffer: 2 * 1024 * 1024 });
       return { content: [{ type: "text", text: `Extracted audio: ${input} -> ${output}` }] };
     }
 
     if (action === "thumbnail") {
       if (!output) return { content: [{ type: "text", text: "Error: output is required for thumbnail" }], isError: true };
-      const time = options || "00:00:01";
-      const cmd = `ffmpeg -y -i "${input}" -ss ${time} -vframes 1 -q:v 2 "${output}" 2>&1`;
-      execSync(cmd, { timeout: 30000 });
+      const time = validTimestamp(options, "00:00:01");
+      safeExecFileSync("ffmpeg", ["-y", "-i", input, "-ss", time, "-vframes", "1", "-q:v", "2", output], { timeout: 30000, maxBuffer: 2 * 1024 * 1024 });
       return { content: [{ type: "text", text: `Thumbnail created: ${input} -> ${output}` }] };
     }
 
     if (action === "resize") {
       if (!output) return { content: [{ type: "text", text: "Error: output is required for resize" }], isError: true };
-      const scale = options || "800:-1";
-      const cmd = `ffmpeg -y -i "${input}" -vf scale=${scale} "${output}" 2>&1`;
-      execSync(cmd, { timeout: 120000 });
+      const scale = validScale(options, "800:-1");
+      safeExecFileSync("ffmpeg", ["-y", "-i", input, "-vf", `scale=${scale}`, output], { timeout: 120000, maxBuffer: 2 * 1024 * 1024 });
       return { content: [{ type: "text", text: `Resized: ${input} -> ${output} (${scale})` }] };
     }
 
     if (action === "trim") {
       if (!output) return { content: [{ type: "text", text: "Error: output is required for trim" }], isError: true };
-      const opts = options || "";
-      const cmd = `ffmpeg -y -i "${input}" ${opts} "${output}" 2>&1`;
-      execSync(cmd, { timeout: 300000 });
+      const duration = validTimestamp(options, "00:00:10");
+      safeExecFileSync("ffmpeg", ["-y", "-i", input, "-t", duration, output], { timeout: 300000, maxBuffer: 2 * 1024 * 1024 });
       return { content: [{ type: "text", text: `Trimmed: ${input} -> ${output}` }] };
     }
 
@@ -10666,12 +10703,12 @@ async function sidekick_transcribe({ path: audioPath, model, language }) {
       return { content: [{ type: "text", text: `Error: File not found: ${audioPath}` }], isError: true };
     }
 
-    const m = model || "base";
-    const langFlag = language ? `--language ${language}` : "";
+    const m = validWhisperModel(model);
     const venvPath = "/home/sidekick/.sidekick-tools/bin/whisper";
     const whisperCmd = fs.existsSync(venvPath) ? venvPath : "whisper";
-    const cmd = `${whisperCmd} "${audioPath}" --model ${m} ${langFlag} --output_format txt --output_dir /tmp 2>&1`;
-    const result = execSync(cmd, { timeout: 600000 }).toString();
+    const args = [audioPath, "--model", m, "--output_format", "txt", "--output_dir", "/tmp"];
+    if (language) args.push("--language", validLangCode(language, "eng"));
+    const result = safeExecFileSync(whisperCmd, args, { timeout: 600000, maxBuffer: 2 * 1024 * 1024 });
 
     const txtPath = audioPath.replace(/\.[^.]+$/, ".txt");
     const tmpTxtPath = `/tmp/${path.basename(audioPath).replace(/\.[^.]+$/, ".txt")}`;
@@ -11233,6 +11270,8 @@ async function sidekick_download({ url, output, format, audio_only }) {
     if (!url) {
       return { content: [{ type: "text", text: "Error: url required" }], isError: true };
     }
+    const parsedUrl = new URL(url);
+    if (!["http:", "https:"].includes(parsedUrl.protocol)) throw new Error("Only http and https URLs are supported");
     const outputTarget = output || "/tmp/%(title)s.%(ext)s";
     const outputPolicyError = enforcePathPolicy(outputTarget, "write");
     if (outputPolicyError) return outputPolicyError;
@@ -11240,19 +11279,14 @@ async function sidekick_download({ url, output, format, audio_only }) {
     const venvPath = "/home/sidekick/.sidekick-tools/bin/yt-dlp";
     const ytdlpCmd = fs.existsSync(venvPath) ? venvPath : "yt-dlp";
     
-    let cmd = `${ytdlpCmd} --no-playlist`;
-    
+    const args = ["--no-playlist"];
     if (audio_only) {
-      cmd += " -x --audio-format mp3";
+      args.push("-x", "--audio-format", "mp3");
     } else if (format) {
-      cmd += ` -f "${format}"`;
+      args.push("-f", validDownloadFormat(format));
     }
-    
-    cmd += ` -o "${outputTarget}"`;
-    
-    cmd += ` "${url}"`;
-    
-    const result = execSync(cmd, { timeout: 300000 }).toString();
+    args.push("-o", outputTarget, parsedUrl.href);
+    const result = safeExecFileSync(ytdlpCmd, args, { timeout: 300000, maxBuffer: 2 * 1024 * 1024 });
     
     // Try to find the output file
     const outputMatch = result.match(/\[download\] Destination: (.+)/);
