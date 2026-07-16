@@ -5,7 +5,7 @@ const path = require("path");
 const crypto = require("crypto");
 const EventEmitter = require("events");
 const { execFileSync } = require("child_process");
-const { callTool, DATA_DIR, GROQ_API_KEY, GROQ_MODEL, loadDelays, saveDelays, loadWatches, saveWatches, getToolDefsForSource, transitionScheduledPlatformExecution, appendScheduledPlatformEvent, createScheduledPlatformExecution } = require("./tools");
+const { callAgentTool, DATA_DIR, GROQ_API_KEY, GROQ_MODEL, loadDelays, saveDelays, loadWatches, saveWatches, getToolDefsForSource, transitionScheduledPlatformExecution, appendScheduledPlatformEvent, createScheduledPlatformExecution } = require("./tools");
 const { recallMemoryForTextAsync, formatMemoryRecall, recordAgentTaskMemory, buildMemoryBrief, inferProjectFromText } = require("./memory");
 const { parseAgentDecision, trackDecisionRepetition, selectBestModelName, buildChatMessages, requiresToolUse } = require("./agent-protocol");
 const platformKernel = require("./platform/kernel");
@@ -62,8 +62,7 @@ async function executeDelay(delay) {
   console.log(`Executing delay ${delay.id}: ${delay.tool}`);
   
   try {
-    const result = await callTool(delay.tool, delay.args || {}, {
-      source: "agent",
+    const result = await callAgentTool(delay.tool, delay.args || {}, {
       parentId: current.platform_execution_id || null,
       rootExecutionId: current.platform_execution_id || null,
       correlationId: delay.id,
@@ -215,7 +214,7 @@ async function executeWatchAction(watch, checkResult, metadata = {}) {
   }
   
   try {
-    return await callTool(action_tool, args, { source: "agent", ...metadata });
+    return await callAgentTool(action_tool, args, metadata);
   } catch (e) {
     console.error(`Watch ${watch.id} action failed: ${e.message}`);
     return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
@@ -745,14 +744,14 @@ Return ONLY valid JSON.`;
       return;
     }
 
-    const result = await callTool("sidekick_teach", {
+    const result = await callAgentTool("sidekick_teach", {
       action: "teach_procedure",
       name: suggestion.name,
       description: suggestion.description,
       parameters: suggestion.parameters || {},
       steps: suggestion.steps,
       trigger_phrases: []
-    }, { source: "agent", taskId });
+    }, { taskId });
 
     if (result.isError) {
       emit(taskId, { type: "step", text: `Procedure save failed: ${result.content?.[0]?.text}` });
@@ -911,7 +910,7 @@ async function runAgent(goal, taskId) {
 
         let result;
         try {
-          const toolRes = await callTool(decision.tool, decision.arguments || {}, { source: "agent", taskId, executionId: platformExecution?.execution_id });
+          const toolRes = await callAgentTool(decision.tool, decision.arguments || {}, { taskId, executionId: platformExecution?.execution_id });
           if (toolRes.isError) {
             result = "Error: " + (toolRes.content?.[0]?.text || "unknown error");
             // If policy or lookup blocks a tool, provide corrective feedback.

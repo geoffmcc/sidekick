@@ -32,6 +32,8 @@ function errorResult(error, code = "handler_error", metadata = {}) {
     timedOut: metadata.timedOut,
     cancelled: metadata.cancelled,
     operationMayContinue: metadata.operationMayContinue,
+    operationId: metadata.operationId,
+    idempotencyKey: metadata.idempotencyKey,
     auditFailed: metadata.auditFailed,
   };
 }

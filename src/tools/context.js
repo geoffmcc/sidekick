@@ -2,6 +2,7 @@ const { AsyncLocalStorage } = require("async_hooks");
 const crypto = require("crypto");
 
 const storage = new AsyncLocalStorage();
+const SOURCE_CAPABILITY = Symbol("sidekick.trustedSourceContext");
 let compatibilitySource = "mcp";
 
 function invocationId(prefix = "tool") {
@@ -12,12 +13,17 @@ function safeSource(source) {
   return String(source || "mcp").toLowerCase().replace(/[^a-z0-9_-]/g, "_") || "mcp";
 }
 
+function trustedInput(source, input = {}) {
+  return { ...input, source, [SOURCE_CAPABILITY]: true };
+}
+
 function createExecutionContext(input = {}) {
   const parent = input.parentContext || storage.getStore() || null;
-  const source = safeSource(input.source || parent?.source || compatibilitySource || "mcp");
+  const source = safeSource(input[SOURCE_CAPABILITY] ? input.source : (parent?.source || compatibilitySource || "mcp"));
   const traceId = input.traceId || input.trace_id || parent?.traceId || invocationId("trace");
   const parentInvocationId = input.parentInvocationId || input.parent_invocation_id || parent?.invocationId || input.parentId || input.parent_id || null;
   return Object.freeze({
+    [SOURCE_CAPABILITY]: Boolean(input[SOURCE_CAPABILITY] || parent?.[SOURCE_CAPABILITY]),
     source,
     requestId: input.requestId || input.request_id || parent?.requestId || invocationId("req"),
     traceId,
@@ -34,6 +40,8 @@ function createExecutionContext(input = {}) {
     approvedExecution: input.approvedExecution === true || parent?.approvedExecution === true,
     generatedProcedure: input.generatedProcedure || input.generated_procedure || parent?.generatedProcedure || null,
     executionId: input.executionId || input.execution_id || parent?.executionId || null,
+    operationId: input.operationId || input.operation_id || parent?.operationId || null,
+    idempotencyKey: input.idempotencyKey || input.idempotency_key || parent?.idempotencyKey || null,
     rootExecutionId: input.rootExecutionId || input.root_execution_id || parent?.rootExecutionId || input.executionId || input.execution_id || null,
     parentId: input.parentId || input.parent_id || parent?.parentId || null,
     stepNumber: input.stepNumber || input.step_number || null,
@@ -42,6 +50,30 @@ function createExecutionContext(input = {}) {
     startedAt: input.startedAt || new Date().toISOString(),
     security: input.security || parent?.security || null,
   });
+}
+
+function createMcpExecutionContext(input = {}) {
+  return createExecutionContext(trustedInput("mcp", input));
+}
+
+function createAgentExecutionContext(input = {}) {
+  return createExecutionContext(trustedInput("agent", input));
+}
+
+function createDashboardExecutionContext(input = {}) {
+  return createExecutionContext(trustedInput("dashboard", input));
+}
+
+function createApprovalExecutionContext(input = {}) {
+  return createExecutionContext(trustedInput("approval", input));
+}
+
+function createInternalExecutionContext(input = {}) {
+  return createExecutionContext(trustedInput(input.source || "internal", input));
+}
+
+function createTestExecutionContext(input = {}) {
+  return createExecutionContext(trustedInput(input.source || "test", input));
 }
 
 function childContext(input = {}) {
@@ -74,6 +106,8 @@ function dispatcherMetadata(context = getExecutionContext(), extra = {}) {
     parentId: context.parentId || context.parentInvocationId,
     rootExecutionId: context.rootExecutionId,
     executionId: context.executionId,
+    operationId: context.operationId,
+    idempotencyKey: context.idempotencyKey,
     stepNumber: context.stepNumber,
     approvalId: context.approvalId,
     generatedProcedure: context.generatedProcedure,
@@ -85,6 +119,12 @@ function dispatcherMetadata(context = getExecutionContext(), extra = {}) {
 
 module.exports = {
   createExecutionContext,
+  createMcpExecutionContext,
+  createAgentExecutionContext,
+  createDashboardExecutionContext,
+  createApprovalExecutionContext,
+  createInternalExecutionContext,
+  createTestExecutionContext,
   childContext,
   runWithContext,
   getExecutionContext,

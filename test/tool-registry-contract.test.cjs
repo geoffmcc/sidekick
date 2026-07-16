@@ -53,7 +53,7 @@ assert.ok(toolsFacadeSource.includes('require("./tools/index")'), 'src/tools.js 
 assert.ok(toolsFacadeSource.split(/\r?\n/).length < 10, 'src/tools.js should remain a small compatibility facade');
 assert.ok(!indexSource.includes('const TOOL_SCHEMAS = {'), 'src/index.js should not own an independent TOOL_SCHEMAS catalog');
 assert.ok(indexSource.includes('getBuiltinRegistry'), 'src/index.js should register built-ins from the canonical registry');
-assert.ok(indexSource.includes('callTool(descriptor.name'), 'MCP built-in execution should route through callTool/dispatcher');
+assert.ok(indexSource.includes('callMcpTool(descriptor.name'), 'MCP built-in execution should route through the MCP dispatcher wrapper');
 assert.ok(!indexSource.includes('descriptor.handler(args)'), 'MCP must not directly invoke built-in handlers');
 assert.strictEqual(registry.get('respond').family, 'utility', 'respond should be owned by extracted utility family');
 assert.ok(!legacy.TOOLS.respond, 'respond should no longer have an active legacy handler');

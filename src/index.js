@@ -6,7 +6,7 @@ const { McpServer } = require("@modelcontextprotocol/sdk/server/mcp.js");
 const { WebStandardStreamableHTTPServerTransport } = require("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js");
 const { SSEServerTransport } = require("@modelcontextprotocol/sdk/server/sse.js");
 const { z } = require("zod");
-const { DATA_DIR, callTool, loadProcedures, syncToolRegistry } = require("./tools");
+const { DATA_DIR, callMcpTool, loadProcedures, syncToolRegistry } = require("./tools");
 const { getBuiltinRegistry } = require("./tools/index");
 const dynamicTools = require("./dynamic-tools");
 const { stripSidekickPrefix } = require("./core/tool-name");
@@ -80,7 +80,7 @@ function createMcpServer() {
       description: descriptor.description,
       inputSchema: descriptor.schema
     }, async (args, extra) => {
-      return callTool(descriptor.name, args, { source: "mcp", requestId: extra?.requestInfo?.requestId });
+      return callMcpTool(descriptor.name, args, { requestId: extra?.requestInfo?.requestId });
     });
   }
 
@@ -95,7 +95,7 @@ function createMcpServer() {
       description: `[procedure] ${proc.description}${paramDesc}`,
       inputSchema: paramSchema
     }, async (args, extra) => {
-      return callTool("teach", { action: "execute", name: procName, args }, { source: "mcp", requestId: extra?.requestInfo?.requestId, generatedProcedure: internalName });
+      return callMcpTool("teach", { action: "execute", name: procName, args }, { requestId: extra?.requestInfo?.requestId, generatedProcedure: internalName });
     });
   }
 
@@ -107,7 +107,7 @@ function createMcpServer() {
       description: def.description,
       inputSchema: dynamicSchemas[def.name]
     }, async (args, extra) => {
-      return callTool(def.name, args, { source: "mcp", requestId: extra?.requestInfo?.requestId, generatedProcedure: def.name, correlationId: def.capabilityId });
+      return callMcpTool(def.name, args, { requestId: extra?.requestInfo?.requestId, generatedProcedure: def.name, correlationId: def.capabilityId });
     });
   }
 

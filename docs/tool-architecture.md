@@ -32,7 +32,7 @@ New production code should depend on `src/tools/index.js`, `dispatchTool`, or `c
 
 Pipeline order:
 
-1. Resolve the canonical tool name or explicit test descriptor.
+1. Reject caller-provided descriptors unless execution is using the test-only descriptor capability.
 2. Create or inherit request-scoped execution context.
 3. Look up the built-in descriptor or generated-tool descriptor.
 4. Reject unknown tools and unclassified generated tools.
@@ -47,15 +47,24 @@ Pipeline order:
 13. Report audit logging failure separately without misclassifying handler success or failure.
 14. Let legacy platform/activity mirroring preserve dashboard compatibility.
 
-Production transports must not directly invoke `descriptor.handler`, legacy handlers, or `dynamicTools.callDynamicTool`. They call `callTool` or `dispatchTool`.
+Production transports must not directly invoke `descriptor.handler`, legacy handlers, or `dynamicTools.callDynamicTool`. They call the source-specific dispatcher wrappers exported from `src/tools/index.js`.
 
 ## Request-Scoped Context
 
 `src/tools/context.js` uses `AsyncLocalStorage` for request-scoped source and invocation metadata. The compatibility `setSource` API remains for old tests and legacy helper calls, but dispatcher-created context is authoritative for tool execution.
 
-Context fields include source, request ID, trace/correlation ID, invocation ID, parent invocation, actor, auth identity, session ID, task ID, project, tool name, approval ID, generated procedure name, execution IDs, timeout, cancellation signal, and security metadata.
+Context fields include source, request ID, trace/correlation ID, invocation ID, parent invocation, actor, auth identity, session ID, task ID, project, tool name, approval ID, generated procedure name, execution IDs, operation ID, idempotency key, timeout, cancellation signal, and security metadata.
 
 Nested calls inherit the intended context fields and receive dispatcher-created invocation metadata. Concurrent calls do not share source or request identity. The legacy `setSource` compatibility setter must not be used around asynchronous execution; live request identity is passed into the dispatcher and carried by `AsyncLocalStorage`.
+
+Generic `createExecutionContext` and compatibility `callTool` calls do not trust caller-supplied `source`. Only private source-specific factories can establish transport identity:
+
+- `createMcpExecutionContext` / `callMcpTool`
+- `createAgentExecutionContext` / `callAgentTool`
+- `createDashboardExecutionContext` / `callDashboardTool`
+- `createApprovalExecutionContext`
+- `createInternalExecutionContext` / `callInternalTool`
+- `createTestExecutionContext` for test-only descriptor execution
 
 ## Policy And Approval Boundary
 
@@ -65,13 +74,19 @@ Approval behavior remains compatible with the existing dashboard approval workfl
 
 - Required approvals queue encrypted payloads.
 - Approval previews are redacted.
-- Approval records store the canonical tool name, encrypted canonical arguments, an argument hash, requester/source metadata, creation time, and expiration time.
+- Approval records store the canonical tool name, encrypted canonical arguments, an argument hash, requester/source metadata, timeout metadata, creation time, and expiration time.
 - Dashboard approval calls `resolveApproval`, which uses the dispatcher-owned trusted `executeApprovedTool` path.
-- The trusted path loads the stored approval, verifies it is pending and unexpired, authenticates and decrypts the stored arguments, transitions it to `executing` in a database transaction, and executes the stored tool with the stored arguments.
+- The trusted path loads the stored approval, verifies it is pending and unexpired, authenticates and decrypts the stored arguments, leases it as `executing` in a database transaction, and executes the stored tool with the stored arguments.
 - Approved execution re-resolves the current descriptor, revalidates arguments, rechecks current policy, and verifies current risk before handler invocation.
-- Finalization records `approved` or `failed`, stores a redacted result preview, discards the encrypted payload, and preserves platform approval/change-set events.
+- Approval execution carries a trusted operation ID, executor ID, and idempotency key through context, timeout errors, tool logs, and finalization.
+- Lease renewal updates approval heartbeat and lease expiration while the approved tool is running.
+- Finalization requires matching operation ID and executor ID, then records `approved` or `failed`, stores a redacted result preview, discards the encrypted payload, and preserves platform approval/change-set events.
+- Timed-out approved operations that may still be running move to `reconciliation_required` with `manual_review` instead of being treated as safely failed or safely retryable.
+- Stale high-risk, critical, or unknown executing approvals move to `reconciliation_required`; stale low-risk approvals are only returned to `pending` when an explicit recovery policy allows low-risk retry.
 - Pending, rejected, expired, failed, already-approved, and already-executing approvals cannot be executed.
-- Approvals are single-use; concurrent duplicate execution is prevented by the `pending` to `executing` claim transition.
+- Approvals are single-use; concurrent duplicate execution is prevented by the leased `pending` to `executing` claim transition.
+
+Operators investigating stale approvals should inspect the approval `operation_id`, `executor_id`, `heartbeat_at`, `lease_expires_at`, `attempt_count`, and `reconciliation_status` fields. Recovery events are recorded in `approval_execution_recovery_events` by migration `021_approval_execution_recovery.sql`.
 
 Approval cannot be bypassed by using MCP, dashboard generated-tool runs, agent execution, scheduler execution, generated-tool nested steps, or legacy `callTool` compatibility APIs.
 
@@ -89,11 +104,11 @@ Legacy compatibility risk lookup returns `critical` for unknown tools so old pol
 
 Current production surfaces and routing:
 
-- MCP built-ins in `src/index.js`: register definitions from descriptors and call `callTool`.
-- MCP taught procedures: call `callTool("teach", ...)`.
-- MCP generated tools: call `callTool(def.name, ...)`.
-- Agent tasks and scheduled delay/watch actions in `src/agent.js`: call `callTool` with `source: "agent"`.
-- Dashboard evolve actions and generated-tool runs in `src/dashboard.js`: call `callTool` with `source: "dashboard"`.
+- MCP built-ins in `src/index.js`: register definitions from descriptors and call `callMcpTool`.
+- MCP taught procedures: call `callMcpTool("teach", ...)`.
+- MCP generated tools: call `callMcpTool(def.name, ...)`.
+- Agent tasks and scheduled delay/watch actions in `src/agent.js`: call `callAgentTool`.
+- Dashboard evolve actions and generated-tool runs in `src/dashboard.js`: call `callDashboardTool`.
 - Legacy internal tool-to-tool calls in `src/tools-legacy.js`: local `callTool` delegates to the dispatcher.
 - Generated/evolved tool steps in `src/dynamic-tools.js`: receive injected `callTool`, which is the dispatcher compatibility API.
 
@@ -108,6 +123,7 @@ Dispatcher results preserve MCP-compatible `{ content: [{ type: "text", text }] 
 - `policy_denied`
 - `approval_required`
 - `approval_queue_unavailable`
+- `descriptor_injection_denied`
 - `risk_unclassified`
 - `timed_out_operation_may_continue`
 - `cancelled`
