@@ -198,6 +198,63 @@ function ensurePlatformKernelSchema() {
     CREATE INDEX IF NOT EXISTS idx_platform_change_sets_approval ON platform_change_sets(approval_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_platform_change_sets_execution ON platform_change_sets(execution_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_platform_change_sets_hash ON platform_change_sets(content_hash);
+
+    CREATE TABLE IF NOT EXISTS platform_workflows (
+      workflow_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT,
+      state TEXT NOT NULL DEFAULT 'defined',
+      current_step INTEGER NOT NULL DEFAULT 0,
+      total_steps INTEGER NOT NULL DEFAULT 0,
+      execution_id TEXT,
+      project_id TEXT,
+      created_by TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT,
+      failed_at TEXT,
+      checkpoint_json TEXT NOT NULL DEFAULT '{}',
+      metadata_json TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX IF NOT EXISTS idx_platform_workflows_state ON platform_workflows(state, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_platform_workflows_project ON platform_workflows(project_id, state);
+
+    CREATE TABLE IF NOT EXISTS platform_workflow_steps (
+      step_id TEXT PRIMARY KEY,
+      workflow_id TEXT NOT NULL,
+      step_index INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      tool_name TEXT,
+      tool_action TEXT,
+      args_json TEXT NOT NULL DEFAULT '{}',
+      state TEXT NOT NULL DEFAULT 'pending',
+      started_at TEXT,
+      completed_at TEXT,
+      failed_at TEXT,
+      result_summary TEXT,
+      error_category TEXT,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      max_retries INTEGER NOT NULL DEFAULT 0,
+      execution_id TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_workflow_steps_idx ON platform_workflow_steps(workflow_id, step_index);
+    CREATE INDEX IF NOT EXISTS idx_platform_workflow_steps_state ON platform_workflow_steps(state, workflow_id);
+
+    CREATE TABLE IF NOT EXISTS platform_runner_sessions (
+      runner_id TEXT PRIMARY KEY,
+      execution_id TEXT,
+      workflow_id TEXT,
+      state TEXT NOT NULL DEFAULT 'active',
+      resource_limits_json TEXT NOT NULL DEFAULT '{}',
+      resource_usage_json TEXT NOT NULL DEFAULT '{}',
+      started_at TEXT NOT NULL,
+      heartbeat_at TEXT,
+      completed_at TEXT,
+      terminated_reason TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX IF NOT EXISTS idx_platform_runner_sessions_state ON platform_runner_sessions(state, started_at DESC);
   `);
 }
 
@@ -625,6 +682,154 @@ function getChangeSetsByApproval(approvalId) {
   return dbStore.getDb().prepare("SELECT * FROM platform_change_sets WHERE approval_id = ? ORDER BY created_at ASC").all(approvalId);
 }
 
+function createWorkflow(input = {}) {
+  ensurePlatformKernelSchema();
+  const workflowId = input.workflow_id || newId("wf");
+  const ts = input.created_at || nowIso();
+  const steps = input.steps || [];
+  const db = dbStore.getDb();
+  db.prepare(`
+    INSERT INTO platform_workflows (workflow_id, name, description, state, current_step, total_steps, execution_id, project_id, created_by, created_at, updated_at, checkpoint_json, metadata_json)
+    VALUES (?, ?, ?, 'defined', 0, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(workflowId, input.name || "unnamed", input.description || null, steps.length, input.execution_id || null, input.project_id || null, input.created_by || null, ts, ts, json(input.checkpoint || {}), json(input.metadata || {}));
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    const stepId = step.step_id || newId("ws");
+    db.prepare(`
+      INSERT INTO platform_workflow_steps (step_id, workflow_id, step_index, name, tool_name, tool_action, args_json, state, max_retries, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+    `).run(stepId, workflowId, i, step.name || `step_${i}`, step.tool_name || null, step.tool_action || null, json(step.args || {}), step.max_retries || 0, json(step.metadata || {}));
+  }
+  appendEvent({ event_type: "workflow.created", source: input.source || "platform", actor_id: input.created_by, execution_id: input.execution_id || null, project_id: input.project_id, subject_type: "workflow", subject_id: workflowId, payload: { name: input.name, total_steps: steps.length }, correlation_id: workflowId });
+  return getWorkflow(workflowId);
+}
+
+function getWorkflow(workflowId) {
+  ensurePlatformKernelSchema();
+  const row = dbStore.getDb().prepare("SELECT * FROM platform_workflows WHERE workflow_id = ?").get(workflowId);
+  if (!row) return null;
+  const steps = dbStore.getDb().prepare("SELECT * FROM platform_workflow_steps WHERE workflow_id = ? ORDER BY step_index ASC").all(workflowId);
+  return { ...row, checkpoint: parseJson(row.checkpoint_json, {}), metadata: parseJson(row.metadata_json, {}), steps: steps.map(s => ({ ...s, args: parseJson(s.args_json, {}), metadata: parseJson(s.metadata_json, {}) })) };
+}
+
+function startWorkflow(workflowId, details = {}) {
+  ensurePlatformKernelSchema();
+  const wf = getWorkflow(workflowId);
+  if (!wf) throw new Error(`Workflow not found: ${workflowId}`);
+  if (wf.state !== "defined" && wf.state !== "paused") throw new Error(`Workflow ${workflowId} cannot be started from state ${wf.state}`);
+  const ts = details.timestamp || nowIso();
+  dbStore.getDb().prepare("UPDATE platform_workflows SET state = 'running', updated_at = ? WHERE workflow_id = ?").run(ts, workflowId);
+  appendEvent({ event_type: "workflow.started", source: details.source || "platform", actor_id: details.actor_id, execution_id: wf.execution_id, project_id: wf.project_id, subject_type: "workflow", subject_id: workflowId, payload: { name: wf.name }, correlation_id: workflowId });
+  return getWorkflow(workflowId);
+}
+
+function advanceWorkflow(workflowId, details = {}) {
+  ensurePlatformKernelSchema();
+  const wf = getWorkflow(workflowId);
+  if (!wf) throw new Error(`Workflow not found: ${workflowId}`);
+  if (wf.state !== "running") throw new Error(`Workflow ${workflowId} is not running (state: ${wf.state})`);
+  const ts = details.timestamp || nowIso();
+  const nextStep = wf.current_step;
+  if (nextStep >= wf.total_steps) {
+    dbStore.getDb().prepare("UPDATE platform_workflows SET state = 'completed', current_step = ?, completed_at = ?, updated_at = ? WHERE workflow_id = ?").run(nextStep, ts, ts, workflowId);
+    appendEvent({ event_type: "workflow.completed", source: details.source || "platform", actor_id: details.actor_id, execution_id: wf.execution_id, project_id: wf.project_id, subject_type: "workflow", subject_id: workflowId, payload: { name: wf.name, total_steps: wf.total_steps }, correlation_id: workflowId });
+    return getWorkflow(workflowId);
+  }
+  const steps = wf.steps || [];
+  const step = steps[nextStep];
+  if (!step) throw new Error(`Step ${nextStep} not found in workflow ${workflowId}`);
+  dbStore.getDb().prepare("UPDATE platform_workflow_steps SET state = 'running', started_at = ? WHERE step_id = ?").run(ts, step.step_id);
+  appendEvent({ event_type: "workflow.step_started", source: details.source || "platform", actor_id: details.actor_id, execution_id: wf.execution_id, project_id: wf.project_id, subject_type: "workflow_step", subject_id: step.step_id, payload: { workflow_id: workflowId, step_index: nextStep, name: step.name, tool_name: step.tool_name }, correlation_id: workflowId });
+  return getWorkflow(workflowId);
+}
+
+function completeWorkflowStep(workflowId, stepId, details = {}) {
+  ensurePlatformKernelSchema();
+  const ts = details.timestamp || nowIso();
+  const success = !details.error;
+  dbStore.getDb().prepare("UPDATE platform_workflow_steps SET state = ?, completed_at = ?, result_summary = ?, error_category = ? WHERE step_id = ?").run(success ? "completed" : "failed", ts, details.result_summary || null, details.error_category || null, stepId);
+  appendEvent({ event_type: success ? "workflow.step_completed" : "workflow.step_failed", source: details.source || "platform", actor_id: details.actor_id, subject_type: "workflow_step", subject_id: stepId, payload: { workflow_id: workflowId, step_id: stepId, success }, correlation_id: workflowId });
+  if (success) {
+    const wf = getWorkflow(workflowId);
+    const nextStep = (wf.current_step || 0) + 1;
+    if (nextStep >= wf.total_steps) {
+      dbStore.getDb().prepare("UPDATE platform_workflows SET state = 'completed', current_step = ?, completed_at = ?, updated_at = ? WHERE workflow_id = ?").run(nextStep, ts, ts, workflowId);
+      appendEvent({ event_type: "workflow.completed", source: details.source || "platform", actor_id: details.actor_id, execution_id: wf.execution_id, project_id: wf.project_id, subject_type: "workflow", subject_id: workflowId, payload: { name: wf.name, total_steps: wf.total_steps }, correlation_id: workflowId });
+    } else {
+      dbStore.getDb().prepare("UPDATE platform_workflows SET current_step = ?, updated_at = ? WHERE workflow_id = ?").run(nextStep, ts, workflowId);
+    }
+  } else if (details.error && details.shouldRetry) {
+    dbStore.getDb().prepare("UPDATE platform_workflow_steps SET state = 'pending', retry_count = retry_count + 1 WHERE step_id = ?").run(stepId);
+  }
+  return getWorkflow(workflowId);
+}
+
+function checkpointWorkflow(workflowId, checkpoint = {}, details = {}) {
+  ensurePlatformKernelSchema();
+  const ts = details.timestamp || nowIso();
+  dbStore.getDb().prepare("UPDATE platform_workflows SET checkpoint_json = ?, updated_at = ? WHERE workflow_id = ?").run(json(checkpoint), ts, workflowId);
+  appendEvent({ event_type: "workflow.checkpointed", source: details.source || "platform", actor_id: details.actor_id, subject_type: "workflow", subject_id: workflowId, payload: { checkpoint_keys: Object.keys(checkpoint) }, correlation_id: workflowId });
+  return getWorkflow(workflowId);
+}
+
+function pauseWorkflow(workflowId, details = {}) {
+  ensurePlatformKernelSchema();
+  const ts = details.timestamp || nowIso();
+  dbStore.getDb().prepare("UPDATE platform_workflows SET state = 'paused', updated_at = ? WHERE workflow_id = ?").run(ts, workflowId);
+  appendEvent({ event_type: "workflow.paused", source: details.source || "platform", actor_id: details.actor_id, subject_type: "workflow", subject_id: workflowId, payload: {}, correlation_id: workflowId });
+  return getWorkflow(workflowId);
+}
+
+function failWorkflow(workflowId, details = {}) {
+  ensurePlatformKernelSchema();
+  const ts = details.timestamp || nowIso();
+  dbStore.getDb().prepare("UPDATE platform_workflows SET state = 'failed', failed_at = ?, updated_at = ? WHERE workflow_id = ?").run(ts, ts, workflowId);
+  appendEvent({ event_type: "workflow.failed", source: details.source || "platform", actor_id: details.actor_id, subject_type: "workflow", subject_id: workflowId, payload: { reason: details.reason || null }, severity: "error", correlation_id: workflowId });
+  return getWorkflow(workflowId);
+}
+
+function createRunnerSession(input = {}) {
+  ensurePlatformKernelSchema();
+  const runnerId = input.runner_id || newId("run");
+  const ts = input.started_at || nowIso();
+  dbStore.getDb().prepare(`
+    INSERT INTO platform_runner_sessions (runner_id, execution_id, workflow_id, state, resource_limits_json, started_at, metadata_json)
+    VALUES (?, ?, ?, 'active', ?, ?, ?)
+  `).run(runnerId, input.execution_id || null, input.workflow_id || null, json(input.resource_limits || {}), ts, json(input.metadata || {}));
+  appendEvent({ event_type: "runner.created", source: input.source || "platform", actor_id: input.actor_id, execution_id: input.execution_id || null, subject_type: "runner", subject_id: runnerId, payload: { workflow_id: input.workflow_id || null }, correlation_id: runnerId });
+  return dbStore.getDb().prepare("SELECT * FROM platform_runner_sessions WHERE runner_id = ?").get(runnerId);
+}
+
+function updateRunnerHeartbeat(runnerId, usage = {}) {
+  ensurePlatformKernelSchema();
+  const ts = nowIso();
+  dbStore.getDb().prepare("UPDATE platform_runner_sessions SET heartbeat_at = ?, resource_usage_json = ? WHERE runner_id = ? AND state = 'active'").run(ts, json(usage), runnerId);
+  return dbStore.getDb().prepare("SELECT * FROM platform_runner_sessions WHERE runner_id = ?").get(runnerId);
+}
+
+function completeRunnerSession(runnerId, details = {}) {
+  ensurePlatformKernelSchema();
+  const ts = details.timestamp || nowIso();
+  dbStore.getDb().prepare("UPDATE platform_runner_sessions SET state = 'completed', completed_at = ? WHERE runner_id = ?").run(ts, runnerId);
+  appendEvent({ event_type: "runner.completed", source: details.source || "platform", actor_id: details.actor_id, subject_type: "runner", subject_id: runnerId, payload: {}, correlation_id: runnerId });
+  return dbStore.getDb().prepare("SELECT * FROM platform_runner_sessions WHERE runner_id = ?").get(runnerId);
+}
+
+function terminateRunnerSession(runnerId, details = {}) {
+  ensurePlatformKernelSchema();
+  const ts = details.timestamp || nowIso();
+  dbStore.getDb().prepare("UPDATE platform_runner_sessions SET state = 'terminated', completed_at = ?, terminated_reason = ? WHERE runner_id = ?").run(ts, details.reason || "terminated", runnerId);
+  appendEvent({ event_type: "runner.terminated", source: details.source || "platform", actor_id: details.actor_id, subject_type: "runner", subject_id: runnerId, payload: { reason: details.reason || "terminated" }, severity: "warning", correlation_id: runnerId });
+  return dbStore.getDb().prepare("SELECT * FROM platform_runner_sessions WHERE runner_id = ?").get(runnerId);
+}
+
+function getRunnerSession(runnerId) {
+  ensurePlatformKernelSchema();
+  const row = dbStore.getDb().prepare("SELECT * FROM platform_runner_sessions WHERE runner_id = ?").get(runnerId);
+  if (!row) return null;
+  return { ...row, resource_limits: parseJson(row.resource_limits_json, {}), resource_usage: parseJson(row.resource_usage_json, {}), metadata: parseJson(row.metadata_json, {}) };
+}
+
 module.exports = {
   EXECUTION_STATES,
   TERMINAL_STATES,
@@ -644,4 +849,17 @@ module.exports = {
   createChangeSet,
   verifyChangeSet,
   getChangeSetsByApproval,
+  createWorkflow,
+  getWorkflow,
+  startWorkflow,
+  advanceWorkflow,
+  completeWorkflowStep,
+  checkpointWorkflow,
+  pauseWorkflow,
+  failWorkflow,
+  createRunnerSession,
+  updateRunnerHeartbeat,
+  completeRunnerSession,
+  terminateRunnerSession,
+  getRunnerSession,
 };

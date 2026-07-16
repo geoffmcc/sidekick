@@ -31,6 +31,7 @@ const suites = [
   { file: 'test/scheduler-platform.test.js', critical: false, description: 'Scheduler and runbook platform adapters' },
   { file: 'test/execution-control.test.js', critical: false, description: 'Platform guard and state-machine enforcement' },
   { file: 'test/capability-rbac.test.js', critical: false, description: 'Capability RBAC and immutable change-set approvals' },
+  { file: 'test/workflow-runner.test.js', critical: false, description: 'Durable workflow engine and isolated runner sessions' },
   { file: 'test/new-tools.test.js', critical: false, description: 'Extended tool behavior' },
   { file: 'test/blackbox.test.js', critical: false, description: 'Structured Black Box incident evidence behavior' },
   { file: 'test/insight-report.test.js', critical: false, description: 'Insight report tool behavior' },
