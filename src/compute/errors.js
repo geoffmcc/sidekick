@@ -84,6 +84,20 @@ class ResourceLimitError extends ComputeError {
   }
 }
 
+class EmptyProviderResultError extends ComputeError {
+  constructor(providerId, details = {}) {
+    super(`Provider ${providerId} returned empty or whitespace-only result`, "EMPTY_PROVIDER_RESULT", { providerId, ...details });
+    this.name = "EmptyProviderResultError";
+  }
+}
+
+class ResultValidationError extends ComputeError {
+  constructor(reason, details = {}) {
+    super(`Result validation failed: ${reason}`, "RESULT_VALIDATION_FAILED", { reason, ...details });
+    this.name = "ResultValidationError";
+  }
+}
+
 const CIRCUIT_STATES = Object.freeze({
   CLOSED: "closed",
   OPEN: "open",
@@ -193,6 +207,8 @@ module.exports = {
   TrustViolationError,
   ExecutorError,
   ResourceLimitError,
+  EmptyProviderResultError,
+  ResultValidationError,
   CIRCUIT_STATES,
   PROVIDER_HEALTH_STATES,
   WORKER_STATES,
