@@ -366,6 +366,16 @@ async function handleJob(job, leaseId) {
       log(`Acknowledged cancellation for job ${job.jobId}`);
       return;
     }
+    const validationError = validateJobResult(result);
+    if (validationError) {
+      await requestWithRetry("POST", `/compute/worker/jobs/${job.jobId}/fail`, {
+        leaseId,
+        errorCategory: validationError.category,
+        errorMessage: validationError.message,
+      }, credentialHeaders(), { attempts: 2 }).catch(() => {});
+      log(`Failed job ${job.jobId}: ${validationError.message}`);
+      return;
+    }
     const resultContent = typeof result.content === "string" ? result.content : JSON.stringify(result).slice(0, 1000);
     const resultArtifact = await publishResultArtifact(job.jobId, leaseId, resultContent);
     const completed = await requestWithRetry("POST", `/compute/worker/jobs/${job.jobId}/complete`, {
@@ -390,6 +400,26 @@ async function handleJob(job, leaseId) {
     if (renewTimer) clearInterval(renewTimer);
     activeJobs.delete(job.jobId);
   }
+}
+
+function validateJobResult(result) {
+  if (!result || typeof result !== "object") {
+    return { category: "RESULT_VALIDATION_FAILED", message: "Provider returned non-object result" };
+  }
+  const content = result.content;
+  const embedding = result.embedding;
+  const hasEmbedding = Array.isArray(embedding) && embedding.length > 0;
+  const hasContent = typeof content === "string";
+  if (!hasContent && !hasEmbedding) {
+    return { category: "EMPTY_PROVIDER_RESULT", message: "Provider returned result with no content or embedding" };
+  }
+  if (hasContent && content.trim().length === 0) {
+    return { category: "EMPTY_PROVIDER_RESULT", message: "Provider returned empty or whitespace-only content" };
+  }
+  if (hasContent && content.length > 10 * 1024 * 1024) {
+    return { category: "RESULT_VALIDATION_FAILED", message: `Content exceeds maximum size: ${content.length} bytes` };
+  }
+  return null;
 }
 
 async function checkCancellation(jobId, leaseId) {
@@ -497,4 +527,4 @@ if (require.main === module) {
   main().catch(e => { console.error(`[worker-agent] ${redact(e.message)}`); process.exit(1); });
 }
 
-module.exports = { collectSystemInfo, deterministicEmbedding, executeJob, boundedInt, jitteredBackoff, redact };
+module.exports = { collectSystemInfo, deterministicEmbedding, executeJob, validateJobResult, boundedInt, jitteredBackoff, redact };

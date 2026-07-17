@@ -18,8 +18,9 @@ const workerManager = require('../src/compute/worker-manager');
 const executorRegistry = require('../src/compute/executor-registry');
 const inferenceService = require('../src/compute/inference-service');
 const healthMonitor = require('../src/compute/health-monitor');
-const { ComputeError } = require('../src/compute/errors');
+const { ComputeError, EmptyProviderResultError, ResultValidationError } = require('../src/compute/errors');
 const { MockProvider } = require('../src/providers/mock-provider');
+const { validateJobResult } = require('../src/compute/worker-agent');
 
 console.log('Running Compute Tests...\n');
 
@@ -65,6 +66,95 @@ test('ComputeError is proper Error subclass', () => {
   assertEqual(e.code, 'TEST_CODE');
   assertEqual(e.message, 'test');
   assertEqual(e.details.detail, 42);
+});
+
+// ─── 1b. New error types ───
+console.log('Compute.1b: new error types');
+test('EmptyProviderResultError has correct code and message', () => {
+  const e = new EmptyProviderResultError('ollama', { modelId: 'llama3' });
+  assertOk(e instanceof Error, 'is Error');
+  assertEqual(e.code, 'EMPTY_PROVIDER_RESULT');
+  assertOk(e.message.includes('ollama'), 'mentions provider');
+  assertEqual(e.details.modelId, 'llama3');
+});
+
+test('ResultValidationError has correct code and message', () => {
+  const e = new ResultValidationError('content too large', { size: 99999 });
+  assertOk(e instanceof Error, 'is Error');
+  assertEqual(e.code, 'RESULT_VALIDATION_FAILED');
+  assertOk(e.message.includes('content too large'), 'includes reason');
+  assertEqual(e.details.size, 99999);
+});
+
+// ─── 1c. validateJobResult ───
+console.log('Compute.1c: validateJobResult');
+test('valid content passes validation', () => {
+  assertEqual(validateJobResult({ content: 'Hello world', model: 'llama3', provider: 'ollama' }), null);
+});
+
+test('valid embedding passes validation', () => {
+  assertEqual(validateJobResult({ embedding: [0.1, -0.2, 0.3] }), null);
+});
+
+test('null result fails validation', () => {
+  const err = validateJobResult(null);
+  assertOk(err, 'returns error');
+  assertEqual(err.category, 'RESULT_VALIDATION_FAILED');
+  assertOk(err.message.includes('non-object'), 'mentions non-object');
+});
+
+test('undefined result fails validation', () => {
+  const err = validateJobResult(undefined);
+  assertOk(err, 'returns error');
+  assertEqual(err.category, 'RESULT_VALIDATION_FAILED');
+});
+
+test('empty string content fails validation', () => {
+  const err = validateJobResult({ content: '' });
+  assertOk(err, 'returns error');
+  assertEqual(err.category, 'EMPTY_PROVIDER_RESULT');
+});
+
+test('whitespace-only content fails validation', () => {
+  const err = validateJobResult({ content: '   \n\t  ' });
+  assertOk(err, 'returns error');
+  assertEqual(err.category, 'EMPTY_PROVIDER_RESULT');
+});
+
+test('thinking-only response without content fails validation', () => {
+  const err = validateJobResult({ thinking: 'reasoning here' });
+  assertOk(err, 'returns error');
+  assertEqual(err.category, 'EMPTY_PROVIDER_RESULT');
+  assertOk(err.message.includes('no content or embedding'), 'correct message');
+});
+
+test('non-string non-array content fails validation', () => {
+  const err = validateJobResult({ content: 12345 });
+  assertOk(err, 'returns error');
+  assertEqual(err.category, 'EMPTY_PROVIDER_RESULT');
+});
+
+test('object-only result with no content or embedding fails', () => {
+  const err = validateJobResult({ model: 'llama3', provider: 'ollama' });
+  assertOk(err, 'returns error');
+  assertEqual(err.category, 'EMPTY_PROVIDER_RESULT');
+});
+
+test('content exceeding 10MB fails validation', () => {
+  const huge = 'x'.repeat(10 * 1024 * 1024 + 1);
+  const err = validateJobResult({ content: huge });
+  assertOk(err, 'returns error');
+  assertEqual(err.category, 'RESULT_VALIDATION_FAILED');
+  assertOk(err.message.includes('exceeds maximum size'), 'mentions size limit');
+});
+
+test('content at exactly 10MB passes validation', () => {
+  const exact = 'x'.repeat(10 * 1024 * 1024);
+  assertEqual(validateJobResult({ content: exact }), null);
+});
+
+test('result with both content and embedding passes', () => {
+  assertEqual(validateJobResult({ content: 'text', embedding: [0.1] }), null);
 });
 
 // ─── 2. ProviderRegistry ───
