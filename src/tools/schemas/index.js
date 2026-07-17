@@ -780,15 +780,31 @@ const TOOL_SCHEMAS = {
   }),
   compute_jobs: z.object({
     action: z.enum(["list", "get", "create", "cancel", "stats", "artifacts"]).describe("Job action"),
-    job_id: z.string().optional().describe("Job ID"),
-    job_type: z.string().optional().describe("Job type (chat|generate|embeddings)"),
-    model: z.string().optional().describe("Model name"),
-    prompt: z.string().optional().describe("Prompt"),
-    provider: z.string().optional().describe("Preferred provider"),
-    max_retries: z.number().optional().describe("Max retry attempts"),
-    timeout_ms: z.number().optional().describe("Timeout in milliseconds"),
-    status: z.string().optional().describe("Filter by status")
-  }),
+    job_id: z.string().optional().describe("Job ID (get, cancel, artifacts)"),
+    // list filters
+    status: z.string().optional().describe("Filter by status (list)"),
+    limit: z.number().int().positive().max(500).optional().describe("Max results (list, default 50)"),
+    provider_id: z.string().optional().describe("Filter by provider ID (list)"),
+    worker_id: z.string().optional().describe("Filter by worker ID (list)"),
+    // create: routing and classification
+    job_type: z.string().optional().describe("Canonical job type (create; also a list filter): chat|generate|embeddings|text_embedding"),
+    capability: z.string().max(128).optional().describe("Requested capability, preserved exactly (create; also a list filter), e.g. openvino.text_embedding"),
+    data_classification: z.enum(["public", "internal", "private"]).optional().describe("Data classification (create); preserved when supplied, defaults to private"),
+    project: z.string().max(200).optional().describe("Project label (create metadata; also a list filter)"),
+    // create: structured executor contract
+    request_payload: z.record(z.any()).optional().describe("Structured executor request payload (create); validated by the job contract and executor-specific rules. Do not combine with prompt/model/provider."),
+    capability_requirements: z.record(z.any()).optional().describe("Capability requirements (create), e.g. { executor, model }"),
+    // create: convenience payload, mapped into request_payload when request_payload is absent
+    prompt: z.string().optional().describe("Prompt (create convenience; mapped to request_payload.prompt)"),
+    model: z.string().optional().describe("Model name (create convenience; mapped to request_payload.model)"),
+    provider: z.string().optional().describe("Preferred provider hint (create convenience; mapped to request_payload.provider)"),
+    // create: limits
+    timeout_ms: z.number().int().min(1000).max(86400000).optional().describe("Job timeout in ms (create), 1000..86400000"),
+    max_retries: z.number().int().min(0).max(10).optional().describe("Max retries after the first attempt (create); maps to maxAttempts = max_retries + 1"),
+    idempotency_key: z.string().max(200).optional().describe("Idempotency key (create)"),
+    // cancel
+    reason: z.string().max(500).optional().describe("Cancellation reason (cancel)")
+  }).strict(),
   compute_route: z.object({
     action: z.enum(["explain", "list_rules", "create_rule", "delete_rule"]).describe("Routing action"),
     workload_class: z.string().optional().describe("Workload class for explain (chat|generate|embeddings)"),
