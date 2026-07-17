@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const root = path.join(__dirname, '..');
-const excludedDirs = new Set(['.git', 'node_modules', 'data', '.opencode']);
+const excludedDirs = new Set(['.git', 'node_modules', 'data', '.opencode', 'spike-openvino-node', 'spike-openvino-python']);
 const excludedFiles = new Set(['opencode.json', 'package-lock.json', 'security.test.js', 'github-setup.test.js', 'static-code-quality.test.js']);
 const textExtensions = new Set(['.js', '.json', '.md', '.yml', '.yaml', '.sh', '.ps1', '.service', '.example', '.gitignore', '.gitattributes']);
 

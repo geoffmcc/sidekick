@@ -20,3 +20,6 @@ test/test-data-security/
 test/test-data-structured-tools-security/
 test/test-data-blackbox-lifecycle/
 test/spike-openvino-node/
+# Python bytecode and caches
+__pycache__/
+*.py[cod]

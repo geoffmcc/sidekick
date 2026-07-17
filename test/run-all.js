@@ -54,6 +54,7 @@ const suites = [
   { file: 'test/integration.test.js', critical: false, description: 'Integration behavior' },
   { file: 'test/dashboard-api.test.js', critical: false, description: 'Dashboard API behavior' },
   { file: 'test/compute.test.js', critical: false, description: 'Compute provider-neutral inference and job system' },
+  { file: 'test/openvino-executor.test.js', critical: false, description: 'OpenVINO NPU executor and Python helper manager' },
   { file: 'test/compute-protocol.test.js', critical: false, description: 'Compute authenticated worker protocol integration' },
   { file: 'test/compute-live-worker.test.js', critical: false, description: 'Opt-in live compute worker smoke test' },
 ];
