@@ -171,35 +171,100 @@ async function sidekick_compute_models({ action, model_id, ...args }) {
   } catch (e) { return err("compute_models error: " + e.message); }
 }
 
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// Executor-specific validation of a nested request_payload. The generic job
+// contract (validateJobContract) enforces supported executors, forbidden
+// process fields, JSON bounds, and size limits; this adds the per-executor
+// allowlist validation for executors that expose a server-side contract.
+function validateExecutorRequest({ capability, capabilityRequirements, requestPayload }) {
+  const identities = [
+    ["capability", capability],
+    ["request_payload.executor", requestPayload.executor],
+    ["capability_requirements.executor", capabilityRequirements.executor],
+  ];
+  const isOpenVino = identities.some(([, v]) => v === "openvino.text_embedding");
+  if (!isOpenVino) return null;
+  // Every supplied executor identity must agree exactly; reject conflicts.
+  for (const [name, value] of identities) {
+    if (value !== undefined && value !== null && value !== "openvino.text_embedding") {
+      return `Conflicting executor identity ${name}='${value}'; expected 'openvino.text_embedding'`;
+    }
+  }
+  const { validateJobRequest } = require("./openvino-model-manifest");
+  const error = validateJobRequest(requestPayload, null);
+  if (error) return `OpenVINO request_payload invalid: ${error}`;
+  return null;
+}
+
 async function sidekick_compute_jobs({ action, job_id, ...args }) {
   try {
     compute.initialize();
     switch (action) {
-      case "list": return ok(compute.jobManager.listJobs(args));
+      case "list": return ok(compute.jobManager.listJobs({
+        status: args.status,
+        jobType: args.job_type,
+        capability: args.capability,
+        project: args.project,
+        providerId: args.provider_id,
+        workerId: args.worker_id,
+        limit: args.limit,
+      }));
       case "get": {
         if (!job_id) return err("job_id required");
         const j = compute.jobManager.getJob(job_id);
         return j ? ok(j) : err("Job not found");
       }
       case "create": {
-        const j = compute.jobManager.createJob({
-          jobType: args.job_type || args.jobType,
-          capability: args.capability || args.job_type || args.jobType,
-          requestPayload: args.request_payload || args.requestPayload || args,
-          project: args.project,
-          source: "mcp",
-          dataClassification: args.data_classification || args.dataClassification || "private",
-          capabilityRequirements: args.capability_requirements || args.capabilityRequirements || {},
-          routingPreferences: args.routing_preferences || args.routingPreferences || {},
-          maxAttempts: args.max_attempts || args.maxAttempts || 3,
-          timeoutMs: args.timeout_ms || args.timeoutMs,
-          idempotencyKey: args.idempotency_key || args.idempotencyKey,
-        });
-        return ok(j);
+        if (!args.job_type) return err("job_type is required for create (e.g. text_embedding)");
+
+        // Build the request payload from an explicit structured field, or map
+        // the convenience fields. Never default it to the raw argument object.
+        let requestPayload;
+        if (args.request_payload !== undefined) {
+          if (!isPlainObject(args.request_payload)) return err("request_payload must be a JSON object");
+          for (const f of ["prompt", "model", "provider"]) {
+            if (args[f] !== undefined) return err(`Conflicting field '${f}': include it inside request_payload, not as a top-level argument`);
+          }
+          requestPayload = args.request_payload;
+        } else {
+          requestPayload = {};
+          if (args.prompt !== undefined) requestPayload.prompt = args.prompt;
+          if (args.model !== undefined) requestPayload.model = args.model;
+          if (args.provider !== undefined) requestPayload.provider = args.provider;
+        }
+
+        if (args.capability_requirements !== undefined && !isPlainObject(args.capability_requirements)) {
+          return err("capability_requirements must be a JSON object");
+        }
+        const capabilityRequirements = args.capability_requirements || {};
+
+        const execError = validateExecutorRequest({ capability: args.capability, capabilityRequirements, requestPayload });
+        if (execError) return err(execError);
+
+        try {
+          const j = compute.jobManager.createJob({
+            jobType: args.job_type,
+            capability: args.capability,          // preserved exactly by the job contract
+            requestPayload,
+            capabilityRequirements,
+            dataClassification: args.data_classification, // undefined => contract default "private"
+            timeoutMs: args.timeout_ms,
+            maxAttempts: args.max_retries === undefined ? undefined : args.max_retries + 1,
+            idempotencyKey: args.idempotency_key,
+            project: args.project,
+            source: "mcp",
+          });
+          return ok(j);
+        } catch (e) {
+          return err("compute_jobs create rejected: " + e.message);
+        }
       }
       case "cancel": {
         if (!job_id) return err("job_id required");
-        const j = compute.jobManager.cancelJob(job_id, { actor: args.actor || "mcp", reason: args.reason || "user_cancelled" });
+        const j = compute.jobManager.cancelJob(job_id, { actor: "mcp", reason: args.reason || "user_cancelled" });
         return ok(j);
       }
       case "stats": return ok(compute.jobManager.getJobStats());

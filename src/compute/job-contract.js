@@ -59,6 +59,17 @@ function validateJobContract({
   if (!SUPPORTED_JOB_TYPES.includes(canonical)) {
     throw new Error(`Unsupported compute job type: ${jobType || capability}. Supported: ${SUPPORTED_JOB_TYPES.join(", ")}`);
   }
+  // Preserve the caller's explicit capability (for example
+  // "openvino.text_embedding") instead of collapsing it to the canonical job
+  // type. Only fall back to the canonical job type when no explicit capability
+  // was supplied. Routing still uses the canonical jobType, so this is safe.
+  let resolvedCapability = canonical;
+  if (capability !== undefined && capability !== null && capability !== "") {
+    if (typeof capability !== "string") throw new Error("capability must be a string");
+    if (capability.length > 128) throw new Error("capability exceeds maximum length of 128");
+    if (capability.includes("\0")) throw new Error("capability contains a null byte");
+    resolvedCapability = capability;
+  }
   const executor = capabilityRequirements.executor || requestPayload.executor;
   if (executor && !SUPPORTED_EXECUTORS.includes(executor)) {
     throw new Error(`Unsupported compute executor: ${executor}. Supported: ${SUPPORTED_EXECUTORS.join(", ")}`);
@@ -81,7 +92,7 @@ function validateJobContract({
   return {
     protocolVersion: PROTOCOL_VERSION,
     jobType: canonical,
-    capability: canonical,
+    capability: resolvedCapability,
     priority: normalizedPriority,
   };
 }

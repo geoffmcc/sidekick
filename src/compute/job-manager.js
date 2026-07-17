@@ -981,4 +981,6 @@ module.exports = {
   listAttempts,
   getJobStats,
   rowToJob,
+  workerCompatibility,
+  workerCanRunJob,
 };
