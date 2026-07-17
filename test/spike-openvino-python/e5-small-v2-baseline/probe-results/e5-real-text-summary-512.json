@@ -1,0 +1,52 @@
+{
+  "python": "3.12.13 (main, Jun 23 2026, 15:23:43) [MSC v.1944 64 bit (AMD64)]",
+  "model_dir": "C:\\Users\\geoff\\Projects\\sidekick\\test\\spike-openvino-python\\e5-small-v2-baseline\\models\\e5-small-v2-qint8-ov",
+  "sequence_length": 512,
+  "statuses": {
+    "CPU": {
+      "status": "pass",
+      "code": 0,
+      "timed_out": false,
+      "stdout_tail": "TARGET=CPU\nPYTHON=3.12.13 (main, Jun 23 2026, 15:23:43) [MSC v.1944 64 bit (AMD64)]\nOPENVINO=2026.2.1-21919-ede283a88e3-releases/2026/2\nMODEL=C:\\Users\\geoff\\Projects\\sidekick\\test\\spike-openvino-python\\e5-small-v2-baseline\\models\\e5-small-v2-qint8-ov\nSEQUENCE_LENGTH=512\nTOKENIZER_CLASS=BertTokenizerFast\nTOKENIZER_FAST=True\nTOKENIZER_PADDING_SIDE=right\nDEVICES=CPU,GPU,NPU\nMODEL_INPUT_NAMES=[\"input_ids\", \"attention_mask\", \"token_type_ids\"]\nMODEL_OUTPUTS=1\nTEXT_0={\"tokens\":11,\"infer_ms\":18.509,\"norm\":0.99999994}\nTEXT_1={\"tokens\":6,\"infer_ms\":15.973,\"norm\":0.99999994}\nTEXT_2={\"tokens\":30,\"infer_ms\":15.49,\"norm\":1.0}\nTEXT_3={\"tokens\":29,\"infer_ms\":17.496,\"norm\":0.99999994}\nTEXT_4={\"tokens\":19,\"infer_ms\":15.201,\"norm\":1.0}\nTEXT_5={\"tokens\":12,\"infer_ms\":15.324,\"norm\":1.0}\nTEXT_6={\"tokens\":17,\"infer_ms\":16.142,\"norm\":0.99999994}\nTEXT_7={\"tokens\":17,\"infer_ms\":16.242,\"norm\":0.99999994}\nTEXT_8={\"tokens\":38,\"infer_ms\":16.643,\"norm\":1.0}\nTEXT_9={\"tokens\":27,\"infer_ms\":15.356,\"norm\":1.0}\nTEXT_10={\"tokens\":30,\"infer_ms\":14.834,\"norm\":0.99999994}\nTEXT_11={\"tokens\":29,\"infer_ms\":15.481,\"norm\":0.99999994}\nTEXT_12={\"tokens\":16,\"infer_ms\":15.886,\"norm\":1.0}\nTEXT_13={\"tokens\":11,\"infer_ms\":15.708,\"norm\":0.99999994}\nTEXT_14={\"tokens\":17,\"infer_ms\":16.396,\"norm\":1.0}\nTEXT_15={\"tokens\":18,\"infer_ms\":15.078,\"norm\":1.0}\nOFFICIAL_SCORE_MATRIX=[[0.9200706481933594, 0.70366370677948], [0.7364698052406311, 0.9174822568893433]]\nOFFICIAL_TOP_DOCS=[0, 1]\nOFFICIAL_RANKING_PASS=true\nSIDEKICK_SCORE_MATRIX=[[0.933743953704834, 0.7205000519752502, 0.7761810421943665, 0.742487370967865, 0.6856697201728821, 0.6682811975479126, 0.7463159561157227, 0.6644871830940247], [0.7223424911499023, 0.8743114471435547, 0.777133584022522, 0.7979931831359863, 0.692989706993103, 0.6567908525466919, 0.7297000288963318, 0.700049102306366], [0.7809790372848511, 0.7662087678909302, 0.8997782468795776, 0.7767642140388489, 0.6997998952865601, 0.676159679889679, 0.7629393339157104, 0.715178370475769], [0.7636503577232361, 0.7601220607757568, 0.7923629283905029, 0.9103066325187683, 0.7294358015060425, 0.7053366899490356, 0.7368361353874207, 0.7249921560287476]]\nSIDEKICK_TOP_DOCS=[0, 1, 2, 3]\nSIDEKICK_RANKING_PASS=true\nLOAD_MS=21.505\nCOMPILE_MS=570.142\nRESULT=C:\\Users\\geoff\\Projects\\sidekick\\test\\spike-openvino-python\\e5-small-v2-baseline\\probe-results\\e5-real-text-cpu-512.json\nPASS\n",
+      "stderr_tail": "None of PyTorch, TensorFlow >= 2.0, or Flax have been found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.\n"
+    },
+    "NPU": {
+      "status": "pass",
+      "code": 0,
+      "timed_out": false,
+      "stdout_tail": "TARGET=NPU\nPYTHON=3.12.13 (main, Jun 23 2026, 15:23:43) [MSC v.1944 64 bit (AMD64)]\nOPENVINO=2026.2.1-21919-ede283a88e3-releases/2026/2\nMODEL=C:\\Users\\geoff\\Projects\\sidekick\\test\\spike-openvino-python\\e5-small-v2-baseline\\models\\e5-small-v2-qint8-ov\nSEQUENCE_LENGTH=512\nTOKENIZER_CLASS=BertTokenizerFast\nTOKENIZER_FAST=True\nTOKENIZER_PADDING_SIDE=right\nDEVICES=CPU,GPU,NPU\nMODEL_INPUT_NAMES=[\"input_ids\", \"attention_mask\", \"token_type_ids\"]\nMODEL_OUTPUTS=1\nTEXT_0={\"tokens\":11,\"infer_ms\":93.262,\"norm\":1.0}\nTEXT_1={\"tokens\":6,\"infer_ms\":47.788,\"norm\":1.0}\nTEXT_2={\"tokens\":30,\"infer_ms\":36.646,\"norm\":0.99999994}\nTEXT_3={\"tokens\":29,\"infer_ms\":30.848,\"norm\":0.99999994}\nTEXT_4={\"tokens\":19,\"infer_ms\":27.938,\"norm\":1.0}\nTEXT_5={\"tokens\":12,\"infer_ms\":27.163,\"norm\":1.0}\nTEXT_6={\"tokens\":17,\"infer_ms\":27.144,\"norm\":0.99999994}\nTEXT_7={\"tokens\":17,\"infer_ms\":27.12,\"norm\":1.0}\nTEXT_8={\"tokens\":38,\"infer_ms\":27.711,\"norm\":1.0}\nTEXT_9={\"tokens\":27,\"infer_ms\":27.533,\"norm\":0.99999994}\nTEXT_10={\"tokens\":30,\"infer_ms\":27.279,\"norm\":1.0}\nTEXT_11={\"tokens\":29,\"infer_ms\":27.197,\"norm\":1.0}\nTEXT_12={\"tokens\":16,\"infer_ms\":27.146,\"norm\":1.0}\nTEXT_13={\"tokens\":11,\"infer_ms\":27.074,\"norm\":1.0}\nTEXT_14={\"tokens\":17,\"infer_ms\":27.136,\"norm\":1.0}\nTEXT_15={\"tokens\":18,\"infer_ms\":27.113,\"norm\":1.0}\nOFFICIAL_SCORE_MATRIX=[[0.9209443926811218, 0.7049311399459839], [0.7389402389526367, 0.9195112586021423]]\nOFFICIAL_TOP_DOCS=[0, 1]\nOFFICIAL_RANKING_PASS=true\nSIDEKICK_SCORE_MATRIX=[[0.9330511689186096, 0.7227656245231628, 0.7762506604194641, 0.7437396049499512, 0.6877134442329407, 0.6697984933853149, 0.746810793876648, 0.6664625406265259], [0.7230117917060852, 0.8730806708335876, 0.7772567868232727, 0.7979570627212524, 0.6978359222412109, 0.6581346988677979, 0.7303911447525024, 0.7003087401390076], [0.7841122150421143, 0.7679567337036133, 0.9007474184036255, 0.7771852016448975, 0.7032647728919983, 0.6767686605453491, 0.7636563777923584, 0.7156561017036438], [0.7638338208198547, 0.760784387588501, 0.7914178967475891, 0.9102410078048706, 0.7304484248161316, 0.7045248746871948, 0.7359855771064758, 0.7240346670150757]]\nSIDEKICK_TOP_DOCS=[0, 1, 2, 3]\nSIDEKICK_RANKING_PASS=true\nLOAD_MS=22.432\nCOMPILE_MS=4762.471\nRESULT=C:\\Users\\geoff\\Projects\\sidekick\\test\\spike-openvino-python\\e5-small-v2-baseline\\probe-results\\e5-real-text-npu-512.json\nPASS\n",
+      "stderr_tail": "None of PyTorch, TensorFlow >= 2.0, or Flax have been found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.\n"
+    }
+  },
+  "comparison": {
+    "per_text_cosines": [
+      0.9998519420623779,
+      0.9998058080673218,
+      0.9994780421257019,
+      0.9994293451309204,
+      0.9996237754821777,
+      0.9997503161430359,
+      0.9995763301849365,
+      0.9997758269309998,
+      0.9992401599884033,
+      0.9994627237319946,
+      0.9994391202926636,
+      0.9996355175971985,
+      0.9996877908706665,
+      0.9995803236961365,
+      0.9997581243515015,
+      0.9996229410171509
+    ],
+    "min_cosine": 0.9992401599884033,
+    "mean_cosine": 0.9996073804795742,
+    "token_parity": true,
+    "token_mismatch_indices": [],
+    "official_score_matrix_max_delta": 0.0024704337120056152,
+    "sidekick_score_matrix_max_delta": 0.00484621524810791,
+    "cpu_official_ranking_pass": true,
+    "npu_official_ranking_pass": true,
+    "cpu_sidekick_ranking_pass": true,
+    "npu_sidekick_ranking_pass": true,
+    "pass": true
+  }
+}

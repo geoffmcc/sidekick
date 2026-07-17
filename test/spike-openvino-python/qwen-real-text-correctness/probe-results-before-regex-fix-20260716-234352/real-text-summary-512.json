@@ -1,0 +1,52 @@
+{
+  "python": "3.12.13 (main, Jun 23 2026, 15:23:43) [MSC v.1944 64 bit (AMD64)]",
+  "model_dir": "C:\\Users\\geoff\\Projects\\sidekick\\test\\spike-openvino-node\\models\\qwen3-embedding-0.6b-int8-ov",
+  "sequence_length": 512,
+  "statuses": {
+    "CPU": {
+      "status": "pass",
+      "code": 0,
+      "timed_out": false,
+      "stdout_tail": "TARGET=CPU\nPYTHON=3.12.13 (main, Jun 23 2026, 15:23:43) [MSC v.1944 64 bit (AMD64)]\nOPENVINO=2026.2.1-21919-ede283a88e3-releases/2026/2\nMODEL=C:\\Users\\geoff\\Projects\\sidekick\\test\\spike-openvino-node\\models\\qwen3-embedding-0.6b-int8-ov\nSEQUENCE_LENGTH=512\nTOKENIZER_CLASS=Qwen2TokenizerFast\nTOKENIZER_FAST=True\nTOKENIZER_PADDING_SIDE=left\nTOKENIZER_EOS_ID=151645\nTOKENIZER_PAD_ID=151643\nDEVICES=CPU,GPU,NPU\nMODEL_INPUT_NAMES=[\"input_ids\", \"attention_mask\"]\nMODEL_OUTPUTS=1\nCOMPILED_INPUT_NAMES=[\"input_ids\", \"attention_mask\"]\nTEXT_0={\"tokens\":34,\"infer_ms\":304.681,\"norm\":1.0}\nTEXT_1={\"tokens\":30,\"infer_ms\":277.685,\"norm\":1.0}\nTEXT_2={\"tokens\":8,\"infer_ms\":281.087,\"norm\":1.0}\nTEXT_3={\"tokens\":31,\"infer_ms\":305.789,\"norm\":1.0}\nTEXT_4={\"tokens\":38,\"infer_ms\":284.407,\"norm\":1.0}\nTEXT_5={\"tokens\":36,\"infer_ms\":278.726,\"norm\":0.99999994}\nTEXT_6={\"tokens\":40,\"infer_ms\":279.049,\"norm\":1.0}\nTEXT_7={\"tokens\":42,\"infer_ms\":306.569,\"norm\":1.0}\nTEXT_8={\"tokens\":28,\"infer_ms\":277.046,\"norm\":0.999999881}\nTEXT_9={\"tokens\":26,\"infer_ms\":279.782,\"norm\":1.0}\nTEXT_10={\"tokens\":27,\"infer_ms\":307.398,\"norm\":1.0}\nTEXT_11={\"tokens\":24,\"infer_ms\":281.543,\"norm\":1.0}\nTEXT_12={\"tokens\":11,\"infer_ms\":274.19,\"norm\":1.0}\nTEXT_13={\"tokens\":8,\"infer_ms\":281.001,\"norm\":1.0}\nTEXT_14={\"tokens\":13,\"infer_ms\":301.195,\"norm\":1.0}\nTEXT_15={\"tokens\":15,\"infer_ms\":298.394,\"norm\":1.0}\nOFFICIAL_SCORE_MATRIX=[[0.7347725033760071, 0.16388271749019623], [0.12569527328014374, 0.6133905649185181]]\nOFFICIAL_TOP_DOCS=[0, 1]\nOFFICIAL_EXPECTED_DOCS=[0, 1]\nOFFICIAL_RANKING_PASS=true\nSIDEKICK_SCORE_MATRIX=[[0.8459307551383972, 0.1592865288257599, 0.26749446988105774, 0.10419496148824692, 0.05280384421348572, 0.026437513530254364, 0.19207006692886353, 0.061272017657756805], [0.11437855660915375, 0.6772860884666443, 0.23307523131370544, 0.3238166570663452, 0.1468113362789154, 0.04269596189260483, 0.2515266239643097, 0.27455875277519226], [0.33878129720687866, 0.3541872203350067, 0.7777214050292969, 0.20012733340263367, 0.18735025823116302, 0.04528793692588806, 0.4715960919857025, 0.21099044382572174], [0.17119614779949188, 0.27997255325317383, 0.20361876487731934, 0.7628490924835205, 0.1184987723827362, 0.06452199071645737, 0.1966264694929123, 0.23465418815612793]]\nSIDEKICK_TOP_DOCS=[0, 1, 2, 3]\nSIDEKICK_EXPECTED_DOCS=[0, 1, 2, 3]\nSIDEKICK_RANKING_PASS=true\nLOAD_MS=88.857\nCOMPILE_MS=1224.952\nRESULT=C:\\Users\\geoff\\Projects\\sidekick\\test\\spike-openvino-python\\qwen-real-text-correctness\\probe-results\\real-text-cpu-512.json\nPASS\n",
+      "stderr_tail": "None of PyTorch, TensorFlow >= 2.0, or Flax have been found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.\nThe tokenizer you are loading from 'C:\\Users\\geoff\\Projects\\sidekick\\test\\spike-openvino-node\\models\\qwen3-embedding-0.6b-int8-ov' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.\n"
+    },
+    "NPU": {
+      "status": "pass",
+      "code": 0,
+      "timed_out": false,
+      "stdout_tail": "TARGET=NPU\nPYTHON=3.12.13 (main, Jun 23 2026, 15:23:43) [MSC v.1944 64 bit (AMD64)]\nOPENVINO=2026.2.1-21919-ede283a88e3-releases/2026/2\nMODEL=C:\\Users\\geoff\\Projects\\sidekick\\test\\spike-openvino-node\\models\\qwen3-embedding-0.6b-int8-ov\nSEQUENCE_LENGTH=512\nTOKENIZER_CLASS=Qwen2TokenizerFast\nTOKENIZER_FAST=True\nTOKENIZER_PADDING_SIDE=left\nTOKENIZER_EOS_ID=151645\nTOKENIZER_PAD_ID=151643\nDEVICES=CPU,GPU,NPU\nMODEL_INPUT_NAMES=[\"input_ids\", \"attention_mask\"]\nMODEL_OUTPUTS=1\nCOMPILED_INPUT_NAMES=[\"input_ids\", \"attention_mask\"]\nTEXT_0={\"tokens\":34,\"infer_ms\":363.481,\"norm\":1.0}\nTEXT_1={\"tokens\":30,\"infer_ms\":273.216,\"norm\":1.0}\nTEXT_2={\"tokens\":8,\"infer_ms\":274.422,\"norm\":1.0}\nTEXT_3={\"tokens\":31,\"infer_ms\":272.209,\"norm\":1.0}\nTEXT_4={\"tokens\":38,\"infer_ms\":273.069,\"norm\":1.0}\nTEXT_5={\"tokens\":36,\"infer_ms\":273.421,\"norm\":1.0}\nTEXT_6={\"tokens\":40,\"infer_ms\":273.768,\"norm\":1.0}\nTEXT_7={\"tokens\":42,\"infer_ms\":272.728,\"norm\":1.0}\nTEXT_8={\"tokens\":28,\"infer_ms\":274.308,\"norm\":0.99999994}\nTEXT_9={\"tokens\":26,\"infer_ms\":273.555,\"norm\":0.99999994}\nTEXT_10={\"tokens\":27,\"infer_ms\":274.911,\"norm\":1.0}\nTEXT_11={\"tokens\":24,\"infer_ms\":271.649,\"norm\":1.0}\nTEXT_12={\"tokens\":11,\"infer_ms\":273.566,\"norm\":1.0}\nTEXT_13={\"tokens\":8,\"infer_ms\":273.549,\"norm\":1.0}\nTEXT_14={\"tokens\":13,\"infer_ms\":272.666,\"norm\":1.0}\nTEXT_15={\"tokens\":15,\"infer_ms\":273.194,\"norm\":1.0}\nOFFICIAL_SCORE_MATRIX=[[0.7351626753807068, 0.1651957482099533], [0.12258636951446533, 0.6117362380027771]]\nOFFICIAL_TOP_DOCS=[0, 1]\nOFFICIAL_EXPECTED_DOCS=[0, 1]\nOFFICIAL_RANKING_PASS=true\nSIDEKICK_SCORE_MATRIX=[[0.8496624827384949, 0.15705054998397827, 0.26754653453826904, 0.1021556407213211, 0.05371011793613434, 0.027408555150032043, 0.19149258732795715, 0.06067325174808502], [0.11427707970142365, 0.6746131777763367, 0.2333705723285675, 0.32437413930892944, 0.14722073078155518, 0.046211764216423035, 0.24915286898612976, 0.273826539516449], [0.3369966745376587, 0.3530377447605133, 0.7753325700759888, 0.19847215712070465, 0.18618805706501007, 0.049257792532444, 0.4664303660392761, 0.20813478529453278], [0.166256383061409, 0.27756139636039734, 0.2008553147315979, 0.7624632120132446, 0.11757513135671616, 0.06692709028720856, 0.19420556724071503, 0.2296595573425293]]\nSIDEKICK_TOP_DOCS=[0, 1, 2, 3]\nSIDEKICK_EXPECTED_DOCS=[0, 1, 2, 3]\nSIDEKICK_RANKING_PASS=true\nLOAD_MS=74.829\nCOMPILE_MS=21387.551\nRESULT=C:\\Users\\geoff\\Projects\\sidekick\\test\\spike-openvino-python\\qwen-real-text-correctness\\probe-results\\real-text-npu-512.json\nPASS\n",
+      "stderr_tail": "None of PyTorch, TensorFlow >= 2.0, or Flax have been found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.\nThe tokenizer you are loading from 'C:\\Users\\geoff\\Projects\\sidekick\\test\\spike-openvino-node\\models\\qwen3-embedding-0.6b-int8-ov' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.\n"
+    }
+  },
+  "comparison": {
+    "per_text_cosines": [
+      0.9995790719985962,
+      0.9995335936546326,
+      0.9995860457420349,
+      0.9994237422943115,
+      0.9996261596679688,
+      0.9997128844261169,
+      0.9996048808097839,
+      0.9996248483657837,
+      0.999588668346405,
+      0.9997115731239319,
+      0.9997192621231079,
+      0.9996927976608276,
+      0.9996706247329712,
+      0.9994521141052246,
+      0.9996092319488525,
+      0.9996697902679443
+    ],
+    "min_cosine": 0.9994237422943115,
+    "mean_cosine": 0.9996128305792809,
+    "token_parity": true,
+    "token_mismatch_indices": [],
+    "official_score_matrix_max_delta": 0.0031089037656784058,
+    "sidekick_score_matrix_max_delta": 0.005165725946426392,
+    "cpu_official_ranking_pass": true,
+    "npu_official_ranking_pass": true,
+    "cpu_sidekick_ranking_pass": true,
+    "npu_sidekick_ranking_pass": true,
+    "pass": true
+  }
+}

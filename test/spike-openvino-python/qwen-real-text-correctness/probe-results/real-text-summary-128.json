@@ -1,0 +1,52 @@
+{
+  "python": "3.12.13 (main, Jun 23 2026, 15:23:43) [MSC v.1944 64 bit (AMD64)]",
+  "model_dir": "C:\\Users\\geoff\\Projects\\sidekick\\test\\spike-openvino-node\\models\\qwen3-embedding-0.6b-int8-ov",
+  "sequence_length": 128,
+  "statuses": {
+    "CPU": {
+      "status": "pass",
+      "code": 0,
+      "timed_out": false,
+      "stdout_tail": "TARGET=CPU\nPYTHON=3.12.13 (main, Jun 23 2026, 15:23:43) [MSC v.1944 64 bit (AMD64)]\nOPENVINO=2026.2.1-21919-ede283a88e3-releases/2026/2\nMODEL=C:\\Users\\geoff\\Projects\\sidekick\\test\\spike-openvino-node\\models\\qwen3-embedding-0.6b-int8-ov\nSEQUENCE_LENGTH=128\nTOKENIZER_CLASS=Qwen2TokenizerFast\nTOKENIZER_FAST=True\nTOKENIZER_PADDING_SIDE=left\nTOKENIZER_EOS_ID=151645\nTOKENIZER_PAD_ID=151643\nDEVICES=CPU,GPU,NPU\nMODEL_INPUT_NAMES=[\"input_ids\", \"attention_mask\"]\nMODEL_OUTPUTS=1\nCOMPILED_INPUT_NAMES=[\"input_ids\", \"attention_mask\"]\nTEXT_0={\"tokens\":34,\"infer_ms\":64.901,\"norm\":0.99999994}\nTEXT_1={\"tokens\":30,\"infer_ms\":72.063,\"norm\":1.0}\nTEXT_2={\"tokens\":8,\"infer_ms\":72.436,\"norm\":1.0}\nTEXT_3={\"tokens\":31,\"infer_ms\":67.408,\"norm\":0.99999994}\nTEXT_4={\"tokens\":38,\"infer_ms\":64.958,\"norm\":1.0}\nTEXT_5={\"tokens\":36,\"infer_ms\":64.907,\"norm\":1.0}\nTEXT_6={\"tokens\":40,\"infer_ms\":62.102,\"norm\":1.0}\nTEXT_7={\"tokens\":42,\"infer_ms\":62.474,\"norm\":0.99999994}\nTEXT_8={\"tokens\":28,\"infer_ms\":63.382,\"norm\":1.0}\nTEXT_9={\"tokens\":26,\"infer_ms\":62.775,\"norm\":1.0}\nTEXT_10={\"tokens\":27,\"infer_ms\":61.909,\"norm\":0.99999994}\nTEXT_11={\"tokens\":24,\"infer_ms\":61.762,\"norm\":0.99999994}\nTEXT_12={\"tokens\":11,\"infer_ms\":61.647,\"norm\":0.99999994}\nTEXT_13={\"tokens\":8,\"infer_ms\":62.926,\"norm\":0.99999994}\nTEXT_14={\"tokens\":13,\"infer_ms\":66.1,\"norm\":1.0}\nTEXT_15={\"tokens\":15,\"infer_ms\":64.599,\"norm\":1.0}\nOFFICIAL_SCORE_MATRIX=[[0.7347286343574524, 0.16403108835220337], [0.12420515716075897, 0.6136741638183594]]\nOFFICIAL_TOP_DOCS=[0, 1]\nOFFICIAL_EXPECTED_DOCS=[0, 1]\nOFFICIAL_RANKING_PASS=true\nSIDEKICK_SCORE_MATRIX=[[0.8452857136726379, 0.15644121170043945, 0.26709967851638794, 0.10350430756807327, 0.04901054874062538, 0.028479041531682014, 0.18988098204135895, 0.06147715076804161], [0.11652709543704987, 0.6776439547538757, 0.23700037598609924, 0.3286229968070984, 0.14838173985481262, 0.051082875579595566, 0.25131887197494507, 0.27661705017089844], [0.3354194164276123, 0.35500186681747437, 0.7791635394096375, 0.19978392124176025, 0.18701456487178802, 0.051271598786115646, 0.47039809823036194, 0.2131110429763794], [0.16715791821479797, 0.27465277910232544, 0.1991625875234604, 0.7634612321853638, 0.11622573435306549, 0.06770073622465134, 0.193015456199646, 0.22993579506874084]]\nSIDEKICK_TOP_DOCS=[0, 1, 2, 3]\nSIDEKICK_EXPECTED_DOCS=[0, 1, 2, 3]\nSIDEKICK_RANKING_PASS=true\nLOAD_MS=77.417\nCOMPILE_MS=1198.518\nRESULT=C:\\Users\\geoff\\Projects\\sidekick\\test\\spike-openvino-python\\qwen-real-text-correctness\\probe-results\\real-text-cpu-128.json\nPASS\n",
+      "stderr_tail": "None of PyTorch, TensorFlow >= 2.0, or Flax have been found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.\n"
+    },
+    "NPU": {
+      "status": "pass",
+      "code": 0,
+      "timed_out": false,
+      "stdout_tail": "TARGET=NPU\nPYTHON=3.12.13 (main, Jun 23 2026, 15:23:43) [MSC v.1944 64 bit (AMD64)]\nOPENVINO=2026.2.1-21919-ede283a88e3-releases/2026/2\nMODEL=C:\\Users\\geoff\\Projects\\sidekick\\test\\spike-openvino-node\\models\\qwen3-embedding-0.6b-int8-ov\nSEQUENCE_LENGTH=128\nTOKENIZER_CLASS=Qwen2TokenizerFast\nTOKENIZER_FAST=True\nTOKENIZER_PADDING_SIDE=left\nTOKENIZER_EOS_ID=151645\nTOKENIZER_PAD_ID=151643\nDEVICES=CPU,GPU,NPU\nMODEL_INPUT_NAMES=[\"input_ids\", \"attention_mask\"]\nMODEL_OUTPUTS=1\nCOMPILED_INPUT_NAMES=[\"input_ids\", \"attention_mask\"]\nTEXT_0={\"tokens\":34,\"infer_ms\":150.459,\"norm\":1.0}\nTEXT_1={\"tokens\":30,\"infer_ms\":67.878,\"norm\":1.000000119}\nTEXT_2={\"tokens\":8,\"infer_ms\":57.145,\"norm\":1.0}\nTEXT_3={\"tokens\":31,\"infer_ms\":56.337,\"norm\":1.0}\nTEXT_4={\"tokens\":38,\"infer_ms\":56.292,\"norm\":1.0}\nTEXT_5={\"tokens\":36,\"infer_ms\":56.701,\"norm\":1.0}\nTEXT_6={\"tokens\":40,\"infer_ms\":56.595,\"norm\":1.0}\nTEXT_7={\"tokens\":42,\"infer_ms\":57.573,\"norm\":1.0}\nTEXT_8={\"tokens\":28,\"infer_ms\":57.175,\"norm\":1.0}\nTEXT_9={\"tokens\":26,\"infer_ms\":56.838,\"norm\":0.99999994}\nTEXT_10={\"tokens\":27,\"infer_ms\":56.718,\"norm\":1.0}\nTEXT_11={\"tokens\":24,\"infer_ms\":56.639,\"norm\":0.99999994}\nTEXT_12={\"tokens\":11,\"infer_ms\":56.115,\"norm\":1.0}\nTEXT_13={\"tokens\":8,\"infer_ms\":56.452,\"norm\":1.0}\nTEXT_14={\"tokens\":13,\"infer_ms\":56.439,\"norm\":1.000000119}\nTEXT_15={\"tokens\":15,\"infer_ms\":56.528,\"norm\":1.0}\nOFFICIAL_SCORE_MATRIX=[[0.7353898882865906, 0.16488495469093323], [0.12255804985761642, 0.6120415329933167]]\nOFFICIAL_TOP_DOCS=[0, 1]\nOFFICIAL_EXPECTED_DOCS=[0, 1]\nOFFICIAL_RANKING_PASS=true\nSIDEKICK_SCORE_MATRIX=[[0.8493727445602417, 0.15700092911720276, 0.26784422993659973, 0.101678766310215, 0.05374893918633461, 0.02716800756752491, 0.1912858635187149, 0.060469575226306915], [0.1149643287062645, 0.6748776435852051, 0.23349159955978394, 0.32423701882362366, 0.14634136855602264, 0.04588666558265686, 0.24865275621414185, 0.27368977665901184], [0.33786600828170776, 0.35265254974365234, 0.7750266790390015, 0.1984511911869049, 0.18615387380123138, 0.048704519867897034, 0.4665640890598297, 0.2080100029706955], [0.16682328283786774, 0.27747273445129395, 0.2010013610124588, 0.7625106573104858, 0.11697652190923691, 0.0666535273194313, 0.19414591789245605, 0.22957541048526764]]\nSIDEKICK_TOP_DOCS=[0, 1, 2, 3]\nSIDEKICK_EXPECTED_DOCS=[0, 1, 2, 3]\nSIDEKICK_RANKING_PASS=true\nLOAD_MS=75.996\nCOMPILE_MS=28127.366\nRESULT=C:\\Users\\geoff\\Projects\\sidekick\\test\\spike-openvino-python\\qwen-real-text-correctness\\probe-results\\real-text-npu-128.json\nPASS\n",
+      "stderr_tail": "None of PyTorch, TensorFlow >= 2.0, or Flax have been found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.\n"
+    }
+  },
+  "comparison": {
+    "per_text_cosines": [
+      0.9995980262756348,
+      0.9994866847991943,
+      0.9995836615562439,
+      0.9995282888412476,
+      0.9996724128723145,
+      0.9996531009674072,
+      0.9996151328086853,
+      0.9996355175971985,
+      0.9995715618133545,
+      0.9997430443763733,
+      0.9996551275253296,
+      0.9997119307518005,
+      0.9996635913848877,
+      0.9996815323829651,
+      0.9997115731239319,
+      0.9997185468673706
+    ],
+    "min_cosine": 0.9994866847991943,
+    "mean_cosine": 0.9996393583714962,
+    "token_parity": true,
+    "token_mismatch_indices": [],
+    "official_score_matrix_max_delta": 0.0016471073031425476,
+    "sidekick_score_matrix_max_delta": 0.0051962099969387054,
+    "cpu_official_ranking_pass": true,
+    "npu_official_ranking_pass": true,
+    "cpu_sidekick_ranking_pass": true,
+    "npu_sidekick_ranking_pass": true,
+    "pass": true
+  }
+}

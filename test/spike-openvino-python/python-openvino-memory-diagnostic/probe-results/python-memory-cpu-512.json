@@ -1,0 +1,38 @@
+{
+  "device": "CPU",
+  "python": "3.12.13 (main, Jun 23 2026, 15:23:43) [MSC v.1944 64 bit (AMD64)]",
+  "openvino": "2026.2.1-21919-ede283a88e3-releases/2026/2",
+  "model_xml": "C:\\Users\\geoff\\Projects\\sidekick\\test\\spike-openvino-node\\models\\qwen3-embedding-0.6b-int8-ov\\openvino_model.xml",
+  "sequence_length": 512,
+  "warmups": 5,
+  "iterations": 50,
+  "gc_every": 1,
+  "load_ms": 79.21239999996033,
+  "reshape_ms": 36.34619999866118,
+  "compile_ms": 1183.7636999989627,
+  "first_infer_ms": 316.33180000062566,
+  "warm_median_ms": 293.0782999992516,
+  "warm_p95_ms": 343.4829549994902,
+  "warm_mean_ms": 299.5446339999762,
+  "throughput_per_sec": 3.3384006471639194,
+  "baseline_rss_mb": 1102.4765625,
+  "final_rss_mb": 1102.99609375,
+  "growth_rss_mb": 0.51953125,
+  "baseline_vms_mb": 1300.2109375,
+  "final_vms_mb": 1300.68359375,
+  "growth_vms_mb": 0.47265625,
+  "output_shape": [
+    1,
+    512,
+    1024
+  ],
+  "output_type": "<Type: 'float32'>",
+  "output_elements": 524288,
+  "checksum": 169.46426630020142,
+  "versions": {
+    "CPU": {
+      "build_number": "2026.2.1-21919-ede283a88e3-releases/2026/2",
+      "description": "openvino_intel_cpu_plugin"
+    }
+  }
+}

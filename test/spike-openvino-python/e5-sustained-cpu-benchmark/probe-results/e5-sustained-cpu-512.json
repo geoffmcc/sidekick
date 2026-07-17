@@ -1,0 +1,40 @@
+{
+  "device": "CPU",
+  "model_dir": "C:\\Users\\geoff\\Projects\\sidekick\\test\\spike-openvino-python\\e5-small-v2-baseline\\models\\e5-small-v2-qint8-ov",
+  "sequence_length": 512,
+  "warmups": 20,
+  "iterations": 1000,
+  "load_ms": 21.71989999988,
+  "compile_ms": 577.6488000010431,
+  "first_infer_ms": 18.49460000084946,
+  "tokenizer": {
+    "median_ms": 0.3322500015201513,
+    "p95_ms": 0.38303499877656577,
+    "p99_ms": 0.4741040011140285,
+    "mean_ms": 0.26820479997695656
+  },
+  "inference": {
+    "median_ms": 14.49624999986554,
+    "p95_ms": 22.064745002899137,
+    "p99_ms": 26.13224899982015,
+    "mean_ms": 15.358164600005694,
+    "throughput_per_sec": 65.1119470356262
+  },
+  "end_to_end": {
+    "median_ms": 15.025899998363457,
+    "p95_ms": 22.613830000045702,
+    "p99_ms": 26.71172399957868,
+    "mean_ms": 15.894352499875822,
+    "throughput_per_sec": 62.91542860948961
+  },
+  "memory": {
+    "baseline_rss_mb": 267.88671875,
+    "final_rss_mb": 267.94921875,
+    "growth_rss_mb": 0.0625,
+    "baseline_vms_mb": 865.08203125,
+    "final_vms_mb": 865.0859375,
+    "growth_vms_mb": 0.00390625
+  },
+  "repeat_cosine": 1.0,
+  "embedding_dim": 384
+}

@@ -1,0 +1,36 @@
+{
+  "source_report": "C:\\Users\\geoff\\Projects\\sidekick\\test\\spike-openvino-python\\sidekick-doc-retrieval-bakeoff\\probe-results\\sidekick-doc-bakeoff-report.json",
+  "rrf_k": 60,
+  "query_count": 63,
+  "disagreement_count": 37,
+  "e5": {
+    "recall_at_1": 0.4603174603174603,
+    "recall_at_5": 0.7619047619047619,
+    "recall_at_10": 0.8095238095238095,
+    "mrr": 0.5749663621015868,
+    "ndcg_at_10": 0.5409674622726869
+  },
+  "qwen": {
+    "recall_at_1": 0.42857142857142855,
+    "recall_at_5": 0.7619047619047619,
+    "recall_at_10": 0.8412698412698413,
+    "mrr": 0.5697634039162532,
+    "ndcg_at_10": 0.561243095339159
+  },
+  "rrf_fusion_top10_union": {
+    "query_count": 63,
+    "recall_at_1": 0.4603174603174603,
+    "recall_at_5": 0.7619047619047619,
+    "recall_at_10": 0.8888888888888888,
+    "mrr": 0.5871693121693122,
+    "ndcg_at_10": 0.5863647795475454
+  },
+  "perfect_router_upper_bound": {
+    "query_count": 63,
+    "recall_at_1": 0.5396825396825397,
+    "recall_at_5": 0.8571428571428571,
+    "recall_at_10": 0.9047619047619048,
+    "mrr": 0.667787855883094,
+    "ndcg_at_10": 0.5034827733640544
+  }
+}
