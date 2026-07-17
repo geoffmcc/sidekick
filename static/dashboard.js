@@ -348,6 +348,56 @@ function renderStructuredValue(value, opts){
   return '<pre class="value-block ' + cls + (long ? ' is-long' : '') + '">' + esc(visible) + '</pre>';
 }
 
+function renderExpandableValue(value, opts){
+  opts = opts || {};
+  const text = displayValue(value);
+  const parsed = typeof value === 'string' ? parseMaybeJson(value) : (typeof value === 'object' && value !== null ? value : null);
+  const rendered = parsed !== null ? JSON.stringify(parsed, null, 2) : text;
+  const cls = parsed !== null ? 'structured-json' : 'structured-text';
+  const limit = opts.limit || 900;
+  const truncated = rendered.length > limit;
+  const id = 'exp-' + Math.random().toString(36).slice(2, 10);
+  if (!truncated) {
+    return '<pre class="value-block ' + cls + '">' + esc(rendered) + '</pre>';
+  }
+  const preview = rendered.slice(0, limit);
+  return '<div class="expandable-block">' +
+    '<pre class="value-block ' + cls + ' expandable-preview" id="' + id + '-preview">' + esc(preview) + '\n… truncated (' + rendered.length.toLocaleString() + ' chars) …</pre>' +
+    '<pre class="value-block ' + cls + ' expandable-full" id="' + id + '-full" style="display:none">' + esc(rendered) + '</pre>' +
+    '<button class="btn btn-sm btn-outline expandable-toggle" onclick="toggleExpandable(\'' + id + '\', this)">Show full (' + rendered.length.toLocaleString() + ' chars)</button>' +
+  '</div>';
+}
+
+function toggleExpandable(id, btn){
+  const preview = document.getElementById(id + '-preview');
+  const full = document.getElementById(id + '-full');
+  if (!preview || !full) return;
+  const showingFull = full.style.display !== 'none';
+  if (showingFull) {
+    full.style.display = 'none';
+    preview.style.display = '';
+    btn.textContent = 'Show full (' + full.textContent.length.toLocaleString() + ' chars)';
+  } else {
+    preview.style.display = 'none';
+    full.style.display = '';
+    btn.textContent = 'Collapse';
+  }
+}
+
+function copyBlockText(btn){
+  const block = btn.closest('.expandable-block') || btn.closest('.detail-block');
+  if (!block) return;
+  const full = block.querySelector('.expandable-full') || block.querySelector('.value-block');
+  if (!full) return;
+  navigator.clipboard.writeText(full.textContent).then(() => {
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+  }).catch(() => {
+    btn.textContent = 'Copy failed';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+  });
+}
+
 function metric(label, value, detail){
   return '<div class="metric-card"><span>' + esc(label) + '</span><strong>' + esc(value == null ? '--' : value) + '</strong>' + (detail ? '<small>' + esc(detail) + '</small>' : '') + '</div>';
 }
@@ -2001,12 +2051,98 @@ function showComputeJob(id){
   el.innerHTML = '<div class="empty">Loading job details...</div>';
   authFetch('/api/compute/jobs/' + encodeURIComponent(id)).then(r=>r.json()).then(d=>{
     if (!d.job) { el.innerHTML = '<div class="agent-err">Job not found</div>'; return; }
-    el.innerHTML = '<div class="card compute-detail-card">' +
-      '<div class="compute-panel-head"><div><div class="section-title">Job Detail</div><div class="sub">' + esc(d.job.jobId) + '</div></div><button class="btn btn-sm btn-outline" onclick="$(\'computeJobDetail\').innerHTML=\'\'">Close</button></div>' +
-      renderStructuredValue(d.job, { limit: 1600, expanded: true }) +
-      '<div class="section-title">Attempts</div>' + (d.attempts && d.attempts.length ? d.attempts.map(a => renderStructuredValue(a, { limit: 700 })).join('') : '<div class="empty">No attempts</div>') +
-      '<div class="section-title">Artifacts</div>' + (d.artifacts && d.artifacts.length ? d.artifacts.map(a => renderStructuredValue(a, { limit: 700 })).join('') : '<div class="empty">No artifacts</div>') +
-    '</div>';
+    const j = d.job;
+    const statusClass = j.status === 'completed' ? 'ok' : (j.status === 'failed' || j.status === 'cancelled' ? 'danger' : 'warn');
+    const created = j.createdAt ? fmtDate(j.createdAt) : '';
+    const duration = j.startedAt && j.completedAt ? formatMs(new Date(j.completedAt) - new Date(j.startedAt)) : (j.startedAt ? 'running' : '--');
+    let html = '<div class="card compute-detail-card">';
+    html += '<div class="compute-panel-head"><div><div class="section-title">Job Detail</div><div class="sub">' + esc(j.jobId) + '</div></div><button class="btn btn-sm btn-outline" onclick="$(\'computeJobDetail\').innerHTML=\'\'">Close</button></div>';
+
+    html += '<div class="job-meta-strip">';
+    html += '<span class="badge ' + statusClass + '">' + esc(j.status || 'unknown') + '</span>';
+    html += '<span class="job-meta-item"><small>Type</small>' + esc(j.jobType || j.capability || '--') + '</span>';
+    html += '<span class="job-meta-item"><small>Created</small>' + esc(created) + '</span>';
+    html += '<span class="job-meta-item"><small>Duration</small>' + esc(duration) + '</span>';
+    html += '<span class="job-meta-item"><small>Progress</small>' + esc(j.progressPercent || 0) + '%</span>';
+    if (j.model) html += '<span class="job-meta-item"><small>Model</small>' + esc(j.model) + '</span>';
+    if (j.workerId) html += '<span class="job-meta-item"><small>Worker</small>' + esc(j.workerId) + '</span>';
+    html += '</div>';
+
+    const prompt = j.requestPayload?.prompt || j.requestPayload?.input || '';
+    if (prompt) {
+      html += '<div class="section-title">Prompt</div>';
+      html += '<div class="detail-block"><pre class="value-block structured-text">' + esc(prompt) + '</pre></div>';
+    }
+
+    if (j.result_json) {
+      html += '<div class="section-title">Result</div>';
+      html += '<div class="detail-block">';
+      html += renderExpandableValue(j.result_json, { limit: 1200 });
+      html += '<button class="btn btn-sm btn-outline copy-btn" onclick="copyBlockText(this)">Copy</button>';
+      html += '</div>';
+    } else if (j.errorMessage) {
+      html += '<div class="section-title">Error</div>';
+      html += '<div class="detail-block"><pre class="value-block structured-text error-text">' + esc(j.errorMessage) + '</pre></div>';
+      if (j.errorCategory) {
+        html += '<div class="job-meta-strip"><span class="job-meta-item"><small>Error Category</small>' + esc(j.errorCategory) + '</span></div>';
+      }
+    } else if (j.status === 'completed') {
+      html += '<div class="section-title">Result</div>';
+      html += '<div class="empty">No result recorded</div>';
+    }
+
+    html += '<div class="section-title">Attempts (' + (d.attempts?.length || 0) + ')</div>';
+    if (d.attempts && d.attempts.length) {
+      d.attempts.forEach((a, i) => {
+        const aStatusClass = a.status === 'success' ? 'ok' : (a.status === 'failed' ? 'danger' : 'warn');
+        html += '<details class="detail-block attempt-block"' + (i === d.attempts.length - 1 ? ' open' : '') + '>';
+        html += '<summary><span class="badge ' + aStatusClass + '">' + esc(a.status || 'unknown') + '</span> Attempt ' + (i + 1) + (a.workerId ? ' — ' + esc(a.workerId) : '') + (a.startedAt ? ' — ' + esc(fmtDate(a.startedAt)) : '') + '</summary>';
+        html += renderExpandableValue(a, { limit: 600 });
+        html += '</details>';
+      });
+    } else {
+      html += '<div class="empty">No attempts</div>';
+    }
+
+    html += '<div class="section-title">Artifacts (' + (d.artifacts?.length || 0) + ')</div>';
+    if (d.artifacts && d.artifacts.length) {
+      d.artifacts.forEach((a, i) => {
+        const sizeLabel = a.sizeBytes ? formatBytes(a.sizeBytes) : (a.size_bytes ? formatBytes(a.size_bytes) : '');
+        html += '<details class="detail-block artifact-block"' + (i === 0 ? ' open' : '') + '>';
+        html += '<summary>' + esc(a.name || a.artifactId || 'artifact') + (sizeLabel ? ' (' + esc(sizeLabel) + ')' : '') + (a.artifactType ? ' — ' + esc(a.artifactType) : '') + '</summary>';
+        html += '<div class="detail-block">';
+        html += '<div class="job-meta-strip">';
+        if (a.contentHash || a.content_hash) html += '<span class="job-meta-item"><small>Hash</small><code>' + esc((a.contentHash || a.content_hash || '').slice(0, 16)) + '…</code></span>';
+        if (a.contentType || a.content_type) html += '<span class="job-meta-item"><small>Type</small>' + esc(a.contentType || a.content_type) + '</span>';
+        html += '</div>';
+        if (a.content) {
+          html += renderExpandableValue(a.content, { limit: 800 });
+          html += '<button class="btn btn-sm btn-outline copy-btn" onclick="copyBlockText(this)">Copy</button>';
+        } else {
+          html += '<div class="empty">Content not available inline</div>';
+        }
+        html += '</div>';
+        html += '</details>';
+      });
+    } else {
+      html += '<div class="empty">No artifacts</div>';
+    }
+
+    if (j.progressMessage || j.lastError) {
+      html += '<details class="detail-block">';
+      html += '<summary>Full metadata</summary>';
+      const meta = {};
+      if (j.progressMessage) meta.progressMessage = j.progressMessage;
+      if (j.lastError) meta.lastError = j.lastError;
+      if (j.startedAt) meta.startedAt = j.startedAt;
+      if (j.completedAt) meta.completedAt = j.completedAt;
+      if (j.leaseExpiresAt) meta.leaseExpiresAt = j.leaseExpiresAt;
+      html += renderStructuredValue(meta, { expanded: true });
+      html += '</details>';
+    }
+
+    html += '</div>';
+    el.innerHTML = html;
   }).catch(e=>{
     el.innerHTML = '<div class="agent-err">Failed to load job detail</div>';
   });
