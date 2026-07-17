@@ -7,6 +7,8 @@ docker/data/*
 .opencode/
 opencode.json
 opencode.jsonc
+.mcp.json
+.claude/settings.local.json
 CONTEXT.md
 docs/workplans/
 backups/
@@ -17,5 +19,4 @@ test/test-data-dashboard/
 test/test-data-security/
 test/test-data-structured-tools-security/
 test/test-data-blackbox-lifecycle/
-
 test/spike-openvino-node/

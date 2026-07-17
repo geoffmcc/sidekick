@@ -1,0 +1,40 @@
+{
+  "device": "NPU",
+  "model_dir": "C:\\Users\\geoff\\Projects\\sidekick\\test\\spike-openvino-node\\models\\qwen3-embedding-0.6b-int8-ov",
+  "sequence_length": 512,
+  "warmups": 20,
+  "iterations": 500,
+  "load_ms": 80.84579999922425,
+  "compile_ms": 20880.154499998753,
+  "first_infer_ms": 351.24630000063917,
+  "tokenizer": {
+    "median_ms": 0.7471000008081319,
+    "p95_ms": 1.800135000303271,
+    "p99_ms": 3.239410002206568,
+    "mean_ms": 0.8310273999377387
+  },
+  "inference": {
+    "median_ms": 273.11029999873426,
+    "p95_ms": 274.9232900008792,
+    "p99_ms": 275.8808260014848,
+    "mean_ms": 273.136007199937,
+    "throughput_per_sec": 3.6611796820621847
+  },
+  "end_to_end": {
+    "median_ms": 274.2087000005995,
+    "p95_ms": 276.6606450000836,
+    "p99_ms": 279.11942299924704,
+    "mean_ms": 274.30036020008265,
+    "throughput_per_sec": 3.645638668759206
+  },
+  "memory": {
+    "baseline_rss_mb": 3165.00390625,
+    "final_rss_mb": 3164.97265625,
+    "growth_rss_mb": -0.03125,
+    "baseline_vms_mb": 3103.88671875,
+    "final_vms_mb": 3103.71484375,
+    "growth_vms_mb": -0.171875
+  },
+  "repeat_cosine": 1.0,
+  "embedding_dim": 1024
+}

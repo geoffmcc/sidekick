@@ -1,0 +1,916 @@
+[
+  {
+    "id": "runtime_ports",
+    "query": "Which ports do the Sidekick MCP server, dashboard, and Agent Bridge use?",
+    "targets": [
+      {
+        "source": "README.md",
+        "heading": "Runtime services"
+      }
+    ],
+    "relevant_ids": [
+      "docs:README.md:sidekick-documentation-runtime-services:1",
+      "docs:README.md:sidekick-documentation-runtime-services:2",
+      "docs:README.md:sidekick-documentation-runtime-services:3"
+    ]
+  },
+  {
+    "id": "agent_information_access",
+    "query": "Where should an agent look for authoritative Sidekick operational knowledge?",
+    "targets": [
+      {
+        "source": "README.md",
+        "heading": "Agent Information Access"
+      }
+    ],
+    "relevant_ids": [
+      "docs:README.md:sidekick-documentation-agent-information-access:1",
+      "docs:README.md:sidekick-documentation-agent-information-access:2",
+      "docs:README.md:sidekick-documentation-agent-information-access:3",
+      "docs:README.md:sidekick-documentation-agent-information-access:4",
+      "docs:README.md:sidekick-documentation-agent-information-access:5",
+      "docs:README.md:sidekick-documentation-agent-information-access:6"
+    ]
+  },
+  {
+    "id": "sidekick_core_idea",
+    "query": "What does Sidekick provide to a connected MCP client or assistant?",
+    "targets": [
+      {
+        "source": "overview.md",
+        "heading": "Core idea"
+      }
+    ],
+    "relevant_ids": [
+      "docs:overview.md:overview-core-idea:1",
+      "docs:overview.md:overview-core-idea:2"
+    ]
+  },
+  {
+    "id": "main_components",
+    "query": "What services and major components make up Sidekick?",
+    "targets": [
+      {
+        "source": "overview.md",
+        "heading": "Main components"
+      }
+    ],
+    "relevant_ids": [
+      "docs:overview.md:overview-main-components:1",
+      "docs:overview.md:overview-main-components:2",
+      "docs:overview.md:overview-main-components:3"
+    ]
+  },
+  {
+    "id": "recommended_exposure",
+    "query": "How should a Sidekick server be exposed safely to remote clients?",
+    "targets": [
+      {
+        "source": "overview.md",
+        "heading": "Recommended operating model"
+      }
+    ],
+    "relevant_ids": [
+      "docs:overview.md:overview-recommended-operating-model:1"
+    ]
+  },
+  {
+    "id": "mcp_server_boundary",
+    "query": "What endpoints and responsibilities belong to the MCP server?",
+    "targets": [
+      {
+        "source": "architecture.md",
+        "heading": "MCP server: `src/index.js`"
+      }
+    ],
+    "relevant_ids": [
+      "docs:architecture.md:architecture-service-boundaries-mcp-server-src-index-js:1",
+      "docs:architecture.md:architecture-service-boundaries-mcp-server-src-index-js:2"
+    ]
+  },
+  {
+    "id": "tool_runtime",
+    "query": "Where is the authoritative tool registry and dispatcher implemented?",
+    "targets": [
+      {
+        "source": "architecture.md",
+        "heading": "Tool runtime: `src/tools/`"
+      }
+    ],
+    "relevant_ids": [
+      "docs:architecture.md:architecture-service-boundaries-tool-runtime-src-tools:1",
+      "docs:architecture.md:architecture-service-boundaries-tool-runtime-src-tools:2",
+      "docs:architecture.md:architecture-service-boundaries-tool-runtime-src-tools:3",
+      "docs:architecture.md:architecture-service-boundaries-tool-runtime-src-tools:4"
+    ]
+  },
+  {
+    "id": "evolve_architecture",
+    "query": "How does Evolve analyze workflows and create generated tools?",
+    "targets": [
+      {
+        "source": "architecture.md",
+        "heading": "Evolve and dynamic tools"
+      }
+    ],
+    "relevant_ids": [
+      "docs:architecture.md:architecture-service-boundaries-evolve-and-dynamic-tools:1",
+      "docs:architecture.md:architecture-service-boundaries-evolve-and-dynamic-tools:10",
+      "docs:architecture.md:architecture-service-boundaries-evolve-and-dynamic-tools:11",
+      "docs:architecture.md:architecture-service-boundaries-evolve-and-dynamic-tools:12",
+      "docs:architecture.md:architecture-service-boundaries-evolve-and-dynamic-tools:13",
+      "docs:architecture.md:architecture-service-boundaries-evolve-and-dynamic-tools:2",
+      "docs:architecture.md:architecture-service-boundaries-evolve-and-dynamic-tools:3",
+      "docs:architecture.md:architecture-service-boundaries-evolve-and-dynamic-tools:4",
+      "docs:architecture.md:architecture-service-boundaries-evolve-and-dynamic-tools:5",
+      "docs:architecture.md:architecture-service-boundaries-evolve-and-dynamic-tools:6",
+      "docs:architecture.md:architecture-service-boundaries-evolve-and-dynamic-tools:7",
+      "docs:architecture.md:architecture-service-boundaries-evolve-and-dynamic-tools:8",
+      "docs:architecture.md:architecture-service-boundaries-evolve-and-dynamic-tools:9"
+    ]
+  },
+  {
+    "id": "approval_recovery",
+    "query": "How do platform guards prevent invalid or duplicate execution transitions?",
+    "targets": [
+      {
+        "source": "architecture.md",
+        "heading": "Authoritative execution control: `platformGuard` and `findActiveExecution`"
+      }
+    ],
+    "relevant_ids": [
+      "docs:architecture.md:architecture-service-boundaries-authoritative-execution-control-platformguard-and-findactiveexecution:1",
+      "docs:architecture.md:architecture-service-boundaries-authoritative-execution-control-platformguard-and-findactiveexecution:2",
+      "docs:architecture.md:architecture-service-boundaries-authoritative-execution-control-platformguard-and-findactiveexecution:3",
+      "docs:architecture.md:architecture-service-boundaries-authoritative-execution-control-platformguard-and-findactiveexecution:4"
+    ]
+  },
+  {
+    "id": "capability_rbac",
+    "query": "How are actor capabilities and immutable approval records managed?",
+    "targets": [
+      {
+        "source": "architecture.md",
+        "heading": "Capability/RBAC and immutable change-set approvals"
+      }
+    ],
+    "relevant_ids": [
+      "docs:architecture.md:architecture-service-boundaries-capability-rbac-and-immutable-change-set-approvals:1",
+      "docs:architecture.md:architecture-service-boundaries-capability-rbac-and-immutable-change-set-approvals:2",
+      "docs:architecture.md:architecture-service-boundaries-capability-rbac-and-immutable-change-set-approvals:3",
+      "docs:architecture.md:architecture-service-boundaries-capability-rbac-and-immutable-change-set-approvals:4"
+    ]
+  },
+  {
+    "id": "workflow_engine",
+    "query": "How does Sidekick represent and execute durable multi-step workflows?",
+    "targets": [
+      {
+        "source": "architecture.md",
+        "heading": "Durable workflow engine and isolated runner sessions"
+      }
+    ],
+    "relevant_ids": [
+      "docs:architecture.md:architecture-service-boundaries-durable-workflow-engine-and-isolated-runner-sessions:1",
+      "docs:architecture.md:architecture-service-boundaries-durable-workflow-engine-and-isolated-runner-sessions:2",
+      "docs:architecture.md:architecture-service-boundaries-durable-workflow-engine-and-isolated-runner-sessions:3",
+      "docs:architecture.md:architecture-service-boundaries-durable-workflow-engine-and-isolated-runner-sessions:4"
+    ]
+  },
+  {
+    "id": "project_workspaces",
+    "query": "How do project workspaces isolate configuration, secrets, and resources?",
+    "targets": [
+      {
+        "source": "architecture.md",
+        "heading": "Project workspaces and model registry"
+      }
+    ],
+    "relevant_ids": [
+      "docs:architecture.md:architecture-service-boundaries-project-workspaces-and-model-registry:1",
+      "docs:architecture.md:architecture-service-boundaries-project-workspaces-and-model-registry:2",
+      "docs:architecture.md:architecture-service-boundaries-project-workspaces-and-model-registry:3",
+      "docs:architecture.md:architecture-service-boundaries-project-workspaces-and-model-registry:4"
+    ]
+  },
+  {
+    "id": "backup_records",
+    "query": "How does the platform kernel track backup and restore operations?",
+    "targets": [
+      {
+        "source": "architecture.md",
+        "heading": "Backup/restore and release maturity"
+      }
+    ],
+    "relevant_ids": [
+      "docs:architecture.md:architecture-service-boundaries-backup-restore-and-release-maturity:1",
+      "docs:architecture.md:architecture-service-boundaries-backup-restore-and-release-maturity:2",
+      "docs:architecture.md:architecture-service-boundaries-backup-restore-and-release-maturity:3"
+    ]
+  },
+  {
+    "id": "session_expiry",
+    "query": "What happens to inactive or stale MCP sessions?",
+    "targets": [
+      {
+        "source": "architecture.md",
+        "heading": "Session handling"
+      }
+    ],
+    "relevant_ids": [
+      "docs:architecture.md:architecture-session-handling:1"
+    ]
+  },
+  {
+    "id": "shared_storage",
+    "query": "Where do Sidekick services store shared durable state?",
+    "targets": [
+      {
+        "source": "architecture.md",
+        "heading": "Shared storage"
+      }
+    ],
+    "relevant_ids": [
+      "docs:architecture.md:architecture-shared-storage:1",
+      "docs:architecture.md:architecture-shared-storage:2"
+    ]
+  },
+  {
+    "id": "automatic_memory_config",
+    "query": "Which settings control automatic memory and embeddings?",
+    "targets": [
+      {
+        "source": "configuration.md",
+        "heading": "Automatic Memory"
+      }
+    ],
+    "relevant_ids": [
+      "docs:configuration.md:configuration-automatic-memory:1",
+      "docs:configuration.md:configuration-automatic-memory:2",
+      "docs:configuration.md:configuration-automatic-memory:3",
+      "docs:configuration.md:configuration-automatic-memory:4",
+      "docs:configuration.md:configuration-automatic-memory:5"
+    ]
+  },
+  {
+    "id": "tool_policy_config",
+    "query": "How are Sidekick tool allowlists, blocklists, and risk policies configured?",
+    "targets": [
+      {
+        "source": "configuration.md",
+        "heading": "Security and tool policy"
+      }
+    ],
+    "relevant_ids": [
+      "docs:configuration.md:configuration-security-and-tool-policy:1",
+      "docs:configuration.md:configuration-security-and-tool-policy:10",
+      "docs:configuration.md:configuration-security-and-tool-policy:11",
+      "docs:configuration.md:configuration-security-and-tool-policy:2",
+      "docs:configuration.md:configuration-security-and-tool-policy:3",
+      "docs:configuration.md:configuration-security-and-tool-policy:4",
+      "docs:configuration.md:configuration-security-and-tool-policy:5",
+      "docs:configuration.md:configuration-security-and-tool-policy:6",
+      "docs:configuration.md:configuration-security-and-tool-policy:7",
+      "docs:configuration.md:configuration-security-and-tool-policy:8",
+      "docs:configuration.md:configuration-security-and-tool-policy:9"
+    ]
+  },
+  {
+    "id": "sqlite_schema",
+    "query": "What important data is stored in the Sidekick SQLite schema?",
+    "targets": [
+      {
+        "source": "data-model.md",
+        "heading": "SQLite schema"
+      }
+    ],
+    "relevant_ids": [
+      "docs:data-model.md:data-model-sqlite-schema:1",
+      "docs:data-model.md:data-model-sqlite-schema:2",
+      "docs:data-model.md:data-model-sqlite-schema:3"
+    ]
+  },
+  {
+    "id": "memory_conflicts",
+    "query": "How does Sidekick detect conflicting memories and supersede old facts?",
+    "targets": [
+      {
+        "source": "data-model.md",
+        "heading": "Conflict Detection and Supersession"
+      }
+    ],
+    "relevant_ids": [
+      "docs:data-model.md:data-model-structured-memory-conflict-detection-and-supersession:1",
+      "docs:data-model.md:data-model-structured-memory-conflict-detection-and-supersession:2"
+    ]
+  },
+  {
+    "id": "memory_lifecycle",
+    "query": "How are memories expired, disabled, restored, or otherwise managed over time?",
+    "targets": [
+      {
+        "source": "data-model.md",
+        "heading": "Memory Lifecycle"
+      }
+    ],
+    "relevant_ids": [
+      "docs:data-model.md:data-model-structured-memory-memory-lifecycle:1",
+      "docs:data-model.md:data-model-structured-memory-memory-lifecycle:2"
+    ]
+  },
+  {
+    "id": "memory_sync",
+    "query": "How are structured memories synchronized between Sidekick machines?",
+    "targets": [
+      {
+        "source": "data-model.md",
+        "heading": "Cross-Machine Sync"
+      }
+    ],
+    "relevant_ids": [
+      "docs:data-model.md:data-model-structured-memory-cross-machine-sync:1",
+      "docs:data-model.md:data-model-structured-memory-cross-machine-sync:2"
+    ]
+  },
+  {
+    "id": "knowledge_base",
+    "query": "What is the Sidekick knowledge base used for?",
+    "targets": [
+      {
+        "source": "data-model.md",
+        "heading": "Knowledge base"
+      }
+    ],
+    "relevant_ids": [
+      "docs:data-model.md:data-model-knowledge-base:1"
+    ]
+  },
+  {
+    "id": "backup_guidance",
+    "query": "What files and directories must be included in a Sidekick backup?",
+    "targets": [
+      {
+        "source": "data-model.md",
+        "heading": "Backup guidance"
+      }
+    ],
+    "relevant_ids": [
+      "docs:data-model.md:data-model-backup-guidance:1"
+    ]
+  },
+  {
+    "id": "durable_active_zero",
+    "query": "Why could the dashboard show many Operational memories but zero Durable Active memories?",
+    "targets": [
+      {
+        "source": "memory-intelligence-findings.md",
+        "heading": "Dashboard Number Explanation"
+      }
+    ],
+    "relevant_ids": [
+      "docs:memory-intelligence-findings.md:memory-intelligence-verified-findings-dashboard-number-explanation:1",
+      "docs:memory-intelligence-findings.md:memory-intelligence-verified-findings-dashboard-number-explanation:2"
+    ]
+  },
+  {
+    "id": "memory_types",
+    "query": "What structured memory types does Sidekick support?",
+    "targets": [
+      {
+        "source": "structured-memory-plan.md",
+        "heading": "Memory Types"
+      }
+    ],
+    "relevant_ids": [
+      "docs:structured-memory-plan.md:structured-memory-and-memory-intelligence-status-memory-types:1"
+    ]
+  },
+  {
+    "id": "memory_classes",
+    "query": "What are semantic, episodic, procedural, working, and prospective memory classes?",
+    "targets": [
+      {
+        "source": "structured-memory-plan.md",
+        "heading": "Memory Classes"
+      }
+    ],
+    "relevant_ids": [
+      "docs:structured-memory-plan.md:structured-memory-and-memory-intelligence-status-memory-classes:1",
+      "docs:structured-memory-plan.md:structured-memory-and-memory-intelligence-status-memory-classes:2"
+    ]
+  },
+  {
+    "id": "memory_remaining_work",
+    "query": "What work remains for Sidekick memory intelligence?",
+    "targets": [
+      {
+        "source": "structured-memory-plan.md",
+        "heading": "Remaining Logical Steps"
+      }
+    ],
+    "relevant_ids": [
+      "docs:structured-memory-plan.md:structured-memory-and-memory-intelligence-status-remaining-logical-steps:1"
+    ]
+  },
+  {
+    "id": "agent_task_lifecycle",
+    "query": "How does an Agent Bridge task move from request through tool calls to completion?",
+    "targets": [
+      {
+        "source": "agent-bridge.md",
+        "heading": "Task lifecycle"
+      }
+    ],
+    "relevant_ids": [
+      "docs:agent-bridge.md:agent-bridge-task-lifecycle:1"
+    ]
+  },
+  {
+    "id": "agent_conversation_retention",
+    "query": "Where are Agent Bridge conversations and transcripts retained?",
+    "targets": [
+      {
+        "source": "agent-bridge.md",
+        "heading": "Conversation retention"
+      }
+    ],
+    "relevant_ids": [
+      "docs:agent-bridge.md:agent-bridge-conversation-retention:1"
+    ]
+  },
+  {
+    "id": "agent_safety_limits",
+    "query": "What prevents the Agent Bridge from looping forever?",
+    "targets": [
+      {
+        "source": "agent-bridge.md",
+        "heading": "Safety limits"
+      }
+    ],
+    "relevant_ids": [
+      "docs:agent-bridge.md:agent-bridge-safety-limits:1"
+    ]
+  },
+  {
+    "id": "compute_enrollment",
+    "query": "How are distributed Compute workers enrolled and authenticated?",
+    "targets": [
+      {
+        "source": "compute.md",
+        "heading": "Enrollment And Workers"
+      }
+    ],
+    "relevant_ids": [
+      "docs:compute.md:sidekick-compute-enrollment-and-workers:1",
+      "docs:compute.md:sidekick-compute-enrollment-and-workers:2",
+      "docs:compute.md:sidekick-compute-enrollment-and-workers:3",
+      "docs:compute.md:sidekick-compute-enrollment-and-workers:4",
+      "docs:compute.md:sidekick-compute-enrollment-and-workers:5"
+    ]
+  },
+  {
+    "id": "compute_leases",
+    "query": "How are Compute jobs claimed, leased, retried, and recovered?",
+    "targets": [
+      {
+        "source": "compute.md",
+        "heading": "Jobs And Leasing"
+      }
+    ],
+    "relevant_ids": [
+      "docs:compute.md:sidekick-compute-jobs-and-leasing:1"
+    ]
+  },
+  {
+    "id": "compute_results",
+    "query": "How does Sidekick Compute handle results and artifacts?",
+    "targets": [
+      {
+        "source": "compute.md",
+        "heading": "Results And Artifacts"
+      }
+    ],
+    "relevant_ids": [
+      "docs:compute.md:sidekick-compute-results-and-artifacts:1",
+      "docs:compute.md:sidekick-compute-results-and-artifacts:2"
+    ]
+  },
+  {
+    "id": "compute_cancellation",
+    "query": "What happens when a Compute job is cancelled or a worker disappears?",
+    "targets": [
+      {
+        "source": "compute.md",
+        "heading": "Cancellation And Recovery"
+      }
+    ],
+    "relevant_ids": [
+      "docs:compute.md:sidekick-compute-cancellation-and-recovery:1"
+    ]
+  },
+  {
+    "id": "compute_trust",
+    "query": "What are the trust boundaries for Sidekick Compute workers?",
+    "targets": [
+      {
+        "source": "compute.md",
+        "heading": "Trust Boundaries"
+      }
+    ],
+    "relevant_ids": [
+      "docs:compute.md:sidekick-compute-trust-boundaries:1",
+      "docs:compute.md:sidekick-compute-trust-boundaries:2"
+    ]
+  },
+  {
+    "id": "dashboard_auth",
+    "query": "How is the Sidekick dashboard authenticated and protected?",
+    "targets": [
+      {
+        "source": "dashboard.md",
+        "heading": "Authentication and protections"
+      }
+    ],
+    "relevant_ids": [
+      "docs:dashboard.md:dashboard-authentication-and-protections:1",
+      "docs:dashboard.md:dashboard-authentication-and-protections:2"
+    ]
+  },
+  {
+    "id": "dashboard_data_editing",
+    "query": "What persistent data can be inspected or edited from the dashboard?",
+    "targets": [
+      {
+        "source": "dashboard.md",
+        "heading": "Data editing"
+      }
+    ],
+    "relevant_ids": [
+      "docs:dashboard.md:dashboard-data-editing:1"
+    ]
+  },
+  {
+    "id": "blackbox_capture",
+    "query": "How do I capture a time-limited incident bundle with Sidekick?",
+    "targets": [
+      {
+        "source": "blackbox.md",
+        "heading": "MCP Actions"
+      }
+    ],
+    "relevant_ids": [
+      "docs:blackbox.md:black-box-incident-explorer-mcp-actions:1",
+      "docs:blackbox.md:black-box-incident-explorer-mcp-actions:2"
+    ]
+  },
+  {
+    "id": "blackbox_retention",
+    "query": "How are Black Box incident captures retained and cleaned up?",
+    "targets": [
+      {
+        "source": "blackbox.md",
+        "heading": "Retention"
+      }
+    ],
+    "relevant_ids": [
+      "docs:blackbox.md:black-box-incident-explorer-retention:1",
+      "docs:blackbox.md:black-box-incident-explorer-retention:2",
+      "docs:blackbox.md:black-box-incident-explorer-retention:3"
+    ]
+  },
+  {
+    "id": "blackbox_security",
+    "query": "What is the security model for Black Box incident data?",
+    "targets": [
+      {
+        "source": "blackbox.md",
+        "heading": "Security Model"
+      }
+    ],
+    "relevant_ids": [
+      "docs:blackbox.md:black-box-incident-explorer-security-model:1"
+    ]
+  },
+  {
+    "id": "predict_evidence",
+    "query": "What evidence sources does Sidekick Predict evaluate?",
+    "targets": [
+      {
+        "source": "predict.md",
+        "heading": "Evidence Sources"
+      }
+    ],
+    "relevant_ids": [
+      "docs:predict.md:predict-evidence-sources:1"
+    ]
+  },
+  {
+    "id": "predict_confidence",
+    "query": "How does Sidekick assign confidence to predictions?",
+    "targets": [
+      {
+        "source": "predict.md",
+        "heading": "Confidence"
+      }
+    ],
+    "relevant_ids": [
+      "docs:predict.md:predict-confidence:1"
+    ]
+  },
+  {
+    "id": "mcp_authentication",
+    "query": "How is the MCP endpoint authenticated?",
+    "targets": [
+      {
+        "source": "security.md",
+        "heading": "MCP authentication"
+      }
+    ],
+    "relevant_ids": [
+      "docs:security.md:security-mcp-authentication:1"
+    ]
+  },
+  {
+    "id": "filesystem_guardrails",
+    "query": "How does Sidekick prevent tools from escaping allowed filesystem paths?",
+    "targets": [
+      {
+        "source": "security.md",
+        "heading": "Filesystem path guardrails"
+      }
+    ],
+    "relevant_ids": [
+      "docs:security.md:security-filesystem-path-guardrails:1",
+      "docs:security.md:security-filesystem-path-guardrails:2",
+      "docs:security.md:security-filesystem-path-guardrails:3"
+    ]
+  },
+  {
+    "id": "database_query_safety",
+    "query": "What protections apply to database queries executed through Sidekick?",
+    "targets": [
+      {
+        "source": "security.md",
+        "heading": "Database query safety"
+      }
+    ],
+    "relevant_ids": [
+      "docs:security.md:security-database-query-safety:1"
+    ]
+  },
+  {
+    "id": "redaction",
+    "query": "How does Sidekick redact secrets from logs and returned output?",
+    "targets": [
+      {
+        "source": "security.md",
+        "heading": "Redaction"
+      }
+    ],
+    "relevant_ids": [
+      "docs:security.md:security-redaction:1"
+    ]
+  },
+  {
+    "id": "secret_storage",
+    "query": "Where should credentials and other secrets be stored?",
+    "targets": [
+      {
+        "source": "security.md",
+        "heading": "Secret storage"
+      }
+    ],
+    "relevant_ids": [
+      "docs:security.md:security-secret-storage:1"
+    ]
+  },
+  {
+    "id": "approval_queue",
+    "query": "How does the approval queue protect risky tool operations?",
+    "targets": [
+      {
+        "source": "security.md",
+        "heading": "Approval queue"
+      }
+    ],
+    "relevant_ids": [
+      "docs:security.md:security-approval-queue:1",
+      "docs:security.md:security-approval-queue:2",
+      "docs:security.md:security-approval-queue:3",
+      "docs:security.md:security-approval-queue:4"
+    ]
+  },
+  {
+    "id": "service_commands",
+    "query": "What commands restart Sidekick and inspect service status or logs?",
+    "targets": [
+      {
+        "source": "operations.md",
+        "heading": "Service commands"
+      }
+    ],
+    "relevant_ids": [
+      "docs:operations.md:operations-service-commands:1",
+      "docs:operations.md:operations-service-commands:2"
+    ]
+  },
+  {
+    "id": "health_checks",
+    "query": "How do I check whether the Sidekick services are healthy?",
+    "targets": [
+      {
+        "source": "operations.md",
+        "heading": "Health checks"
+      }
+    ],
+    "relevant_ids": [
+      "docs:operations.md:operations-health-checks:1"
+    ]
+  },
+  {
+    "id": "dashboard_api_failure",
+    "query": "What should I check when the dashboard loads but its API calls fail?",
+    "targets": [
+      {
+        "source": "operations.md",
+        "heading": "Dashboard loads but API calls fail"
+      }
+    ],
+    "relevant_ids": [
+      "docs:operations.md:operations-common-problems-dashboard-loads-but-api-calls-fail:1"
+    ]
+  },
+  {
+    "id": "agent_not_progressing",
+    "query": "What should I troubleshoot when Agent Bridge tasks do not progress?",
+    "targets": [
+      {
+        "source": "operations.md",
+        "heading": "Agent tasks do not progress"
+      }
+    ],
+    "relevant_ids": [
+      "docs:operations.md:operations-common-problems-agent-tasks-do-not-progress:1"
+    ]
+  },
+  {
+    "id": "add_builtin_tool",
+    "query": "What is the supported process for adding or migrating a built-in tool?",
+    "targets": [
+      {
+        "source": "development.md",
+        "heading": "Adding or migrating a tool"
+      }
+    ],
+    "relevant_ids": [
+      "docs:development.md:development-adding-or-migrating-a-tool:1",
+      "docs:development.md:development-adding-or-migrating-a-tool:2"
+    ]
+  },
+  {
+    "id": "development_safety",
+    "query": "What implementation safety practices should tool developers follow?",
+    "targets": [
+      {
+        "source": "development.md",
+        "heading": "Implementation notes"
+      }
+    ],
+    "relevant_ids": [
+      "docs:development.md:development-implementation-notes:1",
+      "docs:development.md:development-implementation-notes:2"
+    ]
+  },
+  {
+    "id": "tool_dispatcher",
+    "query": "What steps does the centralized tool dispatcher perform for each invocation?",
+    "targets": [
+      {
+        "source": "tool-architecture.md",
+        "heading": "Dispatcher Pipeline"
+      }
+    ],
+    "relevant_ids": [
+      "docs:tool-architecture.md:tool-architecture-dispatcher-pipeline:1",
+      "docs:tool-architecture.md:tool-architecture-dispatcher-pipeline:2"
+    ]
+  },
+  {
+    "id": "tool_risk",
+    "query": "How do tool risk levels interact with policy and approval requirements?",
+    "targets": [
+      {
+        "source": "tool-architecture.md",
+        "heading": "Risk Behavior"
+      }
+    ],
+    "relevant_ids": [
+      "docs:tool-architecture.md:tool-architecture-risk-behavior:1"
+    ]
+  },
+  {
+    "id": "persistent_context_tool",
+    "query": "Which Sidekick tools should an agent use for persistent project memory and recall?",
+    "targets": [
+      {
+        "source": "tool-usage-guide.md",
+        "heading": "Persistent memory"
+      }
+    ],
+    "relevant_ids": [
+      "docs:tool-usage-guide.md:tool-usage-guide-persistent-memory:1",
+      "docs:tool-usage-guide.md:tool-usage-guide-persistent-memory:2",
+      "docs:tool-usage-guide.md:tool-usage-guide-persistent-memory:3",
+      "docs:tool-usage-guide.md:tool-usage-guide-persistent-memory:4",
+      "docs:tool-usage-guide.md:tool-usage-guide-persistent-memory:5",
+      "docs:tool-usage-guide.md:tool-usage-guide-persistent-memory:6",
+      "docs:tool-usage-guide.md:tool-usage-guide-persistent-memory:7",
+      "docs:tool-usage-guide.md:tool-usage-guide-persistent-memory:8"
+    ]
+  },
+  {
+    "id": "safe_experimentation",
+    "query": "Which tools provide backup, rollback, and before-and-after snapshots for risky experiments?",
+    "targets": [
+      {
+        "source": "tool-usage-guide.md",
+        "heading": "Safe experimentation"
+      }
+    ],
+    "relevant_ids": [
+      "docs:tool-usage-guide.md:tool-usage-guide-safe-experimentation:1"
+    ]
+  },
+  {
+    "id": "ollama_default",
+    "query": "What local Ollama model is recommended by default for Sidekick?",
+    "targets": [
+      {
+        "source": "ollama.md",
+        "heading": "Recommended Default Model"
+      }
+    ],
+    "relevant_ids": [
+      "docs:ollama.md:ollama-setup-recommended-default-model:1"
+    ]
+  },
+  {
+    "id": "ollama_running",
+    "query": "How do I see which Ollama models are installed and currently running?",
+    "targets": [
+      {
+        "source": "ollama.md",
+        "heading": "Confirm Installed Models"
+      },
+      {
+        "source": "ollama.md",
+        "heading": "Show Running Models"
+      }
+    ],
+    "relevant_ids": [
+      "docs:ollama.md:ollama-setup-confirm-installed-models:1",
+      "docs:ollama.md:ollama-setup-show-running-models:1"
+    ]
+  },
+  {
+    "id": "deployment_scripts",
+    "query": "How do the supplied deployment scripts install Sidekick?",
+    "targets": [
+      {
+        "source": "installation.md",
+        "heading": "Deployment scripts"
+      }
+    ],
+    "relevant_ids": [
+      "docs:installation.md:installation-and-deployment-deployment-scripts:1",
+      "docs:installation.md:installation-and-deployment-deployment-scripts:2"
+    ]
+  },
+  {
+    "id": "mcp_client_config",
+    "query": "What URL and bearer-token configuration should an MCP client use?",
+    "targets": [
+      {
+        "source": "installation.md",
+        "heading": "MCP client configuration"
+      }
+    ],
+    "relevant_ids": [
+      "docs:installation.md:installation-and-deployment-mcp-client-configuration:1",
+      "docs:installation.md:installation-and-deployment-mcp-client-configuration:2"
+    ]
+  },
+  {
+    "id": "firewall_exposure",
+    "query": "Which Sidekick ports should be exposed through the firewall?",
+    "targets": [
+      {
+        "source": "installation.md",
+        "heading": "Firewall and exposure"
+      }
+    ],
+    "relevant_ids": [
+      "docs:installation.md:installation-and-deployment-firewall-and-exposure:1"
+    ]
+  }
+]

@@ -1,0 +1,24 @@
+{
+  "python": "3.12.13 (main, Jun 23 2026, 15:23:43) [MSC v.1944 64 bit (AMD64)]",
+  "python_executable": "C:\\Users\\geoff\\Projects\\sidekick\\test\\spike-openvino-python\\.venv\\Scripts\\python.exe",
+  "model_dir": "C:\\Users\\geoff\\Projects\\sidekick\\test\\spike-openvino-node\\models\\qwen3-embedding-0.6b-int8-ov",
+  "sequence_length": 512,
+  "warmups": 5,
+  "iterations": 50,
+  "gc_every": 1,
+  "timeout_ms": 900000,
+  "devices": {
+    "CPU": {
+      "status": "pass",
+      "code": 0,
+      "timed_out": false,
+      "stderr_tail": ""
+    },
+    "NPU": {
+      "status": "pass",
+      "code": 0,
+      "timed_out": false,
+      "stderr_tail": ""
+    }
+  }
+}

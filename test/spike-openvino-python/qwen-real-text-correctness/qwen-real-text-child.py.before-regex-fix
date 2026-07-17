@@ -1,0 +1,387 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import openvino as ov
+from transformers import AutoTokenizer
+
+
+TASK = (
+    "Given a user query, retrieve the most relevant passage that answers "
+    "the query or contains the needed technical information"
+)
+
+OFFICIAL_QUERIES = [
+    "What is the capital of China?",
+    "Explain gravity",
+]
+
+OFFICIAL_DOCUMENTS = [
+    "The capital of China is Beijing.",
+    (
+        "Gravity is a force that attracts two bodies towards each other. "
+        "It gives weight to physical objects and is responsible for the "
+        "movement of planets around the sun."
+    ),
+]
+
+SIDEKICK_QUERIES = [
+    "How do I configure VLAN routing in OpenWrt?",
+    "How can Sidekick avoid saving duplicate memories?",
+    "Why should OpenVINO inference run in a supervised helper process?",
+    "Why do my Samba shares reconnect with a password error after working earlier?",
+]
+
+SIDEKICK_DOCUMENTS = [
+    (
+        "Configure inter-VLAN routing on OpenWrt by creating the VLAN interfaces, "
+        "assigning firewall zones, and adding only the required forwarding rules."
+    ),
+    (
+        "Sidekick can compare the embedding of a proposed memory with existing "
+        "memory vectors and reject or merge high-similarity near duplicates."
+    ),
+    (
+        "A supervised OpenVINO helper isolates native runtime failures from the "
+        "main worker and allows the parent to terminate a hung inference process."
+    ),
+    (
+        "Persistent Samba mapping failures can result from stale Windows SMB "
+        "sessions or cached credentials even when the saved password is correct."
+    ),
+    "Chocolate cake is commonly covered with buttercream frosting.",
+    "The capital of France is Paris.",
+    "A graphics card renders images and can accelerate large language models.",
+    "A teapot was found in the woods during a historical family disappearance.",
+]
+
+SIDEKICK_EXPECTED_DOCS = [0, 1, 2, 3]
+
+
+def print_metric(name: str, value: Any) -> None:
+    print(f"{name}={value}", flush=True)
+
+
+def detailed_instruction(query: str) -> str:
+    # Exact format documented by the Qwen model card.
+    return f"Instruct: {TASK}\nQuery:{query}"
+
+
+def l2_normalize(vector: np.ndarray) -> np.ndarray:
+    vector = np.asarray(vector, dtype=np.float32)
+    norm = float(np.linalg.norm(vector))
+    if not math.isfinite(norm) or norm <= 0.0:
+        raise RuntimeError(f"Invalid embedding norm: {norm}")
+    return vector / norm
+
+
+def cosine_matrix(left: np.ndarray, right: np.ndarray) -> np.ndarray:
+    return np.asarray(left, dtype=np.float32) @ np.asarray(right, dtype=np.float32).T
+
+
+def get_port_names(model: ov.Model) -> list[str]:
+    names: list[str] = []
+    for index, port in enumerate(model.inputs):
+        try:
+            name = port.get_any_name()
+        except Exception:
+            name = f"input_{index}"
+        names.append(name)
+    return names
+
+
+def find_input_mapping(model: ov.Model) -> dict[str, ov.Output]:
+    mapping: dict[str, ov.Output] = {}
+    for index, port in enumerate(model.inputs):
+        try:
+            names = set(port.get_names())
+        except Exception:
+            names = set()
+        try:
+            names.add(port.get_any_name())
+        except Exception:
+            pass
+
+        lowered = {name.lower(): name for name in names}
+        if "input_ids" in lowered:
+            mapping["input_ids"] = port
+        if "attention_mask" in lowered:
+            mapping["attention_mask"] = port
+
+        # Fallback for the known two-input Qwen IR, but only after recording names.
+        if not names:
+            if index == 0:
+                mapping.setdefault("input_ids", port)
+            elif index == 1:
+                mapping.setdefault("attention_mask", port)
+
+    if "input_ids" not in mapping or "attention_mask" not in mapping:
+        names = get_port_names(model)
+        raise RuntimeError(
+            "Could not identify input_ids and attention_mask. "
+            f"Observed model inputs: {names}"
+        )
+    return mapping
+
+
+def tokenize_one(tokenizer, text: str, sequence_length: int) -> dict[str, np.ndarray]:
+    encoded = tokenizer(
+        text,
+        padding="max_length",
+        truncation=True,
+        max_length=sequence_length,
+        return_attention_mask=True,
+        return_tensors="np",
+    )
+    if "input_ids" not in encoded or "attention_mask" not in encoded:
+        raise RuntimeError(f"Tokenizer output keys are incomplete: {list(encoded.keys())}")
+
+    input_ids = np.asarray(encoded["input_ids"], dtype=np.int64)
+    attention_mask = np.asarray(encoded["attention_mask"], dtype=np.int64)
+
+    expected = (1, sequence_length)
+    if input_ids.shape != expected or attention_mask.shape != expected:
+        raise RuntimeError(
+            f"Unexpected tokenizer shapes: input_ids={input_ids.shape}, "
+            f"attention_mask={attention_mask.shape}, expected={expected}"
+        )
+    if attention_mask[0, -1] != 1:
+        raise RuntimeError(
+            "Expected left-padding with a real final token, but attention_mask[-1] != 1"
+        )
+    return {"input_ids": input_ids, "attention_mask": attention_mask}
+
+
+def pool_last_token(hidden: np.ndarray, attention_mask: np.ndarray) -> np.ndarray:
+    hidden = np.asarray(hidden, dtype=np.float32)
+    if hidden.ndim != 3 or hidden.shape[0] != 1:
+        raise RuntimeError(f"Unexpected hidden-state shape: {hidden.shape}")
+
+    if bool(np.all(attention_mask[:, -1] == 1)):
+        pooled = hidden[:, -1, :]
+    else:
+        sequence_lengths = attention_mask.sum(axis=1) - 1
+        pooled = hidden[np.arange(hidden.shape[0]), sequence_lengths]
+
+    if pooled.shape != (1, hidden.shape[-1]):
+        raise RuntimeError(f"Unexpected pooled shape: {pooled.shape}")
+    return l2_normalize(pooled[0])
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("model_dir")
+    parser.add_argument("device", choices=["CPU", "NPU"])
+    parser.add_argument("sequence_length", type=int, nargs="?", default=512)
+    parser.add_argument("result_dir", nargs="?", default="probe-results")
+    args = parser.parse_args()
+
+    model_dir = Path(args.model_dir).resolve()
+    model_xml = model_dir / "openvino_model.xml"
+    result_dir = Path(args.result_dir).resolve()
+    result_dir.mkdir(parents=True, exist_ok=True)
+    result_file = result_dir / f"real-text-{args.device.lower()}-{args.sequence_length}.json"
+
+    if not model_xml.is_file():
+        raise FileNotFoundError(f"Missing OpenVINO model: {model_xml}")
+
+    print_metric("TARGET", args.device)
+    print_metric("PYTHON", sys.version.replace("\n", " "))
+    print_metric("OPENVINO", ov.__version__)
+    print_metric("MODEL", str(model_dir))
+    print_metric("SEQUENCE_LENGTH", args.sequence_length)
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        str(model_dir),
+        local_files_only=True,
+        trust_remote_code=False,
+        use_fast=True,
+        padding_side="left",
+    )
+    tokenizer.padding_side = "left"
+
+    print_metric("TOKENIZER_CLASS", tokenizer.__class__.__name__)
+    print_metric("TOKENIZER_FAST", bool(getattr(tokenizer, "is_fast", False)))
+    print_metric("TOKENIZER_PADDING_SIDE", tokenizer.padding_side)
+    print_metric("TOKENIZER_EOS_ID", tokenizer.eos_token_id)
+    print_metric("TOKENIZER_PAD_ID", tokenizer.pad_token_id)
+
+    core = ov.Core()
+    print_metric("DEVICES", ",".join(core.available_devices))
+
+    load_start = time.perf_counter()
+    model = core.read_model(str(model_xml))
+    load_ms = (time.perf_counter() - load_start) * 1000.0
+
+    input_mapping = find_input_mapping(model)
+    input_names = get_port_names(model)
+    print_metric("MODEL_INPUT_NAMES", json.dumps(input_names))
+    print_metric("MODEL_OUTPUTS", len(model.outputs))
+
+    model.reshape(
+        {
+            input_mapping["input_ids"]: [1, args.sequence_length],
+            input_mapping["attention_mask"]: [1, args.sequence_length],
+        }
+    )
+
+    compile_start = time.perf_counter()
+    compiled = core.compile_model(model, args.device)
+    compile_ms = (time.perf_counter() - compile_start) * 1000.0
+    request = compiled.create_infer_request()
+
+    compiled_names = []
+    for i, port in enumerate(compiled.inputs):
+        try:
+            compiled_names.append(port.get_any_name())
+        except Exception:
+            compiled_names.append(f"input_{i}")
+    print_metric("COMPILED_INPUT_NAMES", json.dumps(compiled_names))
+
+    texts = (
+        [detailed_instruction(q) for q in OFFICIAL_QUERIES]
+        + OFFICIAL_DOCUMENTS
+        + [detailed_instruction(q) for q in SIDEKICK_QUERIES]
+        + SIDEKICK_DOCUMENTS
+    )
+
+    records: list[dict[str, Any]] = []
+    embeddings: list[np.ndarray] = []
+
+    for index, text in enumerate(texts):
+        tokens = tokenize_one(tokenizer, text, args.sequence_length)
+        infer_inputs = {
+            input_mapping["input_ids"].get_any_name(): tokens["input_ids"],
+            input_mapping["attention_mask"].get_any_name(): tokens["attention_mask"],
+        }
+
+        start = time.perf_counter()
+        outputs = request.infer(infer_inputs, share_inputs=False, share_outputs=False)
+        infer_ms = (time.perf_counter() - start) * 1000.0
+
+        # This model has one output: last hidden state [1, sequence, 1024].
+        output_value = next(iter(outputs.values()))
+        hidden = np.asarray(output_value, dtype=np.float32)
+        embedding = pool_last_token(hidden, tokens["attention_mask"])
+
+        if not np.all(np.isfinite(embedding)):
+            raise RuntimeError(f"Non-finite values in embedding {index}")
+
+        embeddings.append(embedding)
+        records.append(
+            {
+                "index": index,
+                "text": text,
+                "token_count": int(tokens["attention_mask"].sum()),
+                "input_ids_first_16": tokens["input_ids"][0, :16].tolist(),
+                "input_ids_last_16": tokens["input_ids"][0, -16:].tolist(),
+                "attention_mask_first_16": tokens["attention_mask"][0, :16].tolist(),
+                "attention_mask_last_16": tokens["attention_mask"][0, -16:].tolist(),
+                "infer_ms": infer_ms,
+                "embedding_norm": float(np.linalg.norm(embedding)),
+                "embedding_first_8": embedding[:8].tolist(),
+            }
+        )
+        print_metric(
+            f"TEXT_{index}",
+            json.dumps(
+                {
+                    "tokens": records[-1]["token_count"],
+                    "infer_ms": round(infer_ms, 3),
+                    "norm": round(records[-1]["embedding_norm"], 9),
+                },
+                separators=(",", ":"),
+            ),
+        )
+
+    all_embeddings = np.stack(embeddings)
+
+    official_q = all_embeddings[0:2]
+    official_d = all_embeddings[2:4]
+    sidekick_q_start = 4
+    sidekick_q_end = sidekick_q_start + len(SIDEKICK_QUERIES)
+    sidekick_d_start = sidekick_q_end
+    sidekick_q = all_embeddings[sidekick_q_start:sidekick_q_end]
+    sidekick_d = all_embeddings[sidekick_d_start:]
+
+    official_scores = cosine_matrix(official_q, official_d)
+    sidekick_scores = cosine_matrix(sidekick_q, sidekick_d)
+
+    official_top = np.argmax(official_scores, axis=1).tolist()
+    sidekick_top = np.argmax(sidekick_scores, axis=1).tolist()
+    official_expected = [0, 1]
+
+    official_pass = official_top == official_expected
+    sidekick_pass = sidekick_top == SIDEKICK_EXPECTED_DOCS
+
+    print_metric("OFFICIAL_SCORE_MATRIX", json.dumps(official_scores.tolist()))
+    print_metric("OFFICIAL_TOP_DOCS", json.dumps(official_top))
+    print_metric("OFFICIAL_EXPECTED_DOCS", json.dumps(official_expected))
+    print_metric("OFFICIAL_RANKING_PASS", str(official_pass).lower())
+
+    print_metric("SIDEKICK_SCORE_MATRIX", json.dumps(sidekick_scores.tolist()))
+    print_metric("SIDEKICK_TOP_DOCS", json.dumps(sidekick_top))
+    print_metric("SIDEKICK_EXPECTED_DOCS", json.dumps(SIDEKICK_EXPECTED_DOCS))
+    print_metric("SIDEKICK_RANKING_PASS", str(sidekick_pass).lower())
+
+    result = {
+        "device": args.device,
+        "python": sys.version,
+        "openvino": ov.__version__,
+        "model_dir": str(model_dir),
+        "sequence_length": args.sequence_length,
+        "load_ms": load_ms,
+        "compile_ms": compile_ms,
+        "task_instruction": TASK,
+        "tokenizer": {
+            "class": tokenizer.__class__.__name__,
+            "is_fast": bool(getattr(tokenizer, "is_fast", False)),
+            "padding_side": tokenizer.padding_side,
+            "eos_token_id": tokenizer.eos_token_id,
+            "pad_token_id": tokenizer.pad_token_id,
+        },
+        "records": records,
+        "embeddings": all_embeddings.tolist(),
+        "official": {
+            "queries": OFFICIAL_QUERIES,
+            "documents": OFFICIAL_DOCUMENTS,
+            "scores": official_scores.tolist(),
+            "top_docs": official_top,
+            "expected_docs": official_expected,
+            "pass": official_pass,
+        },
+        "sidekick": {
+            "queries": SIDEKICK_QUERIES,
+            "documents": SIDEKICK_DOCUMENTS,
+            "scores": sidekick_scores.tolist(),
+            "top_docs": sidekick_top,
+            "expected_docs": SIDEKICK_EXPECTED_DOCS,
+            "pass": sidekick_pass,
+        },
+    }
+    result_file.write_text(json.dumps(result, indent=2), encoding="utf-8")
+
+    print_metric("LOAD_MS", f"{load_ms:.3f}")
+    print_metric("COMPILE_MS", f"{compile_ms:.3f}")
+    print_metric("RESULT", str(result_file))
+
+    if not official_pass or not sidekick_pass:
+        print("RANKING_WARNING=One or more expected top-1 rankings did not pass.", flush=True)
+    print("PASS", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        print(f"ERROR={type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        raise
