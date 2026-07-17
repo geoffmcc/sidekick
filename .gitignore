@@ -11,3 +11,11 @@ CONTEXT.md
 docs/workplans/
 backups/
 version.json
+test/test-data-compute/
+test/test-data-compute-protocol/
+test/test-data-dashboard/
+test/test-data-security/
+test/test-data-structured-tools-security/
+test/test-data-blackbox-lifecycle/
+
+test/spike-openvino-node/
