@@ -1,5 +1,5 @@
-const SUPPORTED_JOB_TYPES = Object.freeze(["chat", "generate", "embeddings"]);
-const SUPPORTED_EXECUTORS = Object.freeze(["mock.inference", "ollama.inference"]);
+const SUPPORTED_JOB_TYPES = Object.freeze(["chat", "generate", "embeddings", "text_embedding"]);
+const SUPPORTED_EXECUTORS = Object.freeze(["mock.inference", "ollama.inference", "openvino.text_embedding"]);
 const PROTOCOL_VERSION = "1";
 const MAX_PAYLOAD_BYTES = 64 * 1024;
 const MAX_STRING_LENGTH = 8 * 1024;

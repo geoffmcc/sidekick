@@ -1,0 +1,12 @@
+# Pinned dependencies for Sidekick OpenVINO NPU Helper
+# Install in a clean Python 3.12.13 environment.
+#
+# transformers 4.57.6 is the version proven by the accepted real-text
+# correctness spike (see docs/adr-openvino-integration.md and
+# test/spike-openvino-python/qwen-real-text-correctness/README.txt). It also
+# ships a tokenizers runtime new enough to parse the approved Qwen3-Embedding
+# tokenizer.json; transformers 4.41.2 (tokenizers 0.19.x) cannot and predates
+# the Qwen3 architecture.
+openvino==2026.2.1
+transformers==4.57.6
+numpy==1.26.4

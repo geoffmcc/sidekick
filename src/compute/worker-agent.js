@@ -6,6 +6,22 @@ const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
 
+// OpenVINO executor — optional; gracefully absent when disabled or on non-Windows.
+let _openVinoExecutor = null;
+let _openVinoInitDone = false;
+async function getOpenVinoExecutor() {
+  if (_openVinoInitDone) return _openVinoExecutor;
+  _openVinoInitDone = true;
+  try {
+    _openVinoExecutor = require("./openvino-executor");
+    await _openVinoExecutor.initOpenVinoExecutor();
+  } catch (e) {
+    log(`OpenVINO executor unavailable: ${e.message}`);
+    _openVinoExecutor = null;
+  }
+  return _openVinoExecutor;
+}
+
 applyCliArgs(process.argv.slice(2));
 
 const SERVER_URL = process.env.SIDEKICK_URL || process.env.SIDEKICK_SERVER_URL || "http://127.0.0.1:4097";
@@ -217,6 +233,15 @@ function configuredProviders() {
 function configuredExecutors() {
   const executors = [{ type: "mock.inference", version: "1", capabilities: ["chat", "generate", "embeddings"] }];
   if (process.env.OLLAMA_URL) executors.push({ type: "ollama.inference", version: "1", capabilities: ["chat", "generate", "embeddings"] });
+  // Include OpenVINO executor entry when enabled; capabilities are updated dynamically.
+  if (process.env.SIDEKICK_OPENVINO_ENABLED === "true") {
+    const caps = _openVinoExecutor ? _openVinoExecutor.getOpenVinoCapabilities() : [];
+    executors.push({
+      type: "openvino.text_embedding",
+      version: "1",
+      capabilities: caps.length > 0 ? caps : ["embeddings"],
+    });
+  }
   return executors;
 }
 
@@ -472,6 +497,13 @@ async function executeJob(job, shouldCancel = async () => false) {
     await sleep(chunk);
     remainingDelay -= chunk;
   }
+  // OpenVINO text embedding jobs.
+  const executor = payload.executor || payload.executorType || "";
+  if (executor === "openvino.text_embedding" || job.capability === "openvino.text_embedding") {
+    const ov = await getOpenVinoExecutor();
+    if (!ov) throw new Error("OpenVINO executor is not available on this worker");
+    return ov.executeOpenVinoEmbed(null, payload);
+  }
   if (job.capability === "embeddings" || job.jobType === "embeddings" || job.jobType === "embedding") {
     const text = String(payload.input || payload.text || "");
     return { embedding: deterministicEmbedding(text), model: payload.model || "deterministic-test" };
@@ -513,6 +545,10 @@ function requestShutdown(signal) {
   running = false;
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   log(`Shutting down after ${signal}`);
+  // Shut down the OpenVINO helper process if running.
+  if (_openVinoExecutor && _openVinoExecutor.shutdownOpenVinoExecutor) {
+    try { _openVinoExecutor.shutdownOpenVinoExecutor(); } catch {}
+  }
 }
 
 async function waitForActiveJobs() {
@@ -527,4 +563,4 @@ if (require.main === module) {
   main().catch(e => { console.error(`[worker-agent] ${redact(e.message)}`); process.exit(1); });
 }
 
-module.exports = { collectSystemInfo, deterministicEmbedding, executeJob, validateJobResult, boundedInt, jitteredBackoff, redact };
+module.exports = { collectSystemInfo, deterministicEmbedding, executeJob, validateJobResult, boundedInt, jitteredBackoff, redact, getOpenVinoExecutor };
