@@ -342,6 +342,28 @@ test('revokeWorker sets state revoked', () => {
   assertEqual(revoked.state, 'revoked');
 });
 
+test('claimNextJob enforces worker eligibility by lifecycle state', () => {
+  const eligible = jobManager.workerEligibleToClaim;
+  assertEqual(eligible({ adminState: 'enabled', credentialState: 'active', state: 'online' }).ok, true);
+  assertEqual(eligible({ adminState: 'maintenance', credentialState: 'active' }).reason, 'in_maintenance');
+  assertEqual(eligible({ adminState: 'draining', credentialState: 'active' }).reason, 'draining');
+  assertEqual(eligible({ adminState: 'enabled', credentialState: 'revoked' }).reason, 'credential_revoked');
+  assertEqual(eligible(null).ok, false);
+
+  const token = workerManager.createEnrollmentToken({ displayName: 'sched-worker' });
+  const w = workerManager.enrollWorker({ nodeId: 'sched-node', displayName: 'sched', platform: 'linux', executors: [{ type: 'mock.inference', capabilities: ['chat'] }], enrollmentToken: token.token });
+  const job = jobManager.createJob({ jobType: 'chat', capability: 'chat', requestPayload: { prompt: 'x' } });
+
+  workerManager.updateWorker(w.workerId, { adminState: 'maintenance' });
+  const denied = jobManager.claimNextJob(workerManager.getWorker(w.workerId));
+  assertEqual(denied.ineligible, 'in_maintenance');
+  assertEqual(jobManager.getJob(job.jobId).status, 'queued');
+
+  workerManager.updateWorker(w.workerId, { adminState: 'enabled' });
+  const after = jobManager.claimNextJob(workerManager.getWorker(w.workerId));
+  assertOk(!(after && after.ineligible), 'enabled worker is no longer gated');
+});
+
 test('getWorkerStats returns counts', () => {
   const stats = workerManager.getWorkerStats();
   assertOk(typeof stats.total === 'number');
