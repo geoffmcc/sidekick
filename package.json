@@ -10,7 +10,7 @@
     "start": "node src/index.js",
     "dashboard": "node src/dashboard.js",
     "agent": "node src/agent.js",
-    "package:worker": "mkdir -p dist && npm pack --pack-destination dist",
+    "package:worker": "node scripts/build-worker-package.js",
     "seed:knowledge": "node scripts/seed-knowledge.js",
     "test": "node test/run-all.js",
     "test:ci": "node test/run-all.js",
