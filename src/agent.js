@@ -412,6 +412,9 @@ async function callLLM(messages, options = {}) {
         messages: chatMessages,
         temperature: typeof options.temperature === "number" ? options.temperature : 0.3,
         format: options.format,
+        // Agent conversations carry user/system content: classify explicitly so
+        // placement never treats them as unrestricted.
+        dataClassification: "private",
         preferences: { allowFallback: true },
       }, { systemPrompt: options.systemPrompt || buildSystemPrompt() });
       return { response: result.content || "", model: result.modelId || "unknown", provider: result.providerId || "unknown" };

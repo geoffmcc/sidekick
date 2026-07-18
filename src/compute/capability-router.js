@@ -113,8 +113,20 @@ class CapabilityRouter {
         if (p.providerId === primary.provider?.providerId) continue;
         if (request.dataClassification && !p.dataClassifications.includes(request.dataClassification)) continue;
         const models = modelRegistry.listModels({ providerId: p.providerId, enabled: true });
-        if (models.length > 0) {
-          fallbacks.push({ provider: p, model: models[0], reason: "fallback" });
+        // A fallback candidate must satisfy the SAME requirement filters as a
+        // primary candidate — falling back must never mean falling below the
+        // request's capability, tool/vision/embedding, or context constraints.
+        const matching = models.filter(m => {
+          if (m.deprecated) return false;
+          if (request.requiresTools && !m.supportsTools) return false;
+          if (request.requiresVision && !m.supportsVision) return false;
+          if (request.requiresEmbedding && !m.supportsEmbedding) return false;
+          if (request.contextLimit && m.contextLimit && m.contextLimit < request.contextLimit) return false;
+          if (request.capability && !m.capabilities.includes(request.capability)) return false;
+          return true;
+        });
+        if (matching.length > 0) {
+          fallbacks.push({ provider: p, model: matching[0], reason: "fallback" });
           break;
         }
       }

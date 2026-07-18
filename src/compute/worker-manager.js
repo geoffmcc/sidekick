@@ -87,6 +87,10 @@ function ensureSchema() {
   ensureColumn("compute_workers", "health_state", "TEXT NOT NULL DEFAULT 'unknown'");
   ensureColumn("compute_workers", "disconnected_at", "TEXT");
   ensureColumn("compute_workers", "last_disconnect_reason", "TEXT");
+  // Placement v1: the enrollment token's data-classification scope becomes a
+  // persisted, enforced worker attribute instead of being silently discarded.
+  // Existing workers default to the historical implicit scope.
+  ensureColumn("compute_workers", "allowed_data_classifications_json", "TEXT NOT NULL DEFAULT '[\"public\",\"internal\",\"private\"]'");
   // Re-enrollment tracking (Phase 4)
   ensureColumn("compute_enrollment_tokens", "re_enrollment_of", "TEXT");
   ensureColumn("compute_enrollment_tokens", "replaced_worker_id", "TEXT");
@@ -145,6 +149,7 @@ function rowToWorker(row) {
     lastHealthCheck: row.last_health_check,
     workerVersion: row.worker_version,
     trustLevel: row.trust_level,
+    allowedDataClassifications: parseJson(row.allowed_data_classifications_json, ["public", "internal", "private"]),
     state: row.state,
     connectionState: row.connection_state || "offline",
     adminState: row.admin_state || "enabled",
@@ -225,7 +230,7 @@ function enrollWorker({ nodeId, displayName, platform, architecture, cpuInfo, me
         display_name = ?, platform = ?, architecture = ?, cpu_info = ?, memory_bytes = ?,
         accelerators_json = ?, providers_json = ?, executors_json = ?, model_inventory_json = ?,
         limits_json = ?, health_json = ?, last_health_check = ?, worker_version = ?,
-        trust_level = ?, max_concurrent_jobs = ?, protocol_version = ?,
+        trust_level = ?, allowed_data_classifications_json = ?, max_concurrent_jobs = ?, protocol_version = ?,
         credential_hash = ?, credential_state = 'active', credential_rotated_at = ?,
         state = 'online', connection_state = 'online', revocation_reason = NULL, revoked_at = NULL,
         enrollment_token_hash = ?, public_key = ?, updated_at = ?
@@ -234,7 +239,7 @@ function enrollWorker({ nodeId, displayName, platform, architecture, cpuInfo, me
       displayName, platform, architecture || null, cpuInfo || null, memoryBytes || 0,
       json(accelerators || []), json(providers || []), json(executors || []), json(modelInventory || []),
       json(limits || {}), json(health || {}), health ? now : null, workerVersion || null,
-      tokenData.trustLevel, tokenData.maxConcurrentJobs, String(protocolVersion || "1"),
+      tokenData.trustLevel, json(tokenData.allowedDataClassifications || []), tokenData.maxConcurrentJobs, String(protocolVersion || "1"),
       hashToken(credential), now, hashToken(enrollmentToken), publicKey || null, now, existing.workerId
     );
     db.prepare("UPDATE compute_enrollment_tokens SET replaced_worker_id = ? WHERE token_id = ?").run(existing.workerId, tokenData.tokenId);
@@ -247,15 +252,15 @@ function enrollWorker({ nodeId, displayName, platform, architecture, cpuInfo, me
       worker_id, node_id, display_name, platform, architecture, cpu_info,
       memory_bytes, accelerators_json, providers_json, executors_json,
       model_inventory_json, limits_json, health_json, last_health_check,
-      worker_version, trust_level, state, max_concurrent_jobs, enrolled_at,
+      worker_version, trust_level, allowed_data_classifications_json, state, max_concurrent_jobs, enrolled_at,
       enrollment_token_hash, credential_hash, credential_rotated_at, public_key, protocol_version
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'online', ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'online', ?, ?, ?, ?, ?, ?, ?)
   `).run(
     workerId, nodeId, displayName, platform, architecture || null,
     cpuInfo || null, memoryBytes || 0, json(accelerators || []),
     json(providers || []), json(executors || []),
     json(modelInventory || []), json(limits || {}), json(health || {}), health ? nowIso() : null,
-    workerVersion || null, tokenData.trustLevel,
+    workerVersion || null, tokenData.trustLevel, json(tokenData.allowedDataClassifications || []),
     tokenData.maxConcurrentJobs, nowIso(),
     hashToken(enrollmentToken), hashToken(credential), nowIso(), publicKey || null, String(protocolVersion || "1")
   );
