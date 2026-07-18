@@ -87,6 +87,9 @@ function ensureSchema() {
   ensureColumn("compute_workers", "health_state", "TEXT NOT NULL DEFAULT 'unknown'");
   ensureColumn("compute_workers", "disconnected_at", "TEXT");
   ensureColumn("compute_workers", "last_disconnect_reason", "TEXT");
+  // Re-enrollment tracking (Phase 4)
+  ensureColumn("compute_enrollment_tokens", "re_enrollment_of", "TEXT");
+  ensureColumn("compute_enrollment_tokens", "replaced_worker_id", "TEXT");
   // Backfill from existing state column for legacy workers
   backfillNewStateColumns();
 }
@@ -168,7 +171,7 @@ function rowToWorker(row) {
   };
 }
 
-function createEnrollmentToken({ displayName, trustLevel = "trusted", allowedDataClassifications = ["public", "internal", "private"], maxConcurrentJobs = 2, expiresInMs = 3600000, createdBy = "admin" }) {
+function createEnrollmentToken({ displayName, trustLevel = "trusted", allowedDataClassifications = ["public", "internal", "private"], maxConcurrentJobs = 2, expiresInMs = 3600000, createdBy = "admin", reEnrollmentOf = null }) {
   ensureSchema();
   const token = generateId("enroll") + crypto.randomBytes(16).toString("hex");
   const tokenHash = hashToken(token);
@@ -176,10 +179,10 @@ function createEnrollmentToken({ displayName, trustLevel = "trusted", allowedDat
   const expiresAt = new Date(Date.now() + expiresInMs).toISOString();
   const db = dbStore.getDb();
   db.prepare(`
-    INSERT INTO compute_enrollment_tokens (token_id, token_hash, display_name, trust_level, allowed_data_classifications_json, max_concurrent_jobs, expires_at, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(tokenId, tokenHash, displayName || null, trustLevel, json(allowedDataClassifications), maxConcurrentJobs, expiresAt, createdBy);
-  return { tokenId, token, expiresAt };
+    INSERT INTO compute_enrollment_tokens (token_id, token_hash, display_name, trust_level, allowed_data_classifications_json, max_concurrent_jobs, expires_at, created_by, re_enrollment_of)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(tokenId, tokenHash, displayName || null, trustLevel, json(allowedDataClassifications), maxConcurrentJobs, expiresAt, createdBy, reEnrollmentOf || null);
+  return { tokenId, token, expiresAt, reEnrollmentOf: reEnrollmentOf || null };
 }
 
 function consumeEnrollmentToken(token, workerId) {
@@ -197,15 +200,48 @@ function consumeEnrollmentToken(token, workerId) {
     trustLevel: row.trust_level,
     allowedDataClassifications: parseJson(row.allowed_data_classifications_json, []),
     maxConcurrentJobs: row.max_concurrent_jobs,
+    reEnrollmentOf: row.re_enrollment_of || null,
   };
 }
 
 function enrollWorker({ nodeId, displayName, platform, architecture, cpuInfo, memoryBytes, accelerators, providers, executors, modelInventory, limits, health, workerVersion, publicKey, enrollmentToken, protocolVersion = "1" }) {
   ensureSchema();
   const tokenData = consumeEnrollmentToken(enrollmentToken, nodeId);
-  const workerId = generateId("wk");
   const credential = generateSecret();
   const db = dbStore.getDb();
+  const existing = getWorkerByNodeId(nodeId);
+  if (existing) {
+    // Re-enrollment (credential recovery). Only permitted when the token was
+    // scoped to this node, or the node is already revoked/retired — otherwise an
+    // active node cannot be silently taken over. Reuses the worker identity and
+    // issues a fresh credential (un-revoking the record).
+    const authorized = tokenData.reEnrollmentOf && tokenData.reEnrollmentOf === nodeId;
+    if (!authorized && existing.credentialState !== "revoked") {
+      throw new EnrollmentError(`Node ${nodeId} is already enrolled; issue a re-enrollment token for this node to replace it`);
+    }
+    const now = nowIso();
+    db.prepare(`
+      UPDATE compute_workers SET
+        display_name = ?, platform = ?, architecture = ?, cpu_info = ?, memory_bytes = ?,
+        accelerators_json = ?, providers_json = ?, executors_json = ?, model_inventory_json = ?,
+        limits_json = ?, health_json = ?, last_health_check = ?, worker_version = ?,
+        trust_level = ?, max_concurrent_jobs = ?, protocol_version = ?,
+        credential_hash = ?, credential_state = 'active', credential_rotated_at = ?,
+        state = 'online', connection_state = 'online', revocation_reason = NULL, revoked_at = NULL,
+        enrollment_token_hash = ?, public_key = ?, updated_at = ?
+      WHERE worker_id = ?
+    `).run(
+      displayName, platform, architecture || null, cpuInfo || null, memoryBytes || 0,
+      json(accelerators || []), json(providers || []), json(executors || []), json(modelInventory || []),
+      json(limits || {}), json(health || {}), health ? now : null, workerVersion || null,
+      tokenData.trustLevel, tokenData.maxConcurrentJobs, String(protocolVersion || "1"),
+      hashToken(credential), now, hashToken(enrollmentToken), publicKey || null, now, existing.workerId
+    );
+    db.prepare("UPDATE compute_enrollment_tokens SET replaced_worker_id = ? WHERE token_id = ?").run(existing.workerId, tokenData.tokenId);
+    const worker = getWorker(existing.workerId);
+    return { ...worker, worker, credential, reEnrolled: true, replacedWorkerId: existing.workerId };
+  }
+  const workerId = generateId("wk");
   db.prepare(`
     INSERT INTO compute_workers (
       worker_id, node_id, display_name, platform, architecture, cpu_info,
@@ -224,7 +260,7 @@ function enrollWorker({ nodeId, displayName, platform, architecture, cpuInfo, me
     hashToken(enrollmentToken), hashToken(credential), nowIso(), publicKey || null, String(protocolVersion || "1")
   );
   const worker = getWorker(workerId);
-  return { ...worker, worker, credential };
+  return { ...worker, worker, credential, reEnrolled: false };
 }
 
 function authenticateWorker(workerId, credential) {
