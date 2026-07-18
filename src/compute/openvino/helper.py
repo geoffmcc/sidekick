@@ -397,16 +397,56 @@ def _select_sequence_length(
     )
 
 
+def _load_tokenizer(model_id: str, models_dir: Path) -> Any:
+    """Load a model's tokenizer WITHOUT compiling any OpenVINO model.
+
+    Profile selection / token counting must never force a model compile: on the
+    NPU a second compiled model of the same graph makes an already-resident one
+    fail to execute (ZE_RESULT_ERROR_UNINITIALIZED).  Loading the tokenizer
+    standalone keeps counting cheap and CPU-only.
+    """
+    from transformers import AutoTokenizer
+
+    model_dir = _find_model_dir(models_dir, model_id)
+    padding_side = "left" if model_id.startswith("qwen") else "right"
+    tokenizer_kwargs: dict[str, Any] = {
+        "local_files_only": True,
+        "trust_remote_code": False,
+        "use_fast": True,
+    }
+    if model_id.startswith("qwen"):
+        # The certified Qwen tokenizer requires the mistral regex fix (proven by
+        # the accepted real-text correctness spike).  Fall back with a warning if
+        # an unexpected runtime rejects the keyword rather than failing the load.
+        tokenizer_kwargs["fix_mistral_regex"] = True
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(str(model_dir), **tokenizer_kwargs)
+    except TypeError as exc:
+        if "fix_mistral_regex" in tokenizer_kwargs:
+            _warn(
+                "Tokenizer runtime does not accept fix_mistral_regex; loading "
+                "without it (tokenization may differ from the certified spike)",
+                model_id=model_id,
+                error=str(exc),
+            )
+            tokenizer_kwargs.pop("fix_mistral_regex", None)
+            tokenizer = AutoTokenizer.from_pretrained(str(model_dir), **tokenizer_kwargs)
+        else:
+            raise
+    tokenizer.padding_side = padding_side
+    return tokenizer
+
+
 def _load_model(
     model_id: str,
     models_dir: Path,
     sequence_length: int,
     device: str,
     ov_core: Any,
+    tokenizer: Any = None,
 ) -> ModelState:
     """Load and compile a model for the given device and sequence length."""
     import openvino as ov
-    from transformers import AutoTokenizer
 
     config = _MODEL_CONFIGS[model_id]
 
@@ -429,35 +469,10 @@ def _load_model(
         path=str(model_dir),
     )
 
-    # Load tokenizer — local files only, trust_remote_code always False.
-    padding_side = "left" if model_id.startswith("qwen") else "right"
-    tokenizer_kwargs: dict[str, Any] = {
-        "local_files_only": True,
-        "trust_remote_code": False,
-        "use_fast": True,
-    }
-    if model_id.startswith("qwen"):
-        # The certified Qwen tokenizer requires the mistral regex fix (proven by
-        # the accepted real-text correctness spike) to reproduce exact
-        # tokenization and attention-mask parity.  It is only accepted by the
-        # certified transformers runtime; fall back with a warning if an
-        # unexpected runtime rejects the keyword rather than failing the load.
-        tokenizer_kwargs["fix_mistral_regex"] = True
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(str(model_dir), **tokenizer_kwargs)
-    except TypeError as exc:
-        if "fix_mistral_regex" in tokenizer_kwargs:
-            _warn(
-                "Tokenizer runtime does not accept fix_mistral_regex; loading "
-                "without it (tokenization may differ from the certified spike)",
-                model_id=model_id,
-                error=str(exc),
-            )
-            tokenizer_kwargs.pop("fix_mistral_regex", None)
-            tokenizer = AutoTokenizer.from_pretrained(str(model_dir), **tokenizer_kwargs)
-        else:
-            raise
-    tokenizer.padding_side = padding_side
+    # Tokenizer is loaded standalone (never as a side effect of compiling), so
+    # profile selection cannot force an extra NPU model compile.
+    if tokenizer is None:
+        tokenizer = _load_tokenizer(model_id, models_dir)
 
     # Read and reshape model.
     raw_model = ov_core.read_model(str(model_xml))
@@ -532,6 +547,7 @@ class HelperRuntime:
         self.startup_config = startup_config
         self.ov_core = ov.Core()
         self._states: dict[tuple[str, str, int], ModelState] = {}
+        self._tokenizers: dict[str, Any] = {}
         self._ov_version = ov.__version__
 
         available = self.ov_core.available_devices
@@ -545,6 +561,14 @@ class HelperRuntime:
     def _state_key(self, model_id: str, device: str, seq: int) -> tuple[str, str, int]:
         return (model_id, device, seq)
 
+    def _get_tokenizer(self, model_id: str) -> Any:
+        """Return a cached tokenizer for the model, loading it without any compile."""
+        tok = self._tokenizers.get(model_id)
+        if tok is None:
+            tok = _load_tokenizer(model_id, self.models_dir)
+            self._tokenizers[model_id] = tok
+        return tok
+
     def _get_or_load(
         self, model_id: str, device: str, sequence_length: int
     ) -> ModelState:
@@ -552,12 +576,26 @@ class HelperRuntime:
         if key in self._states:
             return self._states[key]
 
+        if device == "NPU":
+            # The NPU cannot execute a compiled model while another profile of the
+            # same graph is resident (a second compile makes the first raise
+            # ZE_RESULT_ERROR_UNINITIALIZED at execute).  Evict and release any
+            # other NPU-resident profile for this model before compiling a new one
+            # so at most one NPU model is live at a time.
+            stale = [k for k in self._states if k[0] == model_id and k[1] == "NPU"]
+            for k in stale:
+                del self._states[k]
+            if stale:
+                import gc
+                gc.collect()
+
         state = _load_model(
             model_id=model_id,
             models_dir=self.models_dir,
             sequence_length=sequence_length,
             device=device,
             ov_core=self.ov_core,
+            tokenizer=self._get_tokenizer(model_id),
         )
         self._states[key] = state
         return state
@@ -620,17 +658,11 @@ class HelperRuntime:
         primary_device = config["device"]
 
         # --- Profile selection ---
-        # Tokenize without padding to determine token count for profile selection.
-        # We must use a temporary tokenizer or do a raw call — use the tokenizer
-        # from an already-loaded state if available, otherwise load it.
-        # For profile selection we do a quick tokenization without GPU/NPU.
+        # Count tokens with the standalone tokenizer (no model compile) so we do
+        # NOT compile an unused NPU profile just to select the sequence length.
         try:
-            probe_state = self._get_or_load(
-                model_id, primary_device, config["sequence_lengths"][0]
-            )
-            probe_tokens = probe_state.tokenizer(
-                text, truncation=False, return_tensors="np"
-            )
+            tokenizer = self._get_tokenizer(model_id)
+            probe_tokens = tokenizer(text, truncation=False, return_tensors="np")
             raw_count = int(probe_tokens["attention_mask"].sum())
         except Exception as exc:
             _reply_err(request_id, "tokenizer_error", f"Tokenizer failed: {exc}")

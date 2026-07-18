@@ -155,6 +155,9 @@ function loadConfigFile(pathOverride) {
     err.code = "WORKER_CONFIG_READ";
     throw err;
   }
+  // Strip a leading UTF-8 BOM — Windows editors and PowerShell's
+  // `Set-Content -Encoding UTF8` prepend one, and JSON.parse rejects it.
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
   let parsed;
   try {
     parsed = JSON.parse(raw);

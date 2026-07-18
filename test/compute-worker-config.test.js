@@ -103,6 +103,12 @@ test('loadConfigFile parses a valid file and strips $schema', () => {
   assert.strictEqual(r.config.serverUrl, validConfig.serverUrl);
   assert.strictEqual(r.config.$schema, undefined, '$schema stripped before validation');
 });
+test('loadConfigFile tolerates a UTF-8 BOM (Windows/PowerShell writes one)', () => {
+  const p = writeConfig('bom.json', '﻿' + JSON.stringify(validConfig));
+  const r = cfg.loadConfigFile(p);
+  assert.strictEqual(r.exists, true);
+  assert.strictEqual(r.config.serverUrl, validConfig.serverUrl);
+});
 test('loadConfigFile throws on malformed JSON', () => {
   const p = writeConfig('bad.json', '{ not json');
   assert.throws(() => cfg.loadConfigFile(p), e => e.code === 'WORKER_CONFIG_PARSE');
