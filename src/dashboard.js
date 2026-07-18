@@ -1273,8 +1273,9 @@ app.post("/api/compute/enrollment-tokens", (req, res) => {
       maxConcurrentJobs: Math.min(16, Math.max(1, Number(body.maxConcurrentJobs || body.max_concurrent_jobs || 2))),
       expiresInMs: Math.min(7 * 24 * 60 * 60 * 1000, Math.max(60 * 1000, Number(body.expiresInMs || body.expires_in_ms || 3600000))),
       createdBy: "dashboard",
+      reEnrollmentOf: body.reEnrollmentOf || body.re_enrollment_of || null,
     });
-    auditLog(req, "compute.enrollment_token.created", { tokenId: token.tokenId, displayName: body.displayName || body.display_name || null });
+    auditLog(req, "compute.enrollment_token.created", { tokenId: token.tokenId, displayName: body.displayName || body.display_name || null, reEnrollmentOf: token.reEnrollmentOf || null });
     res.json({ ok: true, ...token, install: computeInstallInfo(req, token.token) });
   } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
 });
