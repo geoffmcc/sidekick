@@ -55,6 +55,8 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
 .badge{display:inline-block;font-size:.68rem;color:#8b949e;border:1px solid #30363d;border-radius:4px;padding:2px 6px;text-transform:uppercase}
 .badge.warn{color:#d29922;border-color:#8b6f2f}
 .badge.danger{color:#f85149;border-color:#8b3434}
+.badge.info{color:#58a6ff;border-color:#1f6feb}
+.model-tier-list{display:flex;flex-direction:column;gap:4px;padding:6px 0;font-size:.82rem;color:#c9d1d9}.model-tier-list small{color:#8b949e}
 .agent-log{padding:12px;background:#0d1117;border:1px solid #21262d;border-radius:6px;font-family:var(--font);font-size:.8rem;max-height:500px;overflow-y:auto;margin-top:8px;white-space:pre-wrap;line-height:1.5}
 .agent-step{color:#58a6ff;font-weight:500}
 .agent-ok{color:#3fb950}

@@ -131,7 +131,7 @@ async function main() {
       currentJobs: 0, maxConcurrentJobs: 1, lastHeartbeat: new Date().toISOString(),
       executors: [{ type: "mock.inference" }, { type: "openvino.text_embedding", capabilities: ["embeddings"] }],
       providers: [{ type: "mock" }],
-      modelInventory: [{ name: "deterministic-test" }],
+      modelInventory: [{ name: "qwen3-embedding-0.6b-int8" }],
     };
     const compat = jobManager.workerCompatibility(worker, openvinoJob);
     assert.strictEqual(compat.ok, true, "should be eligible: " + JSON.stringify(compat.reasons));
@@ -147,6 +147,32 @@ async function main() {
     const compat = jobManager.workerCompatibility(worker, openvinoJob);
     assert.strictEqual(compat.ok, false);
     assert.ok(compat.reasons.some((r) => r.includes("capability_missing")), "reason: " + JSON.stringify(compat.reasons));
+  });
+
+  await test("routing: workerCompatibility returns bestTier from model inventory", async () => {
+    const worker = {
+      state: "online", maintenanceMode: false, protocolVersion: "1",
+      currentJobs: 0, maxConcurrentJobs: 2, lastHeartbeat: new Date().toISOString(),
+      executors: [{ type: "mock.inference" }, { type: "openvino.text_embedding", capabilities: ["openvino.text_embedding:qwen3-embedding-0.6b-int8:CPU:seq512:batch1:certified"] }],
+      providers: [{ type: "mock" }],
+      modelInventory: [{ name: "qwen3-embedding-0.6b-int8", provider: "openvino", certificationTier: "certified" }],
+    };
+    const compat = jobManager.workerCompatibility(worker, openvinoJob);
+    assert.strictEqual(compat.ok, true, "should be compatible: " + JSON.stringify(compat.reasons));
+    assert.strictEqual(compat.bestTier, "certified", "should report certified tier");
+  });
+
+  await test("routing: workerCompatibility reports detected_self_tested tier", async () => {
+    const worker = {
+      state: "online", maintenanceMode: false, protocolVersion: "1",
+      currentJobs: 0, maxConcurrentJobs: 2, lastHeartbeat: new Date().toISOString(),
+      executors: [{ type: "mock.inference" }, { type: "openvino.text_embedding", capabilities: ["openvino.text_embedding:qwen3-embedding-0.6b-int8:CPU:seq512:batch1:detected_self_tested"] }],
+      providers: [{ type: "mock" }],
+      modelInventory: [{ name: "qwen3-embedding-0.6b-int8", provider: "openvino", certificationTier: "detected_self_tested" }],
+    };
+    const compat = jobManager.workerCompatibility(worker, openvinoJob);
+    assert.strictEqual(compat.ok, true, "should be compatible: " + JSON.stringify(compat.reasons));
+    assert.strictEqual(compat.bestTier, "detected_self_tested", "should report self-tested tier");
   });
 
   await test("security: unknown top-level field is rejected (not silently dropped)", async () => {

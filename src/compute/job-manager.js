@@ -366,18 +366,48 @@ function workerCompatibility(worker, job) {
   if (worker.lastHeartbeat && Date.now() - new Date(worker.lastHeartbeat).getTime() > 120000) reasons.push("heartbeat_stale");
   const executors = parseMaybeArray(worker.executors).map(e => typeof e === "string" ? e : (e.type || e.name)).filter(Boolean);
   const providers = parseMaybeArray(worker.providers).map(p => typeof p === "string" ? p : (p.type || p.providerType || p.name)).filter(Boolean);
-  const modelInventory = parseMaybeArray(worker.modelInventory).map(m => typeof m === "string" ? m : (m.name || m.model || m.providerModelName)).filter(Boolean);
+  // Preserve full model objects for tier-aware matching.
+  const rawModels = parseMaybeArray(worker.modelInventory);
+  const modelNames = rawModels.map(m => typeof m === "string" ? m : (m.name || m.model || m.providerModelName)).filter(Boolean);
+  // Derive per-model tier from certificationTier field (preferred) or capability strings.
+  const modelTierMap = new Map();
+  for (const m of rawModels) {
+    if (typeof m === "object" && m !== null) {
+      const name = m.name || m.model || m.providerModelName;
+      if (name && m.certificationTier) modelTierMap.set(name, m.certificationTier);
+    }
+  }
+  // Also extract tiers from capability strings for models without explicit tier field.
+  for (const exec of parseMaybeArray(worker.executors)) {
+    if (typeof exec !== "object" || !Array.isArray(exec.capabilities)) continue;
+    for (const cap of exec.capabilities) {
+      const parts = String(cap).split(":");
+      if (parts.length >= 6) {
+        const capModel = parts[1];
+        const capTier = parts[5];
+        if (!modelTierMap.has(capModel) && capTier) modelTierMap.set(capModel, capTier);
+      }
+    }
+  }
   const requiredExecutor = job.capabilityRequirements?.executor || job.requestPayload?.executor;
-  const requiredModel = job.requestPayload?.model || job.capabilityRequirements?.model;
+  const requiredModel = job.requestPayload?.model || job.requestPayload?.model_id || job.capabilityRequirements?.model;
   if (requiredExecutor && !executors.includes(requiredExecutor)) reasons.push(`executor_missing:${requiredExecutor}`);
-  if (requiredModel && modelInventory.length > 0 && !modelInventory.includes(requiredModel)) reasons.push(`model_missing:${requiredModel}`);
+  if (requiredModel && modelNames.length > 0 && !modelNames.includes(requiredModel)) reasons.push(`model_missing:${requiredModel}`);
   let capabilityOk = false;
   if (["chat", "generate", "embedding", "embeddings", "inference"].includes(job.jobType) || ["chat", "generate", "embeddings"].includes(job.capability)) {
     capabilityOk = executors.includes("mock.inference") || executors.includes("ollama.inference") || providers.includes("mock") || providers.includes("ollama");
   }
   capabilityOk = capabilityOk || executors.includes(job.jobType) || executors.includes(job.capability);
   if (!capabilityOk) reasons.push(`capability_missing:${job.capability || job.jobType}`);
-  return { ok: reasons.length === 0, reasons };
+  // Determine the best certification tier for the required model.
+  let bestTier = null;
+  if (requiredModel && modelTierMap.has(requiredModel)) {
+    bestTier = modelTierMap.get(requiredModel);
+  } else if (requiredModel) {
+    // Model present in inventory but no tier info — assume certified (legacy model).
+    bestTier = "certified";
+  }
+  return { ok: reasons.length === 0, reasons, bestTier };
 }
 
 function recordSchedulingDiagnostics(db, jobId, diagnostics) {
@@ -457,7 +487,7 @@ function claimNextJob(worker, { leaseDurationMs = 300000 } = {}) {
         INSERT INTO compute_job_attempts (attempt_id, job_id, attempt_number, worker_id, lease_id, status, lease_acquired_at, lease_expires_at, execution_id)
         VALUES (?, ?, ?, ?, ?, 'leased', ?, ?, ?)
       `).run(attemptId, job.jobId, leased.attempt, worker.workerId, leaseId, now, leaseExpires, executionId || null);
-      recordSchedulingDiagnostics(db, job.jobId, { selected: true, workerId: worker.workerId, reasons: ["compatible"], checkedAt: now });
+      recordSchedulingDiagnostics(db, job.jobId, { selected: true, workerId: worker.workerId, reasons: ["compatible"], bestTier: compatibility.bestTier, checkedAt: now });
       db.prepare("UPDATE compute_workers SET current_jobs = current_jobs + 1, updated_at = ? WHERE worker_id = ?").run(now, worker.workerId);
       db.exec("COMMIT");
       emitComputeEvent("compute.job_leased", leased, { worker_id: worker.workerId, lease_id: leaseId, attempt_id: attemptId });
