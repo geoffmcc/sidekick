@@ -150,6 +150,15 @@ for (const def of builtinExecutors) {
   try { registerExecutor(def); } catch {}
 }
 
+// Register the OpenVINO text-embedding executor definition so the registry is
+// the single authoritative source of executor metadata (type/version/platform/
+// limits) instead of a duplicated, hand-maintained descriptor. Loading this
+// module has no side effects (no helper spawn); initialisation stays explicit.
+try {
+  const { OPENVINO_EXECUTOR_DEFINITION } = require("./openvino-executor");
+  registerExecutor(OPENVINO_EXECUTOR_DEFINITION);
+} catch { /* optional; absent or already registered */ }
+
 module.exports = {
   registerExecutor,
   getExecutor,

@@ -34,6 +34,7 @@ const LEASE_MS = boundedInt(process.env.SIDEKICK_WORKER_LEASE_MS, 300000, 30000,
 const MAX_CONCURRENT_JOBS = boundedInt(process.env.SIDEKICK_WORKER_CONCURRENCY, 1, 1, 16);
 const MAX_RETRY_MS = boundedInt(process.env.SIDEKICK_WORKER_MAX_RETRY_MS, 30000, 1000, 300000);
 const SHUTDOWN_GRACE_MS = boundedInt(process.env.SIDEKICK_WORKER_SHUTDOWN_GRACE_MS, 10000, 1000, 120000);
+const OPENVINO_STARTUP_READINESS_MS = boundedInt(process.env.SIDEKICK_OPENVINO_STARTUP_READINESS_MS, 60000, 1000, 300000);
 const WORKER_VERSION = require("../../package.json").version || "0.0.0";
 const PROTOCOL_VERSION = "1";
 const CONFIG_PATH = process.env.SIDEKICK_WORKER_CONFIG || path.join(os.homedir(), ".sidekick", "worker-credential.json");
@@ -230,17 +231,34 @@ function configuredProviders() {
   return providers;
 }
 
+function openVinoReadiness() {
+  if (process.env.SIDEKICK_OPENVINO_ENABLED !== "true") {
+    return { state: "disabled", capabilities: [], models: [] };
+  }
+  if (_openVinoExecutor && typeof _openVinoExecutor.getStartupReadiness === "function") {
+    return _openVinoExecutor.getStartupReadiness();
+  }
+  // Enabled but the executor module has not been initialised yet.
+  return { state: "probing", capabilities: [], models: [] };
+}
+
 function configuredExecutors() {
   const executors = [{ type: "mock.inference", version: "1", capabilities: ["chat", "generate", "embeddings"] }];
   if (process.env.OLLAMA_URL) executors.push({ type: "ollama.inference", version: "1", capabilities: ["chat", "generate", "embeddings"] });
-  // Include OpenVINO executor entry when enabled; capabilities are updated dynamically.
+  // Advertise the OpenVINO executor for routing ONLY once startup readiness has
+  // established concrete certified profiles. Until then it is intentionally
+  // absent from the routable executor set (its state is reported in health),
+  // so the scheduler never routes an embedding job to a cold/uncertified path.
   if (process.env.SIDEKICK_OPENVINO_ENABLED === "true") {
-    const caps = _openVinoExecutor ? _openVinoExecutor.getOpenVinoCapabilities() : [];
-    executors.push({
-      type: "openvino.text_embedding",
-      version: "1",
-      capabilities: caps.length > 0 ? caps : ["embeddings"],
-    });
+    const readiness = openVinoReadiness();
+    if (readiness.state === "ready" && Array.isArray(readiness.capabilities) && readiness.capabilities.length > 0) {
+      executors.push({
+        type: (_openVinoExecutor && _openVinoExecutor.EXECUTOR_TYPE) || "openvino.text_embedding",
+        version: (_openVinoExecutor && _openVinoExecutor.EXECUTOR_VERSION) || "1",
+        capabilities: readiness.capabilities.slice(0, 16),
+        state: readiness.state,
+      });
+    }
   }
   return executors;
 }
@@ -260,6 +278,25 @@ function configuredModelInventory() {
     }
   }
   if (process.env.OLLAMA_MODEL) models.push({ name: safeString(process.env.OLLAMA_MODEL, 160), provider: "ollama", capabilities: ["chat", "generate"] });
+  // Populate OpenVINO models from the initialised executor's readiness snapshot
+  // so model inventory always agrees with the advertised executor capabilities:
+  // a model appears here only when at least one of its certified profiles is
+  // ready, and never when the OpenVINO executor is not advertised.
+  const ovReadiness = openVinoReadiness();
+  if (ovReadiness.state === "ready" && Array.isArray(ovReadiness.models)) {
+    for (const m of ovReadiness.models.slice(0, 16)) {
+      const name = safeString(m.name, 160);
+      if (!name) continue;
+      models.push({
+        name,
+        provider: "openvino",
+        capabilities: ["text_embedding"],
+        device: safeString(m.device, 16),
+        dimensions: Number.isFinite(Number(m.dimensions)) ? Number(m.dimensions) : undefined,
+        embeddingSpaceId: m.embeddingSpaceId ? safeString(m.embeddingSpaceId, 80) : undefined,
+      });
+    }
+  }
   return models;
 }
 
@@ -268,7 +305,7 @@ function configuredLimits() {
 }
 
 function configuredHealth() {
-  return {
+  const health = {
     status: "healthy",
     checkedAt: new Date().toISOString(),
     nodeVersion: process.version,
@@ -276,6 +313,22 @@ function configuredHealth() {
     protocolVersion: PROTOCOL_VERSION,
     backends: configuredProviders().map(p => ({ type: p.type, endpoint: p.endpoint, status: p.status || "configured" })),
   };
+  // Report the OpenVINO startup state honestly and independently of overall
+  // worker health: a missing NPU or a faulted helper does not make the worker
+  // unhealthy (E5 CPU and other executors remain usable). No sensitive paths.
+  if (process.env.SIDEKICK_OPENVINO_ENABLED === "true") {
+    const r = openVinoReadiness();
+    health.openvino = {
+      state: r.state,
+      reason: r.reason ? safeString(r.reason, 200) : undefined,
+      availableDevices: Array.isArray(r.availableDevices) ? r.availableDevices.slice(0, 8) : [],
+      readyProfiles: Array.isArray(r.capabilities) ? r.capabilities.slice(0, 16) : [],
+      models: Array.isArray(r.models) ? r.models.map(m => safeString(m.name, 160)).filter(Boolean).slice(0, 16) : [],
+      openVinoVersion: r.openVinoVersion || undefined,
+      helperVersion: r.helperVersion || undefined,
+    };
+  }
+  return health;
 }
 
 function loadCredential() {
@@ -528,13 +581,45 @@ function deterministicEmbedding(text) {
   return Array.from({ length: 16 }, (_, i) => (h[i] - 128) / 128);
 }
 
+// Initialise the OpenVINO executor through a bounded readiness path before the
+// worker advertises itself. This makes the very first enrollment/heartbeat carry
+// accurate executor capabilities and model inventory without needing a job. It
+// is a no-op (returns immediately) when OpenVINO is not enabled.
+async function establishOpenVinoReadiness() {
+  if (process.env.SIDEKICK_OPENVINO_ENABLED !== "true") return;
+  log("Establishing OpenVINO startup readiness...");
+  let ov;
+  try {
+    ov = await getOpenVinoExecutor();
+  } catch (e) {
+    log(`OpenVINO executor initialisation failed: ${e.message}`);
+    return;
+  }
+  if (!ov || typeof ov.awaitStartupReadiness !== "function") {
+    log("OpenVINO executor unavailable; advertising without OpenVINO capabilities");
+    return;
+  }
+  try {
+    const r = await ov.awaitStartupReadiness(OPENVINO_STARTUP_READINESS_MS);
+    const profileCount = Array.isArray(r.capabilities) ? r.capabilities.length : 0;
+    log(`OpenVINO startup readiness: ${r.state}${profileCount ? ` (${profileCount} profile(s): ${r.capabilities.join(", ")})` : ""}`);
+  } catch (e) {
+    log(`OpenVINO startup readiness error: ${e.message}`);
+  }
+}
+
 async function main() {
   log(`Starting worker agent v${WORKER_VERSION}`);
-  await enrollIfNeeded();
-  await sendHeartbeat().catch(e => log(`Initial heartbeat failed: ${e.message}`));
-  heartbeatTimer = setInterval(() => sendHeartbeat().catch(e => log(`Heartbeat error: ${e.message}`)), HEARTBEAT_MS);
+  // Register signal handlers first so a shutdown during startup readiness is
+  // handled cleanly (aborts the readiness wait; no orphaned helper).
   process.on("SIGINT", () => requestShutdown("SIGINT"));
   process.on("SIGTERM", () => requestShutdown("SIGTERM"));
+  await establishOpenVinoReadiness();
+  if (!running) { await waitForActiveJobs(); return; }
+  await enrollIfNeeded();
+  if (!running) { await waitForActiveJobs(); return; }
+  await sendHeartbeat().catch(e => log(`Initial heartbeat failed: ${e.message}`));
+  heartbeatTimer = setInterval(() => sendHeartbeat().catch(e => log(`Heartbeat error: ${e.message}`)), HEARTBEAT_MS);
   await claimLoop();
   await waitForActiveJobs();
 }
@@ -563,4 +648,12 @@ if (require.main === module) {
   main().catch(e => { console.error(`[worker-agent] ${redact(e.message)}`); process.exit(1); });
 }
 
-module.exports = { collectSystemInfo, deterministicEmbedding, executeJob, validateJobResult, boundedInt, jitteredBackoff, redact, getOpenVinoExecutor };
+// Test seam: inject a stand-in OpenVINO executor module so the advertisement
+// shaping (executors/modelInventory/health) can be exercised without spawning a
+// real Python helper. Not used in production paths.
+function __setOpenVinoExecutorForTest(mod) {
+  _openVinoExecutor = mod;
+  _openVinoInitDone = true;
+}
+
+module.exports = { collectSystemInfo, configuredExecutors, configuredModelInventory, configuredHealth, deterministicEmbedding, executeJob, validateJobResult, boundedInt, jitteredBackoff, redact, getOpenVinoExecutor, __setOpenVinoExecutorForTest };
