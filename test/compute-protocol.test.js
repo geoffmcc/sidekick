@@ -335,6 +335,15 @@ async function main() {
     assert.strictEqual(enableRes.data.worker.maintenanceMode, false, 'worker maintenance cleared');
     assert.strictEqual((await request('POST', '/compute/worker/heartbeat', { currentJobs: 0, executors: [{ type: 'mock.inference', capabilities: ['chat'] }] }, workerAuth)).status, 200, 'enabled worker can heartbeat again');
 
+    const disconnectRes = await request('POST', '/compute/worker/disconnect', { reason: 'test-shutdown' }, workerAuth);
+    assert.strictEqual(disconnectRes.status, 200, 'worker can gracefully disconnect');
+    assert.strictEqual(disconnectRes.data.worker.connectionState, 'offline', 'disconnect drops connection to offline');
+    assert.strictEqual(disconnectRes.data.worker.lastDisconnectReason, 'test-shutdown', 'disconnect reason recorded');
+    assert.strictEqual((await request('POST', '/compute/worker/disconnect', {}, { Authorization: `Bearer ${workerId}:bad` })).status, 401, 'disconnect requires worker auth');
+    const reheartbeat = await request('POST', '/compute/worker/heartbeat', { currentJobs: 0 }, workerAuth);
+    assert.strictEqual(reheartbeat.status, 200, 'worker can heartbeat after disconnect');
+    assert.strictEqual(reheartbeat.data.worker.connectionState, 'online', 'heartbeat reconnects after graceful disconnect');
+
     const rotateRes = await request('POST', `/compute/admin/workers/${workerId}/credentials/rotate`, {}, admin);
     assert.strictEqual(rotateRes.status, 200, 'admin can rotate worker credential');
     assert.ok(rotateRes.data.credential && rotateRes.data.credential !== activeCredential, 'rotation returns a new credential once');

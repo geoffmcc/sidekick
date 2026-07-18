@@ -55,6 +55,7 @@ const suites = [
   { file: 'test/dashboard-api.test.js', critical: false, description: 'Dashboard API behavior' },
   { file: 'test/compute.test.js', critical: false, description: 'Compute provider-neutral inference and job system' },
   { file: 'test/compute-worker-lifecycle.test.js', critical: false, description: 'Compute worker multi-dimensional lifecycle state model' },
+  { file: 'test/compute-worker-disconnect.test.js', critical: false, description: 'Compute worker graceful disconnect protocol' },
   { file: 'test/openvino-executor.test.js', critical: false, description: 'OpenVINO NPU executor and Python helper manager' },
   { file: 'test/openvino-startup-readiness.test.js', critical: false, description: 'OpenVINO startup capability readiness and advertisement' },
   { file: 'test/compute-protocol.test.js', critical: false, description: 'Compute authenticated worker protocol integration' },

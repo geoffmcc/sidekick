@@ -34,6 +34,7 @@ const LEASE_MS = boundedInt(process.env.SIDEKICK_WORKER_LEASE_MS, 300000, 30000,
 const MAX_CONCURRENT_JOBS = boundedInt(process.env.SIDEKICK_WORKER_CONCURRENCY, 1, 1, 16);
 const MAX_RETRY_MS = boundedInt(process.env.SIDEKICK_WORKER_MAX_RETRY_MS, 30000, 1000, 300000);
 const SHUTDOWN_GRACE_MS = boundedInt(process.env.SIDEKICK_WORKER_SHUTDOWN_GRACE_MS, 10000, 1000, 120000);
+const DISCONNECT_TIMEOUT_MS = boundedInt(process.env.SIDEKICK_WORKER_DISCONNECT_TIMEOUT_MS, 3000, 250, 30000);
 const OPENVINO_STARTUP_READINESS_MS = boundedInt(process.env.SIDEKICK_OPENVINO_STARTUP_READINESS_MS, 60000, 1000, 300000);
 const WORKER_VERSION = require("../../package.json").version || "0.0.0";
 const PROTOCOL_VERSION = "1";
@@ -108,7 +109,7 @@ function credentialHeaders() {
   return workerId && credential ? { Authorization: `Bearer ${workerId}:${credential}` } : {};
 }
 
-function httpRequest(method, requestPath, body, extraHeaders = {}) {
+function httpRequest(method, requestPath, body, extraHeaders = {}, options = {}) {
   return new Promise((resolve, reject) => {
     const url = new URL(requestPath, SERVER_URL);
     const mod = url.protocol === "https:" ? https : http;
@@ -123,7 +124,7 @@ function httpRequest(method, requestPath, body, extraHeaders = {}) {
         catch { resolve({ status: res.statusCode, data: { error: data.substring(0, 500) } }); }
       });
     });
-    req.setTimeout(15000, () => req.destroy(new Error("Request timeout")));
+    req.setTimeout(options.timeoutMs || 15000, () => req.destroy(new Error("Request timeout")));
     req.on("error", reject);
     if (bodyStr) req.write(bodyStr);
     req.end();
@@ -617,8 +618,8 @@ async function main() {
   log(`Starting worker agent v${WORKER_VERSION}`);
   // Register signal handlers first so a shutdown during startup readiness is
   // handled cleanly (aborts the readiness wait; no orphaned helper).
-  process.on("SIGINT", () => requestShutdown("SIGINT"));
-  process.on("SIGTERM", () => requestShutdown("SIGTERM"));
+  process.on("SIGINT", () => { requestShutdown("SIGINT").catch(() => {}); });
+  process.on("SIGTERM", () => { requestShutdown("SIGTERM").catch(() => {}); });
   await establishOpenVinoReadiness();
   if (!running) { await waitForActiveJobs(); return; }
   await enrollIfNeeded();
@@ -629,12 +630,31 @@ async function main() {
   await waitForActiveJobs();
 }
 
-function requestShutdown(signal) {
+// Best-effort graceful disconnect. Tells the server to mark this worker offline
+// immediately on shutdown instead of waiting out the heartbeat-miss threshold.
+// Bounded by DISCONNECT_TIMEOUT_MS; any failure is swallowed since the server's
+// reconciliation loop is the backstop.
+async function sendDisconnect(reason) {
+  if (!workerId || !credential) return false;
+  try {
+    const res = await httpRequest("POST", "/compute/worker/disconnect", { reason }, credentialHeaders(), { timeoutMs: DISCONNECT_TIMEOUT_MS });
+    if (res.status === 200) { log("Sent graceful disconnect"); return true; }
+    log(`Disconnect notification returned HTTP ${res.status} (best-effort)`);
+  } catch (e) {
+    log(`Disconnect notification failed (best-effort): ${e.message}`);
+  }
+  return false;
+}
+
+async function requestShutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   running = false;
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   log(`Shutting down after ${signal}`);
+  // Notify the server before tearing down local resources so it marks us offline
+  // promptly rather than waiting for missed heartbeats (best-effort, bounded).
+  await sendDisconnect(`worker_shutdown:${signal}`);
   // Shut down the OpenVINO helper process if running.
   if (_openVinoExecutor && _openVinoExecutor.shutdownOpenVinoExecutor) {
     try { _openVinoExecutor.shutdownOpenVinoExecutor(); } catch {}
@@ -661,4 +681,11 @@ function __setOpenVinoExecutorForTest(mod) {
   _openVinoInitDone = true;
 }
 
-module.exports = { collectSystemInfo, configuredExecutors, configuredModelInventory, configuredHealth, deterministicEmbedding, executeJob, validateJobResult, boundedInt, jitteredBackoff, redact, getOpenVinoExecutor, __setOpenVinoExecutorForTest };
+// Test seam: inject worker identity so the graceful-disconnect path can be
+// exercised without running the full enrollment flow.
+function __setWorkerIdentityForTest(id, cred) {
+  workerId = id;
+  credential = cred;
+}
+
+module.exports = { collectSystemInfo, configuredExecutors, configuredModelInventory, configuredHealth, deterministicEmbedding, executeJob, validateJobResult, boundedInt, jitteredBackoff, redact, getOpenVinoExecutor, sendDisconnect, requestShutdown, __setOpenVinoExecutorForTest, __setWorkerIdentityForTest };
