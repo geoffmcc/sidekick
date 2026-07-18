@@ -51,7 +51,14 @@ const MAX_RETRY_MS = boundedInt(process.env.SIDEKICK_WORKER_MAX_RETRY_MS, 30000,
 const SHUTDOWN_GRACE_MS = boundedInt(process.env.SIDEKICK_WORKER_SHUTDOWN_GRACE_MS, 10000, 1000, 120000);
 const DISCONNECT_TIMEOUT_MS = boundedInt(process.env.SIDEKICK_WORKER_DISCONNECT_TIMEOUT_MS, 3000, 250, 30000);
 const OPENVINO_STARTUP_READINESS_MS = boundedInt(process.env.SIDEKICK_OPENVINO_STARTUP_READINESS_MS, 60000, 1000, 300000);
-const WORKER_VERSION = require("../../package.json").version || "0.0.0";
+// Resolve the version across layouts: the dev tree (../../package.json = repo
+// root) and the flat standalone package (./package.json alongside this file).
+const WORKER_VERSION = (() => {
+  for (const rel of ["../../package.json", "./package.json"]) {
+    try { const v = require(rel).version; if (v) return v; } catch {}
+  }
+  return process.env.SIDEKICK_WORKER_VERSION || "0.0.0";
+})();
 const PROTOCOL_VERSION = "1";
 const CONFIG_PATH = process.env.SIDEKICK_WORKER_CONFIG || path.join(os.homedir(), ".sidekick", "worker-credential.json");
 

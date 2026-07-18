@@ -27,3 +27,6 @@ __pycache__/
 *.py[cod]
 *.db-shm
 *.db-wal
+
+# Build artifacts
+dist/
