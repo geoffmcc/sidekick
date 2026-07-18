@@ -887,7 +887,7 @@ function getWorkerHandler(req, res) {
 
 function disableWorkerHandler(req, res) {
   try {
-    const worker = compute.workerManager.updateWorker(req.params.workerId, { state: "maintenance", maintenanceMode: true });
+    const worker = compute.workerManager.updateWorker(req.params.workerId, { adminState: "maintenance" });
     if (!worker) return res.status(404).json({ ok: false, error: "worker not found" });
     auditComputeEvent("compute.worker.disabled", { actor: "admin", subjectType: "compute_worker", subjectId: req.params.workerId, payload: { reason: req.body?.reason || null }, severity: "warning" });
     res.json({ ok: true, worker });
@@ -896,7 +896,7 @@ function disableWorkerHandler(req, res) {
 
 function enableWorkerHandler(req, res) {
   try {
-    const worker = compute.workerManager.updateWorker(req.params.workerId, { state: "offline", maintenanceMode: false });
+    const worker = compute.workerManager.updateWorker(req.params.workerId, { adminState: "enabled" });
     if (!worker) return res.status(404).json({ ok: false, error: "worker not found" });
     auditComputeEvent("compute.worker.enabled", { actor: "admin", subjectType: "compute_worker", subjectId: req.params.workerId, payload: { reason: req.body?.reason || null } });
     res.json({ ok: true, worker });
