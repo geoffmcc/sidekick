@@ -287,6 +287,7 @@ function configuredModelInventory() {
     for (const m of ovReadiness.models.slice(0, 16)) {
       const name = safeString(m.name, 160);
       if (!name) continue;
+      const tier = m.certificationTier || "certified";
       models.push({
         name,
         provider: "openvino",
@@ -294,6 +295,7 @@ function configuredModelInventory() {
         device: safeString(m.device, 16),
         dimensions: Number.isFinite(Number(m.dimensions)) ? Number(m.dimensions) : undefined,
         embeddingSpaceId: m.embeddingSpaceId ? safeString(m.embeddingSpaceId, 80) : undefined,
+        certificationTier: tier,
       });
     }
   }
@@ -323,7 +325,10 @@ function configuredHealth() {
       reason: r.reason ? safeString(r.reason, 200) : undefined,
       availableDevices: Array.isArray(r.availableDevices) ? r.availableDevices.slice(0, 8) : [],
       readyProfiles: Array.isArray(r.capabilities) ? r.capabilities.slice(0, 16) : [],
-      models: Array.isArray(r.models) ? r.models.map(m => safeString(m.name, 160)).filter(Boolean).slice(0, 16) : [],
+      models: Array.isArray(r.models) ? r.models.slice(0, 16).map(m => ({
+        name: safeString(m.name, 160),
+        certificationTier: m.certificationTier || "certified",
+      })) : [],
       openVinoVersion: r.openVinoVersion || undefined,
       helperVersion: r.helperVersion || undefined,
     };

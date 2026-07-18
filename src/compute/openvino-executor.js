@@ -26,6 +26,8 @@ const {
   getAdvertisedCapabilities,
   listApprovedModels,
   verifyModelIntegrity,
+  statusToTier,
+  CERTIFICATION_TIER,
 } = require("./openvino-model-manifest");
 
 // ---------------------------------------------------------------------------
@@ -452,13 +454,18 @@ async function awaitStartupReadiness(timeoutMs) {
     if (probe.status !== "ready") continue;
 
     const probedDevice = probe.device;
-    // Tie each advertised capability to the exact device this probe validated.
-    const modelCaps = (model.advertiseCapabilities || []).filter((cap) => {
+    // Use the tier-aware capability strings from the manifest, which include
+    // the certification tier suffix (e.g. :certified, :detected_self_tested).
+    // This guarantees every advertised capability carries its tier.
+    // Format: openvino.text_embedding:<model>:<device>:seq<N>:batch<N>:<tier>
+    const modelCaps = getAdvertisedCapabilities(model.modelId, _availableDevices).filter((cap) => {
       const parts = String(cap).split(":");
-      return parts.length >= 3 && parts[2] === probedDevice && _availableDevices.has(probedDevice);
+      // After the tier suffix, there are now 6 parts. Device is at index 2.
+      return parts.length >= 5 && parts[2] === probedDevice;
     });
     if (modelCaps.length === 0) continue;
 
+    const tier = statusToTier(model.status);
     capabilities.push(...modelCaps);
     models.push({
       name: model.modelId,
@@ -467,6 +474,7 @@ async function awaitStartupReadiness(timeoutMs) {
       dimensions: model.outputDimensions,
       embeddingSpaceId: model.embeddingSpaceId,
       capabilities: modelCaps,
+      certificationTier: tier,
     });
   }
 
@@ -800,6 +808,8 @@ async function probeCapability(modelId, timeoutMs = 30000) {
 
   try {
     const response = await _manager.checkReady(modelId, timeoutMs);
+    const approvedModel = getApprovedModel(modelId);
+    const certificationTier = approvedModel ? statusToTier(approvedModel.status) : CERTIFICATION_TIER.UNSUPPORTED;
     return {
       status: "ready",
       modelId,
@@ -810,6 +820,7 @@ async function probeCapability(modelId, timeoutMs = 30000) {
       certifiedProfiles: response.certified_profiles || [],
       outputDimensions: response.output_dimensions,
       embeddingSpaceId: response.embedding_space_id,
+      certificationTier,
     };
   } catch (err) {
     const code = err.helperErrorCode || "probe_failed";

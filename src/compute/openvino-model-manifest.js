@@ -31,6 +31,23 @@ const CERTIFICATION_TIER = Object.freeze({
   UNSUPPORTED: "unsupported",
 });
 
+/**
+ * Map a model entry's `status` string to a CERTIFICATION_TIER value.
+ *
+ * `certified`, `detected_self_tested`, and `unsupported` are the canonical
+ * runtime tiers. Any unknown status defaults to `unsupported` — the caller
+ * must not assume certification without an explicit tier.
+ *
+ * @param {string} status
+ * @returns {string}
+ */
+function statusToTier(status) {
+  if (status === CERTIFICATION_TIER.CERTIFIED) return CERTIFICATION_TIER.CERTIFIED;
+  if (status === CERTIFICATION_TIER.DETECTED_SELF_TESTED) return CERTIFICATION_TIER.DETECTED_SELF_TESTED;
+  if (status === CERTIFICATION_TIER.UNSUPPORTED) return CERTIFICATION_TIER.UNSUPPORTED;
+  return CERTIFICATION_TIER.UNSUPPORTED; // Unknown => unsafe default.
+}
+
 // ---------------------------------------------------------------------------
 // Model profile constants
 // ---------------------------------------------------------------------------
@@ -362,13 +379,22 @@ function validateJobRequest(jobPayload, workerConfig) {
  * Collect the capability strings that should be advertised for a model when
  * the given device is available and the model certification is ready.
  *
+ * Each returned capability string carries the model's certification tier as a
+ * final segment so the scheduler can distinguish certified profiles from
+ * self-tested or unsupported ones.
+ *
+ * Format: openvino.text_embedding:<model>:<device>:seq<N>:batch<N>:<tier>
+ *
  * @param {string} modelId
  * @param {Set<string>} availableDevices
  * @returns {string[]}
  */
 function getAdvertisedCapabilities(modelId, availableDevices) {
   const model = getApprovedModel(modelId);
-  if (!model || model.status !== "certified") return [];
+  if (!model) return [];
+
+  const tier = statusToTier(model.status);
+  if (tier === CERTIFICATION_TIER.UNSUPPORTED) return [];
 
   return model.advertiseCapabilities.filter((cap) => {
     // Parse the device segment from the capability string.
@@ -377,7 +403,7 @@ function getAdvertisedCapabilities(modelId, availableDevices) {
     if (parts.length < 3) return false;
     const device = parts[2];
     return availableDevices.has(device);
-  });
+  }).map((cap) => `${cap}:${tier}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -543,6 +569,7 @@ module.exports = {
   FALLBACK_POLICY,
   DEVICE,
   CERTIFICATION_TIER,
+  statusToTier,
   getApprovedModel,
   listApprovedModels,
   isDeniedCombination,

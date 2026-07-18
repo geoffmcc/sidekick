@@ -45,13 +45,13 @@ const READY_SNAPSHOT = {
   reason: "2 model(s) ready",
   availableDevices: ["CPU", "GPU", "NPU"],
   capabilities: [
-    "openvino.text_embedding:e5-small-v2-qint8:CPU:seq512:batch1",
-    "openvino.text_embedding:qwen3-embedding-0.6b-int8:NPU:seq128:batch1",
-    "openvino.text_embedding:qwen3-embedding-0.6b-int8:NPU:seq512:batch1",
+    "openvino.text_embedding:e5-small-v2-qint8:CPU:seq512:batch1:certified",
+    "openvino.text_embedding:qwen3-embedding-0.6b-int8:NPU:seq128:batch1:certified",
+    "openvino.text_embedding:qwen3-embedding-0.6b-int8:NPU:seq512:batch1:certified",
   ],
   models: [
-    { name: "e5-small-v2-qint8", provider: "openvino", device: "CPU", dimensions: 384, embeddingSpaceId: "e5-small-v2", capabilities: ["openvino.text_embedding:e5-small-v2-qint8:CPU:seq512:batch1"] },
-    { name: "qwen3-embedding-0.6b-int8", provider: "openvino", device: "NPU", dimensions: 1024, embeddingSpaceId: "qwen3-embedding-0.6b", capabilities: ["openvino.text_embedding:qwen3-embedding-0.6b-int8:NPU:seq128:batch1", "openvino.text_embedding:qwen3-embedding-0.6b-int8:NPU:seq512:batch1"] },
+    { name: "e5-small-v2-qint8", provider: "openvino", device: "CPU", dimensions: 384, embeddingSpaceId: "e5-small-v2", capabilities: ["openvino.text_embedding:e5-small-v2-qint8:CPU:seq512:batch1:certified"], certificationTier: "certified" },
+    { name: "qwen3-embedding-0.6b-int8", provider: "openvino", device: "NPU", dimensions: 1024, embeddingSpaceId: "qwen3-embedding-0.6b", capabilities: ["openvino.text_embedding:qwen3-embedding-0.6b-int8:NPU:seq128:batch1:certified", "openvino.text_embedding:qwen3-embedding-0.6b-int8:NPU:seq512:batch1:certified"], certificationTier: "certified" },
   ],
   openVinoVersion: "2026.2.1-test",
   helperVersion: "1.0.0",
@@ -61,9 +61,9 @@ const CPU_ONLY_SNAPSHOT = {
   state: "ready",
   reason: "1 model ready on [CPU]",
   availableDevices: ["CPU"],
-  capabilities: ["openvino.text_embedding:e5-small-v2-qint8:CPU:seq512:batch1"],
+  capabilities: ["openvino.text_embedding:e5-small-v2-qint8:CPU:seq512:batch1:certified"],
   models: [
-    { name: "e5-small-v2-qint8", provider: "openvino", device: "CPU", dimensions: 384, embeddingSpaceId: "e5-small-v2", capabilities: ["openvino.text_embedding:e5-small-v2-qint8:CPU:seq512:batch1"] },
+    { name: "e5-small-v2-qint8", provider: "openvino", device: "CPU", dimensions: 384, embeddingSpaceId: "e5-small-v2", capabilities: ["openvino.text_embedding:e5-small-v2-qint8:CPU:seq512:batch1:certified"], certificationTier: "certified" },
   ],
   openVinoVersion: "2026.2.1-test",
   helperVersion: "1.0.0",
@@ -161,6 +161,25 @@ async function runShapingTests() {
     assert.deepStrictEqual(invNames, ["e5-small-v2-qint8"], "only CPU-certified model in inventory");
   });
 
+  await test("capabilities carry certification tier suffix in executor and inventory", () => {
+    process.env.SIDEKICK_OPENVINO_ENABLED = "true";
+    workerAgent.__setOpenVinoExecutorForTest(fakeExecutor(READY_SNAPSHOT));
+    const info = workerAgent.collectSystemInfo();
+    const exec = ovExecutorEntry(info);
+    assert.ok(exec, "openvino executor present");
+    for (const cap of exec.capabilities) {
+      assert.ok(cap.endsWith(":certified"), `capability '${cap}' ends with :certified`);
+    }
+    const ovModels = ovModelEntries(info);
+    for (const m of ovModels) {
+      assert.strictEqual(m.certificationTier, "certified", `model ${m.name} has certificationTier`);
+    }
+    const healthModels = info.health.openvino.models || [];
+    for (const hm of healthModels) {
+      assert.strictEqual(hm.certificationTier, "certified", `health model ${hm.name} has certificationTier`);
+    }
+  });
+
   // Reset shaping state.
   delete process.env.SIDEKICK_OPENVINO_ENABLED;
   workerAgent.__setOpenVinoExecutorForTest(null);
@@ -219,14 +238,18 @@ async function runReadinessTests() {
     const r = await ovExecutor.awaitStartupReadiness(8000);
     assert.strictEqual(r.state, "ready", `state was ${r.state}: ${r.reason}`);
     assert.ok(r.availableDevices.includes("NPU"));
-    assert.ok(r.capabilities.includes("openvino.text_embedding:e5-small-v2-qint8:CPU:seq512:batch1"), "E5 CPU");
-    assert.ok(r.capabilities.includes("openvino.text_embedding:qwen3-embedding-0.6b-int8:NPU:seq128:batch1"), "Qwen NPU 128");
-    assert.ok(r.capabilities.includes("openvino.text_embedding:qwen3-embedding-0.6b-int8:NPU:seq512:batch1"), "Qwen NPU 512");
+    assert.ok(r.capabilities.includes("openvino.text_embedding:e5-small-v2-qint8:CPU:seq512:batch1:certified"), "E5 CPU");
+    assert.ok(r.capabilities.includes("openvino.text_embedding:qwen3-embedding-0.6b-int8:NPU:seq128:batch1:certified"), "Qwen NPU 128");
+    assert.ok(r.capabilities.includes("openvino.text_embedding:qwen3-embedding-0.6b-int8:NPU:seq512:batch1:certified"), "Qwen NPU 512");
     // Qwen CPU must NOT be advertised: it is only a job-time fallback, never
     // derived from the NPU model's certification.
     assert.ok(!r.capabilities.some(c => c.includes("qwen") && c.includes(":CPU:")), "no Qwen CPU capability");
     const names = r.models.map(m => m.name).sort();
     assert.deepStrictEqual(names, ["e5-small-v2-qint8", "qwen3-embedding-0.6b-int8"]);
+    // Verify certificationTier on all models.
+    for (const m of r.models) {
+      assert.strictEqual(m.certificationTier, "certified", `model ${m.name} certificationTier`);
+    }
     ovExecutor.shutdownOpenVinoExecutor();
     await sleep(150);
   });
@@ -237,7 +260,7 @@ async function runReadinessTests() {
     const r = await ovExecutor.awaitStartupReadiness(8000);
     assert.strictEqual(r.state, "ready", `state was ${r.state}: ${r.reason}`);
     assert.deepStrictEqual(r.availableDevices, ["CPU"]);
-    assert.deepStrictEqual(r.capabilities, ["openvino.text_embedding:e5-small-v2-qint8:CPU:seq512:batch1"]);
+    assert.deepStrictEqual(r.capabilities, ["openvino.text_embedding:e5-small-v2-qint8:CPU:seq512:batch1:certified"]);
     assert.ok(!r.capabilities.some(c => c.includes(":NPU:")), "no NPU capability when NPU absent");
     assert.deepStrictEqual(r.models.map(m => m.name), ["e5-small-v2-qint8"]);
     ovExecutor.shutdownOpenVinoExecutor();
