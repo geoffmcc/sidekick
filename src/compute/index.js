@@ -6,6 +6,7 @@ const inferenceService = require("./inference-service");
 const capabilityRouter = require("./capability-router");
 const healthMonitor = require("./health-monitor");
 const executorRegistry = require("./executor-registry");
+const placement = require("./placement");
 const errors = require("./errors");
 
 // Reconciliation cadence. Workers heartbeat every ~30s; three missed beats
@@ -162,7 +163,7 @@ function getRoutingRules() {
 function explainRouting(request) {
   const { provider, model, reason } = capabilityRouter.selectProvider(request);
   const fallbacks = capabilityRouter.selectWithFallback(request);
-  return {
+  const legacy = {
     selected: provider ? {
       providerId: provider.providerId,
       providerType: provider.providerType,
@@ -179,6 +180,25 @@ function explainRouting(request) {
     reason,
     fallbackCount: fallbacks.fallbacks?.length || 0,
   };
+  // Additive: the unified placement dry run covers BOTH candidate classes
+  // (provider-direct and worker-backed) with the same evaluation code as real
+  // placement. Legacy fields above are preserved unchanged.
+  try {
+    legacy.placement = placement.explainPlacement({
+      version: 1,
+      capability: ["chat", "generate", "embeddings"].includes(request.capability) ? request.capability : "chat",
+      data_classification: request.dataClassification || "private",
+      ...(request.trustLevel && placement.TRUST_ORDER[request.trustLevel] !== undefined ? { trust_level_required: request.trustLevel } : {}),
+      requirements: {
+        ...(request.requiresTools ? { tools: true } : {}),
+        ...(request.requiresVision ? { vision: true } : {}),
+        ...(Number.isInteger(request.contextLimit) ? { context_limit: request.contextLimit } : {}),
+      },
+    });
+  } catch (e) {
+    legacy.placement = { error: e.message, code: e.code || "PLACEMENT_INVALID" };
+  }
+  return legacy;
 }
 
 module.exports = {
@@ -194,7 +214,9 @@ module.exports = {
   capabilityRouter,
   healthMonitor,
   executorRegistry,
+  placement,
   errors,
   getRoutingRules,
   explainRouting,
+  explainPlacement: placement.explainPlacement,
 };

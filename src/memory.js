@@ -276,6 +276,8 @@ async function generateEmbedding(text) {
       const result = await inferenceService.embed({
         input: text,
         model: EMBEDDING_MODEL,
+        // Memory content is private by definition; classify explicitly.
+        dataClassification: "private",
         preferences: { allowFallback: true },
       });
       return result.embedding || null;

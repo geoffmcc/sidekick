@@ -288,6 +288,16 @@ async function sidekick_compute_route({ action, ...args }) {
         const dbStore = require("../db");
         const db = dbStore.getDb();
         const crypto = require("crypto");
+        // Rules are operator preferences, but their stored arrays are parsed on
+        // every routing decision — validate shape on write so a malformed rule
+        // can never degrade routing: string-only IDs, bounded counts/lengths.
+        for (const field of ["preferred_providers", "preferred_models", "preferred_workers", "fallback_providers"]) {
+          const value = args[field];
+          if (value === undefined) continue;
+          if (!Array.isArray(value) || value.length > 50 || value.some(v => typeof v !== "string" || v.length === 0 || v.length > 200)) {
+            return err(field + " must be an array of up to 50 non-empty id strings");
+          }
+        }
         const ruleId = "rule_" + Date.now().toString(36) + "_" + crypto.randomBytes(6).toString("hex");
         db.prepare(`
           INSERT INTO compute_routing_rules (

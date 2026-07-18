@@ -17,6 +17,7 @@ test/test-data-compute/
 test/test-data-compute-lifecycle/
 test/test-data-compute-reenroll/
 test/test-data-compute-protocol/
+test/test-data-placement/
 test/test-data-dashboard/
 test/test-data-security/
 test/test-data-structured-tools-security/

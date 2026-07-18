@@ -86,6 +86,101 @@ Supported reporting inputs:
 
 Worker heartbeat and admin inspect APIs expose platform, architecture, worker version, protocol version, providers, executors, model inventory, limits, health, and utilization metadata.
 
+## Placement (v1)
+
+`src/compute/placement.js` is the shared placement decision core. Both routing
+paths delegate candidate evaluation to it so their decisions cannot drift:
+
+- **Direct inference** (`inference-service` `chat`/`generate`/`embed`, used by
+  the Agent Bridge, memory embeddings, and the `llm`/`embed` tools) ranks
+  provider+model candidates with the shared predicates and executes the best
+  candidate through provider adapters, falling back only across candidates
+  that passed the same gates.
+- **Distributed jobs** (`job-manager` claim path) evaluate each polling worker
+  with the same predicate (`evaluateWorkerCandidate`) before leasing.
+
+### Placement requests
+
+A logical placement request is strict and versioned (`version: 1`). Callers
+state *what* they need — capability (`embeddings`, `chat`, `generate`),
+`data_classification` (mandatory; a missing classification is rejected, never
+treated as unrestricted), optional `trust_level_required`, logical
+`requirements` (`tools`, `vision`, `structured_output`, `dimensions`,
+`context_limit`, `sequence_length`), and `preferences.allow_fallback`.
+Callers can never select endpoints, credentials, devices, workers, executors,
+trust labels, or provenance; those fields are rejected wherever they appear,
+including inside compute-job payloads (checked at `createJob`).
+
+### Decision policy
+
+- **Embeddings** prefer a certified OpenVINO model on an enrolled, healthy,
+  trust- and classification-eligible worker — NPU-certified first (reason
+  `preferred_certified_npu_embedding`), with CPU fallback offered only when
+  the manifest permits it (`same_model_cpu`) and the request allows fallback.
+  Certification comes from the OpenVINO model manifest, never from a worker's
+  self-reported tier: a worker claim can downgrade a tier but never upgrade
+  one, and unlisted models are never certified.
+- **Chat/generation** prefer registered provider models (Ollama first by
+  scoring) matching the required context window, tool, and structured-output
+  capabilities.
+- **Policy denials never become fallbacks**: classification, trust,
+  certification, validation, and unknown-capability failures fail closed;
+  only transient execution failures trigger fallback, and only across
+  candidates that already passed every gate.
+- Routing rules (`compute_routing_rules`) are operator preferences applied
+  strictly after the gates; a rule can narrow or order candidates but cannot
+  re-admit a rejected one. Rule arrays are validated on write.
+
+### Concurrency
+
+Claim decisions re-read worker concurrency inside the claim transaction (the
+authenticated snapshot is never trusted for the guard) and enforce
+per-executor limits: `openvino.text_embedding` holds a single resident NPU
+model, so at most one active lease per worker uses it even when the
+worker-wide limit has headroom (`concurrency_exhausted`).
+
+### Provenance
+
+A requested accelerator is never recorded as the actual accelerator. On
+completion, the worker's claimed device is cross-checked against the manifest
+for the job's model and persisted on the attempt as `accelerator`,
+`requested_accelerator`, and `accelerator_verification`:
+
+- `manifest_confirmed` — claimed device is the model's certified device
+- `manifest_confirmed_fallback` — permitted fallback device with an explicit
+  fallback report
+- `unverified` — model not manifest-listed; the claim is recorded as a claim
+- `rejected_claim` — device outside the manifest-permitted set; no accelerator
+  is recorded
+
+Fallbacks and failed attempts append to the job's `fallback_history_json`.
+Provider-path execution always reports `acceleratorVerification:
+"not_verified"` — GPU-backed providers are an expectation, never a verified
+fact, and Sidekick reports exactly that.
+
+### Explain mode
+
+`sidekick_compute_route action="explain"` (and `compute.explainPlacement`)
+runs the same decision code as real placement with zero execution and zero
+state mutation, returning the selected candidate, permitted fallbacks, and
+sanitized rejection reasons (`worker_offline`, `worker_stale`,
+`capability_missing`, `executor_missing`, `model_missing`,
+`model_not_certified`, `static_shape_required`, `data_classification_denied`,
+`trust_too_low`, `circuit_open`, `concurrency_exhausted`,
+`fallback_disabled`, …). Explain output never contains endpoints, secrets, or
+raw worker config blobs.
+
+### Limitations
+
+- Worker hardware reports are attested by the enrolled worker, not
+  independently measured by the server; OpenVINO capabilities pass a real
+  local device probe before being advertised, which is the strongest signal
+  available. NPU/CPU provenance is therefore "attested by a trusted-enrolled
+  worker and manifest-consistent", not hardware-attested.
+- Direct (synchronous) embedding execution still runs on provider adapters;
+  the certified-NPU path executes through compute jobs. The placement
+  decision reports the preferred path either way.
+
 ## Jobs And Leasing
 
 Admins create jobs with `/compute/admin/jobs`. Workers claim jobs with `/compute/worker/jobs/claim`.

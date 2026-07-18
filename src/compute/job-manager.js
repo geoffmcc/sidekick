@@ -2,6 +2,8 @@ const crypto = require("crypto");
 const dbStore = require("../db");
 const { JOB_STATES, JOB_TERMINAL_STATES, JOB_TRANSITIONS, JobError, LeaseExpiredError } = require("./errors");
 const { validateJobContract } = require("./job-contract");
+const placement = require("./placement");
+const manifest = require("./openvino-model-manifest");
 let platformKernel = null;
 try { platformKernel = require("../platform/kernel"); } catch {}
 
@@ -144,6 +146,10 @@ function ensureSchema() {
   ensureColumn("compute_job_attempts", "lease_acquired_at", "TEXT");
   ensureColumn("compute_job_attempts", "lease_expires_at", "TEXT");
   ensureColumn("compute_job_attempts", "execution_id", "TEXT");
+  // Placement v1 provenance: what was asked for vs what actually ran, and how
+  // the actual-device claim was verified against the model manifest.
+  ensureColumn("compute_job_attempts", "requested_accelerator", "TEXT");
+  ensureColumn("compute_job_attempts", "accelerator_verification", "TEXT");
   ensureColumn("compute_artifacts", "worker_id", "TEXT");
   ensureColumn("compute_artifacts", "lease_id", "TEXT");
   ensureColumn("compute_artifacts", "state", "TEXT NOT NULL DEFAULT 'finalized'");
@@ -291,6 +297,13 @@ function rowToAttempt(row) {
     error_category: row.error_category,
     errorMessage: row.error_message,
     error_message: row.error_message,
+    accelerator: row.accelerator,
+    requestedAccelerator: row.requested_accelerator,
+    requested_accelerator: row.requested_accelerator,
+    acceleratorVerification: row.accelerator_verification,
+    accelerator_verification: row.accelerator_verification,
+    fallbackReason: row.fallback_reason,
+    fallback_reason: row.fallback_reason,
     metadata: parseJson(row.metadata_json, {}),
     createdAt: row.created_at,
     created_at: row.created_at,
@@ -315,6 +328,10 @@ function createJob({
 }) {
   ensureSchema();
   const validated = validateJobContract({ protocolVersion, jobType, capability, requestPayload, capabilityRequirements, routingPreferences, retryPolicy, resourceRequirements, artifactExpectations, outputLimits, priority, timeoutMs, expiresAt });
+  // Placement choke point: callers must not smuggle infrastructure selection,
+  // credentials, device/worker pinning, trust claims, or provenance into the
+  // job's free-form objects. Rejected explicitly, never silently dropped.
+  placement.assertNoForbiddenFields({ requestPayload, capabilityRequirements, routingPreferences }, "job", { allow: [] });
   jobType = validated.jobType;
   capability = validated.capability;
   protocolVersion = validated.protocolVersion;
@@ -356,58 +373,61 @@ function workerCanRunJob(worker, job) {
   return workerCompatibility(worker, job).ok;
 }
 
-function workerCompatibility(worker, job) {
-  const reasons = [];
-  if (!worker) return { ok: false, reasons: ["worker_missing"] };
-  if (worker.state !== "online") reasons.push(`state:${worker.state}`);
-  if (worker.maintenanceMode) reasons.push("maintenance_mode");
-  if (worker.protocolVersion !== "1") reasons.push(`protocol:${worker.protocolVersion || "missing"}`);
-  if (worker.currentJobs >= worker.maxConcurrentJobs) reasons.push("concurrency_limit");
-  if (worker.lastHeartbeat && Date.now() - new Date(worker.lastHeartbeat).getTime() > 120000) reasons.push("heartbeat_stale");
-  const executors = parseMaybeArray(worker.executors).map(e => typeof e === "string" ? e : (e.type || e.name)).filter(Boolean);
-  const providers = parseMaybeArray(worker.providers).map(p => typeof p === "string" ? p : (p.type || p.providerType || p.name)).filter(Boolean);
-  // Preserve full model objects for tier-aware matching.
-  const rawModels = parseMaybeArray(worker.modelInventory);
-  const modelNames = rawModels.map(m => typeof m === "string" ? m : (m.name || m.model || m.providerModelName)).filter(Boolean);
-  // Derive per-model tier from certificationTier field (preferred) or capability strings.
-  const modelTierMap = new Map();
-  for (const m of rawModels) {
-    if (typeof m === "object" && m !== null) {
-      const name = m.name || m.model || m.providerModelName;
-      if (name && m.certificationTier) modelTierMap.set(name, m.certificationTier);
-    }
+// Map the placement core's sanitized reason codes onto the legacy diagnostic
+// strings this path has always recorded, so scheduling_diagnostics_json stays
+// backward compatible for existing consumers and tests.
+function legacyCompatReason(code, worker, requiredExecutor, requiredModel) {
+  switch (code) {
+    case "worker_offline": return `state:${worker.state}`;
+    case "worker_maintenance": return "maintenance_mode";
+    case "protocol_mismatch": return `protocol:${worker.protocolVersion || "missing"}`;
+    case "concurrency_exhausted": return "concurrency_limit";
+    case "worker_stale": return "heartbeat_stale";
+    case "executor_missing": return `executor_missing:${requiredExecutor}`;
+    case "model_missing": return `model_missing:${requiredModel}`;
+    default: return code;
   }
-  // Also extract tiers from capability strings for models without explicit tier field.
-  for (const exec of parseMaybeArray(worker.executors)) {
-    if (typeof exec !== "object" || !Array.isArray(exec.capabilities)) continue;
-    for (const cap of exec.capabilities) {
-      const parts = String(cap).split(":");
-      if (parts.length >= 6) {
-        const capModel = parts[1];
-        const capTier = parts[5];
-        if (!modelTierMap.has(capModel) && capTier) modelTierMap.set(capModel, capTier);
-      }
-    }
-  }
+}
+
+function jobPlacementRequirement(job) {
+  const trustRequested = job.routingPreferences?.trust_level_required;
+  return {
+    capability: job.capability || job.jobType,
+    dataClassification: job.dataClassification || "private",
+    // Workers enroll at "trusted" by default; a job may only RAISE the floor.
+    trustLevelRequired: placement.TRUST_ORDER[trustRequested] !== undefined && placement.TRUST_ORDER[trustRequested] > placement.TRUST_ORDER.trusted ? trustRequested : "trusted",
+    requirements: {
+      sequenceLength: Number.isInteger(job.capabilityRequirements?.sequence_length) ? job.capabilityRequirements.sequence_length : null,
+      dimensions: Number.isInteger(job.capabilityRequirements?.dimensions) ? job.capabilityRequirements.dimensions : null,
+    },
+  };
+}
+
+function workerCompatibility(worker, job, { activeExecutorCounts = null } = {}) {
+  if (!worker) return { ok: false, reasons: ["worker_missing"], bestTier: null };
   const requiredExecutor = job.capabilityRequirements?.executor || job.requestPayload?.executor;
   const requiredModel = job.requestPayload?.model || job.requestPayload?.model_id || job.capabilityRequirements?.model;
-  if (requiredExecutor && !executors.includes(requiredExecutor)) reasons.push(`executor_missing:${requiredExecutor}`);
-  if (requiredModel && modelNames.length > 0 && !modelNames.includes(requiredModel)) reasons.push(`model_missing:${requiredModel}`);
+
+  // Shared placement predicate: lifecycle, staleness, concurrency (worker-wide
+  // and per-executor), data classification, trust, executor/model presence,
+  // and manifest-authoritative certification all evaluate here — the same code
+  // that backs explainPlacement, so claim decisions and dry runs cannot drift.
+  const evaluation = placement.evaluateWorkerCandidate(
+    jobPlacementRequirement(job), worker, { executor: requiredExecutor, model: requiredModel }, { activeExecutorCounts }
+  );
+  const reasons = evaluation.reasons.map(code => legacyCompatReason(code, worker, requiredExecutor, requiredModel));
+
+  // Job-path-specific: job type ↔ executor-family capability check.
+  const executors = parseMaybeArray(worker.executors).map(e => typeof e === "string" ? e : (e.type || e.name)).filter(Boolean);
+  const providers = parseMaybeArray(worker.providers).map(p => typeof p === "string" ? p : (p.type || p.providerType || p.name)).filter(Boolean);
   let capabilityOk = false;
   if (["chat", "generate", "embedding", "embeddings", "inference"].includes(job.jobType) || ["chat", "generate", "embeddings"].includes(job.capability)) {
     capabilityOk = executors.includes("mock.inference") || executors.includes("ollama.inference") || providers.includes("mock") || providers.includes("ollama");
   }
   capabilityOk = capabilityOk || executors.includes(job.jobType) || executors.includes(job.capability);
   if (!capabilityOk) reasons.push(`capability_missing:${job.capability || job.jobType}`);
-  // Determine the best certification tier for the required model.
-  let bestTier = null;
-  if (requiredModel && modelTierMap.has(requiredModel)) {
-    bestTier = modelTierMap.get(requiredModel);
-  } else if (requiredModel) {
-    // Model present in inventory but no tier info — assume certified (legacy model).
-    bestTier = "certified";
-  }
-  return { ok: reasons.length === 0, reasons, bestTier };
+
+  return { ok: reasons.length === 0, reasons, bestTier: evaluation.tier };
 }
 
 function recordSchedulingDiagnostics(db, jobId, diagnostics) {
@@ -477,10 +497,26 @@ function claimNextJob(worker, { leaseDurationMs = 300000 } = {}) {
   db.exec("BEGIN IMMEDIATE");
   try {
     releaseRetryWaitJobs(db);
+    // Authoritative concurrency state is re-read INSIDE the transaction: the
+    // caller-supplied worker snapshot was captured at authentication time and
+    // two near-simultaneous claims would otherwise both pass the guard.
+    const freshCounts = db.prepare("SELECT current_jobs, max_concurrent_jobs FROM compute_workers WHERE worker_id = ?").get(worker.workerId);
+    const freshWorker = freshCounts
+      ? { ...worker, currentJobs: freshCounts.current_jobs, maxConcurrentJobs: freshCounts.max_concurrent_jobs }
+      : worker;
+    // Active per-executor leases for this worker: executors with a declared
+    // concurrency limit (the OpenVINO helper holds a single resident NPU
+    // model) must not be double-claimed even when the worker-wide limit has
+    // headroom.
+    const activeExecutorCounts = {};
+    for (const active of db.prepare("SELECT capability_requirements_json, request_payload_json FROM compute_jobs WHERE selected_worker_id = ? AND status IN ('leased','starting','running')").all(worker.workerId)) {
+      const executor = parseJson(active.capability_requirements_json, {}).executor || parseJson(active.request_payload_json, {}).executor;
+      if (executor) activeExecutorCounts[executor] = (activeExecutorCounts[executor] || 0) + 1;
+    }
     const rows = db.prepare("SELECT * FROM compute_jobs WHERE status = 'queued' AND attempt < max_attempts AND (expires_at IS NULL OR expires_at > ?) ORDER BY priority ASC, created_at ASC LIMIT 50").all(nowIso());
     for (const row of rows) {
       const job = rowToJob(row);
-      const compatibility = workerCompatibility(worker, job);
+      const compatibility = workerCompatibility(freshWorker, job, { activeExecutorCounts });
       if (!compatibility.ok) {
         recordSchedulingDiagnostics(db, job.jobId, { selected: false, workerId: worker.workerId, rejected: [{ workerId: worker.workerId, reasons: compatibility.reasons }], checkedAt: nowIso() });
         continue;
@@ -678,6 +714,44 @@ function updateProgress(jobId, workerId, leaseId, { progressPercent, progressMes
   return getJob(jobId);
 }
 
+/**
+ * Derive accelerator provenance for a completing attempt. The worker's claimed
+ * device is cross-checked against the model manifest — a worker result can
+ * never upgrade recorded provenance beyond what the manifest permits for the
+ * job's model:
+ *   - claimed == certifiedDevice                     -> manifest_confirmed
+ *   - claimed == fallbackDevice && fallback occurred -> manifest_confirmed_fallback
+ *   - claimed outside the manifest-permitted set     -> rejected_claim (no accelerator recorded)
+ *   - model not manifest-listed (e.g. ollama chat)   -> unverified (claim recorded as claim only)
+ */
+function deriveAttemptProvenance(job, result) {
+  const claimed = typeof result?.device === "string" ? result.device : null;
+  const requested = typeof result?.requested_device === "string" ? result.requested_device : null;
+  const fallbackOccurred = result?.fallback_occurred === true;
+  const fallbackReason = typeof result?.fallback_reason === "string" ? result.fallback_reason.slice(0, 200) : null;
+  const modelName = job.requestPayload?.model || job.requestPayload?.model_id || job.capabilityRequirements?.model || null;
+  const approved = modelName ? manifest.getApprovedModel(modelName) : null;
+  if (!claimed) {
+    return { accelerator: null, requestedAccelerator: requested, verification: null, fallbackOccurred, fallbackReason };
+  }
+  if (!approved) {
+    return { accelerator: claimed, requestedAccelerator: requested, verification: "unverified", fallbackOccurred, fallbackReason };
+  }
+  if (claimed === approved.certifiedDevice && !fallbackOccurred) {
+    return { accelerator: claimed, requestedAccelerator: requested || approved.certifiedDevice, verification: "manifest_confirmed", fallbackOccurred, fallbackReason };
+  }
+  if (fallbackOccurred && approved.fallbackDevice && claimed === approved.fallbackDevice) {
+    return { accelerator: claimed, requestedAccelerator: requested || approved.certifiedDevice, verification: "manifest_confirmed_fallback", fallbackOccurred, fallbackReason };
+  }
+  return { accelerator: null, requestedAccelerator: requested || approved.certifiedDevice, verification: "rejected_claim", fallbackOccurred, fallbackReason };
+}
+
+function appendFallbackHistory(db, jobId, entry, existing) {
+  const history = Array.isArray(existing) ? existing.slice(-19) : [];
+  history.push(entry);
+  db.prepare("UPDATE compute_jobs SET fallback_history_json = ? WHERE job_id = ?").run(JSON.stringify(history), jobId);
+}
+
 function completeJob(jobId, workerId, leaseId, { result = {}, artifacts = [], artifactIds = [], artifact_ids = [] } = {}) {
   ensureSchema();
   const job = getJob(jobId);
@@ -687,6 +761,7 @@ function completeJob(jobId, workerId, leaseId, { result = {}, artifacts = [], ar
   validateCompletionArtifacts(jobId, workerId, leaseId, artifactIds.length ? artifactIds : artifact_ids);
   const db = dbStore.getDb();
   const now = nowIso();
+  const provenance = deriveAttemptProvenance(job, result);
   db.exec("BEGIN IMMEDIATE");
   try {
     const update = db.prepare(`
@@ -694,8 +769,24 @@ function completeJob(jobId, workerId, leaseId, { result = {}, artifacts = [], ar
       WHERE job_id = ? AND selected_worker_id = ? AND lease_id = ? AND status IN ('leased','starting','running')
     `).run(json(result), hashJson(result), now, now, jobId, workerId, leaseId);
     if (update.changes !== 1) throw new LeaseExpiredError(jobId, leaseId);
-    db.prepare("UPDATE compute_job_attempts SET status = 'completed', completed_at = ?, result_json = ?, result_hash = ? WHERE job_id = ? AND lease_id = ?")
-      .run(now, json(result), hashJson(result), jobId, leaseId);
+    // Provenance is written under the same lease-scoped guard as the result
+    // itself, so a superseded attempt can never record or overwrite it.
+    db.prepare(`
+      UPDATE compute_job_attempts SET status = 'completed', completed_at = ?, result_json = ?, result_hash = ?,
+        accelerator = ?, requested_accelerator = ?, accelerator_verification = ?, fallback_reason = COALESCE(?, fallback_reason)
+      WHERE job_id = ? AND lease_id = ?
+    `).run(now, json(result), hashJson(result), provenance.accelerator, provenance.requestedAccelerator, provenance.verification, provenance.fallbackReason, jobId, leaseId);
+    if (provenance.fallbackOccurred || provenance.verification === "rejected_claim") {
+      appendFallbackHistory(db, jobId, {
+        attempt: job.attempt,
+        requested_accelerator: provenance.requestedAccelerator,
+        accelerator: provenance.accelerator,
+        fallback_occurred: provenance.fallbackOccurred,
+        fallback_reason: provenance.fallbackReason,
+        verification: provenance.verification,
+        at: now,
+      }, job.fallbackHistory);
+    }
     db.prepare("UPDATE compute_workers SET current_jobs = MAX(current_jobs - 1, 0), updated_at = ? WHERE worker_id = ?").run(now, workerId);
     db.exec("COMMIT");
   } catch (e) {
@@ -730,6 +821,15 @@ function failJob(jobId, workerId, leaseId, { errorCategory = "worker_error", err
   const nextStatus = current.attempt >= current.maxAttempts ? "dead_letter" : "retry_wait";
   const retryAfter = nextStatus === "retry_wait" ? new Date(Date.now() + retryDelayMs(current)).toISOString() : null;
   const now = nowIso();
+  // Failed attempts are part of the placement/fallback record: what failed,
+  // why, and whether a retry (re-placement) follows.
+  appendFallbackHistory(db, jobId, {
+    attempt: current.attempt,
+    failed: true,
+    error_category: String(errorCategory).slice(0, 80),
+    next_status: nextStatus,
+    at: now,
+  }, current.fallbackHistory);
   db.prepare(`
     UPDATE compute_jobs SET status = ?, lease_id = NULL, lease_expires_at = NULL, lease_renewed_at = NULL, selected_worker_id = NULL,
       error_category = ?, error_message = ?, retry_after = ?, updated_at = ?

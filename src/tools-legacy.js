@@ -1722,8 +1722,10 @@ async function sidekick_llm({ prompt, system, temperature, provider }) {
       const result = await inferenceService.chat({
         messages: [{ role: "user", content: prompt }],
         temperature: temperature || 0.7,
+        dataClassification: "private",
+        // Caller-supplied provider names are advisory only; placement ignores
+        // provider pinning and applies its own gates.
         preferences: { allowFallback: true },
-        ...(provider ? { preferences: { providerId: provider, allowFallback: true } } : {}),
       }, { systemPrompt: system });
       return { content: [{ type: "text", text: result.content || JSON.stringify(result) }] };
     } catch (e) {
@@ -11063,6 +11065,7 @@ async function sidekick_embed({ text, model }) {
         const result = await inferenceService.embed({
           input: text,
           model: m,
+          dataClassification: "private",
           preferences: { allowFallback: true },
         });
         return { content: [{ type: "text", text: JSON.stringify({ embedding: result.embedding, dimensions: result.dimensions || result.embedding?.length, model: m }, null, 2) }] };

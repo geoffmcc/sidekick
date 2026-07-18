@@ -127,7 +127,7 @@ async function main() {
 
   await test("routing: OpenVINO job is eligible for a worker advertising the executor type", async () => {
     const worker = {
-      state: "online", maintenanceMode: false, protocolVersion: "1",
+      state: "online", maintenanceMode: false, protocolVersion: "1", trustLevel: "trusted",
       currentJobs: 0, maxConcurrentJobs: 1, lastHeartbeat: new Date().toISOString(),
       executors: [{ type: "mock.inference" }, { type: "openvino.text_embedding", capabilities: ["embeddings"] }],
       providers: [{ type: "mock" }],
@@ -139,7 +139,7 @@ async function main() {
 
   await test("routing: OpenVINO job is ineligible for a worker without the executor type", async () => {
     const worker = {
-      state: "online", maintenanceMode: false, protocolVersion: "1",
+      state: "online", maintenanceMode: false, protocolVersion: "1", trustLevel: "trusted",
       currentJobs: 0, maxConcurrentJobs: 1, lastHeartbeat: new Date().toISOString(),
       executors: [{ type: "mock.inference" }], providers: [{ type: "mock" }],
       modelInventory: [{ name: "deterministic-test" }],
@@ -151,7 +151,7 @@ async function main() {
 
   await test("routing: workerCompatibility returns bestTier from model inventory", async () => {
     const worker = {
-      state: "online", maintenanceMode: false, protocolVersion: "1",
+      state: "online", maintenanceMode: false, protocolVersion: "1", trustLevel: "trusted",
       currentJobs: 0, maxConcurrentJobs: 2, lastHeartbeat: new Date().toISOString(),
       executors: [{ type: "mock.inference" }, { type: "openvino.text_embedding", capabilities: ["openvino.text_embedding:qwen3-embedding-0.6b-int8:CPU:seq512:batch1:certified"] }],
       providers: [{ type: "mock" }],
@@ -164,7 +164,7 @@ async function main() {
 
   await test("routing: workerCompatibility reports detected_self_tested tier", async () => {
     const worker = {
-      state: "online", maintenanceMode: false, protocolVersion: "1",
+      state: "online", maintenanceMode: false, protocolVersion: "1", trustLevel: "trusted",
       currentJobs: 0, maxConcurrentJobs: 2, lastHeartbeat: new Date().toISOString(),
       executors: [{ type: "mock.inference" }, { type: "openvino.text_embedding", capabilities: ["openvino.text_embedding:qwen3-embedding-0.6b-int8:CPU:seq512:batch1:detected_self_tested"] }],
       providers: [{ type: "mock" }],
