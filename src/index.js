@@ -725,6 +725,18 @@ function heartbeatHandler(req, res) {
   }
 }
 
+function disconnectHandler(req, res) {
+  try {
+    const reason = typeof req.body?.reason === "string" ? req.body.reason.slice(0, 200) : "graceful";
+    const worker = compute.workerManager.disconnectWorker(req.computeWorker.workerId, reason);
+    if (!worker) return res.status(404).json({ ok: false, error: "worker not found" });
+    auditComputeEvent("compute.worker.disconnected", { actor: req.computeWorker.workerId, subjectType: "compute_worker", subjectId: req.computeWorker.workerId, payload: { reason } });
+    res.json({ ok: true, worker });
+  } catch (e) {
+    sendComputeError(res, e, 400);
+  }
+}
+
 function capabilitiesHandler(req, res) {
   try {
     const { providers, executors, accelerators, maxConcurrentJobs, workerVersion } = req.body || {};
@@ -940,6 +952,7 @@ app.use("/compute/enrollment", computeEnrollmentRouter);
 const computeWorkerRouter = express.Router();
 computeWorkerRouter.use(requireWorker);
 computeWorkerRouter.post("/heartbeat", express.json({ limit: "32kb" }), heartbeatHandler);
+computeWorkerRouter.post("/disconnect", express.json({ limit: "8kb" }), disconnectHandler);
 computeWorkerRouter.post("/capabilities", express.json({ limit: "64kb" }), capabilitiesHandler);
 computeWorkerRouter.post("/credentials/rotate", express.json({ limit: "8kb" }), rotateCredentialHandler);
 computeWorkerRouter.post("/jobs/claim", express.json({ limit: "16kb" }), claimJobHandler);
