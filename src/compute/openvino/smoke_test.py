@@ -51,6 +51,10 @@ EXPECTED_DIMENSIONS = {
     "qwen3-embedding-0.6b-int8": 1024,
 }
 
+# Minimum and maximum acceptable L2 norm for a normalised embedding.
+MIN_EMBEDDING_NORM = 0.99
+MAX_EMBEDDING_NORM = 1.01
+
 DEFAULT_MODEL_ID = "qwen3-embedding-0.6b-int8"
 DEFAULT_TEXT = "Smoke test: verify Intel NPU embedding execution."
 
@@ -120,6 +124,13 @@ def validate_embedding_response(
                 f"Embedding contains a non-numeric or non-finite value at "
                 f"index {index}: {value!r}"
             )
+        # Verify L2 norm is approximately 1.0 (normalised embedding).
+        norm = math.sqrt(sum(v * v for v in embedding if isinstance(v, (int, float))))
+        if not math.isfinite(norm) or norm < MIN_EMBEDDING_NORM or norm > MAX_EMBEDDING_NORM:
+            errors.append(
+                f"Embedding L2 norm {norm:.6f} outside expected range "
+                f"[{MIN_EMBEDDING_NORM}, {MAX_EMBEDDING_NORM}]"
+            )
 
     return errors
 
@@ -133,6 +144,32 @@ def _first_bad_value(values: list[Any]) -> tuple[int, Any] | None:
         if not math.isfinite(value):
             return (index, value)
     return None
+
+
+def _compute_l2_norm(embedding: Any) -> float | None:
+    """Compute the L2 norm of an embedding list, or None if invalid."""
+    if not isinstance(embedding, list) or len(embedding) == 0:
+        return None
+    try:
+        return math.sqrt(sum(v * v for v in embedding if isinstance(v, (int, float))))
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# OpenVINO import assertion
+# ---------------------------------------------------------------------------
+
+def check_openvino_import() -> tuple[bool, str]:
+    """Assert that OpenVINO can be imported and return (ok, version_or_error)."""
+    try:
+        import openvino  # noqa: F401
+        version = getattr(openvino, "__version__", "unknown")
+        return True, version
+    except ImportError as exc:
+        return False, f"OpenVINO import failed: {exc}"
+    except Exception as exc:
+        return False, f"OpenVINO import raised: {exc}"
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +234,13 @@ def _read_json_line(pipe, deadline: float) -> dict[str, Any]:
 
 def run_smoke(args: argparse.Namespace) -> int:
     py, store, script = _resolve_paths(args.python, args.models_dir, args.helper_script)
+
+    # Assert OpenVINO is importable in the target Python environment.
+    ov_ok, ov_info = check_openvino_import()
+    if not ov_ok:
+        print(f"\nSMOKE TEST ERROR: {ov_info}", file=sys.stderr, flush=True)
+        return 2
+    print(f"OpenVINO import: OK (version {ov_info})", flush=True)
 
     expect_dim = EXPECTED_DIMENSIONS.get(args.model_id)
     if expect_dim is None and not args.allow_unknown_model:
@@ -270,7 +314,38 @@ def run_smoke(args: argparse.Namespace) -> int:
                 f"OpenVINO (available: {devices})"
             )
 
-        # 2. Send the embed request.
+        # 2. Send request based on action type.
+        request_id = "smoke-1"
+        if args.action == "ready":
+            request = {
+                "v": PROTOCOL_VERSION,
+                "id": request_id,
+                "action": "ready",
+                "model_id": args.model_id,
+            }
+            proc.stdin.write(json.dumps(request) + "\n")
+            proc.stdin.flush()
+
+            infer_deadline = time.monotonic() + (args.inference_timeout_ms / 1000.0)
+            response = None
+            while True:
+                msg = _read_json_line(proc.stdout, infer_deadline)
+                if msg.get("event") == "fatal":
+                    raise HelperError(f"Helper emitted fatal error: {msg.get('error')}")
+                if msg.get("id") == request_id:
+                    response = msg
+                    break
+
+            if not response or response.get("ok") is not True:
+                error = response.get("error", "unknown") if response else "no response"
+                raise HelperError(f"Readiness probe failed: {error}")
+
+            print(f"Readiness probe: OK (device={response.get('device')}, "
+                  f"profiles={response.get('certified_profiles')})", flush=True)
+            print("\nSMOKE TEST PASSED: readiness probe completed successfully.", flush=True)
+            return 0
+
+        # 2b. Send the embed request.
         request_id = "smoke-1"
         request = {
             "v": PROTOCOL_VERSION,
@@ -353,6 +428,7 @@ def _print_report(
     print(f"fallback_occurred : {resp.get('fallback_occurred')}", flush=True)
     print(f"fallback_reason   : {resp.get('fallback_reason')}", flush=True)
     print(f"embedding_dim     : {dim} (expected {expect_dim})", flush=True)
+    print(f"l2_norm           : {_compute_l2_norm(resp.get('embedding'))}", flush=True)
     print(f"token_count       : {resp.get('token_count')}", flush=True)
     print(f"sequence_length   : {resp.get('sequence_length')}", flush=True)
     print(f"compile_ms        : {resp.get('compile_ms')}", flush=True)
@@ -377,6 +453,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=sys.executable,
         help="Absolute path to the Python executable that runs the helper "
         "(default: the interpreter running this script).",
+    )
+    parser.add_argument(
+        "--action",
+        default="embed",
+        choices=["embed", "ready"],
+        help="Helper action to perform: 'embed' (run inference, default) or "
+        "'ready' (file-presence/containment probe without compile).",
     )
     parser.add_argument(
         "--models-dir",

@@ -25,6 +25,7 @@ const {
   getApprovedModel,
   getAdvertisedCapabilities,
   listApprovedModels,
+  verifyModelIntegrity,
 } = require("./openvino-model-manifest");
 
 // ---------------------------------------------------------------------------
@@ -283,6 +284,7 @@ function getStartupReadiness() {
     openVinoVersion: null,
     helperVersion: null,
     probedAt: null,
+    integrity: { ok: true, models: [], manifestMismatch: false },
   };
 
   if (!_config) {
@@ -412,6 +414,7 @@ async function awaitStartupReadiness(timeoutMs) {
       openVinoVersion: null,
       helperVersion: null,
       probedAt: new Date().toISOString(),
+      integrity: { ok: true, models: [], manifestMismatch: false },
     };
     return _readiness;
   }
@@ -429,6 +432,7 @@ async function awaitStartupReadiness(timeoutMs) {
       openVinoVersion: _manager?._helper?.openVinoVersion || null,
       helperVersion: _manager?._helper?.helperVersion || null,
       probedAt: new Date().toISOString(),
+      integrity: { ok: true, models: [], manifestMismatch: false },
     };
     return _readiness;
   }
@@ -466,6 +470,46 @@ async function awaitStartupReadiness(timeoutMs) {
     });
   }
 
+  // 2b. Verify model file integrity against manifest hashes.
+  let integrity = null;
+  if (_config.modelsDir) {
+    try {
+      integrity = verifyModelIntegrity(_config.modelsDir);
+    } catch (err) {
+      integrity = { ok: false, models: [], manifestMismatch: true, error: err.message };
+    }
+
+    if (integrity && !integrity.ok && integrity.manifestMismatch) {
+      _log("warn", "Model integrity hash mismatch detected; withdrawing affected capabilities", {
+        models: integrity.models.filter((m) => !m.ok).map((m) => m.modelId),
+      });
+
+      // Collect model IDs with hash mismatches (not merely missing files).
+      const failedModels = new Set(
+        integrity.models.filter((m) => m.mismatches && m.mismatches.length > 0).map((m) => m.modelId)
+      );
+
+      // Remove capabilities for models that failed integrity checks.
+      for (let i = capabilities.length - 1; i >= 0; i--) {
+        const parts = capabilities[i].split(":");
+        if (parts.length >= 2 && failedModels.has(parts[1])) {
+          capabilities.splice(i, 1);
+        }
+      }
+
+      // Remove models with integrity failures from the inventory.
+      for (let i = models.length - 1; i >= 0; i--) {
+        if (failedModels.has(models[i].name)) {
+          models.splice(i, 1);
+        }
+      }
+    } else if (integrity && !integrity.ok) {
+      _log("info", "Model files not yet provisioned; integrity check deferred", {
+        models: integrity.models.filter((m) => !m.ok).map((m) => m.modelId),
+      });
+    }
+  }
+
   // 3. Decide the honest overall state.
   const devices = Array.from(_availableDevices);
   let state;
@@ -492,6 +536,7 @@ async function awaitStartupReadiness(timeoutMs) {
     openVinoVersion: _manager?._helper?.openVinoVersion || null,
     helperVersion: _manager?._helper?.helperVersion || null,
     probedAt: new Date().toISOString(),
+    integrity: integrity || { ok: true, models: [], manifestMismatch: false },
   };
   _log("info", "OpenVINO startup readiness established", {
     state,
@@ -777,6 +822,28 @@ async function probeCapability(modelId, timeoutMs = 30000) {
 }
 
 // ---------------------------------------------------------------------------
+// On-demand integrity check
+// ---------------------------------------------------------------------------
+
+/**
+ * Run an on-demand model integrity check against the manifest hashes.
+ *
+ * This can be called at any time (e.g. by the dashboard or an operator CLI)
+ * without affecting the cached readiness snapshot.
+ *
+ * @returns {{ ok: boolean, models: object[], manifestMismatch: boolean }|null}
+ *   null when OpenVINO is disabled or modelsDir is not configured.
+ */
+function checkModelIntegrity() {
+  if (!_config || !_config.enabled || !_config.modelsDir) return null;
+  try {
+    return verifyModelIntegrity(_config.modelsDir);
+  } catch (err) {
+    return { ok: false, models: [], manifestMismatch: true, error: err.message };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Shutdown
 // ---------------------------------------------------------------------------
 
@@ -803,6 +870,7 @@ function shutdownOpenVinoExecutor() {
       openVinoVersion: null,
       helperVersion: null,
       probedAt: new Date().toISOString(),
+      integrity: { ok: true, models: [], manifestMismatch: false },
     };
   }
   if (_manager) {
@@ -872,5 +940,6 @@ module.exports = {
   getOpenVinoCapabilities,
   getCapabilityStatus,
   probeCapability,
+  checkModelIntegrity,
   shutdownOpenVinoExecutor,
 };
