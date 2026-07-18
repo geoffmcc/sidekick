@@ -6,6 +6,7 @@ const path = require("path");
 const crypto = require("crypto");
 const workerConfig = require("./worker-config");
 const workerCredential = require("./worker-credential");
+const workerCli = require("./worker-cli");
 
 // OpenVINO executor — optional; gracefully absent when disabled or on non-Windows.
 let _openVinoExecutor = null;
@@ -23,7 +24,11 @@ async function getOpenVinoExecutor() {
   return _openVinoExecutor;
 }
 
-applyCliArgs(process.argv.slice(2));
+const _cli = workerCli.parseArgv(process.argv.slice(2));
+if (_cli.help) { console.log(workerCli.HELP); process.exit(0); }
+if (_cli.error) { console.error(_cli.error); process.exit(2); }
+// Apply CLI flags to env BEFORE the config consts below read env (CLI wins).
+for (const [k, v] of Object.entries(_cli.env)) process.env[k] = v;
 // Fill any remaining settings from the config file (CLI/env already in env win).
 try {
   const cfg = workerConfig.applyFileConfig();
@@ -57,49 +62,6 @@ let heartbeatTimer = null;
 const activeJobs = new Set();
 const activeJobPromises = new Set();
 
-function applyCliArgs(args) {
-  if (args.includes("--help") || args.includes("-h")) {
-    console.log(`Usage: sidekick-compute-worker [enroll|run] [options]
-
-Options:
-  --server <url>       Sidekick MCP server URL, for example http://10.47.20.20:4097
-  --token <token>      One-time enrollment token for first enrollment
-  --name <name>        Worker display name
-  --node-id <id>       Stable node ID for this machine
-  --config <path>      Credential file path
-  --config-file <path> Worker settings config file (JSON)
-  --concurrency <n>    Maximum concurrent jobs, 1-16
-  --service <type>     Accepted for installer scripts; service registration is platform packaging
-`);
-    process.exit(0);
-  }
-  const command = args[0] && !args[0].startsWith("-") ? args.shift() : "run";
-  if (!["run", "enroll"].includes(command)) {
-    console.error(`Unknown worker command: ${command}`);
-    process.exit(2);
-  }
-  const map = {
-    "--server": "SIDEKICK_SERVER_URL",
-    "--token": "SIDEKICK_ENROLL_TOKEN",
-    "--name": "SIDEKICK_NODE_NAME",
-    "--node-id": "SIDEKICK_NODE_ID",
-    "--config": "SIDEKICK_WORKER_CONFIG",
-    "--config-file": "SIDEKICK_WORKER_CONFIG_FILE",
-    "--concurrency": "SIDEKICK_WORKER_CONCURRENCY",
-  };
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === "--service") { i++; continue; }
-    const envName = map[arg];
-    if (!envName) continue;
-    const value = args[++i];
-    if (!value) {
-      console.error(`Missing value for ${arg}`);
-      process.exit(2);
-    }
-    process.env[envName] = value;
-  }
-}
 
 function log(msg) { console.log(`[worker-agent] ${new Date().toISOString()} ${redact(msg)}`); }
 function redact(value) { return String(value || "").replace(/(wksec_|enroll_)[A-Za-z0-9_-]+/g, "[REDACTED]"); }
@@ -684,8 +646,122 @@ async function waitForActiveJobs() {
   if (outcome === "timeout") log(`Shutdown grace expired with ${activeJobPromises.size} active job(s)`);
 }
 
+// --- CLI command handlers (Phase 5) ---
+
+function buildStatus() {
+  const cred = workerCredential.load(CONFIG_PATH);
+  return {
+    serverUrl: SERVER_URL,
+    nodeId: (cred && cred.nodeId) || NODE_ID,
+    displayName: DISPLAY_NAME,
+    credentialPath: CONFIG_PATH,
+    configFilePath: process.env.SIDEKICK_WORKER_CONFIG_FILE || workerConfig.defaultConfigPath(),
+    enrolled: !!cred,
+    workerId: cred ? cred.workerId : null,
+    enrolledAt: cred ? cred.enrolledAt : null,
+    concurrency: MAX_CONCURRENT_JOBS,
+  };
+}
+
+function printStatus() {
+  console.log(workerCli.formatStatus(buildStatus()));
+}
+
+async function runRotate() {
+  if (!loadCredential()) throw new Error("Not enrolled; nothing to rotate");
+  await rotateWorkerCredential();
+  console.log("Credential rotated.");
+}
+
+async function runEnroll(service) {
+  await enrollIfNeeded();
+  console.log(service
+    ? "Enrollment complete (service mode); credential written, claim loop not started."
+    : "Enrollment complete; credential written.");
+}
+
+// Read-only diagnostics. Never weakens or bypasses a security check — it only
+// observes. Each network probe is individually bounded so a hung server cannot
+// wedge the command. Exit code is non-zero if any hard check fails.
+async function runDoctor() {
+  const fs = require("fs");
+  const results = [];
+  const ok = m => results.push(["ok", m]);
+  const warn = m => results.push(["warn", m]);
+  const fail = m => results.push(["fail", m]);
+
+  try {
+    const cfg = workerConfig.loadConfigFile();
+    if (cfg.exists) ok(`Configuration valid (${cfg.path})`);
+    else warn(`No config file; using env/defaults (looked at ${cfg.path})`);
+  } catch (e) { fail(`Configuration invalid: ${e.message}`); }
+
+  const cred = workerCredential.load(CONFIG_PATH);
+  if (cred) ok(`Credential present for ${cred.workerId} (${CONFIG_PATH})`);
+  else warn(`No credential at ${CONFIG_PATH} (not enrolled)`);
+
+  let reachable = false;
+  try {
+    const h = await httpRequest("GET", "/health", null, {}, { timeoutMs: 5000 });
+    if (h.status === 200) { ok(`Server reachable (${SERVER_URL})`); reachable = true; }
+    else fail(`Server returned HTTP ${h.status} (${SERVER_URL})`);
+  } catch (e) { fail(`Server unreachable (${SERVER_URL}): ${e.message}`); }
+
+  if (cred && reachable) {
+    workerId = cred.workerId;
+    credential = cred.credential;
+    try {
+      const hb = await httpRequest("POST", "/compute/worker/heartbeat", { currentJobs: 0 }, credentialHeaders(), { timeoutMs: 5000 });
+      if (hb.status === 200) ok("Authenticated heartbeat succeeded");
+      else if (hb.status === 401) fail("Authenticated heartbeat rejected (401) — credential invalid or revoked");
+      else fail(`Authenticated heartbeat returned HTTP ${hb.status}`);
+    } catch (e) { fail(`Authenticated heartbeat failed: ${e.message}`); }
+  } else if (cred && !reachable) {
+    warn("Skipped heartbeat check (server unreachable)");
+  }
+
+  ok(`Protocol version ${PROTOCOL_VERSION} supported`);
+
+  if (process.env.SIDEKICK_OPENVINO_ENABLED === "true") {
+    ok("OpenVINO enabled");
+    const py = process.env.SIDEKICK_OPENVINO_PYTHON;
+    if (py) fs.existsSync(py) ? ok(`OpenVINO Python found (${py})`) : fail(`OpenVINO Python not found (${py})`);
+    else warn("OpenVINO Python path not configured (SIDEKICK_OPENVINO_PYTHON)");
+    const md = process.env.SIDEKICK_OPENVINO_MODELS_DIR;
+    if (md) fs.existsSync(md) ? ok(`Model store found (${md})`) : warn(`Model store not found (${md})`);
+  } else {
+    warn("OpenVINO disabled");
+  }
+
+  if (process.env.OLLAMA_URL) {
+    try {
+      const url = new URL("/api/tags", process.env.OLLAMA_URL).toString();
+      const r = await httpRequest("GET", url, null, {}, { timeoutMs: 3000 });
+      r.status === 200 ? ok(`Ollama reachable (${process.env.OLLAMA_URL})`) : warn(`Ollama returned HTTP ${r.status}`);
+    } catch (e) { warn(`Ollama unreachable (${process.env.OLLAMA_URL}): ${e.message}`); }
+  }
+
+  for (const [status, msg] of results) console.log(`[${status}] ${msg}`);
+  const counts = { ok: 0, warn: 0, fail: 0 };
+  for (const [s] of results) counts[s]++;
+  console.log(`\nDoctor: ${counts.ok} ok, ${counts.warn} warn, ${counts.fail} fail`);
+  if (counts.fail > 0) process.exitCode = 1;
+}
+
+async function runCommand(command) {
+  switch (command) {
+    case "version": console.log(WORKER_VERSION); return;
+    case "status": printStatus(); return;
+    case "doctor": return runDoctor();
+    case "rotate-credential": return runRotate();
+    case "enroll": return runEnroll(_cli.service);
+    case "run":
+    default: return main();
+  }
+}
+
 if (require.main === module) {
-  main().catch(e => { console.error(`[worker-agent] ${redact(e.message)}`); process.exit(1); });
+  runCommand(_cli.command).catch(e => { console.error(`[worker-agent] ${redact(e.message)}`); process.exit(1); });
 }
 
 // Test seam: inject a stand-in OpenVINO executor module so the advertisement

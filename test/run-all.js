@@ -60,6 +60,7 @@ const suites = [
   { file: 'test/compute-worker-credential.test.js', critical: false, description: 'Compute worker secure credential persistence' },
   { file: 'test/compute-worker-rotate.test.js', critical: false, description: 'Compute worker safe credential rotation workflow' },
   { file: 'test/compute-reenrollment.test.js', critical: false, description: 'Compute worker re-enrollment (credential recovery)' },
+  { file: 'test/compute-worker-cli.test.js', critical: false, description: 'Compute worker CLI subcommands and status formatting' },
   { file: 'test/openvino-executor.test.js', critical: false, description: 'OpenVINO NPU executor and Python helper manager' },
   { file: 'test/openvino-startup-readiness.test.js', critical: false, description: 'OpenVINO startup capability readiness and advertisement' },
   { file: 'test/compute-protocol.test.js', critical: false, description: 'Compute authenticated worker protocol integration' },
