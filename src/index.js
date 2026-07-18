@@ -823,8 +823,9 @@ function cancelJobHandler(req, res) {
 
 function claimJobHandler(req, res) {
   try {
-    const claimed = compute.jobManager.claimNextJob(req.computeWorker, { leaseDurationMs: req.body?.leaseDurationMs || req.body?.lease_duration_ms || 300000 });
-    res.json({ ok: true, claimed: !!claimed, ...(claimed || {}) });
+    const result = compute.jobManager.claimNextJob(req.computeWorker, { leaseDurationMs: req.body?.leaseDurationMs || req.body?.lease_duration_ms || 300000 });
+    if (result && result.ineligible) return res.json({ ok: true, claimed: false, reason: result.ineligible });
+    res.json({ ok: true, claimed: !!result, ...(result || {}) });
   } catch (e) { sendComputeError(res, e, 400); }
 }
 

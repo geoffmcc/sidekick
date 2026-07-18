@@ -330,6 +330,10 @@ async function main() {
     const disableRes = await request('POST', `/compute/admin/workers/${workerId}/disable`, { reason: 'test-disable' }, admin);
     assert.strictEqual(disableRes.status, 200, 'admin can disable worker');
     assert.strictEqual(disableRes.data.worker.maintenanceMode, true, 'worker put into maintenance');
+    const claimWhileMaintenance = await request('POST', '/compute/worker/jobs/claim', { leaseDurationMs: 60000 }, workerAuth);
+    assert.strictEqual(claimWhileMaintenance.status, 200, 'claim endpoint returns 200 for maintenance worker');
+    assert.strictEqual(claimWhileMaintenance.data.claimed, false, 'worker in maintenance cannot claim new jobs');
+    assert.strictEqual(claimWhileMaintenance.data.reason, 'in_maintenance', 'claim refusal reason is surfaced');
     const enableRes = await request('POST', `/compute/admin/workers/${workerId}/enable`, { reason: 'test-enable' }, admin);
     assert.strictEqual(enableRes.status, 200, 'admin can enable worker');
     assert.strictEqual(enableRes.data.worker.maintenanceMode, false, 'worker maintenance cleared');

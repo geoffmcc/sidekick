@@ -457,8 +457,22 @@ function emitComputeEvent(eventType, job, payload = {}, severity = "info") {
   } catch {}
 }
 
+// Whether a worker is allowed to claim new work, based on the multi-dimensional
+// lifecycle state. A worker in maintenance/draining stays connected and keeps
+// its leases but must not pick up NEW jobs; a revoked credential is terminal
+// (defense-in-depth — authentication already rejects revoked workers).
+function workerEligibleToClaim(worker) {
+  if (!worker) return { ok: false, reason: "unknown_worker" };
+  if (worker.credentialState === "revoked" || worker.state === "revoked") return { ok: false, reason: "credential_revoked" };
+  if (worker.adminState === "maintenance") return { ok: false, reason: "in_maintenance" };
+  if (worker.adminState === "draining") return { ok: false, reason: "draining" };
+  return { ok: true };
+}
+
 function claimNextJob(worker, { leaseDurationMs = 300000 } = {}) {
   ensureSchema();
+  const eligibility = workerEligibleToClaim(worker);
+  if (!eligibility.ok) return { ineligible: eligibility.reason };
   const db = dbStore.getDb();
   db.exec("BEGIN IMMEDIATE");
   try {
@@ -990,6 +1004,7 @@ module.exports = {
   transitionJob,
   leaseJob,
   claimNextJob,
+  workerEligibleToClaim,
   renewLease,
   checkLeaseExpiration,
   recoverExpiredLeases,
