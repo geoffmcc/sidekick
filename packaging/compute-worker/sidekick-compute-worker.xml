@@ -1,0 +1,28 @@
+<service>
+  <id>sidekick-compute-worker</id>
+  <name>Sidekick Compute Worker</name>
+  <description>Sidekick distributed compute worker.</description>
+  <!--
+    winsw service wrapper. Rename a winsw release binary to
+    sidekick-compute-worker.exe and place it next to this XML in the worker
+    install directory, then: sidekick-compute-worker.exe install
+    (the install-windows.ps1 script does this for you).
+  -->
+  <executable>node</executable>
+  <arguments>worker-agent.js run</arguments>
+  <workingdirectory>%BASE%</workingdirectory>
+  <env name="NODE_ENV" value="production" />
+  <!-- Non-secret paths only. The credential is a 0600/ACL'd file; the
+       enrollment token is never stored in this definition. -->
+  <env name="SIDEKICK_WORKER_CONFIG_FILE" value="C:\ProgramData\Sidekick\compute-worker\config.json" />
+  <env name="SIDEKICK_WORKER_CONFIG" value="C:\ProgramData\Sidekick\compute-worker\credential.json" />
+  <startmode>Automatic</startmode>
+  <!-- Restart on abnormal exit only, with a delay. A revoked worker exits 0
+       (Phase 6); winsw does not restart on a zero exit code, so it stays stopped. -->
+  <onfailure action="restart" delay="10 sec" />
+  <resetfailure>1 hour</resetfailure>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+</service>
