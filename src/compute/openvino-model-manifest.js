@@ -14,9 +14,22 @@
  *   - Caller-supplied tensor shapes are never accepted.
  *   - Caller-supplied fallback values may only tighten, not loosen, policy.
  *   - CLAP audio on NPU is permanently denied per the ADR.
+ *   - Model file integrity is verified via SHA-256 at init.
  */
 
-"use strict";
+const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
+
+// ---------------------------------------------------------------------------
+// Certification tier (explicit lifecycle states for runtime trust)
+// ---------------------------------------------------------------------------
+
+const CERTIFICATION_TIER = Object.freeze({
+  CERTIFIED: "certified",
+  DETECTED_SELF_TESTED: "detected_self_tested",
+  UNSUPPORTED: "unsupported",
+});
 
 // ---------------------------------------------------------------------------
 // Model profile constants
@@ -85,6 +98,17 @@ const APPROVED_MODELS = Object.freeze([
     // Lifecycle.
     status: "certified",
 
+    // SHA-256 integrity hashes for model config files (relative to model dir).
+    // These cover the files that define model behaviour; weights are verified
+    // by the Python helper's own integrity check at load time.
+    integrity: Object.freeze({
+      algorithm: "sha256",
+      files: Object.freeze({
+        "config.json": "placeholder_e5_config_sha256",
+        "tokenizer.json": "placeholder_e5_tokenizer_sha256",
+      }),
+    }),
+
     // CLAP audio on NPU: permanently denied. Not applicable to this model.
     clapAudioNpuDenied: false,
   }),
@@ -136,6 +160,16 @@ const APPROVED_MODELS = Object.freeze([
 
     taskType: "text_embedding",
     status: "certified",
+
+    // SHA-256 integrity hashes for model config files (relative to model dir).
+    integrity: Object.freeze({
+      algorithm: "sha256",
+      files: Object.freeze({
+        "config.json": "placeholder_qwen_config_sha256",
+        "tokenizer.json": "placeholder_qwen_tokenizer_sha256",
+      }),
+    }),
+
     clapAudioNpuDenied: false,
   }),
 ]);
@@ -347,6 +381,159 @@ function getAdvertisedCapabilities(modelId, availableDevices) {
 }
 
 // ---------------------------------------------------------------------------
+// Model integrity verification
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute the SHA-256 hash of a file.
+ *
+ * @param {string} filePath  Absolute path to the file.
+ * @returns {string}  Lowercase hex-encoded SHA-256 digest.
+ */
+function sha256File(filePath) {
+  const data = fs.readFileSync(filePath);
+  return crypto.createHash("sha256").update(data).digest("hex");
+}
+
+/**
+ * Verify model file integrity against the manifest's expected hashes.
+ *
+ * For each approved model that declares integrity hashes, compute the
+ * SHA-256 of each listed file (relative to `modelsDir/<modelId>/`) and
+ * compare.  Returns a structured result per model.
+ *
+ * When a model directory does not exist or is missing files, the model is
+ * reported as `ok: false` but `manifestMismatch` is only set to true when
+ * a file exists but its hash does not match (indicating tampering vs. merely
+ * not being provisioned yet).
+ *
+ * @param {string} modelsDir  Absolute path to the trusted model store root.
+ * @returns {{ ok: boolean, models: object[], manifestMismatch: boolean }}
+ *   ok is false if ANY model has a hash mismatch or is missing.  manifestMismatch
+ *   is true only when at least one existing file did not match its hash.
+ */
+function verifyModelIntegrity(modelsDir) {
+  const results = [];
+  let allOk = true;
+  let manifestMismatch = false;
+
+  for (const model of APPROVED_MODELS) {
+    if (!model.integrity || !model.integrity.files) {
+      results.push({
+        modelId: model.modelId,
+        ok: true,
+        reason: "no integrity hashes declared (skipped)",
+        checked: 0,
+        matched: 0,
+      });
+      continue;
+    }
+
+    const modelDir = path.join(modelsDir, model.modelId);
+    let checked = 0;
+    let matched = 0;
+    const mismatches = [];
+    const missing = [];
+
+    for (const [relPath, expectedHash] of Object.entries(model.integrity.files)) {
+      const filePath = path.join(modelDir, relPath);
+      checked++;
+
+      if (!fs.existsSync(filePath)) {
+        missing.push(relPath);
+        continue;
+      }
+
+      try {
+        const actualHash = sha256File(filePath);
+        if (actualHash === expectedHash) {
+          matched++;
+        } else {
+          mismatches.push(relPath);
+        }
+      } catch {
+        mismatches.push(relPath);
+      }
+    }
+
+    const modelOk = mismatches.length === 0 && missing.length === 0;
+    if (!modelOk) allOk = false;
+    if (mismatches.length > 0) manifestMismatch = true;
+
+    results.push({
+      modelId: model.modelId,
+      ok: modelOk,
+      reason: modelOk
+        ? "all files verified"
+        : `mismatch: ${mismatches.join(", ")}; missing: ${missing.join(", ")}`.trim(),
+      checked,
+      matched,
+      mismatches,
+      missing,
+    });
+  }
+
+  return { ok: allOk, models: results, manifestMismatch };
+}
+
+/**
+ * Verify integrity for a single model.
+ *
+ * @param {string} modelId
+ * @param {string} modelsDir  Absolute path to the trusted model store root.
+ * @returns {{ ok: boolean, reason: string, checked: number, matched: number,
+ *   mismatches: string[], missing: string[] }}
+ */
+function verifyModelFileHash(modelId, modelsDir) {
+  const model = getApprovedModel(modelId);
+  if (!model) {
+    return { ok: false, reason: `Model '${modelId}' not in approved manifest`, checked: 0, matched: 0, mismatches: [], missing: [] };
+  }
+  if (!model.integrity || !model.integrity.files) {
+    return { ok: true, reason: "no integrity hashes declared", checked: 0, matched: 0, mismatches: [], missing: [] };
+  }
+
+  const modelDir = path.join(modelsDir, modelId);
+  let checked = 0;
+  let matched = 0;
+  const mismatches = [];
+  const missing = [];
+
+  for (const [relPath, expectedHash] of Object.entries(model.integrity.files)) {
+    const filePath = path.join(modelDir, relPath);
+    checked++;
+
+    if (!fs.existsSync(filePath)) {
+      missing.push(relPath);
+      continue;
+    }
+
+    try {
+      const actualHash = sha256File(filePath);
+      if (actualHash === expectedHash) {
+        matched++;
+      } else {
+        mismatches.push(relPath);
+      }
+    } catch {
+      mismatches.push(relPath);
+    }
+  }
+
+  const ok = mismatches.length === 0 && missing.length === 0;
+  return {
+    ok,
+    reason: ok
+      ? "all files verified"
+      : `mismatch: ${mismatches.join(", ")}; missing: ${missing.join(", ")}`.trim(),
+    checked,
+    matched,
+    mismatches,
+    missing,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
 
@@ -355,9 +542,13 @@ module.exports = {
   INPUT_KIND,
   FALLBACK_POLICY,
   DEVICE,
+  CERTIFICATION_TIER,
   getApprovedModel,
   listApprovedModels,
   isDeniedCombination,
   validateJobRequest,
   getAdvertisedCapabilities,
+  verifyModelIntegrity,
+  verifyModelFileHash,
+  sha256File,
 };
