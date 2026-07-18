@@ -23,3 +23,5 @@ test/spike-openvino-node/
 # Python bytecode and caches
 __pycache__/
 *.py[cod]
+*.db-shm
+*.db-wal
