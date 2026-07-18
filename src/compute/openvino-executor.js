@@ -24,6 +24,7 @@ const {
   validateJobRequest,
   getApprovedModel,
   getAdvertisedCapabilities,
+  listApprovedModels,
 } = require("./openvino-model-manifest");
 
 // ---------------------------------------------------------------------------
@@ -37,6 +38,19 @@ const EXECUTOR_VERSION = "1";
 const MIN_EMBEDDING_NORM = 0.99;
 const MAX_EMBEDDING_NORM = 1.01;
 
+// Default bound for the whole startup-readiness path (helper start + device
+// enumeration + per-model readiness probes).  Overridable by the caller.
+const DEFAULT_STARTUP_READINESS_MS = 60000;
+
+// Honest startup states advertised to the worker (see awaitStartupReadiness).
+const READINESS_STATE = Object.freeze({
+  DISABLED: "disabled",     // Feature not enabled on this worker.
+  PROBING: "probing",       // Initialisation in progress; nothing established yet.
+  READY: "ready",           // At least one certified profile passed its readiness probe.
+  UNAVAILABLE: "unavailable", // Helper up, devices known, but no certified profile is ready.
+  FAULTED: "faulted",       // Config/helper fault or the readiness path timed out.
+});
+
 // ---------------------------------------------------------------------------
 // Module-level state (one manager per executor instance)
 // ---------------------------------------------------------------------------
@@ -45,6 +59,15 @@ let _config = null;
 let _manager = null;
 let _initError = null;
 let _availableDevices = new Set();
+
+// Cached readiness snapshot established by awaitStartupReadiness().  Read
+// synchronously by the worker when it builds heartbeat/enrollment payloads so
+// executor capabilities and model inventory always agree.
+let _readiness = null;
+// True once shutdown has been requested; aborts any in-flight readiness wait.
+let _shutdownRequested = false;
+// Abort hook for a pending readiness wait (set while awaiting device discovery).
+let _readinessAbort = null;
 
 // ---------------------------------------------------------------------------
 // Logging
@@ -78,6 +101,18 @@ function _log(level, msg, meta = {}) {
  * @returns {{ enabled: boolean, error: string|null, capabilities: string[] }}
  */
 async function initOpenVinoExecutor(overrideConfig) {
+  // Reset per-init state so a re-initialisation starts from a clean slate.
+  _initError = null;
+  _availableDevices = new Set();
+  _readiness = null;
+  _shutdownRequested = false;
+  _readinessAbort = null;
+  // Defensively stop any previously running helper before replacing it.
+  if (_manager) {
+    try { _manager.shutdown(); } catch { /* best effort */ }
+    _manager = null;
+  }
+
   try {
     _config = overrideConfig || loadOpenVinoConfig();
   } catch (err) {
@@ -219,6 +254,252 @@ function getCapabilityStatus() {
     fallbackPolicy: _config.fallbackPolicy,
     modelsDir: _config.modelsDir,  // For operator diagnostics; no sensitive detail.
   };
+}
+
+// ---------------------------------------------------------------------------
+// Startup readiness (bounded; establishes what is honestly ready before the
+// worker advertises itself)
+// ---------------------------------------------------------------------------
+
+/**
+ * Return the last established startup-readiness snapshot.
+ *
+ * Synchronous and side-effect free so the worker can read it while building
+ * every heartbeat/enrollment payload.  When awaitStartupReadiness() has not yet
+ * run, returns an honest interim state (disabled / faulted / probing) derived
+ * from the current config.
+ *
+ * @returns {{ state: string, reason: string, availableDevices: string[],
+ *   capabilities: string[], models: object[], openVinoVersion: (string|null),
+ *   helperVersion: (string|null), probedAt: (string|null) }}
+ */
+function getStartupReadiness() {
+  if (_readiness) return _readiness;
+
+  const base = {
+    availableDevices: [],
+    capabilities: [],
+    models: [],
+    openVinoVersion: null,
+    helperVersion: null,
+    probedAt: null,
+  };
+
+  if (!_config) {
+    const enabled = process.env.SIDEKICK_OPENVINO_ENABLED === "true";
+    return {
+      ...base,
+      state: enabled ? READINESS_STATE.PROBING : READINESS_STATE.DISABLED,
+      reason: enabled
+        ? "OpenVINO executor not yet initialised"
+        : "SIDEKICK_OPENVINO_ENABLED is not 'true'",
+    };
+  }
+  if (!_config.enabled) {
+    return { ...base, state: READINESS_STATE.DISABLED, reason: "OpenVINO executor is disabled" };
+  }
+  if (_initError) {
+    return { ...base, state: READINESS_STATE.FAULTED, reason: _initError };
+  }
+  return {
+    ...base,
+    state: READINESS_STATE.PROBING,
+    reason: "Startup readiness has not been established yet",
+  };
+}
+
+/**
+ * Wait (bounded) for the helper to enumerate its OpenVINO devices, or fault.
+ *
+ * Resolves once devices are known; rejects on helper exit, shutdown request, or
+ * when the deadline passes.  Never waits longer than the supplied deadline.
+ *
+ * @param {number} deadline  Absolute epoch-ms deadline.
+ * @returns {Promise<void>}
+ */
+function _waitForDevices(deadline) {
+  if (_availableDevices.size > 0) return Promise.resolve();
+  if (_shutdownRequested) {
+    return Promise.reject(new Error("shutdown requested during initialization"));
+  }
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      if (_manager) {
+        _manager.removeListener("helperReady", onReady);
+        _manager.removeListener("helperExited", onExit);
+      }
+      _readinessAbort = null;
+    };
+    const onReady = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    };
+    const onExit = ({ reason } = {}) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error(`helper exited during startup: ${reason || "unknown"}`));
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error("helper did not become ready before the startup deadline"));
+    }, Math.max(0, deadline - Date.now()));
+
+    // Allow an external shutdown to abort this wait promptly.
+    _readinessAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error("shutdown requested during initialization"));
+    };
+
+    _manager.on("helperReady", onReady);
+    _manager.on("helperExited", onExit);
+
+    // Guard against the helper having become ready between the size check and
+    // attaching the listener.
+    if (_availableDevices.size > 0) onReady();
+  });
+}
+
+/**
+ * Establish, within a bounded time budget, which certified profiles are
+ * genuinely ready, and cache an honest readiness snapshot.
+ *
+ * Behaviour:
+ *   - Never claims a profile is ready without an actual helper `ready` probe
+ *     succeeding for that model's certified device (no compile is forced, so
+ *     lazy compilation is preserved; the claimed readiness level is "device
+ *     enumerated + model files present").
+ *   - A capability string is only advertised for the exact device its own probe
+ *     validated.  A missing NPU therefore yields no NPU capabilities but does
+ *     not suppress CPU-certified profiles (e.g. E5 on CPU).
+ *   - Never derives a fallback (CPU) capability from an NPU model's probe.
+ *
+ * @param {number} [timeoutMs]  Total budget for the readiness path.
+ * @returns {Promise<object>}   The readiness snapshot (also cached).
+ */
+async function awaitStartupReadiness(timeoutMs) {
+  const budget = Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? timeoutMs
+    : DEFAULT_STARTUP_READINESS_MS;
+  const deadline = Date.now() + budget;
+
+  if (!_config || !_config.enabled) {
+    _readiness = getStartupReadiness();
+    return _readiness;
+  }
+  if (_initError) {
+    _readiness = { ...getStartupReadiness(), state: READINESS_STATE.FAULTED, reason: _initError };
+    return _readiness;
+  }
+  if (_shutdownRequested || !_manager) {
+    _readiness = {
+      state: READINESS_STATE.FAULTED,
+      reason: _shutdownRequested
+        ? "shutdown requested during initialization"
+        : "helper manager not initialised",
+      availableDevices: [],
+      capabilities: [],
+      models: [],
+      openVinoVersion: null,
+      helperVersion: null,
+      probedAt: new Date().toISOString(),
+    };
+    return _readiness;
+  }
+
+  // 1. Wait for device enumeration (bounded).
+  try {
+    await _waitForDevices(deadline);
+  } catch (err) {
+    _readiness = {
+      state: READINESS_STATE.FAULTED,
+      reason: err.message,
+      availableDevices: Array.from(_availableDevices),
+      capabilities: [],
+      models: [],
+      openVinoVersion: _manager?._helper?.openVinoVersion || null,
+      helperVersion: _manager?._helper?.helperVersion || null,
+      probedAt: new Date().toISOString(),
+    };
+    return _readiness;
+  }
+
+  // 2. Probe each approved model against its certified device (no compile, no
+  //    fallback).  Advertise only capability strings for the probed device.
+  const capabilities = [];
+  const models = [];
+  let probeTimedOut = false;
+
+  for (const model of listApprovedModels()) {
+    if (_shutdownRequested) break;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) { probeTimedOut = true; break; }
+
+    const probe = await probeCapability(model.modelId, Math.min(remaining, 30000));
+    if (probe.status !== "ready") continue;
+
+    const probedDevice = probe.device;
+    // Tie each advertised capability to the exact device this probe validated.
+    const modelCaps = (model.advertiseCapabilities || []).filter((cap) => {
+      const parts = String(cap).split(":");
+      return parts.length >= 3 && parts[2] === probedDevice && _availableDevices.has(probedDevice);
+    });
+    if (modelCaps.length === 0) continue;
+
+    capabilities.push(...modelCaps);
+    models.push({
+      name: model.modelId,
+      provider: "openvino",
+      device: probedDevice,
+      dimensions: model.outputDimensions,
+      embeddingSpaceId: model.embeddingSpaceId,
+      capabilities: modelCaps,
+    });
+  }
+
+  // 3. Decide the honest overall state.
+  const devices = Array.from(_availableDevices);
+  let state;
+  let reason;
+  if (capabilities.length > 0) {
+    state = READINESS_STATE.READY;
+    reason = `${capabilities.length} certified profile(s) ready across [${devices.join(", ")}]`;
+  } else if (probeTimedOut) {
+    state = READINESS_STATE.FAULTED;
+    reason = "Readiness probing exceeded the startup deadline";
+  } else {
+    state = READINESS_STATE.UNAVAILABLE;
+    reason = devices.length > 0
+      ? `Helper ready on [${devices.join(", ")}] but no certified profile passed readiness`
+      : "No OpenVINO devices were enumerated";
+  }
+
+  _readiness = {
+    state,
+    reason,
+    availableDevices: devices,
+    capabilities,
+    models,
+    openVinoVersion: _manager?._helper?.openVinoVersion || null,
+    helperVersion: _manager?._helper?.helperVersion || null,
+    probedAt: new Date().toISOString(),
+  };
+  _log("info", "OpenVINO startup readiness established", {
+    state,
+    devices,
+    capabilities: capabilities.length,
+    models: models.map((m) => m.name),
+  });
+  return _readiness;
 }
 
 // ---------------------------------------------------------------------------
@@ -443,9 +724,10 @@ async function executeOpenVinoEmbed(_context, input) {
  * It does NOT perform actual NPU inference.
  *
  * @param {string} modelId  Model to check.
+ * @param {number} [timeoutMs]  Bound for the helper `ready` round-trip.
  * @returns {Promise<object>}
  */
-async function probeCapability(modelId) {
+async function probeCapability(modelId, timeoutMs = 30000) {
   if (!_config || !_config.enabled) {
     return {
       status: "disabled",
@@ -472,7 +754,7 @@ async function probeCapability(modelId) {
   }
 
   try {
-    const response = await _manager.checkReady(modelId, 30000);
+    const response = await _manager.checkReady(modelId, timeoutMs);
     return {
       status: "ready",
       modelId,
@@ -504,6 +786,25 @@ async function probeCapability(modelId) {
  * never initialised or is disabled.
  */
 function shutdownOpenVinoExecutor() {
+  _shutdownRequested = true;
+  // Abort any in-flight startup-readiness wait so shutdown-during-init returns
+  // promptly instead of blocking until the deadline.
+  if (_readinessAbort) {
+    try { _readinessAbort(); } catch { /* best effort */ }
+  }
+  // If readiness never completed, record an honest terminal snapshot.
+  if (!_readiness || _readiness.state === READINESS_STATE.PROBING) {
+    _readiness = {
+      state: READINESS_STATE.FAULTED,
+      reason: "shutdown requested during initialization",
+      availableDevices: Array.from(_availableDevices),
+      capabilities: [],
+      models: [],
+      openVinoVersion: null,
+      helperVersion: null,
+      probedAt: new Date().toISOString(),
+    };
+  }
   if (_manager) {
     try {
       _manager.shutdown();
@@ -561,8 +862,11 @@ const OPENVINO_EXECUTOR_DEFINITION = {
 module.exports = {
   EXECUTOR_TYPE,
   EXECUTOR_VERSION,
+  READINESS_STATE,
   OPENVINO_EXECUTOR_DEFINITION,
   initOpenVinoExecutor,
+  awaitStartupReadiness,
+  getStartupReadiness,
   executeOpenVinoEmbed,
   validateHelperResponse,
   getOpenVinoCapabilities,

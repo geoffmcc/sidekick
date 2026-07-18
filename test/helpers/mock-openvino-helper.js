@@ -1,6 +1,7 @@
 "use strict";
 
 const fs = require("fs");
+const path = require("path");
 
 function logStderr(lvl, msg, extra = {}) {
   const entry = {
@@ -12,20 +13,60 @@ function logStderr(lvl, msg, extra = {}) {
   process.stderr.write(JSON.stringify(entry) + "\n");
 }
 
+// Behaviour control. The real HelperManager only forwards a minimal env to the
+// child (not arbitrary MOCK_* vars), so scenario knobs are read from an optional
+// control file inside the models dir, which IS forwarded. Absent/unreadable =>
+// default behaviour (all devices, immediate start), so existing tests are
+// unaffected.
+const control = { devices: ["CPU", "GPU", "NPU"], startedDelayMs: 0, failMode: "" };
+try {
+  const raw = fs.readFileSync(path.join(process.env.SIDEKICK_OPENVINO_MODELS_DIR || ".", "mock-control.json"), "utf8");
+  const parsed = JSON.parse(raw);
+  if (Array.isArray(parsed.devices)) control.devices = parsed.devices.filter(d => typeof d === "string");
+  if (Number.isFinite(parsed.startedDelayMs)) control.startedDelayMs = parsed.startedDelayMs;
+  if (typeof parsed.failMode === "string") control.failMode = parsed.failMode;
+} catch { /* default behaviour */ }
+
+const AVAILABLE_DEVICES = control.devices;
+
+function targetDeviceFor(modelId) {
+  return String(modelId || "").includes("qwen") ? "NPU" : "CPU";
+}
+
 logStderr("INFO", "Mock helper starting", {
   models_dir: process.env.SIDEKICK_OPENVINO_MODELS_DIR,
-  node_version: process.version
+  node_version: process.version,
+  devices: AVAILABLE_DEVICES,
+  fail_mode: control.failMode || "none"
 });
 
-// Immediately print the started event.
-console.log(JSON.stringify({
-  v: "1",
-  event: "started",
-  helper_version: "1.0.0",
-  openvino_version: "2026.2.1-test",
-  available_devices: ["CPU", "GPU", "NPU"],
-  models_dir: process.env.SIDEKICK_OPENVINO_MODELS_DIR
-}));
+function emitStarted() {
+  console.log(JSON.stringify({
+    v: "1",
+    event: "started",
+    helper_version: "1.0.0",
+    openvino_version: "2026.2.1-test",
+    available_devices: AVAILABLE_DEVICES,
+    models_dir: process.env.SIDEKICK_OPENVINO_MODELS_DIR
+  }));
+}
+
+// Simulate startup outcomes for readiness testing.
+if (control.failMode === "exit") {
+  // Helper dies before ever becoming ready.
+  logStderr("ERROR", "Mock helper simulating startup exit");
+  process.exit(1);
+} else if (control.failMode === "fatal") {
+  console.log(JSON.stringify({ v: "1", event: "fatal", error: "simulated_fatal_startup" }));
+  process.exit(1);
+} else if (control.failMode === "silent") {
+  // Never emit 'started'; stay alive so the parent hits its startup deadline.
+  setInterval(() => {}, 3600000);
+} else if (control.startedDelayMs > 0) {
+  setTimeout(emitStarted, control.startedDelayMs);
+} else {
+  emitStarted();
+}
 
 let buffer = "";
 process.stdin.setEncoding("utf8");
@@ -60,7 +101,7 @@ function handleLine(line) {
       action: "ping",
       helper_version: "1.0.0",
       openvino_version: "2026.2.1-test",
-      available_devices: ["CPU", "GPU", "NPU"]
+      available_devices: AVAILABLE_DEVICES
     }));
     return;
   }
@@ -77,14 +118,27 @@ function handleLine(line) {
       }));
       return;
     }
+    // A readiness probe targets the model's certified device only; it never
+    // silently substitutes a fallback device.
+    const target = targetDeviceFor(modelId);
+    if (!AVAILABLE_DEVICES.includes(target)) {
+      console.log(JSON.stringify({
+        v: "1",
+        id: reqId,
+        ok: false,
+        error_code: "device_not_found",
+        error: `Device '${target}' not in available_devices ${JSON.stringify(AVAILABLE_DEVICES)}`
+      }));
+      return;
+    }
     console.log(JSON.stringify({
       v: "1",
       id: reqId,
       ok: true,
       action: "ready",
       model_id: modelId,
-      device: modelId.includes("qwen") ? "NPU" : "CPU",
-      available_devices: ["CPU", "GPU", "NPU"],
+      device: target,
+      available_devices: AVAILABLE_DEVICES,
       openvino_version: "2026.2.1-test",
       helper_version: "1.0.0",
       certified_profiles: [128, 512],
