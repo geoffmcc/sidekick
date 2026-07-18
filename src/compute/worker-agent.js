@@ -5,6 +5,7 @@ const https = require("https");
 const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
+const workerConfig = require("./worker-config");
 
 // OpenVINO executor — optional; gracefully absent when disabled or on non-Windows.
 let _openVinoExecutor = null;
@@ -23,10 +24,18 @@ async function getOpenVinoExecutor() {
 }
 
 applyCliArgs(process.argv.slice(2));
+// Fill any remaining settings from the config file (CLI/env already in env win).
+try {
+  const cfg = workerConfig.applyFileConfig();
+  if (cfg.exists) log(`Loaded worker config from ${cfg.path}`);
+} catch (e) {
+  console.error(`[worker-agent] ${e.message}`);
+  process.exit(2);
+}
 
 const SERVER_URL = process.env.SIDEKICK_URL || process.env.SIDEKICK_SERVER_URL || "http://127.0.0.1:4097";
 const ENROLLMENT_TOKEN = process.env.SIDEKICK_ENROLL_TOKEN || process.env.COMPUTE_TOKEN || "";
-const NODE_ID = process.env.SIDEKICK_NODE_ID || `node_${crypto.randomBytes(8).toString("hex")}`;
+const NODE_ID = process.env.SIDEKICK_NODE_ID || workerConfig.generateStableNodeId();
 const DISPLAY_NAME = process.env.SIDEKICK_NODE_NAME || os.hostname();
 const HEARTBEAT_MS = boundedInt(process.env.SIDEKICK_HEARTBEAT_MS, 30000, 1000, 300000);
 const POLL_MS = boundedInt(process.env.SIDEKICK_WORKER_POLL_MS, 2000, 100, 60000);
@@ -58,6 +67,7 @@ Options:
   --name <name>        Worker display name
   --node-id <id>       Stable node ID for this machine
   --config <path>      Credential file path
+  --config-file <path> Worker settings config file (JSON)
   --concurrency <n>    Maximum concurrent jobs, 1-16
   --service <type>     Accepted for installer scripts; service registration is platform packaging
 `);
@@ -74,6 +84,7 @@ Options:
     "--name": "SIDEKICK_NODE_NAME",
     "--node-id": "SIDEKICK_NODE_ID",
     "--config": "SIDEKICK_WORKER_CONFIG",
+    "--config-file": "SIDEKICK_WORKER_CONFIG_FILE",
     "--concurrency": "SIDEKICK_WORKER_CONCURRENCY",
   };
   for (let i = 0; i < args.length; i++) {
