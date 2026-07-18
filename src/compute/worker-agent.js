@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-const fs = require("fs");
 const http = require("http");
 const https = require("https");
 const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
 const workerConfig = require("./worker-config");
+const workerCredential = require("./worker-credential");
 
 // OpenVINO executor — optional; gracefully absent when disabled or on non-Windows.
 let _openVinoExecutor = null;
@@ -349,30 +349,34 @@ function configuredHealth() {
 }
 
 function loadCredential() {
-  try {
-    const stat = fs.statSync(CONFIG_PATH);
-    if (!stat.isFile()) return false;
-    if (process.platform !== "win32" && (stat.mode & 0o077)) {
-      fs.chmodSync(CONFIG_PATH, 0o600);
-      log(`Tightened worker credential file permissions at ${CONFIG_PATH}`);
-    }
-    const parsed = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
-    if (/^wk_[A-Za-z0-9_-]+$/.test(parsed.workerId || "") && /^wksec_[A-Za-z0-9_-]+$/.test(parsed.credential || "")) {
-      workerId = parsed.workerId;
-      credential = parsed.credential;
-      return true;
-    }
-  } catch {}
-  return false;
+  const rec = workerCredential.load(CONFIG_PATH);
+  if (!rec) return false;
+  workerId = rec.workerId;
+  credential = rec.credential;
+  return true;
 }
 
 function saveCredential(worker, secret) {
-  fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true, mode: 0o700 });
-  if (process.platform !== "win32") fs.chmodSync(path.dirname(CONFIG_PATH), 0o700);
-  const tempPath = `${CONFIG_PATH}.${process.pid}.tmp`;
-  fs.writeFileSync(tempPath, JSON.stringify({ workerId: worker.workerId, nodeId: worker.nodeId, credential: secret }, null, 2), { mode: 0o600 });
-  if (process.platform !== "win32") fs.chmodSync(tempPath, 0o600);
-  fs.renameSync(tempPath, CONFIG_PATH);
+  workerCredential.save({ workerId: worker.workerId, nodeId: worker.nodeId || NODE_ID, credential: secret }, CONFIG_PATH);
+}
+
+// Safe credential rotation: ask the server for a new credential (authenticated
+// with the current one), persist it atomically BEFORE switching in-memory so a
+// crash mid-rotation leaves a usable credential on disk, then verify the new
+// credential with a heartbeat. Throws on any failure so callers surface it.
+async function rotateWorkerCredential() {
+  if (!workerId || !credential) throw new Error("Cannot rotate: worker not enrolled");
+  const res = await httpRequest("POST", "/compute/worker/credentials/rotate", {}, credentialHeaders());
+  if (res.status !== 200 || !res.data || !res.data.ok || !res.data.credential) {
+    throw new Error(`Credential rotation failed (${res.status}): ${res.data && res.data.error ? res.data.error : "unknown"}`);
+  }
+  const newCredential = res.data.credential;
+  saveCredential(res.data.worker || { workerId, nodeId: NODE_ID }, newCredential);
+  credential = newCredential;
+  const verify = await httpRequest("POST", "/compute/worker/heartbeat", { currentJobs: 0 }, credentialHeaders());
+  if (verify.status !== 200) throw new Error(`Rotated credential failed verification (HTTP ${verify.status})`);
+  log("Credential rotated and verified");
+  return true;
 }
 
 async function enrollIfNeeded() {
@@ -699,4 +703,4 @@ function __setWorkerIdentityForTest(id, cred) {
   credential = cred;
 }
 
-module.exports = { collectSystemInfo, configuredExecutors, configuredModelInventory, configuredHealth, deterministicEmbedding, executeJob, validateJobResult, boundedInt, jitteredBackoff, redact, getOpenVinoExecutor, sendDisconnect, requestShutdown, __setOpenVinoExecutorForTest, __setWorkerIdentityForTest };
+module.exports = { collectSystemInfo, configuredExecutors, configuredModelInventory, configuredHealth, deterministicEmbedding, executeJob, validateJobResult, boundedInt, jitteredBackoff, redact, getOpenVinoExecutor, sendDisconnect, requestShutdown, rotateWorkerCredential, __setOpenVinoExecutorForTest, __setWorkerIdentityForTest };

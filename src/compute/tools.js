@@ -58,6 +58,7 @@ async function sidekick_compute_nodes({ action, node_id, ...args }) {
           maxConcurrentJobs: args.max_concurrent_jobs || 2,
           expiresInMs: args.expires_in_ms || 3600000,
           createdBy: args.created_by || "admin",
+          reEnrollmentOf: args.re_enrollment_of || null,
         });
         return ok({ ...result, message: "Token created. Give the token value to the worker operator. It will not be shown again." });
       }

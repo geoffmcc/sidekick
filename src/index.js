@@ -680,8 +680,9 @@ function createEnrollmentTokenHandler(req, res) {
       maxConcurrentJobs: body.maxConcurrentJobs || body.max_concurrent_jobs || 2,
       expiresInMs: body.expiresInMs || body.expires_in_ms || 3600000,
       createdBy: "admin-http",
+      reEnrollmentOf: body.reEnrollmentOf || body.re_enrollment_of || null,
     });
-    auditComputeEvent("compute.enrollment_token.created", { actor: "admin-http", subjectType: "compute_enrollment_token", subjectId: token.tokenId, payload: { display_name: body.displayName || body.display_name || null } });
+    auditComputeEvent("compute.enrollment_token.created", { actor: "admin-http", subjectType: "compute_enrollment_token", subjectId: token.tokenId, payload: { display_name: body.displayName || body.display_name || null, re_enrollment_of: token.reEnrollmentOf || null } });
     res.json({ ok: true, ...token, message: "Token created. The token value is returned only once." });
   } catch (e) { sendComputeError(res, e, 400); }
 }
@@ -701,8 +702,8 @@ function enrollWorkerHandler(req, res) {
       health: req.body?.health || req.body?.backendHealth || req.body?.backend_health,
       workerVersion, publicKey, enrollmentToken: token, protocolVersion,
     });
-    auditComputeEvent("compute.worker.enrolled", { actor: enrolled.worker.workerId, subjectType: "compute_worker", subjectId: enrolled.worker.workerId, payload: { node_id: nodeId, protocol_version: protocolVersion || "1" } });
-    res.json({ ok: true, worker: enrolled.worker, credential: enrolled.credential, credentialType: "worker-bearer-v1" });
+    auditComputeEvent(enrolled.reEnrolled ? "compute.worker.re_enrolled" : "compute.worker.enrolled", { actor: enrolled.worker.workerId, subjectType: "compute_worker", subjectId: enrolled.worker.workerId, payload: { node_id: nodeId, protocol_version: protocolVersion || "1", re_enrolled: !!enrolled.reEnrolled, replaced_worker_id: enrolled.replacedWorkerId || null }, severity: enrolled.reEnrolled ? "warning" : "info" });
+    res.json({ ok: true, worker: enrolled.worker, credential: enrolled.credential, credentialType: "worker-bearer-v1", reEnrolled: !!enrolled.reEnrolled });
   } catch (e) {
     sendComputeError(res, e, 400);
   }
