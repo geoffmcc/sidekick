@@ -20,7 +20,12 @@ test/test-data-compute-protocol/
 test/test-data-dashboard/
 test/test-data-security/
 test/test-data-structured-tools-security/
+test/test-data-blackbox/
 test/test-data-blackbox-lifecycle/
+test/test-data-blackbox-mcp/
+test/test-data-platform-kernel/
+test/test-data-predict/
+test/test-data-predict-lifecycle/
 test/spike-openvino-node/
 # Python bytecode and caches
 __pycache__/
