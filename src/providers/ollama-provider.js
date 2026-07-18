@@ -1,6 +1,16 @@
 const http = require("http");
 const https = require("https");
 
+// Drop keys whose value is undefined so optional generation options
+// (num_ctx/num_predict) are omitted rather than sent as null.
+function pruneUndefined(obj) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) out[k] = v;
+  }
+  return out;
+}
+
 class OllamaProvider {
   constructor(config = {}) {
     this.type = "ollama";
@@ -84,11 +94,11 @@ class OllamaProvider {
       model: options.model,
       messages,
       stream: false,
-      options: {
+      options: pruneUndefined({
         temperature: options.temperature ?? 0.7,
         num_ctx: options.contextLimit,
         num_predict: options.maxTokens,
-      }.filter(v => v !== undefined),
+      }),
     };
     if (options.format) body.format = options.format;
     const result = await this._request("/api/chat", body, { timeout: options.timeout || this.timeout });
@@ -109,11 +119,11 @@ class OllamaProvider {
       prompt,
       system: options.system,
       stream: false,
-      options: {
+      options: pruneUndefined({
         temperature: options.temperature ?? 0.7,
         num_ctx: options.contextLimit,
         num_predict: options.maxTokens,
-      }.filter(v => v !== undefined),
+      }),
     };
     const result = await this._request("/api/generate", body, { timeout: options.timeout || this.timeout });
     return {
