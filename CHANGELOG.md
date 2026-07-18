@@ -4,6 +4,12 @@ All notable changes to Sidekick.
 
 ## Unreleased
 
+### Agent Bridge tool execution
+
+- Fixed the Agent tab routing so system-inspection requests ("check disk usage", "how much free memory", "CPU load", "running processes", uptime, swap, ports) reach the tool loop and run approved tools instead of only explaining commands. `requiresToolUse` now recognizes live host-resource requests while keeping conceptual prompts ("explain how disk usage works") conversational.
+- Extracted the planning/tool-execution loop into `src/agent-loop.js` (`runToolLoop`) with injected LLM and tool functions. All tool calls still flow through `callAgentTool`, preserving the tool allowlist, policy, approval controls, and audit logging in the dispatcher; no arbitrary shell execution is exposed.
+- Added `test/agent-loop.test.js` covering successful approved execution, denied/unauthorized tools, unavailable tools, tool execution failures, and requests that should not invoke tools, plus expanded system-inspection routing coverage in `test/agent-protocol.test.js`.
+
 ### Licensing
 
 - Sidekick is now licensed under the GNU General Public License v3.0 only (`GPL-3.0-only`).

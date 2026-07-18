@@ -92,4 +92,17 @@ assert.strictEqual(requiresToolUse("Which models should Sidekick support next?")
 assert.strictEqual(requiresToolUse("What is the capital of France?"), false);
 assert.strictEqual(requiresToolUse("Explain quantum entanglement in simple terms."), false);
 
+// System-inspection requests must route to the tool loop, not the direct-answer
+// path — otherwise the Agent tab only explains commands instead of running them.
+assert.strictEqual(requiresToolUse("check disk usage"), true);
+assert.strictEqual(requiresToolUse("How much free memory is available right now?"), true);
+assert.strictEqual(requiresToolUse("What is the current CPU load?"), true);
+assert.strictEqual(requiresToolUse("Show running processes on the server."), true);
+assert.strictEqual(requiresToolUse("Check system uptime."), true);
+assert.strictEqual(requiresToolUse("Is swap being used?"), true);
+assert.strictEqual(requiresToolUse("List the open ports."), true);
+// Conceptual questions about the same resources stay conversational.
+assert.strictEqual(requiresToolUse("Explain how disk usage works."), false);
+assert.strictEqual(requiresToolUse("Describe what CPU load average means."), false);
+
 console.log("Agent Bridge protocol tests passed");

@@ -7,7 +7,8 @@ const EventEmitter = require("events");
 const { execFileSync } = require("child_process");
 const { callAgentTool, DATA_DIR, GROQ_API_KEY, GROQ_MODEL, loadDelays, saveDelays, loadWatches, saveWatches, getToolDefsForSource, transitionScheduledPlatformExecution, appendScheduledPlatformEvent, createScheduledPlatformExecution } = require("./tools");
 const { recallMemoryForTextAsync, formatMemoryRecall, recordAgentTaskMemory, buildMemoryBrief, inferProjectFromText } = require("./memory");
-const { parseAgentDecision, trackDecisionRepetition, selectBestModelName, buildChatMessages, requiresToolUse } = require("./agent-protocol");
+const { selectBestModelName, buildChatMessages, requiresToolUse } = require("./agent-protocol");
+const { runToolLoop } = require("./agent-loop");
 const platformKernel = require("./platform/kernel");
 const { redactSensitive } = require("./redact");
 let inferenceService = null;
@@ -790,7 +791,6 @@ async function runAgent(goal, taskId) {
   let status = "iteration_limit";
   let finalResult = "";
   let terminalError = "";
-  let repeatState = { fingerprint: "", repeats: 0 };
 
   emit(taskId, { type: "step", text: "Analyzing task: " + goal });
   appendAgentExecutionEvent(platformExecution, "agent.task_started", { task_id: taskId, project: inferredProject, use_tools: useTools });
@@ -822,131 +822,21 @@ async function runAgent(goal, taskId) {
         ]
       : [{ role: "user", content: goal }];
 
-    for (let i = 0; i < MAX_ITERATIONS; i++) {
-      let response;
-      try {
-        response = await callAgentLLM(history);
-        if (i === 0) {
-          emit(taskId, { type: "provider", name: response.provider, model: response.model || "unknown" });
-        }
-        if (response.fallback) {
-          emit(taskId, { type: "fallback", from: "ollama", to: "groq" });
-        }
-      } catch (e) {
-        steps.push({ type: "error", text: e.message });
-        status = "failed";
-        terminalError = "LLM error: " + e.message;
-        break;
-      }
+    const loop = await runToolLoop({
+      history,
+      callLLM: callAgentLLM,
+      callTool: (name, args) => callAgentTool(name, args, { taskId, executionId: platformExecution?.execution_id }),
+      getToolDefs: () => getToolDefsForSource("agent").filter(t => t.enabled),
+      maxIterations: MAX_ITERATIONS,
+      emit: (event) => emit(taskId, event),
+      onEvent: (type, payload, severity) => appendAgentExecutionEvent(platformExecution, type, { task_id: taskId, ...payload }, severity),
+      redact: redactSensitive,
+    });
 
-      const text = (response.response || "").trim();
-      const decision = parseAgentDecision(text);
-      repeatState = trackDecisionRepetition(repeatState, decision);
-
-      if (repeatState.repeated) {
-        if (repeatState.abort) {
-          status = "failed";
-          terminalError = "Agent stopped after repeating the same decision three times";
-          steps.push({ type: "error", text: terminalError });
-          break;
-        }
-        history.push({ role: "assistant", content: text });
-        history.push({
-          role: "user",
-          content: "You repeated the same decision. Do not restate it. Output one valid tool call or a done result as raw JSON now."
-        });
-        continue;
-      }
-
-      if (decision.think) {
-        emit(taskId, { type: "step", text: decision.think });
-        steps.push({ type: "thought", text: decision.think });
-        // Detect hallucinated tool calls in think blocks
-        if (/called\s+sidekick_\w+\s*→/i.test(decision.think) || /stored\s+key/i.test(decision.think)) {
-          history.push({ role: "assistant", content: "Thought: " + decision.think });
-          history.push({ role: "user", content: "You described a tool call but did not execute it. You MUST output a tool call JSON now, not a think block." });
-        } else {
-          history.push({ role: "assistant", content: "Thought: " + decision.think });
-        }
-        continue;
-      }
-
-      if (decision.done) {
-        const result = decision.result || "Task completed";
-        steps.push({ type: "done", text: result });
-        status = "completed";
-        finalResult = result;
-        break;
-      }
-
-      if (decision.tool) {
-        // Tool validation: check if tool exists before calling
-        const availableToolDefs = getToolDefsForSource("agent").filter(t => t.enabled);
-        const validTool = availableToolDefs.find(t => t.name === decision.tool);
-        if (!validTool) {
-          emit(taskId, { type: "step", text: "Unknown tool: " + decision.tool });
-          steps.push({ type: "tool", tool: decision.tool, args: decision.arguments, result: "Error: tool does not exist" });
-          const availableTools = availableToolDefs.map(t => t.name).join(", ");
-          history.push({ role: "assistant", content: "Called " + decision.tool + " → Error: tool does not exist" });
-          history.push({ role: "user", content: "Tool '" + decision.tool + "' does not exist. Available tools: " + availableTools + ". Use sidekick_respond to return text directly, or choose a valid tool from the list." });
-          continue;
-        }
-
-        // Deduplication check: prevent repeated identical tool calls
-        const toolKey = decision.tool + ":" + JSON.stringify(decision.arguments || {});
-        const recentCalls = steps.slice(-3).filter(s => s.type === "tool" && s.tool === decision.tool && JSON.stringify(s.args) === JSON.stringify(decision.arguments || {}));
-        if (recentCalls.length >= 1) {
-          emit(taskId, { type: "step", text: "Blocked: repeated call to " + decision.tool + " with same arguments" });
-          history.push({ role: "assistant", content: "Called " + decision.tool + " → (blocked: already called)" });
-          // Collect all retrieved values from previous get calls
-          const retrievedValues = steps.filter(s => s.type === "tool" && s.tool === "sidekick_get").map(s => s.args.key + "=" + (s.result || "").substring(0, 50)).join(", ");
-          history.push({ role: "user", content: "You already have all the data. Call done NOW with this result: " + retrievedValues + ". Do NOT call any more tools." });
-          continue;
-        }
-
-        emit(taskId, { type: "tool", tool: decision.tool, summary: JSON.stringify(decision.arguments) });
-        appendAgentExecutionEvent(platformExecution, "agent.tool_started", { task_id: taskId, tool: decision.tool, argument_keys: Object.keys(decision.arguments || {}) });
-        steps.push({ type: "tool", tool: decision.tool, args: decision.arguments });
-
-        let result;
-        try {
-          const toolRes = await callAgentTool(decision.tool, decision.arguments || {}, { taskId, executionId: platformExecution?.execution_id });
-          if (toolRes.isError) {
-            result = "Error: " + (toolRes.content?.[0]?.text || "unknown error");
-            // If policy or lookup blocks a tool, provide corrective feedback.
-            if (result.includes("Unknown tool") || result.includes("Tool blocked by policy")) {
-              const availableTools = getToolDefsForSource("agent").filter(t => t.enabled).map(t => t.name).join(", ");
-              result += ". Available tools: " + availableTools + ". Use sidekick_respond to return text directly.";
-            }
-          } else {
-            result = toolRes.content?.[0]?.text || "(empty result)";
-          }
-        } catch (e) {
-          result = "Call failed: " + e.message;
-        }
-
-        const summary = result.substring(0, 500);
-        emit(taskId, { type: "tool", tool: decision.tool, summary: summary.substring(0, 120) });
-        appendAgentExecutionEvent(platformExecution, "agent.tool_completed", { task_id: taskId, tool: decision.tool, ok: !result.startsWith("Error:") && !result.startsWith("Call failed:"), summary: redactSensitive(summary).substring(0, 200) }, result.startsWith("Error:") || result.startsWith("Call failed:") ? "error" : "info");
-        steps[steps.length - 1].result = summary;
-        history.push({ role: "assistant", content: "Called " + decision.tool + " → " + summary.substring(0, 200) });
-        
-        // Special handling for sidekick_respond: automatically transition to done
-        if (decision.tool === "sidekick_respond" && !result.startsWith("Error:")) {
-          steps.push({ type: "done", text: result });
-          status = "completed";
-          finalResult = result;
-          break;
-        }
-        
-        history.push({ role: "user", content: "Continue. Use another tool or call done." });
-      }
-    }
-  }
-
-  if (status === "iteration_limit") {
-    terminalError = `Agent stopped after ${MAX_ITERATIONS} iterations without a final answer`;
-    steps.push({ type: "error", text: terminalError });
+    for (const step of loop.steps) steps.push(step);
+    status = loop.status;
+    finalResult = loop.finalResult;
+    terminalError = loop.terminalError;
   }
 
   const transcript = JSON.stringify({ goal, steps, status, t: new Date().toISOString() });
