@@ -22,6 +22,7 @@ const suites = [
   { file: 'test/ci-status.test.js', critical: true, description: 'Read-only GitHub CI status aggregation' },
   { file: 'test/health.test.js', critical: true, description: 'Composite health aggregation and stable failure shapes' },
   { file: 'test/agent-protocol.test.js', critical: true, description: 'Agent decision parsing, model selection, and chat roles' },
+  { file: 'test/agent-loop.test.js', critical: true, description: 'Agent Bridge tool-execution loop (approved, denied, unavailable, failing, and no-tool paths)' },
   { file: 'test/deploy-scripts.test.js', critical: false, description: 'Deploy script checks' },
   { file: 'test/git-deploy.test.js', critical: false, description: 'Read-only Git deployment hardening' },
   { file: 'test/mcp-session.test.js', critical: false, description: 'MCP stale session recovery behavior' },

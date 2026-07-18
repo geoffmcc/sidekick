@@ -130,12 +130,19 @@ function requiresToolUse(goal) {
   const localActionPattern = /\b(list|count|show|inspect|check|look up|lookup|find|fetch|get|read|open|delete|remove|update|create|store|save|set|merge|deploy|restart|stop|start|run|recall|search|query)\b/;
   const exactnessPattern = /\b(current|currently|latest|recent|right now|today|exact|exactly|available|configured|enabled|running|active|pending|in this repo|in the repo|in this project|on disk)\b/;
   const conceptualPromptPattern = /^(explain|describe|summari[sz]e|compare|brainstorm|suggest|recommend|draft|write|reword|phrase|improve|tune|analyze|review|why\b|how does\b|how should\b)/;
+  // System-inspection requests ("check disk usage", "how much free memory") name a
+  // live host resource that can only be answered by running an approved tool, never
+  // by describing a command. These must reach the tool loop even though the phrasing
+  // does not match a Sidekick resource noun above.
+  const systemInspectionPattern = /\b(disk|storage|filesystem|file\s+system|free\s+space|cpu|cpus|processor|load\s+average|uptime|ram|swap|memory\s+usage|free\s+memory|running\s+process(?:es)?|process\s+list|open\s+ports?|listening\s+ports?|network\s+interfaces?|bandwidth)\b/;
 
   if (toolNamePattern.test(text)) return true;
 
   if (conceptualPromptPattern.test(text) && !exactnessPattern.test(text)) {
     return false;
   }
+
+  if (systemInspectionPattern.test(text)) return true;
 
   const localSignals = [
     /\bhow many\b.*\b(tools?|services|models|tasks|memories|watches|delays)\b/,
