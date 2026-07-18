@@ -5,10 +5,30 @@ const path = require("path");
 const crypto = require("crypto");
 const EventEmitter = require("events");
 const { execFileSync } = require("child_process");
-const { callAgentTool, DATA_DIR, GROQ_API_KEY, GROQ_MODEL, loadDelays, saveDelays, loadWatches, saveWatches, getToolDefsForSource, transitionScheduledPlatformExecution, appendScheduledPlatformEvent, createScheduledPlatformExecution } = require("./tools");
+const { callAgentTool, getBuiltinRegistry, DATA_DIR, GROQ_API_KEY, GROQ_MODEL, loadDelays, saveDelays, loadWatches, saveWatches, getToolDefsForSource, transitionScheduledPlatformExecution, appendScheduledPlatformEvent, createScheduledPlatformExecution } = require("./tools");
+const { stripSidekickPrefix } = require("./core/tool-name");
+
+// Brain v0.1's planning allowlist: agent-visible, enabled, AND present in the
+// built-in tool registry. This deliberately excludes generated/dynamic
+// capabilities so a Brain plan can never name a generated tool, even though
+// the dispatcher would otherwise resolve one (the dispatcher still re-enforces
+// policy/approval for whatever is dispatched — this is defense in depth).
+function brainAgentTools() {
+  let builtinNames = null;
+  try {
+    builtinNames = new Set(getBuiltinRegistry().toolDefs().map(d => stripSidekickPrefix(d.name)));
+  } catch { builtinNames = null; }
+  return getToolDefsForSource("agent")
+    .filter(t => t.enabled)
+    .filter(t => !builtinNames || builtinNames.has(stripSidekickPrefix(t.name)));
+}
 const { recallMemoryForTextAsync, formatMemoryRecall, recordAgentTaskMemory, buildMemoryBrief, inferProjectFromText } = require("./memory");
 const { selectBestModelName, buildChatMessages, classifyEvidenceRequirement } = require("./agent-protocol");
 const { runToolLoop } = require("./agent-loop");
+// Optional, feature-flagged. Guarded like inferenceService so a Brain import
+// error can never affect the default (Brain-disabled) Agent Bridge path.
+let brain = null;
+try { brain = require("./brain"); } catch {}
 const platformKernel = require("./platform/kernel");
 const { redactSensitive } = require("./redact");
 const {
@@ -836,6 +856,7 @@ async function runAgent(goal, taskId, parentContext = null) {
   const useTools = classification.requiresTools;
 
   let status = "iteration_limit";
+  let brainInfo = null;
   let finalResult = "";
   let terminalError = "";
 
@@ -864,7 +885,61 @@ async function runAgent(goal, taskId, parentContext = null) {
     appendAgentExecutionEvent(platformExecution, "agent.memory_brief_loaded", { task_id: taskId, project: inferredProject });
   }
 
-  if (!useTools) {
+  if (brain && brain.isEnabled()) {
+    // Brain v0.1 (feature-flagged). When disabled — the default — this entire
+    // block is skipped and the Agent Bridge behaves exactly as before. When
+    // enabled, Brain plans/validates/executes/verifies/synthesizes; every tool
+    // step still flows through callAgentTool, and it fails closed (honest
+    // failure, never a fabricated answer) when evidence is required but absent.
+    emit(taskId, { type: "step", text: "Brain v0.1 enabled" });
+    appendAgentExecutionEvent(platformExecution, "brain.enabled", { task_id: taskId });
+    const run = brain.makeBrainRunner({
+      // The flexible callLLM (not callAgentLLM, which hardcodes the tool-loop
+      // system prompt): Brain supplies its own planner/synthesis system prompts
+      // per call. This still routes through inferenceService → Compute Placement.
+      callLLM: (messages, options) => callLLM(messages, options),
+      // Pin Brain's planning allowlist to BUILT-IN agent-visible tools only.
+      // Generated/dynamic capabilities remain dispatch-reachable but are
+      // deny-by-default for Brain v0.1 (it must not plan or promote them).
+      agentTools: brainAgentTools(),
+      callTool: (name, args) => callAgentTool(name, args, {
+        taskId,
+        executionId: platformExecution?.execution_id,
+        rootExecutionId: platformExecution?.root_execution_id,
+      }),
+      recallMemory: inferredProject
+        ? async (q) => recallMemoryForTextAsync(q, { project: inferredProject, limit: 8 })
+        : null,
+      redact: redactSensitive,
+    });
+    const outcome = await run({
+      goal,
+      classification,
+      emit: (event) => emit(taskId, event),
+      onEvent: (type, payload, severity) => appendAgentExecutionEvent(platformExecution, type, { task_id: taskId, ...payload }, severity),
+    });
+    for (const s of outcome.steps) steps.push(s);
+    // Durable, additive observability marker: records that Brain handled this
+    // task and its terminal Brain state, without exposing plan internals or
+    // chain-of-thought.
+    brainInfo = { enabled: true, state: outcome.state, evidence_count: outcome.evidenceCount || 0, awaiting_approval: outcome.awaitingApproval ? (outcome.awaitingApproval.approvalId || true) : null };
+    if (outcome.state === "completed") {
+      status = "completed";
+      finalResult = outcome.result;
+    } else if (outcome.state === "waiting_for_approval") {
+      status = "waiting_for_approval";
+      terminalError = "Awaiting human approval" + (outcome.awaitingApproval?.tool ? ` for ${outcome.awaitingApproval.tool}` : "") + (outcome.awaitingApproval?.approvalId ? ` (approval ${outcome.awaitingApproval.approvalId})` : "") + ". The task is parked and was not completed.";
+    } else if (outcome.state === "timed_out") {
+      status = "iteration_limit";
+      terminalError = outcome.error || "Brain task timed out";
+    } else if (outcome.state === "cancelled") {
+      status = "failed";
+      terminalError = outcome.error || "Brain task cancelled";
+    } else {
+      status = "failed";
+      terminalError = outcome.error || "Brain task failed";
+    }
+  } else if (!useTools) {
     try {
       const response = await callDirectAnswerLLM(goal, combinedBrief, continuationBrief);
       emit(taskId, { type: "provider", name: response.provider, model: response.model || "unknown" });
@@ -925,6 +1000,7 @@ async function runAgent(goal, taskId, parentContext = null) {
     session_id: parentContext ? (parentContext.sessionId || null) : null,
     project: inferredProject || null,
     routing: { requires_tools: useTools, reason: classification.reason },
+    brain: brainInfo,
     lineage: {
       platform_execution_id: platformExecution ? platformExecution.execution_id : null,
       root_execution_id: platformExecution ? platformExecution.root_execution_id : null,
