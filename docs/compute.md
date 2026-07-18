@@ -50,15 +50,23 @@ The worker entry point in this repository is:
 node src/compute/worker-agent.js enroll --server http://<sidekick-host>:4097 --token <enrollment-token>
 ```
 
-The dashboard may display the intended packaged command shape:
+`package.json` publishes a `sidekick-compute-worker` `bin`, and
+`npm run package:worker` builds a standalone, dependency-free package under
+`dist/` with a `SHA256SUMS` manifest. Per-platform service installers (systemd,
+launchd, winsw) live under `packaging/compute-worker/` and register the worker as
+a managed OS service:
 
 ```bash
-sidekick-compute-worker enroll --server http://<sidekick-host>:4097 --token <enrollment-token> --service systemd
+sidekick-compute-worker enroll --server http://<sidekick-host>:4097 --token <enrollment-token> --service
 ```
 
-Full disclosure: the current repository `package.json` does not yet publish a `sidekick-compute-worker` `bin` entry, and the accepted `--service` flag does not itself install a Windows service, macOS launch agent, or systemd unit. Use the source command from a checkout unless a platform-specific package or installer has provided the binary and service registration.
+The agent validates persisted credentials, writes them atomically, and tightens POSIX file permissions where the filesystem supports it (and applies NTFS ACLs on Windows). On Windows-mounted WSL paths, the mount may report broader mode bits even when Node writes with `0600`.
 
-The agent validates persisted credentials, writes them atomically, and tightens POSIX file permissions where the filesystem supports it. On Windows-mounted WSL paths, the mount may report broader mode bits even when Node writes with `0600`.
+The worker also supports a multi-dimensional lifecycle state model, a
+subcommand CLI (`run`/`enroll`/`status`/`doctor`/`rotate-credential`/`version`),
+persistent configuration, credential rotation and re-enrollment, resilient
+reconnection, and scheduling that stops parked workers from claiming new jobs.
+See **[`compute-worker.md`](compute-worker.md)** for the full worker lifecycle.
 
 ## Hardware, Backends, And Models
 
