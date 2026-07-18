@@ -63,6 +63,7 @@ const suites = [
   { file: 'test/compute-worker-cli.test.js', critical: false, description: 'Compute worker CLI subcommands and status formatting' },
   { file: 'test/compute-worker-reconnect.test.js', critical: false, description: 'Compute worker reconnection classification and backoff' },
   { file: 'test/compute-worker-resilience.test.js', critical: false, description: 'Compute worker run-loop resilience (reconnect + clean stop)' },
+  { file: 'test/compute-worker-service.test.js', critical: false, description: 'Compute worker OS service definitions and installers' },
   { file: 'test/openvino-executor.test.js', critical: false, description: 'OpenVINO NPU executor and Python helper manager' },
   { file: 'test/openvino-startup-readiness.test.js', critical: false, description: 'OpenVINO startup capability readiness and advertisement' },
   { file: 'test/compute-protocol.test.js', critical: false, description: 'Compute authenticated worker protocol integration' },

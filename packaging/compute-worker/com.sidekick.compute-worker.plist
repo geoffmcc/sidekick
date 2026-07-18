@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.sidekick.compute-worker</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/node</string>
+    <string>/usr/local/sidekick-compute-worker/worker-agent.js</string>
+    <string>run</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>NODE_ENV</key>
+    <string>production</string>
+    <key>SIDEKICK_WORKER_CONFIG_FILE</key>
+    <string>/Library/Application Support/Sidekick Compute Worker/config.json</string>
+    <key>SIDEKICK_WORKER_CONFIG</key>
+    <string>/Library/Application Support/Sidekick Compute Worker/credential.json</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- Restart only on abnormal exit. A revoked worker exits 0 (Phase 6) and must
+       stay stopped, so KeepAlive triggers on non-zero exit only. -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>/Library/Logs/Sidekick/compute-worker.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Library/Logs/Sidekick/compute-worker.err.log</string>
+</dict>
+</plist>

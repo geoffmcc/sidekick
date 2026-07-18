@@ -1,0 +1,31 @@
+[Unit]
+Description=Sidekick Compute Worker
+Documentation=https://github.com/geoffmcc/sidekick
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# WorkingDirectory / paths below are the installer defaults; adjust to taste.
+WorkingDirectory=/opt/sidekick-compute-worker
+ExecStart=/usr/bin/node /opt/sidekick-compute-worker/worker-agent.js run
+# Restart only on abnormal exit. A revoked/incompatible worker exits 0 (Phase 6)
+# and must STAY stopped — re-enroll to recover — so do not use Restart=always.
+Restart=on-failure
+RestartSec=10
+User=sidekick-worker
+Group=sidekick-worker
+# Non-secret configuration only. The credential lives in a 0600 file referenced
+# by path here; the enrollment token is NEVER placed in the unit.
+Environment=NODE_ENV=production
+Environment=SIDEKICK_WORKER_CONFIG_FILE=/etc/sidekick-compute-worker/config.json
+Environment=SIDEKICK_WORKER_CONFIG=/var/lib/sidekick-compute-worker/credential.json
+# Sandboxing
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/sidekick-compute-worker
+
+[Install]
+WantedBy=multi-user.target
