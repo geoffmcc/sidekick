@@ -7,6 +7,7 @@ const crypto = require("crypto");
 const workerConfig = require("./worker-config");
 const workerCredential = require("./worker-credential");
 const workerCli = require("./worker-cli");
+const workerReconnect = require("./worker-reconnect");
 
 // OpenVINO executor — optional; gracefully absent when disabled or on non-Windows.
 let _openVinoExecutor = null;
@@ -59,9 +60,47 @@ let credential = null;
 let running = true;
 let shuttingDown = false;
 let heartbeatTimer = null;
+let reconnecting = false;
+let permanentStopReason = null;
 const activeJobs = new Set();
 const activeJobPromises = new Set();
 
+// Transition logging so an outage produces one "lost connection" line and one
+// "reconnected" line rather than a message per failed request.
+function noteReconnected() {
+  if (reconnecting) { log("Reconnected to server"); reconnecting = false; }
+}
+function noteTransient(context) {
+  if (!reconnecting) { reconnecting = true; log(`Lost connection to server (${context}); retrying with backoff`); }
+}
+
+// Terminal stop: our credential is revoked/invalid or the protocol is
+// incompatible. Do NOT keep retrying (that would spin). Stop the loops and let
+// the process exit cleanly (exit 0) so a service manager set to Restart=on-failure
+// does not hot-loop a worker that can only recover via re-enrollment.
+function fatalStop(reason) {
+  if (permanentStopReason) return;
+  permanentStopReason = reason;
+  running = false;
+  if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+  log(`FATAL: ${reason}. Stopping worker; re-enroll to recover.`);
+}
+
+// React to a request outcome status: drive reconnect logging and trip fatalStop
+// on a permanent classification. Returns the classification string.
+function reactToStatus(status, context) {
+  const cls = workerReconnect.classifyStatus(status, { enrolled: true });
+  if (cls === workerReconnect.PERMANENT) {
+    fatalStop(status === 426
+      ? "Protocol version incompatible with server"
+      : `Server rejected credential (HTTP ${status}); worker revoked or invalid`);
+  } else if (cls === workerReconnect.TRANSIENT) {
+    noteTransient(context);
+  } else {
+    noteReconnected();
+  }
+  return cls;
+}
 
 function log(msg) { console.log(`[worker-agent] ${new Date().toISOString()} ${redact(msg)}`); }
 function redact(value) { return String(value || "").replace(/(wksec_|enroll_)[A-Za-z0-9_-]+/g, "[REDACTED]"); }
@@ -73,9 +112,7 @@ function boundedInt(value, fallback, min, max) {
 }
 
 function jitteredBackoff(baseMs, attempt = 0) {
-  const base = Math.min(MAX_RETRY_MS, Math.max(POLL_MS, baseMs) * Math.pow(2, attempt));
-  const jitter = Math.floor(base * 0.2 * Math.random());
-  return Math.min(MAX_RETRY_MS, base + jitter);
+  return workerReconnect.nextBackoff(attempt, { baseMs: Math.max(POLL_MS, baseMs), maxMs: MAX_RETRY_MS });
 }
 
 function credentialHeaders() {
@@ -376,18 +413,27 @@ async function enrollIfNeeded() {
 async function sendHeartbeat() {
   const sysInfo = collectSystemInfo();
   const memUsage = process.memoryUsage();
-  const result = await requestWithRetry("POST", "/compute/worker/heartbeat", {
-    utilization: { cpuLoad: os.loadavg()[0] / os.cpus().length, memoryUsed: os.totalmem() - os.freemem(), memoryTotal: os.totalmem(), uptime: os.uptime(), processMemory: memUsage.rss },
-    currentJobs: activeJobs.size,
-    providers: sysInfo.providers,
-    executors: sysInfo.executors,
-    accelerators: sysInfo.accelerators,
-    modelInventory: sysInfo.modelInventory,
-    limits: sysInfo.limits,
-    health: sysInfo.health,
-    workerVersion: WORKER_VERSION,
-  }, credentialHeaders());
-  if (result.status !== 200 || !result.data.ok) log(`Heartbeat failed: ${result.data.error || result.status}`);
+  let result;
+  try {
+    result = await requestWithRetry("POST", "/compute/worker/heartbeat", {
+      utilization: { cpuLoad: os.loadavg()[0] / os.cpus().length, memoryUsed: os.totalmem() - os.freemem(), memoryTotal: os.totalmem(), uptime: os.uptime(), processMemory: memUsage.rss },
+      currentJobs: activeJobs.size,
+      providers: sysInfo.providers,
+      executors: sysInfo.executors,
+      accelerators: sysInfo.accelerators,
+      modelInventory: sysInfo.modelInventory,
+      limits: sysInfo.limits,
+      health: sysInfo.health,
+      workerVersion: WORKER_VERSION,
+    }, credentialHeaders());
+  } catch (e) {
+    // Network error after retries — transient; keep the loop alive.
+    noteTransient("heartbeat");
+    throw e;
+  }
+  if (result.status === 200 && result.data.ok) { noteReconnected(); return; }
+  const cls = reactToStatus(result.status, "heartbeat");
+  if (cls !== workerReconnect.PERMANENT) log(`Heartbeat failed: ${result.data.error || result.status}`);
 }
 
 async function claimLoop() {
@@ -396,6 +442,7 @@ async function claimLoop() {
     try {
       if (activeJobs.size < MAX_CONCURRENT_JOBS) {
         const result = await requestWithRetry("POST", "/compute/worker/jobs/claim", { leaseDurationMs: LEASE_MS }, credentialHeaders(), { attempts: 2 });
+        if (reactToStatus(result.status, "claim") === workerReconnect.PERMANENT) break;
         errorAttempt = 0;
         if (result.status === 200 && result.data.claimed) {
           const jobPromise = handleJob(result.data.job, result.data.leaseId).catch(e => log(`Job error: ${e.message}`));
@@ -407,6 +454,7 @@ async function claimLoop() {
         await sleep(POLL_MS);
       }
     } catch (e) {
+      noteTransient("claim");
       log(`Claim loop error: ${e.message}`);
       await sleep(jitteredBackoff(POLL_MS, errorAttempt++));
     }
