@@ -8,13 +8,35 @@ const healthMonitor = require("./health-monitor");
 const executorRegistry = require("./executor-registry");
 const errors = require("./errors");
 
+// Reconciliation cadence. Workers heartbeat every ~30s; three missed beats
+// (90s) marks a connection stale. The timer is unref'd so it never keeps the
+// process alive on its own.
+const RECONCILE_INTERVAL_MS = 30000;
+const MISSED_HEARTBEAT_MULTIPLIER = 3;
+let reconcileTimer = null;
+
+function startReconciliation() {
+  if (reconcileTimer) return;
+  const run = () => {
+    try { workerManager.reconcileWorkerStates(RECONCILE_INTERVAL_MS * MISSED_HEARTBEAT_MULTIPLIER); }
+    catch { /* best-effort; a failed pass is retried on the next tick */ }
+  };
+  run(); // immediate pass at startup to clear stale online state
+  reconcileTimer = setInterval(run, RECONCILE_INTERVAL_MS);
+  if (reconcileTimer.unref) reconcileTimer.unref();
+}
+
+function stopReconciliation() {
+  if (reconcileTimer) { clearInterval(reconcileTimer); reconcileTimer = null; }
+}
+
 function initialize() {
   providerRegistry.ensureSchema();
   modelRegistry.ensureSchema();
   workerManager.ensureSchema();
   jobManager.ensureSchema();
   jobManager.recoverExpiredLeases();
-  workerManager.checkWorkersOffline();
+  startReconciliation();
   try {
     const dbStore = require("../db");
     const db = dbStore.getDb();
@@ -161,6 +183,8 @@ function explainRouting(request) {
 
 module.exports = {
   initialize,
+  startReconciliation,
+  stopReconciliation,
   overview,
   providerRegistry,
   modelRegistry,

@@ -80,12 +80,47 @@ function ensureSchema() {
   ensureColumn("compute_workers", "limits_json", "TEXT NOT NULL DEFAULT '{}'");
   ensureColumn("compute_workers", "health_json", "TEXT NOT NULL DEFAULT '{}'");
   ensureColumn("compute_workers", "last_health_check", "TEXT");
+  // Multi-dimensional state columns (Phase 1)
+  ensureColumn("compute_workers", "connection_state", "TEXT NOT NULL DEFAULT 'offline'");
+  ensureColumn("compute_workers", "admin_state", "TEXT NOT NULL DEFAULT 'enabled'");
+  ensureColumn("compute_workers", "credential_state", "TEXT NOT NULL DEFAULT 'active'");
+  ensureColumn("compute_workers", "health_state", "TEXT NOT NULL DEFAULT 'unknown'");
+  ensureColumn("compute_workers", "disconnected_at", "TEXT");
+  ensureColumn("compute_workers", "last_disconnect_reason", "TEXT");
+  // Backfill from existing state column for legacy workers
+  backfillNewStateColumns();
 }
 
 function ensureColumn(table, column, definition) {
   const db = dbStore.getDb();
   const columns = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
   if (!columns.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
+function backfillNewStateColumns() {
+  const db = dbStore.getDb();
+  try {
+    // Only backfill rows where the new columns have default values (not yet set)
+    db.exec(`
+      UPDATE compute_workers SET
+        connection_state = CASE WHEN state = 'online' THEN 'online' ELSE 'offline' END,
+        admin_state = CASE
+          WHEN state = 'maintenance' THEN 'maintenance'
+          WHEN state = 'draining' THEN 'draining'
+          ELSE 'enabled' END,
+        credential_state = CASE WHEN state = 'revoked' THEN 'revoked' ELSE 'active' END,
+        health_state = CASE WHEN state = 'degraded' THEN 'degraded' ELSE 'unknown' END
+      WHERE connection_state = 'offline' AND admin_state = 'enabled' AND credential_state = 'active'
+    `);
+  } catch {}
+}
+
+function deriveLegacyState(connectionState, adminState, credentialState) {
+  if (credentialState === "revoked") return "revoked";
+  if (adminState === "maintenance") return "maintenance";
+  if (adminState === "draining") return "draining";
+  if (connectionState === "online") return "online";
+  return "offline";
 }
 
 function rowToWorker(row) {
@@ -108,6 +143,12 @@ function rowToWorker(row) {
     workerVersion: row.worker_version,
     trustLevel: row.trust_level,
     state: row.state,
+    connectionState: row.connection_state || "offline",
+    adminState: row.admin_state || "enabled",
+    credentialState: row.credential_state || "active",
+    healthState: row.health_state || "unknown",
+    disconnectedAt: row.disconnected_at,
+    lastDisconnectReason: row.last_disconnect_reason,
     currentJobs: row.current_jobs,
     maxConcurrentJobs: row.max_concurrent_jobs,
     utilization: parseJson(row.utilization_json, {}),
@@ -191,7 +232,8 @@ function authenticateWorker(workerId, credential) {
   if (!workerId || !credential) return null;
   const db = dbStore.getDb();
   const row = db.prepare("SELECT * FROM compute_workers WHERE worker_id = ?").get(workerId);
-  if (!row || !row.credential_hash || row.state === "revoked") return null;
+  if (!row || !row.credential_hash) return null;
+  if (row.state === "revoked" || row.credential_state === "revoked") return null;
   if (!safeEqual(row.credential_hash, hashToken(credential))) return null;
   return rowToWorker(row);
 }
@@ -236,12 +278,39 @@ function listWorkers({ state, platform, trustLevel } = {}) {
 function updateWorker(workerId, updates) {
   ensureSchema();
   const db = dbStore.getDb();
+  const current = getWorker(workerId);
+  if (!current) return null;
   const fields = [];
   const params = [];
   if (updates.displayName !== undefined) { fields.push("display_name = ?"); params.push(updates.displayName); }
-  if (updates.state !== undefined) { fields.push("state = ?"); params.push(updates.state); }
   if (updates.trustLevel !== undefined) { fields.push("trust_level = ?"); params.push(updates.trustLevel); }
-  if (updates.maintenanceMode !== undefined) { fields.push("maintenance_mode = ?"); params.push(updates.maintenanceMode ? 1 : 0); }
+
+  // Multi-dimensional lifecycle state. Admin action arrives either as an
+  // explicit adminState or as the legacy maintenanceMode flag; either way we
+  // keep admin_state, maintenance_mode, and the derived legacy state coherent so
+  // a later heartbeat cannot silently resurrect an administratively parked worker.
+  let connectionState = current.connectionState;
+  let adminState = current.adminState;
+  let credentialState = current.credentialState;
+  let dimsChanged = false;
+  if (updates.connectionState !== undefined) { connectionState = updates.connectionState; fields.push("connection_state = ?"); params.push(connectionState); dimsChanged = true; }
+  if (updates.adminState !== undefined) {
+    adminState = updates.adminState;
+  } else if (updates.maintenanceMode !== undefined) {
+    adminState = updates.maintenanceMode ? "maintenance" : "enabled";
+  }
+  if (adminState !== current.adminState || updates.adminState !== undefined || updates.maintenanceMode !== undefined) {
+    fields.push("admin_state = ?"); params.push(adminState); dimsChanged = true;
+    fields.push("maintenance_mode = ?"); params.push(adminState === "maintenance" ? 1 : 0);
+  }
+  if (updates.credentialState !== undefined) { credentialState = updates.credentialState; fields.push("credential_state = ?"); params.push(credentialState); dimsChanged = true; }
+  if (updates.healthState !== undefined) { fields.push("health_state = ?"); params.push(updates.healthState); }
+
+  // Legacy state: an explicit value wins (back-compat); otherwise derive it from
+  // the resulting dimensions whenever any dimension changed.
+  if (updates.state !== undefined) { fields.push("state = ?"); params.push(updates.state); }
+  else if (dimsChanged) { fields.push("state = ?"); params.push(deriveLegacyState(connectionState, adminState, credentialState)); }
+
   if (updates.maxConcurrentJobs !== undefined) { fields.push("max_concurrent_jobs = ?"); params.push(updates.maxConcurrentJobs); }
   if (updates.accelerators !== undefined) { fields.push("accelerators_json = ?"); params.push(json(updates.accelerators)); }
   if (updates.providers !== undefined) { fields.push("providers_json = ?"); params.push(json(updates.providers)); }
@@ -268,8 +337,11 @@ function heartbeat(workerId, { utilization, currentJobs }) {
   if (currentJobs !== undefined) updates.current_jobs = currentJobs;
   const worker = getWorker(workerId);
   if (!worker) return null;
-  if (worker.state === "revoked") throw new WorkerRevokedError(workerId);
-  if (worker.state === "offline") updates.state = "online";
+  if (worker.credentialState === "revoked") throw new WorkerRevokedError(workerId);
+  if (worker.connectionState === "offline") {
+    updates.connection_state = "online";
+    updates.state = deriveLegacyState("online", worker.adminState, worker.credentialState);
+  }
   const setClauses = Object.keys(updates).map(k => k + " = ?");
   const params = [...Object.values(updates), workerId];
   db.prepare(`UPDATE compute_workers SET ${setClauses.join(", ")} WHERE worker_id = ?`).run(...params);
@@ -280,7 +352,7 @@ function revokeWorker(workerId, reason = "admin_revoked") {
   ensureSchema();
   const db = dbStore.getDb();
   const now = nowIso();
-  db.prepare("UPDATE compute_workers SET state = 'revoked', revocation_reason = ?, revoked_at = ?, updated_at = ? WHERE worker_id = ?")
+  db.prepare("UPDATE compute_workers SET state = 'revoked', credential_state = 'revoked', revocation_reason = ?, revoked_at = ?, updated_at = ? WHERE worker_id = ?")
     .run(reason, now, now, workerId);
   return getWorker(workerId);
 }
@@ -297,6 +369,54 @@ function checkWorkersOffline(timeoutMs = 90000) {
       .run(nowIso(), worker_id);
   }
   return offline.map(w => w.worker_id);
+}
+
+// Periodic connection reconciliation over the multi-dimensional state model.
+// Any worker whose heartbeat has lapsed beyond thresholdMs is moved to
+// connection_state = 'offline'. admin_state (maintenance/draining) is preserved
+// so a parked worker stays parked, and revoked workers are never touched. The
+// legacy `state` column is recomputed from the resulting dimensions.
+function reconcileWorkerStates(thresholdMs = 90000) {
+  ensureSchema();
+  const db = dbStore.getDb();
+  const now = nowIso();
+  const cutoff = new Date(Date.now() - thresholdMs).toISOString();
+  const stale = db.prepare(`
+    SELECT worker_id, admin_state, credential_state FROM compute_workers
+    WHERE connection_state = 'online'
+      AND credential_state != 'revoked'
+      AND (last_heartbeat IS NULL OR last_heartbeat < ?)
+  `).all(cutoff);
+  const update = db.prepare(`
+    UPDATE compute_workers
+    SET connection_state = 'offline', state = ?, disconnected_at = ?, last_disconnect_reason = 'missed_heartbeat', updated_at = ?
+    WHERE worker_id = ?
+  `);
+  for (const row of stale) {
+    const legacy = deriveLegacyState("offline", row.admin_state, row.credential_state);
+    update.run(legacy, now, now, row.worker_id);
+  }
+  return stale.map(r => r.worker_id);
+}
+
+// Graceful, authenticated disconnect notification from a worker. Moves the
+// worker to connection_state = 'offline' immediately without waiting for the
+// heartbeat threshold. Preserves admin_state; a revoked worker is a terminal
+// no-op. reason is bounded to keep it out of unbounded-storage territory.
+function disconnectWorker(workerId, reason = "graceful") {
+  ensureSchema();
+  const db = dbStore.getDb();
+  const worker = getWorker(workerId);
+  if (!worker) return null;
+  if (worker.credentialState === "revoked") return worker;
+  const now = nowIso();
+  const legacy = deriveLegacyState("offline", worker.adminState, worker.credentialState);
+  db.prepare(`
+    UPDATE compute_workers
+    SET connection_state = 'offline', state = ?, disconnected_at = ?, last_disconnect_reason = ?, updated_at = ?
+    WHERE worker_id = ?
+  `).run(legacy, now, String(reason || "graceful").slice(0, 200), now, workerId);
+  return getWorker(workerId);
 }
 
 function getWorkerStats() {
@@ -326,6 +446,9 @@ module.exports = {
   heartbeat,
   revokeWorker,
   checkWorkersOffline,
+  reconcileWorkerStates,
+  disconnectWorker,
+  deriveLegacyState,
   getWorkerStats,
   rowToWorker,
 };

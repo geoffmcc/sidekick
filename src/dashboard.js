@@ -1284,8 +1284,8 @@ app.post("/api/compute/workers/:workerId/:action", (req, res) => {
     compute.initialize();
     const action = req.params.action;
     let worker;
-    if (action === "disable") worker = compute.workerManager.updateWorker(req.params.workerId, { state: "maintenance", maintenanceMode: true });
-    else if (action === "enable") worker = compute.workerManager.updateWorker(req.params.workerId, { state: "offline", maintenanceMode: false });
+    if (action === "disable") worker = compute.workerManager.updateWorker(req.params.workerId, { adminState: "maintenance" });
+    else if (action === "enable") worker = compute.workerManager.updateWorker(req.params.workerId, { adminState: "enabled" });
     else if (action === "revoke") worker = compute.workerManager.revokeWorker(req.params.workerId, req.body?.reason || "dashboard_revoked");
     else return res.status(404).json({ ok: false, error: "unknown worker action" });
     if (!worker) return res.status(404).json({ ok: false, error: "worker not found" });

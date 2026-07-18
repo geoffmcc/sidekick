@@ -14,6 +14,7 @@ docs/workplans/
 backups/
 version.json
 test/test-data-compute/
+test/test-data-compute-lifecycle/
 test/test-data-compute-protocol/
 test/test-data-dashboard/
 test/test-data-security/
