@@ -182,8 +182,8 @@ const APPROVED_MODELS = Object.freeze([
     integrity: Object.freeze({
       algorithm: "sha256",
       files: Object.freeze({
-        "config.json": "placeholder_qwen_config_sha256",
-        "tokenizer.json": "placeholder_qwen_tokenizer_sha256",
+        "config.json": "68f2df7c4bea23d67b321a89503429303aedaef24a3fd646ce14e5c355047a43",
+        "tokenizer.json": "def76fb086971c7867b829c23a26261e38d9d74e02139253b38aeb9df8b4b50a",
       }),
     }),
 
