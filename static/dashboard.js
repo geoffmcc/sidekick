@@ -1982,7 +1982,22 @@ function renderComputeWorker(w){
   const accelerators = (w.accelerators || []).map(a => a.name || a.type || a.vendor || JSON.stringify(a)).filter(Boolean);
   const modelInventory = Array.isArray(w.modelInventory) ? w.modelInventory : [];
   const models = modelInventory.length;
-  const statusClass = w.state === 'online' ? 'ok' : (w.state === 'revoked' ? 'danger' : 'warn');
+  // Multi-dimensional lifecycle state: connection / admin / credential / health.
+  const conn = w.connectionState || (w.state === 'online' ? 'online' : 'offline');
+  const admin = w.adminState || (w.state === 'maintenance' ? 'maintenance' : 'enabled');
+  const cred = w.credentialState || (w.state === 'revoked' ? 'revoked' : 'active');
+  const health = w.healthState || 'unknown';
+  const connClass = conn === 'online' ? 'ok' : 'warn';
+  const adminClass = admin === 'enabled' ? '' : 'warn';
+  const healthClass = health === 'healthy' ? 'ok' : (health === 'unavailable' ? 'danger' : (health === 'degraded' ? 'warn' : ''));
+  const stateBadges =
+    '<span class="badge ' + connClass + '" title="connection">' + esc(conn) + '</span>' +
+    '<span class="badge ' + adminClass + '" title="admin">' + esc(admin) + '</span>' +
+    (cred === 'revoked' ? '<span class="badge danger" title="credential">revoked</span>' : '') +
+    (health !== 'unknown' ? '<span class="badge ' + healthClass + '" title="health">' + esc(health) + '</span>' : '');
+  const disconnectInfo = (conn === 'offline' && w.disconnectedAt)
+    ? '<small class="compute-disconnect">offline since ' + esc(fmtDate(w.disconnectedAt)) + (w.lastDisconnectReason ? ' (' + esc(w.lastDisconnectReason) + ')' : '') + '</small>'
+    : '';
   const lastHeartbeat = w.lastHeartbeat ? fmtDate(w.lastHeartbeat) : 'never';
   const utilization = w.utilization && Object.keys(w.utilization).length ? renderStructuredValue(w.utilization, { limit: 180 }) : '<div class="empty">No utilization yet</div>';
   // Render model inventory with certification tier badges.
@@ -1999,8 +2014,9 @@ function renderComputeWorker(w){
   const ovState = ovHealth ? '<span class="badge ' + (ovHealth.state === 'ready' ? 'ok' : (ovHealth.state === 'disabled' ? '' : 'warn')) + '">openvino ' + esc(ovHealth.state || 'unknown') + '</span>' : '';
   return '<div class="compute-row">' +
     '<div class="compute-row-main">' +
-      '<div><strong>' + esc(w.displayName || w.nodeId || w.workerId) + '</strong> <span class="badge ' + statusClass + '">' + esc(w.state || 'unknown') + '</span> ' + ovState + '</div>' +
+      '<div><strong>' + esc(w.displayName || w.nodeId || w.workerId) + '</strong> ' + stateBadges + ' ' + ovState + '</div>' +
       '<small>' + esc(w.platform || 'unknown') + (w.architecture ? ' / ' + esc(w.architecture) : '') + ' / last heartbeat ' + esc(lastHeartbeat) + '</small>' +
+      disconnectInfo +
       '<div class="compute-badges">' +
         '<span>jobs ' + esc(w.currentJobs || 0) + '/' + esc(w.maxConcurrentJobs || 1) + '</span>' +
         '<span>trust ' + esc(w.trustLevel || 'unknown') + '</span>' +
@@ -2011,8 +2027,12 @@ function renderComputeWorker(w){
       '<details class="detail-block"><summary>Utilization and health</summary>' + utilization + renderStructuredValue(w.health || {}, { limit: 260 }) + '</details>' +
     '</div>' +
     '<div class="compute-row-actions">' +
-      (w.state === 'maintenance' ? '<button class="btn btn-sm" onclick="computeWorkerAction(' + jsArg(w.workerId) + ',\'enable\')">Enable</button>' : '<button class="btn btn-sm btn-outline" onclick="computeWorkerAction(' + jsArg(w.workerId) + ',\'disable\')">Maintenance</button>') +
-      (w.state !== 'revoked' ? '<button class="btn btn-sm btn-danger" onclick="computeWorkerAction(' + jsArg(w.workerId) + ',\'revoke\')">Revoke</button>' : '') +
+      ((admin === 'maintenance' || admin === 'draining')
+        ? '<button class="btn btn-sm" title="Clear maintenance and resume claiming jobs" onclick="computeWorkerAction(' + jsArg(w.workerId) + ',\'enable\')">Resume</button>'
+        : '<button class="btn btn-sm btn-outline" title="Stop claiming new jobs; worker stays connected" onclick="computeWorkerAction(' + jsArg(w.workerId) + ',\'disable\')">Put in maintenance</button>') +
+      (cred !== 'revoked'
+        ? '<button class="btn btn-sm btn-danger" title="Terminal: revoke the credential (re-enroll to recover)" onclick="computeWorkerAction(' + jsArg(w.workerId) + ',\'revoke\')">Revoke credential</button>'
+        : '<span class="badge danger">credential revoked</span>') +
     '</div>' +
   '</div>';
 }
@@ -2170,6 +2190,8 @@ function createComputeEnrollment(){
     maxConcurrentJobs: Number($('computeEnrollJobs').value || 2),
     expiresInMs: Number($('computeEnrollTtl').value || 3600000)
   };
+  const reEnroll = (($('computeEnrollReEnroll') && $('computeEnrollReEnroll').value) || '').trim();
+  if (reEnroll) body.reEnrollmentOf = reEnroll;
   result.innerHTML = '<div class="empty">Creating token...</div>';
   authFetch('/api/compute/enrollment-tokens', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r=>r.json()).then(d=>{
     if (d.ok === false) throw new Error(d.error || 'token creation failed');

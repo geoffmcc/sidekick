@@ -280,13 +280,23 @@ setTimeout(async () => {
       });
       const workerId = enrolled.worker.workerId;
 
+      const listAfterEnroll = await makeRequest('GET', '/api/compute/workers');
+      const listedWorker = (listAfterEnroll.data.workers || []).find(w => w.workerId === workerId);
+      assert.ok(listedWorker, 'Enrolled worker appears in the list');
+      for (const dim of ['connectionState', 'adminState', 'credentialState', 'healthState']) {
+        assert.ok(dim in listedWorker, `Worker list should expose ${dim}`);
+      }
+      assert.strictEqual(listedWorker.credentialState, 'active', 'Freshly enrolled worker credential is active');
+
       const disabled = await makeRequest('POST', `/api/compute/workers/${workerId}/disable`, { reason: 'dashboard-test' });
       assert.strictEqual(disabled.status, 200, 'Worker disable should return 200');
       assert.strictEqual(disabled.data.worker.state, 'maintenance', 'Worker should enter maintenance');
+      assert.strictEqual(disabled.data.worker.adminState, 'maintenance', 'Worker adminState should be maintenance');
 
       const enabled = await makeRequest('POST', `/api/compute/workers/${workerId}/enable`, { reason: 'dashboard-test' });
       assert.strictEqual(enabled.status, 200, 'Worker enable should return 200');
       assert.strictEqual(enabled.data.worker.maintenanceMode, false, 'Worker maintenance mode should clear');
+      assert.strictEqual(enabled.data.worker.adminState, 'enabled', 'Worker adminState should be enabled');
 
       const job = compute.jobManager.createJob({ jobType: 'chat', capability: 'chat', requestPayload: { prompt: 'dashboard cancel retry' } });
       const cancelled = await makeRequest('POST', `/api/compute/jobs/${job.jobId}/cancel`, { reason: 'dashboard-test' });
@@ -304,6 +314,11 @@ setTimeout(async () => {
       const revoked = await makeRequest('POST', `/api/compute/workers/${workerId}/revoke`, { reason: 'dashboard-test' });
       assert.strictEqual(revoked.status, 200, 'Worker revoke should return 200');
       assert.strictEqual(revoked.data.worker.state, 'revoked', 'Worker should be revoked');
+      assert.strictEqual(revoked.data.worker.credentialState, 'revoked', 'Worker credentialState should be revoked');
+
+      const reEnrollToken = await makeRequest('POST', '/api/compute/enrollment-tokens', { displayName: 'reenroll-' + suffix, expiresInMs: 600000, reEnrollmentOf: 'dashboard-node-' + suffix });
+      assert.strictEqual(reEnrollToken.status, 200, 'Re-enrollment token endpoint should return 200');
+      assert.strictEqual(reEnrollToken.data.reEnrollmentOf, 'dashboard-node-' + suffix, 'Token records the re-enrollment node');
       console.log('Passed\n');
     }
 
