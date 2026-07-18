@@ -23,6 +23,7 @@ const suites = [
   { file: 'test/health.test.js', critical: true, description: 'Composite health aggregation and stable failure shapes' },
   { file: 'test/agent-protocol.test.js', critical: true, description: 'Agent decision parsing, model selection, and chat roles' },
   { file: 'test/agent-loop.test.js', critical: true, description: 'Agent Bridge tool-execution loop (approved, denied, unavailable, failing, and no-tool paths)' },
+  { file: 'test/agent-bridge-prompt.test.js', critical: true, description: 'Agent Bridge system prompt derives from the live canonical tool catalog' },
   { file: 'test/agent-continuation.test.js', critical: true, description: 'Agent Bridge follow-up continuation-context builder (validation, redaction, bounding, lineage, cycles)' },
   { file: 'test/agent-bridge-followup.test.js', critical: true, description: 'Agent Bridge follow-up API and security (lineage, terminal-parent, traversal, malformed transcript, tool-boundary)' },
   { file: 'test/agent-followup-ui.test.js', critical: false, description: 'Agent tab follow-up UI controls, lineage rendering, and endpoint wiring' },

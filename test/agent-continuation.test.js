@@ -339,11 +339,15 @@ ok("buildSeedMessages keeps the untrusted brief off the system tier, before the 
   // Final message is the user's new goal.
   assert.strictEqual(msgs[msgs.length - 1].role, "user");
   assert.strictEqual(msgs[msgs.length - 1].content, "Summarize that result.");
-  // The untrusted brief must NOT be a system-role message (F1 hardening).
+  // Neither brief may be a system-role message: the continuation brief (F1
+  // hardening) and the memory brief (recalled data derived from prior model
+  // output) are both untrusted and must not carry system authority.
   const systemContents = msgs.filter(m => m.role === "system").map(m => m.content);
-  assert.ok(!systemContents.some(c => c.includes(brief)), "continuation brief must not be a system message");
-  // Trusted memory context stays on the system tier.
-  assert.ok(systemContents.some(c => c.includes("mem")), "memory brief present as system message");
+  assert.strictEqual(systemContents.length, 0, "no seeded message may occupy the system role");
+  const memoryMsg = msgs.find(m => m.content.includes("mem"));
+  assert.ok(memoryMsg, "memory brief present");
+  assert.strictEqual(memoryMsg.role, "user");
+  assert.ok(/UNTRUSTED/.test(memoryMsg.content), "memory brief labeled untrusted");
   // The brief is present as a distinct message that precedes the goal.
   const briefIdx = msgs.findIndex(m => m.content.includes(brief));
   const goalIdx = msgs.length - 1;

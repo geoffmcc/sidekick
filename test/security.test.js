@@ -451,6 +451,33 @@ console.log('Test 3.3: Disabled tools override open policy');
   console.log('Passed\n');
 }
 
+console.log('Test 3.3b: Blocklist matching is case-insensitive on the tool name');
+{
+  const previousBlocked = process.env.SIDEKICK_BLOCKED_TOOLS;
+  process.env.SIDEKICK_BLOCKED_TOOLS = 'bash';
+  for (const name of ['Bash', 'BASH', 'sidekick_Bash']) {
+    const decision = getToolPolicyDecision(name, 'mcp');
+    assert.ok(!decision.allowed, `Mixed-case name must not evade the blocklist: ${name}`);
+  }
+  if (previousBlocked === undefined) delete process.env.SIDEKICK_BLOCKED_TOOLS;
+  else process.env.SIDEKICK_BLOCKED_TOOLS = previousBlocked;
+  console.log('Passed\n');
+}
+
+console.log('Test 3.3c: Prototype-chain tool names fail closed as critical risk');
+{
+  const previousPolicy = process.env.SIDEKICK_TOOL_POLICY;
+  process.env.SIDEKICK_TOOL_POLICY = 'restricted';
+  for (const name of ['__proto__', 'constructor', 'sidekick___proto__', 'sidekick_constructor', 'toString']) {
+    const decision = getToolPolicyDecision(name, 'agent');
+    assert.strictEqual(decision.risk, 'critical', `Unknown/prototype name must be critical risk: ${name}`);
+    assert.ok(!decision.allowed, `Restricted mode must block prototype-chain names: ${name}`);
+  }
+  if (previousPolicy === undefined) delete process.env.SIDEKICK_TOOL_POLICY;
+  else process.env.SIDEKICK_TOOL_POLICY = previousPolicy;
+  console.log('Passed\n');
+}
+
 console.log('Test 3.4: Tool definitions include policy metadata');
 {
   const defs = getToolDefsForSource('dashboard');

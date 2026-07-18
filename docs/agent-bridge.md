@@ -11,29 +11,80 @@ The MCP server is reactive: a client calls a tool and receives a result. The Age
 1. A client submits a task to `POST /api/agent/run`.
 2. The bridge creates a task ID and transcript file.
 3. The agent loops until the goal is complete, fails, or reaches `SIDEKICK_MAX_ITERATIONS`.
-4. Each tool call goes through `callAgentTool` from `src/tools.js`.
+4. Each tool call goes through `callAgentTool` (exported from `src/tools/index.js` via `src/tools.js`, implemented by the dispatcher in `src/tools/dispatcher.js`).
 5. Progress is emitted as Server-Sent Events through `/api/agent/stream/:taskId`.
 6. Completed task history is available through `/api/agent/history` and `/api/agent/run/:id`.
 7. A terminal task can be continued with a **follow-up** (`POST /api/agent/run/:taskId/follow-up`), which creates a new child task linked to the original — see [Follow-ups (task continuation)](#follow-ups-task-continuation).
 
 ## Request routing
 
-Each goal is classified by `requiresToolUse` (in `src/agent-protocol.js`) into one of two paths:
+Each goal is classified by `classifyEvidenceRequirement` (in `src/agent-protocol.js`; `requiresToolUse` is its boolean wrapper) into one of two paths:
 
-- **Direct answer.** Conceptual prompts ("explain…", "describe…", "what is the capital of France") are answered by the LLM in plain text and never touch tools. This keeps ordinary conversation fast and side-effect free.
+- **Direct answer.** Conceptual prompts ("explain…", "describe…", "how can I check disk usage on Linux?", "what is the capital of France") are answered by the LLM in plain text and never touch tools. This keeps ordinary conversation fast and side-effect free.
 - **Tool loop.** Requests that can only be answered from live state — including **system-inspection** requests such as "check disk usage", "how much free memory is available", "what is the CPU load", or "show running processes" — are routed to the tool loop so the agent runs an approved tool and returns the actual result instead of merely describing a command.
 
-Classification is heuristic: a request that names a Sidekick tool, a Sidekick resource, or a live host resource (disk, CPU, memory/RAM, swap, uptime, processes, ports, network) routes to the tool loop; a purely conceptual prompt about those same resources ("explain how disk usage works") stays conversational.
+Classification is deterministic and heuristic: a request that names a Sidekick tool, a Sidekick resource, or a live host resource (disk, CPU, memory/RAM, swap, uptime, processes, ports, network) routes to the tool loop; a purely conceptual or instructional prompt about those same resources ("explain how disk usage works", "how can someone check disk usage") stays conversational. It is routing, not authorization — every tool call is still independently validated by the dispatcher.
+
+The classifier returns a stable machine-readable reason, surfaced as a `Routing: …` step in the Agent tab stream, an `agent.evidence_classified` platform event, and an additive `routing` field in the transcript:
+
+| Reason | Routed to | Meaning |
+| --- | --- | --- |
+| `explicit_tool_reference` | tool loop | The goal names a Sidekick tool |
+| `system_inspection` | tool loop | The goal asks about live host state (disk, CPU, memory, ports, …) |
+| `local_resource_signal` | tool loop | The goal combines a Sidekick resource with an action or currency signal |
+| `conceptual_prompt` | direct answer | Explanation/instruction request, no live evidence needed |
+| `no_evidence_signals` | direct answer | Ordinary conversation |
+| `empty_goal` | direct answer | Blank input |
+
+### Evidence requirement
+
+A goal routed to the tool loop is marked **evidence-required**. If the model tries to complete such a task without a single successful evidence tool call (the `respond` echo tool does not count), it receives one corrective nudge to run a real tool; if it still cannot produce evidence, the task **fails honestly** with "Sidekick could not inspect the requested state" instead of returning a fabricated live-state answer or a "you could run df -h" instruction sheet. Failed tool calls and approval-pending calls do not count as evidence.
+
+## Tool naming
+
+Since the canonical-naming refactor, tool names are **unprefixed** (`bash`, `get`, `store`, `respond`, …) everywhere: the registry, the DB `tools` table, MCP registration, and the Agent system prompt. Legacy `sidekick_`-prefixed names remain supported as **compatibility aliases only**: the loop resolves them through the same canonicalization authority (`src/core/tool-name.js`) used by the dispatcher and registry, and always dispatches, records, and streams the canonical catalog name. Old transcripts and saved procedures that contain prefixed names continue to work; malformed names (wrong case, empty after the prefix, prototype-chain shapes such as `__proto__`, oversized) are rejected before any lookup.
 
 ## Tool execution and security boundary
 
 The tool loop lives in `src/agent-loop.js` (`runToolLoop`). It performs no privileged work itself. For every tool the model requests it:
 
-1. Rejects any tool that is **not visible to the agent source** (`getToolDefsForSource("agent")`, filtered by policy) before dispatch — unavailable or disallowed tools never reach execution.
-2. Forwards allowed calls to `callAgentTool`, which enforces the tool allowlist, tool policy, approval controls, timeouts, and audit logging centrally in the dispatcher (`src/tools/dispatcher.js`). The Agent Bridge does not bypass any of these controls and does not expose arbitrary shell execution; shell access is only available through the same policy-gated `sidekick_bash` tool.
-3. Surfaces the structured result back into the transcript and stream — success output, policy denials, approval-required notices, and execution failures are all reported clearly in the Agent tab rather than being swallowed.
+1. Validates the structured decision (see below) and rejects any tool that is **not visible to the agent source** (`getToolDefsForSource("agent")`, filtered by policy) before dispatch — unavailable, disabled, or source-denied tools never reach execution.
+2. Forwards allowed calls to `callAgentTool`, which enforces the tool allowlist, tool policy, approval controls, timeouts, and audit logging centrally in the dispatcher (`src/tools/dispatcher.js`). The loop's own visibility check is advisory defense-in-depth; the dispatcher is the authority. The Agent Bridge does not bypass any of these controls and does not expose arbitrary shell execution; shell access is only available through the same policy-gated `bash` tool.
+3. Surfaces the structured result back into the transcript and stream — success output, policy denials, approval-required notices, and execution failures are all reported clearly in the Agent tab rather than being swallowed. Streamed tool arguments and error messages pass through the canonical redactor first.
 
-Because `runToolLoop` takes its LLM and tool functions as injected dependencies, the approved / denied / unavailable / failing / no-tool behaviors are covered directly by `test/agent-loop.test.js` without starting the server.
+### Decision contract
+
+The model must output exactly one raw-JSON decision per turn: `{"think": …}`, `{"tool": …, "arguments": {…}}`, or `{"done": true, "result": …}`. The parser (`parseAgentDecision`) rejects, without executing anything: malformed JSON (treated as reasoning, never as a tool call), decisions containing `__proto__`/`constructor`/`prototype` keys anywhere, conflicting multi-action objects, `done` without a non-empty string result, and malformed tool names. Rejections produce bounded corrective feedback; persistent invalid or repeated output terminates through the repetition tracker and the iteration cap.
+
+### Approval-gated actions
+
+When the dispatcher returns *approval required*, the loop surfaces the pending state (`agent.tool_approval_pending` event and a stream step), instructs the model not to retry and not to assume the action ran, and lets it either continue with other tools or finish by reporting the pending approval. Approvals are never bypassed, inherited, or simulated.
+
+Because `runToolLoop` takes its LLM and tool functions as injected dependencies, the approved / denied / unavailable / failing / no-tool / alias / evidence behaviors are covered directly by `test/agent-loop.test.js` without starting the server; the system prompt's agreement with the live canonical catalog is covered by `test/agent-bridge-prompt.test.js`.
+
+### Observability fields
+
+- Stream (SSE): `step` (including `Routing: …`, rejection, nudge, and approval-pending notices), `provider`, `fallback`, `tool` (redacted args, then truncated result), `done`, `error`, `lineage`.
+- Platform events: `agent.task_started`, `agent.evidence_classified` (`requires_tools`, `reason`), `agent.tool_started` (canonical `tool`, `requested_as` when an alias was used, argument keys only), `agent.tool_completed` (redacted summary), `agent.tool_approval_pending`, `agent.decision_rejected` (`reason`), `agent.evidence_missing`.
+- Transcript: additive `routing: { requires_tools, reason }` field; steps record canonical tool names, plus `invalid` steps with rejection reasons.
+
+## Manual acceptance test
+
+In the dashboard Agent tab submit:
+
+```text
+Check disk usage and tell me which mounted filesystem has the least free space.
+```
+
+Expected: the stream shows `Routing: tool loop (system_inspection)`, a real tool invocation (e.g. `bash` with `df`-style arguments) whose output matches the actual machine, and a final answer summarizing that evidence. Failure modes to reject: an answer that only explains how to run a command, a completion with no tool step, or a `sidekick_…` unknown-tool loop.
+
+Conceptual contrast — submit:
+
+```text
+How can I check disk usage on Linux?
+```
+
+Expected: `Routing: direct answer (conceptual_prompt)` and a plain explanation with no tool execution.
 
 ## Follow-ups (task continuation)
 

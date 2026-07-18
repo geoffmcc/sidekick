@@ -73,7 +73,11 @@ function getToolRisk(name) {
   const generated = dbStore.getGeneratedCapabilityByName(name);
   if (generated) return RISK_LEVELS.includes(generated.risk) ? generated.risk : "critical";
   const canonical = stripSidekickPrefix(name);
-  return TOOL_RISK[canonical] || "critical";
+  // Own-property lookup only: a prototype-chain name like "__proto__" or
+  // "constructor" must fall through to the critical default, never to a
+  // truthy inherited value that would make strict/restricted modes fail open.
+  const risk = Object.prototype.hasOwnProperty.call(TOOL_RISK, canonical) ? TOOL_RISK[canonical] : null;
+  return RISK_LEVELS.includes(risk) ? risk : "critical";
 }
 
 // Sync tool registry from code to database
@@ -184,7 +188,9 @@ function policyListMatches(entries, toolName, risk) {
 }
 
 function findPolicyListMatch(entries, toolName, risk) {
-  const canonical = stripSidekickPrefix(toolName);
+  // Case-fold the tool name symmetrically with the entries so a mixed-case
+  // requested name cannot evade a blocklist entry.
+  const canonical = stripSidekickPrefix(String(toolName || "").toLowerCase());
   return entries.find(entry => {
     const normalized = stripSidekickPrefix(entry.toLowerCase());
     return normalized === canonical || normalized === ("risk:" + risk);

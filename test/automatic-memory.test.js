@@ -34,6 +34,23 @@ const toolMemory = recordToolCallMemory({
 
 assert.ok(toolMemory, "Tool memory should be stored");
 assert.strictEqual(toolMemory.project, "sidekick", "Project should be inferred from args");
+
+// Canonical (unprefixed) names classify identically to the legacy prefixed
+// dialect: post-rename MCP and Agent Bridge calls use canonical names.
+const canonicalToolMemory = recordToolCallMemory({
+  name: "bash",
+  args: { command: "uptime", project: "sidekick" },
+  duration: 5,
+  success: true,
+  summary: "up 3 days",
+  source: "agent"
+});
+assert.ok(canonicalToolMemory, "Canonical bash call should be remembered like sidekick_bash");
+assert.strictEqual(
+  recordToolCallMemory({ name: "get", args: { key: "k" }, duration: 1, success: true, summary: "v", source: "agent" }),
+  null,
+  "Canonical read-only get should stay excluded like sidekick_get"
+);
 assert.strictEqual(toolMemory.type, "tool_call", "Tool memory should be retained in bounded legacy context");
 assert.strictEqual(dbStore.searchMemories({ type: "tool_call", project: "sidekick", limit: 20 }).length, 0, "Tool calls should not create new structured memory rows");
 
