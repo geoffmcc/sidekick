@@ -1,6 +1,7 @@
 let currentPage = 'mission';
 let agentRunning = false;
 let agentStream = null;
+let currentAgentTaskId = null;
 let expandedHistory = {};
 let allLogs = [];
 let allSessions = [];
@@ -1671,6 +1672,81 @@ function runAgent(){
   });
 }
 
+// Shared streaming used by a follow-up child (and available for reuse). The
+// server-side transcript and lineage remain authoritative; this renders only
+// the live SSE and understands the follow-up `lineage` event.
+function streamAgentTask(taskId, opts){
+  opts = opts || {};
+  agentRunning = true;
+  currentAgentTaskId = taskId;
+  $('agentGo').disabled = true;
+  $('agentStop').disabled = false;
+  if (opts.reset) $('agentLog').innerHTML = '';
+  if (opts.parentTaskId) {
+    appendLog('<span class="agent-step">Follow-up to task ' + esc(opts.parentTaskId) +
+      (opts.rootTaskId ? ' · thread root ' + esc(opts.rootTaskId) : '') + '</span>');
+  }
+  appendLog('<span class="agent-step">Task ' + esc(taskId) + ' started</span>');
+  agentStream = new EventSource('/api/agent/stream/' + taskId);
+  agentStream.onmessage = (e) => {
+    let msg;
+    try { msg = JSON.parse(e.data); } catch (err) { return; }
+    if (msg.type === 'lineage') {
+      appendLog('<span class="agent-step">Thread: follow-up to ' + esc(msg.parentTaskId) +
+        ', root ' + esc(msg.rootTaskId) + ' (depth ' + esc(String(msg.depth)) + ')</span>');
+    } else if (msg.type === 'step') appendLog('<span class="agent-step">' + esc(msg.text) + '</span>');
+    else if (msg.type === 'tool') appendLog('  <span class="agent-ok">' + esc(msg.tool) + '</span> ' + esc(msg.summary || ''));
+    else if (msg.type === 'error') { appendLog('<span class="agent-err">' + esc(msg.text) + '</span>'); stopAgent(); }
+    else if (msg.type === 'done') { appendLog('<span class="agent-done">' + esc(msg.text) + '</span>'); stopAgent(); }
+  };
+  agentStream.onerror = () => stopAgent();
+}
+
+// Reveal a terminal task's detail (which contains the follow-up form) and focus it.
+function openFollowup(id){
+  if (!expandedHistory[id]) toggleRunDetail(id);
+  setTimeout(() => { const el = $('followup-input-' + id); if (el) el.focus(); }, 60);
+}
+
+// Submit a follow-up against a terminal parent task. Guards duplicate submission
+// while a run is in flight and while this request is pending.
+function submitFollowup(id){
+  if (agentRunning) return;
+  const input = $('followup-input-' + id);
+  const goal = input ? input.value.trim() : '';
+  if (!goal) return;
+  const btn = document.querySelector('button[data-action="followup-submit"][data-id="' + id + '"]');
+  agentRunning = true;
+  $('agentGo').disabled = true;
+  $('agentStop').disabled = false;
+  if (btn) btn.disabled = true;
+  if (input) input.disabled = true;
+  $('agentLog').innerHTML = '';
+  appendLog('<span class="agent-step">Following up on task ' + esc(id) + '</span>');
+  authFetch('/api/agent/run/' + id + '/follow-up', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ goal })
+  }).then(r => r.json().then(data => ({ status: r.status, data })))
+    .then(({ status, data }) => {
+      if (status >= 400 || !data || data.error) {
+        appendLog('<span class="agent-err">' + esc((data && data.error) || ('HTTP ' + status)) + '</span>');
+        stopAgent();
+        if (btn) btn.disabled = false;
+        if (input) input.disabled = false;
+        return;
+      }
+      streamAgentTask(data.taskId, { reset: false, parentTaskId: data.parentTaskId || id, rootTaskId: data.rootTaskId });
+    })
+    .catch(e => {
+      appendLog('<span class="agent-err">Request failed: ' + esc(e.message) + '</span>');
+      apiError('/api/agent/run/' + id + '/follow-up', e, 0);
+      stopAgent();
+      if (btn) btn.disabled = false;
+      if (input) input.disabled = false;
+    });
+}
+
 function appendLog(html){
   $('agentLog').innerHTML += html + '\n';
   $('agentLog').scrollTop = $('agentLog').scrollHeight;
@@ -1679,6 +1755,7 @@ function appendLog(html){
 function stopAgent(){
   if (agentStream) { agentStream.close(); agentStream = null; }
   agentRunning = false;
+  currentAgentTaskId = null;
   $('agentGo').disabled = false;
   $('agentStop').disabled = true;
 }
@@ -1696,7 +1773,10 @@ function toggleHistory(){
         '<div class="history-item">' +
         '<span class="log-time">' + fmtTime(r.t) + '</span> ' +
         '<span class="' + (r.status === 'completed' ? 'log-ok' : 'log-fail') + '">' + r.status + '</span> ' +
-        '<span class="log-summary" style="flex:1">' + esc(r.goal.substring(0,80)) + '</span>' +
+        '<span class="log-summary" style="flex:1">' + esc(r.goal.substring(0,80)) +
+        (r.parentTaskId ? ' <span style="color:#8b949e;font-size:.7rem" title="Follow-up of ' + esc(r.parentTaskId) + '">(follow-up of ' + esc(r.parentTaskId) + ')</span>' : '') +
+        '</span>' +
+        '<button class="btn btn-sm btn-outline" data-action="followup" data-id="' + esc(r.id) + '" title="Follow up" aria-label="Follow up on task ' + esc(r.id) + '"><i class="fas fa-reply"></i></button>' +
         '<button class="btn btn-sm btn-outline" data-action="export" data-id="' + esc(r.id) + '" title="Export"><i class="fas fa-download"></i></button>' +
         '<button class="btn btn-sm btn-outline" data-action="toggle" data-id="' + esc(r.id) + '" title="Details"><i class="fas fa-chevron-down"></i></button>' +
         '<div id="run-detail-' + esc(r.id) + '" style="display:none;width:100%"></div>' +
@@ -1711,6 +1791,7 @@ function toggleHistory(){
           const id = this.dataset.id;
           if (action === 'export') exportRun(id);
           else if (action === 'toggle') toggleRunDetail(id);
+          else if (action === 'followup') openFollowup(id);
         });
       });
     }).catch(e => apiError('/api/agent/history', e, 0));
@@ -1736,9 +1817,35 @@ function toggleRunDetail(id){
       else if (s.type === 'error') html += '<span class="agent-err">✖ ' + esc(s.text) + '</span>\n';
       else if (s.type === 'done') html += '<span class="agent-done">✔ ' + esc(s.text) + '</span>\n';
     });
-    detail.innerHTML = '<div class="history-detail">' + html + '</div>';
-  }).catch(e => { 
-    detail.innerHTML = '<div class="agent-err">Failed to load details</div>'; 
+    let lineageHtml = '';
+    if (run.parent_task_id) {
+      lineageHtml = '<div class="agent-step" style="margin-bottom:6px">Follow-up to ' +
+        '<a href="#" data-action="open" data-id="' + esc(run.parent_task_id) + '">' + esc(run.parent_task_id) + '</a>' +
+        ' · Thread root: ' + esc(run.root_task_id || id) + '</div>';
+    } else if (run.root_task_id && run.root_task_id !== id) {
+      lineageHtml = '<div class="agent-step" style="margin-bottom:6px">Thread root: ' + esc(run.root_task_id) + '</div>';
+    }
+    const formHtml =
+      '<div class="followup-form" style="margin-top:10px;display:flex;flex-direction:column;gap:6px">' +
+      '<label for="followup-input-' + esc(id) + '" style="color:#8b949e;font-size:.75rem">Follow up on this task</label>' +
+      '<textarea id="followup-input-' + esc(id) + '" class="agent-goal" rows="2" placeholder="Ask a follow-up based on this result…" aria-label="Follow-up goal for task ' + esc(id) + '"></textarea>' +
+      '<div><button class="btn btn-sm" data-action="followup-submit" data-id="' + esc(id) + '">Send follow-up</button></div>' +
+      '</div>';
+    detail.innerHTML = '<div class="history-detail">' + lineageHtml + html + formHtml + '</div>';
+    // Detail buttons/links are rendered after the initial history wiring pass,
+    // so attach their listeners here (same data-action convention).
+    detail.querySelectorAll('button[data-action], a[data-action]').forEach(node => {
+      node.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const action = this.dataset.action;
+        const did = this.dataset.id;
+        if (action === 'followup-submit') submitFollowup(did);
+        else if (action === 'open') toggleRunDetail(did);
+      });
+    });
+  }).catch(e => {
+    detail.innerHTML = '<div class="agent-err">Failed to load details</div>';
     apiError('/api/agent/run/' + id, e, 0);
   });
 }
