@@ -1,5 +1,6 @@
 const dbStore = require("./db");
 const { redactSensitive } = require("./redact");
+const { stripSidekickPrefix } = require("./core/tool-name");
 
 let qdrantClient = null;
 try {
@@ -185,9 +186,13 @@ function pushBounded(list, item, max) {
 
 function shouldRememberTool(name, success) {
   if (!AUTO_MEMORY_ENABLED) return false;
-  if (!name || name === "sidekick_context" || name === "sidekick_knowledge") return false;
-  if (name === "sidekick_get" || name === "sidekick_list" || name === "sidekick_read") return false;
-  return success || name.startsWith("sidekick_db_") || name === "sidekick_bash";
+  // Callers pass whatever name the dispatcher was invoked with; canonicalize so
+  // unprefixed (MCP, post-rename Agent Bridge) and legacy sidekick_-prefixed
+  // invocations classify identically.
+  const canonical = stripSidekickPrefix(String(name || ""));
+  if (!canonical || canonical === "context" || canonical === "knowledge") return false;
+  if (canonical === "get" || canonical === "list" || canonical === "read") return false;
+  return success || canonical.startsWith("db_") || canonical === "bash";
 }
 
 function toStructuredMemory(legacy) {
