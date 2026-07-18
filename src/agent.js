@@ -11,6 +11,19 @@ const { selectBestModelName, buildChatMessages, requiresToolUse } = require("./a
 const { runToolLoop } = require("./agent-loop");
 const platformKernel = require("./platform/kernel");
 const { redactSensitive } = require("./redact");
+const {
+  CONTINUATION_LIMITS,
+  ContinuationError,
+  isTerminalStatus,
+  validateTaskId,
+  resolveTranscriptPath,
+  loadTranscript,
+  normalizeTranscript,
+  resolveAncestors,
+  buildContinuationContext,
+  validateFollowUpGoal,
+  buildSeedMessages,
+} = require("./agent-continuation");
 let inferenceService = null;
 try { inferenceService = require("./compute/inference-service"); } catch {}
 
@@ -380,7 +393,14 @@ function buildSystemPrompt() {
     "You have these tools:\n" + toolDescs;
 }
 
+// Test seam: focused tests inject a deterministic LLM so follow-up routing,
+// seed-message assembly, and the tool loop can be exercised without a live
+// model. Never set in production (remains null).
+let __llmOverride = null;
+function __setLLMOverrideForTests(fn) { __llmOverride = fn; }
+
 async function callLLM(messages, options = {}) {
+  if (__llmOverride) return __llmOverride(messages, options);
   if (inferenceService) {
     try {
       const chatMessages = messages.map(m => ({ role: m.role, content: m.content }));
@@ -428,15 +448,10 @@ async function callAgentLLM(messages) {
   return callLLM(messages, { systemPrompt: buildSystemPrompt(), format: "json", temperature: 0.3 });
 }
 
-async function callDirectAnswerLLM(goal, combinedBrief) {
-  const messages = [];
-  if (combinedBrief) {
-    messages.push({
-      role: "system",
-      content: "Relevant remembered Sidekick context. Use it if helpful, but do not assume it is complete:\n" + combinedBrief
-    });
-  }
-  messages.push({ role: "user", content: goal });
+async function callDirectAnswerLLM(goal, combinedBrief, continuationBrief) {
+  // Both routing paths seed context through the same builder so a follow-up
+  // brief reaches the direct-answer path as well as the tool loop.
+  const messages = buildSeedMessages({ goal, memoryBrief: combinedBrief, continuationBrief });
 
   return callLLM(messages, {
     systemPrompt: "You are a helpful assistant. Answer the user's question directly and succinctly in plain text. Do not use tools, JSON, or mention internal routing. If the answer is not known, say so briefly.",
@@ -565,10 +580,16 @@ function emit(taskId, data) {
   if (ee) ee.emit("data", data);
 }
 
-function startAgentExecution(goal, taskId, project) {
+function startAgentExecution(goal, taskId, project, lineage = null) {
   try {
     const execution = platformKernel.createExecution({
       task_id: taskId,
+      // Reuse the platform kernel's existing parent/root execution lineage for a
+      // follow-up child rather than inventing a parallel graph. For a root task
+      // these stay null/self-rooted exactly as before.
+      parent_execution_id: (lineage && lineage.parentExecutionId) || null,
+      root_execution_id: (lineage && lineage.rootExecutionId) || null,
+      session_id: (lineage && lineage.sessionId) || null,
       project_id: project || null,
       actor_id: "agent",
       client_id: "agent-bridge",
@@ -581,7 +602,10 @@ function startAgentExecution(goal, taskId, project) {
       risk: "medium",
       source: "agent",
       correlation_id: taskId,
-      metadata: { goal_summary: redactSensitive(String(goal || "")).slice(0, 300) },
+      metadata: {
+        goal_summary: redactSensitive(String(goal || "")).slice(0, 300),
+        ...(lineage && lineage.parentTaskId ? { parent_task_id: lineage.parentTaskId, root_task_id: lineage.rootTaskId, continuation_depth: lineage.continuationDepth } : {}),
+      },
     });
     return platformKernel.transitionExecution(execution.execution_id, "running", { source: "agent", reason: "agent task started" });
   } catch {
@@ -765,10 +789,23 @@ Return ONLY valid JSON.`;
   }
 }
 
-async function runAgent(goal, taskId) {
+async function runAgent(goal, taskId, parentContext = null) {
   const steps = [];
-  const inferredProject = inferProjectFromText(goal);
-  const platformExecution = startAgentExecution(goal, taskId, inferredProject);
+  // A follow-up child inherits the parent's project identity when the child's
+  // own goal doesn't infer one, so a thread stays scoped consistently.
+  const inferredProject = inferProjectFromText(goal) || (parentContext && parentContext.project) || null;
+  const executionLineage = parentContext
+    ? {
+        parentExecutionId: parentContext.parentExecutionId || null,
+        rootExecutionId: parentContext.rootExecutionId || null,
+        sessionId: parentContext.sessionId || null,
+        parentTaskId: parentContext.parentTaskId,
+        rootTaskId: parentContext.rootTaskId,
+        continuationDepth: parentContext.continuationDepth,
+      }
+    : null;
+  const platformExecution = startAgentExecution(goal, taskId, inferredProject, executionLineage);
+  const continuationBrief = (parentContext && parentContext.continuationBrief) || null;
   const memoryBrief = inferredProject ? buildMemoryBrief(goal, { project: inferredProject }) : null;
 
   let semanticRecall = [];
@@ -792,6 +829,22 @@ async function runAgent(goal, taskId) {
   let finalResult = "";
   let terminalError = "";
 
+  if (parentContext) {
+    emit(taskId, {
+      type: "lineage",
+      parentTaskId: parentContext.parentTaskId,
+      rootTaskId: parentContext.rootTaskId,
+      depth: parentContext.continuationDepth,
+    });
+    emit(taskId, { type: "step", text: `Follow-up to task ${parentContext.parentTaskId} (thread root ${parentContext.rootTaskId})` });
+    appendAgentExecutionEvent(platformExecution, "agent.followup_started", {
+      task_id: taskId,
+      parent_task_id: parentContext.parentTaskId,
+      root_task_id: parentContext.rootTaskId,
+      continuation_depth: parentContext.continuationDepth,
+    });
+  }
+
   emit(taskId, { type: "step", text: "Analyzing task: " + goal });
   appendAgentExecutionEvent(platformExecution, "agent.task_started", { task_id: taskId, project: inferredProject, use_tools: useTools });
   if (combinedBrief) {
@@ -801,7 +854,7 @@ async function runAgent(goal, taskId) {
 
   if (!useTools) {
     try {
-      const response = await callDirectAnswerLLM(goal, combinedBrief);
+      const response = await callDirectAnswerLLM(goal, combinedBrief, continuationBrief);
       emit(taskId, { type: "provider", name: response.provider, model: response.model || "unknown" });
       if (response.fallback) {
         emit(taskId, { type: "fallback", from: "ollama", to: "groq" });
@@ -815,17 +868,23 @@ async function runAgent(goal, taskId) {
       terminalError = "LLM error: " + e.message;
     }
   } else {
-    const history = combinedBrief
-      ? [
-          { role: "system", content: "Relevant remembered Sidekick context. Use it when helpful, but do not assume it is complete:\n" + combinedBrief },
-          { role: "user", content: goal }
-        ]
-      : [{ role: "user", content: goal }];
+    // The follow-up brief is seeded as a distinct, untrusted-labeled system
+    // message. It is NOT added to `steps`, so an ancestor's tool calls never
+    // enter this child's within-task duplicate-call protection window.
+    const history = buildSeedMessages({ goal, memoryBrief: combinedBrief, continuationBrief });
 
     const loop = await runToolLoop({
       history,
       callLLM: callAgentLLM,
-      callTool: (name, args) => callAgentTool(name, args, { taskId, executionId: platformExecution?.execution_id }),
+      // Every child tool request still flows through callAgentTool — the sole
+      // sanctioned dispatcher seam that enforces the allowlist, source policy,
+      // approval, path restrictions, timeout, audit, and redaction. No earlier
+      // approval is carried in; policy/approval are re-evaluated per call.
+      callTool: (name, args) => callAgentTool(name, args, {
+        taskId,
+        executionId: platformExecution?.execution_id,
+        rootExecutionId: platformExecution?.root_execution_id,
+      }),
       getToolDefs: () => getToolDefsForSource("agent").filter(t => t.enabled),
       maxIterations: MAX_ITERATIONS,
       emit: (event) => emit(taskId, event),
@@ -839,7 +898,24 @@ async function runAgent(goal, taskId) {
     terminalError = loop.terminalError;
   }
 
-  const transcript = JSON.stringify({ goal, steps, status, t: new Date().toISOString() });
+  // Durable transcript with additive lineage fields. Older transcripts without
+  // these fields remain readable and normalize to a root task with no parent.
+  const transcript = JSON.stringify({
+    goal,
+    steps,
+    status,
+    t: new Date().toISOString(),
+    v: 2,
+    parent_task_id: parentContext ? parentContext.parentTaskId : null,
+    root_task_id: parentContext ? parentContext.rootTaskId : taskId,
+    continuation_depth: parentContext ? parentContext.continuationDepth : 0,
+    session_id: parentContext ? (parentContext.sessionId || null) : null,
+    project: inferredProject || null,
+    lineage: {
+      platform_execution_id: platformExecution ? platformExecution.execution_id : null,
+      root_execution_id: platformExecution ? platformExecution.root_execution_id : null,
+    },
+  });
   const transcriptPath = path.join(CONV_DIR, taskId + ".json");
   fs.writeFileSync(transcriptPath, transcript, "utf-8");
   registerAgentTranscript(platformExecution, transcriptPath, taskId, status);
@@ -866,15 +942,103 @@ async function runAgent(goal, taskId) {
   finishAgentExecution(platformExecution, status, { result_summary: status === "completed" ? finalResult : terminalError, reason: terminalError || "agent task completed", error_category: status === "completed" ? null : status });
 }
 
-app.post("/api/agent/run", (req, res) => {
-  const { goal } = req.body;
-  if (!goal) return res.status(400).json({ error: "goal required" });
+// Shared task-start path used by both a normal task and a follow-up so the two
+// never develop separate execution routes. Creates the task id + emitter,
+// answers the client, and kicks the (async) run.
+function beginTaskRun(res, { goal, parentContext = null }) {
   const taskId = crypto.randomUUID().slice(0, 8);
   taskEmitters[taskId] = new EventEmitter();
-  res.json({ taskId });
-  runAgent(goal, taskId).finally(() => {
-    setTimeout(() => delete taskEmitters[taskId], 60000);
-  });
+  const payload = { taskId };
+  if (parentContext) {
+    payload.parentTaskId = parentContext.parentTaskId;
+    payload.rootTaskId = parentContext.rootTaskId;
+    payload.continuationDepth = parentContext.continuationDepth;
+  }
+  res.json(payload);
+  runAgent(goal, taskId, parentContext)
+    .catch((e) => {
+      // The client has already received the taskId; surface an unexpected
+      // failure over the stream instead of letting it become an unhandled
+      // rejection. (Normal LLM/tool errors are handled inside runAgent.)
+      try { emit(taskId, { type: "error", text: "Task failed to run: " + (e && e.message ? e.message : "unknown error") }); } catch {}
+      console.error("Agent task " + taskId + " failed: " + (e && e.message ? e.message : e));
+    })
+    .finally(() => {
+      setTimeout(() => delete taskEmitters[taskId], 60000);
+    });
+  return taskId;
+}
+
+// Resolve the durable lineage + bounded, redacted continuation brief for a child
+// task from a terminal parent. Throws ContinuationError (with a safe status +
+// client message) for every rejection case. Never leaks paths/stack/secrets.
+function buildChildLineage(parentTaskId) {
+  const parent = normalizeTranscript(loadTranscript(CONV_DIR, parentTaskId), parentTaskId);
+  // A transcript only exists once a task is terminal; this is a defensive guard.
+  if (!isTerminalStatus(parent.status)) {
+    throw new ContinuationError("parent_not_terminal", "Parent task is not in a terminal state", 409);
+  }
+  const childDepth = (parent.continuation_depth || 0) + 1;
+  if (childDepth > CONTINUATION_LIMITS.MAX_CONTINUATION_DEPTH) {
+    throw new ContinuationError("depth_exceeded", "Continuation depth limit reached for this thread", 422);
+  }
+  const ancestors = resolveAncestors(parent, (id) =>
+    normalizeTranscript(loadTranscript(CONV_DIR, id), id)
+  );
+  const { text } = buildContinuationContext({ ancestors });
+  return {
+    parentTaskId,
+    rootTaskId: parent.root_task_id || parentTaskId,
+    continuationDepth: childDepth,
+    continuationBrief: text,
+    sessionId: parent.session_id || null,
+    project: parent.project || null,
+    parentExecutionId: parent.lineage.platform_execution_id || null,
+    rootExecutionId: parent.lineage.root_execution_id || null,
+  };
+}
+
+app.post("/api/agent/run", (req, res) => {
+  const goal = req.body && req.body.goal;
+  const goalCheck = validateFollowUpGoal(goal);
+  if (!goalCheck.ok) return res.status(goalCheck.httpStatus).json({ error: goalCheck.clientMessage });
+  beginTaskRun(res, { goal: goalCheck.goal, parentContext: null });
+});
+
+// Canonical follow-up endpoint: create a NEW child task linked to a terminal
+// parent, seeded with bounded prior-task context. The original task is never
+// reopened or mutated.
+app.post("/api/agent/run/:taskId/follow-up", (req, res) => {
+  const parentTaskId = req.params.taskId;
+  if (!validateTaskId(parentTaskId)) {
+    return res.status(400).json({ error: "invalid task id" });
+  }
+  const goalCheck = validateFollowUpGoal(req.body && req.body.goal);
+  if (!goalCheck.ok) return res.status(goalCheck.httpStatus).json({ error: goalCheck.clientMessage });
+
+  // Refuse to race an actively-running parent: while running it has a live
+  // emitter but no persisted transcript yet (transcript is written only at the
+  // terminal step). A persisted transcript therefore implies a terminal parent.
+  let transcriptExists = false;
+  try {
+    transcriptExists = fs.existsSync(resolveTranscriptPath(CONV_DIR, parentTaskId));
+  } catch {
+    return res.status(400).json({ error: "invalid task id" });
+  }
+  if (!transcriptExists && taskEmitters[parentTaskId]) {
+    return res.status(409).json({ error: "parent task is still running" });
+  }
+
+  let parentContext;
+  try {
+    parentContext = buildChildLineage(parentTaskId);
+  } catch (e) {
+    if (e && e.isContinuationError) {
+      return res.status(e.httpStatus).json({ error: e.clientMessage });
+    }
+    return res.status(500).json({ error: "could not start follow-up" });
+  }
+  beginTaskRun(res, { goal: goalCheck.goal, parentContext });
 });
 
 app.get("/api/agent/stream/:taskId", (req, res) => {
@@ -907,18 +1071,46 @@ app.get("/api/agent/history", (req, res) => {
   const files = fs.readdirSync(CONV_DIR).filter(f => f.endsWith(".json")).sort().reverse().slice(0, 20);
   const runs = files.map(f => {
     try {
+      const id = f.replace(".json", "");
       const data = JSON.parse(fs.readFileSync(path.join(CONV_DIR, f), "utf-8"));
-      return { id: f.replace(".json", ""), goal: data.goal, status: data.status, t: data.t };
+      // normalizeTranscript never throws and supplies lineage defaults so old
+      // transcripts (no lineage fields) render as root tasks; one malformed
+      // entry is skipped without breaking the rest of the history response.
+      // (No path is built from `id` here — the file was already listed — so the
+      // filename is used directly as the self-root default.)
+      const norm = normalizeTranscript(data, id);
+      return {
+        id,
+        goal: norm.goal,
+        status: norm.status,
+        t: norm.t,
+        parentTaskId: norm.parent_task_id,
+        rootTaskId: norm.root_task_id,
+        continuationDepth: norm.continuation_depth,
+      };
     } catch { return null; }
   }).filter(Boolean);
   res.json({ runs });
 });
 
 app.get("/api/agent/run/:id", (req, res) => {
-  const file = path.join(CONV_DIR, req.params.id + ".json");
+  const id = req.params.id;
+  if (!validateTaskId(id)) return res.status(400).json({ error: "invalid task id" });
+  let file;
+  try { file = resolveTranscriptPath(CONV_DIR, id); } catch { return res.status(400).json({ error: "invalid task id" }); }
   if (!fs.existsSync(file)) return res.status(404).json({ error: "not found" });
-  try { res.json(JSON.parse(fs.readFileSync(file, "utf-8"))); }
-  catch { res.status(500).json({ error: "parse error" }); }
+  try {
+    const data = JSON.parse(fs.readFileSync(file, "utf-8"));
+    const norm = normalizeTranscript(data, id);
+    // Preserve the raw transcript shape for backward compatibility while
+    // surfacing normalized lineage so the UI can label parent/root threads.
+    res.json({
+      ...data,
+      parent_task_id: norm.parent_task_id,
+      root_task_id: norm.root_task_id,
+      continuation_depth: norm.continuation_depth,
+    });
+  } catch { res.status(500).json({ error: "parse error" }); }
 });
 
 app.get("/api/agent/status", (req, res) => {
@@ -941,6 +1133,19 @@ app.post("/api/watches/reload", (req, res) => {
   res.json({ ok: true });
 });
 
-app.listen(PORT, "127.0.0.1", () => {
-  console.log("Sidekick agent bridge listening on http://127.0.0.1:" + PORT);
-});
+// Only bind the port when run as the entrypoint. When required by a test the
+// module exports `app` so the suite can listen on its own port.
+if (require.main === module) {
+  app.listen(PORT, "127.0.0.1", () => {
+    console.log("Sidekick agent bridge listening on http://127.0.0.1:" + PORT);
+  });
+}
+
+module.exports = {
+  app,
+  runAgent,
+  beginTaskRun,
+  buildChildLineage,
+  CONV_DIR,
+  __setLLMOverrideForTests,
+};

@@ -2240,6 +2240,12 @@ app.post("/api/agent/run", (req, res) => {
   proxyAgent(req, res, "POST", body);
 });
 
+// Canonical follow-up: create a child task continuing a terminal parent.
+app.post("/api/agent/run/:taskId/follow-up", (req, res) => {
+  const body = JSON.stringify(req.body);
+  proxyAgent(req, res, "POST", body);
+});
+
 app.get("/api/agent/stream/:taskId", (req, res) => {
   proxyAgent(req, res, "GET");
 });

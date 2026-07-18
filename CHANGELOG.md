@@ -4,6 +4,15 @@ All notable changes to Sidekick.
 
 ## Unreleased
 
+### Agent Bridge follow-ups (task continuation)
+
+- Added a first-class follow-up system: `POST /api/agent/run/:taskId/follow-up` creates a new child task durably linked to a terminal parent (immediate parent, thread root, and continuation depth), seeded with a bounded, redacted, untrusted-labeled summary of prior work. The original task is never reopened or mutated, and `POST /api/agent/run` stays fully backward compatible via a shared task-start path.
+- Added `src/agent-continuation.js`, a side-effect-free module for strict task-ID validation, contained/symlink-safe transcript loading, transcript normalization (old transcripts normalize to roots), lineage resolution with cycle and depth bounding, and deterministic bounded continuation-context construction. All limits are centralized in `CONTINUATION_LIMITS`.
+- The continuation brief reaches both the direct-answer and tool-loop routing paths as a distinct system message, clearly separated from Sidekick system instructions and the user goal. `thought` steps, hidden reasoning, raw transcripts, unredacted secrets, and approval state are never included; prior tool output is labeled untrusted reference material.
+- Preserved the security boundary: every child tool call still flows through `callAgentTool`, so tool policy, approval, path restrictions, timeouts, audit, and redaction are re-evaluated per call. No earlier approval is inherited; follow-ups are refused against an actively running parent (`409`), and errors never leak paths, stack traces, or secrets.
+- Added the Agent tab follow-up UI (terminal-task follow-up control with duplicate-submit protection, child selection via the existing SSE stream, and parent/root lineage rendering) and lineage fields in `/api/agent/history` and `/api/agent/run/:id` with old-transcript compatibility.
+- Added `test/agent-continuation.test.js`, `test/agent-bridge-followup.test.js`, and `test/agent-followup-ui.test.js` covering continuation-context construction, lineage/API behavior, path-traversal and malformed-transcript handling, the tool-execution boundary, and the UI controls.
+
 ### Agent Bridge tool execution
 
 - Fixed the Agent tab routing so system-inspection requests ("check disk usage", "how much free memory", "CPU load", "running processes", uptime, swap, ports) reach the tool loop and run approved tools instead of only explaining commands. `requiresToolUse` now recognizes live host-resource requests while keeping conceptual prompts ("explain how disk usage works") conversational.

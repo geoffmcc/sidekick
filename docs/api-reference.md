@@ -55,11 +55,13 @@ This reference is generated from Express route declarations in `src/index.js`, `
 | `src/dashboard.js` | POST | `/api/internal/error-log` | |
 | `src/dashboard.js` | POST | `/api/webhook/:source` | |
 | `src/dashboard.js` | POST | `/api/agent/run` | |
+| `src/dashboard.js` | POST | `/api/agent/run/:taskId/follow-up` | Create a child follow-up task (proxied) |
 | `src/dashboard.js` | GET | `/api/agent/stream/:taskId` | |
 | `src/dashboard.js` | GET | `/api/agent/history` | |
 | `src/dashboard.js` | GET | `/api/agent/run/:id` | |
 | `src/dashboard.js` | GET | `/` | |
 | `src/agent.js` | POST | `/api/agent/run` | |
+| `src/agent.js` | POST | `/api/agent/run/:taskId/follow-up` | Create a child follow-up task continuing a terminal parent |
 | `src/agent.js` | GET | `/api/agent/stream/:taskId` | |
 | `src/agent.js` | GET | `/api/agent/history` | |
 | `src/agent.js` | GET | `/api/agent/run/:id` | |
@@ -96,4 +98,4 @@ The dashboard API includes read endpoints for logs, KV data, structured memories
 
 ## Agent API summary
 
-The Agent Bridge exposes endpoints for task submission, task event streaming, task history, individual task retrieval, status, health, delay reload, and watch reload.
+The Agent Bridge exposes endpoints for task submission, follow-up (task continuation), task event streaming, task history, individual task retrieval, status, health, delay reload, and watch reload. See [Agent Bridge → Follow-ups](agent-bridge.md#follow-ups-task-continuation) for the follow-up request/response contract, lineage fields, limits, and security properties.
