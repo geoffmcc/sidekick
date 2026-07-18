@@ -151,6 +151,43 @@ async function runManifestTests() {
     assert.strictEqual(CERTIFICATION_TIER.UNSUPPORTED, "unsupported");
   });
 
+  await test("detected_self_tested model passes validation", () => {
+    const manifest = require("../src/compute/openvino-model-manifest");
+    const restore = manifest._testOverrideModelStatus("e5-small-v2-qint8", "detected_self_tested");
+    try {
+      const job = { model_id: "e5-small-v2-qint8", input_kind: "query", text: "hello" };
+      const err = validateJobRequest(job, MOCK_CONFIG);
+      assert.strictEqual(err, null, "detected_self_tested model should pass validation");
+    } finally {
+      restore();
+    }
+  });
+
+  await test("unsupported model still rejected by validation", () => {
+    const manifest = require("../src/compute/openvino-model-manifest");
+    const restore = manifest._testOverrideModelStatus("e5-small-v2-qint8", "unsupported");
+    try {
+      const job = { model_id: "e5-small-v2-qint8", input_kind: "query", text: "hello" };
+      const err = validateJobRequest(job, MOCK_CONFIG);
+      assert.ok(err, "unsupported model should be rejected");
+      assert.ok(err.includes("not currently certified or self-tested"));
+    } finally {
+      restore();
+    }
+  });
+
+  await test("getAdvertisedCapabilities returns detected_self_tested tier suffix", () => {
+    const manifest = require("../src/compute/openvino-model-manifest");
+    const restore = manifest._testOverrideModelStatus("e5-small-v2-qint8", "detected_self_tested");
+    try {
+      const caps = manifest.getAdvertisedCapabilities("e5-small-v2-qint8", new Set(["CPU"]));
+      assert.ok(caps.length > 0, "should return capabilities");
+      assert.ok(caps[0].endsWith(":detected_self_tested"), `capability should end with :detected_self_tested, got: ${caps[0]}`);
+    } finally {
+      restore();
+    }
+  });
+
   await test("verifyModelFileHash: unknown model returns failure", () => {
     const result = verifyModelFileHash("nonexistent-model", "/tmp");
     assert.strictEqual(result.ok, false);

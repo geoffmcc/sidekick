@@ -1980,13 +1980,26 @@ function loadComputeWorkers(){
 
 function renderComputeWorker(w){
   const accelerators = (w.accelerators || []).map(a => a.name || a.type || a.vendor || JSON.stringify(a)).filter(Boolean);
-  const models = Array.isArray(w.modelInventory) ? w.modelInventory.length : 0;
+  const modelInventory = Array.isArray(w.modelInventory) ? w.modelInventory : [];
+  const models = modelInventory.length;
   const statusClass = w.state === 'online' ? 'ok' : (w.state === 'revoked' ? 'danger' : 'warn');
   const lastHeartbeat = w.lastHeartbeat ? fmtDate(w.lastHeartbeat) : 'never';
   const utilization = w.utilization && Object.keys(w.utilization).length ? renderStructuredValue(w.utilization, { limit: 180 }) : '<div class="empty">No utilization yet</div>';
+  // Render model inventory with certification tier badges.
+  const modelBadges = modelInventory.map(function(m) {
+    const name = m.name || m.model || '?';
+    const tier = m.certificationTier || '';
+    const tierClass = tier === 'certified' ? 'ok' : (tier === 'detected_self_tested' ? 'info' : (tier === 'unsupported' ? 'danger' : ''));
+    const tierLabel = tier ? ' <span class="badge ' + tierClass + '">' + esc(tier) + '</span>' : '';
+    const device = m.device ? ' <small>' + esc(m.device) + '</small>' : '';
+    return '<div>' + esc(name) + device + tierLabel + '</div>';
+  }).join('');
+  // OpenVINO health summary.
+  const ovHealth = w.health && w.health.openvino;
+  const ovState = ovHealth ? '<span class="badge ' + (ovHealth.state === 'ready' ? 'ok' : (ovHealth.state === 'disabled' ? '' : 'warn')) + '">openvino ' + esc(ovHealth.state || 'unknown') + '</span>' : '';
   return '<div class="compute-row">' +
     '<div class="compute-row-main">' +
-      '<div><strong>' + esc(w.displayName || w.nodeId || w.workerId) + '</strong> <span class="badge ' + statusClass + '">' + esc(w.state || 'unknown') + '</span></div>' +
+      '<div><strong>' + esc(w.displayName || w.nodeId || w.workerId) + '</strong> <span class="badge ' + statusClass + '">' + esc(w.state || 'unknown') + '</span> ' + ovState + '</div>' +
       '<small>' + esc(w.platform || 'unknown') + (w.architecture ? ' / ' + esc(w.architecture) : '') + ' / last heartbeat ' + esc(lastHeartbeat) + '</small>' +
       '<div class="compute-badges">' +
         '<span>jobs ' + esc(w.currentJobs || 0) + '/' + esc(w.maxConcurrentJobs || 1) + '</span>' +
@@ -1994,6 +2007,7 @@ function renderComputeWorker(w){
         '<span>models ' + esc(models) + '</span>' +
         (accelerators.length ? '<span>' + esc(accelerators.join(', ')) + '</span>' : '<span>cpu</span>') +
       '</div>' +
+      (modelBadges ? '<details class="detail-block"><summary>Models (' + esc(models) + ')</summary><div class="model-tier-list">' + modelBadges + '</div></details>' : '') +
       '<details class="detail-block"><summary>Utilization and health</summary>' + utilization + renderStructuredValue(w.health || {}, { limit: 260 }) + '</details>' +
     '</div>' +
     '<div class="compute-row-actions">' +

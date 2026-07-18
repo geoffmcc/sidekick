@@ -263,6 +263,7 @@ function isDeniedCombination(modelId, device) {
  *   - fallback value must not loosen the model's default policy.
  *   - Forbidden model/device pairs are rejected unconditionally.
  *   - No arbitrary fields with security implications are accepted.
+ *   - detected_self_tested models are allowed but carry a tier annotation.
  *
  * @param {object} jobPayload  Trusted (server-validated) job request payload.
  * @param {object} workerConfig  Loaded OpenVINO config.
@@ -316,8 +317,9 @@ function validateJobRequest(jobPayload, workerConfig) {
   if (!model) {
     return `Model '${modelId}' is not in the approved model catalogue`;
   }
-  if (model.status !== "certified") {
-    return `Model '${modelId}' has lifecycle status '${model.status}' and is not currently certified`;
+  const tier = statusToTier(model.status);
+  if (tier === CERTIFICATION_TIER.UNSUPPORTED) {
+    return `Model '${modelId}' has lifecycle status '${model.status}' and is not currently certified or self-tested`;
   }
 
   // --- input_kind ---
@@ -372,7 +374,7 @@ function validateJobRequest(jobPayload, workerConfig) {
     return `Model '${modelId}' on device '${certifiedDevice}' is permanently denied: ${check.reason}`;
   }
 
-  return null; // Valid
+  return null; // Valid (backward-compatible falsy; callers needing tier can parse the model).
 }
 
 /**
@@ -563,6 +565,18 @@ function verifyModelFileHash(modelId, modelsDir) {
 // Exports
 // ---------------------------------------------------------------------------
 
+/**
+ * Test-only helper: temporarily override a model's status in the mutable MODEL_INDEX.
+ * Returns a restore function that reverts the change.
+ */
+function _testOverrideModelStatus(modelId, status) {
+  const original = MODEL_INDEX.get(modelId);
+  if (!original) return () => {};
+  const copy = Object.assign({}, original, { status });
+  MODEL_INDEX.set(modelId, copy);
+  return () => { MODEL_INDEX.set(modelId, original); };
+}
+
 module.exports = {
   APPROVED_MODELS,
   INPUT_KIND,
@@ -578,4 +592,5 @@ module.exports = {
   verifyModelIntegrity,
   verifyModelFileHash,
   sha256File,
+  _testOverrideModelStatus,
 };
