@@ -16,6 +16,7 @@ const SESSION_GAP_MS = 5 * 60 * 1000;
 let allTools = [];
 let toolCategories = []; // Will be fetched from API
 let toolStats = {};
+let pendingApprovalCount = 0;
 let allProcedures = [];
 let toolStatsWindow = localStorage.getItem('sidekick_toolStatsWindow') || 'local';
 let evolveExecutionStreams = {};
@@ -147,8 +148,10 @@ function getRiskBadgeClass(risk) {
 function updateToolSummary(tools) {
   $('toolSummaryVisible').textContent = tools.length;
   $('toolSummaryBlocked').textContent = tools.filter(tool => tool.enabled === false).length;
-  $('toolSummaryApproval').textContent = tools.filter(tool => tool.approval_required).length;
+  // Pending approval requests are inbox state, not a property of the filtered catalog.
+  $('toolSummaryApproval').textContent = pendingApprovalCount;
   $('toolSummaryHighRisk').textContent = tools.filter(isHighRiskTool).length;
+  $('toolSummaryApprovalGated').textContent = tools.filter(tool => tool.approval_required).length;
 }
 
 const SERVICE_ICONS = { 'sidekick-mcp': 'fa-server', 'sidekick-dashboard': 'fa-gauge-high', 'sidekick-agent': 'fa-robot', 'ollama': 'fa-brain' };
@@ -2853,11 +2856,14 @@ function loadTools(){
     authFetch('/api/tools').then(r=>r.json()),
     authFetch('/api/stats' + statsQuery).then(r=>r.json()),
     authFetch('/api/procedures').then(r=>r.json()),
-    authFetch('/api/tool-categories').then(r=>r.json())
-  ]).then(([toolsData, statsData, procData, catData]) => {
+    authFetch('/api/tool-categories').then(r=>r.json()),
+    // Non-fatal: the summary card falls back to 0 rather than blanking the catalog.
+    authFetch('/api/approvals?status=pending').then(r=>r.json()).catch(()=>({}))
+  ]).then(([toolsData, statsData, procData, catData, approvalData]) => {
     allTools = toolsData.tools || [];
     allProcedures = procData.procedures || [];
     toolCategories = catData.categories || [];
+    pendingApprovalCount = (approvalData.approvals || []).length;
     populateToolCategoryFilter();
     toolStats = {};
     (statsData.stats || []).forEach(s => {
