@@ -1,7 +1,7 @@
 const { normalizeDescriptor } = require("./descriptor");
 const { TOOL_SCHEMAS } = require("./schemas");
 const { getStaticToolCategory, getStaticToolRisk } = require("./metadata");
-const utilityFamily = require("./families/utility");
+const extractedFamilies = require("./families");
 
 function canonicalName(name) {
   return String(name || "").replace(/^sidekick_/, "");
@@ -11,7 +11,7 @@ function buildBuiltinRegistry({ toolDefs, handlers, riskForTool, categoryForTool
   const defs = toolDefs || [];
   const toolHandlers = handlers || {};
   const schemaMap = schemas || TOOL_SCHEMAS;
-  const extras = extraDescriptors || utilityFamily.descriptors;
+  const extras = extraDescriptors || extractedFamilies.descriptors;
   const extraByName = new Map(extras.map(descriptor => [canonicalName(descriptor.name), descriptor]));
   const descriptors = defs.map(def => {
     const extracted = extraByName.get(canonicalName(def.name));

@@ -298,29 +298,11 @@ const TOOL_SCHEMAS = {
     max_files: z.number().int().min(1).max(10000).optional().describe("Maximum files to inspect (default 2000, maximum 10000)"),
     format: z.enum(["text", "json"]).optional().describe("Output format (default text)")
   }),
-  parse: z.object({
-    input: z.string().describe("Data to parse (string content)"),
-    format: z.string().optional().describe("Format: json, yaml, xml, ini, csv (auto-detected if not specified)")
-  }),
-  diff: z.object({
-    old_text: z.string().describe("Original content to compare"),
-    new_text: z.string().describe("Modified content to compare"),
-    type: z.string().optional().describe("Diff type: text, json, yaml, or auto (default: auto)"),
-    format: z.string().optional().describe("Output format: unified, summary, or json (default: unified)")
-  }),
   hash: z.object({
     input: z.string().optional().describe("Data to hash (string content)"),
     path: z.string().optional().describe("File path to hash"),
     algorithm: z.string().optional().describe("Hash algorithm: md5, sha1, sha256, sha512 (default: sha256)"),
     verify: z.string().optional().describe("Expected hash value to verify against")
-  }),
-  validate: z.object({
-    data: z.union([z.string(), z.record(z.any())]).describe("Data to validate (JSON string or object)"),
-    schema: z.union([z.string(), z.record(z.any())]).describe("JSON Schema (JSON string or object)")
-  }),
-  template: z.object({
-    template: z.string().describe("Handlebars template string"),
-    data: z.union([z.string(), z.record(z.any())]).optional().describe("Template data (JSON string or object)")
   }),
   queue: z.object({
     action: z.enum(["add", "list", "process", "remove", "clear"]).describe("Queue action"),

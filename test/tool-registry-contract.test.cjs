@@ -3,6 +3,10 @@ const fs = require('fs');
 
 const legacyTools = require('../src/tools');
 const toolLayer = require('../src/tools/index');
+const extractedFamilies = require('../src/tools/families');
+
+// Names owned by extracted descriptor families rather than by legacy handlers.
+const extractedNames = extractedFamilies.descriptors.map(d => d.name);
 
 const toolsFacadeSource = fs.readFileSync('src/tools.js', 'utf8');
 const indexSource = fs.readFileSync('src/index.js', 'utf8');
@@ -17,7 +21,7 @@ const legacyDefNames = legacy.TOOL_DEFS.map(d => d.name);
 const legacyToolNames = Object.keys(legacy.TOOLS);
 
 assert.deepStrictEqual(descriptorNames, legacyDefNames, 'Registry definition order should match legacy TOOL_DEFS order');
-assert.deepStrictEqual([...descriptorNames].sort(), [...new Set([...legacyToolNames, 'respond'])].sort(), 'Registry names should match legacy handlers plus extracted descriptors');
+assert.deepStrictEqual([...descriptorNames].sort(), [...new Set([...legacyToolNames, ...extractedNames])].sort(), 'Registry names should match legacy handlers plus extracted descriptors');
 assert.strictEqual(descriptors.length, 107, 'Built-in tool count should remain at the current-main baseline');
 
 for (const descriptor of descriptors) {
@@ -30,7 +34,7 @@ for (const descriptor of descriptors) {
   assert.ok(descriptor.category, `${descriptor.name} should have a category`);
   assert.deepStrictEqual(descriptor.args, legacy.TOOL_DEFS.find(d => d.name === descriptor.name).args || {}, `${descriptor.name} args metadata should match compatibility TOOL_DEFS`);
   assert.strictEqual(descriptor.risk, legacyTools.getToolRisk(descriptor.name), `${descriptor.name} risk should match compatibility lookup`);
-  if (descriptor.family !== 'utility') assert.strictEqual(descriptor.handler, legacy.TOOLS[descriptor.name], `${descriptor.name} handler should match legacy TOOLS until extracted`);
+  if (!descriptor.family) assert.strictEqual(descriptor.handler, legacy.TOOLS[descriptor.name], `${descriptor.name} handler should match legacy TOOLS until extracted`);
 }
 
 assert.deepStrictEqual(Object.keys(registry.toolsMap()), legacyDefNames, 'Derived TOOLS map should preserve definition order');
@@ -56,7 +60,18 @@ assert.ok(indexSource.includes('getBuiltinRegistry'), 'src/index.js should regis
 assert.ok(indexSource.includes('callMcpTool(descriptor.name'), 'MCP built-in execution should route through the MCP dispatcher wrapper');
 assert.ok(!indexSource.includes('descriptor.handler(args)'), 'MCP must not directly invoke built-in handlers');
 assert.strictEqual(registry.get('respond').family, 'utility', 'respond should be owned by extracted utility family');
-assert.ok(!legacy.TOOLS.respond, 'respond should no longer have an active legacy handler');
+for (const name of ['parse', 'diff', 'validate', 'template']) {
+  assert.strictEqual(registry.get(name).family, 'data-utilities', `${name} should be owned by extracted data-utilities family`);
+}
+for (const name of extractedNames) {
+  assert.ok(!legacy.TOOLS[name], `${name} should no longer have an active legacy handler`);
+  assert.ok(legacyDefNames.includes(name), `${name} should keep its legacy TOOL_DEFS row as an ordering anchor`);
+}
+
+// hash stays behind deliberately: it calls enforcePathPolicy, a legacy-internal
+// security boundary that is out of scope for this slice.
+assert.strictEqual(registry.get('hash').family, null, 'hash should remain a legacy-owned descriptor');
+assert.strictEqual(registry.get('hash').handler, legacy.TOOLS.hash, 'hash should still resolve to the legacy handler');
 
 const exportedNames = Object.keys(legacyTools).sort();
 for (const name of [

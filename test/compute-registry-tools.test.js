@@ -248,8 +248,12 @@ const models = args => computeTools.sidekick_compute_models(viaSchema('compute_m
 
   await test('every documented arg key exists in the tool schema', () => {
     const drifted = [];
+    // Resolve schemas from the registry, not the raw TOOL_SCHEMAS catalog: tools
+    // owned by descriptor families carry their schema in the family module, so a
+    // catalog lookup would silently skip them and drop this guard's coverage.
+    const registrySchemas = require('../src/tools').getBuiltinRegistry().schemas();
     for (const def of TOOL_DEFS) {
-      const schema = TOOL_SCHEMAS[def.name];
+      const schema = registrySchemas[def.name];
       if (!schema || !schema.shape || !def.args) continue;
       for (const key of Object.keys(def.args)) {
         if (!(key in schema.shape)) drifted.push(`${def.name}.${key}`);
