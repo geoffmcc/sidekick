@@ -30,6 +30,7 @@ const suites = [
   { file: 'test/agent-bridge-followup.test.js', critical: true, description: 'Agent Bridge follow-up API and security (lineage, terminal-parent, traversal, malformed transcript, tool-boundary)' },
   { file: 'test/agent-followup-ui.test.js', critical: false, description: 'Agent tab follow-up UI controls, lineage rendering, and endpoint wiring' },
   { file: 'test/deploy-scripts.test.js', critical: false, description: 'Deploy script checks' },
+  { file: 'test/metrics-collector.test.js', critical: false, description: 'Metrics collector tool_logs queries and dashboard variable pinning' },
   { file: 'test/git-deploy.test.js', critical: false, description: 'Read-only Git deployment hardening' },
   { file: 'test/mcp-session.test.js', critical: false, description: 'MCP stale session recovery behavior' },
   { file: 'test/ops-workflows.test.js', critical: false, description: 'Packaged operations workflow metadata' },

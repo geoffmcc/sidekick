@@ -16,7 +16,9 @@ const INFLUX_ORG = process.env.SIDEKICK_INFLUX_ORG || 'sidekick';
 const INFLUX_BUCKET = process.env.SIDEKICK_INFLUX_BUCKET || 'sidekick';
 const DB_PATH = process.env.SIDEKICK_DB_FILE || path.join(__dirname, '..', 'data', 'sidekick.db');
 
-if (!INFLUX_TOKEN || INFLUX_TOKEN === 'sidekick-influx-token') {
+// Fail closed on a missing/placeholder token — but only when run directly, so
+// requiring this module for tests does not terminate the test process.
+if (require.main === module && (!INFLUX_TOKEN || INFLUX_TOKEN === 'sidekick-influx-token')) {
   console.error('SIDEKICK_INFLUX_TOKEN must be set to a non-placeholder value before collecting metrics.');
   process.exit(1);
 }
@@ -139,20 +141,28 @@ function collectToolMetrics() {
 }
 
 // Collect database performance metrics
+// Database query stats, derived from the db_* tools' entries in tool_logs.
+//
+// tool_logs stores CANONICAL (unprefixed) tool names — the dispatcher strips
+// the `sidekick_` prefix before logging. This filter matched only the prefixed
+// form, so it selected zero rows, returned null, and the database_performance
+// measurement was never written: the Grafana dashboard sat empty with nothing
+// reporting an error. Both shapes are matched so the metric survives whichever
+// form a given deployment has logged historically.
 function collectDatabaseMetrics() {
   try {
     const db = new Database(DB_PATH, { readonly: true });
-    
+
     // Get query stats from tool_logs for db_query tool
     const oneHourAgo = new Date(Date.now() - 3600000).toISOString();
     
     const queryStats = db.prepare(`
-      SELECT 
+      SELECT
         COUNT(*) as query_count,
         AVG(duration_ms) as query_time_ms,
         SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) as cache_hit_ratio
       FROM tool_logs
-      WHERE tool_name LIKE 'sidekick_db_%' AND timestamp >= ?
+      WHERE (tool_name LIKE 'db_%' OR tool_name LIKE 'sidekick_db_%') AND timestamp >= ?
     `).get(oneHourAgo);
     
     db.close();
@@ -344,8 +354,13 @@ async function collectAll() {
   console.log(`[${new Date().toISOString()}] Metrics collected: system=${systemMetrics ? 'ok' : 'fail'}, tools=${toolMetrics.length}, db=${dbMetrics ? 'ok' : 'skip'}, docker=${dockerMetrics.length}, ollama=${ollamaMetrics.length}, services=${Object.keys(serviceMetrics).length}`);
 }
 
-// Run collection
-collectAll().catch(error => {
-  console.error(`Metrics collection failed: ${error.message}`);
-  process.exit(1);
-});
+// Run collection only when invoked directly, so the collector functions can be
+// exercised by tests without performing a real collection or writing to InfluxDB.
+if (require.main === module) {
+  collectAll().catch(error => {
+    console.error(`Metrics collection failed: ${error.message}`);
+    process.exit(1);
+  });
+}
+
+module.exports = { collectToolMetrics, collectDatabaseMetrics };
