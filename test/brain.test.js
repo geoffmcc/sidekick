@@ -9,7 +9,7 @@ const assert = require("assert");
 const { validatePlan } = require("../src/brain/plan-validator");
 const { runBrainTask } = require("../src/brain/brain");
 const { BRAIN_LIMITS } = require("../src/brain/config");
-const { extractJson } = require("../src/brain/index");
+const { extractJson, buildPlannerSystemPrompt } = require("../src/brain/index");
 
 console.log("Running Brain v0.1 tests...\n");
 
@@ -240,6 +240,32 @@ testAsync("conceptual task completes with no tool calls", async () => {
   });
   assert.strictEqual(out.state, "completed");
   assert.strictEqual(calls.length, 0, "no tools for a conceptual task");
+});
+
+// ---- planner prompt: tool catalog -------------------------------------------
+
+test("planner prompt carries tool descriptions, argument signatures, and approval markers", () => {
+  const prompt = buildPlannerSystemPrompt([
+    { name: "health", description: "System health checks", args: { check: 'string (all|services|processes|disk|network|custom)' } },
+    { name: "bash", description: "Execute a shell command", args: { command: "Shell command to execute" }, approval_required: true },
+    { name: "noargs", description: "d".repeat(500), args: {} },
+  ]);
+  assert.ok(prompt.includes("health: System health checks"), "description rendered");
+  assert.ok(prompt.includes("check: string (all|services|processes|disk|network|custom)"), "argument signature rendered");
+  assert.ok(prompt.includes("bash [requires human approval]"), "approval gate marked");
+  assert.ok(!prompt.includes("noargs [requires human approval]"), "unmarked tools stay unmarked");
+  assert.ok(!prompt.includes("d".repeat(200)), "long descriptions are capped");
+  assert.ok(prompt.includes("prefer one NOT marked"), "prefer-ungated rule present");
+});
+
+test("planner prompt tolerates missing/odd tool metadata", () => {
+  const prompt = buildPlannerSystemPrompt([
+    { name: "bare" },
+    { name: "weird", description: null, args: ["not", "an", "object"] },
+  ]);
+  assert.ok(prompt.includes("- bare"), "name-only tool rendered");
+  assert.ok(prompt.includes("- weird"), "odd metadata rendered without args block");
+  assert.ok(!prompt.includes("arguments: { 0"), "array args never rendered as entries");
 });
 
 // ---- orchestrator: bounded planning correction ------------------------------
