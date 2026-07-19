@@ -1865,10 +1865,12 @@ app.post("/api/memories/:id/disable", (req, res) => {
 app.post("/api/memories/:id/enable", (req, res) => {
   try {
     const db = dbStore.getDb();
+    // ISO, matching how every other writer stores updated_at. datetime('now')
+    // would write a space-separated value that ISO range queries mis-order.
     const result = db.prepare(`
-      UPDATE memories SET enabled = 1, updated_at = datetime('now')
+      UPDATE memories SET enabled = 1, updated_at = ?
       WHERE id = ?
-    `).run(req.params.id);
+    `).run(new Date().toISOString(), req.params.id);
     auditLog(req, "memory_enable", { id: req.params.id });
     res.json({ ok: result.changes > 0 });
   } catch (error) {

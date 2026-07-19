@@ -1686,11 +1686,15 @@ function getMemoryIntelligenceStats() {
   const stats = getMemoryStats();
   if (!hasMemoriesTable()) return stats;
   const count = sql => db.prepare(sql).get().count;
+  // Timestamp columns store ISO 8601; SQLite datetime() returns a space-separated
+  // string, so an ISO row always sorts above such a bound. Bind an ISO value.
+  const countSince = (sql, bound) => db.prepare(sql).get(bound).count;
+  const nowBound = nowIso();
   stats.durable_active = count("SELECT COUNT(*) AS count FROM memories WHERE enabled = 1 AND COALESCE(memory_class, 'semantic') NOT IN ('working') AND type NOT IN ('tool_call')");
   stats.pending_review = count("SELECT COUNT(*) AS count FROM memories WHERE enabled = 1 AND state = 'pending'");
   stats.conflicting = count("SELECT COUNT(*) AS count FROM memories WHERE enabled = 1 AND (conflict_group IS NOT NULL OR metadata_json LIKE '%conflicts_with%')");
-  stats.expired = count("SELECT COUNT(*) AS count FROM memories WHERE state = 'expired' OR (expires_at IS NOT NULL AND expires_at <= datetime('now'))");
-  stats.revalidation_due = count("SELECT COUNT(*) AS count FROM memories WHERE enabled = 1 AND revalidate_after IS NOT NULL AND revalidate_after <= datetime('now')");
+  stats.expired = countSince("SELECT COUNT(*) AS count FROM memories WHERE state = 'expired' OR (expires_at IS NOT NULL AND expires_at <= ?)", nowBound);
+  stats.revalidation_due = countSince("SELECT COUNT(*) AS count FROM memories WHERE enabled = 1 AND revalidate_after IS NOT NULL AND revalidate_after <= ?", nowBound);
   stats.working_memory = count("SELECT COUNT(*) AS count FROM memories WHERE enabled = 1 AND COALESCE(memory_class, '') = 'working'");
   stats.prospective_open = count("SELECT COUNT(*) AS count FROM memories WHERE enabled = 1 AND (COALESCE(memory_class, '') = 'prospective' OR type = 'open_thread')");
   stats.operational_events = hasTable("tool_logs") ? count("SELECT COUNT(*) AS count FROM tool_logs") : 0;

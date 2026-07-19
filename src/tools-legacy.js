@@ -7441,7 +7441,8 @@ async function sidekick_memory({ action, id, project, type, memory_class, conten
   if (action === "forget") return sidekick_memory_manage({ action: "delete", id, reason: reason || "user_forget" });
   if (action === "expire") return sidekick_memory_manage({ action: "expire", id, reason: reason || "manual_expire" });
   if (action === "pin") {
-    const result = dbStore.getDb().prepare("UPDATE memories SET pinned = 1, updated_at = datetime('now') WHERE id = ?").run(id);
+    // ISO, matching how every other writer stores updated_at.
+    const result = dbStore.getDb().prepare("UPDATE memories SET pinned = 1, updated_at = ? WHERE id = ?").run(new Date().toISOString(), id);
     dbStore.auditMemoryEvent("pin", "memory", id, { reason }, getCurrentSource());
     return { content: [{ type: "text", text: result.changes ? `Memory ${id} pinned` : `Memory not found: ${id}` }], isError: result.changes === 0 };
   }
