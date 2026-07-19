@@ -332,7 +332,13 @@ Predict is deterministic telemetry inference, and it inherits that ceiling:
   It cannot know intent.
 - **Boundary quality caps everything.** Tool logs without a session, correlation, or
   task identifier are invisible to every sequence detector. Improving Predict's
-  coverage usually means improving telemetry correlation upstream.
+  coverage usually means improving telemetry correlation upstream. MCP tool calls
+  now carry the transport's per-connection `sessionId`, and a `project` when the
+  call names one; sources that do not supply a grouping key still produce no
+  sequence predictions, by design. Note that a *constant* session identifier is
+  worse than none — it would place every call ever made into a single sequence and
+  let the detectors infer adjacency between unrelated calls, which is the failure
+  mode the `_global` bucket produced.
 - **The 30-minute gap heuristic is arbitrary.** It is a reasonable split for
   interactive sessions but has no ground truth behind it.
 - **Bounded window.** Analysis reads at most the 500 most recent tool logs in the

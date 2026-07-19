@@ -4,6 +4,13 @@ All notable changes to Sidekick.
 
 ## Unreleased
 
+### Tool-log session and project correlation
+
+- MCP tool calls now record the transport's per-connection `sessionId` on `tool_logs`. The field was already plumbed end-to-end (`createMcpExecutionContext` -> `dispatcherMetadata` -> `logToolCall`), but the three MCP registration sites in `src/index.js` passed only `requestId`, so `session_id` was null on every row from every source. Without it each call is its own execution boundary and Predict's sequence detectors correctly produce nothing.
+- `project` is now recorded when a tool call explicitly names one, so project-scoped analysis has data to work with. Scope is observed from the call, never guessed.
+- Deliberately not used: a constant session identifier from `SIDEKICK_SESSION_ID`. A fixed value would group every call ever made into one sequence and let the detectors infer adjacency between unrelated calls — the same failure mode as the removed `_global` bucket. `toolCallContext()` documents this and `test/tool-log-correlation.test.js` pins it.
+- Added `test/tool-log-correlation.test.js` covering session threading, absence handling, shared use of the context builder across all registration sites, project observation, and the resulting sequence boundaries.
+
 ### Predict signal quality and lifecycle correctness
 
 - Fixed the root-cause defect behind low-quality predictions: `tool_logs` stores a `success` column and has no `ok` column, but every detector read `log.ok`. That made **every** tool call count as a failure — production showed `github has 33 unknown failures` at `very_high` confidence against an actual 4 failures in 85 calls — while silently disabling the prerequisite and workflow detectors entirely, since both required a successful call. Rows are now normalized before any detector sees them.
