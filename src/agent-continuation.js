@@ -214,6 +214,10 @@ function normalizeTranscript(raw, taskId) {
     task_id: taskId,
     goal: typeof r.goal === "string" ? r.goal : "",
     status: typeof r.status === "string" ? r.status : "unknown",
+    // Authoritative final answer / terminal error. Resolved rather than copied,
+    // so a pre-v3 transcript (no top-level fields) still normalizes to the
+    // answer recorded in its steps instead of an empty string.
+    ...resolveFinalAnswer(r),
     steps: Array.isArray(r.steps) ? r.steps : [],
     t: typeof r.t === "string" ? r.t : null,
     parent_task_id: parentTaskId,
@@ -280,19 +284,35 @@ function sanitizeToolResult(result, redact, limits) {
   return truncate(redact(oneLine(text)), limits.MAX_STEP_SUMMARY_CHARS);
 }
 
-function extractOutcome(record, redact, limits) {
-  const steps = Array.isArray(record.steps) ? record.steps : [];
-  // Prefer the last explicit done/error step; fall back to status.
+/**
+ * The task's terminal answer, from the single authoritative place it is stored.
+ *
+ * v3+ transcripts carry a top-level `result`/`error`. Older ones do not, and
+ * before v3 the only record was a terminal entry in `steps` — so any path that
+ * did not push one (Brain) left the answer nowhere durable at all. Readers use
+ * this rather than scanning `steps` themselves, so old and new transcripts
+ * behave identically and there is one definition of "the answer".
+ *
+ * @returns {{ result: string, error: string|null }}
+ */
+function resolveFinalAnswer(record) {
+  const r = record && typeof record === "object" ? record : {};
+  if (typeof r.result === "string" && r.result.trim()) return { result: r.result, error: null };
+  if (typeof r.error === "string" && r.error.trim()) return { result: "", error: r.error };
+  const steps = Array.isArray(r.steps) ? r.steps : [];
   for (let i = steps.length - 1; i >= 0; i--) {
     const s = steps[i];
-    if (!s || typeof s !== "object") continue;
-    if (s.type === "done" && typeof s.text === "string") {
-      return "Final answer: " + truncate(redact(oneLine(s.text)), limits.MAX_FINAL_ANSWER_CHARS);
-    }
-    if (s.type === "error" && typeof s.text === "string") {
-      return "Terminal error: " + truncate(redact(oneLine(s.text)), limits.MAX_FINAL_ANSWER_CHARS);
-    }
+    if (!s || typeof s !== "object" || typeof s.text !== "string") continue;
+    if (s.type === "done") return { result: s.text, error: null };
+    if (s.type === "error") return { result: "", error: s.text };
   }
+  return { result: "", error: null };
+}
+
+function extractOutcome(record, redact, limits) {
+  const { result, error } = resolveFinalAnswer(record);
+  if (result) return "Final answer: " + truncate(redact(oneLine(result)), limits.MAX_FINAL_ANSWER_CHARS);
+  if (error) return "Terminal error: " + truncate(redact(oneLine(error)), limits.MAX_FINAL_ANSWER_CHARS);
   return null;
 }
 
@@ -488,6 +508,7 @@ module.exports = {
   resolveTranscriptPath,
   loadTranscript,
   normalizeTranscript,
+  resolveFinalAnswer,
   resolveAncestors,
   buildContinuationContext,
   validateFollowUpGoal,

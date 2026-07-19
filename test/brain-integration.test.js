@@ -76,6 +76,28 @@ function stepText(t) { return (t.steps || []).map(s => s.text || "").join("\n");
     agent.__setLLMOverrideForTests(null);
   });
 
+  // The persisted top-level `error` is a NEW durable location for terminal
+  // error text, and the direct-answer path builds it from a raw provider
+  // message ("LLM error: " + e.message) with no redaction of its own. This
+  // exercises the real write path in src/agent.js end to end — the reader-side
+  // unit test in agent-continuation.test.js injects a fake redactor and so
+  // cannot prove the real redactSensitive() is actually wired in here.
+  await ok("a terminal error carrying a credential is redacted before it reaches disk", async () => {
+    const leak = "ghp_" + "a".repeat(36);
+    agent.__setLLMOverrideForTests(async () => { throw new Error("provider auth failed with " + leak); });
+    const t = await runGoal("What is the capital of France?");
+    assert.strictEqual(t.status, "failed", "the task failed as set up");
+    assert.ok(typeof t.error === "string" && t.error, "a terminal error was persisted");
+    assert.ok(!t.error.includes(leak), "the credential must not reach the transcript");
+    assert.ok(t.error.includes("[REDACTED GITHUB TOKEN]"), "redaction actually applied, got: " + t.error);
+    // The error step is persisted too, and was leaking the raw provider message
+    // verbatim. Both durable locations must be clean, not just the new one.
+    assert.ok(!JSON.stringify(t.steps).includes(leak), "the credential must not reach the steps either");
+    const errStep = (t.steps || []).find(s => s.type === "error");
+    assert.ok(errStep && errStep.text.includes("[REDACTED GITHUB TOKEN]"), "error step redacted, got: " + (errStep && errStep.text));
+    agent.__setLLMOverrideForTests(null);
+  });
+
   await ok("disabled flag: evidence goal uses the existing tool loop, not Brain", async () => {
     agent.__setLLMOverrideForTests(async (messages) => {
       const already = messages.some(m => /Called/.test(m.content || ""));
@@ -106,7 +128,24 @@ function stepText(t) { return (t.steps || []).map(s => s.text || "").join("\n");
     // The git tool step is recorded with a Brain step id, proving execution went
     // through the plan (not the legacy loop). Must not fabricate on failure.
     assert.ok(t.steps.some(s => s.type === "tool" && s.id === "s1" && s.tool === "git"), "git tool step executed via the plan");
-    if (t.status === "completed") assert.strictEqual(t.brain.state, "completed");
+    // Whichever terminal state it reached, the outcome must be durably recorded
+    // rather than left to the SSE stream. Asserted on BOTH branches so this
+    // cannot silently pass by taking the other one. Previously the Brain path
+    // recorded no terminal step and the transcript had no top-level result, so
+    // a completed Brain answer survived nowhere durable at all.
+    assert.strictEqual(t.v, 3, "transcript version reflects the added field");
+    if (t.status === "completed") {
+      assert.strictEqual(t.brain.state, "completed");
+      assert.strictEqual(t.result, "The repository status was retrieved.",
+        "authoritative top-level result persisted");
+      const done = t.steps.filter(s => s.type === "done");
+      assert.strictEqual(done.length, 1, "exactly one terminal answer step");
+      assert.strictEqual(done[0].text, t.result, "terminal step agrees with the top-level result");
+      assert.strictEqual(t.error, null, "a completed task records no terminal error");
+    } else {
+      assert.strictEqual(t.result, "", "a non-completed task records no answer");
+      assert.ok(typeof t.error === "string" && t.error, "a non-completed task records why");
+    }
     delete process.env.SIDEKICK_BRAIN_ENABLED;
     agent.__setLLMOverrideForTests(null);
   });

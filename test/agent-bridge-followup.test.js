@@ -159,7 +159,12 @@ let server;
     assert.strictEqual(raw.parent_task_id, rootId);
     assert.strictEqual(raw.root_task_id, rootId);
     assert.strictEqual(raw.continuation_depth, 1);
-    assert.strictEqual(raw.v, 2);
+    // v3 added the authoritative top-level result/error. The change is additive
+    // — v2 transcripts stay readable and resolve their answer from `steps` —
+    // but the version moves so a reader knows whether `result` can be trusted
+    // directly or must fall back.
+    assert.strictEqual(raw.v, 3);
+    assert.ok("result" in raw, "v3 transcripts carry a top-level result");
   });
 
   // 6) A follow-up of a follow-up retains the original root.
