@@ -764,6 +764,64 @@ console.log('Test 6.3: Both deploy scripts preserve .env');
 }
 
 // ============================================================================
+// GRAFANA PROVISIONING ENVIRONMENT
+// ============================================================================
+
+// Grafana interpolates ${VAR} in provisioning files from its OWN process
+// environment. Compose's --env-file drives compose-level substitution, not the
+// container environment, so a variable referenced in a provisioning file but
+// absent from the grafana service's `environment:` block silently resolves to
+// an empty string — the datasource provisions with no credential and simply
+// stops returning data, with no error anywhere. That is what happened when the
+// deploy-time envsubst step was removed as part of read-only git deploys.
+{
+  console.log('Grafana provisioning environment:');
+
+  const composePath = path.join(__dirname, '..', 'docker', 'docker-compose.yml');
+  const compose = fs.readFileSync(composePath, 'utf8');
+
+  // The grafana service block: from `  grafana:` to the next top-level service.
+  const grafanaBlock = (compose.match(/^ {2}grafana:\n(?: {4}.*\n|\n)*/m) || [''])[0];
+  assert.ok(grafanaBlock, 'grafana service block found in docker-compose.yml');
+
+  const provisioningDir = path.join(__dirname, '..', 'grafana', 'provisioning');
+  const provisioningFiles = [];
+  (function walk(dir) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(p);
+      else if (/\.ya?ml$/.test(entry.name)) provisioningFiles.push(p);
+    }
+  })(provisioningDir);
+  assert.ok(provisioningFiles.length > 0, 'provisioning files found');
+
+  const referenced = new Set();
+  for (const file of provisioningFiles) {
+    const body = fs.readFileSync(file, 'utf8');
+    for (const m of body.matchAll(/\$\{([A-Z_][A-Z0-9_]*)[^}]*\}/g)) referenced.add(m[1]);
+  }
+
+  const missing = [...referenced].filter(v => !new RegExp(`^\\s+${v}:`, 'm').test(grafanaBlock));
+  assert.deepStrictEqual(
+    missing, [],
+    'every variable referenced in grafana/provisioning must be passed into the grafana ' +
+    'container, or it resolves to an empty string at provisioning time. Missing: ' + missing.join(', ')
+  );
+  console.log(`✓ all ${referenced.size} provisioning variable(s) passed into the grafana container\n`);
+
+  // The specific regression: the InfluxDB datasource token.
+  assert.ok(
+    /SIDEKICK_INFLUX_TOKEN:/.test(grafanaBlock),
+    'grafana must receive SIDEKICK_INFLUX_TOKEN for the InfluxDB datasource'
+  );
+  assert.ok(
+    /SIDEKICK_INFLUX_TOKEN:\s*\$\{SIDEKICK_INFLUX_TOKEN:\?/.test(grafanaBlock),
+    'SIDEKICK_INFLUX_TOKEN must fail closed (:?) rather than provision an empty token'
+  );
+  console.log('✓ InfluxDB datasource token passed through and fails closed\n');
+}
+
+// ============================================================================
 // SUMMARY
 // ============================================================================
 
