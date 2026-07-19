@@ -53,6 +53,7 @@ const suites = [
   { file: 'test/predict.test.js', critical: false, description: 'Predict tool and scoring engine behavior' },
   { file: 'test/predict-lifecycle.test.js', critical: false, description: 'Predict lifecycle, dedup, expiration, retention, and feedback behavior' },
   { file: 'test/predict-contract.test.js', critical: false, description: 'Predict dashboard/API contract and tool surface compatibility' },
+  { file: 'test/tool-log-correlation.test.js', critical: false, description: 'MCP session/project correlation on tool logs' },
   { file: 'test/insight-report.test.js', critical: false, description: 'Insight report tool behavior' },
   { file: 'test/evolve.test.js', critical: false, description: 'Evolve tool and retention behavior' },
   { file: 'test/db-tools.test.js', critical: false, description: 'Database tools behavior' },

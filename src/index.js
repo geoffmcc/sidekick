@@ -65,6 +65,28 @@ function buildProcedureSchema(parameters) {
   return z.object(shape);
 }
 
+/**
+ * Builds the execution context for an MCP tool call.
+ *
+ * `extra.sessionId` is the transport's per-connection session identifier. Passing
+ * it through is what gives tool_logs a real execution boundary: without it every
+ * call is isolated, and correlation_id cannot substitute because it is unique per
+ * call. Never substitute a constant (e.g. a static SIDEKICK_SESSION_ID) here — a
+ * fixed value would group every call ever made into one sequence and let
+ * downstream analysis infer adjacency between unrelated calls.
+ *
+ * `project` is recorded only when the call itself names one, so scope is observed
+ * rather than guessed.
+ */
+function toolCallContext(args, extra) {
+  const context = { requestId: extra?.requestInfo?.requestId };
+  if (extra?.sessionId) context.sessionId = extra.sessionId;
+  if (args && typeof args.project === "string" && args.project.trim()) {
+    context.project = args.project.trim();
+  }
+  return context;
+}
+
 function createMcpServer() {
   const server = new McpServer({
     name: "sidekick-mcp-server",
@@ -80,7 +102,7 @@ function createMcpServer() {
       description: descriptor.description,
       inputSchema: descriptor.schema
     }, async (args, extra) => {
-      return callMcpTool(descriptor.name, args, { requestId: extra?.requestInfo?.requestId });
+      return callMcpTool(descriptor.name, args, toolCallContext(args, extra));
     });
   }
 
@@ -95,7 +117,8 @@ function createMcpServer() {
       description: `[procedure] ${proc.description}${paramDesc}`,
       inputSchema: paramSchema
     }, async (args, extra) => {
-      return callMcpTool("teach", { action: "execute", name: procName, args }, { requestId: extra?.requestInfo?.requestId, generatedProcedure: internalName });
+      return callMcpTool("teach", { action: "execute", name: procName, args },
+        { ...toolCallContext(args, extra), generatedProcedure: internalName });
     });
   }
 
@@ -107,7 +130,8 @@ function createMcpServer() {
       description: def.description,
       inputSchema: dynamicSchemas[def.name]
     }, async (args, extra) => {
-      return callMcpTool(def.name, args, { requestId: extra?.requestInfo?.requestId, generatedProcedure: def.name, correlationId: def.capabilityId });
+      return callMcpTool(def.name, args,
+        { ...toolCallContext(args, extra), generatedProcedure: def.name, correlationId: def.capabilityId });
     });
   }
 
