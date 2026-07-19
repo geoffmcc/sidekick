@@ -8,7 +8,14 @@ Each tool has one normalized descriptor with its public name, description, Zod i
 
 Descriptors are validated by `src/tools/descriptor.js`. Validation rejects empty names, invalid names, missing descriptions, missing handlers, missing schemas, missing risks, and risks outside the supported vocabulary: `low`, `medium`, `high`, `critical`.
 
-`src/tools/families/utility.js` is the first extracted descriptor-owned family. It owns the `respond` handler, schema, risk, category, and compatibility metadata. The legacy `TOOL_DEFS` row remains only as an ordering anchor while MCP ordering compatibility is preserved.
+Extracted descriptor-owned families live under `src/tools/families/` and are aggregated by `src/tools/families/index.js`, which is the single source of extracted descriptors for the registry:
+
+- `utility.js` — `respond`. The first extracted family.
+- `data-utilities.js` — `parse`, `diff`, `validate`, `template`. In-process data utilities: they perform no filesystem, database, network, or shell access. This is a description of their current dependencies, not a sandbox guarantee — `validate` compiles caller-supplied JSON Schema through Ajv and `template` compiles caller-supplied Handlebars templates, so their input is still untrusted code-shaped data.
+
+Each family owns its handlers, Zod schemas, risk, category, and compatibility metadata. Legacy `TOOL_DEFS` rows remain only as ordering anchors while MCP ordering compatibility is preserved. When an extracted tool has an entry in `src/tools/schemas/index.js`, remove it so each schema has exactly one owner.
+
+`hash` is intentionally still legacy-owned despite sharing the `Data Pipeline` category: it calls `enforcePathPolicy`, a `src/tools-legacy.js` internal security boundary shared with roughly twenty other handlers. Relocating that boundary is its own slice.
 
 ## Registry Lifecycle
 
@@ -145,16 +152,19 @@ For new descriptor-owned tools:
 
 1. Add the handler and descriptors in a focused family module under `src/tools/families/`.
 2. Include schema, args metadata, explicit risk, category, source, and family.
-3. Add the family descriptors to `src/tools/registry.js`.
+3. Register the family module in `src/tools/families/index.js`; `src/tools/registry.js` consumes that aggregate.
 4. Remove the live legacy handler when safe.
 5. Keep any needed legacy definition row only as a temporary ordering anchor.
-6. Add dispatcher-level tests for success, validation failure, policy denial, approval behavior when relevant, logging, and compatibility exports.
+6. Check for code that tests tool existence against the legacy `TOOLS` handler map. Such a check silently stops recognizing an extracted tool. Resolve built-in names from `TOOL_DEFS` or the registry instead — `sidekick_batch` did exactly this and lost access to every extracted tool until it was corrected.
+7. Add dispatcher-level tests for success, validation failure, policy denial, approval behavior when relevant, logging, and compatibility exports.
 
 Handlers should not implement their own policy or approval logic. Handlers that need nested tools should use an injected or imported dispatcher call path, not raw handler maps.
 
 ## Remaining Legacy Work
 
-Most handlers still live in `src/tools-legacy.js`. Remaining migration should proceed by coherent families, such as read-only data utilities, memory tools, or database inspection tools. Avoid migrating destructive infrastructure tools until their security behavior is fully characterized.
+Most handlers still live in `src/tools-legacy.js`. Remaining migration should proceed by coherent families, such as read-only database inspection tools, memory tools, or the GitHub tools. Avoid migrating destructive infrastructure tools until their security behavior is fully characterized.
+
+A family whose handlers depend on `src/tools-legacy.js` internals — `enforcePathPolicy`, `safeExecFileSync`, `isDangerous`, `jsonText` — needs those helpers relocated to a shared module first. That relocation should be its own slice, not a side effect of a family extraction. Family modules must not require `src/tools-legacy.js` at module top level; the lazy `require` of the dispatcher inside legacy functions is what keeps the dispatcher/legacy cycle from forming.
 
 The compatibility layer remains to preserve external clients, existing generated/evolved tools, dashboard catalogs, approval workflows, and tool logs during gradual extraction.
 
