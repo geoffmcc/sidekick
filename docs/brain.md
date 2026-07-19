@@ -74,9 +74,14 @@ The planner produces a strict JSON plan:
 
 `validatePlan` runs **before any step executes** and rejects the whole plan on
 any failure. A model never validates its own plan — the validator is a separate
-pure function with no model call. It rejects:
+pure function with no model call. Benign unknown plan/step fields (`thoughts`,
+`status`, …) — which small local models routinely emit despite schema-only
+prompting — are **stripped and reported** (`stripped` in the result and in the
+`brain.plan_validated` event) rather than fatal; the validated plan is rebuilt
+exclusively from whitelisted fields, so a stripped key can never reach
+execution. Everything else rejects:
 
-- non-object plans; unknown plan or step fields (strict allowlist)
+- non-object plans
 - prototype-pollution-shaped keys (`__proto__`, `constructor`, `prototype`)
   anywhere in the plan, a step, or step arguments
 - **model-asserted authority fields** — `risk`, `approved`/`approval`,
@@ -94,6 +99,13 @@ pure function with no model call. It rejects:
 
 Legacy `sidekick_`-prefixed tool names in a plan resolve to their canonical
 catalog entry, exactly as the Agent Bridge loop does.
+
+A rejected plan gets bounded correction: the validator's error strings are fed
+back to the planner for up to `MAX_PLANNING_ATTEMPTS` total attempts. Error
+strings may embed short model-chosen fragments (a bad tool or type name), but
+these are sanitized and length-capped at the source (`frag()`), and the
+corrected plan is fully revalidated — the validator, never the model, decides
+acceptance on every attempt; past the bound the task fails closed.
 
 ## Tool execution and the dispatcher boundary
 
@@ -155,7 +167,9 @@ bypasses an approval-gated step and never asks the model to avoid approval.
 ## Observability
 
 The transcript carries an additive `brain` field
-(`{ enabled, state, evidence_count, awaiting_approval }`) and Brain emits
+(`{ enabled, state, evidence_count, awaiting_approval, error }` — `error` is
+the sanitized terminal failure reason, `null` on success, so a failed Brain
+task is diagnosable post-hoc without having watched the live stream) and Brain emits
 platform events (`brain.enabled`, `brain.state`, `brain.plan_validated`,
 `brain.step_started`/`brain.step_completed`, `brain.waiting_for_approval`,
 `brain.evidence_missing`). Plan internals and chain-of-thought are not exposed —

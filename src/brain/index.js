@@ -38,7 +38,8 @@ function buildPlannerSystemPrompt(agentTools) {
     "3. For questions about current or local system state, include a tool step that gathers real evidence.\n" +
     "4. Do NOT include risk, approval, trust, verified, or provenance fields — you cannot grant authority.\n" +
     "5. Do NOT use __proto__, constructor, or prototype as keys.\n" +
-    "6. Output raw JSON only. No markdown, no commentary.\n\n" +
+    "6. Output raw JSON only. No markdown, no commentary.\n" +
+    "7. Output ONLY the schema fields shown above. No extra fields of any kind — no thoughts, status, notes, or explanations inside the JSON.\n\n" +
     "Allowed step types: " + ALLOWED_STEP_TYPES.join(", ") + "\n\n" +
     "Available tools:\n" + toolList;
 }
@@ -83,11 +84,19 @@ function makeBrainRunner(deps) {
   const { callLLM, agentTools, callTool, recallMemory = null, redact = (t) => t } = deps;
   const plannerSystem = buildPlannerSystemPrompt(agentTools);
 
-  const plan = async ({ goal, memoryContext }) => {
+  const plan = async ({ goal, memoryContext, priorErrors }) => {
     const messages = [];
     const memBlock = formatMemoryForPrompt(memoryContext, redact);
     if (memBlock) messages.push({ role: "user", content: memBlock });
     messages.push({ role: "user", content: "New request (this is the task to plan for):\n" + String(goal || "").slice(0, BRAIN_LIMITS.MAX_GOAL_CHARS) });
+    if (Array.isArray(priorErrors) && priorErrors.length) {
+      // Correction round. Validator error strings may embed short model-chosen
+      // fragments (tool/type names), sanitized and length-capped by frag() in
+      // the validator — never free text. The corrected plan is fully
+      // revalidated, so echoed content cannot smuggle anything past the
+      // validator regardless.
+      messages.push({ role: "user", content: "Your previous plan was REJECTED by the validator with these errors:\n" + priorErrors.slice(0, 8).map(e => "- " + e).join("\n") + "\nEmit the corrected plan as raw JSON in EXACTLY the schema from the instructions. Fix every error. No other changes, no extra fields." });
+    }
     const res = await callLLM(messages, { systemPrompt: plannerSystem, format: "json", temperature: 0.2, maxTokens: BRAIN_LIMITS.MAX_GENERATED_TOKENS });
     const parsed = extractJson(res.response);
     if (!parsed) throw new Error("planner produced no parseable plan");

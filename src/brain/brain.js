@@ -121,19 +121,34 @@ async function runBrainTask(opts) {
   if (cancelled()) return terminal("cancelled");
   if (outOfTime()) return terminal("timed_out", { error: "planning deadline exceeded" });
 
-  let candidate;
-  try {
-    candidate = await planFn({ goal, classification, memoryContext });
-  } catch (e) {
-    return terminal("failed", { error: "planning error: " + redact(String(e && e.message || e)) });
-  }
+  // Bounded planning attempts: a rejected plan gets ONE deterministic
+  // correction round with the validator's errors fed back verbatim. The
+  // validator (never the model) decides acceptance on every attempt.
+  let validation = null;
+  let priorErrors = null;
+  for (let attempt = 1; attempt <= BRAIN_LIMITS.MAX_PLANNING_ATTEMPTS; attempt++) {
+    if (cancelled()) return terminal("cancelled");
+    if (outOfTime()) return terminal("timed_out", { error: "planning deadline exceeded" });
+    let candidate;
+    try {
+      candidate = await planFn({ goal, classification, memoryContext, priorErrors });
+    } catch (e) {
+      return terminal("failed", { error: "planning error: " + redact(String(e && e.message || e)) });
+    }
 
-  // ---- validate (deterministic; a model never validates its own plan) ------
-  setState("validating");
-  const validation = validatePlan(candidate, { agentTools });
-  onEvent("brain.plan_validated", { ok: validation.ok, errors: validation.errors.slice(0, 8), step_count: validation.plan ? validation.plan.steps.length : 0 });
-  if (!validation.ok) {
-    return terminal("failed", { error: "plan rejected: " + validation.errors.slice(0, 4).join("; "), extra: { plan_errors: validation.errors } });
+    // ---- validate (deterministic; a model never validates its own plan) ----
+    setState("validating");
+    validation = validatePlan(candidate, { agentTools });
+    onEvent("brain.plan_validated", { attempt, ok: validation.ok, errors: validation.errors.slice(0, 8), stripped: (validation.stripped || []).slice(0, 8), step_count: validation.plan ? validation.plan.steps.length : 0 });
+    if (validation.ok) break;
+    priorErrors = validation.errors;
+    setState("planning");
+  }
+  if (!validation || !validation.ok) {
+    const errs = validation ? validation.errors : [];
+    // Validator errors are sanitized at the source (frag()), but redact here
+    // too: this string lands in the persisted transcript.
+    return terminal("failed", { error: redact("plan rejected: " + errs.slice(0, 4).join("; ")), extra: { plan_errors: errs } });
   }
   const validated = validation.plan;
   emit({ type: "brain_plan", goal: validated.goal, steps: validated.steps.map(s => ({ id: s.id, type: s.type, tool: s.tool || null, purpose: s.purpose || null })) });
