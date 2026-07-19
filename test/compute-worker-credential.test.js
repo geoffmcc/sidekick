@@ -84,6 +84,56 @@ test('applyWindowsAcl is best-effort (returns false without throwing off-Windows
   assert.strictEqual(cred.applyWindowsAcl(p), false);
 });
 
+// --- remove / park / restore / discard (re-enrollment support) ---
+
+test('remove deletes the credential and reports whether one was there', () => {
+  const p = freshPath();
+  cred.save(record, p);
+  assert.strictEqual(cred.remove(p), true, 'reports the removal');
+  assert.strictEqual(fs.existsSync(p), false, 'file is gone');
+  assert.strictEqual(cred.load(p), null, 'no longer loadable');
+  assert.strictEqual(cred.remove(p), false, 'absent file is not an error');
+});
+
+test('park moves the credential aside so load no longer sees it', () => {
+  const p = freshPath();
+  cred.save(record, p);
+  const parked = cred.park(p);
+  assert.ok(parked && parked !== p, 'returns a distinct parked path');
+  assert.strictEqual(fs.existsSync(p), false, 'original path is clear for re-enrollment');
+  assert.strictEqual(cred.load(p), null);
+  assert.ok(fs.existsSync(parked), 'parked copy is retained');
+});
+
+test('park returns null when there is nothing to park', () => {
+  assert.strictEqual(cred.park(path.join(TMP, 'nothing-here.json')), null);
+});
+
+test('restore puts a parked credential back intact', () => {
+  const p = freshPath();
+  cred.save(record, p);
+  const parked = cred.park(p);
+  assert.strictEqual(cred.restore(parked, p), true);
+  const loaded = cred.load(p);
+  assert.ok(loaded, 'credential is loadable again');
+  assert.strictEqual(loaded.credential, record.credential, 'secret survived the round trip');
+  assert.strictEqual(fs.existsSync(parked), false, 'parked copy no longer lingers');
+});
+
+test('restore and discard are no-ops for a null parked path', () => {
+  assert.strictEqual(cred.restore(null, freshPath()), false);
+  assert.strictEqual(cred.discard(null), false);
+});
+
+test('discard deletes the parked credential so the secret does not linger', () => {
+  const p = freshPath();
+  cred.save(record, p);
+  const parked = cred.park(p);
+  assert.strictEqual(cred.discard(parked), true);
+  assert.strictEqual(fs.existsSync(parked), false);
+  assert.strictEqual(cred.discard(parked), false, 'second discard is not an error');
+});
+
 fs.rmSync(TMP, { recursive: true, force: true });
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

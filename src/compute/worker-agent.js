@@ -27,7 +27,9 @@ async function getOpenVinoExecutor() {
 
 const _cli = workerCli.parseArgv(process.argv.slice(2));
 if (_cli.help) { console.log(workerCli.HELP); process.exit(0); }
-if (_cli.error) { console.error(_cli.error); process.exit(2); }
+// redact() is a hoisted function declaration defined below; the error text can
+// echo a mistyped argument such as `--token=enroll_...`, so it must not go out raw.
+if (_cli.error) { console.error(redact(_cli.error)); process.exit(2); }
 // Apply CLI flags to env BEFORE the config consts below read env (CLI wins).
 for (const [k, v] of Object.entries(_cli.env)) process.env[k] = v;
 // Fill any remaining settings from the config file (CLI/env already in env win).
@@ -728,8 +730,62 @@ async function runRotate() {
   console.log("Credential rotated.");
 }
 
+// True if the loaded credential is still accepted by the server. Bounded so an
+// unreachable server cannot wedge enrollment; throws (rather than returning
+// false) on anything that is not a definitive rejection, so a network blip is
+// never mistaken for a revocation.
+//
+// The body is deliberately empty: heartbeat only writes the fields it is given,
+// so omitting currentJobs stops this probe from zeroing the job count of a
+// worker that is already running and busy on this machine.
+//
+// Only 401 counts as revoked. The worker API returns 401 for every auth
+// failure, so a 403 here comes from something in front of the server (proxy,
+// WAF, captive portal) and must not be allowed to destroy a valid credential.
+async function credentialAccepted() {
+  const res = await httpRequest("POST", "/compute/worker/heartbeat", {}, credentialHeaders(), { timeoutMs: 10000 });
+  if (res.status === 200) return true;
+  if (res.status === 401) return false;
+  throw new Error(`unexpected HTTP ${res.status}`);
+}
+
 async function runEnroll(service) {
-  await enrollIfNeeded();
+  let parked = null;
+  // An explicit token means the operator intends this machine to be enrolled
+  // now. Silently keeping an existing credential hides the common failure: a
+  // credential left over from a revoked or deleted worker, which the server
+  // rejects and the worker treats as a terminal stop — exiting 0 forever while
+  // the fresh token goes unused. Verify before trusting what is on disk.
+  if (ENROLLMENT_TOKEN && loadCredential()) {
+    let accepted;
+    try {
+      accepted = await credentialAccepted();
+    } catch (e) {
+      throw new Error(`Cannot verify the existing credential for ${workerId} (${e.message}). Refusing to discard it — re-run enroll once ${SERVER_URL} is reachable.`);
+    }
+    if (accepted) {
+      console.log(`Already enrolled as ${workerId}; existing credential verified. Enrollment token was not used.`);
+      // Re-apply the ACL: an earlier install may have written a user-only ACL
+      // that the LocalSystem service cannot read.
+      if (process.platform === "win32" && !workerCredential.applyWindowsAcl(CONFIG_PATH)) {
+        throw new Error(`Could not secure ${CONFIG_PATH}. The service may be unable to read it; check the file's ACL before starting the service.`);
+      }
+      return;
+    }
+    log(`Existing credential for ${workerId} was rejected by the server (revoked or invalid); re-enrolling with the supplied token.`);
+    // Park rather than delete: if the exchange below fails (expired token, rate
+    // limit, 5xx) the machine would otherwise be left with no credential at all.
+    parked = workerCredential.park(CONFIG_PATH);
+    workerId = null;
+    credential = null;
+  }
+  try {
+    await enrollIfNeeded();
+  } catch (e) {
+    workerCredential.restore(parked, CONFIG_PATH);
+    throw e;
+  }
+  workerCredential.discard(parked);
   console.log(service
     ? "Enrollment complete (service mode); credential written, claim loop not started."
     : "Enrollment complete; credential written.");
