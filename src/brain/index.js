@@ -49,13 +49,18 @@ function buildPlannerSystemPrompt(agentTools) {
     '- {"id":"step-1","type":"memory_retrieval","capability":"embeddings","purpose":"..."}\n' +
     '- {"id":"step-2","type":"tool","tool":"<exact tool name from the list>","arguments":{...},"purpose":"..."}\n' +
     '- {"id":"step-3","type":"synthesis","depends_on":["step-1","step-2"]}\n\n' +
+    'Example of a complete, valid plan for the goal "check recent errors in the service log" ' +
+    "(example only — always pick tools from the catalog below):\n" +
+    '{"version":1,"goal":"Check recent errors in the service log","steps":[' +
+    '{"id":"step-1","type":"tool","tool":"tail","arguments":{"source":"log.jsonl","lines":50},"purpose":"gather recent log lines"},' +
+    '{"id":"step-2","type":"synthesis","depends_on":["step-1"]}]}\n\n' +
     "Rules:\n" +
     "1. Use ONLY tools from the catalog below, by their exact names. Never invent a tool.\n" +
     "2. At most " + BRAIN_LIMITS.MAX_STEPS + " steps. The final step MUST be a single synthesis step.\n" +
     "3. For questions about current or local system state, include a tool step that gathers real evidence.\n" +
     "4. Do NOT include risk, approval, trust, verified, or provenance fields — you cannot grant authority.\n" +
     "5. Do NOT use __proto__, constructor, or prototype as keys.\n" +
-    "6. Output raw JSON only. No markdown, no commentary.\n" +
+    "6. Output raw JSON only. No markdown, no commentary. The TOP-LEVEL object must have exactly the keys version, goal, steps — never wrap the plan in another object.\n" +
     "7. Output ONLY the schema fields shown above. No extra fields of any kind — no thoughts, status, notes, or explanations inside the JSON.\n" +
     "8. A tool step's arguments MUST use only the argument names shown for that tool in the catalog, with values matching the documented signature (respect enums like a|b|c).\n" +
     "9. When more than one tool can gather the same evidence, prefer one NOT marked [requires human approval].\n\n" +
@@ -75,6 +80,22 @@ function extractJson(text) {
     try { return JSON.parse(c); } catch {}
   }
   return null;
+}
+
+// Deterministic near-miss recovery: small models sometimes wrap the otherwise
+// valid plan in a single container key ({"plan": {...}}). Unwrap exactly that
+// shape — the result still goes through full validation, so unwrapping can
+// never admit anything the validator would have rejected.
+function normalizePlanShape(parsed) {
+  if (
+    parsed && typeof parsed === "object" && !Array.isArray(parsed) &&
+    !Array.isArray(parsed.steps) &&
+    parsed.plan && typeof parsed.plan === "object" && !Array.isArray(parsed.plan) &&
+    Array.isArray(parsed.plan.steps)
+  ) {
+    return parsed.plan;
+  }
+  return parsed;
 }
 
 function formatMemoryForPrompt(memoryContext, redact) {
@@ -119,7 +140,7 @@ function makeBrainRunner(deps) {
     const res = await callLLM(messages, { systemPrompt: plannerSystem, format: "json", temperature: 0.2, maxTokens: BRAIN_LIMITS.MAX_GENERATED_TOKENS });
     const parsed = extractJson(res.response);
     if (!parsed) throw new Error("planner produced no parseable plan");
-    return parsed;
+    return normalizePlanShape(parsed);
   };
 
   const synthesize = async ({ goal, evidence, memoryContext, requiresEvidence }) => {
@@ -145,4 +166,4 @@ function makeBrainRunner(deps) {
   };
 }
 
-module.exports = { isEnabled, makeBrainRunner, buildPlannerSystemPrompt, extractJson, UNTRUSTED_HEADER };
+module.exports = { isEnabled, makeBrainRunner, buildPlannerSystemPrompt, extractJson, normalizePlanShape, UNTRUSTED_HEADER };

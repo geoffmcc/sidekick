@@ -9,7 +9,7 @@ const assert = require("assert");
 const { validatePlan } = require("../src/brain/plan-validator");
 const { runBrainTask } = require("../src/brain/brain");
 const { BRAIN_LIMITS } = require("../src/brain/config");
-const { extractJson, buildPlannerSystemPrompt } = require("../src/brain/index");
+const { extractJson, buildPlannerSystemPrompt, normalizePlanShape } = require("../src/brain/index");
 
 console.log("Running Brain v0.1 tests...\n");
 
@@ -256,6 +256,28 @@ test("planner prompt carries tool descriptions, argument signatures, and approva
   assert.ok(!prompt.includes("noargs [requires human approval]"), "unmarked tools stay unmarked");
   assert.ok(!prompt.includes("d".repeat(200)), "long descriptions are capped");
   assert.ok(prompt.includes("prefer one NOT marked"), "prefer-ungated rule present");
+});
+
+test("planner prompt includes a concrete example plan and the no-wrap rule", () => {
+  const prompt = buildPlannerSystemPrompt([{ name: "health" }]);
+  assert.ok(prompt.includes('"version":1,"goal":"Check recent errors'), "concrete example plan present");
+  assert.ok(prompt.includes("example only"), "example marked as illustrative");
+  assert.ok(prompt.includes("never wrap the plan in another object"), "no-wrap rule present");
+});
+
+test("normalizePlanShape unwraps a single plan container, nothing else", () => {
+  const inner = { version: 1, goal: "g", steps: [{ id: "a", type: "synthesis" }] };
+  // The one near-miss shape observed live: the valid plan under a "plan" key.
+  assert.deepStrictEqual(normalizePlanShape({ plan: inner }), inner);
+  // A well-formed plan passes through untouched.
+  assert.deepStrictEqual(normalizePlanShape(inner), inner);
+  // Top-level steps win: never unwrap when the outer object is already a plan.
+  const outer = { version: 1, goal: "g", steps: [], plan: inner };
+  assert.deepStrictEqual(normalizePlanShape(outer), outer);
+  // Non-plan wrappers are left alone (and will fail validation honestly).
+  assert.deepStrictEqual(normalizePlanShape({ plan: "not an object" }), { plan: "not an object" });
+  assert.deepStrictEqual(normalizePlanShape({ plan: { nosteps: true } }), { plan: { nosteps: true } });
+  assert.strictEqual(normalizePlanShape(null), null);
 });
 
 test("planner prompt tolerates missing/odd tool metadata", () => {
