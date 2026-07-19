@@ -99,8 +99,12 @@ const TOOL_RISK = {
   knowledge: "low",
   compute: "medium",
   compute_nodes: "medium",
-  compute_providers: "medium",
-  compute_models: "low",
+  // create/update select the endpoint inference traffic is sent to and set the
+  // trust_level / data_classifications that placement gates on. These were
+  // rated when both actions were inert (a parameter-mapping fault meant they
+  // could never succeed); now that they work, the rating has to match.
+  compute_providers: "high",
+  compute_models: "medium",
   compute_jobs: "medium",
   compute_route: "medium",
   delete: "low",
