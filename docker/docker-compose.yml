@@ -100,6 +100,13 @@ services:
       GF_AUTH_PROXY_HEADER_NAME: "X-WEBAUTH-USER"
       GF_AUTH_PROXY_HEADER_PROPERTY: "username"
       GF_AUTH_PROXY_AUTO_SIGN_UP: "true"
+      # Grafana interpolates ${VAR} in provisioning files from its OWN process
+      # environment, so the InfluxDB datasource token in
+      # grafana/provisioning/datasources/influxdb.yml only resolves if the
+      # variable is passed into THIS container. Compose's --env-file drives
+      # compose-level substitution, not the container environment. Fail closed
+      # (:?) rather than silently provisioning an empty token again.
+      SIDEKICK_INFLUX_TOKEN: ${SIDEKICK_INFLUX_TOKEN:?set SIDEKICK_INFLUX_TOKEN}
     ports:
       - "0.0.0.0:3000:3000"
     volumes:
