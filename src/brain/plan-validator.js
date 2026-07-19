@@ -39,14 +39,106 @@ function hasForbiddenKeyDeep(value, depth = 0) {
   return false;
 }
 
-function hasAuthorityKeyDeep(value, depth = 0) {
+// A few authority key names are also legitimate parameter names on specific
+// tools. `source` is the live collision: tail/log_query take it as a read
+// filter, and rejecting it made every log-scanning plan unrunnable — the
+// planner prompt example itself teaches arguments:{source:...}.
+//
+// The exemption is per-tool and top-level-only, NOT a blanket "skip anything
+// named arguments", because the same word means very different things.
+//
+// Exempt, and why each is safe:
+//   log_query  — a filter over recorded sources (mcp/agent/dashboard).
+//   tools      — selects which sources' policy decisions to REPORT; the catalog
+//                itself is scoped by getCurrentSource(), not by this argument.
+//   mission    — forwarded only into log_query.source / tools.source, both above.
+//   tail       — a FILE PATH, not a filter. Safe because enforcePathPolicy()
+//                gates it and output is redacted, not because of its semantics.
+//
+// Deliberately NOT exempt, because for these `source` is an authority or
+// execution input — exactly what this check exists to refuse:
+//   memory     — source:"correction" sets source_authority 10, the maximum in
+//                the system. A model could self-assert top authority and have
+//                it recalled into later planning.
+//   handoff    — overrides the recorded origin of the handoff.
+//   session    — same override on action=begin, persisted and emitted in the
+//                session_started event. Audit-provenance rather than privilege,
+//                but there is no principled reason to treat it unlike handoff.
+//   baseline   — source:"command" is a MODE SELECTOR that reaches execSync.
+//                baseline is high risk while bash is critical, so a deployment
+//                gating bash would not gate this.
+//   watch      — mode selector choosing service|process|endpoint|file.
+//
+// trust_level is NEVER exempt anywhere: it is a real parameter on
+// compute_providers/compute_nodes/compute_route, and permitting it would let a
+// plan promote a provider to receive private-classified traffic.
+const TOOL_ARGUMENT_AUTHORITY_EXEMPTIONS = new Map([
+  ["tail", new Set(["source"])],
+  ["log_query", new Set(["source"])],
+  ["mission", new Set(["source"])],
+  ["tools", new Set(["source"])],
+]);
+const NO_EXEMPTIONS = new Set();
+
+function hasAuthorityKeyDeep(value, depth = 0, skip = null) {
   if (depth > 8) return true; // fail closed, matching hasForbiddenKeyDeep
-  if (Array.isArray(value)) return value.some(v => hasAuthorityKeyDeep(v, depth + 1));
+  // Subtrees in `skip` are the arguments of well-formed tool steps; they are
+  // re-scanned separately against that tool's own exemption set.
+  if (skip && skip.has(value)) return false;
+  if (Array.isArray(value)) return value.some(v => hasAuthorityKeyDeep(v, depth + 1, skip));
   if (value && typeof value === "object") {
     for (const key of Object.keys(value)) {
       if (FORBIDDEN_AUTHORITY_KEYS.has(key)) return true;
-      if (hasAuthorityKeyDeep(value[key], depth + 1)) return true;
+      if (hasAuthorityKeyDeep(value[key], depth + 1, skip)) return true;
     }
+  }
+  return false;
+}
+
+// Exemptions apply only to a tool step's OWN argument keys. Nested values are
+// scanned with no exemption at all, so a claim cannot be buried one level down.
+//
+// The nested scan restarts its depth counter at 1 rather than carrying the true
+// root depth. That is safe only because hasForbiddenKeyDeep runs FIRST from the
+// plan root and rejects anything past depth 8 outright, so a subtree deep enough
+// to exploit the smaller counter never reaches here. If that guard is ever
+// loosened, pass the true depth in instead.
+function argumentsAssertAuthority(args, exempt) {
+  for (const key of Object.keys(args)) {
+    if (FORBIDDEN_AUTHORITY_KEYS.has(key) && !exempt.has(key)) return true;
+    if (hasAuthorityKeyDeep(args[key], 1, null)) return true;
+  }
+  return false;
+}
+
+// Whole-plan authority check. The exemption is anchored to structural position
+// — steps[i].arguments of a step whose type is "tool" — rather than to any key
+// literally named "arguments", which could otherwise appear anywhere in the
+// tree and carry the exemption with it.
+function planAssertsAuthority(candidate) {
+  const toolArguments = [];
+  const skip = new Set();
+  if (candidate && typeof candidate === "object" && Array.isArray(candidate.steps)) {
+    for (const step of candidate.steps) {
+      if (!step || typeof step !== "object" || Array.isArray(step)) continue;
+      if (step.type !== "tool") continue;
+      // Mirror the strict string check the step loop applies to `tool`. Without
+      // it, canonicalToolName's String() coercion would hand an exempt tool's
+      // key set to `tool: ["tail"]`. That is rejected later either way, but the
+      // two sites must not be able to drift apart.
+      if (typeof step.tool !== "string") continue;
+      const args = step.arguments;
+      if (!args || typeof args !== "object" || Array.isArray(args)) continue;
+      // Note: `skip` matches by object identity anywhere in the tree, not only
+      // at the anchored position. Every member is unconditionally re-scanned
+      // below, so an aliased reference is never silently exempted.
+      skip.add(args);
+      toolArguments.push([canonicalToolName(step.tool), args]);
+    }
+  }
+  if (hasAuthorityKeyDeep(candidate, 0, skip)) return true;
+  for (const [tool, args] of toolArguments) {
+    if (argumentsAssertAuthority(args, TOOL_ARGUMENT_AUTHORITY_EXEMPTIONS.get(tool) || NO_EXEMPTIONS)) return true;
   }
   return false;
 }
@@ -80,7 +172,7 @@ function validatePlan(candidate, { agentTools = [] } = {}) {
   // Reject prototype-pollution and self-authorization shapes before any
   // structural interpretation.
   if (hasForbiddenKeyDeep(candidate)) return fail("forbidden_key");
-  if (hasAuthorityKeyDeep(candidate)) return fail("authority_key_not_permitted");
+  if (planAssertsAuthority(candidate)) return fail("authority_key_not_permitted");
 
   // Benign unknown fields ("thoughts", "status", …) are stripped, not fatal:
   // small local models routinely add them despite schema-only prompting, and

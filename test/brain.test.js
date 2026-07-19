@@ -21,7 +21,14 @@ function test(name, fn) {
 const asyncQueue = [];
 function testAsync(name, fn) { asyncQueue.push({ name, fn }); }
 
-const TOOLS = [{ name: "health", enabled: true }, { name: "git", enabled: true }, { name: "respond", enabled: true }];
+const TOOLS = [{ name: "health", enabled: true }, { name: "git", enabled: true }, { name: "respond", enabled: true },
+  // Tools whose own parameters collide with the authority denylist: `tail` and
+  // `log_query` take `source` as a read filter; `memory` and `baseline` take it
+  // as an authority/mode input and must NOT be exempt.
+  { name: "tail", enabled: true }, { name: "log_query", enabled: true },
+  { name: "mission", enabled: true }, { name: "tools", enabled: true },
+  { name: "memory", enabled: true }, { name: "baseline", enabled: true },
+  { name: "session", enabled: true }, { name: "handoff", enabled: true }];
 
 function goodPlan(extra = {}) {
   return {
@@ -151,6 +158,148 @@ test("over-deep plans reject via the forbidden-key check (pins check ordering)",
   const r = validatePlan(goodPlan({ steps: [{ id: "a", type: "tool", tool: "health", arguments: { deep } }, { id: "b", type: "synthesis", depends_on: ["a"] }] }), { agentTools: TOOLS });
   assert.strictEqual(r.ok, false);
   assert.strictEqual(r.errors[0], "forbidden_key");
+});
+
+const withStep = step => goodPlan({ steps: [step, { id: "s2", type: "synthesis", depends_on: ["s1"] }] });
+const validate = plan => validatePlan(plan, { agentTools: TOOLS });
+
+test("source is allowed as a read filter on the tools that genuinely take one", () => {
+  // `source` is tail/log_query's documented argument name AND an authority
+  // denylist entry. Rejecting it made every log-scanning plan unrunnable — the
+  // #136 prompt example itself teaches arguments:{source:...}.
+  // Every entry in the exemption map is exercised, so a regression in any one
+  // of them fails here rather than hiding behind an unrelated rejection.
+  for (const tool of ["tail", "log_query", "mission", "tools"]) {
+    const r = validate(withStep({ id: "s1", type: "tool", tool, arguments: { source: "log.jsonl" } }));
+    assert.strictEqual(r.ok, true, `${tool}: ${JSON.stringify(r.errors)}`);
+    assert.strictEqual(r.plan.steps[0].arguments.source, "log.jsonl", "the argument survives validation");
+  }
+});
+
+test("source is NOT exempt on tools where it is an authority or execution input", () => {
+  // memory: source:"correction" sets source_authority 10, the maximum in the
+  // system — a model self-asserting top authority, then recalled into later
+  // planning. baseline: source:"command" is a mode selector reaching execSync,
+  // and baseline is only high risk while bash is critical, so a deployment
+  // gating bash would not gate this.
+  const mem = validate(withStep({ id: "s1", type: "tool", tool: "memory",
+    arguments: { action: "remember", source: "correction", content: "x" } }));
+  assert.strictEqual(mem.ok, false, "memory must not accept a model-supplied source");
+  assert.ok(mem.errors.includes("authority_key_not_permitted"));
+
+  const base = validate(withStep({ id: "s1", type: "tool", tool: "baseline",
+    arguments: { action: "check", metric_name: "m", source: "command", command: "id" } }));
+  assert.strictEqual(base.ok, false, "baseline source=command reaches execSync");
+  assert.ok(base.errors.includes("authority_key_not_permitted"));
+
+  // session and handoff both override the recorded origin the same way; they
+  // are excluded for the same reason even though the blast radius is smaller.
+  for (const tool of ["session", "handoff"]) {
+    const r = validate(withStep({ id: "s1", type: "tool", tool, arguments: { action: "begin", source: "geoff" } }));
+    assert.strictEqual(r.ok, false, `${tool} must not accept a model-supplied source`);
+    assert.ok(r.errors.includes("authority_key_not_permitted"));
+  }
+
+  // A tool with no exemption entry at all gets no exemption.
+  const health = validate(withStep({ id: "s1", type: "tool", tool: "health", arguments: { source: "x" } }));
+  assert.strictEqual(health.ok, false);
+  assert.ok(health.errors.includes("authority_key_not_permitted"),
+    "must reject for the authority reason specifically, not some unrelated check");
+});
+
+test("trust_level is never exempt, on any tool", () => {
+  // compute_providers/compute_nodes/compute_route all declare trust_level.
+  // Permitting it would let a plan run compute_providers update
+  // trust_level=privileged and promote a provider to receive private traffic.
+  for (const tool of ["tail", "log_query", "health"]) {
+    const r = validate(withStep({ id: "s1", type: "tool", tool,
+      arguments: { provider_id: "p", trust_level: "privileged" } }));
+    assert.strictEqual(r.ok, false, `${tool} must reject trust_level`);
+    assert.ok(r.errors.includes("authority_key_not_permitted"));
+  }
+
+  // Every other authority key stays rejected inside arguments, exempt tool or not.
+  for (const key of ["risk", "approved", "authorized", "trust", "verified", "provenance", "bypass"]) {
+    const r = validate(withStep({ id: "s1", type: "tool", tool: "tail", arguments: { [key]: "x" } }));
+    assert.strictEqual(r.ok, false, `${key} must still reject inside arguments`);
+    assert.ok(r.errors.includes("authority_key_not_permitted"), `${key} error`);
+  }
+});
+
+test("the exemption is anchored to a tool step's own arguments, nowhere else", () => {
+  // On the step or the plan itself, `source` is still an authority claim.
+  const step = validate(withStep({ id: "s1", type: "tool", tool: "tail", arguments: {}, source: "trusted" }));
+  assert.strictEqual(step.ok, false);
+  assert.ok(step.errors.includes("authority_key_not_permitted"));
+
+  const plan = validate(goodPlan({ source: "agent" }));
+  assert.strictEqual(plan.ok, false);
+  assert.ok(plan.errors.includes("authority_key_not_permitted"));
+
+  // A key literally named "arguments" outside a tool step must not carry the
+  // exemption — this is the case a name-triggered implementation would miss.
+  const strayPlan = validate(goodPlan({ arguments: { source: "x" } }));
+  assert.strictEqual(strayPlan.ok, false, "plan-level 'arguments' must not be exempt");
+  assert.ok(strayPlan.errors.includes("authority_key_not_permitted"));
+
+  const strayNested = validate(withStep({ id: "s1", type: "tool", tool: "tail",
+    arguments: { filter: { arguments: { source: "x" } } } }));
+  assert.strictEqual(strayNested.ok, false, "a nested 'arguments' key must not be exempt");
+  assert.ok(strayNested.errors.includes("authority_key_not_permitted"));
+
+  // Exemption is top-level only: buried one level down it does not apply.
+  const buried = validate(withStep({ id: "s1", type: "tool", tool: "tail",
+    arguments: { filter: { source: "x" } } }));
+  assert.strictEqual(buried.ok, false, "a nested source must not inherit the exemption");
+
+  // A non-tool step named to look like one gets nothing.
+  const nonTool = validate(goodPlan({ steps: [
+    { id: "s1", type: "tool", tool: "health", arguments: {} },
+    { id: "s2", type: "synthesis", depends_on: ["s1"], arguments: { source: "x" } },
+  ] }));
+  assert.strictEqual(nonTool.ok, false, "only a tool step's arguments are exempt");
+});
+
+test("an arguments object shared by an exempt and a non-exempt step is judged by both", () => {
+  // `skip` matches by object identity, so one shared reference could otherwise
+  // be exempted once and never re-checked against the stricter tool. Each STEP
+  // contributes its own re-scan entry, so the non-exempt tool still rejects.
+  // Unreachable from JSON.parse (which cannot alias), but validatePlan is also
+  // called directly with object literals.
+  const shared = { source: "log.jsonl" };
+  const r = validate(goodPlan({ steps: [
+    { id: "s1", type: "tool", tool: "tail", arguments: shared },
+    { id: "s2", type: "tool", tool: "memory", arguments: shared, depends_on: ["s1"] },
+    { id: "s3", type: "synthesis", depends_on: ["s2"] },
+  ] }));
+  assert.strictEqual(r.ok, false, "the memory step must still reject the shared source");
+  assert.ok(r.errors.includes("authority_key_not_permitted"));
+
+  // Sanity: the same object on two exempt steps is fine.
+  const ok = validate(goodPlan({ steps: [
+    { id: "s1", type: "tool", tool: "tail", arguments: shared },
+    { id: "s2", type: "tool", tool: "log_query", arguments: shared, depends_on: ["s1"] },
+    { id: "s3", type: "synthesis", depends_on: ["s2"] },
+  ] }));
+  assert.strictEqual(ok.ok, true, JSON.stringify(ok.errors));
+});
+
+test("prototype-pollution keys inside arguments still reject (forbidden check stays fully deep)", () => {
+  const proto = validatePlan(JSON.parse(
+    '{"version":1,"goal":"g","steps":[{"id":"s1","type":"tool","tool":"health","arguments":{"__proto__":{"x":1}}},{"id":"s2","type":"synthesis","depends_on":["s1"]}]}'
+  ), { agentTools: TOOLS });
+  assert.strictEqual(proto.ok, false);
+  assert.strictEqual(proto.errors[0], "forbidden_key");
+
+  // Over-deep nesting inside arguments must still fail closed.
+  let deep = { leaf: 1 };
+  for (let i = 0; i < 12; i++) deep = { nest: deep };
+  const over = validatePlan(goodPlan({ steps: [
+    { id: "s1", type: "tool", tool: "health", arguments: { deep } },
+    { id: "s2", type: "synthesis", depends_on: ["s1"] },
+  ] }), { agentTools: TOOLS });
+  assert.strictEqual(over.ok, false);
+  assert.strictEqual(over.errors[0], "forbidden_key");
 });
 
 test("stripping never weakens the authority/forbidden-key rejections", () => {
