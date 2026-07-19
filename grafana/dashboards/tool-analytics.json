@@ -537,15 +537,15 @@
   "refresh": "30s",
   "schemaVersion": 38,
   "style": "dark",
-  "tags": ["sidekick", "tools", "analytics"],
+  "tags": [
+    "sidekick",
+    "tools",
+    "analytics"
+  ],
   "templating": {
     "list": [
       {
-        "current": {
-          "selected": false,
-          "text": "sidekick_bash",
-          "value": "sidekick_bash"
-        },
+        "current": {},
         "datasource": {
           "type": "influxdb",
           "uid": "InfluxDB"
