@@ -8,6 +8,12 @@
     install directory, then: sidekick-compute-worker.exe install
     (the install-windows.ps1 script does this for you).
   -->
+  <!--
+    install-windows.ps1 rewrites this to the absolute path of node resolved at
+    install time. The service runs as LocalSystem with the machine PATH, so a
+    user-scoped Node (scoop/nvm/fnm) is not visible to it and a bare "node"
+    fails to start. Installing by hand? Put the full path to node.exe here.
+  -->
   <executable>node</executable>
   <arguments>worker-agent.js run</arguments>
   <workingdirectory>%BASE%</workingdirectory>

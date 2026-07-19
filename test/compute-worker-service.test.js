@@ -88,6 +88,56 @@ test('windows installer verifies any -WinswUrl download (https + SHA-256)', () =
   assert.ok(/SHA-256 mismatch/.test(body), 'must fail closed on hash mismatch');
   assert.ok(/b5066b7bbdfba1293e5d15cda3caaea88fbeab35bd5b38c41c913d492aadfc4f/.test(body), 'default -WinswSha256 must be the pinned winsw v2.12.0 hash');
 });
+test('windows installer resolves node to an absolute path and patches the XML', () => {
+  const body = read(path.join(PKG, 'install-windows.ps1'));
+  assert.ok(/Get-Command node/.test(body), 'must look up node');
+  assert.ok(/\$NodeExe\s*=\s*\$NodeCmd\.Source/.test(body), 'must resolve node to its Source path');
+  assert.ok(/Could not resolve node to an absolute path/.test(body), 'must fail closed when node cannot be resolved');
+  assert.ok(/SelectSingleNode\("executable"\)\.InnerText\s*=\s*\$NodeExe/.test(body), 'must patch <executable> with the resolved path');
+});
+test('windows installer is idempotent when the service already exists', () => {
+  const body = read(path.join(PKG, 'install-windows.ps1'));
+  assert.ok(/Get-Service -Name \$ServiceId/.test(body), 'must probe for an existing service');
+  assert.ok(/\$ScExe delete \$ServiceId/.test(body), 'must be able to remove an orphaned registration');
+  assert.ok(/still exists after removal/.test(body), 'must fail closed if removal did not take');
+  // Removal has to precede the file copy: the running winsw binary is locked.
+  assert.ok(body.indexOf('Get-Service -Name $ServiceId') < body.indexOf('Installing worker files'),
+    'service removal must come before the file copy');
+});
+test('credential ACL grants LocalSystem read so the service can start', () => {
+  const body = read(path.join(ROOT, 'src', 'compute', 'worker-credential.js'));
+  assert.ok(/S-1-5-18/.test(body), 'must grant the LocalSystem SID (locale-independent)');
+  assert.ok(/\/inheritance:r/.test(body), 'must still drop inherited ACEs');
+  assert.ok(/\$\{user\}:F/.test(body), 'must still grant the installing user full control');
+});
+test('enroll verifies an existing credential instead of silently keeping it', () => {
+  const body = read(path.join(ROOT, 'src', 'compute', 'worker-agent.js'));
+  assert.ok(/async function credentialAccepted/.test(body), 'must have a credential check');
+  assert.ok(/Refusing to discard it/.test(body), 'an unreachable server must not discard the credential');
+  assert.ok(/workerCredential\.park\(CONFIG_PATH\)/.test(body), 'a rejected credential must be parked, not deleted outright');
+  assert.ok(/workerCredential\.restore\(parked/.test(body), 'a failed re-enrollment must restore the parked credential');
+});
+test('windows installer refuses a non-admin-writable node.exe', () => {
+  const body = read(path.join(PKG, 'install-windows.ps1'));
+  assert.ok(/Get-NonAdminWriters/.test(body), 'must check who can write the resolved node.exe');
+  assert.ok(/S-1-5-32-544/.test(body), 'must treat Administrators as trusted');
+  assert.ok(/Refusing to install/.test(body), 'must fail closed by default');
+  assert.ok(/AllowUserWritableNode/.test(body), 'must offer an explicit opt-in override');
+  const rights = /\$UnsafeRights = .*?"([^"]+)"/.exec(body);
+  assert.ok(rights, 'must declare the rights it treats as unsafe');
+  assert.ok(!/\bRead\b|ReadAndExecute|ExecuteFile/.test(rights[1]),
+    'read/execute rights must not be flagged as unsafe (every ACL grants them)');
+  assert.ok(/ChangePermissions/.test(rights[1]) && /TakeOwnership/.test(rights[1]),
+    'must catch ACL-rewrite rights, not just direct writes');
+});
+test('elevated installer paths do not resolve system binaries by bare name', () => {
+  const ps = read(path.join(PKG, 'install-windows.ps1'));
+  assert.ok(!/&\s*sc\.exe/.test(ps), 'sc.exe must be called by absolute path');
+  assert.ok(!/&\s*node\s/.test(ps), 'node must be called via the validated $NodeExe');
+  const cred = read(path.join(ROOT, 'src', 'compute', 'worker-credential.js'));
+  assert.ok(!/execFileSync\("icacls"/.test(cred), 'icacls must be called by absolute path');
+  assert.ok(/System32", "icacls\.exe"/.test(cred), 'icacls must resolve under System32');
+});
 test('no service definition embeds a secret', () => {
   for (const body of [unit, plist, winsw]) {
     assert.ok(!/wksec_|enroll_[0-9a-f]{8,}/.test(body), 'service definition must not contain secrets');

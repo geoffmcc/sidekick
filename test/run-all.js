@@ -67,6 +67,7 @@ const suites = [
   { file: 'test/compute-worker-config.test.js', critical: false, description: 'Compute worker persistent configuration and stable node id' },
   { file: 'test/compute-worker-credential.test.js', critical: false, description: 'Compute worker secure credential persistence' },
   { file: 'test/compute-worker-rotate.test.js', critical: false, description: 'Compute worker safe credential rotation workflow' },
+  { file: 'test/compute-worker-enroll-guard.test.js', critical: false, description: 'Compute worker enrollment guard (stale/revoked credential handling)' },
   { file: 'test/compute-reenrollment.test.js', critical: false, description: 'Compute worker re-enrollment (credential recovery)' },
   { file: 'test/compute-worker-cli.test.js', critical: false, description: 'Compute worker CLI subcommands and status formatting' },
   { file: 'test/compute-worker-reconnect.test.js', critical: false, description: 'Compute worker reconnection classification and backoff' },

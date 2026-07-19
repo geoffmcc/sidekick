@@ -161,7 +161,35 @@ sudo SERVER_URL=http://host:4097 ENROLL_TOKEN=<token> ./install-macos.sh
 
 Each installer creates the config/credential directories, writes a non-secret
 `config.json`, runs `enroll --service` to obtain the credential, then registers
-and starts the service. No secret is placed in any service definition.
+and starts the service. No secret is placed in any service definition. Re-running
+an installer over an existing install is safe: it stops and removes the old
+service registration first.
+
+**Windows requires a machine-wide Node.** The service runs as LocalSystem, which
+uses the machine PATH, so the installer resolves `node` to an absolute path and
+bakes it into the service definition. That path becomes a binary SYSTEM executes
+at every boot, so the installer refuses to proceed if it (or any parent
+directory) is writable by a non-administrator — which is the case for the
+per-user installs scoop, nvm, and fnm produce. Install Node machine-wide (the
+official MSI puts it in `C:\Program Files\nodejs`), or point the installer at a
+specific binary:
+
+```powershell
+.\install-windows.ps1 -ServerUrl http://host:4097 -EnrollToken <token> `
+  -NodeExe "C:\Program Files\nodejs\node.exe"
+```
+
+`-AllowUserWritableNode` overrides the check. Only use it where the user who can
+write that path is already effectively an administrator of the machine —
+otherwise it hands them SYSTEM.
+
+**Re-enrolling.** `enroll` with a `--token` no longer keeps whatever credential
+happens to be on disk. If one exists it is verified against the server first: a
+credential the server still accepts is kept (the token goes unused), one the
+server rejects with 401 is replaced using the token, and if the server cannot be
+reached the command fails without touching the credential. A credential being
+replaced is parked until the new one is written, so a failed exchange leaves the
+machine with its original credential rather than none.
 
 ---
 
