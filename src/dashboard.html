@@ -568,6 +568,7 @@
     <div class="compute-actions">
       <button class="btn" onclick="createComputeEnrollment()"><i class="fas fa-key"></i> Create Enrollment</button>
       <button class="btn btn-outline" onclick="loadCompute()"><i class="fas fa-sync"></i> Refresh</button>
+      <span class="sub" id="computeLastUpdate"></span>
     </div>
   </div>
   <div class="metric-strip" id="computeSummary"></div>
@@ -607,12 +608,18 @@
           <select id="computeJobStatus" onchange="loadComputeJobs()">
             <option value="">All statuses</option>
             <option value="created">Created</option>
+            <option value="waiting_for_approval">Waiting for approval</option>
             <option value="queued">Queued</option>
             <option value="leased">Leased</option>
+            <option value="starting">Starting</option>
             <option value="running">Running</option>
+            <option value="cancelling">Cancelling</option>
+            <option value="retry_wait">Retry wait</option>
             <option value="completed">Completed</option>
             <option value="failed">Failed</option>
+            <option value="expired">Expired</option>
             <option value="cancelled">Cancelled</option>
+            <option value="dead_letter">Dead letter</option>
           </select>
           <button class="btn btn-sm btn-outline" onclick="recoverComputeJobs()">Recover Leases</button>
         </div>

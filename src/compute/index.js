@@ -115,10 +115,17 @@ function overview() {
   const onlineWorkers = workers.filter(w => w.state === "online" || w.state === "degraded");
   const jobStats = jobManager.getJobStats();
   const workerStats = workerManager.getWorkerStats();
+  const executorList = executorRegistry.listExecutors();
+  const providerName = p => p.displayName || p.providerId;
   return {
     providers: {
       total: providers.length,
       healthy: healthyProviders.length,
+      // Names so a consumer can say WHICH providers are healthy rather than
+      // leaving "2 of 2" to be guessed at.
+      names: providers.map(providerName),
+      healthyNames: healthyProviders.map(providerName),
+      unhealthyNames: providers.filter(p => p.health.status !== "healthy").map(providerName),
     },
     workers: {
       total: workers.length,
@@ -129,7 +136,9 @@ function overview() {
     routing: {
       rulesCount: getRoutingRules().length,
     },
-    executors: executorRegistry.listExecutors().length,
+    // Count kept as a bare number for existing consumers; names added alongside.
+    executors: executorList.length,
+    executorNames: executorList.map(e => e.type),
   };
 }
 

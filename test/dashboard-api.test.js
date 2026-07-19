@@ -258,6 +258,53 @@ setTimeout(async () => {
       console.log('Passed\n');
     }
 
+    // Test 3.0ga: compute overview names providers and executors
+    // The dashboard labels the Compute tab metrics from these; bare counts left
+    // the operator guessing what was being counted. Seed a healthy and an
+    // unhealthy provider first, otherwise every array is empty and the
+    // assertions below hold vacuously.
+    console.log('Test 3.0ga: compute overview names providers and executors');
+    {
+      const suffix = Date.now().toString(36);
+      const healthy = compute.providerRegistry.createProvider({
+        providerType: 'mock', displayName: 'overview-healthy-' + suffix, endpoint: 'http://127.0.0.1:11434',
+      });
+      const sick = compute.providerRegistry.createProvider({
+        providerType: 'mock', displayName: 'overview-unhealthy-' + suffix, endpoint: 'http://127.0.0.1:11435',
+      });
+      compute.providerRegistry.updateHealth(healthy.providerId, { status: 'healthy', success: true });
+      compute.providerRegistry.updateHealth(sick.providerId, { status: 'unhealthy', success: false, error: 'seeded failure' });
+
+      try {
+        const res = await makeRequest('GET', '/api/compute');
+        assert.strictEqual(res.status, 200, 'Compute overview should return 200');
+        const ov = res.data.overview;
+
+        assert.ok(ov.providers.total >= 2, 'Seeded providers should be counted');
+        assert.ok(ov.providers.healthy >= 1, 'Seeded healthy provider should be counted');
+        assert.strictEqual(ov.providers.names.length, ov.providers.total, 'Provider names should cover every configured provider');
+        assert.strictEqual(ov.providers.healthyNames.length, ov.providers.healthy, 'Healthy names should match the healthy count');
+        assert.strictEqual(
+          ov.providers.unhealthyNames.length, ov.providers.total - ov.providers.healthy,
+          'Unhealthy names should account for every provider that is not healthy'
+        );
+        assert.ok(ov.providers.names.includes(healthy.displayName), 'Names should include the healthy provider');
+        assert.ok(ov.providers.names.includes(sick.displayName), 'Names should include the unhealthy provider');
+        assert.ok(ov.providers.healthyNames.includes(healthy.displayName), 'Healthy names should include the healthy provider');
+        assert.ok(!ov.providers.healthyNames.includes(sick.displayName), 'Healthy names should exclude the unhealthy provider');
+        assert.ok(ov.providers.unhealthyNames.includes(sick.displayName), 'Unhealthy names should include the unhealthy provider');
+
+        assert.strictEqual(typeof ov.executors, 'number', 'Executor count should stay a number for existing consumers');
+        assert.ok(Array.isArray(ov.executorNames), 'Compute overview should name executors');
+        assert.strictEqual(ov.executorNames.length, ov.executors, 'Executor names should match the executor count');
+        assert.ok(ov.executorNames.every(n => typeof n === 'string' && n.length), 'Executor names should be non-empty strings');
+      } finally {
+        compute.providerRegistry.deleteProvider(healthy.providerId);
+        compute.providerRegistry.deleteProvider(sick.providerId);
+      }
+      console.log('Passed\n');
+    }
+
     // Test 3.0gb: dashboard compute API supports enrollment and admin controls
     console.log('Test 3.0gb: dashboard compute API supports enrollment and admin controls');
     {

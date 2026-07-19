@@ -348,8 +348,11 @@ function renderStructuredValue(value, opts){
   const rendered = parsed !== null ? JSON.stringify(parsed, null, 2) : text;
   const cls = parsed !== null ? 'structured-json' : 'structured-text';
   const long = rendered.length > (opts.limit || 900);
-  const visible = long && !opts.expanded ? rendered.slice(0, opts.limit || 900) + '\n... truncated, expand to view all ...' : rendered;
-  return '<pre class="value-block ' + cls + (long ? ' is-long' : '') + '">' + esc(visible) + '</pre>';
+  // Truncating used to end in "expand to view all" with nothing to expand.
+  // Delegate to the expandable renderer so the promised control actually
+  // exists; callers passing expanded:true still get the full block inline.
+  if (long && !opts.expanded) return renderExpandableValue(value, opts);
+  return '<pre class="value-block ' + cls + (long ? ' is-long' : '') + '">' + esc(rendered) + '</pre>';
 }
 
 function renderExpandableValue(value, opts){
@@ -376,14 +379,16 @@ function toggleExpandable(id, btn){
   const preview = document.getElementById(id + '-preview');
   const full = document.getElementById(id + '-full');
   if (!preview || !full) return;
-  const showingFull = full.style.display !== 'none';
+  const showingFull = full.style.display === 'block';
   if (showingFull) {
     full.style.display = 'none';
-    preview.style.display = '';
+    preview.style.display = 'block';
     btn.textContent = 'Show full (' + full.textContent.length.toLocaleString() + ' chars)';
   } else {
     preview.style.display = 'none';
-    full.style.display = '';
+    // Must be an explicit value: the stylesheet sets .expandable-full{display:none},
+    // so clearing the inline style would re-hide the block instead of showing it.
+    full.style.display = 'block';
     btn.textContent = 'Collapse';
   }
 }
@@ -402,8 +407,11 @@ function copyBlockText(btn){
   });
 }
 
-function metric(label, value, detail){
-  return '<div class="metric-card"><span>' + esc(label) + '</span><strong>' + esc(value == null ? '--' : value) + '</strong>' + (detail ? '<small>' + esc(detail) + '</small>' : '') + '</div>';
+function metric(label, value, detail, title){
+  // detail is ellipsised by CSS, so mirror it into a tooltip when it may be
+  // longer than the card (e.g. a list of provider names).
+  const tip = title || detail;
+  return '<div class="metric-card"' + (tip ? ' title="' + attr(tip) + '"' : '') + '><span>' + esc(label) + '</span><strong>' + esc(value == null ? '--' : value) + '</strong>' + (detail ? '<small>' + esc(detail) + '</small>' : '') + '</div>';
 }
 
 function formatMs(ms){
@@ -689,12 +697,16 @@ function renderQuickActionResult(action, result){
   return '<pre class="quick-action-pre">' + esc(JSON.stringify(result, null, 2)) + '</pre>';
 }
 
+// Sole definition. There were three; because declarations hoist, the last one
+// silently won for every caller and capped at MB, so a multi-GB artifact
+// rendered as "3072.0 MB".
 function formatBytes(bytes){
-  if(bytes === 0) return '0 B';
+  const n = Number(bytes || 0);
+  if (!Number.isFinite(n) || n <= 0) return '0 B';
   const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return Math.round(bytes / Math.pow(k, i) * 10) / 10 + ' ' + sizes[i];
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(Math.floor(Math.log(n) / Math.log(k)), sizes.length - 1);
+  return Math.round(n / Math.pow(k, i) * 10) / 10 + ' ' + sizes[i];
 }
 
 function shortSessionId(id) {
@@ -2048,6 +2060,28 @@ function loadCompute(){
   loadComputeOverview();
   loadComputeWorkers();
   loadComputeJobs();
+  stampComputeUpdated();
+}
+
+function stampComputeUpdated(){
+  const el = $('computeLastUpdate');
+  if (el) el.textContent = 'updated ' + new Date().toLocaleTimeString();
+}
+
+// Polled refresh for the Compute tab. The server reconciles worker connection
+// state on its own timer, so a page left open used to show a green "online"
+// badge for a worker the server had already marked offline.
+//
+// Worker rows are only re-rendered when nothing in that list is expanded:
+// re-rendering collapses every <details>, which would yank open utilization and
+// model panels out from under whoever is reading them.
+function refreshCompute(){
+  loadComputeOverview();
+  loadComputeJobs();
+  const workerList = $('computeWorkers');
+  const hasOpenDetail = workerList && workerList.querySelector('details[open]');
+  if (!hasOpenDetail) loadComputeWorkers();
+  stampComputeUpdated();
 }
 
 function loadComputeOverview(){
@@ -2058,12 +2092,30 @@ function loadComputeOverview(){
     const workers = o.workers || {};
     const jobs = o.jobs || {};
     const providers = o.providers || {};
+    // Providers and executors are different things and the counts alone read as
+    // interchangeable, so name them: providers are the inference endpoints the
+    // server routes to, executors are the job types a worker can run.
+    const providerNames = providers.names && providers.names.length ? providers.names.join(', ') : 'none configured';
+    const unhealthy = providers.unhealthyNames || [];
+    const providerDetail = unhealthy.length ? 'unhealthy: ' + unhealthy.join(', ') : providerNames;
+    const executorNames = (o.executorNames && o.executorNames.length) ? o.executorNames.join(', ') : 'none registered';
     el.innerHTML = [
       metric('Workers online', workers.online || 0, (workers.total || 0) + ' total'),
       metric('Jobs total', jobs.total || 0, 'queued ' + (jobs.byStatus?.queued || 0) + ', running ' + (jobs.byStatus?.running || 0)),
       metric('Completed', jobs.byStatus?.completed || 0, 'failed ' + (jobs.byStatus?.failed || 0)),
-      metric('Providers healthy', providers.healthy || 0, (providers.total || 0) + ' configured'),
-      metric('Executors', o.executors || 0, (o.routing?.rulesCount || 0) + ' routing rules')
+      metric(
+        'Inference providers',
+        (providers.healthy || 0) + ' / ' + (providers.total || 0) + ' healthy',
+        providerDetail,
+        'Inference endpoints the server routes to (Ollama / OpenAI-compatible).\nConfigured: ' + providerNames
+      ),
+      metric(
+        'Job executors',
+        o.executors || 0,
+        executorNames,
+        'Executor types registered for distributed jobs.\nRegistered: ' + executorNames + '\nRouting rules: ' + (o.routing?.rulesCount || 0)
+      ),
+      metric('Routing rules', o.routing?.rulesCount || 0, (o.routing?.rulesCount ? 'custom placement active' : 'default placement'))
     ].join('');
   }).catch(e=>{
     el.innerHTML = '<div class="quick-action-error">Compute overview unavailable: ' + esc(e.message || String(e)) + '</div>';
@@ -2109,7 +2161,10 @@ function renderComputeWorker(w){
     ? '<small class="compute-disconnect">offline since ' + esc(fmtDate(w.disconnectedAt)) + (w.lastDisconnectReason ? ' (' + esc(w.lastDisconnectReason) + ')' : '') + '</small>'
     : '';
   const lastHeartbeat = w.lastHeartbeat ? fmtDate(w.lastHeartbeat) : 'never';
-  const utilization = w.utilization && Object.keys(w.utilization).length ? renderStructuredValue(w.utilization, { limit: 180 }) : '<div class="empty">No utilization yet</div>';
+  // Generous inline limits: the block is already scroll-capped by CSS, so most
+  // payloads render whole and only genuinely large ones get an expand control.
+  const utilization = w.utilization && Object.keys(w.utilization).length ? renderStructuredValue(w.utilization, { limit: 700 }) : '<div class="empty">No utilization reported</div>';
+  const healthDetail = w.health && Object.keys(w.health).length ? renderStructuredValue(w.health, { limit: 900 }) : '<div class="empty">No health detail reported</div>';
   // Render model inventory with certification tier badges.
   const modelBadges = modelInventory.map(function(m) {
     const name = m.name || m.model || '?';
@@ -2134,7 +2189,10 @@ function renderComputeWorker(w){
         (accelerators.length ? '<span>' + esc(accelerators.join(', ')) + '</span>' : '<span>cpu</span>') +
       '</div>' +
       (modelBadges ? '<details class="detail-block"><summary>Models (' + esc(models) + ')</summary><div class="model-tier-list">' + modelBadges + '</div></details>' : '') +
-      '<details class="detail-block"><summary>Utilization and health</summary>' + utilization + renderStructuredValue(w.health || {}, { limit: 260 }) + '</details>' +
+      '<details class="detail-block"><summary>Utilization and health</summary>' +
+        '<div class="sub-block-label">Utilization</div>' + utilization +
+        '<div class="sub-block-label">Health</div>' + healthDetail +
+      '</details>' +
     '</div>' +
     '<div class="compute-row-actions">' +
       ((admin === 'maintenance' || admin === 'draining')
@@ -2156,9 +2214,17 @@ function loadComputeJobs(){
   el.innerHTML = '<div class="empty">Loading jobs...</div>';
   authFetch(url).then(r=>r.json()).then(d=>{
     const jobs = d.jobs || [];
-    $('computeJobCount').textContent = jobs.length;
+    // Show the real total, not the page size — the list is capped at 50, so the
+    // header used to read "Jobs (50)" no matter how many existed.
+    const totalJobs = (d.stats && typeof d.stats.total === 'number') ? d.stats.total : jobs.length;
+    $('computeJobCount').textContent = (jobs.length < totalJobs) ? (jobs.length + ' of ' + totalJobs) : String(totalJobs);
     if (!jobs.length) {
-      el.innerHTML = '<div class="empty">No jobs match this filter.</div>';
+      // "No match" is misleading when there are simply no jobs at all — the
+      // usual case on a fresh install — so tell the two apart.
+      const anyJobs = (d.stats && d.stats.total) || 0;
+      el.innerHTML = anyJobs
+        ? '<div class="empty">No jobs match this filter (' + esc(anyJobs) + ' total). Clear the status filter to see them.</div>'
+        : '<div class="empty">No compute jobs have been submitted yet. Jobs appear here once something routes work to a provider or worker.</div>';
       return;
     }
     el.innerHTML = jobs.map(renderComputeJob).join('');
@@ -2168,12 +2234,27 @@ function loadComputeJobs(){
   });
 }
 
+// Mirror of the server's JOB_TERMINAL_STATES / retryable set in
+// src/compute/errors.js and job-manager.js. Kept together so the Cancel and
+// Retry buttons match what the API will actually accept: offering Cancel on a
+// dead-lettered job produced a success toast for a no-op, and expired and
+// dead_letter jobs are retryable server-side but had no Retry button.
+const JOB_TERMINAL_STATES = ['completed','failed','expired','cancelled','dead_letter'];
+const JOB_RETRYABLE_STATES = ['failed','expired','dead_letter','cancelled'];
+
+function computeJobStatusClass(status){
+  if (status === 'completed') return 'ok';
+  // expired and dead_letter are terminal failures, not work in progress.
+  if (['failed','cancelled','expired','dead_letter'].includes(status)) return 'danger';
+  return 'warn';
+}
+
 function renderComputeJob(j){
-  const statusClass = j.status === 'completed' ? 'ok' : (j.status === 'failed' || j.status === 'cancelled' ? 'danger' : 'warn');
+  const statusClass = computeJobStatusClass(j.status);
   const created = j.createdAt ? fmtDate(j.createdAt) : '';
   const prompt = j.requestPayload?.prompt || j.requestPayload?.input || j.progressMessage || j.errorMessage || '';
-  const canCancel = !['completed','failed','cancelled'].includes(j.status);
-  const canRetry = ['failed','cancelled'].includes(j.status);
+  const canCancel = !JOB_TERMINAL_STATES.includes(j.status);
+  const canRetry = JOB_RETRYABLE_STATES.includes(j.status);
   return '<div class="compute-row compact-row">' +
     '<button class="compute-job-button" onclick="showComputeJob(' + jsArg(j.jobId) + ')">' +
       '<strong>' + esc(j.jobType || j.capability || 'job') + '</strong>' +
@@ -2196,7 +2277,7 @@ function showComputeJob(id){
   authFetch('/api/compute/jobs/' + encodeURIComponent(id)).then(r=>r.json()).then(d=>{
     if (!d.job) { el.innerHTML = '<div class="agent-err">Job not found</div>'; return; }
     const j = d.job;
-    const statusClass = j.status === 'completed' ? 'ok' : (j.status === 'failed' || j.status === 'cancelled' ? 'danger' : 'warn');
+    const statusClass = computeJobStatusClass(j.status);
     const created = j.createdAt ? fmtDate(j.createdAt) : '';
     const duration = j.startedAt && j.completedAt ? formatMs(new Date(j.completedAt) - new Date(j.startedAt)) : (j.startedAt ? 'running' : '--');
     let html = '<div class="card compute-detail-card">';
@@ -2208,8 +2289,13 @@ function showComputeJob(id){
     html += '<span class="job-meta-item"><small>Created</small>' + esc(created) + '</span>';
     html += '<span class="job-meta-item"><small>Duration</small>' + esc(duration) + '</span>';
     html += '<span class="job-meta-item"><small>Progress</small>' + esc(j.progressPercent || 0) + '%</span>';
-    if (j.model) html += '<span class="job-meta-item"><small>Model</small>' + esc(j.model) + '</span>';
-    if (j.workerId) html += '<span class="job-meta-item"><small>Worker</small>' + esc(j.workerId) + '</span>';
+    // The API returns the placement decision as selected*Id; j.model / j.workerId
+    // never existed, so these chips were permanently absent.
+    const jobModel = j.selectedModelId || j.requestPayload?.model;
+    if (jobModel) html += '<span class="job-meta-item"><small>Model</small>' + esc(jobModel) + '</span>';
+    if (j.selectedProviderId) html += '<span class="job-meta-item"><small>Provider</small>' + esc(j.selectedProviderId) + '</span>';
+    if (j.selectedWorkerId) html += '<span class="job-meta-item"><small>Worker</small>' + esc(j.selectedWorkerId) + '</span>';
+    if (j.attempt) html += '<span class="job-meta-item"><small>Attempt</small>' + esc(j.attempt) + ' / ' + esc(j.maxAttempts || 1) + '</span>';
     html += '</div>';
 
     const prompt = j.requestPayload?.prompt || j.requestPayload?.input || '';
@@ -2218,10 +2304,13 @@ function showComputeJob(id){
       html += '<div class="detail-block"><pre class="value-block structured-text">' + esc(prompt) + '</pre></div>';
     }
 
-    if (j.result_json) {
+    // rowToJob exposes the parsed payload as `result`; the old `result_json`
+    // check never matched, so every completed job read "No result recorded".
+    const jobResult = j.result !== undefined && j.result !== null ? j.result : j.result_json;
+    if (jobResult !== undefined && jobResult !== null && jobResult !== '') {
       html += '<div class="section-title">Result</div>';
       html += '<div class="detail-block">';
-      html += renderExpandableValue(j.result_json, { limit: 1200 });
+      html += renderExpandableValue(jobResult, { limit: 1200 });
       html += '<button class="btn btn-sm btn-outline copy-btn" onclick="copyBlockText(this)">Copy</button>';
       html += '</div>';
     } else if (j.errorMessage) {
@@ -2263,7 +2352,12 @@ function showComputeJob(id){
           html += renderExpandableValue(a.content, { limit: 800 });
           html += '<button class="btn btn-sm btn-outline copy-btn" onclick="copyBlockText(this)">Copy</button>';
         } else {
-          html += '<div class="empty">Content not available inline</div>';
+          // Artifact bodies are not served over the API, so show where the
+          // artifact actually lives instead of a bare dead end.
+          const locator = a.storagePath || a.storage_path || a.storageRef || a.storage_ref;
+          html += locator
+            ? '<div class="meta-line"><span>Stored at</span> <code>' + esc(locator) + '</code></div>'
+            : '<div class="empty">No inline content and no storage location recorded.</div>';
         }
         html += '</div>';
         html += '</details>';
@@ -2272,15 +2366,29 @@ function showComputeJob(id){
       html += '<div class="empty">No artifacts</div>';
     }
 
-    if (j.progressMessage || j.lastError) {
+    // Previously gated on j.lastError, which the API never returns; that hid
+    // the lease and timing fields for any job with no progress message —
+    // typically the failed ones, where they matter most. Build it from the
+    // fields that actually exist and show it whenever any are present.
+    const meta = {};
+    if (j.progressMessage) meta.progressMessage = j.progressMessage;
+    if (j.errorCategory) meta.errorCategory = j.errorCategory;
+    if (j.errorMessage) meta.errorMessage = j.errorMessage;
+    if (j.queuedAt) meta.queuedAt = j.queuedAt;
+    if (j.startedAt) meta.startedAt = j.startedAt;
+    if (j.completedAt) meta.completedAt = j.completedAt;
+    if (j.cancelledAt) meta.cancelledAt = j.cancelledAt;
+    if (j.cancelReason) meta.cancelReason = j.cancelReason;
+    if (j.retryAfter) meta.retryAfter = j.retryAfter;
+    if (j.leaseId) meta.leaseId = j.leaseId;
+    if (j.leaseExpiresAt) meta.leaseExpiresAt = j.leaseExpiresAt;
+    if (j.dataClassification) meta.dataClassification = j.dataClassification;
+    if (j.project) meta.project = j.project;
+    if (j.fallbackHistory && j.fallbackHistory.length) meta.fallbackHistory = j.fallbackHistory;
+    if (j.schedulingDiagnostics && Object.keys(j.schedulingDiagnostics).length) meta.schedulingDiagnostics = j.schedulingDiagnostics;
+    if (Object.keys(meta).length) {
       html += '<details class="detail-block">';
       html += '<summary>Full metadata</summary>';
-      const meta = {};
-      if (j.progressMessage) meta.progressMessage = j.progressMessage;
-      if (j.lastError) meta.lastError = j.lastError;
-      if (j.startedAt) meta.startedAt = j.startedAt;
-      if (j.completedAt) meta.completedAt = j.completedAt;
-      if (j.leaseExpiresAt) meta.leaseExpiresAt = j.leaseExpiresAt;
       html += renderStructuredValue(meta, { expanded: true });
       html += '</details>';
     }
@@ -2292,28 +2400,56 @@ function showComputeJob(id){
   });
 }
 
+// Guards against a second in-flight request: each click mints a distinct
+// single-use token, so a double-click silently burned one.
+let computeEnrollmentPending = false;
+
 function createComputeEnrollment(){
   const result = $('computeEnrollmentResult');
-  const body = {
-    displayName: $('computeEnrollName').value || 'sidekick-worker',
-    trustLevel: $('computeEnrollTrust').value || 'trusted',
-    maxConcurrentJobs: Number($('computeEnrollJobs').value || 2),
-    expiresInMs: Number($('computeEnrollTtl').value || 3600000)
+  if (!result) return;
+  if (computeEnrollmentPending) return;
+  const fieldValue = (id, fallback) => {
+    const el = $(id);
+    return (el && el.value) || fallback;
   };
-  const reEnroll = (($('computeEnrollReEnroll') && $('computeEnrollReEnroll').value) || '').trim();
+  const body = {
+    displayName: fieldValue('computeEnrollName', 'sidekick-worker'),
+    trustLevel: fieldValue('computeEnrollTrust', 'trusted'),
+    maxConcurrentJobs: Number(fieldValue('computeEnrollJobs', 2)),
+    expiresInMs: Number(fieldValue('computeEnrollTtl', 3600000))
+  };
+  const reEnroll = String(fieldValue('computeEnrollReEnroll', '')).trim();
   if (reEnroll) body.reEnrollmentOf = reEnroll;
+  computeEnrollmentPending = true;
   result.innerHTML = '<div class="empty">Creating token...</div>';
   authFetch('/api/compute/enrollment-tokens', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r=>r.json()).then(d=>{
     if (d.ok === false) throw new Error(d.error || 'token creation failed');
     const commands = d.install?.commands || {};
     result.innerHTML = '<div class="compute-token-warning">Token value is shown once. Store it only on the worker machine.</div>' +
-      '<div class="compute-token-value">' + esc(d.token) + '</div>' +
+      '<div class="compute-token-value" id="computeEnrollTokenValue">' + esc(d.token) + '</div>' +
+      // Shown once and too long to hand-select reliably.
+      '<button class="btn btn-sm btn-outline" onclick="copyElementText(\'computeEnrollTokenValue\', this)">Copy token</button>' +
       '<div class="compute-command-list">' + Object.entries(commands).map(([name, command]) =>
         '<div><strong>' + esc(name) + '</strong><pre>' + esc(command) + '</pre></div>'
       ).join('') + '</div>' +
       '<div class="sub">Expires ' + esc(fmtDate(d.expiresAt)) + '. Worker protocol ' + esc(d.install?.protocolVersion || '1') + '.</div>';
   }).catch(e=>{
     result.innerHTML = '<div class="quick-action-error">Enrollment failed: ' + esc(e.message || String(e)) + '</div>';
+  }).finally(()=>{
+    computeEnrollmentPending = false;
+  });
+}
+
+function copyElementText(id, btn){
+  const el = $(id);
+  if (!el) return;
+  const label = btn.textContent;
+  navigator.clipboard.writeText(el.textContent).then(() => {
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = label; }, 1500);
+  }).catch(() => {
+    btn.textContent = 'Copy failed';
+    setTimeout(() => { btn.textContent = label; }, 1500);
   });
 }
 
@@ -2330,7 +2466,14 @@ function computeJobAction(jobId, action){
   if ((action === 'cancel') && !confirm('Cancel this compute job?')) return;
   authFetch('/api/compute/jobs/' + encodeURIComponent(jobId) + '/' + action, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: 'dashboard_' + action }) }).then(r=>r.json()).then(d=>{
     if (d.ok === false) throw new Error(d.error || action + ' failed');
-    showToast('Job ' + action + ' complete', 'success');
+    // cancelJob returns the job untouched for terminal states, so report the
+    // resulting status rather than claiming success for a no-op.
+    const status = d.job && d.job.status;
+    if (action === 'cancel' && status && status !== 'cancelled' && status !== 'cancelling') {
+      showToast('Job was already ' + status + ' — nothing to cancel', 'info');
+    } else {
+      showToast('Job ' + action + ' complete' + (status ? ' (now ' + status + ')' : ''), 'success');
+    }
     loadCompute();
     showComputeJob(jobId);
   }).catch(e=>alert('Job action failed: ' + (e.message || String(e))));
@@ -2819,14 +2962,6 @@ function loadDbStats() {
   authFetch('/api/db/migrations').then(r => r.json()).then(d => {
     if (d.ok) renderDbMigrations(d);
   }).catch(() => {});
-}
-
-function formatBytes(bytes) {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 
 function renderDbSchema(schema) {
@@ -3446,19 +3581,16 @@ async function exportBlackboxIncident(id){
   }
 }
 
-function formatBytes(value){
-  const n = Number(value || 0);
-  if (n < 1024) return n + ' B';
-  if (n < 1024 * 1024) return Math.round(n / 1024) + ' KB';
-  return (n / 1024 / 1024).toFixed(1) + ' MB';
-}
-
 // -- Refresh -- //
 function refresh(){
   // Only refresh live overview pages AND tab is visible
-  if (currentPage !== 'mission' && currentPage !== 'system') return;
+  if (currentPage !== 'mission' && currentPage !== 'system' && currentPage !== 'compute') return;
   if (document.hidden) return;
 
+  if (currentPage === 'compute') {
+    refreshCompute();
+    return;
+  }
   if (currentPage === 'mission') {
     loadMissionControl();
   } else {
