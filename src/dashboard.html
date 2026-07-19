@@ -516,12 +516,16 @@
       <div class="tool-summary-value blocked" id="toolSummaryBlocked">0</div>
     </div>
     <div class="card tool-summary-card">
-      <div class="s-label" style="margin-bottom:4px">Approval Required</div>
-      <div class="tool-summary-value approval" id="toolSummaryApproval">0</div>
+      <div class="s-label" style="margin-bottom:4px">Approvals Required</div>
+      <div class="tool-summary-value approval" id="toolSummaryApproval" title="Approval requests currently pending review">0</div>
     </div>
     <div class="card tool-summary-card">
       <div class="s-label" style="margin-bottom:4px">High Risk</div>
       <div class="tool-summary-value risk" id="toolSummaryHighRisk">0</div>
+    </div>
+    <div class="card tool-summary-card">
+      <div class="s-label" style="margin-bottom:4px">Tools Requiring Approval</div>
+      <div class="tool-summary-value" id="toolSummaryApprovalGated" title="Tools whose policy gates every call behind an approval">0</div>
     </div>
   </div>
   <div class="search-bar">
