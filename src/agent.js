@@ -922,7 +922,17 @@ async function runAgent(goal, taskId, parentContext = null) {
     // Durable, additive observability marker: records that Brain handled this
     // task and its terminal Brain state, without exposing plan internals or
     // chain-of-thought.
-    brainInfo = { enabled: true, state: outcome.state, evidence_count: outcome.evidenceCount || 0, awaiting_approval: outcome.awaitingApproval ? (outcome.awaitingApproval.approvalId || true) : null };
+    brainInfo = {
+      enabled: true,
+      state: outcome.state,
+      evidence_count: outcome.evidenceCount || 0,
+      awaiting_approval: outcome.awaitingApproval ? (outcome.awaitingApproval.approvalId || true) : null,
+      // Terminal failure reason for post-hoc diagnosis (previously the SSE
+      // stream was the only place it ever appeared). Brain redacts its terminal
+      // error paths; redact again here so this transcript field never depends
+      // on that invariant holding.
+      error: outcome.state === "completed" ? null : (outcome.error ? redactSensitive(String(outcome.error)) : null),
+    };
     if (outcome.state === "completed") {
       status = "completed";
       finalResult = outcome.result;

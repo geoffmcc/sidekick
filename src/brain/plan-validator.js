@@ -40,7 +40,7 @@ function hasForbiddenKeyDeep(value, depth = 0) {
 }
 
 function hasAuthorityKeyDeep(value, depth = 0) {
-  if (depth > 8) return false;
+  if (depth > 8) return true; // fail closed, matching hasForbiddenKeyDeep
   if (Array.isArray(value)) return value.some(v => hasAuthorityKeyDeep(v, depth + 1));
   if (value && typeof value === "object") {
     for (const key of Object.keys(value)) {
@@ -55,6 +55,14 @@ function canonicalToolName(name) {
   return String(name || "").replace(/^sidekick_/, "");
 }
 
+// Sanitize a model-controlled value before embedding it in an error string.
+// Error strings are echoed into the correction prompt, persisted transcripts,
+// and platform events, so they must stay deterministic-shaped: word chars only,
+// hard length cap, never newlines.
+function frag(value) {
+  return String(value).replace(/[^\w.-]/g, "_").slice(0, 64);
+}
+
 /**
  * @param {object} candidate  The parsed plan object produced by the planner.
  * @param {object} opts
@@ -63,7 +71,8 @@ function canonicalToolName(name) {
  */
 function validatePlan(candidate, { agentTools = [] } = {}) {
   const errors = [];
-  const fail = (msg) => { errors.push(msg); return { ok: false, plan: null, errors }; };
+  const stripped = [];
+  const fail = (msg) => { errors.push(msg); return { ok: false, plan: null, errors, stripped }; };
 
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
     return fail("plan_not_object");
@@ -73,8 +82,12 @@ function validatePlan(candidate, { agentTools = [] } = {}) {
   if (hasForbiddenKeyDeep(candidate)) return fail("forbidden_key");
   if (hasAuthorityKeyDeep(candidate)) return fail("authority_key_not_permitted");
 
+  // Benign unknown fields ("thoughts", "status", …) are stripped, not fatal:
+  // small local models routinely add them despite schema-only prompting, and
+  // the validated plan is rebuilt exclusively from whitelisted fields anyway.
+  // Authority-shaped and forbidden keys were already hard-rejected above.
   for (const key of Object.keys(candidate)) {
-    if (!PLAN_ALLOWED_KEYS.has(key)) return fail(`unknown_plan_field:${key}`);
+    if (!PLAN_ALLOWED_KEYS.has(key)) stripped.push(`plan:${frag(key)}`);
   }
   if (Number(candidate.version) !== 1) return fail("unsupported_plan_version");
   if (typeof candidate.goal !== "string" || !candidate.goal.trim()) return fail("missing_goal");
@@ -92,19 +105,19 @@ function validatePlan(candidate, { agentTools = [] } = {}) {
     const at = `step[${i}]`;
     if (!step || typeof step !== "object" || Array.isArray(step)) return fail(`${at}:not_object`);
     for (const key of Object.keys(step)) {
-      if (!STEP_ALLOWED_KEYS.has(key)) return fail(`${at}:unknown_field:${key}`);
+      if (!STEP_ALLOWED_KEYS.has(key)) stripped.push(`${at}:${frag(key)}`);
     }
     if (typeof step.id !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(step.id)) return fail(`${at}:invalid_id`);
     if (ids.has(step.id)) return fail(`${at}:duplicate_id:${step.id}`);
     ids.add(step.id);
-    if (!ALLOWED_STEP_TYPES.includes(step.type)) return fail(`${at}:unknown_step_type:${step.type}`);
+    if (!ALLOWED_STEP_TYPES.includes(step.type)) return fail(`${at}:unknown_step_type:${frag(step.type)}`);
 
     const depends = step.depends_on === undefined ? [] : step.depends_on;
     if (!Array.isArray(depends)) return fail(`${at}:depends_on_not_array`);
     if (depends.some(d => typeof d !== "string")) return fail(`${at}:depends_on_not_strings`);
 
     if (step.type === "memory_retrieval") {
-      if (step.capability !== undefined && !ALLOWED_CAPABILITIES.includes(step.capability)) return fail(`${at}:invalid_capability:${step.capability}`);
+      if (step.capability !== undefined && !ALLOWED_CAPABILITIES.includes(step.capability)) return fail(`${at}:invalid_capability:${frag(step.capability)}`);
       if (step.tool !== undefined) return fail(`${at}:memory_step_has_tool`);
     } else if (step.type === "tool") {
       if (typeof step.tool !== "string" || !step.tool) return fail(`${at}:missing_tool`);
@@ -118,13 +131,25 @@ function validatePlan(candidate, { agentTools = [] } = {}) {
       if (step.tool !== undefined) return fail(`${at}:synthesis_step_has_tool`);
       if (i !== candidate.steps.length - 1) return fail(`${at}:synthesis_not_last`);
     }
-    normalizedSteps.push({ ...step, depends_on: depends });
+    // Whitelist-copy, scoped per step type: stripped unknown keys must never
+    // reach the validated plan, and a field the validator only checks for one
+    // step type must not survive on another (e.g. `capability` on a tool step
+    // is never validated, so it must not become a validated-plan field a
+    // future executor could trust).
+    const normalized = { id: step.id, type: step.type, depends_on: depends };
+    if (step.type === "memory_retrieval" && step.capability !== undefined) normalized.capability = step.capability;
+    if (step.type === "tool") {
+      normalized.tool = step.tool;
+      normalized.arguments = step.arguments === undefined ? {} : step.arguments;
+    }
+    if (typeof step.purpose === "string") normalized.purpose = step.purpose.slice(0, 200);
+    normalizedSteps.push(normalized);
   }
 
   // Dependency references must resolve, and no step may depend on itself.
   for (const step of normalizedSteps) {
     for (const dep of step.depends_on) {
-      if (!ids.has(dep)) return fail(`step:${step.id}:unresolved_dependency:${dep}`);
+      if (!ids.has(dep)) return fail(`step:${step.id}:unresolved_dependency:${frag(dep)}`);
       if (dep === step.id) return fail(`step:${step.id}:self_dependency`);
     }
   }
@@ -149,6 +174,7 @@ function validatePlan(candidate, { agentTools = [] } = {}) {
   return {
     ok: true,
     errors: [],
+    stripped,
     plan: { version: 1, goal: candidate.goal, steps: normalizedSteps },
   };
 }
