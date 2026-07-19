@@ -533,6 +533,26 @@ testAsync("chat executes against a placement-selected provider with honest prove
   assert.strictEqual(result.acceleratorVerification, "not_verified", "provider execution never claims a verified device");
 });
 
+testAsync("chat forwards request.system as a leading system message to the adapter", async () => {
+  // Regression: the system prompt was passed in the (unread) context arg and
+  // silently dropped, leaving every placement-path chat prompt-less — Brain's
+  // planner never saw its plan schema.
+  const result = await inferenceService.chat({ messages: [{ role: "user", content: "plan this" }], system: "You are the planner." });
+  assert.ok(result.content, "chat returns content");
+  const adapter = [...inferenceService._adapterCache.values()].find(a => typeof a.getCalls === "function");
+  assert.ok(adapter, "mock adapter reachable");
+  const call = adapter.getCalls().filter(c => c.method === "chat").pop();
+  assert.strictEqual(call.args.messages[0].role, "system");
+  assert.strictEqual(call.args.messages[0].content, "You are the planner.");
+  assert.strictEqual(call.args.messages[1].role, "user");
+
+  // A caller-supplied leading system message is never overridden or duplicated.
+  await inferenceService.chat({ messages: [{ role: "system", content: "original" }, { role: "user", content: "x" }], system: "must not override" });
+  const call2 = adapter.getCalls().filter(c => c.method === "chat").pop();
+  assert.strictEqual(call2.args.messages[0].content, "original");
+  assert.strictEqual(call2.args.messages.filter(m => m.role === "system").length, 1);
+});
+
 testAsync("classification without any eligible provider fails closed", async () => {
   // Only classification-limited providers exist for 'restricted'.
   await assert.rejects(

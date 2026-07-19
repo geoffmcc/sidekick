@@ -1721,12 +1721,13 @@ async function sidekick_llm({ prompt, system, temperature, provider }) {
     try {
       const result = await inferenceService.chat({
         messages: [{ role: "user", content: prompt }],
+        system,
         temperature: temperature || 0.7,
         dataClassification: "private",
         // Caller-supplied provider names are advisory only; placement ignores
         // provider pinning and applies its own gates.
         preferences: { allowFallback: true },
-      }, { systemPrompt: system });
+      });
       return { content: [{ type: "text", text: result.content || JSON.stringify(result) }] };
     } catch (e) {
       return { content: [{ type: "text", text: "LLM error: " + e.message }], isError: true };

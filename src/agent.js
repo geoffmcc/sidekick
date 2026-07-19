@@ -430,13 +430,18 @@ async function callLLM(messages, options = {}) {
       const chatMessages = messages.map(m => ({ role: m.role, content: m.content }));
       const result = await inferenceService.chat({
         messages: chatMessages,
+        // `system` is part of the REQUEST, not the context arg: the service's
+        // second parameter is telemetry context and is never read for
+        // prompting. Passing the prompt there silently drops it (the bug that
+        // made Brain plan schema-blind on the placement path).
+        system: options.systemPrompt || buildSystemPrompt(),
         temperature: typeof options.temperature === "number" ? options.temperature : 0.3,
         format: options.format,
         // Agent conversations carry user/system content: classify explicitly so
         // placement never treats them as unrestricted.
         dataClassification: "private",
         preferences: { allowFallback: true },
-      }, { systemPrompt: options.systemPrompt || buildSystemPrompt() });
+      });
       return { response: result.content || "", model: result.modelId || "unknown", provider: result.providerId || "unknown" };
     } catch (e) {
       if (GROQ_API_KEY) {

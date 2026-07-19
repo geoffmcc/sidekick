@@ -81,6 +81,7 @@ class InferenceService {
       allowFallback: validated.preferences.allowFallback,
       payload: {
         messages: request.messages,
+        system: request.system,
         temperature: request.temperature ?? 0.7,
         maxTokens: request.maxTokens,
         tools: request.tools,
@@ -183,7 +184,13 @@ class InferenceService {
         const start = Date.now();
         let result;
         if (operation === "chat") {
-          result = await adapter.chat(payload.messages, {
+          // Adapters take the system prompt as a leading system-role message
+          // (Ollama /api/chat and OpenAI-compatible /chat/completions both
+          // honor it). Never override a caller-supplied leading system message.
+          const messages = payload.system && payload.messages?.[0]?.role !== "system"
+            ? [{ role: "system", content: payload.system }, ...payload.messages]
+            : payload.messages;
+          result = await adapter.chat(messages, {
             model: model.providerModelName,
             temperature: payload.temperature,
             maxTokens: payload.maxTokens,
