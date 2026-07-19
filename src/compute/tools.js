@@ -1,10 +1,123 @@
 const compute = require("./index");
+const { TRUST_LEVELS, DATA_CLASSIFICATIONS } = require("./errors");
+const { validateEndpoint } = require("./endpoint-guard");
+
+// Creating a provider grants CONNECTIVITY. It does not grant authority to
+// receive sensitive data — that is a separate, explicit promotion via update.
+//
+// The registry's own defaults predate the trust taxonomy: trustLevel "private"
+// ranks EQUAL to "trusted" in placement's TRUST_ORDER, and dataClassifications
+// defaults to public/internal/private. A provider created with no trust field
+// named would therefore be immediately eligible for private traffic, and since
+// priority is caller-settable it could outrank the real providers. New rows
+// created through the tool start at the bottom instead.
+const CREATE_TRUST_FLOOR = Object.freeze({
+  trustLevel: "untrusted",
+  dataClassifications: ["public"],
+});
+
+// Fields that confer authority rather than connectivity. Rejected on create so
+// that promotion is always a deliberate second step against a known provider_id.
+const PROMOTION_FIELDS = ["trust_level", "data_classifications"];
 
 function ok(data) {
   return { content: [{ type: "text", text: typeof data === "string" ? data : JSON.stringify(data, null, 2) }] };
 }
 function err(msg) {
   return { content: [{ type: "text", text: msg }], isError: true };
+}
+
+// The tool surface is snake_case, matching every other Sidekick tool; the
+// registries take camelCase. Nothing bridged the two, and because the dispatcher
+// strips any key not in the Zod schema, an unmapped name never reached the
+// registry at all: `create` fell over on a NOT NULL column, and `update` matched
+// no field, updated nothing, and returned the unchanged row as success. Every
+// registry row to date had to be inserted with direct SQL because of this.
+//
+// Keys are mapped explicitly rather than by generic snake→camel conversion,
+// because several names genuinely differ (name → displayName, base_url →
+// endpoint) and a silent mismatch is exactly the failure being fixed here.
+const PROVIDER_FIELD_MAP = {
+  name: "displayName",
+  type: "providerType",
+  base_url: "endpoint",
+  api_key: "authSecretKey",
+  trust_level: "trustLevel",
+  tls_policy: "tlsPolicy",
+  cost_policy: "costPolicy",
+  data_classifications: "dataClassifications",
+  capabilities: "capabilities",
+  priority: "priority",
+  enabled: "enabled",
+  mode: "mode",
+  metadata: "metadata",
+};
+
+const MODEL_FIELD_MAP = {
+  provider_id: "providerId",
+  model_name: "displayName",
+  provider_model_name: "providerModelName",
+  capabilities: "capabilities",
+  context_length: "contextLimit",
+  supports_tools: "supportsTools",
+  supports_vision: "supportsVision",
+  supports_embedding: "supportsEmbedding",
+  supports_structured_output: "supportsStructuredOutput",
+  preferred_workloads: "preferredWorkloads",
+  quantization: "quantization",
+  enabled: "enabled",
+};
+
+const BYTES_PER_GB = 1024 ** 3;
+
+function mapFields(args, fieldMap) {
+  const mapped = {};
+  for (const [from, to] of Object.entries(fieldMap)) {
+    if (args[from] !== undefined) mapped[to] = args[from];
+  }
+  return mapped;
+}
+
+// family and parameter_count have no column of their own; they are descriptive
+// and belong with the rest of the free-form model metadata.
+//
+// `existingMetadata` must be supplied on update: the registry replaces the
+// whole metadata column, so building the object from the supplied fields alone
+// would silently drop any key the caller did not happen to repeat.
+function mapModelFields(args, existingMetadata) {
+  const mapped = mapFields(args, MODEL_FIELD_MAP);
+  if (args.min_vram_gb !== undefined) {
+    if (!Number.isFinite(args.min_vram_gb)) throw new Error("min_vram_gb must be a finite number");
+    mapped.estimatedMemoryBytes = Math.round(args.min_vram_gb * BYTES_PER_GB);
+  }
+  const delta = {};
+  if (args.family !== undefined) delta.family = args.family;
+  if (args.parameter_count !== undefined) delta.parameterCount = args.parameter_count;
+  if (Object.keys(delta).length) mapped.metadata = { ...(existingMetadata || {}), ...delta };
+  return mapped;
+}
+
+// Report a missing required field by its tool-facing name, not the SQLite
+// column that would otherwise surface as a NOT NULL constraint error.
+function missingFields(args, required) {
+  return required.filter(f => args[f] === undefined || args[f] === null || args[f] === "");
+}
+
+// trust_level and data_classifications are placement gates, not labels:
+// evaluateProviderCandidate compares a request's required trust and
+// classification against whatever these say. An unrecognised value must be
+// rejected outright rather than stored, because trustRank() maps anything it
+// does not know to 0 — a typo would silently turn into "untrusted" and the
+// operator would have no signal that the provider is now unselectable.
+function invalidEnumValue(args) {
+  if (args.trust_level !== undefined && !TRUST_LEVELS.includes(args.trust_level)) {
+    return `Invalid trust_level "${args.trust_level}". Valid: ${TRUST_LEVELS.join(", ")}`;
+  }
+  if (args.data_classifications !== undefined) {
+    const bad = args.data_classifications.filter(c => !DATA_CLASSIFICATIONS.includes(c));
+    if (bad.length) return `Invalid data_classifications: ${bad.join(", ")}. Valid: ${DATA_CLASSIFICATIONS.join(", ")}`;
+  }
+  return null;
 }
 
 async function sidekick_compute({ action, ...args }) {
@@ -108,19 +221,44 @@ async function sidekick_compute_providers({ action, provider_id, ...args }) {
   try {
     compute.initialize();
     switch (action) {
-      case "list": return ok(compute.providerRegistry.listProviders(args));
+      // Filters need mapping too: an unmapped filter bound nothing and the
+      // caller silently got the whole unfiltered list back.
+      case "list": return ok(compute.providerRegistry.listProviders(mapFields(args, PROVIDER_FIELD_MAP)));
       case "get": {
         if (!provider_id) return err("provider_id required");
         const p = compute.providerRegistry.getProvider(provider_id);
         return p ? ok(p) : err("Provider not found");
       }
       case "create": {
-        const p = compute.providerRegistry.createProvider(args);
+        const missing = missingFields(args, ["type", "name"]);
+        if (missing.length) return err(`Missing required field(s) for create: ${missing.join(", ")}`);
+        const promoting = PROMOTION_FIELDS.filter(f => args[f] !== undefined);
+        if (promoting.length) {
+          return err(
+            `${promoting.join(" and ")} cannot be set during create. Creating a provider grants connectivity only; ` +
+            "authority to handle sensitive data is a separate step. Create the provider, verify it with " +
+            "action=health, then promote it with action=update."
+          );
+        }
+        const endpointError = args.base_url !== undefined ? validateEndpoint(args.base_url) : null;
+        if (endpointError) return err(endpointError);
+        const p = compute.providerRegistry.createProvider({
+          ...CREATE_TRUST_FLOOR,
+          ...mapFields(args, PROVIDER_FIELD_MAP),
+        });
         return ok(p);
       }
       case "update": {
         if (!provider_id) return err("provider_id required");
-        const p = compute.providerRegistry.updateProvider(provider_id, args);
+        const invalid = invalidEnumValue(args);
+        if (invalid) return err(invalid);
+        const endpointError = args.base_url !== undefined ? validateEndpoint(args.base_url) : null;
+        if (endpointError) return err(endpointError);
+        const updates = mapFields(args, PROVIDER_FIELD_MAP);
+        // Without this an unrecognised field set silently updated nothing and
+        // still reported success.
+        if (Object.keys(updates).length === 0) return err("No updatable fields supplied");
+        const p = compute.providerRegistry.updateProvider(provider_id, updates);
         return p ? ok(p) : err("Provider not found");
       }
       case "delete": {
@@ -143,19 +281,28 @@ async function sidekick_compute_models({ action, model_id, ...args }) {
   try {
     compute.initialize();
     switch (action) {
-      case "list": return ok(compute.modelRegistry.listModels(args));
+      case "list": return ok(compute.modelRegistry.listModels({
+        ...mapFields(args, MODEL_FIELD_MAP),
+        ...(args.capability !== undefined ? { capability: args.capability } : {}),
+      }));
       case "get": {
         if (!model_id) return err("model_id required");
         const m = compute.modelRegistry.getModel(model_id);
         return m ? ok(m) : err("Model not found");
       }
       case "create": {
-        const m = compute.modelRegistry.createModel(args);
+        const missing = missingFields(args, ["provider_id", "model_name", "provider_model_name"]);
+        if (missing.length) return err(`Missing required field(s) for create: ${missing.join(", ")}`);
+        const m = compute.modelRegistry.createModel(mapModelFields(args));
         return ok(m);
       }
       case "update": {
         if (!model_id) return err("model_id required");
-        const m = compute.modelRegistry.updateModel(model_id, args);
+        const existing = compute.modelRegistry.getModel(model_id);
+        if (!existing) return err("Model not found");
+        const updates = mapModelFields(args, existing.metadata);
+        if (Object.keys(updates).length === 0) return err("No updatable fields supplied");
+        const m = compute.modelRegistry.updateModel(model_id, updates);
         return m ? ok(m) : err("Model not found");
       }
       case "delete": {
