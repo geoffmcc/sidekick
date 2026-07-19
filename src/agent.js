@@ -941,6 +941,12 @@ async function runAgent(goal, taskId, parentContext = null) {
     if (outcome.state === "completed") {
       status = "completed";
       finalResult = outcome.result;
+      // Terminal answer step. The direct-answer and tool-loop paths both push
+      // one (agent.js / agent-loop.js); Brain did not, so its answer existed
+      // only in the SSE stream and the execution summary. Everything that reads
+      // a task's answer back off `steps` — notably the continuation brief's
+      // "Final answer:" line — silently got nothing for a Brain task.
+      steps.push({ type: "done", text: finalResult });
     } else if (outcome.state === "waiting_for_approval") {
       status = "waiting_for_approval";
       terminalError = "Awaiting human approval" + (outcome.awaitingApproval?.tool ? ` for ${outcome.awaitingApproval.tool}` : "") + (outcome.awaitingApproval?.approvalId ? ` (approval ${outcome.awaitingApproval.approvalId})` : "") + ". The task is parked and was not completed.";
@@ -965,9 +971,15 @@ async function runAgent(goal, taskId, parentContext = null) {
       steps.push({ type: "done", text: finalResult });
       status = "completed";
     } catch (e) {
-      steps.push({ type: "error", text: e.message });
+      // Redact before the message is persisted: this is a raw provider error
+      // and `steps` is written to disk. The tool-loop path already redacts its
+      // equivalent (agent-loop.js), and Brain redacts its own; this was the one
+      // path that did not, and a credential in a provider error reached the
+      // transcript verbatim.
+      const message = redactSensitive("LLM error: " + e.message);
+      steps.push({ type: "error", text: message });
       status = "failed";
-      terminalError = "LLM error: " + e.message;
+      terminalError = message;
     }
   } else {
     // The follow-up brief is seeded as a distinct, untrusted-labeled system
@@ -1007,8 +1019,18 @@ async function runAgent(goal, taskId, parentContext = null) {
     goal,
     steps,
     status,
+    // Authoritative final-answer record. Previously the transcript had no
+    // top-level result at all: the answer was recoverable only by scanning
+    // `steps` for a terminal entry, or from the SSE stream — which is transient
+    // and gone once the task ends. Readers should prefer this field; the step
+    // scan remains as a fallback for v2 and older transcripts.
+    result: status === "completed" ? finalResult : "",
+    // Redacted for the same reason brainInfo.error is: terminal error strings
+    // can carry provider/tool error text, and this field must not depend on
+    // every upstream path having redacted already.
+    error: status === "completed" ? null : (terminalError ? redactSensitive(String(terminalError)) : null),
     t: new Date().toISOString(),
-    v: 2,
+    v: 3,
     parent_task_id: parentContext ? parentContext.parentTaskId : null,
     root_task_id: parentContext ? parentContext.rootTaskId : taskId,
     continuation_depth: parentContext ? parentContext.continuationDepth : 0,
@@ -1213,6 +1235,10 @@ app.get("/api/agent/run/:id", (req, res) => {
     // surfacing normalized lineage so the UI can label parent/root threads.
     res.json({
       ...data,
+      // Resolved, not spread from `data`: a pre-v3 transcript has no top-level
+      // result, and callers should not have to re-derive it from `steps`.
+      result: norm.result,
+      error: norm.error,
       parent_task_id: norm.parent_task_id,
       root_task_id: norm.root_task_id,
       continuation_depth: norm.continuation_depth,

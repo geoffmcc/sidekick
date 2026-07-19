@@ -361,4 +361,82 @@ ok("buildSeedMessages omits absent briefs", () => {
   assert.strictEqual(msgs[0].role, "user");
 });
 
+// --- final-answer persistence (v3 top-level result) -------------------------
+// Before v3 the answer lived only in a terminal `steps` entry, so any path that
+// did not push one — Brain — left it nowhere durable, and a follow-up to a
+// Brain task got no "Final answer:" line at all.
+
+ok("resolveFinalAnswer prefers the authoritative top-level result", () => {
+  const r = C.resolveFinalAnswer({ result: "the answer", steps: [{ type: "done", text: "stale step" }] });
+  assert.strictEqual(r.result, "the answer", "top-level result wins over the step scan");
+  assert.strictEqual(r.error, null);
+});
+
+ok("resolveFinalAnswer falls back to the step scan for pre-v3 transcripts", () => {
+  const r = C.resolveFinalAnswer({ steps: [{ type: "tool", text: "x" }, { type: "done", text: "legacy answer" }] });
+  assert.strictEqual(r.result, "legacy answer");
+  assert.strictEqual(r.error, null);
+});
+
+ok("resolveFinalAnswer surfaces a terminal error from either source", () => {
+  assert.strictEqual(C.resolveFinalAnswer({ error: "boom" }).error, "boom");
+  assert.strictEqual(C.resolveFinalAnswer({ steps: [{ type: "error", text: "legacy boom" }] }).error, "legacy boom");
+  assert.strictEqual(C.resolveFinalAnswer({ error: "boom" }).result, "");
+});
+
+ok("resolveFinalAnswer is empty-safe for a task with no terminal record", () => {
+  for (const input of [undefined, null, {}, { steps: [] }, { steps: [{ type: "tool", text: "x" }] }, { result: "   " }]) {
+    const r = C.resolveFinalAnswer(input);
+    assert.strictEqual(r.result, "", "no answer for " + JSON.stringify(input));
+    assert.strictEqual(r.error, null);
+  }
+});
+
+ok("normalizeTranscript exposes the resolved answer for v3 and pre-v3 alike", () => {
+  const v3 = C.normalizeTranscript({ goal: "g", status: "completed", result: "brain answer", steps: [] }, "aaaaaaaa");
+  assert.strictEqual(v3.result, "brain answer", "v3 top-level result surfaced");
+
+  const v2 = C.normalizeTranscript({ goal: "g", status: "completed", steps: [{ type: "done", text: "old answer" }] }, "bbbbbbbb");
+  assert.strictEqual(v2.result, "old answer", "pre-v3 transcript still resolves an answer");
+
+  const parked = C.normalizeTranscript({ goal: "g", status: "waiting_for_approval", error: "parked", steps: [] }, "cccccccc");
+  assert.strictEqual(parked.result, "");
+  assert.strictEqual(parked.error, "parked");
+});
+
+ok("a Brain-shaped transcript yields a Final answer line in the continuation brief", () => {
+  // The regression: a completed Brain task recorded no terminal step, so
+  // extractOutcome returned null and the follow-up brief silently omitted the
+  // parent's answer. With the top-level result it is present.
+  const brainRecord = { goal: "check disk", status: "completed", result: "Disk is 62% full.", steps: [
+    { type: "tool", id: "s1", tool: "health", ok: true, result: "62%" },
+  ] };
+  const line = C._internal.extractOutcome(brainRecord, (s) => s, C.CONTINUATION_LIMITS);
+  assert.ok(line && line.startsWith("Final answer: "), "outcome line present, got: " + line);
+  assert.ok(line.includes("Disk is 62% full."));
+
+  // Same record without the top-level result is the pre-fix behaviour.
+  const preFix = C._internal.extractOutcome({ ...brainRecord, result: undefined }, (s) => s, C.CONTINUATION_LIMITS);
+  assert.strictEqual(preFix, null, "pins what the bug looked like");
+});
+
+ok("a terminal error is redacted and length-bounded like the answer", () => {
+  const line = C._internal.extractOutcome(
+    { error: "LLM error: key SECRET failed" },
+    (s) => s.replace("SECRET", "[REDACTED]"),
+    C.CONTINUATION_LIMITS
+  );
+  assert.ok(line.startsWith("Terminal error: "));
+  assert.ok(line.includes("[REDACTED]"), "redaction applied to the top-level error");
+  assert.ok(!line.includes("SECRET"));
+});
+
+ok("the resolved answer is still redacted and length-bounded", () => {
+  const long = "SECRET " + "x".repeat(5000);
+  const line = C._internal.extractOutcome({ result: long }, (s) => s.replace("SECRET", "[REDACTED]"), C.CONTINUATION_LIMITS);
+  assert.ok(line.includes("[REDACTED]"), "redaction applied to the top-level result");
+  assert.ok(!line.includes("SECRET"));
+  assert.ok(line.length < long.length, "truncated");
+});
+
 console.log("\nAll " + passed + " continuation tests passed.\n");
