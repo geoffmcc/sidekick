@@ -83,7 +83,8 @@ const TOOL_RISK = {
   hash: "low",
   validate: "low",
   template: "low",
-  predict: "low",
+  // medium, matching black_box: the purge action performs a bulk delete.
+  predict: "medium",
   debug_tool: "low",
   cache: "low",
   summarize: "low",

@@ -2345,10 +2345,11 @@ function recoverComputeJobs(){
 }
 
 // -- Predict -- //
+// Must match the backend prediction type enum in src/predict.js (VALID_TYPES).
 const PREDICT_TYPE_LABELS = {
-  likely_next_action: 'Next Action', failure_risk: 'Failure Risk', missing_prerequisite: 'Missing Prerequisite',
-  context_relevance: 'Context', incident_recurrence: 'Incident Risk', automation_opportunity: 'Automation',
-  handoff_pending: 'Handoff', unknown: 'Unknown'
+  next_action: 'Next Action', likely_failure: 'Likely Failure', missing_prerequisite: 'Missing Prerequisite',
+  relevant_context: 'Relevant Context', incident_recurrence: 'Incident Risk',
+  workflow_opportunity: 'Workflow Opportunity', stale_or_contradicted: 'Stale / Contradicted'
 };
 const PREDICT_STATUS_COLORS = {
   active: '#3fb950', expired: '#8b949e', superseded: '#a371f7', dismissed: '#f85149',
@@ -2358,21 +2359,57 @@ const PREDICT_CONFIDENCE_COLORS = {
   very_high: '#3fb950', high: '#58a6ff', medium: '#a371f7', low: '#f0883e', none: '#8b949e'
 };
 
+// Field names below are the canonical /api/predict/status contract documented
+// in docs/predict.md. Do not read undeclared fields.
 function loadPredictStatus() {
   authFetch('/api/predict/status').then(r => r.json()).then(d => {
     const el = $('predictStatus');
     if (!el) return;
-    const total = d.total || 0;
-    const active = d.active || 0;
-    const detectors = (d.detectors || []).filter(x => x.enabled).length;
+    const detectors = d.detectors || [];
+    const enabled = detectors.filter(x => x.enabled).length;
     const lastAnalyzed = d.last_analyzed ? fmtDate(d.last_analyzed) : 'never';
-    el.innerHTML = '<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:.82rem;color:#8b949e">' +
-      '<span>Total: <strong style="color:#c9d1d9">' + total + '</strong></span>' +
-      '<span>Active: <strong style="color:#3fb950">' + active + '</strong></span>' +
-      '<span>Detectors: <strong style="color:#c9d1d9">' + detectors + '/7</strong></span>' +
+    const scope = d.last_analysis_scope;
+    const scopeLabel = scope
+      ? esc(scope.mode + (scope.project ? ':' + scope.project : '') + (scope.session_id ? ':' + scope.session_id : ''))
+      : '—';
+    const s = d.last_analysis_summary;
+
+    let html = '<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:.82rem;color:#8b949e">' +
+      '<span>Active: <strong style="color:#3fb950">' + (d.active || 0) + '</strong></span>' +
+      '<span>Terminal: <strong style="color:#8b949e">' + (d.terminal || 0) + '</strong></span>' +
+      '<span>Total retained: <strong style="color:#c9d1d9">' + (d.total || 0) + '</strong></span>' +
+      '<span>Detectors: <strong style="color:#c9d1d9">' + enabled + '/' + detectors.length + '</strong></span>' +
       '<span>Last analysis: <strong style="color:#c9d1d9">' + lastAnalyzed + '</strong></span>' +
-      '<span>Retention: <strong style="color:#c9d1d9">' + (d.retention_days || 30) + 'd</strong></span>' +
+      '<span>Scope: <strong style="color:#c9d1d9">' + scopeLabel + '</strong></span>' +
+      '<span>Retention: <strong style="color:#c9d1d9">' + (d.retention_days != null ? d.retention_days + 'd' : 'not configured') + '</strong></span>' +
     '</div>';
+
+    if (s) {
+      const rejected = s.rejected_by_reason || {};
+      const rejectedTotal = Object.values(rejected).reduce(function (a, b) { return a + b; }, 0);
+      const rejectedDetail = Object.keys(rejected).length
+        ? Object.keys(rejected).map(function (k) { return esc(k) + '=' + rejected[k]; }).join(', ')
+        : 'none';
+      html += '<div style="margin-top:6px;font-size:.78rem;color:#8b949e">' +
+        'Last run: considered <strong style="color:#c9d1d9">' + (s.candidates_considered || 0) + '</strong>, ' +
+        'admitted <strong style="color:#c9d1d9">' + (s.candidates_admitted || 0) + '</strong>, ' +
+        'rejected <strong style="color:#c9d1d9">' + rejectedTotal + '</strong> (' + rejectedDetail + ')' +
+        ' · created ' + (s.created || 0) +
+        ' · refreshed ' + (s.refreshed || 0) +
+        ' · reactivated ' + (s.reactivated || 0) +
+        ' · superseded ' + (s.superseded || 0) +
+        ' · expired ' + (s.expired || 0) +
+      '</div>';
+    }
+
+    if (d.last_purge) {
+      const p = d.last_purge;
+      html += '<div style="margin-top:4px;font-size:.75rem;color:#8b949e">Last purge: ' +
+        (p.deleted_predictions || 0) + ' predictions, ' + (p.deleted_evidence || 0) + ' evidence, ' +
+        (p.preserved || 0) + ' preserved by policy</div>';
+    }
+
+    el.innerHTML = html;
   });
 }
 
@@ -2521,18 +2558,103 @@ function predictBack() {
   loadPredict();
 }
 
+// Builds an explicit analysis scope. An empty body is never sent: a global
+// all-project sweep must be chosen deliberately in the scope selector.
+function predictAnalyzeBody() {
+  const mode = $('predictScope') ? $('predictScope').value : 'project';
+  const value = $('predictScopeValue') ? $('predictScopeValue').value.trim() : '';
+  const body = { scope: mode };
+  if (mode === 'project') {
+    if (!value) return { error: 'Enter a project name, or choose "All projects (global)" to analyze everything.' };
+    body.project = value;
+  } else if (mode === 'session') {
+    if (!value) return { error: 'Enter a session id to analyze a single session.' };
+    body.session_id = value;
+  } else if (mode === 'task') {
+    if (!value) return { error: 'Enter a task id to analyze a single task.' };
+    body.task_id = value;
+  }
+  return { body: body };
+}
+
 function runPredictAnalyze() {
+  const out = $('predictAnalyzeResult');
+  const built = predictAnalyzeBody();
+  if (built.error) {
+    if (out) out.innerHTML = '<div class="agent-err">' + esc(built.error) + '</div>';
+    return;
+  }
+  if (built.body.scope === 'global' &&
+      !confirm('Run a global analysis across every project? This is intentionally broad.')) {
+    return;
+  }
+
   const btn = document.querySelector('#page-predict .btn');
   if (btn) { btn.disabled = true; btn.textContent = 'Analyzing...'; }
+  if (out) out.innerHTML = '<div class="empty">Analyzing...</div>';
+
   authFetch('/api/predict/analyze', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({})
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(built.body)
   }).then(r => r.json()).then(d => {
     if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-magnifying-glass-chart"></i> Analyze'; }
+    if (out) {
+      if (d.ok === false) {
+        out.innerHTML = '<div class="agent-err">' + esc(d.error || 'Analysis failed') + '</div>';
+      } else {
+        // Report what actually changed rather than silently refreshing the list.
+        const rejected = d.rejected_by_reason || {};
+        const rejectedTotal = Object.values(rejected).reduce(function (a, b) { return a + b; }, 0);
+        const parts = [
+          'considered ' + (d.candidates_considered || 0),
+          'admitted ' + (d.candidates_admitted || 0),
+          'created ' + (d.created || 0),
+          'refreshed ' + (d.refreshed || 0),
+          'reactivated ' + (d.reactivated || 0),
+          'suppressed ' + (d.suppressed || 0),
+          'superseded ' + (d.superseded || 0),
+          'expired ' + (d.expired || 0)
+        ];
+        let html = '<div class="card" style="padding:10px;font-size:.8rem">' +
+          '<div><strong style="color:#c9d1d9">Analysis complete</strong> ' +
+          '<span style="color:#8b949e">(' + esc(d.scope ? d.scope.mode : '') +
+          (d.scope && d.scope.project ? ':' + esc(d.scope.project) : '') + ', ' + (d.duration_ms || 0) + 'ms)</span></div>' +
+          '<div style="color:#8b949e;margin-top:4px">' + parts.join(' · ') + '</div>';
+        if (rejectedTotal > 0) {
+          html += '<div style="color:#8b949e;margin-top:4px">Rejected ' + rejectedTotal + ': ' +
+            Object.keys(rejected).map(function (k) { return esc(k) + '=' + rejected[k]; }).join(', ') + '</div>';
+        }
+        html += '</div>';
+        out.innerHTML = html;
+      }
+    }
     loadPredictStatus();
     loadPredict();
   }).catch(e => {
     if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-magnifying-glass-chart"></i> Analyze'; }
-    alert('Analysis failed');
+    if (out) out.innerHTML = '<div class="agent-err">Analysis failed</div>';
+  });
+}
+
+// Read-only retention preview. Cleanup itself requires a separate confirmation.
+function runPredictPurgePreview() {
+  const out = $('predictAnalyzeResult');
+  if (out) out.innerHTML = '<div class="empty">Loading purge preview...</div>';
+  authFetch('/api/predict/maintenance/purge-preview').then(r => r.json()).then(d => {
+    if (!out) return;
+    if (d.ok === false) { out.innerHTML = '<div class="agent-err">' + esc(d.error || 'Preview failed') + '</div>'; return; }
+    const w = d.would_delete || {};
+    const preserved = d.preserved || {};
+    out.innerHTML = '<div class="card" style="padding:10px;font-size:.8rem">' +
+      '<div><strong style="color:#c9d1d9">Purge preview</strong> ' +
+      '<span style="color:#8b949e">(retention ' + esc(String(d.retention_days)) + 'd, cutoff ' + esc(String(d.cutoff)) + ')</span></div>' +
+      '<div style="color:#8b949e;margin-top:4px">Would delete: ' + (w.predictions || 0) + ' predictions, ' +
+      (w.prediction_evidence || 0) + ' evidence, ' + (w.prediction_audit || 0) + ' audit rows. ' +
+      'Feedback rows are always retained.</div>' +
+      '<div style="color:#8b949e;margin-top:4px">Preserved by policy: ' + (preserved.count || 0) + '</div>' +
+      '<div style="color:#8b949e;margin-top:4px">Nothing was modified. Run purge from the Predict tool with confirm=true to execute.</div>' +
+    '</div>';
+  }).catch(e => {
+    if (out) out.innerHTML = '<div class="agent-err">Purge preview failed</div>';
   });
 }
 

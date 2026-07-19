@@ -4,6 +4,26 @@ All notable changes to Sidekick.
 
 ## Unreleased
 
+### Predict signal quality and lifecycle correctness
+
+- Fixed the root-cause defect behind low-quality predictions: `tool_logs` stores a `success` column and has no `ok` column, but every detector read `log.ok`. That made **every** tool call count as a failure — production showed `github has 33 unknown failures` at `very_high` confidence against an actual 4 failures in 85 calls — while silently disabling the prerequisite and workflow detectors entirely, since both required a successful call. Rows are now normalized before any detector sees them.
+- Fixed reversed sequence chronology. Tool logs are read newest-first for recency selection but are now explicitly sorted ascending before analysis, so `knowledge → tools` yields "After knowledge, tools commonly follows" rather than its inverse.
+- Removed synthetic global-session stitching. Records without a durable correlation identifier (`session_id`, `correlation_id`, `task_id`) are skipped instead of being merged into one `_global` sequence, and sequences never cross sessions, projects, or a configurable time gap (default 30 minutes).
+- Analysis now requires an explicit scope (`project`, `session`, `task`, or a deliberately requested `global`). An empty request no longer triggers a seven-day all-project sweep, and predictions from different projects are never merged into a project-null record.
+- Disabled the `relevant_context` detector by default. A recent, pinned, or high-confidence memory is not a prediction; when explicitly enabled it emits only in-scope context carrying an unresolved, actionable condition.
+- Prerequisites now require repeated recovery evidence (`A` fails → `B` succeeds → `A` succeeds) within a bounded window and step distance, across at least two sessions. Bare "A failed then B succeeded" adjacency no longer infers a requirement.
+- Added detector-specific minimum evidence for failure predictions (≥5 attempts, ≥3 failures, ≥34% failure rate, ≥2 failures in 24h, ≥2 sessions), documented with reasoning in `docs/predict.md`.
+- Added a central candidate-admission gate covering type, scope, evidence count, observation count, distinct sessions, probability, confidence, actionability, and contradiction. Rejections are tallied by reason in the analysis summary rather than persisted. Admitted candidates are ranked globally before the creation limit, so detector order no longer decides which survive.
+- Introduced a logical prediction identity (`identity_key`) over rule version, type, canonical relation, and scope, protected by a partial unique index on active rows. Reanalysis refreshes, reactivates, or suppresses the existing record instead of appending an equivalent row after expiry; dismissals and recorded outcomes are preserved, never silently rewritten.
+- Expiration now follows the time horizon (4h / 12h / 7d / 30d / never) instead of applying a single 72-hour expiry to every prediction, including open-ended ones.
+- Added a configurable retention policy with `purge_preview`, `purge` (requires `confirm: true`), and a read-only `diagnose` report. Deletion is transactional, removes child rows explicitly, preserves confirmed predictions and anything carrying feedback, retains all feedback rows, and writes one audit row per operation rather than one per deleted record. Nothing is deleted automatically.
+- Made prediction, evidence, and audit insertion atomic, and replaced empty `catch` blocks with bounded, redacted diagnostics.
+- Fixed `feedbackWeight()`, which compared `project = '%'` — an equality test against a literal percent sign that matched nothing for the no-project case. Feedback is now scoped to its rule version, project, and prediction type, counted once per prediction, and bounded to ±0.1.
+- Replaced recursive stale meta-predictions (`Prediction may be stale: Prediction may be stale: ...`) with explicit lifecycle transitions and reasons on the original record.
+- Aligned the dashboard with the backend: corrected prediction type labels and filters to the real enum, replaced status fields the backend never returned, removed a fabricated 30-day retention display, added a visible scope selector, and made Analyze report what changed.
+- Raised the `predict` tool's risk classification to `medium`, matching `black_box`, now that it exposes a bulk-delete action.
+- Added `test/predict-contract.test.js` and rewrote the Predict suites (67 tests) covering sequence direction, boundary isolation, evidence thresholds, admission, identity and lifecycle, retention safety, feedback scope, and frontend/backend contract alignment.
+
 ### Agent Bridge follow-ups (task continuation)
 
 - Added a first-class follow-up system: `POST /api/agent/run/:taskId/follow-up` creates a new child task durably linked to a terminal parent (immediate parent, thread root, and continuation depth), seeded with a bounded, redacted, untrusted-labeled summary of prior work. The original task is never reopened or mutated, and `POST /api/agent/run` stays fully backward compatible via a shared task-start path.

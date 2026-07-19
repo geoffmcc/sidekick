@@ -359,9 +359,13 @@ const TOOL_SCHEMAS = {
     timeout: z.number().optional().describe("Timeout in milliseconds (default: 1800000)")
   }),
   predict: z.object({
-    action: z.enum(["analyze", "list", "get", "feedback", "outcome", "dismiss", "explain", "status", "suggest", "migrate"]).describe("Predict action"),
+    action: z.enum(["analyze", "list", "get", "feedback", "outcome", "dismiss", "explain", "status", "suggest", "migrate", "purge_preview", "purge", "diagnose"]).describe("Predict action"),
     id: z.string().optional().describe("Prediction ID"),
     type: z.string().optional().describe("Filter by prediction type"),
+    scope: z.enum(["project", "session", "task", "global"]).optional().describe("Analysis scope. Inferred from project/session_id/task_id when omitted; use 'global' to deliberately analyze every project"),
+    confirm: z.boolean().optional().describe("Required (true) to execute a purge"),
+    retention_days: z.number().optional().describe("Override the configured retention period for purge_preview/purge"),
+    purge_legacy: z.boolean().optional().describe("Also purge legacy (pre-v2) terminal predictions, which are preserved by default"),
     project: z.string().optional().describe("Project scope"),
     session_id: z.string().optional().describe("Session ID"),
     task_id: z.string().optional().describe("Task ID"),

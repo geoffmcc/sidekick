@@ -1467,9 +1467,45 @@ app.get("/api/predict/:id", (req, res) => {
 });
 
 app.post("/api/predict/analyze", (req, res) => {
-  const { project, session_id, task_id, maxAge } = req.body || {};
-  const result = predictEngine.analyze({ project, session_id, task_id, maxAge: maxAge || "7d" });
-  res.json({ ok: true, ...result });
+  const { scope, project, session_id, task_id, maxAge } = req.body || {};
+  // Scope is required. A seven-day all-project sweep is never the fallback for
+  // an empty request body.
+  const result = predictEngine.analyze({ scope, project, session_id, task_id, maxAge: maxAge || "7d" });
+  if (!result.ok) return res.status(400).json(result);
+  res.json(result);
+});
+
+app.get("/api/predict/maintenance/purge-preview", (req, res) => {
+  const retention = req.query.retention_days === undefined
+    ? undefined : Number(req.query.retention_days);
+  if (!predictEngine.isValidRetentionDays(retention)) {
+    return res.status(400).json({ ok: false, error: "retention_days must be a non-negative number" });
+  }
+  res.json(predictEngine.purgePreview({
+    retention_days: retention,
+    purge_legacy: req.query.purge_legacy === "true",
+  }));
+});
+
+app.post("/api/predict/maintenance/purge", (req, res) => {
+  const { confirm, retention_days, purge_legacy } = req.body || {};
+  // Reject a present-but-invalid retention rather than silently defaulting:
+  // this endpoint deletes, so an ambiguous value must not be interpreted.
+  if (!predictEngine.isValidRetentionDays(retention_days)) {
+    return res.status(400).json({ ok: false, error: "retention_days must be a non-negative number" });
+  }
+  const result = predictEngine.purge({
+    confirm: confirm === true,
+    retention_days,
+    purge_legacy: purge_legacy === true,
+  });
+  if (!result.ok) return res.status(400).json(result);
+  auditLog(req, 'predict.purge', result);
+  res.json(result);
+});
+
+app.get("/api/predict/maintenance/diagnose", (req, res) => {
+  res.json(predictEngine.diagnose());
 });
 
 app.post("/api/predict/:id/feedback", (req, res) => {

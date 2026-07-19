@@ -628,14 +628,23 @@
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
     <div>
       <div class="section-title" style="margin:0">Prediction Engine (<span id="predictCount">0</span>)</div>
-      <div style="color:#8b949e;font-size:.82rem;margin-top:4px">Evidence-backed predictions from tool history, memories, handoffs, incidents, and workflows.</div>
+      <div style="color:#8b949e;font-size:.82rem;margin-top:4px">Evidence-backed predictions from correlated tool history, incidents, and workflows within an explicit scope.</div>
     </div>
-    <div style="display:flex;gap:8px">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <select id="predictScope" style="background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;padding:6px 10px;font-size:.85rem" title="Analysis scope">
+        <option value="project" selected>Current project</option>
+        <option value="session">Session</option>
+        <option value="task">Task</option>
+        <option value="global">All projects (global)</option>
+      </select>
+      <input id="predictScopeValue" placeholder="project name" style="background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;padding:6px 10px;font-size:.85rem;width:170px" />
       <button class="btn btn-sm" onclick="runPredictAnalyze()"><i class="fas fa-magnifying-glass-chart"></i> Analyze</button>
       <button class="btn btn-sm" onclick="loadPredictStatus()"><i class="fas fa-arrows-rotate"></i> Refresh</button>
+      <button class="btn btn-sm btn-outline" onclick="runPredictPurgePreview()" title="Preview retention cleanup (read-only)"><i class="fas fa-broom"></i> Purge preview</button>
     </div>
   </div>
   <div id="predictStatus" style="margin-bottom:12px"></div>
+  <div id="predictAnalyzeResult" style="margin-bottom:12px"></div>
   <div id="predictFilters" style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
     <select id="predictStatusFilter" onchange="loadPredict()" style="background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;padding:6px 10px;font-size:.85rem">
       <option value="">All statuses</option>
@@ -648,13 +657,13 @@
     </select>
     <select id="predictTypeFilter" onchange="loadPredict()" style="background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;padding:6px 10px;font-size:.85rem">
       <option value="">All types</option>
-      <option value="likely_next_action">Next Action</option>
-      <option value="failure_risk">Failure Risk</option>
+      <option value="next_action">Next Action</option>
+      <option value="likely_failure">Likely Failure</option>
       <option value="missing_prerequisite">Missing Prerequisite</option>
-      <option value="context_relevance">Context Relevance</option>
+      <option value="relevant_context">Relevant Context</option>
       <option value="incident_recurrence">Incident Recurrence</option>
-      <option value="automation_opportunity">Automation</option>
-      <option value="handoff_pending">Pending Handoff</option>
+      <option value="workflow_opportunity">Workflow Opportunity</option>
+      <option value="stale_or_contradicted">Stale / Contradicted</option>
     </select>
     <select id="predictConfidenceFilter" onchange="loadPredict()" style="background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;padding:6px 10px;font-size:.85rem">
       <option value="">All confidence</option>

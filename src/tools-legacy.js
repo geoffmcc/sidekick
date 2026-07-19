@@ -6410,9 +6410,9 @@ async function sidekick_orchestrate({ action, id, task_name, subtasks, dependenc
 
 // --- Predict Tool (delegates to src/predict.js) ---
 
-async function sidekick_predict({ action, id, type, project, session_id, task_id, feedback, outcome, limit, status, confidence, maxAge }) {
+async function sidekick_predict({ action, id, type, project, session_id, task_id, feedback, outcome, limit, status, confidence, maxAge, scope, confirm, retention_days, purge_legacy }) {
   try {
-    const validActions = ["analyze", "list", "get", "feedback", "outcome", "dismiss", "explain", "status", "suggest", "migrate"];
+    const validActions = ["analyze", "list", "get", "feedback", "outcome", "dismiss", "explain", "status", "suggest", "migrate", "purge_preview", "purge", "diagnose"];
     if (!action || !validActions.includes(action)) {
       return { content: [{ type: "text", text: `Invalid action. Use: ${validActions.join(", ")}` }], isError: true };
     }
@@ -6423,8 +6423,25 @@ async function sidekick_predict({ action, id, type, project, session_id, task_id
     }
 
     if (action === "analyze") {
-      const result = predictEngine.analyze({ project, session_id, task_id, maxAge: maxAge || "7d" });
+      // Scope is required: a global analysis must be requested deliberately
+      // (scope="global"), never inferred from omitted parameters.
+      const result = predictEngine.analyze({ scope, project, session_id, task_id, maxAge: maxAge || "7d" });
+      if (!result.ok) return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], isError: true };
       return jsonText(result);
+    }
+
+    if (action === "purge_preview") {
+      return jsonText(predictEngine.purgePreview({ retention_days, purge_legacy: purge_legacy === true }));
+    }
+
+    if (action === "purge") {
+      const result = predictEngine.purge({ confirm: confirm === true, retention_days, purge_legacy: purge_legacy === true });
+      if (!result.ok) return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], isError: true };
+      return jsonText(result);
+    }
+
+    if (action === "diagnose") {
+      return jsonText(predictEngine.diagnose());
     }
 
     if (action === "list") {
@@ -11878,7 +11895,7 @@ const TOOL_DEFS = [
   { name: "retry", description: "Retry tool calls with exponential backoff", args: { tool: "string (tool to retry)", args: "object (optional, tool args)", max_attempts: "number (optional, default 3)", backoff: "string (optional, exponential|linear|fixed, default exponential)", initial_delay: "number (optional, ms, default 1000)" } },
   { name: "evolve", description: "Evidence-driven workflow learning and generated-tool lifecycle management. Mines successful bounded workflows, validates parameterized procedures, and exposes approved trial/active generated tools through normal discovery.", args: { action: "string (analyze|candidates|inspect|validate|approve|activate_trial|promote|reject|deprecate|feedback|report|cleanup)", id: "string (optional, candidate/generated capability id or name)", approver: "string (optional)", useful: "boolean (optional, for feedback)", notes: "string (optional)", reason: "string (optional)", limit: "number (optional, logs to analyze)" } },
   { name: "orchestrate", description: "Multi-agent coordination: create task graphs, execute subtasks with dependencies, track progress", args: { action: "string (create|execute|list|status|cancel)", id: "number (optional, task id for execute/status/cancel)", task_name: "string (optional, task name for create)", subtasks: "array (optional, subtask definitions for create)", dependencies: "object (optional, dependency map for create)", timeout: "number (optional, timeout in ms, default 1800000)" } },
-  { name: "predict", description: "Evidence-backed prediction and decision-support engine. Analyzes tool history, memories, handoffs, incidents, and workflows to identify likely next actions, failure risks, missing prerequisites, relevant context, incident recurrence, and automation opportunities.", args: { action: "string (analyze|list|get|feedback|outcome|dismiss|explain|status|suggest|migrate)", id: "string (optional, prediction ID)", type: "string (optional, filter by type)", project: "string (optional, project scope)", session_id: "string (optional)", task_id: "string (optional)", feedback: "string (optional, useful|not_useful|incorrect|already_known|acted_on|dismissed)", outcome: "string (optional, confirmed|did_not_occur|action_succeeded|action_failed|expired|superseded|unresolved)", limit: "number (optional, max results - default 20)", status: "string (optional, filter by status)", confidence: "string (optional, filter by confidence)", maxAge: "string (optional, analysis window - default 7d)" } },
+  { name: "predict", description: "Evidence-backed prediction and decision-support engine. Analyzes correlated tool history, incidents, and workflows within an explicit scope to identify likely next actions, failure risks, missing prerequisites, incident recurrence, and workflow opportunities. Every persisted prediction passes an evidence and confidence admission gate.", args: { action: "string (analyze|list|get|feedback|outcome|dismiss|explain|status|suggest|migrate|purge_preview|purge|diagnose)", id: "string (optional, prediction ID)", type: "string (optional, filter by type)", project: "string (optional, project scope)", session_id: "string (optional)", task_id: "string (optional)", feedback: "string (optional, useful|not_useful|incorrect|already_known|acted_on|dismissed)", outcome: "string (optional, confirmed|did_not_occur|action_succeeded|action_failed|expired|superseded|unresolved)", limit: "number (optional, max results - default 20)", status: "string (optional, filter by status)", confidence: "string (optional, filter by confidence)", maxAge: "string (optional, analysis window - default 7d)", scope: "string (optional, project|session|task|global - required for analyze; use global to deliberately analyze every project)", confirm: "boolean (optional, required true to execute purge)", retention_days: "number (optional, override retention for purge_preview/purge)", purge_legacy: "boolean (optional, also purge legacy pre-v2 terminal predictions, preserved by default)" } },
   { name: "debug_tool", description: "Structured debugging cache with persistent storage for cross-session debugging. Store findings, recall past investigations, cleanup old entries.", args: { action: "string (store|recall|cleanup|start|stop|cache|get|status|clear)", session_name: "string (optional, session identifier for legacy actions)", key: "string (optional, cache key for get/cache, or debug key for cleanup)", value: "string (optional, value to cache/store)", service: "string (optional, service name for store/recall)", issue: "string (optional, issue description for store)", redact: "boolean (optional, default true - set false to skip redaction)" } },
   { name: "fresheyes", description: "Get a fresh perspective from Sidekick's LLM (Grok) on a problem. Sends sanitized context for independent analysis", args: { problem: "string (problem description)", context: "string (optional, relevant context)", files: "array (optional, files analyzed)", hypotheses: "array (optional, current hypotheses)", full_response: "boolean (optional, return full response vs key insights)" } },
   { name: "batch", description: "Execute multiple tool calls in one request to reduce API round-trips. Max 20 calls per batch.", args: { calls: "array (array of { tool: string, args: object })" } },
