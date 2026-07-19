@@ -13,20 +13,7 @@ CONTEXT.md
 docs/workplans/
 backups/
 version.json
-test/test-data-compute/
-test/test-data-compute-lifecycle/
-test/test-data-compute-reenroll/
-test/test-data-compute-protocol/
-test/test-data-placement/
-test/test-data-dashboard/
-test/test-data-security/
-test/test-data-structured-tools-security/
-test/test-data-blackbox/
-test/test-data-blackbox-lifecycle/
-test/test-data-blackbox-mcp/
-test/test-data-platform-kernel/
-test/test-data-predict/
-test/test-data-predict-lifecycle/
+test/test-data-*
 test/spike-openvino-node/
 # Python bytecode and caches
 __pycache__/

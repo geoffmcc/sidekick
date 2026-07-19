@@ -54,6 +54,18 @@ test('includes the worker modules, OpenVINO helper, and service files', () => {
   for (const f of expected) assert.ok(files.includes(f), `missing ${f}`);
 });
 
+test('bundles the pinned, SHA-256-verified winsw as sidekick-compute-worker.exe', () => {
+  // Pinned independently of the build script so a drive-by pin change there
+  // fails here. winsw v2.12.0 WinSW.NET461.exe.
+  const WINSW_SHA256 = 'b5066b7bbdfba1293e5d15cda3caaea88fbeab35bd5b38c41c913d492aadfc4f';
+  const exe = path.join(OUT, 'sidekick-compute-worker.exe');
+  assert.ok(files.includes('sidekick-compute-worker.exe'), 'winsw exe missing from package root');
+  const actual = crypto.createHash('sha256').update(fs.readFileSync(exe)).digest('hex');
+  assert.strictEqual(actual, WINSW_SHA256, 'bundled winsw hash does not match the pinned release');
+  const notices = fs.readFileSync(path.join(OUT, 'THIRD_PARTY_NOTICES.md'), 'utf8');
+  assert.ok(notices.includes('WinSW'), 'packaged THIRD_PARTY_NOTICES.md lacks the WinSW entry');
+});
+
 test('excludes all server-only code', () => {
   const banned = ['index.js', 'dashboard.js', 'db.js', 'tools.js', 'tools-legacy.js', 'agent.js', 'job-manager.js', 'provider-registry.js'];
   for (const b of banned) assert.ok(!files.includes(b), `server-only file leaked: ${b}`);

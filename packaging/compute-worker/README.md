@@ -49,13 +49,15 @@ sudo SERVER_URL=http://host:4097 ENROLL_TOKEN=<token> ./install-macos.sh
 ```
 
 ### Windows (winsw)
-winsw is a small, dependency-free .NET service wrapper. Provide a winsw release
-`.exe` (it is renamed to `sidekick-compute-worker.exe`):
+winsw is a small, dependency-free .NET service wrapper. The built worker package
+bundles a pinned, SHA-256-verified winsw release as `sidekick-compute-worker.exe`
+(see `THIRD_PARTY_NOTICES.md`), so installing from the package needs no download:
 ```powershell
 # elevated PowerShell
-.\install-windows.ps1 -ServerUrl http://host:4097 -EnrollToken <token> `
-  -WinswUrl https://github.com/winsw/winsw/releases/download/vX.Y.Z/WinSW-net461.exe
+.\install-windows.ps1 -ServerUrl http://host:4097 -EnrollToken <token>
 ```
+When installing from a bare repo checkout instead of the package, supply the
+binary with `-WinswUrl <winsw release exe url>` or place it manually.
 
 ## Uninstall
 

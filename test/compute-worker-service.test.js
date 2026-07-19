@@ -81,6 +81,13 @@ test('installers enroll via --service and never embed a token literal', () => {
     assert.ok(!/wksec_/.test(body), `${f} contains a credential literal`);
   }
 });
+test('windows installer verifies any -WinswUrl download (https + SHA-256)', () => {
+  const body = read(path.join(PKG, 'install-windows.ps1'));
+  assert.ok(/Scheme -ne "https"/.test(body), 'must reject non-https -WinswUrl');
+  assert.ok(/Get-FileHash -Algorithm SHA256/.test(body), 'must hash the downloaded winsw');
+  assert.ok(/SHA-256 mismatch/.test(body), 'must fail closed on hash mismatch');
+  assert.ok(/b5066b7bbdfba1293e5d15cda3caaea88fbeab35bd5b38c41c913d492aadfc4f/.test(body), 'default -WinswSha256 must be the pinned winsw v2.12.0 hash');
+});
 test('no service definition embeds a secret', () => {
   for (const body of [unit, plist, winsw]) {
     assert.ok(!/wksec_|enroll_[0-9a-f]{8,}/.test(body), 'service definition must not contain secrets');

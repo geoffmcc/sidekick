@@ -154,9 +154,9 @@ sudo SERVER_URL=http://host:4097 ENROLL_TOKEN=<token> ./install-linux.sh
 sudo SERVER_URL=http://host:4097 ENROLL_TOKEN=<token> ./install-macos.sh
 ```
 ```powershell
-# Windows (elevated) — winsw is a small dependency-free .NET service wrapper
-.\install-windows.ps1 -ServerUrl http://host:4097 -EnrollToken <token> `
-  -WinswUrl https://github.com/winsw/winsw/releases/download/vX.Y.Z/WinSW-net461.exe
+# Windows (elevated) — winsw (the service wrapper) is bundled in the built
+# worker package as sidekick-compute-worker.exe; no download, no -WinswUrl
+.\install-windows.ps1 -ServerUrl http://host:4097 -EnrollToken <token>
 ```
 
 Each installer creates the config/credential directories, writes a non-secret
@@ -172,7 +172,8 @@ Build a self-contained, dependency-free worker package:
 ```bash
 npm run package:worker
 # → dist/sidekick-compute-worker-<version>/  (worker modules, OpenVINO helper,
-#   service definitions/installers, package.json with zero dependencies, SHA256SUMS)
+#   service definitions/installers, bundled winsw as sidekick-compute-worker.exe,
+#   package.json with zero dependencies, SHA256SUMS)
 ```
 
 The build statically walks the worker's module graph and fails if it ever
