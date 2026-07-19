@@ -265,9 +265,20 @@ setTimeout(async () => {
       const tokenResponse = await makeRequest('POST', '/api/compute/enrollment-tokens', { displayName: 'dashboard-worker-' + suffix, expiresInMs: 600000, maxConcurrentJobs: 1 });
       assert.strictEqual(tokenResponse.status, 200, 'Enrollment token endpoint should return 200');
       assert.ok(tokenResponse.data.token, 'Enrollment token should be returned once');
-      assert.ok(tokenResponse.data.install.commands.linux.includes(tokenResponse.data.token), 'Install command should include token');
-      assert.ok(tokenResponse.data.install.commands.linux.includes('127.0.0.1:4097'), 'Install command should point at MCP port');
-      assert.ok(tokenResponse.data.install.commands.windows.includes('/api') === false, 'Install command should point at server root');
+      const cmds = tokenResponse.data.install.commands;
+      assert.ok(cmds.linux.includes(tokenResponse.data.token), 'Install command should include token');
+      assert.ok(cmds.linux.includes('127.0.0.1:4097'), 'Install command should point at MCP port');
+      assert.ok(cmds.windows.includes('/api') === false, 'Install command should point at server root');
+      // The dashboard must advertise the platform SERVICE INSTALLERS (which
+      // enroll + install the OS service + start it), not a bare enroll that
+      // leaves nothing running. Guards against regressing to the old broken
+      // `.exe enroll` / `enroll --service` commands.
+      assert.ok(cmds.linux.includes('install-linux.sh'), 'Linux command runs the systemd service installer');
+      assert.ok(cmds.macos.includes('install-macos.sh'), 'macOS command runs the launchd service installer');
+      assert.ok(cmds.windows.includes('install-windows.ps1'), 'Windows command runs the winsw service installer');
+      assert.ok(cmds.windows.includes('-EnrollToken ' + tokenResponse.data.token), 'Windows installer receives the token');
+      assert.ok(!/\.exe enroll\b/.test(cmds.windows), 'Windows command must not call the winsw wrapper .exe with an enroll verb');
+      assert.ok(!/\benroll --service\b/.test(cmds.linux + cmds.macos + cmds.windows), 'Platform commands must not be bare enroll-only');
 
       const enrolled = compute.workerManager.enrollWorker({
         nodeId: 'dashboard-node-' + suffix,

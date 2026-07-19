@@ -1239,19 +1239,31 @@ function computeInstallInfo(req, enrollmentToken) {
   const pkg = (() => {
     try { return require(path.join(__dirname, "..", "package.json")); } catch { return {}; }
   })();
-  const tokenArg = enrollmentToken ? ` --token ${enrollmentToken}` : " --token <enrollment-token>";
+  const token = enrollmentToken || "<enrollment-token>";
   return {
     workerVersion: pkg.version || "dev",
     protocolVersion: "1",
     baseUrl,
+    // Each command runs the platform service installer, which performs the full
+    // onboarding in one step: enroll (exchange the token for a persistent
+    // credential) -> install the OS service (systemd / launchd / winsw) ->
+    // start it. The service then auto-starts at boot and processes jobs on
+    // demand; a revoked worker exits cleanly and stays stopped. Run these from
+    // the extracted Sidekick compute-worker package directory.
     commands: {
-      linux: `sidekick-compute-worker enroll --server ${baseUrl}${tokenArg} --service systemd`,
-      macos: `sidekick-compute-worker enroll --server ${baseUrl}${tokenArg} --service launchd`,
-      windows: `sidekick-compute-worker.exe enroll --server ${baseUrl}${tokenArg} --service windows-service`,
-      source: `node src/compute/worker-agent.js enroll --server ${baseUrl}${tokenArg}`,
+      linux: `sudo SERVER_URL=${baseUrl} ENROLL_TOKEN=${token} ./install-linux.sh`,
+      macos: `sudo SERVER_URL=${baseUrl} ENROLL_TOKEN=${token} ./install-macos.sh`,
+      windows: `.\\install-windows.ps1 -ServerUrl ${baseUrl} -EnrollToken ${token}`,
+      // Development checkout (no system service): enroll, then run in the
+      // foreground. Use the platform installer above for a managed service.
+      source: `node src/compute/worker-agent.js enroll --server ${baseUrl} --token ${token} && node src/compute/worker-agent.js run --server ${baseUrl}`,
     },
     notes: [
-      "Use a platform release artifact when available; the source command is for development checkouts.",
+      "Run the platform command from the extracted Sidekick compute-worker package directory (the folder containing install-*.{sh,ps1}).",
+      "The installer enrolls, installs the OS service, and starts it — no separate start step is needed.",
+      "Linux and macOS require root (sudo); Windows requires an elevated PowerShell.",
+      "Windows: winsw must be bundled in the package (as sidekick-compute-worker.exe) or pass -WinswUrl <winsw release .exe> to install-windows.ps1.",
+      "The 'source' command is for a development checkout and runs in the foreground without installing a service.",
       "Enrollment tokens are single-use and should be pasted only on the worker machine being added.",
     ],
   };
