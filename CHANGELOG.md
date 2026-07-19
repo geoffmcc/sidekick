@@ -4,6 +4,13 @@ All notable changes to Sidekick.
 
 ## Unreleased
 
+### ISO timestamp comparison correctness
+
+- Fixed `generatePlatformDocs()`'s recent-event breakdown, which reported nothing at all. It used `datetime('now', '-24h')`, but `-24h` is not a valid SQLite modifier, so `datetime()` returned NULL and `timestamp > NULL` matched zero of 6,400 rows. Correcting only the modifier would have inverted the fault — timestamp columns store ISO 8601 while `datetime()` returns a space-separated string, and `'T'` (0x54) sorts above `' '` (0x20), so every row would then match. The query now binds an ISO bound.
+- Fixed the `expired` and `revalidation_due` memory-intelligence stats, which compared `expires_at` / `revalidate_after` against `datetime('now')`. The fault was latent only because no memory currently carries either field; a memory expiring on the current date would not have been counted.
+- Changed two `SET updated_at = datetime('now')` writes (memory enable in the dashboard, memory pin in the tool dispatcher) to store ISO. They were the only writers that could mix a space-separated value into columns that are otherwise entirely ISO, which would have mis-ordered Predict's `memories.updated_at` range query.
+- Added `test/timestamp-format.test.js`: demonstrates both silent failure modes (a NULL bound matching nothing, and an ISO value out-sorting a same-date bound), asserts no runtime query compares a column against `datetime()`, and verifies the kernel event window and memory expiry stats against the real migrated schema.
+
 ### Tool-log session and project correlation
 
 - MCP tool calls now record the transport's per-connection `sessionId` on `tool_logs`. The field was already plumbed end-to-end (`createMcpExecutionContext` -> `dispatcherMetadata` -> `logToolCall`), but the three MCP registration sites in `src/index.js` passed only `requestId`, so `session_id` was null on every row from every source. Without it each call is its own execution boundary and Predict's sequence detectors correctly produce nothing.

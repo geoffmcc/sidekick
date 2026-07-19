@@ -46,6 +46,18 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+/**
+ * ISO timestamp `hours` in the past, for use as a bound parameter.
+ *
+ * Timestamp columns store ISO 8601 ("2026-07-19T21:34:49.497Z"). SQLite's
+ * datetime() returns a space-separated string ("2026-07-19 21:34:49"), so
+ * comparing a column against datetime('now', ...) compares 'T' (0x54) against
+ * ' ' (0x20) and every ISO row sorts above the bound. Always bind an ISO value.
+ */
+function isoHoursAgo(hours) {
+  return new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+}
+
 function newId(prefix) {
   return `${prefix}_${Date.now().toString(36)}_${crypto.randomBytes(6).toString("hex")}`;
 }
@@ -1120,7 +1132,9 @@ function generatePlatformDocs() {
   const capabilityCount = db.prepare("SELECT COUNT(*) as cnt FROM platform_capabilities").get().cnt;
   const changeSetCount = db.prepare("SELECT COUNT(*) as cnt FROM platform_change_sets").get().cnt;
   const states = db.prepare("SELECT state, COUNT(*) as cnt FROM platform_executions GROUP BY state ORDER BY cnt DESC").all();
-  const recentEvents = db.prepare("SELECT event_type, COUNT(*) as cnt FROM platform_execution_events WHERE timestamp > datetime('now', '-24h') GROUP BY event_type ORDER BY cnt DESC LIMIT 10").all();
+  // '-24h' was not a valid SQLite modifier, so datetime() returned NULL and this
+  // matched no rows at all. Bind an ISO bound to match the column's format.
+  const recentEvents = db.prepare("SELECT event_type, COUNT(*) as cnt FROM platform_execution_events WHERE timestamp > ? GROUP BY event_type ORDER BY cnt DESC LIMIT 10").all(isoHoursAgo(24));
   const activeModels = db.prepare("SELECT name, provider, usage_count FROM platform_model_registry WHERE state = 'registered' ORDER BY usage_count DESC LIMIT 5").all();
   const activeExtensions = db.prepare("SELECT name, type, state, usage_count FROM platform_extensions WHERE state = 'active' ORDER BY usage_count DESC LIMIT 5").all();
   return {
