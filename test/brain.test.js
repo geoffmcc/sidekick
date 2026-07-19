@@ -9,7 +9,7 @@ const assert = require("assert");
 const { validatePlan } = require("../src/brain/plan-validator");
 const { runBrainTask } = require("../src/brain/brain");
 const { BRAIN_LIMITS } = require("../src/brain/config");
-const { extractJson, buildPlannerSystemPrompt, normalizePlanShape } = require("../src/brain/index");
+const { extractJson, buildPlannerSystemPrompt, selectToolsForGoal, normalizePlanShape } = require("../src/brain/index");
 
 console.log("Running Brain v0.1 tests...\n");
 
@@ -256,6 +256,29 @@ test("planner prompt carries tool descriptions, argument signatures, and approva
   assert.ok(!prompt.includes("noargs [requires human approval]"), "unmarked tools stay unmarked");
   assert.ok(!prompt.includes("d".repeat(200)), "long descriptions are capped");
   assert.ok(prompt.includes("prefer one NOT marked"), "prefer-ungated rule present");
+});
+
+test("selectToolsForGoal shortlists by goal relevance, deterministically, within the cap", () => {
+  const catalog = [];
+  for (let i = 0; i < 60; i++) catalog.push({ name: `filler_${String(i).padStart(2, "0")}`, description: "unrelated capability" });
+  catalog.push({ name: "disk_analyzer", description: "Inspect disk usage and partitions" });
+  catalog.push({ name: "health", description: "Composite system health checks" });
+
+  const picked = selectToolsForGoal(catalog, "check disk usage on the server", 24);
+  assert.strictEqual(picked.length, 24, "cap respected");
+  const names = picked.map(t => t.name);
+  assert.ok(names.includes("disk_analyzer"), "goal-relevant tool selected");
+  assert.ok(names.includes("health"), "core tool always selected when registered");
+  assert.ok(names.indexOf("disk_analyzer") < names.indexOf("filler_00"), "relevance outranks fillers");
+
+  // Deterministic: identical inputs produce identical output.
+  assert.deepStrictEqual(selectToolsForGoal(catalog, "check disk usage on the server", 24), picked);
+  // Selection never invents tools — always a subset of the input catalog.
+  for (const t of picked) assert.ok(catalog.includes(t));
+  // A goal overlapping nothing still yields a full, core-anchored shortlist.
+  const cold = selectToolsForGoal(catalog, "zzz qqq", 24).map(t => t.name);
+  assert.strictEqual(cold.length, 24);
+  assert.ok(cold.includes("health"));
 });
 
 test("planner prompt includes a concrete example plan and the no-wrap rule", () => {
