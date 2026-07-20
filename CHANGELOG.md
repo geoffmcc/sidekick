@@ -4,6 +4,17 @@ All notable changes to Sidekick.
 
 ## Unreleased
 
+### Filesystem path policy symlink escapes
+
+- Fixed the path policy comparing paths lexically, so a symlink was judged by where it sat rather than by where it pointed. A link beneath an allowed root reached any target outside it, and a path could alias into a denied root under a name that matched no deny entry. Verified end to end before the fix: `read` returned the contents of a file outside the allowed root through a link inside it, and `write` overwrote that file. Both are now denied.
+- Resolution walks the path component by component, so a `..` following a symlink applies to the link's target as the kernel applies it instead of being collapsed lexically first. Collapsing first erased the link entirely and defeated the check; this held for absolute and relative spellings alike, and the relative case additionally required absolutizing without normalizing.
+- Configured roots are canonicalized the same way, so an allowed root that is itself a symlink keeps working. A target that does not exist yet is resolved through its nearest existing ancestor, which catches an escaping link in the part of the path that does exist without creating anything.
+- Deny is evaluated lexically first and canonically second, so it can only have grown: a link sitting inside a denied root that points elsewhere stays denied, and an alias reaching into one is now caught.
+- **Behavior change, fails closed:** a path containing a dangling symlink is now denied whenever any path policy is configured, where it was previously treated as an ordinary absent path. A dangling link is not distinguishable from an absent file by `existsSync` or `realpath` alone, and walking past one hid wherever it pointed.
+- **Operational note:** a single configured root that exists but cannot be resolved denies *every* path rather than being skipped, since silently dropping a deny root would widen access. A rename that leaves a root dangling will lock out all filesystem tools; the returned message deliberately does not name the offending root.
+- Not addressed, and documented in `docs/security.md`: the check-to-use race remains open, comparison stays case-sensitive so a case-variant spelling of a denied root is unrecognised on a case-insensitive mount such as WSL `/mnt/c`, and hard links have no separate target to resolve.
+- Extended `test/path-policy.test.cjs` with symlink coverage: allowed-root escapes via file, directory and multi-hop links; `..` after a symlink in absolute, raw and cwd-relative spellings; deny-root aliasing in both directions; symlinked allowed and denied roots; nonexistent targets below escaping links; dangling links; unresolvable roots; operation-label independence; and enforcement through the live `read` and `write` handlers.
+
 ### ISO timestamp comparison correctness
 
 - Fixed `generatePlatformDocs()`'s recent-event breakdown, which reported nothing at all. It used `datetime('now', '-24h')`, but `-24h` is not a valid SQLite modifier, so `datetime()` returned NULL and `timestamp > NULL` matched zero of 6,400 rows. Correcting only the modifier would have inverted the fault — timestamp columns store ISO 8601 while `datetime()` returns a space-separated string, and `'T'` (0x54) sorts above `' '` (0x20), so every row would then match. The query now binds an ISO bound.
