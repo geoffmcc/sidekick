@@ -15,7 +15,9 @@ Extracted descriptor-owned families live under `src/tools/families/` and are agg
 
 Each family owns its handlers, Zod schemas, risk, category, and compatibility metadata. Legacy `TOOL_DEFS` rows remain only as ordering anchors while MCP ordering compatibility is preserved. When an extracted tool has an entry in `src/tools/schemas/index.js`, remove it so each schema has exactly one owner.
 
-`hash` is intentionally still legacy-owned despite sharing the `Data Pipeline` category: it calls `enforcePathPolicy`, a `src/tools-legacy.js` internal security boundary shared with roughly twenty other handlers. Relocating that boundary is its own slice.
+The filesystem path policy now lives in `src/tools/path-policy.js`, the authoritative implementation of `enforcePathPolicy` and `getPathPolicyDecision`. It requires only `path`, `src/core/policy-env.js`, and `src/tools/context.js`, so descriptor families can depend on it without requiring `src/tools-legacy.js` at module top level. `src/tools-legacy.js` consumes it and no longer defines its own copy.
+
+`hash` is still legacy-owned despite sharing the `Data Pipeline` category. The path-policy boundary it depends on has been relocated, so its migration is now unblocked and belongs to a later slice.
 
 ## Registry Lifecycle
 
@@ -164,7 +166,7 @@ Handlers should not implement their own policy or approval logic. Handlers that 
 
 Most handlers still live in `src/tools-legacy.js`. Remaining migration should proceed by coherent families, such as read-only database inspection tools, memory tools, or the GitHub tools. Avoid migrating destructive infrastructure tools until their security behavior is fully characterized.
 
-A family whose handlers depend on `src/tools-legacy.js` internals — `enforcePathPolicy`, `safeExecFileSync`, `isDangerous`, `jsonText` — needs those helpers relocated to a shared module first. That relocation should be its own slice, not a side effect of a family extraction. Family modules must not require `src/tools-legacy.js` at module top level; the lazy `require` of the dispatcher inside legacy functions is what keeps the dispatcher/legacy cycle from forming.
+A family whose handlers depend on `src/tools-legacy.js` internals — `safeExecFileSync`, `isDangerous`, `jsonText` — needs those helpers relocated to a shared module first. That relocation should be its own slice, not a side effect of a family extraction. `enforcePathPolicy` has already been relocated this way, to `src/tools/path-policy.js`. Family modules must not require `src/tools-legacy.js` at module top level; the lazy `require` of the dispatcher inside legacy functions is what keeps the dispatcher/legacy cycle from forming.
 
 The compatibility layer remains to preserve external clients, existing generated/evolved tools, dashboard catalogs, approval workflows, and tool logs during gradual extraction.
 

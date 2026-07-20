@@ -68,8 +68,9 @@ for (const name of extractedNames) {
   assert.ok(legacyDefNames.includes(name), `${name} should keep its legacy TOOL_DEFS row as an ordering anchor`);
 }
 
-// hash stays behind deliberately: it calls enforcePathPolicy, a legacy-internal
-// security boundary that is out of scope for this slice.
+// hash stays behind deliberately. The enforcePathPolicy boundary it calls now
+// lives in src/tools/path-policy.js, so its migration is unblocked but deferred
+// to a later slice.
 assert.strictEqual(registry.get('hash').family, null, 'hash should remain a legacy-owned descriptor');
 assert.strictEqual(registry.get('hash').handler, legacy.TOOLS.hash, 'hash should still resolve to the legacy handler');
 
