@@ -20,6 +20,8 @@ const { validAllowedIps, validDomainName, validDownloadFormat, validIdentifier, 
 const computeTools = require("./compute/tools");
 const { TOOL_RISK, TOOL_CATEGORIES, RISK_LEVELS } = require("./tools/metadata");
 const toolContext = require("./tools/context");
+const { parsePolicyList, sourceEnvName } = require("./core/policy-env");
+const { getPathPolicyDecision, enforcePathPolicy } = require("./tools/path-policy");
 let inferenceService = null;
 try { inferenceService = require("./compute/inference-service"); } catch {}
 
@@ -176,14 +178,6 @@ function syncToolRegistry() {
   } catch (error) {
     console.error('[ToolRegistry] Error syncing tool registry:', error.message);
   }
-}
-
-function parsePolicyList(value) {
-  return String(value || "").split(",").map(s => s.trim()).filter(Boolean);
-}
-
-function sourceEnvName(source, suffix) {
-  return "SIDEKICK_" + String(source || "unknown").toUpperCase().replace(/[^A-Z0-9]+/g, "_") + "_" + suffix;
 }
 
 function getPolicyEntries(source, suffixes) {
@@ -1425,66 +1419,6 @@ function windowsPathToWslPath(value) {
   const match = text.match(/^([A-Za-z]):[\\/](.*)$/);
   if (!match) return text;
   return "/mnt/" + match[1].toLowerCase() + "/" + match[2].replace(/\\/g, "/");
-}
-
-function normalizePolicyPath(filePath) {
-  return path.resolve(String(filePath || ""));
-}
-
-function pathPolicyEntries(source, suffix) {
-  return [
-    ...parsePolicyList(process.env["SIDEKICK_" + suffix]),
-    ...parsePolicyList(process.env[sourceEnvName(source, suffix)])
-  ];
-}
-
-function pathMatchesPolicyEntry(filePath, entry) {
-  const normalizedPath = normalizePolicyPath(filePath);
-  const normalizedEntry = normalizePolicyPath(entry);
-  const relative = path.relative(normalizedEntry, normalizedPath);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-function findPathPolicyMatch(entries, filePath) {
-  return entries.find(entry => pathMatchesPolicyEntry(filePath, entry));
-}
-
-function getPathPolicyDecision(filePath, operation = "access", source = getCurrentSource()) {
-  const target = normalizePolicyPath(filePath);
-  const allowedEntries = pathPolicyEntries(source, "ALLOWED_PATHS");
-  const deniedEntries = pathPolicyEntries(source, "DENIED_PATHS");
-  const deniedMatch = findPathPolicyMatch(deniedEntries, target);
-
-  if (deniedMatch) {
-    return { allowed: false, source, operation, path: target, reason: "path denied by policy", matched: deniedMatch, list: "denied" };
-  }
-
-  if (allowedEntries.length > 0) {
-    const allowedMatch = findPathPolicyMatch(allowedEntries, target);
-    return {
-      allowed: Boolean(allowedMatch),
-      source,
-      operation,
-      path: target,
-      reason: allowedMatch ? "path allowed by policy" : "path not in allowed paths",
-      matched: allowedMatch || null,
-      list: "allowed"
-    };
-  }
-
-  return { allowed: true, source, operation, path: target, reason: "path policy is open" };
-}
-
-function enforcePathPolicy(filePath, operation = "access") {
-  const decision = getPathPolicyDecision(filePath, operation);
-  if (decision.allowed) return null;
-  return {
-    content: [{
-      type: "text",
-      text: `Path blocked by policy: ${decision.path} (source=${decision.source}, operation=${decision.operation}). ${decision.reason}.`
-    }],
-    isError: true
-  };
 }
 
 async function sidekick_bash({ command }) {

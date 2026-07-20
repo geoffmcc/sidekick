@@ -19,6 +19,7 @@ const suites = [
   { file: 'test/security.test.js', critical: true, description: 'Redaction and dangerous command checks' },
   { file: 'test/structured-tools-security.test.js', critical: true, description: 'Structured command-backed tool hardening' },
   { file: 'test/security-scan.test.js', critical: true, description: 'Read-only config and secret scan behavior' },
+  { file: 'test/path-policy.test.cjs', critical: true, description: 'Shared filesystem path policy boundary' },
   { file: 'test/ci-status.test.js', critical: true, description: 'Read-only GitHub CI status aggregation' },
   { file: 'test/health.test.js', critical: true, description: 'Composite health aggregation and stable failure shapes' },
   { file: 'test/agent-protocol.test.js', critical: true, description: 'Agent decision parsing, model selection, and chat roles' },
