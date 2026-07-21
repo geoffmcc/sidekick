@@ -112,6 +112,31 @@ dbStore.runPendingMigrations();
   assert.ok(healthData.stats.stored_handoffs >= 1, "health should count stored handoffs");
   assert.ok(healthData.stats.durable_active >= 1, "health should count durable active memories");
 
+  const getByNoSelector = await TOOLS.handoff({ action: "get" });
+  assert.ok(getByNoSelector.isError, "handoff get with no selector should be an error");
+  assert.ok(getByNoSelector.content[0].text.includes("requires id or key"), "error message should state id or key is required");
+
+  const getByProjectOnly = await TOOLS.handoff({ action: "get", project: "sidekick" });
+  assert.ok(getByProjectOnly.isError, "handoff get with only project should be an error");
+  assert.ok(getByProjectOnly.content[0].text.includes("requires id or key"), "error message should state id or key is required");
+
+  const inspectByNoSelector = await TOOLS.handoff({ action: "inspect" });
+  assert.ok(inspectByNoSelector.isError, "handoff inspect with no selector should be an error");
+  assert.ok(inspectByNoSelector.content[0].text.includes("requires id or key"), "inspect error message should state id or key is required");
+
+  const inspectByProjectOnly = await TOOLS.handoff({ action: "inspect", project: "sidekick" });
+  assert.ok(inspectByProjectOnly.isError, "handoff inspect with only project should be an error");
+  assert.ok(inspectByProjectOnly.content[0].text.includes("requires id or key"), "inspect error message should state id or key is required");
+
+  const getById = await TOOLS.handoff({ action: "get", id: createData.handoff.id });
+  assert.ok(!getById.isError, "handoff get by id should still work");
+  const getByIdData = JSON.parse(getById.content[0].text);
+  assert.strictEqual(getByIdData.handoff.id, createData.handoff.id, "get by id should return the correct handoff");
+
+  const getByUnknownId = await TOOLS.handoff({ action: "get", id: "nonexistent_id" });
+  assert.ok(getByUnknownId.isError, "handoff get by unknown id should be an error");
+  assert.ok(getByUnknownId.content[0].text.includes("Handoff not found"), "unknown id should return Handoff not found");
+
   console.log("✅ Memory intelligence tests passed");
 })().catch(error => {
   console.error(error);
