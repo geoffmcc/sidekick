@@ -47,7 +47,17 @@ module.exports = {
   ...schemas,
   context,
   result,
-  dispatcher,
+  // The dispatcher is re-exported for transports and tests, but WITHOUT the
+  // internal runner seam. `executeAuthorizedTaskStep` carries the
+  // approved-execution capability, and re-exporting the raw module put it on
+  // the public surface as `require("./tools").dispatcher.executeAuthorizedTaskStep`.
+  // It verifies its own authorization, so reachability is not a bypass — but a
+  // privileged seam should not be reachable from the general tool facade at
+  // all. `src/brain/resume.js` requires `./tools/dispatcher` directly.
+  dispatcher: (() => {
+    const { executeAuthorizedTaskStep, ...publicDispatcher } = dispatcher;
+    return publicDispatcher;
+  })(),
   policy,
   approvals,
   logging,

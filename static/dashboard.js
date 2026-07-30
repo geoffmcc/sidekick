@@ -2839,11 +2839,45 @@ function loadApprovals(){
           '<div><span class="s-label">Reason:</span> ' + esc(a.reason || '') + '</div>' +
           completed +
         '</div>' +
-        '<pre style="white-space:pre-wrap;margin-top:8px;max-height:220px;overflow:auto">' + esc(a.args_preview || '{}') + '</pre>' +
+        // Task-originated approvals persist no preview: arguments are stored
+        // encrypted and rendered on demand for an authenticated reader
+        // (docs/adr-approval-continuation.md §4.4). Showing '{}' here would
+        // mean asking a human to authorize an action they cannot see, so these
+        // get an explicit fetch control instead.
+        (a.args_preview_available
+          // esc() escapes &, < and > but NOT quotes, so it is wrong for an
+          // attribute or JS-string context — jsArg()/attr() are the helpers for
+          // those. An id containing a quote would otherwise break out of the
+          // onclick handler.
+          ? '<div style="margin-top:8px">' +
+              '<button class="btn btn-sm btn-outline" onclick="loadApprovalPreview(' + jsArg(a.id) + ')">' +
+                '<i class="fas fa-eye"></i> Show arguments</button>' +
+              '<pre id="approval-args-' + attr(a.id) + '" style="white-space:pre-wrap;margin-top:8px;max-height:220px;overflow:auto;display:none"></pre>' +
+            '</div>'
+          : '<pre style="white-space:pre-wrap;margin-top:8px;max-height:220px;overflow:auto">' + esc(a.args_preview || '{}') + '</pre>') +
         result +
       '</div>';
     }).join('');
   }).catch(e => apiError('/api/approvals', e, 0));
+}
+
+// Renders a task-originated approval's arguments on demand. The server
+// decrypts, authenticates the payload against its digest, and redacts; nothing
+// is persisted and nothing is cached here. A tampered payload reports as such
+// rather than being displayed as genuine — a reviewer must not be shown a
+// forgery of what they are authorizing.
+function loadApprovalPreview(id){
+  var target = document.getElementById('approval-args-' + id);
+  if (!target) return;
+  target.style.display = 'block';
+  target.textContent = 'Loading…';
+  authFetch('/api/approvals/' + encodeURIComponent(id) + '/preview')
+    .then(r=>r.json())
+    .then(d=>{
+      if (!d.ok) { target.textContent = 'Arguments unavailable: ' + (d.error || 'unknown'); return; }
+      target.textContent = d.preview.args_preview || '{}';
+    })
+    .catch(e => { target.textContent = 'Arguments unavailable'; apiError('/api/approvals/' + id + '/preview', e, 0); });
 }
 
 function approveRequest(id){

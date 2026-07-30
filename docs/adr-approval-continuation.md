@@ -2,14 +2,88 @@
 
 ## Status
 
-**Accepted — 2026-07-19.**
+**Accepted — 2026-07-19. Implemented — 2026-07-30.**
 
 Defines how a Brain task parked at `waiting_for_approval` resumes after a human
 approves, so an approval authorizes one exact parked action and the task runner
 remains the sole executor of plan steps. Accepted as an architectural contract:
 the invariants in §9 are binding, the physical schema is migration-ready but
-provisional in the ways §9 records. **No implementation has been done** — the
-schema, transactions, and recovery paths below are specified, not built.
+provisional in the ways §9 records.
+
+### Implementation status
+
+Built as specified. Migration `025_approval_continuation.sql` creates the three
+tables and their indexes; the additive `approval_execution_recovery_events`
+columns are owned instead by the idempotent
+`ensureApprovalContinuationSchema()`, because migrations run in one process
+while the ensure runs in every process that touches approvals and service start
+order is not guaranteed — SQLite has no `ADD COLUMN IF NOT EXISTS`, so a bare
+`ALTER` would take the MCP server down whenever the agent's ensure won the race.
+The transactions live
+in `src/approvals/continuation.js` (T1–T10), the storage layer and runtime
+`ensure` counterpart in `src/approvals/store.js`, the derived action identity in
+`src/approvals/keys.js`, the closed vocabularies in
+`src/approvals/vocabulary.js`, and the scheduled sweeper in
+`src/approvals/sweeper.js`. Resumption is `src/brain/resume.js`, driven by the
+task runner loop in `src/brain/scheduler.js`; both background jobs are started
+by the agent service (`src/agent.js`). `test/approval-continuation.test.cjs`
+exercises every transaction against a real database.
+
+One known gap left open, flagged rather than silently accepted: `beginTaskRun`
+derives `task_id` from `crypto.randomUUID().slice(0, 8)` — **32 bits**, and
+`task_id` is `task_checkpoints`' PRIMARY KEY and the correlation column
+approvals foreign-key to. A birthday collision is likely within ~65k tasks and
+would bind old approvals to an unrelated checkpoint. T1's state guard turns the
+destructive case into a refusal, so a collision now fails loudly instead of
+clobbering, but widening the identifier is a separate change with wider blast
+radius (transcript filenames, correlation ids) and has not been made here.
+
+Four deviations, all within the latitude §9 marks provisional:
+
+0. **The canonicaliser gained a depth bound of 64.** §9 lists the digest
+   algorithm as provisional but says nothing about input bounds. Payloads
+   nested more than 64 levels deep previously produced a digest and now throw —
+   a real behavioural change, not merely a crash becoming an error, since the
+   original hashed 2000 levels without complaint. Depth 64 and below are
+   byte-identical, verified against the pre-change function. Adopted because
+   this function became load-bearing for durable identity and an adversarially
+   deep or cyclic model-authored plan is a cheap stack-exhaustion trigger.
+
+
+1. **Standalone approvals were not migrated.** Non-task approvals still live in
+   the legacy JSON document and keep today's execution path, so the
+   `slice(0, 500)` eviction survives for them and **I7 holds for
+   task-originated approvals only**. §9 lists the transition path for that
+   document as provisional and §"Limitations" warns the dual-store period is
+   the riskiest part; cutting the live approval surface over is its own slice.
+2. **`args_digest` hashes a version-prefixed payload** (`"ad1" FS json`), which
+   §3 specifies explicitly for `plan_version` but leaves ambiguous for
+   `args_digest`. The prefixed form was chosen so all three digests are
+   self-describing and derived identically.
+3. **The role model remains provisional, as §8.2 anticipated.** Sidekick still
+   has no permission system, so `isAuthorizedHuman` enforces the weaker
+   available rule: an authenticated dashboard principal that is not a known
+   automated-actor name. It fails closed — an unauthenticated deployment cannot
+   reconcile at all.
+
+Two corrections the spec did not state and the implementation needs:
+
+- **An audit event for an aborted transaction must be written after the
+  ROLLBACK**, not inside it. §7.1 requires an integrity failure to roll back
+  *and* record a `manual_review` recovery event, and a write made inside the
+  transaction it reports on is destroyed by the very rollback that makes it
+  necessary.
+- **A runner that holds the claim cannot unwind through T6 or T7 when there is
+  no live approval to name.** T6's approval UPDATE matches zero rows once the
+  binding is cleared, and T7 requires the checkpoint to be *unclaimed*
+  (`waiting_for_approval`/`runnable`). Both therefore refuse, leaving the
+  checkpoint `running` — which the resume scheduler reclaims after every lease
+  expiry, forever. The runner needs a fenced fallback that terminalises the
+  task under its own `claim_epoch`. This is reachable through the §10
+  out-of-scope case: a crash *mid-plan* after the approved step leaves
+  `next_step_id` pointing at a step that never ran and has no ledger row.
+  Such a task is failed and audited with `checkpoint_unrecoverable` rather
+  than being retried indefinitely.
 
 Revision 2 removed an incorrect exactly-once claim, closed recovery gaps in the
 transaction design (stale-running reclaim, atomic wake-up on denial/expiry/

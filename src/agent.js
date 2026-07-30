@@ -920,6 +920,15 @@ async function runAgent(goal, taskId, parentContext = null) {
     const outcome = await run({
       goal,
       classification,
+      // Carries the durable-continuation seam: a Brain task that parks for
+      // approval is checkpointed under this id and resumed by the task runner
+      // (docs/adr-approval-continuation.md).
+      taskId,
+      lineage: {
+        platformExecutionId: platformExecution ? platformExecution.execution_id : null,
+        rootExecutionId: platformExecution ? platformExecution.root_execution_id : null,
+        rootTaskId: parentContext ? parentContext.rootTaskId : taskId,
+      },
       emit: (event) => emit(taskId, event),
       onEvent: (type, payload, severity) => appendAgentExecutionEvent(platformExecution, type, { task_id: taskId, ...payload }, severity),
     });
@@ -1266,11 +1275,143 @@ app.post("/api/watches/reload", (req, res) => {
   res.json({ ok: true });
 });
 
+/**
+ * Approval-continuation background jobs
+ * (docs/adr-approval-continuation.md §7.2, invariants I11 and I17).
+ *
+ * Both of these are LIVENESS DEPENDENCIES, not conveniences:
+ *
+ *   - the sweeper is what guarantees a parked task is woken by expiry, orphan
+ *     recovery, or its own deadline. Without it, a task waits until its
+ *     deadline instead of its approval's expiry.
+ *   - the resume scheduler is what guarantees a task made `runnable` by T2 is
+ *     actually claimed. Without it, an approved approval attaches to a task
+ *     that never runs.
+ *
+ * They are started HERE, in the long-running agent service, specifically so
+ * this implementation does not repeat the `recoverStaleApprovals` failure —
+ * exported, correct, and never called by anything in production.
+ */
+/**
+ * Deliver a resumed task's outcome back to the requester.
+ *
+ * `runAgent` wrote the transcript when the task PARKED, with
+ * `status: "waiting_for_approval"` and an empty result — and
+ * `finishAgentExecution` maps anything that is not completed/iteration_limit to
+ * `failed`. Nothing updated either afterwards, so a task that resumed and
+ * synthesized a real answer left the human who approved the dangerous action
+ * with a failed task and no answer. The whole point of resuming is to produce
+ * that answer, so it has to land somewhere durable.
+ *
+ * The transcript is the right place: it is what the follow-up continuation
+ * builder reads (`resolveFinalAnswer`), what the task-history UI renders, and
+ * what `recordAgentTaskMemory` consumed. Rewritten in place, preserving every
+ * lineage field, so a resumed task looks like any other completed one.
+ */
+function finalizeResumedTask({ taskId, state, outcome, checkpoint }) {
+  if (!taskId || !outcome) return { ok: false, reason: "nothing_to_record" };
+  // Only terminal resumptions carry an answer. `woken` and `reconciling` mean
+  // the task is still in flight and will be picked up again.
+  const terminalStates = { completed: "completed", failed: "failed", cancelled: "failed", timed_out: "iteration_limit" };
+  const mapped = terminalStates[state];
+  if (!mapped) return { ok: false, reason: "not_terminal", state };
+
+  const transcriptPath = path.join(CONV_DIR, taskId + ".json");
+  let record = {};
+  try {
+    record = JSON.parse(fs.readFileSync(transcriptPath, "utf-8"));
+  } catch {
+    return { ok: false, reason: "transcript_unreadable" };
+  }
+
+  const resumedSteps = Array.isArray(outcome.steps) ? outcome.steps : [];
+  const answer = state === "completed" ? String(outcome.result || "") : "";
+  const failure = state === "completed" ? null : redactSensitive(String(outcome.error || outcome.code || state));
+
+  const merged = {
+    ...record,
+    steps: (Array.isArray(record.steps) ? record.steps : []).concat(resumedSteps),
+    status: mapped,
+    result: answer,
+    error: failure,
+    resumed_at: new Date().toISOString(),
+    brain: { ...(record.brain || {}), state, resumed: true, awaiting_approval: null, error: failure },
+  };
+  try {
+    fs.writeFileSync(transcriptPath, JSON.stringify(merged), "utf-8");
+  } catch {
+    return { ok: false, reason: "transcript_unwritable" };
+  }
+
+  // Anything still streaming this task sees the terminal event, and the
+  // platform execution timeline records the resumption rather than ending at
+  // the park.
+  emit(taskId, state === "completed" ? { type: "done", text: answer } : { type: "error", text: failure });
+  try {
+    const executionId = checkpoint && checkpoint.platform_execution_id;
+    if (executionId) {
+      platformKernel.appendEvent({
+        execution_id: executionId,
+        root_execution_id: checkpoint.root_execution_id || null,
+        task_id: taskId,
+        event_type: state === "completed" ? "brain.resumed_completed" : "brain.resumed_failed",
+        payload: { state, evidence_count: outcome.evidenceCount || 0 },
+        severity: state === "completed" ? "info" : "error",
+        source: "agent",
+        actor_id: "task-runner",
+      });
+    }
+  } catch {}
+
+  if (state === "completed") {
+    try { recordAgentTaskMemory({ goal: record.goal, steps: merged.steps, taskId, status: "completed" }); } catch {}
+  }
+  return { ok: true, taskId, status: mapped };
+}
+
+function startApprovalContinuationJobs() {
+  if (!brain || !brain.isEnabled()) return { started: false, reason: "brain_disabled" };
+  let sweeper;
+  let scheduler;
+  try {
+    sweeper = require("./approvals/sweeper").startSweeper();
+    scheduler = require("./brain/scheduler").startResumeScheduler({
+      buildDeps: async (taskId) => brain.makeResumeDeps({
+        callLLM: (messages, options) => callLLM(messages, options),
+        callTool: (name, args) => callAgentTool(name, args, { taskId, source: "agent" }),
+        redact: redactSensitive,
+      }),
+      onPass: (outcomes) => {
+        for (const entry of outcomes) {
+          try { finalizeResumedTask(entry); } catch (error) {
+            console.error(JSON.stringify({
+              level: "error",
+              event: "brain.resume_delivery_failed",
+              task_id: entry.taskId,
+              error: redactSensitive(String(error && error.message || error)).slice(0, 200),
+            }));
+          }
+        }
+      },
+    });
+  } catch (error) {
+    console.error(JSON.stringify({
+      level: "error",
+      event: "approval.continuation_jobs_failed",
+      error: redactSensitive(String(error && error.message || error)).slice(0, 200),
+    }));
+    return { started: false, reason: "error" };
+  }
+  console.log(`Approval continuation: sweeper ${sweeper.started ? "every " + sweeper.intervalMs + "ms" : "not started"}, resume scheduler ${scheduler.started ? "every " + scheduler.intervalMs + "ms" : "not started"}`);
+  return { started: true, sweeper, scheduler };
+}
+
 // Only bind the port when run as the entrypoint. When required by a test the
 // module exports `app` so the suite can listen on its own port.
 if (require.main === module) {
   app.listen(PORT, "127.0.0.1", () => {
     console.log("Sidekick agent bridge listening on http://127.0.0.1:" + PORT);
+    startApprovalContinuationJobs();
   });
 }
 
@@ -1281,5 +1422,7 @@ module.exports = {
   buildChildLineage,
   buildSystemPrompt,
   CONV_DIR,
+  startApprovalContinuationJobs,
+  finalizeResumedTask,
   __setLLMOverrideForTests,
 };

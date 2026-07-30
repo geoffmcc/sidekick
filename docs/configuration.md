@@ -119,6 +119,26 @@ SIDEKICK_AGENT_APPROVAL_MODE=strict
 Approval variables support the same source prefixes as tool policy: `SIDEKICK_MCP_APPROVAL_MODE`, `SIDEKICK_DASHBOARD_APPROVAL_REQUIRED_TOOLS`, `SIDEKICK_AGENT_APPROVAL_EXEMPT_TOOLS`, and related required/exempt lists.
 Queued arguments are encrypted with `SIDEKICK_SECRET_KEY`, removed after approval, rejection, failure, or expiry, and never returned by the approval-list API. Pending approvals expire after `SIDEKICK_APPROVAL_TTL_SECONDS` (default: `3600`). If the secret key is missing, Sidekick refuses to queue the action instead of storing its arguments in plaintext.
 
+### Approval continuation (Brain tasks)
+
+When Brain is enabled, an approval raised by a task is durably checkpointed so the task resumes after a decision (`docs/adr-approval-continuation.md`). Two background jobs run in the agent service and are **liveness dependencies**, not conveniences — if either stops, parked tasks stall:
+
+```env
+SIDEKICK_APPROVAL_SWEEP_INTERVAL_MS=60000    # expiry / orphan / deadline sweep
+SIDEKICK_BRAIN_RESUME_INTERVAL_MS=5000       # task runner poll for runnable tasks
+SIDEKICK_CHECKPOINT_LEASE_SECONDS=300        # claim lease (falls back to SIDEKICK_APPROVAL_LEASE_SECONDS)
+SIDEKICK_APPROVAL_MAX_ATTEMPTS=5             # per-action reclaim ceiling
+```
+
+The sweep interval is an upper bound on how long a task can wait past its approval's expiry, so treat it as a correctness parameter rather than a tuning knob, and monitor the structured counts each sweep logs. Values are clamped: the sweep to 5s-15min, the resume poll to 1s-5min, and the lease to 30s-3600s.
+
+Two constraints are easy to trip over:
+
+- **Both jobs are gated on `SIDEKICK_BRAIN_ENABLED`.** Turning Brain off stops the sweeper and the resume scheduler, so any task parked while it was on stops being swept and will wait for nothing. Drain parked tasks before disabling Brain.
+- **The reconciliation identity check rejects a set of automated-actor names**, including `sidekick`, `root`, `service`, `automation`, `dashboard`, `agent`, and `mcp`. `SIDEKICK_DASHBOARD_USER` is recorded verbatim as the acting principal, so setting it to one of those names makes reconciliation impossible for that deployment (it returns `reconciliation_requires_authorized_human`). Use a name that identifies a person.
+
+`SIDEKICK_SECRET_KEY` is required to **resume** a parked task, not merely to queue one: checkpoints are encrypted at rest. Rotating the key strands parked tasks, so drain or explicitly fail them before rotation.
+
 ## Evolve Workflow Learning
 
 `sidekick_evolve` stores candidates, generated capabilities, validation results, usefulness counters, and generated-tool audit history in SQLite. Cleanup no longer deletes approved/rejected evidence by default because audit history is needed to explain why a capability exists or was deprecated.

@@ -166,7 +166,17 @@ Handlers should not implement their own policy or approval logic. Handlers that 
 
 Most handlers still live in `src/tools-legacy.js`. Remaining migration should proceed by coherent families, such as read-only database inspection tools, memory tools, or the GitHub tools. Avoid migrating destructive infrastructure tools until their security behavior is fully characterized.
 
-A family whose handlers depend on `src/tools-legacy.js` internals — `safeExecFileSync`, `isDangerous`, `jsonText` — needs those helpers relocated to a shared module first. That relocation should be its own slice, not a side effect of a family extraction. `enforcePathPolicy` has already been relocated this way, to `src/tools/path-policy.js`. Family modules must not require `src/tools-legacy.js` at module top level; the lazy `require` of the dispatcher inside legacy functions is what keeps the dispatcher/legacy cycle from forming.
+A family whose handlers depend on `src/tools-legacy.js` internals — `safeExecFileSync`, `isDangerous`, `jsonText` — needs those helpers relocated to a shared module first. That relocation should be its own slice, not a side effect of a family extraction. Family modules must not require `src/tools-legacy.js` at module top level; the lazy `require` of the dispatcher inside legacy functions is what keeps the dispatcher/legacy cycle from forming.
+
+Relocated so far, each for the same reason — a consumer that must not require legacy at top level:
+
+| Helper | Now lives in | Driven by |
+|---|---|---|
+| `enforcePathPolicy`, `getPathPolicyDecision` | `src/tools/path-policy.js` | descriptor families needing the filesystem boundary |
+| `canonicalizeApprovalValue`, `canonicalApprovalJson`, `approvalArgsHash` | `src/approvals/canonical-json.js` | approval continuation deriving durable digests from it |
+| `getSecretKey`, `encryptSecret`, `decryptSecret` | `src/core/secret-cipher.js` | approval continuation encrypting checkpoints at rest |
+
+The canonicaliser is now a **versioned wire format**, not an internal helper: `docs/adr-approval-continuation.md` §3 derives `args_digest`, `plan_version`, and `idempotency_key` from it and stores them durably, so changing its normalisation would silently invalidate every stored digest and fail re-verification for every previously approved action. It must not be modified in place; a change requires a new version prefix and a documented migration of stored digests.
 
 The compatibility layer remains to preserve external clients, existing generated/evolved tools, dashboard catalogs, approval workflows, and tool logs during gradual extraction.
 
