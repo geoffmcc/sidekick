@@ -442,6 +442,33 @@
   <div class="card" id="approvalList" style="max-height:650px;overflow-y:auto;padding:8px 16px">
     <div class="empty">No pending approvals</div>
   </div>
+
+  <!--
+    Reconciliation is deliberately a separate section, not another status in the
+    inbox above. These are not "approve or reject" decisions: the step may have
+    ALREADY run. A claimant died between dispatching a high-risk tool and
+    recording its result, so nothing durable says whether the effect landed, and
+    the task is parked in `reconciling` where no automated process will touch it.
+    Presenting that next to ordinary pending approvals would invite treating it
+    like one. See docs/adr-approval-continuation.md §8.2.
+  -->
+  <div id="reconciliationSection" style="display:none;margin-top:24px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div class="section-title" style="margin:0;color:#f0883e">
+        <i class="fas fa-triangle-exclamation"></i>
+        Ambiguous Executions (<span id="reconciliationCount">0</span>)
+      </div>
+      <button class="btn btn-sm btn-outline" onclick="loadReconciliations()" title="Refresh reconciliations"><i class="fas fa-sync"></i> Refresh</button>
+    </div>
+    <div style="font-size:.8rem;color:#8b949e;line-height:1.6;margin-bottom:12px;padding:10px 12px;border-left:3px solid #f0883e;background:#161b22">
+      A runner claimed one of these high-risk steps and stopped before recording a result.
+      <strong>Whether the tool actually ran is unknown</strong> — that is why no outcome was recorded and why
+      nothing will resume it automatically. Each task waits here for a person to decide.
+    </div>
+    <div class="card" id="reconciliationList" style="max-height:650px;overflow-y:auto;padding:8px 16px">
+      <div class="empty">Nothing awaiting reconciliation</div>
+    </div>
+  </div>
 </div>
 
 <!-- Database Page -->

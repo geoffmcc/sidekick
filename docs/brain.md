@@ -270,10 +270,14 @@ With `SIDEKICK_BRAIN_ENABLED=1` in the Agent tab:
   appended, and `brain.resumed` is `true`. The task-history UI reads the same
   record. Denying it instead resumes the task with a structured
   `approval_denied` step outcome rather than leaving it parked.
-- **Reconciliation** currently has **no dashboard control**. A `reconciling`
-  task is listed by `GET /api/reconciliations` and resolved by
-  `POST /api/reconciliations/:taskId/resolve`, both of which require an
-  authenticated principal — for now that means an authenticated HTTP request,
-  not a button.
+- **Reconciliation** has a dashboard control on the Approvals page, in an
+  **Ambiguous Executions** section kept deliberately separate from the approval
+  inbox: these are not approve-or-reject decisions, because the step may
+  already have run. Each entry shows the tool, risk, task and step, attempt
+  count, who authorized it, and the argument digest, with the arguments
+  themselves renderable on demand. The four decisions are offered as buttons;
+  **It did not run** carries an explicit confirmation, because it redispatches
+  a high-risk tool. Without an authenticated principal the section explains why
+  it cannot be used rather than offering buttons that would be refused.
 
 With the flag unset, the Agent tab behaves exactly as before.

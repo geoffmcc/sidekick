@@ -267,7 +267,7 @@ function showPage(name){
   if (name === 'memory') loadMemories();
   if (name === 'database') loadDbStats();
   if (name === 'config') loadConfig();
-  if (name === 'approvals') loadApprovals();
+  if (name === 'approvals') { loadApprovals(); loadReconciliations(); }
   if (name === 'tools') loadTools();
   if (name === 'evolve') loadEvolve();
   if (name === 'compute') loadCompute();
@@ -2859,6 +2859,125 @@ function loadApprovals(){
       '</div>';
     }).join('');
   }).catch(e => apiError('/api/approvals', e, 0));
+}
+
+// The four permitted reconciliation decisions (ADR §8.2). Each carries its own
+// consequence text, because the wrong choice here is not recoverable by
+// re-deciding: `confirm_not_executed` re-authorizes a dispatch, and asserting
+// an effect did not land when it did produces exactly the double-execution the
+// risk gate exists to prevent. It is audited but not verifiable.
+var RECONCILIATION_DECISIONS = [
+  {
+    id: 'confirm_executed',
+    label: 'It ran',
+    icon: 'fa-check',
+    style: '',
+    meaning: 'The effect landed. The step is recorded as completed and the task continues from the next step. The tool is not run again.',
+    confirm: null
+  },
+  {
+    id: 'confirm_not_executed',
+    label: 'It did not run',
+    icon: 'fa-rotate-right',
+    style: 'btn-danger',
+    meaning: 'The effect did not land. The authorization is renewed with a fresh expiry and the runner dispatches the step ONCE more.',
+    confirm: 'This re-runs the tool.\n\nIf the effect actually DID land, confirming this causes it to happen twice — which is the exact outcome the safety gate exists to prevent. It is audited but cannot be verified.\n\nOnly continue if you have checked the target system and know the action did not take effect.'
+  },
+  {
+    id: 'abandon_step',
+    label: 'Give up on this step',
+    icon: 'fa-forward',
+    style: 'btn-outline',
+    meaning: 'Unknown and not worth resolving. The step is recorded as refused and the planner continues without it.',
+    confirm: 'Record this step as abandoned and let the task continue without it?'
+  },
+  {
+    id: 'fail_task',
+    label: 'Fail the task',
+    icon: 'fa-ban',
+    style: 'btn-outline',
+    meaning: 'Unsafe to continue. The task is failed and the step is recorded as refused.',
+    confirm: 'Fail the whole task? It will not continue past this point.'
+  }
+];
+
+// Ambiguous high-risk executions awaiting a human decision. Kept separate from
+// the approval inbox on purpose — see the comment on the section in
+// dashboard.html.
+function loadReconciliations(){
+  authFetch('/api/reconciliations').then(r=>r.json()).then(d=>{
+    var items = d.reconciliations || [];
+    var section = $('reconciliationSection');
+    var list = $('reconciliationList');
+    if (!section || !list) return;
+
+    $('reconciliationCount').textContent = items.length;
+    // Hidden entirely when there is nothing to decide: this section is alarming
+    // by design and should not be permanent furniture.
+    section.style.display = items.length ? 'block' : 'none';
+    if (!items.length) { list.innerHTML = '<div class="empty">Nothing awaiting reconciliation</div>'; return; }
+
+    list.innerHTML = items.map(function(r){
+      var riskClass = r.risk === 'critical' ? 'danger' : r.risk === 'high' ? 'warn' : '';
+      var buttons = d.can_resolve
+        ? RECONCILIATION_DECISIONS.map(function(dec){
+            return '<button class="btn btn-sm ' + dec.style + '" style="margin:0 6px 6px 0" ' +
+              'onclick="resolveReconciliation(' + jsArg(r.task_id) + ',' + jsArg(dec.id) + ')" ' +
+              'title="' + attr(dec.meaning) + '">' +
+              '<i class="fas ' + dec.icon + '"></i> ' + esc(dec.label) + '</button>';
+          }).join('')
+        : '<div style="color:#f85149;font-size:.8rem">Resolving requires an authenticated principal. ' +
+          'Configure dashboard authentication — an unattributed reconciliation is refused by design.</div>';
+
+      return '<div class="approval-entry" style="padding:12px 0;border-bottom:1px solid #21262d">' +
+        '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">' +
+          '<div>' +
+            '<div style="font-weight:700;color:#c9d1d9">' + esc(r.tool_name) + '</div>' +
+            '<div style="font-size:.78rem;color:#8b949e;margin-top:4px">' +
+              '<span class="badge ' + riskClass + '">' + esc(r.risk || 'unknown') + '</span> ' +
+              '<span class="badge">task ' + esc(r.task_id) + '</span> ' +
+              '<span class="badge">step ' + esc(r.step_id) + '</span> ' +
+              '<span class="badge">attempt ' + esc(String(r.attempt_count)) + '</span>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div style="font-size:.78rem;color:#8b949e;margin-top:8px;line-height:1.5">' +
+          '<div><span class="s-label">Authorized by:</span> ' + esc(r.approver_identity || '(unattributed)') + '</div>' +
+          '<div><span class="s-label">Requested:</span> ' + esc(r.requested_at ? fmtDate(r.requested_at) : '') + '</div>' +
+          '<div><span class="s-label">Became ambiguous:</span> ' + esc(r.updated_at ? fmtDate(r.updated_at) : '') + '</div>' +
+          '<div><span class="s-label">Argument digest:</span> <code>' + esc(r.args_digest || '') + '</code></div>' +
+        '</div>' +
+        (r.args_preview_available
+          ? '<div style="margin-top:8px">' +
+              '<button class="btn btn-sm btn-outline" onclick="loadApprovalPreview(' + jsArg(r.approval_id) + ')">' +
+                '<i class="fas fa-eye"></i> Show arguments</button>' +
+              '<pre id="approval-args-' + attr(r.approval_id) + '" style="white-space:pre-wrap;margin-top:8px;max-height:220px;overflow:auto;display:none"></pre>' +
+            '</div>'
+          : '<div style="margin-top:8px;font-size:.78rem;color:#8b949e">Arguments are no longer available; only the digest above identifies this action.</div>') +
+        '<div style="margin-top:12px">' + buttons + '</div>' +
+      '</div>';
+    }).join('');
+  }).catch(e => apiError('/api/reconciliations', e, 0));
+}
+
+function resolveReconciliation(taskId, decision){
+  var dec = RECONCILIATION_DECISIONS.filter(function(x){ return x.id === decision; })[0];
+  if (!dec) return;
+  if (dec.confirm && !confirm(dec.confirm)) return;
+
+  authFetch('/api/reconciliations/' + encodeURIComponent(taskId) + '/resolve', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ decision: decision })
+  })
+    .then(r=>r.json())
+    .then(d=>{
+      if (!d.ok) { alert('Could not resolve: ' + (d.error || 'unknown')); }
+      loadReconciliations();
+      loadApprovals();
+      loadLogs();
+    })
+    .catch(e => apiError('/api/reconciliations/' + taskId + '/resolve', e, 0));
 }
 
 // Renders a task-originated approval's arguments on demand. The server

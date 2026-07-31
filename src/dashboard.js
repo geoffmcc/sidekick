@@ -1834,7 +1834,16 @@ app.get("/api/reconciliations", (req, res) => {
         updated_at: r.updated_at,
         approver_identity: r.approver_identity,
         attempt_count: r.attempt_count,
+        // Whether the payload is still renderable through the on-demand
+        // preview. Someone deciding whether an effect landed needs to see the
+        // action; if the payload has been discarded they get digests only and
+        // should know that rather than meeting a control that always fails.
+        args_preview_available: Boolean(r.args_encrypted),
       })),
+      // Surfaced so the UI can explain WHY the controls are absent rather than
+      // rendering buttons that will 403. Reconciliation requires an
+      // authenticated human and fails closed without one (I19).
+      can_resolve: Boolean(authenticatedUser(req)),
     });
   } catch (error) {
     logError(req.originalUrl, 500, error, "reconciliations", req.headers["user-agent"]);
