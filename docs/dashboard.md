@@ -20,6 +20,16 @@ Typical dashboard functions:
 - receive and inspect external webhook payloads;
 - clear logs, KV data, conversations, or all dashboard-managed data.
 
+## Approvals and reconciliation
+
+The Approvals tab lists both standalone approvals and those raised by a Brain task. The two behave differently, and the difference is deliberate:
+
+- **Arguments are rendered on demand for task-originated approvals.** They are stored encrypted and no redacted preview is persisted, so the card shows a **Show arguments** control that calls `GET /api/approvals/:id/preview`. The server decrypts, verifies the payload against its digest, and redacts at render time; nothing is cached or written back. If the payload does not match its digest the control reports it as tampered rather than displaying it — the reviewer is the control that catches a substituted action, so they must never be shown a forgery.
+- **Approving a task-originated request does not execute it.** It marks the task runnable; the task runner executes the step and the result flows back into the task. Rejecting it resumes the task with a structured refusal instead of leaving it parked.
+- **Reconciliation** (`GET /api/reconciliations`, `POST /api/reconciliations/:taskId/resolve`) handles a high-risk step whose execution is ambiguous after a crash. It requires an authenticated principal and refuses outright when dashboard authentication is not configured — an unattributed reconciliation is worse than none. See `docs/brain.md` for the four permitted decisions.
+
+The approving identity recorded against an approval is the authenticated dashboard user. When authentication is not configured, the record says `unattributed:dashboard` rather than naming a reviewer who does not exist.
+
 ## Authentication and protections
 
 Dashboard Basic Auth is enabled only when both `SIDEKICK_DASHBOARD_USER` and `SIDEKICK_DASHBOARD_PASS` are set. When enabled, it protects the dashboard HTML, JSON APIs, and agent event streams. Static assets remain public so authenticated browsers can load CSS and fonts. The dashboard also supports `SIDEKICK_DASHBOARD_ALLOWED_IPS`, in-memory rate limiting, origin checks for mutating requests, audit logging, and frontend error logging.

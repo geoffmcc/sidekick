@@ -37,6 +37,125 @@ function truncate(text, max) {
   return s.length > max ? s.slice(0, max) + "…[truncated]" : s;
 }
 
+function isApprovalRequired(toolRes) {
+  return !!(toolRes && (toolRes.approvalRequired || toolRes.code === "approval_required" || toolRes.status === "approval_required"));
+}
+
+/**
+ * Fresh evidence accumulator. Held in one object rather than as loop locals so
+ * a resumed task can rehydrate it from its checkpoint and continue accumulating
+ * under the same bounds — `MAX_EVIDENCE_CHARS` must apply across the whole
+ * task, not per resumption.
+ */
+function newAccumulator(initial = {}) {
+  return {
+    steps: initial.steps || [],
+    evidence: initial.evidence || [],
+    evidenceChars: initial.evidenceChars || 0,
+    successfulToolEvidence: initial.successfulToolEvidence || 0,
+  };
+}
+
+/**
+ * Records one completed tool step into the accumulator. Shared by the ordinary
+ * path and the resume path so evidence accumulation, truncation, and the
+ * "respond is not evidence" rule have exactly ONE implementation (ADR §1).
+ */
+function accumulateToolResult(acc, step, toolRes, { onEvent = () => {} } = {}) {
+  const isError = !!toolRes.isError;
+  const text = toolRes.content && toolRes.content[0] && toolRes.content[0].text
+    ? toolRes.content[0].text
+    : (isError ? "(error)" : "(empty result)");
+  const clipped = truncate(text, BRAIN_LIMITS.MAX_TOOL_OUTPUT_CHARS);
+  acc.steps.push({ type: "tool", id: step.id, tool: step.tool, ok: !isError, result: clipped });
+  onEvent("brain.step_completed", { id: step.id, tool: step.tool, ok: !isError });
+
+  if (!isError && acc.evidenceChars < BRAIN_LIMITS.MAX_EVIDENCE_CHARS) {
+    const room = BRAIN_LIMITS.MAX_EVIDENCE_CHARS - acc.evidenceChars;
+    const piece = clipped.slice(0, room);
+    acc.evidence.push({ id: step.id, tool: step.tool, text: piece });
+    acc.evidenceChars += piece.length;
+    // The respond echo tool is not evidence about live state.
+    if (step.tool.replace(/^sidekick_/, "") !== "respond") acc.successfulToolEvidence++;
+  }
+  return { isError, clipped };
+}
+
+/**
+ * Records a structured refusal outcome (denial, expiry, cancellation,
+ * supersession, orphaning) as a step result the planner can act on.
+ *
+ * ADR §7: these are NOT task failures. They take the same shape a tool error
+ * takes today, so no new handling path is introduced, and the planner may
+ * explain the outcome or select a materially different route. It may not
+ * re-request the same action — the derived idempotency key already exists and
+ * collides with the authoritative unique index, which makes the anti-loop
+ * protection a storage invariant rather than a prompt instruction.
+ */
+function accumulateRefusal(acc, { stepId, tool, outcomeCode, approvalId = null, detail = null }, { onEvent = () => {} } = {}) {
+  acc.steps.push({
+    type: "tool",
+    id: stepId,
+    tool,
+    ok: false,
+    outcome: outcomeCode,
+    approval_id: approvalId,
+    detail: detail || null,
+  });
+  onEvent("brain.step_refused", { id: stepId, tool, outcome: outcomeCode, approval_id: approvalId }, "warning");
+  return acc;
+}
+
+/**
+ * Executes plan steps from `startIndex`, accumulating into `acc`.
+ *
+ * Extracted from `runBrainTask` so the resume path (src/brain/resume.js) runs
+ * the SAME loop rather than a parallel copy: approved steps and ordinary steps
+ * must share one code path, one evidence-accumulation rule, and one
+ * result-persistence rule (ADR §1). Returns a discriminated outcome rather than
+ * a terminal envelope, because the caller owns state transitions.
+ */
+async function executePlanSteps({
+  plan,
+  startIndex = 0,
+  acc,
+  callTool,
+  emit = () => {},
+  onEvent = () => {},
+  redact = (t) => t,
+  cancelled = () => false,
+  outOfTime = () => false,
+}) {
+  const steps = plan.steps || [];
+  for (let index = startIndex; index < steps.length; index++) {
+    const step = steps[index];
+    if (cancelled()) return { status: "cancelled", index };
+    if (outOfTime()) return { status: "timed_out", index };
+    if (step.type !== "tool") continue; // memory already retrieved; synthesis handled by the caller
+
+    emit({ type: "brain_step", step: "tool", id: step.id, tool: step.tool });
+    onEvent("brain.step_started", { id: step.id, tool: step.tool });
+
+    let toolRes;
+    try {
+      toolRes = await callTool(step.tool, step.arguments || {});
+    } catch (e) {
+      acc.steps.push({ type: "tool", id: step.id, tool: step.tool, error: redact(String(e && e.message || e)) });
+      // A tool step failure is honest failure, never fabricated evidence.
+      return { status: "failed", index, stepId: step.id, tool: step.tool };
+    }
+
+    // Approval-required is a first-class waiting state, never retried or
+    // bypassed. The plan does not proceed; the task parks awaiting a human.
+    if (isApprovalRequired(toolRes)) {
+      return { status: "approval_required", index, step, approvalId: toolRes.approvalId || null };
+    }
+
+    accumulateToolResult(acc, step, toolRes, { onEvent });
+  }
+  return { status: "completed", index: steps.length };
+}
+
 /**
  * @param {object} opts
  * @param {string} opts.goal
@@ -68,6 +187,12 @@ async function runBrainTask(opts) {
     redact = (t) => t,
     cancel = { aborted: false },
     clock = null,
+    // Durable-continuation seam (docs/adr-approval-continuation.md). Optional:
+    // when absent, Brain behaves exactly as v0.1 and a parked task is lost.
+    persistence = null,
+    taskId = null,
+    // Platform-execution correlation for the durable checkpoint.
+    lineage = {},
   } = opts;
 
   const startedAt = nowMs(clock);
@@ -155,54 +280,107 @@ async function runBrainTask(opts) {
 
   // ---- run ----------------------------------------------------------------
   setState("running");
-  const evidence = [];
-  let evidenceChars = 0;
-  let successfulToolEvidence = 0;
+  const acc = newAccumulator({ steps });
   let awaitingApproval = null;
 
-  for (const step of validated.steps) {
-    if (cancelled()) return terminal("cancelled");
-    if (outOfTime()) return terminal("timed_out", { error: "task deadline exceeded" });
-    if (step.type !== "tool") continue; // memory already retrieved; synthesis handled below
+  const outcome = await executePlanSteps({
+    plan: validated, startIndex: 0, acc,
+    callTool, emit, onEvent, redact, cancelled, outOfTime,
+  });
 
-    emit({ type: "brain_step", step: "tool", id: step.id, tool: step.tool });
-    onEvent("brain.step_started", { id: step.id, tool: step.tool });
-
-    let toolRes;
-    try {
-      toolRes = await callTool(step.tool, step.arguments || {});
-    } catch (e) {
-      steps.push({ type: "tool", id: step.id, tool: step.tool, error: redact(String(e && e.message || e)) });
-      // A tool step failure is honest failure, never fabricated evidence.
-      return terminal("failed", { error: `step ${step.id} (${step.tool}) failed`, extra: { failed_step: step.id } });
-    }
-
-    // Approval-required is a first-class waiting state, never retried or
-    // bypassed. The plan does not proceed; the task parks awaiting a human.
-    if (toolRes && (toolRes.approvalRequired || toolRes.code === "approval_required" || toolRes.status === "approval_required")) {
-      awaitingApproval = { id: step.id, tool: step.tool, approvalId: toolRes.approvalId || null };
-      steps.push({ type: "tool", id: step.id, tool: step.tool, approval: awaitingApproval.approvalId });
-      state = "waiting_for_approval";
-      emit({ type: "brain_state", state });
-      onEvent("brain.waiting_for_approval", { id: step.id, tool: step.tool, approval_id: awaitingApproval.approvalId }, "warning");
-      return buildResult("waiting_for_approval", { steps, awaitingApproval });
-    }
-
-    const isError = !!toolRes.isError;
-    const text = toolRes.content && toolRes.content[0] && toolRes.content[0].text ? toolRes.content[0].text : (isError ? "(error)" : "(empty result)");
-    const clipped = truncate(text, BRAIN_LIMITS.MAX_TOOL_OUTPUT_CHARS);
-    steps.push({ type: "tool", id: step.id, tool: step.tool, ok: !isError, result: clipped });
-    onEvent("brain.step_completed", { id: step.id, tool: step.tool, ok: !isError });
-
-    if (!isError && evidenceChars < BRAIN_LIMITS.MAX_EVIDENCE_CHARS) {
-      const room = BRAIN_LIMITS.MAX_EVIDENCE_CHARS - evidenceChars;
-      const piece = clipped.slice(0, room);
-      evidence.push({ id: step.id, tool: step.tool, text: piece });
-      evidenceChars += piece.length;
-      // The respond echo tool is not evidence about live state.
-      if (step.tool.replace(/^sidekick_/, "") !== "respond") successfulToolEvidence++;
-    }
+  if (outcome.status === "cancelled") return terminal("cancelled");
+  if (outcome.status === "timed_out") return terminal("timed_out", { error: "task deadline exceeded" });
+  if (outcome.status === "failed") {
+    return terminal("failed", { error: `step ${outcome.stepId} (${outcome.tool}) failed`, extra: { failed_step: outcome.stepId } });
   }
+
+  if (outcome.status === "approval_required") {
+    const step = outcome.step;
+    awaitingApproval = { id: step.id, tool: step.tool, approvalId: outcome.approvalId };
+
+    // ADR docs/adr-approval-continuation.md §5/T1. Without a `persistence`
+    // seam the task parks exactly as Brain v0.1 did: the plan, evidence and
+    // counters are stack locals that are garbage-collected, and the approval
+    // has nothing to return to. With one, the whole suspended execution is
+    // written durably and atomically with the approval that authorizes the
+    // next action — which is what makes resumption possible at all (I9).
+    if (persistence && typeof persistence.park === "function") {
+      let parked;
+      try {
+        parked = await persistence.park({
+          taskId,
+          goal: validated.goal,
+          classification,
+          plan: validated,
+          stepId: step.id,
+          toolName: step.tool,
+          args: step.arguments || {},
+          stepIndex: outcome.index,
+          evidence: acc.evidence,
+          evidenceChars: acc.evidenceChars,
+          successfulToolEvidence: acc.successfulToolEvidence,
+          deadlineAt: new Date(deadlineMs).toISOString(),
+          // Correlation, so a checkpoint can be joined back to the platform
+          // execution and follow-up thread it belongs to. The schema has always
+          // had these columns; not passing them left every checkpoint
+          // permanently uncorrelated.
+          platformExecutionId: lineage.platformExecutionId,
+          rootExecutionId: lineage.rootExecutionId,
+          rootTaskId: lineage.rootTaskId,
+        });
+      } catch (e) {
+        parked = { ok: false, code: "park_threw", detail: redact(String(e && e.message || e)) };
+      }
+      if (!parked || !parked.ok) {
+        // A task that cannot be persisted must fail closed rather than park
+        // into a state nothing can ever resume. Reporting the park failure
+        // honestly is the point: a silent park is the pre-ADR bug.
+        onEvent("brain.park_failed", { id: step.id, tool: step.tool, code: parked && parked.code }, "error");
+        return terminal("failed", {
+          error: `step ${step.id} (${step.tool}) required approval but the task could not be checkpointed (${(parked && parked.code) || "unknown"})`,
+          extra: { failed_step: step.id },
+        });
+      }
+      // The dispatcher already queued a LEGACY approval for this step — it
+      // cannot know the caller is a task. Now that T1 owns the action durably,
+      // that twin must be terminalised: leaving it pending would show two
+      // approvals for one action, and approving the legacy one dispatches the
+      // tool standalone and discards the result, which is the exact bug the
+      // checkpoint exists to remove.
+      const legacyId = outcome.approvalId;
+      if (legacyId && legacyId !== parked.approvalId && persistence.supersedeLegacyApproval) {
+        try {
+          const superseded = await persistence.supersedeLegacyApproval(legacyId, {
+            taskId,
+            replacedBy: parked.approvalId,
+          });
+          if (!superseded || !superseded.ok) {
+            onEvent("brain.legacy_approval_not_superseded", { id: step.id, approval_id: legacyId, code: superseded && superseded.code }, "error");
+          }
+        } catch (e) {
+          onEvent("brain.legacy_approval_not_superseded", { id: step.id, approval_id: legacyId, error: redact(String(e && e.message || e)) }, "error");
+        }
+      }
+
+      awaitingApproval.approvalId = parked.approvalId || awaitingApproval.approvalId;
+      awaitingApproval.legacyApprovalId = legacyId || null;
+      awaitingApproval.taskId = taskId;
+      awaitingApproval.checkpointed = true;
+    }
+
+    acc.steps.push({ type: "tool", id: step.id, tool: step.tool, approval: awaitingApproval.approvalId });
+    state = "waiting_for_approval";
+    emit({ type: "brain_state", state });
+    onEvent("brain.waiting_for_approval", {
+      id: step.id, tool: step.tool,
+      approval_id: awaitingApproval.approvalId,
+      checkpointed: !!awaitingApproval.checkpointed,
+    }, "warning");
+    return buildResult("waiting_for_approval", { steps: acc.steps, awaitingApproval });
+  }
+
+  const evidence = acc.evidence;
+  const successfulToolEvidence = acc.successfulToolEvidence;
 
   // ---- verify (evidence gate) ---------------------------------------------
   setState("verifying");
@@ -243,4 +421,14 @@ function buildResult(state, { steps, result = "", error = "", evidence_count = 0
   };
 }
 
-module.exports = { runBrainTask, TERMINAL_STATES: TERMINAL };
+module.exports = {
+  runBrainTask,
+  TERMINAL_STATES: TERMINAL,
+  // Shared with the resume path so approved and ordinary steps run one loop.
+  executePlanSteps,
+  newAccumulator,
+  accumulateToolResult,
+  accumulateRefusal,
+  isApprovalRequired,
+  buildResult,
+};

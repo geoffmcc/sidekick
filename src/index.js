@@ -590,6 +590,20 @@ try {
   throw error;
 }
 
+// Converge the approval-continuation schema after migrations. Migration 025
+// deliberately leaves the additive `approval_execution_recovery_events` columns
+// to this idempotent owner, because migrations run only in this process while
+// the ensure runs in every process that touches approvals and start order is
+// not guaranteed (see the comment in 025_approval_continuation.sql). Calling it
+// here means a deployment converges on startup rather than on first use.
+try {
+  require('./approvals/store').ensureApprovalContinuationSchema();
+} catch (error) {
+  console.error('[Migration] Approval continuation schema ensure failed:', error.message);
+  process.exitCode = 1;
+  throw error;
+}
+
 // Sync tool registry from code to database on startup
 syncToolRegistry();
 

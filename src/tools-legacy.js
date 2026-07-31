@@ -323,28 +323,17 @@ function approvalPreviewArgs(args) {
   return JSON.stringify(sanitize(args || {}), null, 2).substring(0, 4000);
 }
 
-function canonicalizeApprovalValue(value) {
-  if (Array.isArray(value)) return value.map(canonicalizeApprovalValue);
-  if (value && typeof value === "object") {
-    return Object.keys(value).sort().reduce((out, key) => {
-      if (Object.prototype.propertyIsEnumerable.call(value, key)) out[key] = canonicalizeApprovalValue(value[key]);
-      return out;
-    }, {});
-  }
-  return value;
-}
-
-function canonicalApprovalJson(args) {
-  return JSON.stringify(canonicalizeApprovalValue(args || {}));
-}
-
-function approvalArgsHash(args) {
-  return crypto.createHash("sha256").update(canonicalApprovalJson(args)).digest("hex");
-}
-
-function cloneApprovalArgs(args) {
-  return JSON.parse(canonicalApprovalJson(args));
-}
+// Canonical approval JSON is a VERSIONED WIRE FORMAT and now lives in a shared
+// module: docs/adr-approval-continuation.md §3 derives `args_digest`,
+// `plan_version` and `idempotency_key` from it and stores them durably, so a
+// change to its normalisation would silently invalidate every stored digest.
+// Defining it in two places would make that divergence invisible.
+const {
+  canonicalizeApprovalValue,
+  canonicalApprovalJson,
+  approvalArgsHash,
+  cloneApprovalArgs,
+} = require("./approvals/canonical-json");
 
 function getApprovalTtlSeconds() {
   const configured = parseInt(process.env.SIDEKICK_APPROVAL_TTL_SECONDS || "3600", 10);
@@ -383,6 +372,52 @@ function discardApprovalPayload(item) {
   delete item.args;
   delete item.args_encrypted;
   item.payload_discarded_at = new Date().toISOString();
+}
+
+/**
+ * Terminalise the legacy approval a Brain task step raised, once the durable
+ * checkpoint has taken ownership of that action.
+ *
+ * WHY THIS EXISTS. A Brain tool step reaches the dispatcher through
+ * `callAgentTool`, which correctly queues a legacy approval when policy
+ * requires one — the dispatcher cannot know the caller is a task. Brain then
+ * parks (T1), creating the authoritative approval row in the `approvals` table.
+ * Without this, BOTH survive: two near-identical pending approvals appear in
+ * the Approvals tab, and approving the legacy one routes to
+ * `executeApprovedTool`'s standalone branch, which dispatches the high-risk
+ * tool outside the runner and discards its result — verbatim the pre-ADR bug
+ * this whole change exists to remove, reachable by clicking the wrong row.
+ *
+ * The legacy row is superseded rather than deleted: it is still the record that
+ * a request was made, and its payload is discarded because the checkpoint now
+ * holds the authoritative encrypted copy.
+ */
+function supersedeLegacyApprovalForTask(approvalId, { taskId = null, replacedBy = null } = {}) {
+  if (!approvalId) return { ok: false, code: "missing_id" };
+  const approvals = loadApprovals();
+  const item = approvals.find(a => a.id === approvalId);
+  if (!item) return { ok: false, code: "not_found" };
+  if (item.status !== "pending") return { ok: false, code: "not_pending", status: item.status };
+
+  const now = new Date().toISOString();
+  item.status = "superseded";
+  item.updated_at = now;
+  item.completed_at = now;
+  item.superseded_by = replacedBy;
+  item.task_id = taskId;
+  transitionPlatformApproval(item, "cancelled", {
+    actor_id: "brain",
+    reason: "superseded by a durable task checkpoint",
+    result_status: "superseded",
+    result_summary: `Approval for ${item.tool} is now tracked on the task checkpoint`,
+  });
+  recordPlatformApprovalEvent(item, "approval.superseded", {
+    superseded_by: replacedBy,
+    task_id: taskId,
+  }, { actor_id: "brain", severity: "warning" });
+  discardApprovalPayload(item);
+  saveApprovals(approvals);
+  return { ok: true, approvalId, replacedBy };
 }
 
 function markApprovalReconciliationRequired(item, reason, reviewer = "system") {
@@ -526,17 +561,162 @@ function publicApproval(item) {
   return copy;
 }
 
+/**
+ * Task-originated approvals live in the `approvals` TABLE (migration 025), not
+ * in the legacy JSON document, so they must be surfaced here or a parked Brain
+ * task would be invisible in the Approvals tab and impossible to decide on.
+ *
+ * Shaped to match `publicApproval` so existing consumers need no changes. No
+ * argument content is included: previews are no longer persisted, and
+ * rendering one requires the decryption key at read time
+ * (docs/adr-approval-continuation.md §4.4, I12). A reader sees the tool, risk,
+ * digests and timing — and no argument content whatsoever.
+ */
+function listContinuationApprovals({ status } = {}) {
+  try {
+    const store = require("./approvals/store");
+    store.ensureApprovalContinuationSchema();
+    return store.listApprovalRows({ status, limit: 500 })
+      .filter(row => row.task_id)
+      .map(row => ({
+        id: row.approval_id,
+        status: row.status,
+        tool: row.tool_name,
+        risk: row.risk,
+        source: row.source,
+        mode: row.mode,
+        requester: row.requester_identity,
+        task_id: row.task_id,
+        step_id: row.step_id,
+        plan_version: row.plan_version,
+        args_hash: row.args_digest,
+        args_preview: null,
+        // False once the payload has been discarded, so the UI does not offer a
+        // "Show arguments" control that can only ever fail.
+        args_preview_available: Boolean(row.args_encrypted),
+        requested_at: row.requested_at,
+        expires_at: row.expires_at,
+        updated_at: row.updated_at,
+        reviewed_by: row.approver_identity,
+        reviewed_at: row.decided_at,
+        completed_at: row.completed_at,
+        attempt_count: row.attempt_count,
+        reconciliation_status: row.reconciliation_status,
+        error: row.error_code,
+        continuation: true,
+      }));
+  } catch {
+    // A continuation-storage failure must not blank the legacy queue.
+    return [];
+  }
+}
+
+/**
+ * Render a task-originated approval's arguments ON DEMAND for an authorized
+ * reader (docs/adr-approval-continuation.md §4.4).
+ *
+ * Persisted previews were removed because `approvalPreviewArgs` redacts by key
+ * name and `redactSensitive` matches known credential shapes, so neither can
+ * catch a secret passed as an ordinary-looking value under an ordinary-looking
+ * key — a stored preview is plaintext of unknown sensitivity. The consequence
+ * the ADR accepts is that showing a preview now requires the decryption key at
+ * read time, which is what this does.
+ *
+ * A human being asked to authorize an action must be able to SEE it. Without
+ * this, a reviewer approving a critical-risk `bash` step would see a tool name,
+ * a risk level, and a hex digest — which is not informed consent, and would
+ * make an argument substitution invisible to the one control designed to catch
+ * it.
+ *
+ * The payload is authenticated against `args_digest` before rendering, so a
+ * tampered payload reports as such instead of being displayed as genuine.
+ * Nothing is written back.
+ */
+function renderContinuationApprovalPreview(approvalId) {
+  let row;
+  try {
+    const store = require("./approvals/store");
+    store.ensureApprovalContinuationSchema();
+    row = store.getApproval(approvalId);
+  } catch {
+    return { ok: false, code: "continuation_storage_unavailable" };
+  }
+  if (!row || !row.task_id) return { ok: false, code: "not_found" };
+  if (!row.args_encrypted) return { ok: false, code: "payload_discarded" };
+
+  const store = require("./approvals/store");
+  const { argsDigest } = require("./approvals/keys");
+  let args;
+  try {
+    args = store.decryptJson(row.args_encrypted);
+  } catch {
+    return { ok: false, code: "payload_unreadable" };
+  }
+  // Null is not empty. `argsDigest(null || {})` equals `argsDigest({})`, so a
+  // payload decrypting to JSON null would otherwise authenticate against an
+  // approval whose real arguments were `{}` — the same confusion `verifyClaim`
+  // closes on the dispatch path. Display-only here, but a reviewer must not be
+  // shown `{}` for a payload that is not `{}`.
+  if (args == null) return { ok: false, code: "payload_unreadable" };
+  if (argsDigest(args) !== row.args_digest) {
+    return { ok: false, code: "payload_authentication_failed" };
+  }
+  return {
+    ok: true,
+    approval_id: row.approval_id,
+    task_id: row.task_id,
+    step_id: row.step_id,
+    tool: row.tool_name,
+    risk: row.risk,
+    args_hash: row.args_digest,
+    args_preview: approvalPreviewArgs(args || {}),
+  };
+}
+
 function listApprovals({ status, limit } = {}) {
   const max = Math.min(parseInt(limit || "100", 10) || 100, 500);
   const approvals = loadApprovals();
   if (expireApprovals(approvals)) saveApprovals(approvals);
-  return approvals
+  const legacyItems = approvals
     .filter(item => !status || item.status === status)
-    .slice(0, max)
     .map(publicApproval);
+  const combined = legacyItems.concat(listContinuationApprovals({ status }));
+  combined.sort((a, b) => String(b.requested_at || "").localeCompare(String(a.requested_at || "")));
+  return combined.slice(0, max);
 }
 
 async function resolveApproval(id, action, reviewer = "dashboard") {
+  // Task-originated approvals are decided through the continuation
+  // transactions, not the legacy document: approving is T2 (approval approved
+  // AND task runnable, atomically) and rejecting is T5 (structured step outcome
+  // recorded AND task woken, atomically). Routing them through the legacy path
+  // would strand the task, which is the bug the ADR removes.
+  const continuationApproval = (() => {
+    try {
+      const store = require("./approvals/store");
+      store.ensureApprovalContinuationSchema();
+      const row = store.getApproval(id);
+      return row && row.task_id ? row : null;
+    } catch {
+      return null;
+    }
+  })();
+
+  if (continuationApproval) {
+    if (action === "reject") {
+      const { wake } = require("./approvals/continuation");
+      const outcome = wake({ approvalId: id, trigger: "deny", actor: reviewer });
+      if (!outcome.ok) {
+        return { content: [{ type: "text", text: `Approval ${id} could not be denied (${outcome.code})` }], isError: true };
+      }
+      return { content: [{ type: "text", text: `Denied approval ${id}; task ${outcome.taskId} resumes with a structured refusal.` }] };
+    }
+    if (action !== "approve") {
+      return { content: [{ type: "text", text: "Invalid approval action: " + action }], isError: true };
+    }
+    return require("./tools/dispatcher").executeApprovedTool({ approvalId: id, reviewer, source: reviewer });
+  }
+
   const approvals = loadApprovals();
   if (expireApprovals(approvals)) saveApprovals(approvals);
   const item = approvals.find(a => a.id === id);
@@ -4941,13 +5121,11 @@ async function sidekick_watch({ action, id, name, source, target, condition, int
 const crypto = require("crypto");
 const SECRETS_FILE = path.join(DATA_DIR, "secrets.enc");
 
-function getSecretKey() {
-  const key = process.env.SIDEKICK_SECRET_KEY;
-  if (!key) {
-    throw new Error("SIDEKICK_SECRET_KEY not set in .env");
-  }
-  return crypto.createHash("sha256").update(key).digest();
-}
+// AES-256-GCM value cipher relocated to a shared module so the approval
+// continuation storage layer can encrypt at rest without requiring
+// `tools-legacy` at top level (docs/tool-architecture.md). Wire format
+// unchanged, so existing ciphertext keeps decrypting.
+const { getSecretKey, encryptSecret, decryptSecret } = require("./core/secret-cipher");
 
 function loadSecrets() {
   if (!fs.existsSync(SECRETS_FILE)) return {};
@@ -4961,26 +5139,6 @@ function loadSecrets() {
 
 function saveSecrets(secrets) {
   fs.writeFileSync(SECRETS_FILE, JSON.stringify(secrets, null, 2));
-}
-
-function encryptSecret(value) {
-  const key = getSecretKey();
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
-  let encrypted = cipher.update(value, "utf8", "hex");
-  encrypted += cipher.final("hex");
-  const authTag = cipher.getAuthTag().toString("hex");
-  return { iv: iv.toString("hex"), data: encrypted, authTag };
-}
-
-function decryptSecret(encrypted) {
-  const key = getSecretKey();
-  const iv = Buffer.from(encrypted.iv, "hex");
-  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
-  decipher.setAuthTag(Buffer.from(encrypted.authTag, "hex"));
-  let decrypted = decipher.update(encrypted.data, "hex", "utf8");
-  decrypted += decipher.final("utf8");
-  return decrypted;
 }
 
 async function sidekick_secret({ action, key, value, generate }) {
@@ -11629,6 +11787,8 @@ module.exports = {
   getToolPolicyDecision,
   getApprovalDecision,
   listApprovals,
+  renderContinuationApprovalPreview,
+  supersedeLegacyApprovalForTask,
   queueApproval,
   resolveApproval,
   claimApprovalExecution,

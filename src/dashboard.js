@@ -5,7 +5,7 @@ const path = require("path");
 const os = require("os");
 const { timingSafeCompare } = require("./crypto-utils");
 const { execFileSync } = require("child_process");
-const { callDashboardTool, getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval } = require("./tools");
+const { callDashboardTool, getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval, renderContinuationApprovalPreview } = require("./tools");
 const dynamicTools = require("./dynamic-tools");
 const dbStore = require("./db");
 const { allowedActions } = require("./evolve/lifecycle");
@@ -340,6 +340,25 @@ app.use((req, res, next) => {
   next();
 });
 
+/**
+ * The authenticated principal for this request, or null when the dashboard is
+ * running without authentication configured.
+ *
+ * ADR docs/adr-approval-continuation.md §8.2 / invariant I19: an approval and
+ * especially a reconciliation must record a REAL PRINCIPAL. `reviewer` used to
+ * be hardcoded to the literal "dashboard", which made it impossible to
+ * determine from the record which human approved anything — and a
+ * reconciliation attributed to "dashboard" is indistinguishable from an
+ * unattributed one.
+ *
+ * Returning null rather than a placeholder is deliberate: callers that require
+ * an attributable human must FAIL CLOSED, and a fallback string would silently
+ * defeat that.
+ */
+function authenticatedUser(req) {
+  return (req && typeof req.authUser === "string" && req.authUser) ? req.authUser : null;
+}
+
 if (DASHBOARD_USER && DASHBOARD_PASS) {
   app.use((req, res, next) => {
     if (req.path.startsWith('/static/')) return next();
@@ -349,7 +368,7 @@ if (DASHBOARD_USER && DASHBOARD_PASS) {
       const trimmed = part.trim();
       if (trimmed.startsWith("sidekick_sid=")) {
         const user = verifySessionToken(trimmed.slice("sidekick_sid=".length));
-        if (user === DASHBOARD_USER) return next();
+        if (user === DASHBOARD_USER) { req.authUser = user; return next(); }
       }
     }
     // Fall back to Basic Auth
@@ -365,6 +384,7 @@ if (DASHBOARD_USER && DASHBOARD_PASS) {
     if (timingSafeCompare(user, DASHBOARD_USER) && timingSafeCompare(pass, DASHBOARD_PASS)) {
       // Set session cookie for subsequent requests (including iframe sub-resources)
       res.setHeader("Set-Cookie", `sidekick_sid=${makeSessionToken(user)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400`);
+      req.authUser = user;
       return next();
     }
     res.set("WWW-Authenticate", 'Basic realm="Sidekick Dashboard"');
@@ -1709,10 +1729,57 @@ app.get("/api/approvals", (req, res) => {
   res.json({ ok: true, approvals: listApprovals({ status: req.query.status, limit: req.query.limit }) });
 });
 
+/**
+ * On-demand argument preview for a task-originated approval (ADR §4.4).
+ *
+ * Previews are no longer persisted, so this is the only way a reviewer can see
+ * what they are authorizing. Rendering requires the decryption key at read
+ * time and an authenticated principal; a key-less or unauthenticated reader
+ * gets metadata and digests only, which is the correct failure direction.
+ *
+ * The payload is authenticated against `args_digest` before rendering, so a
+ * substituted payload reports as tampered rather than being displayed as
+ * genuine — the reviewer is the control that catches exactly that.
+ */
+app.get("/api/approvals/:id/preview", (req, res) => {
+  try {
+    // UNCONDITIONALLY requires an authenticated principal, like the
+    // reconciliation endpoint — deliberately NOT gated on
+    // `DASHBOARD_USER && DASHBOARD_PASS`. With authentication unconfigured that
+    // conjunction short-circuits and the global auth middleware is never
+    // registered either, so the check would vanish exactly where it is most
+    // needed and decrypted argument content would be served to anyone who can
+    // reach the port. Metadata and digests remain available to such a reader;
+    // plaintext does not.
+    if (!authenticatedUser(req)) {
+      return res.status(403).json({
+        ok: false,
+        error: "Rendering approval arguments requires an authenticated principal; configure dashboard authentication",
+      });
+    }
+    const preview = renderContinuationApprovalPreview(req.params.id);
+    if (!preview.ok) {
+      const status = preview.code === "not_found" ? 404 : 409;
+      return res.status(status).json({ ok: false, error: preview.code });
+    }
+    auditLog(req, "approval.preview", { id: req.params.id, viewer: authenticatedUser(req) });
+    res.json({ ok: true, preview });
+  } catch (error) {
+    logError(req.originalUrl, 500, error, "approvals", req.headers["user-agent"]);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
 app.post("/api/approvals/:id/approve", async (req, res) => {
   try {
-    auditLog(req, "approval.approve", { id: req.params.id });
-    const result = await resolveApproval(req.params.id, "approve", "dashboard");
+    // The approving identity is now the authenticated principal, not the
+    // literal "dashboard" (I19). Where no authentication is configured there is
+    // no attributable human; the request still proceeds under an explicitly
+    // unattributed marker so approval behaviour is unchanged for deployments
+    // without auth, but the record says so rather than claiming a reviewer.
+    const reviewer = authenticatedUser(req) || "unattributed:dashboard";
+    auditLog(req, "approval.approve", { id: req.params.id, reviewer });
+    const result = await resolveApproval(req.params.id, "approve", reviewer);
     res.json({ ok: !result.isError, result: result.content?.[0]?.text || "" });
   } catch (error) {
     logError(req.originalUrl, 500, error, "approvals", req.headers["user-agent"]);
@@ -1722,11 +1789,81 @@ app.post("/api/approvals/:id/approve", async (req, res) => {
 
 app.post("/api/approvals/:id/reject", async (req, res) => {
   try {
-    auditLog(req, "approval.reject", { id: req.params.id });
-    const result = await resolveApproval(req.params.id, "reject", "dashboard");
+    const reviewer = authenticatedUser(req) || "unattributed:dashboard";
+    auditLog(req, "approval.reject", { id: req.params.id, reviewer });
+    const result = await resolveApproval(req.params.id, "reject", reviewer);
     res.json({ ok: !result.isError, result: result.content?.[0]?.text || "" });
   } catch (error) {
     logError(req.originalUrl, 500, error, "approvals", req.headers["user-agent"]);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+/**
+ * Reconciliation surface (ADR §8.2, T10).
+ *
+ * These resolve an AMBIGUOUS HIGH-RISK EXECUTION — a step that may or may not
+ * have landed — so they are held to a stricter bar than approval:
+ *
+ *   - they require an AUTHENTICATED HUMAN (I19). No automated actor may resolve
+ *     an ambiguity, least of all its own, so an unauthenticated deployment is
+ *     refused outright rather than falling back to a marker string.
+ *   - `confirm_not_executed` is the most dangerous decision in the system:
+ *     asserting an effect did not happen when it did produces exactly the
+ *     double-execution the risk gate exists to prevent. It is audited but not
+ *     verifiable.
+ */
+app.get("/api/reconciliations", (req, res) => {
+  try {
+    const store = require("./approvals/store");
+    store.ensureApprovalContinuationSchema();
+    const rows = store.listApprovalRows({ status: "reconciliation_required", limit: req.query.limit });
+    // Metadata only: no argument or result content. Rendering a preview
+    // requires the decryption key and is produced on demand, never persisted
+    // (I12).
+    res.json({
+      ok: true,
+      reconciliations: rows.map(r => ({
+        approval_id: r.approval_id,
+        task_id: r.task_id,
+        step_id: r.step_id,
+        tool_name: r.tool_name,
+        risk: r.risk,
+        args_digest: r.args_digest,
+        requested_at: r.requested_at,
+        updated_at: r.updated_at,
+        approver_identity: r.approver_identity,
+        attempt_count: r.attempt_count,
+      })),
+    });
+  } catch (error) {
+    logError(req.originalUrl, 500, error, "reconciliations", req.headers["user-agent"]);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+app.post("/api/reconciliations/:taskId/resolve", (req, res) => {
+  try {
+    const reconciledBy = authenticatedUser(req);
+    if (!reconciledBy) {
+      return res.status(403).json({
+        ok: false,
+        error: "Reconciliation requires an authenticated human; configure dashboard authentication",
+      });
+    }
+    const decision = String(req.body?.decision || "");
+    const { resolveReconciliation } = require("./approvals/continuation");
+    let outcome;
+    try {
+      outcome = resolveReconciliation({ taskId: req.params.taskId, decision, reconciledBy });
+    } catch (error) {
+      return res.status(400).json({ ok: false, error: error.message });
+    }
+    auditLog(req, "approval.reconcile", { task_id: req.params.taskId, decision, reconciled_by: reconciledBy, ok: outcome.ok });
+    if (!outcome.ok) return res.status(409).json({ ok: false, error: outcome.code });
+    res.json({ ok: true, task_id: outcome.taskId, decision: outcome.decision, state: outcome.checkpointState });
+  } catch (error) {
+    logError(req.originalUrl, 500, error, "reconciliations", req.headers["user-agent"]);
     res.status(500).json({ ok: false, error: error.message });
   }
 });

@@ -195,6 +195,61 @@ execution — untrusted content that appears to "add a step" is inert.
 - Redaction is regex-based; novel secret formats can slip through (shared with
   the rest of Sidekick).
 
+## Approval continuation (v0.2)
+
+A task that parks for approval now **resumes**. In v0.1 the plan, evidence and
+step counters were stack locals: parking discarded them, the approved tool ran
+standalone in a different execution tree, and its result was thrown away.
+
+The contract is `docs/adr-approval-continuation.md`. In outline:
+
+```text
+step needs approval
+→ T1 park: plan + evidence + binding written durably, atomically with the approval
+→ human decides
+   ├─ approve  → T2: approval approved AND task runnable, in one transaction
+   │             → task runner claims (T3) → verifies (§6) → dispatches → T4A records
+   └─ deny / expire / cancel / supersede
+                 → T5: structured step outcome recorded AND task woken, in one transaction
+                 → task runner claims (T3, resume mode) → T4R consumes the outcome
+→ remaining plan steps run → synthesis
+```
+
+What this changes for someone operating Brain:
+
+- **A parked task survives a restart.** The checkpoint is the durable copy;
+  nothing depends on process memory.
+- **A denial is not a dead end.** It reaches the planner as a structured step
+  outcome, which may explain it or route around it. It may not re-request the
+  same action — the derived idempotency key already exists.
+- **`SIDEKICK_SECRET_KEY` is now required to resume**, not merely to approve.
+  Rotating it strands parked tasks; drain or explicitly fail them first.
+- **A resumed task's answer lands in its transcript**, not in a new surface.
+  The transcript is rewritten when the resumption reaches a terminal state, so
+  the follow-up continuation builder, the task-history UI, and automatic memory
+  all see a normal completed task. A resumption that is still in flight
+  (`woken`, `reconciling`) writes nothing and is picked up again.
+- **Two background jobs are liveness dependencies**, started by the agent
+  service, and both are gated on `SIDEKICK_BRAIN_ENABLED` — turning Brain off
+  stops them, so drain parked tasks first: the expiry/orphan/deadline sweeper
+  (`SIDEKICK_APPROVAL_SWEEP_INTERVAL_MS`, default 60s) and the resume scheduler
+  (`SIDEKICK_BRAIN_RESUME_INTERVAL_MS`, default 5s). The sweep interval is an
+  upper bound on how long a task can wait past its approval's expiry, so it is
+  a correctness parameter rather than a tuning knob. **Monitor them** — each
+  sweep logs structured counts.
+- **A high-risk step whose execution is ambiguous parks in `reconciling`** and
+  is never redispatched automatically. Resolving it requires an authenticated
+  human via `POST /api/reconciliations/:taskId/resolve`, with four permitted
+  decisions. `confirm_not_executed` is the most dangerous: asserting an effect
+  did not land when it did produces the double-execution the gate exists to
+  prevent. It is audited but not verifiable.
+
+The guarantee is deliberately **not** exactly-once, and the ADR's §8 is worth
+reading before relying on it: one claimant of record with write fencing,
+at-least-once for low/medium risk, at-most-once with manual reconciliation for
+high/critical/unknown. A tool misclassified as `low` gets silently retried
+after a crash, so risk classification is a correctness input, not a label.
+
 ## Manual verification
 
 With `SIDEKICK_BRAIN_ENABLED=1` in the Agent tab:
@@ -206,5 +261,19 @@ With `SIDEKICK_BRAIN_ENABLED=1` in the Agent tab:
   generation, clear answer.
 - **Approval:** a high-risk action (with approval mode on) parks in
   `waiting_for_approval` with an `approvalId` and is never auto-executed.
+- **Continuation:** approving that parked action makes the task runnable; the
+  resume scheduler picks it up within its poll interval and the step executes
+  through the runner. Observe it in the **task's transcript**
+  (`data/conversations/<task-id>.json`), which is rewritten in place when the
+  resumption finishes: `status` moves from `waiting_for_approval` to
+  `completed`, `result` holds the synthesized answer, the resumed steps are
+  appended, and `brain.resumed` is `true`. The task-history UI reads the same
+  record. Denying it instead resumes the task with a structured
+  `approval_denied` step outcome rather than leaving it parked.
+- **Reconciliation** currently has **no dashboard control**. A `reconciling`
+  task is listed by `GET /api/reconciliations` and resolved by
+  `POST /api/reconciliations/:taskId/resolve`, both of which require an
+  authenticated principal — for now that means an authenticated HTTP request,
+  not a button.
 
 With the flag unset, the Agent tab behaves exactly as before.

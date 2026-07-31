@@ -220,7 +220,124 @@ function publicContextInput(request) {
   return input;
 }
 
+/**
+ * Dispatch a step the continuation layer has already authorized.
+ *
+ * ADR docs/adr-approval-continuation.md §1: the task runner is the only
+ * executor of plan steps. This is the seam it uses — it carries the
+ * approved-execution capability so the dispatcher does not re-queue an
+ * approval, but performs NO approval bookkeeping of its own. Claiming,
+ * verifying, recording, and terminalising the approval are the continuation
+ * transactions' job (T3/T4/T6), and duplicating any of that here would
+ * reintroduce the two-writers problem the ADR removes.
+ *
+ * IT VERIFIES ITS OWN AUTHORIZATION rather than trusting the caller. The seam
+ * carries `APPROVED_EXECUTION_CAPABILITY`, so reaching it with a fabricated
+ * `meta` would otherwise execute any tool at any risk with no approval at all —
+ * the capability Symbol is module-private and cannot be forged, but the whole
+ * module is re-exported as `require("./tools").dispatcher`, so the function
+ * itself is reachable. Decorative parameters on a privileged seam are how a
+ * capability leaks; these are checked.
+ *
+ * The approval must exist, be `executing`, be bound to the caller's `taskId`
+ * through the checkpoint, and match the `operationId` recorded by the claim
+ * that authorized this dispatch.
+ */
+async function executeAuthorizedTaskStep(toolName, args, meta = {}) {
+  let approval;
+  try {
+    const approvalStore = require("../approvals/store");
+    approvalStore.ensureApprovalContinuationSchema();
+    approval = meta.approvalId ? approvalStore.getApproval(meta.approvalId) : null;
+    if (!approval) return errorResult("Authorized step dispatch requires a live approval", "authorized_step_unauthorized");
+    if (approval.status !== "executing") return errorResult("Authorized step dispatch requires an executing approval", "authorized_step_unauthorized");
+    if (!approval.task_id || approval.task_id !== meta.taskId) return errorResult("Authorized step dispatch is not bound to this task", "authorized_step_unauthorized");
+    if (!meta.operationId || approval.operation_id !== meta.operationId) return errorResult("Authorized step dispatch does not match the claim", "authorized_step_unauthorized");
+    if (approval.tool_name !== toolName) return errorResult("Authorized step dispatch does not match the approved tool", "authorized_step_unauthorized");
+
+    const checkpoint = approvalStore.getCheckpoint(approval.task_id);
+    if (!checkpoint || checkpoint.current_approval_id !== approval.approval_id) {
+      return errorResult("Authorized step dispatch is not the task's live approval", "authorized_step_unauthorized");
+    }
+    if (checkpoint.state !== "running") {
+      return errorResult("Authorized step dispatch requires a claimed task", "authorized_step_unauthorized");
+    }
+
+    // AUTHENTICATE THE ARGUMENTS, not just the tool. This seam does not run
+    // `verifyClaim`, so without this it would enforce a strictly weaker rule
+    // than the runner path: an attacker reaching it could run the approved TOOL
+    // with arguments nobody approved. Both privileged entry points must apply
+    // the same check, or the weaker one is the one that gets used.
+    const { argsDigest } = require("../approvals/keys");
+    if (argsDigest(args || {}) !== approval.args_digest) {
+      return errorResult("Authorized step dispatch does not match the approved arguments", "authorized_step_unauthorized");
+    }
+  } catch {
+    return errorResult("Approval continuation storage is unavailable", "approval_continuation_unavailable");
+  }
+
+  return dispatchTool({
+    name: toolName,
+    args,
+    context: createApprovalExecutionContext({
+      actor: meta.actor || "task-runner",
+      approvalId: meta.approvalId || null,
+      operationId: meta.operationId || null,
+      idempotencyKey: meta.idempotencyKey || null,
+      executionId: meta.operationId || null,
+      timeoutMs: meta.timeoutMs || null,
+      taskId: meta.taskId || null,
+      parentId: meta.parentId || null,
+      rootExecutionId: meta.rootExecutionId || null,
+      correlationId: meta.approvalId || meta.taskId || null,
+      approvedExecution: true,
+    }),
+    internalCapability: APPROVED_EXECUTION_CAPABILITY,
+  });
+}
+
 async function executeApprovedTool({ approvalId, reviewer = "system", source } = {}) {
+  // ADR §1: an approval authorizes an action, it never performs one. For a
+  // TASK-ORIGINATED approval this call is a STATE TRANSITION (T2) — mark the
+  // approval approved and the task runnable, atomically — and returns. The task
+  // runner reclaims the task and executes the step through the normal path.
+  //
+  // Approvals that did not originate from a task (a direct dashboard or MCP
+  // call) keep today's standalone execution below. The two are distinguished
+  // by whether `task_id` is present on the approval.
+  let taskApproval = null;
+  try {
+    const approvalStore = require("../approvals/store");
+    approvalStore.ensureApprovalContinuationSchema();
+    const row = approvalStore.getApproval(approvalId);
+    if (row && row.task_id) taskApproval = row;
+  } catch {
+    // A continuation-storage failure must not silently fall through to the
+    // standalone executor: that would dispatch a task-originated tool outside
+    // the runner and discard its result, which is the bug this ADR fixes.
+    return errorResult("Approval continuation storage is unavailable", "approval_continuation_unavailable");
+  }
+
+  if (taskApproval) {
+    const { approve } = require("../approvals/continuation");
+    const outcome = approve({ approvalId, approverIdentity: reviewer });
+    if (!outcome.ok) {
+      const message = outcome.code === "task_not_waiting"
+        ? `Approval ${approvalId} was decided, but its task is no longer waiting for it`
+        : `Approval ${approvalId} could not be approved (${outcome.code})`;
+      return errorResult(message, outcome.code);
+    }
+    return normalizeResult({
+      content: [{
+        type: "text",
+        text: `Approved ${approvalId} for task ${outcome.taskId}. The task is runnable and will be resumed by the task runner.`,
+      }],
+      approvalId,
+      taskId: outcome.taskId,
+      status: "task_runnable",
+    });
+  }
+
   let claim;
   try {
     claim = legacy.claimApprovalExecution({ approvalId, reviewer, source });
@@ -305,4 +422,4 @@ async function callInternalTool(name, args, options = {}) {
   return dispatchTool({ name, args, context: createInternalExecutionContext(options), options });
 }
 
-module.exports = { dispatchTool, dispatchTestTool, callTool, callMcpTool, callAgentTool, callDashboardTool, callInternalTool, executeApprovedTool, getHandlerMap, getBuiltinRegistry };
+module.exports = { dispatchTool, dispatchTestTool, callTool, callMcpTool, callAgentTool, callDashboardTool, callInternalTool, executeApprovedTool, executeAuthorizedTaskStep, getHandlerMap, getBuiltinRegistry };

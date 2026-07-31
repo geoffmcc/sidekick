@@ -173,7 +173,26 @@ function makeBrainRunner(deps) {
     return normalizePlanShape(parsed);
   };
 
-  const synthesize = async ({ goal, evidence, memoryContext, requiresEvidence }) => {
+  const synthesize = makeSynthesizer({ callLLM, redact });
+
+  return function run({ goal, classification, emit, onEvent, cancel, clock, deadlineMs, taskId = null, lineage = {}, persistence = undefined }) {
+    return runBrainTask({
+      goal, classification, plan, synthesize,
+      agentTools, callTool, recallMemory, redact,
+      emit, onEvent, cancel, clock, deadlineMs,
+      taskId, lineage,
+      persistence: persistence === undefined ? (taskId ? defaultPersistence() : null) : persistence,
+    });
+  };
+}
+
+/**
+ * Synthesis is extracted so the RESUME path can build it without constructing a
+ * whole planner: a resumed task already has a validated plan on its checkpoint
+ * and never replans, so `plan()` would be dead weight there.
+ */
+function makeSynthesizer({ callLLM, redact = (t) => t }) {
+  return async function synthesize({ goal, evidence, memoryContext, requiresEvidence }) {
     const system = "You are Sidekick's synthesis module. Answer the user's request using ONLY the evidence provided. " +
       "Distinguish current tool evidence from remembered context. If the evidence does not support a claim, say so plainly. " +
       (requiresEvidence ? "This request needs current system evidence; base the answer strictly on the tool evidence below. " : "") +
@@ -186,14 +205,85 @@ function makeBrainRunner(deps) {
     const res = await callLLM(messages, { systemPrompt: system, temperature: 0.2, maxTokens: BRAIN_LIMITS.MAX_GENERATED_TOKENS });
     return { answer: res.response || "" };
   };
+}
 
-  return function run({ goal, classification, emit, onEvent, cancel, clock, deadlineMs }) {
-    return runBrainTask({
-      goal, classification, plan, synthesize,
-      agentTools, callTool, recallMemory, redact,
-      emit, onEvent, cancel, clock, deadlineMs,
-    });
+/**
+ * Execution seams for resuming ONE parked task. Mirrors the live wiring in
+ * `makeBrainRunner` — same dispatcher, same synthesis, same redaction — so a
+ * resumed step behaves identically to one that never parked (ADR §1).
+ */
+function makeResumeDeps({ callLLM, callTool, redact = (t) => t }) {
+  const { executeAuthorizedTaskStep } = require("../tools/dispatcher");
+  return {
+    callTool,
+    dispatchApproved: (tool, args, meta) => executeAuthorizedTaskStep(tool, args, meta),
+    synthesize: makeSynthesizer({ callLLM, redact }),
+    redact,
   };
 }
 
-module.exports = { isEnabled, makeBrainRunner, buildPlannerSystemPrompt, selectToolsForGoal, extractJson, normalizePlanShape, UNTRUSTED_HEADER };
+/**
+ * The production park seam: T1 in `src/approvals/continuation.js`.
+ *
+ * Required inside `makeBrainRunner` rather than at module top level so that
+ * `require("./brain")` stays free of the storage layer for callers that only
+ * want the planner helpers — and so a database that has not run migration 025
+ * cannot break Brain's import.
+ */
+function defaultPersistence() {
+  return {
+    park: (input) => {
+      const continuation = require("../approvals/continuation");
+      return continuation.park({
+        taskId: input.taskId,
+        goal: input.goal,
+        classification: input.classification,
+        plan: input.plan,
+        stepId: input.stepId,
+        toolName: input.toolName,
+        args: input.args,
+        // Risk and source are recomputed server-side from the live registry.
+        // The model's asserted values are never honored (Brain's trust
+        // boundary), and the approval row is what a human will read.
+        risk: safeToolRisk(input.toolName),
+        source: "agent",
+        requesterIdentity: "agent",
+        evidence: input.evidence,
+        evidenceChars: input.evidenceChars,
+        successfulToolEvidence: input.successfulToolEvidence,
+        deadlineAt: input.deadlineAt,
+        platformExecutionId: input.platformExecutionId || null,
+        rootExecutionId: input.rootExecutionId || null,
+        rootTaskId: input.rootTaskId || null,
+      });
+    },
+    supersedeLegacyApproval: (approvalId, meta) => {
+      try {
+        return require("../tools-legacy").supersedeLegacyApprovalForTask(approvalId, meta);
+      } catch (error) {
+        return { ok: false, code: "supersede_unavailable" };
+      }
+    },
+  };
+}
+
+function safeToolRisk(toolName) {
+  try {
+    return require("../tools-legacy").getToolRisk(toolName) || "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+module.exports = {
+  isEnabled,
+  makeBrainRunner,
+  buildPlannerSystemPrompt,
+  selectToolsForGoal,
+  extractJson,
+  normalizePlanShape,
+  UNTRUSTED_HEADER,
+  defaultPersistence,
+  makeSynthesizer,
+  makeResumeDeps,
+};
