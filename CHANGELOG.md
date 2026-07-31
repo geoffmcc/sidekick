@@ -4,6 +4,16 @@ All notable changes to Sidekick.
 
 ## Unreleased
 
+### Reconciliation UI for ambiguous executions
+
+Approval continuation shipped with `GET /api/reconciliations` and `POST /api/reconciliations/:taskId/resolve` but no way to reach them from the dashboard, so the designated recovery path for an ambiguous *high-risk* execution was resolvable only by hand-crafting an authenticated request. A task could sit in `reconciling` indefinitely with nothing surfacing it.
+
+- Added an **Ambiguous Executions** section to the Approvals page, shown only when something is waiting. It is deliberately separate from the approval inbox rather than another status filter: these are not approve-or-reject decisions, because the step may already have run, and presenting them alongside ordinary pending approvals would invite treating them like one.
+- Each entry carries what an investigation actually needs — tool, risk, task and step id, attempt count, who authorized the original action, when it became ambiguous, and the argument digest — with the arguments themselves renderable on demand through the existing authenticated preview.
+- All four permitted decisions are offered, each with its consequence stated on the control. **It did not run** is styled as destructive and requires an explicit confirmation naming the risk, because it redispatches a high-risk tool: asserting an effect did not land when it did produces exactly the double-execution the risk gate exists to prevent, and that is audited but not verifiable.
+- Without an authenticated principal the section explains why it cannot be used instead of rendering buttons guaranteed to be refused. The server now reports `can_resolve` and whether the payload is still renderable, so a discarded payload is explained rather than offering a preview control that can only fail.
+- Added `test/reconciliation-ui.test.js` (17 assertions) following the repo's convention of asserting frontend behaviour against the served source. It pins the cross-file element-id wiring, checks the offered decisions equal `src/approvals/vocabulary.js`'s closed vocabulary exactly, verifies the confirmation gate precedes the request rather than following it, and asserts ids reaching attribute and JS-string contexts use `attr()`/`jsArg()` rather than `esc()`, which does not escape quotes. Each guard was verified to fail the suite when removed.
+
 ### Approval continuation — a parked Brain task now resumes
 
 Implements the accepted architectural contract in `docs/adr-approval-continuation.md`. Previously a Brain task that needed approval parked and never resumed: the approved tool executed standalone, in a different execution tree, and its result was discarded. The mechanism was a single dropped field — the execution context carrying `taskId` and `stepNumber` reached `queueApproval`, which never copied either onto the approval record — and everything downstream followed from it.
