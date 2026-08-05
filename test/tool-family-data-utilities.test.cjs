@@ -37,10 +37,6 @@ const text = result => result.content[0].text;
       assert.strictEqual(descriptor.source, 'builtin', `${name} should be a descriptor-owned builtin`);
     }
 
-    // hash deliberately stays behind. Its enforcePathPolicy dependency now
-    // lives in src/tools/path-policy.js; migrating hash is a later slice.
-    assert.strictEqual(typeof legacy.TOOLS.hash, 'function', 'hash should remain a legacy handler in this slice');
-
     // --- Behavior preservation: parse ---
 
     assert.deepStrictEqual(

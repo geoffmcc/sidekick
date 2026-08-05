@@ -12,12 +12,13 @@ Extracted descriptor-owned families live under `src/tools/families/` and are agg
 
 - `utility.js` — `respond`. The first extracted family.
 - `data-utilities.js` — `parse`, `diff`, `validate`, `template`. In-process data utilities: they perform no filesystem, database, network, or shell access. This is a description of their current dependencies, not a sandbox guarantee — `validate` compiles caller-supplied JSON Schema through Ajv and `template` compiles caller-supplied Handlebars templates, so their input is still untrusted code-shaped data.
+- `hashing.js` — `hash`. File and string checksum generation and verification. It uses the shared filesystem path-policy boundary for file reads.
 
 Each family owns its handlers, Zod schemas, risk, category, and compatibility metadata. Legacy `TOOL_DEFS` rows remain only as ordering anchors while MCP ordering compatibility is preserved. When an extracted tool has an entry in `src/tools/schemas/index.js`, remove it so each schema has exactly one owner.
 
 The filesystem path policy now lives in `src/tools/path-policy.js`, the authoritative implementation of `enforcePathPolicy` and `getPathPolicyDecision`. It requires only `fs`, `path`, `src/core/policy-env.js`, and `src/tools/context.js`, so descriptor families can depend on it without requiring `src/tools-legacy.js` at module top level. `src/tools-legacy.js` consumes it and no longer defines its own copy.
 
-`hash` is still legacy-owned despite sharing the `Data Pipeline` category. The path-policy boundary it depends on has been relocated, so its migration is now unblocked and belongs to a later slice.
+`hash` is descriptor-family owned by `hashing.js`. Its legacy `TOOL_DEFS` row remains as the temporary ordering and compatibility anchor; the live legacy handler and legacy schema entry have been removed.
 
 ## Registry Lifecycle
 
@@ -164,7 +165,20 @@ Handlers should not implement their own policy or approval logic. Handlers that 
 
 ## Remaining Legacy Work
 
-Most handlers still live in `src/tools-legacy.js`. Remaining migration should proceed by coherent families, such as read-only database inspection tools, memory tools, or the GitHub tools. Avoid migrating destructive infrastructure tools until their security behavior is fully characterized.
+Most handlers still live in `src/tools-legacy.js`. The next migration sequence should follow dependency and security boundaries rather than source-file size:
+
+1. Read-only database inspection: `db_schema`, `db_query`, `db_stats`, `db_search`, `log_query`, and `db_diff`. First relocate any shared database argument/result helpers that are still legacy-internal. Keep `db_query` read-only and preserve backend/limit/timeout validation. This is a small, medium-sensitivity slice with focused SQLite and policy tests.
+2. Storage and KV: `store`, `get`, `delete`, `list_projects`, `get_by_project`, `cache`, and `redis`. First separate file/KV serialization helpers from legacy. Preserve key/project validation and treat Redis as an optional external dependency. This is a medium-sensitivity slice with persistence and unavailable-service tests.
+3. Structured memory: `context`, `session`, `handoff`, `memory`, `memory_export`, `memory_import`, `memory_manage`, `sync_identity`, `sync_export`, `sync_import`, and `sync_diff`. This depends on the storage slice and memory-facing helper boundaries. It is high compatibility risk because it affects durable state, provenance, redaction, and lifecycle semantics; split the typed memory core from compatibility exports if needed.
+4. Filesystem read/search: `read`, `list`, `search`, `find`, `filter`, `summarize`, `extract`, and `diff_files`. The shared path policy is already available, but `safeExecFileSync` and `jsonText` remain legacy dependencies for some candidates. Relocate those helpers first and cover allow/deny, traversal, missing files, and output limits.
+5. Data transformation and reporting: `transform`, `anonymize`, `insight_report`, and remaining format/report helpers. Reuse the existing data-utilities conventions and keep caller-supplied templates, regular expressions, and schemas treated as untrusted input.
+6. GitHub and CI inspection: `github`, `ci_status`, and related read-only metadata helpers. Preserve token redaction, network error normalization, and the distinction between read-only inspection and mutation. Split inspection from PR/issue/release mutation so approval behavior remains explicit.
+7. Monitoring and status: `health`, `status`, `process`, `service`, `netdiag`, `timeline`, `baseline`, `depend`, and `watch`. These share system-observation and scheduling dependencies; extract read-only observation before lifecycle-changing watch actions. Security sensitivity is medium to high because targets and command-backed collectors must retain centralized policy.
+8. Communication and external integrations: `notify`, `web_fetch`, `llm`, `embed`, `ollama`, `download`, `media`, `transcribe`, `analytics`, and `tunnel`. These have distinct network, credential, optional-binary, and data-egress risks, so they should be split into several small families rather than one integration module.
+9. Compute tool integration: `compute`, `compute_nodes`, `compute_providers`, `compute_models`, `compute_jobs`, and `compute_route`. The compute modules already own much of the implementation; extraction should preserve placement, trust, data-classification, and worker capability gates and should follow compute-specific contract tests.
+10. Destructive database and infrastructure operations: `db_backup`, `db_restore`, `db_export`, `db_migrate`, `nginx`, `wireguard`, `service`, `cron`, `runbook`, `sandbox`, `ops`, and related mutation tools. Defer these until approval, rollback, target validation, and audit behavior are independently characterized. They are not suitable for a broad extraction slice.
+
+The immediate Phase 2 candidate is the first read-only database inspection slice only if its shared helpers can be relocated without widening the database policy boundary. Otherwise, relocate the smallest required database helper module as a preparatory slice. Each numbered family should remain small enough for one reviewable PR.
 
 A family whose handlers depend on `src/tools-legacy.js` internals — `safeExecFileSync`, `isDangerous`, `jsonText` — needs those helpers relocated to a shared module first. That relocation should be its own slice, not a side effect of a family extraction. Family modules must not require `src/tools-legacy.js` at module top level; the lazy `require` of the dispatcher inside legacy functions is what keeps the dispatcher/legacy cycle from forming.
 

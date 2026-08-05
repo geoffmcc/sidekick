@@ -298,12 +298,6 @@ const TOOL_SCHEMAS = {
     max_files: z.number().int().min(1).max(10000).optional().describe("Maximum files to inspect (default 2000, maximum 10000)"),
     format: z.enum(["text", "json"]).optional().describe("Output format (default text)")
   }),
-  hash: z.object({
-    input: z.string().optional().describe("Data to hash (string content)"),
-    path: z.string().optional().describe("File path to hash"),
-    algorithm: z.string().optional().describe("Hash algorithm: md5, sha1, sha256, sha512 (default: sha256)"),
-    verify: z.string().optional().describe("Expected hash value to verify against")
-  }),
   queue: z.object({
     action: z.enum(["add", "list", "process", "remove", "clear"]).describe("Queue action"),
     id: z.number().optional().describe("Task ID (for remove action)"),

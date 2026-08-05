@@ -359,7 +359,7 @@ function setupSymlinkFixtures() {
     assert.ok(writeBlocked.isError, 'Blocked write should return an error');
     assert.strictEqual(fs.readFileSync(outsideFile, 'utf-8'), 'outside content', 'Blocked write must not mutate the target');
 
-    // hash still routes through the shared boundary and stays legacy-owned.
+    // hash still routes through the shared boundary after descriptor extraction.
     const hashBlocked = await tools.TOOLS.hash({ path: outsideFile });
     assert.ok(hashBlocked.isError, 'hash should still enforce the shared path policy');
     assert.ok(hashBlocked.content[0].text.includes('Path blocked by policy'), 'hash should surface the shared policy message');
