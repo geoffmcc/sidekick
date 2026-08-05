@@ -20,7 +20,6 @@ const { validAllowedIps, validDomainName, validDownloadFormat, validIdentifier, 
 const computeTools = require("./compute/tools");
 const { TOOL_RISK, TOOL_CATEGORIES, RISK_LEVELS } = require("./tools/metadata");
 const toolContext = require("./tools/context");
-const { extractHandoffMemories: extractedHandoffMemories } = require("./tools/families/memory-handoff");
 const { loadContext: loadSharedContext, findContextItemById: findSharedContextItemById, updateLegacyContextItem: updateSharedLegacyContextItem } = require("./tools/families/context");
 const { parsePolicyList, sourceEnvName } = require("./core/policy-env");
 const { getPathPolicyDecision, enforcePathPolicy } = require("./tools/path-policy");
@@ -6546,49 +6545,6 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
   }
   if (action === "list") return jsonText({ ok: true, sessions: dbStore.listTaskSessions({ project, state: source, limit: limit || 50 }) });
   return { content: [{ type: "text", text: "Invalid action. Use begin, update, checkpoint, end, abandon, resume, status, list" }], isError: true };
-}
-
-async function sidekick_handoff({ action, id, key, project, title, content, source, task_id, reprocess, include_archived, limit }) {
-  if (action === "create" || action === "update") {
-    const handoffContent = content || (key ? dbStore.getKV(key)?.value : null);
-    if (!handoffContent) return { content: [{ type: "text", text: "content required, or provide key for an existing KV handoff" }], isError: true };
-    if (key && content) dbStore.setKV(key, content, project || dbStore.getKV(key)?.project || null, getCurrentSource(), "handoff");
-    const handoff = dbStore.saveHandoff({ id, kv_key: key, project, title, source: source || getCurrentSource(), task_id, content: handoffContent, extraction_state: "pending" });
-    const memories = extractHandoffMemories(handoff, { project });
-    recordPlatformMemoryEvent("memory.handoff_processed", { handoff_id: handoff.id, key: handoff.kv_key, project: handoff.project, version: handoff.version, memories_created: memories.length, extraction_state: "processed" }, { subjectType: "memory_handoff", subjectId: handoff.id, project: handoff.project, taskId: handoff.task_id });
-    return jsonText({ ok: true, handoff: dbStore.getHandoff(handoff.id), memories_created: memories.length, memories });
-  }
-  if (action === "get") {
-    if (!id && !key) return { content: [{ type: "text", text: "handoff get requires id or key. To retrieve by project, use handoff list or resume check." }], isError: true };
-    const handoff = dbStore.getHandoff(id || key);
-    if (!handoff) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
-    return jsonText({ ok: true, handoff });
-  }
-  if (action === "list") return jsonText({ ok: true, handoffs: dbStore.listHandoffs({ project, includeArchived: include_archived === true, limit: limit || 50 }) });
-  if (action === "inspect") {
-    if (!id && !key) return { content: [{ type: "text", text: "handoff inspect requires id or key. To retrieve by project, use handoff list or resume check." }], isError: true };
-    const handoff = dbStore.getHandoff(id || key);
-    if (!handoff) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
-    const memories = dbStore.searchMemories({ project: handoff.project, includeDisabled: true, limit: 200 }).filter(m => m.source_ref === handoff.id || m.metadata?.handoff_id === handoff.id);
-    return jsonText({ ok: true, handoff, extracted_memories: memories, extraction_version: HANDOFF_EXTRACTION_VERSION });
-  }
-  if (action === "reprocess") {
-    const handoff = dbStore.getHandoff(id || key);
-    if (!handoff) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
-    const memories = extractHandoffMemories(handoff, { project: project || handoff.project });
-    recordPlatformMemoryEvent("memory.handoff_reprocessed", { handoff_id: handoff.id, key: handoff.kv_key, project: handoff.project, version: handoff.version, memories_created_or_confirmed: memories.length }, { subjectType: "memory_handoff", subjectId: handoff.id, project: handoff.project, taskId: handoff.task_id });
-    return jsonText({ ok: true, handoff: dbStore.getHandoff(handoff.id), memories_created_or_confirmed: memories.length, memories });
-  }
-  if (action === "archive") {
-    const ok = dbStore.archiveHandoff(id || key);
-    if (ok) recordPlatformMemoryEvent("memory.handoff_archived", { handoff_id: id || key }, { subjectType: "memory_handoff", subjectId: id || key, project });
-    return { content: [{ type: "text", text: ok ? "Handoff archived" : "Handoff not found" }], isError: !ok };
-  }
-  if (action === "compare") {
-    const handoffs = dbStore.listHandoffs({ project, includeArchived: true, limit: 2 });
-    return jsonText({ ok: true, comparison: handoffs.map(h => ({ id: h.id, key: h.kv_key, version: h.version, hash: h.content_hash, updated_at: h.updated_at })) });
-  }
-  return { content: [{ type: "text", text: "Invalid action. Use create, update, get, list, compare, inspect, reprocess, archive" }], isError: true };
 }
 
 async function sidekick_status({ include, services }) {
