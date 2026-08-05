@@ -47,6 +47,11 @@ sqlite3 data/sidekick.db "SELECT COUNT(*) FROM knowledge WHERE version_added = '
 |---|---|
 | `overview.md` | What Sidekick is, how the pieces fit together, and common use cases. |
 | `architecture.md` | Service boundaries, request flow, storage layout, sessions, and process model. |
+| `platform-convergence-audit.md` | Phase 0R verified baseline, capability reality matrix, archaeology, current dependency graph, and unresolved decisions. |
+| `platform-target-architecture.md` | Proposed converged runtime boundaries and dependency directions grounded in current foundations. |
+| `module-system-design.md` | Proposed module contract and lifecycle using the existing registry, dispatcher, policy, approvals, migrations, and platform services. |
+| `security-research-capability.md` | Proposed `@sidekick/security-research` capability-pack architecture and safety boundary. |
+| `platform-roadmap.md` | Three-track implementation roadmap and exact next-phase work packet. |
 | `installation.md` | Fresh install, deployment scripts, manual systemd setup, and MCP client configuration. |
 | `configuration.md` | Environment variables, ports, LLM settings, data directory, and auth settings. |
 | `compute.md` | Sidekick Compute architecture, worker protocol, artifacts, cancellation, tests, and non-goals. |

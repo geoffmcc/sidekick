@@ -1,5 +1,9 @@
 # Tool Architecture
 
+Status: Current-state architecture, reconciled in Phase 0R
+Verified commit: d2db2658ef0fbf862c64b09315279562caa5bb8e
+Verified date: 2026-08-05T16:16:46-04:00
+
 Sidekick's current built-in registry contains 107 tools across 20 categories. Tools execute through a descriptor registry and centralized dispatcher. `src/tools-legacy.js` still contains most migrated-in-place handlers, but it is no longer the authoritative execution path.
 
 ## Descriptor Model
@@ -10,12 +14,22 @@ Descriptors are validated by `src/tools/descriptor.js`. Validation rejects empty
 
 Extracted descriptor-owned families live under `src/tools/families/` and are aggregated by `src/tools/families/index.js`, which is the single source of extracted descriptors for the registry:
 
-- `utility.js` — `respond`. The first extracted family.
-- `data-utilities.js` — `parse`, `diff`, `validate`, `template`. In-process data utilities: they perform no filesystem, database, network, or shell access. This is a description of their current dependencies, not a sandbox guarantee — `validate` compiles caller-supplied JSON Schema through Ajv and `template` compiles caller-supplied Handlebars templates, so their input is still untrusted code-shaped data.
+- `utility.js` — `respond`.
+- `data-utilities.js` — `parse`, `extract`, `transform`, `diff`, `validate`, `template`. In-process data utilities: they perform no filesystem, database, network, or shell access. This is a description of their current dependencies, not a sandbox guarantee — `validate` compiles caller-supplied JSON Schema through Ajv and `template` compiles caller-supplied Handlebars templates, so their input is still untrusted code-shaped data.
 - `hashing.js` — `hash`. File and string checksum generation and verification. It uses the shared filesystem path-policy boundary for file reads.
 - `database-inspection.js` — `db_schema`, `db_query`, `db_stats`, `log_query`, `db_search`, `db_diff`. Read-only SQLite/Postgres inspection and snapshot comparison; database mutation and export tools remain legacy-owned.
+- `storage.js` — `store`, `get`, `delete`, `list_projects`, `get_by_project`, `cache`, `redis`.
+- `memory-sync.js` — `sync_identity`, `sync_export`, `sync_import`, `sync_diff`.
+- `memory-portability.js` — `memory_export`, `memory_import`.
+- `memory-lifecycle.js` — `memory_manage`.
+- `memory-session.js` — `session`.
+- `memory-handoff.js` — `handoff`.
+- `memory-core.js` — `memory`.
+- `context.js` — `context`.
+- `filesystem.js` — `read`, `list`, `search`, `summarize`, `filter`, `diff_files`, `find`.
+- `monitoring.js` — `tail`.
 
-Each family owns its handlers, Zod schemas, risk, category, and compatibility metadata. Legacy `TOOL_DEFS` rows remain only as ordering anchors while MCP ordering compatibility is preserved. When an extracted tool has an entry in `src/tools/schemas/index.js`, remove it so each schema has exactly one owner.
+These 14 families own 40 descriptors. Each family owns its handlers, inline Zod schemas, risk, category, and compatibility metadata. Legacy `TOOL_DEFS` rows remain only as ordering anchors while MCP ordering compatibility is preserved. Five storage schemas (`store`, `get`, `delete`, `list_projects`, and `get_by_project`) still remain in `src/tools/schemas/index.js`; this is duplicate ownership and is the first cleanup item in the next extraction slice.
 
 The filesystem path policy now lives in `src/tools/path-policy.js`, the authoritative implementation of `enforcePathPolicy` and `getPathPolicyDecision`. It requires only `fs`, `path`, `src/core/policy-env.js`, and `src/tools/context.js`, so descriptor families can depend on it without requiring `src/tools-legacy.js` at module top level. `src/tools-legacy.js` consumes it and no longer defines its own copy.
 
@@ -168,17 +182,15 @@ Handlers should not implement their own policy or approval logic. Handlers that 
 
 Most handlers still live in `src/tools-legacy.js`. The next migration sequence should follow dependency and security boundaries rather than source-file size:
 
-1. Storage and KV: `store`, `get`, `delete`, `list_projects`, `get_by_project`, `cache`, and `redis`. First separate file/KV serialization helpers from legacy. Preserve key/project validation and treat Redis as an optional external dependency. This is a medium-sensitivity slice with persistence and unavailable-service tests.
-2. Structured memory: `context`, `session`, `handoff`, `memory`, `memory_export`, `memory_import`, `memory_manage`, `sync_identity`, `sync_export`, `sync_import`, and `sync_diff`. This depends on the storage slice and memory-facing helper boundaries. It is high compatibility risk because it affects durable state, provenance, redaction, and lifecycle semantics; split the typed memory core from compatibility exports if needed.
-3. Filesystem read/search: `read`, `list`, `search`, `find`, `filter`, `summarize`, `extract`, and `diff_files`. The shared path policy is already available, but `safeExecFileSync` and `jsonText` remain legacy dependencies for some candidates. Relocate those helpers first and cover allow/deny, traversal, missing files, and output limits.
-4. Data transformation and reporting: `transform`, `anonymize`, `insight_report`, and remaining format/report helpers. Reuse the existing data-utilities conventions and keep caller-supplied templates, regular expressions, and schemas treated as untrusted input.
-5. GitHub and CI inspection: `github`, `ci_status`, and related read-only metadata helpers. Preserve token redaction, network error normalization, and the distinction between read-only inspection and mutation. Split inspection from PR/issue/release mutation so approval behavior remains explicit.
-6. Monitoring and status: `health`, `status`, `process`, `service`, `netdiag`, `timeline`, `baseline`, `depend`, and `watch`. These share system-observation and scheduling dependencies; extract read-only observation before lifecycle-changing watch actions. Security sensitivity is medium to high because targets and command-backed collectors must retain centralized policy.
-7. Communication and external integrations: `notify`, `web_fetch`, `llm`, `embed`, `ollama`, `download`, `media`, `transcribe`, `analytics`, and `tunnel`. These have distinct network, credential, optional-binary, and data-egress risks, so they should be split into several small families rather than one integration module.
-8. Compute tool integration: `compute`, `compute_nodes`, `compute_providers`, `compute_models`, `compute_jobs`, and `compute_route`. The compute modules already own much of the implementation; extraction should preserve placement, trust, data-classification, and worker capability gates and should follow compute-specific contract tests.
-9. Destructive database and infrastructure operations: `db_backup`, `db_restore`, `db_export`, `db_migrate`, `nginx`, `wireguard`, `service`, `cron`, `runbook`, `sandbox`, `ops`, and related mutation tools. Defer these until approval, rollback, target validation, and audit behavior are independently characterized. They are not suitable for a broad extraction slice.
+1. Remove the five duplicate storage schemas and add contract coverage; do not re-extract storage.
+2. Data/filesystem follow-up: `anonymize`, `insight_report`, and remaining report helpers; preserve untrusted-input handling.
+3. GitHub and CI inspection: `github`, `ci_status`; separate read-only inspection from mutation and preserve token redaction and approval behavior.
+4. Monitoring and status: `health`, `status`, `process`, `service`, `netdiag`, `timeline`, `baseline`, `depend`, and `watch`; extract observation before lifecycle-changing actions.
+5. Communication and external integrations: split `notify`, `web_fetch`, `llm`, `embed`, `ollama`, `download`, `media`, `transcribe`, `analytics`, and `tunnel` into bounded families.
+6. Compute tool integration: `compute`, `compute_nodes`, `compute_providers`, `compute_models`, `compute_jobs`, and `compute_route`; preserve placement, trust, classification, and worker gates.
+7. Destructive database and infrastructure operations: `db_backup`, `db_restore`, `db_export`, `db_migrate`, `nginx`, `wireguard`, `cron`, `runbook`, `sandbox`, `ops`, and related mutation tools. Defer until approval, rollback, target validation, and audit behavior are characterized.
 
-The read-only database inspection family is now extracted. The immediate next candidate is storage/KV, starting with file-backed and SQLite-backed storage before Redis. Each numbered family should remain small enough for one reviewable PR.
+The read-only database, storage, memory, filesystem, data-utility, and monitoring-tail families are already extracted. The immediate next implementation slice is duplicate-schema removal and registry-contract coverage, followed by a new bounded legacy family only after that cleanup. Each slice should remain small enough for one reviewable PR.
 
 A family whose handlers depend on `src/tools-legacy.js` internals — `safeExecFileSync`, `isDangerous`, `jsonText` — needs those helpers relocated to a shared module first. That relocation should be its own slice, not a side effect of a family extraction. Family modules must not require `src/tools-legacy.js` at module top level; the lazy `require` of the dispatcher inside legacy functions is what keeps the dispatcher/legacy cycle from forming.
 

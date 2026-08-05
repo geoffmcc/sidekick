@@ -1,5 +1,7 @@
 # Tool Creation Guide
 
+Status: Superseded. New and migrated tools must follow `tool-architecture.md` and be descriptor-owned under `src/tools/families/`; the direct `src/tools.js` workflow below describes the pre-registry architecture.
+
 ## Quick Reference
 
 **Files to edit (in order):**
