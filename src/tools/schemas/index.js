@@ -130,27 +130,6 @@ const TOOL_SCHEMAS = {
     type: z.string().optional().describe("Context type: decisions, problems, patterns, projects, sessions, memories, or all (default: all)"),
     limit: z.number().optional().describe("Maximum results to return (default: 10)")
   }),
-  memory: z.object({
-    action: z.enum(["remember", "query", "explain", "list", "get", "confirm", "correct", "forget", "pin", "expire", "conflicts", "health", "backfill"]).describe("Memory action"),
-    id: z.string().optional(),
-    project: z.string().optional(),
-    type: z.string().optional(),
-    memory_class: z.string().optional(),
-    content: z.string().optional(),
-    summary: z.string().optional(),
-    scope_type: z.string().optional(),
-    scope_id: z.string().optional(),
-    source: z.string().optional(),
-    evidence: z.string().optional(),
-    confidence: z.number().optional(),
-    tags: z.union([z.string(), z.array(z.string())]).optional(),
-    query: z.string().optional(),
-    limit: z.number().optional(),
-    reason: z.string().optional(),
-    correct_to: z.string().optional(),
-    fresh_eyes: z.boolean().optional(),
-    historical: z.boolean().optional()
-  }),
   teach: z.object({
     action: z.enum(["teach_procedure", "generate_tool", "learn_from_example", "execute", "list", "remove"]).describe("Teach action to perform"),
     name: z.string().optional().describe("Procedure name (required for teach/generate/execute/remove)"),
