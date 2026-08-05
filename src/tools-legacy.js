@@ -1620,16 +1620,6 @@ async function sidekick_bash({ command }) {
   }
 }
 
-async function sidekick_read({ path: filePath }) {
-  const policyError = enforcePathPolicy(filePath, "read");
-  if (policyError) return policyError;
-  if (!fs.existsSync(filePath)) {
-    return { content: [{ type: "text", text: "File not found: " + filePath }], isError: true };
-  }
-  const content = fs.readFileSync(filePath, "utf-8");
-  return { content: [{ type: "text", text: redactSensitive(content) }] };
-}
-
 async function sidekick_write({ path: filePath, content }) {
   const policyError = enforcePathPolicy(filePath, "write");
   if (policyError) return policyError;
@@ -1747,24 +1737,6 @@ async function sidekick_resume({ action, project, summary, next_step, status, br
   }
 
   return { content: [{ type: "text", text: "Invalid action. Use: check, set, clear, list" }], isError: true };
-}
-
-async function sidekick_list({ path: dirPath }) {
-  const policyError = enforcePathPolicy(dirPath, "read");
-  if (policyError) return policyError;
-  if (!fs.existsSync(dirPath)) {
-    return { content: [{ type: "text", text: "Path not found: " + dirPath }], isError: true };
-  }
-  const items = fs.readdirSync(dirPath, { withFileTypes: true });
-  const lines = items.map(i => {
-    const type = i.isDirectory() ? "DIR" : i.isFile() ? "FILE" : "OTHER";
-    let stat = null;
-    try { stat = fs.statSync(path.join(dirPath, i.name)); } catch (e) {}
-    const size = stat ? stat.size : 0;
-    const date = stat ? stat.mtime.toISOString().slice(0, 19).replace("T", " ") : "";
-    return type.padEnd(5) + " " + String(size).padStart(10) + " " + date + " " + i.name;
-  });
-  return { content: [{ type: "text", text: redactSensitive(lines.join("\n") || "(empty directory)") }] };
 }
 
 async function sidekick_web_fetch({ url: targetUrl, method, headers, body }) {
@@ -1901,42 +1873,6 @@ function callGroqLLM(prompt, system, temperature) {
     req.write(body);
     req.end();
   });
-}
-
-async function sidekick_search({ pattern, path: searchPath, include }) {
-  const targetPath = searchPath || ".";
-  const policyError = enforcePathPolicy(targetPath, "read");
-  if (policyError) return policyError;
-  if (!fs.existsSync(targetPath)) {
-    return { content: [{ type: "text", text: "Path not found: " + targetPath }], isError: true };
-  }
-
-  let useRg = false;
-  try {
-    execFileSync("which", ["rg"], { stdio: "ignore" });
-    useRg = true;
-  } catch (e) {}
-
-  try {
-    let stdout;
-    if (useRg) {
-      const args = ["--json", "--max-count", "100"];
-      if (include) args.push("-g", include);
-      args.push(pattern, targetPath);
-      stdout = execFileSync("rg", args, { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024 });
-    } else {
-      const args = ["-rn", "--max-count=100"];
-      if (include) args.push("--include=" + include);
-      args.push(pattern, targetPath);
-      stdout = execFileSync("grep", args, { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024 });
-    }
-    return { content: [{ type: "text", text: redactSensitive(stdout || "(no matches)") }] };
-  } catch (e) {
-    if (e.status === 1) {
-      return { content: [{ type: "text", text: "No matches found" }] };
-    }
-    return { content: [{ type: "text", text: "Search error: " + (e.stderr || e.message) }], isError: true };
-  }
 }
 
 async function sidekick_git({ action, path: repoPath, args: extraArgs }) {
@@ -11101,13 +11037,10 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
 const TOOLS = {
   bash: sidekick_bash,
   tools: sidekick_tools,
-  read: sidekick_read,
   write: sidekick_write,
   resume: sidekick_resume,
-  list: sidekick_list,
   web_fetch: sidekick_web_fetch,
   llm: sidekick_llm,
-  search: sidekick_search,
   git: sidekick_git,
   notify: sidekick_notify,
   process: sidekick_process,

@@ -12,8 +12,9 @@ const memorySession = require("./memory-session");
 const memoryHandoff = require("./memory-handoff");
 const memoryCore = require("./memory-core");
 const context = require("./context");
+const filesystem = require("./filesystem");
 
-const families = Object.freeze([utility, dataUtilities, hashing, databaseInspection, storage, memorySync, memoryPortability, memoryLifecycle, memorySession, memoryHandoff, memoryCore, context]);
+const families = Object.freeze([utility, dataUtilities, hashing, databaseInspection, storage, memorySync, memoryPortability, memoryLifecycle, memorySession, memoryHandoff, memoryCore, context, filesystem]);
 
 // Descriptors owned by extracted families. The registry substitutes these at
 // their legacy TOOL_DEFS order position, so ordering here is not significant.

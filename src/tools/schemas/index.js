@@ -12,7 +12,6 @@ const TOOL_SCHEMAS = {
     include_disabled: z.boolean().optional().describe("Include policy-disabled tools"),
     limit: z.number().optional().describe("Max search results")
   }),
-  read: z.object({ path: z.string().describe("Absolute path to the file to read") }),
   write: z.object({ path: z.string().describe("Absolute path to write to"), content: z.string().describe("File content to write") }),
   store: z.object({
     key: z.string().describe("Storage key"),
@@ -36,7 +35,6 @@ const TOOL_SCHEMAS = {
     include_cleared: z.boolean().optional().describe("Include cleared/done items for action=list"),
     format: z.enum(["text", "json"]).optional().default("text").describe("Output format")
   }),
-  list: z.object({ path: z.string().optional().default("/home/sidekick").describe("Directory path to list") }),
   web_fetch: z.object({
     url: z.string().describe("URL to fetch"),
     method: z.enum(["GET", "POST"]).optional().default("GET").describe("HTTP method"),
@@ -51,11 +49,6 @@ const TOOL_SCHEMAS = {
   }),
   list_projects: z.object({}),
   get_by_project: z.object({ project: z.string().describe("Project name to filter by") }),
-  search: z.object({
-    pattern: z.string().describe("Regex pattern to search for"),
-    path: z.string().optional().describe("Directory to search in (defaults to current directory)"),
-    include: z.string().optional().describe("File pattern to include (e.g. '*.js', '*.ts')")
-  }),
   git: z.object({
     action: z.enum(["status", "diff", "log", "add", "commit", "push", "pull", "branch", "checkout", "stash"]).describe("Git action to perform"),
     path: z.string().optional().describe("Repository path (defaults to current directory)"),
