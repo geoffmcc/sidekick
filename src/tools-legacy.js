@@ -7357,52 +7357,6 @@ async function sidekick_ops({ action, repo_path, restart_mcp }) {
   return { content: [{ type: "text", text: "Invalid action. Use: verify_deployed_commit, restart_and_smoke_test, deploy_current_main, incident_snapshot" }], isError: true };
 }
 
-async function sidekick_extract({ path: filePath, fields }) {
-  if (!filePath) return { content: [{ type: "text", text: "path required" }], isError: true };
-  const policyError = enforcePathPolicy(filePath, "read");
-  if (policyError) return policyError;
-  if (!fs.existsSync(filePath)) {
-    return { content: [{ type: "text", text: "File not found: " + filePath }], isError: true };
-  }
-  const content = fs.readFileSync(filePath, "utf-8");
-  let data;
-  const ext = path.extname(filePath).toLowerCase();
-  try {
-    if (ext === ".json") {
-      data = JSON.parse(content);
-    } else if (ext === ".yaml" || ext === ".yml") {
-      const yaml = require("yaml");
-      data = yaml.parse(content);
-    } else if (ext === ".ini" || ext === ".cfg") {
-      const ini = require("ini");
-      data = ini.parse(content);
-    } else if (ext === ".xml") {
-      const { XMLParser } = require("fast-xml-parser");
-      const parser = new XMLParser();
-      data = parser.parse(content);
-    } else {
-      data = JSON.parse(content);
-    }
-  } catch (e) {
-    return { content: [{ type: "text", text: "Parse error: " + e.message }], isError: true };
-  }
-  if (!fields) {
-    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-  }
-  const fieldList = Array.isArray(fields) ? fields : fields.split(",").map(f => f.trim());
-  const result = {};
-  for (const fieldPath of fieldList) {
-    const parts = fieldPath.replace(/\[(\d+)\]/g, ".$1").split(".");
-    let val = data;
-    for (const part of parts) {
-      if (val === null || val === undefined) { val = undefined; break; }
-      val = val[part];
-    }
-    result[fieldPath] = val !== undefined ? (typeof val === "object" ? JSON.stringify(val) : String(val)) : null;
-  }
-  return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-}
-
 const ANONYMIZE_PATTERNS_FILE = path.join(DATA_DIR, "anonymize_patterns.json");
 const MAX_ANONYMIZE_INPUT_SIZE = 1024 * 1024;
 
@@ -10860,7 +10814,6 @@ const TOOLS = {
   project: sidekick_project,
   tail: sidekick_tail,
   status: sidekick_status,
-  extract: sidekick_extract,
   anonymize: sidekick_anonymize,
   sandbox: sidekick_sandbox,
   changelog: sidekick_changelog,

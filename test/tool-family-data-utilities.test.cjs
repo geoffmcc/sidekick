@@ -5,6 +5,11 @@ const path = require('path');
 const TEST_DATA_DIR = path.join(__dirname, 'test-data-data-utilities');
 fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
 fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+fs.writeFileSync(path.join(TEST_DATA_DIR, 'data.json'), JSON.stringify({ database: { host: 'localhost', password: 'secret', clientSecret: 'client-secret' }, items: [{ name: 'first' }] }), 'utf8');
+fs.writeFileSync(path.join(TEST_DATA_DIR, 'data.yaml'), 'database:\n  host: localhost\nitems:\n  - name: first\n', 'utf8');
+fs.writeFileSync(path.join(TEST_DATA_DIR, 'data.ini'), '[database]\nhost=localhost\n', 'utf8');
+fs.writeFileSync(path.join(TEST_DATA_DIR, 'data.xml'), '<root><item>value</item></root>', 'utf8');
+fs.writeFileSync(path.join(TEST_DATA_DIR, 'data.txt'), '{"fallback":true}', 'utf8');
 
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_TOOL_POLICY = 'open';
@@ -28,11 +33,11 @@ const text = result => result.content[0].text;
   try {
     // --- Boundary: the family owns these tools, not the legacy module ---
 
-    for (const name of ['parse', 'diff', 'validate', 'template']) {
+    for (const name of ['parse', 'extract', 'diff', 'validate', 'template']) {
       assert.ok(!legacy.TOOLS[name], `${name} should not have a live legacy handler`);
       const descriptor = tools.getBuiltinRegistry().get(name);
       assert.strictEqual(descriptor.family, 'data-utilities', `${name} should be owned by the data-utilities family`);
-      assert.strictEqual(descriptor.risk, 'low', `${name} should be low risk`);
+      assert.strictEqual(descriptor.risk, name === 'extract' ? 'medium' : 'low', `${name} risk should be preserved`);
       assert.strictEqual(descriptor.category, 'Data Pipeline', `${name} should stay in the Data Pipeline category`);
       assert.strictEqual(descriptor.source, 'builtin', `${name} should be a descriptor-owned builtin`);
     }
@@ -75,6 +80,32 @@ const text = result => result.content[0].text;
     result = await family.sidekick_parse({ input: '{"a":1}', format: 'bogus' });
     assert.ok(result.isError, 'parse should reject an unsupported explicit format');
     assert.strictEqual(text(result), 'Unsupported format: bogus');
+
+    // --- Behavior preservation and hardening: extract ---
+
+    result = await family.sidekick_extract({ path: path.join(TEST_DATA_DIR, 'data.json'), fields: 'database.host,items[0].name,missing' });
+    assert.deepStrictEqual(JSON.parse(text(result)), { 'database.host': 'localhost', 'items[0].name': 'first', missing: null });
+    result = await family.sidekick_extract({ path: path.join(TEST_DATA_DIR, 'data.yaml'), fields: ['database.host'] });
+    assert.deepStrictEqual(JSON.parse(text(result)), { 'database.host': 'localhost' });
+    result = await family.sidekick_extract({ path: path.join(TEST_DATA_DIR, 'data.ini') });
+    assert.deepStrictEqual(JSON.parse(text(result)), { database: { host: 'localhost' } });
+    result = await family.sidekick_extract({ path: path.join(TEST_DATA_DIR, 'data.xml') });
+    assert.deepStrictEqual(JSON.parse(text(result)), { root: { item: 'value' } });
+    result = await family.sidekick_extract({ path: path.join(TEST_DATA_DIR, 'data.txt'), fields: 'fallback' });
+    assert.deepStrictEqual(JSON.parse(text(result)), { fallback: 'true' });
+    result = await family.sidekick_extract({ path: path.join(TEST_DATA_DIR, 'data.json') });
+    assert.ok(text(result).includes('"password": "[REDACTED]"'));
+    assert.ok(text(result).includes('"clientSecret": "[REDACTED]"'));
+    assert.ok(!text(result).includes('password":"secret"'));
+    result = await family.sidekick_extract({ path: path.join(TEST_DATA_DIR, 'data.json'), fields: ['constructor', '__proto__'] });
+    assert.deepStrictEqual(JSON.parse(text(result)), JSON.parse('{"constructor":null,"__proto__":null}'));
+    result = await family.sidekick_extract({ path: path.join(TEST_DATA_DIR, 'missing.json') });
+    assert.ok(result.isError);
+    assert.strictEqual(text(result), 'File not found: ' + path.join(TEST_DATA_DIR, 'missing.json'));
+    fs.writeFileSync(path.join(TEST_DATA_DIR, 'bad.json'), '{bad', 'utf8');
+    result = await family.sidekick_extract({ path: path.join(TEST_DATA_DIR, 'bad.json') });
+    assert.ok(result.isError);
+    assert.ok(text(result).startsWith('Parse error:'));
 
     // --- Behavior preservation: diff ---
 
@@ -171,6 +202,17 @@ const text = result => result.content[0].text;
     result = await dispatchTool({ name: 'sidekick_parse', args: {}, context: { source: 'mcp', requestId: 'req_du_invalid' } });
     assert.ok(result.isError, 'dispatcher should reject args that fail the descriptor schema');
     assert.strictEqual(result.code, 'validation_failed', 'schema validation should happen before the handler runs');
+    result = await dispatchTool({ name: 'sidekick_extract', args: { path: path.join(TEST_DATA_DIR, 'data.json'), fields: 'database.host' }, context: { source: 'mcp', requestId: 'req_du_extract' } });
+    assert.deepStrictEqual(JSON.parse(text(result)), { 'database.host': 'localhost' });
+    result = await dispatchTool({ name: 'extract', args: { path: path.join(TEST_DATA_DIR, 'data.json'), fields: 'database.host' }, context: { source: 'mcp', requestId: 'req_du_extract_alias' } });
+    assert.deepStrictEqual(JSON.parse(text(result)), { 'database.host': 'localhost' });
+    const allowedPath = path.join(TEST_DATA_DIR, 'allowed');
+    fs.mkdirSync(allowedPath, { recursive: true });
+    process.env.SIDEKICK_ALLOWED_PATHS = allowedPath;
+    result = await family.sidekick_extract({ path: path.join(TEST_DATA_DIR, 'data.json') });
+    assert.ok(result.isError, 'extract should enforce path policy');
+    assert.ok(text(result).includes('Path blocked by policy'));
+    delete process.env.SIDEKICK_ALLOWED_PATHS;
 
     process.env.SIDEKICK_BLOCKED_TOOLS = 'sidekick_template';
     result = await dispatchTool({ name: 'sidekick_template', args: { template: 'x' }, context: { source: 'mcp', requestId: 'req_du_policy' } });
@@ -214,6 +256,7 @@ const text = result => result.content[0].text;
 
     // Compatibility surface: the derived TOOLS map still exposes the handlers.
     assert.strictEqual(tools.TOOLS.parse, family.sidekick_parse, 'compatibility TOOLS map should expose the extracted parse handler');
+    assert.strictEqual(tools.TOOLS.extract, family.sidekick_extract, 'compatibility TOOLS map should expose the extracted extract handler');
     assert.strictEqual(tools.TOOLS.template, family.sidekick_template, 'compatibility TOOLS map should expose the extracted template handler');
 
     console.log('Data Utilities Family Tests passed');

@@ -259,10 +259,6 @@ const TOOL_SCHEMAS = {
     include: z.string().optional().describe("Sections: services,disk,memory,load,uptime,processes (default: services,disk)"),
     services: z.string().optional().describe("Comma-separated service names (default: sidekick-mcp,sidekick-dashboard,sidekick-agent)")
   }),
-  extract: z.object({
-    path: z.string().describe("File path (JSON, YAML, INI, or XML)"),
-    fields: z.union([z.string(), z.array(z.string())]).optional().describe("Field paths to extract (e.g. 'database.host,database.port')")
-  }),
   anonymize: z.object({
     action: z.enum(["anonymize", "patterns", "add_pattern", "remove_pattern"]),
     input: z.string().optional().describe("Text to anonymize"),
