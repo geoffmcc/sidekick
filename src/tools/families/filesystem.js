@@ -119,6 +119,142 @@ async function sidekick_summarize({ path: filePath, max_lines, strategy, pattern
   return { content: [{ type: "text", text: redactSensitive(header + summary) }] };
 }
 
+async function sidekick_filter({ path: targetPath, pattern, after, before, max_results }) {
+  const maxResults = max_results || 50;
+  const policyError = enforcePathPolicy(targetPath, "read");
+  if (policyError) return policyError;
+  if (!fs.existsSync(targetPath)) {
+    return { content: [{ type: "text", text: "Path not found: " + targetPath }], isError: true };
+  }
+  const stat = fs.statSync(targetPath);
+  const results = [];
+  if (stat.isFile()) {
+    const content = fs.readFileSync(targetPath, "utf-8");
+    const lines = content.split("\n");
+    const re = pattern ? new RegExp(pattern, "i") : null;
+    for (let i = 0; i < lines.length && results.length < maxResults; i++) {
+      if (!re || re.test(lines[i])) results.push({ line: i + 1, text: lines[i].substring(0, 200) });
+    }
+  } else if (stat.isDirectory()) {
+    const afterDate = after ? new Date(after).getTime() : 0;
+    const beforeDate = before ? new Date(before).getTime() : Infinity;
+    const re = pattern ? new RegExp(pattern, "i") : null;
+    function walkDir(dir, depth) {
+      if (depth > 5 || results.length >= maxResults) return;
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+      for (const entry of entries) {
+        if (results.length >= maxResults) break;
+        const fullPath = path.join(dir, entry.name);
+        try {
+          const s = fs.statSync(fullPath);
+          if (entry.isDirectory()) {
+            if (!entry.name.startsWith(".") && entry.name !== "node_modules") walkDir(fullPath, depth + 1);
+          } else if (entry.isFile() && s.mtimeMs >= afterDate && s.mtimeMs <= beforeDate && (!re || re.test(entry.name))) {
+            results.push({ path: fullPath, size: s.size, modified: s.mtime.toISOString().slice(0, 19) });
+          }
+        } catch (e) {}
+      }
+    }
+    walkDir(targetPath, 0);
+  }
+  return { content: [{ type: "text", text: redactSensitive(JSON.stringify(results, null, 2)) }] };
+}
+
+async function sidekick_diff_files({ path_a, path_b, format }) {
+  const policyErrorA = enforcePathPolicy(path_a, "read");
+  if (policyErrorA) return policyErrorA;
+  const policyErrorB = enforcePathPolicy(path_b, "read");
+  if (policyErrorB) return policyErrorB;
+  if (!fs.existsSync(path_a)) return { content: [{ type: "text", text: "File not found: " + path_a }], isError: true };
+  if (!fs.existsSync(path_b)) return { content: [{ type: "text", text: "File not found: " + path_b }], isError: true };
+  const contentA = fs.readFileSync(path_a, "utf-8");
+  const contentB = fs.readFileSync(path_b, "utf-8");
+  if (format === "summary") {
+    const linesA = contentA.split("\n");
+    const linesB = contentB.split("\n");
+    let added = 0, removed = 0, changed = 0;
+    const maxLen = Math.max(linesA.length, linesB.length);
+    for (let i = 0; i < maxLen; i++) {
+      const a = linesA[i] || "";
+      const b = linesB[i] || "";
+      if (a === b) continue;
+      if (i >= linesA.length) added++;
+      else if (i >= linesB.length) removed++;
+      else changed++;
+    }
+    return { content: [{ type: "text", text: JSON.stringify({ file_a: path_a, file_b: path_b, lines_a: linesA.length, lines_b: linesB.length, added, removed, changed }) }] };
+  }
+  const linesA = contentA.split("\n");
+  const linesB = contentB.split("\n");
+  const diffLines = [];
+  let diffCount = 0;
+  const maxLen = Math.max(linesA.length, linesB.length);
+  for (let i = 0; i < maxLen && diffCount < 100; i++) {
+    const a = linesA[i];
+    const b = linesB[i];
+    if (a !== b) {
+      diffCount++;
+      if (a !== undefined) diffLines.push("- " + (i + 1) + ": " + a.substring(0, 200));
+      if (b !== undefined) diffLines.push("+ " + (i + 1) + ": " + b.substring(0, 200));
+    }
+  }
+  const header = "--- " + path_a + "\n+++ " + path_b + "\n";
+  return { content: [{ type: "text", text: redactSensitive(header + diffLines.join("\n")) }] };
+}
+
+async function sidekick_find({ path: searchPath, name, modified_after, modified_before, size_min, size_max, content, max_results }) {
+  const maxResults = max_results || 50;
+  const policyError = enforcePathPolicy(searchPath, "read");
+  if (policyError) return policyError;
+  if (!fs.existsSync(searchPath)) return { content: [{ type: "text", text: "Path not found: " + searchPath }], isError: true };
+  const afterMs = modified_after ? new Date(modified_after).getTime() : 0;
+  const beforeMs = modified_before ? new Date(modified_before).getTime() : Infinity;
+  const sizeMin = size_min ? parseSize(size_min) : 0;
+  const sizeMax = size_max ? parseSize(size_max) : Infinity;
+  const nameRe = name ? new RegExp("^" + name.replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "i") : null;
+  const contentRe = content ? new RegExp(content, "i") : null;
+  const results = [];
+  function walk(dir, depth) {
+    if (depth > 8 || results.length >= maxResults) return;
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+    for (const entry of entries) {
+      if (results.length >= maxResults) break;
+      if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.name === "__pycache__") continue;
+      const fullPath = path.join(dir, entry.name);
+      try {
+        const s = fs.statSync(fullPath);
+        if (entry.isDirectory()) walk(fullPath, depth + 1);
+        else if (entry.isFile()) {
+          if (nameRe && !nameRe.test(entry.name)) continue;
+          if (s.mtimeMs < afterMs || s.mtimeMs > beforeMs) continue;
+          if (s.size < sizeMin || s.size > sizeMax) continue;
+          if (contentRe) {
+            try {
+              const fileContent = fs.readFileSync(fullPath, "utf-8").substring(0, 1024 * 1024);
+              if (!contentRe.test(fileContent)) continue;
+            } catch (e) { continue; }
+          }
+          results.push({ path: fullPath, size: s.size, modified: s.mtime.toISOString().slice(0, 19) });
+        }
+      } catch (e) {}
+    }
+  }
+  walk(searchPath, 0);
+  return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+}
+
+function parseSize(str) {
+  if (typeof str === "number") return str;
+  const match = String(str).match(/^(\d+(?:\.\d+)?)\s*(B|KB|MB|GB)?$/i);
+  if (!match) return 0;
+  const val = parseFloat(match[1]);
+  const unit = (match[2] || "B").toUpperCase();
+  const multipliers = { B: 1, KB: 1024, MB: 1048576, GB: 1073741824 };
+  return Math.floor(val * (multipliers[unit] || 1));
+}
+
 const descriptors = Object.freeze([
   Object.freeze({
     name: "read",
@@ -173,6 +309,58 @@ const descriptors = Object.freeze([
     family: "filesystem",
     handler: sidekick_summarize,
   }),
+  Object.freeze({
+    name: "filter",
+    description: "Filter file contents or directory listings by pattern, date, or size before returning.",
+    schema: z.object({
+      path: z.string().describe("File or directory path to filter"),
+      pattern: z.string().optional().describe("Regex pattern to match"),
+      after: z.string().optional().describe("ISO date: include files modified after this date"),
+      before: z.string().optional().describe("ISO date: include files modified before this date"),
+      max_results: z.number().optional().describe("Maximum results to return (default: 50)"),
+    }),
+    args: { path: "string (file or directory path)", pattern: "string (optional, regex pattern)", after: "string (optional, ISO date for files modified after)", before: "string (optional, ISO date for files modified before)", max_results: "number (optional, default 50)" },
+    risk: "low",
+    category: "Efficiency",
+    source: "builtin",
+    family: "filesystem",
+    handler: sidekick_filter,
+  }),
+  Object.freeze({
+    name: "diff_files",
+    description: "Compare two files directly without reading both into context. Returns unified diff or summary.",
+    schema: z.object({
+      path_a: z.string().describe("First file path"),
+      path_b: z.string().describe("Second file path"),
+      format: z.enum(["unified", "summary"]).optional().describe("Output format (default: unified)"),
+    }),
+    args: { path_a: "string (first file path)", path_b: "string (second file path)", format: "string (optional, unified|summary - default unified)" },
+    risk: "low",
+    category: "Data Pipeline",
+    source: "builtin",
+    family: "filesystem",
+    handler: sidekick_diff_files,
+  }),
+  Object.freeze({
+    name: "find",
+    description: "Advanced file finder: search by name pattern, date range, size range, and content pattern.",
+    schema: z.object({
+      path: z.string().describe("Directory to search in"),
+      name: z.string().optional().describe("File name glob pattern (e.g. '*.js')"),
+      modified_after: z.string().optional().describe("ISO date: files modified after"),
+      modified_before: z.string().optional().describe("ISO date: files modified before"),
+      size_min: z.string().optional().describe("Minimum file size (e.g. '1KB', '1MB')"),
+      size_max: z.string().optional().describe("Maximum file size (e.g. '10MB')"),
+      content: z.string().optional().describe("Regex pattern to match file contents"),
+      max_results: z.number().optional().describe("Maximum results (default: 50)"),
+    }),
+    args: { path: "string (directory to search)", name: "string (optional, glob pattern e.g. '*.js')", modified_after: "string (optional, ISO date)", modified_before: "string (optional, ISO date)", size_min: "string (optional, e.g. '1KB', '1MB')", size_max: "string (optional, e.g. '10MB')", content: "string (optional, regex pattern to match file contents)", max_results: "number (optional, default 50)" },
+    risk: "medium",
+    category: "Efficiency",
+    source: "builtin",
+    family: "filesystem",
+    handler: sidekick_find,
+  }),
 ]);
 
-module.exports = { descriptors, sidekick_read, sidekick_list, sidekick_search, sidekick_summarize };
+module.exports = { descriptors, sidekick_read, sidekick_list, sidekick_search, sidekick_summarize, sidekick_filter, sidekick_diff_files, sidekick_find };

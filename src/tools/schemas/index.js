@@ -245,13 +245,6 @@ const TOOL_SCHEMAS = {
       args: z.record(z.any()).optional().describe("Arguments for the tool")
     })).describe("Array of tool calls to execute (max 20)")
   }),
-  filter: z.object({
-    path: z.string().describe("File or directory path to filter"),
-    pattern: z.string().optional().describe("Regex pattern to match"),
-    after: z.string().optional().describe("ISO date: include files modified after this date"),
-    before: z.string().optional().describe("ISO date: include files modified before this date"),
-    max_results: z.number().optional().describe("Maximum results to return (default: 50)")
-  }),
   project: z.object({
     name: z.string().describe("Project name"),
     include: z.string().optional().describe("Sections to include: kv,context,logs,procedures (default: kv,context)")
@@ -261,21 +254,6 @@ const TOOL_SCHEMAS = {
     pattern: z.string().optional().describe("Regex filter (for journalctl: service name)"),
     lines: z.number().optional().describe("Number of lines to return (default: 50)"),
     since: z.string().optional().describe("Filter entries since this date (ISO or relative: 1h, 1d)")
-  }),
-  diff_files: z.object({
-    path_a: z.string().describe("First file path"),
-    path_b: z.string().describe("Second file path"),
-    format: z.enum(["unified", "summary"]).optional().describe("Output format (default: unified)")
-  }),
-  find: z.object({
-    path: z.string().describe("Directory to search in"),
-    name: z.string().optional().describe("File name glob pattern (e.g. '*.js')"),
-    modified_after: z.string().optional().describe("ISO date: files modified after"),
-    modified_before: z.string().optional().describe("ISO date: files modified before"),
-    size_min: z.string().optional().describe("Minimum file size (e.g. '1KB', '1MB')"),
-    size_max: z.string().optional().describe("Maximum file size (e.g. '10MB')"),
-    content: z.string().optional().describe("Regex pattern to match file contents"),
-    max_results: z.number().optional().describe("Maximum results (default: 50)")
   }),
   status: z.object({
     include: z.string().optional().describe("Sections: services,disk,memory,load,uptime,processes (default: services,disk)"),
