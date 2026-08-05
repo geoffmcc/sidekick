@@ -9,7 +9,6 @@ const evolveCommon = require("./evolve/common");
 const predictEngine = require("./predict");
 const dbStore = require("./db");
 const pgStore = require("./pg");
-const redisStore = require("./redis");
 const qdrantStore = require("./qdrant");
 const { recordToolCallMemory, buildMemoryBrief, recallMemoryForText } = require("./memory");
 const { scanSecurityConfig } = require("./security-scan");
@@ -6513,18 +6512,6 @@ Problem: ${problem}
 
 // --- Token-efficient tools (v1.17) ---
 
-const sessionCache = new Map();
-
-function parseDuration(str) {
-  if (!str) return 300000;
-  const match = str.match(/^(\d+)(s|m|h|d)$/);
-  if (!match) return 300000;
-  const val = parseInt(match[1], 10);
-  const unit = match[2];
-  const multipliers = { s: 1000, m: 60000, h: 3600000, d: 86400000 };
-  return val * (multipliers[unit] || 60000);
-}
-
 async function sidekick_batch({ calls }) {
   if (!Array.isArray(calls) || calls.length === 0) {
     return { content: [{ type: "text", text: "calls must be a non-empty array" }], isError: true };
@@ -6559,93 +6546,6 @@ async function sidekick_batch({ calls }) {
     }
   }
   return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
-}
-
-async function sidekick_cache({ action, key, ttl, value }) {
-  const now = Date.now();
-
-  // Try Redis first
-  let useRedis = false;
-  try {
-    const conn = await redisStore.testConnection();
-    useRedis = conn.connected;
-  } catch (e) {
-    useRedis = false;
-  }
-
-  if (action === "clear") {
-    if (useRedis) {
-      if (key) {
-        await redisStore.del(`cache:${key}`);
-        return { content: [{ type: "text", text: "Cleared cache: " + key + " (redis)" }] };
-      }
-      const keys = await redisStore.keys("cache:*");
-      if (keys.length > 0) {
-        await Promise.all(keys.map(k => redisStore.del(k)));
-      }
-      return { content: [{ type: "text", text: "Cleared " + keys.length + " cache entries (redis)" }] };
-    }
-    // Fallback to in-memory
-    if (key) {
-      sessionCache.delete(key);
-      return { content: [{ type: "text", text: "Cleared cache: " + key }] };
-    }
-    const count = sessionCache.size;
-    sessionCache.clear();
-    return { content: [{ type: "text", text: "Cleared " + count + " cache entries" }] };
-  }
-
-  if (action === "list") {
-    if (useRedis) {
-      const keys = await redisStore.keys("cache:*");
-      const entries = [];
-      for (const k of keys) {
-        const ttlVal = await redisStore.ttl(k);
-        const cacheKey = k.replace("cache:", "");
-        entries.push({ key: cacheKey, expires_in_seconds: ttlVal > 0 ? ttlVal : null });
-      }
-      return { content: [{ type: "text", text: JSON.stringify(entries) }] };
-    }
-    // Fallback to in-memory
-    const entries = [];
-    for (const [k, v] of sessionCache) {
-      entries.push({ key: k, expires_in_ms: v.expires - now, size: v.value.length });
-    }
-    return { content: [{ type: "text", text: JSON.stringify(entries) }] };
-  }
-
-  if (action === "get") {
-    if (!key) return { content: [{ type: "text", text: "key required" }], isError: true };
-    if (useRedis) {
-      const val = await redisStore.get(`cache:${key}`);
-      if (val === null) {
-        return { content: [{ type: "text", text: "Cache miss: " + key }], isError: true };
-      }
-      return { content: [{ type: "text", text: redactSensitive(val) }] };
-    }
-    // Fallback to in-memory
-    const entry = sessionCache.get(key);
-    if (!entry || entry.expires < now) {
-      if (entry) sessionCache.delete(key);
-      return { content: [{ type: "text", text: "Cache miss: " + key }], isError: true };
-    }
-    return { content: [{ type: "text", text: redactSensitive(entry.value) }] };
-  }
-
-  if (action === "set") {
-    if (!key || value === undefined) return { content: [{ type: "text", text: "key and value required" }], isError: true };
-    const duration = parseDuration(ttl);
-    const ttlSeconds = Math.ceil(duration / 1000);
-    if (useRedis) {
-      await redisStore.set(`cache:${key}`, String(value), ttlSeconds);
-      return { content: [{ type: "text", text: "Cached " + key + " (TTL: " + ttl + ", redis)" }] };
-    }
-    // Fallback to in-memory
-    sessionCache.set(key, { value: String(value), expires: now + duration });
-    return { content: [{ type: "text", text: "Cached " + key + " (TTL: " + ttl + ")" }] };
-  }
-
-  return { content: [{ type: "text", text: "Invalid action. Use: get, set, clear, list" }], isError: true };
 }
 
 async function sidekick_summarize({ path: filePath, max_lines, strategy, pattern }) {
@@ -10057,61 +9957,6 @@ async function sidekick_db_migrate({ action, version, name }) {
   }
 }
 
-// --- Redis Tools ---
-
-async function sidekick_redis({ action, key, value, ttl, pattern }) {
-  try {
-    const conn = await redisStore.testConnection();
-    if (!conn.connected) {
-      return { content: [{ type: "text", text: `Error: Redis not available (${conn.error}). Start with: sudo systemctl start sidekick-redis` }], isError: true };
-    }
-
-    if (action === "get") {
-      if (!key) return { content: [{ type: "text", text: "Error: key is required for get" }], isError: true };
-      const val = await redisStore.get(key);
-      return { content: [{ type: "text", text: val !== null ? val : "(nil)" }] };
-    }
-
-    if (action === "set") {
-      if (!key || value === undefined) return { content: [{ type: "text", text: "Error: key and value are required for set" }], isError: true };
-      const ttlSec = ttl ? parseInt(ttl) : undefined;
-      await redisStore.set(key, value, ttlSec);
-      return { content: [{ type: "text", text: `OK${ttlSec ? ` (TTL: ${ttlSec}s)` : ""}` }] };
-    }
-
-    if (action === "del") {
-      if (!key) return { content: [{ type: "text", text: "Error: key is required for del" }], isError: true };
-      const deleted = await redisStore.del(key);
-      return { content: [{ type: "text", text: `Deleted: ${deleted}` }] };
-    }
-
-    if (action === "keys") {
-      const keys = await redisStore.keys(pattern || "*");
-      return { content: [{ type: "text", text: JSON.stringify(keys, null, 2) }] };
-    }
-
-    if (action === "ttl") {
-      if (!key) return { content: [{ type: "text", text: "Error: key is required for ttl" }], isError: true };
-      const ttlVal = await redisStore.ttl(key);
-      return { content: [{ type: "text", text: `${ttlVal}` }] };
-    }
-
-    if (action === "info") {
-      const info = await redisStore.info();
-      return { content: [{ type: "text", text: JSON.stringify(info, null, 2) }] };
-    }
-
-    if (action === "flush") {
-      await redisStore.flush();
-      return { content: [{ type: "text", text: "Redis database flushed" }] };
-    }
-
-    return { content: [{ type: "text", text: "Error: unknown action. Use: get, set, del, keys, ttl, info, flush" }], isError: true };
-  } catch (e) {
-    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
-  }
-}
-
 // --- OCR Tool ---
 
 async function sidekick_ocr({ path: imagePath, language, psm }) {
@@ -11288,7 +11133,6 @@ const TOOLS = {
   debug_tool: sidekick_debug_tool,
   fresheyes: sidekick_fresheyes,
   batch: sidekick_batch,
-  cache: sidekick_cache,
   summarize: sidekick_summarize,
   filter: sidekick_filter,
   project: sidekick_project,
@@ -11313,7 +11157,6 @@ const TOOLS = {
   db_restore: sidekick_db_restore,
   db_export: sidekick_db_export,
   db_migrate: sidekick_db_migrate,
-  redis: sidekick_redis,
   ocr: sidekick_ocr,
   media: sidekick_media,
   transcribe: sidekick_transcribe,
