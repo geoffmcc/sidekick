@@ -33,13 +33,14 @@ const text = result => result.content[0].text;
   try {
     // --- Boundary: the family owns these tools, not the legacy module ---
 
-    for (const name of ['parse', 'extract', 'diff', 'validate', 'template']) {
+    for (const name of ['parse', 'extract', 'transform', 'diff', 'validate', 'template']) {
       assert.ok(!legacy.TOOLS[name], `${name} should not have a live legacy handler`);
       const descriptor = tools.getBuiltinRegistry().get(name);
       assert.strictEqual(descriptor.family, 'data-utilities', `${name} should be owned by the data-utilities family`);
       assert.strictEqual(descriptor.risk, name === 'extract' ? 'medium' : 'low', `${name} risk should be preserved`);
       assert.strictEqual(descriptor.category, 'Data Pipeline', `${name} should stay in the Data Pipeline category`);
       assert.strictEqual(descriptor.source, 'builtin', `${name} should be a descriptor-owned builtin`);
+      assert.ok(!Object.prototype.hasOwnProperty.call(require('../src/tools/schemas').TOOL_SCHEMAS, name), `${name} should have one schema owner`);
     }
 
     // --- Behavior preservation: parse ---
@@ -106,6 +107,24 @@ const text = result => result.content[0].text;
     result = await family.sidekick_extract({ path: path.join(TEST_DATA_DIR, 'bad.json') });
     assert.ok(result.isError);
     assert.ok(text(result).startsWith('Parse error:'));
+
+    // --- Behavior preservation: transform ---
+
+    assert.strictEqual(text(await family.sidekick_transform({ action: 'filter', input: 'keep\ndrop\nkeep', pattern: '^keep$' })), 'keep\nkeep');
+    assert.deepStrictEqual(JSON.parse(text(await family.sidekick_transform({ action: 'filter', input: '["keep","drop"]', pattern: 'keep' }))), ['keep']);
+    assert.strictEqual(text(await family.sidekick_transform({ action: 'extract', input: '{"a":{"b":[1,2]}}', field: 'a.b.[]' })), '[\n  1,\n  2\n]');
+    assert.deepStrictEqual(JSON.parse(text(await family.sidekick_transform({ action: 'sort', input: '[3,1,2]' }))), [1, 2, 3]);
+    assert.deepStrictEqual(JSON.parse(text(await family.sidekick_transform({ action: 'sort', input: '[{"n":2},{"n":1}]', key: 'n' }))), [{ n: 1 }, { n: 2 }]);
+    assert.strictEqual(text(await family.sidekick_transform({ action: 'format', input: '[{"a":1,"b":"x"}]', format: 'csv' })), 'a,b\n1,x');
+    assert.ok(text(await family.sidekick_transform({ action: 'format', input: '[{"a":1,"b":"x"}]', format: 'table' })).includes('a | b'));
+    assert.deepStrictEqual(JSON.parse(text(await family.sidekick_transform({ action: 'map', input: '[1,{"a":2}]', key: 'tag', value: 'yes' }))), [{ tag: 'yes', original: 1 }, { a: 2, tag: 'yes' }]);
+    assert.strictEqual(text(await family.sidekick_transform({ action: 'extract', input: '{"a":1}', field: 'constructor' })), undefined);
+    result = await family.sidekick_transform({ action: 'filter', input: 'x' });
+    assert.ok(result.isError);
+    result = await family.sidekick_transform({ action: 'format', input: 'x', format: 'invalid' });
+    assert.ok(result.isError);
+    result = await family.sidekick_transform({ action: 'sort', input: '{}' });
+    assert.ok(result.isError);
 
     // --- Behavior preservation: diff ---
 
@@ -204,6 +223,13 @@ const text = result => result.content[0].text;
     assert.strictEqual(result.code, 'validation_failed', 'schema validation should happen before the handler runs');
     result = await dispatchTool({ name: 'sidekick_extract', args: { path: path.join(TEST_DATA_DIR, 'data.json'), fields: 'database.host' }, context: { source: 'mcp', requestId: 'req_du_extract' } });
     assert.deepStrictEqual(JSON.parse(text(result)), { 'database.host': 'localhost' });
+    result = await dispatchTool({ name: 'sidekick_transform', args: { action: 'sort', input: '[2,1]' }, context: { source: 'mcp', requestId: 'req_du_transform' } });
+    assert.deepStrictEqual(JSON.parse(text(result)), [1, 2]);
+    result = await dispatchTool({ name: 'transform', args: { action: 'map', input: '[1]', key: 'ok', value: 'yes' }, context: { source: 'mcp', requestId: 'req_du_transform_alias' } });
+    assert.deepStrictEqual(JSON.parse(text(result)), [{ ok: 'yes', original: 1 }]);
+    result = await dispatchTool({ name: 'sidekick_transform', args: { action: 'format', input: '[1]', format: 'invalid' }, context: { source: 'mcp', requestId: 'req_du_transform_invalid_format' } });
+    assert.ok(result.isError);
+    assert.strictEqual(text(result), 'Unknown format. Use: json, csv, table, text');
     result = await dispatchTool({ name: 'extract', args: { path: path.join(TEST_DATA_DIR, 'data.json'), fields: 'database.host' }, context: { source: 'mcp', requestId: 'req_du_extract_alias' } });
     assert.deepStrictEqual(JSON.parse(text(result)), { 'database.host': 'localhost' });
     const allowedPath = path.join(TEST_DATA_DIR, 'allowed');
@@ -257,6 +283,7 @@ const text = result => result.content[0].text;
     // Compatibility surface: the derived TOOLS map still exposes the handlers.
     assert.strictEqual(tools.TOOLS.parse, family.sidekick_parse, 'compatibility TOOLS map should expose the extracted parse handler');
     assert.strictEqual(tools.TOOLS.extract, family.sidekick_extract, 'compatibility TOOLS map should expose the extracted extract handler');
+    assert.strictEqual(tools.TOOLS.transform, family.sidekick_transform, 'compatibility TOOLS map should expose the extracted transform handler');
     assert.strictEqual(tools.TOOLS.template, family.sidekick_template, 'compatibility TOOLS map should expose the extracted template handler');
 
     console.log('Data Utilities Family Tests passed');
