@@ -23,6 +23,7 @@ const { TOOL_RISK, TOOL_CATEGORIES, RISK_LEVELS } = require("./tools/metadata");
 const toolContext = require("./tools/context");
 const { sidekick_memory_manage: extractedMemoryManage } = require("./tools/families/memory-lifecycle");
 const { extractHandoffMemories: extractedHandoffMemories } = require("./tools/families/memory-handoff");
+const { loadContext: loadSharedContext, findContextItemById: findSharedContextItemById, updateLegacyContextItem: updateSharedLegacyContextItem } = require("./tools/families/context");
 const { parsePolicyList, sourceEnvName } = require("./core/policy-env");
 const { getPathPolicyDecision, enforcePathPolicy } = require("./tools/path-policy");
 let inferenceService = null;
@@ -38,7 +39,6 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 const LOG_FILE = path.join(DATA_DIR, "log.jsonl");
 const CRON_FILE = path.join(DATA_DIR, "cron.json");
 const WEBHOOK_FILE = path.join(DATA_DIR, "webhooks.json");
-const CONTEXT_FILE = path.join(DATA_DIR, "context.json");
 const PROCEDURES_FILE = path.join(DATA_DIR, "procedures.json");
 const MAX_LOG = 1000;
 
@@ -6766,7 +6766,7 @@ async function sidekick_project({ name, include }) {
     output.kv = kvResults;
   }
   if (sections.includes("context")) {
-    const ctx = loadContext();
+    const ctx = loadSharedContext();
     const structuredMemories = dbStore.searchMemories({ project: name, limit: 20 }).map(i => ({
       type: i.type || "memory",
       summary: i.summary || i.content,
@@ -6803,7 +6803,7 @@ async function sidekick_project({ name, include }) {
 async function sidekick_memory_manage({ action, id, confirmed_by, days, reason, limit, project }) {
   if (action === "confirm") {
     if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
-    const legacy = findContextItemById(loadContext(), id, "all");
+    const legacy = findSharedContextItemById(loadSharedContext(), id, "all");
     if (legacy) {
       return { content: [{ type: "text", text: `Unsupported memory id for confirm: ${id} is a legacy context ${legacy.type}. Use delete, disable, expire, or restore for legacy context entries.` }], isError: true };
     }
@@ -6813,7 +6813,7 @@ async function sidekick_memory_manage({ action, id, confirmed_by, days, reason, 
 
   if (action === "set_requires_confirmation") {
     if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
-    const legacy = findContextItemById(loadContext(), id, "all");
+    const legacy = findSharedContextItemById(loadSharedContext(), id, "all");
     if (legacy) {
       return { content: [{ type: "text", text: `Unsupported memory id for set_requires_confirmation: ${id} is a legacy context ${legacy.type}. Structured memories only support confirmation requirements.` }], isError: true };
     }
@@ -6826,7 +6826,7 @@ async function sidekick_memory_manage({ action, id, confirmed_by, days, reason, 
     if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
     const success = dbStore.softDeleteMemory(id, reason || "user_deleted");
     if (success) return { content: [{ type: "text", text: `Memory ${id} soft-deleted` }] };
-    const legacy = updateLegacyContextItem(id, "delete", reason || "user_deleted");
+    const legacy = updateSharedLegacyContextItem(id, "delete", reason || "user_deleted");
     if (legacy.supported) return { content: [{ type: "text", text: `Legacy context ${legacy.type} ${id} soft-deleted` }] };
     return { content: [{ type: "text", text: `Memory or context id not found: ${id}` }], isError: true };
   }
@@ -6835,7 +6835,7 @@ async function sidekick_memory_manage({ action, id, confirmed_by, days, reason, 
     if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
     const success = dbStore.disableMemory(id);
     if (success) return { content: [{ type: "text", text: `Memory ${id} disabled` }] };
-    const legacy = updateLegacyContextItem(id, "disable", reason || "user_disabled");
+    const legacy = updateSharedLegacyContextItem(id, "disable", reason || "user_disabled");
     if (legacy.supported) return { content: [{ type: "text", text: `Legacy context ${legacy.type} ${id} disabled` }] };
     return { content: [{ type: "text", text: `Memory or context id not found: ${id}` }], isError: true };
   }
@@ -6844,7 +6844,7 @@ async function sidekick_memory_manage({ action, id, confirmed_by, days, reason, 
     if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
     const success = dbStore.expireMemory(id, reason || "manual_expire");
     if (success) return { content: [{ type: "text", text: `Memory ${id} expired` }] };
-    const legacy = updateLegacyContextItem(id, "expire", reason || "manual_expire");
+    const legacy = updateSharedLegacyContextItem(id, "expire", reason || "manual_expire");
     if (legacy.supported) return { content: [{ type: "text", text: `Legacy context ${legacy.type} ${id} expired` }] };
     return { content: [{ type: "text", text: `Memory or context id not found: ${id}` }], isError: true };
   }
@@ -6853,14 +6853,14 @@ async function sidekick_memory_manage({ action, id, confirmed_by, days, reason, 
     if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
     const success = dbStore.restoreMemory(id);
     if (success) return { content: [{ type: "text", text: `Memory ${id} restored` }] };
-    const legacy = updateLegacyContextItem(id, "restore");
+    const legacy = updateSharedLegacyContextItem(id, "restore");
     if (legacy.supported) return { content: [{ type: "text", text: `Legacy context ${legacy.type} ${id} restored` }] };
     return { content: [{ type: "text", text: `Memory or context id not found: ${id}` }], isError: true };
   }
 
   if (action === "set_auto_expire") {
     if (!id || !days) return { content: [{ type: "text", text: "id and days required" }], isError: true };
-    const legacy = findContextItemById(loadContext(), id, "all");
+    const legacy = findSharedContextItemById(loadSharedContext(), id, "all");
     if (legacy) {
       return { content: [{ type: "text", text: `Unsupported memory id for set_auto_expire: ${id} is a legacy context ${legacy.type}. Structured memories only support auto-expiration.` }], isError: true };
     }
@@ -11272,7 +11272,6 @@ const TOOLS = {
   github: sidekick_github,
   ci_status: sidekick_ci_status,
   webhook: sidekick_webhook,
-  context: sidekick_context,
   teach: sidekick_teach,
   transform: sidekick_transform,
   health: sidekick_health,

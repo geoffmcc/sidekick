@@ -113,23 +113,6 @@ const TOOL_SCHEMAS = {
     id: z.string().optional().describe("Webhook ID (required for get)"),
     limit: z.number().optional().describe("Number of webhooks to list (default: 20)")
   }),
-  context: z.object({
-    action: z.enum(["track_project", "track_decision", "track_problem", "track_pattern", "track_session", "recall", "suggest", "summarize", "list"]).describe("Context action to perform"),
-    project: z.string().optional().describe("Project name (for tracking and filtering)"),
-    context: z.string().optional().describe("Context description (for decisions/patterns)"),
-    decision: z.string().optional().describe("Decision made (for track_decision)"),
-    reasoning: z.string().optional().describe("Reasoning behind decision (for track_decision)"),
-    problem: z.string().optional().describe("Problem description (for track_problem)"),
-    solution: z.string().optional().describe("Solution to problem (for track_problem)"),
-    pattern: z.string().optional().describe("Pattern description (for track_pattern)"),
-    summary: z.string().optional().describe("Session summary (for track_session)"),
-    topics: z.string().optional().describe("Comma-separated session topics (for track_session)"),
-    outcome: z.string().optional().describe("Session outcome: success, partial, or abandoned (for track_session)"),
-    notes: z.string().optional().describe("Additional session notes (for track_session)"),
-    query: z.string().optional().describe("Search query (for recall/suggest)"),
-    type: z.string().optional().describe("Context type: decisions, problems, patterns, projects, sessions, memories, or all (default: all)"),
-    limit: z.number().optional().describe("Maximum results to return (default: 10)")
-  }),
   teach: z.object({
     action: z.enum(["teach_procedure", "generate_tool", "learn_from_example", "execute", "list", "remove"]).describe("Teach action to perform"),
     name: z.string().optional().describe("Procedure name (required for teach/generate/execute/remove)"),
