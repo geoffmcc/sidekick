@@ -6798,36 +6798,6 @@ async function sidekick_project({ name, include }) {
   return { content: [{ type: "text", text: JSON.stringify(output, null, 2) }] };
 }
 
-async function sidekick_memory_export({ project, type, include_disabled, automatic_only }) {
-  const options = {};
-  if (project) options.project = project;
-  if (type) options.type = type;
-  if (include_disabled === false) options.includeDisabled = false;
-  if (automatic_only === true) options.automatic = true;
-
-  const result = dbStore.exportMemories(options);
-  return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-}
-
-async function sidekick_memory_import({ data, on_conflict, preserve_ids }) {
-  let parsed;
-  try {
-    parsed = typeof data === "string" ? JSON.parse(data) : data;
-  } catch (e) {
-    return { content: [{ type: "text", text: "Invalid JSON: " + e.message }], isError: true };
-  }
-
-  const options = {
-    onConflict: on_conflict || "merge",
-    preserveIds: preserve_ids === true
-  };
-
-  const result = dbStore.importMemories(parsed, options);
-  const summary = `Import complete: ${result.imported} imported, ${result.updated || 0} updated, ${result.skipped} skipped`;
-  const errors = result.errors?.length ? `\nErrors: ${result.errors.join(", ")}` : "";
-  return { content: [{ type: "text", text: summary + errors }] };
-}
-
 async function sidekick_memory_manage({ action, id, confirmed_by, days, reason, limit, project }) {
   if (action === "confirm") {
     if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
@@ -11324,8 +11294,6 @@ const TOOLS = {
   summarize: sidekick_summarize,
   filter: sidekick_filter,
   project: sidekick_project,
-  memory_export: sidekick_memory_export,
-  memory_import: sidekick_memory_import,
   memory_manage: sidekick_memory_manage,
   tail: sidekick_tail,
   diff_files: sidekick_diff_files,

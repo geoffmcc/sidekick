@@ -198,17 +198,6 @@ const TOOL_SCHEMAS = {
     fresh_eyes: z.boolean().optional(),
     historical: z.boolean().optional()
   }),
-  memory_export: z.object({
-    project: z.string().optional().describe("Filter by project name"),
-    type: z.string().optional().describe("Filter by memory type (fact, decision, preference, etc.)"),
-    include_disabled: z.boolean().optional().describe("Include disabled memories (default: true)"),
-    automatic_only: z.boolean().optional().describe("Only include automatic memories (default: false)")
-  }),
-  memory_import: z.object({
-    data: z.string().describe("JSON export data (string or object)"),
-    on_conflict: z.enum(["merge", "skip"]).optional().describe("Conflict resolution: merge (update existing) or skip (default: merge)"),
-    preserve_ids: z.boolean().optional().describe("Preserve original memory IDs (default: false)")
-  }),
   memory_manage: z.object({
     action: z.enum(["confirm", "set_requires_confirmation", "delete", "disable", "expire", "restore", "set_auto_expire", "list_by_state", "pending_confirmations", "process_auto_expirations"]).describe("Action to perform"),
     id: z.string().optional().describe("Memory ID (or state name for list_by_state)"),
