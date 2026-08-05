@@ -1909,7 +1909,12 @@ invariant, because task liveness depends on it. *How often* is a tunable.
 - **Reworking `finishAgentExecution`'s mapping of `waiting_for_approval` to
   `failed`** (`src/agent.js:671`). It should become the kernel's real
   `awaiting_approval` state, but that is a small independent fix and should not
-  wait on this ADR.
+  wait on this ADR. **Implemented separately:** `finishAgentExecution` now maps a
+  park to `awaiting_approval`, the kernel admits `running → awaiting_approval`
+  and `awaiting_approval → completed` (`src/platform/kernel.js`), and the
+  resumed outcome in `finalizeResumedTask` transitions the platform execution to
+  its terminal state, so a parked-then-resumed task reads as completed on the
+  timeline instead of failed.
 
 ## Alternatives considered
 

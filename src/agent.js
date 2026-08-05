@@ -669,7 +669,12 @@ function appendAgentExecutionEvent(execution, eventType, payload = {}, severity 
 
 function finishAgentExecution(execution, status, details = {}) {
   if (!execution) return;
-  const state = status === "completed" ? "completed" : status === "iteration_limit" ? "timed_out" : "failed";
+  // A Brain task parked at `waiting_for_approval` is not a failure: it is
+  // suspended awaiting a human decision and will be resumed by the scheduler
+  // (docs/adr-approval-continuation.md §5/T1). Map it to the kernel's real
+  // `awaiting_approval` state so the platform timeline reads it as parked, not
+  // failed, and so the resumed `awaiting_approval → completed` exit is legal.
+  const state = status === "completed" ? "completed" : status === "iteration_limit" ? "timed_out" : status === "waiting_for_approval" ? "awaiting_approval" : "failed";
   try {
     platformKernel.transitionExecution(execution.execution_id, state, {
       source: "agent",
@@ -1297,16 +1302,18 @@ app.post("/api/watches/reload", (req, res) => {
  *
  * `runAgent` wrote the transcript when the task PARKED, with
  * `status: "waiting_for_approval"` and an empty result — and
- * `finishAgentExecution` maps anything that is not completed/iteration_limit to
- * `failed`. Nothing updated either afterwards, so a task that resumed and
+ * `finishAgentExecution` maps a park to the kernel's `awaiting_approval` state,
+ * not `failed`. Nothing updated either afterwards, so a task that resumed and
  * synthesized a real answer left the human who approved the dangerous action
- * with a failed task and no answer. The whole point of resuming is to produce
- * that answer, so it has to land somewhere durable.
+ * with a parked/failed task and no answer. The whole point of resuming is to
+ * produce that answer, so it has to land somewhere durable.
  *
  * The transcript is the right place: it is what the follow-up continuation
  * builder reads (`resolveFinalAnswer`), what the task-history UI renders, and
  * what `recordAgentTaskMemory` consumed. Rewritten in place, preserving every
- * lineage field, so a resumed task looks like any other completed one.
+ * lineage field, so a resumed task looks like any other completed one. The
+ * platform execution is then transitioned `awaiting_approval → completed`
+ * (or the matching failure exit) so the timeline agrees with the transcript.
  */
 function finalizeResumedTask({ taskId, state, outcome, checkpoint }) {
   if (!taskId || !outcome) return { ok: false, reason: "nothing_to_record" };
@@ -1347,8 +1354,8 @@ function finalizeResumedTask({ taskId, state, outcome, checkpoint }) {
   // platform execution timeline records the resumption rather than ending at
   // the park.
   emit(taskId, state === "completed" ? { type: "done", text: answer } : { type: "error", text: failure });
+  const executionId = checkpoint && checkpoint.platform_execution_id;
   try {
-    const executionId = checkpoint && checkpoint.platform_execution_id;
     if (executionId) {
       platformKernel.appendEvent({
         execution_id: executionId,
@@ -1362,6 +1369,30 @@ function finalizeResumedTask({ taskId, state, outcome, checkpoint }) {
       });
     }
   } catch {}
+
+  // The park mapped the execution to `awaiting_approval` (finishAgentExecution);
+  // the resumed outcome is that state's real exit. Transition the platform
+  // execution to its terminal state so the timeline shows a completed task
+  // instead of one that ended parked and "failed". Failures/cancellations/
+  // timeouts already have legal exits from `awaiting_approval`; success needs
+  // `awaiting_approval → completed`, added to the kernel for this exit.
+  const terminalState = state === "completed" ? "completed" : state === "cancelled" ? "cancelled" : state === "timed_out" ? "timed_out" : "failed";
+  try {
+    if (executionId) {
+      platformKernel.transitionExecution(executionId, terminalState, {
+        source: "agent",
+        actor_id: "task-runner",
+        result_status: state === "completed" ? "success" : terminalState,
+        result_summary: state === "completed" ? answer : (failure || terminalState),
+        reason: state === "completed" ? "resumed task completed" : (failure || terminalState),
+        error_category: state === "completed" ? null : terminalState,
+      });
+    }
+  } catch {
+    // Platform observability must not interrupt answer delivery. An execution
+    // already terminal (e.g. a legacy park recorded as `failed`) stays as-is;
+    // the resumed event above still records what happened.
+  }
 
   if (state === "completed") {
     try { recordAgentTaskMemory({ goal: record.goal, steps: merged.steps, taskId, status: "completed" }); } catch {}
@@ -1424,5 +1455,6 @@ module.exports = {
   CONV_DIR,
   startApprovalContinuationJobs,
   finalizeResumedTask,
+  finishAgentExecution,
   __setLLMOverrideForTests,
 };

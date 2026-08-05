@@ -1820,6 +1820,70 @@ e2e.then(async () => {
     assert.strictEqual(inflight.reason, 'not_terminal');
   });
 
+  await testAsync('a parked task parks the platform execution in awaiting_approval and closes it on resume', async () => {
+    // The pre-ADR behavior made a parked task read as FAILED on the platform
+    // timeline even when it later resumed and succeeded. The park must use the
+    // kernel's real `awaiting_approval` state (src/platform/kernel.js:10), and
+    // the resumed outcome must be that state's exit.
+    const agent = require('../src/agent');
+    const platformKernel = require('../src/platform/kernel');
+    const transcriptDir = path.join(TEST_DATA_DIR, 'conversations');
+    fs.mkdirSync(transcriptDir, { recursive: true });
+
+    const writeTranscript = (taskId) => {
+      fs.writeFileSync(path.join(transcriptDir, taskId + '.json'), JSON.stringify({
+        goal: 'restart nginx if it is down',
+        steps: [{ type: 'tool', id: 's1', tool: 'health', ok: true, result: 'down' }],
+        status: 'waiting_for_approval',
+        result: '',
+        error: 'Awaiting human approval',
+        v: 3,
+        root_task_id: taskId,
+        brain: { enabled: true, state: 'waiting_for_approval', awaiting_approval: 'approval_x' },
+      }), 'utf-8');
+    };
+
+    // Park: runAgent creates created → running, then finishAgentExecution maps
+    // waiting_for_approval to awaiting_approval rather than failed.
+    const taskId = newTaskId();
+    const execution = platformKernel.createExecution({ operation_type: 'agent_task', tool_name: 'sidekick_agent', tool_action: 'run', task_id: taskId, source: 'agent' });
+    platformKernel.transitionExecution(execution.execution_id, 'running', { source: 'agent' });
+    agent.finishAgentExecution(execution, 'waiting_for_approval', { reason: 'approval required' });
+    assert.strictEqual(platformKernel.getExecution(execution.execution_id).state, 'awaiting_approval', 'a parked task must read as awaiting approval, not failed');
+
+    // Resume success: the transcript is delivered and the timeline closes as completed.
+    writeTranscript(taskId);
+    const delivered = agent.finalizeResumedTask({
+      taskId,
+      state: 'completed',
+      outcome: {
+        state: 'completed',
+        result: 'nginx was down and has been restarted.',
+        steps: [{ type: 'tool', id: 's2', tool: 'bash', ok: true, result: 'restarted' }],
+        evidenceCount: 2,
+      },
+      checkpoint: { platform_execution_id: execution.execution_id, root_execution_id: execution.root_execution_id },
+    });
+    assert.ok(delivered.ok, delivered.reason);
+    assert.strictEqual(delivered.status, 'completed');
+    assert.strictEqual(platformKernel.getExecution(execution.execution_id).state, 'completed', 'resumed success must close the platform execution as completed');
+
+    // Resume failure takes the awaiting_approval → failed exit.
+    const failTaskId = newTaskId();
+    const failExecution = platformKernel.createExecution({ operation_type: 'agent_task', tool_name: 'sidekick_agent', tool_action: 'run', task_id: failTaskId, source: 'agent' });
+    platformKernel.transitionExecution(failExecution.execution_id, 'running', { source: 'agent' });
+    agent.finishAgentExecution(failExecution, 'waiting_for_approval', { reason: 'approval required' });
+    writeTranscript(failTaskId);
+    const failed = agent.finalizeResumedTask({
+      taskId: failTaskId,
+      state: 'failed',
+      outcome: { state: 'failed', error: 'step s2 (bash) failed', steps: [] },
+      checkpoint: { platform_execution_id: failExecution.execution_id, root_execution_id: failExecution.root_execution_id },
+    });
+    assert.ok(failed.ok, failed.reason);
+    assert.strictEqual(platformKernel.getExecution(failExecution.execution_id).state, 'failed', 'resumed failure must close the platform execution as failed');
+  });
+
   await testAsync('a continuation-storage failure does not blank the legacy approval queue', async () => {
     // `listContinuationApprovals` swallows storage errors so the merged list
     // degrades to the legacy queue rather than returning nothing. Untested,
