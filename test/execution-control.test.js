@@ -203,6 +203,21 @@ test("EC.15: platformGuard with no query returns allowed", () => {
   assert.strictEqual(guard.allowed, true);
 });
 
+// EC.16: a running execution may park awaiting_approval (Brain park, T1)
+test("EC.16: running can park in awaiting_approval", () => {
+  const exec = createAndTransition("agent_task", "running");
+  platformKernel.transitionExecution(exec.execution_id, "awaiting_approval", { source: "test" });
+  assert.strictEqual(platformKernel.getExecution(exec.execution_id).state, "awaiting_approval");
+});
+
+// EC.17: an awaiting_approval execution may complete when resumed (T3/T4 exit)
+test("EC.17: awaiting_approval can complete when resumed", () => {
+  const exec = createAndTransition("agent_task", "running");
+  platformKernel.transitionExecution(exec.execution_id, "awaiting_approval", { source: "test" });
+  platformKernel.transitionExecution(exec.execution_id, "completed", { source: "test" });
+  assert.strictEqual(platformKernel.getExecution(exec.execution_id).state, "completed");
+});
+
 cleanup();
 console.log(`\n  ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

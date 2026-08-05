@@ -4,6 +4,25 @@ All notable changes to Sidekick.
 
 ## Unreleased
 
+### Dependency audit cleared
+
+`npm audit` reported six advisories across transitive and direct dependencies. All were resolved by version bumps without code changes and without `--force`.
+
+- `@modelcontextprotocol/sdk` `^1.29.0` → `^1.30.0`: unblocks `@hono/node-server` 2.x (its declaration now allows `^1.19.9 || ^2.0.5`). `@hono/node-server` 1.19.14 → 2.1.0 and `hono` 4.12.26 → 4.13.0 clear the path-traversal, JSX escaping, CORS ReDoS, API Gateway header-drop, and per-request context advisories.
+- `fast-uri` 3.1.4 → 3.1.5: clears the high-severity backslash authority-introducer host-confusion advisory (already within `ajv`'s `^3.0.1` range).
+- `ip-address` 10.2.0 → 10.4.0: clears the high-severity SSRF/trust-boundary advisories (leading-zero octets, CIDR-suffix special-use suppression, IPv4-mapped/NAT64 misclassification), already within `express-rate-limit`'s `^10.2.0` range.
+- `fast-xml-parser` `^4.5.0` → `^5.7.0` (resolves 5.10.1): clears the XML comment/CDATA injection advisory. Version 5 keeps the same API; Sidekick uses only `XMLParser` (the `XMLBuilder` import at `src/tools-legacy.js` is unused), and the XML format-detection test passes unchanged.
+- Full suite: 76/76 files passed, 0 failed; `npm audit` reports 0 vulnerabilities.
+
+### A parked Brain task no longer reads as failed on the platform timeline
+
+Approval continuation delivers a resumed task's answer back into its transcript, but the platform execution itself told a different story: `finishAgentExecution` mapped a park at `waiting_for_approval` to **failed** (`src/agent.js`), even though the kernel has a real `awaiting_approval` state. So a task that parked, was approved, resumed, and succeeded still ended as *failed* on the execution timeline — the transcript said completed, the timeline said failed.
+
+- `finishAgentExecution` now maps a park to the kernel's `awaiting_approval` state instead of `failed`.
+- The kernel admits the two transitions that makes real: `running → awaiting_approval` (the park) and `awaiting_approval → completed` (the resumed success exit). Failures, cancellations, and timeouts already had legal exits from `awaiting_approval`.
+- `finalizeResumedTask` now transitions the platform execution to its terminal state on the resumed outcome (completed/failed/cancelled/timed_out) rather than only appending an event, so the timeline closes the same way the transcript does. An execution already terminal (e.g. a legacy park recorded before this fix) is left as-is; the resumed event still records what happened.
+- Added `test/execution-control.test.js` coverage for the two new kernel edges, and an end-to-end case in `test/approval-continuation.test.cjs` that parks a real platform execution at `awaiting_approval`, resumes it to `completed`, and closes a resumed failure as `failed`.
+
 ### Reconciliation UI for ambiguous executions
 
 Approval continuation shipped with `GET /api/reconciliations` and `POST /api/reconciliations/:taskId/resolve` but no way to reach them from the dashboard, so the designated recovery path for an ambiguous *high-risk* execution was resolvable only by hand-crafting an authenticated request. A task could sit in `reconciling` indefinitely with nothing surfacing it.

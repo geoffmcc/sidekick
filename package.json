@@ -23,11 +23,11 @@
   "author": "",
   "license": "GPL-3.0-only",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "ajv": "^8.17.1",
     "cors": "^2.8.6",
     "express": "^5.2.1",
-    "fast-xml-parser": "^4.5.0",
+    "fast-xml-parser": "^5.7.0",
     "handlebars": "^4.7.8",
     "ini": "^5.0.0",
     "yaml": "^2.6.0",
