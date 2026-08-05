@@ -130,19 +130,6 @@ const TOOL_SCHEMAS = {
     type: z.string().optional().describe("Context type: decisions, problems, patterns, projects, sessions, memories, or all (default: all)"),
     limit: z.number().optional().describe("Maximum results to return (default: 10)")
   }),
-  handoff: z.object({
-    action: z.enum(["create", "update", "get", "list", "compare", "inspect", "reprocess", "archive"]).describe("Handoff action"),
-    id: z.string().optional(),
-    key: z.string().optional().describe("KV key for backward-compatible handoffs"),
-    project: z.string().optional(),
-    title: z.string().optional(),
-    content: z.string().optional(),
-    source: z.string().optional(),
-    task_id: z.string().optional(),
-    reprocess: z.boolean().optional(),
-    include_archived: z.boolean().optional(),
-    limit: z.number().optional()
-  }),
   memory: z.object({
     action: z.enum(["remember", "query", "explain", "list", "get", "confirm", "correct", "forget", "pin", "expire", "conflicts", "health", "backfill"]).describe("Memory action"),
     id: z.string().optional(),
