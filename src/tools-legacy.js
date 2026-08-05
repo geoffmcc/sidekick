@@ -1361,25 +1361,6 @@ function recordPlatformToolCall(name, argsShape, duration, success, summary, met
   } catch (e) {}
 }
 
-function recordPlatformMemoryEvent(eventType, payload = {}, options = {}) {
-  try {
-    platformKernel.appendEvent({
-      event_type: eventType,
-      source: "memory",
-      actor_id: options.actor || getCurrentSource() || "unknown",
-      subject_type: options.subjectType || null,
-      subject_id: options.subjectId || null,
-      project_id: options.project || payload.project || null,
-      task_id: options.taskId || payload.task_id || payload.taskId || null,
-      session_id: options.sessionId || payload.session_id || payload.sessionId || null,
-      severity: options.severity || "info",
-      payload,
-      sensitivity: "normal",
-      correlation_id: options.correlationId || options.taskId || payload.task_id || payload.taskId || options.subjectId || null,
-    });
-  } catch (e) {}
-}
-
 function recordPlatformApprovalQueued(item) {
   try {
     const execution = platformKernel.createExecution({
@@ -6380,103 +6361,6 @@ async function sidekick_project({ name, include }) {
 
 function jsonText(value) {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
-}
-
-function normalizeTags(tags) {
-  if (Array.isArray(tags)) return tags.map(String).filter(Boolean);
-  if (typeof tags === "string") return tags.split(",").map(s => s.trim()).filter(Boolean);
-  return [];
-}
-
-function memoryClassForToolType(type) {
-  if (["session", "incident", "deployment", "experiment", "release"].includes(type)) return "episodic";
-  if (type === "procedure") return "procedural";
-  if (type === "open_thread") return "prospective";
-  if (type === "negative") return "negative";
-  if (type === "artifact") return "artifact";
-  if (type === "observation") return "observational";
-  if (type === "working") return "working";
-  return "semantic";
-}
-
-function buildScopedMemoryBrief(goal, project, options = {}) {
-  const current = dbStore.searchMemories({ project, type: options.type || "all", limit: options.limit || 30 })
-    .filter(memory => memory.current !== false && memory.state !== "expired" && memory.state !== "deleted")
-    .map(memory => ({
-      id: memory.id,
-      type: memory.type,
-      class: memory.memory_class,
-      scope: `${memory.primary_scope_type || (memory.project ? "project" : "global")}:${memory.primary_scope_id || memory.project || "global"}`,
-      summary: memory.summary || memory.content,
-      confidence: memory.confidence,
-      source: memory.source,
-      source_ref: memory.source_ref,
-      last_verified: memory.last_confirmed_at || memory.last_seen_at,
-      why_selected: project && memory.project === project ? "project scope match" : "global or unscoped match"
-    }));
-  const legacyBrief = buildMemoryBrief(goal || project || "memory", { project }) || null;
-  return {
-    goal: goal || null,
-    project: project || null,
-    selected: current.slice(0, options.limit || 10),
-    sections: legacyBrief,
-    excluded_policy: "Expired, deleted, disabled, superseded, and unrelated project memories are excluded from normal recall.",
-    generated_at: new Date().toISOString()
-  };
-}
-
-async function sidekick_session({ action, id, goal, project, source, working_directory, repository, branch, environment, client_session_id, tags, supplied_context, current_plan, completed_steps, current_hypothesis, evidence, blockers, next_step, artifacts, outcome, final_summary, user_visible_result, acceptance_state, decisions, verified_facts, unresolved_issues, resolved_issues, failed_approaches, procedures_learned, follow_ups, usefulness_feedback, limit }) {
-  if (action === "begin") {
-    if (!goal) return { content: [{ type: "text", text: "goal required" }], isError: true };
-    const brief = buildScopedMemoryBrief(goal, project, { limit: 12 });
-    const session = dbStore.saveTaskSession({ id, goal, project, source: source || getCurrentSource(), client_session_id, working_directory, repository, branch, environment, tags: normalizeTags(tags), supplied_context, state: "active", memory_brief: brief });
-    recordPlatformMemoryEvent("memory.session_started", { session_id: session.id, project: session.project, source: session.source, selected_memories: brief.selected.length }, { subjectType: "memory_task_session", subjectId: session.id, project: session.project, taskId: session.id });
-    return jsonText({ ok: true, session, memory_brief: brief });
-  }
-  if (["update", "checkpoint"].includes(action)) {
-    if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
-    const existing = dbStore.getTaskSession(id);
-    if (!existing) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
-    const session = dbStore.saveTaskSession({ ...existing, current_plan, completed_steps: completed_steps || existing.completed_steps, current_hypothesis, blockers: blockers || existing.blockers, next_step, artifacts: artifacts || existing.artifacts, state: "active" });
-    recordPlatformMemoryEvent(action === "checkpoint" ? "memory.session_checkpointed" : "memory.session_updated", { session_id: session.id, project: session.project, action, completed_steps: Array.isArray(session.completed_steps) ? session.completed_steps.length : 0 }, { subjectType: "memory_task_session", subjectId: session.id, project: session.project, taskId: session.id });
-    return jsonText({ ok: true, session, checkpoint: action === "checkpoint" });
-  }
-  if (action === "end" || action === "abandon") {
-    if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
-    const existing = dbStore.getTaskSession(id);
-    if (!existing) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
-    const state = action === "abandon" ? "abandoned" : "completed";
-    const session = dbStore.saveTaskSession({ ...existing, outcome, final_summary: redactSensitive(final_summary || user_visible_result || outcome || ""), acceptance_state, state, ended_at: new Date().toISOString() });
-    const created = [];
-    const projectName = project || existing.project;
-    const add = (type, values, memoryClass, confidence) => {
-      for (const value of Array.isArray(values) ? values : values ? [values] : []) {
-        const text = redactSensitive(String(value || "").trim());
-        if (!text) continue;
-        const mem = dbStore.upsertMemory({ type, project: projectName, content: text, summary: text, confidence, source: "task_session", source_tool: "sidekick_session", source_task_id: id, source_ref: id, memory_class: memoryClass, evidence_excerpt: text, directness: "direct", source_authority: action === "abandon" ? 4 : 5, metadata: { task_session_id: id, outcome, acceptance_state, usefulness_feedback } });
-        if (mem) created.push(mem);
-      }
-    };
-    if (action !== "abandon" && !["rejected", "failed"].includes(String(acceptance_state || "").toLowerCase())) {
-      add("fact", verified_facts, "semantic", 0.82);
-      add("decision", decisions, "semantic", 0.84);
-      add("procedure", procedures_learned, "procedural", 0.78);
-      add("session", final_summary || user_visible_result, "episodic", 0.74);
-    }
-    add("negative", failed_approaches, "negative", 0.76);
-    add("open_thread", [...(unresolved_issues || []), ...(follow_ups || [])], "prospective", 0.78);
-    add("observation", evidence, "observational", 0.62);
-    recordPlatformMemoryEvent(action === "abandon" ? "memory.session_abandoned" : "memory.session_completed", { session_id: session.id, project: session.project, memories_created: created.length, state: session.state, outcome }, { subjectType: "memory_task_session", subjectId: session.id, project: session.project, taskId: session.id, severity: action === "abandon" ? "warning" : "info" });
-    return jsonText({ ok: true, session, memories_created: created.length, memories: created });
-  }
-  if (action === "resume" || action === "status") {
-    if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
-    const session = dbStore.getTaskSession(id);
-    if (!session) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
-    return jsonText({ ok: true, session, memory_brief: buildScopedMemoryBrief(session.goal, session.project, { limit: 12 }) });
-  }
-  if (action === "list") return jsonText({ ok: true, sessions: dbStore.listTaskSessions({ project, state: source, limit: limit || 50 }) });
-  return { content: [{ type: "text", text: "Invalid action. Use begin, update, checkpoint, end, abandon, resume, status, list" }], isError: true };
 }
 
 async function sidekick_status({ include, services }) {
