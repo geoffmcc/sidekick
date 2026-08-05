@@ -102,4 +102,4 @@ Authoritative: dispatcher, family descriptors, Compute placement/job contracts, 
 4. Define event delivery guarantees before naming the ledger an event bus.
 5. Move workspace secrets to encrypted references without breaking existing deployments.
 6. Define the minimum user/team/membership model for meaningful capability grants.
-7. Use the extracted data-utilities family as the first module proof, not security research or extension CRUD alone.
+7. Use the extracted data-utilities family as the first module proof, not security research or extension CRUD alone. The security-research roadmap must target the currently working `security-research` surface; the unavailable Workbench is optional future integration, not a prerequisite.
