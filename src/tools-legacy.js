@@ -2,7 +2,8 @@ const fs = require("fs");
 const path = require("path");
 const dns = require("dns");
 const https = require("https");
-const { execSync, execFile, execFileSync, spawn } = require("child_process");
+const { exec, execSync, execFile, execFileSync, spawn } = require("child_process");
+const { promisify } = require("util");
 const { redactSensitive } = require("./redact");
 const evolveCommon = require("./evolve/common");
 const predictEngine = require("./predict");
@@ -1601,15 +1602,20 @@ function windowsPathToWslPath(value) {
   return "/mnt/" + match[1].toLowerCase() + "/" + match[2].replace(/\\/g, "/");
 }
 
+const execAsync = promisify(exec);
+
 async function sidekick_bash({ command }) {
   if (isDangerous(command)) {
     return { content: [{ type: "text", text: "Blocked: command matches a dangerous pattern" }], isError: true };
   }
   try {
-    const stdout = execSync(command, { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
+    const { stdout } = await execAsync(command, { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
     return { content: [{ type: "text", text: redactSensitive(stdout || "(empty output)") }] };
   } catch (e) {
-    return { content: [{ type: "text", text: redactSensitive("Exit code: " + e.status + "\nstdout: " + (e.stdout || "") + "\nstderr: " + (e.stderr || "")) }], isError: true };
+    const text = e.killed || e.signal || e.code === "ETIMEDOUT"
+      ? "Timed out after 60000ms (killed by " + (e.signal || "timeout") + ")"
+      : "Exit code: " + e.code + "\nstdout: " + (e.stdout || "") + "\nstderr: " + (e.stderr || "");
+    return { content: [{ type: "text", text: redactSensitive(text) }], isError: true };
   }
 }
 
