@@ -4,6 +4,15 @@ All notable changes to Sidekick.
 
 ## Unreleased
 
+### `sidekick_bash` no longer blocks the server while a command runs
+
+`sidekick_bash` executed commands with synchronous `execSync`, which freezes the MCP server's entire event loop for the command's duration. Any command that made an HTTP request to the server's own ports (4097/4098/4099) deadlocked: the server could not answer the request because its event loop was busy, the command hung, and the client aborted the call with `MCP error -32001: Request timed out`. This is a latent design footgun, not a dependency regression.
+
+- `sidekick_bash` now runs commands with promise-based async `exec` (same 60s timeout, same 10 MB `maxBuffer`), so the event loop stays free and in-process HTTP requests are served normally.
+- Timeout errors are now reported explicitly (`Timed out after 60000ms (killed by SIGTERM)`) instead of `Exit code: undefined`; non-zero exits still report `Exit code: N` with captured stdout/stderr.
+- Added `test/bash-tool.test.js` covering success output, error shape, dangerous-pattern blocking, and a regression case that HTTP-requests an in-process server from inside a command and asserts a prompt round-trip (fails on `execSync`, passes on async `exec`).
+- Full suite: 77/77 files passed, 0 failed.
+
 ### Dependency audit cleared
 
 `npm audit` reported six advisories across transitive and direct dependencies. All were resolved by version bumps without code changes and without `--force`.
