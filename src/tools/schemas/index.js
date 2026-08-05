@@ -240,12 +240,6 @@ const TOOL_SCHEMAS = {
     name: z.string().describe("Project name"),
     include: z.string().optional().describe("Sections to include: kv,context,logs,procedures (default: kv,context)")
   }),
-  tail: z.object({
-    source: z.string().describe("Source: log.jsonl, journalctl, or file path"),
-    pattern: z.string().optional().describe("Regex filter (for journalctl: service name)"),
-    lines: z.number().optional().describe("Number of lines to return (default: 50)"),
-    since: z.string().optional().describe("Filter entries since this date (ISO or relative: 1h, 1d)")
-  }),
   status: z.object({
     include: z.string().optional().describe("Sections: services,disk,memory,load,uptime,processes (default: services,disk)"),
     services: z.string().optional().describe("Comma-separated service names (default: sidekick-mcp,sidekick-dashboard,sidekick-agent)")

@@ -48,6 +48,7 @@ const suites = [
   { file: 'test/tool-family-storage.test.cjs', critical: false, description: 'Extracted storage tool family behavior, Redis fallback, and compatibility' },
   { file: 'test/tool-family-filesystem.test.cjs', critical: false, description: 'Extracted filesystem read/list/search family behavior and policy compatibility' },
   { file: 'test/tool-family-database-inspection.test.cjs', critical: false, description: 'Extracted read-only database inspection family behavior and compatibility' },
+  { file: 'test/tool-family-monitoring.test.cjs', critical: false, description: 'Extracted monitoring tail family behavior, log sources, redaction, and policy compatibility' },
   { file: 'test/approval.test.js', critical: false, description: 'Approval queue behavior' },
   { file: 'test/scheduler-platform.test.js', critical: false, description: 'Scheduler and runbook platform adapters' },
   { file: 'test/execution-control.test.js', critical: false, description: 'Platform guard and state-machine enforcement' },
