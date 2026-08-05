@@ -10,6 +10,7 @@ fs.mkdirSync(ROOT, { recursive: true });
 fs.writeFileSync(path.join(ROOT, 'one.txt'), 'safe value\nsecret=token', 'utf8');
 fs.writeFileSync(path.join(ROOT, 'two.js'), 'const marker = true;\n', 'utf8');
 fs.writeFileSync(path.join(ROOT, 'summary.txt'), 'first\nmiddle\nneedle\nlast\nsecret=token', 'utf8');
+fs.writeFileSync(path.join(ROOT, 'compare.txt'), 'safe value\nchanged\nextra', 'utf8');
 fs.writeFileSync(OUTSIDE, 'outside', 'utf8');
 
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
@@ -26,7 +27,7 @@ const legacy = require('../src/tools-legacy');
 const family = require('../src/tools/families/filesystem');
 
 const text = result => result.content[0].text;
-const names = ['read', 'list', 'search', 'summarize'];
+const names = ['read', 'list', 'search', 'summarize', 'filter', 'diff_files', 'find'];
 
 console.log('Running Filesystem Family Tests...');
 
@@ -36,7 +37,8 @@ console.log('Running Filesystem Family Tests...');
     for (const name of names) {
       const descriptor = registry.get(name);
       assert.strictEqual(descriptor.family, 'filesystem');
-      assert.strictEqual(descriptor.category, name === 'summarize' ? 'Efficiency' : 'Core');
+      const category = name === 'summarize' || name === 'filter' || name === 'find' ? 'Efficiency' : name === 'diff_files' ? 'Data Pipeline' : 'Core';
+      assert.strictEqual(descriptor.category, category);
       assert.strictEqual(descriptor.source, 'builtin');
       assert.strictEqual(typeof descriptor.handler, 'function');
       assert.strictEqual(legacy.TOOLS[name], undefined);
@@ -75,6 +77,29 @@ console.log('Running Filesystem Family Tests...');
     assert.strictEqual(result.isError, true);
     assert.strictEqual(text(result), 'Invalid strategy. Use: head, tail, grep, stats');
 
+    result = await family.sidekick_filter({ path: summaryPath, pattern: 'needle' });
+    assert.deepStrictEqual(JSON.parse(text(result)), [{ line: 3, text: 'needle' }]);
+    result = await family.sidekick_filter({ path: path.join(ROOT, 'one.txt'), pattern: 'secret' });
+    assert.ok(text(result).includes('secret=[REDACTED]'));
+    assert.ok(!text(result).includes('secret=token'));
+    result = await family.sidekick_filter({ path: ROOT, pattern: 'two', max_results: 1 });
+    assert.strictEqual(JSON.parse(text(result)).length, 1);
+
+    const comparePath = path.join(ROOT, 'compare.txt');
+    result = await family.sidekick_diff_files({ path_a: path.join(ROOT, 'one.txt'), path_b: comparePath, format: 'summary' });
+    assert.deepStrictEqual(JSON.parse(text(result)), { file_a: path.join(ROOT, 'one.txt'), file_b: comparePath, lines_a: 2, lines_b: 3, added: 1, removed: 0, changed: 1 });
+    result = await family.sidekick_diff_files({ path_a: path.join(ROOT, 'one.txt'), path_b: comparePath });
+    assert.ok(text(result).includes('- 2: secret=[REDACTED]'));
+    assert.ok(text(result).includes('+ 2: changed'));
+
+    result = await family.sidekick_find({ path: ROOT, name: '*.js', content: 'marker' });
+    assert.deepStrictEqual(JSON.parse(text(result)).map(entry => path.basename(entry.path)), ['two.js']);
+    fs.writeFileSync(path.join(ROOT, 'two.js.bak'), 'marker', 'utf8');
+    result = await family.sidekick_find({ path: ROOT, name: '*.js' });
+    assert.deepStrictEqual(JSON.parse(text(result)).map(entry => path.basename(entry.path)), ['two.js']);
+    result = await family.sidekick_find({ path: ROOT, size_min: '1KB' });
+    assert.deepStrictEqual(JSON.parse(text(result)), []);
+
     result = await tools.dispatchTool({ name: 'sidekick_read', args: { path: path.join(ROOT, 'two.js') }, context: { source: 'mcp' } });
     assert.ok(text(result).includes('marker'));
     result = await tools.dispatchTool({ name: 'sidekick_list', args: { path: ROOT }, context: { source: 'mcp' } });
@@ -85,6 +110,8 @@ console.log('Running Filesystem Family Tests...');
     assert.ok(text(result).includes('strategy=head'));
     result = await tools.dispatchTool({ name: 'summarize', args: { path: path.join(ROOT, 'summary.txt'), max_lines: 1 }, context: { source: 'mcp' } });
     assert.ok(text(result).includes('strategy=head'));
+    result = await tools.dispatchTool({ name: 'sidekick_find', args: { path: ROOT, name: '*.js' }, context: { source: 'mcp' } });
+    assert.strictEqual(JSON.parse(text(result)).length, 1);
 
     process.env.SIDEKICK_ALLOWED_PATHS = ROOT;
     result = await family.sidekick_read({ path: OUTSIDE });
@@ -94,6 +121,12 @@ console.log('Running Filesystem Family Tests...');
     assert.strictEqual(result.isError, true);
     assert.ok(text(result).includes('Path blocked by policy'));
     result = await family.sidekick_summarize({ path: OUTSIDE });
+    assert.strictEqual(result.isError, true);
+    assert.ok(text(result).includes('Path blocked by policy'));
+    result = await family.sidekick_find({ path: TEST_DATA_DIR });
+    assert.strictEqual(result.isError, true);
+    assert.ok(text(result).includes('Path blocked by policy'));
+    result = await family.sidekick_diff_files({ path_a: OUTSIDE, path_b: path.join(ROOT, 'one.txt') });
     assert.strictEqual(result.isError, true);
     assert.ok(text(result).includes('Path blocked by policy'));
 
