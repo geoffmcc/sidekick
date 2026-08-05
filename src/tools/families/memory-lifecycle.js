@@ -2,77 +2,12 @@
 
 const { z } = require("zod");
 const dbStore = require("../../db");
-
-const DEFAULT_CONTEXT = { projects: {}, decisions: [], problems: [], patterns: [], sessions: [], memories: [] };
-const CONTEXT_COLLECTIONS = [
-  { type: "decision", filter: "decisions", key: "decisions" },
-  { type: "problem", filter: "problems", key: "problems" },
-  { type: "pattern", filter: "patterns", key: "patterns" },
-  { type: "session", filter: "sessions", key: "sessions" },
-  { type: "memory", filter: "memories", key: "memories" },
-];
-
-function loadContext() {
-  return dbStore.loadDocument("context", DEFAULT_CONTEXT);
-}
-
-function saveContext(ctx) {
-  dbStore.setDocument("context", ctx);
-}
-
-function findContextItemById(ctx, id) {
-  const wanted = String(id || "").trim();
-  if (!wanted) return null;
-  for (const entry of CONTEXT_COLLECTIONS) {
-    const list = Array.isArray(ctx[entry.key]) ? ctx[entry.key] : [];
-    const index = list.findIndex(item => item && item.id === wanted);
-    if (index >= 0) return { ...entry, item: list[index], index };
-  }
-  return null;
-}
-
-function updateLegacyContextItem(id, action, reason) {
-  const ctx = loadContext();
-  const found = findContextItemById(ctx, id);
-  if (!found) return { found: false };
-
-  const now = new Date().toISOString();
-  const item = found.item;
-  if (action === "delete") {
-    item.enabled = false;
-    item.state = "deleted";
-    item.deleted_at = now;
-    item.delete_reason = reason || "user_deleted";
-  } else if (action === "disable") {
-    item.enabled = false;
-    item.state = "disabled";
-    item.disabled_at = now;
-    item.disable_reason = reason || "user_disabled";
-  } else if (action === "expire") {
-    item.enabled = false;
-    item.state = "expired";
-    item.expired_at = now;
-    item.expire_reason = reason || "manual_expire";
-  } else if (action === "restore") {
-    item.enabled = true;
-    item.state = "active";
-    item.restored_at = now;
-    delete item.deleted_at;
-    delete item.disabled_at;
-    delete item.expired_at;
-  } else {
-    return { found: true, supported: false, type: found.type };
-  }
-
-  item.updated_at = now;
-  saveContext(ctx);
-  return { found: true, supported: true, type: found.type, id };
-}
+const { loadContext, findContextItemById, updateLegacyContextItem } = require("./context");
 
 async function sidekick_memory_manage({ action, id, confirmed_by, days, reason, limit, project }) {
   if (action === "confirm") {
     if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
-    const legacy = findContextItemById(loadContext(), id);
+    const legacy = findContextItemById(loadContext(), id, "all");
     if (legacy) return { content: [{ type: "text", text: `Unsupported memory id for confirm: ${id} is a legacy context ${legacy.type}. Use delete, disable, expire, or restore for legacy context entries.` }], isError: true };
     const success = dbStore.confirmMemory(id, confirmed_by || "user");
     return { content: [{ type: "text", text: success ? `Memory ${id} confirmed` : `Memory not found: ${id}` }], isError: !success };
@@ -80,7 +15,7 @@ async function sidekick_memory_manage({ action, id, confirmed_by, days, reason, 
 
   if (action === "set_requires_confirmation") {
     if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
-    const legacy = findContextItemById(loadContext(), id);
+    const legacy = findContextItemById(loadContext(), id, "all");
     if (legacy) return { content: [{ type: "text", text: `Unsupported memory id for set_requires_confirmation: ${id} is a legacy context ${legacy.type}. Structured memories only support confirmation requirements.` }], isError: true };
     const requires = reason !== "false";
     const success = dbStore.setMemoryRequiresConfirmation(id, requires);
@@ -99,7 +34,7 @@ async function sidekick_memory_manage({ action, id, confirmed_by, days, reason, 
 
   if (action === "set_auto_expire") {
     if (!id || !days) return { content: [{ type: "text", text: "id and days required" }], isError: true };
-    const legacy = findContextItemById(loadContext(), id);
+    const legacy = findContextItemById(loadContext(), id, "all");
     if (legacy) return { content: [{ type: "text", text: `Unsupported memory id for set_auto_expire: ${id} is a legacy context ${legacy.type}. Structured memories only support auto-expiration.` }], isError: true };
     const success = dbStore.setAutoExpire(id, days);
     return { content: [{ type: "text", text: success ? `Memory ${id} will expire in ${days} days` : `Memory not found: ${id}` }], isError: !success };
