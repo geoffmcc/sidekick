@@ -245,12 +245,6 @@ const TOOL_SCHEMAS = {
       args: z.record(z.any()).optional().describe("Arguments for the tool")
     })).describe("Array of tool calls to execute (max 20)")
   }),
-  summarize: z.object({
-    path: z.string().describe("File path to summarize"),
-    max_lines: z.number().optional().describe("Maximum lines to return (default: 50)"),
-    strategy: z.enum(["head", "tail", "grep", "stats"]).optional().describe("Summarization strategy (default: head)"),
-    pattern: z.string().optional().describe("Regex pattern for grep strategy")
-  }),
   filter: z.object({
     path: z.string().describe("File or directory path to filter"),
     pattern: z.string().optional().describe("Regex pattern to match"),
