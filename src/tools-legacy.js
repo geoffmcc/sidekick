@@ -5297,44 +5297,6 @@ const INI = require("ini");
 
 const { detectFormat } = require("./core/format");
 
-// --- Hash Tool ---
-
-async function sidekick_hash({ input, algorithm, verify, path: filePath }) {
-  const algo = algorithm || "sha256";
-  const validAlgorithms = ["md5", "sha1", "sha256", "sha512"];
-
-  if (!validAlgorithms.includes(algo)) {
-    return { content: [{ type: "text", text: `Invalid algorithm. Use: ${validAlgorithms.join(", ")}` }], isError: true };
-  }
-
-  let data;
-
-  if (filePath) {
-    const policyError = enforcePathPolicy(filePath, "read");
-    if (policyError) return policyError;
-    // Hash a file
-    try {
-      data = fs.readFileSync(filePath);
-    } catch (e) {
-      return { content: [{ type: "text", text: `File read error: ${e.message}` }], isError: true };
-    }
-  } else if (input) {
-    // Hash input string
-    data = Buffer.from(input, "utf-8");
-  } else {
-    return { content: [{ type: "text", text: "input or path required" }], isError: true };
-  }
-
-  const hash = crypto.createHash(algo).update(data).digest("hex");
-
-  if (verify) {
-    const matches = hash === verify.toLowerCase();
-    return { content: [{ type: "text", text: matches ? `✓ Hash matches (${algo}: ${hash})` : `✗ Hash mismatch\nExpected: ${verify}\nActual:   ${hash}` }] };
-  }
-
-  return { content: [{ type: "text", text: `${algo.toUpperCase()}: ${hash}` }] };
-}
-
 // --- Queue Tool ---
 
 const QUEUE_FILE = path.join(DATA_DIR, "queue.json");
@@ -11590,7 +11552,6 @@ const TOOLS = {
   watch: sidekick_watch,
   secret: sidekick_secret,
   security_scan: sidekick_security_scan,
-  hash: sidekick_hash,
   queue: sidekick_queue,
   retry: sidekick_retry,
   evolve: sidekick_evolve,

@@ -2,8 +2,9 @@
 
 const utility = require("./utility");
 const dataUtilities = require("./data-utilities");
+const hashing = require("./hashing");
 
-const families = Object.freeze([utility, dataUtilities]);
+const families = Object.freeze([utility, dataUtilities, hashing]);
 
 // Descriptors owned by extracted families. The registry substitutes these at
 // their legacy TOOL_DEFS order position, so ordering here is not significant.

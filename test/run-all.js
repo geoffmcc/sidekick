@@ -44,6 +44,7 @@ const suites = [
   { file: 'test/dispatcher.test.cjs', critical: false, description: 'Centralized tool dispatcher behavior' },
   { file: 'test/tool-registry-contract.test.cjs', critical: false, description: 'Tool registry contract and descriptor coverage' },
   { file: 'test/tool-family-data-utilities.test.cjs', critical: false, description: 'Extracted data-utilities tool family behavior and dispatcher integration' },
+  { file: 'test/tool-family-hashing.test.cjs', critical: false, description: 'Extracted hashing tool family behavior, policy, and compatibility' },
   { file: 'test/approval.test.js', critical: false, description: 'Approval queue behavior' },
   { file: 'test/scheduler-platform.test.js', critical: false, description: 'Scheduler and runbook platform adapters' },
   { file: 'test/execution-control.test.js', critical: false, description: 'Platform guard and state-machine enforcement' },

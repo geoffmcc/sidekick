@@ -68,11 +68,11 @@ for (const name of extractedNames) {
   assert.ok(legacyDefNames.includes(name), `${name} should keep its legacy TOOL_DEFS row as an ordering anchor`);
 }
 
-// hash stays behind deliberately. The enforcePathPolicy boundary it calls now
-// lives in src/tools/path-policy.js, so its migration is unblocked but deferred
-// to a later slice.
-assert.strictEqual(registry.get('hash').family, null, 'hash should remain a legacy-owned descriptor');
-assert.strictEqual(registry.get('hash').handler, legacy.TOOLS.hash, 'hash should still resolve to the legacy handler');
+assert.strictEqual(registry.get('hash').family, 'hashing', 'hash should be owned by the hashing family');
+assert.strictEqual(registry.get('hash').category, 'Data Pipeline', 'hash should retain its category');
+assert.strictEqual(registry.get('hash').source, 'builtin', 'hash should be a descriptor-owned builtin');
+assert.ok(!legacy.TOOLS.hash, 'hash should no longer have an active legacy handler');
+assert.ok(!Object.prototype.hasOwnProperty.call(require('../src/tools/schemas').TOOL_SCHEMAS, 'hash'), 'hash should have no duplicate legacy schema');
 
 const exportedNames = Object.keys(legacyTools).sort();
 for (const name of [
