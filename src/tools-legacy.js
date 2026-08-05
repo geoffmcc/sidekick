@@ -21,6 +21,7 @@ const { validAllowedIps, validDomainName, validDownloadFormat, validIdentifier, 
 const computeTools = require("./compute/tools");
 const { TOOL_RISK, TOOL_CATEGORIES, RISK_LEVELS } = require("./tools/metadata");
 const toolContext = require("./tools/context");
+const { sidekick_memory_manage: extractedMemoryManage } = require("./tools/families/memory-lifecycle");
 const { parsePolicyList, sourceEnvName } = require("./core/policy-env");
 const { getPathPolicyDecision, enforcePathPolicy } = require("./tools/path-policy");
 let inferenceService = null;
@@ -7134,9 +7135,9 @@ async function sidekick_memory({ action, id, project, type, memory_class, conten
     if (!memory) return { content: [{ type: "text", text: "Memory not found: " + id }], isError: true };
     return jsonText({ ok: true, memory, evidence: dbStore.getMemoryEvidence(id), why_known: { source: memory.source, source_ref: memory.source_ref, authority: memory.source_authority, confidence: memory.confidence, components: memory.confidence_components } });
   }
-  if (action === "confirm") return sidekick_memory_manage({ action: "confirm", id, confirmed_by: source || "user" });
-  if (action === "forget") return sidekick_memory_manage({ action: "delete", id, reason: reason || "user_forget" });
-  if (action === "expire") return sidekick_memory_manage({ action: "expire", id, reason: reason || "manual_expire" });
+  if (action === "confirm") return extractedMemoryManage({ action: "confirm", id, confirmed_by: source || "user" });
+  if (action === "forget") return extractedMemoryManage({ action: "delete", id, reason: reason || "user_forget" });
+  if (action === "expire") return extractedMemoryManage({ action: "expire", id, reason: reason || "manual_expire" });
   if (action === "pin") {
     // ISO, matching how every other writer stores updated_at.
     const result = dbStore.getDb().prepare("UPDATE memories SET pinned = 1, updated_at = ? WHERE id = ?").run(new Date().toISOString(), id);
@@ -11294,7 +11295,6 @@ const TOOLS = {
   summarize: sidekick_summarize,
   filter: sidekick_filter,
   project: sidekick_project,
-  memory_manage: sidekick_memory_manage,
   tail: sidekick_tail,
   diff_files: sidekick_diff_files,
   find: sidekick_find,

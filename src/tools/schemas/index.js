@@ -198,15 +198,6 @@ const TOOL_SCHEMAS = {
     fresh_eyes: z.boolean().optional(),
     historical: z.boolean().optional()
   }),
-  memory_manage: z.object({
-    action: z.enum(["confirm", "set_requires_confirmation", "delete", "disable", "expire", "restore", "set_auto_expire", "list_by_state", "pending_confirmations", "process_auto_expirations"]).describe("Action to perform"),
-    id: z.string().optional().describe("Memory ID (or state name for list_by_state)"),
-    confirmed_by: z.string().optional().describe("Who confirmed (for confirm action - default 'user')"),
-    days: z.number().optional().describe("Days until expiration (for set_auto_expire)"),
-    reason: z.string().optional().describe("Reason for delete/expire"),
-    limit: z.number().optional().describe("Limit for list operations (default 50)"),
-    project: z.string().optional().describe("Filter by project for list operations")
-  }),
   teach: z.object({
     action: z.enum(["teach_procedure", "generate_tool", "learn_from_example", "execute", "list", "remove"]).describe("Teach action to perform"),
     name: z.string().optional().describe("Procedure name (required for teach/generate/execute/remove)"),
