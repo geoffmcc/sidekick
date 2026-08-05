@@ -11272,7 +11272,6 @@ const TOOLS = {
   ci_status: sidekick_ci_status,
   webhook: sidekick_webhook,
   context: sidekick_context,
-  session: sidekick_session,
   handoff: sidekick_handoff,
   memory: sidekick_memory,
   teach: sidekick_teach,

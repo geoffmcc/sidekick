@@ -8,8 +8,9 @@ const storage = require("./storage");
 const memorySync = require("./memory-sync");
 const memoryPortability = require("./memory-portability");
 const memoryLifecycle = require("./memory-lifecycle");
+const memorySession = require("./memory-session");
 
-const families = Object.freeze([utility, dataUtilities, hashing, databaseInspection, storage, memorySync, memoryPortability, memoryLifecycle]);
+const families = Object.freeze([utility, dataUtilities, hashing, databaseInspection, storage, memorySync, memoryPortability, memoryLifecycle, memorySession]);
 
 // Descriptors owned by extracted families. The registry substitutes these at
 // their legacy TOOL_DEFS order position, so ordering here is not significant.
