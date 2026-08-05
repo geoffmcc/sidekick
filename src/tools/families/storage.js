@@ -68,7 +68,7 @@ const descriptors = Object.freeze([
       project: z.string().optional().describe("Project name (lowercase, underscores only)"),
       category: z.string().optional().describe("Category tag for filtering (e.g. 'mcp', 'tool', 'config')"),
     }),
-    args: { key: "string", value: "string", project: "string (optional)", category: "string (optional)" },
+    args: { key: "string", value: "string", project: "string (optional)" },
     risk: "low",
     category: "Storage",
     source: "builtin",
