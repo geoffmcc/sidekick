@@ -218,23 +218,6 @@ const TOOL_SCHEMAS = {
     limit: z.number().optional().describe("Limit for list operations (default 50)"),
     project: z.string().optional().describe("Filter by project for list operations")
   }),
-  sync_identity: z.object({
-    action: z.enum(["get", "set_user"]).describe("Action: get (show identity) or set_user (set user ID)"),
-    user_id: z.string().optional().describe("User ID to set (required for set_user action)")
-  }),
-  sync_export: z.object({
-    project: z.string().optional().describe("Filter by project name"),
-    since: z.string().optional().describe("ISO timestamp - only export memories updated after this time"),
-    include_disabled: z.boolean().optional().describe("Include disabled memories (default: true)")
-  }),
-  sync_import: z.object({
-    data: z.string().describe("Sync export data from another machine (JSON string or object)"),
-    strategy: z.enum(["newest", "highest_confidence", "most_confirmed", "merge", "skip"]).optional().describe("Conflict resolution strategy (default: newest)"),
-    preserve_ids: z.boolean().optional().describe("Preserve original memory IDs (default: false)")
-  }),
-  sync_diff: z.object({
-    since: z.string().describe("ISO timestamp - get changes after this time")
-  }),
   teach: z.object({
     action: z.enum(["teach_procedure", "generate_tool", "learn_from_example", "execute", "list", "remove"]).describe("Teach action to perform"),
     name: z.string().optional().describe("Procedure name (required for teach/generate/execute/remove)"),

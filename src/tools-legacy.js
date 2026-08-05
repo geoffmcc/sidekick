@@ -7204,62 +7204,6 @@ async function sidekick_memory({ action, id, project, type, memory_class, conten
   return { content: [{ type: "text", text: "Invalid action. Use remember, query, explain, list, get, confirm, correct, forget, pin, expire, conflicts, health, backfill" }], isError: true };
 }
 
-async function sidekick_sync_identity({ action, user_id }) {
-  if (action === "get") {
-    const machineId = dbStore.getMachineId();
-    const userId = dbStore.getUserId();
-    return { content: [{ type: "text", text: JSON.stringify({ machine_id: machineId, user_id: userId }) }] };
-  }
-
-  if (action === "set_user") {
-    if (!user_id) {
-      return { content: [{ type: "text", text: "user_id required" }], isError: true };
-    }
-    dbStore.setUserId(user_id);
-    return { content: [{ type: "text", text: `User ID set to: ${user_id}` }] };
-  }
-
-  return { content: [{ type: "text", text: "Invalid action. Use 'get' or 'set_user'" }], isError: true };
-}
-
-async function sidekick_sync_export({ project, since, include_disabled }) {
-  const options = {};
-  if (project) options.project = project;
-  if (since) options.since = since;
-  if (include_disabled === false) options.includeDisabled = false;
-
-  const data = dbStore.exportForSync(options);
-  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-}
-
-async function sidekick_sync_import({ data, strategy, preserve_ids }) {
-  let parsed;
-  try {
-    parsed = typeof data === "string" ? JSON.parse(data) : data;
-  } catch (e) {
-    return { content: [{ type: "text", text: "Invalid JSON: " + e.message }], isError: true };
-  }
-
-  const options = {
-    strategy: strategy || "newest",
-    preserveIds: preserve_ids === true
-  };
-
-  const result = dbStore.importFromSync(parsed, options);
-  const summary = `Sync complete: ${result.imported} imported, ${result.conflicts} conflicts resolved, ${result.skipped} skipped`;
-  const errors = result.errors?.length ? `\nErrors: ${result.errors.join(", ")}` : "";
-  return { content: [{ type: "text", text: summary + errors }] };
-}
-
-async function sidekick_sync_diff({ since }) {
-  if (!since) {
-    return { content: [{ type: "text", text: "since parameter required (ISO timestamp)" }], isError: true };
-  }
-
-  const diff = dbStore.getSyncDiff(since);
-  return { content: [{ type: "text", text: JSON.stringify(diff, null, 2) }] };
-}
-
 async function sidekick_tail({ source, pattern, lines, since }) {
   const maxLines = lines || 50;
   const re = pattern ? new RegExp(pattern, "i") : null;
@@ -11383,10 +11327,6 @@ const TOOLS = {
   memory_export: sidekick_memory_export,
   memory_import: sidekick_memory_import,
   memory_manage: sidekick_memory_manage,
-  sync_identity: sidekick_sync_identity,
-  sync_export: sidekick_sync_export,
-  sync_import: sidekick_sync_import,
-  sync_diff: sidekick_sync_diff,
   tail: sidekick_tail,
   diff_files: sidekick_diff_files,
   find: sidekick_find,
