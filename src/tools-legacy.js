@@ -22,6 +22,7 @@ const computeTools = require("./compute/tools");
 const { TOOL_RISK, TOOL_CATEGORIES, RISK_LEVELS } = require("./tools/metadata");
 const toolContext = require("./tools/context");
 const { sidekick_memory_manage: extractedMemoryManage } = require("./tools/families/memory-lifecycle");
+const { extractHandoffMemories: extractedHandoffMemories } = require("./tools/families/memory-handoff");
 const { parsePolicyList, sourceEnvName } = require("./core/policy-env");
 const { getPathPolicyDecision, enforcePathPolicy } = require("./tools/path-policy");
 let inferenceService = null;
@@ -7164,7 +7165,7 @@ async function sidekick_memory({ action, id, project, type, memory_class, conten
     for (const entry of keys) {
       try {
         const handoff = dbStore.saveHandoff({ kv_key: entry.key, project: entry.project || project || null, title: entry.key, source: "backfill", content: entry.value, extraction_state: "pending" });
-        const memories = extractHandoffMemories(handoff, { project: entry.project || project || null });
+        const memories = extractedHandoffMemories(handoff, { project: entry.project || project || null });
         recordPlatformMemoryEvent("memory.handoff_backfilled", { handoff_id: handoff.id, key: handoff.kv_key, project: handoff.project, memories_created: memories.length }, { subjectType: "memory_handoff", subjectId: handoff.id, project: handoff.project, taskId: handoff.task_id });
         report.handoffs++;
         report.memories += memories.length;
@@ -11272,7 +11273,6 @@ const TOOLS = {
   ci_status: sidekick_ci_status,
   webhook: sidekick_webhook,
   context: sidekick_context,
-  handoff: sidekick_handoff,
   memory: sidekick_memory,
   teach: sidekick_teach,
   transform: sidekick_transform,
