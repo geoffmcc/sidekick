@@ -20,7 +20,6 @@ const { validAllowedIps, validDomainName, validDownloadFormat, validIdentifier, 
 const computeTools = require("./compute/tools");
 const { TOOL_RISK, TOOL_CATEGORIES, RISK_LEVELS } = require("./tools/metadata");
 const toolContext = require("./tools/context");
-const { sidekick_memory_manage: extractedMemoryManage } = require("./tools/families/memory-lifecycle");
 const { extractHandoffMemories: extractedHandoffMemories } = require("./tools/families/memory-handoff");
 const { loadContext: loadSharedContext, findContextItemById: findSharedContextItemById, updateLegacyContextItem: updateSharedLegacyContextItem } = require("./tools/families/context");
 const { parsePolicyList, sourceEnvName } = require("./core/policy-env");
@@ -6378,93 +6377,6 @@ async function sidekick_project({ name, include }) {
     output.procedures = Object.keys(procs).filter(n => n.toLowerCase().includes(name.toLowerCase()));
   }
   return { content: [{ type: "text", text: JSON.stringify(output, null, 2) }] };
-}
-
-async function sidekick_memory_manage({ action, id, confirmed_by, days, reason, limit, project }) {
-  if (action === "confirm") {
-    if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
-    const legacy = findSharedContextItemById(loadSharedContext(), id, "all");
-    if (legacy) {
-      return { content: [{ type: "text", text: `Unsupported memory id for confirm: ${id} is a legacy context ${legacy.type}. Use delete, disable, expire, or restore for legacy context entries.` }], isError: true };
-    }
-    const success = dbStore.confirmMemory(id, confirmed_by || "user");
-    return { content: [{ type: "text", text: success ? `Memory ${id} confirmed` : `Memory not found: ${id}` }], isError: !success };
-  }
-
-  if (action === "set_requires_confirmation") {
-    if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
-    const legacy = findSharedContextItemById(loadSharedContext(), id, "all");
-    if (legacy) {
-      return { content: [{ type: "text", text: `Unsupported memory id for set_requires_confirmation: ${id} is a legacy context ${legacy.type}. Structured memories only support confirmation requirements.` }], isError: true };
-    }
-    const requires = reason !== "false";
-    const success = dbStore.setMemoryRequiresConfirmation(id, requires);
-    return { content: [{ type: "text", text: success ? `Memory ${id} requires_confirmation set to ${requires}` : `Memory not found: ${id}` }], isError: !success };
-  }
-
-  if (action === "delete") {
-    if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
-    const success = dbStore.softDeleteMemory(id, reason || "user_deleted");
-    if (success) return { content: [{ type: "text", text: `Memory ${id} soft-deleted` }] };
-    const legacy = updateSharedLegacyContextItem(id, "delete", reason || "user_deleted");
-    if (legacy.supported) return { content: [{ type: "text", text: `Legacy context ${legacy.type} ${id} soft-deleted` }] };
-    return { content: [{ type: "text", text: `Memory or context id not found: ${id}` }], isError: true };
-  }
-
-  if (action === "disable") {
-    if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
-    const success = dbStore.disableMemory(id);
-    if (success) return { content: [{ type: "text", text: `Memory ${id} disabled` }] };
-    const legacy = updateSharedLegacyContextItem(id, "disable", reason || "user_disabled");
-    if (legacy.supported) return { content: [{ type: "text", text: `Legacy context ${legacy.type} ${id} disabled` }] };
-    return { content: [{ type: "text", text: `Memory or context id not found: ${id}` }], isError: true };
-  }
-
-  if (action === "expire") {
-    if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
-    const success = dbStore.expireMemory(id, reason || "manual_expire");
-    if (success) return { content: [{ type: "text", text: `Memory ${id} expired` }] };
-    const legacy = updateSharedLegacyContextItem(id, "expire", reason || "manual_expire");
-    if (legacy.supported) return { content: [{ type: "text", text: `Legacy context ${legacy.type} ${id} expired` }] };
-    return { content: [{ type: "text", text: `Memory or context id not found: ${id}` }], isError: true };
-  }
-
-  if (action === "restore") {
-    if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
-    const success = dbStore.restoreMemory(id);
-    if (success) return { content: [{ type: "text", text: `Memory ${id} restored` }] };
-    const legacy = updateSharedLegacyContextItem(id, "restore");
-    if (legacy.supported) return { content: [{ type: "text", text: `Legacy context ${legacy.type} ${id} restored` }] };
-    return { content: [{ type: "text", text: `Memory or context id not found: ${id}` }], isError: true };
-  }
-
-  if (action === "set_auto_expire") {
-    if (!id || !days) return { content: [{ type: "text", text: "id and days required" }], isError: true };
-    const legacy = findSharedContextItemById(loadSharedContext(), id, "all");
-    if (legacy) {
-      return { content: [{ type: "text", text: `Unsupported memory id for set_auto_expire: ${id} is a legacy context ${legacy.type}. Structured memories only support auto-expiration.` }], isError: true };
-    }
-    const success = dbStore.setAutoExpire(id, days);
-    return { content: [{ type: "text", text: success ? `Memory ${id} will expire in ${days} days` : `Memory not found: ${id}` }], isError: !success };
-  }
-
-  if (action === "list_by_state") {
-    if (!id) return { content: [{ type: "text", text: "state required (passed as id param)" }], isError: true };
-    const memories = dbStore.getMemoriesByState(id, { limit: limit || 50, project });
-    return { content: [{ type: "text", text: JSON.stringify({ count: memories.length, memories }, null, 2) }] };
-  }
-
-  if (action === "pending_confirmations") {
-    const memories = dbStore.getPendingConfirmations({ limit: limit || 50 });
-    return { content: [{ type: "text", text: JSON.stringify({ count: memories.length, memories }, null, 2) }] };
-  }
-
-  if (action === "process_auto_expirations") {
-    const result = dbStore.processAutoExpirations();
-    return { content: [{ type: "text", text: `Processed auto-expirations: ${result.expired} memories expired` }] };
-  }
-
-  return { content: [{ type: "text", text: "Invalid action. Use: confirm, set_requires_confirmation, delete, disable, expire, restore, set_auto_expire, list_by_state, pending_confirmations, process_auto_expirations" }], isError: true };
 }
 
 const HANDOFF_EXTRACTION_VERSION = "handoff-rules-v1";
