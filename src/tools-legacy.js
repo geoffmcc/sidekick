@@ -10083,85 +10083,6 @@ async function sidekick_black_box(args = {}) {
   }
 }
 
-// --- Database Tools ---
-
-async function sidekick_db_schema({ table, verbose, database }) {
-  try {
-    if (database === "postgres") {
-      if (table) {
-        const info = await pgStore.getTableInfo(table);
-        return { content: [{ type: "text", text: JSON.stringify({ table, ...info }, null, 2) }] };
-      }
-      const tables = await pgStore.getTableList();
-      if (verbose) {
-        const detailed = [];
-        for (const t of tables) {
-          const info = await pgStore.getTableInfo(t.name);
-          detailed.push({ name: t.name, type: t.type, ...info });
-        }
-        return { content: [{ type: "text", text: JSON.stringify(detailed, null, 2) }] };
-      }
-      return { content: [{ type: "text", text: JSON.stringify(tables, null, 2) }] };
-    }
-    if (table) {
-      const info = dbStore.getTableInfo(table);
-      return { content: [{ type: "text", text: JSON.stringify({ table, ...info }, null, 2) }] };
-    }
-    const tables = dbStore.getTableList();
-    if (verbose) {
-      const detailed = tables.map(t => ({
-        name: t.name,
-        type: t.type,
-        ...dbStore.getTableInfo(t.name)
-      }));
-      return { content: [{ type: "text", text: JSON.stringify(detailed, null, 2) }] };
-    }
-    return { content: [{ type: "text", text: JSON.stringify(tables, null, 2) }] };
-  } catch (e) {
-    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
-  }
-}
-
-async function sidekick_db_query({ sql, params, readonly, limit, timeout, database }) {
-  try {
-    if (database === "postgres") {
-      const results = await pgStore.executeQuery(sql, params || [], {
-        readonly: readonly !== false,
-        limit: limit || 1000,
-        timeout: timeout || 5000
-      });
-      return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
-    }
-    const results = dbStore.executeQuery(sql, params || [], {
-      readonly: readonly !== false,
-      limit: limit || 1000,
-      timeout: timeout || 5000
-    });
-    return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
-  } catch (e) {
-    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
-  }
-}
-
-async function sidekick_db_stats({ detailed, database }) {
-  try {
-    if (database === "postgres") {
-      const stats = await pgStore.getDatabaseStats();
-      if (!detailed) {
-        delete stats.tables;
-      }
-      return { content: [{ type: "text", text: JSON.stringify(stats, null, 2) }] };
-    }
-    const stats = dbStore.getDatabaseStats();
-    if (!detailed) {
-      delete stats.tables;
-    }
-    return { content: [{ type: "text", text: JSON.stringify(stats, null, 2) }] };
-  } catch (e) {
-    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
-  }
-}
-
 async function sidekick_db_backup({ path: destPath, compress }) {
   try {
     if (destPath) {
@@ -10181,15 +10102,6 @@ async function sidekick_db_restore({ path: backupPath, verify }) {
     if (policyError) return policyError;
     const result = dbStore.restoreBackup(backupPath, verify !== false);
     return { content: [{ type: "text", text: `Restored from: ${backupPath}\nPre-restore backup: ${result.preBackupPath}` }] };
-  } catch (e) {
-    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
-  }
-}
-
-async function sidekick_log_query({ tool, source, success, since, until, limit }) {
-  try {
-    const logs = dbStore.queryToolLogs({ tool, source, success, since, until, limit: limit || 100 });
-    return { content: [{ type: "text", text: JSON.stringify(logs, null, 2) }] };
   } catch (e) {
     return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
   }
@@ -10247,20 +10159,6 @@ async function sidekick_db_export({ table, format, path: outputPath, database })
   }
 }
 
-async function sidekick_db_search({ query, tables, limit, database }) {
-  try {
-    if (database === "postgres") {
-      const results = await pgStore.searchAllTables(query, { tables: tables ? tables.split(",").map(t => t.trim()) : null, limit: limit || 50 });
-      return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
-    }
-    dbStore.setupFTS5();
-    const results = dbStore.searchAllTables(query, { tables: tables ? tables.split(",").map(t => t.trim()) : null, limit: limit || 50 });
-    return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
-  } catch (e) {
-    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
-  }
-}
-
 async function sidekick_db_migrate({ action, version, name }) {
   try {
     if (action === "status") {
@@ -10285,36 +10183,6 @@ async function sidekick_db_migrate({ action, version, name }) {
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     }
     return { content: [{ type: "text", text: "Unknown action. Use: status, list, up" }], isError: true };
-  } catch (e) {
-    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
-  }
-}
-
-async function sidekick_db_diff({ snapshot_a, snapshot_b, table }) {
-  try {
-    if (snapshot_a && snapshot_a !== "current") {
-      const policyError = enforcePathPolicy(snapshot_a, "read");
-      if (policyError) return policyError;
-    }
-    if (snapshot_b && snapshot_b !== "current") {
-      const policyError = enforcePathPolicy(snapshot_b, "read");
-      if (policyError) return policyError;
-    }
-    const snapA = snapshot_a === "current" || !snapshot_a ? dbStore.createSnapshot() : JSON.parse(fs.readFileSync(snapshot_a, "utf-8"));
-    const snapB = snapshot_b === "current" || !snapshot_b ? dbStore.createSnapshot() : JSON.parse(fs.readFileSync(snapshot_b, "utf-8"));
-
-    const diff = dbStore.compareSnapshots(snapA, snapB);
-
-    if (table) {
-      return { content: [{ type: "text", text: JSON.stringify({ [table]: diff[table] || { added: [], removed: [] } }, null, 2) }] };
-    }
-
-    const summary = {};
-    for (const [t, changes] of Object.entries(diff)) {
-      summary[t] = { added: changes.added.length, removed: changes.removed.length };
-    }
-
-    return { content: [{ type: "text", text: JSON.stringify({ summary, details: diff }, null, 2) }] };
   } catch (e) {
     return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
   }
@@ -11588,16 +11456,10 @@ const TOOLS = {
   ops: sidekick_ops,
   mission: sidekick_mission,
   black_box: sidekick_black_box,
-  db_schema: sidekick_db_schema,
-  db_query: sidekick_db_query,
-  db_stats: sidekick_db_stats,
   db_backup: sidekick_db_backup,
   db_restore: sidekick_db_restore,
-  log_query: sidekick_log_query,
   db_export: sidekick_db_export,
-  db_search: sidekick_db_search,
   db_migrate: sidekick_db_migrate,
-  db_diff: sidekick_db_diff,
   redis: sidekick_redis,
   ocr: sidekick_ocr,
   media: sidekick_media,
