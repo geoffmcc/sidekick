@@ -1,5 +1,11 @@
 # Architecture
 
+Status: Current-state architecture
+Verified commit: d2db2658ef0fbf862c64b09315279562caa5bb8e
+Verified date: 2026-08-05T16:16:46-04:00
+
+For Phase 0R classifications, target boundaries, and the migration roadmap, see `platform-convergence-audit.md`, `platform-target-architecture.md`, and `platform-roadmap.md`.
+
 Sidekick has three core Node.js services sharing a SQLite database and data directory, plus optional enrolled Compute worker processes.
 
 ```text

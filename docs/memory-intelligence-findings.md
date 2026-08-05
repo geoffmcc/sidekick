@@ -1,5 +1,8 @@
 # Memory Intelligence Verified Findings
 
+Status: Historical snapshot; superseded for current implementation claims by `structured-memory-plan.md` and `platform-convergence-audit.md`.
+These findings were recorded against the pre-redesign memory-intelligence branch. Preserve them as rationale, not as a current inventory.
+
 Verified against the current working tree on branch `feat/memory-intelligence-system` after PR #70 was merged.
 
 ## Current Architecture

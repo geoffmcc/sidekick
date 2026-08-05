@@ -1,5 +1,9 @@
 # Sidekick Platform Architecture Assessment
 
+Status: Historical snapshot; superseded for current-state claims by `architecture.md` and `platform-convergence-audit.md`.
+Original assessment date/branch: 2026-07-15, `feat/platform-consolidation-foundations`.
+Do not use this document as evidence that the current tree lacks executions, capability records, approval continuation, descriptor dispatch, Compute, or workspaces.
+
 Date: 2026-07-15
 Branch: `feat/platform-consolidation-foundations`
 Baseline: local `main` was clean at `c394c7f` before this branch was created.
