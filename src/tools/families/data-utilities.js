@@ -104,6 +104,102 @@ async function sidekick_extract({ path: filePath, fields }) {
   return { content: [{ type: "text", text: redactSensitive(JSON.stringify(result, null, 2)) }] };
 }
 
+async function sidekick_transform({ action, input, pattern, format, field, key, value }) {
+  if (!input && input !== "") return { content: [{ type: "text", text: "input required" }], isError: true };
+  let data;
+  try { data = JSON.parse(input); } catch { data = input; }
+
+  if (action === "filter") {
+    if (!pattern) return { content: [{ type: "text", text: "pattern required for filter" }], isError: true };
+    const regex = new RegExp(pattern);
+    if (typeof data === "string") return { content: [{ type: "text", text: data.split("\n").filter(line => regex.test(line)).join("\n") }] };
+    if (Array.isArray(data)) {
+      const filtered = data.filter(item => typeof item === "string" ? regex.test(item) : regex.test(typeof item === "object" ? JSON.stringify(item) : String(item)));
+      return { content: [{ type: "text", text: JSON.stringify(filtered, null, 2) }] };
+    }
+    return { content: [{ type: "text", text: "filter works on strings or arrays" }], isError: true };
+  }
+
+  if (action === "extract") {
+    if (!field) return { content: [{ type: "text", text: "field required for extract" }], isError: true };
+    if (typeof data !== "object" || data === null) return { content: [{ type: "text", text: "extract requires JSON input" }], isError: true };
+    let result = data;
+    for (const f of field.split(".")) {
+      if (result === undefined || result === null) break;
+      if (Array.isArray(result) && f === "[]") continue;
+      if (f === "__proto__" || f === "prototype" || f === "constructor" || !Object.prototype.hasOwnProperty.call(Object(result), f)) {
+        result = undefined;
+        break;
+      }
+      result = result[f];
+    }
+    return { content: [{ type: "text", text: typeof result === "string" ? result : JSON.stringify(result, null, 2) }] };
+  }
+
+  if (action === "sort") {
+    if (!Array.isArray(data)) return { content: [{ type: "text", text: "sort requires array input" }], isError: true };
+    const sorted = [...data].sort((a, b) => {
+      if (typeof a === "string" && typeof b === "string") return a.localeCompare(b);
+      if (typeof a === "number" && typeof b === "number") return a - b;
+      if (typeof a === "object" && typeof b === "object" && key) {
+        const aVal = a[key];
+        const bVal = b[key];
+        if (typeof aVal === "number" && typeof bVal === "number") return aVal - bVal;
+        return String(aVal).localeCompare(String(bVal));
+      }
+      return String(a).localeCompare(String(b));
+    });
+    return { content: [{ type: "text", text: JSON.stringify(sorted, null, 2) }] };
+  }
+
+  if (action === "format") {
+    if (!format) return { content: [{ type: "text", text: "format required" }], isError: true };
+    if (format === "json") {
+      if (typeof data === "string") {
+        try { return { content: [{ type: "text", text: JSON.stringify(JSON.parse(data), null, 2) }] }; }
+        catch { return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] }; }
+      }
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+    if (format === "csv") {
+      if (!Array.isArray(data)) return { content: [{ type: "text", text: "csv format requires array input" }], isError: true };
+      if (data.length === 0) return { content: [{ type: "text", text: "" }] };
+      const first = data[0];
+      if (typeof first !== "object" || first === null) return { content: [{ type: "text", text: data.join("\n") }] };
+      const headers = Object.keys(first);
+      const rows = data.map(item => headers.map(h => {
+        const val = item[h];
+        const str = val === null || val === undefined ? "" : String(val);
+        return str.includes(",") || str.includes('"') ? `"${str.replace(/"/g, '""')}"` : str;
+      }).join(","));
+      return { content: [{ type: "text", text: [headers.join(","), ...rows].join("\n") }] };
+    }
+    if (format === "table") {
+      if (!Array.isArray(data)) return { content: [{ type: "text", text: "table format requires array input" }], isError: true };
+      if (data.length === 0) return { content: [{ type: "text", text: "" }] };
+      const first = data[0];
+      if (typeof first !== "object" || first === null) return { content: [{ type: "text", text: data.join("\n") }] };
+      const headers = Object.keys(first);
+      const widths = headers.map(h => Math.max(h.length, ...data.map(row => String(row[h] || "").length)));
+      const headerRow = headers.map((h, i) => h.padEnd(widths[i])).join(" | ");
+      const separator = widths.map(w => "-".repeat(w)).join("-+-");
+      const dataRows = data.map(row => headers.map((h, i) => String(row[h] || "").padEnd(widths[i])).join(" | "));
+      return { content: [{ type: "text", text: [headerRow, separator, ...dataRows].join("\n") }] };
+    }
+    if (format === "text") return { content: [{ type: "text", text: typeof data === "string" ? data : Array.isArray(data) ? data.join("\n") : JSON.stringify(data) }] };
+    return { content: [{ type: "text", text: "Unknown format. Use: json, csv, table, text" }], isError: true };
+  }
+
+  if (action === "map") {
+    if (!key || !value) return { content: [{ type: "text", text: "key and value required for map" }], isError: true };
+    if (!Array.isArray(data)) return { content: [{ type: "text", text: "map requires array input" }], isError: true };
+    const mapped = data.map(item => typeof item === "object" && item !== null ? { ...item, [key]: value } : { [key]: value, original: item });
+    return { content: [{ type: "text", text: JSON.stringify(mapped, null, 2) }] };
+  }
+
+  return { content: [{ type: "text", text: "Unknown action. Use: filter, extract, sort, format, map" }], isError: true };
+}
+
 // --- Diff Tool ---
 
 function diffText(oldText, newText) {
@@ -342,6 +438,25 @@ const descriptors = Object.freeze([
     handler: sidekick_extract,
   }),
   Object.freeze({
+    name: "transform",
+    description: "Data manipulation pipeline: filter, extract, sort, format, and map data",
+    schema: z.object({
+      action: z.enum(["filter", "extract", "sort", "format", "map"]),
+      input: z.string().describe("Input data (text or JSON string)"),
+      pattern: z.string().optional().describe("Regex pattern for filter action"),
+      field: z.string().optional().describe("Field path for extract action"),
+      key: z.string().optional().describe("Key for sort or map action"),
+      value: z.string().optional().describe("Value for map action"),
+      format: z.string().optional().describe("Output format for format action: json, csv, table, text"),
+    }),
+    args: { action: "string (filter|extract|sort|format|map)", input: "string", pattern: "string (optional, for filter)", field: "string (optional, for extract)", key: "string (optional, for sort/map)", value: "string (optional, for map)", format: "string (optional, for format: json|csv|table|text)" },
+    risk: "low",
+    category: "Data Pipeline",
+    source: "builtin",
+    family: "data-utilities",
+    handler: sidekick_transform,
+  }),
+  Object.freeze({
     name: "diff",
     description: "Semantic comparison of text, JSON, or YAML with structure-aware diffing",
     schema: z.object({
@@ -391,6 +506,7 @@ module.exports = {
   descriptors,
   sidekick_parse,
   sidekick_extract,
+  sidekick_transform,
   sidekick_diff,
   sidekick_validate,
   sidekick_template,

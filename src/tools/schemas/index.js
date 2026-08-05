@@ -117,15 +117,6 @@ const TOOL_SCHEMAS = {
     trigger_phrases: z.array(z.string()).optional().describe("Trigger phrases for the procedure"),
     implementation: z.string().optional().describe("Implementation details (for generate_tool)")
   }),
-  transform: z.object({
-    action: z.enum(["filter", "extract", "sort", "format", "map"]).describe("Transform action: filter (regex match), extract (field path), sort (array sort), format (convert format), map (add field)"),
-    input: z.string().describe("Input data (text or JSON string)"),
-    pattern: z.string().optional().describe("Regex pattern for filter action"),
-    field: z.string().optional().describe("Field path for extract action (e.g. 'data.items[0].name')"),
-    key: z.string().optional().describe("Key for sort action (object key) or map action (new field name)"),
-    value: z.string().optional().describe("Value for map action (new field value)"),
-    format: z.string().optional().describe("Output format for format action: json, csv, table, text")
-  }),
   health: z.object({
     check: z.enum(["all", "services", "processes", "disk", "network", "custom"]).describe("Health check type: all (services+processes+disk+network), services, processes, disk, network, or custom commands"),
     services: z.string().optional().describe("Comma-separated service names for services check (default: sidekick-mcp,sidekick-dashboard,sidekick-agent)"),
