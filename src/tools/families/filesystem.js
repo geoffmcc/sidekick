@@ -69,6 +69,56 @@ async function sidekick_search({ pattern, path: searchPath, include }) {
   }
 }
 
+async function sidekick_summarize({ path: filePath, max_lines, strategy, pattern }) {
+  const maxLines = max_lines || 50;
+  const strat = strategy || "head";
+  const policyError = enforcePathPolicy(filePath, "read");
+  if (policyError) return policyError;
+  if (!fs.existsSync(filePath)) {
+    return { content: [{ type: "text", text: "File not found: " + filePath }], isError: true };
+  }
+  const stat = fs.statSync(filePath);
+  if (stat.size > 50 * 1024 * 1024) {
+    return { content: [{ type: "text", text: "File too large to summarize (>50MB): " + filePath }], isError: true };
+  }
+  const content = fs.readFileSync(filePath, "utf-8");
+  const lines = content.split("\n");
+  let summary;
+  if (strat === "head") {
+    summary = lines.slice(0, maxLines).join("\n");
+  } else if (strat === "tail") {
+    summary = lines.slice(-maxLines).join("\n");
+  } else if (strat === "grep") {
+    if (!pattern) return { content: [{ type: "text", text: "pattern required for grep strategy" }], isError: true };
+    const re = new RegExp(pattern, "i");
+    const matched = [];
+    for (let i = 0; i < lines.length && matched.length < maxLines; i++) {
+      if (re.test(lines[i])) {
+        const start = Math.max(0, i - 1);
+        const end = Math.min(lines.length, i + 2);
+        for (let j = start; j < end; j++) {
+          if (!matched.includes(lines[j])) matched.push(lines[j]);
+        }
+      }
+    }
+    summary = matched.join("\n");
+  } else if (strat === "stats") {
+    const nonEmpty = lines.filter(l => l.trim().length > 0);
+    summary = [
+      "File: " + filePath,
+      "Size: " + stat.size + " bytes",
+      "Total lines: " + lines.length,
+      "Non-empty lines: " + nonEmpty.length,
+      "First line: " + (lines[0] || "(empty)"),
+      "Last line: " + (lines[lines.length - 1] || "(empty)")
+    ].join("\n");
+  } else {
+    return { content: [{ type: "text", text: "Invalid strategy. Use: head, tail, grep, stats" }], isError: true };
+  }
+  const header = "[Summary: " + lines.length + " lines, strategy=" + strat + (strat === "grep" ? ", pattern=" + pattern : "") + "]\n";
+  return { content: [{ type: "text", text: redactSensitive(header + summary) }] };
+}
+
 const descriptors = Object.freeze([
   Object.freeze({
     name: "read",
@@ -107,6 +157,22 @@ const descriptors = Object.freeze([
     family: "filesystem",
     handler: sidekick_search,
   }),
+  Object.freeze({
+    name: "summarize",
+    description: "Summarize large files before returning to reduce token usage. Strategies: head, tail, grep, stats.",
+    schema: z.object({
+      path: z.string().describe("File path to summarize"),
+      max_lines: z.number().optional().describe("Maximum lines to return (default: 50)"),
+      strategy: z.enum(["head", "tail", "grep", "stats"]).optional().describe("Summarization strategy (default: head)"),
+      pattern: z.string().optional().describe("Regex pattern for grep strategy"),
+    }),
+    args: { path: "string (file path)", max_lines: "number (optional, default 50)", strategy: "string (optional, head|tail|grep|stats - default head)", pattern: "string (optional, regex for grep strategy)" },
+    risk: "low",
+    category: "Efficiency",
+    source: "builtin",
+    family: "filesystem",
+    handler: sidekick_summarize,
+  }),
 ]);
 
-module.exports = { descriptors, sidekick_read, sidekick_list, sidekick_search };
+module.exports = { descriptors, sidekick_read, sidekick_list, sidekick_search, sidekick_summarize };

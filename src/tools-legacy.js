@@ -6484,56 +6484,6 @@ async function sidekick_batch({ calls }) {
   return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
 }
 
-async function sidekick_summarize({ path: filePath, max_lines, strategy, pattern }) {
-  const maxLines = max_lines || 50;
-  const strat = strategy || "head";
-  const policyError = enforcePathPolicy(filePath, "read");
-  if (policyError) return policyError;
-  if (!fs.existsSync(filePath)) {
-    return { content: [{ type: "text", text: "File not found: " + filePath }], isError: true };
-  }
-  const stat = fs.statSync(filePath);
-  if (stat.size > 50 * 1024 * 1024) {
-    return { content: [{ type: "text", text: "File too large to summarize (>50MB): " + filePath }], isError: true };
-  }
-  const content = fs.readFileSync(filePath, "utf-8");
-  const lines = content.split("\n");
-  let summary;
-  if (strat === "head") {
-    summary = lines.slice(0, maxLines).join("\n");
-  } else if (strat === "tail") {
-    summary = lines.slice(-maxLines).join("\n");
-  } else if (strat === "grep") {
-    if (!pattern) return { content: [{ type: "text", text: "pattern required for grep strategy" }], isError: true };
-    const re = new RegExp(pattern, "i");
-    const matched = [];
-    for (let i = 0; i < lines.length && matched.length < maxLines; i++) {
-      if (re.test(lines[i])) {
-        const start = Math.max(0, i - 1);
-        const end = Math.min(lines.length, i + 2);
-        for (let j = start; j < end; j++) {
-          if (!matched.includes(lines[j])) matched.push(lines[j]);
-        }
-      }
-    }
-    summary = matched.join("\n");
-  } else if (strat === "stats") {
-    const nonEmpty = lines.filter(l => l.trim().length > 0);
-    summary = [
-      "File: " + filePath,
-      "Size: " + stat.size + " bytes",
-      "Total lines: " + lines.length,
-      "Non-empty lines: " + nonEmpty.length,
-      "First line: " + (lines[0] || "(empty)"),
-      "Last line: " + (lines[lines.length - 1] || "(empty)")
-    ].join("\n");
-  } else {
-    return { content: [{ type: "text", text: "Invalid strategy. Use: head, tail, grep, stats" }], isError: true };
-  }
-  const header = "[Summary: " + lines.length + " lines, strategy=" + strat + (strat === "grep" ? ", pattern=" + pattern : "") + "]\n";
-  return { content: [{ type: "text", text: redactSensitive(header + summary) }] };
-}
-
 async function sidekick_filter({ path: targetPath, pattern, after, before, max_results }) {
   const maxResults = max_results || 50;
   const policyError = enforcePathPolicy(targetPath, "read");
@@ -11066,7 +11016,6 @@ const TOOLS = {
   debug_tool: sidekick_debug_tool,
   fresheyes: sidekick_fresheyes,
   batch: sidekick_batch,
-  summarize: sidekick_summarize,
   filter: sidekick_filter,
   project: sidekick_project,
   tail: sidekick_tail,
