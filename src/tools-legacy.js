@@ -1638,35 +1638,6 @@ async function sidekick_write({ path: filePath, content }) {
   return { content: [{ type: "text", text: "Written " + stat.size + " bytes to " + filePath }] };
 }
 
-async function sidekick_store({ key, value, project, category }) {
-  if (project !== undefined && project !== null && !PROJECT_RE.test(project)) {
-    return { content: [{ type: "text", text: "Invalid project name. Must match /^[a-z][a-z0-9_]*$/" }], isError: true };
-  }
-
-  const existing = dbStore.getKV(key);
-  dbStore.setKV(key, value, project !== undefined ? project : (existing?.project || null), getCurrentSource(), category !== undefined ? category : (existing?.category || null));
-
-  return { content: [{ type: "text", text: "Stored key \"" + key + "\" (" + value.length + " chars)" }] };
-}
-
-async function sidekick_get({ key }) {
-  const entry = dbStore.getKV(key);
-  if (!entry) {
-    return { content: [{ type: "text", text: "Key not found: " + key }], isError: true };
-  }
-  const value = (typeof entry === 'object' && entry !== null && 'value' in entry) ? entry.value : entry;
-  return { content: [{ type: "text", text: redactSensitive(value) }] };
-}
-
-async function sidekick_delete({ key }) {
-  const existing = dbStore.getKV(key);
-  if (!existing) {
-    return { content: [{ type: "text", text: "Key not found: " + key }], isError: true };
-  }
-  dbStore.deleteKV(key);
-  return { content: [{ type: "text", text: "Deleted key \"" + key + "\"" }] };
-}
-
 const RESUME_DOCUMENT = "resume";
 
 function loadResumeDocument() {
@@ -1775,24 +1746,6 @@ async function sidekick_resume({ action, project, summary, next_step, status, br
   }
 
   return { content: [{ type: "text", text: "Invalid action. Use: check, set, clear, list" }], isError: true };
-}
-
-async function sidekick_list_projects() {
-  const projects = dbStore.listKVProjects();
-  return { content: [{ type: "text", text: JSON.stringify(projects) }] };
-}
-
-async function sidekick_get_by_project({ project }) {
-  const allKV = dbStore.getAllKV();
-  const results = [];
-  for (const [key, entry] of Object.entries(allKV)) {
-    if (typeof entry === 'object' && entry !== null && 'project' in entry) {
-      if (entry.project === project) {
-        results.push({ key, value: entry.value });
-      }
-    }
-  }
-  return { content: [{ type: "text", text: JSON.stringify(results) }] };
 }
 
 async function sidekick_list({ path: dirPath }) {
@@ -11389,15 +11342,10 @@ const TOOLS = {
   tools: sidekick_tools,
   read: sidekick_read,
   write: sidekick_write,
-  store: sidekick_store,
-  get: sidekick_get,
-  delete: sidekick_delete,
   resume: sidekick_resume,
   list: sidekick_list,
   web_fetch: sidekick_web_fetch,
   llm: sidekick_llm,
-  list_projects: sidekick_list_projects,
-  get_by_project: sidekick_get_by_project,
   search: sidekick_search,
   git: sidekick_git,
   notify: sidekick_notify,
