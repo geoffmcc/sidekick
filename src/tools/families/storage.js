@@ -2,10 +2,21 @@
 
 const { z } = require("zod");
 const dbStore = require("../../db");
+const redisStore = require("../../redis");
 const { redactSensitive } = require("../../redact");
 const toolContext = require("../context");
 
 const PROJECT_RE = /^[a-z][a-z0-9_]*$/;
+const sessionCache = new Map();
+
+function parseDuration(str) {
+  if (!str) return 300000;
+  const match = str.match(/^(\d+)(s|m|h|d)$/);
+  if (!match) return 300000;
+  const val = parseInt(match[1], 10);
+  const multipliers = { s: 1000, m: 60000, h: 3600000, d: 86400000 };
+  return val * (multipliers[match[2]] || 60000);
+}
 
 function getCurrentSource() {
   return toolContext.getExecutionSource() || "unknown";
@@ -56,6 +67,116 @@ async function sidekick_get_by_project({ project }) {
     }
   }
   return { content: [{ type: "text", text: JSON.stringify(results) }] };
+}
+
+async function sidekick_cache({ action, key, ttl, value }) {
+  const now = Date.now();
+  let useRedis = false;
+  try {
+    const conn = await redisStore.testConnection();
+    useRedis = conn.connected;
+  } catch (e) {
+    useRedis = false;
+  }
+
+  if (action === "clear") {
+    if (useRedis) {
+      if (key) {
+        await redisStore.del(`cache:${key}`);
+        return { content: [{ type: "text", text: "Cleared cache: " + key + " (redis)" }] };
+      }
+      const keys = await redisStore.keys("cache:*");
+      if (keys.length > 0) await Promise.all(keys.map(k => redisStore.del(k)));
+      return { content: [{ type: "text", text: "Cleared " + keys.length + " cache entries (redis)" }] };
+    }
+    if (key) {
+      sessionCache.delete(key);
+      return { content: [{ type: "text", text: "Cleared cache: " + key }] };
+    }
+    const count = sessionCache.size;
+    sessionCache.clear();
+    return { content: [{ type: "text", text: "Cleared " + count + " cache entries" }] };
+  }
+
+  if (action === "list") {
+    if (useRedis) {
+      const keys = await redisStore.keys("cache:*");
+      const entries = [];
+      for (const k of keys) {
+        const ttlVal = await redisStore.ttl(k);
+        entries.push({ key: k.replace("cache:", ""), expires_in_seconds: ttlVal > 0 ? ttlVal : null });
+      }
+      return { content: [{ type: "text", text: JSON.stringify(entries) }] };
+    }
+    const entries = [];
+    for (const [k, v] of sessionCache) entries.push({ key: k, expires_in_ms: v.expires - now, size: v.value.length });
+    return { content: [{ type: "text", text: JSON.stringify(entries) }] };
+  }
+
+  if (action === "get") {
+    if (!key) return { content: [{ type: "text", text: "key required" }], isError: true };
+    if (useRedis) {
+      const val = await redisStore.get(`cache:${key}`);
+      if (val === null) return { content: [{ type: "text", text: "Cache miss: " + key }], isError: true };
+      return { content: [{ type: "text", text: redactSensitive(val) }] };
+    }
+    const entry = sessionCache.get(key);
+    if (!entry || entry.expires < now) {
+      if (entry) sessionCache.delete(key);
+      return { content: [{ type: "text", text: "Cache miss: " + key }], isError: true };
+    }
+    return { content: [{ type: "text", text: redactSensitive(entry.value) }] };
+  }
+
+  if (action === "set") {
+    if (!key || value === undefined) return { content: [{ type: "text", text: "key and value required" }], isError: true };
+    const duration = parseDuration(ttl);
+    const ttlSeconds = Math.ceil(duration / 1000);
+    if (useRedis) {
+      await redisStore.set(`cache:${key}`, String(value), ttlSeconds);
+      return { content: [{ type: "text", text: "Cached " + key + " (TTL: " + ttl + ", redis)" }] };
+    }
+    sessionCache.set(key, { value: String(value), expires: now + duration });
+    return { content: [{ type: "text", text: "Cached " + key + " (TTL: " + ttl + ")" }] };
+  }
+
+  return { content: [{ type: "text", text: "Invalid action. Use: get, set, clear, list" }], isError: true };
+}
+
+async function sidekick_redis({ action, key, value, ttl, pattern }) {
+  try {
+    const conn = await redisStore.testConnection();
+    if (!conn.connected) return { content: [{ type: "text", text: `Error: Redis not available (${conn.error}). Start with: sudo systemctl start sidekick-redis` }], isError: true };
+    if (action === "get") {
+      if (!key) return { content: [{ type: "text", text: "Error: key is required for get" }], isError: true };
+      const val = await redisStore.get(key);
+      return { content: [{ type: "text", text: val !== null ? val : "(nil)" }] };
+    }
+    if (action === "set") {
+      if (!key || value === undefined) return { content: [{ type: "text", text: "Error: key and value are required for set" }], isError: true };
+      const ttlSec = ttl ? parseInt(ttl) : undefined;
+      await redisStore.set(key, value, ttlSec);
+      return { content: [{ type: "text", text: `OK${ttlSec ? ` (TTL: ${ttlSec}s)` : ""}` }] };
+    }
+    if (action === "del") {
+      if (!key) return { content: [{ type: "text", text: "Error: key is required for del" }], isError: true };
+      const deleted = await redisStore.del(key);
+      return { content: [{ type: "text", text: `Deleted: ${deleted}` }] };
+    }
+    if (action === "keys") return { content: [{ type: "text", text: JSON.stringify(await redisStore.keys(pattern || "*"), null, 2) }] };
+    if (action === "ttl") {
+      if (!key) return { content: [{ type: "text", text: "Error: key is required for ttl" }], isError: true };
+      return { content: [{ type: "text", text: `${await redisStore.ttl(key)}` }] };
+    }
+    if (action === "info") return { content: [{ type: "text", text: JSON.stringify(await redisStore.info(), null, 2) }] };
+    if (action === "flush") {
+      await redisStore.flush();
+      return { content: [{ type: "text", text: "Redis database flushed" }] };
+    }
+    return { content: [{ type: "text", text: "Error: unknown action. Use: get, set, del, keys, ttl, info, flush" }], isError: true };
+  } catch (e) {
+    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
+  }
 }
 
 const descriptors = Object.freeze([
@@ -119,6 +240,39 @@ const descriptors = Object.freeze([
     family: "storage",
     handler: sidekick_get_by_project,
   }),
+  Object.freeze({
+    name: "cache",
+    description: "Session-scoped caching to avoid redundant operations. Store and retrieve values with TTL.",
+    schema: z.object({
+      action: z.enum(["get", "set", "clear", "list"]).describe("Cache action"),
+      key: z.string().optional().describe("Cache key"),
+      ttl: z.string().optional().describe("Time-to-live: 30s, 5m, 1h (default: 5m)"),
+      value: z.string().optional().describe("Value to cache (for set action)"),
+    }),
+    args: { action: "string (get|set|clear|list)", key: "string (cache key)", ttl: "string (optional, e.g. 30s, 5m, 1h - default 5m)", value: "string (value to cache, for set action)" },
+    risk: "low",
+    category: "Efficiency",
+    source: "builtin",
+    family: "storage",
+    handler: sidekick_cache,
+  }),
+  Object.freeze({
+    name: "redis",
+    description: "Redis operations: get, set, del, keys, ttl, info, flush. Requires sidekick-redis service.",
+    schema: z.object({
+      action: z.enum(["get", "set", "del", "keys", "ttl", "info", "flush"]).describe("Redis action"),
+      key: z.string().optional().describe("Redis key"),
+      value: z.string().optional().describe("Value for set action"),
+      ttl: z.string().optional().describe("TTL in seconds for set action"),
+      pattern: z.string().optional().describe("Pattern for keys action (default '*')"),
+    }),
+    args: { action: "string (get|set|del|keys|ttl|info|flush)", key: "string (optional, Redis key)", value: "string (optional, value for set)", ttl: "string (optional, TTL in seconds for set)", pattern: "string (optional, pattern for keys - default '*')" },
+    risk: "medium",
+    category: "Storage",
+    source: "builtin",
+    family: "storage",
+    handler: sidekick_redis,
+  }),
 ]);
 
-module.exports = { descriptors, sidekick_store, sidekick_get, sidekick_delete, sidekick_list_projects, sidekick_get_by_project };
+module.exports = { descriptors, sidekick_store, sidekick_get, sidekick_delete, sidekick_list_projects, sidekick_get_by_project, sidekick_cache, sidekick_redis };

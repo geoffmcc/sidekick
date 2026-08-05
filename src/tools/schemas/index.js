@@ -252,12 +252,6 @@ const TOOL_SCHEMAS = {
       args: z.record(z.any()).optional().describe("Arguments for the tool")
     })).describe("Array of tool calls to execute (max 20)")
   }),
-  cache: z.object({
-    action: z.enum(["get", "set", "clear", "list"]).describe("Cache action"),
-    key: z.string().optional().describe("Cache key"),
-    ttl: z.string().optional().describe("Time-to-live: 30s, 5m, 1h (default: 5m)"),
-    value: z.string().optional().describe("Value to cache (for set action)")
-  }),
   summarize: z.object({
     path: z.string().describe("File path to summarize"),
     max_lines: z.number().optional().describe("Maximum lines to return (default: 50)"),
@@ -462,13 +456,6 @@ const TOOL_SCHEMAS = {
     action: z.enum(["status", "list", "up"]).describe("Migration action"),
     version: z.number().optional().describe("Target version"),
     name: z.string().optional().describe("Migration filename (for up action)")
-  }),
-  redis: z.object({
-    action: z.enum(["get", "set", "del", "keys", "ttl", "info", "flush"]).describe("Redis action"),
-    key: z.string().optional().describe("Redis key"),
-    value: z.string().optional().describe("Value for set action"),
-    ttl: z.string().optional().describe("TTL in seconds for set action"),
-    pattern: z.string().optional().describe("Pattern for keys action (default '*')")
   }),
   ocr: z.object({
     path: z.string().describe("Image file path"),
