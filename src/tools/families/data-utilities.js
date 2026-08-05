@@ -5,8 +5,12 @@ const { XMLParser } = require("fast-xml-parser");
 const INI = require("ini");
 const Ajv = require("ajv");
 const Handlebars = require("handlebars");
+const fs = require("fs");
+const path = require("path");
 const { z } = require("zod");
 const { detectFormat, parseCSV } = require("../../core/format");
+const { redactSensitive } = require("../../redact");
+const { enforcePathPolicy } = require("../path-policy");
 
 const ajv = new Ajv({ allErrors: true, verbose: true });
 
@@ -45,6 +49,59 @@ async function sidekick_parse({ input, format }) {
   } catch (e) {
     return { content: [{ type: "text", text: `Parse error (${detectedFormat}): ${e.message}` }], isError: true };
   }
+}
+
+const SENSITIVE_FIELD_RE = /password|passwd|passphrase|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|encryption[_-]?key|credential|authorization/i;
+
+function redactExtractedValue(value, key = "") {
+  if (SENSITIVE_FIELD_RE.test(key)) return "[REDACTED]";
+  if (Array.isArray(value)) return value.map(item => redactExtractedValue(item));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([childKey, childValue]) => [childKey, redactExtractedValue(childValue, childKey)]));
+  }
+  return value;
+}
+
+async function sidekick_extract({ path: filePath, fields }) {
+  if (!filePath) return { content: [{ type: "text", text: "path required" }], isError: true };
+  const policyError = enforcePathPolicy(filePath, "read");
+  if (policyError) return policyError;
+  if (!fs.existsSync(filePath)) {
+    return { content: [{ type: "text", text: redactSensitive("File not found: " + filePath) }], isError: true };
+  }
+  const content = fs.readFileSync(filePath, "utf-8");
+  let data;
+  const ext = path.extname(filePath).toLowerCase();
+  try {
+    if (ext === ".json") data = JSON.parse(content);
+    else if (ext === ".yaml" || ext === ".yml") data = YAML.parse(content);
+    else if (ext === ".ini" || ext === ".cfg") data = INI.parse(content);
+    else if (ext === ".xml") data = new XMLParser().parse(content);
+    else data = JSON.parse(content);
+  } catch (e) {
+    return { content: [{ type: "text", text: redactSensitive("Parse error: " + e.message) }], isError: true };
+  }
+  if (!fields) return { content: [{ type: "text", text: redactSensitive(JSON.stringify(redactExtractedValue(data), null, 2)) }] };
+  const fieldList = Array.isArray(fields) ? fields : fields.split(",").map(f => f.trim());
+  const result = {};
+  for (const fieldPath of fieldList) {
+    const parts = fieldPath.replace(/\[(\d+)\]/g, ".$1").split(".");
+    let val = data;
+    for (const part of parts) {
+      if (part === "__proto__" || part === "prototype" || part === "constructor" || val === null || val === undefined || !Object.prototype.hasOwnProperty.call(Object(val), part)) {
+        val = undefined;
+        break;
+      }
+      val = val[part];
+    }
+    Object.defineProperty(result, fieldPath, {
+      value: val !== undefined ? (typeof val === "object" ? JSON.stringify(redactExtractedValue(val, fieldPath)) : (SENSITIVE_FIELD_RE.test(fieldPath) ? "[REDACTED]" : String(val))) : null,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+  }
+  return { content: [{ type: "text", text: redactSensitive(JSON.stringify(result, null, 2)) }] };
 }
 
 // --- Diff Tool ---
@@ -271,6 +328,20 @@ const descriptors = Object.freeze([
     handler: sidekick_parse,
   }),
   Object.freeze({
+    name: "extract",
+    description: "Parse JSON/YAML/INI/XML and extract specific fields by path. Returns only what you need.",
+    schema: z.object({
+      path: z.string().describe("File path (JSON, YAML, INI, or XML)"),
+      fields: z.union([z.string(), z.array(z.string())]).optional().describe("Field paths to extract (e.g. 'database.host,database.port')"),
+    }),
+    args: { path: "string (file path)", fields: "string|array (optional, field paths to extract e.g. 'database.host,database.port')" },
+    risk: "medium",
+    category: "Data Pipeline",
+    source: "builtin",
+    family: "data-utilities",
+    handler: sidekick_extract,
+  }),
+  Object.freeze({
     name: "diff",
     description: "Semantic comparison of text, JSON, or YAML with structure-aware diffing",
     schema: z.object({
@@ -319,6 +390,7 @@ const descriptors = Object.freeze([
 module.exports = {
   descriptors,
   sidekick_parse,
+  sidekick_extract,
   sidekick_diff,
   sidekick_validate,
   sidekick_template,
