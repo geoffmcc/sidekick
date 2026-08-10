@@ -38,7 +38,7 @@ Material commits: `1b93eece` (kernel), `7cb084f7`/`a7aa6fa9` (execution adapters
 | Policy/approvals | IMPLEMENTED BUT PARTIAL | `tools/policy.js`, `approvals/*`, legacy adapters | JSON approval doc plus tables; approval tests | Task continuation is durable; standalone approvals remain a parallel path. |
 | Identity/capabilities | IMPLEMENTED BUT PARTIAL | dispatcher contexts, `platformGuard` | `platform_capabilities`, change sets; capability tests | Actor/source/project/expiry grants work; no users, teams, memberships or full RBAC. |
 | Projects | MISSING canonical entity | String `project`/`project_id` across services | KV, memory, jobs, executions | Scope fields work but there is no project lifecycle/ownership table. Add a projection, not a competing store. |
-| Workspaces | IMPLEMENTED BUT PARTIAL | kernel workspace CRUD | `platform_project_workspaces`; workspace tests | Active workspace/config/limits work; `secrets_json` is not encrypted at kernel boundary. |
+| Workspaces | IMPLEMENTED WITH ENCRYPTED SECRETS | kernel workspace CRUD + secret store | `platform_project_workspaces`; `platform_workspace_secrets`; workspace/project-identity tests | Active workspace/config/limits work; `secrets_json` retained for legacy rows; new encrypted secrets stored per-secret as ciphertext envelopes (see `docs/workspace-secret-references.md`). |
 | Sessions/handoffs | IMPLEMENTED BUT PARTIAL | memory families, Agent lineage, MCP sessions | `memory_task_sessions`, `memory_handoffs`, resume/context, transcripts | Durable pieces work but identities are distributed. Keep session, handoff and memory distinct. |
 | Memory | AUTHORITATIVE AND IN USE | `src/memory.js`, memory families, dashboard | `memories`, `memory_*`, context; memory tests | Structured redacted memory is primary; context/KV/resume remain compatibility stores. |
 | Executions | IMPLEMENTED BUT PARTIAL | kernel plus Agent, Black Box, generated, scheduler, approval adapters | `platform_executions`, transitions; kernel/control tests | Parent/root/correlation and transitions work; Compute jobs remain parallel. |
@@ -100,6 +100,6 @@ Authoritative: dispatcher, family descriptors, Compute placement/job contracts, 
 2. Make platform executions the common Compute adapter without copying Compute job state.
 3. Make `memory_handoffs` canonical with `resume` as index, or define a durable peer relationship.
 4. Define event delivery guarantees before naming the ledger an event bus.
-5. Move workspace secrets to encrypted references without breaking existing deployments.
+5. ~~Move workspace secrets to encrypted references without breaking existing deployments.~~ **RESOLVED** — implemented in migration `027` as an additive `platform_workspace_secrets` child table storing per-secret ciphertext envelopes (AES-256-GCM via `src/core/secret-cipher.js`); legacy `secrets_json` retained. See `docs/workspace-secret-references.md`. Backfill of legacy plaintext remains a follow-up.
 6. Define the minimum user/team/membership model for meaningful capability grants.
 7. Use the extracted data-utilities family as the first module proof, not security research or extension CRUD alone. The security-research roadmap must target the currently working `security-research` surface; the unavailable Workbench is optional future integration, not a prerequisite.

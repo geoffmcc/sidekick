@@ -10,7 +10,7 @@ const MIGRATION_DB = path.join(TEST_DATA_DIR, 'migrations.sqlite');
 const RUNTIME_DB = path.join(TEST_DATA_DIR, 'runtime.sqlite');
 
 function normalizeSql(sql) {
-  return sql.replace(/\s+/g, ' ').trim();
+  return sql.replace(/\s+/g, ' ').replace(/\s*([,()])\s*/g, '$1').trim();
 }
 
 function capturePlatformSchema(db) {
@@ -32,18 +32,22 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
     const migrationStore = require('../src/db');
     const migrationResult = migrationStore.runPendingMigrations();
     const migrationApplied = migrationResult.applied;
-    assert.ok(migrationApplied >= 25, `Migrations 002-026 should apply, got ${migrationApplied}`);
+    assert.ok(migrationApplied >= 26, `Migrations 002-027 should apply, got ${migrationApplied}`);
     assert.ok(
       migrationResult.migrations.some(m => m.file === '026_platform_kernel_tables.sql'),
       'Migration 026 should be applied'
+    );
+    assert.ok(
+      migrationResult.migrations.some(m => m.file === '027_platform_project_projection.sql'),
+      'Migration 027 should be applied'
     );
     const migratedSchema = capturePlatformSchema(migrationStore.getDb());
 
     console.log(`Test KMP.1: migrations-only boot applies ${migrationApplied} migrations`);
     assert.strictEqual(
       migrationStore.getDb().prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
-      String(26),
-      'schema_version should be 26'
+      String(27),
+      'schema_version should be 27'
     );
     console.log('Passed\n');
 
@@ -67,13 +71,13 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
       runtimeSchema.length,
       'Platform object counts must match'
     );
-    const expectedTables = 14;
-    const expectedIndexes = 35;
+    const expectedTables = 17;
+    const expectedIndexes = 38;
     const migratedTables = migratedSchema.filter(o => o.type === 'table').length;
     const migratedIndexes = migratedSchema.filter(o => o.type === 'index' && o.sql).length;
     const migratedAutoindexes = migratedSchema.filter(o => o.type === 'index' && !o.sql).length;
-    assert.strictEqual(migratedTables, expectedTables, 'Expected 14 platform tables');
-    assert.strictEqual(migratedIndexes, expectedIndexes, 'Expected 35 platform indexes');
+    assert.strictEqual(migratedTables, expectedTables, 'Expected 17 platform tables');
+    assert.strictEqual(migratedIndexes, expectedIndexes, 'Expected 38 platform indexes');
     assert.strictEqual(migratedAutoindexes, expectedTables - 1, 'Each TEXT PRIMARY KEY creates one autoindex');
     for (let i = 0; i < migratedSchema.length; i++) {
       const a = migratedSchema[i];
@@ -91,11 +95,11 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
     assert.match(runtimeExecutions.sql, /FOREIGN KEY\(parent_execution_id\)/);
     assert.strictEqual(
       migrationStore.getDb().prepare("SELECT value FROM meta WHERE key = 'platform_kernel_schema_version'").get().value,
-      '1'
+      '2'
     );
     assert.strictEqual(
       runtimeStore.getDb().prepare("SELECT value FROM meta WHERE key = 'platform_kernel_schema_version'").get().value,
-      '1'
+      '2'
     );
     console.log('Passed\n');
 
@@ -106,6 +110,10 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
     assert.ok(KERNEL_SCHEMA_SQL.includes('idx_platform_executions_parent'));
     assert.ok(KERNEL_SCHEMA_SQL.includes('idx_platform_events_correlation'));
     assert.ok(KERNEL_SCHEMA_SQL.includes('FOREIGN KEY(parent_execution_id) REFERENCES platform_executions(execution_id)'));
+    assert.ok(KERNEL_SCHEMA_SQL.includes('CREATE TABLE IF NOT EXISTS platform_projects'));
+    assert.ok(KERNEL_SCHEMA_SQL.includes('CREATE TABLE IF NOT EXISTS platform_project_sources'));
+    assert.ok(KERNEL_SCHEMA_SQL.includes('idx_platform_project_sources_source'));
+    assert.ok(KERNEL_SCHEMA_SQL.includes('CREATE TABLE IF NOT EXISTS platform_workspace_secrets'));
     console.log('Passed\n');
 
     console.log('All Platform Kernel Migration Parity tests passed.');
