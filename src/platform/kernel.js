@@ -915,6 +915,78 @@ function listWorkspaceSecretNames(workspaceId) {
   return getWorkspaceSecretNames(workspaceId);
 }
 
+function backfillWorkspaceSecrets(details = {}) {
+  ensurePlatformKernelSchema();
+  if (!hasSecretKey()) throw new Error("SIDEKICK_SECRET_KEY not set in .env");
+  const db = dbStore.getDb();
+  const rows = db.prepare("SELECT workspace_id, secrets_json FROM platform_project_workspaces WHERE secrets_json IS NOT NULL AND secrets_json NOT IN ('', '{}', 'null')").all();
+  // Envelopes are written before the plaintext is cleared, and existing
+  // envelopes win (DO NOTHING), so an interrupted run never loses a secret and
+  // a re-run only cleans up whatever plaintext is still left. Plaintext is
+  // retained whenever it is the last recoverable copy of anything: an entry
+  // whose name the secret API cannot address, or an existing envelope that no
+  // longer decrypts under the current key.
+  const insert = db.prepare("INSERT INTO platform_workspace_secrets (workspace_id, secret_name, envelope_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(workspace_id, secret_name) DO NOTHING");
+  const selectEnvelope = db.prepare("SELECT envelope_json FROM platform_workspace_secrets WHERE workspace_id = ? AND secret_name = ?");
+  // The clear re-checks the scanned value so a plaintext write that lands
+  // between scan and clear survives for the next run instead of being wiped.
+  const clear = db.prepare("UPDATE platform_project_workspaces SET secrets_json = '{}', updated_at = ? WHERE workspace_id = ? AND secrets_json = ?");
+  let migrated = 0;
+  let skippedExisting = 0;
+  let skippedNull = 0;
+  let workspacesMigrated = 0;
+  const unreadable = [];
+  const retained = [];
+  for (const row of rows) {
+    let secrets;
+    try {
+      secrets = JSON.parse(row.secrets_json);
+    } catch {
+      secrets = null;
+    }
+    if (!secrets || typeof secrets !== "object" || Array.isArray(secrets)) {
+      unreadable.push(row.workspace_id);
+      continue;
+    }
+    const ts = nowIso();
+    let retain = false;
+    for (const [name, value] of Object.entries(secrets)) {
+      if (value == null) {
+        skippedNull++;
+        continue;
+      }
+      if (!name) {
+        retain = true;
+        continue;
+      }
+      const plaintext = typeof value === "string" ? value : JSON.stringify(value);
+      const result = insert.run(row.workspace_id, name, encryptColumn(plaintext), ts, ts);
+      if (result.changes > 0) {
+        migrated++;
+        continue;
+      }
+      skippedExisting++;
+      try {
+        decryptColumn(selectEnvelope.get(row.workspace_id, name).envelope_json);
+      } catch {
+        retain = true;
+      }
+    }
+    if (retain) {
+      retained.push(row.workspace_id);
+      continue;
+    }
+    const cleared = clear.run(ts, row.workspace_id, row.secrets_json);
+    if (cleared.changes === 0) {
+      retained.push(row.workspace_id);
+      continue;
+    }
+    workspacesMigrated++;
+  }
+  appendEvent({ event_type: "workspace.secrets_backfilled", source: details.source || "platform", actor_id: details.actor_id || null, subject_type: "workspace", subject_id: "*", payload: { workspaces_migrated: workspacesMigrated, secrets_migrated: migrated, secrets_skipped_existing: skippedExisting, secrets_skipped_null: skippedNull, workspaces_unreadable: unreadable.length, workspaces_retained: retained.length }, correlation_id: details.correlation_id || null });
+  return { workspaces_scanned: rows.length, workspaces_migrated: workspacesMigrated, secrets_migrated: migrated, secrets_skipped_existing: skippedExisting, secrets_skipped_null: skippedNull, workspaces_unreadable: unreadable, workspaces_retained: retained };
+}
+
 function registerModel(input = {}) {
   ensurePlatformKernelSchema();
   const ts = nowIso();
@@ -1204,6 +1276,7 @@ module.exports = {
   getWorkspaceSecret,
   deleteWorkspaceSecret,
   listWorkspaceSecretNames,
+  backfillWorkspaceSecrets,
   registerModel,
   getModel,
   getModelByName,
