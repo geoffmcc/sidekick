@@ -2228,6 +2228,29 @@ async function sidekick_cron({ action, name, schedule, command, id }) {
     if (!job) {
       return { content: [{ type: "text", text: "Job not found" }], isError: true };
     }
+    // Fenced claim (Phase 4/B): sidekick-initiated runs of the same job are
+    // serialized on the job's definition execution; crontab-fired commands
+    // bypass sidekick entirely and cannot carry the contract. A cancel
+    // request disables the job, which also removes its crontab entry.
+    let cronClaim = null;
+    if (job.platform_execution_id) {
+      const cronClaimRes = claimScheduledDefinition(job, `cron-run:${process.pid}`, "cron");
+      if (!cronClaimRes.ok) {
+        const detail = cronClaimRes.code === "claim_held" ? `already running (${cronClaimRes.claimed_by})` : `cannot run: execution ${cronClaimRes.code}`;
+        return { content: [{ type: "text", text: `Cron job ${job.id} ${detail}` }], isError: true };
+      }
+      cronClaim = cronClaimRes.claim;
+      if (cronClaim.cancel_requested) {
+        job.enabled = false;
+        transitionScheduledPlatformExecution("cron", job, "blocked", { reason: "cron job disabled by cancel request", result_status: "disabled" });
+        appendScheduledPlatformEvent("cron", job, "schedule.cron.disabled", { cancel_requested: true });
+        saveCronJobs(jobs);
+        syncCrontab(jobs);
+        releaseScheduledClaim(job.platform_execution_id, cronClaim);
+        return { content: [{ type: "text", text: `Cron job ${job.id} disabled: cancel requested on its execution` }] };
+      }
+    }
+    const cronRenewTimer = startScheduledLeaseRenewal(job.platform_execution_id, cronClaim);
     const execution = createScheduledPlatformExecution("cron", job, {
       attach: false,
       operationType: "cron_run",
@@ -2249,6 +2272,8 @@ async function sidekick_cron({ action, name, schedule, command, id }) {
         result_summary: stdout || "(empty output)",
         correlation_id: job.id,
       });
+      if (cronRenewTimer) clearInterval(cronRenewTimer);
+      releaseScheduledClaim(job.platform_execution_id, cronClaim);
       return { content: [{ type: "text", text: redactSensitive(stdout || "(empty output)") }] };
     } catch (e) {
       job.lastRun = new Date().toISOString();
@@ -2263,6 +2288,8 @@ async function sidekick_cron({ action, name, schedule, command, id }) {
         result_summary: e.stderr || e.stdout || e.message,
         correlation_id: job.id,
       });
+      if (cronRenewTimer) clearInterval(cronRenewTimer);
+      releaseScheduledClaim(job.platform_execution_id, cronClaim);
       return { content: [{ type: "text", text: redactSensitive("Error: " + (e.stderr || e.stdout || e.message)) }], isError: true };
     }
   }
@@ -4096,21 +4123,20 @@ function recoverStrandedDelays(details = {}) {
   return { requeued };
 }
 
-// Phase 4/B watch adapter: watch checks are serialized per watch by claiming
-// the watch's long-lived definition execution for the duration of the check —
-// the agent interval and an MCP-side `watch check` cannot both dispatch the
-// action for the same tick. A crash mid-check leaves an expired lease that the
-// recovery scan flips to `orphaned`; the next check re-queues it before
-// claiming.
-function claimWatchForCheck(watch, claimedBy) {
-  if (!watch.platform_execution_id) return { ok: true, claim: null };
+// Phase 4/B: scheduled work is serialized per item by claiming the item's
+// long-lived definition execution for the duration of a dispatch (watch
+// check, cron run) — two runners cannot both dispatch the same item. A crash
+// mid-dispatch leaves an expired lease that the recovery scan flips to
+// `orphaned`; the next dispatch re-queues it before claiming.
+function claimScheduledDefinition(item, claimedBy, source) {
+  if (!item.platform_execution_id) return { ok: true, claim: null };
   try {
-    const exec = platformKernel.getExecution(watch.platform_execution_id);
+    const exec = platformKernel.getExecution(item.platform_execution_id);
     if (exec && exec.state === "orphaned") {
-      platformKernel.transitionExecution(watch.platform_execution_id, "queued", { source: "watch", reason: "watch definition re-queued after orphan recovery", correlation_id: watch.id });
+      platformKernel.transitionExecution(item.platform_execution_id, "queued", { source, reason: `${source} definition re-queued after orphan recovery`, correlation_id: item.id });
     }
   } catch (e) {}
-  return platformKernel.claimExecution({ execution_id: watch.platform_execution_id, claimed_by: claimedBy });
+  return platformKernel.claimExecution({ execution_id: item.platform_execution_id, claimed_by: claimedBy });
 }
 
 // A cancel request on the definition execution permanently stops the watch:
@@ -4904,7 +4930,7 @@ async function sidekick_watch({ action, id, name, source, target, condition, int
       return { content: [{ type: "text", text: `Watch not found: ${id}` }], isError: true };
     }
 
-    const checkClaim = claimWatchForCheck(watch, `watch-check:${process.pid}`);
+    const checkClaim = claimScheduledDefinition(watch, `watch-check:${process.pid}`, "watch");
     if (!checkClaim.ok) {
       const detail = checkClaim.code === "claim_held" ? `check already in progress (${checkClaim.claimed_by})` : `cannot check: execution ${checkClaim.code}`;
       return { content: [{ type: "text", text: `Watch ${id} ${detail}` }], isError: true };
@@ -8620,6 +8646,11 @@ const MAX_RUNBOOKS = 20;
 const MAX_ACTIVE_INSTANCES = 5;
 const MAX_STEPS_PER_RUNBOOK = 20;
 const STEP_TIMEOUT_MS = 60000;
+// Claim lease sized for the worst-case autonomous run (20 steps x step +
+// verify + rollback timeouts ~= 27 min) instead of using a renewal timer — no
+// timer means no path to a perpetually-renewed leak.
+const RUNBOOK_CLAIM_LEASE_MS = 3600000;
+const RUNBOOK_ABANDON_AGE_MS = 30 * 60 * 1000;
 
 function loadRunbooks() {
   try {
@@ -8628,6 +8659,47 @@ function loadRunbooks() {
     }
   } catch {}
   return { definitions: {}, instances: {} };
+}
+
+// Phase 4/B restart recovery: an instance stranded `running` by a crash used
+// to hold one of the MAX_ACTIVE_INSTANCES capacity slots forever. An instance
+// is abandoned when no live claim exists AND its execution is orphaned or has
+// sat in `running` past the worst-case runtime. Guided instances parked
+// between steps (execution `waiting`) are never touched, and instances whose
+// execution already reached a terminal state have their file status synced.
+function recoverStrandedRunbooks(details = {}) {
+  try {
+    platformKernel.recoverOrphanedExecutions({ source: details.source || "runbook", actor_id: details.actor || null });
+  } catch (e) {}
+  const data = loadRunbooks();
+  const recovered = [];
+  const nowMs = Date.now();
+  for (const instance of Object.values(data.instances)) {
+    if (instance.status !== "running" || !instance.platform_execution_id) continue;
+    try {
+      const claim = platformKernel.getExecutionClaim(instance.platform_execution_id);
+      if (claim && claim.claimed_by && claim.lease_expires_at && claim.lease_expires_at > new Date().toISOString()) continue;
+      const exec = platformKernel.getExecution(instance.platform_execution_id);
+      if (!exec || exec.state === "waiting") continue;
+      if (platformKernel.TERMINAL_STATES.has(exec.state)) {
+        instance.status = exec.state === "completed" ? "completed" : "failed";
+        recovered.push(instance.id);
+        continue;
+      }
+      const isOrphaned = exec.state === "orphaned";
+      const isStaleRunning = exec.state === "running" && nowMs - (instance.started || 0) > RUNBOOK_ABANDON_AGE_MS;
+      if (!isOrphaned && !isStaleRunning) continue;
+      if (isOrphaned) {
+        platformKernel.transitionExecution(instance.platform_execution_id, "running", { source: details.source || "runbook", actor_id: details.actor || null, reason: "recovering orphaned runbook instance", correlation_id: instance.id });
+      }
+      platformKernel.transitionExecution(instance.platform_execution_id, "failed", { source: details.source || "runbook", actor_id: details.actor || null, reason: "runbook instance abandoned after runner crash", result_status: "failure", error_category: "timeout", result_summary: `Runbook instance ${instance.id} abandoned at step ${instance.currentStep}`, correlation_id: instance.id });
+      instance.status = "failed";
+      instance.abandoned = true;
+      recovered.push(instance.id);
+    } catch (e) {}
+  }
+  if (recovered.length > 0) saveRunbooks(data);
+  return { recovered: recovered.length, instances: recovered };
 }
 
 function saveRunbooks(data) {
@@ -8754,6 +8826,22 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
     });
     saveRunbooks(data);
 
+    // Liveness claim (Phase 4/B): the lease marks this instance as actively
+    // running so recoverStrandedRunbooks can tell a live run from one
+    // abandoned by a crash. The lease is sized for the worst-case autonomous
+    // run instead of using a renewal timer — no timer means no path to a
+    // perpetually-renewed leak; a crash self-heals at lease expiry.
+    const startedInstance = data.instances[instanceId];
+    const startClaimRes = startedInstance.platform_execution_id ? platformKernel.claimExecution({ execution_id: startedInstance.platform_execution_id, claimed_by: `runbook-run:${process.pid}`, lease_ms: RUNBOOK_CLAIM_LEASE_MS }) : { ok: true, claim: null };
+    const startClaim = startClaimRes.ok ? startClaimRes.claim : null;
+    if (startClaim && startClaim.cancel_requested) {
+      startedInstance.status = "cancelled";
+      transitionScheduledPlatformExecution("runbook", startedInstance, "cancelled", { reason: "cancel requested before first step", result_status: "cancelled" });
+      saveRunbooks(data);
+      releaseScheduledClaim(startedInstance.platform_execution_id, startClaim);
+      return { content: [{ type: "text", text: `Runbook instance ${instanceId} cancelled before dispatch` }] };
+    }
+
     if (execMode === "autonomous") {
       let output = `Starting autonomous runbook: ${rbId} (${rb.name})\n\n`;
       for (let i = 0; i < rb.steps.length; i++) {
@@ -8788,6 +8876,7 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
                 result_summary: output,
               });
               saveRunbooks(data);
+              releaseScheduledClaim(startedInstance.platform_execution_id, startClaim);
               return { content: [{ type: "text", text: output }], isError: true };
             }
           }
@@ -8812,6 +8901,7 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
             result_summary: output,
           });
           saveRunbooks(data);
+          releaseScheduledClaim(startedInstance.platform_execution_id, startClaim);
           return { content: [{ type: "text", text: output }], isError: true };
         }
       }
@@ -8822,6 +8912,7 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
         result_summary: output,
       });
       saveRunbooks(data);
+      releaseScheduledClaim(startedInstance.platform_execution_id, startClaim);
       output += `\n✓ Runbook completed successfully`;
       return { content: [{ type: "text", text: output }] };
     } else {
@@ -8863,6 +8954,7 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
         });
       }
       saveRunbooks(data);
+      releaseScheduledClaim(startedInstance.platform_execution_id, startClaim);
       return { content: [{ type: "text", text: output }] };
     }
   }
@@ -8884,6 +8976,25 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
       return { content: [{ type: "text", text: "Runbook definition not found" }], isError: true };
     }
 
+    // Fenced claim (Phase 4/B): two concurrent `next` calls cannot both run
+    // the step; a cancel request stops the instance before dispatch.
+    let nextClaim = null;
+    if (instance.platform_execution_id) {
+      const nextClaimRes = platformKernel.claimExecution({ execution_id: instance.platform_execution_id, claimed_by: `runbook-next:${process.pid}`, lease_ms: RUNBOOK_CLAIM_LEASE_MS });
+      if (!nextClaimRes.ok) {
+        const detail = nextClaimRes.code === "claim_held" ? `a step is already in progress (${nextClaimRes.claimed_by})` : `cannot continue: execution ${nextClaimRes.code}`;
+        return { content: [{ type: "text", text: `Runbook instance ${runbook_id}: ${detail}` }], isError: true };
+      }
+      nextClaim = nextClaimRes.claim;
+      if (nextClaim.cancel_requested) {
+        instance.status = "cancelled";
+        transitionScheduledPlatformExecution("runbook", instance, "cancelled", { reason: "cancel requested before next step", result_status: "cancelled" });
+        saveRunbooks(data);
+        releaseScheduledClaim(instance.platform_execution_id, nextClaim);
+        return { content: [{ type: "text", text: `Runbook instance ${runbook_id} cancelled before next step` }] };
+      }
+    }
+
     instance.currentStep++;
     transitionScheduledPlatformExecution("runbook", instance, "running", { reason: "guided runbook next step started" });
     if (instance.currentStep >= rb.steps.length) {
@@ -8894,6 +9005,7 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
         result_summary: "Runbook completed",
       });
       saveRunbooks(data);
+      releaseScheduledClaim(instance.platform_execution_id, nextClaim);
       return { content: [{ type: "text", text: `✓ Runbook completed` }] };
     }
 
@@ -8936,6 +9048,7 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
       });
     }
     saveRunbooks(data);
+    releaseScheduledClaim(instance.platform_execution_id, nextClaim);
     return { content: [{ type: "text", text: output }] };
   }
 
@@ -10564,8 +10677,9 @@ module.exports = {
   releaseScheduledClaim,
   startScheduledLeaseRenewal,
   recoverStrandedDelays,
-  claimWatchForCheck,
+  claimScheduledDefinition,
   pauseWatchForCancel,
+  recoverStrandedRunbooks,
   getToolDefsForSource,
   getToolCategoriesWithTools,
   buildPolicyInspection,

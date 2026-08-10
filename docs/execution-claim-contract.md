@@ -1,7 +1,7 @@
 # Execution Claim Contract
 
 Status: implemented (Phase 4 / Track B of the platform convergence roadmap,
-first slice)
+four slices: contract + delay, watch, runbook recovery, cron)
 Tracking: `docs/platform-roadmap.md` phase 4/B
 Depends on: `src/platform/kernel.js`, `src/platform/kernel-schema.js`,
 migration `028_platform_execution_claims.sql`
@@ -89,7 +89,7 @@ forcing one unified queue. The Brain single-runner property is untouched.
 
 - Watch checks are serialized per watch by claiming the watch's long-lived
   *definition* execution (`watch.platform_execution_id`) for the duration of
-  the check (`claimWatchForCheck`) — the agent interval and an MCP-side
+  the check (`claimScheduledDefinition`) — the agent interval and an MCP-side
   `watch check` cannot both dispatch the action for the same tick. The claim
   loser skips the tick; any other claim failure also refuses rather than
   running unfenced.
@@ -118,6 +118,41 @@ forcing one unified queue. The Brain single-runner property is untouched.
   documents table, but watches persist to `watches.json` — the count was
   always zero. It now reads through `loadWatches()`.
 
+## Third adapter: runbook
+
+- An instance `start` takes a liveness claim on the instance execution
+  (`runbook-run:${pid}`) before dispatching, sized for the worst-case
+  autonomous run (~27 min of step + verify + rollback timeouts) instead of
+  using a renewal timer — no timer means no path to a perpetually-renewed
+  claim leak, and a crash self-heals at lease expiry. A pending
+  `cancel_requested` cancels the instance before the first step.
+- Guided `next` takes the same fenced claim per step; two concurrent `next`
+  calls cannot both run the step, and a cancel request stops the instance
+  before dispatch. The claim is released after each step, so a guided
+  instance parked between steps (execution `waiting`) carries no lease.
+- On agent startup, `recoverStrandedRunbooks()` runs the kernel recovery scan
+  and abandons any instance stranded `running` by a crash: it skips instances
+  with a live lease, never touches guided instances parked in `waiting`,
+  syncs file status for instances whose execution already reached a terminal
+  state, and otherwise marks the instance `failed` + `abandoned` and drives
+  its execution to `failed` — freeing the `MAX_ACTIVE_INSTANCES` capacity
+  slot that used to be consumed forever. Recovery-only, matching the bounded
+  Phase 4/B slice: full cancellability of an in-flight autonomous run still
+  needs the `execSync` loop restructured.
+
+## Fourth adapter: cron
+
+- Only sidekick-initiated runs can carry the contract: an MCP-side `cron run`
+  claims the job's long-lived definition execution for the duration of the
+  run (`claimScheduledDefinition`), renewing the lease every 60 s and
+  releasing it fenced on completion. Crontab-fired commands bypass sidekick
+  entirely and cannot be serialized.
+- A pending `cancel_requested` disables the job (execution → `blocked`,
+  `enabled = false`), which also removes its crontab entry — cancel is a
+  permanent stop for a repeating consumer.
+- The run itself is a separate `cron_run` execution created with
+  `attach: false`, so the definition execution id is never clobbered.
+
 ## Tests
 
 `test/execution-claims.test.js` (XC.1–XC.11): claim validation, fresh claim,
@@ -128,13 +163,16 @@ recovery scan (orphan vs release vs live-lease untouched), and lease_ms
 bounds (a negative lease is born expired; a huge one overflows into extended
 ISO years whose leading `+` inverts every lexicographic lease comparison).
 
-`test/scheduler-platform.test.js` (SP.5–SP.11): delay run backs off when
+`test/scheduler-platform.test.js` (SP.5–SP.13): delay run backs off when
 claimed, cancel-before-dispatch as an outcome with no child execution,
 restart recovery re-queueing a stranded delay exactly once, fail-closed
 refusal when the execution is terminal, watch check back-off while another
 runner holds the claim (and release after the check), cancel-request pausing
-a watch, and a mid-check failure releasing the claim (renewal timer cleared,
-next check succeeds).
+a watch, a mid-check failure releasing the claim (renewal timer cleared,
+next check succeeds), a stranded runbook instance being abandoned to free its
+capacity slot (with terminal-state sync and exactly-once recovery), and a
+cron run backing off while the job execution is claimed (released after the
+run).
 
 `test/kernel-migration-parity.test.js`: updated to 18 tables / 39 indexes /
 kernel schema version 3.
@@ -144,13 +182,15 @@ kernel schema version 3.
 - No new workflow language, and no use of `platform_workflows` (no production
   consumer exists; revisit when a consumer needs multi-step orchestration).
 - No changes to Brain/approvals/Compute claim layers.
-- No adaptation of cron (OS-crontab-owned runs can't carry the contract),
-  runbooks (autonomous mode needs restructuring before it can be
-  cancellable), or missions (stateless router) — follow-up slices.
-- No migration of `delays.json`/`watches.json` definitions into the DB.
+- No adaptation of missions (stateless router) — follow-up slice.
+- Runbook cancellation is recovery-only: an in-flight autonomous run cannot
+  be cancelled mid-step (the `execSync` loop needs restructuring first).
+- No migration of `delays.json`/`watches.json`/`runbooks.json` definitions
+  into the DB.
 - No event-delivery guarantees (convergence audit decision #4 stays open).
 - No un-cancel API: `cancel_requested` is permanent for an execution. Each
-  delay has a one-shot execution, so the blast radius is that one delay;
-  revisit when a repeating consumer (cron/watch) adopts the contract.
+  delay has a one-shot execution, so the blast radius is that one delay; for
+  repeating consumers (cron/watch) the flag is a permanent stop (job
+  disabled / watch paused).
 - `requestExecutionCancel` is deliberately not exposed through any tool or
   endpoint yet; when it is, it needs an actor authorization check.
