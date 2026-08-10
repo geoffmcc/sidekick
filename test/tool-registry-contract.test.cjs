@@ -72,7 +72,15 @@ assert.strictEqual(registry.get('hash').family, 'hashing', 'hash should be owned
 assert.strictEqual(registry.get('hash').category, 'Data Pipeline', 'hash should retain its category');
 assert.strictEqual(registry.get('hash').source, 'builtin', 'hash should be a descriptor-owned builtin');
 assert.ok(!legacy.TOOLS.hash, 'hash should no longer have an active legacy handler');
-assert.ok(!Object.prototype.hasOwnProperty.call(require('../src/tools/schemas').TOOL_SCHEMAS, 'hash'), 'hash should have no duplicate legacy schema');
+
+// One schema owner per extracted descriptor: a descriptor's schema lives in its
+// family, never duplicated in the legacy TOOL_SCHEMAS catalog. The storage
+// family (store/get/delete/list_projects/get_by_project) is the current
+// baseline that removed its duplicates.
+const toolSchemas = require('../src/tools/schemas').TOOL_SCHEMAS;
+for (const name of extractedNames) {
+  assert.ok(!Object.prototype.hasOwnProperty.call(toolSchemas, name), `${name} should have no duplicate legacy schema`);
+}
 
 const exportedNames = Object.keys(legacyTools).sort();
 for (const name of [

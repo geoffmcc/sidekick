@@ -10,6 +10,8 @@ process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_TOOL_POLICY = 'open';
 process.env.SIDEKICK_APPROVAL_MODE = 'off';
 process.env.SIDEKICK_SECRET_KEY = 'storage-test-secret-key';
+delete process.env.SIDEKICK_BLOCKED_TOOLS;
+delete process.env.SIDEKICK_APPROVAL_REQUIRED_TOOLS;
 
 delete require.cache[require.resolve('../src/tools')];
 
@@ -26,7 +28,16 @@ console.log('Running Storage Family Tests...');
   const original = Object.fromEntries(['testConnection', 'get', 'set', 'del', 'keys', 'ttl', 'info', 'flush'].map(name => [name, redis[name]]));
   try {
     const registry = tools.getBuiltinRegistry();
-    for (const [name, risk, category] of [['cache', 'low', 'Efficiency'], ['redis', 'medium', 'Storage']]) {
+    const expected = {
+      store: ['low', 'Storage'],
+      get: ['low', 'Storage'],
+      delete: ['low', 'Storage'],
+      list_projects: ['low', 'Storage'],
+      get_by_project: ['low', 'Storage'],
+      cache: ['low', 'Efficiency'],
+      redis: ['medium', 'Storage'],
+    };
+    for (const [name, [risk, category]] of Object.entries(expected)) {
       const descriptor = registry.get(name);
       assert.strictEqual(descriptor.family, 'storage');
       assert.strictEqual(descriptor.source, 'builtin');
@@ -42,6 +53,9 @@ console.log('Running Storage Family Tests...');
     assert.ok(!fs.readFileSync(path.join(__dirname, '../src/tools/families/storage.js'), 'utf8').includes('tools-legacy'));
     assert.strictEqual(Object.prototype.hasOwnProperty.call(require('../src/tools/schemas').TOOL_SCHEMAS, 'cache'), false);
     assert.strictEqual(Object.prototype.hasOwnProperty.call(require('../src/tools/schemas').TOOL_SCHEMAS, 'redis'), false);
+    for (const name of ['store', 'get', 'delete', 'list_projects', 'get_by_project']) {
+      assert.strictEqual(Object.prototype.hasOwnProperty.call(require('../src/tools/schemas').TOOL_SCHEMAS, name), false, `${name} should have no duplicate legacy schema`);
+    }
 
     // Redis unavailable: cache falls back and redis reports the original error.
     redis.testConnection = async () => ({ connected: false, error: 'offline' });
@@ -83,6 +97,77 @@ console.log('Running Storage Family Tests...');
     result = await tools.dispatchTool({ name: 'sidekick_cache', args: { action: 'get', key: 'remote' }, context: { source: 'mcp' } });
     assert.strictEqual(result.isError, true);
     assert.strictEqual(text(result), 'Cache miss: remote');
+
+    // KV descriptors execute through the dispatcher under canonical and
+    // sidekick_-prefixed names, exactly like the legacy storage handlers did.
+    result = await tools.dispatchTool({ name: 'store', args: { key: 'alpha', value: 'one' }, context: { source: 'mcp' } });
+    assert.strictEqual(result.isError, undefined, 'store should execute through the dispatcher');
+    assert.strictEqual(text(result), 'Stored key "alpha" (3 chars)');
+    result = await tools.dispatchTool({ name: 'sidekick_get', args: { key: 'alpha' }, context: { source: 'mcp' } });
+    assert.strictEqual(result.isError, undefined, 'sidekick_-prefixed get should resolve to the extracted descriptor');
+    assert.strictEqual(text(result), 'one');
+    result = await tools.dispatchTool({ name: 'sidekick_delete', args: { key: 'alpha' }, context: { source: 'mcp' } });
+    assert.strictEqual(result.isError, undefined, 'sidekick_-prefixed delete should resolve to the extracted descriptor');
+    assert.strictEqual(text(result), 'Deleted key "alpha"');
+    result = await tools.dispatchTool({ name: 'get', args: { key: 'alpha' }, context: { source: 'mcp' } });
+    assert.strictEqual(result.isError, true, 'get after delete should report the key missing');
+    assert.strictEqual(text(result), 'Key not found: alpha');
+
+    result = await tools.dispatchTool({ name: 'sidekick_store', args: { key: 'proj_k1', value: 'v1', project: 'testproj' }, context: { source: 'mcp' } });
+    assert.strictEqual(result.isError, undefined, 'store with a project should execute');
+    result = await tools.dispatchTool({ name: 'list_projects', args: {}, context: { source: 'mcp' } });
+    assert.deepStrictEqual(JSON.parse(text(result)), ['testproj'], 'list_projects should surface the stored project');
+    result = await tools.dispatchTool({ name: 'sidekick_get_by_project', args: { project: 'testproj' }, context: { source: 'mcp' } });
+    const byProject = JSON.parse(text(result));
+    assert.ok(Array.isArray(byProject) && byProject.length === 1, 'get_by_project should return the project keys');
+    assert.strictEqual(byProject[0].key, 'proj_k1');
+    assert.strictEqual(byProject[0].value, 'v1');
+
+    result = await tools.dispatchTool({ name: 'store', args: { key: 'nope' }, context: { source: 'mcp' } });
+    assert.strictEqual(result.isError, true, 'missing value should fail descriptor validation');
+    assert.strictEqual(result.code, 'validation_failed', 'validation should happen before the handler runs');
+
+    // Batch and nested dispatch reach the extracted storage descriptors, and an
+    // unknown tool inside a batch still fails without aborting the batch.
+    result = await tools.dispatchTool({
+      name: 'batch',
+      args: { calls: [
+        { tool: 'store', args: { key: 'batch_k', value: 'bv' } },
+        { tool: 'sidekick_get', args: { key: 'batch_k' } },
+        { tool: 'get_by_project', args: { project: 'testproj' } },
+        { tool: 'batch', args: { calls: [{ tool: 'store', args: { key: 'nested_k', value: 'nv' } }] } },
+        { tool: 'nope_not_real', args: {} },
+      ] },
+      context: { source: 'mcp' },
+    });
+    const batched = JSON.parse(text(result));
+    assert.strictEqual(batched[0].error, false, 'batch should reach an extracted storage tool');
+    assert.strictEqual(batched[0].result, 'Stored key "batch_k" (2 chars)');
+    assert.strictEqual(batched[1].error, false, 'batch should reach a sidekick_-prefixed extracted storage tool');
+    assert.strictEqual(batched[1].result, 'bv');
+    assert.strictEqual(batched[2].error, false, 'batch should reach get_by_project');
+    assert.strictEqual(batched[3].error, false, 'nested batch should execute');
+    assert.ok(batched[3].result.includes('Stored key') && batched[3].result.includes('nested_k'), 'nested batch should reach the extracted storage tool');
+    assert.strictEqual(batched[4].error, 'Unknown tool: nope_not_real', 'unknown batch tools should fail individually');
+
+    // Policy and approval are enforced at the dispatcher for the extracted
+    // storage family, not inside the handlers.
+    process.env.SIDEKICK_BLOCKED_TOOLS = 'sidekick_get';
+    result = await tools.dispatchTool({ name: 'sidekick_get', args: { key: 'proj_k1' }, context: { source: 'mcp' } });
+    assert.strictEqual(result.isError, true, 'policy denial should still apply to extracted storage tools');
+    assert.strictEqual(result.code, 'policy_denied', 'policy must be enforced at the dispatcher, not in the handler');
+    delete process.env.SIDEKICK_BLOCKED_TOOLS;
+
+    process.env.SIDEKICK_APPROVAL_MODE = 'risky';
+    process.env.SIDEKICK_APPROVAL_REQUIRED_TOOLS = 'sidekick_store';
+    result = await tools.dispatchTool({ name: 'sidekick_store', args: { key: 'approval_k', value: 'av' }, context: { source: 'mcp' } });
+    assert.strictEqual(result.isError, true, 'approval-gated storage tool should not execute directly');
+    assert.strictEqual(result.code, 'approval_required', 'approval must be enforced at the dispatcher for extracted families');
+    assert.strictEqual(result.approvalRequired, true, 'result should signal that approval is required');
+    assert.ok(result.approvalId, 'an approval record should be queued');
+    assert.ok(tools.listApprovals({ status: 'pending' }).some(a => a.tool === 'sidekick_store'), 'a pending approval should exist for the extracted storage tool');
+    process.env.SIDEKICK_APPROVAL_MODE = 'off';
+    process.env.SIDEKICK_APPROVAL_REQUIRED_TOOLS = '';
 
     console.log('Storage Family Tests passed');
   } finally {

@@ -13,14 +13,6 @@ const TOOL_SCHEMAS = {
     limit: z.number().optional().describe("Max search results")
   }),
   write: z.object({ path: z.string().describe("Absolute path to write to"), content: z.string().describe("File content to write") }),
-  store: z.object({
-    key: z.string().describe("Storage key"),
-    value: z.string().describe("Value to store"),
-    project: z.string().optional().describe("Project name (lowercase, underscores only)"),
-    category: z.string().optional().describe("Category tag for filtering (e.g. 'mcp', 'tool', 'config')")
-  }),
-  get: z.object({ key: z.string().describe("Storage key to retrieve") }),
-  delete: z.object({ key: z.string().describe("Storage key to delete") }),
   resume: z.object({
     action: z.enum(["check", "set", "clear", "list"]).optional().default("check").describe("Resume action"),
     project: z.string().optional().describe("Project name for check/set/clear"),
@@ -47,8 +39,6 @@ const TOOL_SCHEMAS = {
     temperature: z.number().optional().default(0.7).describe("Sampling temperature (0-2)"),
     provider: z.string().optional().describe("LLM provider: 'ollama' (default) or 'groq' (cloud)")
   }),
-  list_projects: z.object({}),
-  get_by_project: z.object({ project: z.string().describe("Project name to filter by") }),
   git: z.object({
     action: z.enum(["status", "diff", "log", "add", "commit", "push", "pull", "branch", "checkout", "stash"]).describe("Git action to perform"),
     path: z.string().optional().describe("Repository path (defaults to current directory)"),
