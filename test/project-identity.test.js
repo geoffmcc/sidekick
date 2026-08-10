@@ -193,6 +193,88 @@ test("PI.15: getProjectWorkspace hides ciphertext", () => {
   assert.ok(Array.isArray(got.secret_names));
 });
 
+// PI.16: backfillWorkspaceSecrets migrates legacy plaintext into envelopes and clears it
+test("PI.16: backfillWorkspaceSecrets migrates and clears plaintext", () => {
+  const ws = platformKernel.createProjectWorkspace({ name: "legacy", project_id: "legacy_p", secrets: { token: "legacy-token-value", nested: { a: 1 } } });
+  const before = dbStore.getDb().prepare("SELECT secrets_json FROM platform_project_workspaces WHERE workspace_id = ?").get(ws.workspace_id);
+  assert.ok(before.secrets_json.includes("legacy-token-value"));
+  const result = platformKernel.backfillWorkspaceSecrets();
+  assert.strictEqual(result.workspaces_migrated, 1);
+  assert.strictEqual(result.secrets_migrated, 2);
+  assert.deepStrictEqual(result.workspaces_unreadable, []);
+  assert.strictEqual(platformKernel.getWorkspaceSecret(ws.workspace_id, "token"), "legacy-token-value");
+  assert.strictEqual(platformKernel.getWorkspaceSecret(ws.workspace_id, "nested"), '{"a":1}');
+  const after = dbStore.getDb().prepare("SELECT secrets_json FROM platform_project_workspaces WHERE workspace_id = ?").get(ws.workspace_id);
+  assert.strictEqual(after.secrets_json, "{}");
+  const envelope = dbStore.getDb().prepare("SELECT envelope_json FROM platform_workspace_secrets WHERE workspace_id = ? AND secret_name = 'token'").get(ws.workspace_id);
+  assert.ok(!envelope.envelope_json.includes("legacy-token-value"));
+  assert.deepStrictEqual(platformKernel.listWorkspaceSecretNames(ws.workspace_id), ["nested", "token"]);
+});
+
+// PI.17: backfill never overwrites an existing envelope and re-runs migrate nothing
+test("PI.17: backfillWorkspaceSecrets skips existing envelopes and is idempotent", () => {
+  const ws = platformKernel.createProjectWorkspace({ name: "dupe", project_id: "dupe_p", secrets: { dupe: "stale-plaintext" } });
+  platformKernel.setWorkspaceSecret(ws.workspace_id, "dupe", "current-encrypted");
+  const result = platformKernel.backfillWorkspaceSecrets();
+  assert.strictEqual(result.secrets_skipped_existing, 1);
+  assert.strictEqual(platformKernel.getWorkspaceSecret(ws.workspace_id, "dupe"), "current-encrypted");
+  const again = platformKernel.backfillWorkspaceSecrets();
+  assert.strictEqual(again.workspaces_scanned, 0);
+  assert.strictEqual(again.secrets_migrated, 0);
+});
+
+// PI.18: backfill fails closed without SIDEKICK_SECRET_KEY, leaving plaintext untouched
+test("PI.18: backfillWorkspaceSecrets fails closed without key", () => {
+  const ws = platformKernel.createProjectWorkspace({ name: "closed", project_id: "closed_p", secrets: { held: "still-plaintext" } });
+  const prev = process.env.SIDEKICK_SECRET_KEY;
+  delete process.env.SIDEKICK_SECRET_KEY;
+  try {
+    assert.throws(() => platformKernel.backfillWorkspaceSecrets(), /SIDEKICK_SECRET_KEY/);
+  } finally {
+    process.env.SIDEKICK_SECRET_KEY = prev;
+  }
+  const row = dbStore.getDb().prepare("SELECT secrets_json FROM platform_project_workspaces WHERE workspace_id = ?").get(ws.workspace_id);
+  assert.ok(row.secrets_json.includes("still-plaintext"));
+  assert.strictEqual(platformKernel.backfillWorkspaceSecrets().secrets_migrated, 1);
+});
+
+// PI.19: unreadable secrets_json is reported and left untouched
+test("PI.19: backfillWorkspaceSecrets leaves unreadable secrets_json alone", () => {
+  const ws = platformKernel.createProjectWorkspace({ name: "corrupt", project_id: "corrupt_p" });
+  dbStore.getDb().prepare("UPDATE platform_project_workspaces SET secrets_json = 'not-json' WHERE workspace_id = ?").run(ws.workspace_id);
+  const result = platformKernel.backfillWorkspaceSecrets();
+  assert.deepStrictEqual(result.workspaces_unreadable, [ws.workspace_id]);
+  assert.strictEqual(result.workspaces_migrated, 0);
+  const row = dbStore.getDb().prepare("SELECT secrets_json FROM platform_project_workspaces WHERE workspace_id = ?").get(ws.workspace_id);
+  assert.strictEqual(row.secrets_json, "not-json");
+});
+
+// PI.20: a non-null value under an empty name keeps the plaintext copy alive
+test("PI.20: backfillWorkspaceSecrets retains plaintext for unaddressable names", () => {
+  const ws = platformKernel.createProjectWorkspace({ name: "noname", project_id: "noname_p" });
+  dbStore.getDb().prepare("UPDATE platform_project_workspaces SET secrets_json = ? WHERE workspace_id = ?").run('{"":"orphan-value","ok":"good-value"}', ws.workspace_id);
+  const result = platformKernel.backfillWorkspaceSecrets();
+  assert.deepStrictEqual(result.workspaces_retained, [ws.workspace_id]);
+  assert.strictEqual(result.workspaces_migrated, 0);
+  assert.strictEqual(platformKernel.getWorkspaceSecret(ws.workspace_id, "ok"), "good-value");
+  const row = dbStore.getDb().prepare("SELECT secrets_json FROM platform_project_workspaces WHERE workspace_id = ?").get(ws.workspace_id);
+  assert.ok(row.secrets_json.includes("orphan-value"));
+  dbStore.getDb().prepare("UPDATE platform_project_workspaces SET secrets_json = '{}' WHERE workspace_id = ?").run(ws.workspace_id);
+});
+
+// PI.21: plaintext survives when the existing envelope no longer decrypts
+test("PI.21: backfillWorkspaceSecrets retains plaintext for undecryptable envelopes", () => {
+  const ws = platformKernel.createProjectWorkspace({ name: "rotated", project_id: "rotated_p", secrets: { rot: "last-good-copy" } });
+  const ts = new Date().toISOString();
+  dbStore.getDb().prepare("INSERT INTO platform_workspace_secrets (workspace_id, secret_name, envelope_json, created_at, updated_at) VALUES (?, 'rot', ?, ?, ?)").run(ws.workspace_id, '{"iv":"00000000000000000000000000000000","data":"00","authTag":"00000000000000000000000000000000"}', ts, ts);
+  const result = platformKernel.backfillWorkspaceSecrets();
+  assert.deepStrictEqual(result.workspaces_retained, [ws.workspace_id]);
+  assert.strictEqual(result.secrets_skipped_existing, 1);
+  const row = dbStore.getDb().prepare("SELECT secrets_json FROM platform_project_workspaces WHERE workspace_id = ?").get(ws.workspace_id);
+  assert.ok(row.secrets_json.includes("last-good-copy"));
+  dbStore.getDb().prepare("UPDATE platform_project_workspaces SET secrets_json = '{}' WHERE workspace_id = ?").run(ws.workspace_id);
+});
+
 cleanup();
 console.log(`\n  ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

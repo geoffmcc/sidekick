@@ -94,9 +94,42 @@ unaffected.
 - `CREATE TABLE IF NOT EXISTS` is additive and idempotent; existing rows keep
   `secrets_json` and simply have no encrypted rows yet. No data migration is
   required for availability.
-- A follow-up (outside this design) can backfill: for each secret in a
-  workspace's legacy `secrets_json`, write it through `setWorkspaceSecret`,
-  then clear `secrets_json` once all deployments have rotated.
+- `backfillWorkspaceSecrets(details?)` (kernel export, run explicitly like
+  `backfillProjectSources`) migrates legacy plaintext into envelopes and
+  purges it, refusing to purge whenever the plaintext might be the last
+  recoverable copy of anything:
+  - Throws without `SIDEKICK_SECRET_KEY` before touching any row (fail
+    closed).
+  - Scans workspaces whose `secrets_json` is non-empty; each entry is
+    encrypted into `platform_workspace_secrets` with
+    `ON CONFLICT ... DO NOTHING`, so an envelope that already exists is never
+    overwritten (the encrypted store is newer than the legacy plaintext — no
+    double-encrypt, no rollback of a rotated value). An entry whose insert was
+    skipped is then decrypt-checked: if the existing envelope no longer
+    decrypts under the current key, the workspace's plaintext is retained.
+  - Envelopes are written before `secrets_json` is cleared to `{}`, so an
+    interrupted run loses nothing and a re-run migrates only what remains.
+    The clear is conditional on `secrets_json` still holding the scanned
+    value, so a concurrent legacy write survives for the next run.
+  - Workspaces whose plaintext was kept (undecryptable existing envelope,
+    non-null value under an empty name, concurrent write) are returned in
+    `workspaces_retained`; unparseable `secrets_json` is left untouched and
+    returned in `workspaces_unreadable`. Non-string values are stored as
+    their JSON serialization; `null` values are counted as
+    `secrets_skipped_null` and purged.
+  - Emits one summary `workspace.secrets_backfilled` event (counts only, no
+    names list, no values).
+  - Remediation for `workspaces_retained`: inspect the workspace's
+    `secrets_json` directly, re-key or delete the offending envelope (for the
+    undecryptable case) or re-store the value under a valid name via
+    `setWorkspaceSecret`, then re-run the backfill; `workspaces_unreadable`
+    requires fixing the malformed JSON by hand first.
+- The purge is one-way for each migrated workspace, but the legacy write path
+  is still live: `createProjectWorkspace` / `updateProjectWorkspace` accept a
+  plaintext `secrets` input and the workspace getters still return parsed
+  `secrets`. Until those writers are routed through `setWorkspaceSecret`
+  (follow-up), a caller passing `secrets` re-introduces plaintext that the
+  next backfill run purges.
 
 ## Tests
 
@@ -108,6 +141,14 @@ unaffected.
 - PI.13 delete, re-delete, and name listing.
 - PI.14 fail-closed without `SIDEKICK_SECRET_KEY`.
 - PI.15 getters expose `secret_names` and never raw ciphertext.
+- PI.16 backfill migrates legacy plaintext, clears `secrets_json`, round-trips
+  values.
+- PI.17 backfill never overwrites an existing envelope; re-runs migrate
+  nothing.
+- PI.18 backfill fails closed without the key, leaving plaintext untouched.
+- PI.19 unreadable `secrets_json` is reported and left untouched.
+- PI.20 a non-null value under an empty name keeps the workspace's plaintext.
+- PI.21 plaintext survives when the existing envelope no longer decrypts.
 
 `test/kernel-migration-parity.test.js` (KMP.1–KMP.4) verifies migration
 `027` is applied, both boot paths produce identical `platform_*` DDL (17
@@ -117,5 +158,6 @@ tables / 38 indexes), and the kernel schema module stays in sync.
 
 - No encryption key rotation scheme (out of scope; `secret-cipher` key is
   environment-scoped).
-- No automatic plaintext purge during this migration.
+- No automatic plaintext purge at boot or migration time — the purge happens
+  only when `backfillWorkspaceSecrets` is run explicitly.
 - No per-user secret access control (no users/teams model in Phase 3).
