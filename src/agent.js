@@ -5,7 +5,7 @@ const path = require("path");
 const crypto = require("crypto");
 const EventEmitter = require("events");
 const { execFileSync } = require("child_process");
-const { callAgentTool, getBuiltinRegistry, DATA_DIR, GROQ_API_KEY, GROQ_MODEL, loadDelays, saveDelays, loadWatches, saveWatches, getToolDefsForSource, transitionScheduledPlatformExecution, appendScheduledPlatformEvent, createScheduledPlatformExecution, releaseScheduledClaim, startScheduledLeaseRenewal, recoverStrandedDelays, claimWatchForCheck, pauseWatchForCancel } = require("./tools");
+const { callAgentTool, getBuiltinRegistry, DATA_DIR, GROQ_API_KEY, GROQ_MODEL, loadDelays, saveDelays, loadWatches, saveWatches, getToolDefsForSource, transitionScheduledPlatformExecution, appendScheduledPlatformEvent, createScheduledPlatformExecution, releaseScheduledClaim, startScheduledLeaseRenewal, recoverStrandedDelays, recoverStrandedRunbooks, claimScheduledDefinition, pauseWatchForCancel } = require("./tools");
 const { stripSidekickPrefix } = require("./core/tool-name");
 
 // Brain v0.1's planning allowlist: agent-visible, enabled, AND present in the
@@ -199,6 +199,12 @@ try {
 } catch (e) {
   console.error(`Delay recovery failed: ${e.message}`);
 }
+try {
+  const recoveredRunbooks = recoverStrandedRunbooks({ source: "agent", actor: "agent" });
+  if (recoveredRunbooks.recovered > 0) console.log(`Recovered ${recoveredRunbooks.recovered} stranded runbook instance(s) after restart`);
+} catch (e) {
+  console.error(`Runbook recovery failed: ${e.message}`);
+}
 loadAndScheduleDelays();
 
 const watchIntervals = {};
@@ -316,7 +322,7 @@ async function checkWatch(watch) {
   // unfenced.
   let checkClaim = { ok: true, claim: null };
   if (current.platform_execution_id) {
-    checkClaim = claimWatchForCheck(current, `sidekick-agent:${process.pid}`);
+    checkClaim = claimScheduledDefinition(current, `sidekick-agent:${process.pid}`, "watch");
     if (!checkClaim.ok) {
       if (checkClaim.code !== "claim_held") console.log(`Watch ${watch.id} tick skipped (${checkClaim.code})`);
       return;

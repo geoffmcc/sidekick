@@ -219,6 +219,47 @@ console.log('Running Scheduler Platform Tests...\n');
     assert.ok(result.content[0].text.includes('Triggered: true'));
     console.log('Passed\n');
 
+    console.log('Test SP.12: stranded runbook instance is abandoned and frees its capacity slot');
+    result = await TOOLS.runbook({ action: 'create', name: 'stranded runbook', steps: [{ name: 'ok', command: 'printf rb-ok' }] });
+    assert.strictEqual(result.isError, undefined);
+    const strandedRbId = result.content[0].text.match(/Runbook created: (\S+)/)[1];
+    const strandedExec = platformKernel.createExecution({ operation_type: 'runbook_execution', source: 'test' });
+    platformKernel.transitionExecution(strandedExec.execution_id, 'queued', { source: 'test', reason: 'test setup' });
+    platformKernel.transitionExecution(strandedExec.execution_id, 'running', { source: 'test', reason: 'test setup' });
+    const RB_FILE = path.join(TEST_DATA_DIR, 'runbooks.json');
+    const rbData = JSON.parse(fs.readFileSync(RB_FILE, 'utf8'));
+    rbData.instances['rbi_stranded_test'] = { id: 'rbi_stranded_test', definitionId: strandedRbId, status: 'running', currentStep: 1, mode: 'autonomous', started: Date.now() - 31 * 60 * 1000, results: [], platform_execution_id: strandedExec.execution_id };
+    fs.writeFileSync(RB_FILE, JSON.stringify(rbData, null, 2));
+    platformKernel.claimExecution({ execution_id: strandedExec.execution_id, claimed_by: 'dead-rb-runner' });
+    db.getDb().prepare('UPDATE platform_execution_claims SET lease_expires_at = ? WHERE execution_id = ?').run(new Date(Date.now() - 60000).toISOString(), strandedExec.execution_id);
+    platformKernel.recoverOrphanedExecutions({ source: 'test' });
+    const rbRecovery = tools.recoverStrandedRunbooks({ source: 'test' });
+    assert.strictEqual(rbRecovery.recovered, 1);
+    assert.deepStrictEqual(rbRecovery.instances, ['rbi_stranded_test']);
+    const rbDataAfter = JSON.parse(fs.readFileSync(RB_FILE, 'utf8'));
+    assert.strictEqual(rbDataAfter.instances['rbi_stranded_test'].status, 'failed');
+    assert.strictEqual(rbDataAfter.instances['rbi_stranded_test'].abandoned, true);
+    const strandedExecAfter = db.getDb().prepare('SELECT * FROM platform_executions WHERE execution_id = ?').get(strandedExec.execution_id);
+    assert.strictEqual(strandedExecAfter.state, 'failed');
+    const rerunRecovery = tools.recoverStrandedRunbooks({ source: 'test' });
+    assert.strictEqual(rerunRecovery.recovered, 0);
+    console.log('Passed\n');
+
+    console.log('Test SP.13: cron run backs off while the job execution is claimed');
+    const cronJobForClaim = db.loadDocument('cron', [])[0];
+    assert.ok(cronJobForClaim.platform_execution_id);
+    const cronHeld = platformKernel.claimExecution({ execution_id: cronJobForClaim.platform_execution_id, claimed_by: 'other-cron-runner' });
+    assert.strictEqual(cronHeld.ok, true);
+    result = await TOOLS.cron({ action: 'run', id: cronJobForClaim.id });
+    assert.strictEqual(result.isError, true);
+    assert.ok(result.content[0].text.includes('already running'));
+    assert.strictEqual(platformKernel.releaseExecutionClaim({ execution_id: cronJobForClaim.platform_execution_id, claimed_by: 'other-cron-runner', claim_epoch: cronHeld.claim.claim_epoch }).ok, true);
+    result = await TOOLS.cron({ action: 'run', id: cronJobForClaim.id });
+    assert.strictEqual(result.isError, undefined);
+    assert.ok(result.content[0].text.includes('cron-ok'));
+    assert.strictEqual(platformKernel.getExecutionClaim(cronJobForClaim.platform_execution_id).claimed_by, null);
+    console.log('Passed\n');
+
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
     console.log('All Scheduler Platform Tests Passed!');
   } catch (e) {
