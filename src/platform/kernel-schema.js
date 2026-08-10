@@ -7,8 +7,10 @@
  * four base tables; `migrations/026_platform_kernel_tables.sql` adds the ten
  * remaining tables so fresh installs converge without dropping or renaming
  * anything; `migrations/027_platform_project_projection.sql` adds the project
- * projection tables and the encrypted workspace-secret store. Keep the
- * migration files in sync with this module.
+ * projection tables and the encrypted workspace-secret store;
+ * `migrations/028_platform_execution_claims.sql` adds the execution
+ * claim/lease/checkpoint/cancel table. Keep the migration files in sync with
+ * this module.
  */
 const KERNEL_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS platform_executions (
@@ -364,7 +366,21 @@ const KERNEL_SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_platform_artifacts_hash ON platform_artifacts(content_hash);
   CREATE INDEX IF NOT EXISTS idx_platform_transitions_execution ON platform_execution_transitions(execution_id, created_at);
 
-  INSERT OR REPLACE INTO meta (key, value) VALUES ('platform_kernel_schema_version', '2');
+  CREATE TABLE IF NOT EXISTS platform_execution_claims (
+    execution_id TEXT PRIMARY KEY,
+    claimed_by TEXT,
+    claim_epoch INTEGER NOT NULL DEFAULT 0,
+    lease_expires_at TEXT,
+    heartbeat_at TEXT,
+    cancel_requested INTEGER NOT NULL DEFAULT 0,
+    checkpoint_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(execution_id) REFERENCES platform_executions(execution_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_platform_execution_claims_lease ON platform_execution_claims(lease_expires_at) WHERE lease_expires_at IS NOT NULL;
+
+  INSERT OR REPLACE INTO meta (key, value) VALUES ('platform_kernel_schema_version', '3');
 `;
 
 module.exports = { KERNEL_SCHEMA_SQL };

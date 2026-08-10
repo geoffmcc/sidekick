@@ -5,7 +5,7 @@ const path = require("path");
 const crypto = require("crypto");
 const EventEmitter = require("events");
 const { execFileSync } = require("child_process");
-const { callAgentTool, getBuiltinRegistry, DATA_DIR, GROQ_API_KEY, GROQ_MODEL, loadDelays, saveDelays, loadWatches, saveWatches, getToolDefsForSource, transitionScheduledPlatformExecution, appendScheduledPlatformEvent, createScheduledPlatformExecution } = require("./tools");
+const { callAgentTool, getBuiltinRegistry, DATA_DIR, GROQ_API_KEY, GROQ_MODEL, loadDelays, saveDelays, loadWatches, saveWatches, getToolDefsForSource, transitionScheduledPlatformExecution, appendScheduledPlatformEvent, createScheduledPlatformExecution, releaseScheduledClaim, startScheduledLeaseRenewal, recoverStrandedDelays } = require("./tools");
 const { stripSidekickPrefix } = require("./core/tool-name");
 
 // Brain v0.1's planning allowlist: agent-visible, enabled, AND present in the
@@ -66,14 +66,14 @@ const delayTimers = {};
 function scheduleDelay(delay) {
   const executeAt = new Date(delay.when).getTime();
   const msUntil = executeAt - Date.now();
-  
+
   if (msUntil <= 0) {
-    executeDelay(delay);
+    executeDelay(delay).catch(e => console.error(`Delay ${delay.id} dispatch failed: ${e.message}`));
     return;
   }
-  
+
   delayTimers[delay.id] = setTimeout(() => {
-    executeDelay(delay);
+    executeDelay(delay).catch(e => console.error(`Delay ${delay.id} dispatch failed: ${e.message}`));
   }, msUntil);
   
   console.log(`Scheduled delay ${delay.id} for ${delay.when} (${Math.round(msUntil / 60000)} minutes)`);
@@ -82,16 +82,43 @@ function scheduleDelay(delay) {
 async function executeDelay(delay) {
   const delays = loadDelays();
   const current = delays.find(d => d.id === delay.id);
-  
+
   if (!current || current.status !== "pending") {
     delete delayTimers[delay.id];
     return;
   }
-  
+
+  // Fenced claim (Phase 4/B): the agent timer and an MCP-side `delay run` can
+  // race on the same delay; only the claim winner dispatches. Any claim
+  // failure (held, terminal, missing) refuses dispatch rather than running
+  // unfenced.
+  let runClaim = null;
+  if (current.platform_execution_id) {
+    const claimRes = platformKernel.claimExecution({ execution_id: current.platform_execution_id, claimed_by: `sidekick-agent:${process.pid}` });
+    if (!claimRes.ok) {
+      console.log(`Delay ${delay.id} not dispatchable (${claimRes.code}${claimRes.claimed_by ? `, held by ${claimRes.claimed_by}` : ""}), skipping`);
+      delete delayTimers[delay.id];
+      return;
+    }
+    runClaim = claimRes.claim;
+    if (runClaim.cancel_requested) {
+      current.status = "cancelled";
+      current.cancelledAt = new Date().toISOString();
+      transitionScheduledPlatformExecution("delay", current, "cancelled", { source: "agent", actor: "agent", reason: "cancel requested before dispatch", result_status: "cancelled" });
+      appendScheduledPlatformEvent("delay", current, "schedule.delay.cancelled", { cancelled_at: current.cancelledAt }, { source: "agent", actor: "agent" });
+      saveDelays(delays);
+      releaseScheduledClaim(current.platform_execution_id, runClaim);
+      delete delayTimers[delay.id];
+      console.log(`Delay ${delay.id} cancelled before dispatch`);
+      return;
+    }
+  }
+
   current.status = "running";
   current.startedAt = new Date().toISOString();
   transitionScheduledPlatformExecution("delay", current, "running", { source: "agent", actor: "agent", reason: "scheduled delay execution started" });
   saveDelays(delays);
+  const renewTimer = startScheduledLeaseRenewal(current.platform_execution_id, runClaim);
   
   console.log(`Executing delay ${delay.id}: ${delay.tool}`);
   
@@ -101,6 +128,13 @@ async function executeDelay(delay) {
       rootExecutionId: current.platform_execution_id || null,
       correlationId: delay.id,
     });
+    if (renewTimer) clearInterval(renewTimer);
+    const release = releaseScheduledClaim(current.platform_execution_id, runClaim);
+    if (runClaim && !release.ok && release.code === "release_rejected") {
+      console.error(`Delay ${delay.id} completed but its claim was superseded; leaving state to the current claimant`);
+      delete delayTimers[delay.id];
+      return;
+    }
     const delaysAfter = loadDelays();
     const updated = delaysAfter.find(d => d.id === delay.id);
     if (updated) {
@@ -119,6 +153,13 @@ async function executeDelay(delay) {
     }
     console.log(`Delay ${delay.id} completed`);
   } catch (e) {
+    if (renewTimer) clearInterval(renewTimer);
+    const release = releaseScheduledClaim(current.platform_execution_id, runClaim);
+    if (runClaim && !release.ok && release.code === "release_rejected") {
+      console.error(`Delay ${delay.id} threw (${e.message}) but its claim was superseded; leaving state to the current claimant`);
+      delete delayTimers[delay.id];
+      return;
+    }
     const delaysAfter = loadDelays();
     const updated = delaysAfter.find(d => d.id === delay.id);
     if (updated) {
@@ -137,21 +178,27 @@ async function executeDelay(delay) {
     }
     console.error(`Delay ${delay.id} failed: ${e.message}`);
   }
-  
+
   delete delayTimers[delay.id];
 }
 
 function loadAndScheduleDelays() {
   const delays = loadDelays();
   const pending = delays.filter(d => d.status === "pending");
-  
+
   for (const delay of pending) {
     scheduleDelay(delay);
   }
-  
+
   console.log(`Loaded ${pending.length} pending delays`);
 }
 
+try {
+  const recovered = recoverStrandedDelays({ source: "agent", actor: "agent" });
+  if (recovered.requeued > 0) console.log(`Recovered ${recovered.requeued} stranded delay(s) after restart`);
+} catch (e) {
+  console.error(`Delay recovery failed: ${e.message}`);
+}
 loadAndScheduleDelays();
 
 const watchIntervals = {};

@@ -100,6 +100,69 @@ console.log('Running Scheduler Platform Tests...\n');
     assert.ok(stepEvent);
     console.log('Passed\n');
 
+    const platformKernel = require('../src/platform/kernel');
+
+    console.log('Test SP.5: delay run backs off when the execution is claimed');
+    result = await TOOLS.delay({ action: 'add', when: '1h', name: 'claimed delay', tool: 'sidekick_respond', args: { text: 'delay-claim' } });
+    assert.strictEqual(result.isError, undefined);
+    const claimedDelay = tools.loadDelays().find(d => d.name === 'claimed delay');
+    const held = platformKernel.claimExecution({ execution_id: claimedDelay.platform_execution_id, claimed_by: 'other-runner' });
+    assert.strictEqual(held.ok, true);
+    result = await TOOLS.delay({ action: 'run', id: claimedDelay.id });
+    assert.strictEqual(result.isError, true);
+    assert.ok(result.content[0].text.includes('already being executed'));
+    assert.strictEqual(tools.loadDelays().find(d => d.id === claimedDelay.id).status, 'pending');
+    assert.strictEqual(platformKernel.releaseExecutionClaim({ execution_id: claimedDelay.platform_execution_id, claimed_by: 'other-runner', claim_epoch: held.claim.claim_epoch }).ok, true);
+    console.log('Passed\n');
+
+    console.log('Test SP.6: cancel request stops a delay before dispatch as an outcome, not a failure');
+    result = await TOOLS.delay({ action: 'add', when: '1h', name: 'cancel delay', tool: 'sidekick_respond', args: { text: 'never-runs' } });
+    assert.strictEqual(result.isError, undefined);
+    const cancelDelay = tools.loadDelays().find(d => d.name === 'cancel delay');
+    platformKernel.requestExecutionCancel(cancelDelay.platform_execution_id, { reason: 'operator cancel' });
+    result = await TOOLS.delay({ action: 'run', id: cancelDelay.id });
+    assert.strictEqual(result.isError, undefined);
+    assert.ok(result.content[0].text.includes('cancelled before dispatch'));
+    assert.strictEqual(tools.loadDelays().find(d => d.id === cancelDelay.id).status, 'cancelled');
+    const cancelExec = db.getDb().prepare('SELECT * FROM platform_executions WHERE execution_id = ?').get(cancelDelay.platform_execution_id);
+    assert.strictEqual(cancelExec.state, 'cancelled');
+    assert.strictEqual(cancelExec.result_status, 'cancelled');
+    const noChild = latestExecution("parent_execution_id = ? AND operation_type = 'tool_call'", [cancelDelay.platform_execution_id]);
+    assert.strictEqual(noChild, undefined);
+    console.log('Passed\n');
+
+    console.log('Test SP.7: a delay stranded running by a crash is re-queued on recovery');
+    result = await TOOLS.delay({ action: 'add', when: '1h', name: 'stranded delay', tool: 'sidekick_respond', args: { text: 'later' } });
+    assert.strictEqual(result.isError, undefined);
+    const stranded = tools.loadDelays().find(d => d.name === 'stranded delay');
+    assert.strictEqual(platformKernel.claimExecution({ execution_id: stranded.platform_execution_id, claimed_by: 'dead-runner' }).ok, true);
+    platformKernel.transitionExecution(stranded.platform_execution_id, 'running', { source: 'test', reason: 'simulate crash mid-run' });
+    const delaysNow = tools.loadDelays();
+    delaysNow.find(d => d.id === stranded.id).status = 'running';
+    tools.saveDelays(delaysNow);
+    db.getDb().prepare('UPDATE platform_execution_claims SET lease_expires_at = ? WHERE execution_id = ?').run(new Date(Date.now() - 60000).toISOString(), stranded.platform_execution_id);
+    const recovery = tools.recoverStrandedDelays({ source: 'test' });
+    assert.strictEqual(recovery.requeued, 1);
+    assert.strictEqual(tools.loadDelays().find(d => d.id === stranded.id).status, 'pending');
+    const recoveredExec = db.getDb().prepare('SELECT * FROM platform_executions WHERE execution_id = ?').get(stranded.platform_execution_id);
+    assert.strictEqual(recoveredExec.state, 'queued');
+    const rerun = tools.recoverStrandedDelays({ source: 'test' });
+    assert.strictEqual(rerun.requeued, 0);
+    console.log('Passed\n');
+
+    console.log('Test SP.8: delay run fails closed when the execution is terminal');
+    result = await TOOLS.delay({ action: 'add', when: '1h', name: 'terminal delay', tool: 'sidekick_respond', args: { text: 'never' } });
+    assert.strictEqual(result.isError, undefined);
+    const terminalDelay = tools.loadDelays().find(d => d.name === 'terminal delay');
+    platformKernel.transitionExecution(terminalDelay.platform_execution_id, 'cancelled', { source: 'test', reason: 'ledger cancelled out of band' });
+    result = await TOOLS.delay({ action: 'run', id: terminalDelay.id });
+    assert.strictEqual(result.isError, true);
+    assert.ok(result.content[0].text.includes('execution_terminal'));
+    assert.strictEqual(tools.loadDelays().find(d => d.id === terminalDelay.id).status, 'pending');
+    const noDispatch = latestExecution("parent_execution_id = ? AND operation_type = 'tool_call'", [terminalDelay.platform_execution_id]);
+    assert.strictEqual(noDispatch, undefined);
+    console.log('Passed\n');
+
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
     console.log('All Scheduler Platform Tests Passed!');
   } catch (e) {

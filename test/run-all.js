@@ -55,6 +55,7 @@ const suites = [
   { file: 'test/approval.test.js', critical: false, description: 'Approval queue behavior' },
   { file: 'test/scheduler-platform.test.js', critical: false, description: 'Scheduler and runbook platform adapters' },
   { file: 'test/execution-control.test.js', critical: false, description: 'Platform guard and state-machine enforcement' },
+  { file: 'test/execution-claims.test.js', critical: false, description: 'Execution claim/lease/checkpoint/cancel/recovery contract' },
   { file: 'test/capability-rbac.test.js', critical: false, description: 'Capability RBAC and immutable change-set approvals' },
   { file: 'test/workflow-runner.test.js', critical: false, description: 'Durable workflow engine and isolated runner sessions' },
   { file: 'test/workspace-model.test.js', critical: false, description: 'Project workspaces and model registry' },

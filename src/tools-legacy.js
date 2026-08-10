@@ -1536,6 +1536,31 @@ function transitionScheduledPlatformExecution(kind, item, state, details = {}) {
   } catch (e) {}
 }
 
+function releaseScheduledClaim(executionId, claim) {
+  if (!executionId || !claim) return { ok: true };
+  try {
+    return platformKernel.releaseExecutionClaim({ execution_id: executionId, claimed_by: claim.claimed_by, claim_epoch: claim.claim_epoch });
+  } catch (e) {
+    return { ok: false, code: "release_error" };
+  }
+}
+
+// Renew the claim lease on an interval while a scheduled dispatch is in
+// flight, so a slow tool call cannot be orphaned out from under a live
+// runner. A failed renewal means the claim was superseded; the timer stops
+// and the completion write is fenced by releaseScheduledClaim.
+function startScheduledLeaseRenewal(executionId, claim) {
+  if (!executionId || !claim) return null;
+  const timer = setInterval(() => {
+    try {
+      const renewed = platformKernel.renewExecutionLease({ execution_id: executionId, claimed_by: claim.claimed_by, claim_epoch: claim.claim_epoch });
+      if (!renewed.ok) clearInterval(timer);
+    } catch (e) {}
+  }, 60000);
+  if (timer.unref) timer.unref();
+  return timer;
+}
+
 function appendScheduledPlatformEvent(kind, item, eventType, payload = {}, options = {}) {
   try {
     platformKernel.appendEvent({
@@ -4043,6 +4068,34 @@ function saveDelays(delays) {
   fs.writeFileSync(DELAYS_FILE, JSON.stringify(delays, null, 2));
 }
 
+// Phase 4/B restart recovery: a delay that was `running` when its runner died
+// used to be stranded forever. The kernel recovery scan orphans executions
+// whose claim lease expired; any such delay is re-queued to `pending` exactly
+// once (fenced by the orphaned->queued transition, which a concurrent
+// recoverer would lose). Called by the agent on startup.
+function recoverStrandedDelays(details = {}) {
+  try {
+    platformKernel.recoverOrphanedExecutions({ source: details.source || "delay", actor_id: details.actor || null });
+  } catch (e) {}
+  const delays = loadDelays();
+  let requeued = 0;
+  for (const d of delays) {
+    if (d.status !== "running" || !d.platform_execution_id) continue;
+    try {
+      const claim = platformKernel.getExecutionClaim(d.platform_execution_id);
+      if (claim && claim.claimed_by) continue; // actively leased by a live runner
+      const exec = platformKernel.getExecution(d.platform_execution_id);
+      if (!exec || exec.state !== "orphaned") continue;
+      platformKernel.transitionExecution(d.platform_execution_id, "queued", { source: details.source || "delay", actor_id: details.actor || null, reason: "delay re-queued after orphan recovery" });
+      d.status = "pending";
+      d.startedAt = null;
+      requeued++;
+    } catch (e) {}
+  }
+  if (requeued > 0) saveDelays(delays);
+  return { requeued };
+}
+
 function parseWhen(when) {
   if (!when) return null;
 
@@ -4193,10 +4246,34 @@ async function sidekick_delay({ action, id, when, name, tool, args }) {
       return { content: [{ type: "text", text: `Delay ${id} is not pending (status: ${delay.status})` }], isError: true };
     }
 
+    // Fenced claim (Phase 4/B): of the agent timer and any MCP-side run, only
+    // one claimant dispatches. Any claim failure refuses dispatch — a terminal
+    // or missing execution means the ledger disagrees with delays.json, and
+    // running unfenced would bypass the contract entirely.
+    let runClaim = null;
+    if (delay.platform_execution_id) {
+      const claimRes = platformKernel.claimExecution({ execution_id: delay.platform_execution_id, claimed_by: `delay-run:${process.pid}` });
+      if (!claimRes.ok) {
+        const detail = claimRes.code === "claim_held" ? `already being executed by another runner (${claimRes.claimed_by})` : `cannot run: execution ${claimRes.code}`;
+        return { content: [{ type: "text", text: `Delay ${id} ${detail}` }], isError: true };
+      }
+      runClaim = claimRes.claim;
+      if (runClaim.cancel_requested) {
+        delay.status = "cancelled";
+        delay.cancelledAt = now;
+        transitionScheduledPlatformExecution("delay", delay, "cancelled", { reason: "cancel requested before dispatch", result_status: "cancelled", result_summary: `Cancelled delay ${id}` });
+        appendScheduledPlatformEvent("delay", delay, "schedule.delay.cancelled", { cancelled_at: delay.cancelledAt });
+        saveDelays(delays);
+        releaseScheduledClaim(delay.platform_execution_id, runClaim);
+        return { content: [{ type: "text", text: `Delay ${id} was cancelled before dispatch` }] };
+      }
+    }
+
     delay.status = "running";
     delay.startedAt = now;
     transitionScheduledPlatformExecution("delay", delay, "running", { reason: "delay execution started" });
     saveDelays(delays);
+    let renewTimer = startScheduledLeaseRenewal(delay.platform_execution_id, runClaim);
 
     try {
       const result = await callTool(delay.tool, delay.args, {
@@ -4204,31 +4281,48 @@ async function sidekick_delay({ action, id, when, name, tool, args }) {
         rootExecutionId: delay.platform_execution_id || null,
         correlationId: delay.id,
       });
-      delay.status = result.isError ? "failed" : "completed";
-      delay.completedAt = new Date().toISOString();
-      delay.result = result.content?.[0]?.text?.substring(0, 200) || "ok";
-      transitionScheduledPlatformExecution("delay", delay, result.isError ? "failed" : "completed", {
+      if (renewTimer) clearInterval(renewTimer);
+      // Release before the completion write: a rejected release means this
+      // runner was superseded mid-dispatch, and its stale snapshot must not
+      // clobber the current claimant's state.
+      const release = releaseScheduledClaim(delay.platform_execution_id, runClaim);
+      if (runClaim && !release.ok && release.code === "release_rejected") {
+        return { content: [{ type: "text", text: `Delay ${id} finished but its claim was superseded; state is owned by the current claimant` }], isError: true };
+      }
+      const delaysAfter = loadDelays();
+      const fresh = delaysAfter.find(d => d.id === id) || delay;
+      fresh.status = result.isError ? "failed" : "completed";
+      fresh.completedAt = new Date().toISOString();
+      fresh.result = result.content?.[0]?.text?.substring(0, 200) || "ok";
+      transitionScheduledPlatformExecution("delay", fresh, result.isError ? "failed" : "completed", {
         reason: result.isError ? "delay execution failed" : "delay execution completed",
         result_status: result.isError ? "failure" : "success",
-        error_category: result.isError ? evolveCommon.errorCategory(delay.result) : null,
-        result_summary: delay.result,
+        error_category: result.isError ? evolveCommon.errorCategory(fresh.result) : null,
+        result_summary: fresh.result,
       });
-      appendScheduledPlatformEvent("delay", delay, result.isError ? "schedule.delay.failed" : "schedule.delay.completed", { completed_at: delay.completedAt }, { severity: result.isError ? "error" : "info" });
-      saveDelays(delays);
+      appendScheduledPlatformEvent("delay", fresh, result.isError ? "schedule.delay.failed" : "schedule.delay.completed", { completed_at: fresh.completedAt }, { severity: result.isError ? "error" : "info" });
+      saveDelays(delaysAfter);
       if (result.isError) return { content: [{ type: "text", text: `Delay ${id} failed:\n\n${result.content?.[0]?.text || "error"}` }], isError: true };
       return { content: [{ type: "text", text: `Executed delay ${id}:\n\n${result.content?.[0]?.text || "ok"}` }] };
     } catch (e) {
-      delay.status = "failed";
-      delay.completedAt = new Date().toISOString();
-      delay.error = e.message;
-      transitionScheduledPlatformExecution("delay", delay, "failed", {
+      if (renewTimer) clearInterval(renewTimer);
+      const release = releaseScheduledClaim(delay.platform_execution_id, runClaim);
+      if (runClaim && !release.ok && release.code === "release_rejected") {
+        return { content: [{ type: "text", text: `Delay ${id} threw (${e.message}) but its claim was superseded; state is owned by the current claimant` }], isError: true };
+      }
+      const delaysAfter = loadDelays();
+      const fresh = delaysAfter.find(d => d.id === id) || delay;
+      fresh.status = "failed";
+      fresh.completedAt = new Date().toISOString();
+      fresh.error = e.message;
+      transitionScheduledPlatformExecution("delay", fresh, "failed", {
         reason: "delay execution threw",
         result_status: "failure",
         error_category: evolveCommon.errorCategory(e.message),
         result_summary: e.message,
       });
-      appendScheduledPlatformEvent("delay", delay, "schedule.delay.failed", { error: e.message }, { severity: "error" });
-      saveDelays(delays);
+      appendScheduledPlatformEvent("delay", fresh, "schedule.delay.failed", { error: e.message }, { severity: "error" });
+      saveDelays(delaysAfter);
 
       return { content: [{ type: "text", text: `Delay ${id} failed: ${e.message}` }], isError: true };
     }
@@ -10408,6 +10502,9 @@ module.exports = {
   createScheduledPlatformExecution,
   transitionScheduledPlatformExecution,
   appendScheduledPlatformEvent,
+  releaseScheduledClaim,
+  startScheduledLeaseRenewal,
+  recoverStrandedDelays,
   getToolDefsForSource,
   getToolCategoriesWithTools,
   buildPolicyInspection,

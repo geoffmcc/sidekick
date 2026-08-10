@@ -145,6 +145,13 @@ Runner sessions provide isolated execution contexts:
 - `completeRunnerSession(runnerId)` and `terminateRunnerSession(runnerId, { reason })` manage runner lifecycle.
 - Runner sessions emit `runner.created`, `runner.completed`, and `runner.terminated` events.
 
+Execution claims (Phase 4/B) give schedulers a fenced, leased claim on a platform execution before dispatching work — see `docs/execution-claim-contract.md`:
+
+- `claimExecution({ execution_id, claimed_by, lease_ms })` — exactly one winner across concurrent runners (`BEGIN IMMEDIATE`, epoch-fenced); losers get `claim_held`.
+- `renewExecutionLease` / `checkpointExecution` / `releaseExecutionClaim` — all writes fenced by `claimed_by` + `claim_epoch`, so a superseded claimant cannot corrupt state.
+- `requestExecutionCancel(executionId)` — cooperative cancellation flag surfaced to claimants; nothing is force-killed.
+- `recoverOrphanedExecutions()` — clears expired leases and transitions stranded `queued`/`running`/`waiting` executions to `orphaned` for re-queueing. The delay scheduler is the first adapter (claim before dispatch in both the agent timer and `sidekick_delay run`, plus `recoverStrandedDelays()` at agent startup).
+
 ### Project workspaces and model registry
 
 The platform kernel provides isolated project environments and model management:
