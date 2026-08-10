@@ -29,7 +29,7 @@ Extracted descriptor-owned families live under `src/tools/families/` and are agg
 - `filesystem.js` — `read`, `list`, `search`, `summarize`, `filter`, `diff_files`, `find`.
 - `monitoring.js` — `tail`.
 
-These 14 families own 40 descriptors. Each family owns its handlers, inline Zod schemas, risk, category, and compatibility metadata. Legacy `TOOL_DEFS` rows remain only as ordering anchors while MCP ordering compatibility is preserved. Five storage schemas (`store`, `get`, `delete`, `list_projects`, and `get_by_project`) still remain in `src/tools/schemas/index.js`; this is duplicate ownership and is the first cleanup item in the next extraction slice.
+These 14 families own 40 descriptors. Each family owns its handlers, inline Zod schemas, risk, category, and compatibility metadata. Legacy `TOOL_DEFS` rows remain only as ordering anchors while MCP ordering compatibility is preserved. The five storage schemas (`store`, `get`, `delete`, `list_projects`, and `get_by_project`) have been removed from `src/tools/schemas/index.js`; storage has single ownership in `storage.js`, and a registry contract test asserts one schema owner per extracted descriptor.
 
 The filesystem path policy now lives in `src/tools/path-policy.js`, the authoritative implementation of `enforcePathPolicy` and `getPathPolicyDecision`. It requires only `fs`, `path`, `src/core/policy-env.js`, and `src/tools/context.js`, so descriptor families can depend on it without requiring `src/tools-legacy.js` at module top level. `src/tools-legacy.js` consumes it and no longer defines its own copy.
 
@@ -182,15 +182,14 @@ Handlers should not implement their own policy or approval logic. Handlers that 
 
 Most handlers still live in `src/tools-legacy.js`. The next migration sequence should follow dependency and security boundaries rather than source-file size:
 
-1. Remove the five duplicate storage schemas and add contract coverage; do not re-extract storage.
-2. Data/filesystem follow-up: `anonymize`, `insight_report`, and remaining report helpers; preserve untrusted-input handling.
-3. GitHub and CI inspection: `github`, `ci_status`; separate read-only inspection from mutation and preserve token redaction and approval behavior.
-4. Monitoring and status: `health`, `status`, `process`, `service`, `netdiag`, `timeline`, `baseline`, `depend`, and `watch`; extract observation before lifecycle-changing actions.
-5. Communication and external integrations: split `notify`, `web_fetch`, `llm`, `embed`, `ollama`, `download`, `media`, `transcribe`, `analytics`, and `tunnel` into bounded families.
-6. Compute tool integration: `compute`, `compute_nodes`, `compute_providers`, `compute_models`, `compute_jobs`, and `compute_route`; preserve placement, trust, classification, and worker gates.
-7. Destructive database and infrastructure operations: `db_backup`, `db_restore`, `db_export`, `db_migrate`, `nginx`, `wireguard`, `cron`, `runbook`, `sandbox`, `ops`, and related mutation tools. Defer until approval, rollback, target validation, and audit behavior are characterized.
+1. Data/filesystem follow-up: `anonymize`, `insight_report`, and remaining report helpers; preserve untrusted-input handling.
+2. GitHub and CI inspection: `github`, `ci_status`; separate read-only inspection from mutation and preserve token redaction and approval behavior.
+3. Monitoring and status: `health`, `status`, `process`, `service`, `netdiag`, `timeline`, `baseline`, `depend`, and `watch`; extract observation before lifecycle-changing actions.
+4. Communication and external integrations: split `notify`, `web_fetch`, `llm`, `embed`, `ollama`, `download`, `media`, `transcribe`, `analytics`, and `tunnel` into bounded families.
+5. Compute tool integration: `compute`, `compute_nodes`, `compute_providers`, `compute_models`, `compute_jobs`, and `compute_route`; preserve placement, trust, classification, and worker gates.
+6. Destructive database and infrastructure operations: `db_backup`, `db_restore`, `db_export`, `db_migrate`, `nginx`, `wireguard`, `cron`, `runbook`, `sandbox`, `ops`, and related mutation tools. Defer until approval, rollback, target validation, and audit behavior are characterized.
 
-The read-only database, storage, memory, filesystem, data-utility, and monitoring-tail families are already extracted. The immediate next implementation slice is duplicate-schema removal and registry-contract coverage, followed by a new bounded legacy family only after that cleanup. Each slice should remain small enough for one reviewable PR.
+The read-only database, storage, memory, filesystem, data-utility, and monitoring-tail families are already extracted. The storage duplicate-schema removal and registry-contract coverage (Phase 1, Track A) are complete. The immediate next implementation slice is a new bounded legacy family. Each slice should remain small enough for one reviewable PR.
 
 A family whose handlers depend on `src/tools-legacy.js` internals — `safeExecFileSync`, `isDangerous`, `jsonText` — needs those helpers relocated to a shared module first. That relocation should be its own slice, not a side effect of a family extraction. Family modules must not require `src/tools-legacy.js` at module top level; the lazy `require` of the dispatcher inside legacy functions is what keeps the dispatcher/legacy cycle from forming.
 
