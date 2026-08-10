@@ -1,0 +1,117 @@
+const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+
+const TEST_DATA_DIR = path.join(__dirname, 'test-data-kernel-migration-parity');
+fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
+
+const MIGRATION_DB = path.join(TEST_DATA_DIR, 'migrations.sqlite');
+const RUNTIME_DB = path.join(TEST_DATA_DIR, 'runtime.sqlite');
+
+function normalizeSql(sql) {
+  return sql.replace(/\s+/g, ' ').trim();
+}
+
+function capturePlatformSchema(db) {
+  const rows = db
+    .prepare("SELECT type, name, tbl_name, sql FROM sqlite_master WHERE tbl_name LIKE 'platform_%' ORDER BY type, name")
+    .all();
+  return rows.map(r => ({ type: r.type, name: r.name, tbl_name: r.tbl_name, sql: r.sql ? normalizeSql(r.sql) : null }));
+}
+
+console.log('Running Platform Kernel Migration Parity Tests...\n');
+
+(async () => {
+  try {
+    // --- Boot path A: fresh database bootstrapped purely through migrations. ---
+    process.env.SIDEKICK_DATA_DIR = path.join(TEST_DATA_DIR, 'data-a');
+    process.env.SIDEKICK_DB_FILE = MIGRATION_DB;
+    delete require.cache[require.resolve('../src/db')];
+
+    const migrationStore = require('../src/db');
+    const migrationResult = migrationStore.runPendingMigrations();
+    const migrationApplied = migrationResult.applied;
+    assert.ok(migrationApplied >= 25, `Migrations 002-026 should apply, got ${migrationApplied}`);
+    assert.ok(
+      migrationResult.migrations.some(m => m.file === '026_platform_kernel_tables.sql'),
+      'Migration 026 should be applied'
+    );
+    const migratedSchema = capturePlatformSchema(migrationStore.getDb());
+
+    console.log(`Test KMP.1: migrations-only boot applies ${migrationApplied} migrations`);
+    assert.strictEqual(
+      migrationStore.getDb().prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
+      String(26),
+      'schema_version should be 26'
+    );
+    console.log('Passed\n');
+
+    // --- Boot path B: fresh database bootstrapped purely through the runtime kernel. ---
+    process.env.SIDEKICK_DATA_DIR = path.join(TEST_DATA_DIR, 'data-b');
+    process.env.SIDEKICK_DB_FILE = RUNTIME_DB;
+    delete require.cache[require.resolve('../src/db')];
+    delete require.cache[require.resolve('../src/platform/kernel')];
+    delete require.cache[require.resolve('../src/platform/kernel-schema')];
+    delete require.cache[require.resolve('../src/redact')];
+
+    const runtimeStore = require('../src/db');
+    const kernel = require('../src/platform/kernel');
+    kernel.ensurePlatformKernelSchema();
+    const runtimeSchema = capturePlatformSchema(runtimeStore.getDb());
+
+    // --- Parity assertions. ---
+    console.log('Test KMP.2: both boot paths produce the identical platform_* schema');
+    assert.strictEqual(
+      migratedSchema.length,
+      runtimeSchema.length,
+      'Platform object counts must match'
+    );
+    const expectedTables = 14;
+    const expectedIndexes = 35;
+    const migratedTables = migratedSchema.filter(o => o.type === 'table').length;
+    const migratedIndexes = migratedSchema.filter(o => o.type === 'index' && o.sql).length;
+    const migratedAutoindexes = migratedSchema.filter(o => o.type === 'index' && !o.sql).length;
+    assert.strictEqual(migratedTables, expectedTables, 'Expected 14 platform tables');
+    assert.strictEqual(migratedIndexes, expectedIndexes, 'Expected 35 platform indexes');
+    assert.strictEqual(migratedAutoindexes, expectedTables - 1, 'Each TEXT PRIMARY KEY creates one autoindex');
+    for (let i = 0; i < migratedSchema.length; i++) {
+      const a = migratedSchema[i];
+      const b = runtimeSchema[i];
+      assert.strictEqual(a.type, b.type, `Type mismatch for ${a.name}`);
+      assert.strictEqual(a.name, b.name, 'Object names must match in order');
+      assert.strictEqual(a.sql, b.sql, `DDL mismatch for ${a.name}`);
+    }
+    console.log('Passed\n');
+
+    console.log('Test KMP.3: foreign keys and kernel meta exist in both boot paths');
+    const migratedExecutions = migratedSchema.find(o => o.name === 'platform_executions' && o.type === 'table');
+    const runtimeExecutions = runtimeSchema.find(o => o.name === 'platform_executions' && o.type === 'table');
+    assert.match(migratedExecutions.sql, /FOREIGN KEY\(parent_execution_id\)/);
+    assert.match(runtimeExecutions.sql, /FOREIGN KEY\(parent_execution_id\)/);
+    assert.strictEqual(
+      migrationStore.getDb().prepare("SELECT value FROM meta WHERE key = 'platform_kernel_schema_version'").get().value,
+      '1'
+    );
+    assert.strictEqual(
+      runtimeStore.getDb().prepare("SELECT value FROM meta WHERE key = 'platform_kernel_schema_version'").get().value,
+      '1'
+    );
+    console.log('Passed\n');
+
+    console.log('Test KMP.4: kernel schema module stays in sync with the runtime boot');
+    delete require.cache[require.resolve('../src/platform/kernel-schema')];
+    const { KERNEL_SCHEMA_SQL } = require('../src/platform/kernel-schema');
+    assert.ok(KERNEL_SCHEMA_SQL.includes('CREATE TABLE IF NOT EXISTS platform_backups'));
+    assert.ok(KERNEL_SCHEMA_SQL.includes('idx_platform_executions_parent'));
+    assert.ok(KERNEL_SCHEMA_SQL.includes('idx_platform_events_correlation'));
+    assert.ok(KERNEL_SCHEMA_SQL.includes('FOREIGN KEY(parent_execution_id) REFERENCES platform_executions(execution_id)'));
+    console.log('Passed\n');
+
+    console.log('All Platform Kernel Migration Parity tests passed.');
+    process.exit(0);
+  } catch (error) {
+    console.error('Platform Kernel Migration Parity test failed:', error);
+    process.exit(1);
+  }
+})();
