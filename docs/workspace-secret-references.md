@@ -29,9 +29,13 @@ CREATE TABLE IF NOT EXISTS platform_workspace_secrets (
 );
 ```
 
-- `secrets_json` (plaintext) is retained unchanged for backward
-  compatibility. New writers stop populating it; readers fall back to it only
-  for legacy rows that predate the encrypted store.
+- `secrets_json` (plaintext) survives only as a holding area for legacy rows
+  that predate the encrypted store. No kernel writer populates it anymore:
+  `createProjectWorkspace` routes a `secrets` input through the encrypted
+  store (writing `'{}'` to the column), `updateProjectWorkspace` rejects a
+  `secrets` input outright, and the getters never return the column or a
+  parsed `secrets` field. The only reader is `backfillWorkspaceSecrets`,
+  which drains it.
 - Each row stores one secret's `secret-cipher` envelope in `envelope_json`:
 
   ```json
@@ -76,10 +80,14 @@ New workspace methods on `src/platform/kernel.js` (all exported):
 Getters `getProjectWorkspace` / `getWorkspaceByProject` attach
 `secret_names` (sorted, from the child table; no key required). The child
 table lives entirely behind the kernel, so raw ciphertext never appears on a
-workspace row and never leaks into caller logs or responses. Legacy `secrets`
-(plaintext) and `config` / `resource_limits` / `metadata` parsing are
-unchanged — `test/workspace-model.test.js` (WS.1/WS.2) assertions are
-unaffected.
+workspace row and never leaks into caller logs or responses. Workspace
+objects expose no `secrets` or `secrets_json` field at all — values are
+reachable only through `getWorkspaceSecret`. `createProjectWorkspace`
+accepts a `secrets` map for initial provisioning (validated and key-checked
+before the workspace row is inserted; non-string values are stored as their
+JSON serialization); `updateProjectWorkspace` throws if given `secrets`,
+directing callers to the explicit per-secret API. `config` /
+`resource_limits` / `metadata` parsing is unchanged.
 
 ### Fail-closed guarantee
 
@@ -124,12 +132,12 @@ unaffected.
     undecryptable case) or re-store the value under a valid name via
     `setWorkspaceSecret`, then re-run the backfill; `workspaces_unreadable`
     requires fixing the malformed JSON by hand first.
-- The purge is one-way for each migrated workspace, but the legacy write path
-  is still live: `createProjectWorkspace` / `updateProjectWorkspace` accept a
-  plaintext `secrets` input and the workspace getters still return parsed
-  `secrets`. Until those writers are routed through `setWorkspaceSecret`
-  (follow-up), a caller passing `secrets` re-introduces plaintext that the
-  next backfill run purges.
+- The purge is one-way: no live code path writes `secrets_json` anymore, so
+  once a deployment's backfill run drains it (no retained/unreadable
+  workspaces reported), no code path can reintroduce or read the plaintext.
+  At the file level, drained values may linger in WAL frames and free pages
+  until a checkpoint — run `VACUUM` after a backfill if at-rest erasure of
+  the residue matters.
 
 ## Tests
 
@@ -149,6 +157,16 @@ unaffected.
 - PI.19 unreadable `secrets_json` is reported and left untouched.
 - PI.20 a non-null value under an empty name keeps the workspace's plaintext.
 - PI.21 plaintext survives when the existing envelope no longer decrypts.
+
+`test/workspace-model.test.js`:
+
+- WS.2 create with `secrets` stores envelopes only (`secrets_json` stays
+  `{}`), getters expose `secret_names` and no `secrets`/`secrets_json`.
+- WS.11 `updateProjectWorkspace` rejects a plaintext `secrets` input.
+- WS.12 create with `secrets` fails closed without the key, inserting no
+  workspace row; create without `secrets` needs no key.
+- WS.13 malformed `secrets` shapes and non-serializable values are rejected
+  before the workspace row exists.
 
 `test/kernel-migration-parity.test.js` (KMP.1–KMP.4) verifies migration
 `027` is applied, both boot paths produce identical `platform_*` DDL (17
