@@ -706,6 +706,131 @@ function getRunnerSession(runnerId) {
   return { ...row, resource_limits: parseJson(row.resource_limits_json, {}), resource_usage: parseJson(row.resource_usage_json, {}), metadata: parseJson(row.metadata_json, {}) };
 }
 
+// --- Execution claims (Phase 4/B contract) ---
+//
+// One claimant of record per execution, write-fenced by claim_epoch, modeled
+// on the approval-continuation and Compute claim patterns. Claims are advisory
+// for schedulers: the kernel does not dispatch anything, it only guarantees
+// that of N concurrent runners exactly one wins the claim, that a stale
+// claimant cannot write after being superseded, and that expired leases are
+// recoverable. Checkpoint payloads are caller-defined progress markers and
+// must not contain secret material.
+
+const DEFAULT_CLAIM_LEASE_MS = 300000;
+const MAX_CLAIM_LEASE_MS = 86400000;
+
+// Bounds matter: a negative lease is born expired (two live "winners"), and a
+// huge one overflows into extended ISO years ("+033715-...") whose leading "+"
+// sorts before every normal year, silently inverting every lease comparison.
+function normalizeLeaseMs(leaseMs) {
+  if (!Number.isInteger(leaseMs) || leaseMs < 1000 || leaseMs > MAX_CLAIM_LEASE_MS) {
+    throw new Error(`lease_ms must be an integer between 1000 and ${MAX_CLAIM_LEASE_MS}`);
+  }
+  return leaseMs;
+}
+
+function normalizeClaim(row) {
+  if (!row) return null;
+  const { checkpoint_json, ...rest } = row;
+  return { ...rest, cancel_requested: row.cancel_requested === 1, checkpoint: parseJson(checkpoint_json, {}) };
+}
+
+function claimExecution({ execution_id, claimed_by, lease_ms = DEFAULT_CLAIM_LEASE_MS } = {}) {
+  ensurePlatformKernelSchema();
+  if (!execution_id) throw new Error("execution_id is required");
+  if (!claimed_by || typeof claimed_by !== "string") throw new Error("claimed_by is required");
+  normalizeLeaseMs(lease_ms);
+  const db = dbStore.getDb();
+  const attempt = db.transaction(() => {
+    const exec = db.prepare("SELECT state FROM platform_executions WHERE execution_id = ?").get(execution_id);
+    if (!exec) return { ok: false, code: "execution_not_found" };
+    if (TERMINAL_STATES.has(exec.state)) return { ok: false, code: "execution_terminal", state: exec.state };
+    const now = nowIso();
+    const leaseUntil = new Date(Date.now() + lease_ms).toISOString();
+    const row = db.prepare("SELECT * FROM platform_execution_claims WHERE execution_id = ?").get(execution_id);
+    if (!row) {
+      db.prepare("INSERT INTO platform_execution_claims (execution_id, claimed_by, claim_epoch, lease_expires_at, heartbeat_at, cancel_requested, checkpoint_json, created_at, updated_at) VALUES (?, ?, 1, ?, ?, 0, '{}', ?, ?)").run(execution_id, claimed_by, leaseUntil, now, now, now);
+    } else {
+      const result = db.prepare("UPDATE platform_execution_claims SET claimed_by = ?, claim_epoch = claim_epoch + 1, lease_expires_at = ?, heartbeat_at = ?, updated_at = ? WHERE execution_id = ? AND (claimed_by IS NULL OR lease_expires_at IS NULL OR lease_expires_at < ?)").run(claimed_by, leaseUntil, now, now, execution_id, now);
+      if (result.changes === 0) return { ok: false, code: "claim_held", claimed_by: row.claimed_by, lease_expires_at: row.lease_expires_at };
+    }
+    db.prepare("UPDATE platform_executions SET heartbeat_at = ?, updated_at = ? WHERE execution_id = ?").run(now, now, execution_id);
+    return { ok: true, claim: normalizeClaim(db.prepare("SELECT * FROM platform_execution_claims WHERE execution_id = ?").get(execution_id)) };
+  });
+  return attempt.immediate();
+}
+
+function renewExecutionLease({ execution_id, claimed_by, claim_epoch, lease_ms = DEFAULT_CLAIM_LEASE_MS } = {}) {
+  ensurePlatformKernelSchema();
+  if (!execution_id || !claimed_by || !Number.isInteger(claim_epoch)) throw new Error("execution_id, claimed_by and claim_epoch are required");
+  normalizeLeaseMs(lease_ms);
+  const now = nowIso();
+  const leaseUntil = new Date(Date.now() + lease_ms).toISOString();
+  const result = dbStore.getDb().prepare("UPDATE platform_execution_claims SET lease_expires_at = ?, heartbeat_at = ?, updated_at = ? WHERE execution_id = ? AND claimed_by = ? AND claim_epoch = ?").run(leaseUntil, now, now, execution_id, claimed_by, claim_epoch);
+  if (result.changes === 0) return { ok: false, code: "lease_superseded" };
+  dbStore.getDb().prepare("UPDATE platform_executions SET heartbeat_at = ?, updated_at = ? WHERE execution_id = ?").run(now, now, execution_id);
+  return { ok: true, lease_expires_at: leaseUntil };
+}
+
+function checkpointExecution({ execution_id, claimed_by, claim_epoch, checkpoint } = {}) {
+  ensurePlatformKernelSchema();
+  if (!execution_id || !claimed_by || !Number.isInteger(claim_epoch)) throw new Error("execution_id, claimed_by and claim_epoch are required");
+  const now = nowIso();
+  const result = dbStore.getDb().prepare("UPDATE platform_execution_claims SET checkpoint_json = ?, heartbeat_at = ?, updated_at = ? WHERE execution_id = ? AND claimed_by = ? AND claim_epoch = ?").run(json(checkpoint), now, now, execution_id, claimed_by, claim_epoch);
+  if (result.changes === 0) return { ok: false, code: "checkpoint_rejected" };
+  return { ok: true };
+}
+
+function releaseExecutionClaim({ execution_id, claimed_by, claim_epoch } = {}) {
+  ensurePlatformKernelSchema();
+  if (!execution_id || !claimed_by || !Number.isInteger(claim_epoch)) throw new Error("execution_id, claimed_by and claim_epoch are required");
+  const now = nowIso();
+  const result = dbStore.getDb().prepare("UPDATE platform_execution_claims SET claimed_by = NULL, lease_expires_at = NULL, heartbeat_at = ?, updated_at = ? WHERE execution_id = ? AND claimed_by = ? AND claim_epoch = ?").run(now, now, execution_id, claimed_by, claim_epoch);
+  if (result.changes === 0) return { ok: false, code: "release_rejected" };
+  return { ok: true };
+}
+
+function getExecutionClaim(executionId) {
+  ensurePlatformKernelSchema();
+  if (!executionId) throw new Error("execution_id is required");
+  return normalizeClaim(dbStore.getDb().prepare("SELECT * FROM platform_execution_claims WHERE execution_id = ?").get(executionId));
+}
+
+function requestExecutionCancel(executionId, details = {}) {
+  ensurePlatformKernelSchema();
+  if (!executionId) throw new Error("execution_id is required");
+  const exec = dbStore.getDb().prepare("SELECT execution_id FROM platform_executions WHERE execution_id = ?").get(executionId);
+  if (!exec) throw new Error(`Execution not found: ${executionId}`);
+  const now = nowIso();
+  dbStore.getDb().prepare("INSERT INTO platform_execution_claims (execution_id, claim_epoch, cancel_requested, checkpoint_json, created_at, updated_at) VALUES (?, 0, 1, '{}', ?, ?) ON CONFLICT(execution_id) DO UPDATE SET cancel_requested = 1, updated_at = excluded.updated_at").run(executionId, now, now);
+  appendEvent({ event_type: "execution.cancel_requested", source: details.source || "platform", actor_id: details.actor_id || null, execution_id: executionId, payload: { reason: details.reason || null }, correlation_id: executionId });
+  return { execution_id: executionId, cancel_requested: true };
+}
+
+function recoverOrphanedExecutions(details = {}) {
+  ensurePlatformKernelSchema();
+  const db = dbStore.getDb();
+  const now = details.now || nowIso();
+  const rows = db.prepare("SELECT c.execution_id, c.claimed_by, c.lease_expires_at, e.state FROM platform_execution_claims c JOIN platform_executions e ON e.execution_id = c.execution_id WHERE c.claimed_by IS NOT NULL AND c.lease_expires_at IS NOT NULL AND c.lease_expires_at < ?").all(now);
+  const orphaned = [];
+  const released = [];
+  const clear = db.prepare("UPDATE platform_execution_claims SET claimed_by = NULL, lease_expires_at = NULL, updated_at = ? WHERE execution_id = ? AND lease_expires_at IS NOT NULL AND lease_expires_at < ?");
+  for (const row of rows) {
+    const cleared = clear.run(nowIso(), row.execution_id, now);
+    if (cleared.changes === 0) continue;
+    if (["queued", "running", "waiting"].includes(row.state)) {
+      transitionExecution(row.execution_id, "orphaned", { source: details.source || "platform", actor_id: details.actor_id || null, reason: `claim lease expired (was claimed by ${row.claimed_by})` });
+      orphaned.push(row.execution_id);
+    } else {
+      released.push(row.execution_id);
+    }
+  }
+  if (orphaned.length > 0 || released.length > 0) {
+    appendEvent({ event_type: "execution.claims_recovered", source: details.source || "platform", actor_id: details.actor_id || null, subject_type: "execution", subject_id: "*", payload: { orphaned: orphaned.length, released: released.length }, correlation_id: details.correlation_id || null });
+  }
+  return { scanned: rows.length, orphaned, released };
+}
+
 function createProjectWorkspace(input = {}) {
   ensurePlatformKernelSchema();
   // Secrets are fully validated (including their stored string form) before
@@ -1283,6 +1408,13 @@ module.exports = {
   completeRunnerSession,
   terminateRunnerSession,
   getRunnerSession,
+  claimExecution,
+  renewExecutionLease,
+  checkpointExecution,
+  releaseExecutionClaim,
+  getExecutionClaim,
+  requestExecutionCancel,
+  recoverOrphanedExecutions,
   createProjectWorkspace,
   getProjectWorkspace,
   getWorkspaceByProject,
