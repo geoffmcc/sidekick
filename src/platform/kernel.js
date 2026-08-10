@@ -3,6 +3,7 @@ const path = require("path");
 const dbStore = require("../db");
 const { redactSensitive } = require("../redact");
 const { KERNEL_SCHEMA_SQL } = require("./kernel-schema");
+const { encryptColumn, decryptColumn, hasSecretKey } = require("../core/secret-cipher");
 
 const EXECUTION_STATES = Object.freeze([
   "created",
@@ -43,6 +44,22 @@ const ALLOWED_TRANSITIONS = Object.freeze({
   orphaned: ["queued", "running", "failed", "cancelled"],
 });
 
+const PROJECT_STATES = Object.freeze(["active", "archived"]);
+
+const PROJECT_SOURCE_TYPES = Object.freeze([
+  "kv",
+  "memory",
+  "agent",
+  "compute",
+  "workspace",
+  "execution",
+  "handoff",
+  "session",
+  "predict",
+  "blackbox",
+  "custom",
+]);
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -73,6 +90,40 @@ function parseJson(value, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function normalizeProjectId(projectId) {
+  if (typeof projectId !== "string") throw new Error("project_id must be a non-empty string");
+  const id = projectId.trim();
+  if (!id) throw new Error("project_id must be a non-empty string");
+  return id;
+}
+
+function normalizeProject(row) {
+  if (!row) return null;
+  return { ...row, metadata: parseJson(row.metadata_json, {}) };
+}
+
+function normalizeProjectSource(row) {
+  if (!row) return null;
+  return { ...row, metadata: parseJson(row.metadata_json, {}) };
+}
+
+function normalizeWorkspace(row, secretNames = []) {
+  if (!row) return null;
+  return {
+    ...row,
+    config: parseJson(row.config_json, {}),
+    secrets: parseJson(row.secrets_json, {}),
+    resource_limits: parseJson(row.resource_limits_json, {}),
+    metadata: parseJson(row.metadata_json, {}),
+    secret_names: secretNames,
+  };
+}
+
+function getWorkspaceSecretNames(workspaceId) {
+  const rows = dbStore.getDb().prepare("SELECT secret_name FROM platform_workspace_secrets WHERE workspace_id = ? ORDER BY secret_name").all(workspaceId);
+  return rows.map((r) => r.secret_name);
 }
 
 function ensurePlatformKernelSchema() {
@@ -664,15 +715,13 @@ function createProjectWorkspace(input = {}) {
 function getProjectWorkspace(workspaceId) {
   ensurePlatformKernelSchema();
   const row = dbStore.getDb().prepare("SELECT * FROM platform_project_workspaces WHERE workspace_id = ?").get(workspaceId);
-  if (!row) return null;
-  return { ...row, config: parseJson(row.config_json, {}), secrets: parseJson(row.secrets_json, {}), resource_limits: parseJson(row.resource_limits_json, {}), metadata: parseJson(row.metadata_json, {}) };
+  return normalizeWorkspace(row, row ? getWorkspaceSecretNames(workspaceId) : []);
 }
 
 function getWorkspaceByProject(projectId) {
   ensurePlatformKernelSchema();
   const row = dbStore.getDb().prepare("SELECT * FROM platform_project_workspaces WHERE project_id = ? AND state = 'active'").get(projectId);
-  if (!row) return null;
-  return { ...row, config: parseJson(row.config_json, {}), secrets: parseJson(row.secrets_json, {}), resource_limits: parseJson(row.resource_limits_json, {}), metadata: parseJson(row.metadata_json, {}) };
+  return normalizeWorkspace(row, row ? getWorkspaceSecretNames(row.workspace_id) : []);
 }
 
 function updateProjectWorkspace(workspaceId, updates = {}) {
@@ -696,6 +745,174 @@ function archiveProjectWorkspace(workspaceId, details = {}) {
   dbStore.getDb().prepare("UPDATE platform_project_workspaces SET state = 'archived', archived_at = ?, updated_at = ? WHERE workspace_id = ?").run(ts, ts, workspaceId);
   appendEvent({ event_type: "workspace.archived", source: details.source || "platform", actor_id: details.actor_id, subject_type: "workspace", subject_id: workspaceId, payload: {}, correlation_id: workspaceId });
   return dbStore.getDb().prepare("SELECT * FROM platform_project_workspaces WHERE workspace_id = ?").get(workspaceId);
+}
+
+function registerProject(input = {}) {
+  ensurePlatformKernelSchema();
+  const projectId = normalizeProjectId(input.project_id);
+  const ts = nowIso();
+  const result = dbStore.getDb().prepare("INSERT OR IGNORE INTO platform_projects (project_id, display_name, description, owner_actor_id, state, created_at, updated_at, metadata_json) VALUES (?, ?, ?, ?, 'active', ?, ?, ?)").run(projectId, input.display_name || projectId, input.description || null, input.owner_actor_id || null, ts, ts, json(input.metadata));
+  if (result.changes > 0) {
+    appendEvent({ event_type: "project.registered", source: input.source || "platform", actor_id: input.owner_actor_id || null, subject_type: "project", subject_id: projectId, payload: { display_name: input.display_name || projectId }, correlation_id: projectId });
+  }
+  return getProject(projectId);
+}
+
+function getProject(projectId) {
+  ensurePlatformKernelSchema();
+  const pid = normalizeProjectId(projectId);
+  const row = dbStore.getDb().prepare("SELECT * FROM platform_projects WHERE project_id = ?").get(pid);
+  return normalizeProject(row);
+}
+
+function listProjects(filters = {}) {
+  ensurePlatformKernelSchema();
+  let query = "SELECT * FROM platform_projects WHERE 1=1";
+  const params = [];
+  if (filters.state) {
+    if (!PROJECT_STATES.includes(filters.state)) throw new Error(`Invalid project state: ${filters.state}`);
+    query += " AND state = ?";
+    params.push(filters.state);
+  }
+  query += " ORDER BY created_at DESC";
+  if (filters.limit) { query += " LIMIT ?"; params.push(filters.limit); }
+  return dbStore.getDb().prepare(query).all(...params).map(normalizeProject);
+}
+
+function archiveProject(projectId, details = {}) {
+  ensurePlatformKernelSchema();
+  const pid = normalizeProjectId(projectId);
+  const existing = dbStore.getDb().prepare("SELECT * FROM platform_projects WHERE project_id = ?").get(pid);
+  if (!existing) throw new Error(`Project ${pid} not found`);
+  const ts = details.timestamp || nowIso();
+  dbStore.getDb().prepare("UPDATE platform_projects SET state = 'archived', archived_at = ?, updated_at = ? WHERE project_id = ?").run(ts, ts, pid);
+  appendEvent({ event_type: "project.archived", source: details.source || "platform", actor_id: details.actor_id || null, subject_type: "project", subject_id: pid, payload: { reason: details.reason || null }, correlation_id: pid });
+  return getProject(pid);
+}
+
+function getProjectSource(projectId, source, sourceId) {
+  const row = dbStore.getDb().prepare("SELECT * FROM platform_project_sources WHERE project_id = ? AND source = ? AND source_id = ?").get(projectId, source, sourceId);
+  return normalizeProjectSource(row);
+}
+
+function recordProjectSource(projectId, source, sourceId, details = {}) {
+  ensurePlatformKernelSchema();
+  const pid = normalizeProjectId(projectId);
+  if (!PROJECT_SOURCE_TYPES.includes(source)) throw new Error(`Invalid project source: ${source}`);
+  const sid = sourceId == null ? "" : String(sourceId);
+  const ts = nowIso();
+  const count = Number.isFinite(details.count) ? details.count : 1;
+  registerProject({ project_id: pid });
+  dbStore.getDb().prepare(`
+    INSERT INTO platform_project_sources (project_id, source, source_id, first_seen_at, last_seen_at, count, metadata_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(project_id, source, source_id) DO UPDATE SET last_seen_at = excluded.last_seen_at, count = count + excluded.count, metadata_json = excluded.metadata_json
+  `).run(pid, source, sid, ts, ts, count, json(details.metadata));
+  appendEvent({ event_type: "project.source_recorded", source: details.source || "platform", actor_id: details.actor_id || null, subject_type: "project", subject_id: pid, payload: { source, source_id: sid }, correlation_id: pid });
+  return getProjectSource(pid, source, sid);
+}
+
+function getProjectSources(projectId) {
+  ensurePlatformKernelSchema();
+  const pid = normalizeProjectId(projectId);
+  const rows = dbStore.getDb().prepare("SELECT * FROM platform_project_sources WHERE project_id = ? ORDER BY source, source_id").all(pid);
+  return rows.map(normalizeProjectSource);
+}
+
+function getProjectsBySource(source, sourceId) {
+  ensurePlatformKernelSchema();
+  if (!PROJECT_SOURCE_TYPES.includes(source)) throw new Error(`Invalid project source: ${source}`);
+  const sid = sourceId == null ? "" : String(sourceId);
+  const rows = dbStore.getDb().prepare("SELECT * FROM platform_project_sources WHERE source = ? AND source_id = ? ORDER BY last_seen_at DESC").all(source, sid);
+  return rows.map(normalizeProjectSource);
+}
+
+function backfillProjectSources(details = {}) {
+  ensurePlatformKernelSchema();
+  const ts = details.timestamp || nowIso();
+  const scans = [
+    { table: "kv_store", projectCol: "project", source: "kv" },
+    { table: "memories", projectCol: "project", source: "memory" },
+    { table: "platform_executions", projectCol: "project_id", source: "execution" },
+    { table: "platform_project_workspaces", projectCol: "project_id", source: "workspace" },
+    { table: "compute_jobs", projectCol: "project", source: "compute" },
+    { table: "memory_handoffs", projectCol: "project", source: "handoff" },
+    { table: "memory_task_sessions", projectCol: "project", source: "session" },
+    { table: "blackbox_incidents", projectCol: "project", source: "blackbox" },
+    { table: "predictions", projectCol: "project", source: "predict" },
+  ];
+  const upsert = dbStore.getDb().prepare(`
+    INSERT INTO platform_project_sources (project_id, source, source_id, first_seen_at, last_seen_at, count, metadata_json)
+    VALUES (?, ?, '*', ?, ?, ?, ?)
+    ON CONFLICT(project_id, source, source_id) DO UPDATE SET last_seen_at = excluded.last_seen_at, count = excluded.count, metadata_json = excluded.metadata_json
+  `);
+  let written = 0;
+  const perSource = {};
+  for (const scan of scans) {
+    let rows;
+    try {
+      rows = dbStore.getDb().prepare(`SELECT ${scan.projectCol} AS project_id, COUNT(*) AS cnt FROM ${scan.table} WHERE ${scan.projectCol} IS NOT NULL AND ${scan.projectCol} != '' GROUP BY ${scan.projectCol}`).all();
+    } catch {
+      continue;
+    }
+    perSource[scan.source] = rows.length;
+    for (const row of rows) {
+      const pid = String(row.project_id).trim();
+      if (!pid) continue;
+      registerProject({ project_id: pid });
+      upsert.run(pid, scan.source, ts, ts, row.cnt, json({ backfilled_at: ts }));
+      written++;
+    }
+  }
+  appendEvent({ event_type: "project.sources_backfilled", source: details.source || "platform", actor_id: details.actor_id || null, subject_type: "project", subject_id: "*", payload: { written, per_source: perSource }, correlation_id: details.correlation_id || null });
+  return { written, sources: perSource };
+}
+
+function setWorkspaceSecret(workspaceId, name, value, details = {}) {
+  ensurePlatformKernelSchema();
+  if (!workspaceId) throw new Error("workspace_id is required");
+  if (!name || typeof name !== "string") throw new Error("secret name is required");
+  if (value == null) throw new Error("secret value is required");
+  if (!hasSecretKey()) throw new Error("SIDEKICK_SECRET_KEY not set in .env");
+  const existing = dbStore.getDb().prepare("SELECT workspace_id FROM platform_project_workspaces WHERE workspace_id = ?").get(workspaceId);
+  if (!existing) throw new Error(`Workspace ${workspaceId} not found`);
+  const ts = nowIso();
+  dbStore.getDb().prepare("INSERT INTO platform_workspace_secrets (workspace_id, secret_name, envelope_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(workspace_id, secret_name) DO UPDATE SET envelope_json = excluded.envelope_json, updated_at = excluded.updated_at").run(workspaceId, name, encryptColumn(String(value)), ts, ts);
+  dbStore.getDb().prepare("UPDATE platform_project_workspaces SET updated_at = ? WHERE workspace_id = ?").run(ts, workspaceId);
+  appendEvent({ event_type: "workspace.secret_set", source: details.source || "platform", actor_id: details.actor_id || null, subject_type: "workspace", subject_id: workspaceId, payload: { secret_names: [name] }, correlation_id: workspaceId });
+  return getProjectWorkspace(workspaceId);
+}
+
+function getWorkspaceSecret(workspaceId, name) {
+  ensurePlatformKernelSchema();
+  if (!workspaceId) throw new Error("workspace_id is required");
+  if (!name || typeof name !== "string") throw new Error("secret name is required");
+  const row = dbStore.getDb().prepare("SELECT envelope_json FROM platform_workspace_secrets WHERE workspace_id = ? AND secret_name = ?").get(workspaceId, name);
+  if (!row) return null;
+  if (!hasSecretKey()) throw new Error("SIDEKICK_SECRET_KEY not set in .env");
+  return decryptColumn(row.envelope_json);
+}
+
+function deleteWorkspaceSecret(workspaceId, name, details = {}) {
+  ensurePlatformKernelSchema();
+  if (!workspaceId) throw new Error("workspace_id is required");
+  if (!name || typeof name !== "string") throw new Error("secret name is required");
+  const existing = dbStore.getDb().prepare("SELECT workspace_id FROM platform_project_workspaces WHERE workspace_id = ?").get(workspaceId);
+  if (!existing) throw new Error(`Workspace ${workspaceId} not found`);
+  const result = dbStore.getDb().prepare("DELETE FROM platform_workspace_secrets WHERE workspace_id = ? AND secret_name = ?").run(workspaceId, name);
+  if (result.changes === 0) return { workspace_id: workspaceId, deleted: false };
+  const ts = nowIso();
+  dbStore.getDb().prepare("UPDATE platform_project_workspaces SET updated_at = ? WHERE workspace_id = ?").run(ts, workspaceId);
+  appendEvent({ event_type: "workspace.secret_deleted", source: details.source || "platform", actor_id: details.actor_id || null, subject_type: "workspace", subject_id: workspaceId, payload: { secret_names: [name] }, correlation_id: workspaceId });
+  return { workspace_id: workspaceId, deleted: true };
+}
+
+function listWorkspaceSecretNames(workspaceId) {
+  ensurePlatformKernelSchema();
+  if (!workspaceId) throw new Error("workspace_id is required");
+  const existing = dbStore.getDb().prepare("SELECT workspace_id FROM platform_project_workspaces WHERE workspace_id = ?").get(workspaceId);
+  if (!existing) return [];
+  return getWorkspaceSecretNames(workspaceId);
 }
 
 function registerModel(input = {}) {
@@ -975,6 +1192,18 @@ module.exports = {
   getWorkspaceByProject,
   updateProjectWorkspace,
   archiveProjectWorkspace,
+  registerProject,
+  getProject,
+  listProjects,
+  archiveProject,
+  recordProjectSource,
+  getProjectSources,
+  getProjectsBySource,
+  backfillProjectSources,
+  setWorkspaceSecret,
+  getWorkspaceSecret,
+  deleteWorkspaceSecret,
+  listWorkspaceSecretNames,
   registerModel,
   getModel,
   getModelByName,

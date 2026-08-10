@@ -6,7 +6,9 @@
  * through migrations. `migrations/011_platform_kernel.sql` established the
  * four base tables; `migrations/026_platform_kernel_tables.sql` adds the ten
  * remaining tables so fresh installs converge without dropping or renaming
- * anything. Keep the migration files in sync with this module.
+ * anything; `migrations/027_platform_project_projection.sql` adds the project
+ * projection tables and the encrypted workspace-secret store. Keep the
+ * migration files in sync with this module.
  */
 const KERNEL_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS platform_executions (
@@ -220,6 +222,43 @@ const KERNEL_SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_platform_workspaces_owner ON platform_project_workspaces(owner_id, state);
   CREATE INDEX IF NOT EXISTS idx_platform_workspaces_state ON platform_project_workspaces(state, updated_at DESC);
 
+  CREATE TABLE IF NOT EXISTS platform_projects (
+    project_id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    description TEXT,
+    owner_actor_id TEXT,
+    state TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    archived_at TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}'
+  );
+  CREATE INDEX IF NOT EXISTS idx_platform_projects_state ON platform_projects(state, updated_at DESC);
+
+  CREATE TABLE IF NOT EXISTS platform_project_sources (
+    project_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 1,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    PRIMARY KEY (project_id, source, source_id),
+    FOREIGN KEY(project_id) REFERENCES platform_projects(project_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_platform_project_sources_project ON platform_project_sources(project_id, last_seen_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_platform_project_sources_source ON platform_project_sources(source, source_id, last_seen_at DESC);
+
+  CREATE TABLE IF NOT EXISTS platform_workspace_secrets (
+    workspace_id TEXT NOT NULL,
+    secret_name TEXT NOT NULL,
+    envelope_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (workspace_id, secret_name),
+    FOREIGN KEY(workspace_id) REFERENCES platform_project_workspaces(workspace_id)
+  );
+
   CREATE TABLE IF NOT EXISTS platform_model_registry (
     model_id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -325,7 +364,7 @@ const KERNEL_SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_platform_artifacts_hash ON platform_artifacts(content_hash);
   CREATE INDEX IF NOT EXISTS idx_platform_transitions_execution ON platform_execution_transitions(execution_id, created_at);
 
-  INSERT OR REPLACE INTO meta (key, value) VALUES ('platform_kernel_schema_version', '1');
+  INSERT OR REPLACE INTO meta (key, value) VALUES ('platform_kernel_schema_version', '2');
 `;
 
 module.exports = { KERNEL_SCHEMA_SQL };
