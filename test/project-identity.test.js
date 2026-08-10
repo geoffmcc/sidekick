@@ -35,6 +35,12 @@ function cleanup() {
   try { fs.rmSync(DATA_DIR, { recursive: true, force: true }); } catch {}
 }
 
+// createProjectWorkspace no longer writes plaintext, so legacy rows that
+// predate the encrypted store are simulated with direct SQL.
+function seedLegacySecrets(workspaceId, secrets) {
+  dbStore.getDb().prepare("UPDATE platform_project_workspaces SET secrets_json = ? WHERE workspace_id = ?").run(JSON.stringify(secrets), workspaceId);
+}
+
 // PI.1: registerProject creates an idempotent canonical project row
 test("PI.1: registerProject creates idempotent project", () => {
   const first = platformKernel.registerProject({ project_id: "alpha", display_name: "Alpha", owner_actor_id: "admin" });
@@ -195,7 +201,8 @@ test("PI.15: getProjectWorkspace hides ciphertext", () => {
 
 // PI.16: backfillWorkspaceSecrets migrates legacy plaintext into envelopes and clears it
 test("PI.16: backfillWorkspaceSecrets migrates and clears plaintext", () => {
-  const ws = platformKernel.createProjectWorkspace({ name: "legacy", project_id: "legacy_p", secrets: { token: "legacy-token-value", nested: { a: 1 } } });
+  const ws = platformKernel.createProjectWorkspace({ name: "legacy", project_id: "legacy_p" });
+  seedLegacySecrets(ws.workspace_id, { token: "legacy-token-value", nested: { a: 1 } });
   const before = dbStore.getDb().prepare("SELECT secrets_json FROM platform_project_workspaces WHERE workspace_id = ?").get(ws.workspace_id);
   assert.ok(before.secrets_json.includes("legacy-token-value"));
   const result = platformKernel.backfillWorkspaceSecrets();
@@ -213,7 +220,8 @@ test("PI.16: backfillWorkspaceSecrets migrates and clears plaintext", () => {
 
 // PI.17: backfill never overwrites an existing envelope and re-runs migrate nothing
 test("PI.17: backfillWorkspaceSecrets skips existing envelopes and is idempotent", () => {
-  const ws = platformKernel.createProjectWorkspace({ name: "dupe", project_id: "dupe_p", secrets: { dupe: "stale-plaintext" } });
+  const ws = platformKernel.createProjectWorkspace({ name: "dupe", project_id: "dupe_p" });
+  seedLegacySecrets(ws.workspace_id, { dupe: "stale-plaintext" });
   platformKernel.setWorkspaceSecret(ws.workspace_id, "dupe", "current-encrypted");
   const result = platformKernel.backfillWorkspaceSecrets();
   assert.strictEqual(result.secrets_skipped_existing, 1);
@@ -225,7 +233,8 @@ test("PI.17: backfillWorkspaceSecrets skips existing envelopes and is idempotent
 
 // PI.18: backfill fails closed without SIDEKICK_SECRET_KEY, leaving plaintext untouched
 test("PI.18: backfillWorkspaceSecrets fails closed without key", () => {
-  const ws = platformKernel.createProjectWorkspace({ name: "closed", project_id: "closed_p", secrets: { held: "still-plaintext" } });
+  const ws = platformKernel.createProjectWorkspace({ name: "closed", project_id: "closed_p" });
+  seedLegacySecrets(ws.workspace_id, { held: "still-plaintext" });
   const prev = process.env.SIDEKICK_SECRET_KEY;
   delete process.env.SIDEKICK_SECRET_KEY;
   try {
@@ -264,7 +273,8 @@ test("PI.20: backfillWorkspaceSecrets retains plaintext for unaddressable names"
 
 // PI.21: plaintext survives when the existing envelope no longer decrypts
 test("PI.21: backfillWorkspaceSecrets retains plaintext for undecryptable envelopes", () => {
-  const ws = platformKernel.createProjectWorkspace({ name: "rotated", project_id: "rotated_p", secrets: { rot: "last-good-copy" } });
+  const ws = platformKernel.createProjectWorkspace({ name: "rotated", project_id: "rotated_p" });
+  seedLegacySecrets(ws.workspace_id, { rot: "last-good-copy" });
   const ts = new Date().toISOString();
   dbStore.getDb().prepare("INSERT INTO platform_workspace_secrets (workspace_id, secret_name, envelope_json, created_at, updated_at) VALUES (?, 'rot', ?, ?, ?)").run(ws.workspace_id, '{"iv":"00000000000000000000000000000000","data":"00","authTag":"00000000000000000000000000000000"}', ts, ts);
   const result = platformKernel.backfillWorkspaceSecrets();

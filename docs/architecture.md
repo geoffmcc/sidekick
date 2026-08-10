@@ -149,9 +149,9 @@ Runner sessions provide isolated execution contexts:
 
 The platform kernel provides isolated project environments and model management:
 
-- `createProjectWorkspace({ name, project_id, owner_id, config, secrets, resource_limits })` creates an isolated project workspace with its own configuration, secrets, and resource limits. Workspaces start in `active` state.
-- `getProjectWorkspace(workspaceId)` and `getWorkspaceByProject(projectId)` retrieve workspace details with parsed config/secrets.
-- `updateProjectWorkspace(workspaceId, { config, secrets, resource_limits })` updates workspace configuration.
+- `createProjectWorkspace({ name, project_id, owner_id, config, secrets, resource_limits })` creates an isolated project workspace. A `secrets` map is initial provisioning only: entries are routed into the encrypted secret store (requires `SIDEKICK_SECRET_KEY`; fails closed before the row is inserted) and never stored as plaintext. Workspaces start in `active` state.
+- `getProjectWorkspace(workspaceId)` and `getWorkspaceByProject(projectId)` retrieve workspace details with parsed config and sorted `secret_names`; secret values are reachable only through `getWorkspaceSecret`.
+- `updateProjectWorkspace(workspaceId, { config, resource_limits })` updates workspace configuration. Passing `secrets` throws — secrets are managed via `setWorkspaceSecret`/`deleteWorkspaceSecret`.
 - `archiveProjectWorkspace(workspaceId)` transitions to `archived` state, excluding from active lookups.
 - Workspaces emit `workspace.created`, `workspace.updated`, and `workspace.archived` events.
 

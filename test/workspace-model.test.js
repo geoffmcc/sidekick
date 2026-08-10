@@ -5,6 +5,7 @@ const fs = require("fs");
 const DATA_DIR = path.join(__dirname, "test-data-workspace-model-" + Date.now());
 fs.mkdirSync(DATA_DIR, { recursive: true });
 process.env.SIDEKICK_DATA_DIR = DATA_DIR;
+process.env.SIDEKICK_SECRET_KEY = "workspace-model-test-secret-key";
 
 delete require.cache[require.resolve("../src/db")];
 delete require.cache[require.resolve("../src/platform/kernel")];
@@ -40,13 +41,18 @@ test("WS.1: createProjectWorkspace creates workspace", () => {
   assert.strictEqual(ws.state, "active");
 });
 
-// WS.2: getProjectWorkspace returns parsed fields
+// WS.2: getProjectWorkspace returns parsed fields; secrets only as encrypted names
 test("WS.2: getProjectWorkspace returns parsed fields", () => {
   const ws = platformKernel.createProjectWorkspace({ name: "test_get", project_id: "proj_2", config: { debug: true }, secrets: { api_key: "secret123" }, metadata: { region: "us-east" } });
   const got = platformKernel.getProjectWorkspace(ws.workspace_id);
   assert.deepStrictEqual(got.config, { debug: true });
-  assert.deepStrictEqual(got.secrets, { api_key: "secret123" });
   assert.deepStrictEqual(got.metadata, { region: "us-east" });
+  assert.deepStrictEqual(got.secret_names, ["api_key"]);
+  assert.ok(!("secrets" in got));
+  assert.ok(!("secrets_json" in got));
+  assert.strictEqual(platformKernel.getWorkspaceSecret(ws.workspace_id, "api_key"), "secret123");
+  const row = dbStore.getDb().prepare("SELECT secrets_json FROM platform_project_workspaces WHERE workspace_id = ?").get(ws.workspace_id);
+  assert.strictEqual(row.secrets_json, "{}");
 });
 
 // WS.3: getWorkspaceByProject finds active workspace
@@ -105,6 +111,33 @@ test("WS.10: update emits event", () => {
   platformKernel.updateProjectWorkspace(ws.workspace_id, { config: { changed: true } });
   const events = dbStore.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_type = 'workspace.updated' AND subject_id = ?").all(ws.workspace_id);
   assert.ok(events.length > 0);
+});
+
+// WS.11: updateProjectWorkspace rejects plaintext secrets
+test("WS.11: updateProjectWorkspace rejects plaintext secrets", () => {
+  const ws = platformKernel.createProjectWorkspace({ name: "no_plain", project_id: "proj_11" });
+  assert.throws(() => platformKernel.updateProjectWorkspace(ws.workspace_id, { secrets: { k: "v" } }), /setWorkspaceSecret/);
+});
+
+// WS.12: createProjectWorkspace fails closed without key when secrets are given
+test("WS.12: createProjectWorkspace fails closed without key", () => {
+  const prev = process.env.SIDEKICK_SECRET_KEY;
+  delete process.env.SIDEKICK_SECRET_KEY;
+  try {
+    assert.throws(() => platformKernel.createProjectWorkspace({ name: "closed", project_id: "proj_12", secrets: { k: "v" } }), /SIDEKICK_SECRET_KEY/);
+    const plain = platformKernel.createProjectWorkspace({ name: "open", project_id: "proj_12b" });
+    assert.ok(plain.workspace_id);
+  } finally {
+    process.env.SIDEKICK_SECRET_KEY = prev;
+  }
+  assert.strictEqual(platformKernel.getWorkspaceByProject("proj_12"), null);
+});
+
+// WS.13: invalid secrets input is rejected before the workspace row exists
+test("WS.13: createProjectWorkspace rejects invalid secrets pre-insert", () => {
+  assert.throws(() => platformKernel.createProjectWorkspace({ name: "bad_shape", project_id: "proj_13", secrets: ["not", "a", "map"] }), /object of name\/value pairs/);
+  assert.throws(() => platformKernel.createProjectWorkspace({ name: "bad_value", project_id: "proj_13", secrets: { fn: () => {} } }), /secret value is required/);
+  assert.strictEqual(platformKernel.getWorkspaceByProject("proj_13"), null);
 });
 
 // MD.1: registerModel registers model

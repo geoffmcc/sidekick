@@ -111,10 +111,13 @@ function normalizeProjectSource(row) {
 
 function normalizeWorkspace(row, secretNames = []) {
   if (!row) return null;
+  // secrets_json never leaves the kernel: legacy plaintext is only reachable
+  // through backfillWorkspaceSecrets, and current values only through
+  // getWorkspaceSecret.
+  const { secrets_json, ...rest } = row;
   return {
-    ...row,
+    ...rest,
     config: parseJson(row.config_json, {}),
-    secrets: parseJson(row.secrets_json, {}),
     resource_limits: parseJson(row.resource_limits_json, {}),
     metadata: parseJson(row.metadata_json, {}),
     secret_names: secretNames,
@@ -705,11 +708,32 @@ function getRunnerSession(runnerId) {
 
 function createProjectWorkspace(input = {}) {
   ensurePlatformKernelSchema();
+  // Secrets are fully validated (including their stored string form) before
+  // the workspace row exists, and the row + envelopes commit in one
+  // transaction, so a bad entry, a missing key, or a mid-loop failure cannot
+  // leave a half-provisioned workspace behind. secrets_json stays empty for
+  // new rows — values live only as envelopes.
+  if (input.secrets !== undefined && (typeof input.secrets !== "object" || input.secrets === null || Array.isArray(input.secrets))) {
+    throw new Error("secrets must be an object of name/value pairs");
+  }
+  const secretEntries = [];
+  for (const [name, value] of Object.entries(input.secrets || {})) {
+    if (!name || typeof name !== "string") throw new Error("secret name is required");
+    const stored = value == null || typeof value === "string" ? value : JSON.stringify(value);
+    if (stored == null) throw new Error("secret value is required");
+    secretEntries.push([name, stored]);
+  }
+  if (secretEntries.length > 0 && !hasSecretKey()) throw new Error("SIDEKICK_SECRET_KEY not set in .env");
   const ts = nowIso();
   const wsId = newId("ws");
-  dbStore.getDb().prepare("INSERT INTO platform_project_workspaces (workspace_id, name, project_id, owner_id, state, config_json, secrets_json, environment, resource_limits_json, created_at, updated_at, metadata_json) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)").run(wsId, input.name || input.project_id, input.project_id, input.owner_id || "system", json(input.config), json(input.secrets), input.environment || "default", json(input.resource_limits), ts, ts, json(input.metadata));
-  appendEvent({ event_type: "workspace.created", source: input.source || "platform", actor_id: input.owner_id, subject_type: "workspace", subject_id: wsId, project_id: input.project_id, payload: { name: input.name || input.project_id }, correlation_id: wsId });
-  return dbStore.getDb().prepare("SELECT * FROM platform_project_workspaces WHERE workspace_id = ?").get(wsId);
+  dbStore.getDb().transaction(() => {
+    dbStore.getDb().prepare("INSERT INTO platform_project_workspaces (workspace_id, name, project_id, owner_id, state, config_json, secrets_json, environment, resource_limits_json, created_at, updated_at, metadata_json) VALUES (?, ?, ?, ?, 'active', ?, '{}', ?, ?, ?, ?, ?)").run(wsId, input.name || input.project_id, input.project_id, input.owner_id || "system", json(input.config), input.environment || "default", json(input.resource_limits), ts, ts, json(input.metadata));
+    appendEvent({ event_type: "workspace.created", source: input.source || "platform", actor_id: input.owner_id, subject_type: "workspace", subject_id: wsId, project_id: input.project_id, payload: { name: input.name || input.project_id }, correlation_id: wsId });
+    for (const [name, stored] of secretEntries) {
+      setWorkspaceSecret(wsId, name, stored, { source: input.source, actor_id: input.owner_id });
+    }
+  })();
+  return getProjectWorkspace(wsId);
 }
 
 function getProjectWorkspace(workspaceId) {
@@ -726,17 +750,17 @@ function getWorkspaceByProject(projectId) {
 
 function updateProjectWorkspace(workspaceId, updates = {}) {
   ensurePlatformKernelSchema();
+  if (updates.secrets !== undefined) throw new Error("Workspace secrets are managed via setWorkspaceSecret/deleteWorkspaceSecret");
   const ts = nowIso();
   const existing = dbStore.getDb().prepare("SELECT * FROM platform_project_workspaces WHERE workspace_id = ?").get(workspaceId);
   if (!existing) throw new Error(`Workspace ${workspaceId} not found`);
   const config = updates.config !== undefined ? json(updates.config) : existing.config_json;
-  const secrets = updates.secrets !== undefined ? json(updates.secrets) : existing.secrets_json;
   const environment = updates.environment || existing.environment;
   const resourceLimits = updates.resource_limits !== undefined ? json(updates.resource_limits) : existing.resource_limits_json;
   const metadata = updates.metadata !== undefined ? json(updates.metadata) : existing.metadata_json;
-  dbStore.getDb().prepare("UPDATE platform_project_workspaces SET config_json = ?, secrets_json = ?, environment = ?, resource_limits_json = ?, metadata_json = ?, updated_at = ? WHERE workspace_id = ?").run(config, secrets, environment, resourceLimits, metadata, ts, workspaceId);
+  dbStore.getDb().prepare("UPDATE platform_project_workspaces SET config_json = ?, environment = ?, resource_limits_json = ?, metadata_json = ?, updated_at = ? WHERE workspace_id = ?").run(config, environment, resourceLimits, metadata, ts, workspaceId);
   appendEvent({ event_type: "workspace.updated", source: updates.source || "platform", actor_id: updates.actor_id, subject_type: "workspace", subject_id: workspaceId, payload: { updated_fields: Object.keys(updates) }, correlation_id: workspaceId });
-  return dbStore.getDb().prepare("SELECT * FROM platform_project_workspaces WHERE workspace_id = ?").get(workspaceId);
+  return getProjectWorkspace(workspaceId);
 }
 
 function archiveProjectWorkspace(workspaceId, details = {}) {
@@ -744,7 +768,7 @@ function archiveProjectWorkspace(workspaceId, details = {}) {
   const ts = details.timestamp || nowIso();
   dbStore.getDb().prepare("UPDATE platform_project_workspaces SET state = 'archived', archived_at = ?, updated_at = ? WHERE workspace_id = ?").run(ts, ts, workspaceId);
   appendEvent({ event_type: "workspace.archived", source: details.source || "platform", actor_id: details.actor_id, subject_type: "workspace", subject_id: workspaceId, payload: {}, correlation_id: workspaceId });
-  return dbStore.getDb().prepare("SELECT * FROM platform_project_workspaces WHERE workspace_id = ?").get(workspaceId);
+  return getProjectWorkspace(workspaceId);
 }
 
 function registerProject(input = {}) {
