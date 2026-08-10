@@ -5,7 +5,7 @@ const path = require("path");
 const os = require("os");
 const { timingSafeCompare } = require("./crypto-utils");
 const { execFileSync } = require("child_process");
-const { callDashboardTool, getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval, renderContinuationApprovalPreview } = require("./tools");
+const { callDashboardTool, getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval, renderContinuationApprovalPreview, loadWatches } = require("./tools");
 const dynamicTools = require("./dynamic-tools");
 const dbStore = require("./db");
 const { allowedActions } = require("./evolve/lifecycle");
@@ -855,7 +855,9 @@ app.get("/api/dashboard-summary", async (req, res) => {
     
     let activeWatches = 0;
     try {
-      const watchData = dbStore.loadDocument("watches", []);
+      // Watches persist to watches.json, not the documents table — the
+      // document read always returned the empty fallback.
+      const watchData = loadWatches();
       activeWatches = watchData.filter(w => w.status === "active").length;
     } catch {}
     

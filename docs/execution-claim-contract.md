@@ -85,6 +85,39 @@ forcing one unified queue. The Brain single-runner property is untouched.
 - `delays.json` remains the definition store; execution-state authority
   (who is running it, cancellation, recovery) lives in the claim table.
 
+## Second adapter: watch
+
+- Watch checks are serialized per watch by claiming the watch's long-lived
+  *definition* execution (`watch.platform_execution_id`) for the duration of
+  the check (`claimWatchForCheck`) — the agent interval and an MCP-side
+  `watch check` cannot both dispatch the action for the same tick. The claim
+  loser skips the tick; any other claim failure also refuses rather than
+  running unfenced.
+- The lease renews every 60 s during the check (slow action tools are not
+  orphaned under a live runner), and a crash mid-check leaves an expired
+  lease that the recovery scan flips to `orphaned`; the next check re-queues
+  the definition (`orphaned → queued`) before claiming.
+- A `cancel_requested` on the definition execution pauses the watch
+  (`pauseWatchForCancel`: status `paused`, execution → `blocked`, matching
+  the pause action's semantics). Because the flag is not clearable, a
+  cancelled watch re-pauses on every resume attempt — cancel is a permanent
+  stop; normal stop/resume stays with the watch pause/remove actions.
+- All post-claim work runs under try/finally in both paths: a mid-check
+  failure clears the renewal timer (which would otherwise keep the lease
+  fresh forever) and releases the claim, so a throw costs one tick, not the
+  watch.
+- Per-tick writes (`lastCheck`, `triggerCount`) are monotonic counters, not
+  lifecycle state, so watch completion writes are not release-fenced the way
+  delay's are; the claim exists to serialize dispatch, not to arbitrate file
+  state. Corollary: under supersession (a claimant paused/suspended past its
+  lease while another claims), the stale runner's action dispatch may
+  double-fire — acceptable for idempotent notification actions. Completion
+  and pause writes re-load `watches.json` before writing so a snapshot from
+  tick entry cannot clobber concurrent changes to other watches.
+- Related fix: the dashboard's active-watch count read watches from the
+  documents table, but watches persist to `watches.json` — the count was
+  always zero. It now reads through `loadWatches()`.
+
 ## Tests
 
 `test/execution-claims.test.js` (XC.1–XC.11): claim validation, fresh claim,
@@ -95,10 +128,13 @@ recovery scan (orphan vs release vs live-lease untouched), and lease_ms
 bounds (a negative lease is born expired; a huge one overflows into extended
 ISO years whose leading `+` inverts every lexicographic lease comparison).
 
-`test/scheduler-platform.test.js` (SP.5–SP.8): delay run backs off when
+`test/scheduler-platform.test.js` (SP.5–SP.11): delay run backs off when
 claimed, cancel-before-dispatch as an outcome with no child execution,
-restart recovery re-queueing a stranded delay exactly once, and fail-closed
-refusal when the execution is terminal.
+restart recovery re-queueing a stranded delay exactly once, fail-closed
+refusal when the execution is terminal, watch check back-off while another
+runner holds the claim (and release after the check), cancel-request pausing
+a watch, and a mid-check failure releasing the claim (renewal timer cleared,
+next check succeeds).
 
 `test/kernel-migration-parity.test.js`: updated to 18 tables / 39 indexes /
 kernel schema version 3.
@@ -109,7 +145,7 @@ kernel schema version 3.
   consumer exists; revisit when a consumer needs multi-step orchestration).
 - No changes to Brain/approvals/Compute claim layers.
 - No adaptation of cron (OS-crontab-owned runs can't carry the contract),
-  watch, runbooks (autonomous mode needs restructuring before it can be
+  runbooks (autonomous mode needs restructuring before it can be
   cancellable), or missions (stateless router) — follow-up slices.
 - No migration of `delays.json`/`watches.json` definitions into the DB.
 - No event-delivery guarantees (convergence audit decision #4 stays open).
