@@ -4096,6 +4096,39 @@ function recoverStrandedDelays(details = {}) {
   return { requeued };
 }
 
+// Phase 4/B watch adapter: watch checks are serialized per watch by claiming
+// the watch's long-lived definition execution for the duration of the check —
+// the agent interval and an MCP-side `watch check` cannot both dispatch the
+// action for the same tick. A crash mid-check leaves an expired lease that the
+// recovery scan flips to `orphaned`; the next check re-queues it before
+// claiming.
+function claimWatchForCheck(watch, claimedBy) {
+  if (!watch.platform_execution_id) return { ok: true, claim: null };
+  try {
+    const exec = platformKernel.getExecution(watch.platform_execution_id);
+    if (exec && exec.state === "orphaned") {
+      platformKernel.transitionExecution(watch.platform_execution_id, "queued", { source: "watch", reason: "watch definition re-queued after orphan recovery", correlation_id: watch.id });
+    }
+  } catch (e) {}
+  return platformKernel.claimExecution({ execution_id: watch.platform_execution_id, claimed_by: claimedBy });
+}
+
+// A cancel request on the definition execution permanently stops the watch:
+// cancel_requested is not clearable, so every future claimant re-pauses it.
+// Normal operational stop/resume stays with the watch pause/remove actions.
+function pauseWatchForCancel(watch, claim, options = {}) {
+  // Re-load before the lifecycle write: claims fence per watch, but
+  // watches.json is global — an entry snapshot could clobber concurrent
+  // changes to other watches.
+  const watches = loadWatches();
+  const fresh = watches.find(w => w.id === watch.id) || watch;
+  fresh.status = "paused";
+  transitionScheduledPlatformExecution("watch", fresh, "blocked", { source: options.source, actor: options.actor, reason: "watch paused by cancel request", result_status: "paused" });
+  appendScheduledPlatformEvent("watch", fresh, "schedule.watch.paused", { cancel_requested: true }, { source: options.source, actor: options.actor });
+  saveWatches(watches);
+  releaseScheduledClaim(watch.platform_execution_id, claim);
+}
+
 function parseWhen(when) {
   if (!when) return null;
 
@@ -4871,63 +4904,89 @@ async function sidekick_watch({ action, id, name, source, target, condition, int
       return { content: [{ type: "text", text: `Watch not found: ${id}` }], isError: true };
     }
 
-    let checkResult;
-    if (watch.source === "service") {
-      checkResult = checkService(watch.target);
-    } else if (watch.source === "process") {
-      checkResult = checkProcess(watch.target);
-    } else if (watch.source === "endpoint") {
-      checkResult = checkEndpoint(watch.target);
-    } else if (watch.source === "file") {
-      const policyError = enforcePathPolicy(watch.target, "read");
-      if (policyError) return policyError;
-      checkResult = checkFile(watch.target, watch.condition === "content_matches" ? watch.value : null);
+    const checkClaim = claimWatchForCheck(watch, `watch-check:${process.pid}`);
+    if (!checkClaim.ok) {
+      const detail = checkClaim.code === "claim_held" ? `check already in progress (${checkClaim.claimed_by})` : `cannot check: execution ${checkClaim.code}`;
+      return { content: [{ type: "text", text: `Watch ${id} ${detail}` }], isError: true };
     }
-
-    const checkExecution = createScheduledPlatformExecution("watch", watch, {
-      attach: false,
-      parentExecutionId: watch.platform_execution_id || null,
-      rootExecutionId: watch.platform_execution_id || null,
-      operationType: "watch_check",
-      state: "running",
-      risk: getToolRisk(watch.action_tool),
-      metadata: { source: watch.source, target: watch.target, condition: watch.condition },
-      reason: "watch check started",
-    });
-    const triggered = evaluateCondition(watch, checkResult);
-
-    watch.lastCheck = now;
-    if (triggered) {
-      watch.lastTriggered = now;
-      watch.triggerCount++;
-      appendScheduledPlatformEvent("watch", watch, "schedule.watch.triggered", { check_result: checkResult }, { executionId: checkExecution?.execution_id, rootExecutionId: watch.platform_execution_id || checkExecution?.root_execution_id });
-      const actionResult = await executeWatchAction(watch, checkResult, {
-        parentId: checkExecution?.execution_id || watch.platform_execution_id || null,
-        rootExecutionId: watch.platform_execution_id || checkExecution?.root_execution_id || null,
-        correlationId: watch.id,
-      });
-      if (checkExecution) platformKernel.transitionExecution(checkExecution.execution_id, actionResult?.isError ? "failed" : "completed", {
-        source: "watch",
-        actor_id: getCurrentSource() || "unknown",
-        reason: actionResult?.isError ? "watch action failed" : "watch action completed",
-        result_status: actionResult?.isError ? "failure" : "success",
-        error_category: actionResult?.isError ? evolveCommon.errorCategory(actionResult.content?.[0]?.text || "watch action failed") : null,
-        result_summary: actionResult?.content?.[0]?.text || "watch triggered",
-        correlation_id: watch.id,
-      });
-    } else if (checkExecution) {
-      platformKernel.transitionExecution(checkExecution.execution_id, "completed", {
-        source: "watch",
-        actor_id: getCurrentSource() || "unknown",
-        reason: "watch check completed without trigger",
-        result_status: "not_triggered",
-        result_summary: `Watch ${watch.id} did not trigger`,
-        correlation_id: watch.id,
-      });
+    if (checkClaim.claim && checkClaim.claim.cancel_requested) {
+      pauseWatchForCancel(watch, checkClaim.claim);
+      return { content: [{ type: "text", text: `Watch ${id} paused: cancel requested on its execution` }] };
     }
-    saveWatches(watches);
+    // Everything after a successful claim runs under try/finally: a mid-check
+    // throw must clear the renewal timer (which would otherwise keep the
+    // lease fresh forever) and release the claim.
+    const renewTimer = startScheduledLeaseRenewal(watch.platform_execution_id, checkClaim.claim);
+    try {
+      let checkResult;
+      if (watch.source === "service") {
+        checkResult = checkService(watch.target);
+      } else if (watch.source === "process") {
+        checkResult = checkProcess(watch.target);
+      } else if (watch.source === "endpoint") {
+        checkResult = checkEndpoint(watch.target);
+      } else if (watch.source === "file") {
+        const policyError = enforcePathPolicy(watch.target, "read");
+        if (policyError) return policyError;
+        checkResult = checkFile(watch.target, watch.condition === "content_matches" ? watch.value : null);
+      }
 
-    return { content: [{ type: "text", text: `Watch check: ${watch.id}\nSource: ${watch.source} ${watch.target}\nResult: ${JSON.stringify(checkResult)}\nTriggered: ${triggered}` }] };
+      const checkExecution = createScheduledPlatformExecution("watch", watch, {
+        attach: false,
+        parentExecutionId: watch.platform_execution_id || null,
+        rootExecutionId: watch.platform_execution_id || null,
+        operationType: "watch_check",
+        state: "running",
+        risk: getToolRisk(watch.action_tool),
+        metadata: { source: watch.source, target: watch.target, condition: watch.condition },
+        reason: "watch check started",
+      });
+      const triggered = evaluateCondition(watch, checkResult);
+
+      if (triggered) {
+        appendScheduledPlatformEvent("watch", watch, "schedule.watch.triggered", { check_result: checkResult }, { executionId: checkExecution?.execution_id, rootExecutionId: watch.platform_execution_id || checkExecution?.root_execution_id });
+        const actionResult = await executeWatchAction(watch, checkResult, {
+          parentId: checkExecution?.execution_id || watch.platform_execution_id || null,
+          rootExecutionId: watch.platform_execution_id || checkExecution?.root_execution_id || null,
+          correlationId: watch.id,
+        });
+        if (checkExecution) platformKernel.transitionExecution(checkExecution.execution_id, actionResult?.isError ? "failed" : "completed", {
+          source: "watch",
+          actor_id: getCurrentSource() || "unknown",
+          reason: actionResult?.isError ? "watch action failed" : "watch action completed",
+          result_status: actionResult?.isError ? "failure" : "success",
+          error_category: actionResult?.isError ? evolveCommon.errorCategory(actionResult.content?.[0]?.text || "watch action failed") : null,
+          result_summary: actionResult?.content?.[0]?.text || "watch triggered",
+          correlation_id: watch.id,
+        });
+      } else if (checkExecution) {
+        platformKernel.transitionExecution(checkExecution.execution_id, "completed", {
+          source: "watch",
+          actor_id: getCurrentSource() || "unknown",
+          reason: "watch check completed without trigger",
+          result_status: "not_triggered",
+          result_summary: `Watch ${watch.id} did not trigger`,
+          correlation_id: watch.id,
+        });
+      }
+      // Re-load before writing: the entry snapshot may be stale relative to a
+      // concurrent tick for another watch in the other process.
+      const watchesAfter = loadWatches();
+      const fresh = watchesAfter.find(w => w.id === watch.id);
+      if (fresh) {
+        fresh.lastCheck = now;
+        if (triggered) {
+          fresh.lastTriggered = now;
+          fresh.triggerCount = (fresh.triggerCount || 0) + 1;
+        }
+        saveWatches(watchesAfter);
+      }
+
+      return { content: [{ type: "text", text: `Watch check: ${watch.id}\nSource: ${watch.source} ${watch.target}\nResult: ${JSON.stringify(checkResult)}\nTriggered: ${triggered}` }] };
+    } finally {
+      if (renewTimer) clearInterval(renewTimer);
+      releaseScheduledClaim(watch.platform_execution_id, checkClaim.claim);
+    }
   }
 
   return { content: [{ type: "text", text: "Unknown action. Use: add, list, remove, pause, check" }], isError: true };
@@ -10505,6 +10564,8 @@ module.exports = {
   releaseScheduledClaim,
   startScheduledLeaseRenewal,
   recoverStrandedDelays,
+  claimWatchForCheck,
+  pauseWatchForCancel,
   getToolDefsForSource,
   getToolCategoriesWithTools,
   buildPolicyInspection,

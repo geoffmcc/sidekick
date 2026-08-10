@@ -163,6 +163,62 @@ console.log('Running Scheduler Platform Tests...\n');
     assert.strictEqual(noDispatch, undefined);
     console.log('Passed\n');
 
+    console.log('Test SP.9: watch check backs off while another runner holds the claim');
+    result = await TOOLS.watch({ action: 'add', name: 'claimed watch', source: 'file', target: __filename, condition: 'exists', interval: '1h', action_tool: 'sidekick_respond', action_args: { text: 'watch-hit' } });
+    assert.strictEqual(result.isError, undefined);
+    const claimWatch = tools.loadWatches()[tools.loadWatches().length - 1];
+    assert.ok(claimWatch.platform_execution_id);
+    const watchHeld = platformKernel.claimExecution({ execution_id: claimWatch.platform_execution_id, claimed_by: 'other-checker' });
+    assert.strictEqual(watchHeld.ok, true);
+    result = await TOOLS.watch({ action: 'check', id: claimWatch.id });
+    assert.strictEqual(result.isError, true);
+    assert.ok(result.content[0].text.includes('check already in progress'));
+    assert.strictEqual(platformKernel.releaseExecutionClaim({ execution_id: claimWatch.platform_execution_id, claimed_by: 'other-checker', claim_epoch: watchHeld.claim.claim_epoch }).ok, true);
+    result = await TOOLS.watch({ action: 'check', id: claimWatch.id });
+    assert.strictEqual(result.isError, undefined);
+    assert.ok(result.content[0].text.includes('Triggered: true'));
+    assert.strictEqual(platformKernel.getExecutionClaim(claimWatch.platform_execution_id).claimed_by, null);
+    console.log('Passed\n');
+
+    console.log('Test SP.10: cancel request pauses the watch instead of checking');
+    result = await TOOLS.watch({ action: 'add', name: 'cancel watch', source: 'file', target: __filename, condition: 'exists', interval: '1h', action_tool: 'sidekick_respond', action_args: { text: 'never' } });
+    assert.strictEqual(result.isError, undefined);
+    const cancelWatch = tools.loadWatches()[tools.loadWatches().length - 1];
+    platformKernel.requestExecutionCancel(cancelWatch.platform_execution_id, { reason: 'operator stop' });
+    result = await TOOLS.watch({ action: 'check', id: cancelWatch.id });
+    assert.strictEqual(result.isError, undefined);
+    assert.ok(result.content[0].text.includes('paused'));
+    assert.strictEqual(tools.loadWatches().find(w => w.id === cancelWatch.id).status, 'paused');
+    const cancelWatchExec = db.getDb().prepare('SELECT * FROM platform_executions WHERE execution_id = ?').get(cancelWatch.platform_execution_id);
+    assert.strictEqual(cancelWatchExec.state, 'blocked');
+    console.log('Passed\n');
+
+    console.log('Test SP.11: a mid-check failure releases the watch claim');
+    result = await TOOLS.watch({ action: 'add', name: 'throwing watch', source: 'file', target: __filename, condition: 'exists', interval: '1h', action_tool: 'sidekick_respond', action_args: { text: 'x' } });
+    assert.strictEqual(result.isError, undefined);
+    const throwWatch = tools.loadWatches()[tools.loadWatches().length - 1];
+    const origTransition = platformKernel.transitionExecution;
+    // Blanket throwing would be swallowed inside createScheduledPlatformExecution
+    // and null the check execution; target the raw post-action transition only.
+    platformKernel.transitionExecution = (execId, state, details = {}) => {
+      if (details && typeof details.reason === 'string' && details.reason.startsWith('watch action')) throw new Error('injected transition failure');
+      return origTransition(execId, state, details);
+    };
+    let checkOutcome = null;
+    try {
+      checkOutcome = await TOOLS.watch({ action: 'check', id: throwWatch.id });
+    } catch (e) {
+      checkOutcome = { threw: e.message };
+    } finally {
+      platformKernel.transitionExecution = origTransition;
+    }
+    assert.ok(checkOutcome);
+    assert.strictEqual(platformKernel.getExecutionClaim(throwWatch.platform_execution_id).claimed_by, null);
+    result = await TOOLS.watch({ action: 'check', id: throwWatch.id });
+    assert.strictEqual(result.isError, undefined);
+    assert.ok(result.content[0].text.includes('Triggered: true'));
+    console.log('Passed\n');
+
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
     console.log('All Scheduler Platform Tests Passed!');
   } catch (e) {
