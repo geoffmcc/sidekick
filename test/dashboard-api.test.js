@@ -69,6 +69,16 @@ const compute = require('../src/compute');
 // Wait for server to start
 setTimeout(async () => {
   try {
+    console.log('Test 3.0a: dashboard summary exposes module health');
+    {
+      const response = await makeRequest('GET', '/api/dashboard-summary');
+      assert.strictEqual(response.status, 200, 'Dashboard summary should succeed');
+      assert.ok(response.data.health && response.data.health.modules, 'Dashboard summary should include module health');
+      assert.ok(Array.isArray(response.data.health.modules.modules), 'Module health should include module rows');
+      assert.ok(response.data.health.modules.modules.some(module => module.name === 'data-utilities'), 'Module health should include data-utilities');
+      console.log('Passed\n');
+    }
+
     // Test 3.0: dashboard shell and event streams require auth
     console.log('Test 3.0: dashboard shell and event streams require auth');
     {
