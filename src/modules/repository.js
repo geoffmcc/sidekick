@@ -163,6 +163,48 @@ function bindEntryHash(name, entryHash) {
   return getModule(name);
 }
 
+/**
+ * Re-bind a builtin module's entry-code hash to the currently shipped entry.
+ *
+ * SECURITY SCOPE: builtin (first-party) modules only. A builtin's entry code
+ * ships inside the trusted, git-signed, read-only-deployed Sidekick repository,
+ * so the deployed on-disk entry is the authoritative expected code. When a
+ * release legitimately changes a builtin's entry file (e.g. adding a
+ * healthCheck), its content hash changes; without re-binding, the module fails
+ * closed into `error` forever. This refuses any module whose source is not
+ * "builtin" — a third-party module's hash mismatch must stay fail-closed and
+ * requires an explicit operator upgrade, never an automatic re-bind. Activation
+ * still fully re-validates the code (descriptors, tool verification, ownership,
+ * registry build) after the re-bind, so genuinely broken builtin code still
+ * fails closed.
+ */
+function rebindBuiltinEntry(name, { entryPoint, entryHash } = {}) {
+  ensureModuleStorage();
+  const record = getModule(name);
+  if (!record) throw new Error(`Module "${name}" is not registered`);
+  if (record.source !== "builtin") {
+    throw new Error(`Refusing to re-bind entry for non-builtin module "${name}" (source: ${record.source})`);
+  }
+  if (!entryHash || !/^[a-f0-9]{64}$/i.test(String(entryHash))) {
+    throw new Error("entryHash must be a SHA-256 hex digest");
+  }
+  const nextEntryPoint = entryPoint || record.entry_point;
+  const fromState = record.state;
+  // A stale binding fails closed into `error`; recover it to a re-activatable
+  // state so provisioning can enable it. Any other state keeps its state and
+  // only refreshes the hash.
+  const toState = fromState === "error" ? "installed" : fromState;
+  if (toState !== fromState) assertTransition(name, fromState, toState);
+  const result = getDb().prepare(`
+    UPDATE platform_modules
+    SET entry_point = ?, entry_hash = ?, state = ?, error = NULL
+    WHERE module_id = ? AND state = ?
+  `).run(nextEntryPoint, String(entryHash).toLowerCase(), toState, record.module_id, fromState);
+  if (result.changes === 0) throw new Error(`Module "${name}" state changed concurrently (expected ${fromState})`);
+  if (toState !== fromState) recordTransitionEvent(name, fromState, toState, { error: null });
+  return getModule(name);
+}
+
 function recordHealth(name, health) {
   ensureModuleStorage();
   const record = getModule(name);
@@ -383,6 +425,7 @@ module.exports = {
   ensureModuleStorage,
   registerModule,
   bindEntryHash,
+  rebindBuiltinEntry,
   recordHealth,
   listHealthHistory,
   upgradeModule,
