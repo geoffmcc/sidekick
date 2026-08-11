@@ -1141,7 +1141,13 @@ async function runAgent(goal, taskId, parentContext = null) {
     },
   });
   const transcriptPath = path.join(CONV_DIR, taskId + ".json");
-  fs.writeFileSync(transcriptPath, transcript, "utf-8");
+  // Publish terminal transcripts atomically. Follow-up callers use the
+  // transcript as the durable terminal boundary; exposing the destination
+  // before the complete JSON is written creates a race where a child can
+  // observe a partially-published parent record.
+  const temporaryTranscriptPath = `${transcriptPath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(temporaryTranscriptPath, transcript, { encoding: "utf-8", mode: 0o600 });
+  fs.renameSync(temporaryTranscriptPath, transcriptPath);
   registerAgentTranscript(platformExecution, transcriptPath, taskId, status);
 
   if (status === "completed") {
