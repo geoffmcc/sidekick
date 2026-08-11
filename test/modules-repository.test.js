@@ -197,6 +197,14 @@ console.log('Running Module Repository Tests...\n');
     );
     console.log('Passed\n');
 
+    console.log('Test MR.9: duplicate registration requires an explicit forward upgrade');
+    const upgraded = repository.upgradeModule('demo-module', { ...DEMO_MANIFEST, version: '1.3.0', description: 'Upgraded module' }, { entryHash: 'a'.repeat(64) });
+    assert.strictEqual(upgraded.version, '1.3.0', 'Upgrade should persist the newer version');
+    assert.deepStrictEqual(upgraded.applied_migrations, ['seed-extension-row', 'mark-seeded'], 'Upgrade should preserve migration progress');
+    assert.throws(() => repository.registerModule({ ...DEMO_MANIFEST, version: '2.0.0' }), /already registered/, 'Duplicate registration should remain fail-closed');
+    assert.throws(() => repository.upgradeModule('demo-module', { ...DEMO_MANIFEST, version: '1.2.0' }), /must increase version/, 'Downgrades should be rejected');
+    console.log('Passed\n');
+
     console.log('All Module Repository tests passed.');
     process.exit(0);
   } catch (error) {

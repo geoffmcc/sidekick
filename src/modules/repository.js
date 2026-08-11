@@ -28,6 +28,7 @@ const {
   MODULE_STATES,
   MODULE_TRANSITIONS,
   normalizeManifest,
+  compareVersions,
   validateModuleConfig,
 } = require("./manifest");
 
@@ -159,6 +160,37 @@ function bindEntryHash(name, entryHash) {
     if (!record) throw new Error(`Module "${name}" is not registered`);
     if (record.entry_hash !== String(entryHash).toLowerCase()) throw new Error(`Module "${name}" entry binding already exists and does not match`);
   }
+  return getModule(name);
+}
+
+/** Replace a registration only through an explicit forward version upgrade. */
+function upgradeModule(name, manifestInput, { source, entryPoint, entryHash, config } = {}) {
+  ensureModuleStorage();
+  const record = getModule(name);
+  if (!record) throw new Error(`Module "${name}" is not registered`);
+  const manifest = normalizeManifest(manifestInput);
+  if (manifest.name !== record.name) throw new Error(`Module upgrade name mismatch: expected "${record.name}", got "${manifest.name}"`);
+  if (compareVersions(manifest.version, record.version) <= 0) throw new Error(`Module "${name}" upgrade must increase version from ${record.version} to ${manifest.version}`);
+  if (record.state === "uninstalling" || record.state === "uninstalled") throw new Error(`Module "${name}" cannot be upgraded from state ${record.state}`);
+  const nextEntryPoint = entryPoint === undefined ? record.entry_point : entryPoint;
+  const nextEntryHash = entryHash === undefined ? record.entry_hash : entryHash;
+  if (nextEntryPoint && (!nextEntryHash || !/^[a-f0-9]{64}$/i.test(String(nextEntryHash)))) throw new Error(`Module "${name}" upgrade requires a SHA-256 entry hash`);
+  let storedConfig = record.config;
+  if (config !== undefined) {
+    const configResult = validateModuleConfig(manifest, config);
+    if (!configResult.ok) {
+      const details = (configResult.errors || []).map(e => `${e.path}: ${e.message}`).join("; ");
+      throw new Error(`Module "${name}" config is invalid: ${details}`);
+    }
+    storedConfig = configResult.config;
+  }
+  const result = getDb().prepare(`
+    UPDATE platform_modules
+    SET version = ?, description = ?, manifest_json = ?, config_json = ?,
+        source = COALESCE(?, source), entry_point = ?, entry_hash = ?, error = NULL
+    WHERE module_id = ? AND state = ?
+  `).run(manifest.version, manifest.description, JSON.stringify(manifest), JSON.stringify(storedConfig), source === undefined ? null : source, nextEntryPoint, nextEntryHash, record.module_id, record.state);
+  if (result.changes === 0) throw new Error(`Module "${name}" state changed concurrently (expected ${record.state})`);
   return getModule(name);
 }
 
@@ -313,6 +345,7 @@ module.exports = {
   ensureModuleStorage,
   registerModule,
   bindEntryHash,
+  upgradeModule,
   getModule,
   listModules,
   transitionModule,
