@@ -1,36 +1,70 @@
 # Platform Roadmap
 
-Status: Proposed three-track roadmap from current main
-Verified commit: d2db2658ef0fbf862c64b09315279562caa5bb8e
-Verified date: 2026-08-05T16:16:46-04:00
+Status: Residual completion roadmap (post-handoff convergence campaign)
+Verified commit: a88ea84577283899b2f02892e1dcbe9be0dcf509
+Verified date: 2026-08-11
+Supersedes: the 2026-08-05 three-track roadmap pinned to `d2db2658`.
 
-Track A reduces tool ownership coupling. Track B converges existing platform foundations. Track C builds security research only after the generic contracts it needs are usable.
+The prior 8-phase roadmap is fully committed (PRs #191–#235). Measurement of
+those commits (`platform-convergence-audit.md`) shows the platform now has broad
+foundations but thin production integration: ~90 kernel exports have no
+production caller, 9 test suites are excluded from CI, and two verified startup
+bugs sit in the migration layer. This roadmap finishes the transition rather
+than adding another foundation layer.
 
-## Phases
+Work is classified into four tracks. **Convergence tracks (A–C) are the
+campaign; product track (D) is explicitly optional.**
 
-| Phase/track | Bounded goal and foundation | Risks, tests and completion | Non-goals/review size |
+## Track A — Correctness and verification (do first; small, high-value)
+
+| # | Slice | Bounded goal | Completion evidence |
 |---|---|---|---|
-| 1 / A | Remove duplicate storage schemas for `store`, `get`, `delete`, `list_projects`, `get_by_project`; extend registry/storage contract tests. Foundation: storage family/registry. | Preserve 107 tools, order, aliases, nested/batch dispatch and policy. Pass focused tests and `npm test`. Small PR. | No new family, module runtime or kernel split. |
-| 2 / B | Reconcile migration 011 with runtime kernel schema; add fresh-vs-runtime bootstrap parity and stable service-facade design. Foundation: kernel/migrations. | Prevent fresh-install drift without dropping/renaming tables. Kernel/control/artifact tests plus parity test. Medium PR. | No event bus or public kernel split. |
-| 3 / B | Canonical project projection and lifecycle; map workspace, memory, KV, Agent and Compute IDs; design encrypted workspace secret references. | Isolation/backfill audit and cross-project tests; preserve old IDs. Medium/large. | No full users/teams model. |
-| 4 / B | Common workflow claim/checkpoint/cancel/recovery contract across kernel, Brain, approvals, runbooks, missions, cron, delay and watch. | Restart, idempotent claim, cancellation, approval continuation, retry classification and schedule dedupe tests; preserve Brain single runner. Large, split adapters. | No new workflow language first slice. |
-| 5 / B+A | Prove module manifest/lifecycle/service context/permissions/config/health/migrations with extracted data-utilities. | Install/enable/disable, duplicate ownership, aliases, policy/approval, migration and catalog tests. Medium. | No security-research implementation. |
-| 6 / B | Define artifact original/derivative custody, event delivery semantics, connector lifecycle and API integration for the working `security-research` surface; add dashboard service surfaces. | Delivery retry/offset/dead-letter, digest, connector auth/health, no private shared tables. Large, split contracts. The unavailable Workbench is not a prerequisite. | No marketplace or Workbench assumption. |
-| 7 / C | Build `@sidekick/security-research`: scope snapshots, targets, campaigns, hypotheses, test runs, findings, reports, disclosure, Scope Guard, `security-research` connector and Evidence Vault lineage. | Fail-closed scope, human approval, immutable originals, truthful analysis-only status and bounded lab integration. Add an optional Workbench adapter only after its contract is verified. Large, domain slices. | No autonomous offensive system or hard-coded lab network. |
-| 8 / B+C | Add evaluation/replay, users/teams/memberships and deployment profiles. | Side-effect-safe replay, bounded identity/role scope, deployment-profile policy, and multi-user audit tests. Large. | No removal of single-operator mode. |
+| A1 | Register orphaned tests | Add the 9 CI-excluded suites to `test/run-all.js` in dependency order. | `run-all.js` runs 102 suites; all green. |
+| A2 | Migration self-containment (C1) | Make migrations build the schema standalone; `tool_logs` telemetry columns exist before `007`'s index. | Migrations-only boot succeeds; parity test extended past `platform_%`. |
+| A3 | Cross-process schema safety (C2) | Idempotent `compute_*` ALTER path; runtime ensures cannot collide with migrations. | Runtime-then-migration boot succeeds; `compute_%` parity test added. |
+| A4 | Dashboard SQL/auth hardening | Route `/api/db/*` through `callDashboardTool`; remove `readonly:false` arbitrary-SQL path; add auth to unauthenticated read endpoints. | Bypass removed; tests assert mediation. |
 
-## Parallelism
+## Track B — Architectural convergence (dependency-ordered)
 
-Phase 1 can proceed independently. Phase 2 can start in parallel but should land before project/workflow convergence. Phase 3 and 4 serialize where identity and execution lineage are involved. Phase 5 depends on the registry contract from Phase 1. Phase 6 depends on execution/artifact boundaries from Phases 2-4. Phase 7 depends on Phases 2-6; Track A extraction can continue in parallel if module API ownership is kept stable.
+| # | Slice | Bounded goal | Completion evidence |
+|---|---|---|---|
+| B1 | Dead legacy removal | Remove ~825 lines of unreachable code from `tools-legacy.js` (legacy context block, `evolve` tail, orphans). | File shrinks; suite green; no export lost. |
+| B2 | Legacy handler extraction | Extract 67 legacy handlers in the documented dependency order (zero-helper handlers → media/git → self-contained clusters → scheduled-execution helper module → nested-dispatch tools). Each a reviewable slice. | Descriptor-owned families; no family imports `tools-legacy.js` at init; end state = zero production handlers in `tools-legacy.js`. |
+| B3 | Canonical project identity | Register projects inside kernel writers; add adapters from the inferred string; invocation surface for backfills. | Real callers; consumer linkage; isolation tests. |
+| B4 | Execution convergence | Make the ledger authoritative for one runner; wire `requestExecutionCancel`; wire or delete `checkpoint_json`; converge 3 claim implementations behind one contract. | Production caller uses the contract; cancel loop closed. |
+| B5 | Event consumption | Add a delivery drainer + handler registry + event vocabulary; cap subscription backlog; move enqueue into the insert transaction. | A production consumer drains deliveries; hazard removed. |
+| B6 | Artifact custody convergence | Register worker-uploaded artifacts in the kernel; surface (not swallow) mirror failures; add artifact access auth. | One custody authority for the worker path. |
+| B7 | Connector integration | One real provider through the framework; secret-ref resolver bridging to the secret store. | A real integration governed by `platform_connectors`. |
+| B8 | Compute/model dedup | Deprecate `platform_model_registry` writers; make `capability-router` trust-aware; remove dead `checkWorkersOffline`; wire or drop `health_state`. | Single model authority; no trust-unaware selector. |
+| B9 | Module third-party path | Entry loader for verified `entry_point`; persist+verify `package_hash`; operator install/configure/upgrade/uninstall; health for non-builtins; converge/retire `platform_extensions`. | A synthetic third-party module completes the full lifecycle. |
 
-## Exact Next-Phase Work Packet
+## Track C — Foundation-to-production (only where the audit shows a real gap)
 
-Recommended next implementation phase: **Phase 1, Track A, storage schema ownership cleanup**. It is the smallest verified duplicate, preserves active refactor momentum, and establishes the registry invariant future modules must use.
+| # | Slice | Bounded goal | Completion evidence |
+|---|---|---|---|
+| C1 | Security-research wiring | Wire the generic domain records to tools/dashboard/dispatch **only against verified interfaces**; attach Scope Guard to dispatch; fix the disclosure create-path gate; validate evidence refs. External transport stays unavailable and is tested as such. Synthetic data only. | Fail-closed, human-gated, auditable; no confidential data; unavailable transport tested. |
+| C2 | Durable identity (if pursued) | Durable users/teams/memberships tables (mig 036), single-operator bootstrap, capability bridge, API/UI, isolation tests. | Real persistence + authorization + audit, or explicitly deferred as product work. |
+| C3 | Evaluation/replay usefulness (optional) | Durable records + execution/artifact linkage + regression diff + operator surface, preserving side-effect safety. | Reproducible comparison, or explicitly deferred. |
 
-1. Remove only the five duplicate storage schema entries from `src/tools/schemas/index.js` after comparing accepted arguments with `src/tools/families/storage.js`.
-2. Add an assertion that each extracted descriptor has one schema owner and all 107 canonical tools remain in definition order.
-3. Extend storage tests to all seven descriptors, aliases, batch/nested dispatch, policy/approval and Redis-unavailable behavior.
-4. Run `node test/tool-registry-contract.test.cjs`, `node test/dispatcher.test.cjs`, the focused storage test, and `npm test`.
-5. Update `docs/tool-architecture.md` only if measured behavior differs.
+## Track D — Optional future product features (not convergence blockers)
 
-Explicit non-goals: no module runtime, security-research code, platform-kernel split, schema migration, deployment, commit or push during Phase 0R.
+Marketplace/module distribution, external research-workbench integration (needs a
+verified transport first), RBAC beyond bounded roles, RSS/activity APIs. These do
+not block convergence and must not be treated as exit criteria.
+
+## Exit criteria
+
+See `platform-convergence-audit.md` § "Exit criteria for this campaign". The
+campaign is complete when tracks A–B are done, track C items are either done or
+explicitly classified optional, the full suite passes with all suites
+registered, security review finds no new bypass, and documentation describes the
+final code. A row having a commit is not sufficient — production integration and
+verification are required.
+
+## Immediate next work
+
+**A1 — register the 9 orphaned test suites.** They pass individually; wiring them
+in makes every foundation the prior campaign built actually CI-verified, and is
+the precondition for safely extending or converging any of them. Then A2/A3 fix
+the two verified startup bugs before any persistence-touching slice builds on the
+schema.
