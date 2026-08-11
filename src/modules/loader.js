@@ -1,5 +1,9 @@
 "use strict";
 
+const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
+
 /**
  * Module loader -> registry wiring (docs/module-system-design.md).
  *
@@ -175,6 +179,23 @@ function buildModuleDescriptors(record, entry) {
   );
 }
 
+function verifyEntryBinding(record, entry) {
+  if (!record.entry_point || !record.entry_hash) {
+    // Legacy in-memory registrations have no entry point to bind. Any module
+    // that declares an entry point must carry the matching hash.
+    if (!record.entry_point && !record.entry_hash) return;
+    throw new Error(`Module "${record.name}" has no entry-code binding`);
+  }
+  if (entry.entryPoint !== record.entry_point || entry.entryHash !== record.entry_hash) {
+    throw new Error(`Module "${record.name}" entry-code binding does not match the registered entry point`);
+  }
+  const entryPath = path.resolve(process.cwd(), record.entry_point);
+  const root = path.resolve(process.cwd());
+  if (path.relative(root, entryPath).startsWith("..")) throw new Error(`Module "${record.name}" entry point escapes the repository root`);
+  const actualHash = crypto.createHash("sha256").update(fs.readFileSync(entryPath)).digest("hex");
+  if (actualHash !== record.entry_hash) throw new Error(`Module "${record.name}" entry code hash does not match the registered binding`);
+}
+
 /**
  * Register an installed/configured (or persisted enabled) module's tools into
  * the live registry path and persist the `enabled` transition when the module
@@ -202,6 +223,7 @@ function enableModule(name, entry) {
 
   let descriptors;
   try {
+    verifyEntryBinding(record, entry);
     descriptors = buildModuleDescriptors(record, entry);
   } catch (error) {
     failActivation(record, `Module "${record.name}" descriptor construction failed: ${error.message}`);

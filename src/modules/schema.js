@@ -46,6 +46,10 @@ function ensurePlatformModuleSchema() {
   if (ensured) return;
   const db = require("../db").getDb();
   db.exec(MODULE_SCHEMA_SQL);
+  const columns = db.prepare("PRAGMA table_info(platform_modules)").all();
+  if (!columns.some(column => column.name === "entry_hash")) {
+    db.exec("ALTER TABLE platform_modules ADD COLUMN entry_hash TEXT");
+  }
   const row = db.prepare("SELECT value FROM meta WHERE key = 'platform_module_schema_version'").get();
   if (!row) {
     db.prepare("INSERT INTO meta (key, value) VALUES ('platform_module_schema_version', '1')").run();

@@ -33,6 +33,8 @@ const MANIFEST = Object.freeze({
 });
 
 const entry = {
+  entryPoint: "src/modules/entries/data-utilities.js",
+  entryHash: require("crypto").createHash("sha256").update(require("fs").readFileSync(__filename)).digest("hex"),
   buildDescriptors() {
     return family.descriptors.map(descriptor => ({ ...descriptor }));
   },

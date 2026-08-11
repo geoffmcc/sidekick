@@ -29,6 +29,8 @@ Disable stops new work, drains or terminates module jobs, and retains data. Unin
 
 Module migrations use the existing ordered runner and SQLite database. They use logical namespaces and may reference only published platform tables. Config is validated before enablement; secrets are references to shared secret handling. Health covers dependencies, config, jobs and errors, not merely manifest parsing.
 
+Registered modules bind their declared entry point to a SHA-256 code hash. Enablement verifies the path, binding metadata, repository containment, and current file hash before constructing descriptors; a mismatch fails closed.
+
 Events use the future Event Runtime; appending a ledger event is not delivery. Jobs use common execution/claim/recovery semantics. Dashboard extensions expose service-backed routes/views and store no authoritative dashboard-only state.
 
 ## First Proof
