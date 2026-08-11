@@ -37,6 +37,8 @@ The first packaging slice is likewise inspection-only: it produces a determinist
 
 Installation accepts only a discovered candidate, validates a regular in-root entry file, persists its normalized path and hash, and starts at `validated`. It never loads module code; migration, enablement, and activation remain explicit lifecycle steps.
 
+Configuration is a separate boundary after installation: it validates the supplied config against the manifest schema and transitions only `installed -> configured`. It does not load, enable, or activate module code.
+
 Events use the future Event Runtime; appending a ledger event is not delivery. Jobs use common execution/claim/recovery semantics. Dashboard extensions expose service-backed routes/views and store no authoritative dashboard-only state.
 
 ## First Proof
