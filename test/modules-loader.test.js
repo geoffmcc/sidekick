@@ -1,4 +1,5 @@
 const assert = require('assert');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { z } = require('zod');
@@ -196,7 +197,24 @@ console.log('Running Module Loader Tests...\n');
     assert.strictEqual(restored.content[0].text, 'demo-loader-module:back', 'Restored module tool should dispatch');
     console.log('Passed\n');
 
-    console.log('Test ML.8: collision with a generated (dynamic) tool name fails closed');
+    console.log('Test ML.8: entry-code binding rejects changed or mismatched code');
+    const boundEntryPoint = 'src/modules/entries/data-utilities.js';
+    const boundEntryHash = crypto.createHash('sha256').update(fs.readFileSync(path.resolve(process.cwd(), boundEntryPoint))).digest('hex');
+    repository.registerModule({
+      name: 'bound-module',
+      version: '1.0.0',
+      description: 'Entry binding test module',
+    }, { source: 'plugin', entryPoint: boundEntryPoint, entryHash: '0'.repeat(64) });
+    repository.applyModuleMigrations('bound-module', { transitionTo: 'installed' });
+    assert.throws(
+      () => loader.enableModule('bound-module', { entryPoint: boundEntryPoint, entryHash: boundEntryHash, buildDescriptors: () => [] }),
+      /entry-code binding|entry code hash/,
+      'A changed registered entry hash should fail closed before activation'
+    );
+    assert.strictEqual(repository.getModule('bound-module').state, 'error', 'Entry binding failure should record an error state');
+    console.log('Passed\n');
+
+    console.log('Test ML.9: collision with a generated (dynamic) tool name fails closed');
     dbStore.saveGeneratedCapability({
       id: 'cap_loader_test_1',
       name: 'gen_collide_tool',

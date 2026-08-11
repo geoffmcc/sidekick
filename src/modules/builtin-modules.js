@@ -1,5 +1,9 @@
 "use strict";
 
+const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
+
 /**
  * Builtin module provisioning (docs/module-system-design.md).
  *
@@ -23,6 +27,14 @@ const loader = require("./loader");
 
 const BUILTIN_MODULES = Object.freeze([require("./entries/data-utilities")]);
 
+function entryPointFor(name) {
+  return `src/modules/entries/${name}.js`;
+}
+
+function entryHashFor(entryPoint) {
+  return crypto.createHash("sha256").update(fs.readFileSync(path.resolve(process.cwd(), entryPoint))).digest("hex");
+}
+
 function builtinEntriesByName() {
   const entries = {};
   for (const builtin of BUILTIN_MODULES) entries[builtin.MANIFEST.name] = builtin.entry;
@@ -39,10 +51,15 @@ function provisionBuiltinModules() {
     try {
       let record = repository.getModule(name);
       if (!record) {
+        const entryPoint = entryPointFor(name);
         repository.registerModule(builtin.MANIFEST, {
           source: "builtin",
-          entryPoint: `src/modules/entries/${name}.js`,
+          entryPoint,
+          entryHash: entryHashFor(entryPoint),
         });
+        record = repository.getModule(name);
+      } else if (!record.entry_hash) {
+        repository.bindEntryHash(name, entryHashFor(record.entry_point || entryPointFor(name)));
         record = repository.getModule(name);
       }
       if (record.state === "validated" || record.state === "installed") {

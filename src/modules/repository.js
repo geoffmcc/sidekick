@@ -104,7 +104,7 @@ function listModules({ state } = {}) {
  * Registering a name that already exists fails closed — upgrades and
  * re-registration are a separate, explicit flow.
  */
-function registerModule(manifestInput, { source = "discovered", entryPoint = null, config } = {}) {
+function registerModule(manifestInput, { source = "discovered", entryPoint = null, entryHash = null, config } = {}) {
   ensureModuleStorage();
   const manifest = normalizeManifest(manifestInput);
 
@@ -130,8 +130,8 @@ function registerModule(manifestInput, { source = "discovered", entryPoint = nul
   db.prepare(`
     INSERT INTO platform_modules (
       module_id, name, version, state, type, author, description,
-      manifest_json, config_json, source, entry_point, registered_at
-    ) VALUES (?, ?, ?, 'validated', ?, ?, ?, ?, ?, ?, ?, ?)
+      manifest_json, config_json, source, entry_point, entry_hash, registered_at
+    ) VALUES (?, ?, ?, 'validated', ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     moduleId,
     manifest.name,
@@ -143,10 +143,23 @@ function registerModule(manifestInput, { source = "discovered", entryPoint = nul
     JSON.stringify(storedConfig),
     source,
     entryPoint,
+    entryHash,
     nowIso()
   );
 
   return getModule(manifest.name);
+}
+
+function bindEntryHash(name, entryHash) {
+  ensureModuleStorage();
+  if (!entryHash || !/^[a-f0-9]{64}$/i.test(String(entryHash))) throw new Error("entryHash must be a SHA-256 hex digest");
+  const result = getDb().prepare("UPDATE platform_modules SET entry_hash = ? WHERE name = ? AND entry_hash IS NULL").run(String(entryHash).toLowerCase(), String(name));
+  if (result.changes === 0) {
+    const record = getModule(name);
+    if (!record) throw new Error(`Module "${name}" is not registered`);
+    if (record.entry_hash !== String(entryHash).toLowerCase()) throw new Error(`Module "${name}" entry binding already exists and does not match`);
+  }
+  return getModule(name);
 }
 
 /**
@@ -299,6 +312,7 @@ function applyModuleMigrations(name, { transitionTo = null, error = null, config
 module.exports = {
   ensureModuleStorage,
   registerModule,
+  bindEntryHash,
   getModule,
   listModules,
   transitionModule,
