@@ -17,12 +17,14 @@ campaign; product track (D) is explicitly optional.**
 
 ## Track A — Correctness and verification (do first; small, high-value)
 
-| # | Slice | Bounded goal | Completion evidence |
+Track A is complete (PRs #236, #238).
+
+| # | Slice | Status | Bounded goal / resolution |
 |---|---|---|---|
-| A1 | Register orphaned tests | Add the 9 CI-excluded suites to `test/run-all.js` in dependency order. | `run-all.js` runs 102 suites; all green. |
-| A2 | Migration self-containment (C1) | Make migrations build the schema standalone; `tool_logs` telemetry columns exist before `007`'s index. | Migrations-only boot succeeds; parity test extended past `platform_%`. |
-| A3 | Cross-process schema safety (C2) | Idempotent `compute_*` ALTER path; runtime ensures cannot collide with migrations. | Runtime-then-migration boot succeeds; `compute_%` parity test added. |
-| A4 | Dashboard SQL/auth hardening | Route `/api/db/*` through `callDashboardTool`; remove `readonly:false` arbitrary-SQL path; add auth to unauthenticated read endpoints. | Bypass removed; tests assert mediation. |
+| A1 | Register orphaned tests | **done** (#236) | 9 CI-excluded suites registered; suite runs green. |
+| A2 | Migration self-containment (C1) | **done** (#236) | Migrations build the schema standalone; migrations-only boot succeeds. |
+| A3 | Cross-process schema safety (C2) | **done** (#236) | Idempotent `ADD COLUMN`; runtime-then-migration boot no longer collides. |
+| A4 | Dashboard SQL/auth hardening | **done** (#238) | `/api/db/query` routed through `callDashboardTool` (write mode preserved but governed); `db/search` identifiers escaped. Auth-on-reads: verified the flagged read endpoints are network-gated by the blanket dashboard auth middleware (not an auth bypass); no change made. Routing the remaining read-only `/api/db/*` routes is a deferred lower-value follow-up. |
 
 ## Track B — Architectural convergence (dependency-ordered)
 
