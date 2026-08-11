@@ -72,6 +72,11 @@ const RISK_ORDER = { low: 1, medium: 2, high: 3, critical: 4 };
 
 // Tool categories - maps tool names to their category
 function getToolRisk(name) {
+  // Module tools first: the registry wins dispatch for these names, so the
+  // enforced risk must be the risk of what actually executes. Lazy require —
+  // the loader has no top-level dependency back into this module.
+  const moduleDescriptor = require("./modules/loader").resolveActiveDescriptor(name);
+  if (moduleDescriptor) return RISK_LEVELS.includes(moduleDescriptor.risk) ? moduleDescriptor.risk : "critical";
   const generated = dbStore.getGeneratedCapabilityByName(name);
   if (generated) return RISK_LEVELS.includes(generated.risk) ? generated.risk : "critical";
   const canonical = stripSidekickPrefix(name);
@@ -1289,7 +1294,9 @@ function logToolCall(name, args, duration, success, summary, metadata = {}) {
       execution_id: metadata.executionId || metadata.execution_id || null,
       step_number: metadata.stepNumber || metadata.step_number || null,
       retry: Boolean(metadata.retry),
-      generated_procedure: metadata.generatedProcedure || metadata.generated_procedure || null
+      generated_procedure: metadata.generatedProcedure || metadata.generated_procedure || null,
+      // Persisted via entry_json: attributes module-originated dispatches.
+      module: metadata.module || null
     });
     recordPlatformToolCall(name, argsShape, Math.round(duration), success, redactedSummary, metadata);
     recordToolCallMemory({

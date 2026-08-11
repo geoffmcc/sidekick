@@ -58,6 +58,24 @@ function isModuleActive(name) {
   return activeModules.has(String(name));
 }
 
+/**
+ * Resolve an active module tool descriptor by canonical name or alias, or
+ * null. Used by the legacy risk lookup so policy/approval enforcement sees
+ * the risk of the descriptor that actually dispatches for the name.
+ */
+function resolveActiveDescriptor(name) {
+  const canonical = stripSidekickPrefix(String(name || ""));
+  for (const descriptors of activeModules.values()) {
+    for (const descriptor of descriptors) {
+      if (stripSidekickPrefix(descriptor.name) === canonical) return descriptor;
+      for (const alias of descriptor.aliases || []) {
+        if (stripSidekickPrefix(alias) === canonical) return descriptor;
+      }
+    }
+  }
+  return null;
+}
+
 function liveRegistrySnapshot() {
   // Lazy require: the registry builder requires this module, so the loader
   // must not require ../tools at load time. At activation time the tool
@@ -100,7 +118,9 @@ function buildModuleDescriptors(record, entry) {
   if (!entry || typeof entry.buildDescriptors !== "function") {
     throw new Error(`Module "${record.name}" entry must expose buildDescriptors(services)`);
   }
-  const services = createModuleServices(record.name, record.config);
+  const services = createModuleServices(record.name, record.config, {
+    permissions: Array.isArray(record.manifest.permissions) ? record.manifest.permissions : [],
+  });
   const built = entry.buildDescriptors(services.v1);
   if (!Array.isArray(built)) {
     throw new Error(`Module "${record.name}" buildDescriptors must return an array of descriptors`);
@@ -234,6 +254,7 @@ module.exports = {
   getActiveDescriptors,
   getActiveModuleNames,
   isModuleActive,
+  resolveActiveDescriptor,
   enableModule,
   disableModule,
   restorePersistedModules,
