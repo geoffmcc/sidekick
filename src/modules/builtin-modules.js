@@ -45,6 +45,7 @@ function provisionBuiltinModules() {
   const provisioned = [];
   const skipped = [];
   const errors = [];
+  const alerts = [];
 
   for (const builtin of BUILTIN_MODULES) {
     const name = builtin.MANIFEST.name;
@@ -107,6 +108,7 @@ function runBuiltinModuleHealthChecks() {
   const checked = [];
   const skipped = [];
   const errors = [];
+  const alerts = [];
   const { checkModuleHealth } = require("./health");
   for (const builtin of BUILTIN_MODULES) {
     const name = builtin.MANIFEST.name;
@@ -116,18 +118,34 @@ function runBuiltinModuleHealthChecks() {
       continue;
     }
     try {
-      checked.push({ name, result: checkModuleHealth(name, builtin.entry) });
+      const result = checkModuleHealth(name, builtin.entry);
+      checked.push({ name, result });
+      if (!result.ok) alerts.push({ name, health: result.health, state: result.module.state });
     } catch (error) {
       errors.push({ name, error: error.message });
     }
   }
-  return { checked, skipped, errors };
+  if (alerts.length) {
+    try {
+      require("../platform/kernel").appendEvent({
+        event_type: "module.health.alert",
+        source: "modules",
+        subject_type: "module",
+        subject_id: alerts[0].name,
+        severity: "warning",
+        redaction_state: "none",
+        payload: { alerts },
+      });
+    } catch {}
+  }
+  return { checked, skipped, errors, alerts };
 }
 
 function startModuleHealthChecks(intervalMs = 60000) {
   const timer = setInterval(() => {
     const result = runBuiltinModuleHealthChecks();
     if (result.errors.length) console.error(`[Modules] Health sweep failed: ${JSON.stringify(result.errors)}`);
+    if (result.alerts.length) console.error(`[Modules] Health alerts: ${JSON.stringify(result.alerts)}`);
   }, intervalMs);
   timer.unref?.();
   return timer;
