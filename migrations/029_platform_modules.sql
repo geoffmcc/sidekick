@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS platform_modules (
   disabled_at TEXT,
   uninstalled_at TEXT,
   last_health_check_at TEXT,
-  metadata_json TEXT NOT NULL DEFAULT '{}'
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  entry_hash TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_modules_name ON platform_modules(name);
 CREATE INDEX IF NOT EXISTS idx_platform_modules_state ON platform_modules(state, registered_at DESC);
