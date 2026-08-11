@@ -9379,6 +9379,9 @@ async function sidekick_db_migrate({ action, version, name }) {
       if (!name) {
         return { content: [{ type: "text", text: "name required for up migration" }], isError: true };
       }
+      if (!/^\d{3}_[A-Za-z0-9_]+\.sql$/.test(name)) {
+        return { content: [{ type: "text", text: "Invalid migration name; expected NNN_name.sql" }], isError: true };
+      }
       const migrationPath = path.join(dbStore.MIGRATIONS_DIR, name);
       if (!fs.existsSync(migrationPath)) {
         return { content: [{ type: "text", text: `Migration not found: ${name}` }], isError: true };

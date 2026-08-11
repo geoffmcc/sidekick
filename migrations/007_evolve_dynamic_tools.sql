@@ -1,7 +1,21 @@
 -- Evidence-driven Evolve lifecycle and dynamic generated tools.
 
--- Telemetry columns are added idempotently by src/db.js because SQLite does not
--- support ALTER TABLE ADD COLUMN IF NOT EXISTS on all supported versions.
+-- tool_logs telemetry columns. SQLite has no ADD COLUMN IF NOT EXISTS, so the
+-- migration runner (src/db.js execMigrationSql) applies ALTER TABLE ADD COLUMN
+-- idempotently: each statement below is a no-op when the column already exists
+-- (e.g. after the runtime bootstrap created it). These must precede the indexes
+-- that reference them so a migrations-only build is self-contained.
+ALTER TABLE tool_logs ADD COLUMN session_id TEXT;
+ALTER TABLE tool_logs ADD COLUMN task_id TEXT;
+ALTER TABLE tool_logs ADD COLUMN project TEXT;
+ALTER TABLE tool_logs ADD COLUMN args_shape_json TEXT;
+ALTER TABLE tool_logs ADD COLUMN arg_fingerprint TEXT;
+ALTER TABLE tool_logs ADD COLUMN error_category TEXT;
+ALTER TABLE tool_logs ADD COLUMN result_summary TEXT;
+ALTER TABLE tool_logs ADD COLUMN correlation_id TEXT;
+ALTER TABLE tool_logs ADD COLUMN parent_id TEXT;
+ALTER TABLE tool_logs ADD COLUMN retry INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE tool_logs ADD COLUMN generated_procedure TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_tool_logs_session_task ON tool_logs(source, session_id, task_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_tool_logs_fingerprint ON tool_logs(tool_name, arg_fingerprint);
