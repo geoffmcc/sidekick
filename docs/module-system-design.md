@@ -31,6 +31,8 @@ Module migrations use the existing ordered runner and SQLite database. They use 
 
 Registered modules bind their declared entry point to a SHA-256 code hash. Enablement verifies the path, binding metadata, repository containment, and current file hash before constructing descriptors; a mismatch fails closed.
 
+Phase 6 discovery is intentionally separate from activation: bounded scans of `modules/` and `plugins/` parse `manifest.json` (or `sidekick.module.json`) deterministically, reject symlinked module directories and duplicate names, and return candidates/errors without registering or executing module code.
+
 Events use the future Event Runtime; appending a ledger event is not delivery. Jobs use common execution/claim/recovery semantics. Dashboard extensions expose service-backed routes/views and store no authoritative dashboard-only state.
 
 ## First Proof
