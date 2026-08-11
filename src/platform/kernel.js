@@ -765,6 +765,64 @@ function bindExecutionScope(executionId, decision) {
   return getExecution(execution.execution_id);
 }
 
+const RESEARCH_CAMPAIGN_STATES = Object.freeze(["draft", "active", "paused", "closed"]);
+const RESEARCH_HYPOTHESIS_STATES = Object.freeze(["proposed", "ready", "blocked", "analysis_only", "not_run", "running", "inconclusive", "rejected", "supported", "confirmed"]);
+const RESEARCH_TEST_RUN_STATES = Object.freeze(["not_run", "running", "completed", "inconclusive", "failed", "cancelled"]);
+const CAMPAIGN_TRANSITIONS = Object.freeze({ draft: ["active", "closed"], active: ["paused", "closed"], paused: ["active", "closed"], closed: [] });
+const HYPOTHESIS_TRANSITIONS = Object.freeze({ proposed: ["ready", "blocked", "rejected", "analysis_only"], ready: ["blocked", "running", "rejected", "analysis_only"], blocked: ["ready", "rejected"], analysis_only: ["ready", "rejected"], not_run: ["ready", "running", "rejected"], running: ["inconclusive", "supported", "confirmed", "rejected"], inconclusive: ["ready", "running", "rejected"], rejected: [], supported: ["confirmed", "rejected"], confirmed: [] });
+const TEST_RUN_TRANSITIONS = Object.freeze({ not_run: ["running", "cancelled"], running: ["completed", "inconclusive", "failed", "cancelled"], completed: [], inconclusive: [], failed: [], cancelled: [] });
+
+function normalizeResearchCampaign(row) { return row ? { ...row, metadata: parseJson(row.metadata_json, {}) } : null; }
+function normalizeResearchHypothesis(row) { return row ? { ...row, prerequisites: parseJson(row.prerequisites_json, []), criteria: parseJson(row.criteria_json, {}), metadata: parseJson(row.metadata_json, {}) } : null; }
+function normalizeResearchTestRun(row) { return row ? { ...row, environment: parseJson(row.environment_json, {}), evidence: parseJson(row.evidence_json, []), metadata: parseJson(row.metadata_json, {}) } : null; }
+function requiredText(value, name) { const text = String(value || "").trim(); if (!text) throw new Error(`${name} must be a non-empty string`); return text; }
+function boundedList(value, name) { if (value === undefined) return []; if (!Array.isArray(value)) throw new Error(`${name} must be an array`); return value; }
+
+function createResearchCampaign(input = {}) {
+  ensurePlatformKernelSchema();
+  const projectId = normalizeProjectId(input.project_id), createdBy = requiredText(input.created_by, "created_by"), name = requiredText(input.name, "name");
+  const state = input.state || "draft";
+  if (!RESEARCH_CAMPAIGN_STATES.includes(state)) throw new Error(`Invalid campaign state: ${state}`);
+  if (input.scope_snapshot_id) { const snapshot = getScopeSnapshot(input.scope_snapshot_id); if (!snapshot || snapshot.project_id !== projectId) throw new Error("scope_snapshot_id must belong to project"); }
+  const campaignId = input.campaign_id || newId("campaign"), ts = input.created_at || nowIso();
+  dbStore.getDb().prepare("INSERT INTO platform_research_campaigns (campaign_id, project_id, name, state, scope_snapshot_id, created_by, created_at, updated_at, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(campaignId, projectId, name, state, input.scope_snapshot_id || null, createdBy, ts, ts, json(input.metadata || {}));
+  appendEvent({ event_type: "research.campaign.created", source: input.source || "platform", actor_id: createdBy, subject_type: "research_campaign", subject_id: campaignId, project_id: projectId, payload: { name, state, scope_snapshot_id: input.scope_snapshot_id || null }, correlation_id: campaignId });
+  return getResearchCampaign(campaignId);
+}
+function getResearchCampaign(campaignId) { ensurePlatformKernelSchema(); return normalizeResearchCampaign(dbStore.getDb().prepare("SELECT * FROM platform_research_campaigns WHERE campaign_id = ?").get(campaignId)); }
+function listResearchCampaigns(query = {}) { ensurePlatformKernelSchema(); const where = [], params = []; if (query.project_id) { where.push("project_id = ?"); params.push(query.project_id); } if (query.state) { where.push("state = ?"); params.push(query.state); } const limit = Math.min(Math.max(Number(query.limit) || 50, 1), 100); return dbStore.getDb().prepare(`SELECT * FROM platform_research_campaigns ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY updated_at DESC LIMIT ?`).all(...params, limit).map(normalizeResearchCampaign); }
+function transitionResearchCampaign(campaignId, state, details = {}) { ensurePlatformKernelSchema(); const current = getResearchCampaign(campaignId); if (!current || !RESEARCH_CAMPAIGN_STATES.includes(state) || !(CAMPAIGN_TRANSITIONS[current.state] || []).includes(state)) throw new Error(`Invalid campaign transition: ${current ? `${current.state} -> ${state}` : "missing campaign"}`); const ts = nowIso(); dbStore.getDb().prepare("UPDATE platform_research_campaigns SET state = ?, updated_at = ? WHERE campaign_id = ?").run(state, ts, campaignId); appendEvent({ event_type: "research.campaign.state_changed", source: details.source || "platform", actor_id: details.actor_id, subject_type: "research_campaign", subject_id: campaignId, project_id: current.project_id, payload: { from: current.state, to: state, reason: details.reason || null }, correlation_id: campaignId }); return getResearchCampaign(campaignId); }
+
+function createResearchHypothesis(input = {}) {
+  ensurePlatformKernelSchema(); const campaign = getResearchCampaign(input.campaign_id); if (!campaign) throw new Error("campaign_id must reference an existing campaign");
+  if (input.project_id && input.project_id !== campaign.project_id) throw new Error("project_id must match campaign");
+  const title = requiredText(input.title, "title"), claim = requiredText(input.claim, "claim"), createdBy = requiredText(input.created_by, "created_by"), state = input.state || "proposed";
+  if (!RESEARCH_HYPOTHESIS_STATES.includes(state)) throw new Error(`Invalid hypothesis state: ${state}`);
+  if (input.confidence != null && (!Number.isFinite(Number(input.confidence)) || Number(input.confidence) < 0 || Number(input.confidence) > 1)) throw new Error("confidence must be between 0 and 1");
+  const prerequisites = boundedList(input.prerequisites, "prerequisites"), criteria = input.criteria && typeof input.criteria === "object" && !Array.isArray(input.criteria) ? input.criteria : {};
+  const hypothesisId = input.hypothesis_id || newId("hypothesis"), ts = input.created_at || nowIso();
+  dbStore.getDb().prepare("INSERT INTO platform_research_hypotheses (hypothesis_id, campaign_id, project_id, title, claim, state, rationale, prerequisites_json, criteria_json, confidence, created_by, created_at, updated_at, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(hypothesisId, campaign.campaign_id, campaign.project_id, title, claim, state, input.rationale || null, JSON.stringify(prerequisites), JSON.stringify(criteria), input.confidence == null ? null : Number(input.confidence), createdBy, ts, ts, json(input.metadata || {}));
+  appendEvent({ event_type: "research.hypothesis.created", source: input.source || "platform", actor_id: createdBy, subject_type: "research_hypothesis", subject_id: hypothesisId, project_id: campaign.project_id, payload: { campaign_id: campaign.campaign_id, state }, correlation_id: campaign.campaign_id }); return getResearchHypothesis(hypothesisId);
+}
+function getResearchHypothesis(hypothesisId) { ensurePlatformKernelSchema(); return normalizeResearchHypothesis(dbStore.getDb().prepare("SELECT * FROM platform_research_hypotheses WHERE hypothesis_id = ?").get(hypothesisId)); }
+function listResearchHypotheses(query = {}) { ensurePlatformKernelSchema(); const where = [], params = []; for (const key of ["campaign_id", "project_id", "state"]) if (query[key]) { where.push(`${key} = ?`); params.push(query[key]); } const limit = Math.min(Math.max(Number(query.limit) || 50, 1), 100); return dbStore.getDb().prepare(`SELECT * FROM platform_research_hypotheses ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY updated_at DESC LIMIT ?`).all(...params, limit).map(normalizeResearchHypothesis); }
+function transitionResearchHypothesis(hypothesisId, state, details = {}) { ensurePlatformKernelSchema(); const current = getResearchHypothesis(hypothesisId); if (!current || !RESEARCH_HYPOTHESIS_STATES.includes(state) || !(HYPOTHESIS_TRANSITIONS[current.state] || []).includes(state)) throw new Error(`Invalid hypothesis transition: ${current ? `${current.state} -> ${state}` : "missing hypothesis"}`); const ts = nowIso(); dbStore.getDb().prepare("UPDATE platform_research_hypotheses SET state = ?, updated_at = ? WHERE hypothesis_id = ?").run(state, ts, hypothesisId); appendEvent({ event_type: "research.hypothesis.state_changed", source: details.source || "platform", actor_id: details.actor_id, subject_type: "research_hypothesis", subject_id: hypothesisId, project_id: current.project_id, payload: { from: current.state, to: state, reason: details.reason || null }, correlation_id: current.campaign_id }); return getResearchHypothesis(hypothesisId); }
+
+function createResearchTestRun(input = {}) {
+  ensurePlatformKernelSchema(); const hypothesis = getResearchHypothesis(input.hypothesis_id); if (!hypothesis) throw new Error("hypothesis_id must reference an existing hypothesis"); const campaign = getResearchCampaign(hypothesis.campaign_id); const createdBy = requiredText(input.created_by, "created_by");
+  if (input.project_id && input.project_id !== hypothesis.project_id) throw new Error("project_id must match hypothesis");
+  const scopeSnapshotId = input.scope_snapshot_id || campaign.scope_snapshot_id || null;
+  if (scopeSnapshotId) { const snapshot = getScopeSnapshot(scopeSnapshotId); if (!snapshot || snapshot.project_id !== hypothesis.project_id) throw new Error("scope_snapshot_id must belong to project"); }
+  if (input.execution_id) { const execution = getExecution(input.execution_id); if (!execution || execution.project_id !== hypothesis.project_id) throw new Error("execution_id must belong to project"); }
+  const state = input.state || "not_run"; if (!RESEARCH_TEST_RUN_STATES.includes(state)) throw new Error(`Invalid test run state: ${state}`);
+  const testRunId = input.test_run_id || newId("test_run"), ts = input.created_at || nowIso(), evidence = boundedList(input.evidence, "evidence");
+  dbStore.getDb().prepare("INSERT INTO platform_research_test_runs (test_run_id, hypothesis_id, campaign_id, project_id, execution_id, scope_snapshot_id, state, environment_json, outcome, evidence_json, created_by, created_at, started_at, completed_at, updated_at, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(testRunId, hypothesis.hypothesis_id, campaign.campaign_id, hypothesis.project_id, input.execution_id || null, scopeSnapshotId, state, json(input.environment || {}), input.outcome || null, JSON.stringify(evidence), createdBy, ts, state === "running" ? ts : null, null, ts, json(input.metadata || {}));
+  appendEvent({ event_type: "research.test_run.created", source: input.source || "platform", actor_id: createdBy, subject_type: "research_test_run", subject_id: testRunId, project_id: hypothesis.project_id, execution_id: input.execution_id || null, payload: { hypothesis_id: hypothesis.hypothesis_id, campaign_id: campaign.campaign_id, state, scope_snapshot_id: scopeSnapshotId }, correlation_id: campaign.campaign_id }); return getResearchTestRun(testRunId);
+}
+function getResearchTestRun(testRunId) { ensurePlatformKernelSchema(); return normalizeResearchTestRun(dbStore.getDb().prepare("SELECT * FROM platform_research_test_runs WHERE test_run_id = ?").get(testRunId)); }
+function listResearchTestRuns(query = {}) { ensurePlatformKernelSchema(); const where = [], params = []; for (const key of ["project_id", "campaign_id", "hypothesis_id", "execution_id", "state"]) if (query[key]) { where.push(`${key} = ?`); params.push(query[key]); } const limit = Math.min(Math.max(Number(query.limit) || 50, 1), 100); return dbStore.getDb().prepare(`SELECT * FROM platform_research_test_runs ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY updated_at DESC LIMIT ?`).all(...params, limit).map(normalizeResearchTestRun); }
+function transitionResearchTestRun(testRunId, state, details = {}) { ensurePlatformKernelSchema(); const current = getResearchTestRun(testRunId); if (!current || !RESEARCH_TEST_RUN_STATES.includes(state) || !(TEST_RUN_TRANSITIONS[current.state] || []).includes(state)) throw new Error(`Invalid test run transition: ${current ? `${current.state} -> ${state}` : "missing test run"}`); const evidence = details.evidence === undefined ? current.evidence : boundedList(details.evidence, "evidence"), outcome = details.outcome === undefined ? current.outcome : details.outcome; if (state === "completed" && (!current.execution_id || evidence.length === 0 || !outcome)) throw new Error("completed test runs require execution_id, outcome, and evidence"); const ts = nowIso(), terminal = ["completed", "inconclusive", "failed", "cancelled"].includes(state); dbStore.getDb().prepare("UPDATE platform_research_test_runs SET state = ?, outcome = ?, evidence_json = ?, started_at = COALESCE(started_at, ?), completed_at = ?, updated_at = ? WHERE test_run_id = ?").run(state, outcome || null, JSON.stringify(evidence), state === "running" ? ts : null, terminal ? ts : null, ts, testRunId); appendEvent({ event_type: "research.test_run.state_changed", source: details.source || "platform", actor_id: details.actor_id, subject_type: "research_test_run", subject_id: testRunId, project_id: current.project_id, execution_id: current.execution_id, payload: { from: current.state, to: state, outcome: outcome || null, evidence_count: evidence.length }, correlation_id: current.campaign_id }); return getResearchTestRun(testRunId); }
+
 function registerArtifact(input = {}) {
   ensurePlatformKernelSchema();
   if (!input.storage_ref) throw new Error("storage_ref is required");
@@ -1881,6 +1939,18 @@ module.exports = {
   listScopeSnapshots,
   evaluateScope,
   bindExecutionScope,
+  createResearchCampaign,
+  getResearchCampaign,
+  listResearchCampaigns,
+  transitionResearchCampaign,
+  createResearchHypothesis,
+  getResearchHypothesis,
+  listResearchHypotheses,
+  transitionResearchHypothesis,
+  createResearchTestRun,
+  getResearchTestRun,
+  listResearchTestRuns,
+  transitionResearchTestRun,
   registerArtifact,
   getArtifact,
   listArtifacts,
