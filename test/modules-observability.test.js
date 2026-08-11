@@ -115,8 +115,11 @@ console.log('Running Module Observability Tests...\n');
     dbStore.getDb().prepare("UPDATE platform_modules SET state = 'error', error = 'synthetic fault' WHERE name = 'data-utilities'").run();
     const faulted = await tools.callInternalTool('health', { check: 'modules' });
     assert.ok(/error state: synthetic fault/.test(faulted.content[0].text), 'Health should surface the module error');
-    setModuleState('enabled');
-    loader.reconcilePersistedModules(builtinModules.builtinEntriesByName());
+    const recovered = await tools.callInternalTool('module', { action: 'recover', name: 'data-utilities' });
+    assert.ok(!recovered.isError, 'Module recovery should succeed');
+    const recoveredOut = JSON.parse(recovered.content[0].text);
+    assert.strictEqual(recoveredOut.result.ok, true, 'Recovery should require a passing health check');
+    assert.strictEqual(recoveredOut.result.module.state, 'healthy', 'Recovery should leave the module healthy');
     console.log('Passed\n');
 
     console.log('Test MO.8: the dispatch gate fails closed when the state read throws');

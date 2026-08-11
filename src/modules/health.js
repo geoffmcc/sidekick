@@ -38,4 +38,19 @@ function checkModuleHealth(name, entry) {
   return { ok: false, module, health: result };
 }
 
-module.exports = { checkModuleHealth };
+/** Recover an error-state module, then require a passing health check. */
+function recoverModuleHealth(name, entry) {
+  const record = repository.getModule(name);
+  if (!record) throw new Error(`Module "${name}" is not registered`);
+  if (record.state !== "error") {
+    throw new Error(`Module "${name}" must be in error state before recovery (state: ${record.state})`);
+  }
+  // An error may be persisted after another process failed while this process
+  // still holds stale descriptors. Remove those descriptors before the
+  // error -> enabled recovery transition.
+  loader.disableModule(name);
+  loader.enableModule(name, entry);
+  return checkModuleHealth(name, entry);
+}
+
+module.exports = { checkModuleHealth, recoverModuleHealth };
