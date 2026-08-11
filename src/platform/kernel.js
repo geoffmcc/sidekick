@@ -823,6 +823,37 @@ function getResearchTestRun(testRunId) { ensurePlatformKernelSchema(); return no
 function listResearchTestRuns(query = {}) { ensurePlatformKernelSchema(); const where = [], params = []; for (const key of ["project_id", "campaign_id", "hypothesis_id", "execution_id", "state"]) if (query[key]) { where.push(`${key} = ?`); params.push(query[key]); } const limit = Math.min(Math.max(Number(query.limit) || 50, 1), 100); return dbStore.getDb().prepare(`SELECT * FROM platform_research_test_runs ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY updated_at DESC LIMIT ?`).all(...params, limit).map(normalizeResearchTestRun); }
 function transitionResearchTestRun(testRunId, state, details = {}) { ensurePlatformKernelSchema(); const current = getResearchTestRun(testRunId); if (!current || !RESEARCH_TEST_RUN_STATES.includes(state) || !(TEST_RUN_TRANSITIONS[current.state] || []).includes(state)) throw new Error(`Invalid test run transition: ${current ? `${current.state} -> ${state}` : "missing test run"}`); const evidence = details.evidence === undefined ? current.evidence : boundedList(details.evidence, "evidence"), outcome = details.outcome === undefined ? current.outcome : details.outcome; if (state === "completed" && (!current.execution_id || evidence.length === 0 || !outcome)) throw new Error("completed test runs require execution_id, outcome, and evidence"); const ts = nowIso(), terminal = ["completed", "inconclusive", "failed", "cancelled"].includes(state); dbStore.getDb().prepare("UPDATE platform_research_test_runs SET state = ?, outcome = ?, evidence_json = ?, started_at = COALESCE(started_at, ?), completed_at = ?, updated_at = ? WHERE test_run_id = ?").run(state, outcome || null, JSON.stringify(evidence), state === "running" ? ts : null, terminal ? ts : null, ts, testRunId); appendEvent({ event_type: "research.test_run.state_changed", source: details.source || "platform", actor_id: details.actor_id, subject_type: "research_test_run", subject_id: testRunId, project_id: current.project_id, execution_id: current.execution_id, payload: { from: current.state, to: state, outcome: outcome || null, evidence_count: evidence.length }, correlation_id: current.campaign_id }); return getResearchTestRun(testRunId); }
 
+const RESEARCH_FINDING_STATUSES = Object.freeze(["analysis_only", "proposed", "supported", "confirmed", "rejected"]);
+const RESEARCH_REPORT_STATUSES = Object.freeze(["draft", "internal_review", "ready"]);
+function normalizeResearchFinding(row) { return row ? { ...row, evidence_refs: parseJson(row.evidence_refs_json, []), metadata: parseJson(row.metadata_json, {}) } : null; }
+function normalizeResearchReport(row) { return row ? { ...row, finding_refs: parseJson(row.finding_refs_json, []), metadata: parseJson(row.metadata_json, {}) } : null; }
+function createResearchFinding(input = {}) {
+  ensurePlatformKernelSchema(); const campaign = getResearchCampaign(input.campaign_id); if (!campaign) throw new Error("campaign_id must reference an existing campaign");
+  const createdBy = requiredText(input.created_by, "created_by"), title = requiredText(input.title, "title"), claim = requiredText(input.claim, "claim"), status = input.status || "analysis_only", refs = boundedList(input.evidence_refs, "evidence_refs");
+  if (!RESEARCH_FINDING_STATUSES.includes(status)) throw new Error(`Invalid finding status: ${status}`);
+  let hypothesis = null, testRun = null;
+  if (input.hypothesis_id) { hypothesis = getResearchHypothesis(input.hypothesis_id); if (!hypothesis || hypothesis.campaign_id !== campaign.campaign_id) throw new Error("hypothesis_id must belong to campaign"); }
+  if (input.test_run_id) { testRun = getResearchTestRun(input.test_run_id); if (!testRun || testRun.campaign_id !== campaign.campaign_id) throw new Error("test_run_id must belong to campaign"); }
+  if (status === "confirmed" && (!testRun || testRun.state !== "completed" || refs.length === 0)) throw new Error("confirmed findings require a completed test run and evidence references");
+  const findingId = input.finding_id || newId("finding"), ts = input.created_at || nowIso();
+  dbStore.getDb().prepare("INSERT INTO platform_research_findings (finding_id, project_id, campaign_id, hypothesis_id, test_run_id, title, claim, status, impact, evidence_refs_json, created_by, created_at, updated_at, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(findingId, campaign.project_id, campaign.campaign_id, hypothesis ? hypothesis.hypothesis_id : null, testRun ? testRun.test_run_id : null, title, claim, status, input.impact || null, JSON.stringify(refs), createdBy, ts, ts, json(input.metadata || {}));
+  appendEvent({ event_type: "research.finding.created", source: input.source || "platform", actor_id: createdBy, subject_type: "research_finding", subject_id: findingId, project_id: campaign.project_id, payload: { campaign_id: campaign.campaign_id, status, evidence_count: refs.length }, correlation_id: campaign.campaign_id }); return getResearchFinding(findingId);
+}
+function getResearchFinding(findingId) { ensurePlatformKernelSchema(); return normalizeResearchFinding(dbStore.getDb().prepare("SELECT * FROM platform_research_findings WHERE finding_id = ?").get(findingId)); }
+function listResearchFindings(query = {}) { ensurePlatformKernelSchema(); const where = [], params = []; for (const key of ["project_id", "campaign_id", "hypothesis_id", "test_run_id", "status"]) if (query[key]) { where.push(`${key} = ?`); params.push(query[key]); } const limit = Math.min(Math.max(Number(query.limit) || 50, 1), 100); return dbStore.getDb().prepare(`SELECT * FROM platform_research_findings ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY updated_at DESC LIMIT ?`).all(...params, limit).map(normalizeResearchFinding); }
+function createResearchReport(input = {}) {
+  ensurePlatformKernelSchema(); const campaign = getResearchCampaign(input.campaign_id); if (!campaign) throw new Error("campaign_id must reference an existing campaign");
+  const createdBy = requiredText(input.created_by, "created_by"), title = requiredText(input.title, "title"), refs = boundedList(input.finding_refs, "finding_refs"), status = input.status || "draft";
+  if (!RESEARCH_REPORT_STATUSES.includes(status)) throw new Error(`Invalid report status: ${status}`);
+  for (const findingId of refs) { const finding = getResearchFinding(findingId); if (!finding || finding.campaign_id !== campaign.campaign_id) throw new Error("finding_refs must belong to campaign"); }
+  if (input.artifact_id && !getArtifact(input.artifact_id)) throw new Error("artifact_id must reference an existing artifact");
+  const reportId = input.report_id || newId("report"), ts = input.created_at || nowIso();
+  dbStore.getDb().prepare("INSERT INTO platform_research_reports (report_id, project_id, campaign_id, artifact_id, title, status, finding_refs_json, created_by, created_at, updated_at, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(reportId, campaign.project_id, campaign.campaign_id, input.artifact_id || null, title, status, JSON.stringify(refs), createdBy, ts, ts, json(input.metadata || {}));
+  appendEvent({ event_type: "research.report.created", source: input.source || "platform", actor_id: createdBy, subject_type: "research_report", subject_id: reportId, project_id: campaign.project_id, payload: { campaign_id: campaign.campaign_id, status, finding_count: refs.length, artifact_id: input.artifact_id || null }, correlation_id: campaign.campaign_id }); return getResearchReport(reportId);
+}
+function getResearchReport(reportId) { ensurePlatformKernelSchema(); return normalizeResearchReport(dbStore.getDb().prepare("SELECT * FROM platform_research_reports WHERE report_id = ?").get(reportId)); }
+function listResearchReports(query = {}) { ensurePlatformKernelSchema(); const where = [], params = []; for (const key of ["project_id", "campaign_id", "status"]) if (query[key]) { where.push(`${key} = ?`); params.push(query[key]); } const limit = Math.min(Math.max(Number(query.limit) || 50, 1), 100); return dbStore.getDb().prepare(`SELECT * FROM platform_research_reports ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY updated_at DESC LIMIT ?`).all(...params, limit).map(normalizeResearchReport); }
+
 function registerArtifact(input = {}) {
   ensurePlatformKernelSchema();
   if (!input.storage_ref) throw new Error("storage_ref is required");
@@ -1951,6 +1982,12 @@ module.exports = {
   getResearchTestRun,
   listResearchTestRuns,
   transitionResearchTestRun,
+  createResearchFinding,
+  getResearchFinding,
+  listResearchFindings,
+  createResearchReport,
+  getResearchReport,
+  listResearchReports,
   registerArtifact,
   getArtifact,
   listArtifacts,
