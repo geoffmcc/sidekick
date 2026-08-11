@@ -39,7 +39,7 @@ analysis_completed -> test_designed -> environment_prepared -> test_executed
 
 ## Evidence, Disclosure And Lab Safety
 
-Use generic artifact registration for custody. Originals include digest, size, timestamp, source, environment, method, execution ID, sensitivity, retention and custody events. Redacted/report-safe files are derivatives and never replace originals. Outgoing vendor correspondence/submissions require human approval. Disclosure may progress through draft, internal review, ready, submitted, acknowledged, triage, duplicate/informative, accepted, remediation, resolved, retest, bounty and closed states.
+Use generic artifact registration for custody. Originals include a SHA-256 digest, size, timestamp, source, environment, method, execution ID, sensitivity, retention and custody events. Redacted/report-safe files are explicit derivatives linked to an existing original and never replace it. The dashboard exposes bounded custody metadata without unrestricted artifact reads. Outgoing vendor correspondence/submissions require human approval. Disclosure may progress through draft, internal review, ready, submitted, acknowledged, triage, duplicate/informative, accepted, remediation, resolved, retest, bounty and closed states.
 
 The first connector contract must be defined against the working `security-research` surface and tested independently of the unavailable Workbench. Do not claim Workbench-backed integration until its endpoint, lifecycle and result contract are verified.
 

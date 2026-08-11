@@ -81,6 +81,17 @@ setTimeout(async () => {
       console.log('Passed\n');
     }
 
+    console.log('Test 3.0aa: dashboard exposes bounded artifact custody metadata');
+    {
+      const response = await makeRequest('GET', '/api/artifacts?limit=2');
+      assert.strictEqual(response.status, 200, 'Artifact dashboard API should succeed');
+      assert.strictEqual(response.data.ok, true, 'Artifact dashboard API should report success');
+      assert.ok(Array.isArray(response.data.artifacts), 'Artifact dashboard API should return rows');
+      assert.ok(response.data.artifacts.length <= 2, 'Artifact dashboard API should enforce the requested bound');
+      assert.ok(response.data.summary && Number.isInteger(response.data.summary.originals), 'Artifact dashboard API should return custody summary');
+      console.log('Passed\n');
+    }
+
     // Test 3.0: dashboard shell and event streams require auth
     console.log('Test 3.0: dashboard shell and event streams require auth');
     {

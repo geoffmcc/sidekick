@@ -54,6 +54,7 @@ console.log('Running Platform Kernel Tests...\n');
     const second = kernel.appendEvent({ event_type: 'test.event', source: 'test', dedupe_key: 'same-key', payload: { ok: false } });
     assert.strictEqual(first.event_id, second.event_id, 'Duplicate dedupe_key should return existing event');
     assert.throws(() => kernel.registerArtifact({ storage_ref: '../escape.txt', type: 'report', name: 'bad' }), /safe relative path/, 'Path traversal should be rejected');
+    assert.throws(() => kernel.registerArtifact({ storage_ref: 'reports/bad.md', content_hash: 'sha256:test' }), /SHA-256 digest/, 'Artifact hashes should be real SHA-256 digests');
     const artifact = kernel.registerArtifact({
       execution_id: execution.execution_id,
       project_id: 'sidekick',
@@ -61,11 +62,25 @@ console.log('Running Platform Kernel Tests...\n');
       name: 'assessment',
       storage_ref: 'reports/platform-assessment.md',
       content_type: 'text/markdown',
-      content_hash: 'sha256:test',
+      content_hash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     });
     assert.strictEqual(artifact.storage_ref, 'reports/platform-assessment.md', 'Artifact metadata should be stored');
     const withArtifact = kernel.getExecution(execution.execution_id);
     assert.strictEqual(withArtifact.artifact_count, 1, 'Artifact count should be linked to execution');
+    const derivative = kernel.registerArtifact({
+      project_id: 'sidekick',
+      type: 'report',
+      name: 'assessment-redacted',
+      storage_ref: 'reports/platform-assessment-redacted.md',
+      content_hash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      supersedes_artifact_id: artifact.artifact_id,
+      lineage: { purpose: 'redaction' },
+      redaction_state: 'redacted',
+    });
+    assert.strictEqual(derivative.custody_role, 'derivative', 'Derived artifacts should expose custody role');
+    assert.strictEqual(derivative.lineage.role, 'derivative', 'Derived artifacts should carry normalized lineage role');
+    assert.strictEqual(kernel.listArtifacts({ custody_role: 'original' }).length, 1, 'Artifact listing should filter originals');
+    assert.strictEqual(kernel.getArtifact(derivative.artifact_id).supersedes_artifact_id, artifact.artifact_id, 'Artifact lookup should preserve lineage');
     console.log('Passed\n');
 
     console.log('All Platform Kernel tests passed.');

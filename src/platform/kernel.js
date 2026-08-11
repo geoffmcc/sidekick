@@ -110,6 +110,18 @@ function normalizeProjectSource(row) {
   return { ...row, metadata: parseJson(row.metadata_json, {}) };
 }
 
+function normalizeArtifact(row) {
+  if (!row) return null;
+  const lineage = parseJson(row.lineage_json, {});
+  return {
+    ...row,
+    lineage,
+    verification: parseJson(row.verification_json, {}),
+    metadata: parseJson(row.metadata_json, {}),
+    custody_role: lineage.role || (row.supersedes_artifact_id ? "derivative" : "original"),
+  };
+}
+
 function normalizeWorkspace(row, secretNames = []) {
   if (!row) return null;
   // secrets_json never leaves the kernel: legacy plaintext is only reachable
@@ -339,6 +351,23 @@ function registerArtifact(input = {}) {
   if (normalizedRef.includes("../") || normalizedRef === ".." || path.isAbsolute(normalizedRef)) {
     throw new Error("storage_ref must be a safe relative path or opaque storage key");
   }
+  const lineage = input.lineage && typeof input.lineage === "object" ? { ...input.lineage } : {};
+  const custodyRole = lineage.role || (input.supersedes_artifact_id ? "derivative" : "original");
+  if (!["original", "derivative"].includes(custodyRole)) throw new Error("artifact lineage role must be original or derivative");
+  if (custodyRole === "original" && input.supersedes_artifact_id) throw new Error("original artifacts cannot supersede another artifact");
+  if (custodyRole === "derivative" && !input.supersedes_artifact_id) throw new Error("derivative artifacts require supersedes_artifact_id");
+  if (input.supersedes_artifact_id) {
+    const parent = dbStore.getDb().prepare("SELECT artifact_id, deleted_at FROM platform_artifacts WHERE artifact_id = ?").get(input.supersedes_artifact_id);
+    if (!parent) throw new Error(`Parent artifact not found: ${input.supersedes_artifact_id}`);
+    if (parent.deleted_at) throw new Error("derivatives cannot be created from deleted artifacts");
+  }
+  if (input.content_hash !== undefined && !/^(?:sha256:)?[a-f0-9]{64}$/i.test(String(input.content_hash))) {
+    throw new Error("content_hash must be a SHA-256 digest");
+  }
+  if (input.byte_size !== undefined && (!Number.isInteger(input.byte_size) || input.byte_size < 0)) {
+    throw new Error("byte_size must be a non-negative integer");
+  }
+  lineage.role = custodyRole;
   const artifactId = input.artifact_id || newId("art");
   const ts = input.created_at || nowIso();
   dbStore.getDb().prepare(`
@@ -364,7 +393,7 @@ function registerArtifact(input = {}) {
     input.retention_class || "standard",
     input.sensitivity || "normal",
     input.redaction_state || "unknown",
-    json(input.lineage || {}),
+    json(lineage),
     json(input.verification || {}),
     input.supersedes_artifact_id || null,
     json(input.metadata || {})
@@ -385,7 +414,27 @@ function registerArtifact(input = {}) {
     payload: { type: input.type || "artifact", name: input.name || artifactId, storage_ref: normalizedRef },
     correlation_id: input.correlation_id,
   });
-  return dbStore.getDb().prepare("SELECT * FROM platform_artifacts WHERE artifact_id = ?").get(artifactId);
+  return normalizeArtifact(dbStore.getDb().prepare("SELECT * FROM platform_artifacts WHERE artifact_id = ?").get(artifactId));
+}
+
+function getArtifact(artifactId) {
+  ensurePlatformKernelSchema();
+  return normalizeArtifact(dbStore.getDb().prepare("SELECT * FROM platform_artifacts WHERE artifact_id = ?").get(String(artifactId)));
+}
+
+function listArtifacts(query = {}) {
+  ensurePlatformKernelSchema();
+  const conditions = ["deleted_at IS NULL"];
+  const params = [];
+  if (query.project_id) { conditions.push("project_id = ?"); params.push(String(query.project_id)); }
+  if (query.execution_id) { conditions.push("execution_id = ?"); params.push(String(query.execution_id)); }
+  if (query.custody_role) {
+    if (!["original", "derivative"].includes(query.custody_role)) throw new Error("Invalid custody_role");
+    conditions.push("json_extract(lineage_json, '$.role') = ?");
+    params.push(query.custody_role);
+  }
+  const limit = Math.max(1, Math.min(Number(query.limit) || 50, 100));
+  return dbStore.getDb().prepare(`SELECT * FROM platform_artifacts WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC LIMIT ?`).all(...params, limit).map(normalizeArtifact);
 }
 
 function findActiveExecution(query = {}) {
@@ -1389,6 +1438,8 @@ module.exports = {
   transitionExecution,
   appendEvent,
   registerArtifact,
+  getArtifact,
+  listArtifacts,
   findActiveExecution,
   platformGuard,
   grantCapability,
