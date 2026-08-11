@@ -36,6 +36,9 @@ function createExecutionContext(input = {}) {
     taskId: input.taskId || input.task_id || input.requestId || input.request_id || parent?.taskId || null,
     project: input.project || parent?.project || process.env.SIDEKICK_PROJECT || null,
     toolName: input.toolName || input.tool_name || null,
+    // Module attribution: set by the module service facade on dispatch and
+    // inherited by children so fan-out stays attributable to the module.
+    module: input.module || parent?.module || null,
     approvalId: input.approvalId || input.approval_id || parent?.approvalId || null,
     approvedExecution: input.approvedExecution === true || parent?.approvedExecution === true,
     generatedProcedure: input.generatedProcedure || input.generated_procedure || parent?.generatedProcedure || null,
@@ -113,6 +116,7 @@ function dispatcherMetadata(context = getExecutionContext(), extra = {}) {
     generatedProcedure: context.generatedProcedure,
     actor: context.actor,
     source: context.source,
+    module: context.module,
     ...extra,
   };
 }
