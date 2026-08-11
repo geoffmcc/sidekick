@@ -166,6 +166,19 @@ console.log('Running Platform Kernel Tests...\n');
     assert.strictEqual(kernel.listResearchReports({ project_id: 'sidekick' }).length >= 1, true, 'Reports should be project-filterable');
     console.log('Passed\n');
 
+    console.log('Test PK.9: disclosure transitions require explicit human approval');
+    const disclosure = kernel.createResearchDisclosure({ campaign_id: campaign.campaign_id, report_id: report.report_id, recipient_ref: 'recipient:synthetic', created_by: 'test-operator' });
+    kernel.transitionResearchDisclosure(disclosure.disclosure_id, 'internal_review', { actor_id: 'test-operator' });
+    kernel.transitionResearchDisclosure(disclosure.disclosure_id, 'ready', { actor_id: 'test-operator' });
+    assert.throws(() => kernel.transitionResearchDisclosure(disclosure.disclosure_id, 'submitted', { actor_id: 'test-operator' }), /requires approval_ref/, 'Disclosure submission must require approval metadata');
+    const submitted = kernel.createResearchDisclosure({ campaign_id: campaign.campaign_id, report_id: report.report_id, recipient_ref: 'recipient:synthetic', approval_ref: 'approval:synthetic', created_by: 'test-operator' });
+    kernel.transitionResearchDisclosure(submitted.disclosure_id, 'internal_review', { actor_id: 'test-operator' });
+    kernel.transitionResearchDisclosure(submitted.disclosure_id, 'ready', { actor_id: 'test-operator' });
+    const sent = kernel.transitionResearchDisclosure(submitted.disclosure_id, 'submitted', { actor_id: 'test-operator' });
+    assert.strictEqual(sent.state, 'submitted', 'Approved disclosure metadata should reach submitted');
+    assert.ok(sent.submitted_at, 'Submission should record a timestamp');
+    console.log('Passed\n');
+
     console.log('All Platform Kernel tests passed.');
     process.exit(0);
   } catch (error) {
