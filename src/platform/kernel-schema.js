@@ -123,6 +123,28 @@ const KERNEL_SCHEMA_SQL = `
     last_health_check_at TEXT,
     metadata_json TEXT NOT NULL DEFAULT '{}'
   );
+  CREATE TABLE IF NOT EXISTS platform_scope_snapshots (
+    snapshot_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    digest TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'active',
+    rules_json TEXT NOT NULL DEFAULT '{}',
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT,
+    supersedes_snapshot_id TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    FOREIGN KEY(supersedes_snapshot_id) REFERENCES platform_scope_snapshots(snapshot_id)
+  );
+  CREATE TABLE IF NOT EXISTS platform_scope_targets (
+    target_id TEXT PRIMARY KEY,
+    snapshot_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    value_digest TEXT NOT NULL,
+    target_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(snapshot_id) REFERENCES platform_scope_snapshots(snapshot_id)
+  );
   CREATE TABLE IF NOT EXISTS platform_artifacts (
     artifact_id TEXT PRIMARY KEY,
     type TEXT NOT NULL,
@@ -419,6 +441,11 @@ const KERNEL_SCHEMA_SQL = `
   CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_connectors_name ON platform_connectors(name);
   CREATE INDEX IF NOT EXISTS idx_platform_connectors_type_state ON platform_connectors(type, state);
   CREATE INDEX IF NOT EXISTS idx_platform_connectors_state_updated ON platform_connectors(state, updated_at DESC);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_scope_snapshot_digest ON platform_scope_snapshots(digest);
+  CREATE INDEX IF NOT EXISTS idx_platform_scope_snapshot_project ON platform_scope_snapshots(project_id, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_platform_scope_snapshot_state_expiry ON platform_scope_snapshots(state, expires_at);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_scope_target_value ON platform_scope_targets(snapshot_id, kind, value_digest);
+  CREATE INDEX IF NOT EXISTS idx_platform_scope_target_snapshot ON platform_scope_targets(snapshot_id, kind);
   CREATE INDEX IF NOT EXISTS idx_platform_artifacts_execution ON platform_artifacts(execution_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_platform_artifacts_project ON platform_artifacts(project_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_platform_artifacts_hash ON platform_artifacts(content_hash);
@@ -438,7 +465,7 @@ const KERNEL_SCHEMA_SQL = `
   );
   CREATE INDEX IF NOT EXISTS idx_platform_execution_claims_lease ON platform_execution_claims(lease_expires_at) WHERE lease_expires_at IS NOT NULL;
 
-  INSERT OR REPLACE INTO meta (key, value) VALUES ('platform_kernel_schema_version', '5');
+  INSERT OR REPLACE INTO meta (key, value) VALUES ('platform_kernel_schema_version', '6');
 `;
 
 module.exports = { KERNEL_SCHEMA_SQL };

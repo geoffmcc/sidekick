@@ -667,6 +667,104 @@ function checkConnectorHealth(connectorId, probe) {
   }
 }
 
+function canonicalScopeValue(value) {
+  if (Array.isArray(value)) return value.map(canonicalScopeValue);
+  if (value && typeof value === "object") return Object.keys(value).sort().reduce((out, key) => { out[key] = canonicalScopeValue(value[key]); return out; }, {});
+  return value;
+}
+
+function scopeDigest(value) {
+  return crypto.createHash("sha256").update(JSON.stringify(canonicalScopeValue(value))).digest("hex");
+}
+
+function normalizeScopeSnapshot(row) {
+  if (!row) return null;
+  const targets = dbStore.getDb().prepare("SELECT target_id, kind, value_digest, created_at FROM platform_scope_targets WHERE snapshot_id = ? ORDER BY kind, target_id").all(row.snapshot_id);
+  return {
+    ...row,
+    rules: parseJson(row.rules_json, {}),
+    metadata: parseJson(row.metadata_json, {}),
+    target_count: targets.length,
+    targets: targets.map(target => ({ target_id: target.target_id, kind: target.kind, value_digest: target.value_digest, created_at: target.created_at })),
+  };
+}
+
+function createScopeSnapshot(input = {}) {
+  ensurePlatformKernelSchema();
+  const projectId = String(input.project_id || "").trim();
+  const createdBy = String(input.created_by || "").trim();
+  if (!projectId) throw new Error("scope snapshot project_id is required");
+  if (!createdBy) throw new Error("scope snapshot created_by is required");
+  if (!Array.isArray(input.targets) || input.targets.length === 0 || input.targets.length > 100) throw new Error("scope snapshot requires 1-100 targets");
+  const targets = input.targets.map((target, index) => {
+    if (!target || typeof target !== "object" || !String(target.kind || "").trim() || !String(target.value || "").trim()) throw new Error(`scope target ${index} requires kind and value`);
+    return { kind: String(target.kind).trim().slice(0, 80), value: String(target.value).trim().slice(0, 500), metadata: target.metadata || {} };
+  });
+  const rules = input.rules && typeof input.rules === "object" ? input.rules : {};
+  if (rules.allowed_operations !== undefined && (!Array.isArray(rules.allowed_operations) || rules.allowed_operations.some(operation => typeof operation !== "string"))) throw new Error("rules.allowed_operations must be an array of strings");
+  const expiresAt = input.expires_at || null;
+  if (expiresAt && (!Number.isFinite(Date.parse(expiresAt)) || Date.parse(expiresAt) <= Date.now())) throw new Error("scope snapshot expires_at must be a future ISO timestamp");
+  const digest = scopeDigest({ project_id: projectId, targets, rules, expires_at: expiresAt });
+  const snapshotId = input.snapshot_id || newId("scope");
+  const ts = nowIso();
+  const db = dbStore.getDb();
+  db.transaction(() => {
+    db.prepare(`INSERT INTO platform_scope_snapshots (snapshot_id, project_id, digest, state, rules_json, created_by, created_at, expires_at, supersedes_snapshot_id, metadata_json) VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)`).run(snapshotId, projectId, digest, json(rules), createdBy, ts, expiresAt, input.supersedes_snapshot_id || null, json(input.metadata || {}));
+    const insertTarget = db.prepare("INSERT INTO platform_scope_targets (target_id, snapshot_id, kind, value_digest, target_json, created_at) VALUES (?, ?, ?, ?, ?, ?)");
+    for (const target of targets) insertTarget.run(newId("target"), snapshotId, target.kind, scopeDigest({ kind: target.kind, value: target.value }), json(target), ts);
+  })();
+  appendEvent({ event_type: "scope.snapshot.created", source: input.source || "platform", actor_id: createdBy, subject_type: "scope_snapshot", subject_id: snapshotId, project_id: projectId, payload: { digest, target_count: targets.length }, correlation_id: snapshotId });
+  return getScopeSnapshot(snapshotId);
+}
+
+function getScopeSnapshot(snapshotId) {
+  ensurePlatformKernelSchema();
+  return normalizeScopeSnapshot(dbStore.getDb().prepare("SELECT * FROM platform_scope_snapshots WHERE snapshot_id = ?").get(String(snapshotId)));
+}
+
+function listScopeSnapshots({ project_id, state, limit = 50 } = {}) {
+  ensurePlatformKernelSchema();
+  const conditions = [];
+  const params = [];
+  if (project_id) { conditions.push("project_id = ?"); params.push(String(project_id)); }
+  if (state) { conditions.push("state = ?"); params.push(String(state)); }
+  const boundedLimit = Math.max(1, Math.min(Number(limit) || 50, 100));
+  return dbStore.getDb().prepare(`SELECT * FROM platform_scope_snapshots ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""} ORDER BY created_at DESC LIMIT ?`).all(...params, boundedLimit).map(normalizeScopeSnapshot);
+}
+
+function evaluateScope(snapshotId, { project_id, target, target_kind, operation } = {}) {
+  const snapshot = getScopeSnapshot(snapshotId);
+  const targetValue = String(target || "").trim();
+  const targetKind = String(target_kind || "host").trim();
+  const operationName = String(operation || "").trim();
+  let reason = "allowed";
+  if (!snapshot) reason = "snapshot_not_found";
+  else if (snapshot.state !== "active") reason = "snapshot_inactive";
+  else if (snapshot.expires_at && Date.parse(snapshot.expires_at) <= Date.now()) reason = "snapshot_expired";
+  else if (project_id && String(project_id) !== snapshot.project_id) reason = "project_mismatch";
+  else if (!targetValue || !operationName) reason = "target_and_operation_required";
+  else if (!snapshot.targets.some(item => item.kind === targetKind && item.value_digest === scopeDigest({ kind: targetKind, value: targetValue }))) reason = "target_not_in_scope";
+  else if (Array.isArray(snapshot.rules.allowed_operations) && !snapshot.rules.allowed_operations.includes("*") && !snapshot.rules.allowed_operations.includes(operationName)) reason = "operation_not_allowed";
+  const targetDigest = targetValue ? scopeDigest({ kind: targetKind, value: targetValue }) : null;
+  const decision = { ok: reason === "allowed", reason, snapshot_id: snapshot ? snapshot.snapshot_id : String(snapshotId), snapshot_digest: snapshot ? snapshot.digest : null, target_digest: targetDigest, operation: operationName || null };
+  decision.decision_digest = scopeDigest(decision);
+  appendEvent({ event_type: "scope.guard.decision", source: "platform", subject_type: "scope_snapshot", subject_id: snapshot ? snapshot.snapshot_id : String(snapshotId), project_id: snapshot ? snapshot.project_id : project_id || null, severity: decision.ok ? "info" : "warning", payload: { ok: decision.ok, reason, snapshot_digest: decision.snapshot_digest, target_digest: targetDigest, operation: decision.operation, decision_digest: decision.decision_digest }, correlation_id: decision.snapshot_id });
+  return decision;
+}
+
+function bindExecutionScope(executionId, decision) {
+  ensurePlatformKernelSchema();
+  if (!decision || decision.ok !== true || !decision.snapshot_id || !decision.decision_digest) throw new Error("only an allowed scope decision can bind an execution");
+  const execution = getExecution(executionId);
+  if (!execution) throw new Error(`Execution not found: ${executionId}`);
+  const snapshot = getScopeSnapshot(decision.snapshot_id);
+  if (!snapshot || (execution.project_id && execution.project_id !== snapshot.project_id)) throw new Error("scope snapshot does not match execution project");
+  const metadata = { ...(execution.metadata || {}), scope_snapshot_id: snapshot.snapshot_id, scope_snapshot_digest: snapshot.digest, scope_decision_digest: decision.decision_digest };
+  dbStore.getDb().prepare("UPDATE platform_executions SET metadata_json = ?, updated_at = ? WHERE execution_id = ?").run(json(metadata), nowIso(), execution.execution_id);
+  appendEvent({ event_type: "execution.scope_bound", source: "platform", execution_id: execution.execution_id, subject_type: "execution", subject_id: execution.execution_id, project_id: snapshot.project_id, payload: { scope_snapshot_id: snapshot.snapshot_id, scope_snapshot_digest: snapshot.digest, scope_decision_digest: decision.decision_digest }, correlation_id: execution.root_execution_id });
+  return getExecution(execution.execution_id);
+}
+
 function registerArtifact(input = {}) {
   ensurePlatformKernelSchema();
   if (!input.storage_ref) throw new Error("storage_ref is required");
@@ -1778,6 +1876,11 @@ module.exports = {
   configureConnector,
   recordConnectorHealth,
   checkConnectorHealth,
+  createScopeSnapshot,
+  getScopeSnapshot,
+  listScopeSnapshots,
+  evaluateScope,
+  bindExecutionScope,
   registerArtifact,
   getArtifact,
   listArtifacts,
