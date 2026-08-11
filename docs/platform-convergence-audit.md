@@ -12,7 +12,7 @@ The active Sidekick handoff was treated as historical evidence. Current reposito
 
 ## Findings
 
-Sidekick already has a central dispatcher, source-aware policy and approvals, additive execution/event/artifact records, durable workflow primitives, project workspaces, capability grants, Brain, Compute Placement, memory intelligence, and a dashboard. It does not yet have a real installable module runtime, canonical project identity, unified scheduler/runner, unified artifact/execution ownership, live event delivery, multi-user RBAC, or dashboard control-plane coverage for most kernel objects.
+Sidekick already has a central dispatcher, source-aware policy and approvals, additive execution/event/artifact records, durable workflow primitives, project workspaces, capability grants, Brain, Compute Placement, memory intelligence, and a dashboard. It still lacks canonical project identity, unified scheduler/runner, multi-user RBAC, and broad dashboard control-plane coverage, while module runtime, artifact custody, foundational live event delivery, and generic connector lifecycle are now implemented through incremental kernel contracts.
 
 Do not introduce a second registry, dispatcher, policy engine, approval store, project store, workflow engine, model registry, or execution ledger.
 
@@ -51,8 +51,8 @@ Material commits: `1b93eece` (kernel), `7cb084f7`/`a7aa6fa9` (execution adapters
 | Agent Bridge | AUTHORITATIVE AND IN USE | `src/agent.js`, `agent-loop.js` | transcripts/platform mirrors; Agent tests | Task API, lineage, evidence, follow-up and approval flows work. |
 | Brain | IMPLEMENTED BUT PARTIAL | `src/brain/*`, Agent integration | checkpoints/approvals/transcripts; Brain tests | Bounded plan validation and continuation work, off by default; resumed memory context is incomplete. |
 | Models/Compute | AUTHORITATIVE AND IN USE | `src/compute/*`, placement, worker protocol | Compute migrations; placement/lifecycle/E2E tests | Provider/model registry, placement, workers, leases and artifacts work; kernel model registry duplicates it. |
-| Connectors | MISSING generic contract | provider/webhook/Compute protocols | feature stores | No generic lifecycle, health, secrets or event contract. |
-| Dashboard | IMPLEMENTED BUT PARTIAL | `src/dashboard.js`, static UI | direct feature APIs; dashboard tests | Tools, approvals, memory, Compute and Mission Control work; most kernel objects lack API surfaces. |
+| Connectors | IMPLEMENTED BUT PARTIAL | `platform_connectors`, provider/webhook/Compute adapters | connector lifecycle, opaque secret references, health/events, dashboard operations | Domain-specific connector adapters and Workbench integration remain separate. |
+| Dashboard | IMPLEMENTED BUT PARTIAL | `src/dashboard.js`, static UI | direct feature APIs; dashboard tests | Tools, approvals, memory, Compute, connector operations and Mission Control work; most kernel objects still lack API surfaces. |
 | Evaluation/replay | MISSING | deterministic tests only | test fixtures | Need immutable inputs/evidence and side-effect-safe replay. |
 | Authentication | AUTHORITATIVE AND IN USE | MCP bearer, dashboard Basic Auth, worker credentials | security tests/config | Service auth works; principal identity is not multi-user identity. |
 | Users/teams | MISSING | no domain found | none | Capability rows are not RBAC. |
