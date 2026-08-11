@@ -265,7 +265,9 @@ function verifyModuleTools(manifest, descriptors) {
   const providedByName = new Map(descriptors.map(d => [stripSidekickPrefix(d.name), d]));
 
   for (const name of provided) {
-    if (!manifest.tools[name]) {
+    // Own-property check: an inherited key like "constructor" must not
+    // satisfy the declared-tool guard.
+    if (!Object.prototype.hasOwnProperty.call(manifest.tools, name)) {
       errors.push(`Module "${manifest.name}" provides undeclared tool "${name}"`);
       continue;
     }

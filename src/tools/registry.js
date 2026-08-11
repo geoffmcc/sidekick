@@ -32,6 +32,12 @@ function buildBuiltinRegistry({ toolDefs, handlers, riskForTool, categoryForTool
       descriptors.push(normalizeDescriptor(descriptor));
     }
   }
+  // Active module tool descriptors join the same single registry, subject to
+  // the same duplicate-name/alias rules below. Lazy require: the module
+  // loader is activated at runtime and must not load with the registry.
+  for (const descriptor of require("../modules/loader").getActiveDescriptors()) {
+    descriptors.push(descriptor);
+  }
   return createRegistry(descriptors);
 }
 
