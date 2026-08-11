@@ -277,6 +277,25 @@ function disableModule(name) {
   return { module, deactivated: true };
 }
 
+/** Upgrade a registered module and reactivate it through the normal loader path. */
+function upgradeModule(name, manifest, entry) {
+  if (isModuleActive(name)) disableModule(name);
+  repository.upgradeModule(name, manifest, {
+    entryPoint: entry?.entryPoint,
+    entryHash: entry?.entryHash,
+  });
+  const current = repository.getModule(name);
+  if (["disabled", "installed", "configured"].includes(current.state)) {
+    repository.applyModuleMigrations(name, { transitionTo: "enabled" });
+  }
+  try {
+    return enableModule(name, entry);
+  } catch (error) {
+    activeModules.delete(name);
+    throw error;
+  }
+}
+
 /**
  * Re-activate persisted enabled/healthy modules after a process restart.
  * `entriesByName` maps module name -> entry.
@@ -320,5 +339,6 @@ module.exports = {
   reconcilePersistedModules,
   enableModule,
   disableModule,
+  upgradeModule,
   restorePersistedModules,
 };
