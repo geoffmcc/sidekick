@@ -91,7 +91,8 @@ console.log('Running Builtin Module Provisioning Tests...\n');
     console.log('Passed\n');
 
     console.log('Test MB.5: provisioning never overrides operator intent');
-    loader.disableModule('data-utilities');
+    const disabledByTool = await tools.callInternalTool('module', { action: 'disable', name: 'data-utilities' });
+    assert.ok(!disabledByTool.isError, 'Operator disable should dispatch through the module tool');
     assert.strictEqual(repository.getModule('data-utilities').state, 'disabled', 'Module should be disabled');
     const third = builtinModules.provisionBuiltinModules();
     assert.deepStrictEqual(third.provisioned, [], 'Disabled module should not be provisioned');
@@ -103,7 +104,8 @@ console.log('Running Builtin Module Provisioning Tests...\n');
     console.log('Passed\n');
 
     console.log('Test MB.6: operator re-enable brings the tools back');
-    loader.enableModule('data-utilities', builtinModules.builtinEntriesByName()['data-utilities']);
+    const enabledByTool = await tools.callInternalTool('module', { action: 'enable', name: 'data-utilities' });
+    assert.ok(!enabledByTool.isError, 'Operator enable should dispatch through the module tool');
     assert.strictEqual(repository.getModule('data-utilities').state, 'enabled', 'Module should be enabled again');
     const back = await tools.callInternalTool('validate', { data: '{"a":1}', schema: '{"type":"object"}' });
     assert.ok(!back.isError, 'Re-enabled module tool should dispatch');

@@ -91,6 +91,14 @@ function assertMigrationIsDataOnly(sql) {
     if (!/^SELECT\b|^INSERT\b|^UPDATE\b|^DELETE\b|^WITH\b/i.test(statement)) {
       throw new Error(`Module migration contains an unsupported statement: ${statement.slice(0, 120)}`);
     }
+    const cteNames = new Set([...statement.matchAll(/(?:\bWITH|,)\s*([A-Za-z_][A-Za-z0-9_]*)\s+AS\s*\(/gi)].map(match => match[1].toLowerCase()));
+    const tableReferences = [...statement.matchAll(/\b(?:FROM|JOIN|INTO|UPDATE)\s+(["`]?)([A-Za-z_][A-Za-z0-9_]*)(?:\1)/gi)]
+      .map(match => match[2])
+      .filter(table => !cteNames.has(table.toLowerCase()));
+    const privateTable = tableReferences.find(table => !table.startsWith(PUBLISHED_PLATFORM_PREFIX));
+    if (privateTable) {
+      throw new Error(`Module migration may only mutate published platform_* tables: ${privateTable}`);
+    }
   }
 }
 

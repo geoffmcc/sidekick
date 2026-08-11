@@ -111,6 +111,7 @@ const TOOL_RISK = {
   delete: "low",
   resume: "low",
   metrics: "low",
+  module: "high",
 };
 
 const TOOL_CATEGORIES = {
@@ -214,6 +215,7 @@ const TOOL_CATEGORIES = {
   'download': 'Media',
   'knowledge': 'Context & Learning',
   'metrics': 'Monitoring',
+  'module': 'Services',
   'compute': 'Compute',
   'compute_nodes': 'Compute',
   'compute_providers': 'Compute',

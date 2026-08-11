@@ -22,7 +22,7 @@ const legacyToolNames = Object.keys(legacy.TOOLS);
 
 assert.deepStrictEqual(descriptorNames, legacyDefNames, 'Registry definition order should match legacy TOOL_DEFS order');
 assert.deepStrictEqual([...descriptorNames].sort(), [...new Set([...legacyToolNames, ...extractedNames])].sort(), 'Registry names should match legacy handlers plus extracted descriptors');
-assert.strictEqual(descriptors.length, 101, 'Built-in tool count should remain at the current-main baseline');
+assert.strictEqual(descriptors.length, 102, 'Built-in tool count should remain at the current-main baseline');
 
 for (const descriptor of descriptors) {
   assert.strictEqual(typeof descriptor.name, 'string', `${descriptor.name} should have a name`);
