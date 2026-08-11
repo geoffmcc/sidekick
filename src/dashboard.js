@@ -2451,18 +2451,30 @@ app.get("/api/db/schema", (req, res) => {
   }
 });
 
-app.post("/api/db/query", (req, res) => {
+app.post("/api/db/query", async (req, res) => {
   if (!requireDashboardTool(req, res, "sidekick_db_query")) return;
   try {
     const { sql, params, readonly, limit } = req.body || {};
     if (!sql) return res.json({ ok: false, error: "No SQL provided" });
     const start = Date.now();
-    const rows = dbStore.executeQuery(sql, params || [], {
-      readonly: readonly !== false,
-      limit: limit || 1000
-    });
+    // Route through the centralized dispatcher instead of executing directly
+    // against the database. This subjects dashboard SQL — including write-mode
+    // queries (readonly:false) — to the same policy, approval, redaction and
+    // audit controls as every other tool call, closing the previous bypass
+    // where raw SQL ran with only an HTTP policy check.
+    const result = await callDashboardTool(
+      "db_query",
+      { sql, params: params || [], readonly: readonly !== false, limit: limit || 1000 },
+      { actor: "dashboard" }
+    );
     const duration = Date.now() - start;
-    res.json({ ok: true, rows, duration, count: rows.length });
+    const text = result && result.content && result.content[0] ? result.content[0].text : "";
+    if (result && result.isError) {
+      return res.json({ ok: false, error: text || "Query failed" });
+    }
+    let rows;
+    try { rows = JSON.parse(text); } catch { rows = text; }
+    res.json({ ok: true, rows, duration, count: Array.isArray(rows) ? rows.length : undefined });
   } catch (e) {
     res.json({ ok: false, error: e.message });
   }
@@ -2512,12 +2524,13 @@ app.get("/api/db/search", (req, res) => {
     const results = {};
     const maxResults = parseInt(limit) || 50;
     for (const t of tables) {
-      const columns = db.prepare(`PRAGMA table_info("${t.name}")`).all();
+      const quotedTable = `"${t.name.replace(/"/g, '""')}"`;
+      const columns = db.prepare(`PRAGMA table_info(${quotedTable})`).all();
       const textCols = columns.filter(c => c.type === "TEXT" || c.type === "").map(c => c.name);
       if (textCols.length === 0) continue;
-      const whereClause = textCols.map(c => `${c} LIKE ?`).join(" OR ");
+      const whereClause = textCols.map(c => `"${c.replace(/"/g, '""')}" LIKE ?`).join(" OR ");
       const params = textCols.map(() => `%${q}%`);
-      const rows = db.prepare(`SELECT * FROM "${t.name}" WHERE ${whereClause} LIMIT ?`).all(...params, maxResults);
+      const rows = db.prepare(`SELECT * FROM ${quotedTable} WHERE ${whereClause} LIMIT ?`).all(...params, maxResults);
       if (rows.length > 0) results[t.name] = rows;
     }
     res.json({ ok: true, results });

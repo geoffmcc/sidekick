@@ -211,6 +211,34 @@ setTimeout(async () => {
       console.log('Passed\n');
     }
 
+    // Test 3.0c2: POST /api/db/query routes through the centralized dispatcher
+    console.log('Test 3.0c2: POST /api/db/query routes through the dispatcher (mediated + audited)');
+    {
+      dbStore.clearToolLogs();
+      const response = await makeRequest('POST', '/api/db/query', { sql: 'SELECT 1 AS one', readonly: true });
+      assert.strictEqual(response.status, 200, 'query should return 200');
+      assert.ok(response.data.ok, `query should succeed: ${JSON.stringify(response.data)}`);
+      assert.ok(Array.isArray(response.data.rows), 'rows should be an array');
+      assert.strictEqual(response.data.rows[0].one, 1, 'should return the SELECT 1 result');
+      // The dispatcher (not a direct dbStore call) logs db_query to tool_logs
+      // with source=dashboard; the pre-change direct route did not audit at all.
+      const logs = dbStore.queryToolLogs({ tool: 'db_query', source: 'dashboard', limit: 10 });
+      assert.ok(logs.length >= 1, 'db_query from the dashboard should be audited via the dispatcher');
+      console.log('Passed\n');
+    }
+
+    // Test 3.0c3: a write query blocked by policy is denied through the dispatcher
+    console.log('Test 3.0c3: dashboard db/query respects dispatcher policy denial');
+    {
+      const previousBlocked = process.env.SIDEKICK_DASHBOARD_BLOCKED_TOOLS;
+      process.env.SIDEKICK_DASHBOARD_BLOCKED_TOOLS = 'sidekick_db_query';
+      const response = await makeRequest('POST', '/api/db/query', { sql: 'SELECT 1', readonly: true });
+      assert.strictEqual(response.status, 403, 'a policy-blocked db_query should be denied');
+      if (previousBlocked === undefined) delete process.env.SIDEKICK_DASHBOARD_BLOCKED_TOOLS;
+      else process.env.SIDEKICK_DASHBOARD_BLOCKED_TOOLS = previousBlocked;
+      console.log('Passed\n');
+    }
+
     // Test 3.0d: tool usage stats honor an explicit UTC day window
     console.log('Test 3.0d: tool usage stats honor an explicit UTC day window');
     {
