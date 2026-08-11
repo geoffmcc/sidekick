@@ -38,7 +38,7 @@ Transports and modules depend on service facades; services depend on persistence
 | Project Runtime | scattered project fields | Add canonical projection and migration; workspace remains related. |
 | Execution Runtime | kernel plus feature mirrors | Kernel lifecycle/lineage authoritative; adapt Compute and feature stores. |
 | Event Runtime | `platform_execution_events` | Add subscribers, delivery attempts, offsets, retry/dead-letter and idempotency before calling it a bus. |
-| Artifact Runtime | platform and Compute artifacts | Common metadata/lineage with specialized Compute upload/lease rules. |
+| Artifact Runtime | platform and Compute artifacts | Common metadata/lineage with immutable original/derivative custody, SHA-256 digests, and specialized Compute upload/lease rules. |
 | Workflow Runtime | kernel workflows, Brain, runbooks | Common definitions/claims incrementally; preserve Brain continuation transactions. |
 | Scheduler Runtime | cron/delay/watch/Brain/approval/Compute schedulers | Common claim/cancel/recovery contract; feature schedulers remain adapters. |
 | Connector Runtime | providers, webhooks, Compute protocols | Typed lifecycle, health, secrets references and event contract. |

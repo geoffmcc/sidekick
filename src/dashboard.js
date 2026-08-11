@@ -962,6 +962,28 @@ app.get("/api/dashboard-summary", async (req, res) => {
   }
 });
 
+app.get("/api/artifacts", (req, res) => {
+  try {
+    const artifacts = platformKernel.listArtifacts({
+      project_id: req.query.project_id,
+      execution_id: req.query.execution_id,
+      custody_role: req.query.custody_role,
+      limit: req.query.limit,
+    });
+    res.json({
+      ok: true,
+      artifacts,
+      total: artifacts.length,
+      summary: {
+        originals: artifacts.filter(artifact => artifact.custody_role === "original").length,
+        derivatives: artifacts.filter(artifact => artifact.custody_role === "derivative").length,
+      },
+    });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
 app.get("/api/llm", (req, res) => {
   try {
     http.get("http://127.0.0.1:11434/api/tags", (r) => {
