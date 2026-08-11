@@ -816,6 +816,27 @@ app.get("/api/dashboard-summary", async (req, res) => {
     const cpuPct = snapshot.cpuNumber;
     const memPct = snapshot.memory.pctNumber;
     const diskPct = parseFloat(snapshot.disk.pct) || 0;
+
+    let moduleHealth = { total: 0, healthy: 0, issues: 0, modules: [] };
+    try {
+      const repository = require("./modules/repository");
+      const loader = require("./modules/loader");
+      const modules = repository.listModules();
+      const rows = modules.map(record => ({
+        name: record.name,
+        state: record.state,
+        active_in_process: loader.isModuleActive(record.name),
+        health: record.health || {},
+        last_health_check_at: record.last_health_check_at || null,
+        error: record.error || null,
+      }));
+      moduleHealth = {
+        total: rows.length,
+        healthy: rows.filter(row => row.state === "healthy").length,
+        issues: rows.filter(row => row.state === "error" || ((row.state === "enabled" || row.state === "healthy") && !row.active_in_process)).length,
+        modules: rows,
+      };
+    } catch {}
     
     // Calculate health score (100 = perfect, deduct for high usage)
     let healthScore = 100;
@@ -911,7 +932,8 @@ app.get("/api/dashboard-summary", async (req, res) => {
         score: healthScore,
         cpu: cpuPct,
         memory: memPct,
-        disk: diskPct
+        disk: diskPct,
+        modules: moduleHealth,
       },
       toolStats: {
         calls: 0, // Will be populated from /api/stats on frontend
