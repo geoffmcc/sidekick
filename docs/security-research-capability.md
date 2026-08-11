@@ -32,6 +32,8 @@ Phase 7 now provides bounded campaign, hypothesis and test-run records. Campaign
 
 Evidence-linked findings and report metadata are also bounded references. Findings default to `analysis_only`; `confirmed` requires a completed test run and evidence references. Reports reference findings and, optionally, a generic immutable artifact. Neither record embeds evidence bytes or sensitive capture content.
 
+Disclosure metadata is human-gated and stores only report/artifact references, opaque recipient and approval references, state, and timestamps. Submission requires an explicit approval reference; correspondence bodies and recipient addresses are intentionally outside this ledger.
+
 Hypotheses retain claim, boundary, rationale, prerequisites, environment, expected secure/vulnerable behavior, controls, criteria, observations, evidence, rejection reason and confidence. States remain distinct: `proposed`, `ready`, `blocked`, `analysis_only`, `not_run`, `running`, `inconclusive`, `rejected`, `supported`, `confirmed`.
 
 `confirmed` requires a qualifying execution, test environment, observed behavior, controls, evidence and completion validation. Workbench/model output without execution and evidence remains `analysis_only` or `not_run`.
