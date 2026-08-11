@@ -53,6 +53,8 @@ An error-state module can be explicitly recovered with `action: "recover"`: stal
 
 MCP, dashboard, and agent startup schedule an unref'd periodic builtin-module health sweep. The sweep reuses the explicit health boundary, records results, and reports failures without blocking process startup.
 
+Failed sweep results also emit a structured `module.health.alert` kernel event and a bounded operator log message; healthy sweeps emit neither.
+
 Events use the future Event Runtime; appending a ledger event is not delivery. Jobs use common execution/claim/recovery semantics. Dashboard extensions expose service-backed routes/views and store no authoritative dashboard-only state.
 
 ## First Proof
