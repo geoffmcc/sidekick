@@ -137,6 +137,25 @@ console.log('Running Platform Kernel Tests...\n');
     assert.throws(() => scopeGuard.bindExecution(scopedExecution.execution_id, denied), /allowed scope decision/, 'Denied scope decisions must never bind');
     console.log('Passed\n');
 
+    console.log('Test PK.7: research records preserve project, scope, execution, and evidence lineage');
+    const campaign = kernel.createResearchCampaign({ project_id: 'sidekick', name: 'Synthetic scope review', scope_snapshot_id: snapshot.snapshot_id, created_by: 'test-operator' });
+    assert.strictEqual(campaign.state, 'draft', 'Campaigns should start in draft');
+    kernel.transitionResearchCampaign(campaign.campaign_id, 'active', { actor_id: 'test-operator' });
+    const hypothesis = kernel.createResearchHypothesis({ campaign_id: campaign.campaign_id, title: 'Synthetic behavior check', claim: 'The synthetic control remains bounded', rationale: 'Fixture-only test', criteria: { expected: 'bounded' }, created_by: 'test-operator' });
+    assert.deepStrictEqual(hypothesis.prerequisites, [], 'Hypothesis prerequisites should normalize to an array');
+    kernel.transitionResearchHypothesis(hypothesis.hypothesis_id, 'ready', { actor_id: 'test-operator' });
+    const runExecution = kernel.createExecution({ operation_type: 'security_research_observe', project_id: 'sidekick', actor_id: 'test-operator' });
+    const run = kernel.createResearchTestRun({ hypothesis_id: hypothesis.hypothesis_id, execution_id: runExecution.execution_id, scope_snapshot_id: snapshot.snapshot_id, environment: { kind: 'synthetic' }, created_by: 'test-operator' });
+    assert.strictEqual(run.state, 'not_run', 'Test runs should not imply execution before they start');
+    kernel.transitionResearchTestRun(run.test_run_id, 'running', { actor_id: 'test-operator' });
+    assert.throws(() => kernel.transitionResearchTestRun(run.test_run_id, 'completed', { outcome: 'supported' }), /require execution_id, outcome, and evidence/, 'Completed runs must have evidence');
+    const completedRun = kernel.transitionResearchTestRun(run.test_run_id, 'completed', { actor_id: 'test-operator', outcome: 'inconclusive', evidence: ['artifact:synthetic-control'] });
+    assert.strictEqual(completedRun.evidence.length, 1, 'Completed runs should retain evidence references');
+    const supported = kernel.transitionResearchHypothesis(hypothesis.hypothesis_id, 'running', { actor_id: 'test-operator' });
+    assert.strictEqual(supported.state, 'running', 'Hypothesis state should remain distinct from test-run outcome');
+    assert.strictEqual(kernel.listResearchTestRuns({ project_id: 'sidekick' }).length >= 1, true, 'Research test runs should be project-filterable');
+    console.log('Passed\n');
+
     console.log('All Platform Kernel tests passed.');
     process.exit(0);
   } catch (error) {
