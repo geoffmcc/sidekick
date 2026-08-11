@@ -3,6 +3,7 @@ const path = require("path");
 const dbStore = require("../db");
 const { redactSensitive } = require("../redact");
 const { KERNEL_SCHEMA_SQL } = require("./kernel-schema");
+const { ensurePlatformModuleSchema } = require("../modules/schema");
 const { encryptColumn, decryptColumn, hasSecretKey } = require("../core/secret-cipher");
 
 const EXECUTION_STATES = Object.freeze([
@@ -132,6 +133,7 @@ function getWorkspaceSecretNames(workspaceId) {
 function ensurePlatformKernelSchema() {
   const db = dbStore.getDb();
   db.exec(KERNEL_SCHEMA_SQL);
+  ensurePlatformModuleSchema();
 }
 
 function assertState(state) {

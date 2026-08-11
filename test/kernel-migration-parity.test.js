@@ -46,8 +46,8 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
     console.log(`Test KMP.1: migrations-only boot applies ${migrationApplied} migrations`);
     assert.strictEqual(
       migrationStore.getDb().prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
-      String(28),
-      'schema_version should be 28'
+      String(29),
+      'schema_version should be 29'
     );
     console.log('Passed\n');
 
@@ -71,8 +71,8 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
       runtimeSchema.length,
       'Platform object counts must match'
     );
-    const expectedTables = 18;
-    const expectedIndexes = 39;
+    const expectedTables = 19;
+    const expectedIndexes = 41;
     const migratedTables = migratedSchema.filter(o => o.type === 'table').length;
     const migratedIndexes = migratedSchema.filter(o => o.type === 'index' && o.sql).length;
     const migratedAutoindexes = migratedSchema.filter(o => o.type === 'index' && !o.sql).length;
