@@ -829,6 +829,7 @@ app.get("/api/dashboard-summary", async (req, res) => {
         active_in_process: loader.isModuleActive(record.name),
         health: record.health || {},
         last_health_check_at: record.last_health_check_at || null,
+        health_history: repository.listHealthHistory(record.name, 5),
         error: record.error || null,
       }));
       moduleHealth = {

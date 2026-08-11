@@ -75,7 +75,9 @@ setTimeout(async () => {
       assert.strictEqual(response.status, 200, 'Dashboard summary should succeed');
       assert.ok(response.data.health && response.data.health.modules, 'Dashboard summary should include module health');
       assert.ok(Array.isArray(response.data.health.modules.modules), 'Module health should include module rows');
-      assert.ok(response.data.health.modules.modules.some(module => module.name === 'data-utilities'), 'Module health should include data-utilities');
+      const dataUtilities = response.data.health.modules.modules.find(module => module.name === 'data-utilities');
+      assert.ok(dataUtilities, 'Module health should include data-utilities');
+      assert.ok(Array.isArray(dataUtilities.health_history), 'Dashboard module rows should include bounded health history');
       console.log('Passed\n');
     }
 

@@ -174,6 +174,33 @@ function recordHealth(name, health) {
   return getModule(name);
 }
 
+/** Return a small, bounded view of recent health-check ledger events. */
+function listHealthHistory(name, limit = 10) {
+  ensureModuleStorage();
+  const boundedLimit = Math.max(1, Math.min(Number(limit) || 10, 20));
+  try {
+    return getDb().prepare(`
+      SELECT event_id, timestamp, payload_json
+      FROM platform_execution_events
+      WHERE event_type = 'module.health.check' AND subject_id = ?
+      ORDER BY rowid DESC
+      LIMIT ?
+    `).all(String(name), boundedLimit).map(row => {
+      const payload = parseJson(row.payload_json, {});
+      return {
+        event_id: row.event_id,
+        timestamp: row.timestamp,
+        ok: payload.ok === true,
+        state: payload.state || null,
+        health: payload.health || {},
+        error: payload.error || null,
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
 /** Replace a registration only through an explicit forward version upgrade. */
 function upgradeModule(name, manifestInput, { source, entryPoint, entryHash, config } = {}) {
   ensureModuleStorage();
@@ -357,6 +384,7 @@ module.exports = {
   registerModule,
   bindEntryHash,
   recordHealth,
+  listHealthHistory,
   upgradeModule,
   getModule,
   listModules,

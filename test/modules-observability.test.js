@@ -80,6 +80,11 @@ console.log('Running Module Observability Tests...\n');
     const checkedOut = JSON.parse(checked.content[0].text);
     assert.strictEqual(checkedOut.result.ok, true, 'Module health check should report success');
     assert.strictEqual(checkedOut.result.module.state, 'healthy', 'Successful health check should transition the module to healthy');
+    assert.strictEqual(events('module.health.check').length, 1, 'Health checks should be recorded in the kernel ledger');
+    assert.strictEqual(events('module.health.check')[0].ok, true, 'Health event should record the check result');
+    const healthReport = JSON.parse((await tools.callInternalTool('module', { action: 'health', name: 'data-utilities' })).content[0].text);
+    assert.strictEqual(healthReport.module.health_history.length, 1, 'Health report should expose recent check history');
+    assert.strictEqual(healthReport.module.health_history[0].state, 'healthy', 'History should capture the resulting module state');
     console.log('Passed\n');
 
     console.log('Test MO.4: a disable in another process stops dispatch here immediately');

@@ -7,6 +7,7 @@ function jsonText(value) {
 }
 
 function moduleSummary(record, loader) {
+  const repository = require("../../modules/repository");
   return {
     name: record.name,
     version: record.version,
@@ -16,6 +17,7 @@ function moduleSummary(record, loader) {
     error: record.error || null,
     health: record.health || {},
     last_health_check_at: record.last_health_check_at || null,
+    health_history: repository.listHealthHistory(record.name),
   };
 }
 
