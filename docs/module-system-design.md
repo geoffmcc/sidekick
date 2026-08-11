@@ -33,6 +33,8 @@ Registered modules bind their declared entry point to a SHA-256 code hash. Enabl
 
 Phase 6 discovery is intentionally separate from activation: bounded scans of `modules/` and `plugins/` parse `manifest.json` (or `sidekick.module.json`) deterministically, reject symlinked module directories and duplicate names, and return candidates/errors without registering or executing module code.
 
+The first packaging slice is likewise inspection-only: it produces a deterministic file inventory and aggregate hash, excludes dependency and VCS directories, and rejects symlinks and sensitive files. Archive creation, installation, and activation remain separate operations.
+
 Events use the future Event Runtime; appending a ledger event is not delivery. Jobs use common execution/claim/recovery semantics. Dashboard extensions expose service-backed routes/views and store no authoritative dashboard-only state.
 
 ## First Proof
