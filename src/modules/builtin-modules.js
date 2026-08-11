@@ -103,6 +103,36 @@ function provisionBuiltinModules() {
   return outcome;
 }
 
+function runBuiltinModuleHealthChecks() {
+  const checked = [];
+  const skipped = [];
+  const errors = [];
+  const { checkModuleHealth } = require("./health");
+  for (const builtin of BUILTIN_MODULES) {
+    const name = builtin.MANIFEST.name;
+    const record = repository.getModule(name);
+    if (!record || (record.state !== "enabled" && record.state !== "healthy") || typeof builtin.entry.healthCheck !== "function") {
+      skipped.push({ name, state: record?.state || "missing" });
+      continue;
+    }
+    try {
+      checked.push({ name, result: checkModuleHealth(name, builtin.entry) });
+    } catch (error) {
+      errors.push({ name, error: error.message });
+    }
+  }
+  return { checked, skipped, errors };
+}
+
+function startModuleHealthChecks(intervalMs = 60000) {
+  const timer = setInterval(() => {
+    const result = runBuiltinModuleHealthChecks();
+    if (result.errors.length) console.error(`[Modules] Health sweep failed: ${JSON.stringify(result.errors)}`);
+  }, intervalMs);
+  timer.unref?.();
+  return timer;
+}
+
 /**
  * Best-effort kernel ledger event for a provisioning run. Never throws:
  * observability must not stop a process from booting.
@@ -150,4 +180,4 @@ function startModuleReconciliation(intervalMs = 60000) {
   return timer;
 }
 
-module.exports = { BUILTIN_MODULES, builtinEntriesByName, provisionBuiltinModules, startModuleReconciliation };
+module.exports = { BUILTIN_MODULES, builtinEntriesByName, provisionBuiltinModules, runBuiltinModuleHealthChecks, startModuleHealthChecks, startModuleReconciliation };

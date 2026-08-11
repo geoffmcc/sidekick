@@ -120,6 +120,9 @@ console.log('Running Module Observability Tests...\n');
     const recoveredOut = JSON.parse(recovered.content[0].text);
     assert.strictEqual(recoveredOut.result.ok, true, 'Recovery should require a passing health check');
     assert.strictEqual(recoveredOut.result.module.state, 'healthy', 'Recovery should leave the module healthy');
+    const sweep = builtinModules.runBuiltinModuleHealthChecks();
+    assert.strictEqual(sweep.errors.length, 0, 'Scheduled health sweep should not report errors');
+    assert.strictEqual(sweep.checked.length, 1, 'Scheduled health sweep should check the builtin module');
     console.log('Passed\n');
 
     console.log('Test MO.8: the dispatch gate fails closed when the state read throws');

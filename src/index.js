@@ -613,6 +613,7 @@ try {
   if (provision.provisioned.length || provision.skipped.length || provision.errors.length) {
     console.log(`[Modules] Provisioned: ${JSON.stringify(provision.provisioned)}; skipped: ${JSON.stringify(provision.skipped)}; errors: ${provision.errors.length}`);
   }
+  builtinModules.startModuleHealthChecks();
   builtinModules.startModuleReconciliation();
 } catch (error) {
   console.error("[Modules] Builtin module provisioning failed:", error.message);
