@@ -22,7 +22,7 @@ const legacyToolNames = Object.keys(legacy.TOOLS);
 
 assert.deepStrictEqual(descriptorNames, legacyDefNames, 'Registry definition order should match legacy TOOL_DEFS order');
 assert.deepStrictEqual([...descriptorNames].sort(), [...new Set([...legacyToolNames, ...extractedNames])].sort(), 'Registry names should match legacy handlers plus extracted descriptors');
-assert.strictEqual(descriptors.length, 107, 'Built-in tool count should remain at the current-main baseline');
+assert.strictEqual(descriptors.length, 101, 'Built-in tool count should remain at the current-main baseline');
 
 for (const descriptor of descriptors) {
   assert.strictEqual(typeof descriptor.name, 'string', `${descriptor.name} should have a name`);
@@ -60,8 +60,12 @@ assert.ok(indexSource.includes('getBuiltinRegistry'), 'src/index.js should regis
 assert.ok(indexSource.includes('callMcpTool(descriptor.name'), 'MCP built-in execution should route through the MCP dispatcher wrapper');
 assert.ok(!indexSource.includes('descriptor.handler(args)'), 'MCP must not directly invoke built-in handlers');
 assert.strictEqual(registry.get('respond').family, 'utility', 'respond should be owned by extracted utility family');
-for (const name of ['parse', 'diff', 'validate', 'template']) {
-  assert.strictEqual(registry.get(name).family, 'data-utilities', `${name} should be owned by extracted data-utilities family`);
+// data-utilities moved to the module system (src/modules/entries/data-utilities.js):
+// its tools are absent from the builtin registry until the module is
+// provisioned (covered by test/modules-builtin.test.js).
+for (const name of ['parse', 'diff', 'validate', 'template', 'transform', 'extract']) {
+  assert.ok(!registry.has(name), `${name} should be module-owned, not builtin`);
+  assert.ok(!legacyDefNames.includes(name), `${name} should no longer have a legacy TOOL_DEFS row`);
 }
 for (const name of extractedNames) {
   assert.ok(!legacy.TOOLS[name], `${name} should no longer have an active legacy handler`);

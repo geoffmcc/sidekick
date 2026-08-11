@@ -8,6 +8,14 @@ const { execFileSync } = require("child_process");
 const { callAgentTool, getBuiltinRegistry, DATA_DIR, GROQ_API_KEY, GROQ_MODEL, loadDelays, saveDelays, loadWatches, saveWatches, getToolDefsForSource, transitionScheduledPlatformExecution, appendScheduledPlatformEvent, createScheduledPlatformExecution, releaseScheduledClaim, startScheduledLeaseRenewal, recoverStrandedDelays, recoverStrandedRunbooks, claimScheduledDefinition, pauseWatchForCancel } = require("./tools");
 const { stripSidekickPrefix } = require("./core/tool-name");
 
+// Restore persisted platform modules in this process so module tools resolve
+// through the registry here as well (each process holds its own loader state).
+try {
+  require("./modules/builtin-modules").provisionBuiltinModules();
+} catch (error) {
+  console.error("[Modules] Builtin module provisioning failed:", error.message);
+}
+
 // Brain v0.1's planning allowlist: agent-visible, enabled, AND present in the
 // built-in tool registry. This deliberately excludes generated/dynamic
 // capabilities so a Brain plan can never name a generated tool, even though

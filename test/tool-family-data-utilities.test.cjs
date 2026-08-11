@@ -31,15 +31,22 @@ const text = result => result.content[0].text;
 
 (async () => {
   try {
-    // --- Boundary: the family owns these tools, not the legacy module ---
+    // --- Boundary: the data-utilities module owns these tools now ---
 
     for (const name of ['parse', 'extract', 'transform', 'diff', 'validate', 'template']) {
       assert.ok(!legacy.TOOLS[name], `${name} should not have a live legacy handler`);
+      assert.strictEqual(tools.getBuiltinRegistry().get(name), undefined, `${name} should be absent before module provisioning`);
+    }
+
+    const provision = require('../src/modules/builtin-modules').provisionBuiltinModules();
+    assert.deepStrictEqual(provision.errors, [], 'Builtin module provisioning should succeed');
+
+    for (const name of ['parse', 'extract', 'transform', 'diff', 'validate', 'template']) {
       const descriptor = tools.getBuiltinRegistry().get(name);
-      assert.strictEqual(descriptor.family, 'data-utilities', `${name} should be owned by the data-utilities family`);
+      assert.ok(descriptor, `${name} should resolve after module provisioning`);
+      assert.strictEqual(descriptor.source, 'module:data-utilities', `${name} should be owned by the data-utilities module`);
       assert.strictEqual(descriptor.risk, name === 'extract' ? 'medium' : 'low', `${name} risk should be preserved`);
       assert.strictEqual(descriptor.category, 'Data Pipeline', `${name} should stay in the Data Pipeline category`);
-      assert.strictEqual(descriptor.source, 'builtin', `${name} should be a descriptor-owned builtin`);
       assert.ok(!Object.prototype.hasOwnProperty.call(require('../src/tools/schemas').TOOL_SCHEMAS, name), `${name} should have one schema owner`);
     }
 
@@ -280,11 +287,12 @@ const text = result => result.content[0].text;
     assert.strictEqual(batched[4].error, 'Unknown tool: constructor', 'batch must not resolve inherited Object properties');
     assert.strictEqual(batched[5].error, 'Unknown tool: nope_not_real', 'batch should still reject unknown tools');
 
-    // Compatibility surface: the derived TOOLS map still exposes the handlers.
-    assert.strictEqual(tools.TOOLS.parse, family.sidekick_parse, 'compatibility TOOLS map should expose the extracted parse handler');
-    assert.strictEqual(tools.TOOLS.extract, family.sidekick_extract, 'compatibility TOOLS map should expose the extracted extract handler');
-    assert.strictEqual(tools.TOOLS.transform, family.sidekick_transform, 'compatibility TOOLS map should expose the extracted transform handler');
-    assert.strictEqual(tools.TOOLS.template, family.sidekick_template, 'compatibility TOOLS map should expose the extracted template handler');
+    // Compatibility surface: module-owned tools are deliberately absent from
+    // the static builtin compatibility map — the dispatcher (exercised above)
+    // is their only execution path.
+    for (const name of ['parse', 'extract', 'transform', 'template']) {
+      assert.strictEqual(tools.TOOLS[name], undefined, `compatibility TOOLS map should not own module tool ${name}`);
+    }
 
     console.log('Data Utilities Family Tests passed');
   } catch (e) {

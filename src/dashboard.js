@@ -7,6 +7,14 @@ const { timingSafeCompare } = require("./crypto-utils");
 const { execFileSync } = require("child_process");
 const { callDashboardTool, getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval, renderContinuationApprovalPreview, loadWatches } = require("./tools");
 const dynamicTools = require("./dynamic-tools");
+
+// Restore persisted platform modules in this process so module tools resolve
+// through the registry here as well (each process holds its own loader state).
+try {
+  require("./modules/builtin-modules").provisionBuiltinModules();
+} catch (error) {
+  console.error("[Modules] Builtin module provisioning failed:", error.message);
+}
 const dbStore = require("./db");
 const { allowedActions } = require("./evolve/lifecycle");
 const { redactSensitive } = require("./redact");

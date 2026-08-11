@@ -604,6 +604,18 @@ try {
   throw error;
 }
 
+// Provision builtin platform modules (register on first boot, restore
+// persisted enabled modules) BEFORE the registry sync and MCP server
+// creation so module tools are live for the catalog and tool listing.
+try {
+  const provision = require("./modules/builtin-modules").provisionBuiltinModules();
+  if (provision.provisioned.length || provision.errors.length) {
+    console.log(`[Modules] Provisioned: ${JSON.stringify(provision.provisioned)}; errors: ${provision.errors.length}`);
+  }
+} catch (error) {
+  console.error("[Modules] Builtin module provisioning failed:", error.message);
+}
+
 // Sync tool registry from code to database on startup
 syncToolRegistry();
 
