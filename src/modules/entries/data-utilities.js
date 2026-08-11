@@ -38,6 +38,9 @@ const entry = {
   buildDescriptors() {
     return family.descriptors.map(descriptor => ({ ...descriptor }));
   },
+  healthCheck() {
+    return { ok: true, details: { tool_count: family.descriptors.length } };
+  },
 };
 
 module.exports = { MANIFEST, entry };
