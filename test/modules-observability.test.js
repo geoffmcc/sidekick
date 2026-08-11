@@ -17,6 +17,7 @@ const tools = require('../src/tools');
 const repository = require('../src/modules/repository');
 const loader = require('../src/modules/loader');
 const builtinModules = require('../src/modules/builtin-modules');
+const healthBoundary = require('../src/modules/health');
 
 function events(type) {
   return dbStore.getDb()
@@ -117,14 +118,23 @@ console.log('Running Module Observability Tests...\n');
     console.log('Passed\n');
 
     console.log('Test MO.7: health reports an error-state module with its message');
-    dbStore.getDb().prepare("UPDATE platform_modules SET state = 'error', error = 'synthetic fault' WHERE name = 'data-utilities'").run();
+    const failedCheck = healthBoundary.checkModuleHealth('data-utilities', {
+      healthCheck: () => ({ ok: false, error: 'synthetic fault' }),
+    });
+    assert.strictEqual(failedCheck.ok, false, 'A failed health contract should return a failed result');
+    assert.strictEqual(failedCheck.module.state, 'error', 'A failed health contract should enter error state');
     const faulted = await tools.callInternalTool('health', { check: 'modules' });
     assert.ok(/error state: synthetic fault/.test(faulted.content[0].text), 'Health should surface the module error');
+    const failedReport = JSON.parse((await tools.callInternalTool('module', { action: 'health', name: 'data-utilities' })).content[0].text);
+    assert.strictEqual(failedReport.module.health_history[0].ok, false, 'Health history should retain failed checks');
+    assert.strictEqual(failedReport.module.health_history[0].error, 'synthetic fault', 'Health history should retain the failure reason');
     const recovered = await tools.callInternalTool('module', { action: 'recover', name: 'data-utilities' });
     assert.ok(!recovered.isError, 'Module recovery should succeed');
     const recoveredOut = JSON.parse(recovered.content[0].text);
     assert.strictEqual(recoveredOut.result.ok, true, 'Recovery should require a passing health check');
     assert.strictEqual(recoveredOut.result.module.state, 'healthy', 'Recovery should leave the module healthy');
+    const recoveredReport = JSON.parse((await tools.callInternalTool('module', { action: 'health', name: 'data-utilities' })).content[0].text);
+    assert.strictEqual(recoveredReport.module.health_history[0].ok, true, 'Recovery should append a passing health result');
     const sweep = builtinModules.runBuiltinModuleHealthChecks();
     assert.strictEqual(sweep.errors.length, 0, 'Scheduled health sweep should not report errors');
     assert.strictEqual(sweep.checked.length, 1, 'Scheduled health sweep should check the builtin module');
