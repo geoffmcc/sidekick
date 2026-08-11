@@ -71,6 +71,7 @@ const suites = [
   { file: 'test/modules-loader.test.js', critical: false, description: 'Module loader: registry wiring, facade isolation, fail-closed activation, restart restore' },
   { file: 'test/modules-permissions.test.js', critical: false, description: 'Module permissions: deny-by-default facade dispatch, risk caps, module attribution, risk parity' },
   { file: 'test/modules-builtin.test.js', critical: false, description: 'Builtin module provisioning: data-utilities registration, restart restore, catalog sync, operator intent' },
+  { file: 'test/modules-entry-rebind.test.js', critical: false, description: 'Builtin module entry-hash re-binding: drift recovery on restart and third-party fail-closed guard' },
   { file: 'test/modules-observability.test.js', critical: false, description: 'Module observability: kernel lifecycle events, status/health exposure, cross-process disable gate, reconciliation' },
   { file: 'test/modules-discovery.test.js', critical: false, description: 'Module discovery: bounded roots, symlink rejection, realpath containment, execution-free manifest parsing' },
   { file: 'test/modules-installation.test.js', critical: false, description: 'Module installation: entry containment, regular-file check, entry hashing, discovered registration' },

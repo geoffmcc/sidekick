@@ -27,6 +27,22 @@ const loader = require("./loader");
 
 const BUILTIN_MODULES = Object.freeze([require("./entries/data-utilities")]);
 
+// Committed, signed attestation of each builtin's expected entry-code hash.
+//
+// This is the independent anchor that lets a builtin's entry hash be re-bound
+// safely (see the drift branch in provisionBuiltinModules). A legitimate
+// release that changes a builtin entry file updates BOTH the file and its hash
+// here in the same signed commit — the test suite asserts they stay in lockstep
+// (test/modules-entry-rebind.test.js), so forgetting to update this fails CI
+// rather than silently disabling the module on deploy. Because the attestation
+// lives in this separate file, an out-of-band change to only the entry file on
+// disk produces a hash matching neither the stored binding nor this constant,
+// so the module correctly fails closed (tamper-evident) instead of being
+// re-bound to attacker-controlled bytes.
+const EXPECTED_ENTRY_HASHES = Object.freeze({
+  "data-utilities": "04a9fd55f42c9c026a0e8f32ddc7b75547fc85e8e79520e3acd944bd37bc0cf0",
+});
+
 function entryPointFor(name) {
   return `src/modules/entries/${name}.js`;
 }
@@ -62,6 +78,22 @@ function provisionBuiltinModules() {
       } else if (!record.entry_hash) {
         repository.bindEntryHash(name, entryHashFor(record.entry_point || entryPointFor(name)));
         record = repository.getModule(name);
+      } else if (record.source === "builtin") {
+        // A shipped builtin's entry code can legitimately change across releases
+        // (e.g. #217 added a healthCheck to data-utilities), changing its hash.
+        // The registered hash is write-once, so without this the module fails
+        // closed into `error` forever after any such release. Re-bind ONLY when
+        // the on-disk entry matches this build's committed expected hash — the
+        // independent, signed attestation above. That preserves the fail-closed
+        // property: an on-disk entry that matches neither the stored binding nor
+        // the committed hash is treated as tampering and left in error, never
+        // re-bound. rebindBuiltinEntry additionally refuses non-builtin modules.
+        const entryPoint = record.entry_point || entryPointFor(name);
+        const currentHash = entryHashFor(entryPoint);
+        const expected = EXPECTED_ENTRY_HASHES[name];
+        if (record.entry_hash !== currentHash && expected && currentHash === expected) {
+          record = repository.rebindBuiltinEntry(name, { entryPoint, entryHash: currentHash });
+        }
       }
       if (record.state === "validated" || record.state === "installed") {
         // Transient bootstrap states, not operator intent: a crash (or a
@@ -198,4 +230,4 @@ function startModuleReconciliation(intervalMs = 60000) {
   return timer;
 }
 
-module.exports = { BUILTIN_MODULES, builtinEntriesByName, provisionBuiltinModules, runBuiltinModuleHealthChecks, startModuleHealthChecks, startModuleReconciliation };
+module.exports = { BUILTIN_MODULES, EXPECTED_ENTRY_HASHES, entryPointFor, builtinEntriesByName, provisionBuiltinModules, runBuiltinModuleHealthChecks, startModuleHealthChecks, startModuleReconciliation };
