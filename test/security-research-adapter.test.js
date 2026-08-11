@@ -29,6 +29,10 @@ console.log("Running Security Research Adapter Contract Tests...\n");
     assert.strictEqual(result.adapter, "security-research");
     assert.strictEqual(received.operation, "findings.list");
     assert.deepStrictEqual(received.payload, { project_id: "demo" });
+    await assert.rejects(() => request(adapter, "reports.create", {}), /capability is not granted: reports.write/);
+    const writer = createSecurityResearchAdapter({ capabilities: ["evidence.write"], transport: { request: async input => ({ operation: input.operation }) } });
+    const evidenceResult = await request(writer, "evidence.register", {});
+    assert.strictEqual(evidenceResult.operation, "evidence.register");
     console.log("Passed\n");
 
     console.log("All Security Research Adapter Contract tests passed.");
