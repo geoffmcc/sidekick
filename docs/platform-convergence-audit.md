@@ -53,7 +53,7 @@ Material commits: `1b93eece` (kernel), `7cb084f7`/`a7aa6fa9` (execution adapters
 | Models/Compute | AUTHORITATIVE AND IN USE | `src/compute/*`, placement, worker protocol | Compute migrations; placement/lifecycle/E2E tests | Provider/model registry, placement, workers, leases and artifacts work; kernel model registry duplicates it. |
 | Connectors | IMPLEMENTED BUT PARTIAL | `platform_connectors`, provider/webhook/Compute adapters, typed security-research boundary | connector lifecycle, opaque secret references, health/events, dashboard operations | No verified security-research transport is present; domain adapter and Workbench integration remain separate. |
 | Dashboard | IMPLEMENTED BUT PARTIAL | `src/dashboard.js`, static UI | direct feature APIs; dashboard tests | Tools, approvals, memory, Compute, connector operations and Mission Control work; most kernel objects still lack API surfaces. |
-| Evaluation/replay | MISSING | deterministic tests only | test fixtures | Need immutable inputs/evidence and side-effect-safe replay. |
+| Evaluation/replay | MISSING | deterministic tests only | test fixtures | Need immutable inputs/evidence and side-effect-safe replay. Phase 7 scope decisions are authorization evidence, not replay. |
 | Authentication | AUTHORITATIVE AND IN USE | MCP bearer, dashboard Basic Auth, worker credentials | security tests/config | Service auth works; principal identity is not multi-user identity. |
 | Users/teams | MISSING | no domain found | none | Capability rows are not RBAC. |
 | Migrations | IMPLEMENTED BUT PARTIAL | migration runner plus runtime ensures | migrations 001-025; focused tests | Kernel runtime creates more tables than migration 011; bootstrap parity is untested. |

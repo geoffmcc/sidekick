@@ -1113,6 +1113,33 @@ app.post("/api/connectors/:connectorId/:action", (req, res) => {
   } catch (error) { res.status(400).json({ ok: false, error: error.message }); }
 });
 
+app.get("/api/scope-snapshots", (req, res) => {
+  try {
+    const snapshots = platformKernel.listScopeSnapshots({ project_id: req.query.project_id, state: req.query.state, limit: req.query.limit });
+    res.json({ ok: true, snapshots, total: snapshots.length });
+  } catch (error) { res.status(400).json({ ok: false, error: error.message }); }
+});
+
+app.post("/api/scope-snapshots", (req, res) => {
+  const actor = authenticatedUser(req);
+  if (!actor) return res.status(403).json({ ok: false, error: "Scope changes require an authenticated dashboard user" });
+  try {
+    const snapshot = platformKernel.createScopeSnapshot({ ...req.body, created_by: actor, source: "dashboard" });
+    auditLog(req, "scope_snapshot.create", { snapshot_id: snapshot.snapshot_id, digest: snapshot.digest, target_count: snapshot.target_count, actor });
+    res.json({ ok: true, snapshot });
+  } catch (error) { res.status(400).json({ ok: false, error: error.message }); }
+});
+
+app.post("/api/scope-guard/evaluate", (req, res) => {
+  const actor = authenticatedUser(req);
+  if (!actor) return res.status(403).json({ ok: false, error: "Scope evaluation requires an authenticated dashboard user" });
+  try {
+    const decision = platformKernel.evaluateScope(req.body?.snapshot_id, req.body || {});
+    auditLog(req, "scope_guard.evaluate", { snapshot_id: decision.snapshot_id, decision_digest: decision.decision_digest, ok: decision.ok, reason: decision.reason, actor });
+    res.json({ ok: true, decision });
+  } catch (error) { res.status(400).json({ ok: false, error: error.message }); }
+});
+
 app.get("/api/llm", (req, res) => {
   try {
     http.get("http://127.0.0.1:11434/api/tags", (r) => {

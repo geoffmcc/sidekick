@@ -13,6 +13,7 @@ delete require.cache[require.resolve('../src/platform/kernel')];
 
 const dbStore = require('../src/db');
 const kernel = require('../src/platform/kernel');
+const scopeGuard = require('../src/security/scope-guard');
 
 console.log('Running Platform Kernel Tests...\n');
 
@@ -117,6 +118,23 @@ console.log('Running Platform Kernel Tests...\n');
     assert.strictEqual(failedConnector.connector.state, 'error', 'Thrown connector health should enter error state');
     assert.strictEqual(failedConnector.health.error, 'synthetic connector outage', 'Connector health should retain a bounded failure reason');
     assert.ok(dbStore.getDb().prepare("SELECT COUNT(*) AS count FROM platform_execution_events WHERE event_type = 'connector.health.check' AND subject_id = ?").get(connector.connector_id).count >= 2, 'Connector health checks should emit kernel events');
+    console.log('Passed\n');
+
+    console.log('Test PK.6: scope snapshots fail closed and bind allowed executions by digest');
+    const snapshot = kernel.createScopeSnapshot({ project_id: 'sidekick', created_by: 'test-operator', targets: [{ kind: 'host', value: 'example.test' }], rules: { allowed_operations: ['observe'] }, expires_at: new Date(Date.now() + 3600000).toISOString() });
+    assert.strictEqual(snapshot.target_count, 1, 'Scope snapshots should report target count without exposing target values');
+    assert.ok(snapshot.targets[0].value_digest, 'Scope reports should expose target digests');
+    const denied = scopeGuard.evaluate({ snapshot_id: snapshot.snapshot_id, project_id: 'sidekick', target_kind: 'host', target: 'other.example.test', operation: 'observe' });
+    assert.strictEqual(denied.ok, false, 'Out-of-scope targets must be denied');
+    assert.strictEqual(denied.reason, 'target_not_in_scope', 'Scope denial should be explicit');
+    const allowed = scopeGuard.evaluate({ snapshot_id: snapshot.snapshot_id, project_id: 'sidekick', target_kind: 'host', target: 'example.test', operation: 'observe' });
+    assert.strictEqual(allowed.ok, true, 'In-scope permitted operations should be allowed');
+    const scopedExecution = kernel.createExecution({ operation_type: 'security_research_observe', project_id: 'sidekick', actor_id: 'test-operator' });
+    const bound = scopeGuard.bindExecution(scopedExecution.execution_id, allowed);
+    const boundMetadata = bound.metadata;
+    assert.strictEqual(boundMetadata.scope_snapshot_id, snapshot.snapshot_id, 'Execution should bind the scope snapshot');
+    assert.strictEqual(boundMetadata.scope_decision_digest, allowed.decision_digest, 'Execution should bind the decision digest');
+    assert.throws(() => scopeGuard.bindExecution(scopedExecution.execution_id, denied), /allowed scope decision/, 'Denied scope decisions must never bind');
     console.log('Passed\n');
 
     console.log('All Platform Kernel tests passed.');

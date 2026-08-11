@@ -26,7 +26,7 @@ Sidekick owns project/campaign control, authorization snapshots, scope enforceme
 
 ## Scope Guard And Confirmation
 
-Scope Guard attaches immediately before centralized dispatch. It evaluates target, operation, technique, tool/connector, environment, program restrictions, rate limit, third-party data risk, privilege, project/campaign and the exact current ScopeSnapshot. The module check adds domain context but is never the only enforcement boundary. Every execution stores the snapshot ID and digest.
+Scope Guard attaches immediately before centralized dispatch. Phase 7 now provides the generic versioned snapshot, target-digest, operation allowlist, fail-closed decision, and execution-binding contract in `docs/security-research-scope-guard.md`. Domain evaluation still adds target, technique, tool/connector, environment, program restrictions, rate limit, third-party data risk, privilege, project/campaign and the exact current ScopeSnapshot. The module check is never the only enforcement boundary. Every bound execution stores the snapshot and decision digests.
 
 Hypotheses retain claim, boundary, rationale, prerequisites, environment, expected secure/vulnerable behavior, controls, criteria, observations, evidence, rejection reason and confidence. States remain distinct: `proposed`, `ready`, `blocked`, `analysis_only`, `not_run`, `running`, `inconclusive`, `rejected`, `supported`, `confirmed`.
 

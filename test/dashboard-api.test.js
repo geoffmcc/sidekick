@@ -150,6 +150,25 @@ setTimeout(async () => {
       console.log('Passed\n');
     }
 
+    console.log('Test 3.0ae: scope snapshots and guard stay authenticated and digest-only');
+    {
+      const created = await makeRequest('POST', '/api/scope-snapshots', { project_id: 'dashboard-test', targets: [{ kind: 'host', value: 'example.test' }], rules: { allowed_operations: ['observe'] }, expires_at: new Date(Date.now() + 3600000).toISOString() });
+      assert.strictEqual(created.status, 200, 'Authenticated users should create scope snapshots');
+      const snapshot = created.data.snapshot;
+      assert.ok(snapshot.digest && snapshot.targets[0].value_digest, 'Scope response should expose digests');
+      assert.ok(!JSON.stringify(created.data).includes('example.test'), 'Scope response must not expose target values');
+      const allowed = await makeRequest('POST', '/api/scope-guard/evaluate', { snapshot_id: snapshot.snapshot_id, project_id: 'dashboard-test', target_kind: 'host', target: 'example.test', operation: 'observe' });
+      assert.strictEqual(allowed.status, 200, 'Scope evaluation should succeed');
+      assert.strictEqual(allowed.data.decision.ok, true, 'In-scope dashboard evaluation should allow the operation');
+      const denied = await makeRequest('POST', '/api/scope-guard/evaluate', { snapshot_id: snapshot.snapshot_id, project_id: 'dashboard-test', target_kind: 'host', target: 'outside.example.test', operation: 'observe' });
+      assert.strictEqual(denied.status, 200, 'Scope denial should return a decision');
+      assert.strictEqual(denied.data.decision.ok, false, 'Out-of-scope dashboard evaluation should deny');
+      const listed = await makeRequest('GET', '/api/scope-snapshots?project_id=dashboard-test&limit=2');
+      assert.strictEqual(listed.status, 200, 'Scope snapshots should be reportable');
+      assert.ok(listed.data.snapshots.some(item => item.snapshot_id === snapshot.snapshot_id), 'Scope listing should include the snapshot');
+      console.log('Passed\n');
+    }
+
     // Test 3.0: dashboard shell and event streams require auth
     console.log('Test 3.0: dashboard shell and event streams require auth');
     {
