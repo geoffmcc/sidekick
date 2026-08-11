@@ -41,7 +41,7 @@ Transports and modules depend on service facades; services depend on persistence
 | Artifact Runtime | platform and Compute artifacts | Common metadata/lineage with immutable original/derivative custody, SHA-256 digests, and specialized Compute upload/lease rules. |
 | Workflow Runtime | kernel workflows, Brain, runbooks | Common definitions/claims incrementally; preserve Brain continuation transactions. |
 | Scheduler Runtime | cron/delay/watch/Brain/approval/Compute schedulers | Common claim/cancel/recovery contract; feature schedulers remain adapters. |
-| Connector Runtime | providers, webhooks, Compute protocols | Typed lifecycle, health, secrets references and event contract. |
+| Connector Runtime | providers, webhooks, Compute protocols plus `platform_connectors` | Typed registered/configured/enabled/healthy/error lifecycle, opaque secret references, health events, and bounded dashboard/API metadata. |
 | Agent Runtime | Agent Bridge and Brain | Keep both; both call dispatcher and common workflow/execution services. |
 | Model/Compute | `src/compute/*`, kernel model registry | Compute remains operational authority; kernel registry becomes projection/adapter. |
 | Evaluation/Replay | tests only | Add immutable evidence references and side-effect-safe replay. |

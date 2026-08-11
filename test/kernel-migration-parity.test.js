@@ -32,7 +32,7 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
     const migrationStore = require('../src/db');
     const migrationResult = migrationStore.runPendingMigrations();
     const migrationApplied = migrationResult.applied;
-    assert.ok(migrationApplied >= 29, `Migrations through 030 should apply, got ${migrationApplied}`);
+    assert.ok(migrationApplied >= 30, `Migrations through 031 should apply, got ${migrationApplied}`);
     assert.ok(
       migrationResult.migrations.some(m => m.file === '026_platform_kernel_tables.sql'),
       'Migration 026 should be applied'
@@ -45,13 +45,17 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
       migrationResult.migrations.some(m => m.file === '030_platform_event_delivery.sql'),
       'Migration 030 should be applied'
     );
+    assert.ok(
+      migrationResult.migrations.some(m => m.file === '031_platform_connectors.sql'),
+      'Migration 031 should be applied'
+    );
     const migratedSchema = capturePlatformSchema(migrationStore.getDb());
 
     console.log(`Test KMP.1: migrations-only boot applies ${migrationApplied} migrations`);
     assert.strictEqual(
       migrationStore.getDb().prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
-      String(30),
-      'schema_version should be 30'
+      String(31),
+      'schema_version should be 31'
     );
     console.log('Passed\n');
 
@@ -75,13 +79,13 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
       runtimeSchema.length,
       'Platform object counts must match'
     );
-    const expectedTables = 22;
-    const expectedIndexes = 46;
+    const expectedTables = 23;
+    const expectedIndexes = 49;
     const migratedTables = migratedSchema.filter(o => o.type === 'table').length;
     const migratedIndexes = migratedSchema.filter(o => o.type === 'index' && o.sql).length;
     const migratedAutoindexes = migratedSchema.filter(o => o.type === 'index' && !o.sql).length;
-    assert.strictEqual(migratedTables, expectedTables, 'Expected 22 platform tables');
-    assert.strictEqual(migratedIndexes, expectedIndexes, 'Expected 46 platform indexes');
+    assert.strictEqual(migratedTables, expectedTables, 'Expected 23 platform tables');
+    assert.strictEqual(migratedIndexes, expectedIndexes, 'Expected 49 platform indexes');
     assert.strictEqual(migratedAutoindexes, expectedTables - 1, 'Each TEXT PRIMARY KEY creates one autoindex');
     for (let i = 0; i < migratedSchema.length; i++) {
       const a = migratedSchema[i];
@@ -99,11 +103,11 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
     assert.match(runtimeExecutions.sql, /FOREIGN KEY\(parent_execution_id\)/);
     assert.strictEqual(
       migrationStore.getDb().prepare("SELECT value FROM meta WHERE key = 'platform_kernel_schema_version'").get().value,
-      '4'
+      '5'
     );
     assert.strictEqual(
       runtimeStore.getDb().prepare("SELECT value FROM meta WHERE key = 'platform_kernel_schema_version'").get().value,
-      '4'
+      '5'
     );
     console.log('Passed\n');
 

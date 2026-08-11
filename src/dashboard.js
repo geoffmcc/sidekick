@@ -1003,6 +1003,27 @@ app.get("/api/event-deliveries", (req, res) => {
   }
 });
 
+app.get("/api/connectors", (req, res) => {
+  try {
+    const connectors = platformKernel.listConnectors({
+      state: req.query.state,
+      type: req.query.type,
+      limit: req.query.limit,
+    });
+    res.json({
+      ok: true,
+      connectors,
+      total: connectors.length,
+      summary: {
+        healthy: connectors.filter(connector => connector.state === "healthy").length,
+        issues: connectors.filter(connector => connector.state === "error").length,
+      },
+    });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
 app.get("/api/llm", (req, res) => {
   try {
     http.get("http://127.0.0.1:11434/api/tags", (r) => {

@@ -105,6 +105,17 @@ setTimeout(async () => {
       console.log('Passed\n');
     }
 
+    console.log('Test 3.0ac: dashboard exposes bounded connector lifecycle state');
+    {
+      const response = await makeRequest('GET', '/api/connectors?limit=2');
+      assert.strictEqual(response.status, 200, 'Connector dashboard API should succeed');
+      assert.strictEqual(response.data.ok, true, 'Connector dashboard API should report success');
+      assert.ok(Array.isArray(response.data.connectors), 'Connector API should return connectors');
+      assert.ok(response.data.connectors.length <= 2, 'Connector API should enforce the requested bound');
+      assert.ok(response.data.summary && Number.isInteger(response.data.summary.healthy), 'Connector API should return lifecycle summary');
+      console.log('Passed\n');
+    }
+
     // Test 3.0: dashboard shell and event streams require auth
     console.log('Test 3.0: dashboard shell and event streams require auth');
     {
