@@ -1,8 +1,8 @@
 # Platform Target Architecture
 
-Status: Proposed target architecture grounded in the current tree
-Verified commit: d2db2658ef0fbf862c64b09315279562caa5bb8e
-Verified date: 2026-08-05T16:16:46-04:00
+Status: Target architecture (direction); grounded in the current tree
+Verified commit: a88ea84577283899b2f02892e1dcbe9be0dcf509
+Verified date: 2026-08-11
 
 ## Direction
 

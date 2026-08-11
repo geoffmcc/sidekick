@@ -1,10 +1,20 @@
 # Tool Architecture
 
-Status: Current-state architecture, reconciled in Phase 0R
-Verified commit: d2db2658ef0fbf862c64b09315279562caa5bb8e
-Verified date: 2026-08-05T16:16:46-04:00
+Status: Current-state architecture
+Verified commit: a88ea84577283899b2f02892e1dcbe9be0dcf509
+Verified date: 2026-08-11
 
-Sidekick's current built-in registry contains 107 tools across 20 categories. Tools execute through a descriptor registry and centralized dispatcher. `src/tools-legacy.js` still contains most migrated-in-place handlers, but it is no longer the authoritative execution path.
+Sidekick's built-in registry contains 102 tools (`TOOL_DEFS` rows), or 108 when
+the `data-utilities` module is enabled. Tools execute through a descriptor
+registry and centralized dispatcher. `src/tools-legacy.js` still owns most
+migrated-in-place handlers, but it is no longer the authoritative execution path.
+
+Measured ownership at this commit: **67 legacy-owned handlers** (61 defined in
+`tools-legacy.js` + 6 delegated to `src/compute/tools.js`) and **41 family-owned
+tools** across 15 family files. Handler extraction has been stalled for ~15
+commits (the last extraction was `tail`→monitoring); `tools-legacy.js` has grown
+to 10,766 lines and carries ~825 lines of unreachable dead code. See
+`docs/platform-roadmap.md` Track B2 for the dependency-ordered extraction plan.
 
 ## Descriptor Model
 
@@ -29,7 +39,12 @@ Extracted descriptor-owned families live under `src/tools/families/` and are agg
 - `filesystem.js` — `read`, `list`, `search`, `summarize`, `filter`, `diff_files`, `find`.
 - `monitoring.js` — `tail`.
 
-These 14 families own 40 descriptors. Each family owns its handlers, inline Zod schemas, risk, category, and compatibility metadata. Legacy `TOOL_DEFS` rows remain only as ordering anchors while MCP ordering compatibility is preserved. The five storage schemas (`store`, `get`, `delete`, `list_projects`, and `get_by_project`) have been removed from `src/tools/schemas/index.js`; storage has single ownership in `storage.js`, and a registry contract test asserts one schema owner per extracted descriptor.
+These families own 35 descriptors via `families/index.js`; the `data-utilities`
+module contributes 6 more through the module registry (`parse`, `extract`,
+`transform`, `diff`, `validate`, `template`), for **41 family/module-owned tools
+across 15 family files** in total. `module-management.js` (`module`, alias
+`modules`) is the family added since the previous count. Each family owns its
+handlers, inline Zod schemas, risk, category, and compatibility metadata. Legacy `TOOL_DEFS` rows remain only as ordering anchors while MCP ordering compatibility is preserved. The five storage schemas (`store`, `get`, `delete`, `list_projects`, and `get_by_project`) have been removed from `src/tools/schemas/index.js`; storage has single ownership in `storage.js`, and a registry contract test asserts one schema owner per extracted descriptor.
 
 The filesystem path policy now lives in `src/tools/path-policy.js`, the authoritative implementation of `enforcePathPolicy` and `getPathPolicyDecision`. It requires only `fs`, `path`, `src/core/policy-env.js`, and `src/tools/context.js`, so descriptor families can depend on it without requiring `src/tools-legacy.js` at module top level. `src/tools-legacy.js` consumes it and no longer defines its own copy.
 

@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const zlib = require("zlib");
 const crypto = require("crypto");
+const { splitSqlStatements, parseAddColumn } = require("./core/sql-statements");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const DB_FILE = process.env.SIDEKICK_DB_FILE || path.join(DATA_DIR, "sidekick.db");
@@ -2280,29 +2281,65 @@ function getMigrationVersion() {
   return row ? parseInt(row.value, 10) : 0;
 }
 
+// Column existence check used for idempotent ALTER TABLE ADD COLUMN. Table and
+// column names come from migration source (trusted, first-party), not caller
+// input, and are already restricted to [A-Za-z0-9_] by parseAddColumn.
+function migrationColumnExists(table, column) {
+  try {
+    // SQLite identifiers are case-insensitive; compare accordingly so a
+    // differently-cased ADD COLUMN is still recognized as already-present and
+    // skipped (otherwise it would throw "duplicate column name").
+    const target = column.toLowerCase();
+    return db.prepare(`PRAGMA table_info("${table}")`).all().some((c) => c.name.toLowerCase() === target);
+  } catch {
+    return false;
+  }
+}
+
+// Execute a migration script one statement at a time so that
+// `ALTER TABLE <t> ADD COLUMN <c>` is a no-op when <c> already exists. SQLite
+// has no `ADD COLUMN IF NOT EXISTS`, so several telemetry/runtime columns were
+// historically added only by the runtime bootstrap below and left out of the
+// migration files. That made the migration set non-self-contained (a
+// migrations-only build failed) and made a runtime-then-migration boot order
+// throw `duplicate column name`. Idempotent ADD COLUMN handling lets the
+// migrations own those columns while remaining safe in every boot order.
+function execMigrationSql(sql) {
+  for (const statement of splitSqlStatements(sql)) {
+    const add = parseAddColumn(statement);
+    if (add && migrationColumnExists(add.table, add.column)) continue;
+    db.exec(statement);
+  }
+}
+
 function runMigration(name, upSql, downSql) {
   const currentVersion = getMigrationVersion();
-  
-  const migrationMatch = name.match(/^(\d+)_/);
+
+  // Reject anything that is not a bare NNN_name.sql migration filename. This is
+  // an executor-boundary defense: callers such as the db_migrate tool resolve a
+  // file from a caller-supplied name, and a name like "123_../../x.sql" passes a
+  // bare version-prefix check while escaping the migrations directory. A strict
+  // filename pattern here prevents traversal-named SQL from being executed.
+  const migrationMatch = typeof name === "string" && name.match(/^(\d{3})_[A-Za-z0-9_]+\.sql$/);
   if (!migrationMatch) {
-    throw new Error("Migration name must start with version number: NNN_name.sql");
+    throw new Error("Migration name must be a NNN_name.sql migration filename");
   }
   const targetVersion = parseInt(migrationMatch[1], 10);
-  
+
   if (targetVersion <= currentVersion) {
     return { skipped: true, reason: "Migration already applied" };
   }
-  
+
   db.exec("BEGIN IMMEDIATE");
   try {
-    db.exec(upSql);
+    execMigrationSql(upSql);
     db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(String(targetVersion));
     db.exec("COMMIT");
   } catch (error) {
     try { db.exec("ROLLBACK"); } catch {}
     throw error;
   }
-  
+
   return { success: true, version: targetVersion };
 }
 
@@ -2357,7 +2394,7 @@ function runPendingMigrations() {
     try {
       db.exec("BEGIN IMMEDIATE");
       try {
-        db.exec(sql);
+        execMigrationSql(sql);
         db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(String(migration.version));
         db.exec("COMMIT");
       } catch (error) {

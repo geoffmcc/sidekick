@@ -4,7 +4,13 @@ What's planned for Sidekick.
 
 ## Current
 
-- 90 built-in MCP tools. Query the `tools` table for the authoritative current list.
+> Platform architecture status, tool-ownership counts, and the active
+> convergence roadmap are tracked authoritatively in
+> `docs/platform-convergence-audit.md` and `docs/platform-roadmap.md`. The list
+> below is a product-feature history and is not the source of truth for tool
+> counts.
+
+- 102 built-in MCP tools (108 with the `data-utilities` module enabled). Query the `tools` table for the authoritative current list.
 - Live dashboard with 9 tabs (System, Activity, Data, Memory, Database, Config, Agent, Tools, Metrics)
 - Autonomous agent bridge with Groq cloud + local Ollama fallback
 - Persistent KV storage across sessions
