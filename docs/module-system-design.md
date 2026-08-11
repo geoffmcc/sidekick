@@ -49,6 +49,8 @@ The dashboard summary includes the same read-only module health rows, aggregate 
 
 The `module` management surface also exposes `action: "check"` for builtin entries with a health contract. It executes the bounded check through the health boundary and returns the persisted lifecycle result; `action: "health"` remains read-only.
 
+An error-state module can be explicitly recovered with `action: "recover"`: stale local registrations are removed, the shared loader performs the error -> enabled transition, and the health contract must pass before recovery returns successfully.
+
 Events use the future Event Runtime; appending a ledger event is not delivery. Jobs use common execution/claim/recovery semantics. Dashboard extensions expose service-backed routes/views and store no authoritative dashboard-only state.
 
 ## First Proof

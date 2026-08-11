@@ -51,6 +51,16 @@ async function sidekick_module({ action = "list", name }) {
     return jsonText({ ok: true, action, result: checkModuleHealth(name, entry) });
   }
 
+  if (action === "recover") {
+    const { builtinEntriesByName } = require("../../modules/builtin-modules");
+    const entry = builtinEntriesByName()[name];
+    if (!entry) {
+      return { content: [{ type: "text", text: `Module "${name}" has no recovery entry in this process` }], isError: true };
+    }
+    const { recoverModuleHealth } = require("../../modules/health");
+    return jsonText({ ok: true, action, result: recoverModuleHealth(name, entry) });
+  }
+
   if (action === "disable") {
     const result = loader.disableModule(name);
     return jsonText({ ok: true, action, module: moduleSummary(result.module, loader) });
@@ -68,7 +78,7 @@ async function sidekick_module({ action = "list", name }) {
     return jsonText({ ok: true, action, module: moduleSummary(result.module, loader) });
   }
 
-  return { content: [{ type: "text", text: `Unknown module action: ${action}. Use list, get, health, check, enable, or disable` }], isError: true };
+  return { content: [{ type: "text", text: `Unknown module action: ${action}. Use list, get, health, check, recover, enable, or disable` }], isError: true };
 }
 
 const descriptors = Object.freeze([
@@ -77,10 +87,10 @@ const descriptors = Object.freeze([
     aliases: ["modules"],
     description: "Inspect and operate platform module lifecycle state through the shared policy and approval path",
     schema: z.object({
-      action: z.enum(["list", "get", "health", "check", "enable", "disable"]).optional().describe("Module action (default: list)"),
-      name: z.string().optional().describe("Module name for get, health, check, enable, or disable"),
+      action: z.enum(["list", "get", "health", "check", "recover", "enable", "disable"]).optional().describe("Module action (default: list)"),
+      name: z.string().optional().describe("Module name for get, health, check, recover, enable, or disable"),
     }),
-    args: { action: "string (list|get|health|check|enable|disable - default list)", name: "string (module name for get/health/check/enable/disable)" },
+    args: { action: "string (list|get|health|check|recover|enable|disable - default list)", name: "string (module name for get/health/check/recover/enable/disable)" },
     risk: "high",
     category: "Services",
     source: "builtin",
