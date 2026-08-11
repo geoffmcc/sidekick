@@ -51,6 +51,9 @@ Each completed check also appends a `module.health.check` event to the kernel
 ledger. Module reports and dashboard rows expose a bounded recent history from
 that ledger, allowing operators to distinguish current state from recent check
 outcomes without unbounded response growth.
+Exceptions and malformed or asynchronous health results are normalized into a
+failed check, persisted, and transitioned to `error` so the acceptance path is
+observable and recoverable rather than silently disappearing.
 
 The `module` management surface also exposes `action: "check"` for builtin entries with a health contract. It executes the bounded check through the health boundary and returns the persisted lifecycle result; `action: "health"` remains read-only.
 
