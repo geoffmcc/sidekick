@@ -27,15 +27,33 @@ function checkModuleHealth(name, entry) {
   }
 
   const health = repository.recordHealth(name, result);
+  let module;
   if (result.ok) {
-    const module = record.state === "enabled" ? repository.transitionModule(name, "healthy") : health;
-    return { ok: true, module, health: result };
+    module = record.state === "enabled" ? repository.transitionModule(name, "healthy") : health;
+  } else {
+    module = repository.transitionModule(name, "error", {
+      error: result.error || "Module health check failed",
+    });
   }
 
-  const module = repository.transitionModule(name, "error", {
-    error: result.error || "Module health check failed",
-  });
-  return { ok: false, module, health: result };
+  try {
+    require("../platform/kernel").appendEvent({
+      event_type: "module.health.check",
+      source: "modules",
+      subject_type: "module",
+      subject_id: name,
+      severity: result.ok ? "info" : "warning",
+      redaction_state: "none",
+      payload: {
+        module: name,
+        ok: result.ok,
+        state: module.state,
+        health: result,
+        error: result.ok ? undefined : (result.error || "Module health check failed"),
+      },
+    });
+  } catch {}
+  return { ok: result.ok, module, health: result };
 }
 
 /** Recover an error-state module, then require a passing health check. */

@@ -47,6 +47,11 @@ The `module` management surface exposes the persisted health payload and last-ch
 
 The dashboard summary includes the same read-only module health rows, aggregate counts, and active-process mismatch/error count so operators can see lifecycle health without triggering module code.
 
+Each completed check also appends a `module.health.check` event to the kernel
+ledger. Module reports and dashboard rows expose a bounded recent history from
+that ledger, allowing operators to distinguish current state from recent check
+outcomes without unbounded response growth.
+
 The `module` management surface also exposes `action: "check"` for builtin entries with a health contract. It executes the bounded check through the health boundary and returns the persisted lifecycle result; `action: "health"` remains read-only.
 
 An error-state module can be explicitly recovered with `action: "recover"`: stale local registrations are removed, the shared loader performs the error -> enabled transition, and the health contract must pass before recovery returns successfully.
