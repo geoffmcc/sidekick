@@ -13,6 +13,7 @@ const { stripSidekickPrefix } = require("./core/tool-name");
 try {
   const builtinModules = require("./modules/builtin-modules");
   builtinModules.provisionBuiltinModules();
+  builtinModules.startModuleHealthChecks();
   builtinModules.startModuleReconciliation();
 } catch (error) {
   console.error("[Modules] Builtin module provisioning failed:", error.message);

@@ -51,6 +51,8 @@ The `module` management surface also exposes `action: "check"` for builtin entri
 
 An error-state module can be explicitly recovered with `action: "recover"`: stale local registrations are removed, the shared loader performs the error -> enabled transition, and the health contract must pass before recovery returns successfully.
 
+MCP, dashboard, and agent startup schedule an unref'd periodic builtin-module health sweep. The sweep reuses the explicit health boundary, records results, and reports failures without blocking process startup.
+
 Events use the future Event Runtime; appending a ledger event is not delivery. Jobs use common execution/claim/recovery semantics. Dashboard extensions expose service-backed routes/views and store no authoritative dashboard-only state.
 
 ## First Proof
