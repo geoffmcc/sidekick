@@ -36,6 +36,8 @@ Disclosure metadata is human-gated and stores only report/artifact references, o
 
 The final Phase 7 lab policy is fail-closed: only explicitly disposable, isolated environments with `none` or fixture-only networking and `production_access: false` pass. Destructive operations require approval, and operations requiring snapshots must present one. The policy module evaluates descriptors only; it does not discover or connect to networks.
 
+Phase 8 evaluation/replay begins with an audit-only foundation. Replay records contain deterministic digests over opaque execution/event/artifact references and observations; they expose no action list and cannot dispatch tools or mutate execution state.
+
 Hypotheses retain claim, boundary, rationale, prerequisites, environment, expected secure/vulnerable behavior, controls, criteria, observations, evidence, rejection reason and confidence. States remain distinct: `proposed`, `ready`, `blocked`, `analysis_only`, `not_run`, `running`, `inconclusive`, `rejected`, `supported`, `confirmed`.
 
 `confirmed` requires a qualifying execution, test environment, observed behavior, controls, evidence and completion validation. Workbench/model output without execution and evidence remains `analysis_only` or `not_run`.
