@@ -64,6 +64,7 @@ const suites = [
   { file: 'test/modules-repository.test.js', critical: false, description: 'Module lifecycle repository: manifest persistence, transitions, atomic migration progress, restart survival' },
   { file: 'test/modules-loader.test.js', critical: false, description: 'Module loader: registry wiring, facade isolation, fail-closed activation, restart restore' },
   { file: 'test/modules-permissions.test.js', critical: false, description: 'Module permissions: deny-by-default facade dispatch, risk caps, module attribution, risk parity' },
+  { file: 'test/modules-builtin.test.js', critical: false, description: 'Builtin module provisioning: data-utilities registration, restart restore, catalog sync, operator intent' },
   { file: 'test/extension-docs.test.js', critical: false, description: 'Extension system and generated platform docs' },
   { file: 'test/backup-release.test.js', critical: false, description: 'Backup/restore and release maturity' },
   { file: 'test/new-tools.test.js', critical: false, description: 'Extended tool behavior' },

@@ -116,9 +116,18 @@ function syncToolRegistry() {
       return;
     }
 
-    // Get all current tools from code
+    // Get all current tools from code. Active module tools count as current
+    // so the catalog shows them and does not mark them deprecated; provision
+    // modules BEFORE calling this or their tools deprecate until the next sync.
+    const moduleDefs = require("./modules/loader").getActiveDescriptors().map(d => ({
+      name: d.name,
+      description: d.description,
+      args: d.args,
+      risk: d.risk,
+      category: d.category,
+    }));
     const dynamicNames = new Set(dbStore.listGeneratedCapabilities({ states: ["trial", "active"] }).map(t => t.name));
-    const codeTools = new Set([...TOOL_DEFS.map(t => t.name), ...dynamicNames]);
+    const codeTools = new Set([...TOOL_DEFS.map(t => t.name), ...moduleDefs.map(t => t.name), ...dynamicNames]);
 
     // Get all tools from database
     const dbTools = db.prepare("SELECT name, deprecated FROM tools").all();
@@ -147,9 +156,10 @@ function syncToolRegistry() {
     // Clear existing tool-category mappings (we'll recreate them)
     db.prepare("DELETE FROM tool_category_map").run();
 
-    // Insert/update each tool
-    for (const toolDef of TOOL_DEFS) {
-      const risk = TOOL_RISK[toolDef.name] || "low";
+    // Insert/update each tool (module descriptors carry their own risk and
+    // category; legacy defs fall back to the static maps)
+    for (const toolDef of [...TOOL_DEFS, ...moduleDefs]) {
+      const risk = toolDef.risk || TOOL_RISK[toolDef.name] || "low";
       const argsJson = JSON.stringify(toolDef.args || {});
 
       upsertTool.run(
@@ -161,7 +171,7 @@ function syncToolRegistry() {
       );
 
       // Get the tool's category
-      const categoryName = TOOL_CATEGORIES[toolDef.name];
+      const categoryName = toolDef.category || TOOL_CATEGORIES[toolDef.name];
       if (categoryName && categoryMap[categoryName]) {
         db.prepare(
           "INSERT INTO tool_category_map (tool_name, category_id) VALUES (?, ?)"
@@ -179,7 +189,7 @@ function syncToolRegistry() {
     }
 
     dbStore.syncGeneratedToolRegistry();
-    console.log(`[ToolRegistry] Synced ${TOOL_DEFS.length} built-in tools and ${dynamicNames.size} generated tools to database`);
+    console.log(`[ToolRegistry] Synced ${TOOL_DEFS.length} built-in tools, ${moduleDefs.length} module tools, and ${dynamicNames.size} generated tools to database`);
   } catch (error) {
     console.error('[ToolRegistry] Error syncing tool registry:', error.message);
   }
@@ -5691,7 +5701,10 @@ function evolveProcessQueue(evolve) {
 
 async function sidekick_evolve(args = {}) {
   const evolveImpl = require("./evolve");
-  return evolveImpl.sidekick_evolve(args, { TOOL_DEFS, loadProcedures });
+  // Active module tools count as built-in names so evolve cannot mint a
+  // generated capability that collides with a module-owned tool.
+  const moduleDefs = require("./modules/loader").getActiveDescriptors().map(d => ({ name: d.name, description: d.description, args: d.args }));
+  return evolveImpl.sidekick_evolve(args, { TOOL_DEFS: [...TOOL_DEFS, ...moduleDefs], loadProcedures });
 
   const evolve = loadEvolve();
   const now = new Date().toISOString();
@@ -6475,8 +6488,10 @@ async function sidekick_batch({ calls }) {
     // families (src/tools/families/) keep their TOOL_DEFS row as an ordering anchor
     // but no longer have a legacy handler entry. Every TOOL_DEFS name is dispatchable,
     // so this stays equivalent to the old check for legacy-owned tools while keeping
-    // extracted tools reachable. Execution still goes through callTool -> dispatcher.
-    if (!call.tool || !isBuiltinToolName(call.tool)) {
+    // extracted tools reachable. Active module tools are dispatchable too;
+    // generated tools stay excluded as before. Execution still goes through
+    // callTool -> dispatcher.
+    if (!call.tool || !(isBuiltinToolName(call.tool) || require("./modules/loader").resolveActiveDescriptor(call.tool))) {
       results.push({ index: i, tool: call.tool, error: "Unknown tool: " + call.tool });
       continue;
     }
@@ -10565,18 +10580,13 @@ const TOOL_DEFS = [
   { name: "handoff", description: "First-class handoff storage and ingestion. Preserves full handoff artifacts while extracting redacted, evidence-linked structured memories idempotently. get/inspect require id or key; use list or resume check for project-level queries.", args: { action: "string (create|update|get|list|compare|inspect|reprocess|archive)", id: "string (required for get/inspect, optional for other actions)", key: "string (required for get/inspect when id is omitted, optional for other actions)", project: "string (optional, for create/update/list/compare)", title: "string (optional)", content: "string (for create/update)", source: "string (optional)", task_id: "string (optional)", include_archived: "boolean (optional)", limit: "number (optional)" } },
   { name: "memory", description: "Typed memory operations: remember, query, explain, correct, forget, pin, expire, inspect conflicts/health, and backfill high-semantic sources such as handoffs.", args: { action: "string (remember|query|explain|list|get|confirm|correct|forget|pin|expire|conflicts|health|backfill)", id: "string (optional memory id)", project: "string (optional)", type: "string (optional)", memory_class: "string (optional semantic|episodic|procedural|working|prospective|negative|relational|artifact|observational|capability)", content: "string (for remember)", summary: "string (optional)", scope_type: "string (optional)", scope_id: "string (optional)", source: "string (optional)", evidence: "string (optional)", confidence: "number (optional)", tags: "string|array (optional)", query: "string (for query)", limit: "number (optional)", correct_to: "string (for correct)", fresh_eyes: "boolean (optional)", historical: "boolean (optional)" } },
   { name: "teach", description: "Meta-learning and self-extension: teach procedures, generate tools, learn from examples, execute learned workflows", args: { action: "string", name: "string (optional)", description: "string (optional)", steps: "array (optional)", parameters: "object (optional)", args: "object (optional)", example: "string (optional)", trigger_phrases: "array (optional)", implementation: "string (optional)" } },
-  { name: "transform", description: "Data manipulation pipeline: filter, extract, sort, format, and map data", args: { action: "string (filter|extract|sort|format|map)", input: "string", pattern: "string (optional, for filter)", field: "string (optional, for extract)", key: "string (optional, for sort/map)", value: "string (optional, for map)", format: "string (optional, for format: json|csv|table|text)" } },
   { name: "health", description: "Composite system health checks with scoring and issue detection", args: { check: "string (all|services|processes|disk|network|custom)", services: "string (optional, comma-separated service names)", commands: "string (optional, comma-separated commands for custom check)", threshold: "string (optional, e.g. 'disk>90,mem>80')" } },
   { name: "delay", description: "One-shot task scheduling: run a tool once at a specific time or after a delay", args: { action: "string (add|list|cancel|run)", id: "string (optional, for cancel/run)", when: "string (optional, e.g. 10s, 5m, 2h, 1d, or ISO date)", name: "string (optional, human-readable name)", tool: "string (optional, tool name to execute)", args: "object (optional, arguments for the tool)" } },
   { name: "snapshot", description: "Capture system state and detect drift by comparing snapshots", args: { action: "string (capture|compare|list|delete)", name: "string (snapshot name)", capture: "string (optional, comma-separated: processes,services,disk,packages,network,files:/path)", compare: "string (optional, baseline snapshot name for compare action)" } },
   { name: "watch", description: "Event-driven monitoring: watch services, processes, endpoints, or files and trigger actions on conditions", args: { action: "string (add|list|remove|pause|check)", id: "string (optional, for remove/pause/check)", name: "string (optional, watch name)", source: "string (optional, service|process|endpoint|file)", target: "string (optional, service name, process name, URL, or file path)", condition: "string (optional, e.g. status!=active, not_running, status!=200, content_matches)", interval: "string (optional, e.g. 30s, 5m, 1h)", action_tool: "string (optional, tool to call when triggered)", action_args: "object (optional, args for action tool)", pause: "boolean (optional, true to pause, false to resume)" } },
   { name: "secret", description: "Encrypted credential management with AES-256-GCM (requires SIDEKICK_SECRET_KEY in .env)", args: { action: "string (store|get|delete|list|rotate)", key: "string (secret name)", value: "string (optional, for store)", generate: "string (optional, length for rotate, e.g. '32')" } },
   { name: "security_scan", description: "Read-only audit for tracked sensitive files, secret signatures, hardcoded credential settings, runtime .env safety, and sensitive-file permissions. Reports metadata only and never returns secret values.", args: { path: "string (optional, directory to scan - default Sidekick repo)", max_files: "number (optional, bounded 1-10000 - default 2000)", format: "string (optional, text|json - default text)" } },
-  { name: "parse", description: "Parse structured data formats (JSON, YAML, XML, INI, CSV) with auto-detection", args: { input: "string (data to parse)", format: "string (optional, json|yaml|xml|ini|csv - auto-detected if not specified)" } },
-  { name: "diff", description: "Semantic comparison of text, JSON, or YAML with structure-aware diffing", args: { old_text: "string (original content)", new_text: "string (modified content)", type: "string (optional, text|json|yaml|auto - default auto)", format: "string (optional, unified|summary|json - default unified)" } },
   { name: "hash", description: "Generate checksums (MD5, SHA1, SHA256, SHA512) for files or data with verification", args: { input: "string (optional, data to hash)", path: "string (optional, file path to hash)", algorithm: "string (optional, md5|sha1|sha256|sha512 - default sha256)", verify: "string (optional, expected hash to verify against)" } },
-  { name: "validate", description: "Validate data against JSON Schema", args: { data: "string|object (data to validate)", schema: "string|object (JSON Schema)" } },
-  { name: "template", description: "Render Handlebars templates with data", args: { template: "string (Handlebars template)", data: "string|object (template data)" } },
   { name: "queue", description: "Persistent task queue with priorities", args: { action: "string (add|list|process|remove|clear)", id: "number (optional, task id for remove)", tool: "string (optional, tool name for add)", args: "object (optional, tool args for add)", priority: "number (optional, priority for add, default 0)", status: "string (optional, status filter for list/clear)" } },
   { name: "retry", description: "Retry tool calls with exponential backoff", args: { tool: "string (tool to retry)", args: "object (optional, tool args)", max_attempts: "number (optional, default 3)", backoff: "string (optional, exponential|linear|fixed, default exponential)", initial_delay: "number (optional, ms, default 1000)" } },
   { name: "evolve", description: "Evidence-driven workflow learning and generated-tool lifecycle management. Mines successful bounded workflows, validates parameterized procedures, and exposes approved trial/active generated tools through normal discovery.", args: { action: "string (analyze|candidates|inspect|validate|approve|activate_trial|promote|reject|deprecate|feedback|report|cleanup)", id: "string (optional, candidate/generated capability id or name)", approver: "string (optional)", useful: "boolean (optional, for feedback)", notes: "string (optional)", reason: "string (optional)", limit: "number (optional, logs to analyze)" } },
@@ -10600,7 +10610,6 @@ const TOOL_DEFS = [
   { name: "diff_files", description: "Compare two files directly without reading both into context. Returns unified diff or summary.", args: { path_a: "string (first file path)", path_b: "string (second file path)", format: "string (optional, unified|summary - default unified)" } },
   { name: "find", description: "Advanced file finder: search by name pattern, date range, size range, and content pattern.", args: { path: "string (directory to search)", name: "string (optional, glob pattern e.g. '*.js')", modified_after: "string (optional, ISO date)", modified_before: "string (optional, ISO date)", size_min: "string (optional, e.g. '1KB', '1MB')", size_max: "string (optional, e.g. '10MB')", content: "string (optional, regex pattern to match file contents)", max_results: "number (optional, default 50)" } },
   { name: "status", description: "Unified system status: services, disk, memory, load, uptime, top processes in one call.", args: { include: "string (optional, comma-separated: services,disk,memory,load,uptime,processes - default services,disk)", services: "string (optional, comma-separated service names - default sidekick-mcp,sidekick-dashboard,sidekick-agent)" } },
-  { name: "extract", description: "Parse JSON/YAML/INI/XML and extract specific fields by path. Returns only what you need.", args: { path: "string (file path)", fields: "string|array (optional, field paths to extract e.g. 'database.host,database.port')" } },
   { name: "anonymize", description: "Replace sensitive data with realistic but fake values. Preserves data structure while making it safe to share externally.", args: { action: "string (anonymize|patterns|add_pattern|remove_pattern)", input: "string (optional, text to anonymize)", format: "string (optional, text|json|yaml - default text)", custom_patterns: "array (optional, {pattern, replacement} objects)", consistency: "boolean (optional, same input always maps to same output - default true)" } },
   { name: "sandbox", description: "Execute operations in a tracked context with automatic backup and rollback. Safe experimentation on remote systems.", args: { action: "string (exec|rollback|list|diff|clean)", sandbox_name: "string (optional, sandbox identifier)", command: "string (optional, command to execute)", files: "array (optional, files to auto-backup before exec)", auto_backup: "boolean (optional, default true)", rollback_id: "string (optional, sandbox to rollback)" } },
   { name: "changelog", description: "Generate human-readable changelogs from git history. Groups commits semantically and optionally uses LLM for summaries.", args: { action: "string (generate|preview|save)", from: "string (starting ref: tag, commit, branch)", to: "string (optional, ending ref - default HEAD)", format: "string (optional, markdown|plain|conventional - default markdown)", group_by: "string (optional, type|scope|author - default type)", use_llm: "boolean (optional, generate LLM summary - default false)", include: "string (optional, all|features|fixes|breaking|refactor|deps - default all)", path: "string (optional, git repository path - default current directory)" } },

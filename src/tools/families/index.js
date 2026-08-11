@@ -1,7 +1,9 @@
 "use strict";
 
 const utility = require("./utility");
-const dataUtilities = require("./data-utilities");
+// data-utilities moved to the module system: src/modules/entries/data-utilities.js
+// owns its registration now (docs/module-system-design.md, First Proof). The
+// implementation file stays under families/ and is consumed by the module entry.
 const hashing = require("./hashing");
 const databaseInspection = require("./database-inspection");
 const storage = require("./storage");
@@ -15,7 +17,7 @@ const context = require("./context");
 const filesystem = require("./filesystem");
 const monitoring = require("./monitoring");
 
-const families = Object.freeze([utility, dataUtilities, hashing, databaseInspection, storage, memorySync, memoryPortability, memoryLifecycle, memorySession, memoryHandoff, memoryCore, context, filesystem, monitoring]);
+const families = Object.freeze([utility, hashing, databaseInspection, storage, memorySync, memoryPortability, memoryLifecycle, memorySession, memoryHandoff, memoryCore, context, filesystem, monitoring]);
 
 // Descriptors owned by extracted families. The registry substitutes these at
 // their legacy TOOL_DEFS order position, so ordering here is not significant.
