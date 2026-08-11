@@ -37,7 +37,7 @@ Transports and modules depend on service facades; services depend on persistence
 | Identity/Capability | source contexts, auth, `platform_capabilities` | Extend toward users, teams, memberships and delegated grants. |
 | Project Runtime | scattered project fields | Add canonical projection and migration; workspace remains related. |
 | Execution Runtime | kernel plus feature mirrors | Kernel lifecycle/lineage authoritative; adapt Compute and feature stores. |
-| Event Runtime | `platform_execution_events` | Add subscribers, delivery attempts, offsets, retry/dead-letter and idempotency before calling it a bus. |
+| Event Runtime | `platform_execution_events` plus delivery tables | Subscribers, durable attempts, consumer offsets, bounded retry/dead-letter state, and subscription/event idempotency are explicit; the ledger remains the source of truth. |
 | Artifact Runtime | platform and Compute artifacts | Common metadata/lineage with immutable original/derivative custody, SHA-256 digests, and specialized Compute upload/lease rules. |
 | Workflow Runtime | kernel workflows, Brain, runbooks | Common definitions/claims incrementally; preserve Brain continuation transactions. |
 | Scheduler Runtime | cron/delay/watch/Brain/approval/Compute schedulers | Common claim/cancel/recovery contract; feature schedulers remain adapters. |
@@ -50,7 +50,7 @@ Transports and modules depend on service facades; services depend on persistence
 
 ## Core Invariants
 
-An execution is a correlation and lifecycle record, not an exactly-once guarantee. Events are currently a durable audit ledger, not a live bus. Artifacts are immutable originals plus explicit derivatives; redaction never overwrites originals. Project is durable identity, Workspace is environment allocation, Session is bounded interaction, Handoff is deliberate transfer, Memory is reusable knowledge, and Execution is operation lineage.
+An execution is a correlation and lifecycle record, not an exactly-once guarantee. Events remain an at-least-once delivery ledger: subscriptions have durable attempts, retries, dead-letter state, and offsets, while consumers must be idempotent. Artifacts are immutable originals plus explicit derivatives; redaction never overwrites originals. Project is durable identity, Workspace is environment allocation, Session is bounded interaction, Handoff is deliberate transfer, Memory is reusable knowledge, and Execution is operation lineage.
 
 Every module action enters the centralized dispatcher or an execution service that invokes it. Domain checks add context but cannot replace authentication, policy, approval, capability, path, redaction or audit controls. Human approval authorizes; one runner executes; ambiguous high-risk work parks for authenticated reconciliation.
 

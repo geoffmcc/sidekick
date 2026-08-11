@@ -984,6 +984,25 @@ app.get("/api/artifacts", (req, res) => {
   }
 });
 
+app.get("/api/event-deliveries", (req, res) => {
+  try {
+    const deliveries = platformKernel.listEventDeliveries({
+      subscription_id: req.query.subscription_id,
+      status: req.query.status,
+      limit: req.query.limit,
+    });
+    res.json({
+      ok: true,
+      subscriptions: platformKernel.listEventSubscriptions(),
+      deliveries,
+      total: deliveries.length,
+      stats: platformKernel.getEventDeliveryStats(),
+    });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
 app.get("/api/llm", (req, res) => {
   try {
     http.get("http://127.0.0.1:11434/api/tags", (r) => {

@@ -341,7 +341,178 @@ function appendEvent(input = {}) {
     }
     throw error;
   }
+  try { enqueueEventDeliveries(eventId); } catch {}
   return db.prepare("SELECT * FROM platform_execution_events WHERE event_id = ?").get(eventId);
+}
+
+function normalizeEventSubscription(row) {
+  if (!row) return null;
+  return { ...row, metadata: parseJson(row.metadata_json, {}) };
+}
+
+function normalizeEventDelivery(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    metadata: parseJson(row.metadata_json, {}),
+  };
+}
+
+function registerEventSubscription(input = {}) {
+  ensurePlatformKernelSchema();
+  const name = String(input.name || "").trim();
+  const eventType = String(input.event_type || "").trim();
+  if (!name) throw new Error("subscription name is required");
+  if (!eventType) throw new Error("subscription event_type is required");
+  const maxAttempts = Number.isInteger(input.max_attempts) ? input.max_attempts : 3;
+  if (maxAttempts < 1 || maxAttempts > 20) throw new Error("max_attempts must be between 1 and 20");
+  const subscriptionId = input.subscription_id || newId("sub");
+  const ts = nowIso();
+  dbStore.getDb().prepare(`
+    INSERT INTO platform_event_subscriptions
+      (subscription_id, name, event_type, state, max_attempts, created_at, updated_at, metadata_json)
+    VALUES (?, ?, ?, 'active', ?, ?, ?, ?)
+  `).run(subscriptionId, name, eventType, maxAttempts, ts, ts, json(input.metadata || {}));
+  dbStore.getDb().prepare(`
+    INSERT INTO platform_event_offsets (subscription_id, last_event_rowid, updated_at)
+    VALUES (?, 0, ?)
+  `).run(subscriptionId, ts);
+  return normalizeEventSubscription(dbStore.getDb().prepare("SELECT * FROM platform_event_subscriptions WHERE subscription_id = ?").get(subscriptionId));
+}
+
+function setEventSubscriptionState(subscriptionId, state) {
+  ensurePlatformKernelSchema();
+  if (!["active", "paused"].includes(state)) throw new Error("subscription state must be active or paused");
+  const result = dbStore.getDb().prepare("UPDATE platform_event_subscriptions SET state = ?, updated_at = ? WHERE subscription_id = ?").run(state, nowIso(), String(subscriptionId));
+  if (!result.changes) throw new Error(`Event subscription not found: ${subscriptionId}`);
+  return normalizeEventSubscription(dbStore.getDb().prepare("SELECT * FROM platform_event_subscriptions WHERE subscription_id = ?").get(String(subscriptionId)));
+}
+
+function listEventSubscriptions() {
+  ensurePlatformKernelSchema();
+  return dbStore.getDb().prepare("SELECT * FROM platform_event_subscriptions ORDER BY created_at DESC").all().map(normalizeEventSubscription);
+}
+
+function enqueueEventDeliveries(eventId) {
+  ensurePlatformKernelSchema();
+  const db = dbStore.getDb();
+  const event = db.prepare("SELECT event_id, event_type FROM platform_execution_events WHERE event_id = ?").get(eventId);
+  if (!event) return 0;
+  const subscriptions = db.prepare("SELECT * FROM platform_event_subscriptions WHERE state = 'active' AND (event_type = ? OR event_type = '*')").all(event.event_type);
+  const ts = nowIso();
+  let queued = 0;
+  for (const subscription of subscriptions) {
+    const result = db.prepare(`
+      INSERT OR IGNORE INTO platform_event_deliveries
+        (delivery_id, subscription_id, event_id, status, created_at, updated_at, metadata_json)
+      VALUES (?, ?, ?, 'pending', ?, ?, '{}')
+    `).run(newId("delivery"), subscription.subscription_id, event.event_id, ts, ts);
+    queued += result.changes;
+  }
+  return queued;
+}
+
+function claimEventDelivery(deliveryId) {
+  ensurePlatformKernelSchema();
+  const db = dbStore.getDb();
+  const now = nowIso();
+  const result = db.prepare(`
+    UPDATE platform_event_deliveries
+    SET status = 'in_flight', attempt_count = attempt_count + 1, updated_at = ?
+    WHERE delivery_id = ?
+      AND status IN ('pending', 'retry')
+      AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+      AND subscription_id IN (SELECT subscription_id FROM platform_event_subscriptions WHERE state = 'active')
+  `).run(now, String(deliveryId), now);
+  if (!result.changes) return null;
+  return normalizeEventDelivery(db.prepare(`
+    SELECT d.*, s.name AS subscription_name, s.event_type, s.max_attempts
+    FROM platform_event_deliveries d
+    JOIN platform_event_subscriptions s ON s.subscription_id = d.subscription_id
+    WHERE d.delivery_id = ?
+  `).get(String(deliveryId)));
+}
+
+function completeEventDelivery(deliveryId, { ok = true, error = null } = {}) {
+  ensurePlatformKernelSchema();
+  const db = dbStore.getDb();
+  const delivery = db.prepare(`
+    SELECT d.*, s.max_attempts
+    FROM platform_event_deliveries d
+    JOIN platform_event_subscriptions s ON s.subscription_id = d.subscription_id
+    WHERE d.delivery_id = ?
+  `).get(String(deliveryId));
+  if (!delivery) throw new Error(`Event delivery not found: ${deliveryId}`);
+  if (delivery.status !== "in_flight") throw new Error(`Event delivery is not in flight: ${delivery.status}`);
+  const ts = nowIso();
+  if (ok) {
+    const event = db.prepare("SELECT rowid, event_id FROM platform_execution_events WHERE event_id = ?").get(delivery.event_id);
+    db.transaction(() => {
+      db.prepare("UPDATE platform_event_deliveries SET status = 'delivered', delivered_at = ?, updated_at = ?, last_error = NULL WHERE delivery_id = ?").run(ts, ts, delivery.delivery_id);
+      db.prepare(`
+        INSERT INTO platform_event_offsets (subscription_id, last_event_id, last_event_rowid, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(subscription_id) DO UPDATE SET last_event_id = excluded.last_event_id, last_event_rowid = excluded.last_event_rowid, updated_at = excluded.updated_at
+          WHERE excluded.last_event_rowid > platform_event_offsets.last_event_rowid
+      `).run(delivery.subscription_id, event.event_id, event.rowid, ts);
+    })();
+  } else {
+    const exhausted = delivery.attempt_count >= delivery.max_attempts;
+    const nextAttempt = exhausted ? null : new Date(Date.now() + Math.min(60 * 60 * 1000, 1000 * (2 ** Math.max(0, delivery.attempt_count - 1)))).toISOString();
+    db.prepare(`
+      UPDATE platform_event_deliveries
+      SET status = ?, next_attempt_at = ?, last_error = ?, updated_at = ?
+      WHERE delivery_id = ?
+    `).run(exhausted ? "dead_letter" : "retry", nextAttempt, String(error || "delivery failed").replace(/\s+/g, " ").slice(0, 500), ts, delivery.delivery_id);
+  }
+  return normalizeEventDelivery(db.prepare("SELECT * FROM platform_event_deliveries WHERE delivery_id = ?").get(delivery.delivery_id));
+}
+
+function requeueEventDelivery(deliveryId) {
+  ensurePlatformKernelSchema();
+  const result = dbStore.getDb().prepare(`
+    UPDATE platform_event_deliveries
+    SET status = 'pending', attempt_count = 0, next_attempt_at = NULL, last_error = NULL, updated_at = ?
+    WHERE delivery_id = ? AND status = 'dead_letter'
+  `).run(nowIso(), String(deliveryId));
+  if (!result.changes) throw new Error("Only dead-lettered deliveries can be requeued");
+  return normalizeEventDelivery(dbStore.getDb().prepare("SELECT * FROM platform_event_deliveries WHERE delivery_id = ?").get(String(deliveryId)));
+}
+
+function deliverEvent(deliveryId, handler) {
+  if (typeof handler !== "function") throw new Error("delivery handler is required");
+  const delivery = claimEventDelivery(deliveryId);
+  if (!delivery) return null;
+  const event = dbStore.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_id = ?").get(delivery.event_id);
+  event.payload = parseJson(event.payload_json, {});
+  try {
+    handler(event);
+    return completeEventDelivery(delivery.delivery_id, { ok: true });
+  } catch (error) {
+    return completeEventDelivery(delivery.delivery_id, { ok: false, error: error.message });
+  }
+}
+
+function listEventDeliveries({ subscription_id, status, limit = 50 } = {}) {
+  ensurePlatformKernelSchema();
+  const conditions = [];
+  const params = [];
+  if (subscription_id) { conditions.push("d.subscription_id = ?"); params.push(String(subscription_id)); }
+  if (status) { conditions.push("d.status = ?"); params.push(String(status)); }
+  const boundedLimit = Math.max(1, Math.min(Number(limit) || 50, 100));
+  return dbStore.getDb().prepare(`
+    SELECT d.*, s.name AS subscription_name, s.event_type, s.max_attempts
+    FROM platform_event_deliveries d
+    JOIN platform_event_subscriptions s ON s.subscription_id = d.subscription_id
+    ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
+    ORDER BY d.created_at DESC LIMIT ?
+  `).all(...params, boundedLimit).map(normalizeEventDelivery);
+}
+
+function getEventDeliveryStats() {
+  ensurePlatformKernelSchema();
+  const rows = dbStore.getDb().prepare("SELECT status, COUNT(*) AS count FROM platform_event_deliveries GROUP BY status").all();
+  return rows.reduce((stats, row) => { stats[row.status] = row.count; return stats; }, { pending: 0, in_flight: 0, retry: 0, delivered: 0, dead_letter: 0 });
 }
 
 function registerArtifact(input = {}) {
@@ -1437,6 +1608,16 @@ module.exports = {
   getExecution,
   transitionExecution,
   appendEvent,
+  registerEventSubscription,
+  setEventSubscriptionState,
+  listEventSubscriptions,
+  enqueueEventDeliveries,
+  claimEventDelivery,
+  completeEventDelivery,
+  requeueEventDelivery,
+  deliverEvent,
+  listEventDeliveries,
+  getEventDeliveryStats,
   registerArtifact,
   getArtifact,
   listArtifacts,

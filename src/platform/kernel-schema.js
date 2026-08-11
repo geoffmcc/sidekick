@@ -9,8 +9,9 @@
  * anything; `migrations/027_platform_project_projection.sql` adds the project
  * projection tables and the encrypted workspace-secret store;
  * `migrations/028_platform_execution_claims.sql` adds the execution
- * claim/lease/checkpoint/cancel table. Keep the migration files in sync with
- * this module.
+ * claim/lease/checkpoint/cancel table and `migrations/030_platform_event_delivery.sql`
+ * adds durable subscriber/delivery/offset state. Keep the migration files in
+ * sync with this module.
  */
 const KERNEL_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS platform_executions (
@@ -72,6 +73,38 @@ const KERNEL_SCHEMA_SQL = `
     correlation_id TEXT,
     redaction_state TEXT NOT NULL DEFAULT 'redacted',
     FOREIGN KEY(execution_id) REFERENCES platform_executions(execution_id)
+  );
+  CREATE TABLE IF NOT EXISTS platform_event_subscriptions (
+    subscription_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'active',
+    max_attempts INTEGER NOT NULL DEFAULT 3,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}'
+  );
+  CREATE TABLE IF NOT EXISTS platform_event_deliveries (
+    delivery_id TEXT PRIMARY KEY,
+    subscription_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT,
+    last_error TEXT,
+    delivered_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    FOREIGN KEY(subscription_id) REFERENCES platform_event_subscriptions(subscription_id),
+    FOREIGN KEY(event_id) REFERENCES platform_execution_events(event_id)
+  );
+  CREATE TABLE IF NOT EXISTS platform_event_offsets (
+    subscription_id TEXT PRIMARY KEY,
+    last_event_id TEXT,
+    last_event_rowid INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(subscription_id) REFERENCES platform_event_subscriptions(subscription_id)
   );
   CREATE TABLE IF NOT EXISTS platform_artifacts (
     artifact_id TEXT PRIMARY KEY,
@@ -361,6 +394,11 @@ const KERNEL_SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_platform_events_correlation ON platform_execution_events(correlation_id, timestamp);
   CREATE INDEX IF NOT EXISTS idx_platform_events_type ON platform_execution_events(event_type, timestamp DESC);
   CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_events_dedupe ON platform_execution_events(dedupe_key) WHERE dedupe_key IS NOT NULL;
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_event_subscriptions_name ON platform_event_subscriptions(name);
+  CREATE INDEX IF NOT EXISTS idx_platform_event_subscriptions_type_state ON platform_event_subscriptions(event_type, state);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_event_deliveries_subscription_event ON platform_event_deliveries(subscription_id, event_id);
+  CREATE INDEX IF NOT EXISTS idx_platform_event_deliveries_status_next ON platform_event_deliveries(status, next_attempt_at);
+  CREATE INDEX IF NOT EXISTS idx_platform_event_deliveries_event ON platform_event_deliveries(event_id);
   CREATE INDEX IF NOT EXISTS idx_platform_artifacts_execution ON platform_artifacts(execution_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_platform_artifacts_project ON platform_artifacts(project_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_platform_artifacts_hash ON platform_artifacts(content_hash);
@@ -380,7 +418,7 @@ const KERNEL_SCHEMA_SQL = `
   );
   CREATE INDEX IF NOT EXISTS idx_platform_execution_claims_lease ON platform_execution_claims(lease_expires_at) WHERE lease_expires_at IS NOT NULL;
 
-  INSERT OR REPLACE INTO meta (key, value) VALUES ('platform_kernel_schema_version', '3');
+  INSERT OR REPLACE INTO meta (key, value) VALUES ('platform_kernel_schema_version', '4');
 `;
 
 module.exports = { KERNEL_SCHEMA_SQL };
