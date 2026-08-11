@@ -14,6 +14,12 @@ capabilities. Without an injected transport the adapter reports
 operations remain bounded names and the transport is responsible for the
 verified external API contract.
 
+Operations are capability-gated (`findings.read`, `reports.read/write`, and
+`evidence.read/write`) before reaching the injected transport. The Evidence
+Vault boundary in `src/security-research/evidence-vault.js` accepts only opaque
+`artifact:<id>` references and returns custody metadata from a resolver; it
+never accepts or returns evidence bytes.
+
 This boundary does not create security-research domain tables, claim findings,
 assert execution truth, or implement a Workbench adapter. Those belong to the
 Phase 7 capability pack after a real API contract is verified.

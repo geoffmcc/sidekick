@@ -42,13 +42,23 @@ function createSecurityResearchAdapter({ endpoint, secret_ref, capabilities = []
   });
 }
 
+function requiredCapability(operation) {
+  const family = operation.split(/[._]/, 1)[0];
+  if (family === "findings") return "findings.read";
+  if (family === "reports") return operation.includes("create") || operation.includes("submit") ? "reports.write" : "reports.read";
+  if (family === "evidence") return operation.includes("register") || operation.includes("write") ? "evidence.write" : "evidence.read";
+  return `${family}.read`;
+}
+
 async function request(adapter, operation, payload = {}) {
   if (!adapter || adapter.name !== "security-research") throw new Error("security-research adapter is required");
   if (adapter.state !== "ready" || !adapter.transport) throw new Error("security-research surface is unavailable; no request was sent");
   if (typeof operation !== "string" || !/^[a-z][a-z0-9_.-]{0,80}$/.test(operation)) throw new Error("operation must be a bounded name");
+  const capability = requiredCapability(operation);
+  if (!adapter.capabilities.includes(capability)) throw new Error(`security-research capability is not granted: ${capability}`);
   const result = await adapter.transport.request({ operation, payload, endpoint: adapter.endpoint });
   if (!result || typeof result !== "object") throw new Error("security-research adapter returned an invalid result");
   return { ...result, adapter: adapter.name, adapter_version: adapter.adapter_version };
 }
 
-module.exports = { ADAPTER_VERSION, createSecurityResearchAdapter, request };
+module.exports = { ADAPTER_VERSION, createSecurityResearchAdapter, requiredCapability, request };
