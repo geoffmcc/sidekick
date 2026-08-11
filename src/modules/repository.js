@@ -149,6 +149,34 @@ function registerModule(manifestInput, { source = "discovered", entryPoint = nul
   return getModule(manifest.name);
 }
 
+/**
+ * Best-effort kernel ledger event for a module lifecycle change. Never throws:
+ * observability must not break (or roll back) the lifecycle operation itself.
+ * Inside applyModuleMigrations this runs within the migration transaction, so
+ * a recorded event commits or rolls back atomically with the transition.
+ */
+function recordTransitionEvent(moduleName, fromState, toState, { error = null, migrationsApplied = null } = {}) {
+  try {
+    require("../platform/kernel").appendEvent({
+      event_type: "module.transition",
+      source: "modules",
+      subject_type: "module",
+      subject_id: moduleName,
+      severity: toState === "error" ? "warning" : "info",
+      // Error strings are arbitrary text and are NOT redacted here; label the
+      // event honestly so future event readers do not display it as safe.
+      redaction_state: "none",
+      payload: {
+        module: moduleName,
+        from: fromState,
+        to: toState,
+        error: error ? String(error).replace(/\s+/g, " ").slice(0, 300) : undefined,
+        migrations_applied: migrationsApplied || undefined,
+      },
+    });
+  } catch {}
+}
+
 function assertTransition(moduleName, fromState, toState) {
   if (!MODULE_STATES.includes(toState)) {
     throw new Error(`Invalid module state: ${toState}`);
@@ -213,6 +241,7 @@ function transitionModule(name, toState, options = {}) {
   if (result.changes === 0) {
     throw new Error(`Module "${name}" state changed concurrently (expected ${record.state})`);
   }
+  recordTransitionEvent(record.name, record.state, toState, { error: options.error });
 
   return getModule(name);
 }
@@ -257,6 +286,10 @@ function applyModuleMigrations(name, { transitionTo = null, error = null, config
       if (update.changes === 0) {
         throw new Error(`Module "${record.name}" state changed concurrently (expected ${record.state})`);
       }
+      recordTransitionEvent(record.name, record.state, toState, {
+        error,
+        migrationsApplied: progress.applied,
+      });
     },
   });
 

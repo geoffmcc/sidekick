@@ -102,6 +102,42 @@ function liveRegistrySnapshot() {
 }
 
 /**
+ * Per-dispatch gate for module-owned tools: the persisted lifecycle state is
+ * authoritative across processes, so a module disabled anywhere stops
+ * dispatching everywhere on the next call, not on the next restart. When the
+ * persisted state is no longer dispatchable this process self-heals by
+ * dropping its stale local registration.
+ */
+function checkModuleDispatchable(moduleName) {
+  const record = repository.getModule(moduleName);
+  if (record && (record.state === "enabled" || record.state === "healthy")) {
+    return { ok: true, state: record.state };
+  }
+  activeModules.delete(String(moduleName));
+  return { ok: false, state: record ? record.state : "unregistered" };
+}
+
+/**
+ * Reconcile local registrations with the persisted lifecycle states:
+ * deactivate modules another process moved out of enabled/healthy, and
+ * re-activate persisted enabled modules whose entry we hold. Cheap enough to
+ * run on a timer in every process.
+ */
+function reconcilePersistedModules(entriesByName = {}) {
+  repository.ensureModuleStorage();
+  const deactivated = [];
+  for (const name of [...activeModules.keys()]) {
+    const record = repository.getModule(name);
+    if (!record || (record.state !== "enabled" && record.state !== "healthy")) {
+      activeModules.delete(name);
+      deactivated.push({ name, state: record ? record.state : "unregistered" });
+    }
+  }
+  const restore = restorePersistedModules(entriesByName);
+  return { deactivated, activated: restore.restored, failed: restore.failed };
+}
+
+/**
  * Fail an activation closed: record the fault on the module (lifecycle state
  * `error`) when the transition table allows it, then throw. Invalid *usage*
  * (unknown module, state that cannot reach `enabled`) throws without touching
@@ -221,8 +257,14 @@ function disableModule(name) {
 
 /**
  * Re-activate persisted enabled/healthy modules after a process restart.
- * `entriesByName` maps module name -> entry. A persisted enabled module with
- * no entry cannot serve its tools and is transitioned to `error`.
+ * `entriesByName` maps module name -> entry.
+ *
+ * A missing entry is a PROCESS-LOCAL condition, not a module fault: it is
+ * reported in `failed` (and surfaces as an enabled-but-inactive health issue
+ * here) but never persists a global `error` transition — otherwise any one
+ * process lacking a module's entry would kill the module for every process
+ * that serves it correctly. True activation faults (invalid config, ownership
+ * conflicts) are persisted to `error` by enableModule itself.
  */
 function restorePersistedModules(entriesByName = {}) {
   repository.ensureModuleStorage();
@@ -232,19 +274,16 @@ function restorePersistedModules(entriesByName = {}) {
     .listModules()
     .filter(m => (m.state === "enabled" || m.state === "healthy") && !isModuleActive(m.name));
   for (const record of candidates) {
+    const entry = entriesByName[record.name];
+    if (!entry) {
+      failed.push({ name: record.name, error: `Module "${record.name}" is enabled but no entry is available in this process` });
+      continue;
+    }
     try {
-      const entry = entriesByName[record.name];
-      if (!entry) throw new Error(`Module "${record.name}" is enabled but no entry was provided at startup`);
       enableModule(record.name, entry);
       restored.push(record.name);
     } catch (error) {
       failed.push({ name: record.name, error: error.message });
-      // enableModule already recorded the error state when the transition
-      // table allowed it; a missing entry is recorded here for the same reason.
-      const current = repository.getModule(record.name);
-      if (current && (MODULE_TRANSITIONS[current.state] || []).includes("error")) {
-        repository.transitionModule(record.name, "error", { error: error.message });
-      }
     }
   }
   return { restored, failed };
@@ -255,6 +294,8 @@ module.exports = {
   getActiveModuleNames,
   isModuleActive,
   resolveActiveDescriptor,
+  checkModuleDispatchable,
+  reconcilePersistedModules,
   enableModule,
   disableModule,
   restorePersistedModules,

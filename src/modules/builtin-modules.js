@@ -72,14 +72,65 @@ function provisionBuiltinModules() {
   }
 
   // Restore any other persisted enabled modules. Ones without an entry in
-  // this process fail closed to the error state inside the loader.
+  // this process are reported as failed here (and flagged by the modules
+  // health check) but keep their persisted state — a missing entry is a
+  // process-local condition, not a module fault.
   const restore = loader.restorePersistedModules(builtinEntriesByName());
   for (const failure of restore.failed) {
     errors.push(failure);
     console.error(`[Modules] Failed to restore module "${failure.name}": ${failure.error}`);
   }
 
-  return { provisioned, restored: restore.restored, skipped, errors };
+  const outcome = { provisioned, restored: restore.restored, skipped, errors };
+  recordProvisioningEvent(outcome);
+  return outcome;
 }
 
-module.exports = { BUILTIN_MODULES, builtinEntriesByName, provisionBuiltinModules };
+/**
+ * Best-effort kernel ledger event for a provisioning run. Never throws:
+ * observability must not stop a process from booting.
+ */
+function recordProvisioningEvent(outcome) {
+  try {
+    require("../platform/kernel").appendEvent({
+      event_type: "module.provisioning",
+      source: "modules",
+      subject_type: "process",
+      subject_id: `pid:${process.pid}`,
+      severity: outcome.errors.length ? "warning" : "info",
+      // Error strings are arbitrary text and are NOT redacted here; label the
+      // event honestly so future event readers do not display it as safe.
+      redaction_state: "none",
+      payload: {
+        ...outcome,
+        errors: outcome.errors.map(e => ({ ...e, error: String(e.error).replace(/\s+/g, " ").slice(0, 300) })),
+      },
+    });
+  } catch {}
+}
+
+/**
+ * Periodically reconcile this process's live module registrations with the
+ * persisted lifecycle states, so enable/disable in another process converges
+ * here without a restart (the dispatcher's per-call gate already fail-closes
+ * disabled modules immediately; this timer also picks up re-enables).
+ */
+function startModuleReconciliation(intervalMs = 60000) {
+  const timer = setInterval(() => {
+    try {
+      const result = loader.reconcilePersistedModules(builtinEntriesByName());
+      if (result.deactivated.length || result.activated.length) {
+        console.log(`[Modules] Reconciled: deactivated ${JSON.stringify(result.deactivated)}, activated ${JSON.stringify(result.activated)}`);
+      }
+      for (const failure of result.failed) {
+        console.error(`[Modules] Reconciliation failed for "${failure.name}": ${failure.error}`);
+      }
+    } catch (error) {
+      console.error("[Modules] Reconciliation error:", error.message);
+    }
+  }, intervalMs);
+  timer.unref();
+  return timer;
+}
+
+module.exports = { BUILTIN_MODULES, builtinEntriesByName, provisionBuiltinModules, startModuleReconciliation };

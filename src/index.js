@@ -608,10 +608,12 @@ try {
 // persisted enabled modules) BEFORE the registry sync and MCP server
 // creation so module tools are live for the catalog and tool listing.
 try {
-  const provision = require("./modules/builtin-modules").provisionBuiltinModules();
-  if (provision.provisioned.length || provision.errors.length) {
-    console.log(`[Modules] Provisioned: ${JSON.stringify(provision.provisioned)}; errors: ${provision.errors.length}`);
+  const builtinModules = require("./modules/builtin-modules");
+  const provision = builtinModules.provisionBuiltinModules();
+  if (provision.provisioned.length || provision.skipped.length || provision.errors.length) {
+    console.log(`[Modules] Provisioned: ${JSON.stringify(provision.provisioned)}; skipped: ${JSON.stringify(provision.skipped)}; errors: ${provision.errors.length}`);
   }
+  builtinModules.startModuleReconciliation();
 } catch (error) {
   console.error("[Modules] Builtin module provisioning failed:", error.message);
 }

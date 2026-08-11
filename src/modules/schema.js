@@ -37,13 +37,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_modules_name ON platform_modules(
 CREATE INDEX IF NOT EXISTS idx_platform_modules_state ON platform_modules(state, registered_at DESC);
 `;
 
+let ensured = false;
+
 function ensurePlatformModuleSchema() {
+  // Memoized: this now sits on the per-dispatch gate for module tools, and
+  // the schema cannot un-exist within a process lifetime. A re-required
+  // module (tests) resets the flag with the module instance.
+  if (ensured) return;
   const db = require("../db").getDb();
   db.exec(MODULE_SCHEMA_SQL);
   const row = db.prepare("SELECT value FROM meta WHERE key = 'platform_module_schema_version'").get();
   if (!row) {
     db.prepare("INSERT INTO meta (key, value) VALUES ('platform_module_schema_version', '1')").run();
   }
+  ensured = true;
 }
 
 module.exports = { MODULE_SCHEMA_SQL, ensurePlatformModuleSchema };
