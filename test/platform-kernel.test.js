@@ -102,6 +102,23 @@ console.log('Running Platform Kernel Tests...\n');
     assert.strictEqual(kernel.getEventDeliveryStats().dead_letter, 0, 'Requeued delivery should clear the dead-letter state');
     console.log('Passed\n');
 
+    console.log('Test PK.5: connector lifecycle protects credentials and records health events');
+    assert.throws(() => kernel.registerConnector({ name: 'bad-connector', type: 'http', config: { api_key: 'raw-secret' } }), /secret reference/, 'Connector config should reject raw credentials');
+    assert.throws(() => kernel.registerConnector({ name: 'bad-endpoint', type: 'http', endpoint: 'http://user:pass@example.test' }), /without embedded credentials/, 'Connector endpoints should reject embedded credentials');
+    const connector = kernel.registerConnector({ name: 'security-research-test', type: 'security-research', endpoint: 'https://example.test/api', secret_ref: 'secret:security-research/api', capabilities: ['findings.read'], config: { region: 'test' } });
+    assert.strictEqual(connector.state, 'registered', 'Connectors should start registered');
+    assert.strictEqual(connector.secret_ref, 'secret:security-research/api', 'Connector rows should retain only the secret reference');
+    const configured = kernel.configureConnector(connector.connector_id, { config: { region: 'test', timeout_ms: 5000 } });
+    assert.strictEqual(configured.state, 'configured', 'Connector configuration should advance lifecycle');
+    kernel.transitionConnector(connector.connector_id, 'enabled');
+    const healthyConnector = kernel.checkConnectorHealth(connector.connector_id, () => ({ ok: true, details: { reachable: true } }));
+    assert.strictEqual(healthyConnector.connector.state, 'healthy', 'Passing connector health should reach healthy state');
+    const failedConnector = kernel.checkConnectorHealth(connector.connector_id, () => { throw new Error('synthetic connector outage'); });
+    assert.strictEqual(failedConnector.connector.state, 'error', 'Thrown connector health should enter error state');
+    assert.strictEqual(failedConnector.health.error, 'synthetic connector outage', 'Connector health should retain a bounded failure reason');
+    assert.ok(dbStore.getDb().prepare("SELECT COUNT(*) AS count FROM platform_execution_events WHERE event_type = 'connector.health.check' AND subject_id = ?").get(connector.connector_id).count >= 2, 'Connector health checks should emit kernel events');
+    console.log('Passed\n');
+
     console.log('All Platform Kernel tests passed.');
     process.exit(0);
   } catch (error) {

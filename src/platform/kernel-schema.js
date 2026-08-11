@@ -9,9 +9,10 @@
  * anything; `migrations/027_platform_project_projection.sql` adds the project
  * projection tables and the encrypted workspace-secret store;
  * `migrations/028_platform_execution_claims.sql` adds the execution
- * claim/lease/checkpoint/cancel table and `migrations/030_platform_event_delivery.sql`
- * adds durable subscriber/delivery/offset state. Keep the migration files in
- * sync with this module.
+ * claim/lease/checkpoint/cancel table, `migrations/030_platform_event_delivery.sql`
+ * adds durable subscriber/delivery/offset state, and
+ * `migrations/031_platform_connectors.sql` adds connector lifecycle state.
+ * Keep the migration files in sync with this module.
  */
 const KERNEL_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS platform_executions (
@@ -105,6 +106,22 @@ const KERNEL_SCHEMA_SQL = `
     last_event_rowid INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL,
     FOREIGN KEY(subscription_id) REFERENCES platform_event_subscriptions(subscription_id)
+  );
+  CREATE TABLE IF NOT EXISTS platform_connectors (
+    connector_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'registered',
+    endpoint TEXT,
+    secret_ref TEXT,
+    capabilities_json TEXT NOT NULL DEFAULT '[]',
+    config_json TEXT NOT NULL DEFAULT '{}',
+    health_json TEXT NOT NULL DEFAULT '{}',
+    error TEXT,
+    registered_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_health_check_at TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}'
   );
   CREATE TABLE IF NOT EXISTS platform_artifacts (
     artifact_id TEXT PRIMARY KEY,
@@ -399,6 +416,9 @@ const KERNEL_SCHEMA_SQL = `
   CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_event_deliveries_subscription_event ON platform_event_deliveries(subscription_id, event_id);
   CREATE INDEX IF NOT EXISTS idx_platform_event_deliveries_status_next ON platform_event_deliveries(status, next_attempt_at);
   CREATE INDEX IF NOT EXISTS idx_platform_event_deliveries_event ON platform_event_deliveries(event_id);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_connectors_name ON platform_connectors(name);
+  CREATE INDEX IF NOT EXISTS idx_platform_connectors_type_state ON platform_connectors(type, state);
+  CREATE INDEX IF NOT EXISTS idx_platform_connectors_state_updated ON platform_connectors(state, updated_at DESC);
   CREATE INDEX IF NOT EXISTS idx_platform_artifacts_execution ON platform_artifacts(execution_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_platform_artifacts_project ON platform_artifacts(project_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_platform_artifacts_hash ON platform_artifacts(content_hash);
@@ -418,7 +438,7 @@ const KERNEL_SCHEMA_SQL = `
   );
   CREATE INDEX IF NOT EXISTS idx_platform_execution_claims_lease ON platform_execution_claims(lease_expires_at) WHERE lease_expires_at IS NOT NULL;
 
-  INSERT OR REPLACE INTO meta (key, value) VALUES ('platform_kernel_schema_version', '4');
+  INSERT OR REPLACE INTO meta (key, value) VALUES ('platform_kernel_schema_version', '5');
 `;
 
 module.exports = { KERNEL_SCHEMA_SQL };

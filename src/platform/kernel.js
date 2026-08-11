@@ -515,6 +515,141 @@ function getEventDeliveryStats() {
   return rows.reduce((stats, row) => { stats[row.status] = row.count; return stats; }, { pending: 0, in_flight: 0, retry: 0, delivered: 0, dead_letter: 0 });
 }
 
+const CONNECTOR_STATES = Object.freeze(["registered", "configured", "enabled", "healthy", "error", "disabled", "retired"]);
+const CONNECTOR_TRANSITIONS = Object.freeze({
+  registered: ["configured", "enabled", "retired"],
+  configured: ["enabled", "disabled", "retired"],
+  enabled: ["configured", "healthy", "error", "disabled", "retired"],
+  healthy: ["enabled", "error", "disabled", "retired"],
+  error: ["enabled", "disabled", "retired"],
+  disabled: ["configured", "enabled", "retired"],
+  retired: [],
+});
+
+function normalizeConnector(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    capabilities: parseJson(row.capabilities_json, []),
+    config: parseJson(row.config_json, {}),
+    health: parseJson(row.health_json, {}),
+    metadata: parseJson(row.metadata_json, {}),
+  };
+}
+
+function validateConnectorSecretRef(secretRef) {
+  if (secretRef === undefined || secretRef === null || secretRef === "") return null;
+  const value = String(secretRef);
+  if (!/^secret:[A-Za-z0-9_.:/-]{1,190}$/.test(value)) throw new Error("secret_ref must be an opaque secret:name reference");
+  return value;
+}
+
+function validateConnectorEndpoint(endpoint) {
+  if (endpoint === undefined || endpoint === null || endpoint === "") return null;
+  let parsed;
+  try { parsed = new URL(String(endpoint)); } catch { throw new Error("connector endpoint must be a valid URL"); }
+  if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error("connector endpoint must be http(s) without embedded credentials");
+  return parsed.toString();
+}
+
+function assertConnectorConfigSafe(value, pathName = "config") {
+  if (!value || typeof value !== "object") return;
+  for (const [key, child] of Object.entries(value)) {
+    if (/(api[_-]?key|access[_-]?token|password|private[_-]?key|webhook[_-]?url|^secret$)/i.test(key) && !/_ref$/i.test(key)) {
+      throw new Error(`${pathName}.${key} must use a secret reference, not a credential value`);
+    }
+    if (child && typeof child === "object") assertConnectorConfigSafe(child, `${pathName}.${key}`);
+  }
+}
+
+function registerConnector(input = {}) {
+  ensurePlatformKernelSchema();
+  const name = String(input.name || "").trim();
+  const type = String(input.type || "").trim();
+  if (!name) throw new Error("connector name is required");
+  if (!type) throw new Error("connector type is required");
+  const config = input.config || {};
+  assertConnectorConfigSafe(config);
+  const endpoint = validateConnectorEndpoint(input.endpoint);
+  const secretRef = validateConnectorSecretRef(input.secret_ref);
+  const connectorId = input.connector_id || newId("connector");
+  const ts = nowIso();
+  dbStore.getDb().prepare(`
+    INSERT INTO platform_connectors
+      (connector_id, name, type, state, endpoint, secret_ref, capabilities_json, config_json, registered_at, updated_at, metadata_json)
+    VALUES (?, ?, ?, 'registered', ?, ?, ?, ?, ?, ?, ?)
+  `).run(connectorId, name, type, endpoint, secretRef, json(input.capabilities || []), json(config), ts, ts, json(input.metadata || {}));
+  const connector = getConnector(connectorId);
+  appendEvent({ event_type: "connector.registered", source: input.source || "platform", subject_type: "connector", subject_id: connectorId, payload: { name, type, secret_ref: secretRef ? "present" : null }, correlation_id: connectorId });
+  return connector;
+}
+
+function getConnector(connectorId) {
+  ensurePlatformKernelSchema();
+  return normalizeConnector(dbStore.getDb().prepare("SELECT * FROM platform_connectors WHERE connector_id = ?").get(String(connectorId)));
+}
+
+function listConnectors({ state, type, limit = 50 } = {}) {
+  ensurePlatformKernelSchema();
+  const conditions = [];
+  const params = [];
+  if (state) { if (!CONNECTOR_STATES.includes(state)) throw new Error(`Invalid connector state: ${state}`); conditions.push("state = ?"); params.push(state); }
+  if (type) { conditions.push("type = ?"); params.push(String(type)); }
+  const boundedLimit = Math.max(1, Math.min(Number(limit) || 50, 100));
+  return dbStore.getDb().prepare(`SELECT * FROM platform_connectors ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""} ORDER BY updated_at DESC LIMIT ?`).all(...params, boundedLimit).map(normalizeConnector);
+}
+
+function transitionConnector(connectorId, nextState, details = {}) {
+  ensurePlatformKernelSchema();
+  if (!CONNECTOR_STATES.includes(nextState)) throw new Error(`Invalid connector state: ${nextState}`);
+  const current = getConnector(connectorId);
+  if (!current) throw new Error(`Connector not found: ${connectorId}`);
+  if (!(CONNECTOR_TRANSITIONS[current.state] || []).includes(nextState)) throw new Error(`Invalid connector transition: ${current.state} -> ${nextState}`);
+  const ts = nowIso();
+  dbStore.getDb().prepare("UPDATE platform_connectors SET state = ?, error = ?, updated_at = ? WHERE connector_id = ?").run(nextState, nextState === "error" ? String(details.error || "connector error").slice(0, 500) : null, ts, current.connector_id);
+  appendEvent({ event_type: "connector.state_changed", source: details.source || "platform", subject_type: "connector", subject_id: current.connector_id, severity: nextState === "error" ? "warning" : "info", payload: { name: current.name, from: current.state, to: nextState, error: nextState === "error" ? String(details.error || "connector error").slice(0, 500) : null }, correlation_id: current.connector_id });
+  return getConnector(current.connector_id);
+}
+
+function configureConnector(connectorId, input = {}) {
+  ensurePlatformKernelSchema();
+  const current = getConnector(connectorId);
+  if (!current) throw new Error(`Connector not found: ${connectorId}`);
+  if (!["registered", "configured", "disabled"].includes(current.state)) throw new Error(`Connector cannot be configured from state ${current.state}`);
+  const config = input.config === undefined ? current.config : input.config;
+  assertConnectorConfigSafe(config);
+  const endpoint = input.endpoint === undefined ? current.endpoint : validateConnectorEndpoint(input.endpoint);
+  const secretRef = input.secret_ref === undefined ? current.secret_ref : validateConnectorSecretRef(input.secret_ref);
+  dbStore.getDb().prepare("UPDATE platform_connectors SET endpoint = ?, secret_ref = ?, config_json = ?, updated_at = ?, error = NULL WHERE connector_id = ?").run(endpoint, secretRef, json(config), nowIso(), current.connector_id);
+  const configured = current.state === "configured" ? getConnector(current.connector_id) : transitionConnector(current.connector_id, "configured");
+  appendEvent({ event_type: "connector.configured", source: input.source || "platform", subject_type: "connector", subject_id: current.connector_id, payload: { name: configured.name, has_endpoint: Boolean(endpoint), has_secret_ref: Boolean(secretRef) }, correlation_id: current.connector_id });
+  return getConnector(current.connector_id);
+}
+
+function recordConnectorHealth(connectorId, health) {
+  const current = getConnector(connectorId);
+  if (!current) throw new Error(`Connector not found: ${connectorId}`);
+  if (!["enabled", "healthy"].includes(current.state)) throw new Error(`Connector must be enabled before health checks (state: ${current.state})`);
+  const result = typeof health === "boolean" ? { ok: health } : health;
+  if (!result || typeof result.ok !== "boolean") throw new Error("connector health must return { ok: boolean }");
+  const ts = nowIso();
+  dbStore.getDb().prepare("UPDATE platform_connectors SET health_json = ?, last_health_check_at = ?, updated_at = ? WHERE connector_id = ?").run(json(result), ts, ts, current.connector_id);
+  const next = result.ok ? (current.state === "enabled" ? transitionConnector(connectorId, "healthy") : getConnector(connectorId)) : transitionConnector(connectorId, "error", { error: result.error || "connector health check failed" });
+  appendEvent({ event_type: "connector.health.check", source: "platform", subject_type: "connector", subject_id: current.connector_id, severity: result.ok ? "info" : "warning", payload: { name: current.name, ok: result.ok, state: next.state, health: result }, correlation_id: current.connector_id });
+  return { ok: result.ok, connector: next, health: result };
+}
+
+function checkConnectorHealth(connectorId, probe) {
+  if (typeof probe !== "function") throw new Error("connector health probe is required");
+  try {
+    const result = probe({ connector: getConnector(connectorId) });
+    if (result && typeof result.then === "function") return recordConnectorHealth(connectorId, { ok: false, error: "connector health probe must be synchronous" });
+    return recordConnectorHealth(connectorId, result);
+  } catch (error) {
+    return recordConnectorHealth(connectorId, { ok: false, error: String(error.message || error).slice(0, 300) });
+  }
+}
+
 function registerArtifact(input = {}) {
   ensurePlatformKernelSchema();
   if (!input.storage_ref) throw new Error("storage_ref is required");
@@ -1618,6 +1753,13 @@ module.exports = {
   deliverEvent,
   listEventDeliveries,
   getEventDeliveryStats,
+  registerConnector,
+  getConnector,
+  listConnectors,
+  transitionConnector,
+  configureConnector,
+  recordConnectorHealth,
+  checkConnectorHealth,
   registerArtifact,
   getArtifact,
   listArtifacts,
