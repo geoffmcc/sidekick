@@ -41,6 +41,8 @@ Configuration is a separate boundary after installation: it validates the suppli
 
 Activation accepts only a configured module and delegates loading, ownership verification, policy wiring, and the `enabled` transition to the shared loader. An unconfigured module cannot skip the configuration boundary through this path.
 
+Health checks accept only active `enabled` or `healthy` modules and a synchronous entry `healthCheck()` returning `{ ok, details? }`. Results and timestamps are persisted; a passing check transitions `enabled -> healthy`, while a failed check records the result and transitions to `error`.
+
 Events use the future Event Runtime; appending a ledger event is not delivery. Jobs use common execution/claim/recovery semantics. Dashboard extensions expose service-backed routes/views and store no authoritative dashboard-only state.
 
 ## First Proof

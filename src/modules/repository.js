@@ -163,6 +163,17 @@ function bindEntryHash(name, entryHash) {
   return getModule(name);
 }
 
+function recordHealth(name, health) {
+  ensureModuleStorage();
+  const record = getModule(name);
+  if (!record) throw new Error(`Module "${name}" is not registered`);
+  const value = health && typeof health === "object" ? health : { ok: Boolean(health) };
+  getDb()
+    .prepare("UPDATE platform_modules SET health_json = ?, last_health_check_at = ? WHERE module_id = ?")
+    .run(JSON.stringify(value), nowIso(), record.module_id);
+  return getModule(name);
+}
+
 /** Replace a registration only through an explicit forward version upgrade. */
 function upgradeModule(name, manifestInput, { source, entryPoint, entryHash, config } = {}) {
   ensureModuleStorage();
@@ -345,6 +356,7 @@ module.exports = {
   ensureModuleStorage,
   registerModule,
   bindEntryHash,
+  recordHealth,
   upgradeModule,
   getModule,
   listModules,
