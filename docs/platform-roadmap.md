@@ -17,7 +17,7 @@ Track A reduces tool ownership coupling. Track B converges existing platform fou
 | 5 / B+A | Prove module manifest/lifecycle/service context/permissions/config/health/migrations with extracted data-utilities. | Install/enable/disable, duplicate ownership, aliases, policy/approval, migration and catalog tests. Medium. | No security-research implementation. |
 | 6 / B | Define artifact original/derivative custody, event delivery semantics, connector lifecycle and API integration for the working `security-research` surface; add dashboard service surfaces. | Delivery retry/offset/dead-letter, digest, connector auth/health, no private shared tables. Large, split contracts. The unavailable Workbench is not a prerequisite. | No marketplace or Workbench assumption. |
 | 7 / C | Build `@sidekick/security-research`: scope snapshots, targets, campaigns, hypotheses, test runs, findings, reports, disclosure, Scope Guard, `security-research` connector and Evidence Vault lineage. | Fail-closed scope, human approval, immutable originals, truthful analysis-only status and bounded lab integration. Add an optional Workbench adapter only after its contract is verified. Large, domain slices. | No autonomous offensive system or hard-coded lab network. |
-| 8 / B+C | Add evaluation/replay, users/teams/memberships and deployment profiles. | Side-effect-safe replay, capability scope and multi-user audit tests. Large. | No removal of single-operator mode. |
+| 8 / B+C | Add evaluation/replay, users/teams/memberships and deployment profiles. | Side-effect-safe replay, bounded identity/role scope, deployment-profile policy, and multi-user audit tests. Large. | No removal of single-operator mode. |
 
 ## Parallelism
 

@@ -55,7 +55,7 @@ Material commits: `1b93eece` (kernel), `7cb084f7`/`a7aa6fa9` (execution adapters
 | Dashboard | IMPLEMENTED BUT PARTIAL | `src/dashboard.js`, static UI | direct feature APIs; dashboard tests | Tools, approvals, memory, Compute, connector operations and Mission Control work; most kernel objects still lack API surfaces. |
 | Evaluation/replay | IMPLEMENTED FOUNDATION | `src/platform/evaluation-replay.js` | synthetic replay tests | Immutable opaque references and deterministic digests; replay is audit-only and cannot produce actions. Phase 7 scope decisions remain authorization evidence, not replay. |
 | Authentication | AUTHORITATIVE AND IN USE | MCP bearer, dashboard Basic Auth, worker credentials | security tests/config | Service auth works; principal identity is not multi-user identity. |
-| Users/teams | MISSING | no domain found | none | Capability rows are not RBAC. |
+| Users/teams | FOUNDATION IMPLEMENTED | `src/platform/identity-deployment.js` | synthetic identity and role tests | Bounded users, teams, memberships, role checks, and deployment-profile policy are available; durable multi-user persistence and UI remain future work. |
 | Migrations | IMPLEMENTED BUT PARTIAL | migration runner plus runtime ensures | migrations 001-025; focused tests | Kernel runtime creates more tables than migration 011; bootstrap parity is untested. |
 
 ## Current Dependency Diagram
