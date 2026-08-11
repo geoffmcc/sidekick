@@ -13,6 +13,7 @@ process.env.SIDEKICK_SECRET_KEY = 'modules-installation-test-secret-key';
 const { discoverModules } = require('../src/modules/discovery');
 const { installDiscoveredModule } = require('../src/modules/installation');
 const { configureInstalledModule } = require('../src/modules/configuration');
+const { activateConfiguredModule } = require('../src/modules/activation');
 const repository = require('../src/modules/repository');
 
 const root = path.join(process.cwd(), 'test', 'test-data-discovered-module');
@@ -36,10 +37,19 @@ assert.strictEqual(installed.entry_point, 'test/test-data-discovered-module/entr
 const installedState = repository.transitionModule('installed-module', 'installed');
 assert.strictEqual(installedState.state, 'installed');
 assert.throws(() => configureInstalledModule('installed-module', { retention_days: 0 }), /config is invalid/);
+assert.throws(() => activateConfiguredModule('installed-module', { buildDescriptors: () => [] }), /must be configured before activation/);
 const configured = configureInstalledModule('installed-module', { retention_days: 30 });
 assert.strictEqual(configured.state, 'configured');
 assert.deepStrictEqual(configured.config, { retention_days: 30 });
 assert.throws(() => configureInstalledModule('installed-module', { retention_days: 60 }), /must be installed before configuration/);
+const binding = repository.getModule('installed-module');
+const enabled = activateConfiguredModule('installed-module', {
+  entryPoint: binding.entry_point,
+  entryHash: binding.entry_hash,
+  buildDescriptors: () => [],
+});
+assert.strictEqual(enabled.module.state, 'enabled');
+assert.strictEqual(enabled.descriptors.length, 0);
 assert.throws(() => installDiscoveredModule(candidate), /already registered/);
 fs.rmSync(root, { recursive: true, force: true });
 
