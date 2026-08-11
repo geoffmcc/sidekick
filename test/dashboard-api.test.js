@@ -116,6 +116,40 @@ setTimeout(async () => {
       console.log('Passed\n');
     }
 
+    console.log('Test 3.0ad: authenticated connector operations enforce lifecycle and event safety');
+    {
+      const name = `dashboard-connector-${Date.now().toString(36)}`;
+      const denied = await makeRequest('POST', '/api/connectors', { name, type: 'test' }, { auth: false });
+      assert.strictEqual(denied.status, 401, 'Unauthenticated connector mutations should be rejected by dashboard auth');
+      const rawCredential = await makeRequest('POST', '/api/connectors', { name: `${name}-raw`, type: 'test', config: { api_key: 'do-not-store' } });
+      assert.strictEqual(rawCredential.status, 400, 'Connector API should reject raw credential configuration');
+      const subscription = await makeRequest('POST', '/api/event-subscriptions', { name: `${name}-events`, event_type: 'connector.state_changed', max_attempts: 2 });
+      assert.strictEqual(subscription.status, 200, 'Authenticated users should create event subscriptions');
+      const created = await makeRequest('POST', '/api/connectors', { name, type: 'test', endpoint: 'https://example.test/api', secret_ref: 'secret:test/connector', config: { region: 'test' } });
+      assert.strictEqual(created.status, 200, 'Authenticated users should register connectors');
+      const connectorId = created.data.connector.connector_id;
+      const configured = await makeRequest('POST', `/api/connectors/${connectorId}/configure`, { config: { region: 'test', timeout_ms: 2000 } });
+      assert.strictEqual(configured.status, 200, 'Connector configuration should succeed');
+      const enabled = await makeRequest('POST', `/api/connectors/${connectorId}/enable`, {});
+      assert.strictEqual(enabled.status, 200, 'Connector enable should succeed');
+      const health = await makeRequest('GET', `/api/connectors/${connectorId}/health`);
+      assert.strictEqual(health.status, 200, 'Connector health reporting should succeed');
+      assert.strictEqual(health.data.probe_execution, 'adapter-owned', 'Dashboard health should not perform arbitrary network probes');
+      const events = await makeRequest('GET', `/api/connectors/${connectorId}/events?limit=10`);
+      assert.strictEqual(events.status, 200, 'Connector events should be reportable');
+      assert.ok(events.data.events.some(event => event.event_type === 'connector.state_changed'), 'Connector lifecycle should emit events');
+      const deliveries = await makeRequest('GET', `/api/event-deliveries?subscription_id=${subscription.data.subscription.subscription_id}&limit=10`);
+      assert.strictEqual(deliveries.status, 200, 'Connector lifecycle events should enter delivery tracking');
+      assert.ok(deliveries.data.deliveries.length >= 1, 'Connector lifecycle should enqueue subscribed events');
+      const paused = await makeRequest('POST', `/api/event-subscriptions/${subscription.data.subscription.subscription_id}/pause`, {});
+      assert.strictEqual(paused.status, 200, 'Authenticated users should pause event subscriptions');
+      const resumed = await makeRequest('POST', `/api/event-subscriptions/${subscription.data.subscription.subscription_id}/resume`, {});
+      assert.strictEqual(resumed.status, 200, 'Authenticated users should resume event subscriptions');
+      const disabled = await makeRequest('POST', `/api/connectors/${connectorId}/disable`, {});
+      assert.strictEqual(disabled.status, 200, 'Connector disable should succeed');
+      console.log('Passed\n');
+    }
+
     // Test 3.0: dashboard shell and event streams require auth
     console.log('Test 3.0: dashboard shell and event streams require auth');
     {

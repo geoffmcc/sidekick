@@ -599,6 +599,23 @@ function listConnectors({ state, type, limit = 50 } = {}) {
   return dbStore.getDb().prepare(`SELECT * FROM platform_connectors ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""} ORDER BY updated_at DESC LIMIT ?`).all(...params, boundedLimit).map(normalizeConnector);
 }
 
+function listConnectorEvents(connectorId, limit = 20) {
+  ensurePlatformKernelSchema();
+  const boundedLimit = Math.max(1, Math.min(Number(limit) || 20, 100));
+  return dbStore.getDb().prepare(`
+    SELECT event_id, event_type, timestamp, severity, payload_json
+    FROM platform_execution_events
+    WHERE subject_type = 'connector' AND subject_id = ?
+    ORDER BY rowid DESC LIMIT ?
+  `).all(String(connectorId), boundedLimit).map(row => ({
+    event_id: row.event_id,
+    event_type: row.event_type,
+    timestamp: row.timestamp,
+    severity: row.severity,
+    payload: parseJson(row.payload_json, {}),
+  }));
+}
+
 function transitionConnector(connectorId, nextState, details = {}) {
   ensurePlatformKernelSchema();
   if (!CONNECTOR_STATES.includes(nextState)) throw new Error(`Invalid connector state: ${nextState}`);
@@ -1756,6 +1773,7 @@ module.exports = {
   registerConnector,
   getConnector,
   listConnectors,
+  listConnectorEvents,
   transitionConnector,
   configureConnector,
   recordConnectorHealth,

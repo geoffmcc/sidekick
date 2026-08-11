@@ -1003,6 +1003,38 @@ app.get("/api/event-deliveries", (req, res) => {
   }
 });
 
+app.post("/api/event-subscriptions", (req, res) => {
+  const actor = authenticatedUser(req);
+  if (!actor) return res.status(403).json({ ok: false, error: "Connector and event operations require an authenticated dashboard user" });
+  try {
+    const subscription = platformKernel.registerEventSubscription({ ...req.body, source: "dashboard" });
+    auditLog(req, "event_subscription.register", { subscription_id: subscription.subscription_id, event_type: subscription.event_type, actor });
+    res.json({ ok: true, subscription });
+  } catch (error) { res.status(400).json({ ok: false, error: error.message }); }
+});
+
+app.post("/api/event-subscriptions/:subscriptionId/:action", (req, res) => {
+  const actor = authenticatedUser(req);
+  if (!actor) return res.status(403).json({ ok: false, error: "Event subscription operations require an authenticated dashboard user" });
+  const state = req.params.action === "pause" ? "paused" : req.params.action === "resume" ? "active" : null;
+  if (!state) return res.status(404).json({ ok: false, error: "unknown subscription action" });
+  try {
+    const subscription = platformKernel.setEventSubscriptionState(req.params.subscriptionId, state);
+    auditLog(req, `event_subscription.${req.params.action}`, { subscription_id: subscription.subscription_id, actor });
+    res.json({ ok: true, subscription });
+  } catch (error) { res.status(400).json({ ok: false, error: error.message }); }
+});
+
+app.post("/api/event-deliveries/:deliveryId/requeue", (req, res) => {
+  const actor = authenticatedUser(req);
+  if (!actor) return res.status(403).json({ ok: false, error: "Delivery operations require an authenticated dashboard user" });
+  try {
+    const delivery = platformKernel.requeueEventDelivery(req.params.deliveryId);
+    auditLog(req, "event_delivery.requeue", { delivery_id: delivery.delivery_id, actor });
+    res.json({ ok: true, delivery });
+  } catch (error) { res.status(400).json({ ok: false, error: error.message }); }
+});
+
 app.get("/api/connectors", (req, res) => {
   try {
     const connectors = platformKernel.listConnectors({
@@ -1022,6 +1054,63 @@ app.get("/api/connectors", (req, res) => {
   } catch (error) {
     res.status(400).json({ ok: false, error: error.message });
   }
+});
+
+app.post("/api/connectors", (req, res) => {
+  const actor = authenticatedUser(req);
+  if (!actor) return res.status(403).json({ ok: false, error: "Connector operations require an authenticated dashboard user" });
+  let execution = null;
+  try {
+    execution = startDashboardExecution(req, "connector.register");
+    const connector = platformKernel.registerConnector({ ...req.body, source: "dashboard", actor_id: actor });
+    finishDashboardExecution(execution, "completed", { result_status: "success", result_summary: `connector ${connector.name} registered` });
+    auditLog(req, "connector.register", { connector_id: connector.connector_id, name: connector.name, type: connector.type, actor });
+    res.json({ ok: true, connector });
+  } catch (error) {
+    finishDashboardExecution(execution, "failed", { result_status: "failure", error_category: "connector_registration", result_summary: error.message });
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+app.get("/api/connectors/:connectorId", (req, res) => {
+  const connector = platformKernel.getConnector(req.params.connectorId);
+  if (!connector) return res.status(404).json({ ok: false, error: "connector not found" });
+  res.json({ ok: true, connector, events: platformKernel.listConnectorEvents(connector.connector_id, req.query.event_limit) });
+});
+
+app.get("/api/connectors/:connectorId/health", (req, res) => {
+  const connector = platformKernel.getConnector(req.params.connectorId);
+  if (!connector) return res.status(404).json({ ok: false, error: "connector not found" });
+  res.json({ ok: true, connector_id: connector.connector_id, state: connector.state, health: connector.health, last_health_check_at: connector.last_health_check_at, probe_execution: "adapter-owned" });
+});
+
+app.get("/api/connectors/:connectorId/events", (req, res) => {
+  const connector = platformKernel.getConnector(req.params.connectorId);
+  if (!connector) return res.status(404).json({ ok: false, error: "connector not found" });
+  res.json({ ok: true, events: platformKernel.listConnectorEvents(connector.connector_id, req.query.limit) });
+});
+
+app.post("/api/connectors/:connectorId/configure", (req, res) => {
+  const actor = authenticatedUser(req);
+  if (!actor) return res.status(403).json({ ok: false, error: "Connector operations require an authenticated dashboard user" });
+  try {
+    const connector = platformKernel.configureConnector(req.params.connectorId, { ...req.body, source: "dashboard" });
+    auditLog(req, "connector.configure", { connector_id: connector.connector_id, actor, has_secret_ref: Boolean(connector.secret_ref) });
+    res.json({ ok: true, connector });
+  } catch (error) { res.status(400).json({ ok: false, error: error.message }); }
+});
+
+app.post("/api/connectors/:connectorId/:action", (req, res) => {
+  const actor = authenticatedUser(req);
+  if (!actor) return res.status(403).json({ ok: false, error: "Connector operations require an authenticated dashboard user" });
+  const states = { enable: "enabled", disable: "disabled", retire: "retired" };
+  const nextState = states[req.params.action];
+  if (!nextState) return res.status(404).json({ ok: false, error: "unknown connector action" });
+  try {
+    const connector = platformKernel.transitionConnector(req.params.connectorId, nextState, { source: "dashboard", actor_id: actor });
+    auditLog(req, `connector.${req.params.action}`, { connector_id: connector.connector_id, actor });
+    res.json({ ok: true, connector });
+  } catch (error) { res.status(400).json({ ok: false, error: error.message }); }
 });
 
 app.get("/api/llm", (req, res) => {
