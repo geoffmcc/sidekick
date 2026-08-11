@@ -108,7 +108,7 @@ const TOOL_SCHEMAS = {
     implementation: z.string().optional().describe("Implementation details (for generate_tool)")
   }),
   health: z.object({
-    check: z.enum(["all", "services", "processes", "disk", "network", "custom"]).describe("Health check type: all (services+processes+disk+network), services, processes, disk, network, or custom commands"),
+    check: z.enum(["all", "services", "processes", "disk", "network", "custom", "modules"]).describe("Health check type: all (services+processes+disk+network+modules), services, processes, disk, network, custom commands, or platform modules"),
     services: z.string().optional().describe("Comma-separated service names for services check (default: sidekick-mcp,sidekick-dashboard,sidekick-agent)"),
     commands: z.string().optional().describe("Comma-separated shell commands for custom check"),
     threshold: z.string().optional().describe("Alert thresholds (e.g. 'disk>90,mem>80')")
@@ -231,7 +231,7 @@ const TOOL_SCHEMAS = {
     include: z.string().optional().describe("Sections to include: kv,context,logs,procedures (default: kv,context)")
   }),
   status: z.object({
-    include: z.string().optional().describe("Sections: services,disk,memory,load,uptime,processes (default: services,disk)"),
+    include: z.string().optional().describe("Sections: services,disk,memory,load,uptime,processes,modules (default: services,disk)"),
     services: z.string().optional().describe("Comma-separated service names (default: sidekick-mcp,sidekick-dashboard,sidekick-agent)")
   }),
   anonymize: z.object({

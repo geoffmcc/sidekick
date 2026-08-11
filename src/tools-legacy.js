@@ -3969,9 +3969,34 @@ function applyThresholds(results, thresholds) {
   return issues;
 }
 
+function checkPlatformModules() {
+  try {
+    const repository = require("./modules/repository");
+    const loader = require("./modules/loader");
+    const modules = repository.listModules();
+    const issues = [];
+    const summary = [];
+    for (const module of modules) {
+      const active = loader.isModuleActive(module.name);
+      summary.push({ name: module.name, state: module.state, active_in_process: active });
+      if (module.state === "error") {
+        const safeError = String(module.error || "unknown error").replace(/\s+/g, " ").slice(0, 200);
+        issues.push(`Module ${module.name} is in error state: ${safeError}`);
+      } else if ((module.state === "enabled" || module.state === "healthy") && !active) {
+        issues.push(`Module ${module.name} is ${module.state} but not active in this process (tools unavailable here until reconciliation)`);
+      }
+    }
+    // Disabled/uninstalled modules are operator intent, not health problems.
+    const score = Math.max(0, 100 - issues.length * 40);
+    return { score, modules: summary, issues: issues.length ? issues : undefined };
+  } catch (e) {
+    return { score: 0, issues: [`Module health check failed: ${e.message}`] };
+  }
+}
+
 async function sidekick_health({ check, services, commands, threshold }) {
   const now = new Date().toISOString();
-  const checks = check === "all" ? ["services", "processes", "disk", "network"] : [check];
+  const checks = check === "all" ? ["services", "processes", "disk", "network", "modules"] : [check];
   const results = {};
   let totalScore = 0;
   let totalChecks = 0;
@@ -4005,8 +4030,13 @@ async function sidekick_health({ check, services, commands, threshold }) {
       totalScore += results.custom.score;
       totalChecks++;
       if (results.custom.issues) allIssues.push(...results.custom.issues);
+    } else if (c === "modules") {
+      results.modules = checkPlatformModules();
+      totalScore += results.modules.score;
+      totalChecks++;
+      if (results.modules.issues) allIssues.push(...results.modules.issues);
     } else {
-      return { content: [{ type: "text", text: `Unknown check: ${c}. Use: all, services, processes, disk, network, custom` }], isError: true };
+      return { content: [{ type: "text", text: `Unknown check: ${c}. Use: all, services, processes, disk, network, custom, modules` }], isError: true };
     }
   }
 
@@ -4057,6 +4087,13 @@ async function sidekick_health({ check, services, commands, threshold }) {
       output += `- Ports:\n`;
       for (const [svc, info] of Object.entries(results.network.results?.ports || {})) {
         output += `  - ${svc} (${info.port}): ${info.listening ? "listening" : "not listening"}\n`;
+      }
+    } else if (c === "modules") {
+      output += `- Score: ${results.modules.score.toFixed(0)}/100\n`;
+      const moduleRows = results.modules.modules || [];
+      if (moduleRows.length === 0 && !(results.modules.issues || []).length) output += `- No platform modules registered\n`;
+      for (const module of moduleRows) {
+        output += `  - ${module.name}: ${module.state}${module.active_in_process ? " (active)" : " (inactive in this process)"}\n`;
       }
     } else if (c === "custom") {
       output += `- Score: ${results.custom.score.toFixed(0)}/100\n`;
@@ -6613,6 +6650,22 @@ async function sidekick_status({ include, services }) {
       const stdout = execFileSync("uptime", ["-p"], { timeout: 5000, encoding: "utf-8" }).trim();
       output.uptime = stdout;
     } catch (e) { output.uptime = { error: e.message }; }
+  }
+  if (sections.includes("modules")) {
+    try {
+      const repository = require("./modules/repository");
+      const loader = require("./modules/loader");
+      output.modules = repository.listModules().map(m => ({
+        name: m.name,
+        state: m.state,
+        version: m.version,
+        type: m.type,
+        active_in_process: loader.isModuleActive(m.name),
+        tools: Object.keys(m.manifest.tools || {}),
+        error: m.error ? String(m.error).replace(/\s+/g, " ").slice(0, 200) : undefined,
+        error_count: m.error_count || undefined,
+      }));
+    } catch (e) { output.modules = { error: e.message }; }
   }
   if (sections.includes("processes")) {
     try {
@@ -10580,7 +10633,7 @@ const TOOL_DEFS = [
   { name: "handoff", description: "First-class handoff storage and ingestion. Preserves full handoff artifacts while extracting redacted, evidence-linked structured memories idempotently. get/inspect require id or key; use list or resume check for project-level queries.", args: { action: "string (create|update|get|list|compare|inspect|reprocess|archive)", id: "string (required for get/inspect, optional for other actions)", key: "string (required for get/inspect when id is omitted, optional for other actions)", project: "string (optional, for create/update/list/compare)", title: "string (optional)", content: "string (for create/update)", source: "string (optional)", task_id: "string (optional)", include_archived: "boolean (optional)", limit: "number (optional)" } },
   { name: "memory", description: "Typed memory operations: remember, query, explain, correct, forget, pin, expire, inspect conflicts/health, and backfill high-semantic sources such as handoffs.", args: { action: "string (remember|query|explain|list|get|confirm|correct|forget|pin|expire|conflicts|health|backfill)", id: "string (optional memory id)", project: "string (optional)", type: "string (optional)", memory_class: "string (optional semantic|episodic|procedural|working|prospective|negative|relational|artifact|observational|capability)", content: "string (for remember)", summary: "string (optional)", scope_type: "string (optional)", scope_id: "string (optional)", source: "string (optional)", evidence: "string (optional)", confidence: "number (optional)", tags: "string|array (optional)", query: "string (for query)", limit: "number (optional)", correct_to: "string (for correct)", fresh_eyes: "boolean (optional)", historical: "boolean (optional)" } },
   { name: "teach", description: "Meta-learning and self-extension: teach procedures, generate tools, learn from examples, execute learned workflows", args: { action: "string", name: "string (optional)", description: "string (optional)", steps: "array (optional)", parameters: "object (optional)", args: "object (optional)", example: "string (optional)", trigger_phrases: "array (optional)", implementation: "string (optional)" } },
-  { name: "health", description: "Composite system health checks with scoring and issue detection", args: { check: "string (all|services|processes|disk|network|custom)", services: "string (optional, comma-separated service names)", commands: "string (optional, comma-separated commands for custom check)", threshold: "string (optional, e.g. 'disk>90,mem>80')" } },
+  { name: "health", description: "Composite system health checks with scoring and issue detection", args: { check: "string (all|services|processes|disk|network|custom|modules)", services: "string (optional, comma-separated service names)", commands: "string (optional, comma-separated commands for custom check)", threshold: "string (optional, e.g. 'disk>90,mem>80')" } },
   { name: "delay", description: "One-shot task scheduling: run a tool once at a specific time or after a delay", args: { action: "string (add|list|cancel|run)", id: "string (optional, for cancel/run)", when: "string (optional, e.g. 10s, 5m, 2h, 1d, or ISO date)", name: "string (optional, human-readable name)", tool: "string (optional, tool name to execute)", args: "object (optional, arguments for the tool)" } },
   { name: "snapshot", description: "Capture system state and detect drift by comparing snapshots", args: { action: "string (capture|compare|list|delete)", name: "string (snapshot name)", capture: "string (optional, comma-separated: processes,services,disk,packages,network,files:/path)", compare: "string (optional, baseline snapshot name for compare action)" } },
   { name: "watch", description: "Event-driven monitoring: watch services, processes, endpoints, or files and trigger actions on conditions", args: { action: "string (add|list|remove|pause|check)", id: "string (optional, for remove/pause/check)", name: "string (optional, watch name)", source: "string (optional, service|process|endpoint|file)", target: "string (optional, service name, process name, URL, or file path)", condition: "string (optional, e.g. status!=active, not_running, status!=200, content_matches)", interval: "string (optional, e.g. 30s, 5m, 1h)", action_tool: "string (optional, tool to call when triggered)", action_args: "object (optional, args for action tool)", pause: "boolean (optional, true to pause, false to resume)" } },
@@ -10609,7 +10662,7 @@ const TOOL_DEFS = [
   { name: "tail", description: "Tail recent log entries with filtering. Sources: log.jsonl (sidekick logs), journalctl, or any file.", args: { source: "string (log.jsonl, journalctl, or file path)", pattern: "string (optional, regex filter - for journalctl: service name)", lines: "number (optional, default 50)", since: "string (optional, ISO date or relative like 1h, 1d)" } },
   { name: "diff_files", description: "Compare two files directly without reading both into context. Returns unified diff or summary.", args: { path_a: "string (first file path)", path_b: "string (second file path)", format: "string (optional, unified|summary - default unified)" } },
   { name: "find", description: "Advanced file finder: search by name pattern, date range, size range, and content pattern.", args: { path: "string (directory to search)", name: "string (optional, glob pattern e.g. '*.js')", modified_after: "string (optional, ISO date)", modified_before: "string (optional, ISO date)", size_min: "string (optional, e.g. '1KB', '1MB')", size_max: "string (optional, e.g. '10MB')", content: "string (optional, regex pattern to match file contents)", max_results: "number (optional, default 50)" } },
-  { name: "status", description: "Unified system status: services, disk, memory, load, uptime, top processes in one call.", args: { include: "string (optional, comma-separated: services,disk,memory,load,uptime,processes - default services,disk)", services: "string (optional, comma-separated service names - default sidekick-mcp,sidekick-dashboard,sidekick-agent)" } },
+  { name: "status", description: "Unified system status: services, disk, memory, load, uptime, top processes, platform modules in one call.", args: { include: "string (optional, comma-separated: services,disk,memory,load,uptime,processes,modules - default services,disk)", services: "string (optional, comma-separated service names - default sidekick-mcp,sidekick-dashboard,sidekick-agent)" } },
   { name: "anonymize", description: "Replace sensitive data with realistic but fake values. Preserves data structure while making it safe to share externally.", args: { action: "string (anonymize|patterns|add_pattern|remove_pattern)", input: "string (optional, text to anonymize)", format: "string (optional, text|json|yaml - default text)", custom_patterns: "array (optional, {pattern, replacement} objects)", consistency: "boolean (optional, same input always maps to same output - default true)" } },
   { name: "sandbox", description: "Execute operations in a tracked context with automatic backup and rollback. Safe experimentation on remote systems.", args: { action: "string (exec|rollback|list|diff|clean)", sandbox_name: "string (optional, sandbox identifier)", command: "string (optional, command to execute)", files: "array (optional, files to auto-backup before exec)", auto_backup: "boolean (optional, default true)", rollback_id: "string (optional, sandbox to rollback)" } },
   { name: "changelog", description: "Generate human-readable changelogs from git history. Groups commits semantically and optionally uses LLM for summaries.", args: { action: "string (generate|preview|save)", from: "string (starting ref: tag, commit, branch)", to: "string (optional, ending ref - default HEAD)", format: "string (optional, markdown|plain|conventional - default markdown)", group_by: "string (optional, type|scope|author - default type)", use_llm: "boolean (optional, generate LLM summary - default false)", include: "string (optional, all|features|fixes|breaking|refactor|deps - default all)", path: "string (optional, git repository path - default current directory)" } },

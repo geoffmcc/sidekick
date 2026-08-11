@@ -11,7 +11,9 @@ const { stripSidekickPrefix } = require("./core/tool-name");
 // Restore persisted platform modules in this process so module tools resolve
 // through the registry here as well (each process holds its own loader state).
 try {
-  require("./modules/builtin-modules").provisionBuiltinModules();
+  const builtinModules = require("./modules/builtin-modules");
+  builtinModules.provisionBuiltinModules();
+  builtinModules.startModuleReconciliation();
 } catch (error) {
   console.error("[Modules] Builtin module provisioning failed:", error.message);
 }

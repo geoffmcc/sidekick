@@ -207,6 +207,17 @@ async function dispatchCore(request, context, started) {
     const result = errorResult(`Tool ${descriptor.name} has invalid risk classification`, "risk_unclassified");
     return log(descriptor.name, request.args || {}, started, result, context, { risk: descriptor.risk || "unclassified" });
   }
+  if (typeof descriptor.source === "string" && descriptor.source.startsWith("module:")) {
+    // The persisted module lifecycle state is authoritative across processes:
+    // a module disabled in any process stops dispatching here immediately,
+    // without waiting for a restart or the reconciliation timer.
+    const moduleName = descriptor.source.slice("module:".length);
+    const gate = require("../modules/loader").checkModuleDispatchable(moduleName);
+    if (!gate.ok) {
+      const result = errorResult(`Tool ${descriptor.name} belongs to module "${moduleName}" which is ${gate.state}`, "module_disabled");
+      return log(descriptor.name, request.args || {}, started, result, context, { risk: descriptor.risk });
+    }
+  }
   const logName = name || descriptor.name;
   const result = await executeResolvedTool(descriptor, request.args || {}, context, logName, { approvedExecution: isApprovedInternal(request) });
   return log(logName, request.args || {}, started, result, context, { risk: descriptor.risk, approvalId: result.approvalId || context.approvalId });
