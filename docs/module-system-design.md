@@ -35,6 +35,8 @@ Phase 6 discovery is intentionally separate from activation: bounded scans of `m
 
 The first packaging slice is likewise inspection-only: it produces a deterministic file inventory and aggregate hash, excludes dependency and VCS directories, and rejects symlinks and sensitive files. Archive creation, installation, and activation remain separate operations.
 
+Installation accepts only a discovered candidate, validates a regular in-root entry file, persists its normalized path and hash, and starts at `validated`. It never loads module code; migration, enablement, and activation remain explicit lifecycle steps.
+
 Events use the future Event Runtime; appending a ledger event is not delivery. Jobs use common execution/claim/recovery semantics. Dashboard extensions expose service-backed routes/views and store no authoritative dashboard-only state.
 
 ## First Proof
