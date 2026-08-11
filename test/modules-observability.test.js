@@ -58,6 +58,12 @@ console.log('Running Module Observability Tests...\n');
     assert.strictEqual(statusOut.modules[0].state, 'enabled', 'Status should report persisted state');
     assert.strictEqual(statusOut.modules[0].active_in_process, true, 'Status should report in-process activation');
     assert.ok(statusOut.modules[0].tools.includes('parse'), 'Status should list module tools');
+    const moduleHealth = await tools.callInternalTool('module', { action: 'health', name: 'data-utilities' });
+    assert.ok(!moduleHealth.isError, 'module health report should succeed');
+    const moduleHealthOut = JSON.parse(moduleHealth.content[0].text);
+    assert.strictEqual(moduleHealthOut.module.name, 'data-utilities', 'Module health report should name the module');
+    assert.deepStrictEqual(moduleHealthOut.module.health, {}, 'Module health report should expose the persisted health payload');
+    assert.strictEqual(moduleHealthOut.module.last_health_check_at, null, 'Module health report should expose the missing check timestamp');
     console.log('Passed\n');
 
     console.log('Test MO.3: health check scores module state');

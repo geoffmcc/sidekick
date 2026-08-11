@@ -14,6 +14,8 @@ function moduleSummary(record, loader) {
     active_in_process: loader.isModuleActive(record.name),
     tools: Object.keys(record.manifest?.tools || {}),
     error: record.error || null,
+    health: record.health || {},
+    last_health_check_at: record.last_health_check_at || null,
   };
 }
 
@@ -28,7 +30,7 @@ async function sidekick_module({ action = "list", name }) {
   }
 
   if (!name) {
-    return { content: [{ type: "text", text: "name is required for module get/enable/disable" }], isError: true };
+    return { content: [{ type: "text", text: "name is required for module get/health/enable/disable" }], isError: true };
   }
   const record = repository.getModule(name);
   if (!record) {
@@ -36,6 +38,8 @@ async function sidekick_module({ action = "list", name }) {
   }
 
   if (action === "get") return jsonText({ ok: true, module: moduleSummary(record, loader) });
+
+  if (action === "health") return jsonText({ ok: true, module: moduleSummary(record, loader) });
 
   if (action === "disable") {
     const result = loader.disableModule(name);
@@ -54,7 +58,7 @@ async function sidekick_module({ action = "list", name }) {
     return jsonText({ ok: true, action, module: moduleSummary(result.module, loader) });
   }
 
-  return { content: [{ type: "text", text: `Unknown module action: ${action}. Use list, get, enable, or disable` }], isError: true };
+  return { content: [{ type: "text", text: `Unknown module action: ${action}. Use list, get, health, enable, or disable` }], isError: true };
 }
 
 const descriptors = Object.freeze([
@@ -63,10 +67,10 @@ const descriptors = Object.freeze([
     aliases: ["modules"],
     description: "Inspect and operate platform module lifecycle state through the shared policy and approval path",
     schema: z.object({
-      action: z.enum(["list", "get", "enable", "disable"]).optional().describe("Module action (default: list)"),
-      name: z.string().optional().describe("Module name for get, enable, or disable"),
+      action: z.enum(["list", "get", "health", "enable", "disable"]).optional().describe("Module action (default: list)"),
+      name: z.string().optional().describe("Module name for get, health, enable, or disable"),
     }),
-    args: { action: "string (list|get|enable|disable - default list)", name: "string (module name for get/enable/disable)" },
+    args: { action: "string (list|get|health|enable|disable - default list)", name: "string (module name for get/health/enable/disable)" },
     risk: "high",
     category: "Services",
     source: "builtin",
