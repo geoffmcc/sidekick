@@ -91,7 +91,14 @@ function transcriptPath(id) {
 async function waitForTranscript(id, timeoutMs = 5000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    if (fs.existsSync(transcriptPath(id))) return;
+    if (fs.existsSync(transcriptPath(id))) {
+      try {
+        const transcript = JSON.parse(fs.readFileSync(transcriptPath(id), "utf-8"));
+        if (["completed", "failed", "iteration_limit", "timed_out", "cancelled"].includes(transcript.status)) return transcript;
+      } catch {
+        // The writer may still be publishing the record; retry until terminal.
+      }
+    }
     await new Promise((r) => setTimeout(r, 25));
   }
   throw new Error("timed out waiting for transcript " + id);
@@ -148,6 +155,7 @@ let server;
     const before = fs.readFileSync(transcriptPath(pid));
     fake = fakeDirect("c");
     const res = await request("POST", "/api/agent/run/" + pid + "/follow-up", { goal: "Summarize that." });
+    assert.strictEqual(res.status, 200);
     await waitForTranscript(res.data.taskId);
     const after = fs.readFileSync(transcriptPath(pid));
     assert.ok(before.equals(after), "parent transcript bytes must not change");
@@ -251,6 +259,7 @@ let server;
     fake = fakeDirect("summarized");
     seen.direct = null;
     const res = await request("POST", "/api/agent/run/" + pid + "/follow-up", { goal: "Summarize that in one sentence." });
+    assert.strictEqual(res.status, 200);
     await waitForTranscript(res.data.taskId);
     assert.ok(seen.direct, "direct path LLM was invoked");
     const all = seen.direct.map(m => m.content).join("\n");
