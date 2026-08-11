@@ -81,6 +81,25 @@ console.log('Running Platform Kernel Tests...\n');
     assert.strictEqual(derivative.lineage.role, 'derivative', 'Derived artifacts should carry normalized lineage role');
     assert.strictEqual(kernel.listArtifacts({ custody_role: 'original' }).length, 1, 'Artifact listing should filter originals');
     assert.strictEqual(kernel.getArtifact(derivative.artifact_id).supersedes_artifact_id, artifact.artifact_id, 'Artifact lookup should preserve lineage');
+
+    console.log('Test PK.4: event delivery retries, dead-letters, requeues, and advances offsets');
+    const subscription = kernel.registerEventSubscription({ name: 'kernel-test-subscriber', event_type: 'delivery.test', max_attempts: 2 });
+    const deliveryEvent = kernel.appendEvent({ event_type: 'delivery.test', source: 'test', payload: { value: 42 } });
+    let deliveries = kernel.listEventDeliveries({ subscription_id: subscription.subscription_id });
+    assert.strictEqual(deliveries.length, 1, 'Matching events should enqueue one delivery');
+    const firstFailure = kernel.deliverEvent(deliveries[0].delivery_id, () => { throw new Error('temporary failure'); });
+    assert.strictEqual(firstFailure.status, 'retry', 'First delivery failure should be retryable');
+    dbStore.getDb().prepare("UPDATE platform_event_deliveries SET next_attempt_at = ? WHERE delivery_id = ?").run(new Date(0).toISOString(), firstFailure.delivery_id);
+    const secondFailure = kernel.deliverEvent(firstFailure.delivery_id, () => { throw new Error('permanent failure'); });
+    assert.strictEqual(secondFailure.status, 'dead_letter', 'Exhausted delivery attempts should dead-letter');
+    const requeued = kernel.requeueEventDelivery(secondFailure.delivery_id);
+    assert.strictEqual(requeued.status, 'pending', 'Dead-lettered deliveries should be explicitly requeueable');
+    let received;
+    const delivered = kernel.deliverEvent(requeued.delivery_id, event => { received = event.payload.value; });
+    assert.strictEqual(delivered.status, 'delivered', 'Requeued delivery should succeed');
+    assert.strictEqual(received, 42, 'Delivery handler should receive the decoded event payload');
+    assert.strictEqual(dbStore.getDb().prepare("SELECT last_event_id FROM platform_event_offsets WHERE subscription_id = ?").get(subscription.subscription_id).last_event_id, deliveryEvent.event_id, 'Successful delivery should advance the consumer offset');
+    assert.strictEqual(kernel.getEventDeliveryStats().dead_letter, 0, 'Requeued delivery should clear the dead-letter state');
     console.log('Passed\n');
 
     console.log('All Platform Kernel tests passed.');

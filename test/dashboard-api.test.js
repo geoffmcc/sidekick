@@ -30,6 +30,7 @@ function makeRequest(method, path, body = null, optionsOverride = {}) {
     if (optionsOverride.auth === false) {
       delete headers.Authorization;
     }
+
     const options = {
       hostname: '127.0.0.1',
       port: 4100,
@@ -89,6 +90,18 @@ setTimeout(async () => {
       assert.ok(Array.isArray(response.data.artifacts), 'Artifact dashboard API should return rows');
       assert.ok(response.data.artifacts.length <= 2, 'Artifact dashboard API should enforce the requested bound');
       assert.ok(response.data.summary && Number.isInteger(response.data.summary.originals), 'Artifact dashboard API should return custody summary');
+      console.log('Passed\n');
+    }
+
+    console.log('Test 3.0ab: dashboard exposes bounded event delivery state');
+    {
+      const response = await makeRequest('GET', '/api/event-deliveries?limit=2');
+      assert.strictEqual(response.status, 200, 'Event delivery dashboard API should succeed');
+      assert.strictEqual(response.data.ok, true, 'Event delivery dashboard API should report success');
+      assert.ok(Array.isArray(response.data.subscriptions), 'Event delivery API should return subscriptions');
+      assert.ok(Array.isArray(response.data.deliveries), 'Event delivery API should return deliveries');
+      assert.ok(response.data.deliveries.length <= 2, 'Event delivery API should enforce the requested bound');
+      assert.ok(response.data.stats && Number.isInteger(response.data.stats.dead_letter), 'Event delivery API should return status counts');
       console.log('Passed\n');
     }
 
