@@ -47,6 +47,8 @@ The `module` management surface exposes the persisted health payload and last-ch
 
 The dashboard summary includes the same read-only module health rows, aggregate counts, and active-process mismatch/error count so operators can see lifecycle health without triggering module code.
 
+The `module` management surface also exposes `action: "check"` for builtin entries with a health contract. It executes the bounded check through the health boundary and returns the persisted lifecycle result; `action: "health"` remains read-only.
+
 Events use the future Event Runtime; appending a ledger event is not delivery. Jobs use common execution/claim/recovery semantics. Dashboard extensions expose service-backed routes/views and store no authoritative dashboard-only state.
 
 ## First Proof
