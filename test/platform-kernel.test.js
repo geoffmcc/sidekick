@@ -156,6 +156,16 @@ console.log('Running Platform Kernel Tests...\n');
     assert.strictEqual(kernel.listResearchTestRuns({ project_id: 'sidekick' }).length >= 1, true, 'Research test runs should be project-filterable');
     console.log('Passed\n');
 
+    console.log('Test PK.8: findings and reports require bounded evidence lineage');
+    const analysisFinding = kernel.createResearchFinding({ campaign_id: campaign.campaign_id, hypothesis_id: hypothesis.hypothesis_id, title: 'Synthetic observation', claim: 'Fixture behavior was observed', created_by: 'test-operator' });
+    assert.strictEqual(analysisFinding.status, 'analysis_only', 'Findings should default to analysis_only');
+    assert.throws(() => kernel.createResearchFinding({ campaign_id: campaign.campaign_id, test_run_id: run.test_run_id, status: 'confirmed', title: 'Unverified claim', claim: 'Should not confirm', created_by: 'test-operator' }), /completed test run and evidence references/, 'Confirmed findings must have completed evidence');
+    const confirmedFinding = kernel.createResearchFinding({ campaign_id: campaign.campaign_id, hypothesis_id: hypothesis.hypothesis_id, test_run_id: completedRun.test_run_id, status: 'confirmed', title: 'Synthetic confirmed record', claim: 'Synthetic evidence supports the fixture claim', evidence_refs: ['artifact:synthetic-control'], created_by: 'test-operator' });
+    const report = kernel.createResearchReport({ campaign_id: campaign.campaign_id, artifact_id: artifact.artifact_id, title: 'Synthetic report metadata', finding_refs: [analysisFinding.finding_id, confirmedFinding.finding_id], created_by: 'test-operator' });
+    assert.strictEqual(report.finding_refs.length, 2, 'Reports should retain finding references without embedding evidence');
+    assert.strictEqual(kernel.listResearchReports({ project_id: 'sidekick' }).length >= 1, true, 'Reports should be project-filterable');
+    console.log('Passed\n');
+
     console.log('All Platform Kernel tests passed.');
     process.exit(0);
   } catch (error) {
