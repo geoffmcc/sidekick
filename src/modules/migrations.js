@@ -101,9 +101,14 @@ function assertMigrationIsDataOnly(sql) {
  * @param {string} moduleName - module name (for error messages + progress)
  * @param {Array<{name: string, sql: string}>} migrations - declared migrations
  * @param {string[]} alreadyApplied - names already applied (from the row)
+ * @param {object} [options]
+ * @param {function} [options.recordProgress] - called inside the transaction
+ *   after all pending migrations execute, with { applied, alreadyApplied }.
+ *   If it throws, the whole batch (data changes included) rolls back, so
+ *   migration data and persisted progress commit or fail as one unit.
  * @returns {{ applied: string[], alreadyApplied: string[] }}
  */
-function runModuleMigrations(db, moduleName, migrations, alreadyApplied = []) {
+function runModuleMigrations(db, moduleName, migrations, alreadyApplied = [], options = {}) {
   const applied = [];
   const appliedSet = new Set(alreadyApplied || []);
   const pending = (migrations || []).filter(m => !appliedSet.has(m.name));
@@ -121,6 +126,9 @@ function runModuleMigrations(db, moduleName, migrations, alreadyApplied = []) {
     for (const migration of pending) {
       db.exec(migration.sql);
       applied.push(migration.name);
+    }
+    if (typeof options.recordProgress === "function") {
+      options.recordProgress({ applied: [...applied], alreadyApplied: [...appliedSet, ...applied] });
     }
     db.exec("COMMIT");
   } catch (error) {

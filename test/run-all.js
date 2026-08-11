@@ -61,6 +61,7 @@ const suites = [
   { file: 'test/workspace-model.test.js', critical: false, description: 'Project workspaces and model registry' },
   { file: 'test/modules-manifest.test.js', critical: false, description: 'Module manifest contract: normalization, semver, config validation, ownership and descriptor verification' },
   { file: 'test/modules-platform.test.js', critical: false, description: 'Module platform primitives: migration boundaries, progress and service facade' },
+  { file: 'test/modules-repository.test.js', critical: false, description: 'Module lifecycle repository: manifest persistence, transitions, atomic migration progress, restart survival' },
   { file: 'test/extension-docs.test.js', critical: false, description: 'Extension system and generated platform docs' },
   { file: 'test/backup-release.test.js', critical: false, description: 'Backup/restore and release maturity' },
   { file: 'test/new-tools.test.js', critical: false, description: 'Extended tool behavior' },
