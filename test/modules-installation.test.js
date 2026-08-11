@@ -14,6 +14,7 @@ const { discoverModules } = require('../src/modules/discovery');
 const { installDiscoveredModule } = require('../src/modules/installation');
 const { configureInstalledModule } = require('../src/modules/configuration');
 const { activateConfiguredModule } = require('../src/modules/activation');
+const { checkModuleHealth } = require('../src/modules/health');
 const repository = require('../src/modules/repository');
 
 const root = path.join(process.cwd(), 'test', 'test-data-discovered-module');
@@ -50,6 +51,10 @@ const enabled = activateConfiguredModule('installed-module', {
 });
 assert.strictEqual(enabled.module.state, 'enabled');
 assert.strictEqual(enabled.descriptors.length, 0);
+const health = checkModuleHealth('installed-module', { healthCheck: ({ config }) => ({ ok: config.retention_days === 30, details: { checked: true } }) });
+assert.strictEqual(health.ok, true);
+assert.strictEqual(health.module.state, 'healthy');
+assert.deepStrictEqual(health.module.health, { ok: true, details: { checked: true } });
 assert.throws(() => installDiscoveredModule(candidate), /already registered/);
 fs.rmSync(root, { recursive: true, force: true });
 
