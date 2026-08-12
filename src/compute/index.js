@@ -16,11 +16,30 @@ const RECONCILE_INTERVAL_MS = 30000;
 const MISSED_HEARTBEAT_MULTIPLIER = 3;
 let reconcileTimer = null;
 
+// A recovery pass that fails every tick silently reverts crash recovery to
+// the incidental-traffic behavior issue #150 fixed; log it, but throttled so
+// a persistent fault (e.g. sustained SQLITE_BUSY) cannot flood the journal.
+const RECOVERY_LOG_THROTTLE_MS = 5 * 60 * 1000;
+const recoveryFailureLoggedAt = {};
+function logRecoveryFailure(kind, error) {
+  const now = Date.now();
+  if (recoveryFailureLoggedAt[kind] && now - recoveryFailureLoggedAt[kind] < RECOVERY_LOG_THROTTLE_MS) return;
+  recoveryFailureLoggedAt[kind] = now;
+  console.error(`[compute] scheduled ${kind} pass failed: ${error && error.message ? error.message : error}`);
+}
+
 function startReconciliation() {
   if (reconcileTimer) return;
   const run = () => {
     try { workerManager.reconcileWorkerStates(RECONCILE_INTERVAL_MS * MISSED_HEARTBEAT_MULTIPLIER); }
     catch { /* best-effort; a failed pass is retried on the next tick */ }
+    // Crash recovery must not depend on incidental API traffic (issue #150):
+    // reclaim expired leases and requeue eligible retry_wait jobs on the same
+    // cadence, each guarded so one failing pass cannot suppress the others.
+    try { jobManager.recoverExpiredLeases(); }
+    catch (e) { logRecoveryFailure("lease_recovery", e); }
+    try { jobManager.releaseRetryWaitJobs(); }
+    catch (e) { logRecoveryFailure("retry_wait_release", e); }
   };
   run(); // immediate pass at startup to clear stale online state
   reconcileTimer = setInterval(run, RECONCILE_INTERVAL_MS);

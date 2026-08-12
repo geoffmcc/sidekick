@@ -375,7 +375,22 @@ function heartbeat(workerId, { utilization, currentJobs }) {
   const now = nowIso();
   const updates = { last_heartbeat: now, updated_at: now };
   if (utilization !== undefined) updates.utilization_json = json(utilization);
-  if (currentJobs !== undefined) updates.current_jobs = currentJobs;
+  // current_jobs gates admission (placement and claimNextJob) and is
+  // maintained transactionally by the claim/finish/recovery paths. A worker's
+  // self-reported count must never overwrite it (issue #148) — the agent's
+  // rotation-verify and doctor probes report 0 while jobs are mid-flight.
+  // Reconcile from the jobs table instead so decrement drift self-heals on
+  // the heartbeat cadence; the reported value is telemetry only.
+  if (currentJobs !== undefined) {
+    try {
+      // 'cancelling' is included even though nothing sets it today: the state
+      // model permits it as a live state, and a job winding down on the
+      // worker still holds its slot.
+      updates.current_jobs = db.prepare(
+        "SELECT COUNT(*) AS n FROM compute_jobs WHERE selected_worker_id = ? AND status IN ('leased','starting','running','cancelling')"
+      ).get(workerId).n;
+    } catch { /* jobs schema not initialized yet; leave the counter alone */ }
+  }
   const worker = getWorker(workerId);
   if (!worker) return null;
   if (worker.credentialState === "revoked") throw new WorkerRevokedError(workerId);
