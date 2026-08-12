@@ -103,6 +103,51 @@ console.log('Running Scheduler Platform Tests...\n');
 
     const platformKernel = require('../src/platform/kernel');
 
+    console.log('Test SP.4b: guided runbook status mirrors the execution ledger');
+    result = await TOOLS.runbook({ action: 'create', name: 'ledger-authority runbook', steps: [
+      { name: 'first guided step', command: 'printf first-guided' },
+      { name: 'second guided step', command: 'printf second-guided' },
+    ] });
+    assert.strictEqual(result.isError, undefined);
+    const ledgerAuthorityRbId = result.content[0].text.match(/Runbook created: (\S+)/)[1];
+    result = await TOOLS.runbook({ action: 'start', runbook_id: ledgerAuthorityRbId, mode: 'guided' });
+    assert.strictEqual(result.isError, undefined);
+    let ledgerAuthorityData = JSON.parse(fs.readFileSync(RB_FILE, 'utf8'));
+    let ledgerAuthorityInstance = Object.values(ledgerAuthorityData.instances).find(i => i.definitionId === ledgerAuthorityRbId);
+    let ledgerAuthorityExecution = db.getDb().prepare('SELECT state FROM platform_executions WHERE execution_id = ?').get(ledgerAuthorityInstance.platform_execution_id);
+    assert.strictEqual(ledgerAuthorityExecution.state, 'waiting');
+    assert.strictEqual(ledgerAuthorityInstance.status, 'waiting');
+
+    ledgerAuthorityInstance.status = 'running';
+    fs.writeFileSync(RB_FILE, JSON.stringify(ledgerAuthorityData, null, 2));
+    result = await TOOLS.runbook({ action: 'next', runbook_id: ledgerAuthorityInstance.id });
+    assert.strictEqual(result.isError, undefined);
+    ledgerAuthorityData = JSON.parse(fs.readFileSync(RB_FILE, 'utf8'));
+    ledgerAuthorityInstance = ledgerAuthorityData.instances[ledgerAuthorityInstance.id];
+    assert.strictEqual(ledgerAuthorityInstance.status, 'completed');
+    assert.strictEqual(db.getDb().prepare('SELECT state FROM platform_executions WHERE execution_id = ?').get(ledgerAuthorityInstance.platform_execution_id).state, 'completed');
+    console.log('Passed\n');
+
+    console.log('Test SP.4c: next refuses a ledger-terminalized guided runbook');
+    result = await TOOLS.runbook({ action: 'create', name: 'ledger-terminal runbook', steps: [
+      { name: 'terminal first', command: 'printf terminal-first' },
+      { name: 'terminal second', command: 'printf terminal-second' },
+    ] });
+    assert.strictEqual(result.isError, undefined);
+    const ledgerTerminalRbId = result.content[0].text.match(/Runbook created: (\S+)/)[1];
+    result = await TOOLS.runbook({ action: 'start', runbook_id: ledgerTerminalRbId, mode: 'guided' });
+    assert.strictEqual(result.isError, undefined);
+    const ledgerTerminalInstance = Object.values(JSON.parse(fs.readFileSync(RB_FILE, 'utf8')).instances).find(i => i.definitionId === ledgerTerminalRbId);
+    platformKernel.transitionExecution(ledgerTerminalInstance.platform_execution_id, 'cancelled', { source: 'test', reason: 'ledger terminalization' });
+    const terminalData = JSON.parse(fs.readFileSync(RB_FILE, 'utf8'));
+    terminalData.instances[ledgerTerminalInstance.id].status = 'running';
+    fs.writeFileSync(RB_FILE, JSON.stringify(terminalData, null, 2));
+    result = await TOOLS.runbook({ action: 'next', runbook_id: ledgerTerminalInstance.id });
+    assert.strictEqual(result.isError, true);
+    assert.ok(result.content[0].text.includes('ledger state cancelled'));
+    assert.strictEqual(JSON.parse(fs.readFileSync(RB_FILE, 'utf8')).instances[ledgerTerminalInstance.id].status, 'cancelled');
+    console.log('Passed\n');
+
     console.log('Test SP.5: delay run backs off when the execution is claimed');
     result = await TOOLS.delay({ action: 'add', when: '1h', name: 'claimed delay', tool: 'sidekick_respond', args: { text: 'delay-claim' } });
     assert.strictEqual(result.isError, undefined);
