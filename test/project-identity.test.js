@@ -285,6 +285,53 @@ test("PI.21: backfillWorkspaceSecrets retains plaintext for undecryptable envelo
   dbStore.getDb().prepare("UPDATE platform_project_workspaces SET secrets_json = '{}' WHERE workspace_id = ?").run(ws.workspace_id);
 });
 
+// PI.22: casing/charset variants converge to one canonical project (B3 fork fix)
+test("PI.22: registerProject canonicalizes casing and charset to one identity", () => {
+  const a = platformKernel.registerProject({ project_id: "MixedCase", owner_actor_id: "admin" });
+  assert.strictEqual(a.project_id, "mixedcase", "canonical id is lowercased");
+  // A second register with different casing must not fork a new row.
+  platformKernel.registerProject({ project_id: "MIXEDCASE" });
+  platformKernel.registerProject({ project_id: "mixedcase" });
+  const rows = dbStore.getDb().prepare("SELECT COUNT(*) AS c FROM platform_projects WHERE project_id = 'mixedcase'").get();
+  assert.strictEqual(rows.c, 1, "casing variants must not fork the canonical row");
+  // Lookups by any casing resolve to the one row.
+  assert.strictEqual(platformKernel.getProject("MixedCase").project_id, "mixedcase");
+  assert.strictEqual(platformKernel.getProject("mixedcase").project_id, "mixedcase");
+  // Charset normalization: spaces/dashes collapse to underscores.
+  const b = platformKernel.registerProject({ project_id: "My Cool-Project" });
+  assert.strictEqual(b.project_id, "my_cool_project");
+});
+
+// PI.23: the caller's original spelling is preserved when canonicalization changed it
+test("PI.23: registerProject preserves original spelling in metadata and display", () => {
+  const p = platformKernel.registerProject({ project_id: "CamelProj" });
+  assert.strictEqual(p.project_id, "camelproj");
+  assert.strictEqual(p.display_name, "CamelProj", "original spelling kept as display label");
+  assert.strictEqual(p.metadata.original_project_id, "CamelProj");
+  // An explicit display_name still wins, and an already-canonical id adds no metadata noise.
+  const q = platformKernel.registerProject({ project_id: "plainproj", display_name: "Plain" });
+  assert.strictEqual(q.display_name, "Plain");
+  assert.strictEqual(q.metadata.original_project_id, undefined, "no original stamped when nothing changed");
+});
+
+// PI.24: type/empty validation survives canonicalization
+test("PI.24: registerProject still rejects non-string and empty ids", () => {
+  assert.throws(() => platformKernel.registerProject({ project_id: 42 }), /non-empty/);
+  assert.throws(() => platformKernel.registerProject({ project_id: "" }), /non-empty/);
+  assert.throws(() => platformKernel.registerProject({ project_id: "   " }), /non-empty/);
+  assert.throws(() => platformKernel.registerProject({ project_id: "!!!" }), /non-empty/, "charset-only input canonicalizes to empty and is rejected");
+});
+
+// PI.25: recordProjectSource keeps the FK consistent under canonicalization
+test("PI.25: recordProjectSource canonicalizes so the source FK resolves", () => {
+  const src = platformKernel.recordProjectSource("FkProj", "kv", "key1");
+  assert.strictEqual(src.project_id, "fkproj");
+  // The parent project row exists under the canonical id (FK satisfied, no throw above).
+  assert.ok(platformKernel.getProject("FkProj"));
+  const sources = platformKernel.getProjectSources("fkproj");
+  assert.ok(sources.some(s => s.source === "kv" && s.source_id === "key1"));
+});
+
 cleanup();
 console.log(`\n  ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

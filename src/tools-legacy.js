@@ -53,8 +53,6 @@ const CRON_FILE = path.join(DATA_DIR, "cron.json");
 const WEBHOOK_FILE = path.join(DATA_DIR, "webhooks.json");
 const MAX_LOG = 1000;
 
-const PROJECT_RE = /^[a-z][a-z0-9_]*$/;
-
 let compatibilitySource = "unknown";
 
 function setSource(source) {

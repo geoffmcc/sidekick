@@ -11,8 +11,7 @@ const { z } = require("zod");
 const dbStore = require("../../db");
 const { redactSensitive } = require("../../redact");
 const { generateId } = require("../../core/ids");
-
-const PROJECT_RE = /^[a-z][a-z0-9_]*$/;
+const { PROJECT_RE } = require("../../core/project-identity");
 
 const RESUME_DOCUMENT = "resume";
 

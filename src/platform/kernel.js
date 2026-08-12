@@ -5,6 +5,7 @@ const { redactSensitive } = require("../redact");
 const { KERNEL_SCHEMA_SQL } = require("./kernel-schema");
 const { ensurePlatformModuleSchema } = require("../modules/schema");
 const { encryptColumn, decryptColumn, hasSecretKey } = require("../core/secret-cipher");
+const { canonicalizeProjectName } = require("../core/project-identity");
 
 const EXECUTION_STATES = Object.freeze([
   "created",
@@ -95,7 +96,10 @@ function parseJson(value, fallback) {
 
 function normalizeProjectId(projectId) {
   if (typeof projectId !== "string") throw new Error("project_id must be a non-empty string");
-  const id = projectId.trim();
+  // Canonicalize (lowercase + charset) so casing/charset variants of the same
+  // project resolve to one identity across every registry writer. The FK from
+  // platform_project_sources depends on this being the single canonical form.
+  const id = canonicalizeProjectName(projectId);
   if (!id) throw new Error("project_id must be a non-empty string");
   return id;
 }
@@ -1469,11 +1473,17 @@ function archiveProjectWorkspace(workspaceId, details = {}) {
 
 function registerProject(input = {}) {
   ensurePlatformKernelSchema();
+  const original = typeof input.project_id === "string" ? input.project_id.trim() : input.project_id;
   const projectId = normalizeProjectId(input.project_id);
+  // Preserve the caller's original spelling when canonicalization changed it,
+  // so a display label / audit trail survives the fork fix.
+  const canonicalized = typeof original === "string" && original !== projectId;
+  const displayName = input.display_name || (canonicalized ? original : projectId);
+  const metadata = canonicalized ? { ...(input.metadata || {}), original_project_id: original } : input.metadata;
   const ts = nowIso();
-  const result = dbStore.getDb().prepare("INSERT OR IGNORE INTO platform_projects (project_id, display_name, description, owner_actor_id, state, created_at, updated_at, metadata_json) VALUES (?, ?, ?, ?, 'active', ?, ?, ?)").run(projectId, input.display_name || projectId, input.description || null, input.owner_actor_id || null, ts, ts, json(input.metadata));
+  const result = dbStore.getDb().prepare("INSERT OR IGNORE INTO platform_projects (project_id, display_name, description, owner_actor_id, state, created_at, updated_at, metadata_json) VALUES (?, ?, ?, ?, 'active', ?, ?, ?)").run(projectId, displayName, input.description || null, input.owner_actor_id || null, ts, ts, json(metadata));
   if (result.changes > 0) {
-    appendEvent({ event_type: "project.registered", source: input.source || "platform", actor_id: input.owner_actor_id || null, subject_type: "project", subject_id: projectId, payload: { display_name: input.display_name || projectId }, correlation_id: projectId });
+    appendEvent({ event_type: "project.registered", source: input.source || "platform", actor_id: input.owner_actor_id || null, subject_type: "project", subject_id: projectId, payload: { display_name: displayName }, correlation_id: projectId });
   }
   return getProject(projectId);
 }
@@ -1577,7 +1587,9 @@ function backfillProjectSources(details = {}) {
     }
     perSource[scan.source] = rows.length;
     for (const row of rows) {
-      const pid = String(row.project_id).trim();
+      // Canonicalize before both register and upsert so the source row's FK
+      // matches the (canonical) project row, and casing variants converge.
+      const pid = canonicalizeProjectName(String(row.project_id));
       if (!pid) continue;
       registerProject({ project_id: pid });
       upsert.run(pid, scan.source, ts, ts, row.cnt, json({ backfilled_at: ts }));
