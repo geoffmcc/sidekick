@@ -73,23 +73,23 @@ For substantial project work:
 4. Reconcile stored context with the current workspace and runtime.
 5. Proceed using current source and verified state as the authority.
 
-When the live registry exposes `sidekick_session`, start substantial work with:
+When the live registry exposes `session`, start substantial work with:
 
 ```text
-sidekick_session action="begin"
+session action="begin"
 ```
 
 Include the goal, project, repository, branch, working directory, and
 environment when known. Use the returned memory brief as scoped context and do
 not dump unrelated memory into the task.
 
-Checkpoint long-running work with `sidekick_session action="checkpoint"` when
+Checkpoint long-running work with `session action="checkpoint"` when
 plan, blocker, next step, artifact, or ownership changes materially. End with
 `action="end"` or `action="abandon"` and pass verified facts, decisions, failed
 approaches, learned procedures, unresolved issues, artifacts, and follow-ups. An
 abandoned or failed task must not be recorded as a completed success.
 
-If `sidekick_session` is not available yet, continue with the existing
+If `session` is not available yet, continue with the existing
 knowledge, project, context, KV, and resume retrieval sequence below.
 
 Do not load large amounts of unrelated context.
@@ -98,30 +98,34 @@ Do not load large amounts of unrelated context.
 
 Use the tool names actually exposed by the current MCP client.
 
-Examples in this file use Sidekick's canonical internal names, such as:
+Examples in this file use Sidekick's canonical registry names, which are
+unprefixed:
 
 ```text
-sidekick_tools
-sidekick_knowledge
-sidekick_resume
-sidekick_project
-sidekick_get
-sidekick_secret
-sidekick_github
+tools
+knowledge
+resume
+project
+get
+secret
+github
 ```
 
-An MCP client may add its configured server name as a prefix. Do not invent,
-concatenate, or guess prefixes. Discover the available tools in the current
-session and invoke the exposed name that maps to the intended Sidekick tool.
+Older `sidekick_`-prefixed spellings (`sidekick_knowledge`, `sidekick_github`)
+remain valid compatibility aliases that the registry normalizes to the same
+canonical names. An MCP client may additionally add its configured server name
+as a prefix to what it exposes. Do not invent, concatenate, or guess prefixes.
+Discover the available tools in the current session and invoke the exposed name
+that maps to the intended Sidekick tool.
 
 When using the tool catalog's `get` or `policy` action, pass the canonical
-internal registry name in the `name` argument.
+registry name in the `name` argument.
 
 Example:
 
 ```text
-sidekick_tools action="get" name="sidekick_github"
-sidekick_tools action="policy" name="sidekick_github"
+tools action="get" name="github"
+tools action="policy" name="github"
 ```
 
 Do not pass a client-added invocation alias as the registry `name` unless the
@@ -135,25 +139,25 @@ policy decision, or approval mode is current.
 For broad discovery:
 
 ```text
-sidekick_tools action="overview"
+tools action="overview"
 ```
 
 For task-specific discovery:
 
 ```text
-sidekick_tools action="search" query="<needed capability>"
+tools action="search" query="<needed capability>"
 ```
 
 Before using an unfamiliar or consequential tool:
 
 ```text
-sidekick_tools action="get" name="<canonical internal tool name>"
+tools action="get" name="<canonical tool name>"
 ```
 
 When policy, risk, or approval behavior matters:
 
 ```text
-sidekick_tools action="policy" name="<canonical internal tool name>"
+tools action="policy" name="<canonical tool name>"
 ```
 
 Inspect the current definition before assuming that a GitHub, Git, deployment,
@@ -161,9 +165,9 @@ secret, memory, service, or repository action exists.
 
 Memory-intelligence tools may exist only after the current Sidekick deployment
 has migration `009_memory_intelligence.sql` and the matching tool registry. Use
-`sidekick_tools action="search" query="session handoff memory"` or
-`sidekick_tools action="overview"` before assuming `sidekick_session`,
-`sidekick_handoff`, or `sidekick_memory` is callable.
+`tools action="search" query="session handoff memory"` or
+`tools action="overview"` before assuming `session`,
+`handoff`, or `memory` is callable.
 
 Do not query registry tables manually for ordinary tool discovery when the
 catalog tool can provide current metadata and policy information.
@@ -231,28 +235,28 @@ When the user asks to resume prior work:
 Typical calls may include:
 
 ```text
-sidekick_resume action="check" project="<project>"
+resume action="check" project="<project>"
 
-sidekick_handoff action="list" project="<project>"
+handoff action="list" project="<project>"
 
-sidekick_project
+project
   name="<project>"
   include="kv,context,logs,procedures"
 
-sidekick_get key="<relevant key>"
+get key="<relevant key>"
 
-sidekick_context
+context
   action="recall"
   query="<project> handoff build plan"
 
-sidekick_knowledge
+knowledge
   action="search"
   query="<project> handoff build plan"
 ```
 
-Use `sidekick_handoff` only when available in the live registry. Otherwise,
-discover handoffs through `sidekick_project`, `sidekick_get`, `sidekick_context`,
-and `sidekick_knowledge` as shown above.
+Use `handoff` only when available in the live registry. Otherwise,
+discover handoffs through `project`, `get`, `context`,
+and `knowledge` as shown above.
 
 Possible KV key patterns include:
 
@@ -268,7 +272,7 @@ These are discovery hints, not guaranteed names.
 Only report that no handoff exists after checking the formal resume state,
 project KV/store, project context, procedures or logs, and knowledge.
 
-When creating or updating a handoff and `sidekick_handoff` is available, use it
+When creating or updating a handoff and `handoff` is available, use it
 to preserve the full source artifact and link extracted memories to evidence.
 For compatibility, continue to maintain the canonical KV handoff and formal
 resume pointer when project instructions require them.
@@ -310,7 +314,7 @@ The plan identity and local phase number must be unambiguous in stored state
 and generated output.
 
 When storing resume state, use the `plan_name` and `current_phase` fields
-available in `sidekick_resume` to record the plan identity and current phase.
+available in `resume` to record the plan identity and current phase.
 
 ### Completing a handoff plan
 
@@ -418,8 +422,8 @@ Do not copy the entire handoff into the formal resume record.
 Verify both layers independently:
 
 ```text
-sidekick_get key="<project>-handoff"
-sidekick_resume action="check" project="<project>"
+get key="<project>-handoff"
+resume action="check" project="<project>"
 ```
 
 A handoff is successfully saved only when:
@@ -602,18 +606,18 @@ Use structured memory or project context for:
 Prefer typed memory tools when they exist in the live registry:
 
 ```text
-sidekick_memory
-sidekick_handoff
-sidekick_session
+memory
+handoff
+session
 ```
 
-Use `sidekick_memory action="query"` or `action="explain"` to inspect current
+Use `memory action="query"` or `action="explain"` to inspect current
 memories and their evidence. Use `remember` only for supported durable facts,
 preferences, decisions, procedures, open threads, or scoped negative knowledge.
 Use `correct` or `forget` when current verification disproves a memory or makes
 it inappropriate for normal recall.
 
-Use `sidekick_handoff` to preserve full handoff artifacts and inspect or
+Use `handoff` to preserve full handoff artifacts and inspect or
 reprocess derived memories when available. The full handoff remains the source
 of evidence; extracted memories are concise, scoped derivatives.
 
