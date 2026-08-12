@@ -5,8 +5,8 @@ const dbStore = require("../../db");
 const redisStore = require("../../redis");
 const { redactSensitive } = require("../../redact");
 const toolContext = require("../context");
+const { PROJECT_RE } = require("../../core/project-identity");
 
-const PROJECT_RE = /^[a-z][a-z0-9_]*$/;
 const sessionCache = new Map();
 
 function parseDuration(str) {

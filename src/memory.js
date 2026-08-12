@@ -1,6 +1,7 @@
 const dbStore = require("./db");
 const { redactSensitive } = require("./redact");
 const { stripSidekickPrefix } = require("./core/tool-name");
+const { PROJECT_RE } = require("./core/project-identity");
 
 let qdrantClient = null;
 try {
@@ -14,7 +15,6 @@ const OLLAMA_URL = process.env.SIDEKICK_OLLAMA_URL || "http://127.0.0.1:11434";
 const EMBEDDING_MODEL = process.env.SIDEKICK_EMBEDDING_MODEL || "nomic-embed-text";
 const EMBEDDINGS_ENABLED = process.env.SIDEKICK_EMBEDDINGS !== "0";
 
-const PROJECT_RE = /^[a-z][a-z0-9_]*$/;
 const configuredMax = Number(process.env.SIDEKICK_AUTO_MEMORY_MAX || 500);
 const MAX_AUTO_MEMORY = Number.isFinite(configuredMax) ? Math.max(1, configuredMax) : 500;
 const AUTO_MEMORY_ENABLED = !["0", "false", "off"].includes(String(process.env.SIDEKICK_AUTO_MEMORY || "1").toLowerCase());
