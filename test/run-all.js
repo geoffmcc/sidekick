@@ -43,6 +43,7 @@ const suites = [
   { file: 'test/kernel-migration-parity.test.js', critical: false, description: 'Fresh migration boot vs runtime kernel boot schema parity' },
   { file: 'test/migration-self-containment.test.js', critical: true, description: 'Migrations build a complete schema standalone (C1) and tolerate runtime-created columns (C2)' },
   { file: 'test/project-identity.test.js', critical: false, description: 'Canonical project projection, cross-source identity, backfill, and encrypted workspace secrets' },
+  { file: 'test/project-registry-tool.test.js', critical: false, description: 'Project registry invocation surface and gated backfill' },
   { file: 'test/tools.test.js', critical: false, description: 'Core tool behavior' },
   { file: 'test/dispatcher.test.cjs', critical: false, description: 'Centralized tool dispatcher behavior' },
   { file: 'test/tool-registry-contract.test.cjs', critical: false, description: 'Tool registry contract and descriptor coverage' },

@@ -124,7 +124,7 @@ test("PI.9: backfillProjectSources aggregates across stores", () => {
   dbStore.getDb().prepare("UPDATE platform_executions SET project_id = 'backfill_p' WHERE execution_id = 'b_e1'").run();
   platformKernel.createProjectWorkspace({ name: "bf", project_id: "backfill_p" });
 
-  const result = platformKernel.backfillProjectSources();
+  const result = platformKernel.backfillProjectSources({ dry_run: false });
   assert.ok(result.written >= 4);
   const kvRow = platformKernel.getProjectSources("backfill_p").find(r => r.source === "kv" && r.source_id === "*");
   assert.strictEqual(kvRow.count, 2);

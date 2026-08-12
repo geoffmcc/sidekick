@@ -112,6 +112,7 @@ const TOOL_RISK = {
   resume: "low",
   metrics: "low",
   module: "high",
+  project_registry: "high",
 };
 
 const TOOL_CATEGORIES = {
@@ -216,6 +217,7 @@ const TOOL_CATEGORIES = {
   'knowledge': 'Context & Learning',
   'metrics': 'Monitoring',
   'module': 'Services',
+  'project_registry': 'Storage',
   'compute': 'Compute',
   'compute_nodes': 'Compute',
   'compute_providers': 'Compute',
