@@ -211,6 +211,10 @@ function createExecution(input = {}) {
   const executionId = input.execution_id || newId("exec");
   const rootId = input.root_execution_id || input.parent_execution_id || executionId;
   const state = input.state || "created";
+  const project = input.project_id
+    ? registerProject({ project_id: input.project_id, owner_actor_id: input.actor_id, source: input.source || "platform" })
+    : null;
+  const projectId = project ? project.project_id : null;
   if (!validateTransition(null, state)) throw new Error(`Execution must start in created state, got ${state}`);
   db.prepare(`
     INSERT INTO platform_executions (
@@ -226,7 +230,7 @@ function createExecution(input = {}) {
     input.task_id || null,
     input.session_id || null,
     input.workflow_id || null,
-    input.project_id || null,
+    projectId,
     input.incident_id || null,
     input.change_set_id || null,
     input.actor_id || null,
@@ -258,7 +262,7 @@ function createExecution(input = {}) {
     root_execution_id: rootId,
     task_id: input.task_id,
     session_id: input.session_id,
-    project_id: input.project_id,
+    project_id: projectId,
     environment: input.environment,
     payload: { state, operation_type: input.operation_type || "operation", tool_name: input.tool_name || null },
     correlation_id: input.correlation_id || rootId,

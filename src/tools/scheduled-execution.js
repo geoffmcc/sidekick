@@ -17,11 +17,12 @@ function getCurrentSource() {
 
 function createScheduledPlatformExecution(kind, item, options = {}) {
   try {
+    const projectId = options.projectId || toolContext.getExecutionContext().project || process.env.SIDEKICK_PROJECT || null;
     if (!options.allowConcurrent) {
       const guard = platformKernel.platformGuard(null, null, {
         operation_type: options.operationType || `${kind}_operation`,
         tool_name: options.toolName || item.tool || item.action_tool || null,
-        project_id: options.projectId || null,
+        project_id: projectId,
         dedupe_key: item.id || null,
         allowConcurrent: false,
       });
@@ -40,6 +41,7 @@ function createScheduledPlatformExecution(kind, item, options = {}) {
       tool_name: options.toolName || item.tool || item.action_tool || null,
       tool_action: options.toolAction || null,
       risk: options.risk || "medium",
+      project_id: projectId,
       deadline_at: options.deadlineAt || item.when || null,
       source: options.source || kind,
       correlation_id: options.correlationId || item.id,
