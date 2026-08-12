@@ -94,14 +94,16 @@ console.log('Running Scheduler Platform Tests...\n');
     const runbookId = result.content[0].text.match(/Runbook created: (\S+)/)[1];
     result = await TOOLS.runbook({ action: 'start', runbook_id: runbookId, mode: 'autonomous' });
     assert.strictEqual(result.isError, undefined);
+    const platformKernel = require('../src/platform/kernel');
     const runbookExecution = latestExecution("operation_type = 'runbook_execution'");
     assert.strictEqual(runbookExecution.state, 'completed');
     assert.strictEqual(runbookExecution.result_status, 'success');
+    assert.deepStrictEqual(platformKernel.getExecutionClaim(runbookExecution.execution_id).checkpoint, {
+      cursor: 'runbook_step', completed_step: 0, next_step: 1, total_steps: 1,
+    });
     const stepEvent = db.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_type = 'runbook.step_completed' AND execution_id = ?").get(runbookExecution.execution_id);
     assert.ok(stepEvent);
     console.log('Passed\n');
-
-    const platformKernel = require('../src/platform/kernel');
 
     console.log('Test SP.4b: guided runbook status mirrors the execution ledger');
     result = await TOOLS.runbook({ action: 'create', name: 'ledger-authority runbook', steps: [
@@ -117,6 +119,9 @@ console.log('Running Scheduler Platform Tests...\n');
     let ledgerAuthorityExecution = db.getDb().prepare('SELECT state FROM platform_executions WHERE execution_id = ?').get(ledgerAuthorityInstance.platform_execution_id);
     assert.strictEqual(ledgerAuthorityExecution.state, 'waiting');
     assert.strictEqual(ledgerAuthorityInstance.status, 'waiting');
+    assert.deepStrictEqual(platformKernel.getExecutionClaim(ledgerAuthorityInstance.platform_execution_id).checkpoint, {
+      cursor: 'runbook_step', completed_step: 0, next_step: 1, total_steps: 2,
+    });
 
     ledgerAuthorityInstance.status = 'running';
     fs.writeFileSync(RB_FILE, JSON.stringify(ledgerAuthorityData, null, 2));
@@ -309,7 +314,9 @@ console.log('Running Scheduler Platform Tests...\n');
     const rbData = JSON.parse(fs.readFileSync(RB_FILE, 'utf8'));
     rbData.instances['rbi_stranded_test'] = { id: 'rbi_stranded_test', definitionId: strandedRbId, status: 'running', currentStep: 1, mode: 'autonomous', started: Date.now() - 31 * 60 * 1000, results: [], platform_execution_id: strandedExec.execution_id };
     fs.writeFileSync(RB_FILE, JSON.stringify(rbData, null, 2));
-    platformKernel.claimExecution({ execution_id: strandedExec.execution_id, claimed_by: 'dead-rb-runner' });
+    const strandedClaim = platformKernel.claimExecution({ execution_id: strandedExec.execution_id, claimed_by: 'dead-rb-runner' });
+    assert.strictEqual(strandedClaim.ok, true);
+    assert.strictEqual(platformKernel.checkpointExecution({ execution_id: strandedExec.execution_id, claimed_by: 'dead-rb-runner', claim_epoch: strandedClaim.claim.claim_epoch, checkpoint: { cursor: 'runbook_step', completed_step: 2, next_step: 3, total_steps: 4 } }).ok, true);
     db.getDb().prepare('UPDATE platform_execution_claims SET lease_expires_at = ? WHERE execution_id = ?').run(new Date(Date.now() - 60000).toISOString(), strandedExec.execution_id);
     platformKernel.recoverOrphanedExecutions({ source: 'test' });
     const rbRecovery = tools.recoverStrandedRunbooks({ source: 'test' });
@@ -317,6 +324,7 @@ console.log('Running Scheduler Platform Tests...\n');
     assert.deepStrictEqual(rbRecovery.instances, ['rbi_stranded_test']);
     const rbDataAfter = JSON.parse(fs.readFileSync(RB_FILE, 'utf8'));
     assert.strictEqual(rbDataAfter.instances['rbi_stranded_test'].status, 'failed');
+    assert.strictEqual(rbDataAfter.instances['rbi_stranded_test'].currentStep, 3);
     assert.strictEqual(rbDataAfter.instances['rbi_stranded_test'].abandoned, true);
     const strandedExecAfter = db.getDb().prepare('SELECT * FROM platform_executions WHERE execution_id = ?').get(strandedExec.execution_id);
     assert.strictEqual(strandedExecAfter.state, 'failed');

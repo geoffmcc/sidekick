@@ -74,6 +74,21 @@ function syncInstancesFromLedger(data) {
   return changed;
 }
 
+function checkpointRunbookCursor(instance, claim, stepIndex, totalSteps) {
+  if (!instance?.platform_execution_id || !claim) return { ok: true };
+  return platformKernel.checkpointExecution({
+    execution_id: instance.platform_execution_id,
+    claimed_by: claim.claimed_by,
+    claim_epoch: claim.claim_epoch,
+    checkpoint: {
+      cursor: "runbook_step",
+      completed_step: stepIndex,
+      next_step: stepIndex + 1,
+      total_steps: totalSteps,
+    },
+  });
+}
+
 // Phase 4/B restart recovery: an instance stranded `running` by a crash used
 // to hold one of the MAX_ACTIVE_INSTANCES capacity slots forever. An instance
 // is abandoned when no live claim exists AND its execution is orphaned or has
@@ -110,6 +125,10 @@ function recoverStrandedRunbooks(details = {}) {
       const isOrphaned = exec.state === "orphaned";
       const isStaleRunning = exec.state === "running" && nowMs - (instance.started || 0) > RUNBOOK_ABANDON_AGE_MS;
       if (!isOrphaned && !isStaleRunning) continue;
+      const checkpoint = claim?.checkpoint || {};
+      if (Number.isInteger(checkpoint.next_step) && checkpoint.next_step >= 0) {
+        instance.currentStep = checkpoint.next_step;
+      }
       if (isOrphaned) {
         platformKernel.transitionExecution(instance.platform_execution_id, "running", { source: details.source || "runbook", actor_id: details.actor || null, reason: "recovering orphaned runbook instance", correlation_id: instance.id });
       }
@@ -266,6 +285,12 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
       return { content: [{ type: "text", text: `Runbook instance ${instanceId} cancelled before dispatch` }] };
     }
 
+    const startCheckpoint = checkpointRunbookCursor(startedInstance, startClaim, -1, rb.steps.length);
+    if (!startCheckpoint.ok) {
+      releaseScheduledClaim(startedInstance.platform_execution_id, startClaim);
+      return { content: [{ type: "text", text: `Runbook instance ${instanceId} could not establish its execution checkpoint` }], isError: true };
+    }
+
     if (execMode === "autonomous") {
       let output = `Starting autonomous runbook: ${rbId} (${rb.name})\n\n`;
       for (let i = 0; i < rb.steps.length; i++) {
@@ -325,6 +350,11 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
             }
           }
           data.instances[instanceId].results.push({ step: i, success: true });
+          const checkpoint = checkpointRunbookCursor(startedInstance, startClaim, i, rb.steps.length);
+          if (!checkpoint.ok) {
+            releaseScheduledClaim(startedInstance.platform_execution_id, startClaim);
+            return { content: [{ type: "text", text: output + "\n✗ Execution checkpoint rejected" }], isError: true };
+          }
         } catch (e) {
           output += `  ✗ Failed: ${e.message}\n`;
           if (step.rollback) {
@@ -368,6 +398,11 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
         const result = execSync(step.command, { encoding: "utf8", timeout: STEP_TIMEOUT_MS, stdio: ["pipe", "pipe", "pipe"] });
         output += `Result: ${result.substring(0, 500)}\n`;
         data.instances[instanceId].results.push({ step: 0, success: true, output: result });
+        const checkpoint = checkpointRunbookCursor(startedInstance, startClaim, 0, rb.steps.length);
+        if (!checkpoint.ok) {
+          releaseScheduledClaim(startedInstance.platform_execution_id, startClaim);
+          return { content: [{ type: "text", text: output + "\n✗ Execution checkpoint rejected" }], isError: true };
+        }
         if (rb.steps.length > 1) {
           data.instances[instanceId].status = "waiting";
           output += `\nUse action="next" with runbook_id="${instanceId}" to continue`;
@@ -465,6 +500,11 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
       const result = execSync(step.command, { encoding: "utf8", timeout: STEP_TIMEOUT_MS, stdio: ["pipe", "pipe", "pipe"] });
       output += `Result: ${result.substring(0, 500)}\n`;
       instance.results.push({ step: instance.currentStep, success: true, output: result });
+      const checkpoint = checkpointRunbookCursor(instance, nextClaim, instance.currentStep, rb.steps.length);
+      if (!checkpoint.ok) {
+        releaseScheduledClaim(instance.platform_execution_id, nextClaim);
+        return { content: [{ type: "text", text: output + "\n✗ Execution checkpoint rejected" }], isError: true };
+      }
       appendScheduledPlatformEvent("runbook", instance, "runbook.step_completed", { step: instance.currentStep, name: step.name });
       if (instance.currentStep < rb.steps.length - 1) {
         instance.status = "waiting";
