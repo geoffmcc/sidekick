@@ -13,6 +13,14 @@ const comms = require("./comms");
 const processMgmt = require("./process-mgmt");
 const netFetch = require("./net-fetch");
 const observability = require("./observability");
+const shell = require("./shell");
+const development = require("./development");
+const media = require("./media");
+const security = require("./security");
+const meta = require("./meta");
+const knowledge = require("./knowledge");
+const operations = require("./operations");
+const blackBox = require("./black-box");
 const storage = require("./storage");
 const memorySync = require("./memory-sync");
 const memoryPortability = require("./memory-portability");
@@ -25,7 +33,7 @@ const filesystem = require("./filesystem");
 const monitoring = require("./monitoring");
 const moduleManagement = require("./module-management");
 
-const families = Object.freeze([utility, hashing, databaseInspection, databaseAdmin, inference, networking, comms, processMgmt, netFetch, observability, storage, memorySync, memoryPortability, memoryLifecycle, memorySession, memoryHandoff, memoryCore, context, filesystem, monitoring, moduleManagement]);
+const families = Object.freeze([utility, hashing, databaseInspection, databaseAdmin, inference, networking, comms, processMgmt, netFetch, observability, shell, development, media, security, meta, knowledge, operations, blackBox, storage, memorySync, memoryPortability, memoryLifecycle, memorySession, memoryHandoff, memoryCore, context, filesystem, monitoring, moduleManagement]);
 
 // Descriptors owned by extracted families. The registry substitutes these at
 // their legacy TOOL_DEFS order position, so ordering here is not significant.

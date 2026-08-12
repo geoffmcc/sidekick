@@ -53,6 +53,7 @@ const suites = [
   { file: 'test/tool-family-database-inspection.test.cjs', critical: false, description: 'Extracted read-only database inspection family behavior and compatibility' },
   { file: 'test/tool-family-monitoring.test.cjs', critical: false, description: 'Extracted monitoring tail family behavior, log sources, redaction, and policy compatibility' },
   { file: 'test/tool-family-memory-core.test.cjs', critical: false, description: 'Extracted memory-core family ownership, redaction, recall, evidence, and health behavior' },
+  { file: 'test/tool-family-b5-extractions.test.cjs', critical: false, description: 'B-5 extracted families: registry ownership, risk parity, and validation-path smokes for all 24 moved handlers' },
   { file: 'test/approval.test.js', critical: false, description: 'Approval queue behavior' },
   { file: 'test/scheduler-platform.test.js', critical: false, description: 'Scheduler and runbook platform adapters' },
   { file: 'test/execution-control.test.js', critical: false, description: 'Platform guard and state-machine enforcement' },

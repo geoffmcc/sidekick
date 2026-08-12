@@ -203,6 +203,15 @@ async function sidekick_diff_files({ path_a, path_b, format }) {
   return { content: [{ type: "text", text: redactSensitive(header + diffLines.join("\n")) }] };
 }
 
+async function sidekick_write({ path: filePath, content }) {
+  const policyError = enforcePathPolicy(filePath, "write");
+  if (policyError) return policyError;
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, content, "utf-8");
+  const stat = fs.statSync(filePath);
+  return { content: [{ type: "text", text: "Written " + stat.size + " bytes to " + filePath }] };
+}
+
 async function sidekick_find({ path: searchPath, name, modified_after, modified_before, size_min, size_max, content, max_results }) {
   const maxResults = max_results || 50;
   const policyError = enforcePathPolicy(searchPath, "read");
@@ -342,6 +351,17 @@ const descriptors = Object.freeze([
     handler: sidekick_diff_files,
   }),
   Object.freeze({
+    name: "write",
+    description: "Write content to a file on the remote machine",
+    schema: z.object({ path: z.string().describe("Absolute path to write to"), content: z.string().describe("File content to write") }),
+    args: { path: "string", content: "string" },
+    risk: "critical",
+    category: "Core",
+    source: "builtin",
+    family: "filesystem",
+    handler: sidekick_write,
+  }),
+  Object.freeze({
     name: "find",
     description: "Advanced file finder: search by name pattern, date range, size range, and content pattern.",
     schema: z.object({
@@ -363,4 +383,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_read, sidekick_list, sidekick_search, sidekick_summarize, sidekick_filter, sidekick_diff_files, sidekick_find };
+module.exports = { descriptors, sidekick_read, sidekick_list, sidekick_search, sidekick_summarize, sidekick_filter, sidekick_write, sidekick_diff_files, sidekick_find };

@@ -9,9 +9,16 @@ the `data-utilities` module is enabled. Tools execute through a descriptor
 registry and centralized dispatcher. `src/tools-legacy.js` still owns most
 migrated-in-place handlers, but it is no longer the authoritative execution path.
 
-Measured ownership: **48 legacy-owned handlers** (42 defined in
-`tools-legacy.js` + 6 delegated to `src/compute/tools.js`) and **60 family-owned
-tools** across 22 family files. The Track B legacy decomposition is underway:
+Measured ownership: **24 legacy-owned handlers** (18 defined in
+`tools-legacy.js` + 6 delegated to `src/compute/tools.js`) and **84 family-owned
+tools** across 30 family files. The 18 remaining legacy handlers are the
+entangled tail reserved for slice B-6: the registry/policy inspection layer
+(`tools`), the secrets cluster (`github`, `ci_status`, `secret`), the
+scheduled-execution users (`cron`, `delay`, `watch`, `runbook`), the
+nested-dispatch users (`teach`, `queue`, `retry`, `orchestrate`, `batch`,
+`mission`, `circuit`), the `TOOL_DEFS`-closure user (`evolve`), and two
+one-blocker stragglers (`resume` on `generateId`, `project` on
+`loadProcedures`). The Track B legacy decomposition is underway:
 B-1 removed 1163 lines of proven-unreachable dead code (the superseded legacy
 context block, the unreachable `sidekick_evolve` helpers/tail, and four orphan
 helpers), taking `tools-legacy.js` from 10,769 to 9,606 lines with no handler
@@ -31,7 +38,7 @@ Extracted descriptor-owned families live under `src/tools/families/` and are agg
 - `hashing.js` — `hash`. File and string checksum generation and verification. It uses the shared filesystem path-policy boundary for file reads.
 - `database-inspection.js` — `db_schema`, `db_query`, `db_stats`, `log_query`, `db_search`, `db_diff`. Read-only SQLite/Postgres inspection and snapshot comparison.
 - `database-admin.js` — `db_backup`, `db_restore`, `db_export`, `db_migrate`. Database backup/restore/export and schema migration (the mutation counterpart to `database-inspection.js`). Uses the shared filesystem path policy; `db_restore` is `critical` and `db_migrate` is `high` risk, gated by the dispatcher.
-- `inference.js` — `embed`, `ollama`. Text embeddings (via the optional Compute inference service, else Ollama) and Ollama model management.
+- `inference.js` — `llm`, `embed`, `ollama`. LLM chat (Compute inference service, else Ollama/Groq), text embeddings, and Ollama model management. `sidekick_llm` is exported for direct callers: the `development`, `meta`, and `black-box` families import it, and `tools-legacy.js` re-imports it for `teach` until B-6.
 - `networking.js` — `tunnel`, `wireguard`, `nginx`. Cloudflare tunnels, WireGuard VPN, and Nginx reverse-proxy management. All `high` risk; shell-bound argument values are validated through `core/command-validation`.
 - `comms.js` — `notify`, `webhook`. Outbound Discord/Slack/email notifications and received-webhook access (the dashboard keeps its own separate webhook receiver).
 - `process-mgmt.js` — `process`, `service`, `archive`. Process management, systemd service control, and archive create/extract/list. `process` and `service` are `high` risk; command arguments are array-passed to execFileSync and output is redacted.
@@ -45,14 +52,27 @@ Extracted descriptor-owned families live under `src/tools/families/` and are agg
 - `memory-handoff.js` — `handoff`.
 - `memory-core.js` — `memory`.
 - `context.js` — `context`.
-- `filesystem.js` — `read`, `list`, `search`, `summarize`, `filter`, `diff_files`, `find`.
-- `monitoring.js` — `tail`.
+- `filesystem.js` — `read`, `list`, `search`, `summarize`, `filter`, `write`, `diff_files`, `find`. `write` is `critical` risk.
+- `monitoring.js` — `tail`, `snapshot`, `timeline`, `baseline`. Log tailing, system-state snapshots with drift comparison, chronological event timelines, and behavioral baselines with anomaly detection. `baseline` is `high` risk.
+- `shell.js` — `bash`. Arbitrary shell execution (`critical` risk) with the `DANGEROUS_PATTERNS`/`isDangerous` pre-filter, which moved here and is re-exported through `tools-legacy.js` and the facade for `src/tools/policy.js` and the security tests.
+- `development.js` — `git`, `changelog`, `depend`. Structured git operations, conventional-commit changelog generation (optional LLM summaries via the inference family), and npm/systemd/process dependency analysis.
+- `media.js` — `ocr`, `media`, `transcribe`, `analytics`, `insight_report`, `download`. Tesseract OCR, ffmpeg processing, Whisper transcription, DuckDB analytics, evidence-backed insight reports (calls `ocr` in-family), and yt-dlp downloads. `safeExecFileSync` and the yaml/fast-xml-parser/ini/`detectFormat` requires moved here with their only consumers. B-5 also fixed a latent bug: `analytics` used `os.tmpdir()` without requiring `os`, so every file/query call failed — the family adds the missing require.
+- `security.js` — `security_scan`, `sandbox`, `anonymize`. Read-only config/secret scanning, sandboxed command execution with rollback (`critical` risk), and consistent text anonymization.
+- `meta.js` — `predict`, `debug_tool`, `fresheyes`. Prediction engine access, persistent debug sessions, and fresh-perspective analysis (LLM via the inference family).
+- `knowledge.js` — `knowledge`. Knowledge base management over the shared db store.
+- `operations.js` — `ops` (`critical` risk). Packaged deploy/verify/restart/incident workflows, including `scheduleMcpRestart`; imports the observability family's `sidekick_status` for incident snapshots (now family-to-family).
+- `black-box.js` — `black_box`. Incident evidence capture over the shared `src/blackbox` module; passes the inference family's `sidekick_llm` by reference into incident analysis.
 
-These families own 54 descriptors via `families/index.js`; the `data-utilities`
+These families own 78 descriptors via `families/index.js`; the `data-utilities`
 module contributes 6 more through the module registry (`parse`, `extract`,
-`transform`, `diff`, `validate`, `template`), for **60 family/module-owned tools
-across 22 family files** in total. `process-mgmt.js`, `net-fetch.js`, and
-`observability.js` were added by Track B slice B-4. Each family owns its
+`transform`, `diff`, `validate`, `template`), for **84 family/module-owned tools
+across 30 family files** in total. `process-mgmt.js`, `net-fetch.js`, and
+`observability.js` were added by Track B slice B-4; slice B-5 added `shell.js`,
+`development.js`, `media.js`, `security.js`, `meta.js`, `knowledge.js`,
+`operations.js`, and `black-box.js`, and extended `inference.js` (`llm`),
+`filesystem.js` (`write`), and `monitoring.js` (`snapshot`, `timeline`,
+`baseline`) — 24 handlers in one slice, verified by
+`test/tool-family-b5-extractions.test.cjs`. Each family owns its
 handlers, inline Zod schemas, risk, category, and compatibility metadata. Legacy `TOOL_DEFS` rows remain only as ordering anchors while MCP ordering compatibility is preserved. The five storage schemas (`store`, `get`, `delete`, `list_projects`, and `get_by_project`) have been removed from `src/tools/schemas/index.js`; storage has single ownership in `storage.js`, and a registry contract test asserts one schema owner per extracted descriptor.
 
 The filesystem path policy now lives in `src/tools/path-policy.js`, the authoritative implementation of `enforcePathPolicy` and `getPathPolicyDecision`. It requires only `fs`, `path`, `src/core/policy-env.js`, and `src/tools/context.js`, so descriptor families can depend on it without requiring `src/tools-legacy.js` at module top level. `src/tools-legacy.js` consumes it and no longer defines its own copy.

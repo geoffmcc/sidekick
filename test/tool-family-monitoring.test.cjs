@@ -46,7 +46,7 @@ console.log('Running Monitoring Family Tests...');
     assert.strictEqual(typeof descriptor.handler, 'function');
     assert.strictEqual(legacy.TOOLS.tail, undefined);
     assert.ok(!Object.prototype.hasOwnProperty.call(require('../src/tools/schemas').TOOL_SCHEMAS, 'tail'));
-    assert.strictEqual(family.descriptors.length, 1);
+    assert.strictEqual(family.descriptors.length, 4);
 
     db.clearToolLogs();
     db.appendToolLog({ t: '2026-08-05T10:00:00.000Z', n: 'health', s: 'safe result', a: '{}', ok: true });

@@ -51,10 +51,12 @@ assert.deepStrictEqual(violations, [], 'Secret/static violations found:\n' + vio
 
 const toolsFacadePath = path.join(root, 'src', 'tools.js');
 const toolsLegacyPath = path.join(root, 'src', 'tools-legacy.js');
+const shellFamilyPath = path.join(root, 'src', 'tools', 'families', 'shell.js');
 const toolsFacade = fs.readFileSync(toolsFacadePath, 'utf8');
 const toolsLegacy = fs.readFileSync(toolsLegacyPath, 'utf8');
+const shellFamily = fs.readFileSync(shellFamilyPath, 'utf8');
 assert.match(toolsFacade, /module\.exports\s*=\s*require\("\.\/tools\/index"\)/, 'tools.js should remain a compatibility facade to the authoritative tool layer');
-assert.match(toolsLegacy, /function isDangerous\s*\(/, 'tools-legacy.js should define isDangerous during migration');
-assert.match(toolsLegacy, /module\.exports\s*=\s*\{[\s\S]*isDangerous/, 'tools-legacy.js should export isDangerous for security tests');
+assert.match(shellFamily, /function isDangerous\s*\(/, 'families/shell.js should define isDangerous (moved from tools-legacy in B-5)');
+assert.match(toolsLegacy, /module\.exports\s*=\s*\{[\s\S]*isDangerous/, 'tools-legacy.js should re-export isDangerous for security tests during migration');
 
 console.log(`✓ Scanned ${files.length} text files for basic CI safety checks\n`);
