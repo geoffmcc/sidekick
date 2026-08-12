@@ -106,7 +106,7 @@ fs.writeFileSync(filePath, 'file contents\n', 'utf8');
     assert.strictEqual(batchResults[1].result, `MD5: ${digest('md5', 'abc')}`);
 
     const registry = tools.getBuiltinRegistry();
-    assert.strictEqual(registry.listInDefinitionOrder().length, 102);
+    assert.strictEqual(registry.listInDefinitionOrder().length, 103);
     assert.deepStrictEqual(
       registry.listInDefinitionOrder().map(tool => tool.name),
       legacy.TOOL_DEFS.map(def => def.name),

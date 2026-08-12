@@ -1514,6 +1514,9 @@ function archiveProject(projectId, details = {}) {
   const pid = normalizeProjectId(projectId);
   const existing = dbStore.getDb().prepare("SELECT * FROM platform_projects WHERE project_id = ?").get(pid);
   if (!existing) throw new Error(`Project ${pid} not found`);
+  // Idempotent: re-archiving must not re-stamp timestamps or append a
+  // duplicate project.archived audit event.
+  if (existing.state === "archived") return normalizeProject(existing);
   const ts = details.timestamp || nowIso();
   dbStore.getDb().prepare("UPDATE platform_projects SET state = 'archived', archived_at = ?, updated_at = ? WHERE project_id = ?").run(ts, ts, pid);
   appendEvent({ event_type: "project.archived", source: details.source || "platform", actor_id: details.actor_id || null, subject_type: "project", subject_id: pid, payload: { reason: details.reason || null }, correlation_id: pid });
@@ -1559,6 +1562,12 @@ function getProjectsBySource(source, sourceId) {
 
 function backfillProjectSources(details = {}) {
   ensurePlatformKernelSchema();
+  // dry_run reports what a real run would register and upsert without
+  // touching platform_projects, platform_project_sources, or the event log.
+  // The flag is a required boolean so the write path is always deliberately
+  // selected — a bare call must not fail open into a real write.
+  if (typeof details.dry_run !== "boolean") throw new Error("backfillProjectSources requires details.dry_run (boolean)");
+  const dryRun = details.dry_run;
   const ts = details.timestamp || nowIso();
   const scans = [
     { table: "kv_store", projectCol: "project", source: "kv" },
@@ -1591,13 +1600,17 @@ function backfillProjectSources(details = {}) {
       // matches the (canonical) project row, and casing variants converge.
       const pid = canonicalizeProjectName(String(row.project_id));
       if (!pid) continue;
-      registerProject({ project_id: pid });
-      upsert.run(pid, scan.source, ts, ts, row.cnt, json({ backfilled_at: ts }));
+      if (!dryRun) {
+        registerProject({ project_id: pid });
+        upsert.run(pid, scan.source, ts, ts, row.cnt, json({ backfilled_at: ts }));
+      }
       written++;
     }
   }
-  appendEvent({ event_type: "project.sources_backfilled", source: details.source || "platform", actor_id: details.actor_id || null, subject_type: "project", subject_id: "*", payload: { written, per_source: perSource }, correlation_id: details.correlation_id || null });
-  return { written, sources: perSource };
+  if (!dryRun) {
+    appendEvent({ event_type: "project.sources_backfilled", source: details.source || "platform", actor_id: details.actor_id || null, subject_type: "project", subject_id: "*", payload: { written, per_source: perSource }, correlation_id: details.correlation_id || null });
+  }
+  return { written, sources: perSource, dry_run: dryRun };
 }
 
 function setWorkspaceSecret(workspaceId, name, value, details = {}) {
