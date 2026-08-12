@@ -35,7 +35,8 @@ for (const [k, v] of Object.entries(_cli.env)) process.env[k] = v;
 // Fill any remaining settings from the config file (CLI/env already in env win).
 try {
   const cfg = workerConfig.applyFileConfig();
-  if (cfg.exists) log(`Loaded worker config from ${cfg.path}`);
+  // Keep machine-readable CLI output clean for `version`.
+  if (cfg.exists && _cli.command !== "version") log(`Loaded worker config from ${cfg.path}`);
 } catch (e) {
   console.error(`[worker-agent] ${e.message}`);
   process.exit(2);
