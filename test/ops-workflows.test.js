@@ -26,7 +26,7 @@ assert.match(
 );
 
 assert.match(
-  toolsJs,
+  opsFamilyJs,
   /async function sidekick_mission\s*\(/,
   'sidekick_mission should define a Mission Control workflow tool'
 );
@@ -74,7 +74,7 @@ assert.match(
 );
 
 assert.match(
-  toolsJs,
+  opsFamilyJs,
   /policy:\s*\{\s*tool:\s*"tools",\s*args:\s*\{\s*action:\s*"policy"/,
   'mission should route policy inspection through tools action=policy'
 );
@@ -98,9 +98,9 @@ assert.match(
 );
 
 assert.match(
-  schemasJs,
-  /mission:\s*z\.object\(\{[\s\S]*profiles[\s\S]*route[\s\S]*preflight[\s\S]*execute/,
-  'MCP schema should expose mission actions'
+  opsFamilyJs,
+  /missionSchema\s*=\s*z\.object\(\{[\s\S]*profiles[\s\S]*route[\s\S]*preflight[\s\S]*execute/,
+  'mission family schema should expose mission actions'
 );
 
 console.log('Operations workflow checks passed\n');

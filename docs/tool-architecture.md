@@ -6,24 +6,29 @@ Verified date: 2026-08-11
 
 Sidekick's built-in registry contains 102 tools (`TOOL_DEFS` rows), or 108 when
 the `data-utilities` module is enabled. Tools execute through a descriptor
-registry and centralized dispatcher. `src/tools-legacy.js` still owns most
-migrated-in-place handlers, but it is no longer the authoritative execution path.
+registry and centralized dispatcher.
 
-Measured ownership: **24 legacy-owned handlers** (18 defined in
-`tools-legacy.js` + 6 delegated to `src/compute/tools.js`) and **84 family-owned
-tools** across 30 family files. The 18 remaining legacy handlers are the
-entangled tail reserved for slice B-6: the registry/policy inspection layer
-(`tools`), the secrets cluster (`github`, `ci_status`, `secret`), the
-scheduled-execution users (`cron`, `delay`, `watch`, `runbook`), the
-nested-dispatch users (`teach`, `queue`, `retry`, `orchestrate`, `batch`,
-`mission`, `circuit`), the `TOOL_DEFS`-closure user (`evolve`), and two
-one-blocker stragglers (`resume` on `generateId`, `project` on
-`loadProcedures`). The Track B legacy decomposition is underway:
-B-1 removed 1163 lines of proven-unreachable dead code (the superseded legacy
-context block, the unreachable `sidekick_evolve` helpers/tail, and four orphan
-helpers), taking `tools-legacy.js` from 10,769 to 9,606 lines with no handler
-ownership change. See `docs/platform-roadmap.md` Track B for the remaining
-dependency-ordered extraction plan.
+The Track B legacy decomposition is **complete**: as of slice B-6,
+`src/tools-legacy.js` owns **zero production tool handlers**. Measured
+ownership: **6 legacy-delegated handlers** (the `compute*` pass-throughs to
+`src/compute/tools.js`) and **96 family-owned tools** across 38 family files.
+`src/tools-legacy.js` is now a ~1,440-line remnant holding the policy/approval
+machinery, the registry-sync and tool-logging layer, the `TOOL_DEFS` ordering
+anchors, and compatibility re-exports of helpers that moved to families or
+shared modules. It is required by no descriptor family at module load.
+
+The path there: B-1 removed 1163 lines of proven-unreachable dead code; B-2
+through B-5 extracted the read-only, self-contained, and cluster handlers into
+descriptor families; B-6 extracted the final entangled tail — the
+nested-dispatch tools, the scheduled-execution users, the secrets cluster, and
+the registry/policy inspection surface. B-6 introduced two structural pieces:
+`src/tools/dispatch-seam.js`, a dependency-free `callTool` seam that lets a
+family run other tools without importing (and thus cycling through)
+`tools-legacy.js` or reaching the privileged `executeAuthorizedTaskStep`; and
+the shared helper modules `src/core/ids.js`, `src/core/procedures-store.js`,
+`src/core/secrets-store.js`, and `src/tools/scheduled-execution.js`, each
+extracted in its own step before the families that depend on it. See
+`docs/platform-roadmap.md` Track B.
 
 ## Descriptor Model
 
@@ -62,18 +67,31 @@ Extracted descriptor-owned families live under `src/tools/families/` and are agg
 - `knowledge.js` — `knowledge`. Knowledge base management over the shared db store.
 - `operations.js` — `ops` (`critical` risk). Packaged deploy/verify/restart/incident workflows, including `scheduleMcpRestart`; imports the observability family's `sidekick_status` for incident snapshots (now family-to-family).
 - `black-box.js` — `black_box`. Incident evidence capture over the shared `src/blackbox` module; passes the inference family's `sidekick_llm` by reference into incident analysis.
+- `github.js` — `github`, `ci_status`. GitHub API operations and read-only CI status aggregation. The token resolves from env or the encrypted-secrets store and is redacted from error text; the `parseGithubArgs`/`getGithubArg`/`getCiRevisionSelector`/`buildCiStatusResult`/`formatCiStatusText` helpers stay on the facade as compatibility exports. `github` is `high` risk.
+- `secret.js` — `secret` (`high`). Encrypted secret storage over `src/core/secrets-store.js` and the shared AES-256-GCM cipher; wire format unchanged.
+- `resume.js` — `resume`. First-class project resume/handoff records.
+- `teach.js` — `teach` (`high`). Taught procedures over `src/core/procedures-store.js`; generates via the inference family's `sidekick_llm` and executes steps through the dispatch seam.
+- `flow-control.js` — `queue`, `retry`, `orchestrate`, `batch`, `circuit`. Nested-dispatch workflow tools, all running other tools through the seam. `batch` carries `isBuiltinToolName` (resolving `TOOL_DEFS` lazily from the facade). `queue`/`orchestrate` are `high` risk.
+- `scheduling.js` — `cron`, `delay`, `watch`. Scheduled and event-driven execution over the shared `src/tools/scheduled-execution.js` cluster; the delay/watch stores plus `recoverStrandedDelays`/`pauseWatchForCancel` move here and are re-exported through the facade for `src/agent.js`. All `high` risk.
+- `runbook.js` — `runbook` (`critical`). Multi-step operational runbooks with platform-execution tracking; `recoverStrandedRunbooks` is re-exported for `src/agent.js`.
+- `evolve.js` — `evolve` (`critical`). Thin wrapper over `src/evolve`, handed the registry-derived `TOOL_DEFS` and the shared procedures store.
+- `tool-catalog.js` — `tools`. Tool catalog, discovery manifest, and policy inspector; reads the policy/approval/registry helpers that remain in `tools-legacy.js` lazily through the facade, and re-exports `buildPolicyInspection`/`summarizePolicyInspection` for `src/dashboard.js`.
 
-These families own 78 descriptors via `families/index.js`; the `data-utilities`
+These families own 96 descriptors via `families/index.js`; the `data-utilities`
 module contributes 6 more through the module registry (`parse`, `extract`,
-`transform`, `diff`, `validate`, `template`), for **84 family/module-owned tools
-across 30 family files** in total. `process-mgmt.js`, `net-fetch.js`, and
+`transform`, `diff`, `validate`, `template`), for **102 family/module-owned tools
+across 38 family files** in total. `process-mgmt.js`, `net-fetch.js`, and
 `observability.js` were added by Track B slice B-4; slice B-5 added `shell.js`,
 `development.js`, `media.js`, `security.js`, `meta.js`, `knowledge.js`,
 `operations.js`, and `black-box.js`, and extended `inference.js` (`llm`),
 `filesystem.js` (`write`), and `monitoring.js` (`snapshot`, `timeline`,
 `baseline`) — 24 handlers in one slice, verified by
-`test/tool-family-b5-extractions.test.cjs`. Each family owns its
-handlers, inline Zod schemas, risk, category, and compatibility metadata. Legacy `TOOL_DEFS` rows remain only as ordering anchors while MCP ordering compatibility is preserved. The five storage schemas (`store`, `get`, `delete`, `list_projects`, and `get_by_project`) have been removed from `src/tools/schemas/index.js`; storage has single ownership in `storage.js`, and a registry contract test asserts one schema owner per extracted descriptor.
+`test/tool-family-b5-extractions.test.cjs`. Slice B-6 added `github.js`,
+`secret.js`, `resume.js`, `teach.js`, `flow-control.js`, `scheduling.js`,
+`runbook.js`, `evolve.js`, and `tool-catalog.js`, extended `operations.js`
+(`mission`) and `context.js` (`project`), and reached zero legacy-owned
+handlers — verified by `test/tool-family-b6-extractions.test.cjs`. Each family
+owns its handlers, inline Zod schemas, risk, category, and compatibility metadata. Legacy `TOOL_DEFS` rows remain only as ordering anchors while MCP ordering compatibility is preserved. The five storage schemas (`store`, `get`, `delete`, `list_projects`, and `get_by_project`) have been removed from `src/tools/schemas/index.js`; storage has single ownership in `storage.js`, and a registry contract test asserts one schema owner per extracted descriptor.
 
 The filesystem path policy now lives in `src/tools/path-policy.js`, the authoritative implementation of `enforcePathPolicy` and `getPathPolicyDecision`. It requires only `fs`, `path`, `src/core/policy-env.js`, and `src/tools/context.js`, so descriptor families can depend on it without requiring `src/tools-legacy.js` at module top level. `src/tools-legacy.js` consumes it and no longer defines its own copy.
 

@@ -17,6 +17,7 @@ const { execFile, execFileSync, spawn } = require("child_process");
 const { z } = require("zod");
 const { enforcePathPolicy } = require("../path-policy");
 const { sidekick_status } = require("./observability");
+const { callTool } = require("../dispatch-seam");
 
 const SIDEKICK_SERVICES = ["sidekick-mcp", "sidekick-dashboard", "sidekick-agent"];
 const SIDEKICK_DEPLOY_REPO_PATH = "/home/sidekick/sidekick";
@@ -242,7 +243,163 @@ const SCHEMAS = {
   }),
 };
 
+// sidekick_mission (Mission Control) moved here in B-6. It routes an intent
+// to a profile and dispatches the resulting workflow through the nested
+// dispatch seam. missionRoute stays on the src/tools facade as a
+// compatibility export.
+const MISSION_PROFILES = {
+  read_only_audit: {
+    risk: "low",
+    description: "Read-only inspection. Routes status, logs, tool discovery, project context, and deploy verification.",
+    execute: ["status", "logs", "tools", "policy", "project", "verify_deploy"]
+  },
+  trusted_vps: {
+    risk: "high",
+    description: "Trusted single-operator VPS. Allows normal inspection plus deploy_current_main with confirmation.",
+    execute: ["status", "logs", "tools", "policy", "project", "verify_deploy", "deploy", "delete_key"]
+  },
+  production: {
+    risk: "critical",
+    description: "Production-like host. Requires confirmation for mutation and defaults deploy requests to verification.",
+    execute: ["status", "logs", "tools", "policy", "project", "verify_deploy", "delete_key"]
+  },
+  danger_zone: {
+    risk: "critical",
+    description: "Explicit high-power mode. Allows deploy_current_main and key deletion with confirmation.",
+    execute: ["status", "logs", "tools", "policy", "project", "verify_deploy", "deploy", "delete_key"]
+  }
+};
+
+function normalizeMissionIntent(intent) {
+  const text = String(intent || "").toLowerCase();
+  if (!text.trim()) return "unknown";
+  if (/\bdeploy\b|release|rollout|ship/.test(text)) return "deploy";
+  if (/verify.*deploy|deployed.*commit|current.*main|matches.*origin/.test(text)) return "verify_deploy";
+  if (/status|health|uptime|services|disk|memory|load/.test(text)) return "status";
+  if (/log|logs|history|recent activity|tool calls/.test(text)) return "logs";
+  if (/policy|permission|permissions|allowed|blocked|lockdown|approval|approvals|why.*tool|tool.*why|who can call|can call|call what|risk/.test(text)) return "policy";
+  if (/tool|tools|catalog|manifest|available capabilities|what can sidekick do/.test(text)) return "tools";
+  if (/project|memory|context|remember|stored facts/.test(text)) return "project";
+  if (/delete.*key|remove.*key|delete.*kv|remove.*kv/.test(text)) return "delete_key";
+  return "unknown";
+}
+
+function missionRoute(intent, profileName = "trusted_vps", options = {}) {
+  const route = normalizeMissionIntent(intent);
+  const profile = MISSION_PROFILES[profileName] ? profileName : "trusted_vps";
+  const allowed = MISSION_PROFILES[profile].execute.includes(route);
+  const toolMap = {
+    deploy: { tool: "ops", args: { action: "deploy_current_main", repo_path: options.repo_path } },
+    verify_deploy: { tool: "ops", args: { action: "verify_deployed_commit", repo_path: options.repo_path } },
+    status: { tool: "status", args: { include: options.include || "services,disk,memory,load,uptime", services: options.services } },
+    logs: { tool: "log_query", args: { limit: options.limit || 20, tool: options.tool, source: options.source } },
+    tools: { tool: "tools", args: { action: options.query ? "search" : "overview", query: options.query, format: options.format || "text" } },
+    policy: { tool: "tools", args: { action: "policy", name: options.tool, source: options.source, format: options.format || "text", limit: options.limit } },
+    project: { tool: "project", args: { name: options.project || "sidekick", include: options.include || "kv,context" } },
+    delete_key: { tool: "delete", args: { key: options.key } }
+  };
+  const recommendation = toolMap[route] || null;
+  const requiresConfirmation = ["deploy", "delete_key"].includes(route);
+  return {
+    intent: intent || "",
+    profile,
+    route,
+    allowed,
+    requires_confirmation: requiresConfirmation,
+    risk: route === "deploy" ? "critical" : (route === "delete_key" ? "medium" : "low"),
+    recommended_tool: recommendation?.tool || null,
+    recommended_args: recommendation?.args || null,
+    reason: route === "unknown"
+      ? "No deterministic route matched. Use tools action=search or a narrower tool."
+      : (allowed ? "Route is allowed by profile." : "Route is not allowed by profile.")
+  };
+}
+
+function formatMissionRoute(route) {
+  return [
+    "MISSION ROUTE",
+    `Intent: ${route.intent || "(empty)"}`,
+    `Profile: ${route.profile}`,
+    `Route: ${route.route}`,
+    `Allowed: ${route.allowed ? "yes" : "no"}`,
+    `Risk: ${route.risk}`,
+    `Requires confirmation: ${route.requires_confirmation ? "yes" : "no"}`,
+    `Recommended tool: ${route.recommended_tool || "(none)"}`,
+    `Recommended args: ${route.recommended_args ? JSON.stringify(route.recommended_args) : "(none)"}`,
+    `Reason: ${route.reason}`
+  ].join("\n");
+}
+
+async function sidekick_mission({ action, intent, profile, confirm, key, project, query, include, services, repo_path, limit, tool, source, format }) {
+  const selectedAction = action || "route";
+  if (selectedAction === "profiles") {
+    return { content: [{ type: "text", text: JSON.stringify(MISSION_PROFILES, null, 2) }] };
+  }
+
+  const route = missionRoute(intent, profile, { key, project, query, include, services, repo_path, limit, tool, source, format });
+
+  if (selectedAction === "route") {
+    return { content: [{ type: "text", text: formatMissionRoute(route) }] };
+  }
+
+  if (selectedAction === "preflight") {
+    const checks = [
+      route.route === "unknown" ? "Clarify intent or use tools search." : "Intent mapped deterministically.",
+      route.allowed ? "Profile allows this route." : "Profile blocks this route.",
+      route.requires_confirmation ? "Mutation requires confirm=true before execute." : "No mutation confirmation required.",
+      route.recommended_tool ? `Use ${route.recommended_tool}.` : "No tool selected."
+    ];
+    return { content: [{ type: "text", text: JSON.stringify({ ...route, checks }, null, 2) }], isError: !route.allowed || route.route === "unknown" };
+  }
+
+  if (selectedAction === "execute") {
+    if (route.route === "unknown") {
+      return { content: [{ type: "text", text: "No deterministic route matched. Run action=route or action=preflight first." }], isError: true };
+    }
+    if (!route.allowed) {
+      return { content: [{ type: "text", text: `Route ${route.route} is blocked by profile ${route.profile}` }], isError: true };
+    }
+    if (route.requires_confirmation && confirm !== true) {
+      return { content: [{ type: "text", text: `Route ${route.route} requires confirm=true before execution.` }], isError: true };
+    }
+    if (route.route === "delete_key" && !key) {
+      return { content: [{ type: "text", text: "key is required for delete_key missions" }], isError: true };
+    }
+    return callTool(route.recommended_tool, route.recommended_args || {});
+  }
+
+  return { content: [{ type: "text", text: "Invalid action. Allowed: profiles, route, preflight, execute" }], isError: true };
+}
+
+const missionSchema = z.object({
+    action: z.enum(["profiles", "route", "preflight", "execute"]).optional().default("route").describe("Mission Control action"),
+    intent: z.string().optional().describe("User goal or operation intent"),
+    profile: z.enum(["read_only_audit", "trusted_vps", "production", "danger_zone"]).optional().default("trusted_vps").describe("Run profile"),
+    confirm: z.boolean().optional().describe("Required true for mutating execute routes"),
+    key: z.string().optional().describe("KV key for delete missions"),
+    project: z.string().optional().describe("Project name for memory missions"),
+    query: z.string().optional().describe("Search query for tool discovery"),
+    include: z.string().optional().describe("Include sections for status/project"),
+    services: z.string().optional().describe("Services for status missions"),
+    repo_path: z.string().optional().describe("Repository path for deploy workflows"),
+    limit: z.number().optional().describe("Result limit"),
+    tool: z.string().optional().describe("Tool filter for logs"),
+    source: z.string().optional().describe("Source filter for logs"),
+    format: z.string().optional().describe("Output format for tool discovery")
+  });
+
 const descriptors = Object.freeze([
+  Object.freeze({
+    name: "mission",
+    description: "Mission Control intent router for Sidekick operations. Profiles, routes, preflights, and executes common intents through safer existing tools before raw shell.",
+    schema: missionSchema,
+    args: { action: "string (profiles|route|preflight|execute - default route)", intent: "string (user goal or operation intent)", profile: "string (read_only_audit|trusted_vps|production|danger_zone - default trusted_vps)", confirm: "boolean (required true for mutating execute routes)", key: "string (optional, KV key for delete missions)", project: "string (optional, project for memory missions)", query: "string (optional, search query for tool discovery)", include: "string (optional, include sections for status/project)", services: "string (optional, services for status)", repo_path: "string (optional, repo for deploy workflows)", limit: "number (optional, result limit)", tool: "string (optional, tool filter for logs)", source: "string (optional, source filter for logs)", format: "string (optional, output format for tool discovery)" },
+    risk: "critical",
+    category: "Workflow",
+    source: "builtin",
+    family: "operations",
+    handler: sidekick_mission,
+  }),
   Object.freeze({
     name: "ops",
     description: "Packaged Sidekick operations workflows for deploy verification, restart smoke tests, deployments, and incident snapshots.",
@@ -256,4 +413,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_ops };
+module.exports = { descriptors, sidekick_ops, sidekick_mission, missionRoute };

@@ -21,6 +21,15 @@ const meta = require("./meta");
 const knowledge = require("./knowledge");
 const operations = require("./operations");
 const blackBox = require("./black-box");
+const github = require("./github");
+const secret = require("./secret");
+const resume = require("./resume");
+const teach = require("./teach");
+const flowControl = require("./flow-control");
+const scheduling = require("./scheduling");
+const runbook = require("./runbook");
+const evolve = require("./evolve");
+const toolCatalog = require("./tool-catalog");
 const storage = require("./storage");
 const memorySync = require("./memory-sync");
 const memoryPortability = require("./memory-portability");
@@ -33,7 +42,7 @@ const filesystem = require("./filesystem");
 const monitoring = require("./monitoring");
 const moduleManagement = require("./module-management");
 
-const families = Object.freeze([utility, hashing, databaseInspection, databaseAdmin, inference, networking, comms, processMgmt, netFetch, observability, shell, development, media, security, meta, knowledge, operations, blackBox, storage, memorySync, memoryPortability, memoryLifecycle, memorySession, memoryHandoff, memoryCore, context, filesystem, monitoring, moduleManagement]);
+const families = Object.freeze([utility, hashing, databaseInspection, databaseAdmin, inference, networking, comms, processMgmt, netFetch, observability, shell, development, media, security, meta, knowledge, operations, blackBox, github, secret, resume, teach, flowControl, scheduling, runbook, evolve, toolCatalog, storage, memorySync, memoryPortability, memoryLifecycle, memorySession, memoryHandoff, memoryCore, context, filesystem, monitoring, moduleManagement]);
 
 // Descriptors owned by extracted families. The registry substitutes these at
 // their legacy TOOL_DEFS order position, so ordering here is not significant.
