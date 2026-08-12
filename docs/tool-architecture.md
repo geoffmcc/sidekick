@@ -9,9 +9,9 @@ the `data-utilities` module is enabled. Tools execute through a descriptor
 registry and centralized dispatcher. `src/tools-legacy.js` still owns most
 migrated-in-place handlers, but it is no longer the authoritative execution path.
 
-Measured ownership: **63 legacy-owned handlers** (57 defined in
-`tools-legacy.js` + 6 delegated to `src/compute/tools.js`) and **45 family-owned
-tools** across 16 family files. The Track B legacy decomposition is underway:
+Measured ownership: **56 legacy-owned handlers** (50 defined in
+`tools-legacy.js` + 6 delegated to `src/compute/tools.js`) and **52 family-owned
+tools** across 19 family files. The Track B legacy decomposition is underway:
 B-1 removed 1163 lines of proven-unreachable dead code (the superseded legacy
 context block, the unreachable `sidekick_evolve` helpers/tail, and four orphan
 helpers), taking `tools-legacy.js` from 10,769 to 9,606 lines with no handler
@@ -31,6 +31,9 @@ Extracted descriptor-owned families live under `src/tools/families/` and are agg
 - `hashing.js` — `hash`. File and string checksum generation and verification. It uses the shared filesystem path-policy boundary for file reads.
 - `database-inspection.js` — `db_schema`, `db_query`, `db_stats`, `log_query`, `db_search`, `db_diff`. Read-only SQLite/Postgres inspection and snapshot comparison.
 - `database-admin.js` — `db_backup`, `db_restore`, `db_export`, `db_migrate`. Database backup/restore/export and schema migration (the mutation counterpart to `database-inspection.js`). Uses the shared filesystem path policy; `db_restore` is `critical` and `db_migrate` is `high` risk, gated by the dispatcher.
+- `inference.js` — `embed`, `ollama`. Text embeddings (via the optional Compute inference service, else Ollama) and Ollama model management.
+- `networking.js` — `tunnel`, `wireguard`, `nginx`. Cloudflare tunnels, WireGuard VPN, and Nginx reverse-proxy management. All `high` risk; shell-bound argument values are validated through `core/command-validation`.
+- `comms.js` — `notify`, `webhook`. Outbound Discord/Slack/email notifications and received-webhook access (the dashboard keeps its own separate webhook receiver).
 - `storage.js` — `store`, `get`, `delete`, `list_projects`, `get_by_project`, `cache`, `redis`.
 - `memory-sync.js` — `sync_identity`, `sync_export`, `sync_import`, `sync_diff`.
 - `memory-portability.js` — `memory_export`, `memory_import`.
@@ -42,11 +45,11 @@ Extracted descriptor-owned families live under `src/tools/families/` and are agg
 - `filesystem.js` — `read`, `list`, `search`, `summarize`, `filter`, `diff_files`, `find`.
 - `monitoring.js` — `tail`.
 
-These families own 39 descriptors via `families/index.js`; the `data-utilities`
+These families own 46 descriptors via `families/index.js`; the `data-utilities`
 module contributes 6 more through the module registry (`parse`, `extract`,
-`transform`, `diff`, `validate`, `template`), for **45 family/module-owned tools
-across 16 family files** in total. `database-admin.js` is the family added by
-Track B slice B-2. Each family owns its
+`transform`, `diff`, `validate`, `template`), for **52 family/module-owned tools
+across 19 family files** in total. `inference.js`, `networking.js` and `comms.js` were added by
+Track B slice B-3. Each family owns its
 handlers, inline Zod schemas, risk, category, and compatibility metadata. Legacy `TOOL_DEFS` rows remain only as ordering anchors while MCP ordering compatibility is preserved. The five storage schemas (`store`, `get`, `delete`, `list_projects`, and `get_by_project`) have been removed from `src/tools/schemas/index.js`; storage has single ownership in `storage.js`, and a registry contract test asserts one schema owner per extracted descriptor.
 
 The filesystem path policy now lives in `src/tools/path-policy.js`, the authoritative implementation of `enforcePathPolicy` and `getPathPolicyDecision`. It requires only `fs`, `path`, `src/core/policy-env.js`, and `src/tools/context.js`, so descriptor families can depend on it without requiring `src/tools-legacy.js` at module top level. `src/tools-legacy.js` consumes it and no longer defines its own copy.

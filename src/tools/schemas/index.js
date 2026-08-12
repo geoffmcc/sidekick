@@ -44,13 +44,6 @@ const TOOL_SCHEMAS = {
     path: z.string().optional().describe("Repository path (defaults to current directory)"),
     args: z.string().optional().describe("Additional arguments for the git command")
   }),
-  notify: z.object({
-    channel: z.enum(["discord", "slack", "email"]).describe("Notification channel"),
-    webhook_url: z.string().optional().describe("Webhook URL (required for discord/slack)"),
-    recipient: z.string().optional().describe("Email recipient (required for email)"),
-    message: z.string().describe("Message content to send"),
-    title: z.string().optional().describe("Optional title/subject")
-  }),
   process: z.object({
     action: z.enum(["list", "top", "kill", "tree"]).describe("Process action to perform"),
     filter: z.string().optional().describe("Filter processes by name (for list action)"),
@@ -90,11 +83,6 @@ const TOOL_SCHEMAS = {
     ref: z.string().optional().describe("Git ref, branch, or SHA"),
     branch: z.string().optional().describe("Branch name"),
     format: z.enum(["text", "json"]).optional().describe("Output format (text or json, default text)")
-  }),
-  webhook: z.object({
-    action: z.enum(["list", "get", "clear"]).describe("Webhook action to perform"),
-    id: z.string().optional().describe("Webhook ID (required for get)"),
-    limit: z.number().optional().describe("Number of webhooks to list (default: 20)")
   }),
   teach: z.object({
     action: z.enum(["teach_procedure", "generate_tool", "learn_from_example", "execute", "list", "remove"]).describe("Teach action to perform"),
@@ -399,39 +387,11 @@ const TOOL_SCHEMAS = {
     paths: z.union([z.string(), z.array(z.string())]).describe("Text, data, or image file path(s) to analyze"),
     title: z.string().optional().describe("Optional report title")
   }),
-  embed: z.object({
-    text: z.string().describe("Text to embed"),
-    model: z.string().optional().default("nomic-embed-text").describe("Embedding model")
-  }),
-  ollama: z.object({
-    action: z.enum(["list", "ps", "pull", "show"]).describe("Ollama action"),
-    model: z.string().optional().describe("Model name (required for pull/show)")
-  }),
-  tunnel: z.object({
-    action: z.enum(["start", "stop", "list"]).describe("Tunnel action"),
-    port: z.number().optional().describe("Local port to expose (required for start)"),
-    name: z.string().optional().describe("Tunnel name (optional)")
-  }),
   download: z.object({
     url: z.string().describe("Video URL"),
     output: z.string().optional().describe("Output path"),
     format: z.string().optional().describe("Video format"),
     audio_only: z.boolean().optional().describe("Extract audio only")
-  }),
-  wireguard: z.object({
-    action: z.enum(["status", "list_peers", "add_peer", "remove_peer", "generate_keypair"]).describe("WireGuard action"),
-    interface_name: z.string().optional().describe("WireGuard interface (e.g. wg0)"),
-    peer_name: z.string().optional().describe("Peer name (for add_peer)"),
-    public_key: z.string().optional().describe("Peer public key"),
-    endpoint: z.string().optional().describe("Peer endpoint IP:port"),
-    allowed_ips: z.string().optional().describe("Allowed IPs (default 10.0.0.0/24)")
-  }),
-  nginx: z.object({
-    action: z.enum(["status", "list_sites", "add_site", "remove_site", "test_config", "reload"]).describe("Nginx action"),
-    site_name: z.string().optional().describe("Site config name"),
-    domain: z.string().optional().describe("Domain name (for add_site)"),
-    upstream_port: z.number().optional().describe("Local port to proxy to"),
-    ssl_email: z.string().optional().describe("Email for Let's Encrypt")
   }),
   knowledge: z.object({
     action: z.enum(["search", "get", "list", "add", "update", "delete", "purge"]).describe("Knowledge base action"),
