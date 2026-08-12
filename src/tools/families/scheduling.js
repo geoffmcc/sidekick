@@ -294,6 +294,7 @@ function parseWhen(when) {
 async function sidekick_delay({ action, id, when, name, tool, args }) {
   const delays = loadDelays();
   const now = new Date().toISOString();
+  const actorId = toolContext.getExecutionContext().actor;
 
   if (action === "add") {
     if (!when || !tool) {
@@ -391,18 +392,35 @@ async function sidekick_delay({ action, id, when, name, tool, args }) {
       return { content: [{ type: "text", text: `Delay not found: ${id}` }], isError: true };
     }
 
-    if (delay.status !== "pending") {
+    if (["completed", "failed"].includes(delay.status)) {
       return { content: [{ type: "text", text: `Delay ${id} is not pending (status: ${delay.status})` }], isError: true };
+    }
+
+    if (delay.status === "cancelled") {
+      return { content: [{ type: "text", text: `Delay ${id} is already cancelled` }] };
+    }
+
+    const claim = delay.platform_execution_id ? platformKernel.getExecutionClaim(delay.platform_execution_id) : null;
+    const liveClaim = Boolean(claim?.claimed_by && claim.lease_expires_at && claim.lease_expires_at > now);
+    if (liveClaim) {
+      platformKernel.requestExecutionCancel(delay.platform_execution_id, {
+        source: "delay",
+        actor_id: actorId,
+        reason: "delay cancellation requested",
+      });
+      return { content: [{ type: "text", text: `Cancellation requested for delay: ${id}` }] };
     }
 
     delay.status = "cancelled";
     delay.cancelledAt = now;
     transitionScheduledPlatformExecution("delay", delay, "cancelled", {
+      source: "delay",
+      actor: actorId,
       reason: "delay cancelled",
       result_status: "cancelled",
       result_summary: `Cancelled delay ${id}`,
     });
-    appendScheduledPlatformEvent("delay", delay, "schedule.delay.cancelled", { cancelled_at: delay.cancelledAt });
+    appendScheduledPlatformEvent("delay", delay, "schedule.delay.cancelled", { cancelled_at: delay.cancelledAt }, { source: "delay", actor: actorId });
     saveDelays(delays);
 
     return { content: [{ type: "text", text: `Cancelled delay: ${id}` }] };
