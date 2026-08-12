@@ -374,25 +374,6 @@ const TOOL_SCHEMAS = {
     limit: z.number().optional(),
     confirm: z.boolean().optional().default(false)
   }),
-  db_backup: z.object({
-    path: z.string().optional().describe("Output path (default: data/backups/)"),
-    compress: z.boolean().optional().default(true).describe("Gzip compression")
-  }),
-  db_restore: z.object({
-    path: z.string().describe("Backup file path"),
-    verify: z.boolean().optional().default(true).describe("Check integrity before restore")
-  }),
-  db_export: z.object({
-    table: z.string().optional().describe("Specific table (exports all if omitted)"),
-    format: z.enum(["json", "csv", "sql"]).optional().default("json").describe("Export format"),
-    path: z.string().optional().describe("Output file path"),
-    database: z.enum(["sqlite", "postgres"]).optional().default("sqlite").describe("Database backend")
-  }),
-  db_migrate: z.object({
-    action: z.enum(["status", "list", "up"]).describe("Migration action"),
-    version: z.number().optional().describe("Target version"),
-    name: z.string().optional().describe("Migration filename (for up action)")
-  }),
   ocr: z.object({
     path: z.string().describe("Image file path"),
     language: z.string().optional().default("eng").describe("OCR language (default: eng)"),
