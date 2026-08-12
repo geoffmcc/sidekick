@@ -1,7 +1,7 @@
 # Platform Roadmap
 
 Status: Residual completion roadmap (post-handoff convergence campaign)
-Verified commit: 5e4dbfdb04c9878cbbd284bd950a6afbef78eec3
+Verified commit: 51e45058c40f08cc831f18082c84726fc1b1b779
 Verified date: 2026-08-12
 Supersedes: the 2026-08-05 three-track roadmap pinned to `d2db2658`.
 
@@ -9,9 +9,9 @@ The prior 8-phase roadmap is fully committed (PRs #191–#235). Measurement of
 those commits (`platform-convergence-audit.md`) showed the platform had broad
 foundations but thin production integration. Since that audit, Track A completed
 (PRs #236, #238), the entire legacy handler decomposition landed (B1–B2, PRs
-#240–#245), and the first project-identity slice landed (B3-1, PR #246). Many
-kernel exports still have no production caller; wiring them is the remaining
-campaign, not adding another foundation layer.
+#240–#245), and the project-identity/execution convergence slices landed (PRs
+#246, #250, #252–#255). Many kernel exports still have no production caller;
+those remain separately classified residual work, not part of this closeout.
 
 Work is classified into four tracks. **Convergence tracks (A–C) are the
 campaign; product track (D) is explicitly optional.**
@@ -33,8 +33,8 @@ Track A is complete (PRs #236, #238).
 |---|---|---|---|---|
 | B1 | Dead legacy removal | **done** (#240) | Remove unreachable code from `tools-legacy.js` (legacy context block, `evolve` tail, orphans). | 1,163 dead lines removed; suite green; no export lost. |
 | B2 | Legacy handler extraction | **done** (#241–#245) | Extract the 67 legacy handlers in the documented dependency order. Each a reviewable slice. | Zero production handlers in `tools-legacy.js` (now ~1,440 lines of policy/approval/audit machinery, ordering anchors, and compatibility exports); 96 family-owned + 6 module-owned + 6 compute tools; no family imports legacy at init. |
-| B3 | Canonical project identity | **started** (B3-1, #246) | Register projects inside kernel writers; add adapters from the inferred string; invocation surface for backfills. | B3-1 delivered the shared canonicalization function (`src/core/project-identity.js`) and the kernel-registry choke point. Remaining: real callers in kernel/memory/KV writers, adapters replacing the three independent inference derivations, an invocation surface for `backfillProjectSources`, convergence of pre-existing mixed-case registry rows, `createScopeSnapshot` canonicalization, and a boundary policy for the ~11 unvalidated tool schemas. Isolation is untouched. |
-| B4 | Execution convergence | pending | Make the ledger authoritative for one runner; wire `requestExecutionCancel`; wire or delete `checkpoint_json`; converge 3 claim implementations behind one contract. | Production caller uses the contract; cancel loop closed. (The shared claim helpers moved to `src/tools/scheduled-execution.js` during B2.) |
+| B3 | Canonical project identity | **done for this campaign** (#246, #255) | Register projects at execution creation, preserve scheduled project context, verify isolation, and run the confirmed source backfill. | Canonical execution registration and scheduled context are production-wired; project/isolation suites pass; dry-run and confirmed backfill both reported 40 rows across 9 source types and 18 projects. Broader memory/KV inference convergence remains separately classified residual work. |
+| B4 | Execution convergence | **done for this campaign** (#250, #252–#254) | Make the ledger authoritative for the scheduled/runbook runners; wire cancellation and checkpoints. | Cancel requests and checkpoint cursors are production-wired for scheduled/runbook paths; scheduler suite passes; deployed verification passed at `51e4505`. Broader runner convergence remains separately classified residual work. |
 | B5 | Event consumption | pending | Add a delivery drainer + handler registry + event vocabulary; cap subscription backlog; move enqueue into the insert transaction. | A production consumer drains deliveries; hazard removed. |
 | B6 | Artifact custody convergence | pending | Register worker-uploaded artifacts in the kernel; surface (not swallow) mirror failures; add artifact access auth. | One custody authority for the worker path. |
 | B7 | Connector integration | pending | One real provider through the framework; secret-ref resolver bridging to the secret store. | A real integration governed by `platform_connectors`. |
@@ -64,14 +64,18 @@ registered, security review finds no new bypass, and documentation describes the
 final code. A row having a commit is not sufficient — production integration and
 verification are required.
 
+## Campaign closeout record (2026-08-12)
+
+The condensed B3/B4 campaign is closed through PR #255. The confirmed
+`project_registry` backfill was preceded by a dry run and matched it exactly:
+40 project-source rows across `kv` (10), `memory` (4), `execution` (13),
+`compute` (2), `handoff` (5), `session` (4), and `predict` (2), with zero
+workspace or blackbox rows. Verification found 40 stored source rows across
+18 projects. Production was redeployed at `51e4505`; all three services were
+active, restart smoke passed, and deployed-commit verification passed.
+
 ## Immediate next work
 
-**Finish B3 — canonical project identity adoption.** B3-1 (#246) fixed the
-identity function and the kernel-registry choke point; the value only lands when
-production writers use it. The next slices are: register projects inside the
-kernel writers (`startExecution`, `appendEvent`, `createProjectWorkspace`) and
-the memory/KV writers; replace the three independent project-inference
-derivations (`src/memory.js`, `src/agent.js`, `src/tools/context.js`) with the
-shared canonicalizer; add an invocation surface for `backfillProjectSources`;
-and converge any pre-B3-1 mixed-case `platform_projects` rows. After B3, B4
-(execution convergence) is the next dependency-ordered slice.
+The condensed B3/B4 campaign is complete. Future work remains in the residual
+matrix above: broader memory/KV project adapters, event consumption, artifact
+custody, connectors, module lifecycle, and other foundation-to-production gaps.
