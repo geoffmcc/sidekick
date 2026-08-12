@@ -16,6 +16,7 @@ const { execSync } = require("child_process");
 const { z } = require("zod");
 const evolveCommon = require("../../evolve/common");
 const platformKernel = require("../../platform/kernel");
+const toolContext = require("../context");
 const {
   createScheduledPlatformExecution,
   transitionScheduledPlatformExecution,
@@ -97,6 +98,7 @@ function generateRunbookId() {
 
 async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_index }) {
   const data = loadRunbooks();
+  const actorId = toolContext.getExecutionContext().actor;
   const execMode = mode || "autonomous";
 
   if (action === "create") {
@@ -529,8 +531,25 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
       return { content: [{ type: "text", text: "Instance not found" }], isError: true };
     }
     if (!instance.id) instance.id = runbook_id;
+    if (["aborted", "cancelled", "completed", "failed", "rolled_back", "rollback_failed"].includes(instance.status)) {
+      return { content: [{ type: "text", text: `Runbook instance ${runbook_id} is already terminal (status: ${instance.status})` }], isError: true };
+    }
+
+    const claim = instance.platform_execution_id ? platformKernel.getExecutionClaim(instance.platform_execution_id) : null;
+    const liveClaim = Boolean(claim?.claimed_by && claim.lease_expires_at && claim.lease_expires_at > new Date().toISOString());
+    if (liveClaim) {
+      platformKernel.requestExecutionCancel(instance.platform_execution_id, {
+        source: "runbook",
+        actor_id: actorId,
+        reason: "runbook abort requested",
+      });
+      return { content: [{ type: "text", text: `Abort requested for runbook: ${runbook_id}` }] };
+    }
+
     instance.status = "aborted";
     transitionScheduledPlatformExecution("runbook", instance, "cancelled", {
+      source: "runbook",
+      actor: actorId,
       reason: "runbook aborted",
       result_status: "aborted",
       result_summary: `Aborted runbook: ${runbook_id}`,

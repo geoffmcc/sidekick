@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const TEST_DATA_DIR = path.join(__dirname, 'test-scheduler-platform-data');
+const RB_FILE = path.join(TEST_DATA_DIR, 'runbooks.json');
 fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
 fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
 
@@ -131,6 +132,40 @@ console.log('Running Scheduler Platform Tests...\n');
     assert.strictEqual(noChild, undefined);
     console.log('Passed\n');
 
+    console.log('Test SP.6b: delay cancel requests cooperatively when a runner owns the claim');
+    result = await TOOLS.delay({ action: 'add', when: '1h', name: 'live cancel delay', tool: 'sidekick_respond', args: { text: 'in-flight' } });
+    assert.strictEqual(result.isError, undefined);
+    const liveCancelDelay = tools.loadDelays().find(d => d.name === 'live cancel delay');
+    const liveDelayClaim = platformKernel.claimExecution({ execution_id: liveCancelDelay.platform_execution_id, claimed_by: 'live-delay-runner' });
+    assert.strictEqual(liveDelayClaim.ok, true);
+    result = await TOOLS.delay({ action: 'cancel', id: liveCancelDelay.id });
+    assert.strictEqual(result.isError, undefined);
+    assert.ok(result.content[0].text.includes('Cancellation requested'));
+    assert.strictEqual(tools.loadDelays().find(d => d.id === liveCancelDelay.id).status, 'pending');
+    const liveDelayExec = db.getDb().prepare('SELECT actor_id FROM platform_execution_events WHERE event_type = ? AND execution_id = ? ORDER BY rowid DESC LIMIT 1').get('execution.cancel_requested', liveCancelDelay.platform_execution_id);
+    assert.strictEqual(liveDelayExec.actor_id, 'mcp');
+    assert.strictEqual(platformKernel.releaseExecutionClaim({ execution_id: liveCancelDelay.platform_execution_id, claimed_by: 'live-delay-runner', claim_epoch: liveDelayClaim.claim.claim_epoch }).ok, true);
+    console.log('Passed\n');
+
+    console.log('Test SP.6c: runbook abort requests cooperatively when a runner owns the claim');
+    result = await TOOLS.runbook({ action: 'create', name: 'live abort runbook', steps: [{ name: 'first', command: 'printf first' }, { name: 'later', command: 'printf later' }] });
+    assert.strictEqual(result.isError, undefined);
+    const liveAbortRbId = result.content[0].text.match(/Runbook created: (\S+)/)[1];
+    result = await TOOLS.runbook({ action: 'start', runbook_id: liveAbortRbId, mode: 'guided' });
+    assert.strictEqual(result.isError, undefined);
+    const liveAbortInstance = Object.values(JSON.parse(fs.readFileSync(RB_FILE, 'utf8')).instances).find(i => i.definitionId === liveAbortRbId);
+    const liveAbortClaim = platformKernel.claimExecution({ execution_id: liveAbortInstance.platform_execution_id, claimed_by: 'live-runbook-runner' });
+    assert.strictEqual(liveAbortClaim.ok, true);
+    result = await TOOLS.runbook({ action: 'abort', runbook_id: liveAbortInstance.id });
+    assert.strictEqual(result.isError, undefined);
+    assert.ok(result.content[0].text.includes('Abort requested'));
+    const liveAbortAfter = JSON.parse(fs.readFileSync(RB_FILE, 'utf8')).instances[liveAbortInstance.id];
+    assert.notStrictEqual(liveAbortAfter.status, 'aborted');
+    const liveAbortEvent = db.getDb().prepare('SELECT actor_id FROM platform_execution_events WHERE event_type = ? AND execution_id = ? ORDER BY rowid DESC LIMIT 1').get('execution.cancel_requested', liveAbortInstance.platform_execution_id);
+    assert.strictEqual(liveAbortEvent.actor_id, 'mcp');
+    assert.strictEqual(platformKernel.releaseExecutionClaim({ execution_id: liveAbortInstance.platform_execution_id, claimed_by: 'live-runbook-runner', claim_epoch: liveAbortClaim.claim.claim_epoch }).ok, true);
+    console.log('Passed\n');
+
     console.log('Test SP.7: a delay stranded running by a crash is re-queued on recovery');
     result = await TOOLS.delay({ action: 'add', when: '1h', name: 'stranded delay', tool: 'sidekick_respond', args: { text: 'later' } });
     assert.strictEqual(result.isError, undefined);
@@ -226,7 +261,6 @@ console.log('Running Scheduler Platform Tests...\n');
     const strandedExec = platformKernel.createExecution({ operation_type: 'runbook_execution', source: 'test' });
     platformKernel.transitionExecution(strandedExec.execution_id, 'queued', { source: 'test', reason: 'test setup' });
     platformKernel.transitionExecution(strandedExec.execution_id, 'running', { source: 'test', reason: 'test setup' });
-    const RB_FILE = path.join(TEST_DATA_DIR, 'runbooks.json');
     const rbData = JSON.parse(fs.readFileSync(RB_FILE, 'utf8'));
     rbData.instances['rbi_stranded_test'] = { id: 'rbi_stranded_test', definitionId: strandedRbId, status: 'running', currentStep: 1, mode: 'autonomous', started: Date.now() - 31 * 60 * 1000, results: [], platform_execution_id: strandedExec.execution_id };
     fs.writeFileSync(RB_FILE, JSON.stringify(rbData, null, 2));
