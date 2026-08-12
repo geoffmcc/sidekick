@@ -10,6 +10,7 @@ const policy = require("./policy");
 const approvals = require("./approvals");
 const logging = require("./logging");
 const registrySync = require("./registry-sync");
+const observability = require("./families/observability");
 
 function getBuiltinRegistry() {
   return buildBuiltinRegistry({
@@ -32,6 +33,10 @@ module.exports = {
   ...legacy,
   TOOLS: getCompatibilityToolMap(),
   TOOL_DEFS: getCompatibilityToolDefs(),
+  // Compatibility export: checkNetwork moved to the observability family
+  // (B-4) but stays on this surface for test/health.test.js and the
+  // registry contract's compatibility-export list.
+  checkNetwork: observability.checkNetwork,
   callTool: dispatcher.callTool,
   callMcpTool: dispatcher.callMcpTool,
   callAgentTool: dispatcher.callAgentTool,
