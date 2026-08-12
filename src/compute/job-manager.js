@@ -648,8 +648,12 @@ function renewLease(jobId, leaseId, leaseDurationMs = 300000) {
   }
   const now = nowIso();
   const newExpires = new Date(Date.now() + leaseDurationMs).toISOString();
-  db.prepare("UPDATE compute_jobs SET lease_expires_at = ?, lease_renewed_at = ?, updated_at = ? WHERE job_id = ? AND lease_id = ?")
+  const result = db.prepare("UPDATE compute_jobs SET lease_expires_at = ?, lease_renewed_at = ?, updated_at = ? WHERE job_id = ? AND lease_id = ?")
     .run(newExpires, now, now, jobId, leaseId);
+  // Timer-driven recovery (possibly in another process) can null the lease
+  // between the check above and this write; a renewal that matched no row
+  // must fail loudly, or the worker keeps running a job already requeued.
+  if (result.changes !== 1) throw new LeaseExpiredError(jobId, leaseId);
   db.prepare("UPDATE compute_job_attempts SET lease_expires_at = ? WHERE job_id = ? AND lease_id = ?").run(newExpires, jobId, leaseId);
   return getJob(jobId);
 }
@@ -659,19 +663,35 @@ function recoverExpiredLeases() {
   const db = dbStore.getDb();
   const now = nowIso();
   const rows = db.prepare("SELECT * FROM compute_jobs WHERE status IN ('leased', 'running') AND lease_expires_at < ?").all(now);
+  let recovered = 0;
   for (const row of rows) {
     const exhausted = row.attempt >= row.max_attempts;
     const nextStatus = exhausted ? "dead_letter" : "retry_wait";
-    db.prepare(`
-      UPDATE compute_jobs SET status = ?, lease_id = NULL, lease_expires_at = NULL, lease_renewed_at = NULL,
-        selected_worker_id = NULL, error_category = ?, error_message = ?, retry_after = ?, updated_at = ?
-      WHERE job_id = ?
-    `).run(nextStatus, exhausted ? "attempts_exhausted" : "lease_expired", "Worker lease expired", exhausted ? null : new Date(Date.now() + retryDelayMs(rowToJob(row))).toISOString(), now, row.job_id);
-    db.prepare("UPDATE compute_job_attempts SET status = ?, completed_at = ?, error_category = 'lease_expired', error_message = 'Worker lease expired' WHERE job_id = ? AND lease_id = ?")
-      .run(exhausted ? "dead_letter" : "expired", now, row.job_id, row.lease_id);
-    if (row.selected_worker_id) db.prepare("UPDATE compute_workers SET current_jobs = MAX(current_jobs - 1, 0), updated_at = ? WHERE worker_id = ?").run(now, row.selected_worker_id);
+    // Recovery now runs on a timer, potentially from more than one process
+    // (server and dashboard both initialize compute). Each row is recovered
+    // in its own transaction with a guarded UPDATE so a completion, renewal,
+    // or concurrent recovery that lands after the SELECT cannot be
+    // overwritten, and the attempt/counter writes happen exactly once.
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = db.prepare(`
+        UPDATE compute_jobs SET status = ?, lease_id = NULL, lease_expires_at = NULL, lease_renewed_at = NULL,
+          selected_worker_id = NULL, error_category = ?, error_message = ?, retry_after = ?, updated_at = ?
+        WHERE job_id = ? AND lease_id = ? AND status IN ('leased', 'running') AND lease_expires_at < ?
+      `).run(nextStatus, exhausted ? "attempts_exhausted" : "lease_expired", "Worker lease expired", exhausted ? null : new Date(Date.now() + retryDelayMs(rowToJob(row))).toISOString(), now, row.job_id, row.lease_id, now);
+      if (result.changes === 1) {
+        db.prepare("UPDATE compute_job_attempts SET status = ?, completed_at = ?, error_category = 'lease_expired', error_message = 'Worker lease expired' WHERE job_id = ? AND lease_id = ?")
+          .run(exhausted ? "dead_letter" : "expired", now, row.job_id, row.lease_id);
+        if (row.selected_worker_id) db.prepare("UPDATE compute_workers SET current_jobs = MAX(current_jobs - 1, 0), updated_at = ? WHERE worker_id = ?").run(now, row.selected_worker_id);
+        recovered++;
+      }
+      db.exec("COMMIT");
+    } catch (e) {
+      try { db.exec("ROLLBACK"); } catch {}
+      throw e;
+    }
   }
-  return rows.length;
+  return recovered;
 }
 
 function checkLeaseExpiration() { return recoverExpiredLeases(); }
@@ -1108,6 +1128,7 @@ module.exports = {
   renewLease,
   checkLeaseExpiration,
   recoverExpiredLeases,
+  releaseRetryWaitJobs,
   startLeasedJob,
   updateProgress,
   completeJob,
