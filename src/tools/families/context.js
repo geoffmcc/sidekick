@@ -261,7 +261,77 @@ async function sidekick_context({ action, project, context, decision, reasoning,
   }
 }
 
+// sidekick_project moved here in B-6: it aggregates KV, shared context, logs,
+// and procedures for one project, and this family already owns the shared
+// context store it reads. loadSharedContext is the legacy alias for this
+// family's loadContext; the handler body is verbatim.
+const { loadProcedures } = require("../../core/procedures-store");
+const loadSharedContext = loadContext;
+
+async function sidekick_project({ name, include }) {
+  const sections = (include || "kv,context").split(",").map(s => s.trim());
+  const output = {};
+  if (sections.includes("kv")) {
+    const allKV = dbStore.getAllKV();
+    const kvResults = [];
+    for (const [key, entry] of Object.entries(allKV)) {
+      if (typeof entry === 'object' && entry !== null && entry.project === name) {
+        kvResults.push({ key, value: typeof entry.value === 'string' ? entry.value.substring(0, 200) : entry.value, updated: entry.updated });
+      }
+    }
+    output.kv = kvResults;
+  }
+  if (sections.includes("context")) {
+    const ctx = loadSharedContext();
+    const structuredMemories = dbStore.searchMemories({ project: name, limit: 20 }).map(i => ({
+      type: i.type || "memory",
+      summary: i.summary || i.content,
+      created: i.last_seen_at || i.updated_at,
+      project: i.project
+    }));
+    const items = [
+      ...structuredMemories,
+      ...(ctx.decisions || []).map(i => ({ type: "decision", summary: i.decision, created: i.date, project: i.project })),
+      ...(ctx.problems || []).map(i => ({ type: "problem", summary: i.description, created: i.date, project: i.project })),
+      ...(ctx.patterns || []).map(i => ({ type: "pattern", summary: i.description, created: i.date, project: i.project })),
+      ...(ctx.sessions || []).map(i => ({ type: "session", summary: i.summary, created: i.date, project: i.project })),
+      ...(ctx.memories || []).map(i => ({ type: i.type || "memory", summary: i.summary || i.goal || i.tool, created: i.date, project: i.project }))
+    ].filter(i => i.project === name);
+    output.context = items.slice(-20).map(i => ({
+      type: i.type,
+      summary: String(i.summary || "").substring(0, 200),
+      created: i.created
+    }));
+  }
+  if (sections.includes("logs")) {
+    const toolLogs = dbStore.readToolLogs(20);
+    output.logs = toolLogs.map(l => ({
+      time: l.t, tool: l.n, ok: l.ok, summary: l.s
+    }));
+  }
+  if (sections.includes("procedures")) {
+    const procs = loadProcedures();
+    output.procedures = Object.keys(procs).filter(n => n.toLowerCase().includes(name.toLowerCase()));
+  }
+  return { content: [{ type: "text", text: JSON.stringify(output, null, 2) }] };
+}
+
+const projectSchema = z.object({
+    name: z.string().describe("Project name"),
+    include: z.string().optional().describe("Sections to include: kv,context,logs,procedures (default: kv,context)")
+  });
+
 const descriptors = Object.freeze([Object.freeze({
+  name: "project",
+  description: "Get complete project context in one call: KV entries, context tracking, recent logs, procedures.",
+  schema: projectSchema,
+  args: { name: "string (project name)", include: "string (optional, comma-separated: kv,context,logs,procedures - default kv,context)" },
+  risk: "low",
+  category: "Efficiency",
+  source: "builtin",
+  family: "context",
+  handler: sidekick_project,
+}), Object.freeze({
   name: "context",
   description: "Persistent intelligent context management (track projects, decisions, problems, patterns, sessions, automatic memories; recall and suggest based on past context)",
   schema: z.object({ action: z.enum(["track_project", "track_decision", "track_problem", "track_pattern", "track_session", "recall", "suggest", "summarize", "list"]).describe("Context action to perform"), project: z.string().optional().describe("Project name (for tracking and filtering)"), context: z.string().optional().describe("Context description (for decisions/patterns)"), decision: z.string().optional().describe("Decision made (for track_decision)"), reasoning: z.string().optional().describe("Reasoning behind decision (for track_decision)"), problem: z.string().optional().describe("Problem description (for track_problem)"), solution: z.string().optional().describe("Solution to problem (for track_problem)"), pattern: z.string().optional().describe("Pattern description (for track_pattern)"), summary: z.string().optional().describe("Session summary (for track_session)"), topics: z.string().optional().describe("Comma-separated session topics (for track_session)"), outcome: z.string().optional().describe("Session outcome: success, partial, or abandoned (for track_session)"), notes: z.string().optional().describe("Additional session notes (for track_session)"), query: z.string().optional().describe("Search query (for recall/suggest)"), type: z.string().optional().describe("Context type: decisions, problems, patterns, projects, sessions, memories, or all (default: all)"), limit: z.number().optional().describe("Maximum results to return (default: 10)") }),
@@ -269,4 +339,4 @@ const descriptors = Object.freeze([Object.freeze({
   risk: "medium", category: "Context & Learning", source: "builtin", family: "context", handler: sidekick_context,
 })]);
 
-module.exports = { descriptors, sidekick_context, loadContext, saveContext, searchContext, simpleSimilarity, generateEmbedding, findStructuredMemoryById, findContextItemById, formatContextRecallResult, updateLegacyContextItem, contextItemIsActive };
+module.exports = { descriptors, sidekick_context, sidekick_project, loadContext, saveContext, searchContext, simpleSimilarity, generateEmbedding, findStructuredMemoryById, findContextItemById, formatContextRecallResult, updateLegacyContextItem, contextItemIsActive };

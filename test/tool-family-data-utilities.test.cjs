@@ -268,7 +268,9 @@ const text = result => result.content[0].text;
     // handlers moved into a family stay reachable. Before the data-utilities
     // extraction this gate read the legacy TOOLS map and would report
     // "Unknown tool" for every extracted tool.
-    const batchResult = await legacy.TOOLS.batch({
+    // batch moved to families/flow-control.js in B-6; the registry-derived
+    // facade TOOLS map is the current owner (legacy.TOOLS no longer carries it).
+    const batchResult = await tools.TOOLS.batch({
       calls: [
         { tool: 'parse', args: { input: '{"a":1}' } },
         { tool: 'sidekick_template', args: { template: 'hi {{n}}', data: '{"n":"x"}' } },
