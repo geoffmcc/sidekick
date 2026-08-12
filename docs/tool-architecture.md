@@ -9,12 +9,14 @@ the `data-utilities` module is enabled. Tools execute through a descriptor
 registry and centralized dispatcher. `src/tools-legacy.js` still owns most
 migrated-in-place handlers, but it is no longer the authoritative execution path.
 
-Measured ownership at this commit: **67 legacy-owned handlers** (61 defined in
+Measured ownership: **67 legacy-owned handlers** (61 defined in
 `tools-legacy.js` + 6 delegated to `src/compute/tools.js`) and **41 family-owned
-tools** across 15 family files. Handler extraction has been stalled for ~15
-commits (the last extraction was `tail`→monitoring); `tools-legacy.js` has grown
-to 10,766 lines and carries ~825 lines of unreachable dead code. See
-`docs/platform-roadmap.md` Track B2 for the dependency-ordered extraction plan.
+tools** across 15 family files. The Track B legacy decomposition is underway:
+B-1 removed 1163 lines of proven-unreachable dead code (the superseded legacy
+context block, the unreachable `sidekick_evolve` helpers/tail, and four orphan
+helpers), taking `tools-legacy.js` from 10,769 to 9,606 lines with no handler
+ownership change. See `docs/platform-roadmap.md` Track B for the remaining
+dependency-ordered extraction plan.
 
 ## Descriptor Model
 
