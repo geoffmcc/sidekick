@@ -153,7 +153,7 @@ sidekick_evolve({ action: "promote", id: "cand_..." })
 sidekick_evolve({ action: "deprecate", id: "cand_...", reason: "unused" })
 ```
 
-Trial and active generated tools are discoverable as `sidekick_generated_<name>` after registry sync and MCP server startup. Deprecated or rejected generated tools are removed from discovery but retain audit history.
+Trial and active generated tools are discoverable as `generated_<name>` after registry sync and MCP server startup (the older `sidekick_generated_<name>` alias form also resolves). Deprecated or rejected generated tools are removed from discovery but retain audit history.
 
 ## Automatic Memory
 

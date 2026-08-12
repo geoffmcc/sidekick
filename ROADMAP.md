@@ -6,12 +6,39 @@ What's planned for Sidekick.
 
 > Platform architecture status, tool-ownership counts, and the active
 > convergence roadmap are tracked authoritatively in
-> `docs/platform-convergence-audit.md` and `docs/platform-roadmap.md`. The list
-> below is a product-feature history and is not the source of truth for tool
-> counts.
+> `docs/platform-convergence-audit.md` and `docs/platform-roadmap.md`. The
+> feature list further below is a product history and is not the source of
+> truth for tool counts.
 
-- 102 built-in MCP tools (108 with the `data-utilities` module enabled). Query the `tools` table for the authoritative current list.
-- Live dashboard with 9 tabs (System, Activity, Data, Memory, Database, Config, Agent, Tools, Metrics)
+**Where the platform stands (verified at `main` 5e4dbfd, 2026-08-12):**
+
+- 108 built-in MCP tools across 20 categories: 102 in the core registry plus 6
+  from the bundled `data-utilities` module. Query the `tools` table for the
+  authoritative live list.
+- The modular tool runtime is complete: descriptor registry, centralized
+  dispatcher, source-aware policy, approvals, redaction, and audit are the one
+  production execution path, and `src/tools-legacy.js` owns zero tool handlers.
+- Completed architecture: Agent Bridge with follow-ups and evidence honesty;
+  Sidekick Compute (workers, providers, placement, jobs, artifacts, OpenVINO
+  NPU embeddings); durable task-originated approval continuation; execution
+  claims/leases for cron/delay/watch/runbook; Black Box incident evidence;
+  structured memory with sessions, handoffs, and sync; module lifecycle proven
+  by the first-party `data-utilities` module.
+- Active convergence (`docs/platform-roadmap.md` Track B/C): canonical project
+  identity adoption (B3, started), execution-ledger convergence, event
+  consumption, artifact custody convergence, connector integration, compute
+  model dedup, and the third-party module path.
+- Foundation-only (implemented but not production-wired): platform workflow
+  runner, event delivery/consumers, connector integrations, durable
+  users/teams/deployment profiles, evaluation/replay, and the generic
+  security-research records.
+
+## Feature history
+
+The list below records features as they were added (tool names use the older
+`sidekick_` prefix; canonical names today are unprefixed):
+
+- Live dashboard tabs (Mission Control, System, Activity, Data, Memory, Database, Config, Agent, Approvals, Tools, Compute, Metrics)
 - Autonomous agent bridge with Groq cloud + local Ollama fallback
 - Persistent KV storage across sessions
 - AGENTS.md integration for persistent collaboration
@@ -190,41 +217,47 @@ Tools with 70-89% success rate had no background color on the bar fill, making i
 
 ## Planned
 
-### Proxmox Migration
-- Migrate from VPS to local Proxmox VM
-- 12GB VM with on-demand Ollama strategy
-- AMD GPU passthrough (Radeon 680M)
-- Native Ollama (not Docker) for simpler AMD GPU management
-- Device passthrough for GPU with fallback plan
-- Clean shutdown via Proxmox UI
-- Systemd dependencies with health checks
-- Proxmox snapshots with qemu-guest-agent
+> Convergence work (the active engineering campaign) is tracked in
+> `docs/platform-roadmap.md`, not here. This section lists product-level
+> directions beyond that campaign.
 
 ### CI/CD Integration
-- ✅ **sidekick_github** — Full GitHub API integration (PRs, issues, commits, releases)
+- ✅ **github** — Full GitHub API integration (PRs, issues, commits, releases)
+- ✅ **ci_status** — Read-only check-run/CI inspection for a PR head, SHA, ref, or branch
 - Trigger GitHub Actions workflows from sidekick
-- Report build/test status back to GitHub PRs
 - Automated deployment pipelines with rollback capabilities
 - Watch for PR events and run checks automatically
 
 ### Multi-User Support
-- Team collaboration features (shared workspace, concurrent sessions)
-- Role-based access control (admin, developer, viewer)
-- Per-user KV namespaces
-- Audit logging for team actions
+- Current state: single-operator authentication (one shared MCP API key, one
+  dashboard account). An in-memory identity/teams/deployment-profile
+  foundation exists (`src/platform/identity-deployment.js`) but is not
+  persisted, enforced, or exposed anywhere.
+- Remaining: durable users/teams/memberships tables, authentication
+  integration, role-based access control, per-user KV namespaces, and team
+  audit logging (tracked as optional slice C2 in `docs/platform-roadmap.md`).
 
 ### Security & Compliance
-- Dedicated security scanning tools (nmap, lynis, dependency audits)
+- ✅ **security_scan** — Read-only configuration and secret exposure scanning
+- Dedicated network/system scanning integrations (nmap, lynis, dependency audits)
 - Automated compliance checks
 - Vulnerability reporting and tracking
 - Integration with security advisory databases
 
 ### Notifications & Integrations
-- ✅ **sidekick_notify** — Send notifications to Discord, Slack, or email
-- ✅ **sidekick_webhook** — Receive and manage webhooks from external services
-- ✅ **sidekick_watch** — Event-driven monitoring (watch services, processes, endpoints, files)
+- ✅ **notify** — Send notifications to Discord, Slack, or email
+- ✅ **webhook** — Receive and manage webhooks from external services
+- ✅ **watch** — Event-driven monitoring (watch services, processes, endpoints, files)
 - RSS/Atom feed for activity log
 - API for external integrations
+- First real connector through the generic connector framework (the framework
+  stores lifecycle records today but governs no live integration)
+
+### Completed infrastructure milestones
+
+- **Proxmox migration** — completed 2026-06-12; Sidekick moved from a VPS to a
+  local Proxmox VM. GPU passthrough and the WireGuard/Caddy remote-access layer
+  from the original plan (`MIGRATION.md`, historical) were deferred.
 
 ### Data & Configuration Tools
 - ✅ **sidekick_parse** — Parse structured data formats (JSON, YAML, XML, INI, CSV)
@@ -245,7 +278,9 @@ Tools with 70-89% success rate had no background color on the bar fill, making i
 - ✅ **sidekick_cron** — Scheduled tasks and cron-like automation
 - ✅ **sidekick_delay** — One-shot task scheduling
 - ✅ **sidekick_queue** — Persistent task queue with priorities
-- Long-running task persistence (survive VPS restarts)
+- ✅ Scheduled-work restart persistence — delays, watches, runbooks, and
+  task-originated approvals recover across restarts via epoch-fenced execution
+  claims; in-process `retry`/`orchestrate` runs remain non-durable
 - Agent-to-agent communication
 - ✅ **sidekick_context** — Persistent intelligent context management
 - ✅ **sidekick_teach** — Meta-learning and self-extension

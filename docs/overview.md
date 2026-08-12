@@ -1,6 +1,6 @@
 # Overview
 
-Sidekick is a self-hosted agent platform for compatible MCP clients and automation agents. It provides a remote MCP server, browser dashboard, autonomous Agent Bridge, persistent memory and knowledge, and an optional distributed Compute worker system. Current `main` contains 107 built-in tools across 20 categories, with separately approved generated tools added at runtime.
+Sidekick is a self-hosted agent platform for compatible MCP clients and automation agents. It provides a remote MCP server, browser dashboard, autonomous Agent Bridge, persistent memory and knowledge, and an optional distributed Compute worker system. Current `main` contains 108 built-in tools across 20 categories (102 in the core registry plus 6 from the bundled `data-utilities` module), with separately approved generated tools added at runtime.
 
 ## Core idea
 
@@ -34,7 +34,7 @@ Sidekick is broad by design. The current codebase includes tools for:
 | Component | Role |
 |---|---|
 | MCP server | The public tool endpoint used by compatible MCP clients and agents. |
-| Tool runtime | `src/tools/` owns descriptors, registry, dispatcher, request context, schemas, policy, approvals, result normalization, logging, and registry sync. Most established handlers remain in `src/tools-legacy.js` behind compatibility adapters while modular extraction continues. |
+| Tool runtime | `src/tools/` owns descriptors, registry, dispatcher, request context, schemas, policy, approvals, result normalization, logging, and registry sync. Every handler is owned by a descriptor family under `src/tools/families/`, the `data-utilities` module, or `src/compute/tools.js`; `src/tools-legacy.js` retains only policy/approval/audit machinery, ordering anchors, and compatibility exports. |
 | Dashboard | Browser-facing UI and API for monitoring and management. |
 | Agent Bridge | Autonomous task loop that plans and executes tools through the same authoritative dispatcher. |
 | Sidekick Compute | Optional enrolled worker agents, provider/model registry, routing, leases, jobs, cancellation, recovery, and artifacts for allowlisted model workloads. |

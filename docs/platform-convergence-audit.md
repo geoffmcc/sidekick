@@ -1,20 +1,24 @@
 # Platform Convergence Audit
 
 Status: Current-state audit (post-handoff convergence campaign)
-Verified commit: a88ea84577283899b2f02892e1dcbe9be0dcf509
-Verified date: 2026-08-11
-Supersedes: the 2026-08-05 audit pinned to `d2db2658` (45 PRs stale).
+Verified commit: 5e4dbfdb04c9878cbbd284bd950a6afbef78eec3
+Verified date: 2026-08-12
+Supersedes: the 2026-08-11 audit pinned to `a88ea84` (10 PRs stale) and the
+2026-08-05 audit pinned to `d2db2658`.
 
 ## Method
 
-Measured directly from code at `a88ea84`. Handoffs, prior audits, roadmap
-documents, PR descriptions, and phase numbers were treated as historical
-evidence and re-checked against the implementation. Every classification below
-is backed by a call-site or an empirical test, not by a documentation claim.
+Originally measured directly from code at `a88ea84`; rows affected by PRs
+#236–#246 (Track A completion, B1/B2 legacy decomposition, module entry
+re-binding, B3-1 project canonicalization) were re-measured at `5e4dbfd`.
+Handoffs, prior audits, roadmap documents, PR descriptions, and phase numbers
+were treated as historical evidence and re-checked against the implementation.
+Every classification below is backed by a call-site or an empirical test, not
+by a documentation claim.
 
-Baseline test run at this commit: `node test/run-all.js` → **93 passed, 0
-failed, 0 skipped**. Critically, **9 test files exist but are not registered in
-`test/run-all.js`**, so CI never runs them (see Systemic Findings).
+Baseline at `5e4dbfd`: **106 test files registered in `test/run-all.js`**. The
+9 suites that were orphaned at `a88ea84` were registered by PR #236 and now run
+in CI (as `critical: false` entries).
 
 The prior 8-phase roadmap (`d9625a3`..`a88ea84`, PRs #191–#235) has a commit for
 every phase. This audit measures what those commits actually delivered:
@@ -43,21 +47,21 @@ boundaries.
 | Area | Classification | Measured evidence | Residual gap |
 |---|---|---|---|
 | Tool descriptor/registry/dispatcher | **production-complete** | One path: `tools.js`→`tools/index.js`→`dispatcher.js`. All transports route through it. Fail-closed duplicate/risk; capability-Symbol privileged seams; audit failures surfaced. | None for the core; the gap is legacy ownership below. |
-| Tool ownership | **compatibility-owned (62%)** | Measured: **67 legacy-owned handlers** (61 in `tools-legacy.js` + 6 delegated to `compute/tools.js`), **41 family-owned** across 15 family files. `TOOL_DEFS`=102 rows; registry 102/108 (module off/on). 1 alias. `tools-legacy.js`=10,766 lines and has *grown* since the last extraction. | Extract remaining 67 in dependency order; ~825 lines dead legacy code to remove first. |
-| Dashboard `/api/db/*` dispatch | **production-usable but partial** | 6 routes call `dbStore` directly with only `enforceToolPolicy` as an HTTP guard — skip Zod validation, approvals, redaction, audit. `POST /api/db/query` honors `readonly:false` → arbitrary SQL. | Delegate to `callDashboardTool` (`database-inspection` family already implements identical semantics). |
+| Tool ownership | **converged (B1/B2 done)** | Re-measured at `5e4dbfd`: **zero legacy-owned handler bodies**. 96 family-owned across 38 registered family files, 6 module-owned (`data-utilities`), 6 compute tools in `src/compute/tools.js` behind pass-through wiring. `TOOL_DEFS`=102 rows; registry 102/108 (module off/on). 1 alias (`modules`). `tools-legacy.js`=1,439 lines: policy/approval/audit machinery, ordering anchors, compatibility exports. | Optional follow-up: relocate the policy/approval machinery out of the legacy file and retire compatibility exports. |
+| Dashboard `/api/db/*` dispatch | **fixed (#238)** | `/api/db/query` routed through `callDashboardTool` (write mode preserved but governed); `db/search` identifiers escaped. Remaining read-only `/api/db/*` routes are a deferred lower-value follow-up (network-gated by the blanket dashboard auth middleware). | — |
 | DB-backed tool catalog | **duplicated** | `syncToolRegistry`→`tools` tables mirror the registry, feed agent allowlist + dashboard; drift mitigated by intersection, not eliminated. | Derive catalog from the registry, or document the mirror as intentional. |
 | Module lifecycle — activation half | **production-usable but partial** | activation→registry→policy→audit→disable→health all wired, through the one registry (`registry.js:36-40`). Integrity re-hash at activation (`loader.js:182-197`). Only the built-in `data-utilities` module exercises it. | Health scheduling iterates `BUILTIN_MODULES` only. |
-| Module lifecycle — third-party half | **foundation-only (orphaned)** | discovery/inspection/packaging/installation/configuration implemented + tested, **zero `src/` callers**. No entry loader ever `require()`s `entry_point`; a third-party module can reach `configured` but never `enabled`. `package_hash` computed, never persisted/verified. Upgrade/uninstall contract-only. Install confined to repo root. Its 3 tests are orphaned (not in CI). | Entry loader, package-hash binding, operator actions, health for non-builtins, sandbox story. |
+| Module lifecycle — third-party half | **foundation-only** | discovery/inspection/packaging/installation/configuration implemented + tested (tests registered in CI since #236), **zero `src/` callers**. No entry loader ever `require()`s `entry_point`; a third-party module can reach `configured` but never `enabled`. `package_hash` computed, never persisted/verified. Upgrade/uninstall contract-only. Install confined to repo root. | Entry loader, package-hash binding, operator actions, health for non-builtins, sandbox story (B9). |
 | `platform_extensions` registry | **duplicated** | Kernel `platform_extensions` CRUD (`kernel.js:1759-1825`) is a second module-ish lifecycle, unconnected to `platform_modules`. | Converge or retire. |
-| Projects — canonical identity | **foundation-only** | `platform_projects`/`_project_sources`/workspace/secret API (mig 027, `kernel.js:1405-1720`) durable + tested, **zero production callers**. Kernel writers accept `project_id` but never `registerProject`; no consumer FK. `backfillProjectSources`/`backfillWorkspaceSecrets` have no invocation surface. | Register projects inside kernel writers; add an invocation surface for backfills; API/UI. |
+| Projects — canonical identity | **foundation-only (B3-1 landed)** | B3-1 (#246) added `src/core/project-identity.js` (`canonicalizeProjectName`: lowercase, non-`[a-z0-9_]` runs → `_`, trim underscores) and a `normalizeProjectId` choke point in the kernel registry functions, with display-name/original-spelling preservation on first registration. Registry still has **zero production callers**; kernel writers (`startExecution`, `appendEvent`, `createProjectWorkspace`) still accept raw `project_id`; `backfillProjectSources` still has no invocation surface; pre-B3-1 mixed-case registry rows are not converged; `createScopeSnapshot` does not canonicalize. | Remaining B3 slices: real callers in kernel/memory/KV writers; adapters replacing the three inference derivations; backfill invocation surface; legacy-row convergence; boundary policy for unvalidated tool schemas. |
 | Projects — production identity | **duplicated** | Free-text `project` string assigned by NL regex (`inferProjectFromText`, `memory.js:160`), three independent derivations (`memory.js`, `agent.js:927`, `context.js:37`). Live list = `kv_store.project` DISTINCT scan. Parallel: `ctx.projects{}` JSON doc, plus per-feature project columns. | Converge on the canonical projection via adapters. |
 | Cross-project isolation | **missing** | Per-query opt-in `WHERE project = ?` only; no enforcement boundary; `checkCapability`/`platformGuard` capability path is dead in production (no call site passes `capability`+`actor_id`). | Enforcement boundary + isolation tests. |
 | Workspaces + encrypted secrets | **production-complete impl, foundation-only deployment** | Fail-closed envelopes, plaintext writers closed, loss-averse backfill. Zero production callers. | Wire to a tool/route; trigger backfill. |
-| Identity / teams / memberships | **foundation-only (below the bar)** | PR #235 = 18-line in-memory `Map`s, no migration/tables, no auth/authz integration, `authorize()` ignores `project_id`, no audit events, **test not in CI**. | Durable tables (mig 036), single-operator bootstrap, capability bridge, API/UI. |
+| Identity / teams / memberships | **foundation-only (below the bar)** | PR #235 = 19-line in-memory `Map`s, no migration/tables, no auth/authz integration, `authorize()` ignores `project_id`, no audit events. Its test is now registered in CI (#236). | Durable tables (mig 036), single-operator bootstrap, capability bridge, API/UI. |
 | Deployment profiles | **foundation-only + duplicated** | In-memory, `required_checks` never evaluated. `MISSION_PROFILES` (`tools-legacy.js:6786`) is a separate, production-wired profile vocabulary. | Make profiles enforce runtime behavior; reconcile with mission profiles. |
 | Single-operator auth | **production-complete** | Shared bearer key (MCP), env-var dashboard user (fails closed correctly), per-worker credentials, `meta.user_id` (memory sync). | Bootstrap path to a durable owner user when identity lands. |
 | Durable executions | **production-usable but partial (projection)** | `platform_executions` written by 8 producers, all best-effort/try-catch-swallowed; authoritative state lives in per-feature JSON/tables. Recovery (`recoverOrphaned*`) is the load-bearing exception. | Make the ledger authoritative for ≥1 runner. |
-| Execution claims/leases | **production-usable but partial** | Correct epoch-fenced claims used by 4 runners (cron/delay/watch/runbook) via shared helpers **in `tools-legacy.js`**. | Extract the helper module; converge 3 claim implementations behind one contract. |
+| Execution claims/leases | **production-usable but partial** | Correct epoch-fenced claims used by 4 runners (cron/delay/watch/runbook) via shared helpers, now in `src/tools/scheduled-execution.js` (extracted during B2). | Converge 3 claim implementations behind one contract (B4). |
 | Checkpoints / cancel | **foundation-only (half-wired)** | `checkpointExecution` zero prod callers. `requestExecutionCancel` zero prod writers but 6+ prod readers — a built cancel loop with a test-only writer. | Wire cancel (~10 lines); wire or delete `checkpoint_json`. |
 | Workflow runner | **foundation-only (dead)** | `platform_workflows`/`_steps`/`_runner_sessions` + 8 kernel fns: zero production callers. mig 026 exists for boot parity only. | Adopt for one runner or delete. |
 | Non-durable runners | **partial** | `mission` (router), `queue`/`orchestrate` (JSON, look durable), `retry` (in-process — loses work on crash). | Bring onto claims or document as non-durable. |
@@ -80,29 +84,26 @@ boundaries.
 | Security-research fixtures | **synthetic ✓** | Only `example.test`/`synthetic-*`; zero real hosts/CVEs/tokens. `data/sidekick.db` untracked; `backups/` gitignored. Digest-only target projection verified. | No confidential research present. Preserve this. |
 | Evaluation / replay | **foundation-only** | 21 lines, pure, non-durable, zero production callers. Side-effect invariant holds structurally (no dispatcher reference; actions hardcoded `[]`; records rejected otherwise) but it is an unused pure function, not a runtime sandbox. `evaluateReplay` without an expected digest returns `ok:true`. | Durable records, execution/artifact linkage, regression diff, operator surface — all optional product work. |
 | Dashboard control plane | **partial** | Kernel-mediated endpoints (connectors/events/scope/artifacts) have **no UI**; UI endpoints (memory/evolve/predict/blackbox/compute/db) bypass the kernel. Auth is opt-in; `readonly:false` SQL route; `static/dashboard.js:562` calls a nonexistent route. | UI for authoritative objects; route UI mutations through services. |
-| Persistence — migration self-containment | **BROKEN (verified)** | **C1**: pure-migration boot fails at `007` (`no such column: session_id`) — reproduced empirically. `007` indexes `tool_logs.session_id`/`task_id`, added only by runtime `db.js`. Migrations are not a standalone schema. | Make migrations self-contained. |
-| Persistence — cross-process schema | **BROKEN (verified)** | **C2**: runtime `ensureSchema` creates `compute_*` columns; migrations 014–024 bare `ALTER ... ADD COLUMN` (no guard) → `duplicate column name` → fatal MCP boot. Reproduced empirically. Dashboard runs `compute.initialize()` without migrating. | Idempotent ALTER path; gate runtime ensures on migration completion. |
+| Persistence — migration self-containment | **fixed (#236)** | C1 resolved: migrations build the schema standalone; a migrations-only boot succeeds. | — |
+| Persistence — cross-process schema | **fixed (#236, #237)** | C2 resolved: idempotent `ADD COLUMN` path; runtime-then-migration boot no longer collides. PR #237 additionally fixed builtin-module entry-hash re-binding on a legitimate release change (attested rebind for `builtin` modules only; tamper case stays fail-closed). | — |
 | Persistence — runtime-only schema | **partial** | 23 columns across 5 tables (`tool_logs`×11, `predictions`×4, etc.) exist in no migration; `setupFTS5` DROP+recreates ~66 unversioned virtual tables. Single `schema_version` int, no per-migration ledger, no down-migrations. | Migrate the columns; version FTS setup. |
 | Module migration isolation | **production-complete** | `src/modules/migrations.js`: denylist + allowlist + `platform_` restriction + real tokenizer + atomic batch + pre-validation fail-closed. No gaps. | — |
 
 ## Systemic findings
 
-1. **9 orphaned test suites** (`compute-jobs-mcp-contract`, `evaluation-replay`,
-   `identity-deployment`, `modules-discovery`, `modules-installation`,
-   `modules-packaging`, `security-research-adapter`,
-   `security-research-evidence-vault`, `security-research-lab-policy`) exist and
-   pass individually but are absent from `test/run-all.js`, so CI never runs
-   them. Every headline foundation from PRs #227–#235 and the module third-party
-   path is unverified in CI. **This is the highest-leverage, lowest-risk fix.**
-2. **The "zero production callers" pattern is pervasive.** ~90 kernel exports
-   have no production caller: canonical projects, workspaces/secrets, workflows,
-   runner sessions, all 21 security-research functions, `platform_model_registry`,
-   RBAC (`grant/revoke/checkCapability`), backups/releases/extensions. The
-   authoritative platform tier is largely a test-only artifact. Convergence means
-   wiring these into production, not adding more of them.
-3. **Two verified startup-correctness bugs (C1, C2)** in the persistence layer,
-   both reproduced empirically, both in the migration/runtime-ensure region that
-   the parity test does not cover (`compute_*`, `tool_logs`).
+1. ~~9 orphaned test suites~~ **Resolved (#236).** All previously orphaned
+   suites are registered in `test/run-all.js` (as `critical: false`) and run in
+   CI; 106 test files are registered at `5e4dbfd`.
+2. **The "zero production callers" pattern is still the dominant residual gap.**
+   ~90 kernel exports have no production caller: canonical projects (the
+   registry, even after B3-1), workspaces/secrets, workflows, runner sessions,
+   all security-research functions, `platform_model_registry`, RBAC
+   (`grant/revoke/checkCapability`), backups/releases/extensions, event
+   delivery/consumption, `requestExecutionCancel`/`checkpointExecution`. The
+   authoritative platform tier is largely a test-only artifact. Convergence
+   means wiring these into production, not adding more of them.
+3. ~~Two verified startup-correctness bugs (C1, C2)~~ **Resolved (#236).**
+   Migrations are self-contained and the runtime-ensure path is idempotent.
 
 ## Exit criteria for this campaign
 
@@ -144,9 +145,9 @@ Convergence is complete when, with evidence:
 
 | Document | Status | Note |
 |---|---|---|
-| `platform-convergence-audit.md` | CURRENT | This file. |
-| `platform-roadmap.md` | CURRENT | Rewritten for the residual roadmap. |
-| `platform-target-architecture.md` | CURRENT (direction) | Direction still valid; header reverified. |
-| `tool-architecture.md` | NEEDS COUNT CORRECTION | 40→41 family / 67 legacy; extraction stalled. |
-| `ROADMAP.md` | STALE (product) | June-era "90 tools" list; product-facing, corrected header pending. |
-| `architecture.md`, `data-model.md` | PARTIALLY CURRENT | Core accurate; kernel/compute coverage incomplete. |
+| `platform-convergence-audit.md` | CURRENT | This file; changed rows re-verified at `5e4dbfd`. |
+| `platform-roadmap.md` | CURRENT | Track A/B1/B2 marked done; B3-1 recorded; next work updated. |
+| `platform-target-architecture.md` | CURRENT (direction) | Direction still valid. |
+| `tool-architecture.md` | CURRENT | Reconciled at `5e4dbfd`: zero legacy handlers; 96 family + 6 module + 6 compute. |
+| `ROADMAP.md` | CURRENT (product) | Rebuilt 2026-08-12: current status plus clearly-labeled feature history. |
+| `architecture.md`, `data-model.md` | CURRENT | Reconciled at `5e4dbfd`; kernel sections carry production-integration status notes. |

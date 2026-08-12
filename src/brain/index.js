@@ -31,7 +31,7 @@ const CORE_PLANNING_TOOLS = new Set([
   "find", "read", "list", "get", "search", "git", "llm", "respond",
 ]);
 
-// Deterministic goal-relevance shortlist. The FULL catalog (107 tools live)
+// Deterministic goal-relevance shortlist. The FULL catalog (100+ live tools)
 // renders to ~40k chars of system prompt, which collapses a small model's
 // instruction-following — the schema and example drown. ~24 tools with full
 // signatures (~13k chars) planned correctly in live probes. Selection shapes

@@ -11,10 +11,13 @@
 | `src/tools/registry.js` | Built-in descriptor registry and alias resolution. |
 | `src/tools/dispatcher.js` | Authoritative schema, policy, approval, execution, cancellation, result, and audit boundary. |
 | `src/tools/context.js` | Request-scoped source, actor, session, task, project, trace, approval, and cancellation context. |
-| `src/tools/families/` | Descriptor-owned extracted tool families. |
-| `src/tools-legacy.js` | Remaining legacy handler implementations behind compatibility adapters during the modular migration. |
+| `src/tools/families/` | Descriptor-owned tool families (all built-in handlers). |
+| `src/tools-legacy.js` | Tool policy/approval/audit machinery, `TOOL_DEFS` ordering anchors, compute pass-through wiring, and compatibility re-exports. Owns zero tool handlers. |
+| `src/modules/` | Module lifecycle: manifest, discovery, packaging, installation, configuration, activation, permissions, migrations, health. Bundled module: `data-utilities`. |
+| `src/approvals/` | Durable task-originated approval continuation (checkpoints, keys, sweeper, vocabulary). |
+| `src/brain/` | Feature-flagged bounded planner over the Agent Bridge (default off). |
 | `src/compute/` | Compute worker, provider, model, router, job, lease, cancellation, recovery, and artifact implementation. |
-| `src/platform/` | Shared execution/event kernel, durable workflows, runners, workspaces, models, extensions, backups, and releases. |
+| `src/platform/` | Platform kernel: executions, events, artifacts, projects, workspaces, connectors, workflows (foundation), and research record foundations. |
 | `src/memory.js` | Automatic memory capture, bounded retention, and recall helpers. |
 | `src/db.js` | SQLite database layer, migrations, backups, query helpers, FTS/search helpers, snapshots. |
 | `src/pg.js` | Optional PostgreSQL backend for database tools. |
@@ -55,7 +58,7 @@ New built-in tools should be descriptor-owned rather than added directly to `src
 
 1. Add the handler and descriptor in a focused family module under `src/tools/families/`.
 2. Provide a Zod schema, human-readable argument metadata, explicit risk, category, source, and family.
-3. Register the descriptor family in `src/tools/registry.js`.
+3. Register the family module in `src/tools/families/index.js`; `src/tools/registry.js` consumes that aggregate.
 4. Add dispatcher-level tests for success, validation failure, policy denial, approvals when relevant, redaction/logging, and compatibility exports.
 5. Update the generated/reference documentation and knowledge seed where needed.
 

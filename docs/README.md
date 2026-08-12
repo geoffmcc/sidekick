@@ -2,9 +2,9 @@
 
 Sidekick is a self-hosted Model Context Protocol server and autonomous assistant platform that gives compatible clients and agents a persistent remote working environment. These docs describe the current source tree and migrations, while runtime operational knowledge lives in the SQLite-backed knowledge base.
 
-The project currently exposes three core Node.js services and 107 built-in MCP tools across 20 categories. Approved trial/active generated capabilities may add runtime tools beyond that built-in count. Tool metadata, categories, risk labels, enabled/deprecated state, tool logs, key-value data, structured memories, and the knowledge base are stored in SQLite.
+The project currently exposes three core Node.js services and 108 built-in MCP tools across 20 categories (102 in the core registry plus 6 from the bundled `data-utilities` module). Approved trial/active generated capabilities may add runtime tools beyond that built-in count. Tool metadata, categories, risk labels, enabled/deprecated state, tool logs, key-value data, structured memories, and the knowledge base are stored in SQLite.
 
-The tool execution boundary is modular and authoritative under `src/tools/`, but most established handlers still live in `src/tools-legacy.js` behind compatibility adapters while family-by-family extraction continues. See `tool-architecture.md` for the full migration disclosure.
+The tool execution boundary is modular and authoritative under `src/tools/`, and handler extraction is complete: every built-in handler is owned by a descriptor family, the `data-utilities` module, or the Compute subsystem, with `src/tools-legacy.js` retaining only policy/approval/audit machinery, ordering anchors, and compatibility exports. See `tool-architecture.md` for the boundary details.
 
 ## Agent Information Access
 
@@ -43,30 +43,80 @@ sqlite3 data/sidekick.db "SELECT COUNT(*) FROM knowledge WHERE version_added = '
 
 ## Documentation map
 
+**User/operator documentation** — installing, configuring, and running Sidekick:
+
 | File | Purpose |
 |---|---|
 | `overview.md` | What Sidekick is, how the pieces fit together, and common use cases. |
-| `architecture.md` | Service boundaries, request flow, storage layout, sessions, and process model. |
-| `platform-convergence-audit.md` | Phase 0R verified baseline, capability reality matrix, archaeology, current dependency graph, and unresolved decisions. |
-| `platform-target-architecture.md` | Proposed converged runtime boundaries and dependency directions grounded in current foundations. |
-| `module-system-design.md` | Proposed module contract and lifecycle using the existing registry, dispatcher, policy, approvals, migrations, and platform services. |
-| `security-research-capability.md` | Proposed `@sidekick/security-research` capability-pack architecture and safety boundary. |
-| `platform-roadmap.md` | Three-track implementation roadmap and exact next-phase work packet. |
 | `installation.md` | Fresh install, deployment scripts, manual systemd setup, and MCP client configuration. |
+| `install.md` | Documentation conventions (server path, IP placeholder) and deploy-script quick reference. |
 | `configuration.md` | Environment variables, ports, LLM settings, data directory, and auth settings. |
-| `compute.md` | Sidekick Compute architecture, worker protocol, artifacts, cancellation, tests, and non-goals. |
-| `tools-reference.md` | Complete tool inventory generated from the built-in tool registry. |
-| `tool-architecture.md` | Built-in tool descriptor, registry, dispatcher, policy, and compatibility architecture. |
-| `tool-usage-guide.md` | Practical usage patterns and examples for important tool groups. |
-| `dashboard.md` | Dashboard UI, API routes, webhooks, data editing, reset endpoints, and agent proxy. |
-| `agent-bridge.md` | Autonomous task runner behavior, task history, streaming, delays, and watches. |
-| `data-model.md` | SQLite schema, JSON document storage, remaining file-backed state, backups, and migrations. |
-| `security.md` | Authentication, IP allowlists, redaction, command safety, dashboard protections, and risk notes. |
-| `predict.md` | Predict evidence sources, lifecycle, confidence behavior, privacy boundaries, and tests. |
 | `operations.md` | Day-to-day service commands, health checks, troubleshooting, backups, and maintenance. |
-| `development.md` | Source layout, testing, extension workflow, and implementation notes. |
+| `service.md` | systemd service commands quick reference. |
+| `ollama.md` | Local Ollama model setup. |
+| `dashboard.md` | Dashboard UI, API routes, approvals/reconciliation, webhooks, and agent proxy. |
+| `security.md` | Authentication, IP allowlists, redaction, command safety, tool policy, path policy, approvals. |
+
+**Capability documentation** — what Sidekick can do:
+
+| File | Purpose |
+|---|---|
+| `tools-reference.md` | Complete tool inventory generated from the built-in tool registry. |
+| `tool-usage-guide.md` | Practical usage patterns and examples for important tool groups. |
+| `agent-bridge.md` | Autonomous task runner behavior, follow-ups, streaming, delays, and watches. |
+| `brain.md` | Feature-flagged bounded planner (default off) and approval continuation for parked tasks. |
+| `compute.md` | Sidekick Compute architecture, worker protocol, placement, artifacts, cancellation, and non-goals. |
+| `compute-worker.md` | Compute worker lifecycle, CLI, credentials, packaging, and OS-service installation. |
+| `openvino-npu-worker.md` | OpenVINO NPU/CPU embedding worker architecture and security properties. |
+| `blackbox.md` | Black Box incident evidence: profiles, schema, retention, and dashboard behavior. |
+| `predict.md` | Predict evidence sources, lifecycle, confidence behavior, privacy boundaries, and tests. |
+
+**Architecture documentation** — how Sidekick works internally:
+
+| File | Purpose |
+|---|---|
+| `architecture.md` | Service boundaries, request flow, storage layout, sessions, and process model. |
+| `tool-architecture.md` | Built-in tool descriptor, registry, dispatcher, policy, and compatibility architecture. |
+| `data-model.md` | SQLite schema, JSON document storage, remaining file-backed state, backups, and migrations. |
 | `api-reference.md` | HTTP endpoint reference for MCP, Dashboard, and Agent services. |
+| `execution-claim-contract.md` | Epoch-fenced execution claims used by the cron/delay/watch/runbook schedulers. |
+| `workspace-secret-references.md` | Encrypted workspace secret storage at the kernel boundary. |
+| `adr-approval-continuation.md` | ADR: durable approval continuation for parked tasks (implemented). |
+| `adr-brain.md` | ADR: Brain v0.1 orchestration boundary (implemented, feature-flagged). |
+| `adr-compute-placement.md` | ADR: shared compute placement decision core (implemented). |
+| `adr-openvino-integration.md` | ADR: OpenVINO NPU worker integration (implemented). |
+
+**Convergence and planning documentation** — current campaign state and direction:
+
+| File | Purpose |
+|---|---|
+| `platform-convergence-audit.md` | Verified capability reality matrix: production-used versus foundation-only, per area. |
+| `platform-roadmap.md` | Residual convergence roadmap (tracks A–D) and current next work. |
+| `platform-target-architecture.md` | Accepted converged runtime boundaries and dependency directions. |
+| `module-system-design.md` | Module contract and lifecycle (activation half implemented; third-party path pending). |
+| `security-research-capability.md` | Proposed security-research capability pack (kernel record foundations exist; no external integration). |
+| `security-research-scope-guard.md` | Scope snapshot and fail-closed target evaluation contract (foundation). |
+| `security-research-adapter-contract.md` | Fail-closed external adapter boundary (no verified external transport exists). |
+| `structured-memory-plan.md` | Structured memory and memory-intelligence status and remaining steps. |
+
+**Contributor documentation**:
+
+| File | Purpose |
+|---|---|
+| `development.md` | Source layout, testing, extension workflow, and implementation notes. |
+| `tool-creation.md` | Historical tool-creation guide (superseded by `tool-architecture.md`). |
+| `technical-paper.md` | Long-form description of the database-first platform design. |
 | `knowledge-seed.sql` | Manual SQL seed for populating a fresh `knowledge` table with Sidekick self-knowledge. |
+
+**Historical documents** (preserved as history; not current-state):
+
+| File | Purpose |
+|---|---|
+| `platform-architecture-assessment.md` | Pre-consolidation assessment (2026-07-15 snapshot). |
+| `memory-intelligence-findings.md` | Pre-redesign memory findings (superseded). |
+| `dispatcher-identity-recovery-plan.md` | Dispatcher identity/approval-recovery plan (implemented). |
+| `project-review.md` | Early project safety review (its follow-ups have since shipped). |
+| `workplans/sidekick-compute-completion.md` | Compute completion work plan (completed). |
 
 ## Runtime services
 

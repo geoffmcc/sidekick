@@ -1,8 +1,20 @@
 # Module System Design
 
-Status: Proposed module contract
-Verified commit: d2db2658ef0fbf862c64b09315279562caa5bb8e
-Verified date: 2026-08-05T16:16:46-04:00
+Status: Contract largely implemented for first-party (builtin) modules; third-party path pending
+Verified commit: 5e4dbfdb04c9878cbbd284bd950a6afbef78eec3
+Verified date: 2026-08-12
+
+Implemented today: manifest validation, lifecycle persistence
+(`platform_modules`), entry-hash integrity binding with attested re-binding for
+builtin releases, activation into the shared registry, per-dispatch lifecycle
+gating, deny-by-default module permissions with a risk cap, data-only module
+migrations, health checks/recovery/alerts, and periodic health sweeps — all
+exercised in production by the bundled `data-utilities` module (6 tools).
+Not yet implemented: an entry loader for out-of-tree modules (a third-party
+module can reach `configured` but not `enabled`), uninstall, `package_hash`
+persistence/verification, dependency resolution, sandboxing, signing or
+distribution, and a dashboard module UI (the summary API returns module health,
+but the frontend does not render it). See `platform-roadmap.md` slice B9.
 
 ## Manifest Contract
 

@@ -1,8 +1,18 @@
 # Security Research Capability
 
-Status: Proposed capability-pack architecture
-Verified commit: d2db2658ef0fbf862c64b09315279562caa5bb8e
-Verified date: 2026-08-05T16:16:46-04:00
+Status: Proposed capability-pack architecture; generic record foundations implemented, none production-wired
+Verified commit: 5e4dbfdb04c9878cbbd284bd950a6afbef78eec3
+Verified date: 2026-08-12
+
+Implementation reality at the verified commit: the generic kernel records exist
+(scope snapshots/guard, campaigns, hypotheses, test runs, findings, reports,
+disclosure gates — migrations 032–035) with genuinely fail-closed invariants,
+but they have no MCP tools, no dashboard UI, and no production callers; the
+only live surface is three authenticated dashboard scope endpoints. The Scope
+Guard is a tested function that is **not yet attached to tool dispatch**. The
+external adapter is contract-only with no transport (requests fail before any
+network I/O), and no security-research module exists. All fixtures are
+synthetic. This document otherwise describes the accepted design.
 
 ## Position And Responsibility
 
@@ -26,7 +36,7 @@ Sidekick owns project/campaign control, authorization snapshots, scope enforceme
 
 ## Scope Guard And Confirmation
 
-Scope Guard attaches immediately before centralized dispatch. Phase 7 now provides the generic versioned snapshot, target-digest, operation allowlist, fail-closed decision, and execution-binding contract in `docs/security-research-scope-guard.md`. Domain evaluation still adds target, technique, tool/connector, environment, program restrictions, rate limit, third-party data risk, privilege, project/campaign and the exact current ScopeSnapshot. The module check is never the only enforcement boundary. Every bound execution stores the snapshot and decision digests.
+Scope Guard is designed to attach immediately before centralized dispatch; that attachment has not been built yet. Phase 7 provides the generic versioned snapshot, target-digest, operation allowlist, fail-closed decision, and execution-binding contract in `docs/security-research-scope-guard.md`. Domain evaluation still adds target, technique, tool/connector, environment, program restrictions, rate limit, third-party data risk, privilege, project/campaign and the exact current ScopeSnapshot. The module check is never the only enforcement boundary. Every bound execution stores the snapshot and decision digests.
 
 Phase 7 now provides bounded campaign, hypothesis and test-run records. Campaigns are project-bound and may carry the current scope snapshot; hypotheses belong to a campaign and preserve claim, rationale, prerequisites, criteria and confidence; test runs link a hypothesis to an optional platform execution, scope snapshot, environment and evidence references. These records are workflow metadata, not an execution engine or finding store.
 

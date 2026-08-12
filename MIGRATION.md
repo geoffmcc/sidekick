@@ -1,5 +1,12 @@
 # Sidekick Migration Plan: VPS → Proxmox
 
+> **Status: Historical snapshot (June 2026).** This migration completed on
+> 2026-06-12; the VPS was decommissioned and Sidekick now runs on the Proxmox
+> VM. The WireGuard/Caddy remote-access layer and GPU passthrough described
+> below were deferred and did not ship as planned. This document is preserved
+> as planning history — do not use it as current deployment guidance; see
+> `docs/installation.md` and `docs/operations.md` instead.
+
 ## Overview
 
 Migrate Sidekick from current VPS (YOUR_VPS_IP) to local Proxmox VM on NucBox M7 Ultra (AMD Ryzen 7 PRO 6850U, Radeon 680M GPU).

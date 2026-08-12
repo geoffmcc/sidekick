@@ -1,17 +1,20 @@
 # Tool Architecture
 
 Status: Current-state architecture
-Verified commit: a88ea84577283899b2f02892e1dcbe9be0dcf509
-Verified date: 2026-08-11
+Verified commit: 5e4dbfdb04c9878cbbd284bd950a6afbef78eec3
+Verified date: 2026-08-12
 
 Sidekick's built-in registry contains 102 tools (`TOOL_DEFS` rows), or 108 when
-the `data-utilities` module is enabled. Tools execute through a descriptor
-registry and centralized dispatcher.
+the `data-utilities` module is enabled — the default on every standard
+deployment, since all three services provision built-in modules at startup.
+Tools execute through a descriptor registry and centralized dispatcher.
 
 The Track B legacy decomposition is **complete**: as of slice B-6,
 `src/tools-legacy.js` owns **zero production tool handlers**. Measured
-ownership: **6 legacy-delegated handlers** (the `compute*` pass-throughs to
-`src/compute/tools.js`) and **96 family-owned tools** across 38 family files.
+ownership: **96 family-owned tools** across 38 registered family files, **6
+module-owned tools** (`data-utilities`, registered through the module loader
+from a 39th family file), and **6 compute tools** whose handlers live in
+`src/compute/tools.js` behind pure pass-through wiring in `tools-legacy.js`.
 `src/tools-legacy.js` is now a ~1,440-line remnant holding the policy/approval
 machinery, the registry-sync and tool-logging layer, the `TOOL_DEFS` ordering
 anchors, and compatibility re-exports of helpers that moved to families or
@@ -76,11 +79,20 @@ Extracted descriptor-owned families live under `src/tools/families/` and are agg
 - `runbook.js` — `runbook` (`critical`). Multi-step operational runbooks with platform-execution tracking; `recoverStrandedRunbooks` is re-exported for `src/agent.js`.
 - `evolve.js` — `evolve` (`critical`). Thin wrapper over `src/evolve`, handed the registry-derived `TOOL_DEFS` and the shared procedures store.
 - `tool-catalog.js` — `tools`. Tool catalog, discovery manifest, and policy inspector; reads the policy/approval/registry helpers that remain in `tools-legacy.js` lazily through the facade, and re-exports `buildPolicyInspection`/`summarizePolicyInspection` for `src/dashboard.js`.
+- `module-management.js` — `module` (alias `modules`, `high` risk). Read/enable/disable/check/recover for platform module lifecycle state through the shared policy and approval path.
 
 These families own 96 descriptors via `families/index.js`; the `data-utilities`
 module contributes 6 more through the module registry (`parse`, `extract`,
-`transform`, `diff`, `validate`, `template`), for **102 family/module-owned tools
-across 38 family files** in total. `process-mgmt.js`, `net-fetch.js`, and
+`transform`, `diff`, `validate`, `template`), for **102 family/module-owned
+descriptors across 39 family files** (38 registered families plus the
+module-registered `data-utilities.js`). The remaining 6 built-in tools are the
+compute family (`compute`, `compute_nodes`, `compute_providers`,
+`compute_models`, `compute_jobs`, `compute_route`), implemented in
+`src/compute/tools.js` and wired through pass-through entries in
+`tools-legacy.js`; the registry synthesizes their descriptors with
+`source: "builtin-legacy"`. `module-management.js` — `module` (with the one
+declared alias in the codebase, `modules`) — exposes read/enable/disable/
+check/recover for platform modules. `process-mgmt.js`, `net-fetch.js`, and
 `observability.js` were added by Track B slice B-4; slice B-5 added `shell.js`,
 `development.js`, `media.js`, `security.js`, `meta.js`, `knowledge.js`,
 `operations.js`, and `black-box.js`, and extended `inference.js` (`llm`),
@@ -240,20 +252,33 @@ For new descriptor-owned tools:
 
 Handlers should not implement their own policy or approval logic. Handlers that need nested tools should use an injected or imported dispatcher call path, not raw handler maps.
 
-## Remaining Legacy Work
+## Remaining Legacy Footprint
 
-Most handlers still live in `src/tools-legacy.js`. The next migration sequence should follow dependency and security boundaries rather than source-file size:
+Handler extraction is finished — every migration sequence step that used to be
+listed here has been completed (slices B-1 through B-6, PRs #240–#245). What
+remains in `src/tools-legacy.js` is deliberate and bounded:
 
-1. Data/filesystem follow-up: `anonymize`, `insight_report`, and remaining report helpers; preserve untrusted-input handling.
-2. GitHub and CI inspection: `github`, `ci_status`; separate read-only inspection from mutation and preserve token redaction and approval behavior.
-3. Monitoring and status: `health`, `status`, `process`, `service`, `netdiag`, `timeline`, `baseline`, `depend`, and `watch`; extract observation before lifecycle-changing actions.
-4. Communication and external integrations: split `notify`, `web_fetch`, `llm`, `embed`, `ollama`, `download`, `media`, `transcribe`, `analytics`, and `tunnel` into bounded families.
-5. Compute tool integration: `compute`, `compute_nodes`, `compute_providers`, `compute_models`, `compute_jobs`, and `compute_route`; preserve placement, trust, classification, and worker gates.
-6. Destructive database and infrastructure operations: `db_backup`, `db_restore`, `db_export`, `db_migrate`, `nginx`, `wireguard`, `cron`, `runbook`, `sandbox`, `ops`, and related mutation tools. Defer until approval, rollback, target validation, and audit behavior are characterized.
+1. **Policy, approval, and audit machinery** — `getToolRisk`,
+   `enforceToolPolicy`, `getToolPolicyDecision`, the standalone approval store
+   (`queueApproval`, `resolveApproval`, `claimApprovalExecution`,
+   `finalizeApprovalExecution`, recovery helpers), `logToolCall`, and the
+   platform mirroring adapters. These are dispatcher dependencies, not tool
+   handlers.
+2. **`TOOL_DEFS` ordering anchors** — the 102-row definition list that
+   preserves MCP catalog ordering compatibility.
+3. **Compute pass-through wiring** — the `TOOLS` map entries delegating the six
+   `compute*` tools to `src/compute/tools.js`.
+4. **Compatibility re-exports** — helpers whose implementations moved to
+   families or shared modules but whose old import paths are kept for
+   `src/agent.js`, `src/dashboard.js`, and existing tests.
 
-The read-only database, storage, memory, filesystem, data-utility, and monitoring-tail families are already extracted. The storage duplicate-schema removal and registry-contract coverage (Phase 1, Track A) are complete. The immediate next implementation slice is a new bounded legacy family. Each slice should remain small enough for one reviewable PR.
-
-A family whose handlers depend on `src/tools-legacy.js` internals — `safeExecFileSync`, `isDangerous`, `jsonText` — needs those helpers relocated to a shared module first. That relocation should be its own slice, not a side effect of a family extraction. Family modules must not require `src/tools-legacy.js` at module top level; the lazy `require` of the dispatcher inside legacy functions is what keeps the dispatcher/legacy cycle from forming.
+Relocating the policy/approval machinery into `src/tools/` modules and retiring
+the compatibility exports is routine follow-up work, not a security boundary:
+the dispatcher is already the sole execution path. Family modules must not
+require `src/tools-legacy.js` at module top level; the lazy `require` of the
+dispatcher inside legacy functions is what keeps the dispatcher/legacy cycle
+from forming, and `src/tools/dispatch-seam.js` gives families nested dispatch
+without touching legacy at all.
 
 Relocated so far, each for the same reason — a consumer that must not require legacy at top level:
 

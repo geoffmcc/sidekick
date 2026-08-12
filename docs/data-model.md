@@ -16,7 +16,7 @@ Sidekick stores core persistent state in SQLite (`sidekick.db`) under `SIDEKICK_
 
 ## SQLite schema
 
-Migrations live under `migrations/` and run automatically when the MCP server starts. The current schema version is stored in `meta.schema_version`.
+Migrations live under `migrations/` and run automatically when the MCP server starts. The current schema version is stored in `meta.schema_version`. The tree currently has 35 ordered migrations; migrations are self-contained (a fresh database builds from migrations alone), and the runtime schema-ensure path is idempotent across processes.
 
 Core tables:
 
@@ -31,6 +31,16 @@ Core tables:
 - `knowledge`: searchable knowledge base entries.
 
 The MCP server calls `runPendingMigrations()` and `syncToolRegistry()` during startup. Removed code tools are not deleted from `tools`; they are marked `deprecated=1` and `enabled=0`.
+
+Beyond the core tables, later migrations add feature-owned table groups (each documented with its feature):
+
+- `memories` plus memory-intelligence tables (`memory_handoffs`, `memory_evidence`, `memory_entities`, `memory_relationships`, `memory_task_sessions`, `memory_audit_events`) — migrations 003–006, 009.
+- Black Box incident evidence tables — migration 010; see `blackbox.md`.
+- Platform kernel: `platform_executions`, `platform_execution_events`, `platform_artifacts`, `platform_execution_transitions` (011), workflows/runners/workspaces/models/extensions/backups/releases (026), project projection and workspace secrets (027), execution claims (028), event delivery (030), connectors (031). Several of these groups are implemented foundations without production callers yet; `platform-convergence-audit.md` tracks which.
+- Sidekick Compute: `compute_providers`, `compute_models`, `compute_workers`, `compute_enrollment_tokens`, `compute_jobs`, `compute_job_attempts`, `compute_artifacts`, `compute_routing_rules`, `compute_benchmarks`, `compute_metrics` — migrations 013–024; see `compute.md`.
+- Durable approval continuation: `approvals`, `task_checkpoints`, `task_step_results` — migration 025; see `adr-approval-continuation.md`.
+- Platform modules: `platform_modules` — migration 029; see `module-system-design.md`.
+- Security-research record foundations — migrations 032–035; see `security-research-capability.md`.
 
 ## KV store (SQLite)
 
