@@ -37,6 +37,7 @@ const STEP_TIMEOUT_MS = 60000;
 // timer means no path to a perpetually-renewed leak.
 const RUNBOOK_CLAIM_LEASE_MS = 3600000;
 const RUNBOOK_ABANDON_AGE_MS = 30 * 60 * 1000;
+const RUNBOOK_ACTIVE_LEDGER_STATES = new Set(["queued", "running", "waiting"]);
 
 function loadRunbooks() {
   try {
@@ -45,6 +46,32 @@ function loadRunbooks() {
     }
   } catch {}
   return { definitions: {}, instances: {} };
+}
+
+// The JSON document remains a compatibility mirror, but the platform
+// execution ledger owns lifecycle status once an instance has been created.
+// This keeps interactive calls safe when another process has advanced or
+// terminalized the execution since this process loaded runbooks.json.
+function syncInstanceFromLedger(instance) {
+  if (!instance?.platform_execution_id) return { execution: null, changed: false };
+  const execution = platformKernel.getExecution(instance.platform_execution_id);
+  if (!execution) return { execution: null, changed: false };
+  const mirroredStatus = execution.state === "cancelled" && instance.status === "aborted"
+    ? "aborted"
+    : execution.state;
+  const changed = instance.status !== mirroredStatus;
+  if (changed) instance.status = mirroredStatus;
+  return { execution, changed };
+}
+
+function syncInstancesFromLedger(data) {
+  let changed = false;
+  for (const instance of Object.values(data.instances || {})) {
+    try {
+      if (syncInstanceFromLedger(instance).changed) changed = true;
+    } catch {}
+  }
+  return changed;
 }
 
 // Phase 4/B restart recovery: an instance stranded `running` by a crash used
@@ -61,15 +88,23 @@ function recoverStrandedRunbooks(details = {}) {
   const recovered = [];
   const nowMs = Date.now();
   for (const instance of Object.values(data.instances)) {
-    if (instance.status !== "running" || !instance.platform_execution_id) continue;
+    if (!instance.platform_execution_id) continue;
+    const wasTerminal = ["aborted", "completed", "partial", "failed", "cancelled", "timed_out", "rolled_back", "rollback_failed"].includes(instance.status);
     try {
       const claim = platformKernel.getExecutionClaim(instance.platform_execution_id);
-      if (claim && claim.claimed_by && claim.lease_expires_at && claim.lease_expires_at > new Date().toISOString()) continue;
       const exec = platformKernel.getExecution(instance.platform_execution_id);
-      if (!exec || exec.state === "waiting") continue;
+      if (!exec) continue;
+      if (exec.state === "waiting") {
+        instance.status = "waiting";
+        continue;
+      }
+      if (claim && claim.claimed_by && claim.lease_expires_at && claim.lease_expires_at > new Date().toISOString()) {
+        instance.status = exec.state;
+        continue;
+      }
       if (platformKernel.TERMINAL_STATES.has(exec.state)) {
-        instance.status = exec.state === "completed" ? "completed" : "failed";
-        recovered.push(instance.id);
+        instance.status = exec.state === "cancelled" && instance.status === "aborted" ? "aborted" : exec.state;
+        if (!wasTerminal) recovered.push(instance.id);
         continue;
       }
       const isOrphaned = exec.state === "orphaned";
@@ -100,6 +135,8 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
   const data = loadRunbooks();
   const actorId = toolContext.getExecutionContext().actor;
   const execMode = mode || "autonomous";
+  const ledgerMirrorChanged = syncInstancesFromLedger(data);
+  if (ledgerMirrorChanged) saveRunbooks(data);
 
   if (action === "create") {
     if (!name || !steps || steps.length === 0) {
@@ -189,7 +226,7 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
       return { content: [{ type: "text", text: "Runbook not found" }], isError: true };
     }
 
-    const activeCount = Object.values(data.instances).filter(i => i.status === "running").length;
+    const activeCount = Object.values(data.instances).filter(i => RUNBOOK_ACTIVE_LEDGER_STATES.has(i.status)).length;
     if (activeCount >= MAX_ACTIVE_INSTANCES) {
       return { content: [{ type: "text", text: `Max active instances reached (${MAX_ACTIVE_INSTANCES})` }], isError: true };
     }
@@ -332,6 +369,7 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
         output += `Result: ${result.substring(0, 500)}\n`;
         data.instances[instanceId].results.push({ step: 0, success: true, output: result });
         if (rb.steps.length > 1) {
+          data.instances[instanceId].status = "waiting";
           output += `\nUse action="next" with runbook_id="${instanceId}" to continue`;
           transitionScheduledPlatformExecution("runbook", data.instances[instanceId], "waiting", {
             reason: "guided runbook waiting for next step",
@@ -377,6 +415,9 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
     if (!instance.id) instance.id = runbook_id;
     if (instance.mode !== "guided") {
       return { content: [{ type: "text", text: "Instance is not in guided mode" }], isError: true };
+    }
+    if (instance.status !== "waiting") {
+      return { content: [{ type: "text", text: `Runbook instance ${runbook_id} cannot continue: ledger state ${instance.status}` }], isError: true };
     }
     const rb = data.definitions[instance.definitionId];
     if (!rb) {
@@ -426,6 +467,7 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
       instance.results.push({ step: instance.currentStep, success: true, output: result });
       appendScheduledPlatformEvent("runbook", instance, "runbook.step_completed", { step: instance.currentStep, name: step.name });
       if (instance.currentStep < rb.steps.length - 1) {
+        instance.status = "waiting";
         output += `\nUse action="next" to continue`;
         transitionScheduledPlatformExecution("runbook", instance, "waiting", {
           reason: "guided runbook waiting for next step",
