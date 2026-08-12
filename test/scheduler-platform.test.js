@@ -260,6 +260,37 @@ console.log('Running Scheduler Platform Tests...\n');
     assert.strictEqual(platformKernel.getExecutionClaim(cronJobForClaim.platform_execution_id).claimed_by, null);
     console.log('Passed\n');
 
+    console.log('Test SP.14: cross-process cancel request stops an autonomous runbook at the next step boundary');
+    // Step 1 requests the cancel from a separate node process (the real
+    // cross-process topology: another service writing to the shared DB);
+    // step 2 must never dispatch.
+    const cancelScript = path.join(TEST_DATA_DIR, 'request-mid-run-cancel.js');
+    const cancelMarker = path.join(TEST_DATA_DIR, 'cancelled-step-ran.txt');
+    fs.writeFileSync(cancelScript, [
+      `const kernel = require(${JSON.stringify(path.join(__dirname, '..', 'src', 'platform', 'kernel'))});`,
+      `const testDb = require(${JSON.stringify(path.join(__dirname, '..', 'src', 'db'))});`,
+      "const row = testDb.getDb().prepare(\"SELECT execution_id FROM platform_executions WHERE operation_type = 'runbook_execution' AND state = 'running' ORDER BY updated_at DESC LIMIT 1\").get();",
+      "kernel.requestExecutionCancel(row.execution_id, { source: 'test', reason: 'mid-run cancel' });",
+    ].join('\n'));
+    result = await TOOLS.runbook({ action: 'create', name: 'mid-run cancel runbook', steps: [
+      { name: 'request cancel', command: `node ${JSON.stringify(cancelScript)}` },
+      { name: 'never runs', command: `printf cancelled-step-ran > ${JSON.stringify(cancelMarker)}` },
+    ] });
+    assert.strictEqual(result.isError, undefined);
+    const cancelRbId = result.content[0].text.match(/Runbook created: (\S+)/)[1];
+    result = await TOOLS.runbook({ action: 'start', runbook_id: cancelRbId, mode: 'autonomous' });
+    assert.strictEqual(result.isError, undefined);
+    assert.ok(result.content[0].text.includes('Cancel requested'));
+    assert.ok(!fs.existsSync(cancelMarker));
+    const cancelledRun = latestExecution("operation_type = 'runbook_execution' AND state = 'cancelled'");
+    assert.ok(cancelledRun);
+    assert.strictEqual(cancelledRun.result_status, 'cancelled');
+    assert.strictEqual(platformKernel.getExecutionClaim(cancelledRun.execution_id).claimed_by, null);
+    const cancelledInstance = Object.values(JSON.parse(fs.readFileSync(RB_FILE, 'utf8')).instances).find(i => i.platform_execution_id === cancelledRun.execution_id);
+    assert.strictEqual(cancelledInstance.status, 'cancelled');
+    assert.strictEqual(cancelledInstance.currentStep, 1);
+    console.log('Passed\n');
+
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
     console.log('All Scheduler Platform Tests Passed!');
   } catch (e) {

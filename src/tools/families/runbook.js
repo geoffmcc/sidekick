@@ -231,6 +231,26 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
       let output = `Starting autonomous runbook: ${rbId} (${rb.name})\n\n`;
       for (let i = 0; i < rb.steps.length; i++) {
         const step = rb.steps[i];
+        // Cooperative cancel (B4): re-read the claim from the ledger before
+        // dispatching each step so a cross-process cancel request stops the
+        // run at the next step boundary. The claimant terminalizes its own
+        // execution; already-completed steps are not rolled back.
+        if (startedInstance.platform_execution_id) {
+          const liveClaim = platformKernel.getExecutionClaim(startedInstance.platform_execution_id);
+          if (liveClaim && liveClaim.cancel_requested) {
+            output += `Cancel requested — stopping before step ${i + 1}/${rb.steps.length} (${step.name})\n`;
+            startedInstance.status = "cancelled";
+            startedInstance.currentStep = i;
+            transitionScheduledPlatformExecution("runbook", startedInstance, "cancelled", {
+              reason: "cancel requested during autonomous run",
+              result_status: "cancelled",
+              result_summary: output,
+            });
+            saveRunbooks(data);
+            releaseScheduledClaim(startedInstance.platform_execution_id, startClaim);
+            return { content: [{ type: "text", text: output }] };
+          }
+        }
         output += `Step ${i + 1}/${rb.steps.length}: ${step.name}\n`;
         appendScheduledPlatformEvent("runbook", data.instances[instanceId], "runbook.step_started", { step: i, name: step.name });
         try {
