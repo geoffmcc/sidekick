@@ -8125,114 +8125,6 @@ async function sidekick_black_box(args = {}) {
   }
 }
 
-async function sidekick_db_backup({ path: destPath, compress }) {
-  try {
-    if (destPath) {
-      const policyError = enforcePathPolicy(destPath, "write");
-      if (policyError) return policyError;
-    }
-    const result = dbStore.createBackup(destPath, compress !== false);
-    return { content: [{ type: "text", text: `Backup created: ${result.path} (${result.size} bytes, compressed: ${result.compressed})` }] };
-  } catch (e) {
-    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
-  }
-}
-
-async function sidekick_db_restore({ path: backupPath, verify }) {
-  try {
-    const policyError = enforcePathPolicy(backupPath, "read");
-    if (policyError) return policyError;
-    const result = dbStore.restoreBackup(backupPath, verify !== false);
-    return { content: [{ type: "text", text: `Restored from: ${backupPath}\nPre-restore backup: ${result.preBackupPath}` }] };
-  } catch (e) {
-    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
-  }
-}
-
-async function sidekick_db_export({ table, format, path: outputPath, database }) {
-  try {
-    const fmt = format || "json";
-    if (outputPath) {
-      const policyError = enforcePathPolicy(outputPath, "write");
-      if (policyError) return policyError;
-    }
-    if (database === "postgres") {
-      if (table) {
-        const data = await pgStore.exportTable(table, fmt);
-        if (outputPath) {
-          fs.writeFileSync(outputPath, data);
-          return { content: [{ type: "text", text: `Exported ${table} to ${outputPath}` }] };
-        }
-        return { content: [{ type: "text", text: data }] };
-      }
-      const tables = await pgStore.getTableList();
-      const allData = {};
-      for (const t of tables) {
-        allData[t.name] = JSON.parse(await pgStore.exportTable(t.name, "json"));
-      }
-      const output = JSON.stringify(allData, null, 2);
-      if (outputPath) {
-        fs.writeFileSync(outputPath, output);
-        return { content: [{ type: "text", text: `Exported all tables to ${outputPath}` }] };
-      }
-      return { content: [{ type: "text", text: output }] };
-    }
-    if (table) {
-      const data = dbStore.exportTable(table, fmt);
-      if (outputPath) {
-        fs.writeFileSync(outputPath, data);
-        return { content: [{ type: "text", text: `Exported ${table} to ${outputPath}` }] };
-      }
-      return { content: [{ type: "text", text: data }] };
-    }
-    const tables = dbStore.getTableList().filter(t => t.type === "table");
-    const allData = {};
-    for (const t of tables) {
-      allData[t.name] = JSON.parse(dbStore.exportTable(t.name, "json"));
-    }
-    const output = JSON.stringify(allData, null, 2);
-    if (outputPath) {
-      fs.writeFileSync(outputPath, output);
-      return { content: [{ type: "text", text: `Exported all tables to ${outputPath}` }] };
-    }
-    return { content: [{ type: "text", text: output }] };
-  } catch (e) {
-    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
-  }
-}
-
-async function sidekick_db_migrate({ action, version, name }) {
-  try {
-    if (action === "status") {
-      const current = dbStore.getMigrationVersion();
-      const migrations = dbStore.listMigrations();
-      return { content: [{ type: "text", text: JSON.stringify({ currentVersion: current, migrations }, null, 2) }] };
-    }
-    if (action === "list") {
-      const migrations = dbStore.listMigrations();
-      return { content: [{ type: "text", text: JSON.stringify(migrations, null, 2) }] };
-    }
-    if (action === "up") {
-      if (!name) {
-        return { content: [{ type: "text", text: "name required for up migration" }], isError: true };
-      }
-      if (!/^\d{3}_[A-Za-z0-9_]+\.sql$/.test(name)) {
-        return { content: [{ type: "text", text: "Invalid migration name; expected NNN_name.sql" }], isError: true };
-      }
-      const migrationPath = path.join(dbStore.MIGRATIONS_DIR, name);
-      if (!fs.existsSync(migrationPath)) {
-        return { content: [{ type: "text", text: `Migration not found: ${name}` }], isError: true };
-      }
-      const sql = fs.readFileSync(migrationPath, "utf-8");
-      const result = dbStore.runMigration(name, sql, "");
-      return { content: [{ type: "text", text: JSON.stringify(result) }] };
-    }
-    return { content: [{ type: "text", text: "Unknown action. Use: status, list, up" }], isError: true };
-  } catch (e) {
-    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
-  }
-}
-
 // --- OCR Tool ---
 
 async function sidekick_ocr({ path: imagePath, language, psm }) {
@@ -9419,10 +9311,6 @@ const TOOLS = {
   ops: sidekick_ops,
   mission: sidekick_mission,
   black_box: sidekick_black_box,
-  db_backup: sidekick_db_backup,
-  db_restore: sidekick_db_restore,
-  db_export: sidekick_db_export,
-  db_migrate: sidekick_db_migrate,
   ocr: sidekick_ocr,
   media: sidekick_media,
   transcribe: sidekick_transcribe,
