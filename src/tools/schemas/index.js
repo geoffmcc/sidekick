@@ -27,12 +27,6 @@ const TOOL_SCHEMAS = {
     include_cleared: z.boolean().optional().describe("Include cleared/done items for action=list"),
     format: z.enum(["text", "json"]).optional().default("text").describe("Output format")
   }),
-  web_fetch: z.object({
-    url: z.string().describe("URL to fetch"),
-    method: z.enum(["GET", "POST"]).optional().default("GET").describe("HTTP method"),
-    headers: z.string().optional().describe("JSON object of extra headers"),
-    body: z.string().optional().describe("Request body (for POST)")
-  }),
   llm: z.object({
     prompt: z.string().describe("The prompt to send to the LLM"),
     system: z.string().optional().describe("System prompt override"),
@@ -43,24 +37,6 @@ const TOOL_SCHEMAS = {
     action: z.enum(["status", "diff", "log", "add", "commit", "push", "pull", "branch", "checkout", "stash"]).describe("Git action to perform"),
     path: z.string().optional().describe("Repository path (defaults to current directory)"),
     args: z.string().optional().describe("Additional arguments for the git command")
-  }),
-  process: z.object({
-    action: z.enum(["list", "top", "kill", "tree"]).describe("Process action to perform"),
-    filter: z.string().optional().describe("Filter processes by name (for list action)"),
-    pid: z.number().optional().describe("Process ID to kill"),
-    name: z.string().optional().describe("Process name to kill (alternative to pid)"),
-    signal: z.string().optional().describe("Signal to send when killing (default: TERM)")
-  }),
-  service: z.object({
-    action: z.enum(["start", "stop", "restart", "status", "enable", "disable", "logs"]).describe("Service action to perform"),
-    service: z.string().describe("Systemd service name"),
-    lines: z.number().optional().describe("Number of log lines to show (default: 50)")
-  }),
-  archive: z.object({
-    action: z.enum(["create", "extract", "list"]).describe("Archive action to perform"),
-    path: z.string().describe("Source path (file/directory for create, archive for extract/list)"),
-    output: z.string().optional().describe("Output path (required for create)"),
-    format: z.string().optional().describe("Archive format: tar.gz, tgz, or zip (default: tar.gz)")
   }),
   cron: z.object({
     action: z.enum(["add", "list", "remove", "run"]).describe("Cron action to perform"),
@@ -94,12 +70,6 @@ const TOOL_SCHEMAS = {
     example: z.string().optional().describe("Example to learn from (required for learn_from_example)"),
     trigger_phrases: z.array(z.string()).optional().describe("Trigger phrases for the procedure"),
     implementation: z.string().optional().describe("Implementation details (for generate_tool)")
-  }),
-  health: z.object({
-    check: z.enum(["all", "services", "processes", "disk", "network", "custom", "modules"]).describe("Health check type: all (services+processes+disk+network+modules), services, processes, disk, network, custom commands, or platform modules"),
-    services: z.string().optional().describe("Comma-separated service names for services check (default: sidekick-mcp,sidekick-dashboard,sidekick-agent)"),
-    commands: z.string().optional().describe("Comma-separated shell commands for custom check"),
-    threshold: z.string().optional().describe("Alert thresholds (e.g. 'disk>90,mem>80')")
   }),
   delay: z.object({
     action: z.enum(["add", "list", "cancel", "run"]).describe("Delay action: add (schedule new), list (show all), cancel (remove pending), run (execute immediately)"),
@@ -218,10 +188,6 @@ const TOOL_SCHEMAS = {
     name: z.string().describe("Project name"),
     include: z.string().optional().describe("Sections to include: kv,context,logs,procedures (default: kv,context)")
   }),
-  status: z.object({
-    include: z.string().optional().describe("Sections: services,disk,memory,load,uptime,processes,modules (default: services,disk)"),
-    services: z.string().optional().describe("Comma-separated service names (default: sidekick-mcp,sidekick-dashboard,sidekick-agent)")
-  }),
   anonymize: z.object({
     action: z.enum(["anonymize", "patterns", "add_pattern", "remove_pattern"]),
     input: z.string().optional().describe("Text to anonymize"),
@@ -249,13 +215,6 @@ const TOOL_SCHEMAS = {
     use_llm: z.boolean().optional().default(false),
     include: z.enum(["all", "features", "fixes", "breaking", "refactor", "deps"]).optional().default("all"),
     path: z.string().optional().describe("Git repository path (default: current directory)")
-  }),
-  netdiag: z.object({
-    action: z.enum(["check", "dns", "route", "ports", "listeners", "connectivity"]),
-    target: z.string().describe("Host, URL, or IP to diagnose"),
-    port_range: z.string().optional().describe("Port range for scan (e.g., '80-443')"),
-    timeout: z.number().optional().default(5000),
-    format: z.enum(["detailed", "compact", "json"]).optional().default("detailed")
   }),
   timeline: z.object({
     action: z.enum(["build", "filter", "export"]),
@@ -402,15 +361,6 @@ const TOOL_SCHEMAS = {
     tags: z.string().optional().describe("Comma-separated tags (for add/update)"),
     query: z.string().optional().describe("Search query (for search)"),
     limit: z.number().optional().describe("Max results (for search/list)")
-  }),
-  metrics: z.object({
-    action: z.enum(["write", "query", "list_measurements", "list_fields"]).describe("Metrics action"),
-    measurement: z.string().optional().describe("Measurement name (for write/list_fields)"),
-    fields: z.record(z.any()).optional().describe("Field values (for write)"),
-    tags: z.record(z.string()).optional().describe("Tags (for write)"),
-    timestamp: z.number().optional().describe("Nanosecond timestamp (for write)"),
-    query: z.string().optional().describe("Flux query (for query action)"),
-    time_range: z.string().optional().describe("Time range for list_fields (e.g. -30d)")
   }),
   compute: z.object({
     action: z.enum(["overview", "init"]).describe("Compute action")

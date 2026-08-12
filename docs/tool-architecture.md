@@ -9,9 +9,9 @@ the `data-utilities` module is enabled. Tools execute through a descriptor
 registry and centralized dispatcher. `src/tools-legacy.js` still owns most
 migrated-in-place handlers, but it is no longer the authoritative execution path.
 
-Measured ownership: **56 legacy-owned handlers** (50 defined in
-`tools-legacy.js` + 6 delegated to `src/compute/tools.js`) and **52 family-owned
-tools** across 19 family files. The Track B legacy decomposition is underway:
+Measured ownership: **48 legacy-owned handlers** (42 defined in
+`tools-legacy.js` + 6 delegated to `src/compute/tools.js`) and **60 family-owned
+tools** across 22 family files. The Track B legacy decomposition is underway:
 B-1 removed 1163 lines of proven-unreachable dead code (the superseded legacy
 context block, the unreachable `sidekick_evolve` helpers/tail, and four orphan
 helpers), taking `tools-legacy.js` from 10,769 to 9,606 lines with no handler
@@ -34,6 +34,9 @@ Extracted descriptor-owned families live under `src/tools/families/` and are agg
 - `inference.js` — `embed`, `ollama`. Text embeddings (via the optional Compute inference service, else Ollama) and Ollama model management.
 - `networking.js` — `tunnel`, `wireguard`, `nginx`. Cloudflare tunnels, WireGuard VPN, and Nginx reverse-proxy management. All `high` risk; shell-bound argument values are validated through `core/command-validation`.
 - `comms.js` — `notify`, `webhook`. Outbound Discord/Slack/email notifications and received-webhook access (the dashboard keeps its own separate webhook receiver).
+- `process-mgmt.js` — `process`, `service`, `archive`. Process management, systemd service control, and archive create/extract/list. `process` and `service` are `high` risk; command arguments are array-passed to execFileSync and output is redacted.
+- `net-fetch.js` — `web_fetch`. Outbound HTTP fetch from the host.
+- `observability.js` — `status`, `health`, `metrics`, `netdiag`. Unified system status, composite health checks with scoring, InfluxDB metrics, and network diagnostics. `health` and `netdiag` are `high` risk (custom health commands run through a shell; netdiag builds shell command strings with every user-supplied value passed through its `shellEscape` guard). `checkNetwork` keeps its injectable probe seams and is re-exported through the `src/tools` facade as a compatibility export; `sidekick_ops` (legacy) imports the family's `sidekick_status` for its incident snapshots.
 - `storage.js` — `store`, `get`, `delete`, `list_projects`, `get_by_project`, `cache`, `redis`.
 - `memory-sync.js` — `sync_identity`, `sync_export`, `sync_import`, `sync_diff`.
 - `memory-portability.js` — `memory_export`, `memory_import`.
@@ -45,11 +48,11 @@ Extracted descriptor-owned families live under `src/tools/families/` and are agg
 - `filesystem.js` — `read`, `list`, `search`, `summarize`, `filter`, `diff_files`, `find`.
 - `monitoring.js` — `tail`.
 
-These families own 46 descriptors via `families/index.js`; the `data-utilities`
+These families own 54 descriptors via `families/index.js`; the `data-utilities`
 module contributes 6 more through the module registry (`parse`, `extract`,
-`transform`, `diff`, `validate`, `template`), for **52 family/module-owned tools
-across 19 family files** in total. `inference.js`, `networking.js` and `comms.js` were added by
-Track B slice B-3. Each family owns its
+`transform`, `diff`, `validate`, `template`), for **60 family/module-owned tools
+across 22 family files** in total. `process-mgmt.js`, `net-fetch.js`, and
+`observability.js` were added by Track B slice B-4. Each family owns its
 handlers, inline Zod schemas, risk, category, and compatibility metadata. Legacy `TOOL_DEFS` rows remain only as ordering anchors while MCP ordering compatibility is preserved. The five storage schemas (`store`, `get`, `delete`, `list_projects`, and `get_by_project`) have been removed from `src/tools/schemas/index.js`; storage has single ownership in `storage.js`, and a registry contract test asserts one schema owner per extracted descriptor.
 
 The filesystem path policy now lives in `src/tools/path-policy.js`, the authoritative implementation of `enforcePathPolicy` and `getPathPolicyDecision`. It requires only `fs`, `path`, `src/core/policy-env.js`, and `src/tools/context.js`, so descriptor families can depend on it without requiring `src/tools-legacy.js` at module top level. `src/tools-legacy.js` consumes it and no longer defines its own copy.
