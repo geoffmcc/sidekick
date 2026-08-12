@@ -1,6 +1,8 @@
 const crypto = require("crypto");
-const { redactSensitive } = require("../redact");
+const { redactSensitive, isSensitiveKey } = require("../redact");
 
+// Retained for evolve/validator's free-text scan; key-name checks go through
+// the shared isSensitiveKey so the two lists cannot drift.
 const SECRET_KEY_RE = /(password|passwd|passphrase|secret|token|api[_-]?key|authorization|cookie|private[_-]?key|credential)/i;
 const PATH_RE = /^(?:[A-Za-z]:\\|\/|\.\/|\.\.\/)/;
 const HOST_RE = /^(?:https?:\/\/)?[a-z0-9.-]+(?::\d+)?(?:\/.*)?$/i;
@@ -19,7 +21,7 @@ function fingerprint(value) {
 
 function normalizeScalar(value, key = "") {
   if (value === null || value === undefined) return value;
-  if (SECRET_KEY_RE.test(key)) return "[REDACTED]";
+  if (isSensitiveKey(key)) return "[REDACTED]";
   if (typeof value === "boolean") return value;
   if (typeof value === "number") return Number.isInteger(value) ? "<int>" : "<number>";
   const text = redactSensitive(String(value));

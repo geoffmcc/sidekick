@@ -66,7 +66,13 @@ function accumulateToolResult(acc, step, toolRes, { onEvent = () => {} } = {}) {
   const text = toolRes.content && toolRes.content[0] && toolRes.content[0].text
     ? toolRes.content[0].text
     : (isError ? "(error)" : "(empty result)");
-  const clipped = truncate(text, BRAIN_LIMITS.MAX_TOOL_OUTPUT_CHARS);
+  // The secret tool's successful result IS the credential; keep it out of the
+  // persisted step record, the evidence fed to synthesis prompts, and the
+  // planner feedback (errors stay for diagnostics).
+  const raw = step.tool.replace(/^sidekick_/, "") === "secret" && !isError
+    ? "(sensitive value withheld)"
+    : text;
+  const clipped = truncate(raw, BRAIN_LIMITS.MAX_TOOL_OUTPUT_CHARS);
   acc.steps.push({ type: "tool", id: step.id, tool: step.tool, ok: !isError, result: clipped });
   onEvent("brain.step_completed", { id: step.id, tool: step.tool, ok: !isError });
 

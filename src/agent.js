@@ -41,7 +41,7 @@ const { runToolLoop } = require("./agent-loop");
 let brain = null;
 try { brain = require("./brain"); } catch {}
 const platformKernel = require("./platform/kernel");
-const { redactSensitive } = require("./redact");
+const { redactSensitive, redactSensitiveKeysDeep } = require("./redact");
 const {
   CONTINUATION_LIMITS,
   ContinuationError,
@@ -860,7 +860,9 @@ async function suggestProcedure(goal, steps, taskId) {
   if (toolSteps.length < 3) return;
 
   const transcript = toolSteps.map(s => {
-    const argsStr = JSON.stringify(s.args || {});
+    // This transcript leaves the machine (cloud LLM); steps arrive sanitized
+    // from the loop, but sanitize again so this sink never depends on that.
+    const argsStr = JSON.stringify(redactSensitiveKeysDeep(s.args || {}));
     return `- ${s.tool}(${argsStr})`;
   }).join("\n");
 

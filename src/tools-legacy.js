@@ -3,7 +3,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { encryptSecret, decryptSecret } = require("./core/secret-cipher");
 const { execSync, execFileSync } = require("child_process");
-const { redactSensitive } = require("./redact");
+const { redactSensitive, isSensitiveKey, redactSensitiveKeysDeep } = require("./redact");
 const evolveCommon = require("./evolve/common");
 const dbStore = require("./db");
 const { recordToolCallMemory, buildMemoryBrief, recallMemoryForText } = require("./memory");
@@ -306,22 +306,18 @@ function generateApprovalId() {
 }
 
 function approvalPreviewArgs(args) {
-  function sanitize(value, key = "") {
-    const normalizedKey = String(key).toLowerCase().replace(/[^a-z0-9]/g, "");
-    if (/(password|passwd|passphrase|secret|token|apikey|authorization|cookie|privatekey|credential)/.test(normalizedKey)) {
-      return "[REDACTED]";
-    }
-    if (Array.isArray(value)) return value.map(item => sanitize(item));
-    if (value && typeof value === "object") {
-      return Object.fromEntries(Object.entries(value).map(([childKey, childValue]) => [
-        childKey,
-        sanitize(childValue, childKey)
-      ]));
-    }
-    return typeof value === "string" ? redactSensitive(value) : value;
-  }
+  return JSON.stringify(redactSensitiveKeysDeep(args || {}), null, 2).substring(0, 4000);
+}
 
-  return JSON.stringify(sanitize(args || {}), null, 2).substring(0, 4000);
+// The secret tool's `value` argument is a raw credential under a key name no
+// generic check can flag; withhold it before anything derived from the args
+// (previews, change-set snapshots) is persisted.
+function withholdSecretToolValue(toolName, args) {
+  if (stripSidekickPrefix(String(toolName || "")) === "secret"
+    && args && typeof args === "object" && args.value !== undefined) {
+    return { ...args, value: "[REDACTED]" };
+  }
+  return args;
 }
 
 // Canonical approval JSON is a VERSIONED WIRE FORMAT and now lives in a shared
@@ -542,7 +538,7 @@ function queueApproval(toolName, args, decision, context = {}) {
     reason: decision.reason,
     args_encrypted: encryptApprovalArgs(storedArgs),
     args_hash: approvalArgsHash(storedArgs),
-    args_preview: approvalPreviewArgs(storedArgs),
+    args_preview: approvalPreviewArgs(withholdSecretToolValue(toolName, storedArgs)),
     timeout_ms: context.timeoutMs || context.timeout_ms || null,
     requested_at: now,
     updated_at: now,
@@ -558,7 +554,7 @@ function publicApproval(item) {
   const copy = { ...item };
   delete copy.args;
   delete copy.args_encrypted;
-  copy.args_preview = copy.args_preview || approvalPreviewArgs(item.args);
+  copy.args_preview = copy.args_preview || approvalPreviewArgs(withholdSecretToolValue(item.tool, item.args));
   return copy;
 }
 
@@ -903,7 +899,12 @@ function finalizeApprovalExecution({ approvalId, reviewer = "dashboard", result,
     updated.status = result?.isError ? "failed" : "approved";
     updated.reconciliation_status = "not_required";
   }
-  updated.result_preview = redactSensitive(result?.content?.[0]?.text || "").substring(0, 1000);
+  // Approved secret executions return raw credential values that pattern
+  // redaction cannot recognize; never store them in the approval record.
+  const previewText = stripSidekickPrefix(String(updated.tool || "")) === "secret"
+    ? "(sensitive value withheld)"
+    : (result?.content?.[0]?.text || "");
+  updated.result_preview = redactSensitive(previewText).substring(0, 1000);
   updated.completed_at = new Date().toISOString();
   updated.updated_at = updated.completed_at;
   transitionPlatformApproval(updated, result?.isError ? "failed" : "completed", {
@@ -920,7 +921,9 @@ function finalizeApprovalExecution({ approvalId, reviewer = "dashboard", result,
   recordPlatformChangeSet(updated, result?.isError ? "failed" : "approved", {
     actor_id: reviewer,
     reason: result?.isError ? "approved tool execution failed" : "approved tool execution completed",
-    args: args || {},
+    // The change-set snapshot is persisted unencrypted; sanitize it the same
+    // way as the preview. args_hash/args_digest keep raw-args integrity.
+    args: redactSensitiveKeysDeep(withholdSecretToolValue(updated.tool, args || {})),
     result_summary: updated.result_preview,
   });
   discardApprovalPayload(updated);
@@ -1057,7 +1060,17 @@ function formatArgs(args) {
   if (typeof args !== "object" || args === null) return "";
   const parts = [];
   for (const [key, value] of Object.entries(args)) {
-    const str = String(value);
+    // redactSensitive only sees the bare value here; a credential under a
+    // sensitive key name has no recognizable shape, so check the key first.
+    if (isSensitiveKey(key)) {
+      parts.push(key + "=[REDACTED]");
+      continue;
+    }
+    // Objects/arrays are sanitized with key context before serialization:
+    // String() loses their content and JSON quoting defeats redactSensitive.
+    const str = value && typeof value === "object"
+      ? JSON.stringify(redactSensitiveKeysDeep(value))
+      : String(value);
     const truncated = str.length > 100 ? str.substring(0, 100) + "..." : str;
     parts.push(key + "=" + redactSensitive(truncated));
   }
@@ -1066,6 +1079,21 @@ function formatArgs(args) {
 
 function logToolCall(name, args, duration, success, summary, metadata = {}) {
   try {
+    // The secret tool's results carry raw credential values (`get` returns the
+    // decrypted value, `rotate` echoes the new one) and `store` receives the
+    // plaintext in args.value. Pattern redaction cannot recognize arbitrary
+    // secret values, so scrub these before any persistence below.
+    const canonical = stripSidekickPrefix(String(name || ""));
+    if (canonical === "secret") {
+      if (args && typeof args === "object" && args.value !== undefined) {
+        args = { ...args, value: "[REDACTED]" };
+      }
+      if (success && ["get", "rotate"].includes(args?.action)) {
+        // Phrased without redaction trigger words: summarizeResult re-applies
+        // redactSensitive, which would rewrite e.g. "secret value" itself.
+        summary = "(sensitive value withheld)";
+      }
+    }
     const redactedSummary = evolveCommon.summarizeResult(summary);
     const argsShape = evolveCommon.normalizeArgs(args || {});
     dbStore.appendToolLog({

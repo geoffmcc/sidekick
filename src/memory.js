@@ -1,5 +1,5 @@
 const dbStore = require("./db");
-const { redactSensitive } = require("./redact");
+const { redactSensitive, isSensitiveKey, redactSensitiveKeysDeep } = require("./redact");
 const { stripSidekickPrefix } = require("./core/tool-name");
 const { PROJECT_RE } = require("./core/project-identity");
 
@@ -128,12 +128,21 @@ function summarizeArgs(args) {
   const parts = [];
   for (const [key, value] of Object.entries(args)) {
     if (value === undefined) continue;
+    // truncate() only pattern-redacts the bare value; a credential under a
+    // sensitive key name has no recognizable shape, so check the key first.
+    if (isSensitiveKey(key)) {
+      parts.push(`${key}=[REDACTED]`);
+      continue;
+    }
     let text;
     if (typeof value === "string") {
       text = value;
     } else {
       try {
-        text = JSON.stringify(value);
+        // Sanitize before serializing: JSON quoting defeats the key=value
+        // patterns in redactSensitive, so nested credentials must be handled
+        // with their key context intact.
+        text = JSON.stringify(redactSensitiveKeysDeep(value));
       } catch {
         text = String(value);
       }
@@ -192,6 +201,9 @@ function shouldRememberTool(name, success) {
   const canonical = stripSidekickPrefix(String(name || ""));
   if (!canonical || canonical === "context" || canonical === "knowledge") return false;
   if (canonical === "get" || canonical === "list" || canonical === "read") return false;
+  // secret handles raw credential values in both args and results; nothing it
+  // does belongs in recallable memory.
+  if (canonical === "secret") return false;
   return success || canonical.startsWith("db_") || canonical === "bash";
 }
 
@@ -458,8 +470,34 @@ function getDoneText(steps) {
   return done ? done.text || "" : "";
 }
 
+// Agent/Brain steps arrive with raw tool args and result text. Everything
+// derived below (sessions, memories, extracted statements) is persisted and
+// recalled into prompts, so scrub credentials here regardless of what the
+// caller already did: sensitive-key args by name, and the secret tool's
+// results wholesale (its values have no recognizable shape).
+function sanitizeStepsForPersistence(steps) {
+  return (steps || []).map(step => {
+    if (!step || typeof step !== "object") return step;
+    const sanitized = { ...step };
+    const isSecretTool = sanitized.tool && stripSidekickPrefix(String(sanitized.tool)) === "secret";
+    if (sanitized.args && typeof sanitized.args === "object") {
+      // The secret tool's `value` arg is a raw credential under a key name no
+      // generic check can flag; withhold it before the deep pass.
+      const args = isSecretTool && sanitized.args.value !== undefined
+        ? { ...sanitized.args, value: "[REDACTED]" }
+        : sanitized.args;
+      sanitized.args = redactSensitiveKeysDeep(args);
+    }
+    if (isSecretTool && typeof sanitized.result === "string" && !sanitized.result.startsWith("Error")) {
+      sanitized.result = "(sensitive value withheld)";
+    }
+    return sanitized;
+  });
+}
+
 function recordAgentTaskMemory({ goal, steps, taskId, status, project: projectArg }) {
   if (!AUTO_MEMORY_ENABLED) return null;
+  steps = sanitizeStepsForPersistence(steps);
   const ctx = loadContext();
   const date = nowIso();
   const tools = compactToolList(steps);
