@@ -322,6 +322,19 @@ test("PI.24: registerProject still rejects non-string and empty ids", () => {
   assert.throws(() => platformKernel.registerProject({ project_id: "!!!" }), /non-empty/, "charset-only input canonicalizes to empty and is rejected");
 });
 
+test("PI.25: execution creation registers and canonicalizes its project", () => {
+  const execution = platformKernel.createExecution({
+    operation_type: "project_registration_test",
+    project_id: "Execution Project",
+    actor_id: "test-actor",
+    source: "test",
+  });
+  assert.strictEqual(execution.project_id, "execution_project");
+  const project = platformKernel.getProject("execution_project");
+  assert.ok(project, "execution project should be registered automatically");
+  assert.strictEqual(project.owner_actor_id, "test-actor");
+});
+
 // PI.25: recordProjectSource keeps the FK consistent under canonicalization
 test("PI.25: recordProjectSource canonicalizes so the source FK resolves", () => {
   const src = platformKernel.recordProjectSource("FkProj", "kv", "key1");

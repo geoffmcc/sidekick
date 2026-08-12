@@ -15,6 +15,7 @@ delete require.cache[require.resolve('../src/tools')];
 delete require.cache[require.resolve('../src/db')];
 const tools = require('../src/tools');
 const db = require('../src/db');
+const scheduledExecution = require('../src/tools/scheduled-execution');
 
 const { TOOLS } = tools;
 
@@ -32,6 +33,21 @@ console.log('Running Scheduler Platform Tests...\n');
 (async () => {
   try {
     tools.setSource('mcp');
+
+    console.log('Test SP.0: scheduled executions inherit project context and register it');
+    const scheduled = scheduledExecution.createScheduledPlatformExecution('cron', { id: 'project-isolated-cron', tool: 'sidekick_respond' }, {
+      projectId: 'Project A',
+      allowConcurrent: true,
+    });
+    assert.strictEqual(scheduled.project_id, 'project_a');
+    assert.ok(db.getDb().prepare('SELECT 1 FROM platform_projects WHERE project_id = ?').get('project_a'));
+    const other = scheduledExecution.createScheduledPlatformExecution('cron', { id: 'project-isolated-cron-b', tool: 'sidekick_respond' }, {
+      projectId: 'Project B',
+      allowConcurrent: true,
+    });
+    assert.strictEqual(other.project_id, 'project_b');
+    assert.notStrictEqual(scheduled.project_id, other.project_id);
+    console.log('Passed\n');
 
     console.log('Test SP.1: cron add/run mirrors platform executions');
     let result = await TOOLS.cron({ action: 'add', name: 'platform cron', schedule: '* * * * *', command: 'printf cron-ok' });
