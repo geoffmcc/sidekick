@@ -111,7 +111,7 @@ Later migrations extend `memories` with lifecycle, sync, and deferred-review fie
 - `005_sync_support.sql`: origin machine/user identifiers, sync versioning, and last-sync timestamps.
 - `006_memory_deferred.sql`: state, confirmation requirements, confirmer identity, soft delete, and expiration timestamps.
 
-The `meta` table stores `schema_version`. Migration files live in `migrations/` and use numeric prefixes such as `001_initial_schema.sql` through `006_memory_deferred.sql`.
+The `meta` table stores `schema_version`. Migration files live in `migrations/` and use numeric prefixes; the current tree has 35 ordered migrations, `001_initial_schema.sql` through `035_research_disclosure.sql`. Beyond the memory migrations described above, later migrations add memory intelligence (009), Black Box incident evidence (010), the platform kernel (011, 026–028, 030–031), Sidekick Compute (013–024), durable approval continuation (025), platform modules (029), project identity projection (027), and the security-research record foundations (032–035).
 
 On MCP startup, `src/index.js` calls:
 
@@ -214,7 +214,7 @@ Current search is a SQLite `LIKE` search across title, content, and tags. It is 
 
 ## 7. Tool System
 
-Current `main` contains 107 built-in tools across 20 categories. Canonical MCP names are unprefixed; older `sidekick_`-prefixed forms are compatibility aliases. Approved trial/active generated capabilities may add runtime tools beyond that built-in count.
+Current `main` contains 108 built-in tools across 20 categories: 102 in the core registry plus 6 provided by the bundled `data-utilities` module. Canonical MCP names are unprefixed; older `sidekick_`-prefixed forms are compatibility aliases. Approved trial/active generated capabilities may add runtime tools beyond that built-in count.
 
 The authoritative execution path is descriptor- and dispatcher-based:
 
@@ -224,7 +224,7 @@ The authoritative execution path is descriptor- and dispatcher-based:
 4. MCP, dashboard, Agent Bridge, scheduler, generated-tool, and legacy nested-call surfaces all use dispatcher entry points rather than invoking handlers directly.
 5. The registry is synchronized into SQLite for dashboard discovery, policy inspection, and deprecation history.
 
-`src/tools.js` is a compatibility re-export to `src/tools/index.js`. Most established handlers still reside in `src/tools-legacy.js` behind adapters while coherent families are extracted into `src/tools/families/`. The production execution/security boundary is modular, but handler decomposition is not yet complete.
+`src/tools.js` is a compatibility re-export to `src/tools/index.js`. Handler decomposition is complete: every built-in handler is owned by a descriptor family under `src/tools/families/`, the `data-utilities` module, or `src/compute/tools.js`. `src/tools-legacy.js` retains only the tool policy/approval/audit machinery, the `TOOL_DEFS` ordering anchors, and compatibility re-exports.
 
 Built-in categories are Core, Storage, Database, Git & GitHub, Services, Scheduling, Communication, Context & Learning, Data Pipeline, Monitoring, Workflow, Meta, Efficiency, Security, Networking, Development, Reliability, Archive, Media, and Compute.
 
@@ -451,7 +451,7 @@ npm test
 
 ## 17. Current Trade-Offs
 
-The modular tool migration is intentionally incomplete. The dispatcher, registry, context, policy, approval, redaction, and audit boundaries are authoritative, but most mature handlers remain in `src/tools-legacy.js` to preserve compatibility while family-by-family extraction continues.
+The modular tool migration is complete at the handler level — zero production handlers remain in `src/tools-legacy.js` — but the compatibility layer is intentionally retained: the legacy file still hosts the policy/approval/audit machinery and ordering anchors, and `sidekick_`-prefixed aliases still resolve. The broader platform kernel (projects, workflows, events, connectors, identity) has substantial implemented foundations whose production wiring is still in progress; `docs/platform-convergence-audit.md` tracks which surfaces are production-used versus foundation-only.
 
 SQLite has replaced the old full-file KV/log bottleneck for core state, but not every feature artifact has moved into the database. This is intentional where files are natural outputs, but shared mutable state should continue moving toward SQLite or another transactional backend.
 

@@ -1,4 +1,9 @@
-# Installation and Deployment
+# Deploy Quick Reference and Documentation Conventions
+
+> The authoritative installation guide is [`installation.md`](installation.md)
+> (requirements, local development, deployment scripts, manual systemd setup,
+> MCP client configuration, and firewall guidance). This page keeps the deploy
+> quick reference and the documentation conventions used across the docs.
 
 Sidekick should be installed and deployed using the included deployment scripts.
 

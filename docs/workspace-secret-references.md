@@ -1,6 +1,6 @@
 # Encrypted Workspace Secret References
 
-Status: design (Phase 3 / Track B of the platform convergence roadmap)
+Status: implemented at the kernel boundary (fail-closed envelopes, plaintext writers closed, loss-averse backfill); no production caller yet uses workspaces, so deployment wiring remains Track B work
 Tracking: `docs/platform-convergence-audit.md` — unresolved decision #5
 Depends on: `src/core/secret-cipher.js`, `src/platform/kernel-schema.js`, migration `027_platform_project_projection.sql`
 

@@ -1,101 +1,88 @@
 # HTTP API Reference
 
-This reference is generated from Express route declarations in `src/index.js`, `src/dashboard.js`, and `src/agent.js`.
+This reference is generated from Express route declarations in `src/index.js`, `src/dashboard.js`, and `src/agent.js` (verified at `5e4dbfd`). Dashboard routes sit behind the dashboard protections described in `security.md`; MCP and compute routes use the authentication described below.
 
-## Route inventory
+## MCP server (`src/index.js`, port 4097)
 
-| Source | Method | Path | Notes |
-|---|---|---|---|
-| `src/index.js` | GET | `/health` | |
-| `src/index.js` | GET | `/sse` | |
-| `src/index.js` | POST | `/messages` | |
-| `src/index.js` | POST | `/mcp` | |
-| `src/index.js` | GET | `/mcp` | |
-| `src/index.js` | DELETE | `/mcp` | |
-| `src/dashboard.js` | GET | `/api/logs` | |
-| `src/dashboard.js` | GET | `/api/kv` | |
-| `src/dashboard.js` | GET | `/api/system` | |
-| `src/dashboard.js` | GET | `/api/dashboard-summary` | |
-| `src/dashboard.js` | GET | `/api/llm` | |
-| `src/dashboard.js` | GET | `/api/services` | |
-| `src/dashboard.js` | GET | `/api/config` | |
-| `src/dashboard.js` | PUT | `/api/kv/:key` | |
-| `src/dashboard.js` | GET | `/api/kv/projects` | |
-| `src/dashboard.js` | DELETE | `/api/kv/:key` | |
-| `src/dashboard.js` | GET | `/api/stats` | |
-| `src/dashboard.js` | GET | `/api/tools` | |
-| `src/dashboard.js` | GET | `/api/tool-categories` | |
-| `src/dashboard.js` | GET | `/api/knowledge` | |
-| `src/dashboard.js` | GET | `/api/procedures` | |
-| `src/dashboard.js` | GET | `/api/memories` | |
-| `src/dashboard.js` | GET | `/api/memories/projects` | |
-| `src/dashboard.js` | GET | `/api/memories/types` | |
-| `src/dashboard.js` | POST | `/api/memories/:id/disable` | |
-| `src/dashboard.js` | POST | `/api/memories/:id/enable` | |
-| `src/dashboard.js` | DELETE | `/api/memories/:id` | |
-| `src/dashboard.js` | POST | `/api/memories/export` | |
-| `src/dashboard.js` | POST | `/api/memories/import` | |
-| `src/dashboard.js` | GET | `/api/memories/stats` | |
-| `src/dashboard.js` | POST | `/api/memories/expire` | |
-| `src/dashboard.js` | GET | `/api/sync/identity` | |
-| `src/dashboard.js` | POST | `/api/sync/identity` | |
-| `src/dashboard.js` | GET | `/api/sync/export` | |
-| `src/dashboard.js` | POST | `/api/sync/import` | |
-| `src/dashboard.js` | GET | `/api/sync/diff` | |
-| `src/dashboard.js` | GET | `/api/db/schema` | |
-| `src/dashboard.js` | POST | `/api/db/query` | |
-| `src/dashboard.js` | GET | `/api/db/stats` | |
-| `src/dashboard.js` | POST | `/api/db/backup` | |
-| `src/dashboard.js` | GET | `/api/db/search` | |
-| `src/dashboard.js` | GET | `/api/db/migrations` | |
-| `src/dashboard.js` | DELETE | `/api/logs` | |
-| `src/dashboard.js` | DELETE | `/api/kv` | |
-| `src/dashboard.js` | DELETE | `/api/conversations` | |
-| `src/dashboard.js` | DELETE | `/api/data` | |
-| `src/dashboard.js` | POST | `/api/internal/error-log` | |
-| `src/dashboard.js` | POST | `/api/webhook/:source` | |
-| `src/dashboard.js` | POST | `/api/agent/run` | |
-| `src/dashboard.js` | POST | `/api/agent/run/:taskId/follow-up` | Create a child follow-up task (proxied) |
-| `src/dashboard.js` | GET | `/api/agent/stream/:taskId` | |
-| `src/dashboard.js` | GET | `/api/agent/history` | |
-| `src/dashboard.js` | GET | `/api/agent/run/:id` | |
-| `src/dashboard.js` | GET | `/` | |
-| `src/agent.js` | POST | `/api/agent/run` | |
-| `src/agent.js` | POST | `/api/agent/run/:taskId/follow-up` | Create a child follow-up task continuing a terminal parent |
-| `src/agent.js` | GET | `/api/agent/stream/:taskId` | |
-| `src/agent.js` | GET | `/api/agent/history` | |
-| `src/agent.js` | GET | `/api/agent/run/:id` | |
-| `src/agent.js` | GET | `/api/agent/status` | |
-| `src/agent.js` | GET | `/api/health` | |
-| `src/agent.js` | POST | `/api/delays/reload` | |
-| `src/agent.js` | POST | `/api/watches/reload` | |
+### Core endpoints
 
-## MCP server endpoints
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/health` | Diagnostics: uptime, session counts, version. |
+| POST | `/mcp` | Primary Streamable HTTP MCP endpoint (bearer token or `api_key`). |
+| GET | `/mcp` | Streamable HTTP GET path (requires `mcp-session-id`). |
+| DELETE | `/mcp` | Session teardown (requires `mcp-session-id`). |
+| GET | `/sse` | Legacy SSE transport session creation. |
+| POST | `/messages` | Legacy SSE JSON-RPC message channel. |
 
-### `GET /health`
+### Sidekick Compute routes
 
-Returns JSON health information including uptime, current session count, stale session mappings, version, timestamp, and session details.
+Three authenticated route groups are mounted as routers, plus explicitly authenticated flat compatibility aliases:
 
-### `POST /mcp`
+| Group | Auth | Purpose |
+|---|---|---|
+| `/compute/enrollment/*` | one-time enrollment token (rate limited) | Worker enrollment exchange. |
+| `/compute/worker/*` | scoped worker credential | Worker protocol: heartbeat, capabilities, credential rotation, job claim/start/renew/progress/complete/fail, cancellation check/ack, artifact upload/finalize. |
+| `/compute/admin/*` | Sidekick API key | Admin: enrollment tokens, job create/list/get/cancel, recovery, health. |
 
-Primary Streamable HTTP MCP endpoint. Requires a valid bearer token or `api_key` query parameter. Handles session creation, tool invocation, and stale session reinitialization responses.
+Flat aliases (all explicitly authenticated, kept for compatibility): `POST /compute/enrollment-tokens`, `POST /compute/enroll`, `POST /compute/heartbeat`, `POST /compute/capabilities`, `POST /compute/credentials/rotate`, `POST /compute/jobs`, `GET /compute/jobs`, `GET /compute/jobs/:jobId`, `POST /compute/jobs/:jobId/cancel`, `POST /compute/jobs/claim`, `POST /compute/jobs/:jobId/start|renew|progress|complete|fail`, `POST /compute/jobs/:jobId/cancellation`, `POST /compute/jobs/:jobId/cancellation/ack`, `POST /compute/jobs/:jobId/artifacts/upload`, `POST /compute/jobs/:jobId/artifacts/:artifactId/finalize`, `POST /compute/recover`, `GET /compute/health`.
 
-### `GET /mcp`
+## Dashboard (`src/dashboard.js`, port 4098)
 
-Streamable HTTP GET path. Requires a valid `mcp-session-id` header.
+### System, config, and catalog
 
-### `DELETE /mcp`
+`GET /` (HTML shell), `GET /api/system`, `GET /api/dashboard-summary`, `GET /api/llm`, `GET /api/services`, `GET /api/config`, `GET /api/stats`, `GET /api/tools`, `GET /api/tool-categories`, `GET /api/tool-policy`, `GET /api/knowledge`, `GET /api/procedures`, `GET /api/metrics/status`.
 
-Streamable HTTP session teardown. Requires a valid `mcp-session-id` header.
+### Activity, KV data, and resets
 
-### `GET /sse` and `POST /messages`
+`GET /api/logs`, `DELETE /api/logs`, `GET /api/kv`, `GET /api/kv/projects`, `PUT /api/kv/:key`, `DELETE /api/kv/:key`, `DELETE /api/kv`, `DELETE /api/conversations`, `DELETE /api/data`, `POST /api/internal/error-log`, `POST /api/webhook/:source`.
 
-Legacy SSE transport. `/sse` creates an SSE session. `/messages` posts JSON-RPC messages for the session ID issued by the SSE transport.
+### Memory and sync
 
-## Dashboard API summary
+`GET /api/memories`, `GET /api/memories/projects`, `GET /api/memories/types`, `GET /api/memories/stats`, `GET /api/memories/:id/evidence`, `POST /api/memories/:id/disable`, `POST /api/memories/:id/enable`, `DELETE /api/memories/:id`, `POST /api/memories/export`, `POST /api/memories/import`, `POST /api/memories/expire`, `GET /api/handoffs`, `GET /api/handoffs/:id`, `GET/POST /api/sync/identity`, `GET /api/sync/export`, `POST /api/sync/import`, `GET /api/sync/diff`.
 
-The dashboard API includes read endpoints for logs, KV data, structured memories, sync metadata, system status, dashboard summary, LLM status, services, config, stats, tools, tool categories, knowledge entries, procedures, database schema, database stats, database search, and migration status. `/api/tools` returns risk and policy metadata for each tool. It includes mutating endpoints for KV writes/deletes, memory enable/disable/delete/import/export/expiration, sync identity/import operations, database queries/backups, log/data resets, error logging, webhook capture, and agent proxy operations.
+### Database
 
-## Agent API summary
+`GET /api/db/schema`, `POST /api/db/query` (routed through the governed dashboard tool path), `GET /api/db/stats`, `POST /api/db/backup`, `GET /api/db/search`, `GET /api/db/migrations`.
 
-The Agent Bridge exposes endpoints for task submission, follow-up (task continuation), task event streaming, task history, individual task retrieval, status, health, delay reload, and watch reload. See [Agent Bridge → Follow-ups](agent-bridge.md#follow-ups-task-continuation) for the follow-up request/response contract, lineage fields, limits, and security properties.
+### Approvals and reconciliation
+
+`GET /api/approvals`, `GET /api/approvals/:id/preview` (authenticated on-demand argument rendering), `POST /api/approvals/:id/approve`, `POST /api/approvals/:id/reject`, `GET /api/reconciliations`, `POST /api/reconciliations/:taskId/resolve` (requires an authenticated human principal).
+
+### Evolve and Predict
+
+`GET /api/evolve`, `POST /api/evolve/analyze`, `POST /api/evolve/:id/validate|approve|reject|promote|deprecate|feedback|run`, `GET /api/evolve/executions`, `GET /api/evolve/executions/:executionId`, `GET /api/evolve/executions/:executionId/stream`, `POST /api/evolve/executions/:executionId/cancel`, `GET /api/predict`, `GET /api/predict/status`, `GET /api/predict/:id`, `GET /api/predict/:id/explain`, `POST /api/predict/analyze`, `POST /api/predict/:id/dismiss|feedback|outcome`, `POST /api/predict/migrate`, `GET /api/predict/maintenance/diagnose`, `GET /api/predict/maintenance/purge-preview`, `POST /api/predict/maintenance/purge`.
+
+### Black Box
+
+`GET /api/blackbox/health|profiles|storage|incidents|search|compare|purge-preview`, `GET /api/blackbox/incidents/:id`, `GET /api/blackbox/incidents/:id/timeline|export`, `DELETE /api/blackbox/incidents/:id`, `POST /api/blackbox/incidents/:id/analyze|notes`, `POST /api/blackbox/capture`, `GET /api/blackbox/captures/:id`, `GET /api/blackbox/captures/:id/stream`, `POST /api/blackbox/captures/:id/cancel|retry|repair`, `GET /api/blackbox/sources/:id`, `POST /api/blackbox/purge`.
+
+### Compute (dashboard views)
+
+`GET /api/compute`, `GET /api/compute/workers`, `GET /api/compute/jobs`, `GET /api/compute/jobs/:jobId`, `GET /api/compute/install`, `POST /api/compute/enrollment-tokens`, `POST /api/compute/workers/:workerId/:action` (disable/enable/revoke), `POST /api/compute/jobs/:jobId/:action` (cancel/retry), `POST /api/compute/recover`.
+
+### Platform kernel surfaces (API-only; no dashboard UI yet)
+
+`GET /api/artifacts` (custody metadata only), `GET /api/event-deliveries`, `POST /api/event-subscriptions`, `POST /api/event-subscriptions/:subscriptionId/:action` (pause/resume), `POST /api/event-deliveries/:deliveryId/requeue`, `GET /api/connectors`, `POST /api/connectors`, `GET /api/connectors/:connectorId`, `GET /api/connectors/:connectorId/health|events`, `POST /api/connectors/:connectorId/configure`, `POST /api/connectors/:connectorId/:action` (enable/disable/retire), `GET /api/scope-snapshots`, `POST /api/scope-snapshots`, `POST /api/scope-guard/evaluate`.
+
+Note: creating an event subscription starts delivery fan-out, but no production consumer drains deliveries yet — an active subscription accumulates pending rows until paused (see `platform-convergence-audit.md`).
+
+### Quick actions, Grafana proxy, and agent proxy
+
+`POST /api/quick-actions/:action` (allowlisted Mission Control actions), `/grafana/*` (authenticated proxy to the local Grafana instance for the Metrics tab), plus the agent proxy routes: `POST /api/agent/run`, `POST /api/agent/run/:taskId/follow-up`, `GET /api/agent/stream/:taskId`, `GET /api/agent/history`, `GET /api/agent/run/:id`.
+
+## Agent Bridge (`src/agent.js`, port 4099, loopback-only)
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/api/agent/run` | Submit a task goal. |
+| POST | `/api/agent/run/:taskId/follow-up` | Create a child follow-up task continuing a terminal parent. |
+| GET | `/api/agent/stream/:taskId` | SSE task progress. |
+| GET | `/api/agent/history` | Task history. |
+| GET | `/api/agent/run/:id` | Task detail/transcript. |
+| GET | `/api/agent/status` | Bridge status. |
+| GET | `/api/health` | Health check. |
+| POST | `/api/delays/reload` | Reload scheduled delays. |
+| POST | `/api/watches/reload` | Reload watches. |
+
+The bridge binds to `127.0.0.1` and has no authentication of its own; it is reached through the authenticated dashboard proxy. See [Agent Bridge → Follow-ups](agent-bridge.md#follow-ups-task-continuation) for the follow-up request/response contract, lineage fields, limits, and security properties.

@@ -1,8 +1,8 @@
 # Architecture
 
 Status: Current-state architecture
-Verified commit: d2db2658ef0fbf862c64b09315279562caa5bb8e
-Verified date: 2026-08-05T16:16:46-04:00
+Verified commit: 5e4dbfdb04c9878cbbd284bd950a6afbef78eec3
+Verified date: 2026-08-12
 
 For Phase 0R classifications, target boundaries, and the migration roadmap, see `platform-convergence-audit.md`, `platform-target-architecture.md`, and `platform-roadmap.md`.
 
@@ -19,7 +19,7 @@ MCP Server :4097
 src/tools/index.js -> descriptor registry -> centralized dispatcher
         |                                  |
         |                                  +-> policy / approvals / redaction / audit
-        +-> extracted family handlers or tools-legacy compatibility handlers
+        +-> descriptor-family handlers, module descriptors, or compute tools
         |
         +-> SQLite sidekick.db + selected artifacts
 
@@ -52,7 +52,7 @@ The server requires `Authorization: Bearer <SIDEKICK_API_KEY>` or `?api_key=<key
 - `approvals.js`, `policy.js`, `logging.js`, `result.js`, and `registry-sync.js` for focused boundary responsibilities;
 - `schemas/`, `metadata.js`, and `families/` for schemas, explicit risk/category metadata, and extracted descriptor-owned tool families.
 
-The current built-in registry contains 107 tools across 20 categories. Most mature handler implementations still reside in `src/tools-legacy.js`, but production transports and nested compatibility calls enter them through the dispatcher. This is a deliberate compatibility stage of the ongoing modular migration, not a second ungoverned execution path.
+The current built-in registry contains 108 tools across 20 categories (102 in the core registry plus 6 from the bundled `data-utilities` module). Handler extraction out of `src/tools-legacy.js` is complete: every handler is owned by a descriptor family under `src/tools/families/`, the `data-utilities` module, or `src/compute/tools.js`. What remains in `src/tools-legacy.js` is the tool policy/approval/audit machinery, the `TOOL_DEFS` ordering anchors, the compute pass-through wiring, and compatibility re-exports — see `tool-architecture.md`.
 
 Important compatibility exports from `src/tools/index.js` include `TOOLS`, `TOOL_DEFS`, `callTool`, source-specific call wrappers, policy/approval helpers, logging helpers, and registry synchronization. New production code should use the source-specific dispatcher wrappers rather than directly invoking handlers or relying on the legacy `setSource` compatibility setter.
 
@@ -93,6 +93,19 @@ Memory intelligence operations emit platform events for handoff processing, sess
 Approval requests mirror queue, approval, rejection, expiry, and terminal execution outcomes into the platform kernel with `operation_type='approval_request'`. Encrypted approval payloads and existing approval status remain in `json_documents('approvals')`; platform rows contain only lifecycle metadata and redacted result summaries.
 
 Schedulers and guided operational workflows mirror definitions and execution attempts into the platform kernel. Cron jobs, delays, watches, and runbook instances keep their existing JSON/document stores as compatibility sources of truth while platform executions/events provide shared visibility for queued work, checks, triggers, manual runs, timer-fired background runs, step progress, completion, cancellation, and failures.
+
+> **Production-integration status.** The platform kernel sections below
+> describe implemented, tested APIs, but not all of them have production
+> callers yet. In production use today: execution records (best-effort
+> projection from eight producers), execution claims/leases (cron, delay,
+> watch, runbook), events (write side), artifacts (three producers), and the
+> module lifecycle (via the `data-utilities` module). Foundation-only, with no
+> production callers yet: the durable workflow engine and runner sessions, the
+> capability/RBAC grants, the kernel model registry, extensions,
+> backups/releases, canonical project registration, workspaces/secrets, and
+> event delivery/consumption. `docs/platform-convergence-audit.md` tracks the
+> per-area classification and `docs/platform-roadmap.md` tracks the wiring
+> work.
 
 ### Authoritative execution control: `platformGuard` and `findActiveExecution`
 
@@ -150,7 +163,7 @@ Execution claims (Phase 4/B) give schedulers a fenced, leased claim on a platfor
 - `claimExecution({ execution_id, claimed_by, lease_ms })` — exactly one winner across concurrent runners (`BEGIN IMMEDIATE`, epoch-fenced); losers get `claim_held`.
 - `renewExecutionLease` / `checkpointExecution` / `releaseExecutionClaim` — all writes fenced by `claimed_by` + `claim_epoch`, so a superseded claimant cannot corrupt state.
 - `requestExecutionCancel(executionId)` — cooperative cancellation flag surfaced to claimants; nothing is force-killed.
-- `recoverOrphanedExecutions()` — clears expired leases and transitions stranded `queued`/`running`/`waiting` executions to `orphaned` for re-queueing. The delay scheduler is the first adapter (claim before dispatch in both the agent timer and `sidekick_delay run`, plus `recoverStrandedDelays()` at agent startup).
+- `recoverOrphanedExecutions()` — clears expired leases and transitions stranded `queued`/`running`/`waiting` executions to `orphaned` for re-queueing. Four schedulers use the claim contract in production — cron, delay, watch, and runbook — through the shared helpers in `src/tools/scheduled-execution.js` (`recoverStrandedDelays()` and `recoverStrandedRunbooks()` run at agent startup). `requestExecutionCancel` and `checkpointExecution` remain unwired: production code reads the cancel flag but nothing sets it yet.
 
 ### Project workspaces and model registry
 

@@ -9,11 +9,13 @@ Compute jobs are limited to the versioned job contract in `src/compute/job-contr
 - `chat`
 - `generate`
 - `embeddings`
+- `text_embedding` (the OpenVINO embedding job type; `embedding` and `inference` are accepted aliases for `embeddings` and `chat`)
 
 Supported distributed executors are allowlisted:
 
 - `mock.inference`
 - `ollama.inference`
+- `openvino.text_embedding`
 
 Job payloads reject command-like keys such as `command`, `argv`, `executable`, and `shell`. Unsupported job types such as `custom` and `transcription` are rejected by the HTTP API and job manager.
 
@@ -160,10 +162,15 @@ fact, and Sidekick reports exactly that.
 
 ### Explain mode
 
-`sidekick_compute_route action="explain"` (and `compute.explainPlacement`)
-runs the same decision code as real placement with zero execution and zero
-state mutation, returning the selected candidate, permitted fallbacks, and
-sanitized rejection reasons (`worker_offline`, `worker_stale`,
+`compute.explainPlacement` runs the same decision code as real placement with
+zero execution and zero state mutation, returning the selected candidate,
+permitted fallbacks, and sanitized rejection reasons. **Known limitation:** the
+MCP tool wrapper (`compute_route action="explain"`) currently drops its
+arguments — the tool passes snake_case fields where the explain API expects
+camelCase, so tool-level explain always evaluates a default `chat`/`private`
+request regardless of the arguments supplied. Until that is fixed, treat
+tool-level explain output as illustrative of the default request only.
+Rejection reason codes include (`worker_offline`, `worker_stale`,
 `capability_missing`, `executor_missing`, `model_missing`,
 `model_not_certified`, `static_shape_required`, `data_classification_denied`,
 `trust_too_low`, `circuit_open`, `concurrency_exhausted`,
@@ -204,6 +211,8 @@ POST /compute/worker/jobs/:jobId/artifacts/:artifactId/finalize
 ```
 
 Artifact metadata records job, attempt, worker, lease, type, name, content type, hash, size, state, created time, and finalization time. Upload validates lease ownership, size limits, and content hashes. Finalization is idempotent and rejects hash/size mismatches, cross-worker attempts, stale leases, and cancelled jobs.
+
+Note that the server persists artifact **metadata** (including the verified SHA-256 content hash), not the artifact bytes themselves: `storage_ref` is a synthetic reference, and there is no server-side artifact content store or download endpoint.
 
 The worker agent uploads and finalizes `result.txt` before completing a job. Inline completion artifacts remain supported for compatibility and are normalized into the same artifact metadata shape.
 

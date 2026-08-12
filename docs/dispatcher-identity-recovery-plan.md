@@ -1,5 +1,14 @@
 # Dispatcher Identity And Approval Recovery Plan
 
+> **Status: Historical — implemented.** Every gap listed under "Remaining
+> Gaps" below has since been closed: source-specific context factories exist
+> (`src/tools/context.js`), production dispatch rejects caller-provided
+> descriptors, approvals are leased with operation/executor identity and
+> heartbeats, and stale high-risk approvals move to reconciliation
+> (`migrations/021_approval_execution_recovery.sql`). See
+> `tool-architecture.md` for the current boundary. Preserved as the plan that
+> drove that work.
+
 ## Current Architecture Trace
 
 - MCP calls in `src/index.js` register canonical descriptors and call `callTool(...)` with MCP transport metadata.

@@ -1,5 +1,12 @@
 # Project Review
 
+> **Status: Historical snapshot.** The "highest-priority follow-ups" and
+> "consider adding" items below have since shipped: filesystem path policy
+> (`SIDEKICK_ALLOWED_PATHS`/`SIDEKICK_DENIED_PATHS`), the dashboard approval
+> queue, the tool policy inspector (`tools action="policy"`), and read-only
+> configuration/secret scanning (`security_scan`). Preserved as the review that
+> motivated them.
+
 This review focuses on changes that improve project safety, user trust, and operator ergonomics without changing Sidekick's core model: a self-hosted MCP server, dashboard, and local agent with powerful host tools.
 
 ## Fixed in this branch

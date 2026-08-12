@@ -2,7 +2,16 @@
 
 **Autonomous Agent Platform**
 
-A self-hosted AI agent platform with 107 built-in MCP tools, persistent structured memory, searchable knowledge, autonomous workflows, and distributed model compute. Runs on your remote machine, keeps explicit project context across sessions, and can expose approved generated capabilities without modifying the built-in registry.
+Sidekick is a self-hosted platform that gives AI assistants and agents durable infrastructure: a remote machine they can operate, persistent project memory and knowledge that survive any single session, a governed catalog of 108 built-in MCP tools, an autonomous task runner, and distributed model compute. The connected assistant or agent is replaceable — you can switch clients, models, or vendors — while the projects, memory, tools, policy, and history stay on your machine, under your control.
+
+**Why use it?** Because most AI work loses everything between sessions. With Sidekick, one session's decisions, handoffs, and stored facts are retrievable by the next session — or by a completely different agent. Typical uses that the current implementation supports:
+
+- keeping project continuity across AI sessions and across different agents/models;
+- software development and project work on a persistent remote machine (shell, files, git, GitHub API, CI inspection, databases);
+- bounded autonomous tasks through the Agent Bridge (submit a goal, get evidence-backed execution);
+- self-hosted AI infrastructure and homelab/system administration (services, processes, networking, monitoring, incident capture);
+- scheduled and event-driven automation (cron, one-shot delays, watches, runbooks);
+- routing local/distributed model workloads (chat, generation, embeddings) across enrolled compute workers.
 
 **How?** Connect a compatible MCP client to Sidekick, then optionally adapt the included `AGENTS.md` template so the client knows how to use its persistent tools and knowledge.
 
@@ -10,7 +19,7 @@ A self-hosted AI agent platform with 107 built-in MCP tools, persistent structur
 
 ## Refactor Status and Compatibility Disclosure
 
-> **Full disclosure:** Sidekick's tool runtime is partway through a deliberate modular migration. The descriptor registry, centralized dispatcher, request-scoped context, schema validation, source-aware policy, approval enforcement, redaction, and audit logging are now the authoritative production execution path. However, most mature tool handlers still reside in `src/tools-legacy.js` behind compatibility adapters. New tool families belong under `src/tools/families/`, and legacy families are being extracted incrementally to preserve behavior and avoid a risky all-at-once rewrite. The execution and security boundary is modular today; complete implementation decomposition is not yet finished. See [`docs/tool-architecture.md`](docs/tool-architecture.md) for the current boundary and remaining migration work.
+> **Full disclosure:** Sidekick's tool runtime finished its modular handler migration. The descriptor registry, centralized dispatcher, request-scoped context, schema validation, source-aware policy, approval enforcement, redaction, and audit logging are the authoritative production execution path, and every tool handler is now owned by a descriptor family under `src/tools/families/`, the `data-utilities` module, or the Compute subsystem — `src/tools-legacy.js` owns **zero** production tool handlers. What remains in `src/tools-legacy.js` (~1,400 lines) is the tool policy/approval/audit engine, the legacy `TOOL_DEFS` ordering anchors, and compatibility re-exports kept for existing consumers; relocating those is routine follow-up, not a risk boundary. The broader platform convergence campaign (canonical project identity, event consumption, artifact custody, connector integration, and related slices) is still in progress — see [`docs/platform-roadmap.md`](docs/platform-roadmap.md) for what remains and [`docs/tool-architecture.md`](docs/tool-architecture.md) for the tool-runtime boundary.
 
 Canonical MCP tool names are unprefixed, such as `bash`, `knowledge`, and `compute_jobs`. The runtime still recognizes older `sidekick_`-prefixed names as compatibility aliases, but new documentation, policies, and integrations should use the bare names.
 
@@ -114,6 +123,16 @@ A connected agent can combine multiple Sidekick tools to complete longer tasks. 
 
 The same workflow can emit notifications, create durable task records, or run through the Agent Bridge when autonomous execution is appropriate.
 
+### Project Continuity Across Sessions and Agents
+
+The core continuity workflow: one agent or session does the work and leaves a durable handoff; a later session — possibly a different client or model entirely — retrieves it and continues without rebuilding context by hand.
+
+1. **Session A** works on a project, storing durable facts with `store`, tracking decisions with `context`, and optionally opening an explicit envelope with `session action="begin"`.
+2. **Before stopping**, it leaves a handoff: `resume action="set" project="myproject"` with the summary, next step, and branch (or a richer `handoff action="create"` record).
+3. **Session B** — hours or weeks later, on any compatible MCP client — starts with `resume action="check" project="myproject"`, recalls context with `project name="myproject"` or `context action="recall"`, and continues the work.
+
+Retrieval is explicit: the connected agent has to ask for the handoff (the `AGENTS.md` template teaches it to check at session start). Sidekick stores and serves the state; it does not inject it automatically into a new client session.
+
 ### Conversational Planning
 
 Sidekick supports continuity across ordinary conversations because project facts, decisions, procedures, and handoffs can be retrieved in later sessions:
@@ -164,12 +183,12 @@ Sidekick can learn repeated successful workflows from redacted tool telemetry. `
 The Agent Bridge runs independently from your main AI session. Submit a complex task via the dashboard, and Sidekick will plan, execute, and iterate until it's done—without you babysitting each step.
 
 ### 🖥️ Distributed Compute
-Sidekick Compute enrolls authenticated worker agents and routes allowlisted `chat`, `generate`, and `embeddings` jobs across registered workers, providers, and models. It includes scoped worker credentials, job leases, progress, cancellation, retry/recovery, artifacts, health reporting, routing rules, and dashboard controls. It is intentionally not an arbitrary remote shell or a general-purpose GPU batch system.
+Sidekick Compute enrolls authenticated worker agents and routes allowlisted `chat`, `generate`, and `embeddings` jobs (including certified OpenVINO NPU/CPU text-embedding jobs) across registered workers, providers, and models. It includes scoped worker credentials, job leases, progress, cancellation, retry/recovery, artifacts, health reporting, routing rules, and dashboard controls. It is intentionally not an arbitrary remote shell or a general-purpose GPU batch system.
 
 ### 🔒 Security-First Design
 Every tool output is automatically scanned and redacted for sensitive data (API keys, tokens, passwords). The dashboard has rate limiting, CSRF protection, and audit logging. The agent bridge is isolated and only accessible through the dashboard.
 
-### 🛠️ 107 Built-In Specialized Tools
+### 🛠️ 108 Built-In Specialized Tools
 Not just bash and file operations. Sidekick includes tools for:
 - GitHub integration and read-only CI/check-run inspection
 - Service and process management
@@ -280,7 +299,7 @@ Sidekick has used its own tools to test storage and recall behavior, investigate
 
 | Service | Port | Description |
 |---------|------|-------------|
-| **MCP Server** | 4097 | 107 built-in tools across 20 categories; approved generated tools may add runtime entries |
+| **MCP Server** | 4097 | 108 built-in tools across 20 categories; approved generated tools may add runtime entries |
 | **Dashboard** | 4098 | Web UI for system health, activity, data, memory, approvals, tools, Compute, agent tasks, and metrics |
 | **Agent Bridge** | 4099 | AI agent loop — LLM plans and calls MCP tools autonomously |
 | **Ollama** | 11434 | Local LLM inference (qwen2.5-coder:7b, llama3.1:8b, nomic-embed-text) |
@@ -293,12 +312,12 @@ All tools are exposed via the MCP server at `http://YOUR_REMOTE_IP:4097/mcp`.
 
 ### Tool Categories
 
-The 107 built-in tools are organized into 20 categories:
+The 108 built-in tools are organized into 20 categories. 102 live in the core registry; the six Data Pipeline utilities (`parse`, `extract`, `transform`, `diff`, `validate`, `template`) are provided by the bundled `data-utilities` module, the first-party proof of the module system:
 - **Core** — bash, tools, read, write, list, search, web_fetch, llm, respond
 - **Storage** — store, get, delete, resume, list_projects, get_by_project, redis
 - **Database** — db_schema, db_query, db_stats, db_backup, db_restore, db_export, log_query, db_search, db_migrate, db_diff, analytics
 - **Git & GitHub** — git, github, ci_status
-- **Services** — process, service
+- **Services** — process, service, module
 - **Scheduling** — cron, delay
 - **Communication** — notify, webhook
 - **Context & Learning** — context, session, handoff, memory, teach, embed, ollama, memory_export, memory_import, memory_manage, sync_identity, sync_export, sync_import, sync_diff, knowledge
@@ -333,7 +352,7 @@ ORDER BY tc.sort_order, t.name
 
 To avoid confusion, it's important to understand what each component is:
 
-- **Sidekick** = The self-hosted agent platform: 107 built-in MCP tools + persistent memory + knowledge base + Dashboard + Agent Bridge + metrics + approved generated capabilities + Sidekick Compute
+- **Sidekick** = The self-hosted agent platform: 108 built-in MCP tools + persistent memory + knowledge base + Dashboard + Agent Bridge + metrics + approved generated capabilities + Sidekick Compute
 - **The assistant or agent** = Any compatible MCP client, coding assistant, or automation agent that uses Sidekick's platform
 - **Tool runtime** = The descriptor registry and dispatcher that validate, authorize, approve, execute, redact, and audit tool calls across MCP, dashboard, agent, scheduler, and generated-tool paths
 - **Agent Bridge** = Sidekick's autonomous task runner, accessed through the Dashboard and API
@@ -351,7 +370,8 @@ The Knowledge Base replaces the need for large markdown files. Instead of re-rea
 - Sidekick Compute accepts only versioned, allowlisted model workloads; it is not arbitrary worker-side command execution.
 - Evolve does not silently activate free-form code. Generated capabilities must pass validation and approval before trial or active exposure.
 - The Agent Bridge acts only on submitted tasks, schedules, or watches and remains bounded by tool policy, approvals, iteration limits, and the same dispatcher used by other execution paths.
-- The handler migration out of `src/tools-legacy.js` is still in progress, as disclosed above.
+- The module system's full lifecycle (discovery, packaging, installation, configuration, health, recovery) is implemented, but only the bundled first-party `data-utilities` module exercises it today; there is no third-party module ecosystem yet.
+- Handler extraction out of `src/tools-legacy.js` is complete (zero production handlers remain there); the remaining platform convergence work is tracked in `docs/platform-roadmap.md`.
 
 ## Security
 
@@ -382,7 +402,7 @@ Open `http://YOUR_REMOTE_IP:4098/` in a browser.
 - **Config** — environment variables (sensitive values redacted)
 - **Agent** — submit tasks for the AI agent to execute autonomously
 - **Approvals** — review, approve, or reject queued risky actions when approval mode is enabled
-- **Tools** — browsable catalog of all 107 built-in tools plus approved generated tools, with search, category filtering, policy status, risk labels, and detailed argument info
+- **Tools** — browsable catalog of all 108 built-in tools plus approved generated tools, with search, category filtering, policy status, risk labels, and detailed argument info
 - **Compute** — enrolled workers, providers, models, routing, jobs, artifacts, cancellation, retry, and lease recovery
 - **Metrics** — embedded Grafana dashboards for system health, tool analytics, database performance, Docker containers, and Ollama metrics
 
@@ -497,7 +517,7 @@ git push
 .\deploy.ps1 -IP "YOUR_REMOTE_IP"
 
 # Or deploy (Linux/Mac)
-./deploy.sh YOUR_REMOTE_IP
+./deploy.sh -IP YOUR_REMOTE_IP
 ```
 
 Or SSH directly to pull:
@@ -665,10 +685,17 @@ This follows the principle of least privilege: after initial setup, the sidekick
 │   │   ├── registry.js     Descriptor registry for built-in tools
 │   │   ├── dispatcher.js   Authoritative validation, policy, approval, execution, and audit path
 │   │   ├── context.js      Request-scoped execution context
-│   │   └── families/       Descriptor-owned extracted tool families
-│   ├── tools-legacy.js     Remaining legacy handler implementations behind dispatcher adapters
+│   │   ├── dispatch-seam.js Dependency-free nested tool dispatch seam
+│   │   └── families/       Descriptor-owned tool families (all built-in handlers)
+│   ├── tools-legacy.js     Tool policy/approval/audit engine, TOOL_DEFS ordering anchors,
+│   │                       and compatibility re-exports (owns zero tool handlers)
+│   ├── modules/            Module lifecycle: manifest, discovery, install, activation,
+│   │                       permissions, migrations, health (bundled: data-utilities)
+│   ├── approvals/          Durable task-originated approval continuation (ADR stack)
+│   ├── brain/              Feature-flagged bounded planner over the Agent Bridge (default off)
 │   ├── compute/            Worker, provider, model, job, routing, lease, and artifact system
-│   ├── platform/           Shared execution, event, workflow, runner, workspace, and release kernel
+│   ├── platform/           Platform kernel: executions, events, artifacts, projects,
+│   │                       workspaces, connectors, and research record foundations
 │   ├── memory.js           Automatic memory capture and recall helpers
 │   ├── index.js            MCP server, sessions, tool registration, and Compute HTTP routes
 │   ├── dashboard.js        Dashboard web UI and management API
@@ -683,7 +710,7 @@ This follows the principle of least privilege: after initial setup, the sidekick
 │   ├── bootstrap.sh    VM bootstrap script (creates user, installs Node.js, etc.)
 │   ├── setup-tools.sh  Server tooling setup (Docker, databases, media tools, etc.)
 │   ├── collect-metrics.js  Metrics collection script (runs via cron)
-│   └── parse-context.js    Migrate CONTEXT.md to knowledge base
+│   └── seed-knowledge.js   Seed the knowledge base on fresh deployments
 ├── systemd/
 │   ├── sidekick-mcp.service       MCP server systemd unit
 │   ├── sidekick-dashboard.service Dashboard systemd unit
@@ -699,13 +726,10 @@ This follows the principle of least privilege: after initial setup, the sidekick
 ├── grafana/
 │   ├── provisioning/       Grafana auto-provisioning configs
 │   └── dashboards/         6 pre-built Grafana dashboards
-├── migrations/
-│   ├── 001_initial_schema.sql  Initial database schema
-│   ├── 002_tool_registry.sql   Tool registry and knowledge base tables
-│   ├── 003_structured_memory.sql Structured memory table
-│   ├── 004_memory_lifecycle.sql Memory confirmation and decay support
-│   ├── 005_sync_support.sql     Cross-machine memory sync metadata
-│   └── 006_memory_deferred.sql  Memory state, confirmation, delete/expire fields
+├── migrations/             35 ordered SQLite migrations: core schema, tool registry,
+│                           structured memory, Black Box, platform kernel, Compute,
+│                           approvals, modules, projects, events, connectors, research records
+├── packaging/              Compute worker OS-service installers (systemd, launchd, winsw)
 ├── data/               Runtime data (on remote: logs, KV, conversations, metrics)
 ├── deploy.ps1          Deploy script (Windows)
 ├── deploy.sh           Deploy script (Linux/Mac)
@@ -742,7 +766,7 @@ sudo journalctl -u sidekick-agent -n 50
 
 1. Clone the repo
 2. Copy `.env.example` → `.env` and fill in your values
-3. Run `.\deploy.ps1 -IP "YOUR_REMOTE_IP"` (Windows) or `./deploy.sh YOUR_REMOTE_IP` (Linux/Mac)
+3. Run `.\deploy.ps1 -IP "YOUR_REMOTE_IP"` (Windows) or `./deploy.sh -IP YOUR_REMOTE_IP` (Linux/Mac)
 4. Enter the sidekick password when prompted (first deploy only)
 5. Open `http://YOUR_REMOTE_IP:4098/` and explore your new autonomous agent platform
 

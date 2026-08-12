@@ -1,6 +1,6 @@
 # Tools Reference
 
-This catalog reflects the descriptor registry and compatibility definitions exported through `src/tools/index.js`. Current `main` contains 107 built-in tools across 20 categories. Approved trial/active generated capabilities are additional runtime tools and are not included in the built-in count. The runtime `tools` table and `tools` manifest remain authoritative for enabled/deprecated and generated-tool state.
+This catalog reflects the descriptor registry and compatibility definitions exported through `src/tools/index.js`. Current `main` contains 108 built-in tools across 20 categories: 102 in the core registry plus 6 (`parse`, `extract`, `transform`, `diff`, `validate`, `template`) provided by the bundled `data-utilities` module. Approved trial/active generated capabilities are additional runtime tools and are not included in the built-in count. The runtime `tools` table and `tools` manifest remain authoritative for enabled/deprecated and generated-tool state.
 
 Tool names below use the canonical MCP form: `bash`, `knowledge`, `compute_jobs`, and so on. The dispatcher and registry still normalize older `sidekick_`-prefixed names for compatibility, but those aliases are deprecated for documentation and new integrations.
 
@@ -18,7 +18,7 @@ Risk is based on what a tool can change or expose, not whether its implementatio
 | Risk | Tools | Default recommendation |
 |---|---|---|
 | Critical | `bash`, `write`, `db_restore`, `runbook`, `ops`, `mission`, `sandbox`, `evolve` | Gate in shared or public deployments. Allow only for trusted operators. |
-| High | `process`, `service`, `cron`, `delay`, `watch`, `github`, `teach`, `secret`, `db_migrate`, `queue`, `orchestrate`, `health`, `netdiag`, `baseline`, `tunnel`, `wireguard`, `nginx` | Block in `restricted` mode unless the workflow needs them. |
+| High | `process`, `service`, `module`, `cron`, `delay`, `watch`, `github`, `teach`, `secret`, `db_migrate`, `queue`, `orchestrate`, `health`, `netdiag`, `baseline`, `tunnel`, `wireguard`, `nginx` | Block in `restricted` mode unless the workflow needs them. |
 | Medium | `notify`, `read`, `archive`, `git`, `web_fetch`, `llm`, `context`, `session`, `handoff`, `memory`, `memory_import`, `memory_manage`, `sync_import`, `snapshot`, `retry`, `fresheyes`, `batch`, `tail`, `find`, `status`, `extract`, `changelog`, `timeline`, `circuit`, `depend`, `black_box`, `predict`, `db_query`, `db_backup`, `db_export`, `redis`, `ocr`, `media`, `transcribe`, `analytics`, `download`, `compute`, `compute_nodes`, `compute_providers`, `compute_jobs`, `compute_route` | Generally useful, but can expose data or trigger external effects. |
 | Low | `ci_status`, `security_scan`, `memory_export`, `sync_identity`, `sync_export`, `sync_diff`, `insight_report`, `embed`, `ollama`, `tools`, `respond`, `list`, `store`, `get`, `list_projects`, `get_by_project`, `search`, `webhook`, `transform`, `parse`, `diff`, `hash`, `validate`, `template`, `debug_tool`, `cache`, `summarize`, `filter`, `project`, `diff_files`, `anonymize`, `db_schema`, `db_stats`, `log_query`, `db_search`, `db_diff`, `knowledge`, `compute_models`, `delete`, `resume`, `metrics` | Usually safe to expose, subject to data sensitivity. |
 
