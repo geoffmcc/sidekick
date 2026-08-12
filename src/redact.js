@@ -3,6 +3,47 @@
  * @param {string} text - Text to redact
  * @returns {string} - Redacted text
  */
+// Key names whose values must never be persisted, regardless of value shape.
+// Keys are normalized (NFKC-folded, lowercased, non-alphanumerics stripped)
+// before testing, so `api_key`, `apiKey`, and `API-KEY` all match `apikey`.
+// Tokens are matched as substrings, so short entries are limited to spellings
+// unlikely to occur inside benign key names (`auth` would match `author`).
+const SENSITIVE_KEY_RE = /(password|passwd|passphrase|pwd|secret|token|bearer|apikey|accesskey|sshkey|authorization|cookie|privatekey|credential|otp)/;
+
+/**
+ * Returns true when an argument/field name denotes a credential. Pattern
+ * redaction alone cannot catch a generic secret value (e.g. a plain password),
+ * so persistence paths must check the key name before storing `key=value`.
+ * @param {string} key - Argument or field name
+ * @returns {boolean}
+ */
+function isSensitiveKey(key) {
+  const normalized = String(key || "").normalize("NFKC").toLowerCase().replace(/[^a-z0-9]/g, "");
+  return SENSITIVE_KEY_RE.test(normalized);
+}
+
+/**
+ * Recursively sanitizes a value for persistence: values under sensitive key
+ * names are replaced wholesale, and remaining strings are pattern-redacted.
+ * JSON.stringify of an unsanitized object defeats the `key=value` patterns in
+ * redactSensitive (the quote after the key breaks the match), so nested
+ * structures must be walked with their key context before serialization.
+ * @param {*} value - Value to sanitize
+ * @param {string} [key] - The key this value sits under, when known
+ * @returns {*} - Sanitized copy; primitives other than strings pass through
+ */
+function redactSensitiveKeysDeep(value, key = "") {
+  if (isSensitiveKey(key)) return "[REDACTED]";
+  if (Array.isArray(value)) return value.map(item => redactSensitiveKeysDeep(item));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([childKey, childValue]) => [
+      childKey,
+      redactSensitiveKeysDeep(childValue, childKey)
+    ]));
+  }
+  return typeof value === "string" ? redactSensitive(value) : value;
+}
+
 function redactSensitive(text) {
   if (typeof text !== 'string') return text;
   
@@ -45,4 +86,4 @@ function redactSensitive(text) {
     .replace(/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[REDACTED JWT]');
 }
 
-module.exports = { redactSensitive };
+module.exports = { redactSensitive, isSensitiveKey, redactSensitiveKeysDeep };

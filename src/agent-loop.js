@@ -1,5 +1,6 @@
 const { parseAgentDecision, trackDecisionRepetition, resolveAgentToolName } = require("./agent-protocol");
 const { stripSidekickPrefix } = require("./core/tool-name");
+const { redactSensitiveKeysDeep } = require("./redact");
 
 const DEFAULT_MAX_ITERATIONS = 15;
 
@@ -207,7 +208,14 @@ async function runToolLoop({
 
       emit({ type: "tool", tool: toolName, summary: redact(JSON.stringify(decision.arguments)) });
       onEvent("agent.tool_started", { tool: toolName, requested_as: resolved.alias ? String(decision.tool).substring(0, 80) : undefined, argument_keys: Object.keys(decision.arguments || {}) });
-      steps.push({ type: "tool", tool: toolName, args: decision.arguments });
+      // steps[] is persisted (transcript file, memory extraction, procedure
+      // suggestion); sanitize args at the record. history keeps the raw
+      // arguments the loop itself needs. The secret tool's `value` arg is a
+      // raw credential under a key name no generic check can flag.
+      const stepArgs = canonical(toolName) === "secret" && decision.arguments && decision.arguments.value !== undefined
+        ? { ...decision.arguments, value: "[REDACTED]" }
+        : decision.arguments;
+      steps.push({ type: "tool", tool: toolName, args: redactSensitiveKeysDeep(stepArgs) });
 
       let result;
       let approvalPending = false;
@@ -234,7 +242,11 @@ async function runToolLoop({
       const summary = result.substring(0, 500);
       emit({ type: "tool", tool: toolName, summary: summary.substring(0, 120) });
       onEvent("agent.tool_completed", { tool: toolName, ok: !isFailureText(result), summary: redact(summary).substring(0, 200) }, isFailureText(result) ? "error" : "info");
-      steps[steps.length - 1].result = summary;
+      // The secret tool's successful result IS the credential; never let it
+      // into the persisted step record (errors stay for diagnostics).
+      steps[steps.length - 1].result = canonical(toolName) === "secret" && !isFailureText(result)
+        ? "(sensitive value withheld)"
+        : summary;
       history.push({ role: "assistant", content: "Called " + toolName + " → " + summary.substring(0, 200) });
 
       if (approvalPending) {
