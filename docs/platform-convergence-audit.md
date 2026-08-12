@@ -1,7 +1,7 @@
 # Platform Convergence Audit
 
 Status: Current-state audit (post-handoff convergence campaign)
-Verified commit: 5e4dbfdb04c9878cbbd284bd950a6afbef78eec3
+Verified commit: 51e45058c40f08cc831f18082c84726fc1b1b779
 Verified date: 2026-08-12
 Supersedes: the 2026-08-11 audit pinned to `a88ea84` (10 PRs stale) and the
 2026-08-05 audit pinned to `d2db2658`.
@@ -19,6 +19,19 @@ by a documentation claim.
 Baseline at `5e4dbfd`: **106 test files registered in `test/run-all.js`**. The
 9 suites that were orphaned at `a88ea84` were registered by PR #236 and now run
 in CI (as `critical: false` entries).
+
+## Closeout delta (2026-08-12)
+
+The subsequent B3/B4 campaign slices were verified against deployed `51e4505`.
+Execution creation now registers canonical projects, scheduled executions
+inherit request project context, and the project/isolation suites cover the
+boundary. The project-source backfill was run through the guarded dry-run then
+confirmed path: both reports matched at 40 rows across 9 source types and 18
+projects. Runbook cancellation/checkpoint behavior is ledger-backed for the
+scheduled runners. The full suite and deployment smoke verification passed.
+
+These changes close the condensed campaign scope; the broader residual matrix
+below remains intentionally unchanged where it describes unrelated future work.
 
 The prior 8-phase roadmap (`d9625a3`..`a88ea84`, PRs #191–#235) has a commit for
 every phase. This audit measures what those commits actually delivered:
