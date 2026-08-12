@@ -27,7 +27,7 @@ const legacy = require('../src/tools-legacy');
 const family = require('../src/tools/families/filesystem');
 
 const text = result => result.content[0].text;
-const names = ['read', 'list', 'search', 'summarize', 'filter', 'diff_files', 'find'];
+const names = ['read', 'list', 'search', 'summarize', 'filter', 'write', 'diff_files', 'find'];
 
 console.log('Running Filesystem Family Tests...');
 

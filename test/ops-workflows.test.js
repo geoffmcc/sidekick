@@ -6,6 +6,7 @@ const { getBuiltinRegistry } = require('../src/tools/index');
 const root = path.join(__dirname, '..');
 const toolsJs = fs.readFileSync(path.join(root, 'src', 'tools-legacy.js'), 'utf8');
 const schemasJs = fs.readFileSync(path.join(root, 'src', 'tools', 'schemas', 'index.js'), 'utf8');
+const opsFamilyJs = fs.readFileSync(path.join(root, 'src', 'tools', 'families', 'operations.js'), 'utf8');
 const registry = getBuiltinRegistry();
 const ops = registry.get('ops');
 const mission = registry.get('mission');
@@ -13,7 +14,7 @@ const mission = registry.get('mission');
 console.log('Running operations workflow tests...\n');
 
 assert.match(
-  toolsJs,
+  opsFamilyJs,
   /async function sidekick_ops\s*\(/,
   'sidekick_ops should define a packaged operations workflow tool'
 );
@@ -61,13 +62,13 @@ assert.match(
 );
 
 assert.match(
-  toolsJs,
+  opsFamilyJs,
   /scheduleMcpRestart\s*\(/,
   'sidekick_ops should schedule MCP self-restarts instead of blocking the response'
 );
 
 assert.match(
-  toolsJs,
+  opsFamilyJs,
   /function filterGitStatus\s*\(/,
   'sidekick_ops should ignore the known package-lock.json noise in deploy checks'
 );
@@ -79,19 +80,19 @@ assert.match(
 );
 
 assert.match(
-  toolsJs,
+  opsFamilyJs,
   /--max-time", "5", "-fsS"/,
   'sidekick_ops should bound the MCP health probe'
 );
 
 assert.match(
-  toolsJs,
+  opsFamilyJs,
   /await runOpsCommandAsync\s*\(/,
   'sidekick_ops should probe its own MCP health endpoint asynchronously to avoid blocking the event loop'
 );
 
 assert.match(
-  schemasJs,
+  opsFamilyJs,
   /ops:\s*z\.object\(\{[\s\S]*verify_deployed_commit[\s\S]*restart_and_smoke_test[\s\S]*deploy_current_main[\s\S]*incident_snapshot/,
   'MCP schema should expose ops actions'
 );

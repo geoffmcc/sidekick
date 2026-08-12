@@ -135,9 +135,9 @@ test('purge_preview is exposed as a read-only GET', () => {
 
 console.log('Contract.5: the MCP tool surface stays compatible');
 test('canonical tool actions are preserved and extended', () => {
-  const legacy = fs.readFileSync(path.join(ROOT, 'src', 'tools-legacy.js'), 'utf-8');
-  const schemas = fs.readFileSync(path.join(ROOT, 'src', 'tools', 'schemas', 'index.js'), 'utf-8');
-  const match = legacy.match(/const validActions = \[([^\]]*)\]/);
+  const metaFamily = fs.readFileSync(path.join(ROOT, 'src', 'tools', 'families', 'meta.js'), 'utf-8');
+  const schemas = metaFamily;
+  const match = metaFamily.match(/const validActions = \[([^\]]*)\]/);
   assert.ok(match, 'validActions found');
   const actions = [...match[1].matchAll(/"([^"]+)"/g)].map(m => m[1]);
   for (const existing of ['analyze', 'list', 'get', 'feedback', 'outcome', 'dismiss', 'explain', 'status', 'suggest', 'migrate']) {
@@ -150,8 +150,9 @@ test('canonical tool actions are preserved and extended', () => {
 });
 
 test('every documented purge option is reachable through the tool and the route', () => {
-  const legacy = fs.readFileSync(path.join(ROOT, 'src', 'tools-legacy.js'), 'utf-8');
-  const schemas = fs.readFileSync(path.join(ROOT, 'src', 'tools', 'schemas', 'index.js'), 'utf-8');
+  const metaFamily = fs.readFileSync(path.join(ROOT, 'src', 'tools', 'families', 'meta.js'), 'utf-8');
+  const legacy = metaFamily;
+  const schemas = metaFamily;
   const docs = fs.readFileSync(path.join(ROOT, 'docs', 'predict.md'), 'utf-8');
 
   for (const opt of ['retention_days', 'purge_legacy', 'confirm']) {

@@ -1,7 +1,6 @@
 const { z } = require("zod");
 
 const TOOL_SCHEMAS = {
-  bash: z.object({ command: z.string().describe("Shell command to execute") }),
   tools: z.object({
     action: z.enum(["overview", "search", "get", "policy"]).optional().default("overview").describe("Catalog action"),
     query: z.string().optional().describe("Search terms for action=search"),
@@ -12,7 +11,6 @@ const TOOL_SCHEMAS = {
     include_disabled: z.boolean().optional().describe("Include policy-disabled tools"),
     limit: z.number().optional().describe("Max search results")
   }),
-  write: z.object({ path: z.string().describe("Absolute path to write to"), content: z.string().describe("File content to write") }),
   resume: z.object({
     action: z.enum(["check", "set", "clear", "list"]).optional().default("check").describe("Resume action"),
     project: z.string().optional().describe("Project name for check/set/clear"),
@@ -26,17 +24,6 @@ const TOOL_SCHEMAS = {
     current_phase: z.number().int().positive().optional().describe("Current phase number within the named plan for action=set"),
     include_cleared: z.boolean().optional().describe("Include cleared/done items for action=list"),
     format: z.enum(["text", "json"]).optional().default("text").describe("Output format")
-  }),
-  llm: z.object({
-    prompt: z.string().describe("The prompt to send to the LLM"),
-    system: z.string().optional().describe("System prompt override"),
-    temperature: z.number().optional().default(0.7).describe("Sampling temperature (0-2)"),
-    provider: z.string().optional().describe("LLM provider: 'ollama' (default) or 'groq' (cloud)")
-  }),
-  git: z.object({
-    action: z.enum(["status", "diff", "log", "add", "commit", "push", "pull", "branch", "checkout", "stash"]).describe("Git action to perform"),
-    path: z.string().optional().describe("Repository path (defaults to current directory)"),
-    args: z.string().optional().describe("Additional arguments for the git command")
   }),
   cron: z.object({
     action: z.enum(["add", "list", "remove", "run"]).describe("Cron action to perform"),
@@ -79,12 +66,6 @@ const TOOL_SCHEMAS = {
     tool: z.string().optional().describe("Tool name to execute (for add action)"),
     args: z.record(z.any()).optional().describe("Arguments to pass to the tool (for add action)")
   }),
-  snapshot: z.object({
-    action: z.enum(["capture", "compare", "list", "delete"]).describe("Snapshot action: capture (save state), compare (detect drift), list (show all), delete (remove)"),
-    name: z.string().optional().describe("Snapshot name"),
-    capture: z.string().optional().describe("What to capture: processes,services,disk,packages,network,files:/path (comma-separated)"),
-    compare: z.string().optional().describe("Baseline snapshot name for compare action")
-  }),
   watch: z.object({
     action: z.enum(["add", "list", "remove", "pause", "check"]).describe("Watch action: add (create new), list (show all), remove (delete), pause (pause/resume), check (manual check)"),
     id: z.string().optional().describe("Watch ID (required for remove/pause/check)"),
@@ -102,11 +83,6 @@ const TOOL_SCHEMAS = {
     key: z.string().optional().describe("Secret name/key"),
     value: z.string().optional().describe("Secret value (for store action)"),
     generate: z.string().optional().describe("Length for rotation (e.g. '32' for 32-char random hex)")
-  }),
-  security_scan: z.object({
-    path: z.string().optional().describe("Directory to scan (default Sidekick repository)"),
-    max_files: z.number().int().min(1).max(10000).optional().describe("Maximum files to inspect (default 2000, maximum 10000)"),
-    format: z.enum(["text", "json"]).optional().describe("Output format (default text)")
   }),
   queue: z.object({
     action: z.enum(["add", "list", "process", "remove", "clear"]).describe("Queue action"),
@@ -144,40 +120,6 @@ const TOOL_SCHEMAS = {
     dependencies: z.record(z.array(z.string())).optional().describe("Dependency map (for create)"),
     timeout: z.number().optional().describe("Timeout in milliseconds (default: 1800000)")
   }),
-  predict: z.object({
-    action: z.enum(["analyze", "list", "get", "feedback", "outcome", "dismiss", "explain", "status", "suggest", "migrate", "purge_preview", "purge", "diagnose"]).describe("Predict action"),
-    id: z.string().optional().describe("Prediction ID"),
-    type: z.string().optional().describe("Filter by prediction type"),
-    scope: z.enum(["project", "session", "task", "global"]).optional().describe("Analysis scope. Inferred from project/session_id/task_id when omitted; use 'global' to deliberately analyze every project"),
-    confirm: z.boolean().optional().describe("Required (true) to execute a purge"),
-    retention_days: z.number().optional().describe("Override the configured retention period for purge_preview/purge"),
-    purge_legacy: z.boolean().optional().describe("Also purge legacy (pre-v2) terminal predictions, which are preserved by default"),
-    project: z.string().optional().describe("Project scope"),
-    session_id: z.string().optional().describe("Session ID"),
-    task_id: z.string().optional().describe("Task ID"),
-    feedback: z.string().optional().describe("Feedback value (useful|not_useful|incorrect|already_known|acted_on|dismissed)"),
-    outcome: z.string().optional().describe("Outcome value (confirmed|did_not_occur|action_succeeded|action_failed|expired|superseded|unresolved)"),
-    limit: z.number().optional().describe("Max results (default 20, max 100)"),
-    status: z.string().optional().describe("Filter by status (active|expired|superseded|dismissed|confirmed|did_not_occur)"),
-    confidence: z.string().optional().describe("Filter by confidence (none|low|medium|high|very_high)"),
-    maxAge: z.string().optional().describe("Analysis window (default 7d)")
-  }),
-  debug_tool: z.object({
-    action: z.enum(["store", "recall", "cleanup", "start", "stop", "cache", "get", "status", "clear"]).describe("Debug action"),
-    session_name: z.string().optional().describe("Session identifier (for legacy session actions)"),
-    key: z.string().optional().describe("Cache key (for get/cache) or debug key (for cleanup)"),
-    value: z.string().optional().describe("Value to cache/store"),
-    service: z.string().optional().describe("Service name (for store/recall)"),
-    issue: z.string().optional().describe("Issue description (for store)"),
-    redact: z.boolean().optional().describe("Default true - set false to skip redaction")
-  }),
-  fresheyes: z.object({
-    problem: z.string().describe("Problem description"),
-    context: z.string().optional().describe("Relevant context"),
-    files: z.array(z.string()).optional().describe("Files analyzed"),
-    hypotheses: z.array(z.string()).optional().describe("Current hypotheses"),
-    full_response: z.boolean().optional().describe("Return full response vs key insights")
-  }),
   batch: z.object({
     calls: z.array(z.object({
       tool: z.string().describe("Tool name to call"),
@@ -188,44 +130,6 @@ const TOOL_SCHEMAS = {
     name: z.string().describe("Project name"),
     include: z.string().optional().describe("Sections to include: kv,context,logs,procedures (default: kv,context)")
   }),
-  anonymize: z.object({
-    action: z.enum(["anonymize", "patterns", "add_pattern", "remove_pattern"]),
-    input: z.string().optional().describe("Text to anonymize"),
-    format: z.enum(["text", "json", "yaml"]).optional().default("text"),
-    custom_patterns: z.array(z.object({
-      pattern: z.string(),
-      replacement: z.string()
-    })).optional(),
-    consistency: z.boolean().optional().default(true).describe("Same input always maps to same output")
-  }),
-  sandbox: z.object({
-    action: z.enum(["exec", "rollback", "list", "diff", "clean"]),
-    sandbox_name: z.string().optional(),
-    command: z.string().optional().describe("Command to execute in sandbox"),
-    files: z.array(z.string()).optional().describe("Files to auto-backup before exec"),
-    auto_backup: z.boolean().optional().default(true),
-    rollback_id: z.string().optional()
-  }),
-  changelog: z.object({
-    action: z.enum(["generate", "preview", "save"]),
-    from: z.string().describe("Starting ref (tag, commit, branch)"),
-    to: z.string().optional().default("HEAD"),
-    format: z.enum(["markdown", "plain", "conventional"]).optional().default("markdown"),
-    group_by: z.enum(["type", "scope", "author"]).optional().default("type"),
-    use_llm: z.boolean().optional().default(false),
-    include: z.enum(["all", "features", "fixes", "breaking", "refactor", "deps"]).optional().default("all"),
-    path: z.string().optional().describe("Git repository path (default: current directory)")
-  }),
-  timeline: z.object({
-    action: z.enum(["build", "filter", "export"]),
-    since: z.string().describe("Start time (ISO or relative: 1h, 1d, 7d)"),
-    until: z.string().optional().default("now"),
-    sources: z.array(z.enum(["log.jsonl", "journalctl", "git", "files", "all"])).optional().default(["all"]),
-    pattern: z.string().optional().describe("Regex filter for event content"),
-    severity: z.enum(["error", "warn", "info", "all"]).optional().default("all"),
-    format: z.enum(["compact", "detailed", "json"]).optional().default("compact"),
-    max_events: z.number().optional().default(200)
-  }),
   circuit: z.object({
     action: z.enum(["call", "status", "reset", "configure"]),
     target: z.string().describe("Circuit target label (e.g., 'github-api', 'web-fetch')"),
@@ -234,22 +138,6 @@ const TOOL_SCHEMAS = {
     failure_threshold: z.number().optional().default(5),
     cooldown_seconds: z.number().optional().default(60),
     cache_response: z.boolean().optional().default(false)
-  }),
-  baseline: z.object({
-    action: z.enum(["record", "learn", "check", "status", "reset"]),
-    metric_name: z.string().describe("Metric identifier"),
-    value: z.number().optional().describe("Value to record (for action=record)"),
-    source: z.string().optional().describe("Data source: 'health', 'custom', 'command'"),
-    command: z.string().optional().describe("Command to collect metric (for source=command)"),
-    window: z.string().optional().default("7d").describe("History window to analyze"),
-    sensitivity: z.enum(["low", "medium", "high"]).optional().default("medium")
-  }),
-  depend: z.object({
-    action: z.enum(["tree", "reverse", "outdated", "impact", "orphans"]),
-    type: z.enum(["npm", "service", "process"]),
-    target: z.string().optional().describe("Package, service, or PID to analyze"),
-    depth: z.number().optional().default(5),
-    format: z.enum(["tree", "flat", "json"]).optional().default("tree")
   }),
   runbook: z.object({
     action: z.enum(["create", "start", "next", "verify", "rollback", "abort", "list", "get", "delete"]),
@@ -264,11 +152,6 @@ const TOOL_SCHEMAS = {
     })).optional(),
     runbook_id: z.string().optional(),
     step_index: z.number().optional()
-  }),
-  ops: z.object({
-    action: z.enum(["verify_deployed_commit", "restart_and_smoke_test", "deploy_current_main", "incident_snapshot"]).describe("Packaged operations workflow to run"),
-    repo_path: z.string().optional().describe("Repository path. Defaults to the current Sidekick repo."),
-    restart_mcp: z.boolean().optional().default(false).describe("For restart_and_smoke_test, schedule sidekick-mcp restart after the response.")
   }),
   mission: z.object({
     action: z.enum(["profiles", "route", "preflight", "execute"]).optional().default("route").describe("Mission Control action"),
@@ -285,82 +168,6 @@ const TOOL_SCHEMAS = {
     tool: z.string().optional().describe("Tool filter for logs"),
     source: z.string().optional().describe("Source filter for logs"),
     format: z.string().optional().describe("Output format for tool discovery")
-  }),
-  black_box: z.object({
-    action: z.enum([
-      "capture", "capture_status", "cancel_capture", "list", "get", "delete", "analyze",
-      "list_incidents", "get_incident", "list_captures", "get_capture", "list_sources", "get_source",
-      "search", "compare", "add_note", "update_incident", "verify", "pin", "extend_retention",
-      "archive", "export", "storage_status", "purge_preview", "purge", "profiles"
-    ]),
-    name: z.string().optional().describe("Incident name/title"),
-    title: z.string().optional().describe("Incident title"),
-    description: z.string().optional().describe("Incident description"),
-    project: z.string().optional(),
-    environment: z.string().optional(),
-    severity: z.string().optional(),
-    lifecycle_state: z.string().optional(),
-    tags: z.array(z.string()).optional(),
-    profile: z.enum(["quick", "standard", "deep", "network", "service", "sidekick", "repository", "custom"]).optional(),
-    include: z.array(z.string()).optional().describe("Legacy sections or collector keys"),
-    analyze_with_llm: z.boolean().optional().default(false),
-    use_llm: z.boolean().optional().default(true),
-    incident_id: z.string().optional(),
-    capture_id: z.string().optional(),
-    compare_capture_id: z.string().optional(),
-    source_id: z.string().optional(),
-    query: z.string().optional(),
-    note: z.string().optional(),
-    content: z.string().optional(),
-    note_type: z.string().optional(),
-    retention_class: z.string().optional(),
-    reason: z.string().optional(),
-    format: z.enum(["json", "markdown"]).optional(),
-    raw: z.boolean().optional(),
-    offset: z.number().optional(),
-    limit: z.number().optional(),
-    confirm: z.boolean().optional().default(false)
-  }),
-  ocr: z.object({
-    path: z.string().describe("Image file path"),
-    language: z.string().optional().default("eng").describe("OCR language (default: eng)"),
-    psm: z.number().optional().describe("Page segmentation mode")
-  }),
-  media: z.object({
-    action: z.enum(["info", "convert", "extract_audio", "thumbnail", "resize", "trim"]).describe("Media action"),
-    input: z.string().describe("Input file path"),
-    output: z.string().optional().describe("Output file path"),
-    options: z.string().optional().describe("Format-specific options")
-  }),
-  transcribe: z.object({
-    path: z.string().describe("Audio/video file path"),
-    model: z.string().optional().default("base").describe("Whisper model (tiny|base|small|medium)"),
-    language: z.string().optional().describe("Language code")
-  }),
-  analytics: z.object({
-    query: z.string().optional().describe("SQL query"),
-    file: z.string().optional().describe("Data file path (CSV, JSON, or Parquet)"),
-    format: z.string().optional().describe("File format (csv|json|parquet)")
-  }),
-  insight_report: z.object({
-    paths: z.union([z.string(), z.array(z.string())]).describe("Text, data, or image file path(s) to analyze"),
-    title: z.string().optional().describe("Optional report title")
-  }),
-  download: z.object({
-    url: z.string().describe("Video URL"),
-    output: z.string().optional().describe("Output path"),
-    format: z.string().optional().describe("Video format"),
-    audio_only: z.boolean().optional().describe("Extract audio only")
-  }),
-  knowledge: z.object({
-    action: z.enum(["search", "get", "list", "add", "update", "delete", "purge"]).describe("Knowledge base action"),
-    id: z.number().optional().describe("Entry ID (for get/update/delete)"),
-    category: z.string().optional().describe("Category (for list/add/update)"),
-    title: z.string().optional().describe("Title (for add/update)"),
-    content: z.string().optional().describe("Content (for add/update)"),
-    tags: z.string().optional().describe("Comma-separated tags (for add/update)"),
-    query: z.string().optional().describe("Search query (for search)"),
-    limit: z.number().optional().describe("Max results (for search/list)")
   }),
   compute: z.object({
     action: z.enum(["overview", "init"]).describe("Compute action")

@@ -220,7 +220,7 @@ try {
 
   const deploySh = fs.readFileSync(path.join(root, 'deploy.sh'), 'utf8');
   const deployPs1 = fs.readFileSync(path.join(root, 'deploy.ps1'), 'utf8');
-  const toolsJs = fs.readFileSync(path.join(root, 'src', 'tools-legacy.js'), 'utf8');
+  const opsFamilyJs = fs.readFileSync(path.join(root, 'src', 'tools', 'families', 'operations.js'), 'utf8');
   const schemasJs = fs.readFileSync(path.join(root, 'src', 'tools', 'schemas', 'index.js'), 'utf8');
   assert.match(deploySh, /SCP\/offline mode/, 'deploy.sh should label explicit SCP/offline mode');
   assert.match(deployPs1, /SCP\/offline mode/, 'deploy.ps1 should label explicit SCP/offline mode');
@@ -232,9 +232,9 @@ try {
   assert.match(deployPs1, /Syncing \.env before first Git conversion/, 'deploy.ps1 should copy first-deploy .env before conversion backup');
   assert.doesNotMatch(deploySh, /rm -rf \$REMOTE_DIR/, 'deploy.sh should not destructively remove live directory');
   assert.doesNotMatch(deployPs1, /rm -rf \$REMOTE_DIR/, 'deploy.ps1 should not destructively remove live directory');
-  assert.match(toolsJs, /SIDEKICK_DEPLOY_REPO_PATH = "\/home\/sidekick\/sidekick"/, 'sidekick_ops should use fixed deployment path');
-  assert.match(toolsJs, /deployScriptPath\(repoPath\)/, 'sidekick_ops should delegate to git deployment helper');
-  assert.match(schemasJs, /ops:\s*z\.object/, 'ops schema should remain registered');
+  assert.match(opsFamilyJs, /SIDEKICK_DEPLOY_REPO_PATH = "\/home\/sidekick\/sidekick"/, 'sidekick_ops should use fixed deployment path');
+  assert.match(opsFamilyJs, /deployScriptPath\(repoPath\)/, 'sidekick_ops should delegate to git deployment helper');
+  assert.match(opsFamilyJs, /ops:\s*z\.object/, 'ops schema should remain registered');
 
   console.log('Git deployment hardening tests passed\n');
 } finally {
