@@ -2,7 +2,27 @@ const providerRegistry = require("./provider-registry");
 const modelRegistry = require("./model-registry");
 const { RoutingError, DataClassificationError, TrustViolationError, CIRCUIT_STATES, DATA_CLASSIFICATIONS, TRUST_LEVELS, WORKLOAD_CLASSES } = require("./errors");
 
-const TRUST_ORDER = { untrusted: 0, limited: 1, trusted: 2, privileged: 3 };
+// Trust ordering is IMPORTED from the placement core rather than redeclared.
+// The second copy that used to live here was missing the legacy `private`
+// label, which placement ranks as `trusted`, so the same provider ranked 2 in
+// placement and 0 here — two selectors that both look authoritative,
+// disagreeing about whether a provider is trusted at all.
+const { TRUST_ORDER } = require("./placement");
+
+// Placement treats an unspecified requirement as `trusted`; matching that
+// default is what keeps `explain` from advertising a provider that real
+// placement would refuse.
+const DEFAULT_TRUST_REQUIRED = "trusted";
+
+// Unknown or legacy labels rank as untrusted, fail-closed, exactly as placement does.
+function trustRank(level) {
+  return TRUST_ORDER[level] ?? 0;
+}
+
+function meetsTrust(provider, request) {
+  const required = request.trustLevel || DEFAULT_TRUST_REQUIRED;
+  return trustRank(provider.trustLevel) >= trustRank(required);
+}
 
 class CapabilityRouter {
   constructor() {
@@ -54,6 +74,11 @@ class CapabilityRouter {
       if (p.health.circuitState === CIRCUIT_STATES.OPEN) return false;
       if (p.health.status === "disabled" || p.health.status === "maintenance") return false;
       if (dataClassification && !p.dataClassifications.includes(dataClassification)) return false;
+      // Trust was never compared here. Circuit state, health and data
+      // classification were all enforced, so the omission looked like a
+      // complete filter while `explain` could still name a provider that
+      // `decidePlacement` refuses on trust grounds.
+      if (!meetsTrust(p, request)) return false;
       return true;
     });
 
@@ -112,6 +137,10 @@ class CapabilityRouter {
       for (const p of allProviders) {
         if (p.providerId === primary.provider?.providerId) continue;
         if (request.dataClassification && !p.dataClassifications.includes(request.dataClassification)) continue;
+        // The comment below already required a fallback to satisfy the same
+        // constraints as a primary candidate; trust was missing from that list,
+        // which is the one constraint where falling back quietly would matter most.
+        if (!meetsTrust(p, request)) continue;
         const models = modelRegistry.listModels({ providerId: p.providerId, enabled: true });
         // A fallback candidate must satisfy the SAME requirement filters as a
         // primary candidate — falling back must never mean falling below the

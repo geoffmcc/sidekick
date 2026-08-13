@@ -44,6 +44,7 @@ const suites = [
   { file: 'test/platform-event-consumption.test.js', critical: false, description: 'Transactional event fan-out, backlog cap, delivery drainer, handler registry, and event vocabulary' },
   { file: 'test/compute-artifact-custody.test.js', critical: false, description: 'Compute worker artifacts registered with the kernel custody authority, surfaced custody failures, and the dry-run reconciler' },
   { file: 'test/per-action-risk.test.js', critical: false, description: 'Per-action tool risk resolution, fail-closed downgrade rules, and approval/policy decisions at the dispatcher boundary' },
+  { file: 'test/compute-model-dedup.test.js', critical: false, description: 'Single model authority, shared trust ordering between router and placement, and maintained worker health_state' },
   { file: 'test/kernel-migration-parity.test.js', critical: false, description: 'Fresh migration boot vs runtime kernel boot schema parity' },
   { file: 'test/migration-self-containment.test.js', critical: true, description: 'Migrations build a complete schema standalone (C1) and tolerate runtime-created columns (C2)' },
   { file: 'test/project-identity.test.js', critical: false, description: 'Canonical project projection, cross-source identity, backfill, and encrypted workspace secrets' },
