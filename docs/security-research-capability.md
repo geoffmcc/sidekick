@@ -1,22 +1,23 @@
 # Security Research Capability
 
-Status: Proposed capability-pack architecture; generic record foundations implemented, none production-wired
-Verified commit: 5e4dbfdb04c9878cbbd284bd950a6afbef78eec3
-Verified date: 2026-08-12
+Status: Shipped governed capability pack; optional runtime configuration is required
+Verified commit: b8ca33f1a541708fe6c2ba5f067253f20861fbe5
+Verified date: 2026-08-13
 
 Implementation reality at the verified commit: the generic kernel records exist
 (scope snapshots/guard, campaigns, hypotheses, test runs, findings, reports,
-disclosure gates — migrations 032–035) with genuinely fail-closed invariants,
-but they have no MCP tools, no dashboard UI, and no production callers; the
-only live surface is three authenticated dashboard scope endpoints. The Scope
-Guard is a tested function that is **not yet attached to tool dispatch**. The
-external adapter is contract-only with no transport (requests fail before any
-network I/O), and no security-research module exists. All fixtures are
-synthetic. This document otherwise describes the accepted design.
+disclosure gates — migrations 032–035), and the shipped `packs/security-research`
+pack exposes them through governed tools and workflows. The pack enforces
+scope, policy, approval, audit, evidence-integrity and external-workspace
+boundaries. Command probes dispatch the governed `bash` tool, HTTP probes
+dispatch `web_fetch`, workflows compose the governed Git tool, and a configured
+Proxmox environment can compose the governed provisioning/guest tools. No
+private research workspace or target data is part of this repository. All
+fixtures are synthetic.
 
 ## Position And Responsibility
 
-`@sidekick/security-research` is a future module, not Sidekick core and not an unrestricted autonomous offensive-security system. This audit does **not** assume that the separate Security Research Workbench is operational: it currently is not working, so it must not be a prerequisite for the capability-pack roadmap. The present operator workflow uses `security-research`; the first integration should target that working surface through a documented, typed boundary. A Workbench adapter remains an optional future replacement or additional consumer, not the source of current truth.
+`@sidekick/security-research` is an optional module, not Sidekick core and not an unrestricted autonomous offensive-security system. The separate Security Research Workbench is not a prerequisite: the shipped pack is the current operator surface, and its composed tools remain subject to the normal policy, approval and audit path. A Workbench adapter remains an optional future replacement or additional consumer, not the source of current truth.
 
 Sidekick owns project/campaign control, authorization snapshots, scope enforcement, orchestration, approvals, execution lineage, evidence custody, artifacts, monitoring, correspondence metadata, handoffs and compute routing. The current `security-research` surface owns whatever investigation/report workflow is verified for the deployment; its state must be integrated through APIs, connectors or events rather than private shared tables. Coding agents review code/tests but do not own state. Disposable labs reproduce behavior; authoritative state and evidence stay outside them. Humans decide authorization, destructive actions, findings, reports, submissions and disclosure.
 
@@ -36,7 +37,7 @@ Sidekick owns project/campaign control, authorization snapshots, scope enforceme
 
 ## Scope Guard And Confirmation
 
-Scope Guard is designed to attach immediately before centralized dispatch; that attachment has not been built yet. Phase 7 provides the generic versioned snapshot, target-digest, operation allowlist, fail-closed decision, and execution-binding contract in `docs/security-research-scope-guard.md`. Domain evaluation still adds target, technique, tool/connector, environment, program restrictions, rate limit, third-party data risk, privilege, project/campaign and the exact current ScopeSnapshot. The module check is never the only enforcement boundary. Every bound execution stores the snapshot and decision digests.
+Scope Guard is enforced by the security-research module before its composed probes and lab operations reach centralized dispatch. The generic versioned snapshot, target-digest, operation allowlist, fail-closed decision, and execution-binding contract are documented in `docs/security-research-scope-guard.md`. Domain evaluation adds target, technique, tool/connector, environment, program restrictions, rate limit, third-party data risk, privilege, project/campaign and the exact current ScopeSnapshot. The module check is never the only enforcement boundary. Every bound execution stores the snapshot and decision digests.
 
 Phase 7 now provides bounded campaign, hypothesis and test-run records. Campaigns are project-bound and may carry the current scope snapshot; hypotheses belong to a campaign and preserve claim, rationale, prerequisites, criteria and confidence; test runs link a hypothesis to an optional platform execution, scope snapshot, environment and evidence references. These records are workflow metadata, not an execution engine or finding store.
 
@@ -61,7 +62,7 @@ analysis_completed -> test_designed -> environment_prepared -> test_executed
 
 Use generic artifact registration for custody. Originals include a SHA-256 digest, size, timestamp, source, environment, method, execution ID, sensitivity, retention and custody events. Redacted/report-safe files are explicit derivatives linked to an existing original and never replace it. The dashboard exposes bounded custody metadata without unrestricted artifact reads. Outgoing vendor correspondence/submissions require human approval. Disclosure may progress through draft, internal review, ready, submitted, acknowledged, triage, duplicate/informative, accepted, remediation, resolved, retest, bounty and closed states.
 
-The generic connector contract owns registration, configuration, lifecycle, opaque secret references, health and event metadata. Phase 6 provides a fail-closed typed adapter boundary in `docs/security-research-adapter-contract.md`; the repository currently has no verified `security-research` API transport. The first domain connector must be defined against a working surface and tested independently of the unavailable Workbench. Do not claim Workbench-backed integration until its endpoint, lifecycle and result contract are verified.
+The generic connector contract owns registration, configuration, lifecycle, opaque secret references, health and event metadata. The shipped pack does not embed a Workbench transport or bypass provider APIs: it composes the governed local tools and optional configured lab providers. Do not claim Workbench-backed integration until its endpoint, lifecycle and result contract are separately verified.
 
 Lab policy is represented by environment records, connector configuration and policy, not hard-coded VLANs or addresses. Disposable targets have no route to household/production systems; destructive actions require approval and clean snapshots; evidence is exported before target destruction.
 
