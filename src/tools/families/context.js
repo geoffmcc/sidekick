@@ -36,20 +36,24 @@ function simpleSimilarity(text1, text2) {
   return intersection.size / union.size;
 }
 
+let inferenceService = null;
+try { inferenceService = require("../../compute/inference-service"); } catch {}
+
 async function generateEmbedding(text) {
-  const ollamaUrl = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
-  const model = "nomic-embed-text";
-
+  // Embeddings route through Compute — the single inference authority — not a
+  // direct Ollama call. Context is private, so placement keeps it on
+  // local/trusted providers. Best-effort: null degrades similarity search to the
+  // lexical fallback gracefully.
+  if (!inferenceService || !text) return null;
+  const model = process.env.SIDEKICK_EMBEDDING_MODEL || "nomic-embed-text";
   try {
-    const response = await fetch(`${ollamaUrl}/api/embeddings`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model, prompt: text })
+    const result = await inferenceService.embed({
+      input: text,
+      model,
+      dataClassification: "private",
+      preferences: { allowFallback: true },
     });
-
-    if (!response.ok) return null;
-    const data = await response.json();
-    return data.embedding;
+    return result.embedding || null;
   } catch {
     return null;
   }

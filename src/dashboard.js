@@ -1141,26 +1141,25 @@ app.post("/api/scope-guard/evaluate", (req, res) => {
 });
 
 app.get("/api/llm", (req, res) => {
+  // Reflect the Compute provider/model registry — the inference authority — from
+  // registry state rather than probing a single hardcoded Ollama endpoint. This
+  // is a read-only view of what Compute will actually route to; it never becomes
+  // a separate provider-configuration path.
   try {
-    http.get("http://127.0.0.1:11434/api/tags", (r) => {
-      let data = "";
-      r.on("data", (c) => data += c);
-      r.on("end", () => {
-        try {
-          const parsed = JSON.parse(data);
-          const models = (parsed.models || []).map(m => ({
-            name: m.name,
-            size: (m.size / 1073741824).toFixed(2) + "GB",
-            modified: m.modified_at
-          }));
-          if (models.length === 0) {
-            res.json({ status: "no_models", models: [] });
-          } else {
-            res.json({ status: "ok", models });
-          }
-        } catch { res.json({ status: "unreachable", error: "parse error" }); }
-      });
-    }).on("error", (e) => res.json({ status: "unreachable", error: e.message }));
+    const providers = compute.providerRegistry.listProviders({ enabled: true });
+    const models = [];
+    for (const p of providers) {
+      for (const m of compute.modelRegistry.listModels({ providerId: p.providerId, enabled: true })) {
+        models.push({
+          name: m.providerModelName,
+          provider: p.displayName,
+          providerType: p.providerType,
+          capabilities: m.capabilities,
+          health: p.health.status,
+        });
+      }
+    }
+    res.json({ status: models.length === 0 ? "no_models" : "ok", models });
   } catch (e) {
     res.json({ status: "unreachable", error: e.message });
   }

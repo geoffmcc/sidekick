@@ -88,12 +88,26 @@ Supported reporting inputs:
 
 Worker heartbeat and admin inspect APIs expose platform, architecture, worker version, protocol version, providers, executors, model inventory, limits, health, and utilization metadata.
 
+## Inference authority
+
+Compute is the single inference authority. Production inference callers request
+inference through `inference-service` (`chat`/`generate`/`embed`) and let
+Placement choose provider, model, endpoint, credentials, health eligibility, and
+fallback; they do not reach a provider directly. The converged callers are the
+Agent Bridge (`src/agent.js` `callLLM` + procedure suggestion, which also drives
+Brain and the tool loop), memory and context embeddings (`src/memory.js`,
+`src/tools/families/context.js`), and the `llm`/`embed` tools
+(`src/tools/families/inference.js`). The only sanctioned direct-Ollama touchpoint
+outside Compute/provider adapters is the `ollama` tool's model administration
+(list/ps/pull/show), which is management, not inference. `test/inference-convergence.test.js`
+guards this boundary.
+
 ## Providers and credentials
 
 Compute routes inference to **registered providers** in the `compute_providers`
 table (with their models in `compute_models`). Placement can only select a
 provider that exists in the registry, so an empty registry means every
-`InferenceService` call fails and callers fall back to direct HTTP.
+`InferenceService` call fails.
 
 ### Environment bootstrap
 

@@ -11,7 +11,6 @@ try {
 let inferenceService = null;
 try { inferenceService = require("./compute/inference-service"); } catch {}
 
-const OLLAMA_URL = process.env.SIDEKICK_OLLAMA_URL || "http://127.0.0.1:11434";
 const EMBEDDING_MODEL = process.env.SIDEKICK_EMBEDDING_MODEL || "nomic-embed-text";
 const EMBEDDINGS_ENABLED = process.env.SIDEKICK_EMBEDDINGS !== "0";
 
@@ -283,29 +282,18 @@ function buildMemoryTags(source, extra = []) {
 
 async function generateEmbedding(text) {
   if (!EMBEDDINGS_ENABLED || !text) return null;
-  if (inferenceService) {
-    try {
-      const result = await inferenceService.embed({
-        input: text,
-        model: EMBEDDING_MODEL,
-        // Memory content is private by definition; classify explicitly.
-        dataClassification: "private",
-        preferences: { allowFallback: true },
-      });
-      return result.embedding || null;
-    } catch {
-      return null;
-    }
-  }
+  // Embeddings route through Compute like all other inference — no direct Ollama
+  // fallback. Memory content is private, so placement keeps it on local/trusted
+  // providers. Best-effort: a null return degrades semantic search gracefully.
+  if (!inferenceService) return null;
   try {
-    const response = await fetch(`${OLLAMA_URL}/api/embeddings`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: EMBEDDING_MODEL, prompt: text })
+    const result = await inferenceService.embed({
+      input: text,
+      model: EMBEDDING_MODEL,
+      dataClassification: "private",
+      preferences: { allowFallback: true },
     });
-    if (!response.ok) return null;
-    const data = await response.json();
-    return data.embedding || null;
+    return result.embedding || null;
   } catch {
     return null;
   }

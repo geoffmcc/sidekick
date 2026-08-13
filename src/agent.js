@@ -5,7 +5,7 @@ const path = require("path");
 const crypto = require("crypto");
 const EventEmitter = require("events");
 const { execFileSync } = require("child_process");
-const { callAgentTool, getBuiltinRegistry, DATA_DIR, GROQ_API_KEY, GROQ_MODEL, loadDelays, saveDelays, loadWatches, saveWatches, getToolDefsForSource, transitionScheduledPlatformExecution, appendScheduledPlatformEvent, createScheduledPlatformExecution, releaseScheduledClaim, startScheduledLeaseRenewal, recoverStrandedDelays, recoverStrandedRunbooks, claimScheduledDefinition, pauseWatchForCancel } = require("./tools");
+const { callAgentTool, getBuiltinRegistry, DATA_DIR, loadDelays, saveDelays, loadWatches, saveWatches, getToolDefsForSource, transitionScheduledPlatformExecution, appendScheduledPlatformEvent, createScheduledPlatformExecution, releaseScheduledClaim, startScheduledLeaseRenewal, recoverStrandedDelays, recoverStrandedRunbooks, claimScheduledDefinition, pauseWatchForCancel } = require("./tools");
 const { stripSidekickPrefix } = require("./core/tool-name");
 
 // Restore persisted platform modules in this process so module tools resolve
@@ -34,7 +34,7 @@ function brainAgentTools() {
     .filter(t => !builtinNames || builtinNames.has(stripSidekickPrefix(t.name)));
 }
 const { recallMemoryForTextAsync, formatMemoryRecall, recordAgentTaskMemory, buildMemoryBrief, inferProjectFromText } = require("./memory");
-const { selectBestModelName, buildChatMessages, classifyEvidenceRequirement } = require("./agent-protocol");
+const { classifyEvidenceRequirement } = require("./agent-protocol");
 const { runToolLoop } = require("./agent-loop");
 // Optional, feature-flagged. Guarded like inferenceService so a Brain import
 // error can never affect the default (Brain-disabled) Agent Bridge path.
@@ -446,19 +446,6 @@ process.on("uncaughtException", (e) => {
   console.error("Uncaught:", e.message);
 });
 
-if (!GROQ_API_KEY) {
-  setTimeout(() => {
-    const http = require("http");
-    const body = JSON.stringify({ model: "phi3:mini", prompt: "hello", stream: false });
-    const req = http.request({
-      hostname: "127.0.0.1", port: 11434, path: "/api/generate", method: "POST",
-      headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }
-    });
-    req.write(body); req.end();
-    req.on("error", () => {});
-    req.setTimeout(300000, () => req.destroy());
-  }, 1000);
-}
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
@@ -519,55 +506,36 @@ function __setLLMOverrideForTests(fn) { __llmOverride = fn; }
 
 async function callLLM(messages, options = {}) {
   if (__llmOverride) return __llmOverride(messages, options);
-  if (inferenceService) {
-    try {
-      const chatMessages = messages.map(m => ({ role: m.role, content: m.content }));
-      const result = await inferenceService.chat({
-        messages: chatMessages,
-        // `system` is part of the REQUEST, not the context arg: the service's
-        // second parameter is telemetry context and is never read for
-        // prompting. Passing the prompt there silently drops it (the bug that
-        // made Brain plan schema-blind on the placement path).
-        system: options.systemPrompt || buildSystemPrompt(),
-        temperature: typeof options.temperature === "number" ? options.temperature : 0.3,
-        format: options.format,
-        // Agent conversations carry user/system content: classify explicitly so
-        // placement never treats them as unrestricted.
-        dataClassification: "private",
-        preferences: { allowFallback: true },
-      });
-      return { response: result.content || "", model: result.modelId || "unknown", provider: result.providerId || "unknown" };
-    } catch (e) {
-      if (GROQ_API_KEY) {
-        try {
-          const result = await callGroqLLM(messages, options);
-          result.provider = "groq";
-          result.fallback = true;
-          return result;
-        } catch (groqErr) {
-          throw new Error("Compute failed: " + e.message + " | Groq fallback failed: " + groqErr.message);
-        }
-      }
-      throw e;
-    }
+  // Compute is the single inference authority. The Agent Bridge no longer keeps
+  // its own provider-selection/fallback tree (try Compute → direct Ollama →
+  // direct Groq): it states requirements and lets Compute Placement own the
+  // choice of provider, model, endpoint, credentials, health eligibility, and
+  // fallback. Agent conversations carry user/system content, so they are
+  // classified "private" — which, under the secure-by-default provider policy,
+  // keeps them on local/trusted providers and fails closed rather than silently
+  // reaching a cloud provider.
+  if (!inferenceService) {
+    throw new Error("Compute inference service unavailable (src/compute/inference-service).");
   }
-  try {
-    const result = await callOllamaLLM(messages, options);
-    result.provider = "ollama";
-    return result;
-  } catch (ollamaErr) {
-    if (GROQ_API_KEY) {
-      try {
-        const result = await callGroqLLM(messages, options);
-        result.provider = "groq";
-        result.fallback = true;
-        return result;
-      } catch (groqErr) {
-        throw new Error("Ollama failed: " + ollamaErr.message + " | Groq fallback failed: " + groqErr.message);
-      }
-    }
-    throw ollamaErr;
-  }
+  const chatMessages = messages.map(m => ({ role: m.role, content: m.content }));
+  const result = await inferenceService.chat({
+    messages: chatMessages,
+    // `system` is part of the REQUEST, not the telemetry context arg: the
+    // service's second parameter is never read for prompting.
+    system: options.systemPrompt || buildSystemPrompt(),
+    temperature: typeof options.temperature === "number" ? options.temperature : 0.3,
+    format: options.format,
+    dataClassification: "private",
+    preferences: { allowFallback: true },
+  });
+  return {
+    response: result.content || "",
+    model: result.modelId || "unknown",
+    provider: result.providerId || "unknown",
+    // Compute fell back across eligible (all gate-passing) providers; surfaced
+    // for telemetry only.
+    fallback: !!result.fallback,
+  };
 }
 
 async function callAgentLLM(messages) {
@@ -585,121 +553,10 @@ async function callDirectAnswerLLM(goal, combinedBrief, continuationBrief) {
   });
 }
 
-function callGroqLLM(messages, options = {}, attempt = 1) {
-  const systemPrompt = options.systemPrompt || buildSystemPrompt();
-  const temperature = typeof options.temperature === "number" ? options.temperature : 0.3;
-  return new Promise((resolve, reject) => {
-    const https = require("https");
-    const body = JSON.stringify({
-      model: GROQ_MODEL,
-      messages: [
-        { role: "system", content: systemPrompt },
-        ...messages.map(m => ({ role: m.role, content: m.content }))
-      ],
-      temperature
-    });
-    const req = https.request({
-      hostname: "api.groq.com",
-      path: "/openai/v1/chat/completions",
-      method: "POST",
-      headers: {
-        "Authorization": "Bearer " + GROQ_API_KEY,
-        "Content-Type": "application/json",
-        "Content-Length": Buffer.byteLength(body)
-      }
-    }, (res) => {
-      let data = "";
-      res.on("data", (c) => data += c);
-      res.on("end", () => {
-        try {
-          const parsed = JSON.parse(data);
-          if (res.statusCode === 429 && attempt < 5) {
-            const wait = Math.min(10000, 1000 * Math.pow(2, attempt));
-            return setTimeout(() => resolve(callGroqLLM(messages, options, attempt + 1)), wait);
-          }
-          if (res.statusCode >= 400) {
-            return reject(new Error("Groq: " + (parsed.error?.message || data.substring(0, 200))));
-          }
-          const content = parsed.choices?.[0]?.message?.content || "";
-          resolve({ response: content, model: GROQ_MODEL });
-        } catch (e) {
-          reject(new Error("Groq parse: " + data.substring(0, 200)));
-        }
-      });
-    });
-    req.setTimeout(30000, () => { req.destroy(); reject(new Error("LLM timeout")); });
-    req.on("error", reject);
-    req.write(body);
-    req.end();
-  });
-}
-
-function detectBestModel() {
-  return new Promise((resolve) => {
-    const configuredModel = process.env.SIDEKICK_AGENT_MODEL || "";
-    if (configuredModel) return resolve(configuredModel);
-    const http = require("http");
-    const req = http.request({
-      hostname: "127.0.0.1", port: 11434, path: "/api/tags", method: "GET"
-    }, (res) => {
-      let data = "";
-      res.on("data", (c) => data += c);
-      res.on("end", () => {
-        try {
-          const parsed = JSON.parse(data);
-          const models = parsed.models || [];
-          resolve(selectBestModelName(models.map(m => m.name)));
-        } catch {
-          resolve("phi3:mini");
-        }
-      });
-    });
-    req.on("error", () => resolve("phi3:mini"));
-    req.setTimeout(5000, () => { req.destroy(); resolve("phi3:mini"); });
-    req.end();
-  });
-}
-
-function callOllamaLLM(messages, options = {}) {
-  return new Promise((resolve, reject) => {
-    const http = require("http");
-    detectBestModel().then((model) => {
-      const systemPrompt = options.systemPrompt || buildSystemPrompt();
-      const temperature = typeof options.temperature === "number" ? options.temperature : 0.3;
-      const responseFormat = Object.prototype.hasOwnProperty.call(options, "format") ? options.format : undefined;
-      const body = JSON.stringify({
-        model: model,
-        messages: buildChatMessages(systemPrompt, messages),
-        ...(responseFormat ? { format: responseFormat } : {}),
-        options: { temperature },
-        stream: false
-      });
-      const req = http.request({
-        hostname: "127.0.0.1", port: 11434, path: "/api/chat", method: "POST",
-        headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }
-      }, (res) => {
-        let data = "";
-        res.on("data", (c) => data += c);
-        res.on("end", () => {
-          try {
-            const result = JSON.parse(data);
-            if (res.statusCode >= 400 || result.error) {
-              return reject(new Error("Ollama: " + (result.error || data.substring(0, 200))));
-            }
-            result.model = model;
-            result.response = result.message?.content || "";
-            resolve(result);
-          }
-          catch { reject(new Error("LLM parse fail: " + data.substring(0, 200))); }
-        });
-      });
-      req.setTimeout(300000, () => { req.destroy(); reject(new Error("LLM timeout")); });
-      req.on("error", reject);
-      req.write(body);
-      req.end();
-    });
-  });
-}
+// Direct Groq/Ollama inference helpers (callGroqLLM, detectBestModel,
+// callOllamaLLM) were removed in the inference-caller convergence: the Agent
+// Bridge no longer reaches a provider directly. All inference flows through
+// callLLM → Compute InferenceService → Placement.
 
 function emit(taskId, data) {
   const ee = taskEmitters[taskId];
@@ -808,51 +665,22 @@ function registerAgentTranscript(execution, transcriptPath, taskId, status) {
   }
 }
 
-function suggestGroqLLM(prompt, attempt = 1) {
-  return new Promise((resolve, reject) => {
-    const https = require("https");
-    const body = JSON.stringify({
-      model: GROQ_MODEL,
-      messages: [
-        { role: "system", content: "You analyze agent task transcripts and decide if they should be saved as reusable procedures. Return only valid JSON." },
-        { role: "user", content: prompt }
-      ],
-      temperature: 0.2
-    });
-    const req = https.request({
-      hostname: "api.groq.com",
-      path: "/openai/v1/chat/completions",
-      method: "POST",
-      headers: {
-        "Authorization": "Bearer " + GROQ_API_KEY,
-        "Content-Type": "application/json",
-        "Content-Length": Buffer.byteLength(body)
-      }
-    }, (res) => {
-      let data = "";
-      res.on("data", (c) => data += c);
-      res.on("end", () => {
-        try {
-          const parsed = JSON.parse(data);
-          if (res.statusCode === 429 && attempt < 3) {
-            const wait = Math.min(5000, 1000 * Math.pow(2, attempt));
-            return setTimeout(() => resolve(suggestGroqLLM(prompt, attempt + 1)), wait);
-          }
-          if (res.statusCode >= 400) {
-            return reject(new Error("Groq: " + (parsed.error?.message || data.substring(0, 200))));
-          }
-          const content = parsed.choices?.[0]?.message?.content || "";
-          resolve(content);
-        } catch (e) {
-          reject(new Error("Groq parse: " + data.substring(0, 200)));
-        }
-      });
-    });
-    req.setTimeout(15000, () => { req.destroy(); reject(new Error("LLM timeout")); });
-    req.on("error", reject);
-    req.write(body);
-    req.end();
+// Procedure-suggestion inference. Routes through Compute like all other agent
+// inference rather than calling a provider directly; classified "private" (the
+// transcript carries task/tool data), so under the secure-by-default policy it
+// stays on local/trusted providers.
+async function suggestProcedureLLM(prompt) {
+  if (!inferenceService) {
+    throw new Error("Compute inference service unavailable (src/compute/inference-service).");
+  }
+  const result = await inferenceService.chat({
+    messages: [{ role: "user", content: prompt }],
+    system: "You analyze agent task transcripts and decide if they should be saved as reusable procedures. Return only valid JSON.",
+    temperature: 0.2,
+    dataClassification: "private",
+    preferences: { allowFallback: true },
   });
+  return result.content || "";
 }
 
 async function suggestProcedure(goal, steps, taskId) {
@@ -860,7 +688,7 @@ async function suggestProcedure(goal, steps, taskId) {
   if (toolSteps.length < 3) return;
 
   const transcript = toolSteps.map(s => {
-    // This transcript leaves the machine (cloud LLM); steps arrive sanitized
+    // This transcript is sent to the inference provider; steps arrive sanitized
     // from the loop, but sanitize again so this sink never depends on that.
     const argsStr = JSON.stringify(redactSensitiveKeysDeep(s.args || {}));
     return `- ${s.tool}(${argsStr})`;
@@ -887,7 +715,7 @@ Rules for saving:
 Return ONLY valid JSON.`;
 
   try {
-    const response = await suggestGroqLLM(prompt);
+    const response = await suggestProcedureLLM(prompt);
     const jsonMatch = response.match(/\{[\s\S]*\}/);
     if (!jsonMatch) return;
     
@@ -1075,7 +903,7 @@ async function runAgent(goal, taskId, parentContext = null) {
       const response = await callDirectAnswerLLM(goal, combinedBrief, continuationBrief);
       emit(taskId, { type: "provider", name: response.provider, model: response.model || "unknown" });
       if (response.fallback) {
-        emit(taskId, { type: "fallback", from: "ollama", to: "groq" });
+        emit(taskId, { type: "fallback", to: response.provider, via: "compute" });
       }
       finalResult = (response.response || "").trim() || "I couldn't generate an answer.";
       steps.push({ type: "done", text: finalResult });
