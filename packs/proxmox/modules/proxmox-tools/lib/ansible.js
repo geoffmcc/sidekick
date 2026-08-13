@@ -221,6 +221,9 @@ async function run(config, dispatch, params, { dryRun = false, timeoutMs } = {})
   if (params.limit !== undefined) { if (!ALIAS_RE.test(String(params.limit))) return { ok: false, code: "invalid_input", message: "limit must be a host alias" }; limit = params.limit; }
 
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sk-ansible-"));
+  // Set when the run parks for approval: the queued command still needs the
+  // generated inventory and extra-vars files that live in this directory.
+  let keepWorkspace = false;
   try {
     fs.chmodSync(tmp, 0o700);
     const invPath = path.join(tmp, "inventory.ini");
@@ -242,7 +245,20 @@ async function run(config, dispatch, params, { dryRun = false, timeoutMs } = {})
       return { ok: false, code: "permission_denied", message: "The pack lacks permission to run the bash tool required for Ansible." };
     }
     if (dispatched && (dispatched.approvalRequired || dispatched.code === "approval_required")) {
-      return { ok: false, code: "approval_required", approval_id: dispatched.approvalId || null, message: "Running Ansible requires operator approval of the underlying bash execution." };
+      // The queued command references the inventory and extra-vars files in
+      // `tmp`. Deleting them here made approval structurally unusable: the
+      // approved execution replayed a command whose inputs no longer existed,
+      // and retrying only minted another approval with another doomed temp dir.
+      keepWorkspace = true;
+      return {
+        ok: false,
+        code: "approval_required",
+        approval_id: dispatched.approvalId || null,
+        message: "Running Ansible requires operator approval of the underlying bash execution.",
+        // Retained so the approved run can find its inputs; the operator can
+        // remove it if the approval is abandoned.
+        retained_workspace: tmp,
+      };
     }
     const text = dispatched && Array.isArray(dispatched.content) && dispatched.content[0] ? String(dispatched.content[0].text || "") : "";
     // Extract exactly ansible's JSON document; the bash tool appends stderr
@@ -260,7 +276,9 @@ async function run(config, dispatch, params, { dryRun = false, timeoutMs } = {})
       output_tail: redactSensitive(text).slice(-2000),
     };
   } finally {
-    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
+    if (!keepWorkspace) {
+      try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
+    }
   }
 }
 

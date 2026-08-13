@@ -121,8 +121,32 @@ function boundOutput(text) {
 function gate(ctx, probe) {
   const { config, run } = ctx;
   const operation = probe.operation || (probe.type === "http" ? "http.request" : "execute");
-  const target = probe.target || (probe.type === "http" ? probe.url : (ctx.environment && ctx.environment.name));
   const httpCfg = config.http || {};
+
+  // The scope check must describe the request that will actually be made. For
+  // an http probe the destination is `probe.url` and nothing else: honoring a
+  // caller-supplied `probe.target` here let a caller name an in-scope host
+  // while pointing `url` somewhere entirely different, and the recorded
+  // observation stored the label rather than the URL, so the substitution was
+  // invisible afterwards too.
+  let target;
+  let targetKind;
+  if (probe.type === "http") {
+    let parsed;
+    try {
+      parsed = new URL(probe.url);
+    } catch {
+      throw new ResearchError("invalid_input", `http probe url is invalid: ${probe.url}`);
+    }
+    // A snapshot registered by host must still authorize a URL probe, so the
+    // caller may choose which form is checked — but both are derived from the
+    // URL being requested, never from a separate argument.
+    targetKind = probe.target_kind === "host" ? "host" : "url";
+    target = targetKind === "host" ? parsed.hostname : probe.url;
+  } else {
+    target = probe.target || (ctx.environment && ctx.environment.name);
+    targetKind = probe.target_kind || "host";
+  }
 
   // Type-specific host/SSRF safety ALWAYS applies — a scope snapshot authorizes
   // a target, it does not authorize running on the Sidekick host or reaching a
@@ -140,12 +164,7 @@ function gate(ctx, probe) {
       throw new ResearchError("policy_denied", "command probes on the Sidekick host are disabled. Set allow_local_probes: true only for a workspace-confined synthetic fixture.");
     }
   } else if (probe.type === "http") {
-    let host;
-    try {
-      host = new URL(probe.url).hostname;
-    } catch {
-      throw new ResearchError("invalid_input", `http probe url is invalid: ${probe.url}`);
-    }
+    const host = new URL(probe.url).hostname;
     if (isPrivateHost(host) && httpCfg.allow_private_addresses !== true) {
       throw new ResearchError("policy_denied", `http probe target ${host} is a private/loopback address; enable http.allow_private_addresses only for an intentionally provisioned private lab.`);
     }
@@ -157,7 +176,7 @@ function gate(ctx, probe) {
     const decision = records.evaluateScope(snapshotId, {
       project_id: run.project_id,
       target,
-      target_kind: probe.target_kind || (probe.type === "http" ? "url" : "host"),
+      target_kind: targetKind,
       operation,
     });
     if (!decision || !decision.ok) {
@@ -194,7 +213,13 @@ async function runCommand(services, ctx, probe, runtime) {
 
 async function runHttp(services, ctx, probe, runtime) {
   const args = { url: probe.url, method: probe.method || "GET" };
-  if (probe.headers && typeof probe.headers === "object") args.headers = probe.headers;
+  // web_fetch takes headers as a JSON STRING. Passing the object straight
+  // through failed schema validation, and pre-stringifying by the caller was
+  // dropped by the old `typeof === "object"` test — so headers never actually
+  // reached a request either way.
+  if (probe.headers != null) {
+    args.headers = typeof probe.headers === "string" ? probe.headers : JSON.stringify(probe.headers);
+  }
   if (probe.body != null) args.body = typeof probe.body === "string" ? probe.body : JSON.stringify(probe.body);
   const result = await services.dispatch("web_fetch", args, { signal: runtime && runtime.signal, timeoutMs: ctx.timeoutMs });
   return mapDispatch(result, "http");
@@ -234,6 +259,12 @@ async function execute(services, ctx, probe, runtime) {
     type: probe.type,
     target: gated.target || null,
     operation: gated.operation,
+    // Record what was actually executed, not just the label it was checked
+    // under. Evidence that cannot say which command ran or which URL was
+    // requested is not reproducible, which is the point of capturing it.
+    ...(probe.type === "command"
+      ? { command: String(probe.command || "") }
+      : { request: { url: probe.url, method: probe.method || "GET" } }),
     executed_at: new Date().toISOString(),
     succeeded: outcome.ok,
     underlying_code: outcome.underlying_code || null,
