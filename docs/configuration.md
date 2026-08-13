@@ -72,6 +72,23 @@ encrypted secret store and the provider record keeps only a reference (never the
 plaintext). Set `SIDEKICK_DISABLE_PROVIDER_BOOTSTRAP=1` to manage providers by
 hand.
 
+## Platform event delivery
+
+The event delivery drainer consumes the platform event ledger in the MCP
+process (see `docs/platform-events.md`). Defaults are sensible; these exist for
+tuning and for turning it off.
+
+- `SIDEKICK_EVENT_DRAIN_INTERVAL_MS` (default `15000`, clamped 1s–5min) — how
+  often pending deliveries are claimed.
+- `SIDEKICK_EVENT_DRAIN_BATCH` (default `50`, clamped 1–500) — deliveries per
+  pass.
+- `SIDEKICK_EVENT_BACKLOG_CAP` (default `10000`, floor 10) — undelivered depth
+  at which a subscription is **auto-paused** instead of accumulating without
+  bound. A paused subscription records `auto_pause_reason`; drain or requeue its
+  backlog, then resume it from the dashboard.
+- `SIDEKICK_DISABLE_EVENT_DRAINER=1` — start with no drainer. Deliveries then
+  queue up (bounded by the cap) until a drainer runs.
+
 ## Security and tool policy
 
 Set a strong MCP API key before any non-local deployment:
