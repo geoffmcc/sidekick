@@ -149,6 +149,7 @@ const SNAPNAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,39}$/;
 const CI_USER_RE = /^[a-z_][a-z0-9_-]{0,31}$/;
 // A storage:vztmpl/<file> OS template volume id for LXC.
 const OSTEMPLATE_RE = /^[A-Za-z][A-Za-z0-9\-_.]{0,99}:vztmpl\/[A-Za-z0-9][\w.\-+]{0,127}$/;
+const ISO_VOLUME_RE = /^[A-Za-z][A-Za-z0-9\-_.]{0,99}:iso\/[A-Za-z0-9][\w.\-+]{0,127}$/;
 const NET_MODELS = new Set(["virtio", "e1000", "rtl8139", "vmxnet3"]);
 const OS_TYPES = new Set(["l26", "l24", "other", "wxp", "w2k", "w2k3", "w2k8", "wvista", "win7", "win8", "win10", "win11", "solaris"]);
 const LXC_OSTYPES = new Set(["debian", "ubuntu", "centos", "fedora", "alpine", "archlinux", "opensuse", "unmanaged"]);
@@ -185,6 +186,19 @@ function validateCiUser(value) {
 function validateOsTemplate(value) {
   if (typeof value !== "string" || !OSTEMPLATE_RE.test(value)) {
     return invalid("ostemplate", "ostemplate must be a <storage>:vztmpl/<file> volume id");
+  }
+  return { ok: true, value };
+}
+
+/**
+ * An ISO volume id, validated for the same reason ostemplate is: it is
+ * interpolated into a Proxmox property string (`ide2: <vol>,media=cdrom`), so
+ * an unvalidated value carrying a comma can append arbitrary options to that
+ * property.
+ */
+function validateIsoVolume(value) {
+  if (typeof value !== "string" || !ISO_VOLUME_RE.test(value)) {
+    return invalid("iso", "iso must be a <storage>:iso/<file> volume id");
   }
   return { ok: true, value };
 }
@@ -266,6 +280,7 @@ module.exports = {
   validateIntRange,
   validateCiUser,
   validateOsTemplate,
+  validateIsoVolume,
   validateOsType,
   validateLxcOsType,
   validateSshKey,

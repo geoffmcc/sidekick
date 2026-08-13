@@ -73,20 +73,20 @@ async function sidekick_teach({ action, name, description, steps, example, trigg
     }
     const toolSchemas = `
 Tool parameter schemas:
-- sidekick_bash: { "command": "shell command to run" }
-- sidekick_read: { "path": "absolute file path" }
-- sidekick_write: { "path": "absolute file path", "content": "file content" }
-- sidekick_list: { "path": "/home/sidekick" } (optional path)
-- sidekick_search: { "pattern": "regex", "path": "optional dir", "include": "optional file pattern" }
-- sidekick_git: { "action": "status|diff|log|add|commit|push|pull|branch|checkout|stash", "args": "optional string" }
-- sidekick_notify: { "channel": "discord|slack|email", "message": "text", "webhook_url": "for discord/slack", "recipient": "for email" }
-- sidekick_process: { "action": "list|top|kill|tree", "filter": "optional name", "pid": "optional number", "name": "optional name" }
-- sidekick_service: { "action": "start|stop|restart|status|enable|disable|logs", "service": "service name" }
-- sidekick_archive: { "action": "create|extract|list", "path": "source path", "output": "output path for create", "format": "tar.gz|zip" }
-- sidekick_store: { "key": "storage key", "value": "value to store", "project": "optional project name" }
-- sidekick_get: { "key": "storage key" }
-- sidekick_web_fetch: { "url": "URL to fetch", "method": "GET|POST", "body": "optional", "headers": "optional JSON" }
-- sidekick_llm: { "prompt": "question", "system": "optional system prompt", "temperature": "optional 0-2" }
+- bash: { "command": "shell command to run" }
+- read: { "path": "absolute file path" }
+- write: { "path": "absolute file path", "content": "file content" }
+- list: { "path": "/home/sidekick" } (optional path)
+- search: { "pattern": "regex", "path": "optional dir", "include": "optional file pattern" }
+- git: { "action": "status|diff|log|add|commit|push|pull|branch|checkout|stash", "args": "optional string" }
+- notify: { "channel": "discord|slack|email", "message": "text", "webhook_url": "for discord/slack", "recipient": "for email" }
+- process: { "action": "list|top|kill|tree", "filter": "optional name", "pid": "optional number", "name": "optional name" }
+- service: { "action": "start|stop|restart|status|enable|disable|logs", "service": "service name" }
+- archive: { "action": "create|extract|list", "path": "source path", "output": "output path for create", "format": "tar.gz|zip" }
+- store: { "key": "storage key", "value": "value to store", "project": "optional project name" }
+- get: { "key": "storage key" }
+- web_fetch: { "url": "URL to fetch", "method": "GET|POST", "body": "optional", "headers": "optional JSON" }
+- llm: { "prompt": "question", "system": "optional system prompt", "temperature": "optional 0-2" }
 `;
     const prompt = `Generate a procedure definition for "${name}" based on this description: "${description}".
 
@@ -99,8 +99,8 @@ Example format:
 {
   "parameters": { "path": { "type": "string", "description": "Directory to check", "required": true } },
   "steps": [
-    {"tool": "sidekick_bash", "args": {"command": "df -h {{path}}"}},
-    {"tool": "sidekick_bash", "args": {"command": "du -sh {{path}}"}}
+    {"tool": "bash", "args": {"command": "df -h {{path}}"}},
+    {"tool": "bash", "args": {"command": "du -sh {{path}}"}}
   ]
 }
 

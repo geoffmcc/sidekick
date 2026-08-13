@@ -110,6 +110,9 @@ class OllamaProvider {
       promptEvalCount: result.prompt_eval_count,
       evalCount: result.eval_count,
       done: result.done,
+      // "length" means num_predict truncated the answer. Callers need this to
+      // tell a truncated response apart from an empty one.
+      finishReason: result.done_reason,
     };
   }
 
@@ -133,6 +136,7 @@ class OllamaProvider {
       promptEvalCount: result.prompt_eval_count,
       evalCount: result.eval_count,
       done: result.done,
+      finishReason: result.done_reason,
     };
   }
 

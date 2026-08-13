@@ -453,9 +453,16 @@ function normalizeToolLog(row) {
  *
  * Unscoped records are never merged into a synthetic global session: doing so
  * fabricates adjacency between calls that never ran together.
+ *
+ * `task_id` outranks `correlation_id` because a correlation id is only as good
+ * as its issuer. An agent task is a real boundary the caller knows; the
+ * execution context, lacking one, falls back to minting a fresh per-call trace
+ * id and using it as the correlation id — which shredded each task into
+ * unrelated single-call segments. Where correlation IS durable (an approval id
+ * on the approval path), no task id is present, so it still applies.
  */
 function boundaryId(log) {
-  return log.session_id || log.correlation_id || log.task_id || null;
+  return log.session_id || log.task_id || log.correlation_id || null;
 }
 
 /**

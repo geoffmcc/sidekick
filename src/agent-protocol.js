@@ -217,9 +217,16 @@ function classifyEvidenceRequirement(goal) {
   const conceptualPromptPattern = /^(explain|describe|summari[sz]e|compare|brainstorm|suggest|recommend|draft|write|reword|phrase|improve|tune|analyze|review|why\b|how does\b|how should\b|how (?:can|could|do|would|might) (?:i|you|one|someone|somebody|we)\b)/;
   // System-inspection requests ("check disk usage", "how much free memory") name a
   // live host resource that can only be answered by running an approved tool, never
-  // by describing a command. These must reach the tool loop even though the phrasing
-  // does not match a Sidekick resource noun above.
-  const systemInspectionPattern = /\b(disk|drives?|volumes?|mount(?:s|ed)?|storage|filesystem|file\s+system|free\s+space|cpu|cpus|processor|load\s+average|uptime|ram|swap|memory\s+usage|free\s+memory|running\s+process(?:es)?|process\s+list|open\s+ports?|listening\s+ports?|network\s+interfaces?|bandwidth)\b/;
+  // by describing a command. Self-evidently stateful phrases route on their own.
+  // Bare resource nouns (disk, ram, cpu, mount, volume, drive...) also appear in
+  // plenty of non-inspection sentences ("a new CPU cooler", "Mount Everest",
+  // "turn the volume down"), so they only route when an inspection verb,
+  // exactness signal, or state word appears alongside them.
+  const statefulPhrasePattern = /\b(free\s+space|space\s+(?:left|free|available)|disk\s+(?:usage|space)|(?:cpu|processor|memory|ram|swap|storage|bandwidth|network)\s+(?:usage|utili[sz]ation|consumption)|cpu\s+load|load\s+average|free\s+memory|available\s+memory|running\s+process(?:es)?|process\s+list|open\s+ports?|listening\s+ports?|network\s+interfaces?)\b/;
+  const inspectableNounPattern = /\b(disk|drives?|volumes?|mount(?:s|ed)?|storage|filesystem|file\s+system|cpu|cpus|processor|uptime|ram|swap|bandwidth)\b/;
+  const inspectionContextPattern = new RegExp(
+    localActionPattern.source + "|" + exactnessPattern.source +
+    "|\\b(?:how\\s+much|how\\s+full|how\\s+many|usage|used|using|in\\s+use|free|full|utili[sz]ation)\\b");
 
   if (toolNamePattern.test(text)) return { requiresTools: true, reason: "explicit_tool_reference" };
 
@@ -227,7 +234,10 @@ function classifyEvidenceRequirement(goal) {
     return { requiresTools: false, reason: "conceptual_prompt" };
   }
 
-  if (systemInspectionPattern.test(text)) return { requiresTools: true, reason: "system_inspection" };
+  if (statefulPhrasePattern.test(text) ||
+      (inspectableNounPattern.test(text) && inspectionContextPattern.test(text))) {
+    return { requiresTools: true, reason: "system_inspection" };
+  }
 
   const localSignals = [
     /\bhow many\b.*\b(tools?|services|models|tasks|memories|watches|delays)\b/,

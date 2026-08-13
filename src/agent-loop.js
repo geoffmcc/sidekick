@@ -177,12 +177,17 @@ async function runToolLoop({
       const availableToolDefs = getToolDefs();
       const resolved = resolveAgentToolName(decision.tool, availableToolDefs);
       if (!resolved) {
+        // "Does not exist" would be a lie for a tool that exists but is hidden
+        // from this source by policy: the transcript then blames the model for
+        // inventing a real tool name, and an operator debugging a restricted
+        // deployment is sent looking for a missing tool instead of a policy.
         const requestedLabel = String(decision.tool).substring(0, 80);
-        emit({ type: "step", text: "Unknown tool: " + requestedLabel });
-        steps.push({ type: "tool", tool: requestedLabel, args: decision.arguments, result: "Error: tool does not exist" });
+        const unavailable = "is not available to this agent (either no such tool, or not permitted for this source)";
+        emit({ type: "step", text: "Unavailable tool: " + requestedLabel });
+        steps.push({ type: "tool", tool: requestedLabel, args: decision.arguments, result: "Error: tool " + unavailable });
         const availableTools = availableToolDefs.map(t => t.name).join(", ");
-        history.push({ role: "assistant", content: "Called " + requestedLabel + " → Error: tool does not exist" });
-        history.push({ role: "user", content: "Tool '" + requestedLabel + "' does not exist. Available tools: " + availableTools + ". " + respondHint(getToolDefs) });
+        history.push({ role: "assistant", content: "Called " + requestedLabel + " → Error: tool " + unavailable });
+        history.push({ role: "user", content: "Tool '" + requestedLabel + "' " + unavailable + ". Available tools: " + availableTools + ". " + respondHint(getToolDefs) });
         continue;
       }
       const toolName = resolved.name;

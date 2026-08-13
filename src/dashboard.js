@@ -1815,10 +1815,30 @@ app.get("/api/evolve", (req, res) => {
   });
 });
 
+// Actions that change what code the server will run, or that approve such a
+// change. These must be attributable to a real principal for the same reason
+// connector registration is (invariant I19): "dashboard" is not a person, and
+// promoting or running a self-generated tool is a critical-risk operation.
+const EVOLVE_MUTATIONS = new Set(["approve", "reject", "promote", "run", "delete", "retire"]);
+
+function requireAttributedActor(req, res, what) {
+  const actor = authenticatedUser(req);
+  if (!actor) {
+    res.status(403).json({ ok: false, error: `${what} requires an authenticated dashboard user` });
+    return null;
+  }
+  return actor;
+}
+
 async function evolveDashboardAction(req, res, action, extra = {}) {
   try {
+    let actor = authenticatedUser(req);
+    if (EVOLVE_MUTATIONS.has(action)) {
+      actor = requireAttributedActor(req, res, "Evolve approval and promotion");
+      if (!actor) return;
+    }
     auditLog(req, `evolve.${action}`, { id: req.params.id || req.body?.id || null });
-    const result = await callDashboardTool("evolve", { action, id: req.params.id || req.body?.id, ...(req.body || {}), ...extra }, { actor: "dashboard" });
+    const result = await callDashboardTool("evolve", { action, id: req.params.id || req.body?.id, ...(req.body || {}), ...extra }, { actor: actor || "dashboard" });
     res.json({ ok: !result.isError, result: result.content?.[0]?.text || "" });
   } catch (error) {
     logError(req.originalUrl, 500, error, "evolve", req.headers["user-agent"]);
@@ -1846,10 +1866,23 @@ function capabilityResult(res, result) {
   return res.json({ ok: true, ...payload });
 }
 
+// Installing, enabling or upgrading a pack activates executable module code
+// inside the server process — the `capability` tool is critical risk for
+// exactly that reason. Reads stay open to the dashboard's existing gating;
+// mutations must name a real principal, like connector registration does.
+const CAPABILITY_MUTATIONS = new Set([
+  "install", "configure", "enable", "disable", "upgrade", "uninstall",
+]);
+
 async function capabilityAction(req, res, args, auditAction) {
   try {
+    let actor = authenticatedUser(req);
+    if (CAPABILITY_MUTATIONS.has(args.action)) {
+      actor = requireAttributedActor(req, res, "Capability pack installation and lifecycle changes");
+      if (!actor) return;
+    }
     auditLog(req, `capability.${auditAction}`, { name: args.name || args.path || null });
-    const result = await callDashboardTool("capability", args, { actor: authenticatedUser(req) || "dashboard" });
+    const result = await callDashboardTool("capability", args, { actor: actor || "dashboard" });
     return capabilityResult(res, result);
   } catch (error) {
     logError(req.originalUrl, 500, error, "capability", req.headers["user-agent"]);
@@ -1914,7 +1947,12 @@ app.get("/api/capabilities/:name/workflows", async (req, res) => {
 
 app.post("/api/evolve/analyze", (req, res) => evolveDashboardAction(req, res, "analyze"));
 app.post("/api/evolve/:id/validate", (req, res) => evolveDashboardAction(req, res, "validate"));
-app.post("/api/evolve/:id/approve", (req, res) => evolveDashboardAction(req, res, "approve", { approver: "dashboard" }));
+// The approver is the authenticated user, never the literal string
+// "dashboard": an approval record that cannot name a person is not an
+// approval. evolveDashboardAction rejects the request when there is no
+// authenticated user, so this is always a real principal.
+app.post("/api/evolve/:id/approve", (req, res) =>
+  evolveDashboardAction(req, res, "approve", { approver: authenticatedUser(req) || undefined }));
 app.post("/api/evolve/:id/promote", (req, res) => evolveDashboardAction(req, res, "promote"));
 app.post("/api/evolve/:id/reject", (req, res) => evolveDashboardAction(req, res, "reject"));
 app.post("/api/evolve/:id/deprecate", (req, res) => evolveDashboardAction(req, res, "deprecate"));
@@ -1970,6 +2008,10 @@ app.get("/api/evolve/executions/:executionId", (req, res) => {
 });
 
 app.post("/api/evolve/:id/run", (req, res) => {
+  // Executing a self-generated capability runs model-authored code paths on the
+  // host; it carries the same attribution requirement as approving one.
+  const actor = requireAttributedActor(req, res, "Running a generated tool");
+  if (!actor) return;
   const cap = dbStore.getGeneratedCapability(req.params.id) || dbStore.getGeneratedCapabilityByName(req.params.id);
   if (!cap || !["trial", "active"].includes(cap.state)) return res.status(400).json({ ok: false, error: "Generated tool is not trial or active" });
   const executionId = `gte_${Date.now().toString(36)}_${crypto.randomBytes(6).toString("hex")}`;
@@ -1986,7 +2028,7 @@ app.post("/api/evolve/:id/run", (req, res) => {
   });
   setImmediate(async () => {
     try {
-      await callDashboardTool(cap.name, req.body?.args || {}, { actor: "dashboard", executionId, timeoutMs });
+      await callDashboardTool(cap.name, req.body?.args || {}, { actor, executionId, timeoutMs });
     } catch (error) {
       dbStore.updateGeneratedToolExecution(executionId, {
         state: "failed",
@@ -2648,41 +2690,50 @@ app.get("/api/db/migrations", (req, res) => {
   }
 });
 
-app.delete("/api/logs", (req, res) => {
-  try { dbStore.clearToolLogs(); } catch {}
-  auditLog(req, 'logs.clear', {});
-  res.json({ ok: true });
-});
-
-app.delete("/api/kv", (req, res) => {
-  try { dbStore.clearKV(); } catch {}
-  auditLog(req, 'kv.clear', {});
-  res.json({ ok: true });
-});
-
-app.delete("/api/conversations", (req, res) => {
+// Destructive clears report what actually happened. These previously answered
+// `{ok: true}` unconditionally after an empty catch, so a permission error, a
+// locked database, or a partially-completed multi-step clear was presented to
+// the "clear all" confirmation flow as a completed wipe.
+function clearConversationFiles() {
   const dir = path.join(DATA_DIR, "conversations");
-  try {
-    fs.readdirSync(dir).filter(f => f.endsWith(".json")).forEach(f => {
-      fs.unlinkSync(path.join(dir, f));
-    });
-  } catch {}
-  auditLog(req, 'conversations.clear', {});
-  res.json({ ok: true });
-});
+  if (!fs.existsSync(dir)) return 0;
+  let removed = 0;
+  for (const file of fs.readdirSync(dir).filter(f => f.endsWith(".json"))) {
+    fs.unlinkSync(path.join(dir, file));
+    removed++;
+  }
+  return removed;
+}
 
-app.delete("/api/data", (req, res) => {
+function respondToClear(req, res, auditEvent, run) {
   try {
+    const detail = run() || {};
+    auditLog(req, auditEvent, detail);
+    res.json({ ok: true, ...detail });
+  } catch (error) {
+    logError(req.originalUrl, 500, error, auditEvent, req.headers["user-agent"]);
+    auditLog(req, auditEvent + ".failed", { error: redactSensitive(String(error.message || error)) });
+    res.status(500).json({ ok: false, error: redactSensitive(String(error.message || error)) });
+  }
+}
+
+app.delete("/api/logs", (req, res) =>
+  respondToClear(req, res, "logs.clear", () => { dbStore.clearToolLogs(); return {}; }));
+
+app.delete("/api/kv", (req, res) =>
+  respondToClear(req, res, "kv.clear", () => { dbStore.clearKV(); return {}; }));
+
+app.delete("/api/conversations", (req, res) =>
+  respondToClear(req, res, "conversations.clear", () => ({ removed: clearConversationFiles() })));
+
+app.delete("/api/data", (req, res) =>
+  respondToClear(req, res, "data.clear", () => {
+    // Ordered so a failure reports which stage stopped the wipe rather than
+    // claiming the whole clear succeeded.
     dbStore.clearToolLogs();
     dbStore.clearKV();
-    const dir = path.join(DATA_DIR, "conversations");
-    fs.readdirSync(dir).filter(f => f.endsWith(".json")).forEach(f => {
-      fs.unlinkSync(path.join(dir, f));
-    });
-  } catch {}
-  auditLog(req, 'data.clear', {});
-  res.json({ ok: true });
-});
+    return { removed: clearConversationFiles() };
+  }));
 
 // Error logging endpoint (for frontend errors)
 app.post('/api/internal/error-log', (req, res) => {

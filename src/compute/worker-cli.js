@@ -32,7 +32,7 @@ Commands:
   version            Print the worker version and exit
 
 Options:
-  --server <url>       Sidekick server URL, e.g. http://10.47.20.20:4097
+  --server <url>       Sidekick server URL, e.g. http://sidekick.example.internal:4097
   --token <token>      One-time enrollment token (enroll)
   --name <name>        Worker display name
   --node-id <id>       Stable node ID for this machine

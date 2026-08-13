@@ -401,13 +401,30 @@ async function runBrainTask(opts) {
 
   // ---- synthesize ----------------------------------------------------------
   let answer = "";
+  let finishReason = null;
   try {
     const out = await synthesize({ goal: validated.goal, evidence, memoryContext, requiresEvidence });
     answer = (out && typeof out.answer === "string" ? out.answer : "").trim();
+    finishReason = out && out.finishReason || null;
   } catch (e) {
-    return terminal("failed", { error: "synthesis error: " + redact(String(e && e.message || e)) });
+    return terminal("failed", {
+      error: "synthesis error: " + redact(String(e && e.message || e)),
+      extra: { evidence_count: evidence.length },
+    });
   }
-  if (!answer) return terminal("failed", { error: "synthesis produced no answer" });
+  if (!answer) {
+    // Report the evidence that WAS collected: a synthesis failure after ten
+    // successful tool calls is a different problem from one after zero, and
+    // reporting evidence_count 0 for both hid that.
+    onEvent("brain.synthesis_empty", { evidence_count: evidence.length, finish_reason: finishReason }, "error");
+    return terminal("failed", {
+      error: finishReason === "length"
+        ? "synthesis produced no usable answer: the model stopped at the generation token budget (" +
+          BRAIN_LIMITS.MAX_GENERATED_TOKENS + " tokens) with " + evidence.length + " evidence items"
+        : "synthesis produced no answer (evidence items: " + evidence.length + ")",
+      extra: { evidence_count: evidence.length },
+    });
+  }
   if (cancelled()) return terminal("cancelled"); // a cancel during synthesis still wins
 
   return terminal("completed", { result: answer, extra: { evidence_count: evidence.length } });

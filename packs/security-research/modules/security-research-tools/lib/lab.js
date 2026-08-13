@@ -23,7 +23,7 @@
  */
 
 const path = require("path");
-const { kernel } = require("./platform");
+const { kernel, labPolicy } = require("./platform");
 const { ResearchError, classifyDispatchFailure } = require("./errors");
 const workspace = require("./workspace");
 const evidence = require("./evidence");
@@ -88,8 +88,20 @@ function recordResource(ctx, identity) {
 async function provision(services, ctx, runtime) {
   const env = ctx.environment || {};
   // PROVIDER-EXTRACTION POINT: this branch is the only place that embeds Proxmox-provider specifics (tool names, result fields, no-delete cleanup); when a second environment provider is added, split it into per-provider adapters and keep research_run provision/cleanup provider-agnostic.
-  if (env.kind !== "proxmox") {
-    throw new ResearchError("unsupported_operation", `lab provisioning is only implemented for a 'proxmox' environment (got '${env.kind}')`);
+  //
+  // `disposable` and `proxmox` are both fulfilled by the Proxmox pack, as the
+  // environment schema states. `disposable` additionally asserts the fixture
+  // policy — isolated, no production access, fixture-or-no networking — which
+  // was written and tested but had no caller, so the stricter kind was in
+  // practice simply rejected rather than enforced.
+  if (env.kind !== "proxmox" && env.kind !== "disposable") {
+    throw new ResearchError("unsupported_operation", `lab provisioning is only implemented for a 'proxmox' or 'disposable' environment (got '${env.kind}')`);
+  }
+  if (env.kind === "disposable") {
+    const decision = labPolicy().evaluateLabPolicy(env, { destructive: false });
+    if (!decision.ok) {
+      throw new ResearchError("policy_denied", `disposable lab policy denied: ${decision.reasons.join(", ")}`, { policy: decision.policy, reasons: decision.reasons });
+    }
   }
   if (!env.provider_profile) {
     throw new ResearchError("environment_failed", "a proxmox environment requires provider_profile (the Proxmox pack profile name, configured at runtime)");

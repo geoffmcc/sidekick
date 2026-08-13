@@ -212,6 +212,28 @@ function makeGitRepo() {
     assert.strictEqual(outScope.code, "scope_denied");
   });
 
+  await test("SR.12b an http probe is scoped by the url it will request, not by a caller-supplied label", async () => {
+    // The scope check must describe the request actually made. Naming an
+    // in-scope host in `target` while pointing `url` elsewhere previously
+    // authorized the probe against the label and then fetched the other host.
+    const snap = await okCall("research_scope", {
+      action: "create", project_id: PROJECT,
+      targets: [{ kind: "host", value: "lab.example.test" }],
+      rules: { allowed_operations: ["http.request"] },
+    });
+    const camp = await okCall("research_project", { action: "create", project_id: PROJECT, name: "url scope campaign", scope_snapshot_id: snap.snapshot.snapshot_id });
+    const hyp = await okCall("research_hypothesis", { action: "create", campaign_id: camp.campaign.campaign_id, title: "url scope", claim: "url governs scope" });
+    const run = await okCall("research_run", { action: "plan", hypothesis_id: hyp.hypothesis.hypothesis_id, environment: { kind: "remote", name: "ext" } });
+    await okCall("research_run", { action: "start", run_id: run.run.run_id });
+
+    const spoofed = await call("research_probe", {
+      run_id: run.run.run_id,
+      probe: { type: "http", url: "https://out-of-scope.test/x", target: "lab.example.test", target_kind: "host" },
+    });
+    assert.strictEqual(spoofed.isError, true, "a label must not authorize a different destination");
+    assert.strictEqual(spoofed.code, "scope_denied");
+  });
+
   await test("SR.13 http probe to a non-allowlisted host is refused before any request", async () => {
     const planned = await okCall("research_run", { action: "plan", hypothesis_id: hypothesisId, environment: { kind: "remote", name: "ext" } });
     await okCall("research_run", { action: "start", run_id: planned.run.run_id });

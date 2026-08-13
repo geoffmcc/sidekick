@@ -504,6 +504,62 @@ console.log('Test 3.4: Tool definitions include policy metadata');
 }
 
 // ============================================================================
+// TEST: OUTBOUND REQUEST DESTINATION POLICY (#146)
+// ============================================================================
+
+{
+  console.log('Test: outbound fetch destination policy');
+  delete process.env.SIDEKICK_ALLOW_PRIVATE_FETCH;
+  const { validateOutboundUrl, filterRequestHeaders } = require('../src/security/outbound-url');
+
+  // Destinations that must never be reachable from a caller-supplied URL.
+  const refused = [
+    'http://127.0.0.1:4097/admin',
+    'http://localhost:4098/',
+    'http://10.0.0.5/',
+    'http://192.168.1.10/',
+    'http://172.16.0.1/',
+    'http://100.64.0.1/',
+    'http://[::1]/',
+    'http://[fc00::1]/',
+    'http://169.254.169.254/latest/meta-data/',
+    'https://metadata.google.internal/computeMetadata/v1/',
+    'http://0.0.0.0:4097/',
+    'http://2130706433/',              // decimal-encoded 127.0.0.1
+    'http://[::ffff:127.0.0.1]/',      // IPv4-mapped loopback
+    'gopher://internal/x',             // non-HTTP scheme
+    'file:///etc/passwd',
+    'https://user:secret@example.com/' // embedded credentials
+  ];
+  for (const url of refused) {
+    assert.ok(validateOutboundUrl(url), `must refuse ${url}`);
+  }
+
+  // Ordinary public destinations still work.
+  for (const url of ['https://example.com/api', 'http://example.com:8080/x?y=1']) {
+    assert.strictEqual(validateOutboundUrl(url), null, `must allow ${url}`);
+  }
+
+  // The escape hatch reopens private networks but never credential endpoints.
+  process.env.SIDEKICK_ALLOW_PRIVATE_FETCH = 'true';
+  assert.strictEqual(validateOutboundUrl('http://10.0.0.5/'), null,
+    'SIDEKICK_ALLOW_PRIVATE_FETCH must allow LAN destinations');
+  assert.ok(validateOutboundUrl('http://169.254.169.254/'),
+    'metadata endpoints stay refused even with private fetch enabled');
+  assert.ok(validateOutboundUrl('http://[fe80::1]/'),
+    'link-local stays refused even with private fetch enabled');
+  delete process.env.SIDEKICK_ALLOW_PRIVATE_FETCH;
+
+  // Caller headers may not impersonate a host or attach credentials.
+  const { accepted, rejected } = filterRequestHeaders({
+    Host: 'evil.example', Authorization: 'Bearer x', Cookie: 'a=b', 'X-Trace': '1'
+  });
+  assert.deepStrictEqual(Object.keys(accepted), ['X-Trace']);
+  assert.strictEqual(rejected.length, 3, 'Host, Authorization and Cookie must be refused');
+  console.log('Passed\n');
+}
+
+// ============================================================================
 // CLEANUP
 // ============================================================================
 

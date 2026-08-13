@@ -682,7 +682,10 @@ function auditComputeEvent(eventType, { actor = "compute", subjectType, subjectI
       severity,
       payload,
       sensitivity: "normal",
-      redaction_state: "redacted",
+      // These payloads carry caller-supplied fields (reason, display_name), so
+      // this publisher cannot honestly claim to have redacted them. Declaring
+      // "none" makes the delivery path redact before a subscriber sees it.
+      redaction_state: "none",
       correlation_id: subjectId || undefined,
     });
   } catch {}

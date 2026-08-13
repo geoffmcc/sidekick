@@ -4,8 +4,9 @@
 // to, so a caller who can set it gets a request-forgery primitive. The policy
 // here is deliberately an allowlist of schemes plus a denylist of destinations
 // that are never legitimate providers — NOT a blanket block on private
-// addressing. Loopback and RFC1918 providers are first-class: the host Ollama
-// provider is http://127.0.0.1:11434 and the GPU box is 10.47.60.10.
+// addressing. Loopback and RFC1918 providers are first-class: a host Ollama
+// provider typically listens on http://127.0.0.1:11434, and an accelerator host
+// is commonly a private LAN address.
 //
 // SCOPE LIMIT — this validates URL TEXT at write time only. It cannot stop a
 // hostname that resolves to a denied address later (DNS rebinding), nor a

@@ -87,7 +87,10 @@ async function createVm(client, profile, params, context) {
   const diskStorage = params.disk && params.disk.storage ? field(validate.validateStorageId(params.disk.storage), errors) : null;
   const diskGb = params.disk && params.disk.size_gb !== undefined ? field(validate.validateIntRange("disk.size_gb", params.disk.size_gb, 1, 8192), errors) : null;
   const ostype = params.ostype !== undefined ? field(validate.validateOsType(params.ostype), errors) : "l26";
-  const isoVol = params.iso !== undefined ? String(params.iso) : null;
+  // Validated like every other value that lands in a property string: `iso` is
+  // interpolated into `ide2: <vol>,media=cdrom`, so an embedded comma would
+  // append further ide2 options.
+  const isoVol = params.iso !== undefined ? field(validate.validateIsoVolume(params.iso), errors) : null;
   // cloud-init is intentionally NOT applied to a bare create: it is meaningful
   // only atop a cloud image, which is a clone-from-template flow. See cloneGuest.
   if (errors.length) throw new ProxmoxError("invalid_input", errors[0], { errors });
@@ -183,6 +186,15 @@ async function cloneGuest(client, profile, params, context) {
   if (errors.length) throw new ProxmoxError("invalid_input", errors[0], { errors });
   await assertVmidFree(client, newid);
 
+  // Validate cloud-init BEFORE creating anything. Building it after the clone
+  // meant an invalid value reported a failure while leaving a fully created,
+  // untagged guest behind — a resource the pack could no longer recognize as
+  // its own, since the provenance config post never ran either.
+  const prov = provenance.buildProvenance({ run: context && context.correlationId, test: params._test === true, baseDescription: params.description || "" });
+  const cfg = { tags: prov.tags, description: prov.description };
+  if (kind === "qemu") buildCloudInitConfig(params.cloud_init, cfg, errors);
+  if (errors.length) throw new ProxmoxError("invalid_input", errors[0], { errors });
+
   const cloneBody = {
     newid,
     full: full ? 1 : 0,
@@ -192,11 +204,7 @@ async function cloneGuest(client, profile, params, context) {
   const upid = await client.post(["nodes", node, kind, sourceVmid, "clone"], cloneBody);
   const cloneResult = await monitorCreate(client, node, upid, kind, newid, { skipExistsCheck: true });
 
-  // Stamp provenance onto the clone and apply any cloud-init config.
-  const prov = provenance.buildProvenance({ run: context && context.correlationId, test: params._test === true, baseDescription: params.description || "" });
-  const cfg = { tags: prov.tags, description: prov.description };
-  if (kind === "qemu") buildCloudInitConfig(params.cloud_init, cfg, errors);
-  if (errors.length) throw new ProxmoxError("invalid_input", errors[0], { errors });
+  // Stamp provenance onto the clone and apply the validated cloud-init config.
   await client.post(["nodes", node, kind, newid, "config"], cfg);
 
   recordResourceEvent(context, { type: "resource_created", profile: profile.name, node, vmid: newid, kind, name, marker: prov.marker, run: context && context.correlationId, result: cloneResult.outcome, extra: { cloned_from: sourceVmid } });

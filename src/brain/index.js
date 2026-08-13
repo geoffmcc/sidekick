@@ -202,8 +202,15 @@ function makeSynthesizer({ callLLM, redact = (t) => t }) {
     if (memBlock) messages.push({ role: "user", content: memBlock });
     messages.push({ role: "user", content: "# Current tool evidence\n" + formatEvidenceForPrompt(evidence, redact) });
     messages.push({ role: "user", content: "# Request\n" + String(goal || "").slice(0, BRAIN_LIMITS.MAX_GOAL_CHARS) });
-    const res = await callLLM(messages, { systemPrompt: system, temperature: 0.2, maxTokens: BRAIN_LIMITS.MAX_GENERATED_TOKENS });
-    return { answer: res.response || "" };
+    const res = await callLLM(messages, {
+      systemPrompt: system,
+      temperature: 0.2,
+      maxTokens: BRAIN_LIMITS.MAX_GENERATED_TOKENS,
+      timeoutMs: BRAIN_LIMITS.MAX_GENERATION_MS,
+    });
+    // `finishReason` distinguishes "the budget cut the answer off" from "the
+    // model returned nothing", which callers report differently.
+    return { answer: res.response || "", finishReason: res.finishReason || null };
   };
 }
 

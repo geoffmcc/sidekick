@@ -200,6 +200,15 @@ assert.strictEqual(requiresToolUse("Is the Sidekick service running?"), true);
 assert.strictEqual(requiresToolUse("Show the current Git status."), true);
 assert.strictEqual(requiresToolUse("How full is the drive?"), true);
 assert.strictEqual(requiresToolUse("Which mounted volume has the least space left?"), true);
+// Bare resource nouns in non-inspection sentences must NOT route to the tool
+// loop (#125): no inspection verb, exactness signal, or state word present.
+assert.strictEqual(requiresToolUse("I bought a new CPU cooler."), false);
+assert.strictEqual(requiresToolUse("What does RAM stand for?"), false);
+assert.strictEqual(requiresToolUse("How tall is Mount Everest?"), false);
+assert.strictEqual(requiresToolUse("Turn the volume down."), false);
+assert.strictEqual(requiresToolUse("The drive to the airport takes an hour."), false);
+assert.strictEqual(requiresToolUse("What's a good size for a swap partition?"), false);
+assert.strictEqual(requiresToolUse("My laptop has 16GB of RAM."), false);
 // Conceptual questions about the same resources stay conversational.
 assert.strictEqual(requiresToolUse("Explain how disk usage works."), false);
 assert.strictEqual(requiresToolUse("Describe what CPU load average means."), false);

@@ -305,7 +305,7 @@ let server;
     const child = JSON.parse(fs.readFileSync(transcriptPath(res.data.taskId), "utf-8"));
     const toolStep = child.steps.find(s => s.type === "tool" && s.tool === "sidekick_totally_not_a_real_tool");
     assert.ok(toolStep, "unknown tool call recorded");
-    assert.match(String(toolStep.result || ""), /does not exist/i, "unknown tool must be rejected");
+    assert.match(String(toolStep.result || ""), /is not available to this agent/i, "unknown tool must be rejected");
   });
 
   // 18) No earlier approval is inherited: the follow-up endpoint ignores any

@@ -216,6 +216,30 @@ function checkCircuit(providerId) {
   return row.health_circuit_state;
 }
 
+/**
+ * Ages every open circuit that has served its cooldown into half-open, so a
+ * provider excluded by transient failures becomes eligible again.
+ *
+ * This exists because the exclusion is self-sustaining: placement refuses to
+ * route to an open circuit, so no request can ever record the success that
+ * would close it. `checkCircuit` implements the cooldown but had no caller;
+ * the compute reconciliation pass now drives it.
+ *
+ * Returns the provider ids that were reopened for testing.
+ */
+function recoverOpenCircuits() {
+  ensureSchema();
+  const db = dbStore.getDb();
+  const rows = db.prepare(
+    "SELECT provider_id FROM compute_providers WHERE health_circuit_state = ? AND enabled = 1"
+  ).all(CIRCUIT_STATES.OPEN);
+  const reopened = [];
+  for (const row of rows) {
+    if (checkCircuit(row.provider_id) === CIRCUIT_STATES.HALF_OPEN) reopened.push(row.provider_id);
+  }
+  return reopened;
+}
+
 // Return the raw credential reference stored on a provider (the NAME of a
 // secret in the encrypted store), or null. Deliberately NOT part of
 // rowToProvider: the provider object exposes only `hasAuth` so the reference
@@ -244,6 +268,7 @@ module.exports = {
   deleteProvider,
   updateHealth,
   checkCircuit,
+  recoverOpenCircuits,
   canReceiveDataClassification,
   getAuthSecretRef,
   rowToProvider,
