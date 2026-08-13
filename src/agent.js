@@ -61,6 +61,13 @@ try { inferenceService = require("./compute/inference-service"); } catch {}
 const PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 
 const MAX_ITERATIONS = parseInt(process.env.SIDEKICK_MAX_ITERATIONS || "15", 10);
+// Per-tool-call deadline for agent dispatches. Brain declares this budget; the
+// Agent Bridge is what makes it binding, since the dispatcher only enforces a
+// timeout when the caller supplies one. Falls back to Brain's own constant so
+// the two cannot drift, and stays defined when Brain is not loadable.
+const BRAIN_STEP_TIMEOUT_MS = (() => {
+  try { return require("./brain/config").BRAIN_LIMITS.MAX_STEP_MS; } catch { return 60000; }
+})();
 const CONV_DIR = path.join(DATA_DIR, "conversations");
 fs.mkdirSync(CONV_DIR, { recursive: true });
 
@@ -454,9 +461,19 @@ const taskEmitters = {};
 
 function buildSystemPrompt() {
   const availableTools = getToolDefsForSource("agent").filter(t => t.enabled);
+  // Approval state belongs in the catalog the model reads: a tool it cannot run
+  // unattended should be chosen knowingly, not discovered at dispatch time.
   const toolDescs = availableTools.map(t =>
-    "- " + t.name + "(" + Object.keys(t.args).join(", ") + "): " + t.description + " [risk: " + t.risk + "]"
+    "- " + t.name + "(" + Object.keys(t.args).join(", ") + "): " + t.description + " [risk: " + t.risk + "]" +
+    (t.approval_required ? " [requires human approval]" : "")
   ).join("\n");
+  // The worked examples must only name tools this source can actually reach.
+  // Steering toward bash when policy hides it teaches the model to call a tool
+  // that will come back "does not exist".
+  const has = name => availableTools.some(t => t.name === name);
+  const stateExample = has("bash")
+    ? { tool: "bash", args: '{"command": "df -h"}', answer: "Disk usage: /dev/sda1 is 23% used, 154G free" }
+    : { tool: "status", args: "{}", answer: "All services are running; disk 23% used" };
   return "You are an autonomous agent running on a remote machine.\n\n" +
     "CRITICAL RULES:\n" +
     "1. Do NOT repeat or verify a result you already have. Trust tool outputs.\n" +
@@ -479,10 +496,10 @@ function buildSystemPrompt() {
     "WRONG: {\"think\": \"Called get -> result\"}  -- do NOT mimic tool output in think\n" +
     "RIGHT: {\"tool\": \"get\", \"arguments\": {\"key\": \"mykey\"}}\n\n" +
     "Example (system state): \"check disk usage\"\n" +
-    "-> {\"tool\": \"bash\", \"arguments\": {\"command\": \"df -h\"}}\n" +
-    "-> {\"done\": true, \"result\": \"Disk usage: /dev/sda1 is 23% used, 154G free\"}\n\n" +
+    "-> {\"tool\": \"" + stateExample.tool + "\", \"arguments\": " + stateExample.args + "}\n" +
+    "-> {\"done\": true, \"result\": \"" + stateExample.answer + "\"}\n\n" +
     "Example (multi-step): \"store disk usage and retrieve it\"\n" +
-    "-> {\"tool\": \"bash\", \"arguments\": {\"command\": \"df -h\"}}\n" +
+    "-> {\"tool\": \"" + stateExample.tool + "\", \"arguments\": " + stateExample.args + "}\n" +
     "-> {\"tool\": \"store\", \"arguments\": {\"key\": \"disk\", \"value\": \"23%\"}}\n" +
     "-> {\"tool\": \"get\", \"arguments\": {\"key\": \"disk\"}}\n" +
     "-> {\"done\": true, \"result\": \"Disk usage: 23%\"}\n\n" +
@@ -524,6 +541,12 @@ async function callLLM(messages, options = {}) {
     // service's second parameter is never read for prompting.
     system: options.systemPrompt || buildSystemPrompt(),
     temperature: typeof options.temperature === "number" ? options.temperature : 0.3,
+    // Callers that declare a generation budget (Brain planning and synthesis)
+    // must have it reach the provider; dropping it here left every declared
+    // budget at the provider default and made truncation indistinguishable
+    // from an empty answer.
+    maxTokens: typeof options.maxTokens === "number" ? options.maxTokens : undefined,
+    timeout: typeof options.timeoutMs === "number" ? options.timeoutMs : undefined,
     format: options.format,
     dataClassification: "private",
     preferences: { allowFallback: true },
@@ -532,6 +555,9 @@ async function callLLM(messages, options = {}) {
     response: result.content || "",
     model: result.modelId || "unknown",
     provider: result.providerId || "unknown",
+    // Why generation stopped, when the provider reports it: "length" means the
+    // answer was cut off by the token budget rather than genuinely empty.
+    finishReason: result.finishReason || result.done_reason || null,
     // Compute fell back across eligible (all gate-passing) providers; surfaced
     // for telemetry only.
     fallback: !!result.fallback,
@@ -767,6 +793,23 @@ async function runAgent(goal, taskId, parentContext = null) {
     : null;
   const platformExecution = startAgentExecution(goal, taskId, inferredProject, executionLineage);
   const continuationBrief = (parentContext && parentContext.continuationBrief) || null;
+  // Routing is a pure classification of the goal text. Computing it before the
+  // guarded body keeps the transcript's routing record truthful even when the
+  // run throws before reaching the loop.
+  const classification = classifyEvidenceRequirement(goal);
+  const useTools = classification.requiresTools;
+
+  let status = "iteration_limit";
+  let brainInfo = null;
+  let finalResult = "";
+  let terminalError = "";
+
+  // Everything from here to the terminal tail is guarded. An execution that has
+  // been set `running` must always reach a terminal state: before this, a throw
+  // anywhere in the body (memory recall, Brain, the tool loop, the transcript
+  // write) skipped finishAgentExecution and stranded the row in `running`
+  // forever, with no reaper able to see it (agent executions hold no claim).
+  try {
   const memoryBrief = inferredProject ? buildMemoryBrief(goal, { project: inferredProject }) : null;
 
   let semanticRecall = [];
@@ -786,13 +829,6 @@ async function runAgent(goal, taskId, parentContext = null) {
   // The brief is untrusted recalled data; redact before it is seeded so a
   // remembered secret can never re-enter a prompt, transcript, or provider.
   const combinedBrief = briefParts.length > 0 ? redactSensitive(briefParts.join("\n\n")) : null;
-  const classification = classifyEvidenceRequirement(goal);
-  const useTools = classification.requiresTools;
-
-  let status = "iteration_limit";
-  let brainInfo = null;
-  let finalResult = "";
-  let terminalError = "";
 
   if (parentContext) {
     emit(taskId, {
@@ -838,8 +874,17 @@ async function runAgent(goal, taskId, parentContext = null) {
       agentTools: brainAgentTools(),
       callTool: (name, args) => callAgentTool(name, args, {
         taskId,
+        project: inferredProject,
+        // One correlation id per task, not one per call. The context builder
+        // otherwise mints a fresh trace id per dispatch and uses it as the
+        // correlation id, which shredded a task's tool history into unrelated
+        // single-call segments for Predict and the tool-log views.
+        correlationId: taskId,
         executionId: platformExecution?.execution_id,
         rootExecutionId: platformExecution?.root_execution_id,
+        // Without a deadline the dispatcher returns an unbounded promise, so a
+        // hung tool call blocks the task past every declared Brain budget.
+        timeoutMs: BRAIN_STEP_TIMEOUT_MS,
       }),
       recallMemory: inferredProject
         ? async (q) => recallMemoryForTextAsync(q, { project: inferredProject, limit: 8 })
@@ -934,8 +979,11 @@ async function runAgent(goal, taskId, parentContext = null) {
       // approval is carried in; policy/approval are re-evaluated per call.
       callTool: (name, args) => callAgentTool(name, args, {
         taskId,
+        project: inferredProject,
+        correlationId: taskId,
         executionId: platformExecution?.execution_id,
         rootExecutionId: platformExecution?.root_execution_id,
+        timeoutMs: BRAIN_STEP_TIMEOUT_MS,
       }),
       getToolDefs: () => getToolDefsForSource("agent").filter(t => t.enabled),
       maxIterations: MAX_ITERATIONS,
@@ -949,6 +997,16 @@ async function runAgent(goal, taskId, parentContext = null) {
     status = loop.status;
     finalResult = loop.finalResult;
     terminalError = loop.terminalError;
+  }
+  } catch (e) {
+    // Unexpected throw inside the run: record it as an honest terminal failure
+    // rather than letting the execution strand. The caller's .catch cannot do
+    // this — it has no execution handle — so it must happen here.
+    status = "failed";
+    terminalError = redactSensitive("Agent task failed: " + (e && e.message ? e.message : String(e)));
+    steps.push({ type: "error", text: terminalError });
+    appendAgentExecutionEvent(platformExecution, "agent.task_threw", { task_id: taskId, error: terminalError }, "error");
+    console.error("Agent task " + taskId + " threw: " + (e && e.stack ? e.stack : e));
   }
 
   // Durable transcript with additive lineage fields. Older transcripts without
@@ -987,9 +1045,22 @@ async function runAgent(goal, taskId, parentContext = null) {
   // before the complete JSON is written creates a race where a child can
   // observe a partially-published parent record.
   const temporaryTranscriptPath = `${transcriptPath}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(temporaryTranscriptPath, transcript, { encoding: "utf-8", mode: 0o600 });
-  fs.renameSync(temporaryTranscriptPath, transcriptPath);
-  registerAgentTranscript(platformExecution, transcriptPath, taskId, status);
+  // A failed transcript write must not cost the caller the answer: the terminal
+  // stream event and the execution transition below still run, and the failure
+  // is reported instead of silently losing a completed task.
+  try {
+    fs.writeFileSync(temporaryTranscriptPath, transcript, { encoding: "utf-8", mode: 0o600 });
+    fs.renameSync(temporaryTranscriptPath, transcriptPath);
+    registerAgentTranscript(platformExecution, transcriptPath, taskId, status);
+  } catch (e) {
+    const message = redactSensitive("Transcript could not be published: " + (e && e.message ? e.message : String(e)));
+    console.error("Agent task " + taskId + ": " + message);
+    try {
+      appendAgentExecutionEvent(platformExecution, "agent.transcript_write_failed", { task_id: taskId, error: message }, "error");
+    } catch {}
+    try { fs.unlinkSync(temporaryTranscriptPath); } catch {}
+    emit(taskId, { type: "step", text: message + " (the answer below was still produced)" });
+  }
 
   if (status === "completed") {
     try {
@@ -1001,16 +1072,25 @@ async function runAgent(goal, taskId, parentContext = null) {
     } catch (e) {
       emit(taskId, { type: "step", text: "Automatic memory save failed: " + e.message });
     }
-
-    await suggestProcedure(goal, steps, taskId);
   }
 
+  // Terminal state first. Procedure suggestion is an optional post-task nicety
+  // that calls a model with no deadline of its own; running it before this
+  // point delayed the user-visible completion by however long that call took.
   if (status === "completed") {
     emit(taskId, { type: "done", text: finalResult });
   } else {
     emit(taskId, { type: "error", text: terminalError });
   }
   finishAgentExecution(platformExecution, status, { result_summary: status === "completed" ? finalResult : terminalError, reason: terminalError || "agent task completed", error_category: status === "completed" ? null : status });
+
+  if (status === "completed") {
+    try {
+      await suggestProcedure(goal, steps, taskId);
+    } catch (e) {
+      console.error("Agent task " + taskId + " procedure suggestion failed: " + (e && e.message ? e.message : e));
+    }
+  }
 }
 
 // Shared task-start path used by both a normal task and a follow-up so the two
@@ -1274,9 +1354,15 @@ function finalizeResumedTask({ taskId, state, outcome, checkpoint }) {
     resumed_at: new Date().toISOString(),
     brain: { ...(record.brain || {}), state, resumed: true, awaiting_approval: null, error: failure },
   };
+  // Republish atomically, exactly as runAgent does: follow-up callers treat the
+  // transcript as the terminal boundary, so an in-place rewrite lets a reader
+  // observe truncated JSON mid-write.
+  const temporaryTranscriptPath = `${transcriptPath}.${process.pid}.${Date.now()}.tmp`;
   try {
-    fs.writeFileSync(transcriptPath, JSON.stringify(merged), "utf-8");
+    fs.writeFileSync(temporaryTranscriptPath, JSON.stringify(merged), { encoding: "utf-8", mode: 0o600 });
+    fs.renameSync(temporaryTranscriptPath, transcriptPath);
   } catch {
+    try { fs.unlinkSync(temporaryTranscriptPath); } catch {}
     return { ok: false, reason: "transcript_unwritable" };
   }
 
@@ -1339,12 +1425,31 @@ function startApprovalContinuationJobs() {
     scheduler = require("./brain/scheduler").startResumeScheduler({
       buildDeps: async (taskId) => brain.makeResumeDeps({
         callLLM: (messages, options) => callLLM(messages, options),
-        callTool: (name, args) => callAgentTool(name, args, { taskId, source: "agent" }),
+        callTool: (name, args) => callAgentTool(name, args, {
+          taskId,
+          source: "agent",
+          correlationId: taskId,
+          timeoutMs: BRAIN_STEP_TIMEOUT_MS,
+        }),
         redact: redactSensitive,
       }),
       onPass: (outcomes) => {
         for (const entry of outcomes) {
-          try { finalizeResumedTask(entry); } catch (error) {
+          try {
+            const delivered = finalizeResumedTask(entry);
+            // A resumed task is already marked completed in the continuation
+            // store, so the scheduler will never retry it. A delivery that
+            // returns not-ok therefore loses the synthesized answer silently
+            // unless it is reported here.
+            if (delivered && delivered.ok === false) {
+              console.error(JSON.stringify({
+                level: "error",
+                event: "brain.resume_delivery_incomplete",
+                task_id: entry.taskId,
+                reason: delivered.reason || "unknown",
+              }));
+            }
+          } catch (error) {
             console.error(JSON.stringify({
               level: "error",
               event: "brain.resume_delivery_failed",

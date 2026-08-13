@@ -437,16 +437,32 @@ async function resumeBrainTask(opts) {
     try { goal = store.decryptJson(checkpoint.goal_encrypted) || ""; } catch { goal = ""; }
 
     let answer = "";
+    let finishReason = null;
     try {
       const out = await synthesize({ goal, evidence: acc.evidence, memoryContext: [], requiresEvidence });
       answer = (out && typeof out.answer === "string" ? out.answer : "").trim();
+      finishReason = out && out.finishReason || null;
     } catch (e) {
       continuation.completeTask({ taskId, claimEpoch, claimedBy, state: "failed" });
-      return finish({ state: "failed", taskId, error: "synthesis error: " + redact(String(e && e.message || e)), steps: acc.steps });
+      return finish({
+        state: "failed", taskId, steps: acc.steps,
+        error: "synthesis error: " + redact(String(e && e.message || e)),
+        evidence_count: acc.evidence.length,
+      });
     }
     if (!answer) {
+      // Same honesty contract as the non-resumed path in brain.js: report the
+      // evidence actually collected and whether the token budget truncated it.
+      onEvent("brain.synthesis_empty", { evidence_count: acc.evidence.length, finish_reason: finishReason }, "error");
       continuation.completeTask({ taskId, claimEpoch, claimedBy, state: "failed" });
-      return finish({ state: "failed", taskId, error: "synthesis produced no answer", steps: acc.steps });
+      return finish({
+        state: "failed", taskId, steps: acc.steps,
+        error: finishReason === "length"
+          ? "synthesis produced no usable answer: the model stopped at the generation token budget (" +
+            BRAIN_LIMITS.MAX_GENERATED_TOKENS + " tokens) with " + acc.evidence.length + " evidence items"
+          : "synthesis produced no answer (evidence items: " + acc.evidence.length + ")",
+        evidence_count: acc.evidence.length,
+      });
     }
 
     const completed = continuation.completeTask({ taskId, claimEpoch, claimedBy, state: "completed" });

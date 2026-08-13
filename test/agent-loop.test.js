@@ -169,7 +169,9 @@ const getToolDefs = () => AGENT_TOOLS;
         });
         assert.strictEqual(rec.calls.length, 0, "unavailable tools must never reach dispatch: " + name);
         const toolStep = result.steps.find((s) => s.type === "tool");
-        assert.strictEqual(toolStep.result, "Error: tool does not exist");
+        // The rejection must not assert non-existence: a policy-hidden tool
+        // does exist, it is simply not reachable from this source.
+        assert.match(String(toolStep.result), /is not available to this agent/);
       }
     }
 
