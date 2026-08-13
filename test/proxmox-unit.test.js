@@ -388,6 +388,18 @@ test("U.32: ansible.buildCommand interpolates only module paths; parseResult der
   assert.strictEqual(ansible.parseResult("Traceback...", 2, ["web"]).ok, false);
 });
 
+test("U.32b: extractJsonObject isolates ansible JSON from trailing stderr warnings", () => {
+  // The governed bash tool concatenates stdout + stderr; the JSON must still parse.
+  const mixed = '{"stats":{"local":{"ok":0,"failures":0,"unreachable":1}}}\n\nstderr: [WARNING]: something {not json}';
+  const doc = ansible.extractJsonObject(mixed);
+  assert.ok(doc && JSON.parse(doc).stats, "extracts the JSON document only");
+  const r = ansible.parseResult(doc, 1, ["local"]);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.per_host.local.unreachable, 1, "unreachable host parsed correctly");
+  // Braces inside JSON strings must not confuse the extractor.
+  assert.ok(ansible.extractJsonObject('prefix {"msg":"a } b {"} tail').includes('"msg":"a } b {"'));
+});
+
 (async () => {
   console.log("Running Proxmox pack unit/security tests...\n");
   // (all synchronous; wrapper kept for parity with other suites)
