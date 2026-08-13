@@ -31,6 +31,12 @@
  *   - It does not deliver to external systems. Handlers here are in-process and
  *     side-effect-light on purpose; a webhook fan-out belongs behind the
  *     connector authority, not inside the drainer.
+ *
+ * Payload safety and causation are enforced in `kernel.deliverEvent`, not here,
+ * so they apply to every caller of the delivery contract rather than only to
+ * deliveries this drainer happens to run: payloads not stored redacted are
+ * redacted on the way to a handler, and events a handler publishes inherit the
+ * handled event as their `causation_id`.
  */
 
 const { redactSensitive } = require("../redact");
@@ -64,7 +70,7 @@ function getBatchLimit() {
  * operator paused (or that the backlog cap auto-paused) stays paused until the
  * operator resumes it. Restarting the process must not silently undo that.
  */
-function registerHandler(name, handler, { event_type = null, max_attempts = 3 } = {}) {
+function registerHandler(name, handler, { event_type = null, max_attempts = 3, max_sensitivity = null, accepts_unredacted = false } = {}) {
   const subscriptionName = String(name || "").trim();
   if (!subscriptionName) throw new Error("handler subscription name is required");
   if (typeof handler !== "function") throw new Error("handler must be a function");
@@ -73,7 +79,13 @@ function registerHandler(name, handler, { event_type = null, max_attempts = 3 } 
   let subscription = existing;
   if (!subscription) {
     if (!event_type) throw new Error(`event_type is required to create subscription ${subscriptionName}`);
-    subscription = kernel.registerEventSubscription({ name: subscriptionName, event_type, max_attempts });
+    // Delivery policy lives on the subscription, not on the in-process handler:
+    // it has to survive a restart and be inspectable by an operator who is
+    // looking at why a consumer sees what it sees.
+    const metadata = {};
+    if (max_sensitivity) metadata.max_sensitivity = max_sensitivity;
+    if (accepts_unredacted === true) metadata.accepts_unredacted = true;
+    subscription = kernel.registerEventSubscription({ name: subscriptionName, event_type, max_attempts, metadata });
   } else if (event_type && existing.event_type !== event_type) {
     // The stored subscription is the authority for what it matches. Rebinding
     // the type here would change fan-out for a queue that already has rows in
@@ -219,6 +231,10 @@ const BUILTIN_CONSUMERS = Object.freeze([
 ]);
 
 function operationalAlertHandler(event) {
+  // The payload arrives already redacted (delivery redacts anything not stored
+  // that way), so this is the belt to that suspenders — a log line is a
+  // different trust boundary again, and the cost is one pass over a bounded
+  // string.
   console.error(JSON.stringify({
     level: "error",
     event: "platform.event.alert",
