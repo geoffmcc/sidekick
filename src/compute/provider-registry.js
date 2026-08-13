@@ -216,6 +216,18 @@ function checkCircuit(providerId) {
   return row.health_circuit_state;
 }
 
+// Return the raw credential reference stored on a provider (the NAME of a
+// secret in the encrypted store), or null. Deliberately NOT part of
+// rowToProvider: the provider object exposes only `hasAuth` so the reference
+// never leaks into API responses, logs, or the dashboard. The single consumer
+// is provider-credentials.resolveProviderApiKey at inference dispatch.
+function getAuthSecretRef(providerId) {
+  ensureSchema();
+  const db = dbStore.getDb();
+  const row = db.prepare("SELECT auth_secret_key FROM compute_providers WHERE provider_id = ?").get(providerId);
+  return row ? (row.auth_secret_key || null) : null;
+}
+
 function canReceiveDataClassification(providerId, dataClassification) {
   const provider = getProvider(providerId);
   if (!provider) return false;
@@ -233,5 +245,6 @@ module.exports = {
   updateHealth,
   checkCircuit,
   canReceiveDataClassification,
+  getAuthSecretRef,
   rowToProvider,
 };

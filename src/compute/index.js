@@ -16,6 +16,11 @@ const RECONCILE_INTERVAL_MS = 30000;
 const MISSED_HEARTBEAT_MULTIPLIER = 3;
 let reconcileTimer = null;
 
+// Provider bootstrap runs once per process (initialize() is called on every
+// compute tool invocation). The registry scan inside is itself idempotent; this
+// guard just avoids repeating it on every call.
+let bootstrapDone = false;
+
 // A recovery pass that fails every tick silently reverts crash recovery to
 // the incidental-traffic behavior issue #150 fixed; log it, but throttled so
 // a persistent fault (e.g. sustained SQLITE_BUSY) cannot flood the journal.
@@ -125,6 +130,16 @@ function initialize() {
       CREATE INDEX IF NOT EXISTS idx_compute_metrics_recorded ON compute_metrics(recorded_at);
     `);
   } catch {}
+  // Populate the provider/model registry from the environment so the
+  // InferenceService authority actually has providers to route to. Idempotent
+  // and best-effort — a failure here must never prevent initialize from
+  // completing. Guarded so it runs at most once per process even though
+  // initialize() is called on every compute tool invocation.
+  if (!bootstrapDone) {
+    bootstrapDone = true;
+    try { require("./provider-bootstrap").bootstrapProviders(); }
+    catch (e) { logRecoveryFailure("provider_bootstrap", e); }
+  }
 }
 
 function overview() {

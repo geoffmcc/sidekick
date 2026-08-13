@@ -15,6 +15,9 @@ fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
 fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_API_KEY = "sk-sidekick-test-key";
+// This suite builds its own controlled provider/model fixtures; opt out of the
+// env-driven provider bootstrap so it does not add unexpected candidates.
+process.env.SIDEKICK_DISABLE_PROVIDER_BOOTSTRAP = "1";
 
 delete require.cache[require.resolve("../src/db")];
 const dbStore = require("../src/db");

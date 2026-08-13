@@ -49,11 +49,28 @@ OLLAMA_MODEL=qwen2.5-coder:7b
 
 This matches `.env.example` and is tuned for code-oriented work. CPU-only hosts may choose a smaller model; stronger hosts may choose a larger model.
 
-## Groq vs Ollama
+## Providers (Ollama, Groq, OpenAI)
 
-If `GROQ_API_KEY` is configured, Sidekick can use Groq for faster cloud LLM responses.
+Model inference is routed by **Compute**. On startup Sidekick registers managed
+providers from the environment (see `docs/compute.md` → *Providers and
+credentials*):
 
-If Groq is not configured, Sidekick can use local Ollama as a fallback.
+- `OLLAMA_URL` (default `http://127.0.0.1:11434`) → local Ollama, trusted for all
+  data classifications, preferred over cloud.
+- `GROQ_API_KEY` (+ optional `GROQ_MODEL`) → Groq as an OpenAI-compatible cloud
+  provider.
+- `OPENAI_API_KEY` (+ optional `OPENAI_BASE_URL`, `OPENAI_MODEL`,
+  `OPENAI_EMBEDDING_MODEL`) → OpenAI-compatible cloud provider.
+
+Cloud providers are seeded **secure by default**: they serve `public`/`internal`
+data only and rank below local, so private inference stays local and fails closed
+rather than silently egressing to the cloud. Promote a cloud provider to private
+data explicitly via the `compute` tool (`action=update`, `data_classifications`).
+
+When `SIDEKICK_SECRET_KEY` is set, a cloud provider's API key is migrated into the
+encrypted secret store and the provider record keeps only a reference (never the
+plaintext). Set `SIDEKICK_DISABLE_PROVIDER_BOOTSTRAP=1` to manage providers by
+hand.
 
 ## Security and tool policy
 
