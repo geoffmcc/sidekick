@@ -4,6 +4,66 @@ All notable changes to Sidekick.
 
 ## Unreleased
 
+### Capability Packs v1, and the third-party module lifecycle (B9) that it needed
+
+Sidekick Core had to absorb every new area of functionality directly, because the only way to add tools was to add them to Core. The module subsystem was the intended answer, but its third-party half was unfinished: a module that did not ship inside the repository could reach `configured` and never `enabled`, there was no managed installation location, no whole-package integrity, no upgrade, and no uninstall. **B9 is now complete**, and Capability Packs v1 is built on top of it.
+
+**B9 — third-party module lifecycle**
+
+- Managed module store at `<SIDEKICK_DATA_DIR>/modules/<name>/<version>/`. An installed module never runs from the directory the operator pointed at; installation copies exactly the inspected files, re-hashes the managed copy, and refuses the install if the source changed underneath it. Owning the runtime location is what makes the recorded hash mean anything afterwards.
+- Safe package inspection (`inspectPackageForInstall`) reports identity, display name, version, manifest, entry point, files, deterministic whole-package hash, compatibility, contributed tools, configuration requirements and provenance — without requiring, importing or evaluating any package code. It refuses path traversal, symlinks, non-regular files, entry points escaping the package root, malformed manifests, invalid versions, duplicate identity, descriptor collisions (including aliases and generated capability names), built-in tool shadowing, and packaged secrets.
+- Verified entry-point loading (`src/modules/entry-loader.js`). Before `require` runs: the installation is inside the managed store, the package still hashes to its recorded value, the entry point resolves inside the installation and still hashes to its recorded value, the manifest is compatible, configuration is satisfied, and the operator left the module runnable. A mutated installed package fails closed and its code never executes.
+- Real `install` / `configure` / `enable` / `disable` / `upgrade` / `uninstall` (`src/modules/lifecycle.js`). Upgrade stages the candidate beside the live installation, verifies it, promotes it, preserves compatible configuration, applies module migrations, removes stale descriptors, and retains the previous installation until activation succeeds — a failed upgrade restores and re-enables the previous version rather than destroying it. Same-version and downgrade replacement are refused unless explicitly allowed.
+- Uninstall removes runtime contributions, the managed package and the registration row. Historical execution and audit evidence — kernel ledger events, tool logs, completed runs — is preserved by design.
+- A derived health model: `healthy`, `disabled`, `unhealthy`, `configuration_required`, `incompatible`, `integrity_failure`, `load_failure`, `restart_required`, `not_installed`, each with per-component evidence.
+- Cross-process convergence: each process records the code identity it registered, so an upgrade performed elsewhere drops the stale registration and re-activates from the new installation without a restart. Node's require cache is purged for the installation subtree so the new bytes are the ones that run.
+- `platform_extensions` is retired as a module concept. It had no production caller; `platform_modules` is the single module authority. The table and its kernel CRUD stay for backward compatibility and are not part of any lifecycle.
+
+**Capability Packs v1**
+
+- A capability pack is an installable **area of competence** — modules, workflow definitions, knowledge assets and configuration — declared in `sidekick.pack.json` and installed into a managed pack store. Every manifest field has runtime meaning; there are no decorative sections.
+- Packs compose the subsystems that already existed. Pack-owned modules install through the module lifecycle, pack-owned workflows register in the workflow definition registry, pack knowledge lands in the ordinary `knowledge` table (tagged `pack:<name>`, so agents find it through the ordinary `knowledge` tool), and pack tools are normal descriptors in the one registry with the one dispatcher. There is no pack-specific runtime, dispatcher or workflow engine.
+- Component ownership is recorded in `platform_capability_pack_components` so disable, upgrade and uninstall act coherently across those subsystems without becoming a competing source of truth. Duplicate ownership is refused: two packs cannot claim the same component.
+- Install leaves a pack **disabled**. Installing code and activating code are separate operator decisions, and a pack that fails to enable rolls back rather than advertising a partially live capability.
+- Pack health is **derived from components**: `healthy`, `disabled`, `degraded`, `configuration_required`, `incompatible`, `integrity_failure`, `component_failure`, `restart_required`. A pack whose required component is unusable is never reported healthy — a tampered owned module surfaces as `integrity_failure` at the pack level.
+- First-party bundled packs (under `packs/`) differ from third-party packs in trust and provenance only. They use the same manifest, the same managed store, the same lifecycle and the same health model, so the first-party pack genuinely exercises the platform.
+
+**Workflow definitions become runnable**
+
+- Sidekick already owned workflow *execution* state (`platform_workflows`, `platform_workflow_steps`, the execution ledger) but had nowhere to keep reusable *definitions*, which is why packs could not contribute runnable workflows. `platform_workflow_definitions` is that missing half.
+- The runner (`src/workflows/runner.js`) drives the existing primitives rather than replacing them. Each step is dispatched with `callInternalTool`, so it carries schema validation, tool policy, approvals, timeouts, cancellation, redaction and audit. On top of that a run gets durable per-step state, checkpoints, project identity, execution history and provenance (pack name, pack version, workflow version, definition checksum).
+- A step requiring approval **parks** the run in `waiting`, records where it stopped and returns the approval id; the operator approves through the normal path and resumes with `workflow action="resume"`. Cancellation is cooperative and cross-process: the execution claim is re-read before every step.
+- References in a definition are resolved, never evaluated (`${inputs.x}`, `${steps.y.json.a.b[0]}`, `${steps.y.text}`, `${steps.y.ok}`). A reference to a step that has not run yet is a validation error at registration time, so a broken definition is caught when a pack is inspected rather than when an operator tries to run it.
+- `completeWorkflowStep` gained an `advance` option so a step a definition tolerates (`on_error: "continue"`) is recorded as **failed** without stalling the durable cursor. Previously the step row and the cursor could not both be accurate.
+
+**Developer / Software Engineering pack (bundled, first-party)**
+
+- `dev_repo_profile` (low) — a mechanically derived project profile: git state and recent history, languages, ecosystems, package managers with their install commands, workspace/monorepo layout, classified build/test/lint/typecheck scripts, CI and container configuration, migrations, documentation, agent instruction files, and candidate verification commands **each carrying the evidence that produced it**. Nothing is inferred by a language model; a fact that cannot be established from files on disk is reported as absent rather than invented.
+- `dev_change_summary` (low) — structured engineering impact for a change set: per-kind classification, affected areas, likely API/schema changes with the symbol names added and removed and which are potentially breaking, dependency version movements, verification-coverage signals, evidence-backed risk indicators, and the untracked files no diff can show.
+- `dev_verify` (high) — selects the project's own verification commands and runs them through Sidekick's governed `bash` path, reporting for each what was selected, why, exactly what executed, the exit status, duration and bounded output. Selection is conservative: an intent with no detectable command is reported `not_detected`, never guessed. The TypeScript ecosystem default uses `npx --no-install`, because a verification command must never install a package or reach the network to decide whether a project typechecks.
+- Seven runnable workflows: repository reconnaissance, issue investigation, implement change, CI failure triage, pull request review, dependency upgrade, release preparation. Investigation never modifies source; implementation never commits, pushes, merges, tags, releases or publishes; the dependency upgrade requires the operator to supply the exact update command so the workflow never invents a mutation.
+- Eight knowledge assets covering recon, change discipline, verification strategy, investigation, CI triage, review, dependency/release safety and handoff expectations. Repository-specific instructions such as `AGENTS.md` remain authoritative; pack knowledge complements them.
+- Twelve configuration options with safe defaults, including command overrides and an optional `repository_roots` confinement that applies **in addition to** the global Sidekick path policy.
+
+**Operator surfaces**
+
+- New `capability` tool (risk **critical** — installing or enabling a pack activates executable module code in the Sidekick process): `list`, `available`, `show`, `inspect`, `install`, `configure`, `enable`, `disable`, `health`, `upgrade`, `uninstall`.
+- New `workflow` tool (risk **high**): `list`, `show`, `run`, `resume`.
+- Dashboard **Capabilities** page: installed packs with state, health, integrity, configuration validity and contributed components; available bundled packs; and inspection/installation from an approved server-local path. Every mutation POSTs to the dashboard API, which dispatches the governed `capability` tool server-side — browser code never mutates pack state directly, and the existing auth, IP allowlist, rate limiting and Origin/CSRF checks apply. No remote marketplace.
+
+**Trust model, stated plainly**
+
+Installed pack and third-party module code runs **in-process with Sidekick's privileges**. There is no process isolation and none is claimed. What the platform provides is integrity (the bytes are the reviewed bytes), provenance (where they came from and who installed them) and lifecycle control (an operator decided to run them). Treat installing a third-party pack as equivalent to deploying code.
+
+**Schema**
+
+- Migration `036_capability_packs.sql` (schema_version 36, platform kernel schema version 10). Additive: three `platform_modules` columns (`install_path`, `package_hash`, `provenance_json`) and three new tables (`platform_capability_packs`, `platform_capability_pack_components`, `platform_workflow_definitions`). The runtime ensure paths apply the same DDL in the same order, and the parity test confirms both boot paths produce identical `platform_*` schema.
+
+**Verification**
+
+- New suites: `test/modules-third-party-lifecycle.test.js` (18 checks, synthetic fixtures, including tamper-fails-closed and built-in-collision-refused), `test/workflow-definitions.test.js` (12 checks), `test/capability-packs.test.js` (16 checks against the real bundled Developer pack), `test/developer-pack.test.js` (14 checks against real git repositories — the Sidekick repository itself and a purpose-built fixture repository).
+- Core registry tool count baseline: 103 -> 105.
+
 ### `sidekick_bash` no longer blocks the server while a command runs
 
 `sidekick_bash` executed commands with synchronous `execSync`, which freezes the MCP server's entire event loop for the command's duration. Any command that made an HTTP request to the server's own ports (4097/4098/4099) deadlocked: the server could not answer the request because its event loop was busy, the command hung, and the client aborted the call with `MCP error -32001: Request timed out`. This is a latent design footgun, not a dependency regression.

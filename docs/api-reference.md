@@ -61,6 +61,12 @@ Flat aliases (all explicitly authenticated, kept for compatibility): `POST /comp
 
 `GET /api/compute`, `GET /api/compute/workers`, `GET /api/compute/jobs`, `GET /api/compute/jobs/:jobId`, `GET /api/compute/install`, `POST /api/compute/enrollment-tokens`, `POST /api/compute/workers/:workerId/:action` (disable/enable/revoke), `POST /api/compute/jobs/:jobId/:action` (cancel/retry), `POST /api/compute/recover`.
 
+### Capabilities (capability packs)
+
+`GET /api/capabilities`, `GET /api/capabilities/:name`, `GET /api/capabilities/:name/health`, `GET /api/capabilities/:name/workflows`, `POST /api/capabilities/inspect`, `POST /api/capabilities/install`, `POST /api/capabilities/:name/configure|enable|disable|upgrade|uninstall`.
+
+Every route dispatches the governed `capability` tool through `callDashboardTool`, so pack operations carry the same policy, approval, redaction and audit path as an MCP call; browser code never mutates pack state directly. Installing or enabling a pack activates executable module code in the Sidekick process. See `docs/capability-packs.md`.
+
 ### Platform kernel surfaces (API-only; no dashboard UI yet)
 
 `GET /api/artifacts` (custody metadata only), `GET /api/event-deliveries`, `POST /api/event-subscriptions`, `POST /api/event-subscriptions/:subscriptionId/:action` (pause/resume), `POST /api/event-deliveries/:deliveryId/requeue`, `GET /api/connectors`, `POST /api/connectors`, `GET /api/connectors/:connectorId`, `GET /api/connectors/:connectorId/health|events`, `POST /api/connectors/:connectorId/configure`, `POST /api/connectors/:connectorId/:action` (enable/disable/retire), `GET /api/scope-snapshots`, `POST /api/scope-snapshots`, `POST /api/scope-guard/evaluate`.

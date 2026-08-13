@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "name": "developer/pull-request-review",
+  "version": "1.0.0",
+  "title": "Pull Request Review",
+  "description": "Perform a substantive engineering review of a change set. Grounds every finding in the actual diff: classification, API/schema impact, dependency changes, migrations, test and documentation coverage, security-sensitive paths, CI state, and the project's own verification result.",
+  "mode": "read_only",
+  "tags": ["developer", "review", "read-only"],
+  "inputs": {
+    "path": { "type": "string", "required": true, "description": "Local repository path containing the change set" },
+    "base": { "type": "string", "required": false, "default": "origin/main", "description": "Base ref the change is reviewed against" },
+    "repo": { "type": "string", "required": false, "description": "GitHub owner/repository for PR and CI enrichment" },
+    "pr": { "type": "string", "required": false, "description": "Pull request number" },
+    "run_verification": { "type": "boolean", "required": false, "default": true, "description": "Run the project's own verification as review evidence" }
+  },
+  "steps": [
+    {
+      "name": "profile",
+      "title": "Establish repository context",
+      "tool": "dev_repo_profile",
+      "args": { "path": "${inputs.path}" },
+      "expect": "json",
+      "on_error": "fail"
+    },
+    {
+      "name": "impact",
+      "title": "Analyze the change set",
+      "tool": "dev_change_summary",
+      "args": { "path": "${inputs.path}", "base": "${inputs.base}" },
+      "expect": "json",
+      "on_error": "fail"
+    },
+    {
+      "name": "diff_stat",
+      "title": "Collect the reviewable diff stat",
+      "tool": "git",
+      "args": { "action": "diff", "path": "${inputs.path}", "args": "${inputs.base} --stat" },
+      "expect": "text",
+      "on_error": "continue"
+    },
+    {
+      "name": "commits",
+      "title": "Inspect the commits under review",
+      "tool": "git",
+      "args": { "action": "log", "path": "${inputs.path}", "args": "${inputs.base}..HEAD --pretty=format:%h|%an|%s" },
+      "expect": "text",
+      "on_error": "continue"
+    },
+    {
+      "name": "pull_request",
+      "title": "Retrieve pull request metadata",
+      "tool": "github",
+      "args": { "action": "pr_get", "repo": "${inputs.repo}", "args": "${inputs.pr}" },
+      "when": "${inputs.pr}",
+      "expect": "text",
+      "on_error": "continue"
+    },
+    {
+      "name": "ci",
+      "title": "Retrieve CI check state",
+      "tool": "ci_status",
+      "args": { "repo": "${inputs.repo}", "pr": "${inputs.pr}", "format": "json" },
+      "when": "${inputs.repo}",
+      "expect": "json",
+      "on_error": "continue"
+    },
+    {
+      "name": "verify",
+      "title": "Run the project's own verification as review evidence",
+      "tool": "dev_verify",
+      "args": { "path": "${inputs.path}", "mode": "standard", "continue_on_failure": true },
+      "when": "${inputs.run_verification}",
+      "expect": "json",
+      "on_error": "continue"
+    }
+  ],
+  "result": {
+    "repository": "${steps.profile.json.repository}",
+    "base": "${inputs.base}",
+    "commits": "${steps.commits.text}",
+    "diff_stat": "${steps.diff_stat.text}",
+    "totals": "${steps.impact.json.totals}",
+    "changed_by_kind": "${steps.impact.json.by_kind}",
+    "affected_areas": "${steps.impact.json.areas}",
+    "api_surface": "${steps.impact.json.api_surface}",
+    "dependencies": "${steps.impact.json.dependencies}",
+    "migrations": "${steps.impact.json.by_kind.migration}",
+    "test_coverage_signals": "${steps.impact.json.verification}",
+    "risks": "${steps.impact.json.risks}",
+    "risk_level": "${steps.impact.json.risk_level}",
+    "verification_verdict": "${steps.verify.json.verdict}",
+    "verification": "${steps.verify.json.summary}",
+    "ci_state": "${steps.ci.json}",
+    "pull_request": "${steps.pull_request.text}",
+    "review_note": "Findings above are derived from the actual diff and the executed verification. api_surface.potentially_breaking lists symbols removed without reappearing; risks carries the evidence for each indicator."
+  }
+}

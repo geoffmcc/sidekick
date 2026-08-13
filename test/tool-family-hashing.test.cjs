@@ -106,7 +106,8 @@ fs.writeFileSync(filePath, 'file contents\n', 'utf8');
     assert.strictEqual(batchResults[1].result, `MD5: ${digest('md5', 'abc')}`);
 
     const registry = tools.getBuiltinRegistry();
-    assert.strictEqual(registry.listInDefinitionOrder().length, 103);
+    // Capability Packs v1 added `capability` and `workflow`: 103 -> 105.
+    assert.strictEqual(registry.listInDefinitionOrder().length, 105);
     assert.deepStrictEqual(
       registry.listInDefinitionOrder().map(tool => tool.name),
       legacy.TOOL_DEFS.map(def => def.name),

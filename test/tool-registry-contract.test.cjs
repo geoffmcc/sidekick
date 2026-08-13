@@ -22,7 +22,10 @@ const legacyToolNames = Object.keys(legacy.TOOLS);
 
 assert.deepStrictEqual(descriptorNames, legacyDefNames, 'Registry definition order should match legacy TOOL_DEFS order');
 assert.deepStrictEqual([...descriptorNames].sort(), [...new Set([...legacyToolNames, ...extractedNames])].sort(), 'Registry names should match legacy handlers plus extracted descriptors');
-assert.strictEqual(descriptors.length, 103, 'Built-in tool count should remain at the current-main baseline');
+// Baseline moves only when a tool is deliberately added or removed.
+// Capability Packs v1 added `capability` (pack lifecycle) and `workflow`
+// (workflow definition registry + runner): 103 -> 105.
+assert.strictEqual(descriptors.length, 105, 'Built-in tool count should remain at the current-main baseline');
 
 for (const descriptor of descriptors) {
   assert.strictEqual(typeof descriptor.name, 'string', `${descriptor.name} should have a name`);

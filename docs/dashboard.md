@@ -4,7 +4,7 @@ The dashboard is implemented in `src/dashboard.js` and defaults to port 4098. It
 
 ## Main UI areas
 
-The dashboard frontend is split across `src/dashboard.html`, `static/dashboard.css`, and `static/dashboard.js`. `src/dashboard.js` serves the private HTML shell from the authenticated root route and serves only CSS/JS/font assets through `/static`. The UI is organized around tabs for Mission Control, system status, activity, data, database, configuration, agent tasks, memory, tools, and metrics.
+The dashboard frontend is split across `src/dashboard.html`, `static/dashboard.css`, and `static/dashboard.js`. `src/dashboard.js` serves the private HTML shell from the authenticated root route and serves only CSS/JS/font assets through `/static`. The UI is organized around tabs for Mission Control, system status, activity, data, database, configuration, agent tasks, memory, tools, capabilities, and metrics.
 
 Typical dashboard functions:
 
@@ -14,6 +14,7 @@ Typical dashboard functions:
 - inspect and manage structured memories;
 - view system statistics;
 - inspect configured tools;
+- manage capability packs (install, configure, enable, disable, upgrade, uninstall, health);
 - submit autonomous agent tasks;
 - stream agent progress;
 - view task history;
@@ -43,6 +44,52 @@ If the dashboard is exposed outside a private network, put it behind a reverse p
 ## Tool catalog
 
 `GET /api/tools` returns tool metadata for the dashboard, including risk classification and whether the active dashboard policy enables each tool. The Tools tab displays that policy state alongside search, category filtering, and argument details.
+
+## Capabilities
+
+The Capabilities tab is the operator surface for capability packs
+(`docs/capability-packs.md`). It shows:
+
+- **Installed packs** — name, display name, version, publisher, provenance
+  (first-party/third-party), whether the pack is bundled, lifecycle state,
+  derived health, and the modules, tools, workflows and knowledge assets the
+  pack contributes. Actions: Details, Health Check, Enable, Disable, Upgrade,
+  Uninstall.
+- **Available bundled packs** — first-party packs shipped with this release
+  that are not installed, with Inspect and Install. An incompatible pack shows
+  the Sidekick range it requires and its Install button is disabled.
+- **Local package inspection/installation** — a server-local path can be
+  inspected or installed. Paths resolve on the Sidekick server; the browser
+  cannot browse server files, and there is no remote marketplace in v1.
+
+Endpoints:
+
+| Route | Purpose |
+|---|---|
+| `GET /api/capabilities` | installed packs plus available bundled packs |
+| `GET /api/capabilities/:name` | full pack description |
+| `GET /api/capabilities/:name/health` | derived component health |
+| `GET /api/capabilities/:name/workflows` | the pack's workflow definitions |
+| `POST /api/capabilities/inspect` | inspect a bundled pack or server-local path |
+| `POST /api/capabilities/install` | install a bundled pack or server-local path |
+| `POST /api/capabilities/:name/configure` | validate and persist configuration |
+| `POST /api/capabilities/:name/enable` | activate owned components |
+| `POST /api/capabilities/:name/disable` | withdraw active capabilities |
+| `POST /api/capabilities/:name/upgrade` | upgrade from a bundled or local package |
+| `POST /api/capabilities/:name/uninstall` | remove the pack |
+
+**Every mutation dispatches the governed `capability` tool server-side**
+through `callDashboardTool`, so pack operations carry the same policy,
+approval, redaction and audit path as an MCP call. Browser code never mutates
+pack state directly. The dashboard's existing Basic Auth/session cookie, IP
+allowlist, rate limiting and Origin-based CSRF checks all apply, and each
+mutation is written to the dashboard audit log. Failures are surfaced verbatim:
+incompatible version, bad package, hash mismatch, invalid entry point, missing
+dependency, invalid configuration, descriptor collision, module load failure,
+unhealthy component and restart requirement each report their own reason.
+
+Installing or enabling a pack activates executable module code inside the
+Sidekick process; the page says so, and destructive actions confirm first.
 
 ## Mission Control Quick Actions
 

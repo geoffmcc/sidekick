@@ -39,7 +39,9 @@ Beyond the core tables, later migrations add feature-owned table groups (each do
 - Platform kernel: `platform_executions`, `platform_execution_events`, `platform_artifacts`, `platform_execution_transitions` (011), workflows/runners/workspaces/models/extensions/backups/releases (026), project projection and workspace secrets (027), execution claims (028), event delivery (030), connectors (031). Several of these groups are implemented foundations without production callers yet; `platform-convergence-audit.md` tracks which.
 - Sidekick Compute: `compute_providers`, `compute_models`, `compute_workers`, `compute_enrollment_tokens`, `compute_jobs`, `compute_job_attempts`, `compute_artifacts`, `compute_routing_rules`, `compute_benchmarks`, `compute_metrics` — migrations 013–024; see `compute.md`.
 - Durable approval continuation: `approvals`, `task_checkpoints`, `task_step_results` — migration 025; see `adr-approval-continuation.md`.
-- Platform modules: `platform_modules` — migration 029; see `module-system-design.md`.
+- Platform modules: `platform_modules` — migration 029, extended by 036 with `install_path`, `package_hash` and `provenance_json` for the third-party module lifecycle; see `module-system-design.md`. Managed module packages live on disk under `<SIDEKICK_DATA_DIR>/modules/<name>/<version>/`, not in the database.
+- Capability packs: `platform_capability_packs` (identity, version, publisher, provenance, lifecycle state, manifest, configuration, package hash, install path, health) and `platform_capability_pack_components` (which pack owns which module/workflow/knowledge component) — migration 036; see `capability-packs.md`. Managed pack packages live under `<SIDEKICK_DATA_DIR>/packs/<name>/<version>/`.
+- Workflow definitions: `platform_workflow_definitions` — migration 036. Reusable workflow DEFINITIONS with owner, mode, steps and checksum. Workflow EXECUTION state stays in `platform_workflows` / `platform_workflow_steps` and the execution ledger; the definition registry does not duplicate it.
 - Security-research record foundations — migrations 032–035; see `security-research-capability.md`.
 
 ## KV store (SQLite)

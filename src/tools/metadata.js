@@ -113,6 +113,12 @@ const TOOL_RISK = {
   metrics: "low",
   module: "high",
   project_registry: "high",
+  // Installing or enabling a capability pack activates third-party executable
+  // module code inside the Sidekick process; that is a critical operation.
+  capability: "critical",
+  // A workflow run dispatches governed tool calls; each step's own tool risk
+  // still applies on top of this at dispatch time.
+  workflow: "high",
 };
 
 const TOOL_CATEGORIES = {
@@ -218,6 +224,8 @@ const TOOL_CATEGORIES = {
   'metrics': 'Monitoring',
   'module': 'Services',
   'project_registry': 'Storage',
+  'capability': 'Services',
+  'workflow': 'Services',
   'compute': 'Compute',
   'compute_nodes': 'Compute',
   'compute_providers': 'Compute',

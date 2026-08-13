@@ -269,6 +269,7 @@ function showPage(name){
   if (name === 'config') loadConfig();
   if (name === 'approvals') { loadApprovals(); loadReconciliations(); }
   if (name === 'tools') loadTools();
+  if (name === 'capabilities') loadCapabilities();
   if (name === 'evolve') loadEvolve();
   if (name === 'compute') loadCompute();
   if (name === 'predict') { loadPredictStatus(); loadPredict(); }
@@ -3778,3 +3779,215 @@ fetchToolCategories().then(() => {
   }
 });
 setInterval(refresh, 10000);
+
+// --- Capabilities (capability packs) ---------------------------------------
+//
+// Read-only rendering plus action buttons. Every mutation is a POST to the
+// dashboard API, which dispatches the governed `capability` tool server-side;
+// nothing here mutates pack state directly.
+
+const CAP_HEALTH_CLASS = {
+  healthy: 'ok',
+  disabled: 'warn',
+  degraded: 'warn',
+  restart_required: 'warn',
+  configuration_required: 'warn',
+  incompatible: 'err',
+  integrity_failure: 'err',
+  component_failure: 'err',
+};
+
+function capPill(status) {
+  const cls = CAP_HEALTH_CLASS[status] || 'warn';
+  return '<span class="metrics-status-pill ' + cls + '">' + esc(status || 'unknown') + '</span>';
+}
+
+function capError(message) {
+  const el = $('capError');
+  if (!el) return;
+  el.innerHTML = message
+    ? '<div class="card" style="padding:10px;border-color:#f85149;color:#f85149">' + esc(message) + '</div>'
+    : '';
+}
+
+async function loadCapabilities() {
+  capError('');
+  try {
+    const res = await authFetch('/api/capabilities');
+    const data = await res.json();
+    if (!data.ok) { capError(data.error || 'Failed to load capability packs'); return; }
+    renderInstalledCapabilities(data.installed || []);
+    renderAvailableCapabilities(data.available_bundled || []);
+    $('capCount').textContent = (data.installed || []).length;
+  } catch (error) {
+    capError(error.message);
+  }
+}
+
+function renderInstalledCapabilities(packs) {
+  const el = $('capInstalled');
+  if (!packs.length) {
+    el.innerHTML = '<div class="sub">No capability packs installed.</div>';
+    return;
+  }
+  el.innerHTML = packs.map(pack => {
+    const actions = [];
+    actions.push('<button class="btn btn-sm" onclick="capabilityDetail(' + jsArg(pack.name) + ')"><i class="fas fa-circle-info"></i> Details</button>');
+    actions.push('<button class="btn btn-sm" onclick="capabilityHealth(' + jsArg(pack.name) + ')"><i class="fas fa-stethoscope"></i> Health Check</button>');
+    if (pack.enabled) {
+      actions.push('<button class="btn btn-sm btn-outline" onclick="capabilityAction(' + jsArg(pack.name) + ',\'disable\')"><i class="fas fa-pause"></i> Disable</button>');
+    } else {
+      actions.push('<button class="btn btn-sm" onclick="capabilityAction(' + jsArg(pack.name) + ',\'enable\')"><i class="fas fa-play"></i> Enable</button>');
+    }
+    actions.push('<button class="btn btn-sm btn-outline" onclick="capabilityUpgrade(' + jsArg(pack.name) + ')"><i class="fas fa-arrow-up"></i> Upgrade</button>');
+    actions.push('<button class="btn btn-sm btn-outline" onclick="capabilityUninstall(' + jsArg(pack.name) + ')"><i class="fas fa-trash"></i> Uninstall</button>');
+
+    return '<div class="card" style="padding:12px;margin-bottom:10px">'
+      + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">'
+      + '<div>'
+      + '<div style="font-weight:600">' + esc(pack.display_name || pack.name) + ' <span class="sub">v' + esc(pack.version) + '</span></div>'
+      + '<div class="sub">' + esc(pack.name) + ' &middot; ' + esc(pack.publisher || 'unknown publisher') + ' &middot; '
+      + esc(pack.provenance === 'first_party' ? 'first-party' : 'third-party')
+      + (pack.bundled ? ' &middot; bundled' : '') + '</div>'
+      + '</div>'
+      + '<div>' + capPill(pack.health) + ' <span class="metrics-status-pill ' + (pack.enabled ? 'ok' : 'warn') + '">' + esc(pack.state) + '</span></div>'
+      + '</div>'
+      + '<div class="sub" style="margin-top:8px">'
+      + 'Modules: ' + (pack.modules.length ? esc(pack.modules.join(', ')) : 'none')
+      + ' &middot; Tools: ' + (pack.tools.length ? esc(pack.tools.join(', ')) : 'none')
+      + ' &middot; Workflows: ' + pack.workflows.length
+      + ' &middot; Knowledge: ' + pack.knowledge
+      + '</div>'
+      + '<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">' + actions.join('') + '</div>'
+      + '<pre id="capDetail-' + attr(pack.name) + '" style="display:none;margin-top:10px;max-height:420px;overflow:auto"></pre>'
+      + '</div>';
+  }).join('');
+}
+
+function renderAvailableCapabilities(packs) {
+  const el = $('capAvailable');
+  if (!packs.length) {
+    el.innerHTML = '<div class="sub">No uninstalled bundled packs.</div>';
+    return;
+  }
+  el.innerHTML = packs.map(pack => {
+    if (pack.error) {
+      return '<div class="card" style="padding:12px;margin-bottom:10px;border-color:#f85149">'
+        + '<div style="font-weight:600">' + esc(pack.name) + '</div>'
+        + '<div class="sub" style="color:#f85149">Invalid bundled pack: ' + esc(pack.error) + '</div></div>';
+    }
+    const blocked = !pack.compatible;
+    return '<div class="card" style="padding:12px;margin-bottom:10px">'
+      + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">'
+      + '<div>'
+      + '<div style="font-weight:600">' + esc(pack.display_name || pack.name) + ' <span class="sub">v' + esc(pack.version) + '</span></div>'
+      + '<div class="sub">' + esc(pack.description || '') + '</div>'
+      + '<div class="sub">' + esc(pack.publisher || '') + ' &middot; first-party &middot; bundled &middot; '
+      + pack.modules.length + ' module(s), ' + pack.workflows + ' workflow(s), ' + pack.knowledge + ' knowledge asset(s)</div>'
+      + (blocked ? '<div class="sub" style="color:#f85149">Incompatible: requires Sidekick ' + esc(pack.requires_sidekick || '') + '</div>' : '')
+      + '</div>'
+      + '<div style="display:flex;gap:6px;flex-wrap:wrap">'
+      + '<button class="btn btn-sm btn-outline" onclick="inspectBundledCapability(' + jsArg(pack.name) + ')"><i class="fas fa-magnifying-glass"></i> Inspect</button>'
+      + '<button class="btn btn-sm" ' + (blocked ? 'disabled' : '') + ' onclick="installBundledCapability(' + jsArg(pack.name) + ')"><i class="fas fa-download"></i> Install</button>'
+      + '</div>'
+      + '</div></div>';
+  }).join('');
+}
+
+async function capabilityPost(url, body, label) {
+  capError('');
+  try {
+    const res = await authFetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      capError((label ? label + ': ' : '') + (data.error || 'operation failed'));
+      return null;
+    }
+    await loadCapabilities();
+    return data;
+  } catch (error) {
+    capError(error.message);
+    return null;
+  }
+}
+
+function capabilityAction(name, action) {
+  return capabilityPost('/api/capabilities/' + encodeURIComponent(name) + '/' + action, {}, action);
+}
+
+async function capabilityDetail(name) {
+  const el = $('capDetail-' + name);
+  if (!el) return;
+  if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+  const res = await authFetch('/api/capabilities/' + encodeURIComponent(name));
+  const data = await res.json();
+  el.textContent = JSON.stringify(data.pack || data, null, 2);
+  el.style.display = 'block';
+}
+
+async function capabilityHealth(name) {
+  const el = $('capDetail-' + name);
+  const res = await authFetch('/api/capabilities/' + encodeURIComponent(name) + '/health');
+  const data = await res.json();
+  if (el) {
+    el.textContent = JSON.stringify(data.health || data, null, 2);
+    el.style.display = 'block';
+  }
+  loadCapabilities();
+}
+
+function capabilityUpgrade(name) {
+  const path = prompt('Server-local path of the upgrade package (leave blank to upgrade from the bundled release copy):', '');
+  if (path === null) return;
+  return capabilityPost('/api/capabilities/' + encodeURIComponent(name) + '/upgrade', path ? { path } : {}, 'upgrade');
+}
+
+function capabilityUninstall(name) {
+  if (!confirm('Uninstall capability pack "' + name + '"?\n\nThis removes its modules, workflow definitions, knowledge entries and managed package files. Historical execution and audit records are preserved.')) return;
+  return capabilityPost('/api/capabilities/' + encodeURIComponent(name) + '/uninstall', {}, 'uninstall');
+}
+
+function installBundledCapability(name) {
+  if (!confirm('Install capability pack "' + name + '"?\n\nIts modules become executable code inside Sidekick once enabled.')) return;
+  return capabilityPost('/api/capabilities/install', { name, enable: false }, 'install');
+}
+
+async function inspectBundledCapability(name) {
+  await showCapabilityInspection({ name });
+}
+
+async function inspectLocalCapability() {
+  const path = $('capLocalPath').value.trim();
+  if (!path) { capError('Enter a server-local package path to inspect.'); return; }
+  await showCapabilityInspection({ path });
+}
+
+async function installLocalCapability() {
+  const path = $('capLocalPath').value.trim();
+  if (!path) { capError('Enter a server-local package path to install.'); return; }
+  if (!confirm('Install the capability pack at "' + path + '"?\n\nThird-party pack modules run as trusted executable code inside the Sidekick process once enabled.')) return;
+  await capabilityPost('/api/capabilities/install', { path, enable: false }, 'install');
+}
+
+async function showCapabilityInspection(body) {
+  capError('');
+  const el = $('capInspect');
+  try {
+    const res = await authFetch('/api/capabilities/inspect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!data.ok) { capError(data.error || 'inspection failed'); el.style.display = 'none'; return; }
+    el.textContent = JSON.stringify(data.inspection, null, 2);
+    el.style.display = 'block';
+  } catch (error) {
+    capError(error.message);
+    el.style.display = 'none';
+  }
+}

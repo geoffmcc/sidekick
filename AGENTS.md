@@ -79,6 +79,38 @@ knowledge action="get" id=18
 knowledge action="list" 
 ```
 
+### Capability Packs
+
+Sidekick capabilities can be extended with **capability packs** — installable
+areas of competence composed from modules, workflow definitions, knowledge and
+configuration. Use `capability action="list"` to see what is installed and
+`capability action="available"` for bundled packs that are not.
+
+Pack-contributed tools are ordinary Sidekick tools: they appear in `tools
+action="overview"` and in the `tools` table, and they dispatch through the same
+policy/approval/audit path as everything else. Pack knowledge is ordinary
+knowledge: `knowledge action="search"` finds it.
+
+Pack workflows are runnable through the `workflow` tool:
+
+```text
+workflow action="list"
+workflow action="show" name="developer/repository-recon"
+workflow action="run"  name="developer/repository-recon" inputs={"path": "/srv/repo"}
+```
+
+The bundled **Developer / Software Engineering** pack adds `dev_repo_profile`,
+`dev_change_summary` and `dev_verify`, plus seven engineering workflows. When
+working on a software repository, prefer `dev_repo_profile` over ad hoc
+inspection: it returns mechanically-derived facts (branch, HEAD, working tree,
+ecosystems, package managers, scripts, CI, migrations, instruction files, and
+the verification commands the project itself defines) with the evidence for
+each. Repository-specific instructions such as `AGENTS.md` in that repository
+remain authoritative.
+
+`capability` is critical-risk: installing or enabling a pack activates
+executable module code inside the Sidekick process.
+
 ### Available Categories
 
 - **best-practices** — Interaction policies, debugging, tool selection, token efficiency

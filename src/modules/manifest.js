@@ -68,11 +68,19 @@ const MIGRATION_SCHEMA = z.object({
   sql: z.string().min(1),
 });
 
+const ENTRY_POINT_RE = /^[A-Za-z0-9_.][A-Za-z0-9_./-]*$/;
+
 const manifestSchema = z.object({
   name: z.string().regex(MODULE_NAME_RE),
   version: z.string(),
   sidekick: z.string().optional(),
   description: z.string().min(1),
+  // Operator-facing label. Identity stays `name`; this only affects display.
+  displayName: z.string().min(1).optional().nullable(),
+  // Declared entry file, relative to the package root. Traversal and absolute
+  // paths are refused here as well as at resolution time (defence in depth:
+  // this is the value that decides which file Sidekick will require).
+  entryPoint: z.string().regex(ENTRY_POINT_RE).optional().nullable(),
   author: z.string().optional().nullable(),
   type: z.enum(MODULE_TYPES).default("plugin"),
   dependencies: z.array(z.string().regex(MODULE_NAME_RE)).default([]),
@@ -191,6 +199,9 @@ function normalizeManifest(input) {
   }
   if (parsed.data.sidekick && !/^(>=|<=|>|<|\^|~|[0-9*])/.test(parsed.data.sidekick)) {
     throw new Error(`Invalid sidekick compatibility range: ${parsed.data.sidekick}`);
+  }
+  if (parsed.data.entryPoint && parsed.data.entryPoint.split("/").includes("..")) {
+    throw new Error(`Invalid module entry point: ${parsed.data.entryPoint}`);
   }
   for (const name of Object.keys(parsed.data.tools)) {
     const canonical = stripSidekickPrefix(name);

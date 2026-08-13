@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "name": "developer/issue-investigation",
+  "version": "1.0.0",
+  "title": "Issue Investigation",
+  "description": "Investigate a GitHub issue or a locally described bug and produce evidence-backed findings. Read-only: never modifies source. Maps issue language to code areas, inspects the implicated source and history, and records a durable investigation handoff.",
+  "mode": "read_only",
+  "tags": ["developer", "investigation", "read-only"],
+  "inputs": {
+    "path": { "type": "string", "required": true, "description": "Repository path" },
+    "symptom": { "type": "string", "required": true, "description": "The reported symptom, error text, or issue title to investigate" },
+    "search_term": { "type": "string", "required": false, "description": "Explicit code search term; defaults to the symptom text" },
+    "include": { "type": "string", "required": false, "description": "Restrict the code search to files matching this glob (e.g. *.js)" },
+    "repo": { "type": "string", "required": false, "description": "GitHub owner/repository for optional issue enrichment" },
+    "project": { "type": "string", "required": false, "description": "Canonical Sidekick project name for the handoff" },
+    "record_handoff": { "type": "boolean", "required": false, "default": true }
+  },
+  "steps": [
+    {
+      "name": "profile",
+      "title": "Establish repository context",
+      "tool": "dev_repo_profile",
+      "args": { "path": "${inputs.path}" },
+      "expect": "json",
+      "on_error": "fail"
+    },
+    {
+      "name": "issues",
+      "title": "Retrieve GitHub issue context",
+      "tool": "github",
+      "args": { "action": "issue_list", "repo": "${inputs.repo}" },
+      "when": "${inputs.repo}",
+      "expect": "text",
+      "on_error": "continue"
+    },
+    {
+      "name": "code_search",
+      "title": "Map the symptom to code areas",
+      "tool": "search",
+      "args": { "pattern": "${inputs.search_term}", "path": "${inputs.path}", "include": "${inputs.include}" },
+      "expect": "text",
+      "on_error": "continue"
+    },
+    {
+      "name": "symptom_search",
+      "title": "Search for the reported symptom text",
+      "tool": "search",
+      "args": { "pattern": "${inputs.symptom}", "path": "${inputs.path}", "include": "${inputs.include}" },
+      "expect": "text",
+      "on_error": "continue"
+    },
+    {
+      "name": "recent_changes",
+      "title": "Inspect recent history for regressions",
+      "tool": "git",
+      "args": { "action": "log", "path": "${inputs.path}", "args": "-30 --pretty=format:%h|%ad|%an|%s --date=short" },
+      "expect": "text",
+      "on_error": "continue"
+    },
+    {
+      "name": "working_tree",
+      "title": "Confirm the working tree state at investigation time",
+      "tool": "git",
+      "args": { "action": "status", "path": "${inputs.path}", "args": "--porcelain=v1 -b" },
+      "expect": "text",
+      "on_error": "continue"
+    },
+    {
+      "name": "handoff",
+      "title": "Record a durable investigation handoff",
+      "tool": "handoff",
+      "args": {
+        "action": "create",
+        "project": "${inputs.project}",
+        "title": "Issue investigation: ${inputs.symptom}",
+        "source": "developer/issue-investigation",
+        "content": "Repository: ${inputs.path}\nBranch: ${steps.profile.json.repository.branch}\nHEAD: ${steps.profile.json.repository.head.sha}\nSymptom: ${inputs.symptom}\n\nCode search matches:\n${steps.code_search.text}\n\nSymptom text matches:\n${steps.symptom_search.text}\n\nRecent history:\n${steps.recent_changes.text}\n\nWorking tree:\n${steps.working_tree.text}\n\nNOTE: this workflow is read-only. It collects evidence and does not modify source; implementation requires developer/implement-change."
+      },
+      "when": "${inputs.record_handoff}",
+      "expect": "text",
+      "on_error": "continue"
+    }
+  ],
+  "result": {
+    "repository": "${steps.profile.json.repository}",
+    "symptom": "${inputs.symptom}",
+    "candidate_locations": "${steps.code_search.text}",
+    "symptom_matches": "${steps.symptom_search.text}",
+    "recent_history": "${steps.recent_changes.text}",
+    "working_tree": "${steps.working_tree.text}",
+    "github_issue_context": "${steps.issues.text}",
+    "handoff_recorded": "${steps.handoff.ok}"
+  }
+}

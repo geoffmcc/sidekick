@@ -44,7 +44,8 @@ console.log('Running Filesystem Family Tests...');
       assert.strictEqual(legacy.TOOLS[name], undefined);
       assert.ok(!Object.prototype.hasOwnProperty.call(require('../src/tools/schemas').TOOL_SCHEMAS, name));
     }
-    assert.strictEqual(registry.listInDefinitionOrder().length, 103);
+    // Capability Packs v1 added `capability` and `workflow`: 103 -> 105.
+    assert.strictEqual(registry.listInDefinitionOrder().length, 105);
     assert.deepStrictEqual(registry.listInDefinitionOrder().map(d => d.name), legacy.TOOL_DEFS.map(d => d.name));
     assert.strictEqual(family.descriptors.length, names.length);
 

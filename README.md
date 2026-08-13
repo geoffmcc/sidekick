@@ -312,12 +312,12 @@ All tools are exposed via the MCP server at `http://YOUR_REMOTE_IP:4097/mcp`.
 
 ### Tool Categories
 
-The 108 built-in tools are organized into 20 categories. 102 live in the core registry; the six Data Pipeline utilities (`parse`, `extract`, `transform`, `diff`, `validate`, `template`) are provided by the bundled `data-utilities` module, the first-party proof of the module system:
+The built-in tools are organized into 20 categories. 105 live in the core registry; the six Data Pipeline utilities (`parse`, `extract`, `transform`, `diff`, `validate`, `template`) are provided by the bundled `data-utilities` module. Installing a capability pack adds its own tools to the same registry — the Developer pack adds `dev_repo_profile`, `dev_change_summary` and `dev_verify`:
 - **Core** — bash, tools, read, write, list, search, web_fetch, llm, respond
 - **Storage** — store, get, delete, resume, list_projects, get_by_project, redis
 - **Database** — db_schema, db_query, db_stats, db_backup, db_restore, db_export, log_query, db_search, db_migrate, db_diff, analytics
 - **Git & GitHub** — git, github, ci_status
-- **Services** — process, service, module
+- **Services** — process, service, module, capability, workflow
 - **Scheduling** — cron, delay
 - **Communication** — notify, webhook
 - **Context & Learning** — context, session, handoff, memory, teach, embed, ollama, memory_export, memory_import, memory_manage, sync_identity, sync_export, sync_import, sync_diff, knowledge
@@ -333,6 +333,40 @@ The 108 built-in tools are organized into 20 categories. 102 live in the core re
 - **Archive** — archive
 - **Media** — ocr, media, transcribe, download
 - **Compute** — compute, compute_nodes, compute_providers, compute_models, compute_jobs, compute_route
+
+### Capability Packs
+
+Sidekick Core does not have to absorb every future area of functionality. A
+**capability pack** is an installable *area of competence* — modules, workflow
+definitions, knowledge assets and configuration — installed, enabled,
+configured, upgraded and uninstalled through one lifecycle:
+
+```
+capability action="available"                    # bundled packs you can install
+capability action="install"   name="developer"
+capability action="enable"    name="developer"
+capability action="health"    name="developer"
+workflow   action="run" name="developer/repository-recon" inputs={ "path": "/srv/repo" }
+```
+
+or Dashboard → **Capabilities**.
+
+Packs compose the subsystems Sidekick already has: pack tools are normal
+descriptors in the one registry with the one dispatcher, pack modules install
+through the module lifecycle, pack workflows register in the workflow
+definition registry, and pack knowledge lands in the ordinary knowledge base.
+There is no second plugin runtime and no remote marketplace.
+
+The bundled first-party **Developer / Software Engineering** pack adds
+structured repository profiling, change-set impact analysis, governed project
+verification, and seven runnable engineering workflows. See
+[`docs/capability-packs.md`](docs/capability-packs.md) and
+[`docs/developer-pack.md`](docs/developer-pack.md).
+
+> Installing or enabling a pack activates executable module code inside the
+> Sidekick process. Inspection never executes package code, and every installed
+> package is integrity-verified before it loads — but there is no sandbox.
+> Treat installing a third-party pack as equivalent to deploying code.
 
 ### Black Box Incident Explorer
 
@@ -352,12 +386,16 @@ ORDER BY tc.sort_order, t.name
 
 To avoid confusion, it's important to understand what each component is:
 
-- **Sidekick** = The self-hosted agent platform: 108 built-in MCP tools + persistent memory + knowledge base + Dashboard + Agent Bridge + metrics + approved generated capabilities + Sidekick Compute
+- **Sidekick** = The self-hosted agent platform: 105 built-in MCP tools (plus module- and pack-contributed tools) + persistent memory + knowledge base + Dashboard + Agent Bridge + metrics + approved generated capabilities + Sidekick Compute + capability packs
 - **The assistant or agent** = Any compatible MCP client, coding assistant, or automation agent that uses Sidekick's platform
 - **Tool runtime** = The descriptor registry and dispatcher that validate, authorize, approve, execute, redact, and audit tool calls across MCP, dashboard, agent, scheduler, and generated-tool paths
 - **Agent Bridge** = Sidekick's autonomous task runner, accessed through the Dashboard and API
 - **Knowledge Base** = Structured documentation stored in SQLite, searchable via `knowledge`
 - **Sidekick Compute** = The allowlisted worker/provider/model/job system for distributed inference workloads
+- **Module** = A runtime implementation contributed to Sidekick: code that builds tool descriptors and reports health, managed through a full install/configure/enable/upgrade/uninstall lifecycle
+- **Workflow** = A durable, reusable multi-step execution defined as data and run through the tool dispatcher, with checkpoints, project identity, cancellation and approval continuation
+- **Capability Pack** = An installable *area of competence* composed from modules, workflows, knowledge and configuration. The Developer / Software Engineering pack ships bundled. See `docs/capability-packs.md`.
+- **Connector** = A managed relationship with an external service or system. **Future work** (roadmap slice B7); the framework exists but no real provider is wired.
 - **Metrics System** = InfluxDB + Grafana for system health, tool usage, and service monitoring
 
 When a connected client calls Sidekick tools, the work executes through Sidekick on the remote machine. The assistant or agent chooses the operation; Sidekick supplies and governs the capability.
@@ -370,7 +408,8 @@ The Knowledge Base replaces the need for large markdown files. Instead of re-rea
 - Sidekick Compute accepts only versioned, allowlisted model workloads; it is not arbitrary worker-side command execution.
 - Evolve does not silently activate free-form code. Generated capabilities must pass validation and approval before trial or active exposure.
 - The Agent Bridge acts only on submitted tasks, schedules, or watches and remains bounded by tool policy, approvals, iteration limits, and the same dispatcher used by other execution paths.
-- The module system's full lifecycle (discovery, packaging, installation, configuration, health, recovery) is implemented, but only the bundled first-party `data-utilities` module exercises it today; there is no third-party module ecosystem yet.
+- The module system's full lifecycle is implemented for first-party AND third-party modules: safe package inspection, a managed module store, verified entry-point loading with whole-package integrity, install/configure/enable/disable/upgrade/uninstall, and a derived health model. **Installed module code is trusted executable code running in-process with Sidekick's privileges — there is no sandbox and none is claimed.** The controls are integrity, provenance and lifecycle, not isolation. Treat installing a third-party pack as equivalent to deploying code.
+- Capability packs compose existing subsystems; they are not a second plugin runtime, dispatcher or workflow engine. There is no remote marketplace: packs are installed from the bundled release copy or from an approved server-local path.
 - Handler extraction out of `src/tools-legacy.js` is complete (zero production handlers remain there); the remaining platform convergence work is tracked in `docs/platform-roadmap.md`.
 
 ## Security
@@ -385,6 +424,8 @@ The Knowledge Base replaces the need for large markdown files. Instead of re-rea
 | **Data Redaction** | All tool outputs automatically redact SSH keys, GitHub tokens, API keys, passwords, database URLs, etc. |
 
 The dashboard auth and IP whitelist are disabled by default (empty env var = no restriction). Set them in `.env` before exposing to the internet. For shared or public-facing deployments, set `SIDEKICK_TOOL_POLICY=restricted` and explicitly allow only the high-risk tools your workflow needs.
+
+**Capability Tool Warning:** `capability` is critical-risk because installing or enabling a capability pack activates executable module code inside the Sidekick process. Inspection is safe and never executes package code, but installation and enablement are deployments. Packages are refused for path traversal, symlinks, escaping entry points, descriptor collisions, built-in tool shadowing and packaged secrets, and every installed package is integrity-verified before it loads — but none of that is a sandbox. For shared or public-facing deployments, set `SIDEKICK_TOOL_POLICY=restricted` and require approval for `capability`.
 
 **Evolve Tool Warning:** `evolve` is critical-risk because it can approve and expose generated workflow tools. It does not treat free-text proposals as callable tools and generated capabilities must pass validation before trial activation. For shared or public-facing deployments, set `SIDEKICK_TOOL_POLICY=restricted` and require approval for `evolve` and high-risk generated tools.
 
@@ -402,7 +443,8 @@ Open `http://YOUR_REMOTE_IP:4098/` in a browser.
 - **Config** — environment variables (sensitive values redacted)
 - **Agent** — submit tasks for the AI agent to execute autonomously
 - **Approvals** — review, approve, or reject queued risky actions when approval mode is enabled
-- **Tools** — browsable catalog of all 108 built-in tools plus approved generated tools, with search, category filtering, policy status, risk labels, and detailed argument info
+- **Tools** — browsable catalog of built-in tools plus module-, pack- and approved generated tools, with search, category filtering, policy status, risk labels, and detailed argument info
+- **Capabilities** — installed capability packs with version, publisher, provenance (first-party/third-party, bundled), state, health, integrity and configuration validity, plus contributed modules, tools, workflows and knowledge; available bundled packs; and inspection/installation from an approved server-local path. Actions: Details, Health Check, Enable, Disable, Upgrade, Uninstall. Every mutation dispatches the governed `capability` tool server-side.
 - **Compute** — enrolled workers, providers, models, routing, jobs, artifacts, cancellation, retry, and lease recovery
 - **Metrics** — embedded Grafana dashboards for system health, tool analytics, database performance, Docker containers, and Ollama metrics
 
@@ -689,8 +731,13 @@ This follows the principle of least privilege: after initial setup, the sidekick
 │   │   └── families/       Descriptor-owned tool families (all built-in handlers)
 │   ├── tools-legacy.js     Tool policy/approval/audit engine, TOOL_DEFS ordering anchors,
 │   │                       and compatibility re-exports (owns zero tool handlers)
-│   ├── modules/            Module lifecycle: manifest, discovery, install, activation,
+│   ├── modules/            Module lifecycle: manifest, discovery, packaging, managed store,
+│   │                       verified entry loading, install/configure/enable/upgrade/uninstall,
 │   │                       permissions, migrations, health (bundled: data-utilities)
+│   ├── packs/              Capability-pack lifecycle: manifest, packaging, managed store,
+│   │                       ownership, install/enable/upgrade/uninstall, derived health
+│   ├── workflows/          Workflow definition registry, reference contract, and the runner
+│   │                       over the kernel's execution primitives
 │   ├── approvals/          Durable task-originated approval continuation (ADR stack)
 │   ├── brain/              Feature-flagged bounded planner over the Agent Bridge (default off)
 │   ├── compute/            Worker, provider, model, job, routing, lease, and artifact system
@@ -706,6 +753,9 @@ This follows the principle of least privilege: after initial setup, the sidekick
 │   ├── redis.js            Redis client for caching
 │   ├── qdrant.js           Qdrant vector DB client for semantic search
 │   └── crypto-utils.js     Timing-safe comparison helpers
+├── packs/
+│   └── developer/      Bundled first-party Developer / Software Engineering capability pack
+│                       (developer-tools module, 7 workflows, 8 knowledge assets)
 ├── scripts/
 │   ├── bootstrap.sh    VM bootstrap script (creates user, installs Node.js, etc.)
 │   ├── setup-tools.sh  Server tooling setup (Docker, databases, media tools, etc.)

@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "name": "developer/implement-change",
+  "version": "1.0.0",
+  "title": "Implement Change",
+  "description": "Take a bounded software change through verification and review evidence. Establishes context, inspects the working tree, runs the project's own verification, inspects the final diff, produces a structured impact summary, and records a durable handoff. It deliberately does NOT commit, push, merge, publish or release.",
+  "mode": "mutating",
+  "tags": ["developer", "implementation"],
+  "inputs": {
+    "path": { "type": "string", "required": true, "description": "Repository path" },
+    "summary": { "type": "string", "required": true, "description": "What the bounded change is meant to accomplish" },
+    "project": { "type": "string", "required": false, "description": "Canonical Sidekick project name for the handoff" },
+    "base": { "type": "string", "required": false, "description": "Base ref for the final diff; omit to use working-tree changes" },
+    "verification_mode": { "type": "string", "required": false, "default": "standard", "enum": ["quick", "standard", "full"] },
+    "record_handoff": { "type": "boolean", "required": false, "default": true }
+  },
+  "steps": [
+    {
+      "name": "profile",
+      "title": "Establish repository and verification context",
+      "tool": "dev_repo_profile",
+      "args": { "path": "${inputs.path}" },
+      "expect": "json",
+      "on_error": "fail"
+    },
+    {
+      "name": "working_tree",
+      "title": "Inspect the working tree before verification",
+      "tool": "git",
+      "args": { "action": "status", "path": "${inputs.path}", "args": "--porcelain=v1 -b" },
+      "expect": "text",
+      "on_error": "fail"
+    },
+    {
+      "name": "verify",
+      "title": "Run the project's own verification",
+      "tool": "dev_verify",
+      "args": { "path": "${inputs.path}", "mode": "${inputs.verification_mode}", "continue_on_failure": true },
+      "expect": "json",
+      "on_error": "continue"
+    },
+    {
+      "name": "final_diff",
+      "title": "Inspect the final diff",
+      "tool": "git",
+      "args": { "action": "diff", "path": "${inputs.path}", "args": "--stat" },
+      "expect": "text",
+      "on_error": "continue"
+    },
+    {
+      "name": "impact",
+      "title": "Summarize engineering impact",
+      "tool": "dev_change_summary",
+      "args": { "path": "${inputs.path}", "base": "${inputs.base}" },
+      "expect": "json",
+      "on_error": "continue"
+    },
+    {
+      "name": "handoff",
+      "title": "Record a durable implementation handoff",
+      "tool": "handoff",
+      "args": {
+        "action": "create",
+        "project": "${inputs.project}",
+        "title": "Implementation: ${inputs.summary}",
+        "source": "developer/implement-change",
+        "content": "Repository: ${inputs.path}\nBranch: ${steps.profile.json.repository.branch}\nHEAD: ${steps.profile.json.repository.head.sha}\nIntent: ${inputs.summary}\n\nWorking tree:\n${steps.working_tree.text}\n\nDiff stat:\n${steps.final_diff.text}\n\nVerification verdict: ${steps.verify.json.verdict}\nVerification summary: ${steps.verify.json.summary}\n\nImpact totals: ${steps.impact.json.totals}\nRisk level: ${steps.impact.json.risk_level}\nRisks: ${steps.impact.json.risks}\n\nNOT DONE BY THIS WORKFLOW: commit, push, merge, publish, release. Those remain separate governed operations requiring explicit operator intent."
+      },
+      "when": "${inputs.record_handoff}",
+      "expect": "text",
+      "on_error": "continue"
+    }
+  ],
+  "result": {
+    "repository": "${steps.profile.json.repository}",
+    "intent": "${inputs.summary}",
+    "working_tree": "${steps.working_tree.text}",
+    "verification_verdict": "${steps.verify.json.verdict}",
+    "verification": "${steps.verify.json.summary}",
+    "verification_commands": "${steps.verify.json.commands}",
+    "diff_stat": "${steps.final_diff.text}",
+    "impact": "${steps.impact.json}",
+    "handoff_recorded": "${steps.handoff.ok}",
+    "not_performed": "commit, push, merge, publish, release"
+  }
+}

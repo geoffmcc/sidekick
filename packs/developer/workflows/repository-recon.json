@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "name": "developer/repository-recon",
+  "version": "1.0.0",
+  "title": "Repository Reconnaissance",
+  "description": "Understand an unfamiliar software repository before modifying it. Read-only: establishes project identity, repository state, instructions, structure, verification paths and recent history, and leaves a durable handoff.",
+  "mode": "read_only",
+  "tags": ["developer", "recon", "read-only"],
+  "inputs": {
+    "path": { "type": "string", "required": true, "description": "Repository path to profile" },
+    "project": { "type": "string", "required": false, "description": "Canonical Sidekick project name for context and handoff" },
+    "record_handoff": { "type": "boolean", "required": false, "default": true, "description": "Persist a durable reconnaissance handoff" }
+  },
+  "steps": [
+    {
+      "name": "project_context",
+      "title": "Resolve canonical project context",
+      "tool": "project",
+      "args": { "name": "${inputs.project}", "include": "kv,context" },
+      "when": "${inputs.project}",
+      "expect": "text",
+      "on_error": "continue"
+    },
+    {
+      "name": "profile",
+      "title": "Profile the repository",
+      "tool": "dev_repo_profile",
+      "args": { "path": "${inputs.path}" },
+      "expect": "json",
+      "on_error": "fail"
+    },
+    {
+      "name": "top_level",
+      "title": "Inspect top-level layout",
+      "tool": "list",
+      "args": { "path": "${inputs.path}" },
+      "expect": "text",
+      "on_error": "continue"
+    },
+    {
+      "name": "agent_instructions",
+      "title": "Read repository agent instructions",
+      "tool": "read",
+      "args": { "path": "${inputs.path}/AGENTS.md" },
+      "expect": "text",
+      "on_error": "continue"
+    },
+    {
+      "name": "readme",
+      "title": "Read the README",
+      "tool": "read",
+      "args": { "path": "${inputs.path}/README.md" },
+      "expect": "text",
+      "on_error": "continue"
+    },
+    {
+      "name": "contributing",
+      "title": "Read contribution guidance",
+      "tool": "read",
+      "args": { "path": "${inputs.path}/CONTRIBUTING.md" },
+      "expect": "text",
+      "on_error": "continue"
+    },
+    {
+      "name": "history",
+      "title": "Inspect recent history",
+      "tool": "git",
+      "args": { "action": "log", "path": "${inputs.path}", "args": "-20 --pretty=format:%h|%ad|%an|%s --date=short" },
+      "expect": "text",
+      "on_error": "continue"
+    },
+    {
+      "name": "handoff",
+      "title": "Record a durable reconnaissance handoff",
+      "tool": "handoff",
+      "args": {
+        "action": "create",
+        "project": "${inputs.project}",
+        "title": "Repository reconnaissance: ${inputs.path}",
+        "source": "developer/repository-recon",
+        "content": "Repository: ${inputs.path}\nBranch: ${steps.profile.json.repository.branch}\nHEAD: ${steps.profile.json.repository.head.sha}\nWorking tree clean: ${steps.profile.json.repository.working_tree.clean}\nLanguages: ${steps.profile.json.languages}\nEcosystems: ${steps.profile.json.ecosystems}\nPackage managers: ${steps.profile.json.package_managers}\nWorkspaces: ${steps.profile.json.structure.workspaces}\nCI: ${steps.profile.json.ci}\nMigrations: ${steps.profile.json.migrations}\nInstruction files: ${steps.profile.json.instruction_files}\nLikely verification commands: ${steps.profile.json.verification.likely_commands}\nRecent commits: ${steps.history.text}"
+      },
+      "when": "${inputs.record_handoff}",
+      "expect": "text",
+      "on_error": "continue"
+    }
+  ],
+  "result": {
+    "repository": "${steps.profile.json.repository}",
+    "languages": "${steps.profile.json.languages}",
+    "ecosystems": "${steps.profile.json.ecosystems}",
+    "package_managers": "${steps.profile.json.package_managers}",
+    "structure": "${steps.profile.json.structure}",
+    "scripts": "${steps.profile.json.scripts}",
+    "ci": "${steps.profile.json.ci}",
+    "containers": "${steps.profile.json.containers}",
+    "migrations": "${steps.profile.json.migrations}",
+    "documentation": "${steps.profile.json.documentation}",
+    "instruction_files": "${steps.profile.json.instruction_files}",
+    "verification": "${steps.profile.json.verification}",
+    "recent_history": "${steps.history.text}",
+    "agent_instructions_present": "${steps.agent_instructions.ok}",
+    "handoff_recorded": "${steps.handoff.ok}"
+  }
+}

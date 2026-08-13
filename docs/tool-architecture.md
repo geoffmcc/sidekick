@@ -1,13 +1,14 @@
 # Tool Architecture
 
 Status: Current-state architecture
-Verified commit: 5e4dbfdb04c9878cbbd284bd950a6afbef78eec3
 Verified date: 2026-08-12
 
-Sidekick's built-in registry contains 102 tools (`TOOL_DEFS` rows), or 108 when
+Sidekick's built-in registry contains 105 tools (`TOOL_DEFS` rows), or 111 when
 the `data-utilities` module is enabled — the default on every standard
 deployment, since all three services provision built-in modules at startup.
-Tools execute through a descriptor registry and centralized dispatcher.
+Installed capability packs add their own module-owned tools to the same
+registry (the bundled Developer pack adds 3). Tools execute through one
+descriptor registry and one centralized dispatcher, whatever contributed them.
 
 The Track B legacy decomposition is **complete**: as of slice B-6,
 `src/tools-legacy.js` owns **zero production tool handlers**. Measured
@@ -80,12 +81,16 @@ Extracted descriptor-owned families live under `src/tools/families/` and are agg
 - `evolve.js` — `evolve` (`critical`). Thin wrapper over `src/evolve`, handed the registry-derived `TOOL_DEFS` and the shared procedures store.
 - `tool-catalog.js` — `tools`. Tool catalog, discovery manifest, and policy inspector; reads the policy/approval/registry helpers that remain in `tools-legacy.js` lazily through the facade, and re-exports `buildPolicyInspection`/`summarizePolicyInspection` for `src/dashboard.js`.
 - `module-management.js` — `module` (alias `modules`, `high` risk). Read/enable/disable/check/recover for platform module lifecycle state through the shared policy and approval path.
+- `capability-packs.js` — `capability` (aliases `capability_pack`, `pack`; `critical` risk). Capability-pack lifecycle: list/available/show/inspect/install/configure/enable/disable/health/upgrade/uninstall. `critical` because installing or enabling a pack activates executable module code in the Sidekick process. Owns no lifecycle logic itself; delegates to `src/packs/`.
+- `workflow-definitions.js` — `workflow` (alias `workflows`; `high` risk). List/show/run/resume registered workflow definitions. Each step is dispatched through the same dispatcher, so each individual tool's own policy and approval still apply on top.
 
-These families own 96 descriptors via `families/index.js`; the `data-utilities`
-module contributes 6 more through the module registry (`parse`, `extract`,
-`transform`, `diff`, `validate`, `template`), for **102 family/module-owned
-descriptors across 39 family files** (38 registered families plus the
-module-registered `data-utilities.js`). The remaining 6 built-in tools are the
+These families own 98 descriptors via `families/index.js` (96 plus `capability`
+and `workflow`, added by Capability Packs v1); the `data-utilities` module
+contributes 6 more through the module registry (`parse`, `extract`,
+`transform`, `diff`, `validate`, `template`), for **104 family/module-owned
+descriptors across 41 family files** (40 registered families plus the
+module-registered `data-utilities.js`). Capability-pack modules contribute
+further descriptors at runtime through the same module registry path. The remaining 6 built-in tools are the
 compute family (`compute`, `compute_nodes`, `compute_providers`,
 `compute_models`, `compute_jobs`, `compute_route`), implemented in
 `src/compute/tools.js` and wired through pass-through entries in

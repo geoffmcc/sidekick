@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "name": "developer/ci-triage",
+  "version": "1.0.0",
+  "title": "CI Failure Triage",
+  "description": "Explain why CI failed and determine the likely corrective action. Correlates the remote check state with the local repository, reruns the project's own verification locally, and reports whether the evidence points at the code or at infrastructure.",
+  "mode": "read_only",
+  "tags": ["developer", "ci", "triage"],
+  "inputs": {
+    "repo": { "type": "string", "required": true, "description": "GitHub owner/repository" },
+    "path": { "type": "string", "required": true, "description": "Local repository path to correlate against" },
+    "pr": { "type": "string", "required": false, "description": "Pull request number" },
+    "ref": { "type": "string", "required": false, "description": "Branch, ref or SHA" },
+    "reproduce_locally": { "type": "boolean", "required": false, "default": true, "description": "Run the project's own verification locally to compare against CI" }
+  },
+  "steps": [
+    {
+      "name": "checks",
+      "title": "Inspect CI check state",
+      "tool": "ci_status",
+      "args": { "repo": "${inputs.repo}", "pr": "${inputs.pr}", "ref": "${inputs.ref}", "format": "json" },
+      "expect": "json",
+      "on_error": "fail"
+    },
+    {
+      "name": "profile",
+      "title": "Correlate with local repository state",
+      "tool": "dev_repo_profile",
+      "args": { "path": "${inputs.path}" },
+      "expect": "json",
+      "on_error": "fail"
+    },
+    {
+      "name": "local_changes",
+      "title": "Analyze uncommitted local divergence",
+      "tool": "dev_change_summary",
+      "args": { "path": "${inputs.path}" },
+      "expect": "json",
+      "on_error": "continue"
+    },
+    {
+      "name": "local_verify",
+      "title": "Reproduce the failure locally",
+      "tool": "dev_verify",
+      "args": { "path": "${inputs.path}", "mode": "standard", "continue_on_failure": true },
+      "when": "${inputs.reproduce_locally}",
+      "expect": "json",
+      "on_error": "continue"
+    }
+  ],
+  "result": {
+    "repository": "${inputs.repo}",
+    "local_path": "${inputs.path}",
+    "ci_state": "${steps.checks.json}",
+    "local_head": "${steps.profile.json.repository.head}",
+    "local_branch": "${steps.profile.json.repository.branch}",
+    "local_working_tree_clean": "${steps.profile.json.repository.working_tree.clean}",
+    "local_divergence": "${steps.local_changes.json.totals}",
+    "local_verification": "${steps.local_verify.json.summary}",
+    "local_verification_commands": "${steps.local_verify.json.commands}",
+    "ci_configuration": "${steps.profile.json.ci}",
+    "triage_note": "Compare local_verification against ci_state. A local failure reproducing the CI failure points at the code; a local pass with a CI failure points at environment, dependencies, caching, or an infrastructure/flake cause. local_working_tree_clean=false means the local tree does not match what CI built."
+  }
+}
