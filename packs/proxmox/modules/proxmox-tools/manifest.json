@@ -1,0 +1,58 @@
+{
+  "name": "proxmox-tools",
+  "displayName": "Proxmox Tools",
+  "version": "1.0.0",
+  "description": "Secure Proxmox VE inspection and controlled guest lifecycle operations over the Proxmox API, with administrator-configured profiles, pinned-CA TLS, and capability detection.",
+  "author": "Sidekick",
+  "type": "plugin",
+  "entryPoint": "entry.js",
+  "sidekick": ">=1.0.0",
+  "capabilities": [
+    "proxmox-discovery",
+    "proxmox-capability-detection",
+    "proxmox-guest-lifecycle"
+  ],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "profiles": {
+        "type": "object",
+        "description": "Administrator-configured Proxmox environments, keyed by profile name. Endpoints and credential references live here; secret VALUES never do.",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "endpoint": { "type": "string", "description": "Proxmox API origin, https only, e.g. https://pve.example.internal:8006 (no path/query/credentials)." },
+            "token_ref": { "type": "string", "description": "Secret store reference for the API token, of the form secret:<name>. The value is resolved server-side and never returned." },
+            "ca_pem": { "type": "string", "description": "Optional PEM CA certificate to pin (e.g. the Proxmox cluster CA) for self-signed installations. TLS verification stays on." },
+            "ca_secret_ref": { "type": "string", "description": "Optional secret store reference (secret:<name>) holding the pinned CA PEM, as an alternative to ca_pem." },
+            "request_timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 120000, "description": "Per-request timeout (default 15000)." },
+            "task_poll_interval_ms": { "type": "integer", "minimum": 250, "maximum": 10000, "description": "Task status poll interval (default 1000)." },
+            "task_timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 1800000, "description": "Maximum wait for a task to reach a terminal state (default 120000)." },
+            "allow_lifecycle": { "type": "boolean", "description": "When true, this profile permits start/shutdown/reboot. Defaults to false: a profile is read-only unless an administrator opts in." },
+            "default": { "type": "boolean", "description": "Mark this profile the default when more than one is configured." }
+          },
+          "required": ["endpoint", "token_ref"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "additionalProperties": false
+  },
+  "tools": {
+    "proxmox": {
+      "risk": "low",
+      "category": "Infrastructure",
+      "aliases": ["pve"]
+    },
+    "proxmox_guest": {
+      "risk": "high",
+      "category": "Infrastructure",
+      "aliases": ["pve_guest"]
+    }
+  },
+  "permissions": [],
+  "lifecycle": {
+    "disable": "stop_new_work",
+    "uninstall": "retain_data"
+  }
+}

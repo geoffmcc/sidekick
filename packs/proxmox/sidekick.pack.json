@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "name": "proxmox",
+  "display_name": "Proxmox VE",
+  "version": "1.0.0",
+  "description": "Lets Sidekick securely discover, understand, monitor and operate Proxmox VE infrastructure: administrator-configured named profiles, pinned-CA TLS, normalized cluster/node/guest/storage/task discovery, capability detection (PBS, Ceph, SDN, QEMU guest agent, cloud-init, optional automation), and a controlled guest lifecycle (start, graceful shutdown, reboot) with correct asynchronous task handling.",
+  "publisher": "Sidekick",
+  "compatibility": {
+    "sidekick": ">=1.0.0"
+  },
+  "modules": [
+    {
+      "name": "proxmox-tools",
+      "path": "modules/proxmox-tools",
+      "entry_point": "entry.js",
+      "config_from_pack": true
+    }
+  ],
+  "workflows": [
+    { "path": "workflows/environment-recon.json" },
+    { "path": "workflows/guest-health.json" }
+  ],
+  "knowledge": [
+    {
+      "path": "knowledge/proxmox-operating.md",
+      "title": "Proxmox pack: operating model and tools",
+      "category": "operations",
+      "tags": ["proxmox", "operations", "capabilities"]
+    },
+    {
+      "path": "knowledge/proxmox-least-privilege.md",
+      "title": "Proxmox pack: API tokens and least-privilege permissions",
+      "category": "operations",
+      "tags": ["proxmox", "security", "permissions", "tokens"]
+    },
+    {
+      "path": "knowledge/proxmox-safety.md",
+      "title": "Proxmox pack: task semantics and operational safety",
+      "category": "operations",
+      "tags": ["proxmox", "safety", "tasks", "cluster"]
+    }
+  ],
+  "requires": {
+    "tools": [],
+    "optional_tools": ["secret", "netdiag"]
+  },
+  "configuration": {
+    "schema": {
+      "type": "object",
+      "properties": {
+        "profiles": {
+          "type": "object",
+          "description": "Administrator-configured Proxmox environments, keyed by profile name. Endpoints and credential references live here; secret VALUES never do. Store the API token with the secret tool and reference it as token_ref: \"secret:<name>\".",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "endpoint": { "type": "string" },
+              "token_ref": { "type": "string" },
+              "ca_pem": { "type": "string" },
+              "ca_secret_ref": { "type": "string" },
+              "request_timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 120000 },
+              "task_poll_interval_ms": { "type": "integer", "minimum": 250, "maximum": 10000 },
+              "task_timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 1800000 },
+              "allow_lifecycle": { "type": "boolean" },
+              "default": { "type": "boolean" }
+            },
+            "required": ["endpoint", "token_ref"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "defaults": {
+      "profiles": {}
+    }
+  }
+}
