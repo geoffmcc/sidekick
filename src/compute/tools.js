@@ -420,7 +420,18 @@ async function sidekick_compute_jobs({ action, job_id, ...args }) {
         if (!job_id) return err("job_id required");
         return ok(compute.jobManager.listArtifacts(job_id));
       }
-      default: return err("Unknown action: " + action + ". Valid: list, get, create, cancel, stats, artifacts");
+      case "reconcile_artifact_custody": {
+        // Deliberately operator-invoked and dry-run by default: registration is
+        // insert-only and publishes an event per artifact, so it is not something
+        // to run as a side effect of a deploy. Read the plan, then pass
+        // confirm=true to execute it.
+        const custody = require("./artifact-custody");
+        return ok(custody.reconcileComputeArtifacts({
+          confirm: args.confirm === true,
+          limit: args.limit,
+        }));
+      }
+      default: return err("Unknown action: " + action + ". Valid: list, get, create, cancel, stats, artifacts, reconcile_artifact_custody");
     }
   } catch (e) { return err("compute_jobs error: " + e.message); }
 }
