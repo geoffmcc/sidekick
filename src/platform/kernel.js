@@ -429,7 +429,12 @@ function appendEvent(input = {}) {
         input.dedupe_key || null,
         causationId,
         input.correlation_id || input.root_execution_id || input.execution_id || null,
-        input.redaction_state || "redacted"
+        // Default to "unknown", not "redacted". Delivery skips its own
+        // redaction pass for anything already labeled redacted, so defaulting
+        // to that label let a publisher that never redacted anything opt its
+        // payload out of redaction just by not saying so. Publishers that do
+        // redact still declare it explicitly.
+        input.redaction_state || "unknown"
       );
       enqueueDeliveriesForEvent(db, { event_id: eventId, event_type: input.event_type, sensitivity });
     })();

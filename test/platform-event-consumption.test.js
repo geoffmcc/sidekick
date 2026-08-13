@@ -392,14 +392,29 @@ test("a subscription may opt in to unredacted payloads, explicitly", () => {
   assert.ok(seen.payload.error.includes("sk-live-abcdef"), "the opted-in consumer receives the raw text");
 });
 
-test("an already-redacted payload is passed through untouched", () => {
+test("a payload declared already-redacted is passed through untouched", () => {
   resetEvents();
   let seen = null;
   drainer.registerHandler("passthrough.consumer", event => { seen = event; }, { event_type: "delivery.clean" });
-  kernel.appendEvent({ event_type: "delivery.clean", source: "test", payload: { detail: "ordinary text" } });
+  // The publisher must SAY it redacted. Delivery trusts this label, so it is
+  // an explicit claim, never an omission.
+  kernel.appendEvent({ event_type: "delivery.clean", source: "test", redaction_state: "redacted", payload: { detail: "ordinary text" } });
   drainer.drainOnce();
   assert.strictEqual(seen.redacted_by_delivery, false);
   assert.strictEqual(seen.payload.detail, "ordinary text");
+});
+
+test("a payload that declares no redaction state is redacted before delivery", () => {
+  resetEvents();
+  let seen = null;
+  drainer.registerHandler("unknown.consumer", event => { seen = event; }, { event_type: "delivery.unstated" });
+  // Omitting redaction_state used to record "redacted", which let a publisher
+  // that redacted nothing opt its payload out of the delivery redaction pass.
+  const stored = kernel.appendEvent({ event_type: "delivery.unstated", source: "test", payload: { error: "token sk-live-abcdef" } });
+  assert.strictEqual(stored.redaction_state, "unknown", "an undeclared payload is not assumed redacted");
+  drainer.drainOnce();
+  assert.strictEqual(seen.redacted_by_delivery, true);
+  assert.ok(!JSON.stringify(seen.payload).includes("sk-live-abcdef"), "delivery redacts what the publisher did not");
 });
 
 // ---- sensitivity (B5 residual) ----------------------------------------------

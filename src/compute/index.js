@@ -45,6 +45,13 @@ function startReconciliation() {
     catch (e) { logRecoveryFailure("lease_recovery", e); }
     try { jobManager.releaseRetryWaitJobs(); }
     catch (e) { logRecoveryFailure("retry_wait_release", e); }
+    // Circuit recovery has the same "must not depend on incidental traffic"
+    // property. Five consecutive failures open a provider's circuit, and
+    // placement then refuses to route to it — so nothing ever calls it again,
+    // nothing records a success, and the circuit could never reclose. Aging an
+    // open circuit into half-open here lets the next request re-test it.
+    try { providerRegistry.recoverOpenCircuits(); }
+    catch (e) { logRecoveryFailure("circuit_recovery", e); }
   };
   run(); // immediate pass at startup to clear stale online state
   reconcileTimer = setInterval(run, RECONCILE_INTERVAL_MS);

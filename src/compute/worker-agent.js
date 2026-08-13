@@ -599,14 +599,44 @@ async function executeJob(job, shouldCancel = async () => false) {
     return ov.executeOpenVinoEmbed(null, payload);
   }
   if (job.capability === "embeddings" || job.jobType === "embeddings" || job.jobType === "embedding") {
+    if (!isSyntheticRequest(payload)) {
+      throw new Error(
+        "No embedding backend on this worker: the deterministic embedding is a test fixture and " +
+        "must not answer a real embeddings job. Enable an executor (e.g. OpenVINO) or request " +
+        `model "${SYNTHETIC_MODEL}" explicitly.`
+      );
+    }
     const text = String(payload.input || payload.text || "");
-    return { embedding: deterministicEmbedding(text), model: payload.model || "deterministic-test" };
+    return { embedding: deterministicEmbedding(text), model: payload.model || SYNTHETIC_MODEL };
   }
   if (process.env.OLLAMA_URL && (payload.backend === "ollama" || payload.provider === "ollama")) {
     return ollamaGenerate(payload);
   }
+  // Fabricated content must never be returned as a real result. Previously any
+  // chat/generate job that did not explicitly name the ollama backend fell
+  // through to `mock:<prompt>` and completed as a SUCCESS — an answer the
+  // caller had no way to tell apart from a real one.
+  if (!isSyntheticRequest(payload)) {
+    if (process.env.OLLAMA_URL) return ollamaGenerate(payload);
+    throw new Error(
+      "No inference backend on this worker: set OLLAMA_URL (or request the ollama backend) to serve " +
+      `this job. The "${SYNTHETIC_MODEL}" model is a test fixture and is only used when requested by name.`
+    );
+  }
   const prompt = payload.prompt || (Array.isArray(payload.messages) ? payload.messages.map(m => m.content).join("\n") : "");
-  return { content: `mock:${String(prompt).slice(0, 200)}`, model: payload.model || "deterministic-test", workerId };
+  return { content: `mock:${String(prompt).slice(0, 200)}`, model: payload.model || SYNTHETIC_MODEL, workerId };
+}
+
+// The worker ships a deterministic executor so the protocol, lease, artifact
+// and cancellation paths can be exercised end to end without a model. It is
+// addressable ONLY by explicit request — by model name or an explicit
+// mock provider/backend — so it can never stand in for a real one.
+const SYNTHETIC_MODEL = "deterministic-test";
+
+function isSyntheticRequest(payload) {
+  const model = String(payload.model || "").toLowerCase();
+  const provider = String(payload.provider || payload.backend || "").toLowerCase();
+  return model === SYNTHETIC_MODEL || provider === "mock" || provider === "deterministic";
 }
 
 async function ollamaGenerate(payload) {

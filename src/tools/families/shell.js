@@ -33,16 +33,33 @@ function isDangerous(cmd) {
 
 const execAsync = promisify(exec);
 
-async function sidekick_bash({ command }) {
+const DEFAULT_TIMEOUT_MS = 60000;
+// Ceiling for a caller-supplied deadline. Callers that legitimately run long
+// work (project test suites, Ansible plays, research probes) declare their own
+// budget; this only stops a caller from removing the bound entirely.
+const MAX_TIMEOUT_MS = 3600000;
+
+async function sidekick_bash({ command }, runtime = {}) {
   if (isDangerous(command)) {
     return { content: [{ type: "text", text: "Blocked: command matches a dangerous pattern" }], isError: true };
   }
+  // Honor the deadline the dispatcher was given. The 60s constant used to be
+  // absolute, which silently killed every caller that declared a longer budget
+  // — a project's test suite, a playbook, a long probe — and then reported the
+  // kill as if the command itself had failed.
+  // The margin keeps the process kill ahead of the dispatcher's own deadline,
+  // so a timeout is reported as a killed command rather than as the
+  // dispatcher's "operation may still be running".
+  const requested = Number(runtime?.context?.timeoutMs);
+  const timeout = requested > 0
+    ? Math.max(1000, Math.min(requested, MAX_TIMEOUT_MS) - 250)
+    : DEFAULT_TIMEOUT_MS;
   try {
-    const { stdout } = await execAsync(command, { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
+    const { stdout } = await execAsync(command, { timeout, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
     return { content: [{ type: "text", text: redactSensitive(stdout || "(empty output)") }] };
   } catch (e) {
     const text = e.killed || e.signal || e.code === "ETIMEDOUT"
-      ? "Timed out after 60000ms (killed by " + (e.signal || "timeout") + ")"
+      ? "Timed out after " + timeout + "ms (killed by " + (e.signal || "timeout") + ")"
       : "Exit code: " + e.code + "\nstdout: " + (e.stdout || "") + "\nstderr: " + (e.stderr || "");
     return { content: [{ type: "text", text: redactSensitive(text) }], isError: true };
   }
