@@ -264,6 +264,32 @@ const models = args => computeTools.sidekick_compute_models(viaSchema('compute_m
       'so callers following the docs get silently wrong results');
   });
 
+  await test('every action a tool documents exists in its schema action enum', () => {
+    // Sibling of the arg-key guard above, for the same failure mode one level
+    // down. A handler can gain a `case` while the zod enum does not, and because
+    // these schemas are .strict() the dispatcher rejects the call before the
+    // handler runs — the tool looks implemented and is unreachable. Shipped
+    // exactly that way once (compute_jobs reconcile_artifact_custody).
+    const drifted = [];
+    const registrySchemas = require('../src/tools').getBuiltinRegistry().schemas();
+    for (const def of TOOL_DEFS) {
+      const documented = def.args && def.args.action;
+      const schema = registrySchemas[def.name];
+      if (!documented || !schema || !schema.shape || !schema.shape.action) continue;
+      const match = /\(([^)]*\|[^)]*)\)/.exec(String(documented));
+      if (!match) continue; // no documented action list to compare against
+      const actionSchema = schema.shape.action;
+      const options = actionSchema.options || actionSchema._def?.values;
+      if (!Array.isArray(options)) continue; // not a plain enum
+      for (const action of match[1].split('|').map(a => a.trim()).filter(Boolean)) {
+        if (!options.includes(action)) drifted.push(`${def.name}.${action}`);
+      }
+    }
+    assert.deepStrictEqual(drifted, [],
+      'a documented action missing from the schema enum is rejected by the dispatcher ' +
+      'before the handler runs, so the tool advertises an action it cannot perform');
+  });
+
   fs.rmSync(TMP, { recursive: true, force: true });
   for (const [status, name, detail] of results) {
     if (status === 'ok') console.log(`  \x1b[32m✓\x1b[0m ${name}`);
