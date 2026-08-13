@@ -43,7 +43,7 @@ const MODULE_TRANSITIONS = Object.freeze({
   discovered: ["validated", "error"],
   validated: ["installed", "error"],
   installed: ["configured", "enabled", "uninstalling", "error"],
-  configured: ["enabled", "installed", "error"],
+  configured: ["enabled", "installed", "uninstalling", "error"],
   enabled: ["healthy", "disabled", "error"],
   healthy: ["disabled", "error"],
   disabled: ["enabled", "installed", "uninstalling", "error"],

@@ -51,6 +51,7 @@ async function sidekick_black_box(args = {}) {
       const capture = await blackbox.captureIncident({ ...args, source: getCurrentSource() });
       let payload = {
         incident_id: capture.incident_id,
+        id: capture.id,
         capture_id: capture.id,
         state: capture.state,
         profile: capture.profile,
@@ -68,6 +69,8 @@ async function sidekick_black_box(args = {}) {
 
     if (action === "capture_status") return { content: [{ type: "text", text: JSON.stringify(blackbox.captureStatus(args.capture_id), null, 2) }] };
     if (action === "cancel_capture") return { content: [{ type: "text", text: JSON.stringify(blackbox.cancelCapture(args.capture_id), null, 2) }] };
+    if (action === "retry_capture") return { content: [{ type: "text", text: JSON.stringify(await blackbox.retryCapture(args.capture_id, { ...args, source: getCurrentSource() }), null, 2) }] };
+    if (action === "repair") return { content: [{ type: "text", text: JSON.stringify(blackbox.repairEmptyCapture(args.capture_id), null, 2) }] };
     if (action === "list_captures") return { content: [{ type: "text", text: JSON.stringify({ captures: blackbox.listCaptures(args.incident_id) }, null, 2) }] };
     if (action === "get_capture") return { content: [{ type: "text", text: JSON.stringify(blackbox.getCapture(args.capture_id, { includeSources: true }), null, 2) }] };
     if (action === "list_sources") return { content: [{ type: "text", text: JSON.stringify({ sources: blackbox.listSources(args.capture_id) }, null, 2) }] };
@@ -99,7 +102,7 @@ async function sidekick_black_box(args = {}) {
 const SCHEMAS = {
   black_box: z.object({
     action: z.enum([
-      "capture", "capture_status", "cancel_capture", "list", "get", "delete", "analyze",
+      "capture", "capture_status", "cancel_capture", "retry_capture", "repair", "list", "get", "delete", "analyze",
       "list_incidents", "get_incident", "list_captures", "get_capture", "list_sources", "get_source",
       "search", "compare", "add_note", "update_incident", "verify", "pin", "extend_retention",
       "archive", "export", "storage_status", "purge_preview", "purge", "profiles"
@@ -111,6 +114,7 @@ const SCHEMAS = {
     environment: z.string().optional(),
     severity: z.string().optional(),
     lifecycle_state: z.string().optional(),
+    pinned: z.boolean().optional(),
     tags: z.array(z.string()).optional(),
     profile: z.enum(["quick", "standard", "deep", "network", "service", "sidekick", "repository", "custom"]).optional(),
     include: z.array(z.string()).optional().describe("Legacy sections or collector keys"),

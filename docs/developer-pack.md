@@ -161,7 +161,6 @@ is required.
 | `command_timeout_ms` | — | Per-command timeout |
 | `continue_on_failure` | `false` | Keep running after a failed command |
 | `repository_roots` | `[]` | Confinement: when non-empty, the Developer tools refuse paths outside these roots, **in addition to** the global Sidekick path policy |
-| `github_enrichment` | `true` | Allow workflows to enrich results with GitHub data when `github` is configured |
 
 Example:
 

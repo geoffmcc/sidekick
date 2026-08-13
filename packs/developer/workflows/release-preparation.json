@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "title": "Release Preparation",
   "description": "Determine whether a repository is ready for release and draft the release notes. Checks repository state, version consistency, changelog status, uncommitted work, verification, dependency state and migration/API warnings, then produces a readiness verdict. It never tags, never creates a GitHub release and never publishes.",
-  "mode": "read_only",
+  "mode": "mutating",
   "tags": ["developer", "release", "read-only"],
   "inputs": {
     "path": { "type": "string", "required": true, "description": "Repository path" },
@@ -57,7 +57,7 @@
       "name": "verify",
       "title": "Run the project's own verification",
       "tool": "dev_verify",
-      "args": { "path": "${inputs.path}", "mode": "${inputs.verification_mode}", "continue_on_failure": true },
+      "args": { "path": "${inputs.path}", "mode": "${inputs.verification_mode}", "continue_on_failure": true, "timeout_ms": 600000 },
       "expect": "json",
       "on_error": "continue"
     },

@@ -117,10 +117,6 @@
           "type": "array",
           "items": { "type": "string" },
           "description": "Optional confinement: when non-empty, Developer tools refuse paths outside these roots, in addition to the global Sidekick path policy. Secrets never belong here or anywhere else in pack configuration."
-        },
-        "github_enrichment": {
-          "type": "boolean",
-          "description": "Allow Developer workflows to enrich results with GitHub issue/PR/CI data when the github tool is configured."
         }
       },
       "additionalProperties": false
@@ -129,8 +125,7 @@
       "autodetect_verification": true,
       "verification_mode": "standard",
       "max_output_chars": 12000,
-      "continue_on_failure": false,
-      "github_enrichment": true
+      "continue_on_failure": false
     }
   }
 }

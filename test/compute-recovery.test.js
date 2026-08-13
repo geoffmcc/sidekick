@@ -103,6 +103,34 @@ const db = dbStore.getDb();
 
 console.log("CR.1: scheduled recovery (issue #150)");
 
+test("queued jobs with elapsed deadlines become terminal expired jobs", () => {
+  const explicit = jobManager.createJob({
+    jobType: "text_embedding",
+    capability: "openvino.text_embedding",
+    source: "test",
+    requestPayload: { input: "expired", model: QWEN },
+    capabilityRequirements: { executor: "openvino.text_embedding" },
+    expiresAt: new Date(Date.now() - 1000).toISOString(),
+  });
+  const timed = jobManager.createJob({
+    jobType: "text_embedding",
+    capability: "openvino.text_embedding",
+    source: "test",
+    requestPayload: { input: "timed", model: QWEN },
+    capabilityRequirements: { executor: "openvino.text_embedding" },
+    timeoutMs: 1000,
+  });
+  db.prepare("UPDATE compute_jobs SET created_at = ? WHERE job_id = ?")
+    .run(new Date(Date.now() - 2000).toISOString(), timed.jobId);
+
+  assert.strictEqual(jobManager.expireQueuedJobs(), 2, "both elapsed deadlines transition once");
+  for (const id of [explicit.jobId, timed.jobId]) {
+    const expired = jobManager.getJob(id);
+    assert.strictEqual(expired.status, "expired");
+    assert.strictEqual(expired.errorCategory, "expired");
+  }
+});
+
 test("an expired lease is reclaimed by the reconciliation pass alone", () => {
   const worker = enrollWorker({});
   const job = makeJob();

@@ -131,9 +131,10 @@ async function sidekick_compute({ action, ...args }) {
   } catch (e) { return err("compute error: " + e.message); }
 }
 
-async function sidekick_compute_nodes({ action, node_id, ...args }) {
+async function sidekick_compute_nodes({ action, node_id, worker_id, ...args }) {
   try {
     compute.initialize();
+    const targetWorkerId = worker_id || node_id;
     switch (action) {
       case "list": return ok(compute.workerManager.listWorkers(args));
       case "get": {
@@ -149,17 +150,20 @@ async function sidekick_compute_nodes({ action, node_id, ...args }) {
         return ok(updated);
       }
       case "revoke": {
-        if (!node_id) return err("node_id required");
-        const w = compute.workerManager.getWorkerByNodeId(node_id);
+        if (!targetWorkerId) return err("node_id or worker_id required");
+        const w = worker_id ? compute.workerManager.getWorker(worker_id) : compute.workerManager.getWorkerByNodeId(node_id);
         if (!w) return err("Worker not found");
         const revoked = compute.workerManager.revokeWorker(w.workerId, args.reason || "admin_revoked");
         return ok(revoked);
       }
       case "maintenance": {
-        if (!node_id) return err("node_id required");
-        const w = compute.workerManager.getWorkerByNodeId(node_id);
+        if (!targetWorkerId) return err("node_id or worker_id required");
+        const w = worker_id ? compute.workerManager.getWorker(worker_id) : compute.workerManager.getWorkerByNodeId(node_id);
         if (!w) return err("Worker not found");
-        const updated = compute.workerManager.updateWorker(w.workerId, { maintenanceMode: args.enable !== false });
+        const updated = compute.workerManager.updateWorker(w.workerId, {
+          maintenanceMode: args.enable !== true,
+          adminState: args.enable === true ? "enabled" : "maintenance",
+        });
         return ok(updated);
       }
       case "stats": return ok(compute.workerManager.getWorkerStats());
@@ -415,6 +419,16 @@ async function sidekick_compute_jobs({ action, job_id, ...args }) {
         const j = compute.jobManager.cancelJob(job_id, { actor: "mcp", reason: args.reason || "user_cancelled" });
         return ok(j);
       }
+      case "retry": {
+        if (!job_id) return err("job_id required");
+        const j = compute.jobManager.retryJob(job_id, { actor: "dashboard", reason: args.reason || "dashboard_retry" });
+        return ok(j);
+      }
+      case "recover": {
+        const recovered = compute.jobManager.recoverExpiredLeases();
+        const expired = compute.jobManager.expireQueuedJobs();
+        return ok({ recovered, expired });
+      }
       case "stats": return ok(compute.jobManager.getJobStats());
       case "artifacts": {
         if (!job_id) return err("job_id required");
@@ -431,7 +445,7 @@ async function sidekick_compute_jobs({ action, job_id, ...args }) {
           limit: args.limit,
         }));
       }
-      default: return err("Unknown action: " + action + ". Valid: list, get, create, cancel, stats, artifacts, reconcile_artifact_custody");
+      default: return err("Unknown action: " + action + ". Valid: list, get, create, cancel, retry, recover, stats, artifacts, reconcile_artifact_custody");
     }
   } catch (e) { return err("compute_jobs error: " + e.message); }
 }
