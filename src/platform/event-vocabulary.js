@@ -123,6 +123,7 @@ const KNOWN_EVENT_TYPES = Object.freeze([
   "brain.waiting_for_approval",
   "capability.granted",
   "capability.revoked",
+  "compute.artifact_custody_failed",
   "connector.configured",
   "connector.health.check",
   "connector.registered",

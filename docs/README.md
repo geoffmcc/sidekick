@@ -81,6 +81,7 @@ sqlite3 data/sidekick.db "SELECT COUNT(*) FROM knowledge WHERE version_added = '
 | `api-reference.md` | HTTP endpoint reference for MCP, Dashboard, and Agent services. |
 | `execution-claim-contract.md` | Epoch-fenced execution claims used by the cron/delay/watch/runbook schedulers. |
 | `platform-events.md` | Event ledger, transactional fan-out, subscription backlog cap, delivery drainer, and handler registry. |
+| `artifact-custody.md` | Kernel artifact custody, compute worker registration, custody failure reporting, and the orphan reconciler. |
 | `connectors.md` | Connector authority: managed integrations, credential references, lifecycle, and the GitHub connector. |
 | `workspace-secret-references.md` | Encrypted workspace secret storage at the kernel boundary. |
 | `adr-approval-continuation.md` | ADR: durable approval continuation for parked tasks (implemented). |

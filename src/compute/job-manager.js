@@ -6,6 +6,7 @@ const placement = require("./placement");
 const manifest = require("./openvino-model-manifest");
 let platformKernel = null;
 try { platformKernel = require("../platform/kernel"); } catch {}
+const artifactCustody = require("./artifact-custody");
 
 function nowIso() { return new Date().toISOString(); }
 function generateId(prefix) { return `${prefix}_${Date.now().toString(36)}_${crypto.randomBytes(6).toString("hex")}`; }
@@ -929,6 +930,33 @@ function retryJob(jobId, { actor = "admin", reason = "retry_requested" } = {}) {
   return retried;
 }
 
+/**
+ * Registers a finalized artifact with the kernel and records the outcome on the
+ * compute row. A failure is surfaced (event + log + durable marker) but never
+ * propagated: the bytes and the job result are valid, and letting a custody
+ * problem fail the work it exists to record would be the wrong trade.
+ * `reconcileComputeArtifacts` closes any gap afterwards.
+ */
+function recordCustody(artifact, job) {
+  if (!artifact) return null;
+  const outcome = artifactCustody.registerComputeArtifact(artifact, job);
+  try {
+    const metadata = { ...artifact.metadata };
+    if (outcome.status === "registered" || outcome.status === "already") {
+      metadata.kernel_artifact_id = outcome.kernel_artifact_id;
+      delete metadata.kernel_custody_error;
+    } else if (outcome.status === "failed") {
+      metadata.kernel_custody_error = outcome.error;
+    } else {
+      return outcome;
+    }
+    dbStore.getDb().prepare("UPDATE compute_artifacts SET metadata_json = ? WHERE artifact_id = ?")
+      .run(json(metadata), artifact.artifactId);
+  } catch { /* the marker is best-effort; the event below is the durable signal */ }
+  if (outcome.status === "failed") artifactCustody.reportCustodyFailure(artifact, job, outcome.error);
+  return outcome;
+}
+
 function createVerifiedArtifact(jobId, leaseId, workerId, artifact, executionId) {
   assertLeaseOwner(jobId, workerId, leaseId, ["leased", "starting", "running", "completed"]);
   const normalized = normalizeArtifact(jobId, artifact);
@@ -944,23 +972,13 @@ function createVerifiedArtifact(jobId, leaseId, workerId, artifact, executionId)
     metadata: { ...normalized.metadata, workerId, verified: true, inline: true },
   });
   const finalized = getArtifact(artifactId);
-  if (platformKernel && executionId) {
-    try {
-      platformKernel.registerArtifact({
-        type: finalized.artifactType || "compute-result",
-        name: finalized.name || artifactId,
-        execution_id: executionId,
-        producer: workerId,
-        storage_ref: finalized.storageRef || `compute/${jobId}/${artifactId}`,
-        content_type: finalized.contentType || "text/plain",
-        byte_size: finalized.sizeBytes || 0,
-        content_hash: finalized.contentHash,
-        sensitivity: finalized.sensitivity || "normal",
-        verification: { hash_verified: true },
-        source: "compute",
-      });
-    } catch {}
-  }
+  // Was a hand-rolled mirror inside an empty `catch {}` — a custody failure here
+  // was unobservable. It now shares the one custody path, which reports.
+  // The caller's executionId stays authoritative: it is the execution the
+  // completion was recorded against, and preferring the job row here would
+  // quietly change which execution the artifact is attributed to.
+  const job = getJob(jobId);
+  recordCustody(finalized, job ? { ...job, rootExecutionId: executionId || job.rootExecutionId } : { rootExecutionId: executionId });
   return artifactId;
 }
 
@@ -1032,7 +1050,11 @@ function finalizeArtifact(jobId, workerId, leaseId, artifactId, { contentHash, c
   if (updated.changes !== 1) return getArtifact(artifactId);
   const finalized = getArtifact(artifactId);
   emitComputeEvent("compute.artifact_finalized", getJob(jobId), { worker_id: workerId, lease_id: leaseId, artifact_id: artifactId });
-  return finalized;
+  // Custody. This is the path every production compute artifact actually took,
+  // and until now it registered nothing with the kernel. Finalize rather than
+  // upload, because only here are the hash and size verified.
+  recordCustody(finalized, getJob(jobId));
+  return getArtifact(artifactId);
 }
 
 function createAttempt(jobId, { providerId, modelId, workerId, leaseId }) {
