@@ -158,12 +158,90 @@ its backlog cap. Drain or requeue, then resume it.
 | `SIDEKICK_EVENT_DRAIN_BATCH` | `50` | Deliveries claimed per pass (clamped 1–500). |
 | `SIDEKICK_DISABLE_EVENT_DRAINER` | unset | `1` starts the MCP process with no drainer. |
 
+## Causation
+
+`causation_id` sat in the schema from the start with no publisher ever setting
+it, so the ledger recorded *that* things happened but never *what caused* them.
+`correlation_id` groups a chain; causation is the parentage inside it.
+
+Two real sources now populate it:
+
+- **Handler-published events.** Anything published while handling a delivery is
+  caused by the delivered event. `kernel.deliverEvent` runs handlers inside
+  `runWithCausation`, and `appendEvent` picks the value up from that context —
+  an `AsyncLocalStorage`, not a module-level variable, because a handler may be
+  async and a shared variable would leak one delivery's causation into a
+  concurrent one. This case only became real when B5 shipped a consumer.
+- **Execution state changes.** A transition is caused by the transition before
+  it. `platform_execution_transitions` already stored the event id per
+  transition, so the chain needed no new schema — it was simply never read back.
+
+An explicit `causation_id` on the input always wins over the ambient one.
+
+## Payload safety on delivery
+
+Storage and delivery are different trust boundaries, and the numbers make the
+case: **44% of the production ledger is stored `redaction_state: "none"`** —
+module transitions and pack events deliberately keep arbitrary error text and
+label themselves honestly rather than claim a redaction they did not perform.
+
+That was harmless while nothing consumed events. A consumer makes the payload
+leave the database and reach handler code (and, for the built-in consumers, a
+log line). So `kernel.deliverEvent` redacts any payload not already stored
+redacted, and tells the handler it did:
+
+| Field on the delivered event | Meaning |
+|---|---|
+| `redacted_by_delivery` | `true` when delivery redacted the payload in transit |
+| `original_redaction_state` | what the ledger actually stored |
+| `redaction_state` | `redacted` once delivery has done its pass |
+
+**The ledger is never rewritten** — the stored row keeps its honest
+`redaction_state` and its original text. Redaction happens on the way out.
+
+A subscription that genuinely needs raw text opts in with
+`metadata.accepts_unredacted`, which is durable and inspectable by an operator
+wondering why a consumer sees what it sees — not a handler-side flag.
+
+## Sensitivity
+
+`sensitivity` is a closed set — `normal`, `sensitive`, `secret` — validated at
+publish. A subscription declares a ceiling with `metadata.max_sensitivity`
+(default `normal`), and **fan-out** withholds anything above it.
+
+Gating at fan-out rather than at delivery is the stricter choice: an event a
+subscription may not see never becomes a row addressed to it, so it cannot leak
+later through a handler change, a requeue, or the dashboard's delivery list.
+
+Stated plainly: **every one of the 21,267 events in the production ledger is
+`normal`**, so this gate withholds nothing today. It is a policy hook that
+becomes load-bearing the moment a publisher raises a level — not a claim that
+anything is currently being protected by it. The live protection is the
+redaction pass above.
+
+## Provenance, and what is *not* authorization
+
+`source` is shape-validated (lowercase, `-`/`_` separators, ≤32 chars). An
+unknown but well-formed source is allowed and logged once per process.
+
+Rejecting unknown sources would be worse than the problem: nearly every
+production publisher wraps `appendEvent` in a swallowed `try {} catch {}`, so a
+rejection would silently *drop* the event rather than record it with odd
+provenance. The set has already drifted on its own — production carries both
+`approval` and `approvals`, both `workflow` and `workflow-runner` — which is
+what the warning surfaces.
+
+**This is provenance validation, not authorization.** It checks that a source is
+well-formed; it cannot check whether the caller is entitled to claim it, because
+single-operator mode has no durable actor identity to check against. Real
+authorization of publishers depends on the identity boundary tracked in Track C,
+and labelling this as authorization would misstate what it does.
+
 ## Not in B5
 
 No schema change was required, so there is no new migration. Still open:
 
-- `causation_id` is never set by any publisher.
-- Delivery ignores `sensitivity`; every handler sees the same payload.
-- `appendEvent` is unauthorized — any caller may publish any event type.
+- `appendEvent` remains unauthorized in the sense above: any in-process caller
+  may publish any event type under any well-formed source.
 - Offsets advance on delivery but are not used to replay or backfill a
   subscription created after the fact.

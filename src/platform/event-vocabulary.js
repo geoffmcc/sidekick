@@ -269,8 +269,94 @@ function validateSubscriptionEventType(eventType) {
   };
 }
 
+/**
+ * Sensitivity levels, ordered least to most restricted. Before this was a
+ * closed set the column accepted any string, and in practice every one of the
+ * 21,267 events in the production ledger was `normal` — the field was inert,
+ * so "delivery ignores sensitivity" described a gate with nothing to gate.
+ * Enumerating the levels makes the column mean something the moment a publisher
+ * uses one, and lets a subscription declare a ceiling.
+ */
+const SENSITIVITY_LEVELS = Object.freeze(["normal", "sensitive", "secret"]);
+
+/**
+ * Redaction states. `redacted` means the payload went through `redactSensitive`
+ * before storage. `none` means it did NOT — module transitions and pack events
+ * deliberately store arbitrary error text and label themselves honestly rather
+ * than pretend. 44% of the production ledger is `none`, which is exactly why
+ * the delivery path re-redacts before handing a payload to a handler.
+ */
+const REDACTION_STATES = Object.freeze(["redacted", "none", "unknown"]);
+
+// Event sources observed in production. Advisory, like namespaces: the set has
+// already drifted on its own (`approval` vs `approvals`, `workflow` vs
+// `workflow-runner`), which is the argument for validating the shape — and
+// against rejecting an unlisted one, since most publishers swallow errors from
+// appendEvent and a rejection would silently drop the event instead.
+const KNOWN_EVENT_SOURCES = Object.freeze([
+  "agent",
+  "approval",
+  "approvals",
+  "blackbox",
+  "bootstrap",
+  "capability-packs",
+  "compute",
+  "cron",
+  "dashboard",
+  "delay",
+  "mcp",
+  "memory",
+  "modules",
+  "ops-backfill",
+  "platform",
+  "retry",
+  "runbook",
+  "watch",
+  "workflow",
+  "workflow-runner",
+  // Reserved for suites that exercise the pipeline without impersonating a real
+  // producer, matching the `test` namespace above.
+  "test",
+]);
+
+const EVENT_SOURCE_SHAPE = /^[a-z][a-z0-9]*([_-][a-z0-9]+)*$/;
+
+function isValidSensitivity(value) {
+  return SENSITIVITY_LEVELS.includes(value);
+}
+
+function sensitivityRank(value) {
+  const index = SENSITIVITY_LEVELS.indexOf(value);
+  return index === -1 ? 0 : index;
+}
+
+/**
+ * True when an event at `eventSensitivity` may be delivered to a subscription
+ * whose ceiling is `maxSensitivity`. Unknown values fail closed to `normal`.
+ */
+function sensitivityAllowed(eventSensitivity, maxSensitivity) {
+  return sensitivityRank(eventSensitivity) <= sensitivityRank(maxSensitivity);
+}
+
+function isValidSourceShape(source) {
+  return typeof source === "string" && source.length <= 32 && EVENT_SOURCE_SHAPE.test(source);
+}
+
+function isKnownSource(source) {
+  return KNOWN_EVENT_SOURCES.includes(source);
+}
+
 module.exports = {
   EVENT_NAMESPACES,
+  SENSITIVITY_LEVELS,
+  REDACTION_STATES,
+  KNOWN_EVENT_SOURCES,
+  EVENT_SOURCE_SHAPE,
+  isValidSensitivity,
+  sensitivityRank,
+  sensitivityAllowed,
+  isValidSourceShape,
+  isKnownSource,
   KNOWN_EVENT_TYPES,
   EVENT_TYPE_SHAPE,
   WILDCARD_EVENT_TYPE,

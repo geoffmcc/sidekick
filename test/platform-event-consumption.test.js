@@ -36,7 +36,18 @@ function test(name, fn) {
 function resetEvents() {
   kernel.ensurePlatformKernelSchema();
   const db = dbStore.getDb();
-  db.exec("DELETE FROM platform_event_deliveries; DELETE FROM platform_event_offsets; DELETE FROM platform_event_subscriptions; DELETE FROM platform_execution_events;");
+  // Delete in dependency order. The graph is not obvious: transitions reference
+  // events, and events themselves reference executions, so executions must go
+  // LAST rather than first.
+  db.exec([
+    "DELETE FROM platform_event_deliveries;",
+    "DELETE FROM platform_event_offsets;",
+    "DELETE FROM platform_event_subscriptions;",
+    "DELETE FROM platform_execution_transitions;",
+    "DELETE FROM platform_execution_events;",
+    "DELETE FROM platform_execution_claims;",
+    "DELETE FROM platform_executions;",
+  ].join(" "));
   drainer.clearHandlers();
   delete process.env.SIDEKICK_EVENT_BACKLOG_CAP;
 }
@@ -295,6 +306,142 @@ test("the drain loop starts, is idempotent, and stops", () => {
   assert.strictEqual(drainer.isRunning(), true);
   assert.strictEqual(drainer.stopDrainer().stopped, true);
   assert.strictEqual(drainer.isRunning(), false);
+});
+
+// ---- causation (B5 residual) ------------------------------------------------
+
+test("an event published while handling another event inherits it as its cause", () => {
+  resetEvents();
+  // The textbook causation case, and the one that only became real once a
+  // consumer existed to publish from.
+  drainer.registerHandler("causing.consumer", () => {
+    kernel.appendEvent({ event_type: "delivery.derived", source: "test", payload: { derived: true } });
+  }, { event_type: "delivery.cause" });
+
+  const cause = kernel.appendEvent({ event_type: "delivery.cause", source: "test" });
+  assert.strictEqual(drainer.drainOnce().delivered, 1);
+
+  const derived = dbStore.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_type = 'delivery.derived'").get();
+  assert.strictEqual(derived.causation_id, cause.event_id, "the handled event is recorded as the cause");
+  assert.strictEqual(kernel.getAmbientCausationId(), null, "the context does not leak past the delivery");
+});
+
+test("an explicit causation_id always wins over the ambient one", () => {
+  resetEvents();
+  drainer.registerHandler("explicit.consumer", () => {
+    kernel.appendEvent({ event_type: "delivery.derived", source: "test", causation_id: "evt_explicit" });
+  }, { event_type: "delivery.cause" });
+  kernel.appendEvent({ event_type: "delivery.cause", source: "test" });
+  drainer.drainOnce();
+  const derived = dbStore.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_type = 'delivery.derived'").get();
+  assert.strictEqual(derived.causation_id, "evt_explicit");
+});
+
+test("execution state changes form a causal chain", () => {
+  resetEvents();
+  const execution = kernel.createExecution({ kind: "test", actor_id: "tester", source: "test" });
+  kernel.transitionExecution(execution.execution_id, "running", { source: "test" });
+  kernel.transitionExecution(execution.execution_id, "completed", { source: "test" });
+
+  const events = dbStore.getDb()
+    .prepare("SELECT event_id, event_type, causation_id FROM platform_execution_events WHERE execution_id = ? AND event_type LIKE 'execution.%' ORDER BY rowid")
+    .all(execution.execution_id);
+  const running = events.find(e => e.event_type === "execution.running");
+  const completed = events.find(e => e.event_type === "execution.completed");
+  assert.ok(running && completed, "both transitions were recorded");
+  assert.strictEqual(completed.causation_id, running.event_id, "each state change is caused by the one before it");
+});
+
+// ---- payload safety on delivery (B5 residual) -------------------------------
+
+test("a payload not stored redacted is redacted before it reaches a handler", () => {
+  resetEvents();
+  // 44% of the production ledger is redaction_state "none" — module transitions
+  // and pack events keep raw error text on purpose. Consuming it is what makes
+  // it leave the database.
+  let seen = null;
+  drainer.registerHandler("redact.consumer", event => { seen = event; }, { event_type: "delivery.raw" });
+  kernel.appendEvent({
+    event_type: "delivery.raw",
+    source: "test",
+    redaction_state: "none",
+    payload: { error: "connect failed with Authorization: Bearer sk-live-abcdef", token: "sk-live-abcdef" },
+  });
+  assert.strictEqual(drainer.drainOnce().delivered, 1);
+
+  assert.strictEqual(seen.redacted_by_delivery, true, "the handler is told the payload was redacted in transit");
+  assert.strictEqual(seen.original_redaction_state, "none");
+  assert.strictEqual(seen.redaction_state, "redacted");
+  assert.ok(!JSON.stringify(seen.payload).includes("sk-live-abcdef"), "no credential survives into handler code");
+
+  const stored = dbStore.getDb().prepare("SELECT payload_json, redaction_state FROM platform_execution_events WHERE event_type = 'delivery.raw'").get();
+  assert.strictEqual(stored.redaction_state, "none", "the ledger still records honestly what was stored");
+  assert.ok(stored.payload_json.includes("sk-live-abcdef"), "delivery redaction does not rewrite history");
+});
+
+test("a subscription may opt in to unredacted payloads, explicitly", () => {
+  resetEvents();
+  let seen = null;
+  drainer.registerHandler("raw.consumer", event => { seen = event; }, { event_type: "delivery.raw", accepts_unredacted: true });
+  const sub = kernel.listEventSubscriptions().find(s => s.name === "raw.consumer");
+  assert.strictEqual(sub.metadata.accepts_unredacted, true, "the opt-in is durable and inspectable, not a handler-side flag");
+
+  kernel.appendEvent({ event_type: "delivery.raw", source: "test", redaction_state: "none", payload: { error: "raw sk-live-abcdef" } });
+  drainer.drainOnce();
+  assert.strictEqual(seen.redacted_by_delivery, false);
+  assert.ok(seen.payload.error.includes("sk-live-abcdef"), "the opted-in consumer receives the raw text");
+});
+
+test("an already-redacted payload is passed through untouched", () => {
+  resetEvents();
+  let seen = null;
+  drainer.registerHandler("passthrough.consumer", event => { seen = event; }, { event_type: "delivery.clean" });
+  kernel.appendEvent({ event_type: "delivery.clean", source: "test", payload: { detail: "ordinary text" } });
+  drainer.drainOnce();
+  assert.strictEqual(seen.redacted_by_delivery, false);
+  assert.strictEqual(seen.payload.detail, "ordinary text");
+});
+
+// ---- sensitivity (B5 residual) ----------------------------------------------
+
+test("sensitivity is a closed set and defaults to normal", () => {
+  resetEvents();
+  assert.strictEqual(kernel.appendEvent({ event_type: "delivery.test", source: "test" }).sensitivity, "normal");
+  assert.strictEqual(kernel.appendEvent({ event_type: "delivery.test", source: "test", sensitivity: "secret" }).sensitivity, "secret");
+  assert.throws(() => kernel.appendEvent({ event_type: "delivery.test", source: "test", sensitivity: "kinda-secret" }), /sensitivity must be one of/);
+});
+
+test("fan-out withholds events above a subscription's sensitivity ceiling", () => {
+  resetEvents();
+  drainer.registerHandler("normal.consumer", () => {}, { event_type: "delivery.graded" });
+  drainer.registerHandler("cleared.consumer", () => {}, { event_type: "delivery.graded", max_sensitivity: "secret" });
+
+  kernel.appendEvent({ event_type: "delivery.graded", source: "test", sensitivity: "secret" });
+  const delivered = kernel.listEventDeliveries({ limit: 100 });
+  assert.strictEqual(delivered.length, 1, "only the cleared subscription is addressed");
+  assert.strictEqual(delivered[0].subscription_name, "cleared.consumer");
+
+  // Gating at fan-out means no row exists to leak later via requeue or the UI.
+  kernel.appendEvent({ event_type: "delivery.graded", source: "test" });
+  assert.strictEqual(kernel.listEventDeliveries({ limit: 100 }).length, 3, "a normal event reaches both");
+});
+
+// ---- provenance (B5 residual) -----------------------------------------------
+
+test("event source shape is enforced and unknown sources are flagged, not dropped", () => {
+  resetEvents();
+  assert.throws(() => kernel.appendEvent({ event_type: "delivery.test", source: "Bad Source!" }), /event source must be lowercase/);
+  assert.throws(() => kernel.appendEvent({ event_type: "delivery.test", source: "UPPER" }), /event source must be lowercase/);
+  // A missing or empty source keeps its long-standing default rather than
+  // failing a publisher that never set one.
+  assert.strictEqual(kernel.appendEvent({ event_type: "delivery.test", source: "" }).source, "platform");
+  assert.strictEqual(kernel.appendEvent({ event_type: "delivery.test" }).source, "platform");
+
+  // Unknown but well-formed is allowed on purpose: nearly every production
+  // publisher swallows appendEvent errors, so rejecting would silently drop the
+  // event rather than record it with odd provenance.
+  const event = kernel.appendEvent({ event_type: "delivery.test", source: "brand-new-subsystem" });
+  assert.strictEqual(event.source, "brand-new-subsystem");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

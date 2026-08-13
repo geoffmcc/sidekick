@@ -1,8 +1,9 @@
 const crypto = require("crypto");
 const path = require("path");
 const dbStore = require("../db");
+const { AsyncLocalStorage } = require("async_hooks");
 const eventVocabulary = require("./event-vocabulary");
-const { redactSensitive } = require("../redact");
+const { redactSensitive, redactSensitiveKeysDeep } = require("../redact");
 const { KERNEL_SCHEMA_SQL } = require("./kernel-schema");
 const { ensurePlatformModuleSchema } = require("../modules/schema");
 const { ensureCapabilityPackSchema } = require("../packs/schema");
@@ -294,8 +295,16 @@ function transitionExecution(executionId, newState, details = {}) {
         error_category = COALESCE(?, error_category), result_summary = COALESCE(?, result_summary), heartbeat_at = COALESCE(?, heartbeat_at)
     WHERE execution_id = ?
   `).run(newState, ts, completedAt, details.result_status || null, details.error_category || null, details.result_summary ? redactSensitive(details.result_summary) : null, details.heartbeat_at || null, executionId);
+  // The previous transition's event is this one's cause: a state change follows
+  // from the change before it. `platform_execution_transitions` already records
+  // the event id per transition, so the chain is derivable without new schema —
+  // it was simply never read back.
+  const previousTransition = db.prepare(
+    "SELECT event_id FROM platform_execution_transitions WHERE execution_id = ? AND event_id IS NOT NULL ORDER BY id DESC LIMIT 1"
+  ).get(executionId);
   const event = appendEvent({
     event_type: `execution.${newState}`,
+    causation_id: details.causation_id || previousTransition?.event_id || null,
     source: details.source || "platform",
     actor_id: details.actor_id || current.actor_id,
     execution_id: executionId,
@@ -313,12 +322,79 @@ function transitionExecution(executionId, newState, details = {}) {
   return getExecution(executionId);
 }
 
+/**
+ * Ambient causation. `causation_id` existed in the schema from the start and no
+ * publisher ever set it, so the ledger recorded *that* things happened and
+ * never *what caused* them — correlation grouped a chain, but the parentage
+ * inside it was lost.
+ *
+ * The textbook case only became real when B5 shipped a consumer: an event
+ * published while handling another event is caused by it. Threading that
+ * through every handler signature would be invasive and easy to forget, so the
+ * drainer establishes it as context instead and `appendEvent` picks it up.
+ * AsyncLocalStorage rather than a module-level variable because a handler may
+ * be async, and a plain variable would leak one delivery's causation into a
+ * concurrently-running one.
+ *
+ * An explicit `causation_id` on the input always wins over the ambient value.
+ */
+/**
+ * Provenance validation, NOT authorization. It rejects a malformed `source` and
+ * flags one that no known producer uses; it cannot tell whether the caller is
+ * entitled to claim that source, because in single-operator mode there is no
+ * durable actor identity to check against (see docs/platform-events.md).
+ *
+ * Unknown-but-well-formed sources are allowed for the same reason unknown
+ * namespaces are: nearly every production publisher wraps `appendEvent` in a
+ * swallowed try/catch, so rejecting would silently drop the event — strictly
+ * worse than recording it with odd provenance. The set has already drifted on
+ * its own (`approval` vs `approvals`), which is what the warning surfaces.
+ */
+const warnedUnknownSources = new Set();
+
+function normalizeEventSource(value) {
+  const source = String(value || "").trim();
+  if (!eventVocabulary.isValidSourceShape(source)) {
+    throw new Error(`event source must be lowercase alphanumeric with - or _ separators, got: ${JSON.stringify(source).slice(0, 64)}`);
+  }
+  if (!eventVocabulary.isKnownSource(source) && !warnedUnknownSources.has(source)) {
+    // Once per process per source: a new publisher should be visible, but not
+    // at one log line per event.
+    warnedUnknownSources.add(source);
+    console.error(JSON.stringify({ level: "warn", event: "platform.event.unknown_source", source }));
+  }
+  return source;
+}
+
+function normalizeEventSensitivity(value) {
+  if (value === undefined || value === null || value === "") return "normal";
+  const sensitivity = String(value);
+  if (!eventVocabulary.isValidSensitivity(sensitivity)) {
+    throw new Error(`event sensitivity must be one of ${eventVocabulary.SENSITIVITY_LEVELS.join(", ")}, got: ${JSON.stringify(sensitivity).slice(0, 32)}`);
+  }
+  return sensitivity;
+}
+
+const causationContext = new AsyncLocalStorage();
+
+function runWithCausation(eventId, fn) {
+  if (!eventId) return fn();
+  return causationContext.run({ eventId: String(eventId) }, fn);
+}
+
+function getAmbientCausationId() {
+  return causationContext.getStore()?.eventId || null;
+}
+
 function appendEvent(input = {}) {
   ensurePlatformKernelSchema();
   const db = dbStore.getDb();
   const eventId = input.event_id || newId("evt");
   const payload = input.payload || {};
   const ts = input.timestamp || nowIso();
+  const source = normalizeEventSource(input.source || "platform");
+  const sensitivity = normalizeEventSensitivity(input.sensitivity);
+  const causationId = input.causation_id || getAmbientCausationId();
   const insertEvent = db.prepare(`
     INSERT INTO platform_execution_events (
       event_id, event_type, schema_version, timestamp, source, actor_id, subject_type, subject_id,
@@ -337,7 +413,7 @@ function appendEvent(input = {}) {
         eventId,
         input.event_type,
         ts,
-        input.source || "platform",
+        source,
         input.actor_id || null,
         input.subject_type || null,
         input.subject_id || null,
@@ -349,13 +425,13 @@ function appendEvent(input = {}) {
         input.session_id || null,
         input.severity || "info",
         json(payload),
-        input.sensitivity || "normal",
+        sensitivity,
         input.dedupe_key || null,
-        input.causation_id || null,
+        causationId,
         input.correlation_id || input.root_execution_id || input.execution_id || null,
         input.redaction_state || "redacted"
       );
-      enqueueDeliveriesForEvent(db, { event_id: eventId, event_type: input.event_type });
+      enqueueDeliveriesForEvent(db, { event_id: eventId, event_type: input.event_type, sensitivity });
     })();
   } catch (error) {
     if (input.dedupe_key && /UNIQUE constraint failed/.test(error.message)) {
@@ -469,8 +545,18 @@ function enqueueDeliveriesForEvent(db, event) {
   if (!subscriptions.length) return 0;
   const cap = getEventBacklogCap();
   const ts = nowIso();
+  const eventSensitivity = event.sensitivity || "normal";
   let queued = 0;
   for (const subscription of subscriptions) {
+    // Sensitivity ceiling, declared per subscription and defaulting to `normal`.
+    // Gating at FAN-OUT rather than at delivery is the stricter choice: an event
+    // a subscription may not see never becomes a row addressed to it, so it
+    // cannot leak through a later handler change, a requeue, or the dashboard's
+    // delivery list. Every event in the production ledger is `normal` today, so
+    // this gate is inert until a publisher raises one — it is a policy hook, not
+    // a claim that anything is currently being withheld.
+    const maxSensitivity = parseJson(subscription.metadata_json, {}).max_sensitivity || "normal";
+    if (!eventVocabulary.sensitivityAllowed(eventSensitivity, maxSensitivity)) continue;
     if (countUndeliveredDeliveries(db, subscription.subscription_id, cap) >= cap) {
       // Auto-pause at the cap. This is the fix for the operational hazard that
       // POST /api/event-subscriptions created: a subscription nothing drains
@@ -501,7 +587,7 @@ function enqueueDeliveriesForEvent(db, event) {
 function enqueueEventDeliveries(eventId) {
   ensurePlatformKernelSchema();
   const db = dbStore.getDb();
-  const event = db.prepare("SELECT event_id, event_type FROM platform_execution_events WHERE event_id = ?").get(eventId);
+  const event = db.prepare("SELECT event_id, event_type, sensitivity FROM platform_execution_events WHERE event_id = ?").get(eventId);
   if (!event) return 0;
   return db.transaction(() => enqueueDeliveriesForEvent(db, event))();
 }
@@ -628,14 +714,47 @@ function requeueEventDelivery(deliveryId) {
   return normalizeEventDelivery(dbStore.getDb().prepare("SELECT * FROM platform_event_deliveries WHERE delivery_id = ?").get(String(deliveryId)));
 }
 
+/**
+ * Prepares the event object handed to a handler.
+ *
+ * 44% of the production ledger is stored with `redaction_state: "none"` — module
+ * transitions and pack events deliberately keep arbitrary error text and label
+ * themselves honestly. That was safe while nothing consumed events. A consumer
+ * changes the trust boundary: the payload now leaves the database and reaches
+ * handler code (and, for the built-in consumers, a log line).
+ *
+ * So delivery redacts anything not already stored redacted, and says so on the
+ * object. A subscription that genuinely needs raw text opts in with
+ * `metadata.accepts_unredacted`, which is a deliberate, visible, per-subscription
+ * decision rather than the default.
+ */
+function prepareDeliveredEvent(row, subscriptionMetadata = {}) {
+  const event = { ...row, payload: parseJson(row.payload_json, {}) };
+  const alreadyRedacted = row.redaction_state === "redacted";
+  if (alreadyRedacted || subscriptionMetadata.accepts_unredacted === true) {
+    event.redacted_by_delivery = false;
+    return event;
+  }
+  event.payload = redactSensitiveKeysDeep(event.payload);
+  event.original_redaction_state = row.redaction_state;
+  event.redaction_state = "redacted";
+  event.redacted_by_delivery = true;
+  return event;
+}
+
 function deliverEvent(deliveryId, handler) {
   if (typeof handler !== "function") throw new Error("delivery handler is required");
   const delivery = claimEventDelivery(deliveryId);
   if (!delivery) return null;
-  const event = dbStore.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_id = ?").get(delivery.event_id);
-  event.payload = parseJson(event.payload_json, {});
+  const row = dbStore.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_id = ?").get(delivery.event_id);
+  const subscriptionMetadata = parseJson(
+    dbStore.getDb().prepare("SELECT metadata_json FROM platform_event_subscriptions WHERE subscription_id = ?").get(delivery.subscription_id)?.metadata_json,
+    {}
+  );
+  const event = prepareDeliveredEvent(row, subscriptionMetadata);
   try {
-    handler(event);
+    // Anything the handler publishes is caused by the event it is handling.
+    runWithCausation(event.event_id, () => handler(event));
     return completeEventDelivery(delivery.delivery_id, { ok: true });
   } catch (error) {
     return completeEventDelivery(delivery.delivery_id, { ok: false, error: error.message });
@@ -2136,6 +2255,8 @@ module.exports = {
   setEventSubscriptionState,
   listEventSubscriptions,
   enqueueEventDeliveries,
+  runWithCausation,
+  getAmbientCausationId,
   getEventBacklogCap,
   listClaimableEventDeliveries,
   recoverStaleEventDeliveries,
