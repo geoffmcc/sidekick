@@ -2001,6 +2001,20 @@ function backfillWorkspaceSecrets(details = {}) {
   return { workspaces_scanned: rows.length, workspaces_migrated: workspacesMigrated, secrets_migrated: migrated, secrets_skipped_existing: skippedExisting, secrets_skipped_null: skippedNull, workspaces_unreadable: unreadable, workspaces_retained: retained };
 }
 
+/**
+ * DEPRECATED — `platform_model_registry` is a second model registry.
+ *
+ * `compute_models` (via `src/compute/model-registry.js`) is the single model
+ * authority: it is what placement ranks, what the inference service dispatches
+ * against, and what the provider bootstrap seeds. This table has never had a
+ * production caller — only tests — and duplicating model identity across two
+ * stores is how the two drift into disagreeing about what exists.
+ *
+ * These functions are retained (not deleted) so the schema and its tests keep
+ * building, and are deliberately NOT bridged to `compute_models`: a sync bridge
+ * would make the duplication permanent instead of ending it. Do not add callers.
+ * `test/compute-model-dedup.test.js` fails if production code starts using them.
+ */
 function registerModel(input = {}) {
   ensurePlatformKernelSchema();
   const ts = nowIso();

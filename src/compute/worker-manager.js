@@ -398,6 +398,13 @@ function heartbeat(workerId, { utilization, currentJobs }) {
     updates.connection_state = "online";
     updates.state = deriveLegacyState("online", worker.adminState, worker.credentialState);
   }
+  // health_state was backfilled by migration 022 and then never maintained by
+  // anything, so every worker read back `unknown` forever. A heartbeat is the
+  // one moment the server has first-hand evidence the worker is reachable, so
+  // it is where `healthy` is earned. `degraded` stays an explicit operator or
+  // telemetry judgement through updateWorker; this only distinguishes
+  // "answering" from "not heard from".
+  updates.health_state = "healthy";
   const setClauses = Object.keys(updates).map(k => k + " = ?");
   const params = [...Object.values(updates), workerId];
   db.prepare(`UPDATE compute_workers SET ${setClauses.join(", ")} WHERE worker_id = ?`).run(...params);
@@ -411,20 +418,6 @@ function revokeWorker(workerId, reason = "admin_revoked") {
   db.prepare("UPDATE compute_workers SET state = 'revoked', credential_state = 'revoked', revocation_reason = ?, revoked_at = ?, updated_at = ? WHERE worker_id = ?")
     .run(reason, now, now, workerId);
   return getWorker(workerId);
-}
-
-function checkWorkersOffline(timeoutMs = 90000) {
-  ensureSchema();
-  const db = dbStore.getDb();
-  const cutoff = new Date(Date.now() - timeoutMs).toISOString();
-  const offline = db.prepare(
-    "SELECT worker_id FROM compute_workers WHERE state IN ('online', 'degraded') AND last_heartbeat < ?"
-  ).all(cutoff);
-  for (const { worker_id } of offline) {
-    db.prepare("UPDATE compute_workers SET state = 'offline', updated_at = ? WHERE worker_id = ?")
-      .run(nowIso(), worker_id);
-  }
-  return offline.map(w => w.worker_id);
 }
 
 // Periodic connection reconciliation over the multi-dimensional state model.
@@ -445,7 +438,7 @@ function reconcileWorkerStates(thresholdMs = 90000) {
   `).all(cutoff);
   const update = db.prepare(`
     UPDATE compute_workers
-    SET connection_state = 'offline', state = ?, disconnected_at = ?, last_disconnect_reason = 'missed_heartbeat', updated_at = ?
+    SET connection_state = 'offline', state = ?, health_state = 'unknown', disconnected_at = ?, last_disconnect_reason = 'missed_heartbeat', updated_at = ?
     WHERE worker_id = ?
   `);
   for (const row of stale) {
@@ -501,7 +494,6 @@ module.exports = {
   updateWorker,
   heartbeat,
   revokeWorker,
-  checkWorkersOffline,
   reconcileWorkerStates,
   disconnectWorker,
   deriveLegacyState,
