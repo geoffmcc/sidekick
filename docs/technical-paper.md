@@ -311,7 +311,7 @@ Current LLM behavior in `agent.js` is code-truth specific:
 - It emits provider and fallback events to the stream.
 - It detects installed Ollama models and prefers coding models such as `qwen2.5-coder`, then general models, then a fallback.
 
-The `llm` tool has its own provider selection behavior and can use `SIDEKICK_DEFAULT_LLM`.
+The `llm` tool selects among the configured Compute providers; callers may request a provider explicitly.
 
 The Agent Bridge also loads and executes:
 

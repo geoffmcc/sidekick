@@ -711,10 +711,9 @@ This follows the principle of least privilege: after initial setup, the sidekick
 | `SIDEKICK_AUTO_MEMORY_MAX` | `500` | Max retained automatic memory entries |
 | `SIDEKICK_EMBEDDINGS` | `1` | Enable semantic memory embeddings when Ollama/Qdrant are available |
 | `SIDEKICK_EMBEDDING_MODEL` | `nomic-embed-text` | Ollama embedding model for semantic memory recall |
-| `SIDEKICK_OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama URL used by memory embedding helpers |
 | `SIDEKICK_AGENT_MODEL` | auto-detected, preferring `llama3.1` | Ollama model used by the Agent Bridge |
 | `SIDEKICK_HEALTHCHECK_URL` | `https://github.com` | HTTPS endpoint used to verify outbound DNS and TLS connectivity |
-| `SIDEKICK_POSTGRES_URL` | `postgresql://sidekick:sidekick@127.0.0.1:5432/sidekick` | PostgreSQL connection string |
+| `SIDEKICK_POSTGRES_URL` | — | Optional PostgreSQL connection string; overrides the discrete connection fields |
 | `SIDEKICK_REDIS_URL` | `redis://127.0.0.1:6379` | Redis connection string |
 | `SIDEKICK_QDRANT_URL` | `http://127.0.0.1:6333` | Qdrant vector DB URL |
 | `SIDEKICK_INFLUX_URL` | `http://127.0.0.1:8086` | InfluxDB URL |
@@ -722,6 +721,9 @@ This follows the principle of least privilege: after initial setup, the sidekick
 | `SIDEKICK_POSTGRES_PASSWORD` | — | Required when starting the bundled PostgreSQL container via `docker/docker-compose.yml` |
 | `SIDEKICK_INFLUX_PASSWORD` | — | Required when starting the bundled InfluxDB container via `docker/docker-compose.yml` |
 | `SIDEKICK_GRAFANA_ADMIN_PASSWORD` | — | Required when starting the bundled Grafana container via `docker/docker-compose.yml` |
+| `SIDEKICK_GRAFANA_PORT` | `3000` | Local Grafana port used by dashboard health checks and proxying |
+| `SIDEKICK_GRAFANA_ROOT_URL` | `http://localhost:4098/grafana/` | Compose-only Grafana public root URL |
+| `SIDEKICK_ALLOW_PRIVATE_FETCH` | `false` | Allow web fetches to loopback/private destinations; metadata and link-local remain blocked |
 | `SIDEKICK_INFLUX_ORG` | `sidekick` | InfluxDB organization |
 | `SIDEKICK_INFLUX_BUCKET` | `sidekick` | InfluxDB bucket for metrics |
 

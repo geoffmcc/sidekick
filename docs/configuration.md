@@ -198,10 +198,13 @@ SIDEKICK_AUTO_MEMORY=1
 SIDEKICK_AUTO_MEMORY_MAX=500
 SIDEKICK_EMBEDDINGS=1
 SIDEKICK_EMBEDDING_MODEL=nomic-embed-text
-SIDEKICK_OLLAMA_URL=http://127.0.0.1:11434
 ```
 
 Set `SIDEKICK_AUTO_MEMORY=0` to disable automatic memory. Increase or decrease `SIDEKICK_AUTO_MEMORY_MAX` to control how many automatic memory entries are retained. Set `SIDEKICK_EMBEDDINGS=0` to disable semantic memory embeddings; otherwise Sidekick uses Ollama and Qdrant when available.
+
+`SIDEKICK_QDRANT_URL` selects the Qdrant endpoint for semantic memory embeddings. The embedding service uses `OLLAMA_URL` and `OLLAMA_MODEL`.
+
+`SIDEKICK_ALLOW_PRIVATE_FETCH=true` permits `web_fetch` to reach loopback and private-network destinations. Metadata and link-local destinations remain blocked.
 
 Memory storage has three lifecycle surfaces:
 

@@ -72,17 +72,37 @@ async function fetchWinsw() {
     if (sha256(cached) === WINSW.sha256) return cached;
     fs.rmSync(WINSW.cache);
   }
-  const res = await fetch(WINSW.url, { signal: AbortSignal.timeout(60_000) });
-  if (!res.ok) throw new Error(`winsw download failed: HTTP ${res.status} for ${WINSW.url}`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  if (buf.length > 8 * 1024 * 1024) throw new Error(`winsw download oversized: ${buf.length} bytes (expected ~640 KiB)`);
-  const actual = sha256(buf);
-  if (actual !== WINSW.sha256) {
-    throw new Error(`winsw ${WINSW.version} SHA-256 mismatch: expected ${WINSW.sha256}, got ${actual}. Refusing to package an unverified binary.`);
+  const maxAttempts = 3;
+  let lastError;
+  let lastWasTransient = false;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const res = await fetch(WINSW.url, { signal: AbortSignal.timeout(60_000) });
+      if (res.status >= 400 && res.status < 500) {
+        throw new Error(`winsw download failed permanently: HTTP ${res.status} for ${WINSW.url}`);
+      }
+      if (!res.ok) throw new Error(`transient winsw download failure: HTTP ${res.status} for ${WINSW.url}`);
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length > 8 * 1024 * 1024) throw new Error(`winsw download oversized: ${buf.length} bytes (expected ~640 KiB)`);
+      const actual = sha256(buf);
+      if (actual !== WINSW.sha256) {
+        throw new Error(`winsw ${WINSW.version} SHA-256 mismatch: expected ${WINSW.sha256}, got ${actual}. Refusing to package an unverified binary.`);
+      }
+      fs.mkdirSync(path.dirname(WINSW.cache), { recursive: true });
+      fs.writeFileSync(WINSW.cache, buf);
+      return buf;
+    } catch (error) {
+      lastError = error;
+      const message = String(error && error.message || error);
+      const transient = message.startsWith("transient ") || error && (error.name === "AbortError" || error.name === "TimeoutError" || error.name === "TypeError" || error.code === "ETIMEDOUT" || error.code === "ECONNRESET" || error.code === "ENETUNREACH");
+      lastWasTransient = transient;
+      if (!transient || attempt === maxAttempts) break;
+      await new Promise(resolve => setTimeout(resolve, 500 * (2 ** (attempt - 1))));
+    }
   }
-  fs.mkdirSync(path.dirname(WINSW.cache), { recursive: true });
-  fs.writeFileSync(WINSW.cache, buf);
-  return buf;
+  const message = String(lastError && lastError.message || lastError);
+  if (!lastWasTransient) throw lastError;
+  throw new Error(`transient winsw download failure after ${maxAttempts} attempts: ${message}`);
 }
 
 // 2. Fresh output dir.

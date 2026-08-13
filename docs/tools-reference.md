@@ -46,7 +46,7 @@ Filesystem path guardrails are optional and default to open. Use `SIDEKICK_ALLOW
 | `delete` | Storage | Delete a stored value from KV storage by key | `{ key: "string" }` |
 | `resume` | Storage | Manage first-class project resume handoffs stored in the resume document. Use to check, set, clear, or list pending work without relying on ad hoc KV keys. | `{ action: "string (check|set|clear|list - default check)", project: "string (required for check/set/clear)", summary: "string (optional)", next_step: "string (optional)", status: "string (optional)", branch: "string (optional)", url: "string (optional)", notes: "string (optional)", include_cleared: "boolean (optional)", format: "string (optional, text|json - default text)" }` |
 | `web_fetch` | Core | Fetch a URL from the remote machine | `{ url: "string", method: "string (optional)", headers: "string (optional)", body: "string (optional)" }` |
-| `llm` | Core | Ask the LLM (defaults to local Ollama, use provider='groq' for cloud Groq) | `{ prompt: "string", system: "string (optional)", temperature: "number (optional)", provider: "string (optional, 'ollama' or 'groq' - default from SIDEKICK_DEFAULT_LLM env var or 'ollama')" }` |
+| `llm` | Core | Ask the LLM through the configured Compute providers | `{ prompt: "string", system: "string (optional)", temperature: "number (optional)", provider: "string (optional, 'ollama' or 'groq')" }` |
 | `list_projects` | Storage | List all unique project names in KV storage | `{}` |
 | `get_by_project` | Storage | Get all keys and values for a specific project | `{ project: "string" }` |
 | `search` | Core | Search file contents using ripgrep or grep | `{ pattern: "string", path: "string (optional)", include: "string (optional)" }` |
@@ -316,9 +316,9 @@ Arguments: `{ since: "string (ISO timestamp - get changes after this time)" }`
 
 ### `llm`
 
-Ask the LLM (defaults to local Ollama, use provider='groq' for cloud Groq)
+Ask the LLM through the configured Compute providers; pass `provider='groq'` to request cloud Groq explicitly.
 
-Arguments: `{ prompt: "string", system: "string (optional)", temperature: "number (optional)", provider: "string (optional, 'ollama' or 'groq' - default from SIDEKICK_DEFAULT_LLM env var or 'ollama')" }`
+Arguments: `{ prompt: "string", system: "string (optional)", temperature: "number (optional)", provider: "string (optional, 'ollama' or 'groq')" }`
 
 ### `teach`
 

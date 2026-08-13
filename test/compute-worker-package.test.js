@@ -20,8 +20,18 @@ function test(name, fn) {
   catch (e) { failed++; console.log(`  \x1b[31m✗\x1b[0m ${name}`); console.log(`    ${e.stack || e.message}`); }
 }
 
-// Build fresh.
-execFileSync('node', ['scripts/build-worker-package.js'], { cwd: REPO, stdio: 'ignore' });
+// Build fresh. A transient release-host outage should skip this optional
+// network-backed package test; permanent failures must still fail CI.
+try {
+  execFileSync('node', ['scripts/build-worker-package.js'], { cwd: REPO, encoding: 'utf8' });
+} catch (error) {
+  const detail = `${error.stdout || ''}\n${error.stderr || ''}`;
+  if (/transient winsw download failure/i.test(detail)) {
+    console.log('↷ Skipping worker package test: WinSW download was transiently unavailable');
+    process.exit(0);
+  }
+  throw error;
+}
 
 function listFiles(dir, prefix = '') {
   const out = [];
