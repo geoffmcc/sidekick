@@ -92,14 +92,93 @@ const RESOURCES = [
   { id: "storage/pve1/local-lvm", type: "storage", storage: "local-lvm", node: "pve1", plugintype: "lvmthin", content: "images,rootdir", status: "available", shared: 0 },
 ];
 
+// Dynamic guest store so provisioning/snapshot/delete are stateful. Seeded with
+// the two read-test guests; provisioning adds more.
+const store = new Map([
+  [100, { vmid: 100, node: "pve1", kind: "qemu", status: "running", template: 0, config: { name: "web", cores: 2, memory: 2048, agent: "1", ide2: "local:vm-100-cloudinit,media=cdrom", scsi0: "local-lvm:vm-100-disk-0" }, snapshots: [] }],
+  [101, { vmid: 101, node: "pve1", kind: "qemu", status: "stopped", template: 0, config: { name: "db", cores: 2, memory: 2048 }, snapshots: [] }],
+]);
+let nextFreeId = 200;
+function resourcesView() {
+  const guests = [...store.values()].map(g => ({ id: `${g.kind}/${g.vmid}`, type: g.kind, vmid: g.vmid, name: g.config.name, node: g.node, status: g.status, template: g.template, maxmem: (g.config.memory || 512) * 1048576, maxcpu: g.config.cores || 1 }));
+  return [...NODES.map(n => ({ ...n, id: `node/${n.node}` })), ...guests, ...RESOURCES.filter(r => r.type === "storage")];
+}
+function parseBody(raw) {
+  const params = new URLSearchParams(raw || "");
+  const obj = {};
+  for (const [k, v] of params) obj[k] = v;
+  return obj;
+}
+function newUpid(kind) {
+  const upid = `UPID:pve1:0000${Math.floor(Math.random() * 65536).toString(16)}:0000ABCD:6A000000:${kind}::root@pam:`;
+  tasks.set(upid, { polls: 0 });
+  return upid;
+}
+
 const server = https.createServer({ cert: certPem, key: keyPem }, (req, res) => {
+  let raw = "";
+  req.on("data", c => (raw += c));
+  req.on("end", () => handle(req, res, raw));
+});
+
+function handle(req, res, raw) {
   lastAuthHeader = req.headers.authorization || null;
   const url = new URL(req.url, "https://127.0.0.1");
   const p = url.pathname.replace(/^\/api2\/json/, "");
   const method = req.method;
+  const body = method === "GET" ? {} : parseBody(raw);
 
   // Auth gate: every route requires the PVEAPIToken header.
   if (lastAuthHeader !== `PVEAPIToken=${TOKEN}`) return sendError(res, 401, "authentication failure");
+
+  // --- provisioning: stateful routes ---
+  if (method === "GET" && p === "/cluster/nextid") return send(res, 200, String(nextFreeId));
+  if (method === "POST" && p === "/nodes/pve1/qemu") {
+    const vmid = Number(body.vmid) || nextFreeId++;
+    if (Number(body.vmid) >= nextFreeId) nextFreeId = Number(body.vmid) + 1;
+    store.set(vmid, { vmid, node: "pve1", kind: "qemu", status: "stopped", template: 0, config: { name: body.name, cores: Number(body.cores), memory: Number(body.memory), tags: body.tags, description: body.description }, snapshots: [] });
+    return send(res, 200, newUpid("qmcreate"));
+  }
+  const cfgMatch = p.match(/^\/nodes\/pve1\/qemu\/(\d+)\/config$/);
+  if (cfgMatch && method === "POST") {
+    const g = store.get(Number(cfgMatch[1]));
+    if (!g) return sendError(res, 500, "config does not exist");
+    Object.assign(g.config, Object.fromEntries(Object.entries(body).map(([k, v]) => [k, /^(cores|memory)$/.test(k) ? Number(v) : v])));
+    return send(res, 200, null);
+  }
+  const snapMatch = p.match(/^\/nodes\/pve1\/qemu\/(\d+)\/snapshot$/);
+  if (snapMatch && method === "POST") {
+    const g = store.get(Number(snapMatch[1]));
+    if (!g) return sendError(res, 500, "does not exist");
+    g.snapshots.push({ name: body.snapname, description: body.description || "", snaptime: 1700000000 });
+    return send(res, 200, newUpid("qmsnapshot"));
+  }
+  if (snapMatch && method === "GET") {
+    const g = store.get(Number(snapMatch[1])) || { snapshots: [] };
+    return send(res, 200, [...g.snapshots, { name: "current", description: "You are here!" }]);
+  }
+  const tmplMatch = p.match(/^\/nodes\/pve1\/qemu\/(\d+)\/template$/);
+  if (tmplMatch && method === "POST") {
+    const g = store.get(Number(tmplMatch[1]));
+    if (!g) return sendError(res, 500, "does not exist");
+    if (g.snapshots.length) return sendError(res, 500, "unable to create template, because VM contains snapshots");
+    g.template = 1;
+    return send(res, 200, null);
+  }
+  const cloneMatch = p.match(/^\/nodes\/pve1\/qemu\/(\d+)\/clone$/);
+  if (cloneMatch && method === "POST") {
+    const src = store.get(Number(cloneMatch[1]));
+    if (!src) return sendError(res, 500, "does not exist");
+    const newid = Number(body.newid);
+    store.set(newid, { vmid: newid, node: "pve1", kind: "qemu", status: "stopped", template: 0, config: { name: body.name || `${src.config.name}-clone`, cores: src.config.cores, memory: src.config.memory }, snapshots: [] });
+    if (newid >= nextFreeId) nextFreeId = newid + 1;
+    return send(res, 200, newUpid("qmclone"));
+  }
+  const delMatch = p.match(/^\/nodes\/pve1\/qemu\/(\d+)$/);
+  if (delMatch && method === "DELETE") {
+    store.delete(Number(delMatch[1]));
+    return send(res, 200, newUpid("qmdestroy"));
+  }
 
   if (method === "GET" && p === "/version") return send(res, 200, { release: "9.2", version: "9.2.10", repoid: "deadbeef" });
   if (method === "GET" && p === "/cluster/status") {
@@ -108,7 +187,7 @@ const server = https.createServer({ cert: certPem, key: keyPem }, (req, res) => 
       { type: "node", name: "pve1", online: 1, ip: "10.0.0.11", local: 1 },
     ]);
   }
-  if (method === "GET" && p === "/cluster/resources") return send(res, 200, RESOURCES);
+  if (method === "GET" && p === "/cluster/resources") return send(res, 200, resourcesView());
   if (method === "GET" && p === "/storage") {
     return send(res, 200, [
       { storage: "local", type: "dir", content: "iso,backup", shared: 0 },
@@ -129,16 +208,17 @@ const server = https.createServer({ cert: certPem, key: keyPem }, (req, res) => 
   if (method === "GET" && p === "/cluster/sdn/vnets") return send(res, 200, []);
   if (method === "GET" && p === "/cluster/backup") return send(res, 200, []);
   if (method === "GET" && p === "/nodes/pve1/tasks") return send(res, 200, []);
-  if (method === "GET" && p === "/nodes/pve1/qemu") return send(res, 200, RESOURCES.filter(r => r.type === "qemu").map(r => ({ vmid: r.vmid, name: r.name, status: r.status, maxmem: r.maxmem, maxcpu: r.maxcpu })));
-  if (method === "GET" && /^\/nodes\/pve1\/qemu\/\d+\/config$/.test(p)) {
-    const vmid = Number(p.split("/")[4]);
-    if (vmid === 100) return send(res, 200, { name: "web", cores: 2, memory: 2048, agent: "1", ide2: "local:vm-100-cloudinit,media=cdrom", scsi0: "local-lvm:vm-100-disk-0" });
-    return send(res, 200, { name: "db", cores: 2, memory: 2048 });
+  if (method === "GET" && p === "/nodes/pve1/qemu") return send(res, 200, [...store.values()].map(g => ({ vmid: g.vmid, name: g.config.name, status: g.status, maxmem: (g.config.memory || 512) * 1048576, maxcpu: g.config.cores || 1 })));
+  if (cfgMatch && method === "GET") {
+    const g = store.get(Number(cfgMatch[1]));
+    if (!g) return sendError(res, 500, "config does not exist");
+    return send(res, 200, { ...g.config, ...(g.template ? { template: 1 } : {}) });
   }
   if (method === "GET" && /^\/nodes\/pve1\/qemu\/\d+\/status\/current$/.test(p)) {
     const vmid = Number(p.split("/")[4]);
-    const r = RESOURCES.find(x => x.vmid === vmid) || {};
-    return send(res, 200, { vmid, name: r.name, status: r.status, qmpstatus: r.status, maxmem: r.maxmem, maxcpu: r.maxcpu, template: 0, ha: { managed: 0 } });
+    const g = store.get(vmid);
+    if (!g) return sendError(res, 500, "does not exist");
+    return send(res, 200, { vmid, name: g.config.name, status: g.status, qmpstatus: g.status, maxmem: (g.config.memory || 512) * 1048576, maxcpu: g.config.cores || 1, template: g.template, ha: { managed: 0 } });
   }
   if (method === "GET" && /^\/nodes\/pve1\/qemu\/\d+\/agent\//.test(p)) return sendError(res, 500, "No QEMU guest agent configured");
 
@@ -158,7 +238,7 @@ const server = https.createServer({ cert: certPem, key: keyPem }, (req, res) => 
   }
 
   return sendError(res, 501, `unmocked route ${method} ${p}`);
-});
+}
 
 require("../src/db").runPendingMigrations();
 const { loadSecrets, saveSecrets } = require("../src/core/secrets-store");
@@ -166,6 +246,32 @@ const { encryptSecret } = require("../src/core/secret-cipher");
 const bundled = require("../src/packs/bundled");
 const packLifecycle = require("../src/packs/lifecycle");
 const { callInternalTool } = require("../src/tools/dispatcher");
+const LIB = path.resolve(__dirname, "..", "packs", "proxmox", "modules", "proxmox-tools", "lib");
+const provenance = require(path.join(LIB, "provenance.js"));
+
+// The test-only guarded DELETE: it exists ONLY here, never in the shipped
+// client. It reads the target back, proves the exact Sidekick test-ownership
+// marker, and refuses anything it cannot prove it created.
+function directRequest(port, method, apiPath, body) {
+  return new Promise((resolve, reject) => {
+    const data = body ? new URLSearchParams(body).toString() : null;
+    const r = https.request({ host: "127.0.0.1", port, method, path: `/api2/json${apiPath}`, ca: certPem, rejectUnauthorized: true,
+      headers: { Authorization: `PVEAPIToken=${TOKEN}`, ...(data ? { "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(data) } : {}) } },
+      res => { let b = ""; res.on("data", c => b += c); res.on("end", () => { try { resolve(JSON.parse(b).data); } catch { resolve(null); } }); });
+    r.on("error", reject);
+    if (data) r.write(data);
+    r.end();
+  });
+}
+async function guardedDelete(port, node, vmid, expectedMarker) {
+  const cfg = await directRequest(port, "GET", `/nodes/${node}/qemu/${vmid}/config`).catch(() => null);
+  if (!cfg) return { deleted: false, reason: "already absent" };
+  const check = provenance.checkOwnership(cfg, { requireManaged: true, requireTest: true, requireMarker: expectedMarker });
+  if (!check.ok) return { deleted: false, refused: true, reason: check.reason };
+  await directRequest(port, "DELETE", `/nodes/${node}/qemu/${vmid}`);
+  const after = await directRequest(port, "GET", `/nodes/${node}/qemu/${vmid}/config`).catch(() => null);
+  return { deleted: !after };
+}
 
 function storeToken() {
   const secrets = loadSecrets();
@@ -310,6 +416,103 @@ function storeToken() {
     assert.strictEqual(lp.profiles.find(p => p.name === "notls").tls, "system_ca");
     const dp = json(await callInternalTool("proxmox", { action: "detect_providers" }));
     assert.ok(dp.providers.ansible && dp.providers.ansible.state.match(/installed|not_installed/));
+  });
+
+  // --- phase 2: provisioning, provenance, policy, guarded delete, ansible ---
+
+  await test("PXV.1: proxmox_provision and ansible_run register with high risk", async () => {
+    const reg = require("../src/tools-legacy");
+    assert.strictEqual(reg.getToolRisk("proxmox_provision"), "high");
+    assert.strictEqual(reg.getToolRisk("ansible_run"), "high");
+  });
+
+  await test("PXV.2: create_vm provisions a provenance-tagged guest through the tool", async () => {
+    const r = json(await callInternalTool("proxmox_provision", { action: "create_vm", profile: "main", vm: { node: "pve1", name: "sk-int-vm", cores: 1, memory: 512, disk: { storage: "local-lvm", size_gb: 1 } } }));
+    assert.strictEqual(r.ok, true, JSON.stringify(r));
+    assert.strictEqual(r.outcome, "created");
+    assert.ok(r.vmid >= 200, "a free vmid was allocated");
+    assert.ok(r.tags.includes("sidekick-managed"), "created guest is tagged sidekick-managed");
+    assert.ok(r.marker, "a provenance marker was recorded");
+    // The plan/explain is included and deterministic.
+    assert.strictEqual(r.explain.risk_class, "mutating");
+    // Read the config back through the read tool and confirm provenance is real.
+    const cfg = json(await callInternalTool("proxmox", { action: "guest_status", profile: "main", vmid: r.vmid }));
+    assert.strictEqual(cfg.vmid, r.vmid);
+  });
+
+  await test("PXV.3: dry_run returns a plan and makes no change", async () => {
+    const before = json(await callInternalTool("proxmox", { action: "list_guests", profile: "main" })).total;
+    const r = json(await callInternalTool("proxmox_provision", { action: "create_vm", profile: "main", dry_run: true, vm: { node: "pve1", name: "sk-dry", cores: 1, memory: 512 } }));
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.dry_run, true);
+    assert.ok(r.explain && r.explain.expected_effect, "explain carries the expected effect");
+    const after = json(await callInternalTool("proxmox", { action: "list_guests", profile: "main" })).total;
+    assert.strictEqual(after, before, "dry run created nothing");
+  });
+
+  await test("PXV.4: configure changes cpu/memory and verifies by read-back", async () => {
+    const created = json(await callInternalTool("proxmox_provision", { action: "create_vm", profile: "main", vm: { node: "pve1", name: "sk-cfg", cores: 1, memory: 512, disk: { storage: "local-lvm", size_gb: 1 } } }));
+    const r = json(await callInternalTool("proxmox_provision", { action: "configure", profile: "main", vmid: created.vmid, configure: { memory: 1024 } }));
+    assert.strictEqual(r.ok, true, JSON.stringify(r));
+    assert.strictEqual(r.applied.memory, 1024);
+  });
+
+  await test("PXV.5: snapshot_create then list_snapshots reflects it", async () => {
+    const created = json(await callInternalTool("proxmox_provision", { action: "create_vm", profile: "main", vm: { node: "pve1", name: "sk-snap", cores: 1, memory: 512, disk: { storage: "local-lvm", size_gb: 1 } } }));
+    const snap = json(await callInternalTool("proxmox_provision", { action: "snapshot_create", profile: "main", vmid: created.vmid, snapshot: { snapname: "s1" } }));
+    assert.strictEqual(snap.ok, true, JSON.stringify(snap));
+    const list = json(await callInternalTool("proxmox", { action: "list_snapshots", profile: "main", node: "pve1", vmid: created.vmid }));
+    assert.ok(list.snapshots.some(s => s.name === "s1"));
+  });
+
+  await test("PXV.6: clone produces a new provenance-tagged guest", async () => {
+    const tmpl = json(await callInternalTool("proxmox_provision", { action: "create_vm", profile: "main", vm: { node: "pve1", name: "sk-tmpl", cores: 1, memory: 512, disk: { storage: "local-lvm", size_gb: 1 } } }));
+    await callInternalTool("proxmox_provision", { action: "convert_template", profile: "main", vmid: tmpl.vmid });
+    const clone = json(await callInternalTool("proxmox_provision", { action: "clone", profile: "main", clone: { node: "pve1", source_vmid: tmpl.vmid, name: "sk-clone" } }));
+    assert.strictEqual(clone.ok, true, JSON.stringify(clone));
+    assert.notStrictEqual(clone.vmid, tmpl.vmid);
+    assert.ok(clone.tags.includes("sidekick-managed"));
+  });
+
+  await test("PXV.7: a protected resource is refused by deterministic policy", async () => {
+    const created = json(await callInternalTool("proxmox_provision", { action: "create_vm", profile: "main", vm: { node: "pve1", name: "sk-prot", cores: 1, memory: 512, disk: { storage: "local-lvm", size_gb: 1 } } }));
+    packLifecycle.configure("proxmox", {
+      protected_resources: [{ vmid: created.vmid }],
+      profiles: { main: { endpoint, token_ref: "secret:proxmox_test_token", ca_pem: certPem, allow_lifecycle: true, task_poll_interval_ms: 300, task_timeout_ms: 5000, default: true } },
+    });
+    const r = json(await callInternalTool("proxmox_provision", { action: "configure", profile: "main", vmid: created.vmid, configure: { memory: 2048 } }));
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.code, "protected_resource");
+    // Protection is a hard deny for ALL mutating ops, snapshots included.
+    const snap = json(await callInternalTool("proxmox_provision", { action: "snapshot_create", profile: "main", vmid: created.vmid, snapshot: { snapname: "nope" } }));
+    assert.strictEqual(snap.ok, false);
+    assert.strictEqual(snap.code, "protected_resource");
+    // restore config without protection
+    packLifecycle.configure("proxmox", { profiles: { main: { endpoint, token_ref: "secret:proxmox_test_token", ca_pem: certPem, allow_lifecycle: true, task_poll_interval_ms: 300, task_timeout_ms: 5000, default: true } } });
+  });
+
+  await test("PXV.8: the test-only guarded DELETE verifies ownership and refuses foreign resources", async () => {
+    // Create a disposable TEST resource directly with a test-ownership marker.
+    const prov = provenance.buildProvenance({ run: "int-test", test: true });
+    const marker = prov.marker;
+    await directRequest(port, "POST", "/nodes/pve1/qemu", { vmid: 990, name: "sk-del-test", tags: prov.tags, description: prov.description });
+    // The guard deletes it because the exact marker matches.
+    const ok = await guardedDelete(port, "pve1", 990, marker);
+    assert.strictEqual(ok.deleted, true, JSON.stringify(ok));
+    // The guard REFUSES a guest it cannot prove it created (vmid 100, unmarked).
+    const refused = await guardedDelete(port, "pve1", 100, marker);
+    assert.strictEqual(refused.deleted, false);
+    assert.strictEqual(refused.refused, true);
+  });
+
+  await test("PXV.9: ansible_run detect reports state and dry_run without config is not_ready", async () => {
+    const det = json(await callInternalTool("ansible_run", { action: "detect" }));
+    assert.strictEqual(det.ok, true);
+    assert.ok(["not_installed", "installed_unconfigured", "misconfigured", "ready"].includes(det.ansible.state));
+    const dry = json(await callInternalTool("ansible_run", { action: "dry_run", playbook: "baseline.yml", hosts: [{ alias: "h", host: "10.0.0.9" }] }));
+    // Not configured (no playbook_dir) or ansible absent -> a clean not-ready code, never a crash.
+    assert.strictEqual(dry.ok, false);
+    assert.ok(["not_configured", "provider_unavailable"].includes(dry.code), dry.code);
   });
 
   await test("PX.15: an invalid profile makes pack health fail closed, and is recoverable", async () => {

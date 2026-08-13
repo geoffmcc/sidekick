@@ -139,13 +139,121 @@ function validateSecretRef(value) {
   return { ok: true, value };
 }
 
+// --- provisioning field validators -----------------------------------------
+
+// Guest name / hostname: a DNS label.
+const GUEST_NAME_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/;
+// Snapshot name (pve-common): letters/digits/_/-, starting alnum, <=40.
+const SNAPNAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,39}$/;
+// cloud-init username.
+const CI_USER_RE = /^[a-z_][a-z0-9_-]{0,31}$/;
+// A storage:vztmpl/<file> OS template volume id for LXC.
+const OSTEMPLATE_RE = /^[A-Za-z][A-Za-z0-9\-_.]{0,99}:vztmpl\/[A-Za-z0-9][\w.\-+]{0,127}$/;
+const NET_MODELS = new Set(["virtio", "e1000", "rtl8139", "vmxnet3"]);
+const OS_TYPES = new Set(["l26", "l24", "other", "wxp", "w2k", "w2k3", "w2k8", "wvista", "win7", "win8", "win10", "win11", "solaris"]);
+const LXC_OSTYPES = new Set(["debian", "ubuntu", "centos", "fedora", "alpine", "archlinux", "opensuse", "unmanaged"]);
+
+function validateGuestName(value) {
+  if (typeof value !== "string" || !GUEST_NAME_RE.test(value)) {
+    return invalid("name", "name must be a DNS label (letters, digits, hyphens; max 63)");
+  }
+  return { ok: true, value };
+}
+
+function validateSnapname(value) {
+  if (typeof value !== "string" || !SNAPNAME_RE.test(value)) {
+    return invalid("snapname", "snapshot name must start alphanumeric and contain only letters, digits, '_', '-' (max 40)");
+  }
+  return { ok: true, value };
+}
+
+function validateIntRange(field, value, min, max) {
+  const n = typeof value === "number" ? value : Number.parseInt(String(value), 10);
+  if (!Number.isInteger(n) || String(n) !== String(value).trim() || n < min || n > max) {
+    return invalid(field, `${field} must be an integer between ${min} and ${max}`);
+  }
+  return { ok: true, value: n };
+}
+
+function validateCiUser(value) {
+  if (typeof value !== "string" || !CI_USER_RE.test(value)) {
+    return invalid("ci_user", "ci_user must be a valid Unix username");
+  }
+  return { ok: true, value };
+}
+
+function validateOsTemplate(value) {
+  if (typeof value !== "string" || !OSTEMPLATE_RE.test(value)) {
+    return invalid("ostemplate", "ostemplate must be a <storage>:vztmpl/<file> volume id");
+  }
+  return { ok: true, value };
+}
+
+function validateOsType(value) {
+  if (typeof value !== "string" || !OS_TYPES.has(value)) {
+    return invalid("ostype", `ostype must be one of: ${[...OS_TYPES].join(", ")}`);
+  }
+  return { ok: true, value };
+}
+
+function validateLxcOsType(value) {
+  if (typeof value !== "string" || !LXC_OSTYPES.has(value)) {
+    return invalid("ostype", `LXC ostype must be one of: ${[...LXC_OSTYPES].join(", ")}`);
+  }
+  return { ok: true, value };
+}
+
+// An SSH public key line. Conservative: known key types + base64 body + optional comment.
+function validateSshKey(value) {
+  if (typeof value !== "string") return invalid("ssh_keys", "ssh key must be a string");
+  const trimmed = value.trim();
+  if (!/^(ssh-ed25519|ssh-rsa|ssh-dss|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)\s+[A-Za-z0-9+/]{20,}={0,3}(\s+\S+)?$/.test(trimmed)) {
+    return invalid("ssh_keys", "value is not a well-formed SSH public key");
+  }
+  if (trimmed.length > 4096) return invalid("ssh_keys", "ssh key is too long");
+  return { ok: true, value: trimmed };
+}
+
+// A network spec built from structured parts, never a raw model-supplied string.
+function validateNetSpec({ model, bridge, vlan } = {}) {
+  const m = model || "virtio";
+  if (!NET_MODELS.has(m)) return invalid("net_model", `net_model must be one of: ${[...NET_MODELS].join(", ")}`);
+  if (bridge !== undefined && bridge !== null) {
+    if (typeof bridge !== "string" || !/^vmbr\d{1,4}$/.test(bridge)) {
+      return invalid("net_bridge", "net_bridge must be a Linux bridge name like vmbr0");
+    }
+  }
+  if (vlan !== undefined && vlan !== null) {
+    const v = validateIntRange("net_vlan", vlan, 1, 4094);
+    if (!v.ok) return v;
+  }
+  return { ok: true, value: { model: m, bridge: bridge || null, vlan: vlan != null ? Number(vlan) : null } };
+}
+
+// An IPv4 CIDR or "dhcp" for cloud-init ipconfig.
+function validateIpConfig(value) {
+  if (value === undefined || value === null || value === "") return { ok: true, value: null };
+  if (value === "dhcp") return { ok: true, value: "ip=dhcp" };
+  const m = String(value).match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\/\d{1,2})(?:,gw=(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}))?$/);
+  if (!m) return invalid("ip", "ip must be 'dhcp' or '<ipv4>/<prefix>[,gw=<ipv4>]'");
+  const octetsOk = m[1].split("/")[0].split(".").every(o => Number(o) <= 255) && (!m[2] || m[2].split(".").every(o => Number(o) <= 255));
+  const prefix = Number(m[1].split("/")[1]);
+  if (!octetsOk || prefix > 32) return invalid("ip", "ip contains an out-of-range octet or prefix");
+  return { ok: true, value: `ip=${m[1]}${m[2] ? `,gw=${m[2]}` : ""}` };
+}
+
 module.exports = {
   PROFILE_NAME_RE,
   NODE_NAME_RE,
   STORAGE_ID_RE,
   SECRET_REF_RE,
+  GUEST_NAME_RE,
+  SNAPNAME_RE,
   VMID_MIN,
   VMID_MAX,
+  NET_MODELS,
+  OS_TYPES,
+  LXC_OSTYPES,
   validateProfileName,
   validateVmid,
   validateNodeName,
@@ -153,4 +261,14 @@ module.exports = {
   validateEndpoint,
   validateSecretRef,
   parseUpid,
+  validateGuestName,
+  validateSnapname,
+  validateIntRange,
+  validateCiUser,
+  validateOsTemplate,
+  validateOsType,
+  validateLxcOsType,
+  validateSshKey,
+  validateNetSpec,
+  validateIpConfig,
 };

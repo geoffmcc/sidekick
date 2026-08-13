@@ -29,6 +29,10 @@ const ERROR_CODES = Object.freeze([
   "auth_failed",            // 401: token rejected
   "permission_denied",      // 403: token lacks a privilege
   "resource_missing",       // 404 or Proxmox "does not exist"
+  "resource_exists",        // create would collide with an existing resource
+  "ownership_unverified",   // provenance/ownership could not be proven
+  "protected_resource",     // target is protected from the operation
+  "ambiguous_state",        // mutation outcome could not be determined
   "api_error",              // other Proxmox API error
   "response_invalid",       // non-JSON / oversized / malformed response
   "task_failed",            // task reached a terminal state other than OK

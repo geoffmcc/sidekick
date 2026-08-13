@@ -18,7 +18,8 @@
   ],
   "workflows": [
     { "path": "workflows/environment-recon.json" },
-    { "path": "workflows/guest-health.json" }
+    { "path": "workflows/guest-health.json" },
+    { "path": "workflows/provision-guest.json" }
   ],
   "knowledge": [
     {
@@ -38,6 +39,12 @@
       "title": "Proxmox pack: task semantics and operational safety",
       "category": "operations",
       "tags": ["proxmox", "safety", "tasks", "cluster"]
+    },
+    {
+      "path": "knowledge/proxmox-provisioning.md",
+      "title": "Proxmox pack: provisioning, provenance and controlled automation",
+      "category": "operations",
+      "tags": ["proxmox", "provisioning", "provenance", "ansible", "policy"]
     }
   ],
   "requires": {
@@ -48,6 +55,31 @@
     "schema": {
       "type": "object",
       "properties": {
+        "protected_resources": {
+          "type": "array",
+          "description": "Guests that mutating/destructive operations must never touch, matched by vmid, tag, or name glob. A match is a hard deny in addition to Proxmox's own protection flag.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "vmid": { "type": "integer" },
+              "tag": { "type": "string" },
+              "name": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "ansible": {
+          "type": "object",
+          "description": "Optional Ansible integration. Absent or unconfigured means Ansible is simply unavailable. Point playbook_dir at an administrator-controlled directory of allowlisted playbooks on the Sidekick host.",
+          "properties": {
+            "playbook_dir": { "type": "string" },
+            "allowed_playbooks": { "type": "array", "items": { "type": "string" } },
+            "allowed_hosts": { "type": "array", "items": { "type": "string" }, "description": "Optional allowlist of destination host addresses ansible_run may target." },
+            "ssh_key_dir": { "type": "string", "description": "Optional directory that ssh_key_file values must resolve inside." },
+            "default_timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 3600000 }
+          },
+          "additionalProperties": false
+        },
         "profiles": {
           "type": "object",
           "description": "Administrator-configured Proxmox environments, keyed by profile name. Endpoints and credential references live here; secret VALUES never do. Store the API token with the secret tool and reference it as token_ref: \"secret:<name>\".",
