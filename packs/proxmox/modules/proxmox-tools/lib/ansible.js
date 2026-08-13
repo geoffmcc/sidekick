@@ -141,6 +141,32 @@ function buildExtraVars(vars) {
   return { ok: true, vars: out };
 }
 
+/**
+ * Extract the first complete top-level JSON object from mixed output. The
+ * governed bash tool concatenates stdout and stderr (ansible writes its JSON
+ * callback to stdout and warnings/deprecations to stderr), so slicing to the
+ * end of the text would include trailing non-JSON and break parsing. This walks
+ * balanced braces, honouring string literals, and returns exactly the JSON
+ * document.
+ */
+function extractJsonObject(text) {
+  if (typeof text !== "string") return null;
+  const start = text.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') inStr = false;
+    } else if (c === '"') inStr = true;
+    else if (c === "{") depth++;
+    else if (c === "}") { depth--; if (depth === 0) return text.slice(start, i + 1); }
+  }
+  return null;
+}
+
 /** Parse ansible's JSON stdout callback. Success = every host with 0 failures and 0 unreachable, and at least one play ran. */
 function parseResult(stdout, exitCode, aliases) {
   let parsed = null;
@@ -219,9 +245,9 @@ async function run(config, dispatch, params, { dryRun = false, timeoutMs } = {})
       return { ok: false, code: "approval_required", approval_id: dispatched.approvalId || null, message: "Running Ansible requires operator approval of the underlying bash execution." };
     }
     const text = dispatched && Array.isArray(dispatched.content) && dispatched.content[0] ? String(dispatched.content[0].text || "") : "";
-    // The bash tool wraps stdout; extract the JSON document ansible emitted.
-    const jsonStart = text.indexOf("{");
-    const stdout = jsonStart >= 0 ? text.slice(jsonStart) : text;
+    // Extract exactly ansible's JSON document; the bash tool appends stderr
+    // (warnings/deprecations) after stdout, which would otherwise break parsing.
+    const stdout = extractJsonObject(text) || text;
     const exitCode = dispatched && dispatched.isError ? 1 : 0;
     const result = parseResult(stdout, exitCode, inv.aliases);
     return {
@@ -238,4 +264,4 @@ async function run(config, dispatch, params, { dryRun = false, timeoutMs } = {})
   }
 }
 
-module.exports = { isAvailable, detect, resolvePlaybook, buildInventory, buildExtraVars, parseResult, buildCommand, run };
+module.exports = { isAvailable, detect, resolvePlaybook, buildInventory, buildExtraVars, parseResult, buildCommand, extractJsonObject, run };
