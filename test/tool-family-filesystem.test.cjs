@@ -45,7 +45,8 @@ console.log('Running Filesystem Family Tests...');
       assert.ok(!Object.prototype.hasOwnProperty.call(require('../src/tools/schemas').TOOL_SCHEMAS, name));
     }
     // Capability Packs v1 added `capability` and `workflow`: 103 -> 105.
-    assert.strictEqual(registry.listInDefinitionOrder().length, 105);
+    // B7 added `connector` (read-only connector inspection): 105 -> 106.
+    assert.strictEqual(registry.listInDefinitionOrder().length, 106);
     assert.deepStrictEqual(registry.listInDefinitionOrder().map(d => d.name), legacy.TOOL_DEFS.map(d => d.name));
     assert.strictEqual(family.descriptors.length, names.length);
 

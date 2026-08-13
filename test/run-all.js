@@ -109,6 +109,7 @@ const suites = [
   { file: 'test/compute-placement.test.js', critical: false, description: 'Compute Placement v1 shared decision core, provenance, and explain parity' },
   { file: 'test/compute-provider-bootstrap.test.js', critical: false, description: 'Compute provider/model bootstrap from env, idempotency, secure-by-default cloud, and secret-reference credential resolution' },
   { file: 'test/inference-convergence.test.js', critical: true, description: 'Production inference callers route only through Compute (no direct Ollama/Groq egress)' },
+  { file: 'test/connector-authority.test.js', critical: false, description: 'GitHub connector bootstrap, secret-ref resolution, github tool routing through the connector authority, and read-only connector tool redaction' },
   { file: 'test/compute-recovery.test.js', critical: false, description: 'Scheduled lease recovery and heartbeat counter integrity' },
   { file: 'test/compute-worker-lifecycle.test.js', critical: false, description: 'Compute worker multi-dimensional lifecycle state model' },
   { file: 'test/compute-worker-disconnect.test.js', critical: false, description: 'Compute worker graceful disconnect protocol' },

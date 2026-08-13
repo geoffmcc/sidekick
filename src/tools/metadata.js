@@ -119,6 +119,8 @@ const TOOL_RISK = {
   // A workflow run dispatches governed tool calls; each step's own tool risk
   // still applies on top of this at dispatch time.
   workflow: "high",
+  // Read-only inspection of the connector authority; no mutation, no secrets.
+  connector: "low",
 };
 
 const TOOL_CATEGORIES = {
@@ -226,6 +228,7 @@ const TOOL_CATEGORIES = {
   'project_registry': 'Storage',
   'capability': 'Services',
   'workflow': 'Services',
+  'connector': 'Services',
   'compute': 'Compute',
   'compute_nodes': 'Compute',
   'compute_providers': 'Compute',

@@ -631,6 +631,16 @@ try {
   console.error("[Compute] Init failed (non-fatal):", e.message);
 }
 
+// Register managed connectors (GitHub) in the platform connector authority so
+// the github tool routes through a governed connector rather than reaching the
+// API directly. Idempotent and non-fatal.
+try {
+  require("./connectors/bootstrap").bootstrapConnectors();
+  console.log("[Connectors] Bootstrap complete");
+} catch (e) {
+  console.error("[Connectors] Bootstrap failed (non-fatal):", e.message);
+}
+
 const compute = require("./compute");
 let platformKernelForComputeAudit = null;
 try { platformKernelForComputeAudit = require("./platform/kernel"); } catch {}
