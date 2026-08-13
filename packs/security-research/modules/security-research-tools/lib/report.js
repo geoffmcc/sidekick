@@ -16,6 +16,7 @@ const { ResearchError } = require("./errors");
 const workspace = require("./workspace");
 const evidence = require("./evidence");
 const records = require("./records");
+const runs = require("./runs");
 const { requireText } = require("./identity");
 
 // Validate that every referenced evidence id resolves, so a report cannot claim
@@ -47,7 +48,12 @@ function materialize(ctx, input, actor) {
     for (const ref of (claim.evidence_refs || [])) evidenceRefs.add(ref);
   }
   if (input.run_id) {
-    const run = kernel().getResearchTestRun(input.run_id);
+    // Use the run's ARTIFACT-DERIVED evidence (the same source runs.get exposes),
+    // not the raw kernel test_run.evidence_json — the latter is only populated on
+    // completion, so a running run with captured evidence would otherwise report
+    // zero evidence.
+    let run = null;
+    try { run = runs.get(input.run_id); } catch { run = null; }
     if (run) for (const ref of (run.evidence || [])) evidenceRefs.add(ref);
   }
   const verifiedEvidence = verifyEvidenceRefs([...evidenceRefs]);
