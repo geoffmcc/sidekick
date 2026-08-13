@@ -1,0 +1,23 @@
+{
+  "name": "synthetic-metrics",
+  "displayName": "Synthetic Metrics (fixture)",
+  "version": "1.0.0",
+  "description": "Synthetic third-party module fixture used to prove the B9 lifecycle end to end",
+  "author": "Sidekick Test Fixtures",
+  "type": "plugin",
+  "entryPoint": "entry.js",
+  "sidekick": ">=1.0.0",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "label": { "type": "string" },
+      "factor": { "type": "integer", "minimum": 1, "maximum": 100 }
+    },
+    "required": ["label"],
+    "additionalProperties": false
+  },
+  "tools": {
+    "synthetic_metric": { "risk": "low", "category": "Monitoring", "aliases": ["synthetic_metrics"] }
+  },
+  "permissions": []
+}

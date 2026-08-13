@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "name": "developer",
+  "display_name": "Developer / Software Engineering",
+  "version": "1.0.0",
+  "description": "Makes Sidekick substantially better at understanding, investigating, modifying, verifying and maintaining software projects: structured repository profiling, change-set impact analysis, governed project verification, and seven runnable engineering workflows.",
+  "publisher": "Sidekick",
+  "compatibility": {
+    "sidekick": ">=1.0.0"
+  },
+  "modules": [
+    {
+      "name": "developer-tools",
+      "path": "modules/developer-tools",
+      "entry_point": "entry.js",
+      "config_from_pack": true
+    }
+  ],
+  "workflows": [
+    { "path": "workflows/repository-recon.json" },
+    { "path": "workflows/issue-investigation.json" },
+    { "path": "workflows/implement-change.json" },
+    { "path": "workflows/ci-triage.json" },
+    { "path": "workflows/pull-request-review.json" },
+    { "path": "workflows/dependency-upgrade.json" },
+    { "path": "workflows/release-preparation.json" }
+  ],
+  "knowledge": [
+    {
+      "path": "knowledge/repository-reconnaissance.md",
+      "title": "Developer pack: repository reconnaissance",
+      "category": "development",
+      "tags": ["developer", "recon", "repository"]
+    },
+    {
+      "path": "knowledge/change-discipline.md",
+      "title": "Developer pack: code change discipline",
+      "category": "development",
+      "tags": ["developer", "changes", "discipline"]
+    },
+    {
+      "path": "knowledge/verification-strategy.md",
+      "title": "Developer pack: verification strategy",
+      "category": "development",
+      "tags": ["developer", "verification", "testing"]
+    },
+    {
+      "path": "knowledge/issue-investigation.md",
+      "title": "Developer pack: issue investigation",
+      "category": "development",
+      "tags": ["developer", "debugging", "investigation"]
+    },
+    {
+      "path": "knowledge/ci-triage.md",
+      "title": "Developer pack: CI failure triage",
+      "category": "development",
+      "tags": ["developer", "ci", "triage"]
+    },
+    {
+      "path": "knowledge/pull-request-review.md",
+      "title": "Developer pack: pull request review",
+      "category": "development",
+      "tags": ["developer", "review", "pull-request"]
+    },
+    {
+      "path": "knowledge/dependency-and-release.md",
+      "title": "Developer pack: dependency upgrades and release preparation",
+      "category": "development",
+      "tags": ["developer", "dependencies", "release"]
+    },
+    {
+      "path": "knowledge/sidekick-handoffs.md",
+      "title": "Developer pack: handoff expectations for developer work",
+      "category": "development",
+      "tags": ["developer", "handoff", "continuity"]
+    }
+  ],
+  "requires": {
+    "tools": ["git", "bash", "read", "list", "search"],
+    "optional_tools": ["github", "ci_status", "handoff", "project", "changelog", "summarize", "depend"]
+  },
+  "configuration": {
+    "schema": {
+      "type": "object",
+      "properties": {
+        "autodetect_verification": {
+          "type": "boolean",
+          "description": "Detect verification commands from project files. When false, only explicit overrides run."
+        },
+        "verification_mode": {
+          "type": "string",
+          "enum": ["quick", "standard", "full"],
+          "description": "Default breadth for dev_verify: quick (syntax/lint/typecheck), standard (lint/typecheck/test), full (adds build)."
+        },
+        "test_command": { "type": "string", "description": "Explicit test command, overriding detection." },
+        "lint_command": { "type": "string", "description": "Explicit lint command, overriding detection." },
+        "typecheck_command": { "type": "string", "description": "Explicit typecheck command, overriding detection." },
+        "build_command": { "type": "string", "description": "Explicit build command, overriding detection." },
+        "syntax_command": { "type": "string", "description": "Explicit syntax-check command, overriding detection." },
+        "max_output_chars": {
+          "type": "integer",
+          "minimum": 500,
+          "maximum": 60000,
+          "description": "Maximum command output retained per verification command."
+        },
+        "command_timeout_ms": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 600000,
+          "description": "Per-command timeout for verification commands."
+        },
+        "continue_on_failure": {
+          "type": "boolean",
+          "description": "Keep running later verification commands after one fails."
+        },
+        "repository_roots": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Optional confinement: when non-empty, Developer tools refuse paths outside these roots, in addition to the global Sidekick path policy. Secrets never belong here or anywhere else in pack configuration."
+        },
+        "github_enrichment": {
+          "type": "boolean",
+          "description": "Allow Developer workflows to enrich results with GitHub issue/PR/CI data when the github tool is configured."
+        }
+      },
+      "additionalProperties": false
+    },
+    "defaults": {
+      "autodetect_verification": true,
+      "verification_mode": "standard",
+      "max_output_chars": 12000,
+      "continue_on_failure": false,
+      "github_enrichment": true
+    }
+  }
+}

@@ -39,7 +39,8 @@ const names = ['db_schema', 'db_query', 'db_stats', 'log_query', 'db_search', 'd
       assert.ok(!Object.prototype.hasOwnProperty.call(require('../src/tools/schemas').TOOL_SCHEMAS, name), `${name} should have one schema owner`);
     }
     assert.strictEqual(family.descriptors.length, names.length);
-    assert.strictEqual(registry.listInDefinitionOrder().length, 103);
+    // Capability Packs v1 added `capability` and `workflow`: 103 -> 105.
+    assert.strictEqual(registry.listInDefinitionOrder().length, 105);
     assert.deepStrictEqual(registry.listInDefinitionOrder().map(d => d.name), legacy.TOOL_DEFS.map(d => d.name));
 
     let result = await family.sidekick_db_schema({});

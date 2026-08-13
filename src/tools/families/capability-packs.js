@@ -1,0 +1,193 @@
+"use strict";
+
+// Capability-pack tool family: capability.
+//
+// The single operator/agent surface for capability-pack lifecycle. Every
+// action routes through the normal descriptor + dispatcher path, so policy,
+// approval, timeouts, redaction and audit logging all apply — installing or
+// activating third-party executable code is emphatically not a read-only
+// operation, and the descriptor's `critical` risk says so.
+//
+// This family owns no lifecycle logic of its own: it validates and shapes
+// arguments, then delegates to src/packs/lifecycle.js and src/packs/bundled.js.
+
+const { z } = require("zod");
+
+function jsonText(payload) {
+  return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
+}
+
+function failure(message, extra = {}) {
+  return { content: [{ type: "text", text: JSON.stringify({ ok: false, error: message, ...extra }, null, 2) }], isError: true };
+}
+
+function requireName(name, action) {
+  if (!name) throw new Error(`name is required for capability action "${action}"`);
+  return String(name);
+}
+
+async function sidekick_capability({ action = "list", name, path: sourcePath, config, enable, allow_same_version, allow_downgrade, remove_knowledge, remove_module_data }) {
+  // Lazy requires: this family is loaded while the registry is assembled, and
+  // the pack lifecycle reaches back into the module loader and tool registry.
+  const lifecycle = require("../../packs/lifecycle");
+  const repository = require("../../packs/repository");
+  const bundled = require("../../packs/bundled");
+
+  try {
+    if (action === "list") {
+      const installed = repository.listPacks().map(pack => lifecycle.describe(pack.name, { includeHealth: true }));
+      const available = bundled.listBundledPacks().filter(pack => !pack.installed);
+      return jsonText({
+        ok: true,
+        action,
+        installed: installed.map(pack => ({
+          name: pack.name,
+          display_name: pack.display_name,
+          version: pack.version,
+          publisher: pack.publisher,
+          provenance: pack.provenance,
+          bundled: pack.bundled,
+          state: pack.state,
+          enabled: pack.enabled,
+          health: pack.health.status,
+          modules: pack.modules.map(m => m.name),
+          tools: pack.tools,
+          workflows: pack.workflows.map(w => w.name),
+          knowledge: pack.knowledge.length,
+        })),
+        available_bundled: available,
+      });
+    }
+
+    if (action === "available") {
+      return jsonText({ ok: true, action, bundled: bundled.listBundledPacks() });
+    }
+
+    if (action === "show") {
+      const pack = lifecycle.describe(requireName(name, action));
+      if (!pack) return failure(`Capability pack "${name}" is not installed`, { code: "not_installed" });
+      return jsonText({ ok: true, action, pack });
+    }
+
+    if (action === "inspect") {
+      // Inspection of a bundled pack by name, or of a server-local package path.
+      let target = sourcePath;
+      if (!target && name) {
+        const candidate = bundled.getBundledPack(name);
+        if (!candidate) return failure(`No bundled capability pack named "${name}" and no path supplied`, { code: "not_found" });
+        target = candidate.path;
+      }
+      if (!target) return failure("inspect requires either a bundled pack name or a server-local path", { code: "invalid_arguments" });
+      return jsonText({ ok: true, action, inspection: lifecycle.inspect(target) });
+    }
+
+    if (action === "install") {
+      const result = sourcePath
+        ? lifecycle.install(sourcePath, { config, enable: enable === true, provenance: "third_party", source: { kind: "local_path" } })
+        : bundled.installBundledPack(requireName(name, action), { config, enable: enable === true });
+      return jsonText({
+        ok: true,
+        action,
+        pack: lifecycle.describe(result.pack.name),
+        install_path: result.install_path,
+        components: result.components,
+      });
+    }
+
+    if (action === "configure") {
+      const result = lifecycle.configure(requireName(name, action), config || {});
+      return jsonText({ ok: true, action, pack: lifecycle.describe(result.pack.name), propagated_to_modules: result.propagated_to_modules });
+    }
+
+    if (action === "enable") {
+      const result = lifecycle.enable(requireName(name, action));
+      return jsonText({ ok: true, action, pack: lifecycle.describe(result.pack.name), activated: result.activated });
+    }
+
+    if (action === "disable") {
+      const result = lifecycle.disable(requireName(name, action));
+      return jsonText({ ok: true, action, pack: lifecycle.describe(result.pack.name), deactivated: result.deactivated });
+    }
+
+    if (action === "health") {
+      const report = lifecycle.health(requireName(name, action));
+      repository.recordPackHealth(name, report);
+      return jsonText({ ok: report.ok, action, health: report });
+    }
+
+    if (action === "upgrade") {
+      const packName = requireName(name, action);
+      const options = { allowSameVersion: allow_same_version === true, allowDowngrade: allow_downgrade === true, config };
+      const result = sourcePath
+        ? lifecycle.upgrade(packName, sourcePath, options)
+        : bundled.upgradeBundledPack(packName, options);
+      return jsonText({
+        ok: true,
+        action,
+        pack: lifecycle.describe(result.pack.name),
+        previous_version: result.previous_version,
+        version: result.version,
+      });
+    }
+
+    if (action === "uninstall") {
+      const result = lifecycle.uninstall(requireName(name, action), {
+        removeKnowledge: remove_knowledge !== false,
+        removeModuleData: remove_module_data === true,
+      });
+      return jsonText({ ok: true, action, result });
+    }
+
+    return failure(
+      `Unknown capability action: ${action}. Use list, available, show, inspect, install, configure, enable, disable, health, upgrade, or uninstall`,
+      { code: "unknown_action" }
+    );
+  } catch (error) {
+    return failure(String(error && error.message ? error.message : error), {
+      action,
+      code: error && error.code ? error.code : "capability_operation_failed",
+      failures: error && error.failures ? error.failures : undefined,
+    });
+  }
+}
+
+const descriptors = Object.freeze([
+  Object.freeze({
+    name: "capability",
+    aliases: ["capability_pack", "pack"],
+    description:
+      "Manage Sidekick capability packs: list installed and bundled packs, inspect a package, install, configure, enable, disable, check health, upgrade and uninstall. Installing or enabling a pack activates executable module code in the Sidekick process.",
+    schema: z.object({
+      action: z
+        .enum(["list", "available", "show", "inspect", "install", "configure", "enable", "disable", "health", "upgrade", "uninstall"])
+        .optional()
+        .describe("Capability pack action (default: list)"),
+      name: z.string().optional().describe("Pack name (required for show/configure/enable/disable/health/upgrade/uninstall, and for installing a bundled pack)"),
+      path: z.string().optional().describe("Server-local package path for inspect/install/upgrade of a non-bundled pack"),
+      config: z.record(z.any()).optional().describe("Pack configuration object, validated against the pack's configuration schema"),
+      enable: z.boolean().optional().describe("Enable the pack immediately after install (default false)"),
+      allow_same_version: z.boolean().optional().describe("Permit replacing the installed version with the same version (upgrade)"),
+      allow_downgrade: z.boolean().optional().describe("Permit moving to a lower version (upgrade)"),
+      remove_knowledge: z.boolean().optional().describe("Remove the pack's knowledge entries on uninstall (default true)"),
+      remove_module_data: z.boolean().optional().describe("Request removal of module-owned data on uninstall, where the module's manifest permits it (default false)"),
+    }),
+    args: {
+      action: "string (list|available|show|inspect|install|configure|enable|disable|health|upgrade|uninstall - default list)",
+      name: "string (pack name)",
+      path: "string (server-local package path)",
+      config: "object (pack configuration)",
+      enable: "boolean (enable immediately after install)",
+      allow_same_version: "boolean (upgrade: allow same-version replacement)",
+      allow_downgrade: "boolean (upgrade: allow downgrade)",
+      remove_knowledge: "boolean (uninstall: remove knowledge entries, default true)",
+      remove_module_data: "boolean (uninstall: remove module-owned data where permitted)",
+    },
+    risk: "critical",
+    category: "Services",
+    source: "builtin",
+    family: "capability-packs",
+    handler: sidekick_capability,
+  }),
+]);
+
+module.exports = { descriptors, sidekick_capability };

@@ -9,6 +9,11 @@
  *   - config (the module's validated config)
  *   - dispatch(name, args, options)  -> routes through the existing dispatcher
  *     (full policy + approval path), never through handler maps.
+ *   - paths.enforce/decide           -> the SAME canonical filesystem path
+ *     boundary the builtin families use (src/tools/path-policy.js). A module
+ *     that reads files must be able to honour path policy without either
+ *     reimplementing it or round-tripping every file through the dispatcher;
+ *     exposing the shared boundary is reuse, not a second policy.
  *
  * dispatch() enforces the module's declared manifest permissions as a
  * deny-by-default allowlist BEFORE the call reaches the dispatcher: a module
@@ -26,7 +31,7 @@
 const { RISK_LEVELS } = require("../tools/metadata");
 const { stripSidekickPrefix } = require("../core/tool-name");
 
-const NARROW_SERVICE_KEYS = Object.freeze(["moduleName", "config", "dispatch"]);
+const NARROW_SERVICE_KEYS = Object.freeze(["moduleName", "config", "dispatch", "paths"]);
 
 function riskIndex(risk) {
   const index = RISK_LEVELS.indexOf(risk);
@@ -86,10 +91,24 @@ function createModuleServices(moduleName, config = {}, { permissions = [] } = {}
     return dispatcher.callTool(String(name), args || {}, { ...(options || {}), module: moduleName });
   }
 
+  // The canonical filesystem boundary, not a copy of it. `enforce` returns
+  // null when the path is permitted and a ready-to-return error result when it
+  // is not, exactly as the builtin filesystem family consumes it, and it
+  // resolves the execution source per call from the request-scoped context.
+  const paths = Object.freeze({
+    enforce(filePath, operation = "access") {
+      return require("../tools/path-policy").enforcePathPolicy(filePath, operation);
+    },
+    decide(filePath, operation = "access") {
+      return require("../tools/path-policy").getPathPolicyDecision(filePath, operation);
+    },
+  });
+
   const v1 = Object.freeze({
     moduleName,
     config: frozenConfig,
     dispatch,
+    paths,
   });
 
   return Object.freeze({

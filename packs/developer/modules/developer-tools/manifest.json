@@ -1,0 +1,85 @@
+{
+  "name": "developer-tools",
+  "displayName": "Developer Tools",
+  "version": "1.0.0",
+  "description": "Structured software-engineering tools: repository profiling, change-set impact analysis, and governed project verification",
+  "author": "Sidekick",
+  "type": "plugin",
+  "entryPoint": "entry.js",
+  "sidekick": ">=1.0.0",
+  "capabilities": [
+    "repository-profiling",
+    "change-analysis",
+    "project-verification"
+  ],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "autodetect_verification": {
+        "type": "boolean",
+        "description": "Detect verification commands from project files. When false, only explicit overrides run."
+      },
+      "verification_mode": {
+        "type": "string",
+        "enum": ["quick", "standard", "full"],
+        "description": "Default breadth for dev_verify when no mode or intents are supplied."
+      },
+      "test_command": { "type": "string", "description": "Explicit test command, overriding detection." },
+      "lint_command": { "type": "string", "description": "Explicit lint command, overriding detection." },
+      "typecheck_command": { "type": "string", "description": "Explicit typecheck command, overriding detection." },
+      "build_command": { "type": "string", "description": "Explicit build command, overriding detection." },
+      "syntax_command": { "type": "string", "description": "Explicit syntax-check command, overriding detection." },
+      "max_output_chars": {
+        "type": "integer",
+        "minimum": 500,
+        "maximum": 60000,
+        "description": "Maximum command output retained per verification command."
+      },
+      "command_timeout_ms": {
+        "type": "integer",
+        "minimum": 1000,
+        "maximum": 600000,
+        "description": "Per-command timeout for verification commands."
+      },
+      "continue_on_failure": {
+        "type": "boolean",
+        "description": "Keep running later verification commands after one fails."
+      },
+      "repository_roots": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Optional confinement: when non-empty, the Developer tools refuse paths outside these roots, in addition to the global Sidekick path policy."
+      },
+      "github_enrichment": {
+        "type": "boolean",
+        "description": "Allow Developer workflows to enrich results with GitHub issue/PR/CI data when the github tool is configured."
+      }
+    },
+    "additionalProperties": false
+  },
+  "tools": {
+    "dev_repo_profile": {
+      "risk": "low",
+      "category": "Development",
+      "aliases": ["repo_profile"]
+    },
+    "dev_change_summary": {
+      "risk": "low",
+      "category": "Development",
+      "aliases": ["change_summary"]
+    },
+    "dev_verify": {
+      "risk": "high",
+      "category": "Development",
+      "aliases": ["verify_project"]
+    }
+  },
+  "permissions": [
+    { "tool": "git", "risk": "medium" },
+    { "tool": "bash", "risk": "critical" }
+  ],
+  "lifecycle": {
+    "disable": "stop_new_work",
+    "uninstall": "retain_data"
+  }
+}

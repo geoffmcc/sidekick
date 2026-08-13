@@ -12,6 +12,13 @@ function moduleSummary(record, loader) {
     name: record.name,
     version: record.version,
     state: record.state,
+    source: record.source,
+    // Managed (installed) modules run from the Sidekick-owned module store and
+    // carry an integrity hash; builtin modules ship inside the repository.
+    managed: Boolean(record.install_path),
+    install_path: record.install_path || null,
+    package_hash: record.package_hash || null,
+    provenance: record.provenance || {},
     active_in_process: loader.isModuleActive(record.name),
     tools: Object.keys(record.manifest?.tools || {}),
     error: record.error || null,
@@ -19,6 +26,19 @@ function moduleSummary(record, loader) {
     last_health_check_at: record.last_health_check_at || null,
     health_history: repository.listHealthHistory(record.name),
   };
+}
+
+/**
+ * Resolve a module's entry for this process.
+ *
+ * Covers BOTH sources: builtin entries that ship in the repository, and
+ * installed modules loaded from the managed store through the verified entry
+ * loader. Before B9 this looked only at builtin entries, so an operator could
+ * not enable, health-check or recover an installed third-party module through
+ * the management surface at all.
+ */
+function resolveEntry(record) {
+  return require("../../modules/entries").resolveModuleEntry(record);
 }
 
 async function sidekick_module({ action = "list", name }) {
@@ -43,24 +63,29 @@ async function sidekick_module({ action = "list", name }) {
 
   if (action === "health") return jsonText({ ok: true, module: moduleSummary(record, loader) });
 
+  if (action === "status") {
+    // Derived, component-level health (integrity, compatibility, configuration,
+    // in-process activation) rather than the last stored payload.
+    const { health } = require("../../modules/lifecycle");
+    return jsonText({ ok: true, action, health: health(name, { runCheck: false }) });
+  }
+
   if (action === "check") {
-    const { builtinEntriesByName } = require("../../modules/builtin-modules");
-    const entry = builtinEntriesByName()[name];
-    if (!entry) {
-      return { content: [{ type: "text", text: `Module "${name}" has no health entry in this process` }], isError: true };
+    const resolved = resolveEntry(record);
+    if (!resolved.ok) {
+      return { content: [{ type: "text", text: `Module "${name}" has no health entry in this process: ${resolved.error}` }], isError: true };
     }
     const { checkModuleHealth } = require("../../modules/health");
-    return jsonText({ ok: true, action, result: checkModuleHealth(name, entry) });
+    return jsonText({ ok: true, action, result: checkModuleHealth(name, resolved.entry) });
   }
 
   if (action === "recover") {
-    const { builtinEntriesByName } = require("../../modules/builtin-modules");
-    const entry = builtinEntriesByName()[name];
-    if (!entry) {
-      return { content: [{ type: "text", text: `Module "${name}" has no recovery entry in this process` }], isError: true };
+    const resolved = resolveEntry(record);
+    if (!resolved.ok) {
+      return { content: [{ type: "text", text: `Module "${name}" has no recovery entry in this process: ${resolved.error}` }], isError: true };
     }
     const { recoverModuleHealth } = require("../../modules/health");
-    return jsonText({ ok: true, action, result: recoverModuleHealth(name, entry) });
+    return jsonText({ ok: true, action, result: recoverModuleHealth(name, resolved.entry) });
   }
 
   if (action === "disable") {
@@ -69,18 +94,19 @@ async function sidekick_module({ action = "list", name }) {
   }
 
   if (action === "enable") {
-    // Lazy-load to avoid the builtin module entry -> family registry cycle
-    // while descriptors are being assembled.
-    const { builtinEntriesByName } = require("../../modules/builtin-modules");
-    const entry = builtinEntriesByName()[name];
-    if (!entry) {
-      return { content: [{ type: "text", text: `Module "${name}" has no entry in this process` }], isError: true };
+    // Resolution is lazy for two reasons: it avoids the builtin module entry ->
+    // family registry cycle while descriptors are being assembled, and for a
+    // managed module it is the point at which integrity, compatibility and
+    // configuration are verified before any code loads.
+    const resolved = resolveEntry(record);
+    if (!resolved.ok) {
+      return { content: [{ type: "text", text: `Module "${name}" cannot be enabled in this process: ${resolved.error}` }], isError: true };
     }
-    const result = loader.enableModule(name, entry);
+    const result = loader.enableModule(name, resolved.entry);
     return jsonText({ ok: true, action, module: moduleSummary(result.module, loader) });
   }
 
-  return { content: [{ type: "text", text: `Unknown module action: ${action}. Use list, get, health, check, recover, enable, or disable` }], isError: true };
+  return { content: [{ type: "text", text: `Unknown module action: ${action}. Use list, get, health, status, check, recover, enable, or disable` }], isError: true };
 }
 
 const descriptors = Object.freeze([
@@ -89,10 +115,10 @@ const descriptors = Object.freeze([
     aliases: ["modules"],
     description: "Inspect and operate platform module lifecycle state through the shared policy and approval path",
     schema: z.object({
-      action: z.enum(["list", "get", "health", "check", "recover", "enable", "disable"]).optional().describe("Module action (default: list)"),
-      name: z.string().optional().describe("Module name for get, health, check, recover, enable, or disable"),
+      action: z.enum(["list", "get", "health", "status", "check", "recover", "enable", "disable"]).optional().describe("Module action (default: list)"),
+      name: z.string().optional().describe("Module name for get, health, status, check, recover, enable, or disable"),
     }),
-    args: { action: "string (list|get|health|check|recover|enable|disable - default list)", name: "string (module name for get/health/check/recover/enable/disable)" },
+    args: { action: "string (list|get|health|status|check|recover|enable|disable - default list)", name: "string (module name for get/health/status/check/recover/enable/disable)" },
     risk: "high",
     category: "Services",
     source: "builtin",

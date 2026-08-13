@@ -121,11 +121,18 @@ function provisionBuiltinModules() {
     }
   }
 
-  // Restore any other persisted enabled modules. Ones without an entry in
-  // this process are reported as failed here (and flagged by the modules
-  // health check) but keep their persisted state — a missing entry is a
-  // process-local condition, not a module fault.
-  const restore = loader.restorePersistedModules(builtinEntriesByName());
+  // Restore any other persisted enabled module — builtin OR installed
+  // third-party. Managed modules are loaded through the verified entry loader,
+  // so a package that fails integrity, compatibility or configuration is
+  // reported here and simply does not run; it is never required blindly.
+  // A missing/unloadable entry is a process-local condition, not a module
+  // fault, so it never persists a global error transition.
+  const { entries: allEntries, failures } = require("./entries").moduleEntriesByName();
+  for (const failure of failures) {
+    errors.push({ name: failure.name, error: `${failure.code}: ${failure.error}` });
+    console.error(`[Modules] Failed to load installed module "${failure.name}": ${failure.error}`);
+  }
+  const restore = loader.restorePersistedModules(allEntries);
   for (const failure of restore.failed) {
     errors.push(failure);
     console.error(`[Modules] Failed to restore module "${failure.name}": ${failure.error}`);
@@ -136,21 +143,45 @@ function provisionBuiltinModules() {
   return outcome;
 }
 
-function runBuiltinModuleHealthChecks() {
+/**
+ * Periodic health sweep across ALL runnable modules.
+ *
+ * Not just builtins: an installed third-party (pack-owned) module is exactly
+ * the kind of module whose health an operator needs swept, since its code came
+ * from outside the release and its managed package can drift. Modules that are
+ * not active in this process are skipped rather than loaded — the sweep must
+ * not become a reason to execute code the operator disabled.
+ */
+function runModuleHealthChecks() {
   const checked = [];
   const skipped = [];
   const errors = [];
   const alerts = [];
   const { checkModuleHealth } = require("./health");
-  for (const builtin of BUILTIN_MODULES) {
-    const name = builtin.MANIFEST.name;
-    const record = repository.getModule(name);
-    if (!record || (record.state !== "enabled" && record.state !== "healthy") || typeof builtin.entry.healthCheck !== "function") {
-      skipped.push({ name, state: record?.state || "missing" });
+  const loaderModule = require("./loader");
+  const { resolveModuleEntry } = require("./entries");
+
+  for (const record of repository.listModules()) {
+    const name = record.name;
+    if (record.state !== "enabled" && record.state !== "healthy") {
+      skipped.push({ name, state: record.state });
+      continue;
+    }
+    if (!loaderModule.isModuleActive(name)) {
+      skipped.push({ name, state: record.state, reason: "not active in this process" });
+      continue;
+    }
+    const resolved = resolveModuleEntry(record);
+    if (!resolved.ok) {
+      errors.push({ name, error: resolved.error });
+      continue;
+    }
+    if (typeof resolved.entry.healthCheck !== "function") {
+      skipped.push({ name, state: record.state, reason: "no healthCheck" });
       continue;
     }
     try {
-      const result = checkModuleHealth(name, builtin.entry);
+      const result = checkModuleHealth(name, resolved.entry);
       checked.push({ name, result });
       if (!result.ok) alerts.push({ name, health: result.health, state: result.module.state });
     } catch (error) {
@@ -175,7 +206,7 @@ function runBuiltinModuleHealthChecks() {
 
 function startModuleHealthChecks(intervalMs = 60000) {
   const timer = setInterval(() => {
-    const result = runBuiltinModuleHealthChecks();
+    const result = runModuleHealthChecks();
     if (result.errors.length) console.error(`[Modules] Health sweep failed: ${JSON.stringify(result.errors)}`);
     if (result.alerts.length) console.error(`[Modules] Health alerts: ${JSON.stringify(result.alerts)}`);
   }, intervalMs);
@@ -215,7 +246,7 @@ function recordProvisioningEvent(outcome) {
 function startModuleReconciliation(intervalMs = 60000) {
   const timer = setInterval(() => {
     try {
-      const result = loader.reconcilePersistedModules(builtinEntriesByName());
+      const result = loader.reconcilePersistedModules(require("./entries").moduleEntriesByName().entries);
       if (result.deactivated.length || result.activated.length) {
         console.log(`[Modules] Reconciled: deactivated ${JSON.stringify(result.deactivated)}, activated ${JSON.stringify(result.activated)}`);
       }
@@ -230,4 +261,16 @@ function startModuleReconciliation(intervalMs = 60000) {
   return timer;
 }
 
-module.exports = { BUILTIN_MODULES, EXPECTED_ENTRY_HASHES, entryPointFor, builtinEntriesByName, provisionBuiltinModules, runBuiltinModuleHealthChecks, startModuleHealthChecks, startModuleReconciliation };
+module.exports = {
+  BUILTIN_MODULES,
+  EXPECTED_ENTRY_HASHES,
+  entryPointFor,
+  builtinEntriesByName,
+  provisionBuiltinModules,
+  runModuleHealthChecks,
+  // Compatibility alias: the sweep now covers installed modules too, but the
+  // original name is on the public surface.
+  runBuiltinModuleHealthChecks: runModuleHealthChecks,
+  startModuleHealthChecks,
+  startModuleReconciliation,
+};

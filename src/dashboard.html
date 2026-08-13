@@ -29,6 +29,7 @@
   <a onclick="showPage('agent')" id="nav-agent">Agent</a>
   <a onclick="showPage('approvals')" id="nav-approvals">Approvals</a>
   <a onclick="showPage('tools')" id="nav-tools">Tools</a>
+  <a onclick="showPage('capabilities')" id="nav-capabilities">Capabilities</a>
   <a onclick="showPage('evolve')" id="nav-evolve">Evolve</a>
   <a onclick="showPage('compute')" id="nav-compute">Compute</a>
   <a onclick="showPage('predict')" id="nav-predict">Predict</a>
@@ -582,6 +583,36 @@
   </div>
   <div id="evolveExecutionWatch"></div>
   <div id="evolveList"></div>
+</div>
+
+<!-- Capabilities Page -->
+<div class="page" id="page-capabilities">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div>
+      <div class="section-title" style="margin:0">Capability Packs (<span id="capCount">0</span>)</div>
+      <div style="color:#8b949e;font-size:.82rem;margin-top:4px">A capability pack is an installable area of competence: modules, workflows, knowledge and configuration. Installing or enabling a pack activates executable module code inside Sidekick — there is no process sandbox, only integrity and lifecycle controls.</div>
+    </div>
+    <button class="btn btn-sm" onclick="loadCapabilities()"><i class="fas fa-sync"></i> Refresh</button>
+  </div>
+
+  <div id="capError"></div>
+
+  <div class="section-title">Installed</div>
+  <div id="capInstalled"></div>
+
+  <div class="section-title" style="margin-top:20px">Available (bundled with this Sidekick release)</div>
+  <div id="capAvailable"></div>
+
+  <div class="section-title" style="margin-top:20px">Inspect / install a server-local package</div>
+  <div class="card" style="padding:12px">
+    <div style="color:#8b949e;font-size:.82rem;margin-bottom:8px">Paths are resolved on the Sidekick server. The browser cannot browse server files; enter a path the server can read. Remote/marketplace installation is not available.</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <input id="capLocalPath" placeholder="/absolute/path/to/pack" style="flex:1;min-width:280px">
+      <button class="btn btn-sm" onclick="inspectLocalCapability()"><i class="fas fa-magnifying-glass"></i> Inspect</button>
+      <button class="btn btn-sm btn-outline" onclick="installLocalCapability()"><i class="fas fa-download"></i> Install</button>
+    </div>
+    <pre id="capInspect" style="margin-top:10px;display:none;max-height:400px;overflow:auto"></pre>
+  </div>
 </div>
 
 <!-- Compute Page -->

@@ -4,6 +4,8 @@ const dbStore = require("../db");
 const { redactSensitive } = require("../redact");
 const { KERNEL_SCHEMA_SQL } = require("./kernel-schema");
 const { ensurePlatformModuleSchema } = require("../modules/schema");
+const { ensureCapabilityPackSchema } = require("../packs/schema");
+const { ensureWorkflowDefinitionSchema } = require("../workflows/schema");
 const { encryptColumn, decryptColumn, hasSecretKey } = require("../core/secret-cipher");
 const { canonicalizeProjectName } = require("../core/project-identity");
 
@@ -150,6 +152,8 @@ function ensurePlatformKernelSchema() {
   const db = dbStore.getDb();
   db.exec(KERNEL_SCHEMA_SQL);
   ensurePlatformModuleSchema();
+  ensureCapabilityPackSchema();
+  ensureWorkflowDefinitionSchema();
 }
 
 function assertState(state) {
@@ -1204,7 +1208,12 @@ function completeWorkflowStep(workflowId, stepId, details = {}) {
   const success = !details.error;
   dbStore.getDb().prepare("UPDATE platform_workflow_steps SET state = ?, completed_at = ?, result_summary = ?, error_category = ? WHERE step_id = ?").run(success ? "completed" : "failed", ts, details.result_summary || null, details.error_category || null, stepId);
   appendEvent({ event_type: success ? "workflow.step_completed" : "workflow.step_failed", source: details.source || "platform", actor_id: details.actor_id, subject_type: "workflow_step", subject_id: stepId, payload: { workflow_id: workflowId, step_id: stepId, success }, correlation_id: workflowId });
-  if (success) {
+  // `advance` lets a caller record a step as FAILED without stalling the
+  // workflow cursor. A workflow definition may declare a step as tolerated
+  // (on_error: "continue"); its durable record must still say it failed, but
+  // the run legitimately continues past it. Without this the step row and the
+  // cursor could not both be accurate.
+  if (success || (details.error && details.advance)) {
     const wf = getWorkflow(workflowId);
     const nextStep = (wf.current_step || 0) + 1;
     if (nextStep >= wf.total_steps) {

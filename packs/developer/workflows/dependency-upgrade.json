@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "name": "developer/dependency-upgrade",
+  "version": "1.0.0",
+  "title": "Dependency Upgrade",
+  "description": "Safely perform a bounded upgrade of ONE dependency. Establishes the current version, finds the usage that could break, applies the update through the project's own package manager, verifies, and reports remaining compatibility concerns. Deliberately scoped to the named package — it never sweeps the whole dependency tree.",
+  "mode": "mutating",
+  "tags": ["developer", "dependencies"],
+  "inputs": {
+    "path": { "type": "string", "required": true, "description": "Repository path" },
+    "package": { "type": "string", "required": true, "description": "The single dependency to upgrade" },
+    "target_version": { "type": "string", "required": false, "description": "Target version; omit to move to the latest the manager resolves" },
+    "update_command": { "type": "string", "required": true, "description": "The exact package-manager command that performs the bounded update (e.g. 'npm install lodash@4.17.21'). Supplied explicitly so the workflow never invents a mutation." },
+    "verification_mode": { "type": "string", "required": false, "default": "standard", "enum": ["quick", "standard", "full"] }
+  },
+  "steps": [
+    {
+      "name": "profile",
+      "title": "Establish ecosystem and package manager",
+      "tool": "dev_repo_profile",
+      "args": { "path": "${inputs.path}" },
+      "expect": "json",
+      "on_error": "fail"
+    },
+    {
+      "name": "current_manifest",
+      "title": "Read the current dependency manifest",
+      "tool": "read",
+      "args": { "path": "${inputs.path}/package.json" },
+      "expect": "text",
+      "on_error": "continue"
+    },
+    {
+      "name": "declared_version",
+      "title": "Locate the current declared version",
+      "tool": "search",
+      "args": { "pattern": "${inputs.package}", "path": "${inputs.path}", "include": "package.json" },
+      "expect": "text",
+      "on_error": "continue"
+    },
+    {
+      "name": "usage",
+      "title": "Find usage that an upgrade could break",
+      "tool": "search",
+      "args": { "pattern": "${inputs.package}", "path": "${inputs.path}" },
+      "expect": "text",
+      "on_error": "continue"
+    },
+    {
+      "name": "pre_state",
+      "title": "Record the working tree before the update",
+      "tool": "git",
+      "args": { "action": "status", "path": "${inputs.path}", "args": "--porcelain=v1" },
+      "expect": "text",
+      "on_error": "fail"
+    },
+    {
+      "name": "update",
+      "title": "Apply the bounded update through the package manager",
+      "tool": "bash",
+      "args": { "command": "cd ${inputs.path} && ${inputs.update_command}" },
+      "expect": "text",
+      "on_error": "fail"
+    },
+    {
+      "name": "change",
+      "title": "Confirm only the intended manifests changed",
+      "tool": "dev_change_summary",
+      "args": { "path": "${inputs.path}" },
+      "expect": "json",
+      "on_error": "continue"
+    },
+    {
+      "name": "verify",
+      "title": "Verify the project against the new version",
+      "tool": "dev_verify",
+      "args": { "path": "${inputs.path}", "mode": "${inputs.verification_mode}", "continue_on_failure": true },
+      "expect": "json",
+      "on_error": "continue"
+    }
+  ],
+  "result": {
+    "package": "${inputs.package}",
+    "target_version": "${inputs.target_version}",
+    "ecosystem": "${steps.profile.json.ecosystems}",
+    "package_managers": "${steps.profile.json.package_managers}",
+    "declared_version_before": "${steps.declared_version.text}",
+    "usage_sites": "${steps.usage.text}",
+    "working_tree_before": "${steps.pre_state.text}",
+    "update_output": "${steps.update.text}",
+    "resulting_change": "${steps.change.json.totals}",
+    "dependency_changes": "${steps.change.json.dependencies}",
+    "files_changed": "${steps.change.json.by_kind.dependency.files}",
+    "verification_verdict": "${steps.verify.json.verdict}",
+    "verification": "${steps.verify.json.summary}",
+    "compatibility_note": "usage_sites lists every reference to the package that an upgrade could affect. dependency_changes shows what actually moved; anything outside the dependency manifests means the update was wider than requested."
+  }
+}

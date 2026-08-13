@@ -37,6 +37,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_modules_name ON platform_modules(
 CREATE INDEX IF NOT EXISTS idx_platform_modules_state ON platform_modules(state, registered_at DESC);
 `;
 
+// Columns added after the original 029 CREATE. Order is part of the contract:
+// SQLite appends each ADD COLUMN to the stored CREATE text, so both boot paths
+// must apply them identically.
+//   entry_hash    — 029 (inline in the migration, ALTER here)
+//   install_path  — 036, managed installation directory for third-party packages
+//   package_hash  — 036, whole-package integrity hash of the managed installation
+//   provenance_json — 036, where the package came from and who installed it
+const ADDITIVE_MODULE_COLUMNS = Object.freeze([
+  ["entry_hash", "entry_hash TEXT"],
+  ["install_path", "install_path TEXT"],
+  ["package_hash", "package_hash TEXT"],
+  ["provenance_json", "provenance_json TEXT NOT NULL DEFAULT '{}'"],
+]);
+
 let ensured = false;
 
 function ensurePlatformModuleSchema() {
@@ -47,8 +61,12 @@ function ensurePlatformModuleSchema() {
   const db = require("../db").getDb();
   db.exec(MODULE_SCHEMA_SQL);
   const columns = db.prepare("PRAGMA table_info(platform_modules)").all();
-  if (!columns.some(column => column.name === "entry_hash")) {
-    db.exec("ALTER TABLE platform_modules ADD COLUMN entry_hash TEXT");
+  const present = new Set(columns.map(column => column.name));
+  // Additive columns, applied in the SAME ORDER as migrations/029 + 036 so the
+  // migrations-only boot and this runtime boot reach identical sqlite_master
+  // DDL (test/kernel-migration-parity.test.js).
+  for (const [column, ddl] of ADDITIVE_MODULE_COLUMNS) {
+    if (!present.has(column)) db.exec(`ALTER TABLE platform_modules ADD COLUMN ${ddl}`);
   }
   const row = db.prepare("SELECT value FROM meta WHERE key = 'platform_module_schema_version'").get();
   if (!row) {

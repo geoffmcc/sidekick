@@ -33,6 +33,7 @@ const { normalizeDescriptor } = require("../tools/descriptor");
 const { stripSidekickPrefix } = require("../core/tool-name");
 const repository = require("./repository");
 const { createModuleServices } = require("./services");
+const entryLoader = require("./entry-loader");
 const {
   MODULE_TRANSITIONS,
   validateModuleConfig,
@@ -42,6 +43,22 @@ const {
 
 // moduleName -> frozen array of normalized descriptors currently registered.
 const activeModules = new Map();
+
+// moduleName -> the code identity this process actually registered
+// { version, entryHash, packageHash }. Reconciliation compares it against the
+// persisted row so an UPGRADE performed in another process converges here
+// without a restart: the descriptors were built from the old bytes, and the
+// row now names different bytes, so the stale registration is dropped and the
+// module is re-activated from the new managed installation.
+const activeBindings = new Map();
+
+function bindingDrifted(binding, record) {
+  return (
+    binding.version !== record.version ||
+    binding.entryHash !== (record.entry_hash || null) ||
+    binding.packageHash !== (record.package_hash || null)
+  );
+}
 
 function freezeDeep(value) {
   if (!value || typeof value !== "object") return value;
@@ -118,6 +135,7 @@ function checkModuleDispatchable(moduleName) {
     return { ok: true, state: record.state };
   }
   activeModules.delete(String(moduleName));
+  activeBindings.delete(String(moduleName));
   return { ok: false, state: record ? record.state : "unregistered" };
 }
 
@@ -134,7 +152,19 @@ function reconcilePersistedModules(entriesByName = {}) {
     const record = repository.getModule(name);
     if (!record || (record.state !== "enabled" && record.state !== "healthy")) {
       activeModules.delete(name);
+      activeBindings.delete(name);
       deactivated.push({ name, state: record ? record.state : "unregistered" });
+      continue;
+    }
+    const binding = activeBindings.get(name);
+    if (binding && bindingDrifted(binding, record)) {
+      // Another process upgraded (or re-bound) this module. The descriptors
+      // here were built from bytes that are no longer the registered ones, so
+      // drop them; the restore pass below re-activates from the new code when
+      // an entry is available in this process.
+      activeModules.delete(name);
+      activeBindings.delete(name);
+      deactivated.push({ name, state: record.state, reason: "code_changed" });
     }
   }
   const restore = restorePersistedModules(entriesByName);
@@ -179,6 +209,21 @@ function buildModuleDescriptors(record, entry) {
   );
 }
 
+/**
+ * Verify that the entry the caller handed us is the code the registration
+ * names, and that the bytes on disk still match.
+ *
+ * Two independent checks, and both matter:
+ *   - the supplied entry's self-declared binding must equal the registered one
+ *     (catches "load module A, activate it as module B");
+ *   - the file on disk must still hash to the registered value, and for a
+ *     MANAGED (third-party) installation the whole package must too (catches
+ *     mutation after install — the tamper case).
+ *
+ * A managed installation resolves its entry inside its own installation
+ * directory; builtin/in-repo modules keep resolving against the repository
+ * root, which is what builtin provisioning has always done.
+ */
 function verifyEntryBinding(record, entry) {
   if (!record.entry_point || !record.entry_hash) {
     // Legacy in-memory registrations have no entry point to bind. Any module
@@ -189,9 +234,11 @@ function verifyEntryBinding(record, entry) {
   if (entry.entryPoint !== record.entry_point || entry.entryHash !== record.entry_hash) {
     throw new Error(`Module "${record.name}" entry-code binding does not match the registered entry point`);
   }
-  const entryPath = path.resolve(process.cwd(), record.entry_point);
-  const root = path.resolve(process.cwd());
-  if (path.relative(root, entryPath).startsWith("..")) throw new Error(`Module "${record.name}" entry point escapes the repository root`);
+  if (entryLoader.isManagedRecord(record)) {
+    const integrity = entryLoader.verifyInstalledPackage(record);
+    if (!integrity.ok) throw new Error(integrity.error);
+  }
+  const entryPath = entryLoader.resolveEntryPath(record);
   const actualHash = crypto.createHash("sha256").update(fs.readFileSync(entryPath)).digest("hex");
   if (actualHash !== record.entry_hash) throw new Error(`Module "${record.name}" entry code hash does not match the registered binding`);
 }
@@ -245,6 +292,11 @@ function enableModule(name, entry) {
   }
 
   activeModules.set(record.name, Object.freeze(descriptors));
+  activeBindings.set(record.name, Object.freeze({
+    version: record.version,
+    entryHash: record.entry_hash || null,
+    packageHash: record.package_hash || null,
+  }));
   try {
     // Prove the combined registry still builds under its own duplicate rules
     // before reporting success — belt and braces over checkManifestOwnership.
@@ -252,6 +304,7 @@ function enableModule(name, entry) {
     if (!alreadyEnabled) repository.transitionModule(record.name, "enabled");
   } catch (error) {
     activeModules.delete(record.name);
+    activeBindings.delete(record.name);
     failActivation(record, `Module "${record.name}" activation failed: ${error.message}`);
   }
 
@@ -274,24 +327,54 @@ function disableModule(name) {
     module = repository.transitionModule(record.name, "disabled");
   }
   activeModules.delete(record.name);
+  activeBindings.delete(record.name);
   return { module, deactivated: true };
 }
 
-/** Upgrade a registered module and reactivate it through the normal loader path. */
-function upgradeModule(name, manifest, entry) {
+/**
+ * Upgrade a registered module and reactivate it through the normal loader path.
+ *
+ * Two call shapes, because the two callers legitimately differ:
+ *   upgradeModule(name, manifest, entry)    — in-repo/in-memory entry supplied
+ *                                             directly (the original path)
+ *   upgradeModule(name, manifest, options)  — managed installation: the new
+ *                                             entry can only be loaded AFTER
+ *                                             the row names the new package,
+ *                                             so the caller passes a
+ *                                             `resolveEntry()` thunk that runs
+ *                                             at exactly that point.
+ *
+ * Either way the module is deactivated first, so the old version's descriptors
+ * are never left registered alongside the new version's.
+ */
+function upgradeModule(name, manifest, entryOrOptions) {
+  const suppliedEntry = entryOrOptions && typeof entryOrOptions.buildDescriptors === "function" ? entryOrOptions : null;
+  const options = suppliedEntry ? { entryPoint: suppliedEntry.entryPoint, entryHash: suppliedEntry.entryHash } : (entryOrOptions || {});
+  const { resolveEntry, ...repositoryOptions } = options;
+
   if (isModuleActive(name)) disableModule(name);
-  repository.upgradeModule(name, manifest, {
-    entryPoint: entry?.entryPoint,
-    entryHash: entry?.entryHash,
-  });
+  repository.upgradeModule(name, manifest, repositoryOptions);
   const current = repository.getModule(name);
   if (["disabled", "installed", "configured"].includes(current.state)) {
     repository.applyModuleMigrations(name, { transitionTo: "enabled" });
   }
+
+  let entry = suppliedEntry;
+  if (!entry) {
+    if (typeof resolveEntry !== "function") throw new Error(`Module "${name}" upgrade requires an entry or an entry resolver`);
+    const resolved = resolveEntry();
+    if (!resolved || !resolved.ok) {
+      const message = resolved && resolved.error ? resolved.error : `Module "${name}" upgraded code could not be loaded`;
+      failActivation(repository.getModule(name), message);
+    }
+    entry = resolved.entry;
+  }
+
   try {
     return enableModule(name, entry);
   } catch (error) {
     activeModules.delete(name);
+    activeBindings.delete(name);
     throw error;
   }
 }
@@ -330,8 +413,13 @@ function restorePersistedModules(entriesByName = {}) {
   return { restored, failed };
 }
 
+function getActiveBinding(name) {
+  return activeBindings.get(String(name)) || null;
+}
+
 module.exports = {
   getActiveDescriptors,
+  getActiveBinding,
   getActiveModuleNames,
   isModuleActive,
   resolveActiveDescriptor,

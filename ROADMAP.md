@@ -10,28 +10,41 @@ What's planned for Sidekick.
 > feature list further below is a product history and is not the source of
 > truth for tool counts.
 
-**Where the platform stands (verified at `main` 5e4dbfd, 2026-08-12):**
+**Where the platform stands (2026-08-12):**
 
-- 108 built-in MCP tools across 20 categories: 102 in the core registry plus 6
-  from the bundled `data-utilities` module. Query the `tools` table for the
-  authoritative live list.
+- 105 built-in MCP tools in the core registry, plus tools contributed by
+  installed modules (6 from the bundled `data-utilities` module; 3 more when
+  the Developer capability pack is installed and enabled). Query the `tools`
+  table for the authoritative live list.
 - The modular tool runtime is complete: descriptor registry, centralized
   dispatcher, source-aware policy, approvals, redaction, and audit are the one
   production execution path, and `src/tools-legacy.js` owns zero tool handlers.
+- **Capability Packs v1 shipped.** Sidekick Core no longer has to absorb every
+  future area of functionality. A pack is an installable area of competence
+  composed from modules, workflows, knowledge and configuration, managed
+  through the `capability` tool and the dashboard **Capabilities** page. The
+  first-party Developer / Software Engineering pack ships bundled. See
+  `docs/capability-packs.md` and `docs/developer-pack.md`.
+- **The module lifecycle is complete for third-party modules (B9).** Managed
+  module store, safe package inspection, verified entry-point loading with
+  whole-package integrity, install/configure/enable/disable/upgrade/uninstall,
+  and a derived health model. Installed module code is trusted executable code
+  with integrity and lifecycle controls — not a sandbox.
+- **Workflow definitions are runnable.** `platform_workflow_definitions` plus a
+  runner that drives the existing kernel workflow/execution primitives and the
+  single tool dispatcher, with durable state, checkpoints, project identity,
+  cancellation and approval continuation.
 - Completed architecture: Agent Bridge with follow-ups and evidence honesty;
   Sidekick Compute (workers, providers, placement, jobs, artifacts, OpenVINO
   NPU embeddings); durable task-originated approval continuation; execution
   claims/leases for cron/delay/watch/runbook; Black Box incident evidence;
-  structured memory with sessions, handoffs, and sync; module lifecycle proven
-  by the first-party `data-utilities` module.
-- Active convergence (`docs/platform-roadmap.md` Track B/C): canonical project
-  identity adoption (B3, started), execution-ledger convergence, event
-  consumption, artifact custody convergence, connector integration, compute
-  model dedup, and the third-party module path.
-- Foundation-only (implemented but not production-wired): platform workflow
-  runner, event delivery/consumers, connector integrations, durable
-  users/teams/deployment profiles, evaluation/replay, and the generic
-  security-research records.
+  structured memory with sessions, handoffs, and sync.
+- Active convergence (`docs/platform-roadmap.md` Track B): event consumption
+  (B5), artifact custody convergence (B6), connector integration (B7), and
+  compute/model deduplication (B8) remain pending, separate campaigns.
+- Foundation-only (implemented but not production-wired): event
+  delivery/consumers, connector integrations, durable users/teams/deployment
+  profiles, evaluation/replay, and the generic security-research records.
 
 ## Feature history
 
@@ -117,6 +130,38 @@ The list below records features as they were added (tool names use the older
 - **sidekick_db_diff** — Compare database snapshots
 
 ## Recently Completed ✅
+
+### v1.24: Capability Packs v1 and the Developer Pack
+**Status:** COMPLETED
+**Date:** 2026-08-12
+
+**What Was Added:**
+- **B9 third-party module lifecycle (complete):** managed module store under
+  `<SIDEKICK_DATA_DIR>/modules/<name>/<version>/`; safe package inspection that
+  never executes package code; verified `entry_point` loading gated on
+  whole-package integrity, entry hash, containment, compatibility and
+  configuration; real install/configure/enable/disable/upgrade/uninstall; a
+  derived health model; cross-process convergence when installed code changes.
+- **Capability Packs v1:** `sidekick.pack.json` manifest, managed pack store,
+  component ownership, full lifecycle, derived health, and bundled first-party
+  packs — built on the module, workflow and tool subsystems that already
+  existed rather than a second plugin runtime.
+- **Workflow definition registry and runner:** `platform_workflow_definitions`
+  plus a runner over the existing kernel workflow/execution primitives; every
+  step is a governed tool call.
+- **Developer / Software Engineering pack (bundled, first-party):**
+  `dev_repo_profile`, `dev_change_summary`, `dev_verify`; seven runnable
+  workflows (repository reconnaissance, issue investigation, implement change,
+  CI triage, pull request review, dependency upgrade, release preparation);
+  eight knowledge assets; twelve configuration options.
+- **New tools:** `capability` (critical) and `workflow` (high).
+- **Dashboard:** a first-class **Capabilities** page.
+- Migration `036_capability_packs.sql`.
+
+**Result:**
+- Core registry tools: 103 -> 105 (+3 more when the Developer pack is enabled)
+- B9 complete; B5, B6, B7 and B8 remain separate future campaigns
+
 
 ### v1.20: Structured Memory Completion
 **Status:** COMPLETED

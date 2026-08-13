@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "name": "developer/release-preparation",
+  "version": "1.0.0",
+  "title": "Release Preparation",
+  "description": "Determine whether a repository is ready for release and draft the release notes. Checks repository state, version consistency, changelog status, uncommitted work, verification, dependency state and migration/API warnings, then produces a readiness verdict. It never tags, never creates a GitHub release and never publishes.",
+  "mode": "read_only",
+  "tags": ["developer", "release", "read-only"],
+  "inputs": {
+    "path": { "type": "string", "required": true, "description": "Repository path" },
+    "since": { "type": "string", "required": true, "description": "Previous release ref (tag or commit) the notes are generated from" },
+    "version": { "type": "string", "required": false, "description": "Intended release version, checked against the project manifest" },
+    "verification_mode": { "type": "string", "required": false, "default": "full", "enum": ["quick", "standard", "full"] }
+  },
+  "steps": [
+    {
+      "name": "profile",
+      "title": "Establish repository state",
+      "tool": "dev_repo_profile",
+      "args": { "path": "${inputs.path}" },
+      "expect": "json",
+      "on_error": "fail"
+    },
+    {
+      "name": "manifest",
+      "title": "Read the project manifest for version consistency",
+      "tool": "read",
+      "args": { "path": "${inputs.path}/package.json" },
+      "expect": "text",
+      "on_error": "continue"
+    },
+    {
+      "name": "changelog",
+      "title": "Read the current changelog",
+      "tool": "summarize",
+      "args": { "path": "${inputs.path}/CHANGELOG.md", "max_lines": 60, "strategy": "head" },
+      "expect": "text",
+      "on_error": "continue"
+    },
+    {
+      "name": "uncommitted",
+      "title": "Check for uncommitted work",
+      "tool": "git",
+      "args": { "action": "status", "path": "${inputs.path}", "args": "--porcelain=v1 -b" },
+      "expect": "text",
+      "on_error": "fail"
+    },
+    {
+      "name": "release_impact",
+      "title": "Analyze everything changed since the previous release",
+      "tool": "dev_change_summary",
+      "args": { "path": "${inputs.path}", "base": "${inputs.since}" },
+      "expect": "json",
+      "on_error": "continue"
+    },
+    {
+      "name": "verify",
+      "title": "Run the project's own verification",
+      "tool": "dev_verify",
+      "args": { "path": "${inputs.path}", "mode": "${inputs.verification_mode}", "continue_on_failure": true },
+      "expect": "json",
+      "on_error": "continue"
+    },
+    {
+      "name": "release_notes",
+      "title": "Draft release notes from the commit history",
+      "tool": "changelog",
+      "args": { "action": "preview", "from": "${inputs.since}", "to": "HEAD", "format": "markdown", "group_by": "type", "path": "${inputs.path}" },
+      "expect": "text",
+      "on_error": "continue"
+    }
+  ],
+  "result": {
+    "repository": "${steps.profile.json.repository}",
+    "intended_version": "${inputs.version}",
+    "since": "${inputs.since}",
+    "project_manifest": "${steps.manifest.text}",
+    "changelog_head": "${steps.changelog.text}",
+    "working_tree": "${steps.uncommitted.text}",
+    "working_tree_clean": "${steps.profile.json.repository.working_tree.clean}",
+    "uncommitted_file_count": "${steps.profile.json.repository.working_tree.changed_files}",
+    "release_impact": "${steps.release_impact.json.totals}",
+    "api_surface_changes": "${steps.release_impact.json.api_surface}",
+    "dependency_changes": "${steps.release_impact.json.dependencies}",
+    "migrations_in_release": "${steps.release_impact.json.by_kind.migration}",
+    "release_risks": "${steps.release_impact.json.risks}",
+    "verification_verdict": "${steps.verify.json.verdict}",
+    "verification": "${steps.verify.json.summary}",
+    "release_notes_draft": "${steps.release_notes.text}",
+    "readiness_criteria": "Ready when: working_tree_clean is true, verification_verdict is passed or passed_partial, intended_version matches the project manifest, the changelog covers this version, and every entry in api_surface_changes.potentially_breaking and migrations_in_release is deliberate and documented.",
+    "not_performed": "tag creation, GitHub release creation, package publication"
+  }
+}

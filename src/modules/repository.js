@@ -75,6 +75,7 @@ function normalizeRow(row) {
     applied_migrations: parseJson(row.applied_migrations_json, []),
     health: parseJson(row.health_json, {}),
     metadata: parseJson(row.metadata_json, {}),
+    provenance: parseJson(row.provenance_json, {}),
   };
 }
 
@@ -105,7 +106,7 @@ function listModules({ state } = {}) {
  * Registering a name that already exists fails closed — upgrades and
  * re-registration are a separate, explicit flow.
  */
-function registerModule(manifestInput, { source = "discovered", entryPoint = null, entryHash = null, config } = {}) {
+function registerModule(manifestInput, { source = "discovered", entryPoint = null, entryHash = null, installPath = null, packageHash = null, provenance = null, config } = {}) {
   ensureModuleStorage();
   const manifest = normalizeManifest(manifestInput);
 
@@ -131,8 +132,9 @@ function registerModule(manifestInput, { source = "discovered", entryPoint = nul
   db.prepare(`
     INSERT INTO platform_modules (
       module_id, name, version, state, type, author, description,
-      manifest_json, config_json, source, entry_point, entry_hash, registered_at
-    ) VALUES (?, ?, ?, 'validated', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      manifest_json, config_json, source, entry_point, entry_hash, registered_at,
+      install_path, package_hash, provenance_json
+    ) VALUES (?, ?, ?, 'validated', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     moduleId,
     manifest.name,
@@ -145,7 +147,10 @@ function registerModule(manifestInput, { source = "discovered", entryPoint = nul
     source,
     entryPoint,
     entryHash,
-    nowIso()
+    nowIso(),
+    installPath,
+    packageHash,
+    JSON.stringify(provenance || {})
   );
 
   return getModule(manifest.name);
@@ -244,13 +249,23 @@ function listHealthHistory(name, limit = 10) {
 }
 
 /** Replace a registration only through an explicit forward version upgrade. */
-function upgradeModule(name, manifestInput, { source, entryPoint, entryHash, config } = {}) {
+function upgradeModule(name, manifestInput, { source, entryPoint, entryHash, installPath, packageHash, provenance, config, allowSameVersion = false, allowDowngrade = false } = {}) {
   ensureModuleStorage();
   const record = getModule(name);
   if (!record) throw new Error(`Module "${name}" is not registered`);
   const manifest = normalizeManifest(manifestInput);
   if (manifest.name !== record.name) throw new Error(`Module upgrade name mismatch: expected "${record.name}", got "${manifest.name}"`);
-  if (compareVersions(manifest.version, record.version) <= 0) throw new Error(`Module "${name}" upgrade must increase version from ${record.version} to ${manifest.version}`);
+  const direction = compareVersions(manifest.version, record.version);
+  // Ambiguous replacement is refused rather than guessed at. Re-installing the
+  // SAME version with different bytes and rolling BACK to an older version are
+  // both legitimate operator intents, but neither is what "upgrade" means, so
+  // each needs its own explicit flag.
+  if (direction === 0 && !allowSameVersion) {
+    throw new Error(`Module "${name}" is already at version ${record.version}; same-version replacement requires an explicit reinstall`);
+  }
+  if (direction < 0 && !allowDowngrade) {
+    throw new Error(`Module "${name}" upgrade must increase version from ${record.version} to ${manifest.version}`);
+  }
   if (record.state === "uninstalling" || record.state === "uninstalled") throw new Error(`Module "${name}" cannot be upgraded from state ${record.state}`);
   const nextEntryPoint = entryPoint === undefined ? record.entry_point : entryPoint;
   const nextEntryHash = entryHash === undefined ? record.entry_hash : entryHash;
@@ -264,12 +279,17 @@ function upgradeModule(name, manifestInput, { source, entryPoint, entryHash, con
     }
     storedConfig = configResult.config;
   }
+  const nextInstallPath = installPath === undefined ? record.install_path : installPath;
+  const nextPackageHash = packageHash === undefined ? record.package_hash : packageHash;
+  const nextProvenance = provenance === undefined ? record.provenance : provenance;
+  if (nextInstallPath && !nextPackageHash) throw new Error(`Module "${name}" upgrade requires a package hash for its managed installation`);
   const result = getDb().prepare(`
     UPDATE platform_modules
     SET version = ?, description = ?, manifest_json = ?, config_json = ?,
-        source = COALESCE(?, source), entry_point = ?, entry_hash = ?, error = NULL
+        source = COALESCE(?, source), entry_point = ?, entry_hash = ?, error = NULL,
+        install_path = ?, package_hash = ?, provenance_json = ?
     WHERE module_id = ? AND state = ?
-  `).run(manifest.version, manifest.description, JSON.stringify(manifest), JSON.stringify(storedConfig), source === undefined ? null : source, nextEntryPoint, nextEntryHash, record.module_id, record.state);
+  `).run(manifest.version, manifest.description, JSON.stringify(manifest), JSON.stringify(storedConfig), source === undefined ? null : source, nextEntryPoint, nextEntryHash, nextInstallPath, nextPackageHash, JSON.stringify(nextProvenance || {}), record.module_id, record.state);
   if (result.changes === 0) throw new Error(`Module "${name}" state changed concurrently (expected ${record.state})`);
   return getModule(name);
 }
@@ -421,8 +441,50 @@ function applyModuleMigrations(name, { transitionTo = null, error = null, config
   return { applied: result.applied, alreadyApplied: result.alreadyApplied, module: getModule(name) };
 }
 
+/**
+ * Validate and persist configuration WITHOUT a lifecycle transition.
+ *
+ * `configuration.js` owns the installed -> configured lifecycle step. This is
+ * the reconfigure path for a module that is already past it (configured,
+ * disabled, enabled, healthy, error): configuration must be changeable without
+ * pretending the module went back to "installed".
+ */
+function setModuleConfig(name, config) {
+  ensureModuleStorage();
+  const record = getModule(name);
+  if (!record) throw new Error(`Module "${name}" is not registered`);
+  const configResult = validateModuleConfig(record.manifest, config);
+  if (!configResult.ok) {
+    const details = (configResult.errors || []).map(e => `${e.path}: ${e.message}`).join("; ");
+    throw new Error(`Module "${name}" config is invalid: ${details}`);
+  }
+  getDb()
+    .prepare("UPDATE platform_modules SET config_json = ?, configured_at = ? WHERE module_id = ?")
+    .run(JSON.stringify(configResult.config), nowIso(), record.module_id);
+  return getModule(name);
+}
+
+/**
+ * Remove a module's registration row.
+ *
+ * Only the REGISTRATION is removed. Kernel ledger events (transitions, health
+ * checks, tool invocations) are historical evidence of what the system did and
+ * are deliberately left in place — uninstalling a module must not rewrite the
+ * audit trail.
+ */
+function deleteModuleRecord(name) {
+  ensureModuleStorage();
+  const record = getModule(name);
+  if (!record) return { removed: false };
+  const result = getDb().prepare("DELETE FROM platform_modules WHERE module_id = ?").run(record.module_id);
+  recordTransitionEvent(record.name, record.state, "uninstalled", { error: null });
+  return { removed: result.changes > 0, module: record };
+}
+
 module.exports = {
   ensureModuleStorage,
+  setModuleConfig,
+  deleteModuleRecord,
   registerModule,
   bindEntryHash,
   rebindBuiltinEntry,

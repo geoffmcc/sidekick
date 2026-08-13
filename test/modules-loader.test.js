@@ -89,7 +89,16 @@ console.log('Running Module Loader Tests...\n');
 
     console.log('Test ML.3: handlers receive only the narrow frozen v1 facade');
     assert.ok(capturedServices, 'Entry should have been built with services');
-    assert.deepStrictEqual(Object.keys(capturedServices).sort(), ['config', 'dispatch', 'moduleName'], 'v1 facade keys should be narrow');
+    // The facade is narrow BY CONTRACT, not by a hardcoded list here: assert
+    // against the contract itself so the two cannot drift. `paths` was added by
+    // Capability Packs v1 so a module can honour the SAME canonical filesystem
+    // boundary the builtin families use, instead of reimplementing policy or
+    // round-tripping every file read through the dispatcher.
+    const { NARROW_SERVICE_KEYS } = require('../src/modules/services');
+    assert.deepStrictEqual(Object.keys(capturedServices).sort(), [...NARROW_SERVICE_KEYS].sort(), 'v1 facade keys should be narrow');
+    assert.deepStrictEqual([...NARROW_SERVICE_KEYS].sort(), ['config', 'dispatch', 'moduleName', 'paths'], 'the narrow facade contract itself must stay small');
+    assert.strictEqual(typeof capturedServices.paths.enforce, 'function', 'paths exposes the shared path boundary');
+    assert.ok(Object.isFrozen(capturedServices.paths), 'the paths facade is frozen');
     assert.ok(Object.isFrozen(capturedServices) && Object.isFrozen(capturedServices.config), 'Facade and config should be frozen');
     assert.strictEqual(capturedServices.moduleName, 'demo-loader-module', 'Facade should carry the module name');
     console.log('Passed\n');
