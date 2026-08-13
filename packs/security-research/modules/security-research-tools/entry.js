@@ -36,6 +36,7 @@ const records = require("./lib/records");
 const runsLib = require("./lib/runs");
 const evidenceLib = require("./lib/evidence");
 const probesLib = require("./lib/probes");
+const labLib = require("./lib/lab");
 const compareLib = require("./lib/compare");
 const reportLib = require("./lib/report");
 const discovery = require("./lib/discovery");
@@ -133,7 +134,7 @@ function handleScope(services, args, runtime) {
 
 // --- research_run -----------------------------------------------------------
 
-function handleRun(services, args, runtime) {
+async function handleRun(services, args, runtime) {
   const actor = resolveActor(args, runtime);
   const config = services.config || {};
   switch (args.action) {
@@ -149,6 +150,17 @@ function handleRun(services, args, runtime) {
       return ok({ run: runsLib.cancel(args.run_id, actor, args.reason) });
     case "complete":
       return ok({ run: runsLib.complete(args.run_id, { outcome: args.outcome, evidence: args.evidence, actor }) });
+    case "provision": {
+      // Provision the run's disposable lab by composing the Proxmox pack. The
+      // WHICH-lab specifics (profile, clone spec) come from the run's environment,
+      // supplied by the operator at runtime — never from this repository.
+      const ctx = runContext(services, args.run_id, runtime);
+      return ok({ lab: await labLib.provision(services, ctx, runtime) });
+    }
+    case "cleanup": {
+      const ctx = runContext(services, args.run_id, runtime);
+      return ok({ lab: await labLib.cleanup(services, ctx, runtime) });
+    }
     case "list":
       return ok({ runs: runsLib.list({ project_id: args.project_id, campaign_id: args.campaign_id, hypothesis_id: args.hypothesis_id, state: args.state, limit: args.limit }) });
     default:
@@ -390,9 +402,9 @@ const entry = {
       },
       {
         name: "research_run",
-        description: "Manage durable research runs: plan (create execution + test run), start, status, resume, cancel, complete, or list. A run is backed by a platform execution and a kernel test-run record, so its state survives a restart. A completed run requires an outcome and evidence — enforced by the kernel, not assumed.",
+        description: "Manage durable research runs: plan (create execution + test run), start, status, resume, cancel, complete, provision, cleanup, or list. A run is backed by a platform execution and a kernel test-run record, so its state survives a restart. A completed run requires an outcome and evidence — enforced by the kernel. For a run whose environment is kind 'proxmox', 'provision' composes the Proxmox pack to create a disposable guest (recording provenance) and 'cleanup' requests an authorized shutdown, reporting deletion as pending/manual since the provider exposes no delete.",
         schema: z.object({
-          action: z.enum(["plan", "start", "status", "resume", "cancel", "complete", "list"]),
+          action: z.enum(["plan", "start", "status", "resume", "cancel", "complete", "provision", "cleanup", "list"]),
           run_id: z.string().optional(),
           hypothesis_id: z.string().optional(),
           campaign_id: z.string().optional(),
@@ -408,7 +420,7 @@ const entry = {
           limit: z.number().int().min(1).max(100).optional(),
           actor: z.string().optional(),
         }),
-        args: { action: "string (plan|start|status|resume|cancel|complete|list)", run_id: "string", hypothesis_id: "string", environment: "string|object", outcome: "string", evidence: "array of evidence references" },
+        args: { action: "string (plan|start|status|resume|cancel|complete|provision|cleanup|list)", run_id: "string", hypothesis_id: "string", environment: "string|object", outcome: "string", evidence: "array of evidence references" },
         risk: "high",
         category: "Security",
         handler: guard((args, runtime) => handleRun(services, args, runtime)),

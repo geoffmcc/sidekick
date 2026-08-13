@@ -3,7 +3,7 @@
   "name": "security-research",
   "display_name": "Security Research",
   "version": "1.0.0",
-  "description": "A governed, reproducible framework for authorized security research. Organizes work into campaigns, hypotheses, durable research runs, bounded probes, evidence with integrity and redaction, deterministic comparison, validation and report material. It composes existing Sidekick capabilities through the normal policy/approval/audit path rather than reimplementing them: command probes dispatch the governed bash tool and HTTP probes dispatch web_fetch, its workflows compose the Git tool, and it enforces a hard boundary between the public Sidekick repository and an external, private research workspace. Named environments describe where a probe runs; Proxmox disposable-lab provisioning is a documented environment seam for a later increment.",
+  "description": "A governed, reproducible framework for authorized security research. Organizes work into campaigns, hypotheses, durable research runs, bounded probes, evidence with integrity and redaction, deterministic comparison, validation and report material. It composes existing Sidekick capabilities through the normal policy/approval/audit path rather than reimplementing them: command probes dispatch the governed bash tool and HTTP probes dispatch web_fetch, a proxmox environment composes proxmox_provision/proxmox_guest to provision and tear down a disposable lab, its workflows compose the Git tool, and it enforces a hard boundary between the public Sidekick repository and an external, private research workspace. Which lab (endpoint, profile, clone spec) is supplied entirely by runtime configuration, never committed.",
   "publisher": "Sidekick",
   "compatibility": {
     "sidekick": ">=1.0.0"
@@ -105,6 +105,7 @@
               "network_mode": { "type": "string", "enum": ["none", "fixture", "lab"] },
               "production_access": { "type": "boolean" },
               "provider_profile": { "type": "string", "description": "For kind=proxmox: the Proxmox pack profile name to provision within." },
+              "provision": { "type": "object", "description": "For kind=proxmox: the proxmox_provision spec (e.g. { action: 'clone', clone: { source_vmid, newid, node } }) used to create the disposable guest. Operator-supplied at runtime; no lab specifics are committed." },
               "workdir": { "type": "string", "description": "For kind=local/remote: working directory a command probe is confined to." },
               "description": { "type": "string" }
             },

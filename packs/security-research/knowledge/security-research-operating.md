@@ -11,10 +11,10 @@ private workspace — never in the Sidekick repository.
   existing research record layer (campaigns, hypotheses, runs, findings,
   reports).
 - A capability *consumer*: command probes dispatch `bash`, http probes dispatch
-  `web_fetch`, and its workflows compose `git` — all through the normal
-  policy/approval/audit path. It has no special privilege and cannot bypass
-  provider policy. (Proxmox disposable-lab auto-provisioning is a documented
-  environment seam, not yet dispatched.)
+  `web_fetch`, a `proxmox` environment composes `proxmox_provision`/
+  `proxmox_guest` to provision and tear down a disposable lab, and its workflows
+  compose `git` — all through the normal policy/approval/audit path. It has no
+  special privilege and cannot bypass provider policy.
 
 ## What it is not
 

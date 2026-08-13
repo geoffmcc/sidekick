@@ -44,6 +44,9 @@ function normalizeEnvironment(env) {
     network_mode: env.network_mode || (kind === "local" ? "none" : "lab"),
     production_access: env.production_access === true,
     provider_profile: env.provider_profile || null,
+    // The proxmox_provision spec (action + params) for a disposable lab. Carried
+    // through verbatim so the run can provision later; operator-supplied.
+    provision: env.provision && typeof env.provision === "object" ? env.provision : null,
     workdir: env.workdir || null,
     description: env.description || null,
   };

@@ -34,11 +34,13 @@ traffic generation.
 
 ## Provider policy is never bypassed
 
-The principle holds for every capability this pack composes now or later. When a
-future increment lets a run provision infrastructure through the Proxmox pack, a
-destructive provider operation is decided by the Proxmox pack's own controls —
-the Security Research pack cannot say "this is research, therefore allow it." If
-cleanup is not authorized, it is reported as pending/manual rather than forced.
+When a run with a `proxmox` environment provisions infrastructure through the
+Proxmox pack, the destructive-operation decision belongs to the Proxmox pack's
+own controls (`allow_lifecycle`, protected-resource, provenance) — the Security
+Research pack cannot say "this is research, therefore allow it." The Proxmox pack
+exposes no VM delete, so `research_run action=cleanup` performs an authorized
+shutdown and reports deletion as pending/manual rather than reintroducing a
+destructive path.
 
 ## Risk and approvals
 

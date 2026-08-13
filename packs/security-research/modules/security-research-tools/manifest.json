@@ -2,7 +2,7 @@
   "name": "security-research-tools",
   "displayName": "Security Research Tools",
   "version": "1.0.0",
-  "description": "Governed security-research orchestration: campaigns, hypotheses, durable runs, bounded probes, evidence with integrity and redaction, deterministic comparison, validation and report material. Command probes dispatch bash and http probes dispatch web_fetch through the Sidekick policy/approval/audit path (its only two allowlisted dispatch targets); workflows compose git. Enforces a hard boundary between the public repository and an external private research workspace.",
+  "description": "Governed security-research orchestration: campaigns, hypotheses, durable runs, bounded probes, evidence with integrity and redaction, deterministic comparison, validation and report material. Command probes dispatch bash and http probes dispatch web_fetch; a proxmox environment composes proxmox_provision/proxmox_guest to provision and tear down a disposable lab; workflows compose git. All through the Sidekick policy/approval/audit path. Enforces a hard boundary between the public repository and an external private research workspace.",
   "author": "Sidekick",
   "type": "plugin",
   "entryPoint": "entry.js",
@@ -48,6 +48,7 @@
             "network_mode": { "type": "string", "enum": ["none", "fixture", "lab"] },
             "production_access": { "type": "boolean" },
             "provider_profile": { "type": "string" },
+            "provision": { "type": "object" },
             "workdir": { "type": "string" },
             "description": { "type": "string" }
           },
@@ -72,7 +73,9 @@
   },
   "permissions": [
     { "tool": "bash", "risk": "critical" },
-    { "tool": "web_fetch", "risk": "medium" }
+    { "tool": "web_fetch", "risk": "medium" },
+    { "tool": "proxmox_provision", "risk": "high" },
+    { "tool": "proxmox_guest", "risk": "high" }
   ],
   "lifecycle": {
     "disable": "stop_new_work",
