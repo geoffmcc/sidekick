@@ -43,6 +43,8 @@ function startReconciliation() {
     // cadence, each guarded so one failing pass cannot suppress the others.
     try { jobManager.recoverExpiredLeases(); }
     catch (e) { logRecoveryFailure("lease_recovery", e); }
+    try { jobManager.expireQueuedJobs(); }
+    catch (e) { logRecoveryFailure("job_expiry", e); }
     try { jobManager.releaseRetryWaitJobs(); }
     catch (e) { logRecoveryFailure("retry_wait_release", e); }
     // Circuit recovery has the same "must not depend on incidental traffic"

@@ -127,7 +127,7 @@ async function detectCapabilities(client, profile) {
     state: cloudInitGuests > 0 || templates > 0 ? "detected" : "not_detected",
     guests_with_cloud_init: cloudInitGuests,
     qemu_templates: templates,
-    detail: "Provisioning from templates/cloud-init is a documented future phase; this reports detection only.",
+    detail: "Provisioning from templates/cloud-init is available through the governed proxmox_provision capability; this reports detected configuration only.",
   };
 
   // --- optional local automation providers ------------------------------

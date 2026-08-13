@@ -253,6 +253,15 @@ function uninstall(name, { removeData = false } = {}) {
   }
   if (loader.isModuleActive(name)) loader.disableModule(name);
 
+  // Persist the intermediate state before removing the package or its
+  // registration row. If removal is interrupted, recovery can distinguish an
+  // uninstall in progress from an ordinary disabled module.
+  let current = repository.getModule(name);
+  if (current.state === "error") current = repository.transitionModule(name, "disabled");
+  if (["installed", "configured", "disabled"].includes(current.state)) {
+    repository.transitionModule(name, "uninstalling");
+  }
+
   let packageRemoved = false;
   if (entryLoader.isManagedRecord(record)) {
     entryLoader.purgeRequireCache(path.resolve(record.install_path));

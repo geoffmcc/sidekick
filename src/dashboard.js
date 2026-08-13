@@ -482,6 +482,46 @@ function blackboxJson(res, fn) {
   }
 }
 
+async function governedDashboardMutation(req, res, tool, args, auditAction) {
+  // The dashboard middleware already authenticates the request. The dispatcher
+  // receives the real user when available, while compatibility clients retain
+  // the established dashboard actor for medium-risk mutations; critical-risk
+  // routes use requireAttributedActor at their dedicated boundaries.
+  const actor = authenticatedUser(req) || "dashboard";
+  try {
+    auditLog(req, auditAction, { tool, action: args.action, id: args.incident_id || args.capture_id || args.id || null });
+    const result = await callDashboardTool(tool, args, { actor });
+    if (!result?.isError && tool === "compute_nodes") {
+      const text = result.content?.[0]?.text || "";
+      let payload; try { payload = JSON.parse(text); } catch { payload = { message: text }; }
+      if (["maintenance", "revoke"].includes(args.action)) return res.json({ ok: true, worker: payload });
+      if (args.action === "create_token") return res.json({ ok: true, ...payload, install: computeInstallInfo(req, payload.token) });
+    }
+    if (!result?.isError && tool === "compute_jobs") {
+      const text = result.content?.[0]?.text || "";
+      let payload; try { payload = JSON.parse(text); } catch { payload = { message: text }; }
+      if (["cancel", "retry"].includes(args.action)) return res.json({ ok: true, job: payload });
+      if (args.action === "recover") return res.json({ ok: true, recovered: payload.recovered, expired: payload.expired });
+    }
+    if (!result?.isError && tool === "black_box") {
+      const text = result.content?.[0]?.text || "";
+      let payload;
+      try { payload = JSON.parse(text); } catch { payload = { message: text }; }
+      const wrapped = {
+        capture: ["capture", "retry_capture"].includes(args.action) ? payload : undefined,
+        analysis: args.action === "analyze" ? payload : undefined,
+        incident: args.action === "update_incident" ? payload : undefined,
+        note: args.action === "add_note" ? payload : undefined,
+      };
+      if (Object.values(wrapped).some(value => value !== undefined)) return res.json({ ok: true, ...wrapped });
+    }
+    return capabilityResult(res, result);
+  } catch (error) {
+    logError(req.originalUrl, 500, error, tool, req.headers["user-agent"]);
+    return res.status(500).json({ ok: false, error: error.message });
+  }
+}
+
 function writeKV(data) {
   dbStore.replaceKV(data || {});
 }
@@ -730,15 +770,14 @@ function seedKV() {
   };
 
   for (const [key, value] of Object.entries(seed)) {
-    if (!(key in kv)) {
-      kv[key] = {
-        value: value,
-        project: "system",
-        source: "dashboard",
-        created: now,
-        updated: now
-      };
-    }
+    const existing = kv[key];
+    kv[key] = {
+      value,
+      project: "system",
+      source: "dashboard",
+      created: existing?.created || now,
+      updated: now,
+    };
   }
 
   const stale = Object.keys(kv).filter(k => k.startsWith("security:failed_logins_24h"));
@@ -1508,59 +1547,40 @@ app.get("/api/compute/install", (req, res) => {
 });
 
 app.post("/api/compute/enrollment-tokens", (req, res) => {
-  try {
-    compute.initialize();
-    const body = req.body || {};
-    const token = compute.workerManager.createEnrollmentToken({
-      displayName: body.displayName || body.display_name,
-      trustLevel: body.trustLevel || body.trust_level || "trusted",
-      allowedDataClassifications: body.allowedDataClassifications || body.allowed_data_classifications || ["public", "internal", "private"],
-      maxConcurrentJobs: Math.min(16, Math.max(1, Number(body.maxConcurrentJobs || body.max_concurrent_jobs || 2))),
-      expiresInMs: Math.min(7 * 24 * 60 * 60 * 1000, Math.max(60 * 1000, Number(body.expiresInMs || body.expires_in_ms || 3600000))),
-      createdBy: "dashboard",
-      reEnrollmentOf: body.reEnrollmentOf || body.re_enrollment_of || null,
-    });
-    auditLog(req, "compute.enrollment_token.created", { tokenId: token.tokenId, displayName: body.displayName || body.display_name || null, reEnrollmentOf: token.reEnrollmentOf || null });
-    res.json({ ok: true, ...token, install: computeInstallInfo(req, token.token) });
-  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+  const body = req.body || {};
+  return governedDashboardMutation(req, res, "compute_nodes", {
+    action: "create_token",
+    display_name: body.displayName || body.display_name,
+    trust_level: body.trustLevel || body.trust_level || "trusted",
+    allowed_data_classifications: body.allowedDataClassifications || body.allowed_data_classifications || ["public", "internal", "private"],
+    max_concurrent_jobs: Math.min(16, Math.max(1, Number(body.maxConcurrentJobs || body.max_concurrent_jobs || 2))),
+    expires_in_ms: Math.min(7 * 24 * 60 * 60 * 1000, Math.max(60 * 1000, Number(body.expiresInMs || body.expires_in_ms || 3600000))),
+    ...(body.reEnrollmentOf || body.re_enrollment_of ? { re_enrollment_of: body.reEnrollmentOf || body.re_enrollment_of } : {}),
+  }, "compute.enrollment_token.created");
 });
 
 app.post("/api/compute/workers/:workerId/:action", (req, res) => {
-  try {
-    compute.initialize();
-    const action = req.params.action;
-    let worker;
-    if (action === "disable") worker = compute.workerManager.updateWorker(req.params.workerId, { adminState: "maintenance" });
-    else if (action === "enable") worker = compute.workerManager.updateWorker(req.params.workerId, { adminState: "enabled" });
-    else if (action === "revoke") worker = compute.workerManager.revokeWorker(req.params.workerId, req.body?.reason || "dashboard_revoked");
-    else return res.status(404).json({ ok: false, error: "unknown worker action" });
-    if (!worker) return res.status(404).json({ ok: false, error: "worker not found" });
-    auditLog(req, `compute.worker.${action}`, { workerId: req.params.workerId, reason: req.body?.reason || null });
-    res.json({ ok: true, worker });
-  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+  const action = req.params.action;
+  if (!["disable", "enable", "revoke"].includes(action)) return res.status(404).json({ ok: false, error: "unknown worker action" });
+  return governedDashboardMutation(req, res, "compute_nodes", {
+    action: action === "revoke" ? "revoke" : "maintenance",
+    worker_id: req.params.workerId,
+    enable: action === "enable",
+    reason: req.body?.reason || "dashboard_revoked",
+  }, `compute.worker.${action}`);
 });
 
 app.post("/api/compute/jobs/:jobId/:action", (req, res) => {
-  try {
-    compute.initialize();
-    const action = req.params.action;
-    let job;
-    if (action === "cancel") job = compute.jobManager.cancelJob(req.params.jobId, { actor: "dashboard", reason: req.body?.reason || "dashboard_cancelled" });
-    else if (action === "retry") job = compute.jobManager.retryJob(req.params.jobId, { actor: "dashboard", reason: req.body?.reason || "dashboard_retry" });
-    else return res.status(404).json({ ok: false, error: "unknown job action" });
-    auditLog(req, `compute.job.${action}`, { jobId: req.params.jobId, reason: req.body?.reason || null });
-    res.json({ ok: true, job });
-  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+  const action = req.params.action;
+  if (!["cancel", "retry"].includes(action)) return res.status(404).json({ ok: false, error: "unknown job action" });
+  return governedDashboardMutation(req, res, "compute_jobs", {
+    action,
+    job_id: req.params.jobId,
+    reason: req.body?.reason || `dashboard_${action}`,
+  }, `compute.job.${action}`);
 });
 
-app.post("/api/compute/recover", (req, res) => {
-  try {
-    compute.initialize();
-    const recovered = compute.jobManager.recoverExpiredLeases();
-    auditLog(req, "compute.jobs.recover", { recovered });
-    res.json({ ok: true, recovered });
-  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
-});
+app.post("/api/compute/recover", (req, res) => governedDashboardMutation(req, res, "compute_jobs", { action: "recover" }, "compute.jobs.recover"));
 
 app.get("/api/blackbox/profiles", (req, res) => {
   res.json({ profiles: blackbox.PROFILE_INFO });
@@ -1572,15 +1592,7 @@ app.get("/api/blackbox/storage", (req, res) => blackboxJson(res, () => blackbox.
 
 app.get("/api/blackbox/incidents", (req, res) => blackboxJson(res, () => ({ incidents: blackbox.listIncidents(req.query) })));
 
-app.post("/api/blackbox/capture", async (req, res) => {
-  try {
-    const capture = await blackbox.captureIncident({ ...(req.body || {}), source: "dashboard", requested_by: "dashboard" });
-    auditLog(req, 'blackbox.capture', { incident_id: capture.incident_id, capture_id: capture.id, state: capture.state });
-    res.json({ ok: true, capture });
-  } catch (error) {
-    res.status(400).json({ ok: false, error: error.message });
-  }
-});
+app.post("/api/blackbox/capture", (req, res) => governedDashboardMutation(req, res, "black_box", { action: "capture", ...(req.body || {}) }, "blackbox.capture"));
 
 app.get("/api/blackbox/incidents/:id", (req, res) => blackboxJson(res, () => {
   const incident = blackbox.getIncident(req.params.id, { includeTimeline: true, includeAnalysis: true });
@@ -1591,64 +1603,25 @@ app.get("/api/blackbox/incidents/:id", (req, res) => blackboxJson(res, () => {
   return { incident };
 }));
 
-app.patch("/api/blackbox/incidents/:id", (req, res) => blackboxJson(res, () => {
-  const incident = blackbox.updateIncident(req.params.id, req.body || {}, "dashboard");
-  auditLog(req, 'blackbox.update', { incident_id: req.params.id, updates: Object.keys(req.body || {}) });
-  return { ok: true, incident };
-}));
+app.patch("/api/blackbox/incidents/:id", (req, res) => governedDashboardMutation(req, res, "black_box", { action: "update_incident", incident_id: req.params.id, ...(req.body || {}) }, "blackbox.update"));
 
-app.delete("/api/blackbox/incidents/:id", (req, res) => blackboxJson(res, () => {
-  const ok = blackbox.deleteIncident(req.params.id, "dashboard");
-  auditLog(req, 'blackbox.delete', { incident_id: req.params.id, ok });
-  return { ok };
-}));
+app.delete("/api/blackbox/incidents/:id", (req, res) => governedDashboardMutation(req, res, "black_box", { action: "delete", incident_id: req.params.id }, "blackbox.delete"));
 
 app.get("/api/blackbox/incidents/:id/timeline", (req, res) => blackboxJson(res, () => ({ timeline: blackbox.getTimeline(req.params.id) })));
 
 app.get("/api/blackbox/incidents/:id/export", (req, res) => blackboxJson(res, () => ({ export: blackbox.exportIncident(req.params.id, { format: req.query.format || "json" }) })));
 
-app.post("/api/blackbox/incidents/:id/analyze", async (req, res) => {
-  try {
-    const incident = blackbox.getIncident(req.params.id, { includeCaptures: true });
-    if (!incident) { res.status(404).json({ ok: false, error: "Incident not found" }); return; }
-    const latestCapture = (incident.captures || [])[0];
-    if (!latestCapture || ["no_evidence", "blocked", "failed_preflight"].includes(latestCapture.state) || !latestCapture.source_count) {
-      res.status(400).json({ ok: false, error: `Cannot analyze: latest capture is in state '${latestCapture?.state || "none"}' with ${latestCapture?.source_count || 0} sources. Retry the capture first.` });
-      return;
-    }
-    const analysis = await blackbox.analyzeIncident(req.params.id, { ...(req.body || {}), actor: "dashboard" });
-    auditLog(req, 'blackbox.analyze', { incident_id: req.params.id, analysis_id: analysis.id });
-    res.json({ ok: true, analysis });
-  } catch (error) {
-    res.status(400).json({ ok: false, error: error.message });
-  }
-});
+app.post("/api/blackbox/incidents/:id/analyze", (req, res) => governedDashboardMutation(req, res, "black_box", { action: "analyze", incident_id: req.params.id, ...(req.body || {}) }, "blackbox.analyze"));
 
-app.post("/api/blackbox/incidents/:id/notes", (req, res) => blackboxJson(res, () => {
-  const note = blackbox.addNote(req.params.id, { ...(req.body || {}), source: "dashboard" });
-  auditLog(req, 'blackbox.note', { incident_id: req.params.id, note_id: note.id });
-  return { ok: true, note };
-}));
+app.post("/api/blackbox/incidents/:id/notes", (req, res) => governedDashboardMutation(req, res, "black_box", { action: "add_note", incident_id: req.params.id, ...(req.body || {}) }, "blackbox.note"));
 
 app.get("/api/blackbox/captures/:id", (req, res) => blackboxJson(res, () => ({ capture: blackbox.getCapture(req.params.id, { includeSources: true }) })));
 
-app.post("/api/blackbox/captures/:id/cancel", (req, res) => blackboxJson(res, () => blackbox.cancelCapture(req.params.id)));
+app.post("/api/blackbox/captures/:id/cancel", (req, res) => governedDashboardMutation(req, res, "black_box", { action: "cancel_capture", capture_id: req.params.id }, "blackbox.cancel"));
 
-app.post("/api/blackbox/captures/:id/retry", async (req, res) => {
-  try {
-    const capture = await blackbox.retryCapture(req.params.id, { ...(req.body || {}), source: "dashboard", requested_by: "dashboard" });
-    auditLog(req, 'blackbox.retry', { original_capture_id: req.params.id, new_capture_id: capture.id, state: capture.state });
-    res.json({ ok: true, capture });
-  } catch (error) {
-    res.status(400).json({ ok: false, error: error.message });
-  }
-});
+app.post("/api/blackbox/captures/:id/retry", (req, res) => governedDashboardMutation(req, res, "black_box", { action: "retry_capture", capture_id: req.params.id, ...(req.body || {}) }, "blackbox.retry"));
 
-app.post("/api/blackbox/captures/:id/repair", (req, res) => blackboxJson(res, () => {
-  const result = blackbox.repairEmptyCapture(req.params.id);
-  auditLog(req, 'blackbox.repair', { capture_id: req.params.id, ...result });
-  return result;
-}));
+app.post("/api/blackbox/captures/:id/repair", (req, res) => governedDashboardMutation(req, res, "black_box", { action: "repair", capture_id: req.params.id }, "blackbox.repair"));
 
 app.get("/api/blackbox/captures/:id/stream", (req, res) => {
   res.writeHead(200, {
@@ -1671,11 +1644,7 @@ app.get("/api/blackbox/compare", (req, res) => blackboxJson(res, () => blackbox.
 
 app.get("/api/blackbox/purge-preview", (req, res) => blackboxJson(res, () => blackbox.purgePreview()));
 
-app.post("/api/blackbox/purge", (req, res) => blackboxJson(res, () => {
-  const result = blackbox.purgeExpired({ confirm: !!(req.body && req.body.confirm) });
-  auditLog(req, 'blackbox.purge', result);
-  return result;
-}));
+app.post("/api/blackbox/purge", (req, res) => governedDashboardMutation(req, res, "black_box", { action: "purge", confirm: req.body?.confirm === true }, "blackbox.purge"));
 
 // --- Predict API routes ---
 app.get("/api/predict/status", (req, res) => {
@@ -1699,14 +1668,7 @@ app.get("/api/predict/:id", (req, res) => {
   res.json({ ok: true, prediction: pred, evidence, feedback });
 });
 
-app.post("/api/predict/analyze", (req, res) => {
-  const { scope, project, session_id, task_id, maxAge } = req.body || {};
-  // Scope is required. A seven-day all-project sweep is never the fallback for
-  // an empty request body.
-  const result = predictEngine.analyze({ scope, project, session_id, task_id, maxAge: maxAge || "7d" });
-  if (!result.ok) return res.status(400).json(result);
-  res.json(result);
-});
+app.post("/api/predict/analyze", (req, res) => governedDashboardMutation(req, res, "predict", { action: "analyze", ...(req.body || {}), maxAge: req.body?.maxAge || "7d" }, "predict.analyze"));
 
 app.get("/api/predict/maintenance/purge-preview", (req, res) => {
   const retention = req.query.retention_days === undefined
@@ -1720,44 +1682,17 @@ app.get("/api/predict/maintenance/purge-preview", (req, res) => {
   }));
 });
 
-app.post("/api/predict/maintenance/purge", (req, res) => {
-  const { confirm, retention_days, purge_legacy } = req.body || {};
-  // Reject a present-but-invalid retention rather than silently defaulting:
-  // this endpoint deletes, so an ambiguous value must not be interpreted.
-  if (!predictEngine.isValidRetentionDays(retention_days)) {
-    return res.status(400).json({ ok: false, error: "retention_days must be a non-negative number" });
-  }
-  const result = predictEngine.purge({
-    confirm: confirm === true,
-    retention_days,
-    purge_legacy: purge_legacy === true,
-  });
-  if (!result.ok) return res.status(400).json(result);
-  auditLog(req, 'predict.purge', result);
-  res.json(result);
-});
+app.post("/api/predict/maintenance/purge", (req, res) => governedDashboardMutation(req, res, "predict", { action: "purge", ...(req.body || {}) }, "predict.purge"));
 
 app.get("/api/predict/maintenance/diagnose", (req, res) => {
   res.json(predictEngine.diagnose());
 });
 
-app.post("/api/predict/:id/feedback", (req, res) => {
-  const { feedback } = req.body || {};
-  if (!feedback) return res.status(400).json({ ok: false, error: "feedback required" });
-  const result = predictEngine.recordFeedback(req.params.id, feedback);
-  res.json(result);
-});
+app.post("/api/predict/:id/feedback", (req, res) => governedDashboardMutation(req, res, "predict", { action: "feedback", id: req.params.id, ...(req.body || {}) }, "predict.feedback"));
 
-app.post("/api/predict/:id/outcome", (req, res) => {
-  const { outcome } = req.body || {};
-  if (!outcome) return res.status(400).json({ ok: false, error: "outcome required" });
-  const result = predictEngine.recordOutcome(req.params.id, outcome);
-  res.json(result);
-});
+app.post("/api/predict/:id/outcome", (req, res) => governedDashboardMutation(req, res, "predict", { action: "outcome", id: req.params.id, ...(req.body || {}) }, "predict.outcome"));
 
-app.post("/api/predict/:id/dismiss", (req, res) => {
-  res.json(predictEngine.dismissPrediction(req.params.id));
-});
+app.post("/api/predict/:id/dismiss", (req, res) => governedDashboardMutation(req, res, "predict", { action: "dismiss", id: req.params.id }, "predict.dismiss"));
 
 app.get("/api/predict/:id/explain", (req, res) => {
   const pred = predictEngine.getPrediction(req.params.id);
@@ -1781,9 +1716,7 @@ app.get("/api/predict/:id/explain", (req, res) => {
   });
 });
 
-app.post("/api/predict/migrate", (req, res) => {
-  res.json({ ok: true, ...predictEngine.migrateLegacy() });
-});
+app.post("/api/predict/migrate", (req, res) => governedDashboardMutation(req, res, "predict", { action: "migrate" }, "predict.migrate"));
 
 app.get("/api/evolve", (req, res) => {
   const capabilities = dbStore.listGeneratedCapabilities({ includeInactive: true }).map(cap => ["trial", "active"].includes(cap.state) ? (dbStore.syncGeneratedCapabilityStats(cap.id) || cap) : cap);

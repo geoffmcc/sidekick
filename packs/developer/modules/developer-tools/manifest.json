@@ -49,10 +49,6 @@
         "type": "array",
         "items": { "type": "string" },
         "description": "Optional confinement: when non-empty, the Developer tools refuse paths outside these roots, in addition to the global Sidekick path policy."
-      },
-      "github_enrichment": {
-        "type": "boolean",
-        "description": "Allow Developer workflows to enrich results with GitHub issue/PR/CI data when the github tool is configured."
       }
     },
     "additionalProperties": false

@@ -49,7 +49,8 @@ release.
 - guest-agent counts (guests with the agent enabled), confirmed reachable only
   on demand via `guest_status`
 - `installed` / `not_installed` for optional local automation (Ansible, nodex,
-  SSH, OpenTofu/Terraform), each marked `execution: not_implemented`
+  SSH, OpenTofu/Terraform); Ansible reports `execution: governed` because it
+  runs through `ansible_run`, while the other providers remain detection-only
 
 An absent subsystem (`Ceph: not_detected`) is a normal answer, never an error.
 

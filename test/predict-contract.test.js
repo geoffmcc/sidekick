@@ -22,6 +22,7 @@ const ROOT = path.join(__dirname, '..');
 const frontend = fs.readFileSync(path.join(ROOT, 'static', 'dashboard.js'), 'utf-8');
 const markup = fs.readFileSync(path.join(ROOT, 'src', 'dashboard.html'), 'utf-8');
 const server = fs.readFileSync(path.join(ROOT, 'src', 'dashboard.js'), 'utf-8');
+const predictTool = fs.readFileSync(path.join(ROOT, 'src', 'tools', 'families', 'meta.js'), 'utf-8');
 
 console.log('Running Predict Contract Tests...\n');
 
@@ -113,15 +114,19 @@ test('the scope selector exists and offers an explicit global option', () => {
 
 console.log('Contract.4: server routes enforce scope and confirmation');
 test('the analyze route rejects an unscoped request', () => {
-  assert.ok(/if \(!result\.ok\) return res\.status\(400\)\.json\(result\);/.test(server),
-    'the analyze route surfaces a scope error as a 400');
+  assert.ok(/app\.post\("\/api\/predict\/analyze", \(req, res\) => governedDashboardMutation/.test(server),
+    'the analyze route uses the governed prediction dispatcher');
+  assert.ok(/if \(result && result\.isError\) return res\.status\(400\)\.json/.test(server),
+    'governed prediction errors surface as a 400');
   const result = predictEngine.analyze({});
   assert.strictEqual(result.ok, false, 'the engine refuses an unscoped analysis');
 });
 
 test('the purge route requires explicit confirmation', () => {
-  assert.ok(/predictEngine\.purge\(\{\s*confirm:\s*confirm === true/.test(server),
-    'the purge route only confirms on a literal true');
+  assert.ok(/app\.post\("\/api\/predict\/maintenance\/purge", \(req, res\) => governedDashboardMutation/.test(server),
+    'the purge route uses the governed prediction dispatcher');
+  assert.ok(/predictEngine\.purge\(\{ confirm: confirm === true/.test(predictTool),
+    'the prediction tool only confirms on a literal true');
   assert.strictEqual(predictEngine.purge({}).ok, false, 'unconfirmed purge is refused');
   assert.strictEqual(predictEngine.purge({ confirm: 'true' }).ok, false, 'a truthy string does not confirm');
 });

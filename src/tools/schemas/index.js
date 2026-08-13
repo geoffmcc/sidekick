@@ -7,6 +7,7 @@ const TOOL_SCHEMAS = {
   compute_nodes: z.object({
     action: z.enum(["list", "get", "heartbeat", "revoke", "maintenance", "stats", "create_token", "list_tokens", "enroll"]).describe("Worker node action"),
     node_id: z.string().optional().describe("Worker node ID"),
+    worker_id: z.string().optional().describe("Worker ID for dashboard lifecycle actions"),
     token: z.string().optional().describe("Enrollment token"),
     display_name: z.string().optional().describe("Worker or token display name"),
     platform: z.string().optional().describe("Worker platform"),
@@ -23,6 +24,7 @@ const TOOL_SCHEMAS = {
     max_concurrent_jobs: z.number().optional().describe("Maximum concurrent jobs for enrolled worker"),
     expires_in_ms: z.number().optional().describe("Enrollment token lifetime in milliseconds"),
     created_by: z.string().optional().describe("Enrollment token creator"),
+    re_enrollment_of: z.string().optional().describe("Node ID being re-enrolled"),
     reason: z.string().optional().describe("Revoke reason"),
     enable: z.boolean().optional().describe("Enable/disable maintenance"),
     state: z.string().optional().describe("Filter by worker state for list"),
@@ -66,7 +68,7 @@ const TOOL_SCHEMAS = {
     enabled: z.boolean().optional().describe("Enable/disable model")
   }),
   compute_jobs: z.object({
-    action: z.enum(["list", "get", "create", "cancel", "stats", "artifacts", "reconcile_artifact_custody"]).describe("Job action"),
+    action: z.enum(["list", "get", "create", "cancel", "retry", "recover", "stats", "artifacts", "reconcile_artifact_custody"]).describe("Job action"),
     job_id: z.string().optional().describe("Job ID (get, cancel, artifacts)"),
     // list filters
     status: z.string().optional().describe("Filter by status (list)"),

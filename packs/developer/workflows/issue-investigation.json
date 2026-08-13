@@ -38,6 +38,7 @@
       "title": "Map the symptom to code areas",
       "tool": "search",
       "args": { "pattern": "${inputs.search_term}", "path": "${inputs.path}", "include": "${inputs.include}" },
+      "when": "${inputs.search_term}",
       "expect": "text",
       "on_error": "continue"
     },

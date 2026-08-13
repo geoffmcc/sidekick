@@ -558,6 +558,31 @@ function releaseRetryWaitJobs(db = dbStore.getDb()) {
     .run(now, now, now);
 }
 
+// Expiry is a state transition, not merely a placement filter. Keeping an
+// expired job in `queued` makes dashboards, list consumers, and retry logic
+// report a job that can never run. `expires_at` is an explicit deadline;
+// timeout_ms is the bounded lifetime from creation when no explicit deadline
+// was supplied.
+function expireQueuedJobs(db = dbStore.getDb()) {
+  const now = Date.now();
+  const nowIsoValue = new Date(now).toISOString();
+  const rows = db.prepare("SELECT job_id, expires_at, timeout_ms, created_at FROM compute_jobs WHERE status = 'queued' AND (expires_at IS NOT NULL OR timeout_ms IS NOT NULL)").all();
+  let expired = 0;
+  for (const row of rows) {
+    const explicitDeadline = row.expires_at ? Date.parse(row.expires_at) : NaN;
+    const timeoutDeadline = row.timeout_ms && row.created_at ? Date.parse(row.created_at) + Number(row.timeout_ms) : NaN;
+    const deadline = Number.isFinite(explicitDeadline) ? explicitDeadline : timeoutDeadline;
+    if (!Number.isFinite(deadline) || deadline > now) continue;
+    const result = db.prepare(`
+      UPDATE compute_jobs
+      SET status = 'expired', error_category = 'expired', error_message = 'Job deadline elapsed before execution', completed_at = ?, updated_at = ?
+      WHERE job_id = ? AND status = 'queued'
+    `).run(nowIsoValue, nowIsoValue, row.job_id);
+    if (result.changes === 1) expired++;
+  }
+  return expired;
+}
+
 function retryDelayMs(job) {
   const policy = job.retryPolicy || {};
   const base = Number(policy.backoffMs || policy.initialBackoffMs || 1000);
@@ -1150,6 +1175,7 @@ module.exports = {
   renewLease,
   checkLeaseExpiration,
   recoverExpiredLeases,
+  expireQueuedJobs,
   releaseRetryWaitJobs,
   startLeasedJob,
   updateProgress,

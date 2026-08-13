@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "title": "Pull Request Review",
   "description": "Perform a substantive engineering review of a change set. Grounds every finding in the actual diff: classification, API/schema impact, dependency changes, migrations, test and documentation coverage, security-sensitive paths, CI state, and the project's own verification result.",
-  "mode": "read_only",
+  "mode": "mutating",
   "tags": ["developer", "review", "read-only"],
   "inputs": {
     "path": { "type": "string", "required": true, "description": "Local repository path containing the change set" },
@@ -68,7 +68,7 @@
       "name": "verify",
       "title": "Run the project's own verification as review evidence",
       "tool": "dev_verify",
-      "args": { "path": "${inputs.path}", "mode": "standard", "continue_on_failure": true },
+      "args": { "path": "${inputs.path}", "mode": "standard", "continue_on_failure": true, "timeout_ms": 600000 },
       "when": "${inputs.run_verification}",
       "expect": "json",
       "on_error": "continue"

@@ -10,7 +10,9 @@
   "capabilities": [
     "proxmox-discovery",
     "proxmox-capability-detection",
-    "proxmox-guest-lifecycle"
+    "proxmox-guest-lifecycle",
+    "proxmox-provisioning",
+    "proxmox-ansible"
   ],
   "configSchema": {
     "type": "object",

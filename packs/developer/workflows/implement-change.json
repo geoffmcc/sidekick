@@ -35,7 +35,7 @@
       "name": "verify",
       "title": "Run the project's own verification",
       "tool": "dev_verify",
-      "args": { "path": "${inputs.path}", "mode": "${inputs.verification_mode}", "continue_on_failure": true },
+      "args": { "path": "${inputs.path}", "mode": "${inputs.verification_mode}", "continue_on_failure": true, "timeout_ms": 600000 },
       "expect": "json",
       "on_error": "continue"
     },

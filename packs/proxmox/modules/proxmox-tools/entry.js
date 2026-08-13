@@ -433,7 +433,7 @@ const entry = {
     const profileList = profilesLib.listProfiles(config || {});
     const invalid = profileList.filter(p => !p.valid);
     const details = {
-      tools: 2,
+      tools: 4,
       profiles: profileList.length,
       profile_names: profileList.map(p => p.name),
       invalid_profiles: invalid.map(p => ({ name: p.name, error: p.error })),

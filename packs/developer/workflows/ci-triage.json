@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "title": "CI Failure Triage",
   "description": "Explain why CI failed and determine the likely corrective action. Correlates the remote check state with the local repository, reruns the project's own verification locally, and reports whether the evidence points at the code or at infrastructure.",
-  "mode": "read_only",
+  "mode": "mutating",
   "tags": ["developer", "ci", "triage"],
   "inputs": {
     "repo": { "type": "string", "required": true, "description": "GitHub owner/repository" },
@@ -42,7 +42,7 @@
       "name": "local_verify",
       "title": "Reproduce the failure locally",
       "tool": "dev_verify",
-      "args": { "path": "${inputs.path}", "mode": "standard", "continue_on_failure": true },
+      "args": { "path": "${inputs.path}", "mode": "standard", "continue_on_failure": true, "timeout_ms": 600000 },
       "when": "${inputs.reproduce_locally}",
       "expect": "json",
       "on_error": "continue"
