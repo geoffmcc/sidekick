@@ -239,6 +239,13 @@ function makeGitRepo() {
     });
     assert.strictEqual(run.owner, "pack:security-research");
     assert.ok(run.result && run.result.hypothesis, `workflow result should carry the hypothesis: ${JSON.stringify(run.result)}`);
+    // The git steps must ACTUALLY succeed (they compose the git tool). Guard
+    // against the args-shape regression where git steps failed silently.
+    const stepStatus = Object.fromEntries((run.steps || []).map((s) => [s.step, s.status]));
+    assert.strictEqual(stepStatus.baseline_commit, "ok", `baseline_commit git step must succeed: ${JSON.stringify(run.steps)}`);
+    assert.strictEqual(stepStatus.diffstat, "ok", "diffstat git step must succeed");
+    assert.ok(/^[0-9a-f]{7,40}\b/.test(String(run.result.baseline_commit || "").trim()), `baseline_commit should resolve to a SHA, got: ${run.result.baseline_commit}`);
+    assert.ok(/service\.txt/.test(String(run.result.diffstat || "")), `diffstat should list the changed file, got: ${run.result.diffstat}`);
   });
 
   await test("SR.16 version-regression-check workflow composes probes + compare", async () => {
@@ -365,6 +372,16 @@ function makeGitRepo() {
     const result = await labLib.cleanup(failing, ctx, {});
     assert.strictEqual(result.cleanup, "shutdown_incomplete");
     assert.strictEqual(result.resources[0].shutdown.ok, false);
+  });
+
+  await test("SR.23 report from a running (uncompleted) run counts its artifact-derived evidence", async () => {
+    const planned = await okCall("research_run", { action: "plan", hypothesis_id: hypothesisId, environment: { kind: "local", name: "lab" } });
+    await okCall("research_run", { action: "start", run_id: planned.run.run_id });
+    // Capture evidence but do NOT complete the run — evidence is artifact-derived,
+    // not written into test_run.evidence_json.
+    await okCall("research_evidence", { action: "capture", run_id: planned.run.run_id, type: "observation", name: "note", data: "an observation", content_type: "text/plain" });
+    const rep = await okCall("research_report", { action: "materialize", campaign_id: campaignId, run_id: planned.run.run_id, title: "running-run report", summary: "evidence should be counted even before completion" });
+    assert.ok(rep.evidence_count >= 1, `report must count the running run's evidence, got ${rep.evidence_count}`);
   });
 
   // cleanup

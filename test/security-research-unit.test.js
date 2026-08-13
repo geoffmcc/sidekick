@@ -17,6 +17,7 @@ const LIB = path.join(PACK_ROOT, "modules", "security-research-tools", "lib");
 const workspace = require(path.join(LIB, "workspace.js"));
 const compare = require(path.join(LIB, "compare.js"));
 const probes = require(path.join(LIB, "probes.js"));
+const runs = require(path.join(LIB, "runs.js"));
 const { ResearchError } = require(path.join(LIB, "errors.js"));
 
 let failures = 0;
@@ -168,6 +169,25 @@ test("U.19 json comparison reports changed key paths", () => {
 test("U.20 validation verdict is deterministic", () => {
   assert.strictEqual(compare.validateExpectation("status:403", "status:403", "status").matched, true);
   assert.strictEqual(compare.validateExpectation("status:403", "status:200", "status").matched, false);
+});
+
+// --- environment resolution -------------------------------------------------
+
+test("U.22 resolveEnvironment accepts a name, an inline object, and a stringified JSON object", () => {
+  // named lookup
+  const named = runs.resolveEnvironment({ environments: { lab: { kind: "proxmox", provider_profile: "p" } } }, "lab");
+  assert.strictEqual(named.kind, "proxmox");
+  assert.strictEqual(named.name, "lab");
+  // inline object
+  assert.strictEqual(runs.resolveEnvironment({}, { kind: "local", name: "x" }).kind, "local");
+  // stringified JSON (MCP client serialization quirk) is parsed, not treated as a name
+  const fromString = runs.resolveEnvironment({}, '{"kind":"remote","name":"ext"}');
+  assert.strictEqual(fromString.kind, "remote");
+  assert.strictEqual(fromString.name, "ext");
+  // a plain unknown name still fails closed
+  expectResearchError("environment_failed", () => runs.resolveEnvironment({}, "nope"));
+  // malformed JSON-looking string fails closed rather than becoming a name
+  expectResearchError("invalid_input", () => runs.resolveEnvironment({}, "{not json"));
 });
 
 // --- leakage self-scan of the pack tree ------------------------------------

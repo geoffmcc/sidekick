@@ -19,7 +19,7 @@
       "name": "baseline_commit",
       "title": "Resolve baseline commit",
       "tool": "git",
-      "args": { "action": "log", "path": "${inputs.repo_path}", "args": ["-1", "--format=%H %ci %s", "${inputs.baseline_ref}"] },
+      "args": { "action": "log", "path": "${inputs.repo_path}", "args": "-1 --format=%H ${inputs.baseline_ref}" },
       "expect": "text",
       "on_error": "continue"
     },
@@ -27,7 +27,7 @@
       "name": "candidate_commit",
       "title": "Resolve candidate commit",
       "tool": "git",
-      "args": { "action": "log", "path": "${inputs.repo_path}", "args": ["-1", "--format=%H %ci %s", "${inputs.candidate_ref}"] },
+      "args": { "action": "log", "path": "${inputs.repo_path}", "args": "-1 --format=%H ${inputs.candidate_ref}" },
       "expect": "text",
       "on_error": "continue"
     },
@@ -35,7 +35,7 @@
       "name": "diffstat",
       "title": "Changed files between the two revisions",
       "tool": "git",
-      "args": { "action": "diff", "path": "${inputs.repo_path}", "args": ["--stat", "${inputs.baseline_ref}..${inputs.candidate_ref}"] },
+      "args": { "action": "diff", "path": "${inputs.repo_path}", "args": "--stat ${inputs.baseline_ref}..${inputs.candidate_ref}" },
       "expect": "text",
       "on_error": "continue"
     },
