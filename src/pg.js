@@ -1,13 +1,40 @@
 const { Pool } = require("pg");
 
-const POSTGRES_URL = process.env.SIDEKICK_POSTGRES_URL || "postgresql://sidekick:sidekick@127.0.0.1:5432/sidekick";
+// Connection config is resolved lazily, not at import time, so a deployment
+// that sets the environment after this module is first required still connects
+// correctly.
+//
+// The bundled compose stack requires SIDEKICK_POSTGRES_PASSWORD and uses it as
+// the container's password, but nothing consumed it: the only connection
+// string was a hardcoded `sidekick:sidekick` default, which by construction
+// cannot authenticate against the container it is paired with. The password is
+// now the single knob for the bundled path, with SIDEKICK_POSTGRES_URL still
+// overriding it outright for external servers.
+const DEFAULT_HOST = "127.0.0.1";
+const DEFAULT_PORT = 5432;
+const DEFAULT_USER = "sidekick";
+const DEFAULT_DATABASE = "sidekick";
+
+function resolveConnectionConfig() {
+  const url = process.env.SIDEKICK_POSTGRES_URL;
+  if (url) return { connectionString: url };
+  return {
+    host: process.env.SIDEKICK_POSTGRES_HOST || DEFAULT_HOST,
+    port: Number(process.env.SIDEKICK_POSTGRES_PORT || DEFAULT_PORT),
+    user: process.env.SIDEKICK_POSTGRES_USER || DEFAULT_USER,
+    database: process.env.SIDEKICK_POSTGRES_DB || DEFAULT_DATABASE,
+    // Discrete fields rather than a composed URL: a password containing URL
+    // metacharacters would otherwise need escaping to survive parsing.
+    password: process.env.SIDEKICK_POSTGRES_PASSWORD || DEFAULT_USER,
+  };
+}
 
 let pool = null;
 
 function getPool() {
   if (!pool) {
     pool = new Pool({
-      connectionString: POSTGRES_URL,
+      ...resolveConnectionConfig(),
       max: 10,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 5000,

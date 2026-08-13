@@ -982,8 +982,52 @@ function makeMemoryDedupKey(memory) {
   ].join("\u001f");
 }
 
+// Structured-memory write admission.
+//
+// `tool_call` records are operational telemetry, not durable knowledge. The
+// automatic-capture path has always excluded them (src/memory.js
+// shouldRememberTool), but the import and sync paths wrote raw SQL with no
+// allowlist at all, so a single import could fill the table with telemetry and
+// displace real memories at recall time. Admission belongs here, where every
+// write path already passes, rather than being re-implemented per caller.
+const TELEMETRY_MEMORY_TYPES = new Set(["tool_call"]);
+
+// Types the system actually produces (src/memory.js) plus the legacy context
+// shapes that import/sync carry. Unknown types are admitted but normalized to
+// `observation` so a caller cannot invent a type that ranks itself specially.
+const KNOWN_MEMORY_TYPES = new Set([
+  "fact", "decision", "preference", "observation", "procedure",
+  "open_thread", "agent_task", "session", "problem", "pattern",
+]);
+
+function isTelemetryMemoryType(type) {
+  return TELEMETRY_MEMORY_TYPES.has(String(type || "").toLowerCase());
+}
+
+/**
+ * Normalizes an inbound memory for durable storage, or returns null when it
+ * must not be stored. Applies to every write path: direct upsert, import, and
+ * sync import.
+ */
+function admitMemory(memory) {
+  const rawType = String(memory && memory.type || "observation").toLowerCase();
+  if (isTelemetryMemoryType(rawType)) return null;
+  const type = KNOWN_MEMORY_TYPES.has(rawType) ? rawType : "observation";
+  const content = String(memory && (memory.content || memory.summary) || "").trim();
+  if (!content) return null;
+  // Confidence is caller-supplied on the import paths; clamp it so an import
+  // cannot rank its rows above everything the system learned first-hand.
+  const confidence = Number.isFinite(memory.confidence)
+    ? Math.min(1, Math.max(0, memory.confidence))
+    : 0.5;
+  return { ...memory, type, content, confidence };
+}
+
 function upsertMemory(memory) {
   if (!hasMemoriesTable()) return null;
+  // Reject telemetry before any table work so the exclusion cannot be bypassed
+  // by calling upsertMemory directly.
+  if (isTelemetryMemoryType(memory && memory.type)) return null;
 
   const ts = nowIso();
   const type = memory.type || "observation";
@@ -1791,9 +1835,18 @@ function importMemories(data, options = {}) {
 
   db.exec("BEGIN IMMEDIATE");
   try {
-    for (const mem of data.memories) {
-      if (!mem.type || !mem.content) {
+    for (const raw of data.memories) {
+      if (!raw.type || !raw.content) {
         errors.push(`skipped: missing type or content for memory`);
+        skipped++;
+        continue;
+      }
+
+      const mem = admitMemory(raw);
+      if (!mem) {
+        // Telemetry and empty rows are refused, not silently stored: an import
+        // that is 87% tool_call records should report what it dropped.
+        errors.push(`skipped: memory type "${raw.type}" is not admitted to structured memory`);
         skipped++;
         continue;
       }
@@ -2583,13 +2636,22 @@ function importFromSync(data, options = {}) {
   
   db.exec("BEGIN IMMEDIATE");
   try {
-    for (const mem of data.memories) {
-      if (!mem.type || !mem.content) {
+    for (const raw of data.memories) {
+      if (!raw.type || !raw.content) {
         errors.push(`skipped: missing type or content`);
         skipped++;
         continue;
       }
-      
+
+      // Same admission rule as the direct and import paths: a peer's telemetry
+      // must not become this machine's structured memory.
+      const mem = admitMemory(raw);
+      if (!mem) {
+        errors.push(`skipped: memory type "${raw.type}" is not admitted to structured memory`);
+        skipped++;
+        continue;
+      }
+
       const existing = db.prepare(`
         SELECT * FROM memories
         WHERE type = ? AND COALESCE(project, '') = COALESCE(?, '') AND content = ?
@@ -2782,6 +2844,8 @@ function getDb() {
 }
 
 module.exports = {
+  admitMemory,
+  isTelemetryMemoryType,
   DATA_DIR,
   DB_FILE,
   BACKUP_DIR,
