@@ -49,6 +49,37 @@ for (const file of files) {
 
 assert.deepStrictEqual(violations, [], 'Secret/static violations found:\n' + violations.join('\n'));
 
+// Scoped developer-path / private-workspace leak scan for the Security Research
+// surface. The pack's whole reason to exist is a hard public/private boundary,
+// so its committed code, tests and docs must use generic placeholders and never
+// a real developer-machine path or a private research-workspace path. Scoped to
+// this surface (rather than repo-wide) because existing suites legitimately
+// embed sample absolute paths in assertions; the pack surface has no such
+// excuse. The pack's own unit test is skipped here because it deliberately
+// DEFINES these detection patterns.
+const researchSurface = files.filter(file => {
+  if (path.basename(file) === 'security-research-unit.test.js') return false;
+  const rel = path.relative(root, file).split(path.sep).join('/');
+  return rel.startsWith('packs/security-research/')
+    || rel.startsWith('test/security-research')
+    || /^docs\/security-research/.test(rel);
+});
+const developerPathRules = [
+  { name: 'WSL mount path', pattern: /\/mnt\/[a-z]\// },
+  { name: 'Windows user directory', pattern: /[A-Za-z]:\\Users\\/ },
+  { name: 'developer home project/research directory', pattern: /\/home\/[a-z0-9_.-]+\/(?:Projects|Desktop|Documents|research|security-research)\b/ },
+  { name: 'authorization header value', pattern: /Authorization:\s*Bearer\s+[A-Za-z0-9._-]{8,}/i },
+];
+const researchViolations = [];
+for (const file of researchSurface) {
+  const rel = path.relative(root, file);
+  const content = fs.readFileSync(file, 'utf8');
+  for (const rule of developerPathRules) {
+    if (rule.pattern.test(content)) researchViolations.push(`${rel}: ${rule.name}`);
+  }
+}
+assert.deepStrictEqual(researchViolations, [], 'Security Research surface leaked a developer/private path:\n' + researchViolations.join('\n'));
+
 const toolsFacadePath = path.join(root, 'src', 'tools.js');
 const toolsLegacyPath = path.join(root, 'src', 'tools-legacy.js');
 const shellFamilyPath = path.join(root, 'src', 'tools', 'families', 'shell.js');

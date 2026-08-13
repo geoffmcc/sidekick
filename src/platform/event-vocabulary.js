@@ -314,6 +314,7 @@ const KNOWN_EVENT_SOURCES = Object.freeze([
   "proxmox-pack",
   "retry",
   "runbook",
+  "security-research",
   "watch",
   "workflow",
   "workflow-runner",
