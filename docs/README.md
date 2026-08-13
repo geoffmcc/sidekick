@@ -80,6 +80,8 @@ sqlite3 data/sidekick.db "SELECT COUNT(*) FROM knowledge WHERE version_added = '
 | `data-model.md` | SQLite schema, JSON document storage, remaining file-backed state, backups, and migrations. |
 | `api-reference.md` | HTTP endpoint reference for MCP, Dashboard, and Agent services. |
 | `execution-claim-contract.md` | Epoch-fenced execution claims used by the cron/delay/watch/runbook schedulers. |
+| `platform-events.md` | Event ledger, transactional fan-out, subscription backlog cap, delivery drainer, and handler registry. |
+| `connectors.md` | Connector authority: managed integrations, credential references, lifecycle, and the GitHub connector. |
 | `workspace-secret-references.md` | Encrypted workspace secret storage at the kernel boundary. |
 | `adr-approval-continuation.md` | ADR: durable approval continuation for parked tasks (implemented). |
 | `adr-brain.md` | ADR: Brain v0.1 orchestration boundary (implemented, feature-flagged). |

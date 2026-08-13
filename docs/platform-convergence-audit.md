@@ -79,9 +79,9 @@ boundaries.
 | Workflow runner | **foundation-only (dead)** | `platform_workflows`/`_steps`/`_runner_sessions` + 8 kernel fns: zero production callers. mig 026 exists for boot parity only. | Adopt for one runner or delete. |
 | Non-durable runners | **partial** | `mission` (router), `queue`/`orchestrate` (JSON, look durable), `retry` (in-process — loses work on crash). | Bring onto claims or document as non-durable. |
 | Brain / approvals continuation | **production-complete (separate stack)** | `task_checkpoints`, `continuation.js` (1576 lines), sweeper, resume scheduler — production-wired; touches kernel via correlation fields only. | Keep distinct; do not force cosmetic unification. |
-| Events — publish | **production-complete** | 14 prod publish sites + ~58 kernel-internal `appendEvent`; auto-enqueue into deliveries. | `enqueue` is outside the insert txn (fan-out can be silently lost). |
-| Events — delivery/consume | **foundation-only (no consumers)** | `deliverEvent` referenced only by kernel + test. **No drainer** polls pending/retry deliveries. Offsets written, never read. `causation_id` never set. No event schema/vocabulary. `appendEvent` unauthorized; delivery ignores sensitivity. | Drainer + handler registry + vocabulary; cap subscription backlog. |
-| Events — operational hazard | **partial** | `POST /api/event-subscriptions` creates a subscription → unbounded `pending` accumulation with nothing to drain it. | Backlog cap/TTL, or ship the drainer first. |
+| Events — publish | **production-complete (B5)** | 14 prod publish sites + ~58 kernel-internal `appendEvent`; auto-enqueue into deliveries. Fan-out now runs **inside** the insert transaction, so an event cannot commit without its deliveries. | — |
+| Events — delivery/consume | **production-wired (B5)** | `src/platform/event-drainer.js` polls pending/retry, claims atomically, recovers stale `in_flight` claims, and runs handlers registered by subscription **name**; started from `src/index.js`. Four built-in failure consumers (`execution.failed`/`timed_out`/`rollback_failed`, `module.health.alert`) mean offsets advance in production. `src/platform/event-vocabulary.js` enforces `event_type` shape at subscription time and reports unknown namespaces. | `causation_id` still never set; delivery still ignores `sensitivity`; `appendEvent` still unauthorized; offsets are not used for replay/backfill. |
+| Events — operational hazard | **fixed (B5)** | Fan-out probes undelivered depth (`pending`/`retry`/`in_flight`, bounded `LIMIT cap + 1`) and auto-pauses the subscription at `SIDEKICK_EVENT_BACKLOG_CAP` (default 10000), recording `auto_pause_reason`. Publishers are never blocked or failed by a stalled consumer. Deliveries with no registered handler are left `pending` and counted, never acked. | — |
 | Artifacts — kernel custody | **production-complete (write path)** | Insert-only identity, digest regex, role/lineage invariants (`kernel.js:874-883`). No recursive-lineage read API; no `storage_ref` byte resolver. | Lineage read API; retention (no sweeper/`deleted_at` writer exists). |
 | Artifacts — convergence | **duplicated** | 4 active models (platform, compute, blackbox files, session JSON). Worker HTTP upload path (`worker-agent.js:558-572`) never registers in the kernel; the inline mirror swallows errors. `compute_artifacts` schema duplicated in migrations + `job-manager.js`. | Register worker artifacts in kernel; surface mirror failures. |
 | Artifacts — access auth | **network-gated; project scoping missing** | `GET /api/artifacts` has no per-route auth, but the blanket dashboard auth middleware (`dashboard.js:373`, active whenever `DASHBOARD_USER`/`DASHBOARD_PASS` are set — they are in production) gates every route, so it is not an open endpoint. It has no `project_id` scoping and never invokes `checkCapability`. | Project scoping / capability check (deferred; not an auth bypass). |
@@ -111,8 +111,9 @@ boundaries.
    ~90 kernel exports have no production caller: canonical projects (the
    registry, even after B3-1), workspaces/secrets, workflows, runner sessions,
    all security-research functions, `platform_model_registry`, RBAC
-   (`grant/revoke/checkCapability`), backups/releases/extensions, event
-   delivery/consumption, `requestExecutionCancel`/`checkpointExecution`. The
+   (`grant/revoke/checkCapability`), backups/releases/extensions,
+   `requestExecutionCancel`/`checkpointExecution`. (Event delivery/consumption
+   left this list in B5.) The
    authoritative platform tier is largely a test-only artifact. Convergence
    means wiring these into production, not adding more of them.
 3. ~~Two verified startup-correctness bugs (C1, C2)~~ **Resolved (#236).**
@@ -134,8 +135,10 @@ Convergence is complete when, with evidence:
 5. Projects/authorization have one coherent identity boundary with real callers.
 6. Durable execution primitives are used by their intended production callers;
    cancel/checkpoint are wired or removed.
-7. Events have a production consumer/drainer where the architecture requires
-   one, or subscriptions are prevented from accumulating unbounded.
+7. ~~Events have a production consumer/drainer where the architecture requires
+   one, or subscriptions are prevented from accumulating unbounded.~~ **Met
+   (B5).** Both, in fact: the drainer runs in the MCP process with built-in
+   consumers, and the backlog cap bounds any subscription nothing drains.
 8. Artifacts have one custody authority; the worker path registers with it.
 9. Connectors have one lifecycle model with ≥1 real provider distinguished from
    the generic contract; secret refs resolve.

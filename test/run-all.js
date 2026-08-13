@@ -41,6 +41,7 @@ const suites = [
   { file: 'test/mcp-session.test.js', critical: false, description: 'MCP stale session recovery behavior' },
   { file: 'test/ops-workflows.test.js', critical: false, description: 'Packaged operations workflow metadata' },
   { file: 'test/platform-kernel.test.js', critical: false, description: 'Unified execution, event, and artifact primitives' },
+  { file: 'test/platform-event-consumption.test.js', critical: false, description: 'Transactional event fan-out, backlog cap, delivery drainer, handler registry, and event vocabulary' },
   { file: 'test/kernel-migration-parity.test.js', critical: false, description: 'Fresh migration boot vs runtime kernel boot schema parity' },
   { file: 'test/migration-self-containment.test.js', critical: true, description: 'Migrations build a complete schema standalone (C1) and tolerate runtime-created columns (C2)' },
   { file: 'test/project-identity.test.js', critical: false, description: 'Canonical project projection, cross-source identity, backfill, and encrypted workspace secrets' },

@@ -641,6 +641,24 @@ try {
   console.error("[Connectors] Bootstrap failed (non-fatal):", e.message);
 }
 
+// Start the platform event delivery drainer. Without it the delivery tables are
+// a queue with no consumer: events fan out into `pending` rows that nothing
+// ever claims. Runs in the MCP process only — a second drainer would be safe
+// (claims are atomic) but pointless. Opt out with SIDEKICK_DISABLE_EVENT_DRAINER=1.
+if (process.env.SIDEKICK_DISABLE_EVENT_DRAINER === "1") {
+  console.log("[Events] Drainer disabled by SIDEKICK_DISABLE_EVENT_DRAINER");
+} else {
+  try {
+    const eventDrainer = require("./platform/event-drainer");
+    const consumers = eventDrainer.registerBuiltinConsumers();
+    const started = eventDrainer.startDrainer();
+    console.log(`[Events] Drainer started (interval ${started.intervalMs}ms); consumers: ${JSON.stringify(consumers.registered)}`);
+    if (consumers.errors.length) console.error("[Events] Consumer registration errors:", JSON.stringify(consumers.errors));
+  } catch (e) {
+    console.error("[Events] Drainer start failed (non-fatal):", e.message);
+  }
+}
+
 const compute = require("./compute");
 let platformKernelForComputeAudit = null;
 try { platformKernelForComputeAudit = require("./platform/kernel"); } catch {}

@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const path = require("path");
 const dbStore = require("../db");
+const eventVocabulary = require("./event-vocabulary");
 const { redactSensitive } = require("../redact");
 const { KERNEL_SCHEMA_SQL } = require("./kernel-schema");
 const { ensurePlatformModuleSchema } = require("../modules/schema");
@@ -318,42 +319,50 @@ function appendEvent(input = {}) {
   const eventId = input.event_id || newId("evt");
   const payload = input.payload || {};
   const ts = input.timestamp || nowIso();
+  const insertEvent = db.prepare(`
+    INSERT INTO platform_execution_events (
+      event_id, event_type, schema_version, timestamp, source, actor_id, subject_type, subject_id,
+      project_id, environment, execution_id, root_execution_id, task_id, session_id, severity,
+      payload_json, sensitivity, dedupe_key, causation_id, correlation_id, redaction_state
+    ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
   try {
-    db.prepare(`
-      INSERT INTO platform_execution_events (
-        event_id, event_type, schema_version, timestamp, source, actor_id, subject_type, subject_id,
-        project_id, environment, execution_id, root_execution_id, task_id, session_id, severity,
-        payload_json, sensitivity, dedupe_key, causation_id, correlation_id, redaction_state
-      ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      eventId,
-      input.event_type,
-      ts,
-      input.source || "platform",
-      input.actor_id || null,
-      input.subject_type || null,
-      input.subject_id || null,
-      input.project_id || null,
-      input.environment || null,
-      input.execution_id || null,
-      input.root_execution_id || null,
-      input.task_id || null,
-      input.session_id || null,
-      input.severity || "info",
-      json(payload),
-      input.sensitivity || "normal",
-      input.dedupe_key || null,
-      input.causation_id || null,
-      input.correlation_id || input.root_execution_id || input.execution_id || null,
-      input.redaction_state || "redacted"
-    );
+    // The append and its fan-out are ONE transaction. Enqueue used to run after
+    // the insert committed, inside `try {} catch {}`: a crash or an error in
+    // between produced an event that is in the ledger, is not in any
+    // subscription's delivery queue, and that no consumer can ever discover is
+    // missing. Either both land or neither does.
+    db.transaction(() => {
+      insertEvent.run(
+        eventId,
+        input.event_type,
+        ts,
+        input.source || "platform",
+        input.actor_id || null,
+        input.subject_type || null,
+        input.subject_id || null,
+        input.project_id || null,
+        input.environment || null,
+        input.execution_id || null,
+        input.root_execution_id || null,
+        input.task_id || null,
+        input.session_id || null,
+        input.severity || "info",
+        json(payload),
+        input.sensitivity || "normal",
+        input.dedupe_key || null,
+        input.causation_id || null,
+        input.correlation_id || input.root_execution_id || input.execution_id || null,
+        input.redaction_state || "redacted"
+      );
+      enqueueDeliveriesForEvent(db, { event_id: eventId, event_type: input.event_type });
+    })();
   } catch (error) {
     if (input.dedupe_key && /UNIQUE constraint failed/.test(error.message)) {
       return db.prepare("SELECT * FROM platform_execution_events WHERE dedupe_key = ?").get(input.dedupe_key);
     }
     throw error;
   }
-  try { enqueueEventDeliveries(eventId); } catch {}
   return db.prepare("SELECT * FROM platform_execution_events WHERE event_id = ?").get(eventId);
 }
 
@@ -376,6 +385,21 @@ function registerEventSubscription(input = {}) {
   const eventType = String(input.event_type || "").trim();
   if (!name) throw new Error("subscription name is required");
   if (!eventType) throw new Error("subscription event_type is required");
+  // Fan-out is exact-match, so a typo produces a subscription that silently
+  // never fires. Shape is enforced; an unrecognised namespace is reported and
+  // logged but allowed, because a new subsystem must not be blocked from
+  // subscribing before someone edits the vocabulary. See event-vocabulary.js.
+  const typeCheck = eventVocabulary.validateSubscriptionEventType(eventType);
+  if (!typeCheck.valid) throw new Error(typeCheck.reason);
+  if (typeCheck.unknown_namespace) {
+    console.error(JSON.stringify({
+      level: "warn",
+      event: "platform.event.subscription_unknown_namespace",
+      subscription_name: name,
+      event_type: eventType,
+      namespace: eventVocabulary.getEventNamespace(eventType),
+    }));
+  }
   const maxAttempts = Number.isInteger(input.max_attempts) ? input.max_attempts : 3;
   if (maxAttempts < 1 || maxAttempts > 20) throw new Error("max_attempts must be between 1 and 20");
   const subscriptionId = input.subscription_id || newId("sub");
@@ -384,7 +408,10 @@ function registerEventSubscription(input = {}) {
     INSERT INTO platform_event_subscriptions
       (subscription_id, name, event_type, state, max_attempts, created_at, updated_at, metadata_json)
     VALUES (?, ?, ?, 'active', ?, ?, ?, ?)
-  `).run(subscriptionId, name, eventType, maxAttempts, ts, ts, json(input.metadata || {}));
+  `).run(subscriptionId, name, eventType, maxAttempts, ts, ts, json({
+    ...(input.metadata || {}),
+    ...(typeCheck.unknown_namespace ? { unknown_namespace: true } : {}),
+  }));
   dbStore.getDb().prepare(`
     INSERT INTO platform_event_offsets (subscription_id, last_event_rowid, updated_at)
     VALUES (?, 0, ?)
@@ -405,15 +432,62 @@ function listEventSubscriptions() {
   return dbStore.getDb().prepare("SELECT * FROM platform_event_subscriptions ORDER BY created_at DESC").all().map(normalizeEventSubscription);
 }
 
-function enqueueEventDeliveries(eventId) {
-  ensurePlatformKernelSchema();
-  const db = dbStore.getDb();
-  const event = db.prepare("SELECT event_id, event_type FROM platform_execution_events WHERE event_id = ?").get(eventId);
-  if (!event) return 0;
+const DEFAULT_EVENT_BACKLOG_CAP = 10000;
+
+function getEventBacklogCap() {
+  const configured = parseInt(process.env.SIDEKICK_EVENT_BACKLOG_CAP || "", 10);
+  if (!Number.isFinite(configured)) return DEFAULT_EVENT_BACKLOG_CAP;
+  // Floor at 10 so a misconfiguration cannot pause every subscription on the
+  // first event; ceiling high enough that the cap stays a safety net rather
+  // than a queue-depth policy.
+  return Math.min(Math.max(configured, 10), 1_000_000);
+}
+
+/**
+ * Bounded backlog probe. Counting the full undelivered set on every publish
+ * would make a subscription that is millions behind expensive exactly when it
+ * is already unhealthy, so the subquery stops at cap + 1 — enough to answer
+ * "at or over the cap?" and nothing more.
+ */
+function countUndeliveredDeliveries(db, subscriptionId, cap) {
+  return db.prepare(`
+    SELECT COUNT(*) AS count FROM (
+      SELECT 1 FROM platform_event_deliveries
+      WHERE subscription_id = ? AND status IN ('pending', 'retry', 'in_flight')
+      LIMIT ?
+    )
+  `).get(String(subscriptionId), cap + 1).count;
+}
+
+/**
+ * Fan-out for one event. Runs inside the caller's transaction (see appendEvent)
+ * and must therefore never throw for an ordinary condition: a slow or absent
+ * consumer is not a reason to fail the publisher.
+ */
+function enqueueDeliveriesForEvent(db, event) {
   const subscriptions = db.prepare("SELECT * FROM platform_event_subscriptions WHERE state = 'active' AND (event_type = ? OR event_type = '*')").all(event.event_type);
+  if (!subscriptions.length) return 0;
+  const cap = getEventBacklogCap();
   const ts = nowIso();
   let queued = 0;
   for (const subscription of subscriptions) {
+    if (countUndeliveredDeliveries(db, subscription.subscription_id, cap) >= cap) {
+      // Auto-pause at the cap. This is the fix for the operational hazard that
+      // POST /api/event-subscriptions created: a subscription nothing drains
+      // used to accumulate `pending` rows without bound. Pausing stops the
+      // growth at the source, is durable, and is visible in the subscription
+      // list — unlike dropping the delivery, which would lose the event with no
+      // record, and unlike failing the publish, which would let a dead consumer
+      // take down every producer. The operator drains or requeues, then calls
+      // setEventSubscriptionState to resume; events published while paused are
+      // not delivered, which is what paused means.
+      const metadata = parseJson(subscription.metadata_json, {});
+      metadata.auto_paused_at = ts;
+      metadata.auto_pause_reason = `backlog cap of ${cap} undelivered deliveries reached`;
+      db.prepare("UPDATE platform_event_subscriptions SET state = 'paused', updated_at = ?, metadata_json = ? WHERE subscription_id = ? AND state = 'active'")
+        .run(ts, json(metadata), subscription.subscription_id);
+      continue;
+    }
     const result = db.prepare(`
       INSERT OR IGNORE INTO platform_event_deliveries
         (delivery_id, subscription_id, event_id, status, created_at, updated_at, metadata_json)
@@ -422,6 +496,69 @@ function enqueueEventDeliveries(eventId) {
     queued += result.changes;
   }
   return queued;
+}
+
+function enqueueEventDeliveries(eventId) {
+  ensurePlatformKernelSchema();
+  const db = dbStore.getDb();
+  const event = db.prepare("SELECT event_id, event_type FROM platform_execution_events WHERE event_id = ?").get(eventId);
+  if (!event) return 0;
+  return db.transaction(() => enqueueDeliveriesForEvent(db, event))();
+}
+
+/**
+ * Work query for the drainer: deliveries that are due now, for subscriptions
+ * that are still active. Claiming is a separate atomic step
+ * (`claimEventDelivery`), so two drainers racing on the same row is safe — the
+ * loser simply gets null.
+ */
+function listClaimableEventDeliveries({ limit = 50, subscription_ids = null } = {}) {
+  ensurePlatformKernelSchema();
+  const now = nowIso();
+  const bounded = Math.max(1, Math.min(Number(limit) || 50, 500));
+  const params = [now];
+  let filter = "";
+  if (Array.isArray(subscription_ids) && subscription_ids.length) {
+    filter = ` AND d.subscription_id IN (${subscription_ids.map(() => "?").join(",")})`;
+    params.push(...subscription_ids.map(String));
+  }
+  return dbStore.getDb().prepare(`
+    SELECT d.delivery_id, d.subscription_id, d.event_id, d.attempt_count, s.name AS subscription_name, s.event_type, s.max_attempts
+    FROM platform_event_deliveries d
+    JOIN platform_event_subscriptions s ON s.subscription_id = d.subscription_id
+    WHERE d.status IN ('pending', 'retry')
+      AND (d.next_attempt_at IS NULL OR d.next_attempt_at <= ?)
+      AND s.state = 'active'${filter}
+    ORDER BY d.created_at ASC, d.rowid ASC
+    LIMIT ?
+  `).all(...params, bounded).map(normalizeEventDelivery);
+}
+
+/**
+ * Reclaims deliveries stuck `in_flight`. A handler that crashed the process
+ * mid-delivery leaves its row claimed forever, and before there was a drainer
+ * nothing ever claimed, so this failure mode did not exist to be handled. It
+ * does now.
+ *
+ * `attempt_count` was already incremented at claim time, so a reclaimed
+ * delivery that has exhausted its attempts goes straight to dead_letter rather
+ * than being retried past `max_attempts`.
+ */
+function recoverStaleEventDeliveries({ olderThanMs = 300000 } = {}) {
+  ensurePlatformKernelSchema();
+  const cutoff = new Date(Date.now() - Math.max(1000, Number(olderThanMs) || 300000)).toISOString();
+  const ts = nowIso();
+  const result = dbStore.getDb().prepare(`
+    UPDATE platform_event_deliveries
+    SET status = CASE
+          WHEN attempt_count >= (SELECT s.max_attempts FROM platform_event_subscriptions s WHERE s.subscription_id = platform_event_deliveries.subscription_id)
+          THEN 'dead_letter' ELSE 'retry' END,
+        next_attempt_at = NULL,
+        last_error = 'reclaimed after stale in-flight delivery',
+        updated_at = ?
+    WHERE status = 'in_flight' AND updated_at <= ?
+  `).run(ts, cutoff);
+  return result.changes;
 }
 
 function claimEventDelivery(deliveryId) {
@@ -1999,6 +2136,9 @@ module.exports = {
   setEventSubscriptionState,
   listEventSubscriptions,
   enqueueEventDeliveries,
+  getEventBacklogCap,
+  listClaimableEventDeliveries,
+  recoverStaleEventDeliveries,
   claimEventDelivery,
   completeEventDelivery,
   requeueEventDelivery,

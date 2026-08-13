@@ -1,0 +1,282 @@
+"use strict";
+
+/**
+ * Event vocabulary for the platform event ledger.
+ *
+ * Before this file there was no vocabulary at all: `appendEvent` accepted any
+ * string, and a subscription could be created for an `event_type` that nothing
+ * would ever publish. Fan-out is exact-match (or `*`), so a typo does not fail
+ * loudly — it produces a subscription that silently never fires, which is the
+ * worst possible failure mode for an audit trail.
+ *
+ * Two levels of strictness, deliberately different:
+ *
+ *   - SHAPE is enforced. `dotted.lower_snake` with at least one dot is the
+ *     contract every publisher already follows, and anything else (whitespace,
+ *     empty, uppercase, no namespace) can only be a mistake. Enforcing it costs
+ *     nothing and catches the typo class that matters.
+ *   - NAMESPACE is advisory. An unknown namespace is reported (and logged) but
+ *     not rejected, because this list is a snapshot of what the code publishes
+ *     today and a new subsystem must not be blocked from subscribing before
+ *     someone remembers to edit this file. `test/platform-event-consumption`
+ *     keeps the snapshot honest in the other direction: every literal
+ *     `event_type` in `src/` must have its namespace registered here.
+ *
+ * KNOWN_EVENT_TYPES covers both the direct `event_type:` literals and the types
+ * passed positionally through the publisher helpers (`appendScheduledPlatformEvent`,
+ * `recordPlatformApprovalEvent`, `appendAgentExecutionEvent`,
+ * `appendPlatformCaptureEvent`, `recordPackEvent`, `onEvent`). A few publishers
+ * build the type from a runtime value (`auditComputeEvent`, the memory families),
+ * so the NAMESPACE list — not the type list — is the authoritative surface, and
+ * it is the namespace that the test enforces.
+ */
+
+// Namespaces in use by production publishers, grouped by owning subsystem.
+const EVENT_NAMESPACES = Object.freeze([
+  // Kernel primitives
+  "execution",
+  "artifact",
+  "capability",
+  "changeset",
+  "workflow",
+  "runner",
+  "workspace",
+  "project",
+  "scope",
+  "backup",
+  "release",
+  "model",
+  "extension",
+  // Subsystems
+  "agent",
+  "approval",
+  "blackbox",
+  "brain",
+  "compute",
+  "connector",
+  "memory",
+  "module",
+  "pack",
+  "runbook",
+  "schedule",
+  "research",
+  // Reserved for the delivery pipeline's own bookkeeping and for tests that
+  // exercise the pipeline without impersonating a real subsystem.
+  "delivery",
+  "test",
+]);
+
+// Literal event types published by `src/`. Dynamic (variable) types are covered
+// by their namespace only — see the file header.
+const KNOWN_EVENT_TYPES = Object.freeze([
+  "agent.decision_rejected",
+  "agent.evidence_classified",
+  "agent.evidence_missing",
+  "agent.followup_started",
+  "agent.memory_brief_loaded",
+  "agent.task_started",
+  "agent.tool_approval_pending",
+  "agent.tool_completed",
+  "agent.tool_started",
+  "approval.approved",
+  "approval.completed",
+  "approval.expired",
+  "approval.failed",
+  "approval.finalize_rejected",
+  "approval.lease_recovered",
+  "approval.lease_renewed",
+  "approval.reconciliation_required",
+  "approval.rejected",
+  "approval.requested",
+  "approval.superseded",
+  "artifact.registered",
+  "backup.completed",
+  "backup.created",
+  "backup.restored",
+  "blackbox.capture_cancelled",
+  "blackbox.capture_timeout",
+  "blackbox.source_completed",
+  "blackbox.source_started",
+  "brain.attempt_limit_exceeded",
+  "brain.checkpoint_corrupt",
+  "brain.completion_discarded",
+  "brain.enabled",
+  "brain.evidence_missing",
+  "brain.lease_lost",
+  "brain.legacy_approval_not_superseded",
+  "brain.memory_failed",
+  "brain.park_failed",
+  "brain.plan_validated",
+  "brain.reconciliation_required",
+  "brain.result_discarded",
+  "brain.resume_claim_failed",
+  "brain.resume_unrecoverable",
+  "brain.resumed_completed",
+  "brain.resumed_failed",
+  "brain.state",
+  "brain.step_already_recorded",
+  "brain.step_completed",
+  "brain.step_not_in_plan",
+  "brain.step_redispatched",
+  "brain.step_refused",
+  "brain.step_started",
+  "brain.waiting_for_approval",
+  "capability.granted",
+  "capability.revoked",
+  "connector.configured",
+  "connector.health.check",
+  "connector.registered",
+  "connector.state_changed",
+  "execution.awaiting_approval",
+  "execution.blocked",
+  "execution.cancel_requested",
+  "execution.cancelled",
+  "execution.claims_recovered",
+  "execution.completed",
+  "execution.created",
+  "execution.failed",
+  "execution.orphaned",
+  "execution.partial",
+  "execution.planned",
+  "execution.queued",
+  "execution.ready",
+  "execution.retrying",
+  "execution.rollback_failed",
+  "execution.rolled_back",
+  "execution.rolling_back",
+  "execution.running",
+  "execution.scope_bound",
+  "execution.timed_out",
+  "execution.verifying",
+  "execution.waiting",
+  "extension.activated",
+  "extension.deactivated",
+  "extension.registered",
+  "extension.uninstalled",
+  "model.deprecated",
+  "model.registered",
+  "module.health.alert",
+  "module.health.check",
+  "module.provisioning",
+  "module.transition",
+  "pack.transition",
+  "pack.uninstalled",
+  "project.archived",
+  "project.registered",
+  "project.source_recorded",
+  "project.sources_backfilled",
+  "release.created",
+  "release.published",
+  "research.campaign.created",
+  "research.campaign.state_changed",
+  "research.disclosure.created",
+  "research.disclosure.state_changed",
+  "research.finding.created",
+  "research.hypothesis.created",
+  "research.hypothesis.state_changed",
+  "research.report.created",
+  "research.test_run.created",
+  "research.test_run.state_changed",
+  "runbook.step_completed",
+  "runbook.step_started",
+  "runbook.step_verified",
+  "runner.completed",
+  "runner.created",
+  "runner.terminated",
+  "schedule.cron.added",
+  "schedule.cron.disabled",
+  "schedule.cron.removed",
+  "schedule.delay.added",
+  "schedule.delay.cancelled",
+  "schedule.delay.completed",
+  "schedule.delay.failed",
+  "schedule.watch.added",
+  "schedule.watch.paused",
+  "schedule.watch.removed",
+  "schedule.watch.resumed",
+  "schedule.watch.triggered",
+  "scope.guard.decision",
+  "scope.snapshot.created",
+  "workflow.checkpointed",
+  "workflow.completed",
+  "workflow.created",
+  "workflow.failed",
+  "workflow.paused",
+  "workflow.started",
+  "workflow.step_completed",
+  "workflow.step_dispatch",
+  "workflow.step_failed",
+  "workflow.step_started",
+  "workspace.archived",
+  "workspace.created",
+  "workspace.secret_deleted",
+  "workspace.secret_set",
+  "workspace.secrets_backfilled",
+]);
+
+// `execution.<state>` and `changeset.<decision>` are built by interpolation in
+// the kernel. The execution states are enumerated above because that state
+// machine is closed; `changeset.<decision>` takes caller-supplied text, so it
+// is covered by its namespace only.
+const EVENT_TYPE_SHAPE = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$/;
+
+// The wildcard subscription. Not an event type — no publisher may use it.
+const WILDCARD_EVENT_TYPE = "*";
+
+function isValidEventTypeShape(eventType) {
+  return typeof eventType === "string" && EVENT_TYPE_SHAPE.test(eventType);
+}
+
+function getEventNamespace(eventType) {
+  if (typeof eventType !== "string") return null;
+  const namespace = eventType.split(".")[0];
+  return namespace || null;
+}
+
+function isKnownNamespace(eventType) {
+  const namespace = getEventNamespace(eventType);
+  return Boolean(namespace) && EVENT_NAMESPACES.includes(namespace);
+}
+
+function isKnownEventType(eventType) {
+  return KNOWN_EVENT_TYPES.includes(eventType);
+}
+
+/**
+ * Validates a subscription's `event_type`. Returns the advisory findings rather
+ * than throwing for anything except a malformed shape, so callers decide how
+ * loud to be. `*` is always valid: it is how an operator subscribes to the
+ * whole ledger.
+ */
+function validateSubscriptionEventType(eventType) {
+  if (eventType === WILDCARD_EVENT_TYPE) {
+    return { valid: true, wildcard: true, unknown_namespace: false, known_type: false };
+  }
+  if (!isValidEventTypeShape(eventType)) {
+    return {
+      valid: false,
+      wildcard: false,
+      unknown_namespace: true,
+      known_type: false,
+      reason: "event_type must be dotted lower_snake_case (for example execution.failed) or '*'",
+    };
+  }
+  return {
+    valid: true,
+    wildcard: false,
+    unknown_namespace: !isKnownNamespace(eventType),
+    known_type: isKnownEventType(eventType),
+  };
+}
+
+module.exports = {
+  EVENT_NAMESPACES,
+  KNOWN_EVENT_TYPES,
+  EVENT_TYPE_SHAPE,
+  WILDCARD_EVENT_TYPE,
+  isValidEventTypeShape,
+  getEventNamespace,
+  isKnownNamespace,
+  isKnownEventType,
+  validateSubscriptionEventType,
+};

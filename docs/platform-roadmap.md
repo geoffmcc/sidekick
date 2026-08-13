@@ -4,8 +4,9 @@ Status: Residual completion roadmap (post-handoff convergence campaign)
 Verified date: 2026-08-12
 Supersedes: the 2026-08-05 three-track roadmap pinned to `d2db2658`.
 
-**B9 is complete** (Capability Packs v1 campaign). B5, B6, B7 and B8 remain
-open and are separate future campaigns — none of them was touched by that
+**B9 is complete** (Capability Packs v1 campaign), as are **B5** (event
+consumption) and the B7 keystone. B6 and B8 remain open and are separate future
+campaigns — none of them was touched by that
 work beyond the one change strictly required for workflow-step correctness
 (`completeWorkflowStep` gained an `advance` option so a tolerated step failure
 can be recorded accurately without stalling the durable cursor).
@@ -40,7 +41,7 @@ Track A is complete (PRs #236, #238).
 | B2 | Legacy handler extraction | **done** (#241–#245) | Extract the 67 legacy handlers in the documented dependency order. Each a reviewable slice. | Zero production handlers in `tools-legacy.js` (now ~1,440 lines of policy/approval/audit machinery, ordering anchors, and compatibility exports); 96 family-owned + 6 module-owned + 6 compute tools; no family imports legacy at init. |
 | B3 | Canonical project identity | **done for this campaign** (#246, #255) | Register projects at execution creation, preserve scheduled project context, verify isolation, and run the confirmed source backfill. | Canonical execution registration and scheduled context are production-wired; project/isolation suites pass; dry-run and confirmed backfill both reported 40 rows across 9 source types and 18 projects. Broader memory/KV inference convergence remains separately classified residual work. |
 | B4 | Execution convergence | **done for this campaign** (#250, #252–#254) | Make the ledger authoritative for the scheduled/runbook runners; wire cancellation and checkpoints. | Cancel requests and checkpoint cursors are production-wired for scheduled/runbook paths; scheduler suite passes; deployed verification passed at `51e4505`. Broader runner convergence remains separately classified residual work. |
-| B5 | Event consumption | pending | Add a delivery drainer + handler registry + event vocabulary; cap subscription backlog; move enqueue into the insert transaction. | A production consumer drains deliveries; hazard removed. |
+| B5 | Event consumption | **done** | Delivery drainer + handler registry (`src/platform/event-drainer.js`), event vocabulary (`src/platform/event-vocabulary.js`), per-subscription backlog cap with auto-pause, fan-out moved into the append transaction, stale-claim recovery. | The drainer runs in the MCP process with four built-in failure consumers, so deliveries are claimed and offsets advance in production. `appendEvent` and its fan-out are one transaction — an event can no longer commit without its deliveries. An undrained subscription auto-pauses at `SIDEKICK_EVENT_BACKLOG_CAP` instead of growing without bound, closing the `POST /api/event-subscriptions` hazard. No schema change; no migration. `test/platform-event-consumption.test.js` (17 checks). See `docs/platform-events.md`. |
 | B6 | Artifact custody convergence | pending | Register worker-uploaded artifacts in the kernel; surface (not swallow) mirror failures; add artifact access auth. | One custody authority for the worker path. |
 | B7 | Connector integration | keystone landed | GitHub registered as a managed connector; the `github` tool routes endpoint + credential (secret_ref → secret store) through the connector authority; read-only `connector` tool. Health checks / mutating connector management are the fast-follow. | A real integration governed by `platform_connectors`. See `docs/connectors.md`. |
 | B8 | Compute/model dedup | pending | Deprecate `platform_model_registry` writers; make `capability-router` trust-aware; remove dead `checkWorkersOffline`; wire or drop `health_state`. | Single model authority; no trust-unaware selector. |
@@ -115,8 +116,8 @@ Both boot paths (migrations-only and runtime kernel) produce identical
 
 ## Immediate next work
 
-Future work remains in the residual matrix above: **B5** (event consumption),
-**B6** (artifact custody convergence), **B7** (connector integration) and
-**B8** (compute/model deduplication) are all still pending and are separate
-campaigns. Broader memory/KV project adapters and other
+Future work remains in the residual matrix above: **B6** (artifact custody
+convergence) and **B8** (compute/model deduplication) are still pending and are
+separate campaigns, as is the B7 fast-follow (connector health checks, per-call
+observability, mutating connector management, dashboard surface). Broader memory/KV project adapters and other
 foundation-to-production gaps also remain.
