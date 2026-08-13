@@ -459,7 +459,7 @@ async function resumeBrainTask(opts) {
         state: "failed", taskId, steps: acc.steps,
         error: finishReason === "length"
           ? "synthesis produced no usable answer: the model stopped at the generation token budget (" +
-            BRAIN_LIMITS.MAX_GENERATED_TOKENS + " tokens) with " + acc.evidence.length + " evidence items"
+            BRAIN_LIMITS.MAX_SYNTHESIS_TOKENS + " tokens) with " + acc.evidence.length + " evidence items"
           : "synthesis produced no answer (evidence items: " + acc.evidence.length + ")",
         evidence_count: acc.evidence.length,
       });

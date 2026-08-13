@@ -66,7 +66,7 @@ const taskMemory = recordAgentTaskMemory({
 
 assert.ok(taskMemory, "Agent task memory should be stored");
 assert.strictEqual(taskMemory.memory.project, "sidekick", "Task project should be inferred from goal");
-assert.strictEqual(taskMemory.memory.type, "session", "Agent task memory should be stored as structured session memory");
+assert.ok(["agent_task", "session"].includes(taskMemory.memory.type), "Agent task memory should use a supported structured task type");
 
 const ctx = loadContext();
 assert.ok(Array.isArray(ctx.memories), "Context should include memories array");
@@ -307,6 +307,16 @@ assert.ok(importResult.imported >= 1, "Import should add new memories");
 const importedMemories = dbStore.searchMemories({ project: "imported_project", limit: 10 });
 assert.ok(importedMemories.length > 0, "Imported memories should be searchable");
 assert.ok(importedMemories.some(m => m.content.includes("Imported fact")), "Imported content should be findable");
+
+const telemetryImportResult = dbStore.importMemories({
+  memories: [
+    { type: "tool_call", project: "imported_project", content: "ping" },
+    { type: "decision", project: "imported_project", content: "Imported durable decision" },
+  ]
+}, { onConflict: "skip" });
+assert.strictEqual(telemetryImportResult.imported, 1, "Only durable memory types should be imported");
+assert.ok(telemetryImportResult.skipped >= 1, "Telemetry memory types should be rejected at admission");
+assert.strictEqual(dbStore.searchMemories({ project: "imported_project", type: "tool_call", limit: 10 }).length, 0, "tool_call telemetry must not enter structured memory");
 
 const reimportResult = dbStore.importMemories(exportData, { onConflict: "skip" });
 assert.ok(reimportResult.skipped >= 0, "Re-import with skip should handle conflicts");

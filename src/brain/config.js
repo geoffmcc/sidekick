@@ -33,7 +33,8 @@ const BRAIN_LIMITS = Object.freeze({
   MAX_STEP_MS: 60000,               // per-step budget (tool step)
   MAX_MEMORY_RETRIEVAL_MS: 30000,   // embedding + recall ceiling (matches embed timeout)
   MAX_GENERATION_MS: 120000,        // planning/synthesis generation ceiling
-  MAX_GENERATED_TOKENS: 2048,       // cap on model output tokens per generation
+  MAX_GENERATED_TOKENS: 2048,       // planner cap; keep plan correction bounded
+  MAX_SYNTHESIS_TOKENS: 8192,       // reasoning models may spend tokens thinking before answering
   MAX_RETRIEVED_MEMORIES: 8,        // bounded recall count
   MAX_TOOL_OUTPUT_CHARS: 4000,      // per tool-result retained as evidence
   MAX_EVIDENCE_CHARS: 16000,        // total retained evidence budget
