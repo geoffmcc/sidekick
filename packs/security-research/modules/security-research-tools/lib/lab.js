@@ -87,6 +87,7 @@ function recordResource(ctx, identity) {
  */
 async function provision(services, ctx, runtime) {
   const env = ctx.environment || {};
+  // PROVIDER-EXTRACTION POINT: this branch is the only place that embeds Proxmox-provider specifics (tool names, result fields, no-delete cleanup); when a second environment provider is added, split it into per-provider adapters and keep research_run provision/cleanup provider-agnostic.
   if (env.kind !== "proxmox") {
     throw new ResearchError("unsupported_operation", `lab provisioning is only implemented for a 'proxmox' environment (got '${env.kind}')`);
   }
