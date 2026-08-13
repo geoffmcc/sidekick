@@ -96,7 +96,7 @@ async function runToolLoop({
         emit({ type: "provider", name: response.provider, model: response.model || "unknown" });
       }
       if (response.fallback) {
-        emit({ type: "fallback", from: "ollama", to: "groq" });
+        emit({ type: "fallback", to: response.provider, via: "compute" });
       }
     } catch (e) {
       const message = redact("LLM error: " + e.message);
