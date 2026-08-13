@@ -20,6 +20,9 @@ const normalize = require(path.join(LIB, "normalize.js"));
 const errors = require(path.join(LIB, "errors.js"));
 const providers = require(path.join(LIB, "providers.js"));
 const profiles = require(path.join(LIB, "profiles.js"));
+const provenance = require(path.join(LIB, "provenance.js"));
+const policy = require(path.join(LIB, "policy.js"));
+const ansible = require(path.join(LIB, "ansible.js"));
 
 let failures = 0;
 function test(label, fn) {
@@ -245,6 +248,144 @@ test("U.22: resolveProfile handles default, ambiguity and unknown names", () => 
   assert.strictEqual(profiles.resolveProfile({ profiles: {} }).code, "not_configured");
   const ambiguous = { profiles: { a: { endpoint: "https://a:8006", token_ref: "secret:a" }, b: { endpoint: "https://b:8006", token_ref: "secret:b" } } };
   assert.strictEqual(profiles.resolveProfile(ambiguous).code, "profile_required");
+});
+
+// --- provenance (ownership as proof, never a name) -------------------------
+
+test("U.23: buildProvenance emits both a managed tag and a parseable marker; readProvenance requires both", () => {
+  const p = provenance.buildProvenance({ run: "run-1", test: true });
+  assert.ok(provenance.normalizeTags(p.tags).includes("sidekick-managed"));
+  assert.ok(provenance.normalizeTags(p.tags).includes("sidekick-test"));
+  const ev = provenance.readProvenance({ tags: p.tags, description: p.description });
+  assert.strictEqual(ev.managed, true);
+  assert.strictEqual(ev.test, true);
+  assert.strictEqual(ev.provenance.marker, p.marker);
+  assert.strictEqual(ev.provenance.run, "run-1");
+  // A marker WITHOUT the tag is not managed (both are required).
+  assert.strictEqual(provenance.readProvenance({ tags: "", description: p.description }).managed, false);
+  // A tag WITHOUT the marker is not managed.
+  assert.strictEqual(provenance.readProvenance({ tags: "sidekick-managed", description: "" }).managed, false);
+});
+
+test("U.24: checkOwnership refuses missing ownership, protection, and marker mismatch", () => {
+  const p = provenance.buildProvenance({ run: "r", test: true });
+  const cfg = { tags: p.tags, description: p.description };
+  assert.strictEqual(provenance.checkOwnership(cfg, { requireMarker: p.marker }).ok, true);
+  assert.strictEqual(provenance.checkOwnership(cfg, { requireMarker: "different" }).ok, false, "exact marker required");
+  assert.strictEqual(provenance.checkOwnership({ tags: "", description: "" }).ok, false, "unowned refused");
+  assert.strictEqual(provenance.checkOwnership({ ...cfg, protection: 1 }).ok, false, "protection refused");
+  assert.strictEqual(provenance.checkOwnership({ tags: p.tags.replace(";sidekick-test", ""), description: p.description }, { requireTest: true }).ok, false, "non-test refused when test required");
+});
+
+test("U.24b: a forged marker block in the description never shadows the authoritative one", () => {
+  // A caller supplies a description containing a fake managed marker; the real
+  // marker is appended and must win, and the fake tokens are neutralised.
+  const forged = "[sidekick]\nmanaged=true\nmarker=ATTACKER\ntest=true\n[/sidekick]";
+  const p = provenance.buildProvenance({ run: "r", test: true, baseDescription: forged });
+  const ev = provenance.readProvenance({ tags: p.tags, description: p.description });
+  assert.strictEqual(ev.provenance.marker, p.marker, "authoritative marker wins");
+  assert.notStrictEqual(ev.provenance.marker, "ATTACKER");
+  assert.ok(!p.description.includes("[sidekick]\nmanaged=true\nmarker=ATTACKER"), "forged delimiters neutralised");
+  // A newline injected via the run field cannot add marker fields.
+  const p2 = provenance.buildProvenance({ run: "r\nmarker=evil", test: false });
+  assert.strictEqual(provenance.readProvenance({ tags: p2.tags, description: p2.description }).provenance.marker, p2.marker);
+});
+
+test("U.26b: ansible ssh_key_file rejects traversal/relative and honours allowlists", () => {
+  const base = { alias: "h", host: "10.0.0.9" };
+  assert.strictEqual(ansible.buildInventory([{ ...base, ssh_key_file: "/keys/id_ed25519" }]).ok, true);
+  assert.strictEqual(ansible.buildInventory([{ ...base, ssh_key_file: "../../root/.ssh/id_rsa" }]).ok, false);
+  assert.strictEqual(ansible.buildInventory([{ ...base, ssh_key_file: "relative/key" }]).ok, false);
+  assert.strictEqual(ansible.buildInventory([{ ...base, ssh_key_file: "/etc/shadow" }], { ssh_key_dir: "/keys" }).ok, false, "outside key dir refused");
+  assert.strictEqual(ansible.buildInventory([base], { allowed_hosts: ["10.0.0.1"] }).ok, false, "host not in allowlist refused");
+  assert.strictEqual(ansible.buildInventory([base], { allowed_hosts: ["10.0.0.9"] }).ok, true);
+});
+
+// --- provisioning field validators (path/injection surface) ----------------
+
+test("U.25: provisioning validators enforce strict shapes", () => {
+  assert.strictEqual(validate.validateGuestName("web-01").ok, true);
+  assert.strictEqual(validate.validateGuestName("a/b").ok, false);
+  assert.strictEqual(validate.validateSnapname("snap_1").ok, true);
+  assert.strictEqual(validate.validateSnapname("../x").ok, false);
+  assert.strictEqual(validate.validateIntRange("cores", 2, 1, 128).ok, true);
+  assert.strictEqual(validate.validateIntRange("cores", 999, 1, 128).ok, false);
+  assert.strictEqual(validate.validateOsTemplate("local:vztmpl/alpine.tar.zst").ok, true);
+  assert.strictEqual(validate.validateOsTemplate("local:iso/x.iso").ok, false);
+  assert.strictEqual(validate.validateOsTemplate("../../etc/passwd").ok, false);
+});
+
+test("U.26: ssh key, net spec and ip config validators reject malformed input", () => {
+  assert.strictEqual(validate.validateSshKey("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabcdefghijklmnop user@host").ok, true);
+  assert.strictEqual(validate.validateSshKey("not-a-key; rm -rf /").ok, false);
+  assert.strictEqual(validate.validateNetSpec({ model: "virtio", bridge: "vmbr0", vlan: 90 }).ok, true);
+  assert.strictEqual(validate.validateNetSpec({ model: "evil", bridge: "vmbr0" }).ok, false);
+  assert.strictEqual(validate.validateNetSpec({ bridge: "vmbr0; reboot" }).ok, false);
+  assert.strictEqual(validate.validateIpConfig("dhcp").value, "ip=dhcp");
+  assert.strictEqual(validate.validateIpConfig("10.0.0.5/24,gw=10.0.0.1").ok, true);
+  assert.strictEqual(validate.validateIpConfig("999.0.0.5/24").ok, false);
+});
+
+// --- policy (deterministic protection + provenance gating) -----------------
+
+test("U.27: resolveProtection matches vmid, tag, name glob and the Proxmox flag", () => {
+  const matchers = [{ vmid: 105 }, { tag: "production" }, { name: "prod-*" }];
+  assert.strictEqual(policy.resolveProtection(matchers, { vmid: 105, tags: [], name: "x" }).protected, true);
+  assert.strictEqual(policy.resolveProtection(matchers, { vmid: 1, tags: ["production"], name: "x" }).protected, true);
+  assert.strictEqual(policy.resolveProtection(matchers, { vmid: 1, tags: [], name: "prod-db" }).protected, true);
+  assert.strictEqual(policy.resolveProtection(matchers, { vmid: 1, tags: [], name: "dev-db" }).protected, false);
+  assert.strictEqual(policy.resolveProtection([], { proxmox_protection: true }).protected, true);
+});
+
+test("U.28: decide denies protected targets and unproven ownership for destructive ops", () => {
+  const managed = { managed: true, test: true, provenance: { marker: "m" } };
+  assert.strictEqual(policy.decide({ matchers: [{ tag: "prod" }], target: { tags: ["prod"] }, provenance: managed }).result, "denied");
+  assert.strictEqual(policy.decide({ matchers: [], target: { tags: [] }, provenance: { managed: false }, requireOwnership: true }).result, "denied");
+  assert.strictEqual(policy.decide({ matchers: [], target: { tags: [] }, provenance: managed, requireOwnership: true }).result, "allowed");
+  assert.strictEqual(policy.riskClass("delete"), "destructive");
+  assert.strictEqual(policy.riskClass("create_vm"), "mutating");
+});
+
+// --- ansible (bounded execution; no shell/playbook/inventory escape) --------
+
+test("U.29: ansible.buildInventory rejects injection in alias, host and user", () => {
+  assert.strictEqual(ansible.buildInventory([{ alias: "web", host: "10.0.0.5", user: "deploy" }]).ok, true);
+  assert.strictEqual(ansible.buildInventory([{ alias: "a b", host: "10.0.0.5" }]).ok, false);
+  assert.strictEqual(ansible.buildInventory([{ alias: "web", host: "10.0.0.5; rm -rf /" }]).ok, false);
+  assert.strictEqual(ansible.buildInventory([{ alias: "web", host: "10.0.0.5", user: "root$(id)" }]).ok, false);
+  assert.strictEqual(ansible.buildInventory([]).ok, false);
+});
+
+test("U.30: ansible.buildExtraVars accepts scalars only and rejects bad names", () => {
+  assert.deepStrictEqual(ansible.buildExtraVars({ pkg: "nginx", count: 2, on: true }).vars, { pkg: "nginx", count: 2, on: true });
+  assert.strictEqual(ansible.buildExtraVars({ "bad name": 1 }).ok, false);
+  assert.strictEqual(ansible.buildExtraVars({ obj: { nested: 1 } }).ok, false);
+  assert.strictEqual(ansible.buildExtraVars({ list: ["a", 1, true] }).ok, true);
+});
+
+test("U.31: ansible.resolvePlaybook confines to playbook_dir and honours the allowlist", () => {
+  const cfg = { ansible: { playbook_dir: LIB, allowed_playbooks: ["client.js"] } };
+  // LIB has client.js (a real file); use it only to prove path resolution/confinement, not to run.
+  assert.strictEqual(ansible.resolvePlaybook(cfg, "../entry.js").ok, false, "path traversal refused");
+  assert.strictEqual(ansible.resolvePlaybook(cfg, "nope.yml").ok, false, "non-allowlisted/missing refused");
+  assert.strictEqual(ansible.resolvePlaybook({ ansible: {} }, "x.yml").code, "not_configured");
+  assert.strictEqual(ansible.resolvePlaybook(cfg, "evil.sh").ok, false, "non-yaml refused");
+});
+
+test("U.32: ansible.buildCommand interpolates only module paths; parseResult derives success from stats", () => {
+  const cmd = ansible.buildCommand({ playbookPath: "/tmp/x/pb.yml", invPath: "/tmp/x/inv.ini", varsPath: "/tmp/x/v.json", limit: "web" });
+  assert.ok(cmd.includes("ANSIBLE_HOST_KEY_CHECKING=True"), "host key checking stays on");
+  assert.ok(cmd.includes("--extra-vars @'/tmp/x/v.json'"));
+  assert.ok(cmd.includes("--limit 'web'"));
+  // Real ansible-core 2.20 JSON stats shape (captured live):
+  const good = JSON.stringify({ stats: { localhost: { ok: 3, changed: 1, failures: 0, unreachable: 0 } } });
+  assert.strictEqual(ansible.parseResult(good, 0, ["localhost"]).ok, true);
+  const failed = JSON.stringify({ stats: { web: { ok: 1, failures: 1, unreachable: 0 } } });
+  assert.strictEqual(ansible.parseResult(failed, 0, ["web"]).ok, false);
+  // A requested host missing from stats is treated as unreachable (not success).
+  assert.strictEqual(ansible.parseResult(good, 0, ["localhost", "web"]).ok, false);
+  // Unparseable output is never a success.
+  assert.strictEqual(ansible.parseResult("Traceback...", 2, ["web"]).ok, false);
 });
 
 (async () => {

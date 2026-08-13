@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "name": "proxmox/provision-guest",
+  "version": "1.0.0",
+  "title": "Provision a Disposable Guest",
+  "description": "Reproducibly provision a single Sidekick-managed VM and validate it: create the guest (provenance-tagged), then read back its status. This workflow definition IS the reproducible environment manifest — versionable data describing the resource and the steps. Cleanup of the created guest is a deliberately separate, ownership-verified operation (see the pack's destructive-operation policy) and is not performed here.",
+  "mode": "mutating",
+  "inputs": {
+    "profile": { "type": "string", "description": "Configured Proxmox profile name.", "required": false, "default": "" },
+    "node": { "type": "string", "description": "Target node.", "required": true },
+    "name": { "type": "string", "description": "Guest name.", "required": true },
+    "cores": { "type": "number", "description": "vCPU cores.", "required": false, "default": 2 },
+    "memory": { "type": "number", "description": "Memory in MB.", "required": false, "default": 2048 },
+    "storage": { "type": "string", "description": "Storage for the root disk.", "required": true },
+    "disk_gb": { "type": "number", "description": "Root disk size in GB.", "required": false, "default": 8 }
+  },
+  "steps": [
+    {
+      "name": "provision",
+      "title": "Create the guest",
+      "tool": "proxmox_provision",
+      "args": {
+        "action": "create_vm",
+        "profile": "${inputs.profile}",
+        "vm": {
+          "node": "${inputs.node}",
+          "name": "${inputs.name}",
+          "cores": "${inputs.cores}",
+          "memory": "${inputs.memory}",
+          "disk": { "storage": "${inputs.storage}", "size_gb": "${inputs.disk_gb}" }
+        }
+      },
+      "expect": "json",
+      "on_error": "fail"
+    },
+    {
+      "name": "validate",
+      "title": "Read back guest status",
+      "tool": "proxmox",
+      "args": { "action": "guest_status", "profile": "${inputs.profile}", "vmid": "${steps.provision.json.vmid}" },
+      "expect": "json",
+      "on_error": "continue"
+    }
+  ],
+  "result": {
+    "vmid": "${steps.provision.json.vmid}",
+    "node": "${steps.provision.json.node}",
+    "provenance_marker": "${steps.provision.json.marker}",
+    "created": "${steps.provision.json.outcome}",
+    "status": "${steps.validate.json.status}"
+  },
+  "tags": ["proxmox", "provision", "disposable", "reproducible"]
+}

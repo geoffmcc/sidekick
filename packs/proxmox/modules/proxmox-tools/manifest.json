@@ -15,6 +15,31 @@
   "configSchema": {
     "type": "object",
     "properties": {
+      "protected_resources": {
+        "type": "array",
+        "description": "Guests that mutating/destructive operations must never touch, matched by vmid, tag, or name glob. A match is a hard deny in addition to Proxmox's own protection flag.",
+        "items": {
+          "type": "object",
+          "properties": {
+            "vmid": { "type": "integer" },
+            "tag": { "type": "string" },
+            "name": { "type": "string", "description": "Name glob, e.g. prod-*" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "ansible": {
+        "type": "object",
+        "description": "Optional Ansible integration. Absent or unconfigured means Ansible is simply unavailable.",
+        "properties": {
+          "playbook_dir": { "type": "string", "description": "Administrator-controlled directory of allowlisted playbooks on the Sidekick host." },
+          "allowed_playbooks": { "type": "array", "items": { "type": "string" }, "description": "Optional explicit allowlist of playbook file names; when set, only these may run." },
+          "allowed_hosts": { "type": "array", "items": { "type": "string" }, "description": "Optional allowlist of destination host addresses ansible_run may target." },
+          "ssh_key_dir": { "type": "string", "description": "Optional directory that ssh_key_file values must resolve inside." },
+          "default_timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 3600000 }
+        },
+        "additionalProperties": false
+      },
       "profiles": {
         "type": "object",
         "description": "Administrator-configured Proxmox environments, keyed by profile name. Endpoints and credential references live here; secret VALUES never do.",
@@ -48,9 +73,21 @@
       "risk": "high",
       "category": "Infrastructure",
       "aliases": ["pve_guest"]
+    },
+    "proxmox_provision": {
+      "risk": "high",
+      "category": "Infrastructure",
+      "aliases": ["pve_provision"]
+    },
+    "ansible_run": {
+      "risk": "high",
+      "category": "Infrastructure",
+      "aliases": ["ansible_playbook"]
     }
   },
-  "permissions": [],
+  "permissions": [
+    { "tool": "bash", "risk": "critical" }
+  ],
   "lifecycle": {
     "disable": "stop_new_work",
     "uninstall": "retain_data"

@@ -38,17 +38,34 @@ required to use the pack.
   state pre-checks (idempotency), asynchronous task monitoring to a terminal
   state, and honest `task_timeout` when a guest cannot complete a graceful
   operation.
-- Optional local automation **detection** for Ansible, nodex, SSH and
-  OpenTofu/Terraform (presence only).
-- Two read-only workflows: `proxmox/environment-recon`, `proxmox/guest-health`.
+- Optional local automation **detection** for nodex, SSH and OpenTofu/Terraform
+  (presence only).
+- **Provisioning and configuration** (`proxmox_provision`): create VM, create
+  LXC, clone (with cloud-init), configure cpu/memory, snapshot, convert to
+  template — each provenance-tagged, task-monitored, and with `dry_run`/explain.
+- **Resource provenance**: Sidekick-created guests carry a `sidekick-managed`
+  tag plus a parseable marker; ownership is proven from both before any
+  consequential operation, and each operation emits a `proxmox.*` event.
+- **Protected resources and deterministic policy**: `protected_resources`
+  (vmid/tag/name-glob) plus Proxmox's protection flag are hard denies enforced
+  in code.
+- **Optional Ansible execution** (`ansible_run`): detect / dry_run / run of
+  allowlisted playbooks against a generated inventory through the governed
+  shell, with per-host results parsed from Ansible's JSON output.
+- Three workflows: `proxmox/environment-recon`, `proxmox/guest-health`,
+  `proxmox/provision-guest` (the reproducible-environment mechanism).
 
-**Architected / deferred (not exposed as working in v1):**
+**Architected / deferred (not exposed as working):**
 
-- Provisioning (clone/create + cloud-init + Ansible), delete/migrate/snapshot,
-  hard stop/reset, and any configuration mutation.
-- Direct Proxmox Backup Server API (datastores, verification, prune). v1 reads
+- Destruction (delete VM/container/volume, destroy snapshot). No delete
+  capability and no client `delete()` method ship; a single test-only guarded
+  DELETE lives in the test/probe harness. Guarded destructive capabilities are
+  a future phase (identity + provenance + protection + policy + approval +
+  expected-effect preview + audit).
+- Migration, and host/cluster administration.
+- Direct Proxmox Backup Server API (datastores, verification, prune). Reads
   Proxmox-side (vzdump) backup configuration and task history only.
-- Execution through Ansible, SSH, nodex or Terraform/OpenTofu — detection only.
+- Execution through SSH, nodex or Terraform/OpenTofu — detection only.
 - Ceph operations beyond health/detection read.
 - Rolling cluster maintenance (quorum/HA-aware upgrades and reboots) as a
   durable workflow.
@@ -129,18 +146,22 @@ secret.
 |---|---|---|
 | `proxmox` (alias `pve`) | **low** (read) | All read/discovery/capability actions. |
 | `proxmox_guest` (alias `pve_guest`) | **high** (change) | start / graceful shutdown / reboot. |
+| `proxmox_provision` (alias `pve_provision`) | **high** (mutating) | create_vm, create_lxc, clone, configure, snapshot_create, convert_template; `dry_run` for explain. |
+| `ansible_run` (alias `ansible_playbook`) | **high** | detect / dry_run / run of allowlisted playbooks (optional; dispatches the governed `bash` tool). |
 
-Reads and mutations are **separate tools** because a module tool's risk is
-fixed per tool and cannot be lowered per action — the read surface stays `low`
-and the lifecycle surface stays `high`, so approval policy sees each correctly.
-The pack declares no permission to dispatch any other Sidekick tool: it speaks
-HTTPS itself and resolves credentials through Sidekick's existing secret
-resolver in-process.
+Operations are split into **separate tools by risk class** because a module
+tool's risk is fixed per tool and cannot be lowered per action — reads stay
+`low`, mutations stay `high` — so approval policy sees each correctly. The pack
+declares one dispatch permission (`bash`, for Ansible only); everything else it
+does over HTTPS itself, resolving credentials through Sidekick's secret resolver
+in-process.
 
 Destructive operations (delete, destroy disks, migrate, change cluster
 membership/quorum, host/guest shell, arbitrary playbooks) are **not present**.
-Absence is deliberate: they are excluded until Sidekick's confirmation and
-validation for them are proven, not exposed for completeness.
+The runtime client exposes no `delete()` method. Destruction is treated as a
+privileged capability, not an ordinary HTTP verb, and will ship later only as an
+explicit guarded operation. See `packs/proxmox/knowledge/proxmox-provisioning.md`
+for the provisioning, provenance, policy and destructive-operation model.
 
 `proxmox` read actions: `cluster_summary`, `capabilities`, `list_nodes`,
 `node_status`, `list_guests`, `guest_status`, `list_storage`, `storage_status`,

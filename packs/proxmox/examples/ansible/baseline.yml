@@ -1,0 +1,27 @@
+---
+# Example allowlisted baseline playbook for the ansible_run capability.
+#
+# Deliberately safe and idempotent: it gathers facts, reports the OS, and writes
+# a single marker file. It needs neither root nor Internet access, so it is
+# suitable for validating the Ansible integration against a localhost target on
+# the Sidekick host.
+#
+# An administrator makes this runnable by setting the pack's
+# ansible.playbook_dir to a directory containing this file (and, if desired,
+# listing "baseline.yml" in ansible.allowed_playbooks). The ansible_run tool
+# targets the [targets] group, which the pack generates from the structured
+# hosts you pass.
+- name: Sidekick baseline
+  hosts: targets
+  gather_facts: true
+  become: false
+  tasks:
+    - name: Report host identity
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} is {{ ansible_distribution | default('unknown') }} {{ ansible_distribution_version | default('') }}"
+
+    - name: Ensure a Sidekick marker file exists (idempotent)
+      ansible.builtin.copy:
+        dest: "{{ sidekick_marker_path | default('/tmp/sidekick-provisioned') }}"
+        content: "provisioned by sidekick\n"
+        mode: "0644"
