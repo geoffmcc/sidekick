@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "name": "security-research",
+  "display_name": "Security Research",
+  "version": "1.0.0",
+  "description": "A governed, reproducible framework for authorized security research. Organizes work into campaigns, hypotheses, durable research runs, bounded probes, evidence with integrity and redaction, deterministic comparison, validation and report material. It composes existing Sidekick capabilities through the normal policy/approval/audit path rather than reimplementing them: command probes dispatch the governed bash tool and HTTP probes dispatch web_fetch, its workflows compose the Git tool, and it enforces a hard boundary between the public Sidekick repository and an external, private research workspace. Named environments describe where a probe runs; Proxmox disposable-lab provisioning is a documented environment seam for a later increment.",
+  "publisher": "Sidekick",
+  "compatibility": {
+    "sidekick": ">=1.0.0"
+  },
+  "modules": [
+    {
+      "name": "security-research-tools",
+      "path": "modules/security-research-tools",
+      "entry_point": "entry.js",
+      "config_from_pack": true
+    }
+  ],
+  "workflows": [
+    { "path": "workflows/source-regression.json" },
+    { "path": "workflows/version-regression-check.json" }
+  ],
+  "knowledge": [
+    {
+      "path": "knowledge/security-research-operating.md",
+      "title": "Security Research pack: operating model and tools",
+      "category": "operations",
+      "tags": ["security-research", "operations", "capabilities"]
+    },
+    {
+      "path": "knowledge/security-research-boundary.md",
+      "title": "Security Research pack: public/private workspace boundary",
+      "category": "operations",
+      "tags": ["security-research", "privacy", "workspace", "leakage"]
+    },
+    {
+      "path": "knowledge/security-research-safety.md",
+      "title": "Security Research pack: scope, policy and probe safety",
+      "category": "operations",
+      "tags": ["security-research", "safety", "scope", "policy", "probes"]
+    }
+  ],
+  "requires": {
+    "tools": [],
+    "optional_tools": ["bash", "web_fetch", "git", "hash", "proxmox", "proxmox_guest", "proxmox_provision", "ansible_run", "secret"]
+  },
+  "configuration": {
+    "schema": {
+      "type": "object",
+      "properties": {
+        "workspace": {
+          "type": "string",
+          "description": "Absolute path to the EXTERNAL private research workspace. This directory holds all target-specific research, evidence and reports and must live OUTSIDE the Sidekick source repository. When unset here, the SIDEKICK_RESEARCH_WORKSPACE environment variable is used. The pack refuses to operate if this resolves to the Sidekick repository, its data directory, or the managed pack store."
+        },
+        "allow_local_probes": {
+          "type": "boolean",
+          "description": "When true, command probes may run on the Sidekick host process itself (working directory confined to the research workspace). Defaults to false: command execution is expected to target a configured disposable lab environment, never the host running Sidekick."
+        },
+        "probe_timeout_ms": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 600000,
+          "description": "Default bound for a single probe's execution (default 60000)."
+        },
+        "max_evidence_bytes": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 104857600,
+          "description": "Maximum size of a single captured evidence artifact (default 5242880 = 5 MiB)."
+        },
+        "http": {
+          "type": "object",
+          "description": "Bounds for HTTP probes composed over the web_fetch capability.",
+          "properties": {
+            "allowed_hosts": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Host globs (e.g. lab.example.test, 10.0.0.*) an HTTP probe may target when no scope snapshot is bound. A scope snapshot, when present, is authoritative and is evaluated in addition to this list."
+            },
+            "allow_private_addresses": {
+              "type": "boolean",
+              "description": "When true, HTTP probes may target private/loopback/link-local addresses. Defaults to false as an SSRF guard; enable only for intentionally provisioned private labs."
+            },
+            "max_response_bytes": {
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 52428800,
+              "description": "Maximum captured HTTP response body size (default 2097152 = 2 MiB)."
+            }
+          },
+          "additionalProperties": false
+        },
+        "environments": {
+          "type": "object",
+          "description": "Named research environments a run may target. Each describes WHERE a probe executes; the pack expresses requirements and composes the relevant provider capability to fulfil them. Sensitive endpoints belong in secret references, never here.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["local", "disposable", "proxmox", "remote"],
+                "description": "local = the Sidekick host process (requires allow_local_probes); disposable/proxmox = a workflow-owned lab fulfilled by the Proxmox pack; remote = an explicitly authorized existing lab host."
+              },
+              "isolation": { "type": "string", "enum": ["isolated", "shared"] },
+              "network_mode": { "type": "string", "enum": ["none", "fixture", "lab"] },
+              "production_access": { "type": "boolean" },
+              "provider_profile": { "type": "string", "description": "For kind=proxmox: the Proxmox pack profile name to provision within." },
+              "workdir": { "type": "string", "description": "For kind=local/remote: working directory a command probe is confined to." },
+              "description": { "type": "string" }
+            },
+            "required": ["kind"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "defaults": {
+      "allow_local_probes": false,
+      "probe_timeout_ms": 60000,
+      "max_evidence_bytes": 5242880,
+      "http": {
+        "allow_private_addresses": false,
+        "max_response_bytes": 2097152
+      },
+      "environments": {}
+    }
+  }
+}

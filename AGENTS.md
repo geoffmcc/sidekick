@@ -108,6 +108,18 @@ the verification commands the project itself defines) with the evidence for
 each. Repository-specific instructions such as `AGENTS.md` in that repository
 remain authoritative.
 
+The bundled **Proxmox VE** pack adds `proxmox`, `proxmox_guest`,
+`proxmox_provision` and `ansible_run` for governed infrastructure work. The
+bundled **Security Research** pack adds `research_status`, `research_project`,
+`research_hypothesis`, `research_scope`, `research_run`, `research_probe`,
+`research_evidence`, `research_compare`, `research_validate` and
+`research_report` for authorized, reproducible security research. Command probes
+compose the `bash` tool and http probes compose `web_fetch` (its only two
+dispatch targets); its workflows compose `git`. It keeps all target-specific
+research in an external private workspace and never treats "research" as a reason
+to bypass a provider's policy or open an unrestricted shell — see
+`docs/security-research-pack.md`.
+
 `capability` is critical-risk: installing or enabling a pack activates
 executable module code inside the Sidekick process.
 

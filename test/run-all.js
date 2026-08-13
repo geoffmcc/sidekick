@@ -90,6 +90,8 @@ const suites = [
   { file: 'test/developer-pack.test.js', critical: true, description: 'Developer pack behaviour against real git repositories: repo profile, change summary, governed verification, and runnable workflows' },
   { file: 'test/proxmox-unit.test.js', critical: true, description: 'Proxmox pack unit/security: endpoint/identifier/UPID validation, credential redaction, response normalization, error taxonomy, provider detection, profile resolution' },
   { file: 'test/proxmox-pack.test.js', critical: true, description: 'Proxmox pack integration: install/configure/health, pinned-CA TLS (and fail-closed without it), normalized discovery, guest lifecycle task monitoring, idempotency, and token-leak defense against a mock Proxmox API' },
+  { file: 'test/security-research-unit.test.js', critical: true, description: 'Security Research pack unit/boundary: external-workspace canonicalization and fail-closed rejection of the repo/data/store, probe scope/SSRF gating, deterministic comparison, and a pack-tree leakage self-scan' },
+  { file: 'test/security-research-pack.test.js', critical: true, description: 'Security Research pack integration: install/health, campaign/hypothesis/scope/run lifecycle, bounded command probes composing bash, evidence integrity/redaction in an external workspace, deterministic comparison/validation, report material, scope enforcement, and both governed workflows' },
   { file: 'test/extension-docs.test.js', critical: false, description: 'Extension system and generated platform docs' },
   { file: 'test/backup-release.test.js', critical: false, description: 'Backup/restore and release maturity' },
   { file: 'test/new-tools.test.js', critical: false, description: 'Extended tool behavior' },

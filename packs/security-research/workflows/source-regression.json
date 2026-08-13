@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "name": "security-research/source-regression",
+  "version": "1.0.0",
+  "title": "Source-only version comparison",
+  "description": "Read-only source comparison between two revisions: resolve each commit, produce a diffstat, and record a candidate explanation as an analysis-only hypothesis. Proves the research methodology is not Proxmox-specific — it needs only the Git capability and touches no lab. Never modifies the repository.",
+  "mode": "read_only",
+  "tags": ["security-research", "source", "regression", "git"],
+  "inputs": {
+    "repo_path": { "type": "string", "required": true, "description": "Path to a local checkout of the source under research (in the private workspace)." },
+    "baseline_ref": { "type": "string", "required": true, "description": "Baseline commit-ish (tag, branch, or SHA)." },
+    "candidate_ref": { "type": "string", "required": true, "description": "Candidate commit-ish to compare against the baseline." },
+    "campaign_id": { "type": "string", "required": true, "description": "Research campaign the hypothesis belongs to." },
+    "title": { "type": "string", "required": true, "description": "Short title for the recorded hypothesis." },
+    "claim": { "type": "string", "required": true, "description": "The candidate explanation being recorded for later dynamic validation." }
+  },
+  "steps": [
+    {
+      "name": "baseline_commit",
+      "title": "Resolve baseline commit",
+      "tool": "git",
+      "args": { "action": "log", "path": "${inputs.repo_path}", "args": ["-1", "--format=%H %ci %s", "${inputs.baseline_ref}"] },
+      "expect": "text",
+      "on_error": "continue"
+    },
+    {
+      "name": "candidate_commit",
+      "title": "Resolve candidate commit",
+      "tool": "git",
+      "args": { "action": "log", "path": "${inputs.repo_path}", "args": ["-1", "--format=%H %ci %s", "${inputs.candidate_ref}"] },
+      "expect": "text",
+      "on_error": "continue"
+    },
+    {
+      "name": "diffstat",
+      "title": "Changed files between the two revisions",
+      "tool": "git",
+      "args": { "action": "diff", "path": "${inputs.repo_path}", "args": ["--stat", "${inputs.baseline_ref}..${inputs.candidate_ref}"] },
+      "expect": "text",
+      "on_error": "continue"
+    },
+    {
+      "name": "record",
+      "title": "Record a candidate explanation as an analysis-only hypothesis",
+      "tool": "research_hypothesis",
+      "args": {
+        "action": "create",
+        "campaign_id": "${inputs.campaign_id}",
+        "title": "${inputs.title}",
+        "claim": "${inputs.claim}",
+        "state": "analysis_only",
+        "rationale": "Source comparison ${inputs.baseline_ref}..${inputs.candidate_ref}; see attached diffstat for the changed surface."
+      },
+      "expect": "json"
+    }
+  ],
+  "result": {
+    "hypothesis": "${steps.record.json.hypothesis}",
+    "baseline_commit": "${steps.baseline_commit.text}",
+    "candidate_commit": "${steps.candidate_commit.text}",
+    "diffstat": "${steps.diffstat.text}"
+  }
+}

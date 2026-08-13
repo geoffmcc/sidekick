@@ -97,7 +97,8 @@ sqlite3 data/sidekick.db "SELECT COUNT(*) FROM knowledge WHERE version_added = '
 | `platform-roadmap.md` | Residual convergence roadmap (tracks A–D) and current next work. |
 | `platform-target-architecture.md` | Accepted converged runtime boundaries and dependency directions. |
 | `module-system-design.md` | Module contract and lifecycle (activation half implemented; third-party path pending). |
-| `security-research-capability.md` | Proposed security-research capability pack (kernel record foundations exist; no external integration). |
+| `security-research-pack.md` | The first-party Security Research capability pack: governed research orchestration over the kernel record layer, with an enforced public/private workspace boundary. |
+| `security-research-capability.md` | Earlier design note for the security-research capability (kernel record foundations); superseded in part by the shipped pack in `security-research-pack.md`. |
 | `security-research-scope-guard.md` | Scope snapshot and fail-closed target evaluation contract (foundation). |
 | `security-research-adapter-contract.md` | Fail-closed external adapter boundary (no verified external transport exists). |
 | `structured-memory-plan.md` | Structured memory and memory-intelligence status and remaining steps. |

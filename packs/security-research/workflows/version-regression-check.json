@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "name": "security-research/version-regression-check",
+  "version": "1.0.0",
+  "title": "Behavioral version-regression check",
+  "description": "Against an already-planned-and-started run, execute the same bounded probe twice — once representing the baseline and once the candidate — capture each as evidence, and compare the two observations deterministically. The comparison result and both evidence references are returned for validation and report material. Composes research_probe and research_compare through the governed dispatch path; the probes themselves are scope- and policy-gated.",
+  "mode": "mutating",
+  "tags": ["security-research", "regression", "probe", "comparison"],
+  "inputs": {
+    "run_id": { "type": "string", "required": true, "description": "An existing research run (planned and started) that owns the resulting evidence." },
+    "baseline_probe": { "type": "object", "required": true, "description": "The probe spec representing baseline behavior (e.g. { type: 'http', url: '...', name: 'baseline' })." },
+    "candidate_probe": { "type": "object", "required": true, "description": "The probe spec representing candidate behavior." },
+    "compare_mode": { "type": "string", "required": false, "default": "auto", "enum": ["status", "hash", "text", "json", "auto"], "description": "How to compare the two observations." }
+  },
+  "steps": [
+    {
+      "name": "baseline",
+      "title": "Execute the baseline probe",
+      "tool": "research_probe",
+      "args": { "run_id": "${inputs.run_id}", "probe": "${inputs.baseline_probe}" },
+      "expect": "json"
+    },
+    {
+      "name": "candidate",
+      "title": "Execute the candidate probe",
+      "tool": "research_probe",
+      "args": { "run_id": "${inputs.run_id}", "probe": "${inputs.candidate_probe}" },
+      "expect": "json"
+    },
+    {
+      "name": "compare",
+      "title": "Compare the two observations deterministically",
+      "tool": "research_compare",
+      "args": {
+        "baseline_evidence": "${steps.baseline.json.evidence.reference}",
+        "candidate_evidence": "${steps.candidate.json.evidence.reference}",
+        "mode": "${inputs.compare_mode}"
+      },
+      "expect": "json"
+    }
+  ],
+  "result": {
+    "comparison": "${steps.compare.json.comparison}",
+    "baseline_evidence": "${steps.baseline.json.evidence.reference}",
+    "candidate_evidence": "${steps.candidate.json.evidence.reference}"
+  }
+}

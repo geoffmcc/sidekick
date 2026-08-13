@@ -227,6 +227,13 @@ Currently bundled:
   a controlled guest lifecycle over the Proxmox API, with administrator
   configured profiles, pinned-CA TLS and correct asynchronous task handling.
   See `docs/proxmox-pack.md`.
+- **Security Research** (`packs/security-research`) — a governed, reproducible
+  framework for authorized security research: campaigns, hypotheses, durable
+  runs, bounded probes, evidence with integrity and redaction, deterministic
+  comparison, validation and report material. It composes the controlled
+  execution, HTTP, Git and Proxmox capabilities rather than reimplementing them,
+  and enforces a hard boundary between the public repository and an external
+  private research workspace. See `docs/security-research-pack.md`.
 
 ## Workflow definitions
 

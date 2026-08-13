@@ -357,11 +357,19 @@ through the module lifecycle, pack workflows register in the workflow
 definition registry, and pack knowledge lands in the ordinary knowledge base.
 There is no second plugin runtime and no remote marketplace.
 
-The bundled first-party **Developer / Software Engineering** pack adds
-structured repository profiling, change-set impact analysis, governed project
-verification, and seven runnable engineering workflows. See
-[`docs/capability-packs.md`](docs/capability-packs.md) and
-[`docs/developer-pack.md`](docs/developer-pack.md).
+Three first-party packs ship bundled: the **Developer / Software Engineering**
+pack (structured repository profiling, change-set impact analysis, governed
+verification, seven engineering workflows), the **Proxmox VE** pack (secure
+discovery, capability detection and a controlled guest lifecycle), and the
+**Security Research** pack (governed research orchestration — campaigns,
+hypotheses, runs, bounded probes, evidence integrity and redaction, comparison,
+validation and report material — composing the controlled-execution and HTTP
+tools, and Git via its workflows, while enforcing a hard public/private
+workspace boundary). See
+[`docs/capability-packs.md`](docs/capability-packs.md),
+[`docs/developer-pack.md`](docs/developer-pack.md),
+[`docs/proxmox-pack.md`](docs/proxmox-pack.md) and
+[`docs/security-research-pack.md`](docs/security-research-pack.md).
 
 > Installing or enabling a pack activates executable module code inside the
 > Sidekick process. Inspection never executes package code, and every installed
