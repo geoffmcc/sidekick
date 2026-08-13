@@ -701,10 +701,10 @@ setTimeout(async () => {
       });
       dbStore.upsertMemory({
         id: 'mem-dashboard-tool',
-        type: 'tool_call',
+        type: 'observation',
         project: 'alpha',
-        content: 'sidekick_alpha succeeded',
-        summary: 'Tool call record',
+        content: 'sidekick_alpha observed a successful operation',
+        summary: 'Operational observation',
         confidence: 0.5,
         source: 'agent',
         source_tool: 'sidekick_alpha',

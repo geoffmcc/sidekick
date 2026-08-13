@@ -404,7 +404,7 @@ async function main() {
     agent.stderr.on('data', c => agentLogs += c.toString());
     try {
       await new Promise(r => setTimeout(r, 1000));
-      const agentJob = await request('POST', '/compute/admin/jobs', { jobType: 'chat', capability: 'chat', requestPayload: { prompt: 'agent runtime' }, dataClassification: 'private' }, admin);
+      const agentJob = await request('POST', '/compute/admin/jobs', { jobType: 'chat', capability: 'chat', requestPayload: { prompt: 'agent runtime', provider: 'mock' }, dataClassification: 'private' }, admin);
       assert.strictEqual(agentJob.status, 200, 'agent runtime job submitted');
       const completedAgentJob = await waitForJobStatus(agentJob.data.job.jobId, 'completed', admin);
       assert.strictEqual(completedAgentJob.result.content, 'mock:agent runtime', 'real worker agent completed deterministic job');
@@ -435,7 +435,7 @@ async function main() {
     let restartLogs = '';
     restartedAgent.stdout.on('data', c => restartLogs += c.toString());
     restartedAgent.stderr.on('data', c => restartLogs += c.toString());
-    const gracefulJob = await request('POST', '/compute/admin/jobs', { jobType: 'chat', capability: 'chat', requestPayload: { prompt: 'graceful shutdown', delayMs: 500 } }, admin);
+    const gracefulJob = await request('POST', '/compute/admin/jobs', { jobType: 'chat', capability: 'chat', requestPayload: { prompt: 'graceful shutdown', provider: 'mock', delayMs: 500 } }, admin);
     assert.strictEqual(gracefulJob.status, 200, 'graceful-shutdown job submitted');
     await waitForJobStatus(gracefulJob.data.job.jobId, 'running', admin);
     restartedAgent.kill('SIGTERM');
@@ -450,7 +450,7 @@ async function main() {
     cancellingAgent.stdout.on('data', c => cancellingLogs += c.toString());
     cancellingAgent.stderr.on('data', c => cancellingLogs += c.toString());
     try {
-      const agentCancelJob = await request('POST', '/compute/admin/jobs', { jobType: 'chat', capability: 'chat', requestPayload: { prompt: 'agent cancel', delayMs: 2000 } }, admin);
+      const agentCancelJob = await request('POST', '/compute/admin/jobs', { jobType: 'chat', capability: 'chat', requestPayload: { prompt: 'agent cancel', provider: 'mock', delayMs: 2000 } }, admin);
       assert.strictEqual(agentCancelJob.status, 200, 'agent cancellation job submitted');
       await waitForJobStatus(agentCancelJob.data.job.jobId, 'running', admin);
       const cancelAgentJob = await request('POST', `/compute/admin/jobs/${agentCancelJob.data.job.jobId}/cancel`, { reason: 'agent-cancel-test' }, admin);
