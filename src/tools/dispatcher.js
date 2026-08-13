@@ -141,7 +141,7 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
 
   let policyError;
   try {
-    policyError = legacy.enforceToolPolicy(descriptor.name, context.source);
+    policyError = legacy.enforceToolPolicy(descriptor.name, context.source, executionArgs);
   } catch (e) {
     return errorResult("Policy evaluation failed", "policy_evaluation_failed");
   }
@@ -150,7 +150,9 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
   if (!options.approvedExecution) {
     let approval;
     try {
-      approval = legacy.getApprovalDecision(descriptor.name, context.source);
+      // executionArgs is the frozen, validated object that will be dispatched,
+      // so a per-action risk decision cannot disagree with what actually runs.
+      approval = legacy.getApprovalDecision(descriptor.name, context.source, executionArgs);
     } catch (e) {
       return errorResult("Approval evaluation failed", "approval_evaluation_failed");
     }

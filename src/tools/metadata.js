@@ -253,7 +253,49 @@ function getStaticToolCategory(name) {
   return TOOL_CATEGORIES[normalizeToolName(name)] || "Uncategorized";
 }
 
+/**
+ * Per-action risk overrides for tools whose actions differ in danger.
+ *
+ * Risk was a per-TOOL label, which is wrong for a tool that both reads and
+ * mutates. `capability` is the case that exposed it: installing or enabling a
+ * pack executes third-party code in-process (correctly critical), but merely
+ * LISTING packs is a read — and because the dashboard's Capabilities tab calls
+ * `capability action="list"` on load, simply opening that tab filed a
+ * critical-risk approval request. Rejecting it did not help; the tab refetched
+ * and filed another.
+ *
+ * The damage is not the noise. It is that the operator learns `capability`
+ * prompts are routine UI chatter, and the one prompt that genuinely matters —
+ * an install activating unsandboxed third-party code — arrives looking exactly
+ * like the twenty they already waved through. An approval control spent on
+ * browsing is not protecting anything.
+ *
+ * Rules, all fail-closed:
+ *   - Only actions listed here get a different risk. Anything unlisted,
+ *     missing, or non-string keeps the tool-level risk.
+ *   - Lookups are own-property only, so `__proto__`/`constructor` cannot
+ *     inherit a truthy value and lower the risk of a mutating call.
+ *   - This never applies to module-provided or generated tools: their risk is
+ *     the risk of what actually executes, resolved before this table is
+ *     consulted.
+ *
+ * Add an action here only when it cannot mutate state, spend credentials, or
+ * execute foreign code. When unsure, leave it out — the cost of omitting one is
+ * an extra prompt; the cost of adding one wrongly is a silent bypass.
+ */
+const TOOL_ACTION_RISK = Object.freeze({
+  // Read-only pack inspection. `inspect` is deliberately ABSENT: it reads a
+  // caller-supplied path, so it keeps the tool-level risk.
+  capability: Object.freeze({
+    list: "low",
+    available: "low",
+    show: "low",
+    health: "low",
+  }),
+});
+
 module.exports = {
+  TOOL_ACTION_RISK,
   TOOL_RISK,
   TOOL_CATEGORIES,
   RISK_LEVELS,

@@ -11,7 +11,7 @@ const dynamicTools = require("./dynamic-tools");
 const platformKernel = require("./platform/kernel");
 const { stripSidekickPrefix } = require("./core/tool-name");
 const computeTools = require("./compute/tools");
-const { TOOL_RISK, TOOL_CATEGORIES, RISK_LEVELS } = require("./tools/metadata");
+const { TOOL_RISK, TOOL_ACTION_RISK, TOOL_CATEGORIES, RISK_LEVELS } = require("./tools/metadata");
 const toolContext = require("./tools/context");
 const { loadContext: loadSharedContext, findContextItemById: findSharedContextItemById, updateLegacyContextItem: updateSharedLegacyContextItem } = require("./tools/families/context");
 const { parsePolicyList, sourceEnvName } = require("./core/policy-env");
@@ -67,10 +67,12 @@ function getCurrentSource() {
 const RISK_ORDER = { low: 1, medium: 2, high: 3, critical: 4 };
 
 // Tool categories - maps tool names to their category
-function getToolRisk(name) {
+function getToolRisk(name, args = undefined) {
   // Module tools first: the registry wins dispatch for these names, so the
   // enforced risk must be the risk of what actually executes. Lazy require —
-  // the loader has no top-level dependency back into this module.
+  // the loader has no top-level dependency back into this module. Per-action
+  // overrides deliberately do NOT apply here: the descriptor's risk is the
+  // risk of foreign code, and a caller-supplied action must not lower it.
   const moduleDescriptor = require("./modules/loader").resolveActiveDescriptor(name);
   if (moduleDescriptor) return RISK_LEVELS.includes(moduleDescriptor.risk) ? moduleDescriptor.risk : "critical";
   const generated = dbStore.getGeneratedCapabilityByName(name);
@@ -80,7 +82,26 @@ function getToolRisk(name) {
   // "constructor" must fall through to the critical default, never to a
   // truthy inherited value that would make strict/restricted modes fail open.
   const risk = Object.prototype.hasOwnProperty.call(TOOL_RISK, canonical) ? TOOL_RISK[canonical] : null;
-  return RISK_LEVELS.includes(risk) ? risk : "critical";
+  const toolRisk = RISK_LEVELS.includes(risk) ? risk : "critical";
+  return resolveActionRisk(canonical, args, toolRisk);
+}
+
+/**
+ * Applies a per-action risk override, if one is declared for this tool and this
+ * exact action. Every unlisted, missing, or malformed case keeps the tool-level
+ * risk, so the only reachable outcome of an unrecognised action is the stricter
+ * one. Own-property lookups throughout: an inherited `__proto__` value must not
+ * be able to lower the risk of a mutating call.
+ */
+function resolveActionRisk(canonical, args, toolRisk) {
+  if (!args || typeof args !== "object") return toolRisk;
+  if (!Object.prototype.hasOwnProperty.call(TOOL_ACTION_RISK, canonical)) return toolRisk;
+  const action = Object.prototype.hasOwnProperty.call(args, "action") ? args.action : undefined;
+  if (typeof action !== "string" || !action) return toolRisk;
+  const actionMap = TOOL_ACTION_RISK[canonical];
+  if (!Object.prototype.hasOwnProperty.call(actionMap, action)) return toolRisk;
+  const actionRisk = actionMap[action];
+  return RISK_LEVELS.includes(actionRisk) ? actionRisk : toolRisk;
 }
 
 // Canonical names of every built-in tool, including those whose handlers have
@@ -218,8 +239,8 @@ function getApprovalEntries(source, suffixes) {
   return entries;
 }
 
-function getApprovalDecision(toolName, source = getCurrentSource()) {
-  const risk = getToolRisk(toolName);
+function getApprovalDecision(toolName, source = getCurrentSource(), args = undefined) {
+  const risk = getToolRisk(toolName, args);
   const mode = getApprovalMode(source);
   const requiredEntries = getApprovalEntries(source, ["REQUIRED_TOOLS"]);
   const exemptEntries = getApprovalEntries(source, ["EXEMPT_TOOLS"]);
@@ -249,8 +270,8 @@ function getApprovalDecision(toolName, source = getCurrentSource()) {
   return { required: false, source, mode, risk, reason: "approval not required" };
 }
 
-function getToolPolicyDecision(toolName, source = getCurrentSource()) {
-  const risk = getToolRisk(toolName);
+function getToolPolicyDecision(toolName, source = getCurrentSource(), args = undefined) {
+  const risk = getToolRisk(toolName, args);
   const sourceMode = process.env[sourceEnvName(source, "TOOL_POLICY")];
   const mode = (sourceMode || process.env.SIDEKICK_TOOL_POLICY || "open").toLowerCase();
   const allowedEntries = getPolicyEntries(source, ["ALLOWED_TOOLS"]);
@@ -281,8 +302,8 @@ function getToolPolicyDecision(toolName, source = getCurrentSource()) {
   return { allowed: true, source, mode, risk, reason: "allowed" };
 }
 
-function enforceToolPolicy(toolName, source = getCurrentSource()) {
-  const decision = getToolPolicyDecision(toolName, source);
+function enforceToolPolicy(toolName, source = getCurrentSource(), args = undefined) {
+  const decision = getToolPolicyDecision(toolName, source, args);
   if (decision.allowed) return null;
   return {
     content: [{

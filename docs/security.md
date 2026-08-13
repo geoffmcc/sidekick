@@ -65,6 +65,46 @@ sidekick_tools({ action: "policy", source: "mcp,dashboard,agent", name: "sidekic
 
 It reports the policy decision, active mode, matching selector when applicable, and approval requirement for each inspected source/tool pair.
 
+## Per-action tool risk
+
+Risk was originally a per-**tool** label. That is wrong for a tool whose actions
+differ in danger, and the failure mode is not merely cosmetic.
+
+`capability` is the case that exposed it. Installing or enabling a pack executes
+third-party code inside the Sidekick process, so the tool is correctly labelled
+`critical`. But merely *listing* packs is a read — and because the dashboard's
+Capabilities tab calls `capability action="list"` when it loads, opening that tab
+filed a critical-risk approval request. Rejecting it did not help: the tab
+refetched and filed another.
+
+The damage is the erosion, not the noise. An operator who learns that
+`capability` prompts are routine UI chatter will wave through the one prompt that
+genuinely matters — an install activating unsandboxed third-party code — because
+it looks exactly like the twenty before it. An approval control spent on browsing
+is not protecting anything.
+
+`TOOL_ACTION_RISK` in `src/tools/metadata.js` declares per-action overrides, and
+both the approval decision and the tool policy decision resolve risk through
+them. Every rule is fail-closed:
+
+- Only actions listed in the table get a different risk. Anything unlisted,
+  missing, empty, or non-string keeps the tool-level risk.
+- Lookups are own-property only, so `__proto__` or `constructor` cannot inherit a
+  truthy value and lower the risk of a mutating call.
+- Module-provided and generated tools are resolved **before** the table is
+  consulted: their risk is the risk of the code that actually executes, and a
+  caller-supplied action must never lower it.
+- Callers that pass no arguments get the tool-level decision, unchanged.
+
+The decision is evaluated against the same validated, frozen argument object the
+dispatcher goes on to execute (`src/tools/dispatcher.js`), so a per-action risk
+decision cannot disagree with what actually runs.
+
+Add an action to the table only when it cannot mutate state, spend credentials,
+or execute foreign code. When unsure, leave it out — the cost of omitting one is
+an extra prompt; the cost of adding one wrongly is a silent bypass. `capability
+inspect` is deliberately absent for this reason: it reads a caller-supplied path.
+
 ## Filesystem path guardrails
 
 Filesystem path guardrails restrict direct file and repository path arguments while preserving open defaults for trusted single-user deployments. Leave these variables unset for current behavior, or set comma-separated absolute paths:
