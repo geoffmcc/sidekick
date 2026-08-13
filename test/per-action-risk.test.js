@@ -85,6 +85,22 @@ test("a tool with no action overrides is unaffected by an action argument", () =
   assert.strictEqual(legacy.getToolRisk("knowledge", { action: "list" }), legacy.getToolRisk("knowledge"));
 });
 
+test("workflow reads resolve low while run and resume stay high", () => {
+  // GET /api/capabilities/:name/workflows dispatches workflow action=list.
+  assert.strictEqual(TOOL_RISK.workflow, "high");
+  assert.strictEqual(legacy.getToolRisk("workflow", { action: "list" }), "low");
+  assert.strictEqual(legacy.getToolRisk("workflow", { action: "show", name: "developer/ci-triage" }), "low");
+  assert.strictEqual(legacy.getToolRisk("workflow", { action: "run", name: "x" }), "high", "running a workflow dispatches governed tool calls");
+  assert.strictEqual(legacy.getToolRisk("workflow", { action: "resume", name: "x" }), "high");
+});
+
+test("strict mode stops prompting for workflow reads but not workflow runs", () => {
+  withApprovalMode("strict", () => {
+    assert.strictEqual(legacy.getApprovalDecision("workflow", "dashboard", { action: "list" }).required, false);
+    assert.strictEqual(legacy.getApprovalDecision("workflow", "dashboard", { action: "run", name: "x" }).required, true);
+  });
+});
+
 // ---- approval decisions -----------------------------------------------------
 
 test("risky mode stops demanding approval for browsing capability packs", () => {

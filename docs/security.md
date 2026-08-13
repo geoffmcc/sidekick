@@ -105,6 +105,27 @@ or execute foreign code. When unsure, leave it out — the cost of omitting one 
 an extra prompt; the cost of adding one wrongly is a silent bypass. `capability
 inspect` is deliberately absent for this reason: it reads a caller-supplied path.
 
+### Why the table is short
+
+The table covers `capability` and `workflow` only, and that is a measured result
+rather than an unfinished job. 30 tools carry high or critical risk and 22 of
+them have action enums containing obvious reads (`list`, `status`, `get`,
+`check`), so the temptation is to sweep them all. The traffic does not support
+it:
+
+- The **dashboard** dispatches exactly three tools — `capability`, `workflow`,
+  and `evolve` — plus `db_query`. `evolve`'s read routes query the database
+  directly and never dispatch the tool, so only the first two are read paths
+  through the dispatcher.
+- The **agent** has never called a critical-risk tool at all.
+- **MCP** runs with approval mode `off`, so its traffic never produces a prompt
+  regardless of risk.
+
+Every other high/critical tool has no read path that reaches an approval
+decision. Adding overrides for them would be speculative: entries can only lower
+risk, so an unnecessary one is pure downside. Extend the table when a read path
+demonstrably exists, not because an action is named `list`.
+
 ## Filesystem path guardrails
 
 Filesystem path guardrails restrict direct file and repository path arguments while preserving open defaults for trusted single-user deployments. Leave these variables unset for current behavior, or set comma-separated absolute paths:

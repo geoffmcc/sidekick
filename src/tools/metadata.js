@@ -292,6 +292,16 @@ const TOOL_ACTION_RISK = Object.freeze({
     show: "low",
     health: "low",
   }),
+  // `GET /api/capabilities/:name/workflows` dispatches `workflow action="list"`,
+  // so viewing a pack's workflows is a read through a high-risk tool. It does
+  // not prompt under the current risky mode (which gates on critical only), but
+  // it would under strict, and a restricted policy would block the route
+  // outright — the tab would fail rather than ask. `run` and `resume` dispatch
+  // governed tool calls and stay high.
+  workflow: Object.freeze({
+    list: "low",
+    show: "low",
+  }),
 });
 
 module.exports = {
