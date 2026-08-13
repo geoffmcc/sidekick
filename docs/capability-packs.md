@@ -218,6 +218,16 @@ differ from third-party packs in **trust** (`provenance: first_party`, source
 lifecycle, same health model. That is deliberate — a first-party pack that took
 a shortcut would stop exercising the platform it exists to prove.
 
+Currently bundled:
+
+- **Developer / Software Engineering** (`packs/developer`) — repository
+  profiling, change-set impact analysis, governed verification, seven
+  engineering workflows. See `docs/developer-pack.md`.
+- **Proxmox VE** (`packs/proxmox`) — secure discovery, capability detection and
+  a controlled guest lifecycle over the Proxmox API, with administrator
+  configured profiles, pinned-CA TLS and correct asynchronous task handling.
+  See `docs/proxmox-pack.md`.
+
 ## Workflow definitions
 
 Sidekick already owned workflow *execution* state (`platform_workflows`,
@@ -358,4 +368,5 @@ third-party pack as equivalent to deploying code.
 
 - `docs/module-system-design.md` — the module subsystem the pack lifecycle builds on
 - `docs/developer-pack.md` — the first-party Developer pack
+- `docs/proxmox-pack.md` — the first-party Proxmox VE pack
 - `docs/platform-roadmap.md` — B9 status and the remaining residual roadmap

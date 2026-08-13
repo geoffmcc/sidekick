@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "name": "proxmox/environment-recon",
+  "version": "1.0.0",
+  "title": "Proxmox Environment Reconnaissance",
+  "description": "Read-only reconnaissance of a Proxmox environment: cluster summary, capability detection, storage inventory, and recent failed tasks. Selects an administrator-configured profile; makes no changes.",
+  "mode": "read_only",
+  "inputs": {
+    "profile": {
+      "type": "string",
+      "description": "Configured Proxmox profile name (leave empty to use the only/default profile).",
+      "required": false,
+      "default": ""
+    }
+  },
+  "steps": [
+    {
+      "name": "summary",
+      "title": "Cluster summary",
+      "tool": "proxmox",
+      "args": { "action": "cluster_summary", "profile": "${inputs.profile}" },
+      "expect": "json",
+      "on_error": "fail"
+    },
+    {
+      "name": "capabilities",
+      "title": "Capability detection",
+      "tool": "proxmox",
+      "args": { "action": "capabilities", "profile": "${inputs.profile}" },
+      "expect": "json",
+      "on_error": "continue"
+    },
+    {
+      "name": "storage",
+      "title": "Storage inventory",
+      "tool": "proxmox",
+      "args": { "action": "list_storage", "profile": "${inputs.profile}" },
+      "expect": "json",
+      "on_error": "continue"
+    },
+    {
+      "name": "failed_tasks",
+      "title": "Recent failed tasks",
+      "tool": "proxmox",
+      "args": { "action": "list_tasks", "profile": "${inputs.profile}", "errors": true, "limit": 20 },
+      "expect": "json",
+      "on_error": "continue"
+    }
+  ],
+  "result": {
+    "profile": "${steps.summary.json.profile}",
+    "version": "${steps.summary.json.version}",
+    "cluster": "${steps.summary.json.cluster}",
+    "guests": "${steps.summary.json.guests}",
+    "capabilities": "${steps.capabilities.json}",
+    "storage": "${steps.storage.json}",
+    "recent_failed_tasks": "${steps.failed_tasks.json}"
+  },
+  "tags": ["proxmox", "recon", "read-only"]
+}

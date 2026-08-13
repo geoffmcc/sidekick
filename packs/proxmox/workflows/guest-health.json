@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "name": "proxmox/guest-health",
+  "version": "1.0.0",
+  "title": "Proxmox Guest Health",
+  "description": "Read-only health view of a single guest: its current status and QEMU guest-agent enrichment when available, plus the status of the node hosting it. Makes no changes.",
+  "mode": "read_only",
+  "inputs": {
+    "vmid": {
+      "type": "number",
+      "description": "VMID of the guest to inspect.",
+      "required": true
+    },
+    "profile": {
+      "type": "string",
+      "description": "Configured Proxmox profile name (leave empty to use the only/default profile).",
+      "required": false,
+      "default": ""
+    }
+  },
+  "steps": [
+    {
+      "name": "guest",
+      "title": "Guest status",
+      "tool": "proxmox",
+      "args": { "action": "guest_status", "profile": "${inputs.profile}", "vmid": "${inputs.vmid}" },
+      "expect": "json",
+      "on_error": "fail"
+    },
+    {
+      "name": "node",
+      "title": "Host node status",
+      "tool": "proxmox",
+      "args": { "action": "node_status", "profile": "${inputs.profile}", "node": "${steps.guest.json.node}" },
+      "expect": "json",
+      "on_error": "continue"
+    }
+  ],
+  "result": {
+    "vmid": "${steps.guest.json.vmid}",
+    "node": "${steps.guest.json.node}",
+    "status": "${steps.guest.json.status}",
+    "guest_agent": "${steps.guest.json.guest_agent}",
+    "cloud_init": "${steps.guest.json.cloud_init}",
+    "host_node": "${steps.node.json}"
+  },
+  "tags": ["proxmox", "guest", "read-only"]
+}
