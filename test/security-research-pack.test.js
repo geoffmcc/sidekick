@@ -34,6 +34,7 @@ const bundled = require(path.join(REPO, "src/packs/bundled"));
 const packLifecycle = require(path.join(REPO, "src/packs/lifecycle"));
 const platformKernel = require(path.join(REPO, "src/platform/kernel"));
 const { callInternalTool } = require(path.join(REPO, "src/tools/dispatcher"));
+const labLib = require(path.join(REPO, "packs/security-research/modules/security-research-tools/lib/lab.js"));
 
 const PROJECT = "demo_project"; // already canonical, so scope project_id matches
 
@@ -255,6 +256,115 @@ function makeGitRepo() {
     assert.strictEqual(run.owner, "pack:security-research");
     assert.ok(run.result && run.result.comparison, `workflow should return a comparison: ${JSON.stringify(run.result)}`);
     assert.strictEqual(run.result.comparison.changed, true);
+  });
+
+  // --- disposable lab composition (stub provider, offline) -------------------
+  // The Proxmox pack is not installed in this test process, so we exercise the
+  // composition seam by injecting a fake services.dispatch — proving lab.js
+  // dispatches the right governed tool with the operator-supplied spec, records
+  // provenance, and cleans up honestly, without any Proxmox or homelab details.
+  await test("SR.17 lab provision composes proxmox_provision and records provenance", async () => {
+    const planned = await okCall("research_run", {
+      action: "plan", hypothesis_id: hypothesisId,
+      environment: { kind: "proxmox", provider_profile: "lab-profile", provision: { action: "clone", clone: { source_vmid: 9000, newid: 9999, node: "pve-fixture" } } },
+    });
+    assert.strictEqual(planned.run.environment.kind, "proxmox");
+    assert.deepStrictEqual(planned.run.environment.provision.clone, { source_vmid: 9000, newid: 9999, node: "pve-fixture" });
+    const ctx = {
+      root: WORKSPACE, config: {}, campaignId: planned.run.campaign_id, runId: planned.run.run_id,
+      projectId: planned.run.project_id, executionId: planned.run.execution_id, environment: planned.run.environment,
+      actor: "tester", timeoutMs: 5000,
+    };
+    let captured = null;
+    const fake = { dispatch: async (name, a) => {
+      captured = { name, a };
+      return { content: [{ type: "text", text: JSON.stringify({ ok: true, action: "clone", profile: a.profile, vmid: a.clone.newid, node: a.clone.node, marker: "sk-run-fixture", outcome: "created" }) }] };
+    } };
+    const prov = await labLib.provision(fake, ctx, {});
+    assert.strictEqual(captured.name, "proxmox_provision", "must dispatch the governed provider tool");
+    assert.strictEqual(captured.a.profile, "lab-profile");
+    assert.strictEqual(captured.a.action, "clone");
+    assert.strictEqual(prov.resource_ref, "9999@lab-profile");
+    assert.ok(prov.resource_artifact.startsWith("artifact:"));
+    // Provenance is a custody artifact linked to the run's execution.
+    const owned = labLib.ownedResources(ctx);
+    assert.strictEqual(owned.length, 1);
+    assert.strictEqual(owned[0].identity.vmid, 9999);
+    // Save ctx for the cleanup test.
+    global.__srLabCtx = ctx;
+  });
+
+  await test("SR.18 lab cleanup requests an authorized shutdown and reports deletion pending/manual", async () => {
+    const ctx = global.__srLabCtx;
+    let guestCall = null;
+    const fake = { dispatch: async (name, a) => {
+      guestCall = { name, a };
+      return { content: [{ type: "text", text: JSON.stringify({ ok: true, action: "shutdown", outcome: "stopped" }) }] };
+    } };
+    const result = await labLib.cleanup(fake, ctx, {});
+    assert.strictEqual(guestCall.name, "proxmox_guest");
+    assert.strictEqual(guestCall.a.action, "shutdown");
+    assert.strictEqual(result.cleanup, "pending_manual");
+    assert.strictEqual(result.resources[0].deletion, "pending_manual");
+    assert.strictEqual(result.resources[0].shutdown.ok, true);
+  });
+
+  await test("SR.19 lab composition fails closed: missing provider, provider refusal, non-proxmox env", async () => {
+    const ctx = global.__srLabCtx;
+    // Proxmox pack absent -> dependency_missing (never a silent shell fallback).
+    const absent = { dispatch: async () => ({ content: [{ type: "text", text: "Unknown tool: proxmox_provision" }], isError: true, code: "unknown_tool" }) };
+    await assert.rejects(labLib.provision(absent, ctx, {}), (e) => e.code === "dependency_missing");
+    // Provider refuses (e.g. lifecycle disabled) -> policy_denied, not swallowed.
+    const refused = { dispatch: async () => ({ content: [{ type: "text", text: JSON.stringify({ ok: false, code: "lifecycle_disabled", error: "profile is read-only" }) }] }) };
+    await assert.rejects(labLib.provision(refused, ctx, {}), (e) => e.code === "policy_denied");
+    // A non-proxmox environment cannot provision a lab.
+    const localCtx = { ...ctx, environment: { kind: "local", name: "lab" } };
+    const never = { dispatch: async () => { throw new Error("should not dispatch"); } };
+    await assert.rejects(labLib.provision(never, localCtx, {}), (e) => e.code === "unsupported_operation");
+  });
+
+  await test("SR.20 lab dry-run validates the provider without creating anything", async () => {
+    const planned = await okCall("research_run", {
+      action: "plan", hypothesis_id: hypothesisId,
+      environment: { kind: "proxmox", provider_profile: "lab-profile", provision: { action: "clone", dry_run: true, clone: { source_vmid: 9000, newid: 9998, node: "pve-fixture" } } },
+    });
+    const ctx = {
+      root: WORKSPACE, config: {}, campaignId: planned.run.campaign_id, runId: planned.run.run_id,
+      projectId: planned.run.project_id, executionId: planned.run.execution_id, environment: planned.run.environment,
+      actor: "tester", timeoutMs: 5000,
+    };
+    const fake = { dispatch: async (name, a) => ({ content: [{ type: "text", text: JSON.stringify({ ok: true, action: "clone", profile: a.profile, dry_run: true, explain: { operation: "clone", expected_effect: "would create vmid 9998" } }) }] }) };
+    const prov = await labLib.provision(fake, ctx, {});
+    assert.strictEqual(prov.dry_run, true);
+    assert.strictEqual(prov.resource_ref, null);
+    assert.strictEqual(labLib.ownedResources(ctx).length, 0, "dry-run must not record a resource");
+  });
+
+  await test("SR.21 provider_profile is authoritative over a stray provision.profile", async () => {
+    const planned = await okCall("research_run", {
+      action: "plan", hypothesis_id: hypothesisId,
+      environment: { kind: "proxmox", provider_profile: "lab-profile", provision: { action: "clone", profile: "other-profile", clone: { source_vmid: 9000, newid: 9997, node: "pve-fixture" } } },
+    });
+    const ctx = {
+      root: WORKSPACE, config: {}, campaignId: planned.run.campaign_id, runId: planned.run.run_id,
+      projectId: planned.run.project_id, executionId: planned.run.execution_id, environment: planned.run.environment,
+      actor: "tester", timeoutMs: 5000,
+    };
+    let dispatchedProfile = null;
+    const fake = { dispatch: async (name, a) => {
+      dispatchedProfile = a.profile;
+      return { content: [{ type: "text", text: JSON.stringify({ ok: true, vmid: a.clone.newid, node: a.clone.node, profile: a.profile, outcome: "created" }) }] };
+    } };
+    await labLib.provision(fake, ctx, {});
+    assert.strictEqual(dispatchedProfile, "lab-profile", "provider_profile must win over a stray provision.profile");
+  });
+
+  await test("SR.22 cleanup reports shutdown_incomplete when a shutdown fails", async () => {
+    const ctx = global.__srLabCtx;
+    const failing = { dispatch: async () => ({ content: [{ type: "text", text: JSON.stringify({ ok: false, code: "lifecycle_disabled" }) }], isError: true, code: "handler_error" }) };
+    const result = await labLib.cleanup(failing, ctx, {});
+    assert.strictEqual(result.cleanup, "shutdown_incomplete");
+    assert.strictEqual(result.resources[0].shutdown.ok, false);
   });
 
   // cleanup

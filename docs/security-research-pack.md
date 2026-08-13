@@ -8,8 +8,9 @@ does so by **composing existing Sidekick capabilities** through the normal
 policy/approval/audit path rather than reimplementing them: command probes
 dispatch the governed `bash` tool, HTTP probes dispatch `web_fetch`, and its
 workflows compose the `git` tool. Named environments describe *where* a probe
-runs; Proxmox disposable-lab provisioning is a documented seam for a later
-increment, not a present feature.
+runs, and a `proxmox` environment composes the Proxmox pack (`proxmox_provision`
+/ `proxmox_guest`) to provision and tear down a disposable lab — with *which*
+lab supplied entirely by runtime configuration, never committed.
 
 Two properties are non-negotiable and are enforced, not merely documented:
 
@@ -26,14 +27,15 @@ runs (execution-backed), bounded probes — a `command` probe on the local host
 (opt-in) and an `http` probe that can reach a remote/lab host under scope and
 SSRF gating — evidence capture with SHA-256 integrity into the external
 workspace, sanitized redaction derivatives, deterministic comparison, validation
-with kernel-enforced invariants, evidence-linked report material, and two
-governed workflows (one of which composes `git`).
+with kernel-enforced invariants, evidence-linked report material, two governed
+workflows (one of which composes `git`), and **Proxmox disposable-lab
+provisioning** — a run whose environment is kind `proxmox` composes
+`proxmox_provision` to create a disposable guest (recording provenance) and
+`proxmox_guest` to request an authorized shutdown on cleanup.
 
-**Deferred (clean seams, not built):** Proxmox disposable-lab **auto-provisioning**
-(the environment abstraction and permission model exist; the run lifecycle does
-not yet dispatch `proxmox_provision`), container/browser/debugger/fuzzer/packet
-providers, a dedicated HTTP hardening tool, and disclosure connectors. These are
-extension points, not present features.
+**Deferred (clean seams, not built):** container/browser/debugger/fuzzer/packet
+environment providers, a dedicated HTTP hardening tool, and disclosure
+connectors. These are extension points, not present features.
 
 ## Install
 
@@ -75,9 +77,13 @@ snapshot is the authoritative allowlist a run's probes are checked against.
 ### research_run (risk `high`)
 
 Manage durable runs: `plan` (creates a platform execution + a test-run record),
-`start`, `status`, `resume`, `cancel`, `complete`, `list`. A run's state survives
-a restart. A completed run requires an outcome and evidence — enforced by the
-kernel, not assumed.
+`start`, `status`, `resume`, `cancel`, `complete`, `provision`, `cleanup`,
+`list`. A run's state survives a restart. A completed run requires an outcome and
+evidence — enforced by the kernel. For a run whose environment is kind
+`proxmox`, `provision` composes `proxmox_provision` to create a disposable guest
+(recording provenance as a custody artifact) and `cleanup` composes
+`proxmox_guest` for an authorized shutdown, reporting deletion as pending/manual
+since the Proxmox pack exposes no VM delete.
 
 ### research_probe (risk `high`)
 
@@ -151,14 +157,27 @@ committed file.
 
 ## Dependencies
 
-The module dispatches only `bash` (command probes) and `web_fetch` (http probes)
-— those are the only two entries in its permission allowlist. Its workflows
-additionally compose the `git` tool through the workflow engine. `research_status`
-also reports the availability of `proxmox`, `proxmox_guest`, `proxmox_provision`
-and `ansible_run` for the deferred disposable-lab increment. None are required to
-install. A probe that needs an absent capability returns a structured
-`dependency_missing`/`capability_unavailable` error — it never silently falls
-back to an unrestricted shell.
+The module dispatches `bash` (command probes), `web_fetch` (http probes), and —
+for a run with a `proxmox` environment — `proxmox_provision` and `proxmox_guest`
+(disposable-lab provision/cleanup). Those four are its entire permission
+allowlist. Its workflows additionally compose the `git` tool through the workflow
+engine. None are required to install; installing the Proxmox pack is required
+only to use `proxmox` environments, and `research_status` reports which
+capabilities are available. A run or probe that needs an absent capability
+returns a structured `dependency_missing`/`capability_unavailable` error — it
+never silently falls back to an unrestricted shell.
+
+### Disposable lab environments (Proxmox)
+
+A `proxmox` environment is described entirely by runtime configuration — the
+Proxmox pack profile (endpoint + `token_ref: secret:<name>`) and the
+`proxmox_provision` spec (e.g. a clone of a template) — none of which is
+committed. `research_run action=provision` clones the disposable guest and
+records its identity as a custody artifact linked to the run; probes then target
+it (an `http` probe reaches its address, scope-gated). `research_run
+action=cleanup` requests an authorized graceful shutdown and reports deletion as
+pending/manual. Provider policy is never bypassed: `allow_lifecycle`,
+protected-resource and provenance controls in the Proxmox pack still decide.
 
 ## Health
 
