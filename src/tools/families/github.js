@@ -3,10 +3,14 @@
 // GitHub tool family: github, ci_status.
 //
 // Extracted from src/tools-legacy.js. Depends only on Node builtins, zod,
-// the shared redaction utility, the encrypted-secrets store, and the shared
-// secret cipher — never on tools-legacy.js. The GitHub token resolves from
-// SIDEKICK_GITHUB_TOKEN / GITHUB_TOKEN env or the encrypted secret store and
-// is redacted from error text by redactGithubError before any output. The
+// the shared redaction utility, the encrypted-secrets store, the shared secret
+// cipher, and (optionally) the connector authority — never on tools-legacy.js.
+// The GitHub integration is governed by the registered GitHub connector when
+// present: endpoint and credential come from the connector (its secret_ref
+// resolved at call time via connectors/resolve.js). A GITHUB_TOKEN env value
+// remains the highest-precedence override and the legacy secret-store key the
+// final fallback, so the tool works before/without a connector. The token is
+// redacted from error text by redactGithubError before any output. The
 // helper quartet parseGithubArgs/getGithubArg/getCiRevisionSelector/
 // buildCiStatusResult (+formatCiStatusText) stays on the src/tools facade as
 // compatibility exports. Risk (github high, ci_status low) preserved from
@@ -40,18 +44,44 @@ function getGithubArg(args, names) {
   return args.value;
 }
 
+// The GitHub connector is the governing authority for this integration when one
+// is registered (endpoint + credential reference). It is optional so the tool
+// still works before the connector authority is present; env stays the highest-
+// precedence override for backwards compatibility.
+let connectorResolve = null;
+try { connectorResolve = require("../../connectors/resolve"); } catch { connectorResolve = null; }
+
+function githubConnector() {
+  return connectorResolve ? connectorResolve.getActiveConnector("github") : null;
+}
+
 function resolveGithubToken() {
-  let token = process.env.GITHUB_TOKEN;
-  if (token) return token;
+  // Precedence: explicit env override (BC) → the registered GitHub connector's
+  // secret reference → the legacy encrypted secret-store key.
+  if (process.env.GITHUB_TOKEN) return process.env.GITHUB_TOKEN;
+
+  const connector = githubConnector();
+  if (connector && connectorResolve) {
+    const viaConnector = connectorResolve.resolveConnectorCredential(connector);
+    if (viaConnector) return viaConnector;
+  }
 
   try {
     const secrets = loadSecrets();
     const secret = secrets["github_token"];
-    if (secret) token = decryptSecret(secret);
+    if (secret) return decryptSecret(secret);
   } catch (e) {
     // Secret store not available
   }
-  return token;
+  return undefined;
+}
+
+// Governed API base: the connector's endpoint when registered, else the public
+// GitHub API. Callers append the API path to this.
+function resolveGithubApiBase() {
+  const connector = githubConnector();
+  if (connector && connector.endpoint) return String(connector.endpoint).replace(/\/$/, "");
+  return "https://api.github.com";
 }
 
 function redactGithubError(value, token) {
@@ -61,7 +91,7 @@ function redactGithubError(value, token) {
 }
 
 function githubRequest(token, method, endpoint, body) {
-  const apiBase = "https://api.github.com";
+  const apiBase = resolveGithubApiBase();
   return new Promise((resolve) => {
     const url = new URL(apiBase + endpoint);
     const options = {
@@ -301,26 +331,14 @@ async function sidekick_ci_status(args = {}) {
 
 async function sidekick_github({ action, repo, args: extraArgs }) {
   const parsedArgs = parseGithubArgs(extraArgs);
-  let token = process.env.GITHUB_TOKEN;
-
-  if (!token) {
-    try {
-      const secrets = loadSecrets();
-      const secret = secrets["github_token"];
-      if (secret) {
-        token = decryptSecret(secret);
-      }
-    } catch (e) {
-      // Secret store not available
-    }
-  }
+  const token = resolveGithubToken();
 
   if (!token) {
     return { content: [{ type: "text", text: "github_token not found in secret store" }], isError: true };
   }
 
   const https = require("https");
-  const apiBase = "https://api.github.com";
+  const apiBase = resolveGithubApiBase();
 
   function ghRequest(method, endpoint, body) {
     return new Promise((resolve) => {
@@ -483,4 +501,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_github, sidekick_ci_status, parseGithubArgs, getGithubArg, getCiRevisionSelector, buildCiStatusResult, formatCiStatusText };
+module.exports = { descriptors, sidekick_github, sidekick_ci_status, parseGithubArgs, getGithubArg, getCiRevisionSelector, buildCiStatusResult, formatCiStatusText, resolveGithubToken, resolveGithubApiBase };
