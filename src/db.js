@@ -984,7 +984,8 @@ function makeMemoryDedupKey(memory) {
 
 // Structured-memory write admission.
 //
-// `tool_call` records are operational telemetry, not durable knowledge. The
+// `tool_call` records produced by operational capture/import are telemetry,
+// not durable knowledge. The
 // automatic-capture path has always excluded them (src/memory.js
 // shouldRememberTool), but the import and sync paths wrote raw SQL with no
 // allowlist at all, so a single import could fill the table with telemetry and

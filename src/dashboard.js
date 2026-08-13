@@ -474,6 +474,24 @@ function readKV() {
   return dbStore.loadKV({});
 }
 
+function dashboardExecutionMetadata(req, actor, extra = {}) {
+  const header = name => req?.headers?.[name] || req?.headers?.[name.toLowerCase()] || null;
+  const cookie = String(header("cookie") || "");
+  const sessionCookie = cookie.split(";").map(value => value.trim())
+    .find(value => value.startsWith("sidekick_sid="));
+  const sessionId = header("x-sidekick-session-id") ||
+    (sessionCookie ? "dashboard:" + crypto.createHash("sha256").update(sessionCookie).digest("hex").slice(0, 24) : null);
+  const body = req?.body && typeof req.body === "object" ? req.body : {};
+  return {
+    actor,
+    sessionId,
+    project: body.project || req?.query?.project || header("x-sidekick-project") || null,
+    taskId: body.task_id || body.taskId || req?.query?.task_id || header("x-sidekick-task-id") || null,
+    requestId: header("x-request-id") || null,
+    ...extra,
+  };
+}
+
 function blackboxJson(res, fn) {
   try {
     res.json(fn());
@@ -490,7 +508,7 @@ async function governedDashboardMutation(req, res, tool, args, auditAction) {
   const actor = authenticatedUser(req) || "dashboard";
   try {
     auditLog(req, auditAction, { tool, action: args.action, id: args.incident_id || args.capture_id || args.id || null });
-    const result = await callDashboardTool(tool, args, { actor });
+    const result = await callDashboardTool(tool, args, dashboardExecutionMetadata(req, actor));
     if (!result?.isError && tool === "compute_nodes") {
       const text = result.content?.[0]?.text || "";
       let payload; try { payload = JSON.parse(text); } catch { payload = { message: text }; }
@@ -1771,7 +1789,7 @@ async function evolveDashboardAction(req, res, action, extra = {}) {
       if (!actor) return;
     }
     auditLog(req, `evolve.${action}`, { id: req.params.id || req.body?.id || null });
-    const result = await callDashboardTool("evolve", { action, id: req.params.id || req.body?.id, ...(req.body || {}), ...extra }, { actor: actor || "dashboard" });
+    const result = await callDashboardTool("evolve", { action, id: req.params.id || req.body?.id, ...(req.body || {}), ...extra }, dashboardExecutionMetadata(req, actor || "dashboard"));
     res.json({ ok: !result.isError, result: result.content?.[0]?.text || "" });
   } catch (error) {
     logError(req.originalUrl, 500, error, "evolve", req.headers["user-agent"]);
@@ -1815,7 +1833,7 @@ async function capabilityAction(req, res, args, auditAction) {
       if (!actor) return;
     }
     auditLog(req, `capability.${auditAction}`, { name: args.name || args.path || null });
-    const result = await callDashboardTool("capability", args, { actor: actor || "dashboard" });
+    const result = await callDashboardTool("capability", args, dashboardExecutionMetadata(req, actor || "dashboard"));
     return capabilityResult(res, result);
   } catch (error) {
     logError(req.originalUrl, 500, error, "capability", req.headers["user-agent"]);
@@ -1870,7 +1888,7 @@ app.post("/api/capabilities/:name/uninstall", (req, res) =>
 
 app.get("/api/capabilities/:name/workflows", async (req, res) => {
   try {
-    const result = await callDashboardTool("workflow", { action: "list", owner: req.params.name }, { actor: authenticatedUser(req) || "dashboard" });
+    const result = await callDashboardTool("workflow", { action: "list", owner: req.params.name }, dashboardExecutionMetadata(req, authenticatedUser(req) || "dashboard"));
     return capabilityResult(res, result);
   } catch (error) {
     logError(req.originalUrl, 500, error, "capability", req.headers["user-agent"]);
@@ -1961,7 +1979,7 @@ app.post("/api/evolve/:id/run", (req, res) => {
   });
   setImmediate(async () => {
     try {
-      await callDashboardTool(cap.name, req.body?.args || {}, { actor, executionId, timeoutMs });
+      await callDashboardTool(cap.name, req.body?.args || {}, dashboardExecutionMetadata(req, actor, { executionId, timeoutMs }));
     } catch (error) {
       dbStore.updateGeneratedToolExecution(executionId, {
         state: "failed",
@@ -2525,7 +2543,7 @@ app.post("/api/db/query", async (req, res) => {
     const result = await callDashboardTool(
       "db_query",
       { sql, params: params || [], readonly: readonly !== false, limit: limit || 1000 },
-      { actor: "dashboard" }
+      dashboardExecutionMetadata(req, "dashboard")
     );
     const duration = Date.now() - start;
     const text = result && result.content && result.content[0] ? result.content[0].text : "";

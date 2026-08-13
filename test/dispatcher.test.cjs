@@ -36,12 +36,18 @@ console.log('Running Dispatcher Tests...');
     assert.strictEqual(result.isError, undefined, 'generic caller should still execute low-risk tool');
     assert.ok(db.queryToolLogs({ tool: 'sidekick_respond', source: 'mcp', success: true, limit: 20 }).some(row => row.task_id === 'req_forged_source'), 'generic source input should not establish dashboard identity');
 
-    await callAgentTool('sidekick_respond', { text: 'agent source' }, { requestId: 'req_agent_source' });
-    await callDashboardTool('sidekick_respond', { text: 'dashboard source' }, { requestId: 'req_dashboard_source' });
+    await callAgentTool('sidekick_respond', { text: 'agent source' }, { requestId: 'req_agent_source', sessionId: 'agent-session', project: 'agent-project' });
+    await callDashboardTool('sidekick_respond', { text: 'dashboard source' }, { requestId: 'req_dashboard_source', sessionId: 'dashboard-session', project: 'dashboard-project' });
     await callMcpTool('sidekick_respond', { text: 'mcp source' }, { requestId: 'req_mcp_source' });
     assert.ok(db.queryToolLogs({ tool: 'sidekick_respond', source: 'agent', success: true, limit: 20 }).some(row => row.task_id === 'req_agent_source'), 'agent wrapper should establish agent identity');
     assert.ok(db.queryToolLogs({ tool: 'sidekick_respond', source: 'dashboard', success: true, limit: 20 }).some(row => row.task_id === 'req_dashboard_source'), 'dashboard wrapper should establish dashboard identity');
     assert.ok(db.queryToolLogs({ tool: 'sidekick_respond', source: 'mcp', success: true, limit: 20 }).some(row => row.task_id === 'req_mcp_source'), 'mcp wrapper should establish mcp identity');
+    const agentLog = db.queryToolLogs({ tool: 'sidekick_respond', source: 'agent', success: true, limit: 20 }).find(row => row.task_id === 'req_agent_source');
+    const dashboardLog = db.queryToolLogs({ tool: 'sidekick_respond', source: 'dashboard', success: true, limit: 20 }).find(row => row.task_id === 'req_dashboard_source');
+    assert.strictEqual(agentLog.session_id, 'agent-session');
+    assert.strictEqual(agentLog.project, 'agent-project');
+    assert.strictEqual(dashboardLog.session_id, 'dashboard-session');
+    assert.strictEqual(dashboardLog.project, 'dashboard-project');
 
     result = await dispatchTool({ name: 'sidekick_missing', args: {}, context: { source: 'mcp', requestId: 'req_unknown' } });
     assert.ok(result.isError, 'unknown tool should fail');

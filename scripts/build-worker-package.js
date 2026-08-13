@@ -8,7 +8,8 @@
 // emits a minimal package.json (zero dependencies) and a SHA256SUMS manifest.
 // Also bundles a pinned, SHA-256-verified winsw release as
 // sidekick-compute-worker.exe so install-windows.ps1 works offline with no
-// -WinswUrl; the binary lives only in the built artifact, never in git.
+// -WinswUrl. The pinned binary is checked into the package source so builds
+// are deterministic and do not require a release-host network request.
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
@@ -25,6 +26,7 @@ const ENTRY = path.join(COMPUTE, "worker-agent.js");
 const WINSW = {
   version: "v2.12.0",
   url: "https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW.NET461.exe",
+  source: path.join(REPO, "packaging", "compute-worker", "sidekick-compute-worker.exe"),
   sha256: "b5066b7bbdfba1293e5d15cda3caaea88fbeab35bd5b38c41c913d492aadfc4f",
   cache: path.join(REPO, "dist", ".cache", "winsw-v2.12.0-net461.exe"),
 };
@@ -67,6 +69,13 @@ function sha256(buf) {
 // matches, otherwise downloaded from the pinned release URL. Any hash mismatch
 // is fatal — never package an unverified binary.
 async function fetchWinsw() {
+  if (fs.existsSync(WINSW.source)) {
+    const packaged = fs.readFileSync(WINSW.source);
+    if (sha256(packaged) !== WINSW.sha256) {
+      throw new Error(`packaged winsw SHA-256 mismatch: expected ${WINSW.sha256}, got ${sha256(packaged)}. Refusing to package an unverified binary.`);
+    }
+    return packaged;
+  }
   if (fs.existsSync(WINSW.cache)) {
     const cached = fs.readFileSync(WINSW.cache);
     if (sha256(cached) === WINSW.sha256) return cached;

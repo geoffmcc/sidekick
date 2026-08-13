@@ -205,7 +205,7 @@ function makeSynthesizer({ callLLM, redact = (t) => t }) {
     const res = await callLLM(messages, {
       systemPrompt: system,
       temperature: 0.2,
-      maxTokens: BRAIN_LIMITS.MAX_GENERATED_TOKENS,
+      maxTokens: BRAIN_LIMITS.MAX_SYNTHESIS_TOKENS,
       timeoutMs: BRAIN_LIMITS.MAX_GENERATION_MS,
     });
     // `finishReason` distinguishes "the budget cut the answer off" from "the
