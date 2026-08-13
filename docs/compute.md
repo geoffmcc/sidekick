@@ -88,6 +88,54 @@ Supported reporting inputs:
 
 Worker heartbeat and admin inspect APIs expose platform, architecture, worker version, protocol version, providers, executors, model inventory, limits, health, and utilization metadata.
 
+## Providers and credentials
+
+Compute routes inference to **registered providers** in the `compute_providers`
+table (with their models in `compute_models`). Placement can only select a
+provider that exists in the registry, so an empty registry means every
+`InferenceService` call fails and callers fall back to direct HTTP.
+
+### Environment bootstrap
+
+On `compute.initialize()`, `src/compute/provider-bootstrap.js` registers managed
+providers from the environment Sidekick already supports, so the InferenceService
+authority has real providers to route to without manual operator setup:
+
+- **Ollama (local)** from `OLLAMA_URL` (default `http://127.0.0.1:11434`), seeded
+  `trusted` for `public`/`internal`/`private` at high priority, with a chat model
+  (`OLLAMA_MODEL` / `SIDEKICK_AGENT_MODEL`) and an embedding model
+  (`SIDEKICK_EMBEDDING_MODEL`, default `nomic-embed-text`).
+- **Groq (cloud)** when `GROQ_API_KEY` is set — registered as an
+  `openai-compatible` provider at `https://api.groq.com/openai/v1` with
+  `GROQ_MODEL`.
+- **OpenAI-compatible (cloud)** when `OPENAI_API_KEY` is set (`OPENAI_BASE_URL`,
+  `OPENAI_MODEL`, `OPENAI_EMBEDDING_MODEL`).
+
+Bootstrap is **idempotent and secure by default**:
+
+- Managed rows are tagged (`metadata.managed = "env-bootstrap"`) and matched by a
+  stable key, so re-running never duplicates them and operator edits (trust
+  promotion, disable, priority, endpoint) survive restarts.
+- Cloud providers are seeded for `public`/`internal` **only** and at lower
+  priority than local. Private/sensitive inference stays on local/trusted
+  providers and **fails closed** rather than silently egressing to a cloud API.
+  Authorizing a cloud provider for private data is an explicit operator step
+  (`compute` `action=update` with `data_classifications`).
+- Set `SIDEKICK_DISABLE_PROVIDER_BOOTSTRAP=1` to manage providers entirely by
+  hand, or `SIDEKICK_DISABLE_OLLAMA_BOOTSTRAP=1` to skip only the local default.
+
+### Credential references
+
+A provider's `auth_secret_key` column is a **reference** — the name of a secret
+in Sidekick's encrypted secret store (`data/secrets.enc`, the same store the
+`secret` tool manages) — never a plaintext key. Bootstrap migrates a cloud
+provider's env key into that store and keeps only the reference on the record.
+`src/compute/provider-credentials.js` resolves the reference to a usable key as
+late as possible (at adapter dispatch); the plaintext never appears in a provider
+API response, a log line, or the dashboard (records expose only `hasAuth`). When
+no master `SIDEKICK_SECRET_KEY` is configured, the originating env-var name is
+recorded in provider metadata and read as a compatibility fallback instead.
+
 ## Placement (v1)
 
 `src/compute/placement.js` is the shared placement decision core. Both routing

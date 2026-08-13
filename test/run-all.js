@@ -107,6 +107,7 @@ const suites = [
   { file: 'test/compute.test.js', critical: false, description: 'Compute provider-neutral inference and job system' },
   { file: 'test/compute-dashboard-ui.test.js', critical: false, description: 'Compute tab UI labelling, job detail fields, action-state parity, and refresh' },
   { file: 'test/compute-placement.test.js', critical: false, description: 'Compute Placement v1 shared decision core, provenance, and explain parity' },
+  { file: 'test/compute-provider-bootstrap.test.js', critical: false, description: 'Compute provider/model bootstrap from env, idempotency, secure-by-default cloud, and secret-reference credential resolution' },
   { file: 'test/compute-recovery.test.js', critical: false, description: 'Scheduled lease recovery and heartbeat counter integrity' },
   { file: 'test/compute-worker-lifecycle.test.js', critical: false, description: 'Compute worker multi-dimensional lifecycle state model' },
   { file: 'test/compute-worker-disconnect.test.js', critical: false, description: 'Compute worker graceful disconnect protocol' },

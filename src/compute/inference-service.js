@@ -28,7 +28,17 @@ class InferenceService {
       adapter = new OllamaProvider({ endpoint: provider.endpoint, name: provider.displayName });
     } else if (provider.providerType === "openai-compatible") {
       const OpenAICompatibleProvider = require("../providers/openai-compatible-provider");
-      adapter = new OpenAICompatibleProvider({ endpoint: provider.endpoint, name: provider.displayName });
+      // Resolve the provider's credential reference through the secret authority
+      // as late as possible (here, at first dispatch) rather than trusting the
+      // adapter's OPENAI_API_KEY env fallback. The plaintext key never touches
+      // the provider record, an API response, or a log line.
+      const { resolveProviderApiKey } = require("./provider-credentials");
+      const apiKey = resolveProviderApiKey(provider);
+      adapter = new OpenAICompatibleProvider({
+        endpoint: provider.endpoint,
+        name: provider.displayName,
+        ...(apiKey ? { apiKey } : {}),
+      });
     } else if (provider.providerType === "mock") {
       const MockProvider = require("../providers/mock-provider");
       adapter = new MockProvider({ name: provider.displayName });
