@@ -25,6 +25,16 @@ const ENVIRONMENT_KINDS = ["local", "disposable", "proxmox", "remote"];
 function resolveEnvironment(config, envInput) {
   if (!envInput) return { kind: "local", name: "default-local", isolation: "shared", network_mode: "none", production_access: false };
   if (typeof envInput === "string") {
+    // Tolerate a stringified JSON environment object: some MCP clients serialize
+    // object arguments on permissive (any) schema fields to strings. A leading
+    // '{' means the caller meant an inline environment, not a named one.
+    const trimmed = envInput.trim();
+    if (trimmed.startsWith("{")) {
+      let parsed = null;
+      try { parsed = JSON.parse(trimmed); } catch { parsed = null; }
+      if (parsed && typeof parsed === "object") return normalizeEnvironment(parsed);
+      throw new ResearchError("invalid_input", "environment looks like JSON but could not be parsed");
+    }
     const environments = (config && config.environments) || {};
     const found = environments[envInput];
     if (!found) throw new ResearchError("environment_failed", `unknown environment '${envInput}' — configure it under the pack's 'environments'`);
