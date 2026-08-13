@@ -195,5 +195,20 @@ test("the reconciler ignores unfinalized artifacts", () => {
   assert.strictEqual(plan.examined, 0, "only finalized artifacts are candidates for custody");
 });
 
+// ---- operator surface -------------------------------------------------------
+
+test("the reconcile action and its confirm flag pass the tool input schema", () => {
+  // Regression: the handler case was added to compute/tools.js without adding
+  // the action to the zod enum, and the schema is .strict(), so the MCP layer
+  // rejected the call before it ever reached the handler. Module-level tests
+  // passed the whole time because they never crossed the schema boundary.
+  const schema = require("../src/tools").getBuiltinRegistry().schemas().compute_jobs;
+  assert.ok(schema, "compute_jobs resolves a schema from the registry");
+  assert.doesNotThrow(() => schema.parse({ action: "reconcile_artifact_custody" }), "the dry-run form is accepted");
+  assert.doesNotThrow(() => schema.parse({ action: "reconcile_artifact_custody", confirm: true }), "the confirmed form is accepted");
+  const parsed = schema.parse({ action: "reconcile_artifact_custody", confirm: true });
+  assert.strictEqual(parsed.confirm, true, "confirm survives parsing rather than being stripped");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

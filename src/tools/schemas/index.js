@@ -66,7 +66,7 @@ const TOOL_SCHEMAS = {
     enabled: z.boolean().optional().describe("Enable/disable model")
   }),
   compute_jobs: z.object({
-    action: z.enum(["list", "get", "create", "cancel", "stats", "artifacts"]).describe("Job action"),
+    action: z.enum(["list", "get", "create", "cancel", "stats", "artifacts", "reconcile_artifact_custody"]).describe("Job action"),
     job_id: z.string().optional().describe("Job ID (get, cancel, artifacts)"),
     // list filters
     status: z.string().optional().describe("Filter by status (list)"),
@@ -90,7 +90,9 @@ const TOOL_SCHEMAS = {
     max_retries: z.number().int().min(0).max(10).optional().describe("Max retries after the first attempt (create); maps to maxAttempts = max_retries + 1"),
     idempotency_key: z.string().max(200).optional().describe("Idempotency key (create)"),
     // cancel
-    reason: z.string().max(500).optional().describe("Cancellation reason (cancel)")
+    reason: z.string().max(500).optional().describe("Cancellation reason (cancel)"),
+    // reconcile_artifact_custody: dry run unless explicitly confirmed
+    confirm: z.boolean().optional().describe("Execute the reconciliation (reconcile_artifact_custody); omitted or false performs a dry run that writes nothing")
   }).strict(),
   compute_route: z.object({
     action: z.enum(["explain", "list_rules", "create_rule", "delete_rule"]).describe("Routing action"),
