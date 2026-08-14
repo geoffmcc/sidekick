@@ -1,8 +1,11 @@
 # Open-Issue Triage — 2026-08-12
 
-Verification of all 13 open GitHub issues against the current working tree
-(`main` @ 4e723d1). Each verdict is based on reading the current code, not the
-state at filing time.
+Historical verification of all 13 open GitHub issues against the working tree
+at `main` @ `4e723d1`. Each verdict was based on the code available at that
+snapshot, not the state at filing time. The later inference and Compute changes
+through `389a969` supersede provider/max-token line references in this record;
+retain this file as triage history and re-check any still-open issue against the
+current implementation before acting on it.
 
 Verdicts: **STILL VALID** (keep open), **FIXED** (close), **PARTIALLY FIXED**
 (keep open; update body to reflect remaining scope).

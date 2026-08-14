@@ -1,6 +1,6 @@
 # Overview
 
-Sidekick is a self-hosted agent platform for compatible MCP clients and automation agents. It provides a remote MCP server, browser dashboard, autonomous Agent Bridge, persistent memory and knowledge, and an optional distributed Compute worker system. Current `main` contains 108 built-in tools across 20 categories (102 in the core registry plus 6 from the bundled `data-utilities` module), with separately approved generated tools added at runtime.
+Sidekick is a self-hosted agent platform for compatible MCP clients and automation agents. It provides a remote MCP server, browser dashboard, autonomous Agent Bridge, persistent memory and knowledge, and an optional distributed Compute worker system. Current `main` contains 112 built-in tools across 20 categories (106 in the core registry plus 6 from the bundled `data-utilities` module), with separately approved generated tools added at runtime.
 
 ## Core idea
 
@@ -25,7 +25,7 @@ Sidekick is broad by design. The current codebase includes tools for:
 - cron jobs, one-shot delays, file/process/service/endpoint watches, task queues, retry wrappers, and batch tool calls;
 - structured parsing, validation, templating, hashing, diffs, changelog generation, anonymization, extraction, analytics, and evidence-backed insight reports;
 - system health, snapshots, timelines, network diagnostics, dependency analysis, baselines, circuit breakers, runbooks, and incident captures;
-- LLM calls through local Ollama or Groq;
+- LLM calls routed through Compute across configured providers and models;
 - learned procedures and approval-gated generated tools;
 - allowlisted `chat`, `generate`, and `embeddings` jobs routed through enrolled Compute workers, providers, and models.
 

@@ -479,7 +479,7 @@ The memory system is now fully implemented with all planned features from the pe
 ### SSH Key Infrastructure
 - Generated new ED25519 SSH key on VPS
 - Added to authorized_keys for both root and sidekick users
-- Saved to `C:\Users\geoffrey\.ssh\sidekick` on Windows
+- Saved to `C:\Users\<user>\.ssh\sidekick` on Windows
 - Replaced old broken key that wasn't working
 - All deploys now use the new key successfully
 

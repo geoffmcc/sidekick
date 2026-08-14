@@ -2,7 +2,7 @@
 
 **Autonomous Agent Platform**
 
-Sidekick is a self-hosted platform that gives AI assistants and agents durable infrastructure: a remote machine they can operate, persistent project memory and knowledge that survive any single session, a governed catalog of 108 built-in MCP tools, an autonomous task runner, and distributed model compute. The connected assistant or agent is replaceable — you can switch clients, models, or vendors — while the projects, memory, tools, policy, and history stay on your machine, under your control.
+Sidekick is a self-hosted platform that gives AI assistants and agents durable infrastructure: a remote machine they can operate, persistent project memory and knowledge that survive any single session, a governed catalog of 112 built-in MCP tools, an autonomous task runner, and distributed model compute. The connected assistant or agent is replaceable — you can switch clients, models, or vendors — while the projects, memory, tools, policy, and history stay on your machine, under your control.
 
 **Why use it?** Because most AI work loses everything between sessions. With Sidekick, one session's decisions, handoffs, and stored facts are retrievable by the next session — or by a completely different agent. Typical uses that the current implementation supports:
 
@@ -19,7 +19,7 @@ Sidekick is a self-hosted platform that gives AI assistants and agents durable i
 
 ## Refactor Status and Compatibility Disclosure
 
-> **Full disclosure:** Sidekick's tool runtime finished its modular handler migration. The descriptor registry, centralized dispatcher, request-scoped context, schema validation, source-aware policy, approval enforcement, redaction, and audit logging are the authoritative production execution path, and every tool handler is now owned by a descriptor family under `src/tools/families/`, the `data-utilities` module, or the Compute subsystem — `src/tools-legacy.js` owns **zero** production tool handlers. What remains in `src/tools-legacy.js` (~1,400 lines) is the tool policy/approval/audit engine, the legacy `TOOL_DEFS` ordering anchors, and compatibility re-exports kept for existing consumers; relocating those is routine follow-up, not a risk boundary. The broader platform convergence campaign (canonical project identity, event consumption, artifact custody, connector integration, and related slices) is still in progress — see [`docs/platform-roadmap.md`](docs/platform-roadmap.md) for what remains and [`docs/tool-architecture.md`](docs/tool-architecture.md) for the tool-runtime boundary.
+> **Full disclosure:** Sidekick's tool runtime finished its modular handler migration. The descriptor registry, centralized dispatcher, request-scoped context, schema validation, source-aware policy, approval enforcement, redaction, and audit logging are the authoritative production execution path, and every tool handler is now owned by a descriptor family under `src/tools/families/`, the `data-utilities` module, or the Compute subsystem — `src/tools-legacy.js` owns **zero** production tool handlers. What remains in `src/tools-legacy.js` (~1,500 lines) is the tool policy/approval/audit engine, the legacy `TOOL_DEFS` ordering anchors, compute pass-through wiring, and compatibility re-exports kept for existing consumers; relocating those is routine follow-up, not a risk boundary. The broader platform convergence campaign (canonical project identity, event consumption, artifact custody, connector integration, and related slices) is still in progress — see [`docs/platform-roadmap.md`](docs/platform-roadmap.md) for what remains and [`docs/tool-architecture.md`](docs/tool-architecture.md) for the tool-runtime boundary.
 
 Canonical MCP tool names are unprefixed, such as `bash`, `knowledge`, and `compute_jobs`. The runtime still recognizes older `sidekick_`-prefixed names as compatibility aliases, but new documentation, policies, and integrations should use the bare names.
 
@@ -188,7 +188,7 @@ Sidekick Compute enrolls authenticated worker agents and routes allowlisted `cha
 ### 🔒 Security-First Design
 Every tool output is automatically scanned and redacted for sensitive data (API keys, tokens, passwords). The dashboard has rate limiting, CSRF protection, and audit logging. The agent bridge is isolated and only accessible through the dashboard.
 
-### 🛠️ 108 Built-In Specialized Tools
+### 🛠️ 112 Built-In Specialized Tools
 Not just bash and file operations. Sidekick includes tools for:
 - GitHub integration and read-only CI/check-run inspection
 - Service and process management
@@ -231,7 +231,7 @@ Sidekick has used its own tools to test storage and recall behavior, investigate
 | **Media processing** | `ocr`, `media`, `transcribe` | OCR, video/audio conversion, transcription |
 | **Networking** | `tunnel`, `wireguard`, `nginx` | Cloudflare tunnels, VPN, reverse proxy |
 | **Web scraping from remote** | `web_fetch` bypasses local network restrictions | AI knows to use remote machine for fetching when needed |
-| **LLM on demand** | Cloud Groq for speed, local Ollama as fallback | AI knows which to use and when |
+| **LLM on demand** | Compute routes allowlisted inference across registered providers and models | AI can request inference without selecting credentials or endpoints |
 | **Distributed model jobs** | `compute_*` manages enrolled workers, providers, models, routing, jobs, and artifacts | AI can route allowlisted inference work without exposing arbitrary worker-side shell execution |
 | **File content search** | `search` uses ripgrep/grep for fast code search | AI can quickly find code patterns across the codebase |
 | **Git operations** | `git` provides structured git commands | AI can check status, diff, log, commit, push, pull safely |
@@ -277,7 +277,7 @@ Sidekick has used its own tools to test storage and recall behavior, investigate
 └────────────────────────────────────────────────────────┘
 ```
 
-*The Agent Bridge supports the Groq cloud API when `GROQ_API_KEY` is configured. Sidekick Compute workers are separate enrolled processes that connect to scoped `/compute/worker/*` routes on the MCP service; they are not additional always-on services inside the three-process core.*
+*The Agent Bridge sends inference through Compute. Provider bootstrap can register Ollama, Groq, and OpenAI-compatible providers, but private conversations remain on eligible local/trusted providers by default and fail closed rather than silently reaching the cloud. Sidekick Compute workers are separate enrolled processes that connect to scoped `/compute/worker/*` routes on the MCP service; they are not additional always-on services inside the three-process core.*
 
 ### Data Layer
 
@@ -293,13 +293,13 @@ Sidekick has used its own tools to test storage and recall behavior, investigate
   - `qwen2.5-coder:7b` — Default, optimized for code tasks
   - `llama3.1:8b` — General purpose reasoning
   - `nomic-embed-text` — Embedding model for semantic search
-- **Groq** (cloud) — Fast inference when `GROQ_API_KEY` is set
+- **Groq/OpenAI-compatible** (cloud) — Available when configured and permitted by Compute placement policy
 
 ## Services & Tools
 
 | Service | Port | Description |
 |---------|------|-------------|
-| **MCP Server** | 4097 | 108 built-in tools across 20 categories; approved generated tools may add runtime entries |
+| **MCP Server** | 4097 | 112 built-in tools across 20 categories; approved generated tools may add runtime entries |
 | **Dashboard** | 4098 | Web UI for system health, activity, data, memory, approvals, tools, Compute, agent tasks, and metrics |
 | **Agent Bridge** | 4099 | AI agent loop — LLM plans and calls MCP tools autonomously |
 | **Ollama** | 11434 | Local LLM inference (qwen2.5-coder:7b, llama3.1:8b, nomic-embed-text) |
@@ -312,7 +312,7 @@ All tools are exposed via the MCP server at `http://YOUR_REMOTE_IP:4097/mcp`.
 
 ### Tool Categories
 
-The built-in tools are organized into 20 categories. 105 live in the core registry; the six Data Pipeline utilities (`parse`, `extract`, `transform`, `diff`, `validate`, `template`) are provided by the bundled `data-utilities` module. Installing a capability pack adds its own tools to the same registry — the Developer pack adds `dev_repo_profile`, `dev_change_summary` and `dev_verify`:
+The built-in tools are organized into 20 categories. 106 live in the core registry; the six Data Pipeline utilities (`parse`, `extract`, `transform`, `diff`, `validate`, `template`) are provided by the bundled `data-utilities` module. Installing a capability pack adds its own tools to the same registry — the Developer pack adds `dev_repo_profile`, `dev_change_summary` and `dev_verify`:
 - **Core** — bash, tools, read, write, list, search, web_fetch, llm, respond
 - **Storage** — store, get, delete, resume, list_projects, get_by_project, redis
 - **Database** — db_schema, db_query, db_stats, db_backup, db_restore, db_export, log_query, db_search, db_migrate, db_diff, analytics
@@ -394,7 +394,7 @@ ORDER BY tc.sort_order, t.name
 
 To avoid confusion, it's important to understand what each component is:
 
-- **Sidekick** = The self-hosted agent platform: 105 built-in MCP tools (plus module- and pack-contributed tools) + persistent memory + knowledge base + Dashboard + Agent Bridge + metrics + approved generated capabilities + Sidekick Compute + capability packs
+- **Sidekick** = The self-hosted agent platform: 112 built-in MCP tools (plus module- and pack-contributed tools) + persistent memory + knowledge base + Dashboard + Agent Bridge + metrics + approved generated capabilities + Sidekick Compute + capability packs
 - **The assistant or agent** = Any compatible MCP client, coding assistant, or automation agent that uses Sidekick's platform
 - **Tool runtime** = The descriptor registry and dispatcher that validate, authorize, approve, execute, redact, and audit tool calls across MCP, dashboard, agent, scheduler, and generated-tool paths
 - **Agent Bridge** = Sidekick's autonomous task runner, accessed through the Dashboard and API
@@ -501,7 +501,7 @@ knowledge action="get" id=18
 
 The agent at `:4099` takes a natural-language goal and runs an autonomous loop:
 
-1. Sends goal + tool definitions to the LLM (Groq cloud or local Ollama)
+1. Sends goal + tool definitions to Compute for provider/model selection
 2. LLM responds with a tool call decision
 3. Bridge executes the tool via MCP
 4. Feeds result back to LLM
@@ -655,7 +655,7 @@ The deploy script automatically syncs `.env` to the remote machine if it exists 
 
 | Option | Description |
 |--------|-------------|
-| `-IP` | Remote machine IP address (default: `192.168.1.10`) |
+| `-IP` | Remote machine address (for example, `YOUR_REMOTE_IP`) |
 | `-InitialUser` | Initial SSH user for bootstrap (e.g., ubuntu, admin, root) |
 
 **First deploy:** The script prompts for the initial SSH user if not provided, then prompts for their password once. It then bootstraps the VM (creates sidekick user, installs Node.js, configures sudoers, installs services, installs SSH key, and opens firewall ports). After that, deploys are fully automated with no password required.
@@ -663,10 +663,10 @@ The deploy script automatically syncs `.env` to the remote machine if it exists 
 **Automation/CI:** Specify the initial user with `-InitialUser` to skip the interactive prompt:
 ```powershell
 # Windows
-.\deploy.ps1 -IP "192.168.1.10" -InitialUser "ubuntu"
+.\deploy.ps1 -IP "YOUR_REMOTE_IP" -InitialUser "ubuntu"
 
 # Linux/Mac
-./deploy.sh -IP 192.168.1.10 -InitialUser ubuntu
+./deploy.sh -IP YOUR_REMOTE_IP -InitialUser ubuntu
 ```
 
 ### Security Model
@@ -702,16 +702,22 @@ This follows the principle of least privilege: after initial setup, the sidekick
 | `SIDEKICK_APPROVAL_TTL_SECONDS` | `3600` | Maximum age of a pending approval; approval payloads require `SIDEKICK_SECRET_KEY` |
 | `SIDEKICK_APPROVAL_REQUIRED_TOOLS` | — | Comma-separated tools or risk selectors that always require approval |
 | `SIDEKICK_APPROVAL_EXEMPT_TOOLS` | — | Comma-separated tools or risk selectors exempt from approval |
-| `OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama API URL (local fallback) |
+| `OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama API URL for the local Compute provider |
 | `OLLAMA_MODEL` | `qwen2.5-coder:7b` | Default Ollama model |
-| `GROQ_API_KEY` | — | Groq API key for cloud LLM (empty = use local Ollama) |
-| `GROQ_MODEL` | `llama3-8b-8192` | Groq model name |
+| `GROQ_API_KEY` | — | Optional Groq credential; Compute registers the provider when set |
+| `GROQ_MODEL` | `llama-3.1-8b-instant` | Groq model name |
+| `OPENAI_API_KEY` | — | Optional OpenAI-compatible provider credential |
+| `OPENAI_BASE_URL` | — | Optional OpenAI-compatible provider endpoint |
+| `OPENAI_MODEL` | `gpt-4o-mini` | OpenAI-compatible chat model |
+| `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | OpenAI-compatible embedding model |
+| `SIDEKICK_DISABLE_PROVIDER_BOOTSTRAP` | `0` | Disable environment provider registration |
+| `SIDEKICK_DISABLE_OLLAMA_BOOTSTRAP` | `0` | Disable only the default Ollama provider registration |
 | `SIDEKICK_MAX_ITERATIONS` | `15` | Max agent loop iterations (safety limit) |
 | `SIDEKICK_AUTO_MEMORY` | `1` | Enable bounded automatic memory summaries |
 | `SIDEKICK_AUTO_MEMORY_MAX` | `500` | Max retained automatic memory entries |
 | `SIDEKICK_EMBEDDINGS` | `1` | Enable semantic memory embeddings when Ollama/Qdrant are available |
 | `SIDEKICK_EMBEDDING_MODEL` | `nomic-embed-text` | Ollama embedding model for semantic memory recall |
-| `SIDEKICK_AGENT_MODEL` | auto-detected, preferring `llama3.1` | Ollama model used by the Agent Bridge |
+| `SIDEKICK_AGENT_MODEL` | — | Optional Agent Bridge/Compute chat-model override; otherwise `OLLAMA_MODEL` is used |
 | `SIDEKICK_HEALTHCHECK_URL` | `https://github.com` | HTTPS endpoint used to verify outbound DNS and TLS connectivity |
 | `SIDEKICK_POSTGRES_URL` | — | Optional PostgreSQL connection string; overrides the discrete connection fields |
 | `SIDEKICK_REDIS_URL` | `redis://127.0.0.1:6379` | Redis connection string |

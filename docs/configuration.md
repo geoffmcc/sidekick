@@ -115,8 +115,8 @@ Tool policy defaults to `open` for backward compatibility. Use `restricted` for 
 
 ```env
 SIDEKICK_TOOL_POLICY=restricted
-SIDEKICK_AGENT_ALLOWED_TOOLS=sidekick_read,sidekick_search,sidekick_get,sidekick_respond
-SIDEKICK_BLOCKED_TOOLS=sidekick_db_restore,sidekick_evolve
+SIDEKICK_AGENT_ALLOWED_TOOLS=read,search,get,respond
+SIDEKICK_BLOCKED_TOOLS=db_restore,evolve
 ```
 
 Policy lists accept exact tool names and risk selectors such as `risk:high` or `risk:critical`. Source-specific variables are available for `MCP`, `DASHBOARD`, and `AGENT` sources, for example `SIDEKICK_AGENT_TOOL_POLICY` and `SIDEKICK_MCP_BLOCKED_TOOLS`.
@@ -124,7 +124,7 @@ Policy lists accept exact tool names and risk selectors such as `risk:high` or `
 Inspect the effective policy before changing lockdown settings:
 
 ```javascript
-sidekick_tools({ action: "policy", source: "mcp,dashboard,agent", name: "sidekick_bash", format: "json" })
+tools({ action: "policy", source: "mcp,dashboard,agent", name: "bash", format: "json" })
 ```
 
 The policy inspector reports whether each source/tool decision is allowed or blocked, the active mode, the matching allow/block selector when one applies, and whether approval is required.
@@ -145,8 +145,8 @@ Approval mode defaults to `off`, so allowed tools execute immediately. Use it wh
 SIDEKICK_SECRET_KEY=replace-with-a-strong-random-secret
 SIDEKICK_APPROVAL_MODE=risky
 SIDEKICK_APPROVAL_TTL_SECONDS=3600
-SIDEKICK_APPROVAL_REQUIRED_TOOLS=sidekick_evolve,sidekick_db_restore
-SIDEKICK_APPROVAL_EXEMPT_TOOLS=sidekick_bash
+SIDEKICK_APPROVAL_REQUIRED_TOOLS=evolve,db_restore
+SIDEKICK_APPROVAL_EXEMPT_TOOLS=bash
 SIDEKICK_AGENT_APPROVAL_MODE=strict
 ```
 
@@ -175,16 +175,16 @@ Two constraints are easy to trip over:
 
 ## Evolve Workflow Learning
 
-`sidekick_evolve` stores candidates, generated capabilities, validation results, usefulness counters, and generated-tool audit history in SQLite. Cleanup no longer deletes approved/rejected evidence by default because audit history is needed to explain why a capability exists or was deprecated.
+`evolve` stores candidates, generated capabilities, validation results, usefulness counters, and generated-tool audit history in SQLite. Cleanup no longer deletes approved/rejected evidence by default because audit history is needed to explain why a capability exists or was deprecated.
 
 Use lifecycle actions instead of deleting records:
 
 ```javascript
-sidekick_evolve({ action: "analyze" })
-sidekick_evolve({ action: "validate", id: "cand_..." })
-sidekick_evolve({ action: "approve", id: "cand_...", approver: "operator" })
-sidekick_evolve({ action: "promote", id: "cand_..." })
-sidekick_evolve({ action: "deprecate", id: "cand_...", reason: "unused" })
+evolve({ action: "analyze" })
+evolve({ action: "validate", id: "cand_..." })
+evolve({ action: "approve", id: "cand_...", approver: "operator" })
+evolve({ action: "promote", id: "cand_..." })
+evolve({ action: "deprecate", id: "cand_...", reason: "unused" })
 ```
 
 Trial and active generated tools are discoverable as `generated_<name>` after registry sync and MCP server startup (the older `sidekick_generated_<name>` alias form also resolves). Deprecated or rejected generated tools are removed from discovery but retain audit history.
@@ -208,11 +208,11 @@ Set `SIDEKICK_AUTO_MEMORY=0` to disable automatic memory. Increase or decrease `
 
 Memory storage has three lifecycle surfaces:
 
-- KV entries are key-value records. Use `sidekick_delete` to remove a KV key.
-- `sidekick_context` writes compatibility context entries such as decisions, problems, patterns, and `sess_...` sessions into the `context` document. Exact IDs can be recalled with `sidekick_context action="recall" query="<id>"`.
-- Structured memories live in the `memories` table. Use `sidekick_memory_manage` for lifecycle actions. `delete`, `disable`, `expire`, and `restore` also work for legacy context IDs such as `sess_...`; confirmation and auto-expiration actions are structured-memory-only and return a clear unsupported-ID error for legacy context entries.
+- KV entries are key-value records. Use `delete` to remove a KV key.
+- `context` writes compatibility context entries such as decisions, problems, patterns, and `sess_...` sessions into the `context` document. Exact IDs can be recalled with `context action="recall" query="<id>"`.
+- Structured memories live in the `memories` table. Use `memory_manage` for lifecycle actions. `delete`, `disable`, `expire`, and `restore` also work for legacy context IDs such as `sess_...`; confirmation and auto-expiration actions are structured-memory-only and return a clear unsupported-ID error for legacy context entries.
 
-Project handoffs use the `resume` document. Use `sidekick_resume action="check" project="<project>"` to resume pending work, `set` to leave a handoff, `clear` after completion, and `list` to audit active handoffs.
+Project handoffs use the `resume` document. Use `resume action="check" project="<project>"` to resume pending work, `set` to leave a handoff, `clear` after completion, and `list` to audit active handoffs.
 
 ## Useful Checks
 

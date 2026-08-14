@@ -1,7 +1,7 @@
 # Platform Roadmap
 
 Status: Residual completion roadmap (post-handoff convergence campaign)
-Verified date: 2026-08-12
+Verified date: 2026-08-14
 Supersedes: the 2026-08-05 three-track roadmap pinned to `d2db2658`.
 
 **Track B is complete.** B1–B9 have all landed: B9 (Capability Packs v1), B5
@@ -39,7 +39,7 @@ Track A is complete (PRs #236, #238).
 | # | Slice | Status | Bounded goal | Completion evidence |
 |---|---|---|---|---|
 | B1 | Dead legacy removal | **done** (#240) | Remove unreachable code from `tools-legacy.js` (legacy context block, `evolve` tail, orphans). | 1,163 dead lines removed; suite green; no export lost. |
-| B2 | Legacy handler extraction | **done** (#241–#245) | Extract the 67 legacy handlers in the documented dependency order. Each a reviewable slice. | Zero production handlers in `tools-legacy.js` (now ~1,440 lines of policy/approval/audit machinery, ordering anchors, and compatibility exports); 96 family-owned + 6 module-owned + 6 compute tools; no family imports legacy at init. |
+| B2 | Legacy handler extraction | **done** (#241–#245) | Extract the legacy handlers in the documented dependency order. Each a reviewable slice. | Zero production handlers in `tools-legacy.js` (now ~1,500 lines of policy/approval/audit machinery, ordering anchors, compute pass-through wiring, and compatibility exports); the current core registry has 106 `TOOL_DEFS` rows and the default module adds 6 tools; no family imports legacy at init. |
 | B3 | Canonical project identity | **done for this campaign** (#246, #255) | Register projects at execution creation, preserve scheduled project context, verify isolation, and run the confirmed source backfill. | Canonical execution registration and scheduled context are production-wired; project/isolation suites pass; dry-run and confirmed backfill both reported 40 rows across 9 source types and 18 projects. Broader memory/KV inference convergence remains separately classified residual work. |
 | B4 | Execution convergence | **done for this campaign** (#250, #252–#254) | Make the ledger authoritative for the scheduled/runbook runners; wire cancellation and checkpoints. | Cancel requests and checkpoint cursors are production-wired for scheduled/runbook paths; scheduler suite passes; deployed verification passed at `51e4505`. Broader runner convergence remains separately classified residual work. |
 | B5 | Event consumption | **done** | Delivery drainer + handler registry (`src/platform/event-drainer.js`), event vocabulary (`src/platform/event-vocabulary.js`), per-subscription backlog cap with auto-pause, fan-out moved into the append transaction, stale-claim recovery. | The drainer runs in the MCP process with four built-in failure consumers, so deliveries are claimed and offsets advance in production. `appendEvent` and its fan-out are one transaction — an event can no longer commit without its deliveries. An undrained subscription auto-pauses at `SIDEKICK_EVENT_BACKLOG_CAP` instead of growing without bound, closing the `POST /api/event-subscriptions` hazard. No schema change; no migration. Residual slice adds causation (`causation_id` from the execution-transition chain and the ambient delivery context), payload redaction on the delivery path with an explicit `accepts_unredacted` opt-in, a closed `sensitivity` vocabulary gated at fan-out, and publish-time `source` provenance validation. `test/platform-event-consumption.test.js` (26 checks). See `docs/platform-events.md`. |
@@ -118,7 +118,7 @@ Both boot paths (migrations-only and runtime kernel) produce identical
 ## Immediate next work
 
 Future work remains in the residual matrix above: **B6** (artifact custody
-convergence) and **B8** (compute/model deduplication) are still pending and are
-separate campaigns, as is the B7 fast-follow (connector health checks, per-call
-observability, mutating connector management, dashboard surface). Broader memory/KV project adapters and other
+convergence) and **B8** (compute/model deduplication) are complete; remaining work
+is the B7 fast-follow (connector health checks, per-call observability, mutating
+connector management, dashboard surface). Broader memory/KV project adapters and other
 foundation-to-production gaps also remain.

@@ -72,7 +72,7 @@ defaults**. The (non-secret) config file is JSON, validated on load:
 
 ```json
 {
-  "serverUrl": "http://10.0.0.5:4097",
+  "serverUrl": "http://YOUR_REMOTE_IP:4097",
   "nodeId": "node_…",
   "displayName": "lab-worker",
   "concurrency": 4,

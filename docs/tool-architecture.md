@@ -1,9 +1,9 @@
 # Tool Architecture
 
 Status: Current-state architecture
-Verified date: 2026-08-12
+Verified date: 2026-08-14
 
-Sidekick's built-in registry contains 105 tools (`TOOL_DEFS` rows), or 111 when
+Sidekick's built-in registry contains 106 tools (`TOOL_DEFS` rows), or 112 when
 the `data-utilities` module is enabled — the default on every standard
 deployment, since all three services provision built-in modules at startup.
 Installed capability packs add their own module-owned tools to the same
@@ -11,12 +11,11 @@ registry (the bundled Developer pack adds 3). Tools execute through one
 descriptor registry and one centralized dispatcher, whatever contributed them.
 
 The Track B legacy decomposition is **complete**: as of slice B-6,
-`src/tools-legacy.js` owns **zero production tool handlers**. Measured
-ownership: **96 family-owned tools** across 38 registered family files, **6
-module-owned tools** (`data-utilities`, registered through the module loader
-from a 39th family file), and **6 compute tools** whose handlers live in
+`src/tools-legacy.js` owns **zero production tool handlers**. Core handlers are
+owned by descriptor families, while the six `data-utilities` tools are
+registered through the module loader and the six compute tools have handlers in
 `src/compute/tools.js` behind pure pass-through wiring in `tools-legacy.js`.
-`src/tools-legacy.js` is now a ~1,440-line remnant holding the policy/approval
+`src/tools-legacy.js` is now a ~1,500-line remnant holding the policy/approval
 machinery, the registry-sync and tool-logging layer, the `TOOL_DEFS` ordering
 anchors, and compatibility re-exports of helpers that moved to families or
 shared modules. It is required by no descriptor family at module load.
@@ -47,7 +46,7 @@ Extracted descriptor-owned families live under `src/tools/families/` and are agg
 - `hashing.js` — `hash`. File and string checksum generation and verification. It uses the shared filesystem path-policy boundary for file reads.
 - `database-inspection.js` — `db_schema`, `db_query`, `db_stats`, `log_query`, `db_search`, `db_diff`. Read-only SQLite/Postgres inspection and snapshot comparison.
 - `database-admin.js` — `db_backup`, `db_restore`, `db_export`, `db_migrate`. Database backup/restore/export and schema migration (the mutation counterpart to `database-inspection.js`). Uses the shared filesystem path policy; `db_restore` is `critical` and `db_migrate` is `high` risk, gated by the dispatcher.
-- `inference.js` — `llm`, `embed`, `ollama`. LLM chat (Compute inference service, else Ollama/Groq), text embeddings, and Ollama model management. `sidekick_llm` is exported for direct callers: the `development`, `meta`, and `black-box` families import it, and `tools-legacy.js` re-imports it for `teach` until B-6.
+- `inference.js` — `llm`, `embed`, `ollama`. LLM chat and text embeddings use the Compute inference service; `ollama` remains a model-management surface. `sidekick_llm` is exported for direct callers: the `development`, `meta`, and `black-box` families import it, and `tools-legacy.js` re-imports it for `teach` until B-6.
 - `networking.js` — `tunnel`, `wireguard`, `nginx`. Cloudflare tunnels, WireGuard VPN, and Nginx reverse-proxy management. All `high` risk; shell-bound argument values are validated through `core/command-validation`.
 - `comms.js` — `notify`, `webhook`. Outbound Discord/Slack/email notifications and received-webhook access (the dashboard keeps its own separate webhook receiver).
 - `process-mgmt.js` — `process`, `service`, `archive`. Process management, systemd service control, and archive create/extract/list. `process` and `service` are `high` risk; command arguments are array-passed to execFileSync and output is redacted.
@@ -269,7 +268,7 @@ remains in `src/tools-legacy.js` is deliberate and bounded:
    `finalizeApprovalExecution`, recovery helpers), `logToolCall`, and the
    platform mirroring adapters. These are dispatcher dependencies, not tool
    handlers.
-2. **`TOOL_DEFS` ordering anchors** — the 102-row definition list that
+2. **`TOOL_DEFS` ordering anchors** — the 106-row definition list that
    preserves MCP catalog ordering compatibility.
 3. **Compute pass-through wiring** — the `TOOLS` map entries delegating the six
    `compute*` tools to `src/compute/tools.js`.

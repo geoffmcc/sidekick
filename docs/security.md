@@ -37,7 +37,7 @@ The dashboard includes:
 
 ## Command safety
 
-`sidekick_bash` blocks commands matching known dangerous patterns, including examples such as recursive root deletion, common flag-order and case variants, block-device writes, filesystem creation, fork-bomb pattern, curl/wget piped to shell, and recursive `chmod 777 /`.
+`bash` blocks commands matching known dangerous patterns, including examples such as recursive root deletion, common flag-order and case variants, block-device writes, filesystem creation, fork-bomb pattern, curl/wget piped to shell, and recursive `chmod 777 /`.
 
 This is a guardrail, not a full sandbox. It will not detect every destructive command. Avoid granting Sidekick broader sudo access than necessary.
 
@@ -49,8 +49,8 @@ Set `SIDEKICK_TOOL_POLICY=restricted` to block high and critical risk tools unle
 
 ```env
 SIDEKICK_AGENT_TOOL_POLICY=restricted
-SIDEKICK_AGENT_ALLOWED_TOOLS=sidekick_read,sidekick_search,sidekick_get,sidekick_respond
-SIDEKICK_BLOCKED_TOOLS=sidekick_db_restore,sidekick_evolve
+SIDEKICK_AGENT_ALLOWED_TOOLS=read,search,get,respond
+SIDEKICK_BLOCKED_TOOLS=db_restore,evolve
 ```
 
 Policy lists accept tool names and risk selectors such as `risk:high` or `risk:critical`. Explicit blocklists win over allowlists.
@@ -60,7 +60,7 @@ High and critical tools are not removed from the project because trusted operato
 Use the tool policy inspector to verify effective access before and after changing environment variables:
 
 ```javascript
-sidekick_tools({ action: "policy", source: "mcp,dashboard,agent", name: "sidekick_bash", format: "json" })
+tools({ action: "policy", source: "mcp,dashboard,agent", name: "bash", format: "json" })
 ```
 
 It reports the policy decision, active mode, matching selector when applicable, and approval requirement for each inspected source/tool pair.
@@ -142,7 +142,7 @@ Paths are canonicalized before they are compared, so a symlink is judged by wher
 
 Three limits are worth stating plainly. A hard link is not a symlink and has no separate target to resolve, so a hard link created inside an allowed root to a file outside it reads as an ordinary file in that root and is permitted; keep allowed roots on filesystems where untrusted users cannot create links to sensitive files. Comparison is case-sensitive, so on a case-insensitive filesystem — a `/mnt/c` DrvFS mount under WSL, for example — a differently-cased spelling of a denied root is not recognised; keep roots on a case-sensitive filesystem where this matters. And this is a check on the path, performed before the operation: it does not close the window between the check and the subsequent filesystem access, so a path that is replaced in that interval can still be followed.
 
-The guard applies to direct path arguments on file, archive, search, diff, database export/backup/restore, media, watch, snapshot, changelog, and ops tools. It does not parse arbitrary commands passed to shell-capable tools, so keep `sidekick_bash`, sandbox execution, deploy workflows, and other high-power tools behind tool policy and approval.
+The guard applies to direct path arguments on file, archive, search, diff, database export/backup/restore, media, watch, snapshot, changelog, and ops tools. It does not parse arbitrary commands passed to shell-capable tools, so keep `bash`, sandbox execution, deploy workflows, and other high-power tools behind tool policy and approval.
 
 ## Approval queue
 
@@ -154,8 +154,8 @@ Set `SIDEKICK_APPROVAL_MODE=risky` to queue critical-risk tools for dashboard ap
 SIDEKICK_SECRET_KEY=replace-with-a-strong-random-secret
 SIDEKICK_APPROVAL_MODE=risky
 SIDEKICK_APPROVAL_TTL_SECONDS=3600
-SIDEKICK_APPROVAL_REQUIRED_TOOLS=sidekick_evolve,sidekick_db_restore
-SIDEKICK_APPROVAL_EXEMPT_TOOLS=sidekick_bash
+SIDEKICK_APPROVAL_REQUIRED_TOOLS=evolve,db_restore
+SIDEKICK_APPROVAL_EXEMPT_TOOLS=bash
 SIDEKICK_AGENT_APPROVAL_MODE=strict
 ```
 
@@ -191,14 +191,14 @@ The supplied sudoers file allows the `sidekick` user to run specific systemctl a
 
 ## Secret storage
 
-`sidekick_secret` provides AES-256-GCM encrypted credential management and requires `SIDEKICK_SECRET_KEY`. Store the secret key outside the repository and include it in your host secret management or systemd environment strategy. API tokens such as the GitHub PAT used by `sidekick_github` belong in `sidekick_secret` as encrypted secrets, not in KV memory.
+`secret` provides AES-256-GCM encrypted credential management and requires `SIDEKICK_SECRET_KEY`. Store the secret key outside the repository and include it in your host secret management or systemd environment strategy. API tokens such as the GitHub PAT used by `github` belong in `secret` as encrypted secrets, not in KV memory.
 
 ## Configuration and secret scanning
 
-Use `sidekick_security_scan` for a read-only audit before deployments or after configuration changes:
+Use `security_scan` for a read-only audit before deployments or after configuration changes:
 
 ```javascript
-sidekick_security_scan({ path: "/home/sidekick/sidekick", format: "text" })
+security_scan({ path: "/home/sidekick/sidekick", format: "text" })
 ```
 
 The scanner checks for tracked sensitive files, private-key and high-confidence credential signatures, hardcoded sensitive configuration values or fallbacks, generated credential filenames, runtime `.env` security keys, and permissive sensitive-file modes. It reports paths, key names, line numbers, and severity only; it never returns matched values. Scans obey global and source-specific path policy, skip denied descendants, and are bounded by `max_files`.

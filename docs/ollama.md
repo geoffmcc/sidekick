@@ -1,6 +1,6 @@
 # Ollama Setup
 
-Sidekick can use Ollama as a local LLM provider/fallback.
+Sidekick can use Ollama as a local Compute provider for LLM inference and embeddings.
 
 ## Recommended Default Model
 

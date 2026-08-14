@@ -214,7 +214,7 @@ Current search is a SQLite `LIKE` search across title, content, and tags. It is 
 
 ## 7. Tool System
 
-Current `main` contains 108 built-in tools across 20 categories: 102 in the core registry plus 6 provided by the bundled `data-utilities` module. Canonical MCP names are unprefixed; older `sidekick_`-prefixed forms are compatibility aliases. Approved trial/active generated capabilities may add runtime tools beyond that built-in count.
+Current `main` contains 112 built-in tools across 20 categories: 106 in the core registry plus 6 provided by the bundled `data-utilities` module. Canonical MCP names are unprefixed; older `sidekick_`-prefixed forms are compatibility aliases. Approved trial/active generated capabilities may add runtime tools beyond that built-in count.
 
 The authoritative execution path is descriptor- and dispatcher-based:
 
@@ -304,14 +304,12 @@ Task lifecycle:
 7. The loop ends on `done`, error, or `SIDEKICK_MAX_ITERATIONS`.
 8. A transcript is written to `data/conversations/<taskId>.json`.
 
-Current LLM behavior in `agent.js` is code-truth specific:
-
-- The agent tries local Ollama first.
-- If Ollama fails and `GROQ_API_KEY` is set, it falls back to Groq.
-- It emits provider and fallback events to the stream.
-- It detects installed Ollama models and prefers coding models such as `qwen2.5-coder`, then general models, then a fallback.
-
-The `llm` tool selects among the configured Compute providers; callers may request a provider explicitly.
+Current LLM behavior in `agent.js` is code-truth specific: all Agent Bridge
+inference goes through Compute's inference service and placement layer. Compute
+selects eligible registered providers and models, emits provider and fallback
+events to the stream, and fails closed when classification or trust policy
+leaves no eligible candidate. The `llm` tool also routes through this authority;
+callers do not select credentials or endpoints directly.
 
 The Agent Bridge also loads and executes:
 

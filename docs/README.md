@@ -2,7 +2,7 @@
 
 Sidekick is a self-hosted Model Context Protocol server and autonomous assistant platform that gives compatible clients and agents a persistent remote working environment. These docs describe the current source tree and migrations, while runtime operational knowledge lives in the SQLite-backed knowledge base.
 
-The project currently exposes three core Node.js services and 108 built-in MCP tools across 20 categories (102 in the core registry plus 6 from the bundled `data-utilities` module). Approved trial/active generated capabilities may add runtime tools beyond that built-in count. Tool metadata, categories, risk labels, enabled/deprecated state, tool logs, key-value data, structured memories, and the knowledge base are stored in SQLite.
+The project currently exposes three core Node.js services and 112 built-in MCP tools across 20 categories (106 in the core registry plus 6 from the bundled `data-utilities` module). Approved trial/active generated capabilities may add runtime tools beyond that built-in count. Tool metadata, categories, risk labels, enabled/deprecated state, tool logs, key-value data, structured memories, and the knowledge base are stored in SQLite.
 
 The tool execution boundary is modular and authoritative under `src/tools/`, and handler extraction is complete: every built-in handler is owned by a descriptor family, the `data-utilities` module, or the Compute subsystem, with `src/tools-legacy.js` retaining only policy/approval/audit machinery, ordering anchors, and compatibility exports. See `tool-architecture.md` for the boundary details.
 
