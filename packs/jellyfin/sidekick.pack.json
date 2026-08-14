@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "name": "jellyfin",
+  "display_name": "Jellyfin",
+  "version": "1.0.0",
+  "description": "Governed Jellyfin server discovery, playback diagnosis, library and maintenance intelligence over administrator-named profiles.",
+  "publisher": "Sidekick",
+  "compatibility": { "sidekick": ">=1.0.0" },
+  "modules": [{ "name": "jellyfin-tools", "path": "modules/jellyfin-tools", "entry_point": "entry.js", "config_from_pack": true }],
+  "workflows": [
+    { "path": "workflows/health.json" },
+    { "path": "workflows/playback-diagnose.json" },
+    { "path": "workflows/maintenance-preflight.json" },
+    { "path": "workflows/upgrade-readiness.json" },
+    { "path": "workflows/incident.json" }
+  ],
+  "knowledge": [
+    { "path": "knowledge/operating.md", "title": "Jellyfin pack: operating model", "category": "operations", "tags": ["jellyfin", "operations"] },
+    { "path": "knowledge/security.md", "title": "Jellyfin pack: profiles and safety", "category": "operations", "tags": ["jellyfin", "security", "tls"] },
+    { "path": "knowledge/playback.md", "title": "Jellyfin pack: playback diagnosis", "category": "operations", "tags": ["jellyfin", "playback", "transcoding"] },
+    { "path": "knowledge/maintenance.md", "title": "Jellyfin pack: maintenance and storage safety", "category": "operations", "tags": ["jellyfin", "maintenance", "storage"] }
+  ],
+  "requires": { "tools": [], "optional_tools": ["secret", "proxmox"] },
+  "configuration": {
+    "schema": {
+      "type": "object",
+      "properties": {
+        "allow_insecure_http": { "type": "boolean", "default": false },
+        "allow_destructive": { "type": "boolean", "default": false },
+        "protected_resources": { "type": "array", "items": { "type": "object", "additionalProperties": false, "properties": { "kind": { "type": "string" }, "id": { "type": "string" }, "name": { "type": "string" } } } },
+        "profiles": {
+          "type": "object", "additionalProperties": { "type": "object", "additionalProperties": false,
+            "properties": {
+              "endpoint": { "type": "string" }, "api_key_ref": { "type": "string" },
+              "ca_pem": { "type": "string" }, "ca_secret_ref": { "type": "string" },
+              "allow_insecure_http": { "type": "boolean" }, "request_timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 120000 }, "default": { "type": "boolean" }, "allow_writes": { "type": "boolean" }
+            }, "required": ["endpoint", "api_key_ref"]
+          }
+        }
+      }, "additionalProperties": false
+    },
+    "defaults": { "allow_insecure_http": false, "allow_destructive": false, "profiles": {} }
+  }
+}

@@ -234,6 +234,10 @@ Currently bundled:
   execution, HTTP, Git and Proxmox capabilities rather than reimplementing them,
   and enforces a hard boundary between the public repository and an external
   private research workspace. See `docs/security-research-pack.md`.
+- **Jellyfin** (`packs/jellyfin`) — named-profile Jellyfin discovery, bounded
+  playback diagnosis, library/task inspection, maintenance preflight and
+  governed scheduled-task operations. It keeps host, storage, GPU and
+  hypervisor questions in their appropriate capability packs.
 
 ## Workflow definitions
 
