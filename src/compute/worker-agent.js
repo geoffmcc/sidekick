@@ -618,14 +618,14 @@ async function executeJob(job, shouldCancel = async () => false) {
     return { embedding: deterministicEmbedding(text), model: payload.model || SYNTHETIC_MODEL };
   }
   if (process.env.OLLAMA_URL && (payload.backend === "ollama" || payload.provider === "ollama")) {
-    return ollamaGenerate(payload);
+    return job.jobType === "chat" ? ollamaChat(payload) : ollamaGenerate(payload);
   }
   // Fabricated content must never be returned as a real result. Previously any
   // chat/generate job that did not explicitly name the ollama backend fell
   // through to `mock:<prompt>` and completed as a SUCCESS — an answer the
   // caller had no way to tell apart from a real one.
   if (!isSyntheticRequest(payload)) {
-    if (process.env.OLLAMA_URL) return ollamaGenerate(payload);
+    if (process.env.OLLAMA_URL) return job.jobType === "chat" ? ollamaChat(payload) : ollamaGenerate(payload);
     throw new Error(
       "No inference backend on this worker: set OLLAMA_URL (or request the ollama backend) to serve " +
       `this job. The "${SYNTHETIC_MODEL}" model is a test fixture and is only used when requested by name.`
@@ -663,6 +663,34 @@ async function ollamaGenerate(payload) {
   const result = await httpRequest("POST", endpoint.href, body, {}, { timeoutMs: OLLAMA_REQUEST_TIMEOUT_MS });
   if (result.status !== 200) throw new Error(`Ollama request failed: ${result.status}`);
   return { content: result.data.response || "", model: payload.model, provider: "ollama" };
+}
+
+async function ollamaChat(payload) {
+  const endpoint = new URL("/api/chat", process.env.OLLAMA_URL);
+  const messages = Array.isArray(payload.messages) && payload.messages.length
+    ? payload.messages.map(message => ({ role: message.role, content: String(message.content || "") }))
+    : [{ role: "user", content: String(payload.prompt || "") }];
+  if (payload.system && messages[0]?.role !== "system") {
+    messages.unshift({ role: "system", content: String(payload.system) });
+  }
+  const body = {
+    model: payload.model,
+    messages,
+    stream: false,
+    // Structured planning and normal Compute chat calls need visible content;
+    // thinking is opt-in so it cannot consume the planner's JSON budget.
+    think: payload.think === undefined ? false : Boolean(payload.think),
+    ...(payload.format ? { format: payload.format } : {}),
+    options: { num_predict: resolveOutputTokenBudget({ maxTokens: payload.maxTokens, outputBudget: payload.outputBudget }) },
+  };
+  const result = await httpRequest("POST", endpoint.href, body, {}, { timeoutMs: OLLAMA_REQUEST_TIMEOUT_MS });
+  if (result.status !== 200) throw new Error(`Ollama chat request failed: ${result.status}`);
+  return {
+    content: result.data.message?.content || result.data.response || "",
+    model: payload.model,
+    provider: "ollama",
+    finishReason: result.data.done_reason || null,
+  };
 }
 
 function deterministicEmbedding(text) {
