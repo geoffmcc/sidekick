@@ -6,7 +6,6 @@
 
 const inferenceService = require("./inference-service");
 const jobManager = require("./job-manager");
-const workerManager = require("./worker-manager");
 const { redactSensitive } = require("../redact");
 
 const POLL_INTERVAL_MS = 250;
@@ -18,16 +17,6 @@ let inFlight = 0;
 function isDirectInferenceJob(job) {
   return (job.jobType === "chat" || job.jobType === "generate") &&
     job.requestPayload && job.requestPayload.async === true;
-}
-
-// Worker-backed Ollama is authoritative when an enrolled worker advertises
-// the real executor. Direct-provider execution remains the safe fallback for
-// installations that have not enabled Ollama on a worker yet.
-function hasEligibleWorker(job) {
-  return workerManager.listWorkers().some(worker =>
-    (worker.state === "online" || worker.state === "degraded") &&
-    jobManager.workerCanRunJob(worker, job)
-  );
 }
 
 async function execute(claimed) {
@@ -104,8 +93,7 @@ async function runChatToCompletion(job, payload) {
 function runOnce() {
   if (inFlight >= MAX_CONCURRENCY) return;
   const jobs = jobManager.listJobs({ status: "queued", limit: 50 })
-    .filter(isDirectInferenceJob)
-    .filter(job => !hasEligibleWorker(job));
+    .filter(isDirectInferenceJob);
   for (const job of jobs) {
     if (inFlight >= MAX_CONCURRENCY) break;
     const claimed = jobManager.claimDirectJob(job.jobId, {
