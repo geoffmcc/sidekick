@@ -133,7 +133,8 @@ setTimeout(async () => {
       const enabled = await makeRequest('POST', `/api/connectors/${connectorId}/enable`, {});
       assert.strictEqual(enabled.status, 200, 'Connector enable should succeed');
       const health = await makeRequest('GET', `/api/connectors/${connectorId}/health`);
-      assert.strictEqual(health.status, 200, 'Connector health reporting should succeed');
+      assert.strictEqual(health.status, 502, 'Unsupported connector health should fail explicitly');
+      assert.strictEqual(health.data.ok, false, 'Unsupported connector health should not report success');
       assert.strictEqual(health.data.probe_execution, 'adapter-owned', 'Dashboard health should not perform arbitrary network probes');
       const events = await makeRequest('GET', `/api/connectors/${connectorId}/events?limit=10`);
       assert.strictEqual(events.status, 200, 'Connector events should be reportable');
@@ -720,6 +721,22 @@ setTimeout(async () => {
       assert.strictEqual(tool.category, 'operational', 'Tool calls should be operational');
       assert.strictEqual(fact.importance, 'high', 'Importance should derive from confidence');
       assert.strictEqual(tool.source_tool, 'sidekick_alpha', 'Should expose source tool metadata');
+
+      const disabled = await makeRequest('POST', '/api/memories/mem-dashboard-fact/disable');
+      assert.strictEqual(disabled.status, 200, 'Disable should return 200');
+      assert.strictEqual(disabled.data.ok, true, 'Disable should succeed');
+
+      const enabled = await makeRequest('POST', '/api/memories/mem-dashboard-fact/enable');
+      assert.strictEqual(enabled.status, 200, 'Enable should return 200');
+      assert.strictEqual(enabled.data.ok, true, 'Enable should use the canonical lifecycle service');
+      assert.strictEqual(dbStore.getMemoryById('mem-dashboard-fact').enabled, true, 'Enable should restore an operationally disabled memory');
+
+      const deleted = await makeRequest('DELETE', '/api/memories/mem-dashboard-fact');
+      assert.strictEqual(deleted.status, 200, 'Delete should return 200');
+      assert.strictEqual(deleted.data.ok, true, 'Delete should soft-delete through the lifecycle service');
+      const deletedMemory = dbStore.getMemoryById('mem-dashboard-fact');
+      assert.strictEqual(deletedMemory.state, 'deleted', 'Dashboard delete should preserve the tombstone state');
+      assert.strictEqual(deletedMemory.enabled, false, 'Deleted memories should not remain enabled');
       console.log('Passed\n');
     }
 

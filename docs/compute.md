@@ -13,9 +13,11 @@ Compute jobs are limited to the versioned job contract in `src/compute/job-contr
 
 Supported distributed executors are allowlisted:
 
-- `mock.inference`
 - `ollama.inference`
 - `openvino.text_embedding`
+
+The deterministic mock executor is test-only and is never advertised or
+accepted by production services.
 
 Job payloads reject command-like keys such as `command`, `argv`, `executable`, and `shell`. Unsupported job types such as `custom` and `transcription` are rejected by the HTTP API and job manager.
 

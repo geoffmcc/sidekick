@@ -65,7 +65,7 @@ async function test(name, fn) {
   }
 }
 
-const create = (args) => callMcpTool("sidekick_compute_jobs", { action: "create", ...args });
+const create = (args, options) => callMcpTool("sidekick_compute_jobs", { action: "create", ...args }, options);
 const getJob = (job_id) => callMcpTool("sidekick_compute_jobs", { action: "get", job_id });
 const body = (res) => JSON.parse(res.content[0].text);
 
@@ -123,6 +123,15 @@ async function main() {
   await test("create: data_classification defaults to private when omitted", async () => {
     const j = body(await create({ job_type: "embeddings", request_payload: { input: "hello" } }));
     assert.strictEqual(j.dataClassification, "private");
+  });
+
+  await test("identity: execution project is propagated and scopes the job", async () => {
+    const j = body(await create({ job_type: "embeddings", request_payload: { input: "project scope" } }, { project: "SideKick" }));
+    assert.strictEqual(j.project, "sidekick");
+    const readback = body(await callMcpTool("sidekick_compute_jobs", { action: "get", job_id: j.jobId }, { project: "sidekick" }));
+    assert.strictEqual(readback.project, "sidekick");
+    const denied = await callMcpTool("sidekick_compute_jobs", { action: "get", job_id: j.jobId }, { project: "other-project" });
+    assert.ok(denied.isError, "cross-project job access must be rejected");
   });
 
   await test("routing: OpenVINO job is eligible for a worker advertising the executor type", async () => {

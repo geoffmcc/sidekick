@@ -2,6 +2,7 @@ const compute = require("./index");
 const { TRUST_LEVELS, DATA_CLASSIFICATIONS } = require("./errors");
 const { validateEndpoint } = require("./endpoint-guard");
 const toolContext = require("../tools/context");
+const { canonicalizeProjectName } = require("../core/project-identity");
 
 // Creating a provider grants CONNECTIVITY. It does not grant authority to
 // receive sensitive data — that is a separate, explicit promotion via update.
@@ -358,19 +359,31 @@ async function sidekick_compute_jobs({ action, job_id, ...args }) {
     const context = toolContext.getExecutionContext();
     const source = context.source || "mcp";
     const actor = context.actor || source;
+    const contextProject = context.project ? canonicalizeProjectName(context.project) : null;
+    const requestedProject = args.project ? canonicalizeProjectName(args.project) : null;
+    if (contextProject && requestedProject && contextProject !== requestedProject) {
+      return err("project scope does not match the execution context");
+    }
+    const scopedProject = requestedProject || contextProject || null;
+    const assertJobScope = (job) => {
+      if (contextProject && (!job || canonicalizeProjectName(job.project || "") !== contextProject)) {
+        throw new Error("job is outside the execution project scope");
+      }
+      return job;
+    };
     switch (action) {
       case "list": return ok(compute.jobManager.listJobs({
         status: args.status,
         jobType: args.job_type,
         capability: args.capability,
-        project: args.project,
+        project: scopedProject,
         providerId: args.provider_id,
         workerId: args.worker_id,
         limit: args.limit,
       }));
       case "get": {
         if (!job_id) return err("job_id required");
-        const j = compute.jobManager.getJob(job_id);
+        const j = assertJobScope(compute.jobManager.getJob(job_id));
         return j ? ok(j) : err("Job not found");
       }
       case "create": {
@@ -410,7 +423,7 @@ async function sidekick_compute_jobs({ action, job_id, ...args }) {
             timeoutMs: args.timeout_ms,
             maxAttempts: args.max_retries === undefined ? undefined : args.max_retries + 1,
             idempotencyKey: args.idempotency_key,
-            project: args.project,
+            project: scopedProject,
             source,
           });
           return ok(j);
@@ -436,6 +449,7 @@ async function sidekick_compute_jobs({ action, job_id, ...args }) {
       case "stats": return ok(compute.jobManager.getJobStats());
       case "artifacts": {
         if (!job_id) return err("job_id required");
+        assertJobScope(compute.jobManager.getJob(job_id));
         return ok(compute.jobManager.listArtifacts(job_id));
       }
       case "reconcile_artifact_custody": {

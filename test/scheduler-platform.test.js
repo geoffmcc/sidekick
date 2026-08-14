@@ -374,6 +374,7 @@ console.log('Running Scheduler Platform Tests...\n');
       `const testDb = require(${JSON.stringify(path.join(__dirname, '..', 'src', 'db'))});`,
       "const row = testDb.getDb().prepare(\"SELECT execution_id FROM platform_executions WHERE operation_type = 'runbook_execution' AND state = 'running' ORDER BY updated_at DESC LIMIT 1\").get();",
       "kernel.requestExecutionCancel(row.execution_id, { source: 'test', reason: 'mid-run cancel' });",
+      "testDb.getDb().close();",
     ].join('\n'));
     result = await TOOLS.runbook({ action: 'create', name: 'mid-run cancel runbook', steps: [
       { name: 'request cancel', command: `node ${JSON.stringify(cancelScript)}` },

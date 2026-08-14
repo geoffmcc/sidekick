@@ -26,6 +26,7 @@ const blackbox = require("./blackbox");
 const predictEngine = require("./predict");
 const platformKernel = require("./platform/kernel");
 const compute = require("./compute");
+const { probeConnector } = require("./connectors/health");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const PORT = parseInt(process.env.SIDEKICK_DASHBOARD_PORT || "4098", 10);
@@ -1135,10 +1136,16 @@ app.get("/api/connectors/:connectorId", (req, res) => {
   res.json({ ok: true, connector, events: platformKernel.listConnectorEvents(connector.connector_id, req.query.event_limit) });
 });
 
-app.get("/api/connectors/:connectorId/health", (req, res) => {
+app.get("/api/connectors/:connectorId/health", async (req, res) => {
   const connector = platformKernel.getConnector(req.params.connectorId);
   if (!connector) return res.status(404).json({ ok: false, error: "connector not found" });
-  res.json({ ok: true, connector_id: connector.connector_id, state: connector.state, health: connector.health, last_health_check_at: connector.last_health_check_at, probe_execution: "adapter-owned" });
+  try {
+    const health = await probeConnector(connector);
+    const recorded = platformKernel.recordConnectorHealth(connector.connector_id, health);
+    res.status(recorded.ok ? 200 : 502).json({ ok: recorded.ok, connector_id: recorded.connector.connector_id, state: recorded.connector.state, health: recorded.health, last_health_check_at: recorded.connector.last_health_check_at, probe_execution: "adapter-owned" });
+  } catch (error) {
+    res.status(502).json({ ok: false, connector_id: connector.connector_id, error: "connector_health_failed" });
+  }
 });
 
 app.get("/api/connectors/:connectorId/events", (req, res) => {
@@ -2302,15 +2309,9 @@ app.post("/api/memories/:id/disable", (req, res) => {
 
 app.post("/api/memories/:id/enable", (req, res) => {
   try {
-    const db = dbStore.getDb();
-    // ISO, matching how every other writer stores updated_at. datetime('now')
-    // would write a space-separated value that ISO range queries mis-order.
-    const result = db.prepare(`
-      UPDATE memories SET enabled = 1, updated_at = ?
-      WHERE id = ?
-    `).run(new Date().toISOString(), req.params.id);
+    const success = dbStore.enableMemory(req.params.id);
     auditLog(req, "memory_enable", { id: req.params.id });
-    res.json({ ok: result.changes > 0 });
+    res.json({ ok: success });
   } catch (error) {
     res.json({ ok: false, error: error.message });
   }
@@ -2318,10 +2319,9 @@ app.post("/api/memories/:id/enable", (req, res) => {
 
 app.delete("/api/memories/:id", (req, res) => {
   try {
-    const db = dbStore.getDb();
-    const result = db.prepare(`DELETE FROM memories WHERE id = ?`).run(req.params.id);
-    auditLog(req, "memory_delete", { id: req.params.id });
-    res.json({ ok: result.changes > 0 });
+    const success = dbStore.softDeleteMemory(req.params.id, "dashboard_delete");
+    auditLog(req, "memory_delete", { id: req.params.id, soft_deleted: success });
+    res.json({ ok: success });
   } catch (error) {
     res.json({ ok: false, error: error.message });
   }

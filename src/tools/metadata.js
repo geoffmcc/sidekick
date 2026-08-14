@@ -119,8 +119,8 @@ const TOOL_RISK = {
   // A workflow run dispatches governed tool calls; each step's own tool risk
   // still applies on top of this at dispatch time.
   workflow: "high",
-  // Read-only inspection of the connector authority; no mutation, no secrets.
-  connector: "low",
+  // Health probes update connector state and emit health evidence events.
+  connector: "medium",
 };
 
 const TOOL_CATEGORIES = {

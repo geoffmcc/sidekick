@@ -104,6 +104,18 @@ test("CR.6: checkCapability with project scope", () => {
   assert.strictEqual(notFound, null);
 });
 
+test("CR.6a: capability project scope uses canonical project identity", () => {
+  platformKernel.grantCapability({
+    actor_id: "agent-canonical-project",
+    capability: "deploy",
+    project_id: "Sidekick-Production",
+    granted_by: "test",
+  });
+  const found = platformKernel.checkCapability("agent-canonical-project", "deploy", "sidekick_production");
+  assert.ok(found, "canonical equivalent project should resolve the capability grant");
+  assert.strictEqual(found.project_id, "sidekick_production");
+});
+
 // CR.7: platformGuard blocks when capability missing
 test("CR.7: platformGuard blocks when capability missing", () => {
   const guard = platformKernel.platformGuard(null, null, {

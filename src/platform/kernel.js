@@ -1291,18 +1291,19 @@ function grantCapability(input = {}) {
   ensurePlatformKernelSchema();
   const capId = input.capability_id || newId("cap");
   const ts = input.granted_at || nowIso();
+  const projectId = input.project_id == null ? null : normalizeProjectId(input.project_id);
   const db = dbStore.getDb();
   db.prepare(`
     INSERT INTO platform_capabilities (capability_id, actor_id, capability, project_id, granted_by, granted_at, expires_at, metadata_json)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(capId, input.actor_id, input.capability, input.project_id || null, input.granted_by || null, ts, input.expires_at || null, json(input.metadata || {}));
+  `).run(capId, input.actor_id, input.capability, projectId, input.granted_by || null, ts, input.expires_at || null, json(input.metadata || {}));
   appendEvent({
     event_type: "capability.granted",
     source: input.source || "platform",
     actor_id: input.granted_by || "system",
     subject_type: "capability",
     subject_id: capId,
-    project_id: input.project_id,
+    project_id: projectId,
     payload: { actor_id: input.actor_id, capability: input.capability, expires_at: input.expires_at || null },
     correlation_id: capId,
   });
@@ -1331,9 +1332,10 @@ function revokeCapability(capabilityId, details = {}) {
 function checkCapability(actorId, capability, projectId) {
   ensurePlatformKernelSchema();
   const ts = nowIso();
+  const canonicalProjectId = projectId == null ? null : normalizeProjectId(projectId);
   const conditions = ["actor_id = ?", "capability = ?", "revoked_at IS NULL"];
   const params = [actorId, capability];
-  if (projectId) { conditions.push("(project_id = ? OR project_id IS NULL)"); params.push(projectId); }
+  if (canonicalProjectId) { conditions.push("(project_id = ? OR project_id IS NULL)"); params.push(canonicalProjectId); }
   else { conditions.push("project_id IS NULL"); }
   conditions.push("(expires_at IS NULL OR expires_at > ?)");
   params.push(ts);

@@ -14,6 +14,8 @@
 // `hasAuth`.
 
 const { z } = require("zod");
+const platformKernel = require("../../platform/kernel");
+const { probeConnector } = require("../../connectors/health");
 
 let kernel = null;
 try { kernel = require("../../platform/kernel"); } catch { kernel = null; }
@@ -52,7 +54,15 @@ async function sidekick_connector({ action = "list", connector_id, type, state, 
       const events = kernel.listConnectorEvents(connector_id, Number.isInteger(limit) ? limit : 20);
       return { content: [{ type: "text", text: JSON.stringify({ events }, null, 2) }] };
     }
-    return { content: [{ type: "text", text: "Unknown action: " + action + ". Valid: list, get, events" }], isError: true };
+    if (action === "health") {
+      if (!connector_id) return { content: [{ type: "text", text: "connector_id required" }], isError: true };
+      const connector = kernel.getConnector(connector_id);
+      if (!connector) return { content: [{ type: "text", text: "Connector not found" }], isError: true };
+      const health = await probeConnector(connector);
+      const recorded = platformKernel.recordConnectorHealth(connector.connector_id, health);
+      return { content: [{ type: "text", text: JSON.stringify({ connector: safeConnector(recorded.connector), health: recorded.health }, null, 2) }], isError: !recorded.ok };
+    }
+    return { content: [{ type: "text", text: "Unknown action: " + action + ". Valid: list, get, events, health" }], isError: true };
   } catch (e) {
     return { content: [{ type: "text", text: "connector error: " + e.message }], isError: true };
   }
@@ -61,22 +71,22 @@ async function sidekick_connector({ action = "list", connector_id, type, state, 
 const descriptors = Object.freeze([
   Object.freeze({
     name: "connector",
-    description: "Inspect the platform connector authority: list registered connectors (GitHub, ...), get one by id, or read recent lifecycle events. Read-only; credential references are never exposed (only has_secret_ref)",
+    description: "Inspect and health-check the platform connector authority: list registered connectors, get one, run a bounded provider health probe, or read lifecycle events. Credential references are never exposed (only has_secret_ref)",
     schema: z.object({
-      action: z.enum(["list", "get", "events"]).optional().default("list").describe("Connector action"),
+      action: z.enum(["list", "get", "events", "health"]).optional().default("list").describe("Connector action"),
       connector_id: z.string().optional().describe("Connector id (required for get/events)"),
       type: z.string().optional().describe("Filter by connector type (list)"),
       state: z.string().optional().describe("Filter by lifecycle state (list)"),
       limit: z.number().int().optional().describe("Max rows/events"),
     }),
     args: {
-      action: "string (list|get|events - default list)",
-      connector_id: "string (required for get/events)",
+      action: "string (list|get|events|health - default list)",
+      connector_id: "string (required for get/events/health)",
       type: "string (optional, filter by type for list)",
       state: "string (optional, filter by state for list)",
       limit: "number (optional, max rows/events)",
     },
-    risk: "low",
+    risk: "medium",
     category: "Services",
     source: "builtin",
     family: "connectors",
