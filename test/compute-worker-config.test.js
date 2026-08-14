@@ -29,6 +29,7 @@ const MANAGED_ENV = [
   'SIDEKICK_NODE_ID', 'SIDEKICK_NODE_NAME', 'SIDEKICK_WORKER_CONCURRENCY', 'SIDEKICK_HEARTBEAT_MS',
   'SIDEKICK_WORKER_POLL_MS', 'SIDEKICK_URL', 'SIDEKICK_SERVER_URL', 'SIDEKICK_OPENVINO_ENABLED',
   'SIDEKICK_OPENVINO_PYTHON', 'SIDEKICK_OPENVINO_MODELS_DIR', 'OLLAMA_URL', 'OLLAMA_MODEL', 'SIDEKICK_WORKER_CONFIG_FILE',
+  'SIDEKICK_OLLAMA_TIMEOUT_MS',
 ];
 function withCleanEnv(preset, fn) {
   const saved = {};
@@ -49,7 +50,7 @@ const validConfig = {
   heartbeatMs: 30000,
   pollMs: 2000,
   openvino: { enabled: true, pythonPath: '/opt/py/python', modelsDir: '/opt/models' },
-  ollama: { enabled: true, url: 'http://127.0.0.1:11434', model: 'qwen3.5:latest' },
+  ollama: { enabled: true, url: 'http://127.0.0.1:11434', model: 'qwen3.5:latest', timeoutMs: 120000 },
 };
 
 // --- Schema validation ---
@@ -130,6 +131,7 @@ test('applyConfigToEnv fills unset env vars from file', () => {
     assert.strictEqual(process.env.SIDEKICK_OPENVINO_PYTHON, '/opt/py/python');
     assert.strictEqual(process.env.OLLAMA_URL, 'http://127.0.0.1:11434');
     assert.strictEqual(process.env.OLLAMA_MODEL, 'qwen3.5:latest');
+    assert.strictEqual(process.env.SIDEKICK_OLLAMA_TIMEOUT_MS, '120000');
   });
 });
 test('applyConfigToEnv does not override an already-set env var (env > file)', () => {
@@ -153,10 +155,16 @@ test('applyConfigToEnv encodes openvino.enabled=false as "false"', () => {
 });
 test('applyConfigToEnv skips ollama.url when ollama.enabled is false', () => {
   withCleanEnv({}, () => {
-    cfg.applyConfigToEnv({ ollama: { enabled: false, url: 'http://x:11434', model: 'qwen3.5:latest' } });
+    cfg.applyConfigToEnv({ ollama: { enabled: false, url: 'http://x:11434', model: 'qwen3.5:latest', timeoutMs: 120000 } });
     assert.strictEqual(process.env.OLLAMA_URL, undefined);
     assert.strictEqual(process.env.OLLAMA_MODEL, undefined);
+    assert.strictEqual(process.env.SIDEKICK_OLLAMA_TIMEOUT_MS, undefined);
   });
+});
+
+test('validateConfig rejects an unsafe Ollama timeout', () => {
+  assert.throws(() => cfg.validateConfig({ ollama: { timeoutMs: 1000 } }), /ollama\.timeoutMs must be >= 5000/);
+  assert.throws(() => cfg.validateConfig({ ollama: { timeoutMs: 600001 } }), /ollama\.timeoutMs must be <= 600000/);
 });
 
 fs.rmSync(TMP, { recursive: true, force: true });

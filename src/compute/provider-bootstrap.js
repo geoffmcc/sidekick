@@ -84,7 +84,7 @@ function seedOllama() {
     mode: "direct",
     metadata: { managed: "env-bootstrap", bootstrapKey: "ollama", source: "OLLAMA_URL" },
   });
-  const chatModel = process.env.OLLAMA_MODEL || process.env.SIDEKICK_AGENT_MODEL || "qwen2.5-coder:7b";
+  const chatModel = process.env.OLLAMA_MODEL || process.env.SIDEKICK_AGENT_MODEL || "qwen3.5:latest";
   modelRegistry.createModel({
     providerId: provider.providerId,
     providerModelName: chatModel,

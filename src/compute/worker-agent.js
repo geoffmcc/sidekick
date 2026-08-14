@@ -8,6 +8,7 @@ const workerConfig = require("./worker-config");
 const workerCredential = require("./worker-credential");
 const workerCli = require("./worker-cli");
 const workerReconnect = require("./worker-reconnect");
+const { resolveOutputTokenBudget } = require("./token-budget");
 
 // OpenVINO executor — optional; gracefully absent when disabled or on non-Windows.
 let _openVinoExecutor = null;
@@ -54,6 +55,10 @@ const MAX_RETRY_MS = boundedInt(process.env.SIDEKICK_WORKER_MAX_RETRY_MS, 30000,
 const SHUTDOWN_GRACE_MS = boundedInt(process.env.SIDEKICK_WORKER_SHUTDOWN_GRACE_MS, 10000, 1000, 120000);
 const DISCONNECT_TIMEOUT_MS = boundedInt(process.env.SIDEKICK_WORKER_DISCONNECT_TIMEOUT_MS, 3000, 250, 30000);
 const OPENVINO_STARTUP_READINESS_MS = boundedInt(process.env.SIDEKICK_OPENVINO_STARTUP_READINESS_MS, 60000, 1000, 300000);
+// Model generation can legitimately take longer than the worker control-plane
+// requests, especially on first load or for long coding prompts. Keep this
+// separate from the short control-plane timeout and make it configurable.
+const OLLAMA_REQUEST_TIMEOUT_MS = boundedInt(process.env.SIDEKICK_OLLAMA_TIMEOUT_MS, 120000, 5000, 600000);
 // Resolve the version across layouts: the dev tree (../../package.json = repo
 // root) and the flat standalone package (./package.json alongside this file).
 const WORKER_VERSION = (() => {
@@ -645,8 +650,17 @@ function isSyntheticRequest(payload) {
 
 async function ollamaGenerate(payload) {
   const endpoint = new URL("/api/generate", process.env.OLLAMA_URL);
-  const body = JSON.stringify({ model: payload.model, prompt: payload.prompt || "Hello", stream: false, options: { num_predict: payload.maxTokens || 64 } });
-  const result = await httpRequest("POST", endpoint.href, JSON.parse(body));
+  const body = {
+    model: payload.model,
+    prompt: payload.prompt || "Hello",
+    stream: false,
+    // Gemma thinking can consume a small output budget without producing a
+    // visible response. Callers may opt in explicitly, but normal Compute chat
+    // jobs should return answer text in `response`.
+    think: payload.think === undefined ? false : Boolean(payload.think),
+    options: { num_predict: resolveOutputTokenBudget({ maxTokens: payload.maxTokens, outputBudget: payload.outputBudget }) },
+  };
+  const result = await httpRequest("POST", endpoint.href, body, {}, { timeoutMs: OLLAMA_REQUEST_TIMEOUT_MS });
   if (result.status !== 200) throw new Error(`Ollama request failed: ${result.status}`);
   return { content: result.data.response || "", model: payload.model, provider: "ollama" };
 }

@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const dbStore = require("../db");
+const { normalizeOutputBudgetPayload } = require("./token-budget");
 const { JOB_STATES, JOB_TERMINAL_STATES, JOB_TRANSITIONS, JobError, LeaseExpiredError } = require("./errors");
 const { validateJobContract } = require("./job-contract");
 const placement = require("./placement");
@@ -329,6 +330,7 @@ function createJob({
   idempotencyKey,
 }) {
   ensureSchema();
+  requestPayload = normalizeOutputBudgetPayload(jobType, requestPayload);
   const validated = validateJobContract({ protocolVersion, jobType, capability, requestPayload, capabilityRequirements, routingPreferences, retryPolicy, resourceRequirements, artifactExpectations, outputLimits, priority, timeoutMs, expiresAt });
   // Placement choke point: callers must not smuggle infrastructure selection,
   // credentials, device/worker pinning, trust claims, or provenance into the

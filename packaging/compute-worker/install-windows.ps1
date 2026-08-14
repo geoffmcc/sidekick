@@ -19,6 +19,9 @@ param(
   [string]$InstallDir = "C:\Program Files\Sidekick\compute-worker",
   [string]$ConfigDir  = "C:\ProgramData\Sidekick\compute-worker",
   [int]$Concurrency   = 1,
+  [string]$OllamaUrl  = "",
+  [string]$OllamaModel = "qwen3.5:latest",
+  [int]$OllamaTimeoutMs = 120000,
   # Optional override: https URL to a winsw release .exe. Normally unnecessary —
   # the built worker package already bundles winsw as sidekick-compute-worker.exe.
   # Needed only when installing from a bare repo checkout without the binary.
@@ -162,7 +165,14 @@ Write-Host "==> Installing worker files to $InstallDir"
 Copy-Item -Path (Join-Path $WorkerSrc "*") -Destination $InstallDir -Recurse -Force
 
 Write-Host "==> Writing config (non-secret)"
-@{ serverUrl = $ServerUrl; concurrency = $Concurrency } | ConvertTo-Json | Set-Content -Path (Join-Path $ConfigDir "config.json") -Encoding UTF8
+$Config = [ordered]@{ serverUrl = $ServerUrl; concurrency = $Concurrency }
+if ($OllamaUrl -ne "") {
+  if ($OllamaTimeoutMs -lt 5000 -or $OllamaTimeoutMs -gt 600000) { throw "-OllamaTimeoutMs must be between 5000 and 600000." }
+  if ($OllamaModel -eq "") { throw "-OllamaModel is required when -OllamaUrl is supplied, so the worker can advertise a schedulable model." }
+  $Config.ollama = [ordered]@{ enabled = $true; url = $OllamaUrl; timeoutMs = $OllamaTimeoutMs }
+  $Config.ollama.model = $OllamaModel
+}
+$Config | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $ConfigDir "config.json") -Encoding UTF8
 
 Write-Host "==> Placing winsw service definition"
 $XmlDest = Join-Path $InstallDir "sidekick-compute-worker.xml"

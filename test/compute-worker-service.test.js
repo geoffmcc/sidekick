@@ -21,6 +21,7 @@ function test(name, fn) {
 const unit = read(path.join(ROOT, 'systemd', 'sidekick-compute-worker.service'));
 const plist = read(path.join(PKG, 'com.sidekick.compute-worker.plist'));
 const winsw = read(path.join(PKG, 'sidekick-compute-worker.xml'));
+const workerAgent = read(path.join(ROOT, 'src', 'compute', 'worker-agent.js'));
 
 // --- systemd ---
 test('systemd unit has the three sections', () => {
@@ -68,7 +69,13 @@ const psInstallers = ['install-windows.ps1', 'uninstall-windows.ps1'];
 test('shell installers are syntactically valid (bash -n) and strict-mode', () => {
   for (const f of shInstallers) {
     const p = path.join(PKG, f);
-    execFileSync('bash', ['-n', p]);
+    if (process.platform === 'win32') {
+      const windowsPathForWsl = p.replace(/\\/g, '/');
+      const wslPath = execFileSync('wsl.exe', ['wslpath', '-a', windowsPathForWsl], { encoding: 'utf8' }).trim();
+      execFileSync('wsl.exe', ['bash', '-n', wslPath]);
+    } else {
+      execFileSync('bash', ['-n', p]);
+    }
     assert.ok(/set -euo pipefail/.test(read(p)), `${f} missing strict mode`);
   }
 });
@@ -94,6 +101,23 @@ test('windows installer resolves node to an absolute path and patches the XML', 
   assert.ok(/\$NodeExe\s*=\s*\$NodeCmd\.Source/.test(body), 'must resolve node to its Source path');
   assert.ok(/Could not resolve node to an absolute path/.test(body), 'must fail closed when node cannot be resolved');
   assert.ok(/SelectSingleNode\("executable"\)\.InnerText\s*=\s*\$NodeExe/.test(body), 'must patch <executable> with the resolved path');
+});
+test('installers expose a durable Ollama configuration and inference timeout', () => {
+  const ps = read(path.join(PKG, 'install-windows.ps1'));
+  assert.ok(/OllamaUrl/.test(ps) && /OllamaModel/.test(ps), 'Windows installer should accept Ollama settings');
+  assert.ok(/OllamaTimeoutMs/.test(ps) && /120000/.test(ps), 'Windows installer should configure a long inference timeout');
+  for (const f of ['install-linux.sh', 'install-macos.sh']) {
+    const body = read(path.join(PKG, f));
+    assert.ok(/OLLAMA_URL/.test(body) && /OLLAMA_MODEL/.test(body), `${f} should accept Ollama settings`);
+    assert.ok(/OLLAMA_TIMEOUT_MS/.test(body), `${f} should configure the Ollama timeout`);
+  }
+});
+test('Ollama inference has a configurable long timeout and visible answer defaults', () => {
+  assert.ok(/SIDEKICK_OLLAMA_TIMEOUT_MS/.test(workerAgent));
+  assert.ok(/timeoutMs: OLLAMA_REQUEST_TIMEOUT_MS/.test(workerAgent));
+  assert.ok(/think: payload\.think === undefined \? false/.test(workerAgent));
+  assert.ok(/resolveOutputTokenBudget\(\{ maxTokens: payload\.maxTokens/.test(workerAgent));
+  assert.ok(/normal: 4096/.test(read(path.join(ROOT, 'src', 'compute', 'token-budget.js'))));
 });
 test('windows installer is idempotent when the service already exists', () => {
   const body = read(path.join(PKG, 'install-windows.ps1'));
