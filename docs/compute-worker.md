@@ -79,7 +79,12 @@ defaults**. The (non-secret) config file is JSON, validated on load:
   "heartbeatMs": 30000,
   "pollMs": 2000,
   "openvino": { "enabled": true, "pythonPath": "…", "modelsDir": "…" },
-  "ollama": { "enabled": true, "url": "http://127.0.0.1:11434" }
+    "ollama": {
+      "enabled": true,
+      "url": "http://127.0.0.1:11434",
+      "model": "qwen3.5:latest",
+      "timeoutMs": 120000
+    }
 }
 ```
 
@@ -149,19 +154,25 @@ contract above). Definitions and installers live in
 
 ```bash
 # Linux
-sudo SERVER_URL=http://host:4097 ENROLL_TOKEN=<token> ./install-linux.sh
+sudo SERVER_URL=http://host:4097 ENROLL_TOKEN=<token> \
+  OLLAMA_URL=http://127.0.0.1:11434 OLLAMA_MODEL=qwen3.5:latest ./install-linux.sh
 # macOS
-sudo SERVER_URL=http://host:4097 ENROLL_TOKEN=<token> ./install-macos.sh
+sudo SERVER_URL=http://host:4097 ENROLL_TOKEN=<token> \
+  OLLAMA_URL=http://127.0.0.1:11434 OLLAMA_MODEL=qwen3.5:latest ./install-macos.sh
 ```
 ```powershell
 # Windows (elevated) — winsw (the service wrapper) is bundled in the built
 # worker package as sidekick-compute-worker.exe; no download, no -WinswUrl
-.\install-windows.ps1 -ServerUrl http://host:4097 -EnrollToken <token>
+.\install-windows.ps1 -ServerUrl http://host:4097 -EnrollToken <token> `
+  -OllamaUrl http://127.0.0.1:11434 -OllamaModel qwen3.5:latest
 ```
 
-Each installer creates the config/credential directories, writes a non-secret
-`config.json`, runs `enroll --service` to obtain the credential, then registers
-and starts the service. No secret is placed in any service definition. Re-running
+Each installer creates the config/credential directories, writes a validated
+non-secret `config.json`, runs `enroll --service` to obtain the credential, then
+registers and starts the service. When Ollama settings are supplied, the config
+also carries the model inventory and a 120-second generation timeout, so a fresh
+worker advertises chat capability and can handle long coding requests. No secret
+is placed in any service definition. Re-running
 an installer over an existing install is safe: it stops and removes the old
 service registration first.
 

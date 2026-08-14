@@ -1,6 +1,7 @@
 const providerRegistry = require("./provider-registry");
 const healthMonitor = require("./health-monitor");
 const placement = require("./placement");
+const { resolveOutputTokenBudget } = require("./token-budget");
 const { ComputeError, ProviderUnavailableError, RoutingError } = require("./errors");
 
 /**
@@ -96,7 +97,7 @@ class InferenceService {
         messages: request.messages,
         system: request.system,
         temperature: request.temperature ?? 0.7,
-        maxTokens: request.maxTokens,
+        maxTokens: resolveOutputTokenBudget({ maxTokens: request.maxTokens, outputBudget: request.outputBudget }),
         timeout: request.timeout,
         tools: request.tools,
         format: request.format,
@@ -117,7 +118,7 @@ class InferenceService {
         prompt,
         system: request.system,
         temperature: request.temperature ?? 0.7,
-        maxTokens: request.maxTokens,
+        maxTokens: resolveOutputTokenBudget({ maxTokens: request.maxTokens, outputBudget: request.outputBudget }),
         timeout: request.timeout,
         contextLimit: request.contextLimit,
       },

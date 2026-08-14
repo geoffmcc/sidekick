@@ -394,7 +394,7 @@ async function sidekick_compute_jobs({ action, job_id, ...args }) {
         let requestPayload;
         if (args.request_payload !== undefined) {
           if (!isPlainObject(args.request_payload)) return err("request_payload must be a JSON object");
-          for (const f of ["prompt", "model", "provider"]) {
+          for (const f of ["prompt", "model", "provider", "output_budget"]) {
             if (args[f] !== undefined) return err(`Conflicting field '${f}': include it inside request_payload, not as a top-level argument`);
           }
           requestPayload = args.request_payload;
@@ -403,6 +403,7 @@ async function sidekick_compute_jobs({ action, job_id, ...args }) {
           if (args.prompt !== undefined) requestPayload.prompt = args.prompt;
           if (args.model !== undefined) requestPayload.model = args.model;
           if (args.provider !== undefined) requestPayload.provider = args.provider;
+          if (args.output_budget !== undefined) requestPayload.outputBudget = args.output_budget;
         }
 
         if (args.capability_requirements !== undefined && !isPlainObject(args.capability_requirements)) {

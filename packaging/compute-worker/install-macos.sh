@@ -21,6 +21,16 @@ PLIST_SRC="$SCRIPT_DIR/com.sidekick.compute-worker.plist"
 : "${SERVER_URL:?Set SERVER_URL}"
 : "${ENROLL_TOKEN:?Set ENROLL_TOKEN}"
 command -v node >/dev/null || { echo "node not found on PATH" >&2; exit 1; }
+OLLAMA_ENABLED=false
+if [ -n "${OLLAMA_URL:-}" ]; then OLLAMA_ENABLED=true; fi
+OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3.5:latest}
+if [ "$OLLAMA_ENABLED" = true ] && [ -z "${OLLAMA_MODEL:-}" ]; then
+  echo "OLLAMA_MODEL is required when OLLAMA_URL is set, so the worker can advertise a schedulable model" >&2; exit 1
+fi
+OLLAMA_TIMEOUT_MS=${OLLAMA_TIMEOUT_MS:-120000}
+if ! [[ "$OLLAMA_TIMEOUT_MS" =~ ^[0-9]+$ ]] || [ "$OLLAMA_TIMEOUT_MS" -lt 5000 ] || [ "$OLLAMA_TIMEOUT_MS" -gt 600000 ]; then
+  echo "OLLAMA_TIMEOUT_MS must be an integer between 5000 and 600000" >&2; exit 1
+fi
 
 echo "==> Creating directories"
 mkdir -p "$INSTALL_DIR" "$LOG_DIR"
@@ -33,7 +43,13 @@ echo "==> Writing config (non-secret)"
 cat > "$SUPPORT_DIR/config.json" <<EOF
 {
   "serverUrl": "$SERVER_URL",
-  "concurrency": ${CONCURRENCY:-1}
+  "concurrency": ${CONCURRENCY:-1},
+  "ollama": {
+    "enabled": $OLLAMA_ENABLED,
+    "url": "${OLLAMA_URL:-http://127.0.0.1:11434}",
+    "model": "${OLLAMA_MODEL:-}",
+    "timeoutMs": ${OLLAMA_TIMEOUT_MS:-120000}
+  }
 }
 EOF
 chmod 0644 "$SUPPORT_DIR/config.json"

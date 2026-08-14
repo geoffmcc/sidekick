@@ -15,6 +15,7 @@
 const { z } = require("zod");
 const compute = require("../../compute");
 const toolContext = require("../context");
+const { resolveOutputTokenBudget } = require("../../compute/token-budget");
 
 let inferenceService = null;
 try { inferenceService = require("../../compute/inference-service"); } catch {}
@@ -118,7 +119,7 @@ async function sidekick_ollama({ action, model }) {
   }
 }
 
-async function sidekick_llm({ prompt, system, temperature, async: asyncMode, timeout_ms: timeoutMs, max_tokens: maxTokens, context_limit: contextLimit }) {
+async function sidekick_llm({ prompt, system, temperature, async: asyncMode, timeout_ms: timeoutMs, max_tokens: maxTokens, output_budget: outputBudget, context_limit: contextLimit }) {
   // Chat routes through Compute — the single inference authority. Provider/model
   // selection, credentials, health, and fallback belong to Placement; the tool
   // no longer reaches Ollama/Groq directly or accepts a provider pin. Requests
@@ -152,7 +153,7 @@ async function sidekick_llm({ prompt, system, temperature, async: asyncMode, tim
           prompt,
           system,
           temperature: temperature ?? 0.7,
-          maxTokens,
+          maxTokens: resolveOutputTokenBudget({ maxTokens, outputBudget }),
           contextLimit,
           model: workerModel,
         },
@@ -175,6 +176,7 @@ async function sidekick_llm({ prompt, system, temperature, async: asyncMode, tim
       system,
       temperature: temperature || 0.7,
       dataClassification: "private",
+      maxTokens: resolveOutputTokenBudget({ maxTokens, outputBudget }),
       preferences: { allowFallback: true },
     });
     return { content: [{ type: "text", text: result.content || JSON.stringify(result) }] };
@@ -193,10 +195,11 @@ const descriptors = Object.freeze([
       temperature: z.number().optional().default(0.7).describe("Sampling temperature (0-2)"),
       async: z.boolean().optional().default(false).describe("Queue the request durably and return a job ID instead of waiting for the model"),
       timeout_ms: z.number().int().min(1000).max(86400000).optional().describe("Maximum provider execution time for async requests"),
-      max_tokens: z.number().int().min(256).max(262144).optional().describe("Optional maximum output tokens; omitted uses a large finite provider budget"),
+      max_tokens: z.number().int().min(256).max(262144).optional().describe("Optional maximum output tokens; overrides output_budget"),
+      output_budget: z.enum(["normal", "complex", "large"]).optional().default("normal").describe("Output tier: normal=4096, complex=8192, large=16384; max_tokens overrides it"),
       context_limit: z.number().int().min(4096).max(262144).optional().describe("Optional model context window; omitted uses the registered model limit"),
     }),
-    args: { prompt: "string", system: "string (optional)", temperature: "number (optional)", async: "boolean (optional)", timeout_ms: "integer (optional, async execution timeout)", max_tokens: "integer (optional, provider output limit)", context_limit: "integer (optional, model context limit)" },
+    args: { prompt: "string", system: "string (optional)", temperature: "number (optional)", async: "boolean (optional)", timeout_ms: "integer (optional, async execution timeout)", max_tokens: "integer (optional, provider output limit; overrides output_budget)", output_budget: "string (optional: normal|complex|large; defaults normal)", context_limit: "integer (optional, model context limit)" },
     risk: "medium",
     category: "Core",
     source: "builtin",

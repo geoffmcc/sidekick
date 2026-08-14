@@ -44,6 +44,7 @@ const CONFIG_SCHEMA = {
         enabled: { type: "boolean" },
         url: { type: "string", format: "uri" },
         model: { type: "string", maxLength: 256 },
+        timeoutMs: { type: "integer", minimum: 5000, maximum: 600000 },
       },
     },
   },
@@ -194,6 +195,7 @@ function applyConfigToEnv(fileConfig) {
   if (fileConfig.ollama && typeof fileConfig.ollama === "object") {
     if (fileConfig.ollama.url !== undefined && fileConfig.ollama.enabled !== false) setIfUnset("OLLAMA_URL", fileConfig.ollama.url);
     if (fileConfig.ollama.model !== undefined && fileConfig.ollama.enabled !== false) setIfUnset("OLLAMA_MODEL", fileConfig.ollama.model);
+    if (fileConfig.ollama.timeoutMs !== undefined && fileConfig.ollama.enabled !== false) setIfUnset("SIDEKICK_OLLAMA_TIMEOUT_MS", fileConfig.ollama.timeoutMs);
   }
 }
 

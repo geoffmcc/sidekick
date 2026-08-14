@@ -47,6 +47,8 @@ The worker agent in `src/compute/worker-agent.js` can be configured with:
 - `SIDEKICK_WORKER_LEASE_MS`
 - `SIDEKICK_WORKER_CONCURRENCY`
 - `SIDEKICK_WORKER_SHUTDOWN_GRACE_MS`
+- `OLLAMA_URL` and `OLLAMA_MODEL` for a local Ollama chat/generate backend
+- `SIDEKICK_OLLAMA_TIMEOUT_MS` for generation timeout (default 120000 ms; range 5000–600000)
 
 The worker entry point in this repository is:
 
@@ -87,6 +89,12 @@ Supported reporting inputs:
 - `OLLAMA_URL`: optional Ollama backend, with credentials stripped before reporting.
 - `SIDEKICK_WORKER_MODELS_JSON`: explicit model inventory.
 - `OLLAMA_MODEL`: optional Ollama model inventory entry.
+
+LLM output budgets are tiered by default: `normal` produces up to 4096 tokens,
+`complex` up to 8192, and `large` up to 16384. Use the `output_budget` field on
+`llm` or `compute_jobs` chat/generate requests; an explicit `max_tokens` (or
+`request_payload.maxTokens`) always overrides the tier.
+- `SIDEKICK_OLLAMA_TIMEOUT_MS`: maximum time allowed for one Ollama generation request; use a larger value for long coding tasks.
 
 Worker heartbeat and admin inspect APIs expose platform, architecture, worker version, protocol version, providers, executors, model inventory, limits, health, and utilization metadata.
 
