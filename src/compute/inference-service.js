@@ -118,6 +118,7 @@ class InferenceService {
         system: request.system,
         temperature: request.temperature ?? 0.7,
         maxTokens: request.maxTokens,
+        timeout: request.timeout,
         contextLimit: request.contextLimit,
       },
       context,
