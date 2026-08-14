@@ -2,6 +2,8 @@ let currentPage = 'mission';
 let agentRunning = false;
 let agentStream = null;
 let currentAgentTaskId = null;
+let agentRestoreInFlight = false;
+const AGENT_LAST_TASK_KEY = 'sidekick_agent_last_task_id';
 let expandedHistory = {};
 let allLogs = [];
 let allSessions = [];
@@ -270,6 +272,7 @@ function showPage(name){
   if (name === 'approvals') { loadApprovals(); loadReconciliations(); }
   if (name === 'tools') loadTools();
   if (name === 'capabilities') loadCapabilities();
+  if (name === 'agent') restoreAgentState();
   if (name === 'evolve') loadEvolve();
   if (name === 'compute') loadCompute();
   if (name === 'predict') { loadPredictStatus(); loadPredict(); }
@@ -1668,19 +1671,7 @@ function runAgent(){
       return;
     }
     const taskId = data.taskId;
-    appendLog('<span class="agent-step">► Task ' + taskId + ' started</span>');
-    agentStream = new EventSource('/api/agent/stream/' + taskId);
-    agentStream.onmessage = (e) => {
-      const msg = JSON.parse(e.data);
-      if (msg.type === 'step') appendLog('<span class="agent-step">◄ ' + esc(msg.text) + '</span>');
-      else if (msg.type === 'tool') appendLog('  <span class="agent-ok">→ ' + esc(msg.tool) + '</span> ' + esc(msg.summary));
-      else if (msg.type === 'error') appendLog('<span class="agent-err">✖ ' + esc(msg.text) + '</span>');
-      else if (msg.type === 'done') {
-        appendLog('<span class="agent-done">✔ ' + esc(msg.text) + '</span>');
-        stopAgent();
-      }
-    };
-    agentStream.onerror = () => stopAgent();
+    streamAgentTask(taskId, { reset: false });
   }).catch(e => {
     appendLog('<span class="agent-err"> Request failed: ' + esc(e.message) + '</span>');
     apiError('/api/agent/run', e, 0);
@@ -1695,6 +1686,7 @@ function streamAgentTask(taskId, opts){
   opts = opts || {};
   agentRunning = true;
   currentAgentTaskId = taskId;
+  rememberAgentTask(taskId);
   $('agentGo').disabled = true;
   $('agentStop').disabled = false;
   if (opts.reset) $('agentLog').innerHTML = '';
@@ -1702,7 +1694,9 @@ function streamAgentTask(taskId, opts){
     appendLog('<span class="agent-step">Follow-up to task ' + esc(opts.parentTaskId) +
       (opts.rootTaskId ? ' · thread root ' + esc(opts.rootTaskId) : '') + '</span>');
   }
-  appendLog('<span class="agent-step">Task ' + esc(taskId) + ' started</span>');
+  if (opts.announce !== false) {
+    appendLog('<span class="agent-step">' + (opts.reconnect ? 'Reconnected to' : 'Task') + ' ' + esc(taskId) + (opts.reconnect ? '' : ' started') + '</span>');
+  }
   agentStream = new EventSource('/api/agent/stream/' + taskId);
   agentStream.onmessage = (e) => {
     let msg;
@@ -1766,6 +1760,55 @@ function submitFollowup(id){
 function appendLog(html){
   $('agentLog').innerHTML += html + '\n';
   $('agentLog').scrollTop = $('agentLog').scrollHeight;
+}
+
+function rememberAgentTask(taskId){
+  if (!taskId) return;
+  currentAgentTaskId = taskId;
+  try { localStorage.setItem(AGENT_LAST_TASK_KEY, taskId); } catch (e) { /* storage may be unavailable */ }
+}
+
+function readRememberedAgentTask(){
+  try { return localStorage.getItem(AGENT_LAST_TASK_KEY); } catch (e) { return null; }
+}
+
+function renderAgentTranscript(run){
+  const steps = run && Array.isArray(run.steps) ? run.steps : [];
+  let html = '';
+  steps.forEach(s => {
+    if (s.type === 'thought') html += '<span class="agent-step">◄ ' + esc(s.text) + '</span>\n';
+    else if (s.type === 'tool') html += '  <span class="agent-ok">→ ' + esc(s.tool) + '</span> ' + esc(s.args ? JSON.stringify(s.args) : '') + '\n    ' + esc((s.result || '').substring(0, 200)) + '\n';
+    else if (s.type === 'error') html += '<span class="agent-err">✖ ' + esc(s.text) + '</span>\n';
+    else if (s.type === 'done') html += '<span class="agent-done">✔ ' + esc(s.text) + '</span>\n';
+  });
+  if (!html && run && run.result) html = '<span class="agent-done">✔ ' + esc(run.result) + '</span>\n';
+  if (html) $('agentLog').innerHTML = html;
+  $('agentLog').scrollTop = $('agentLog').scrollHeight;
+}
+
+function restoreAgentState(){
+  if (agentRunning || agentRestoreInFlight) return;
+  const taskId = readRememberedAgentTask();
+  if (!taskId) return;
+  agentRestoreInFlight = true;
+  authFetch('/api/agent/run/' + encodeURIComponent(taskId)).then(r => {
+    if (r.ok) return r.json();
+    if (r.status === 404) return null;
+    throw new Error('HTTP ' + r.status);
+  }).then(run => {
+    if (run) {
+      rememberAgentTask(taskId);
+      renderAgentTranscript(run);
+      const active = ['queued', 'running', 'pending', 'in_progress'].includes(run.status);
+      if (active) streamAgentTask(taskId, { reset: false, reconnect: true });
+      return;
+    }
+    // Active tasks do not get a durable transcript until terminal completion.
+    // Reattaching to the existing governed SSE stream preserves the live run.
+    streamAgentTask(taskId, { reset: false, reconnect: true });
+  }).catch(e => {
+    appendLog('<span class="agent-err">Could not restore task ' + esc(taskId) + ': ' + esc(e.message) + '</span>');
+  }).finally(() => { agentRestoreInFlight = false; });
 }
 
 function stopAgent(){
