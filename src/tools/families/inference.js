@@ -190,7 +190,7 @@ const descriptors = Object.freeze([
       temperature: z.number().optional().default(0.7).describe("Sampling temperature (0-2)"),
       async: z.boolean().optional().default(false).describe("Queue the request durably and return a job ID instead of waiting for the model"),
       timeout_ms: z.number().int().min(1000).max(86400000).optional().describe("Maximum provider execution time for async requests"),
-      max_tokens: z.number().int().min(256).max(262144).optional().describe("Optional maximum output tokens; omitted means the provider may generate until it naturally finishes"),
+      max_tokens: z.number().int().min(256).max(262144).optional().describe("Optional maximum output tokens; omitted uses a large finite provider budget"),
       context_limit: z.number().int().min(4096).max(262144).optional().describe("Optional model context window; omitted uses the registered model limit"),
     }),
     args: { prompt: "string", system: "string (optional)", temperature: "number (optional)", async: "boolean (optional)", timeout_ms: "integer (optional, async execution timeout)", max_tokens: "integer (optional, provider output limit)", context_limit: "integer (optional, model context limit)" },

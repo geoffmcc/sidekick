@@ -1,5 +1,6 @@
 const http = require("http");
 const https = require("https");
+const DEFAULT_MAX_OUTPUT_TOKENS = 65536;
 
 // Drop keys whose value is undefined so optional generation options
 // (num_ctx/num_predict) are omitted rather than sent as null.
@@ -97,9 +98,10 @@ class OllamaProvider {
       options: pruneUndefined({
         temperature: options.temperature ?? 0.7,
         num_ctx: options.contextLimit,
-        // Ollama's -1 means generate until the model naturally finishes.
-        // The caller may still provide an explicit bounded maxTokens value.
-        num_predict: options.maxTokens === undefined ? -1 : options.maxTokens,
+        // Use a large finite budget by default. Ollama's -1 is unbounded and
+        // can leave reasoning models running indefinitely; callers may still
+        // provide an explicit maxTokens value.
+        num_predict: options.maxTokens === undefined ? DEFAULT_MAX_OUTPUT_TOKENS : options.maxTokens,
       }),
     };
     if (options.format) body.format = options.format;
@@ -127,7 +129,7 @@ class OllamaProvider {
       options: pruneUndefined({
         temperature: options.temperature ?? 0.7,
         num_ctx: options.contextLimit,
-        num_predict: options.maxTokens === undefined ? -1 : options.maxTokens,
+        num_predict: options.maxTokens === undefined ? DEFAULT_MAX_OUTPUT_TOKENS : options.maxTokens,
       }),
     };
     const result = await this._request("/api/generate", body, { timeout: options.timeout || this.timeout });
