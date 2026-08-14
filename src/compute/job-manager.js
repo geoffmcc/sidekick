@@ -10,12 +10,35 @@ let platformKernel = null;
 try { platformKernel = require("../platform/kernel"); } catch {}
 const artifactCustody = require("./artifact-custody");
 
+const SOURCE_HANDOFF_MAX_BYTES = 256 * 1024;
+const DATA_CLASSIFICATION_RANK = Object.freeze({ public: 0, internal: 1, private: 2 });
+
 function nowIso() { return new Date().toISOString(); }
 function generateId(prefix) { return `${prefix}_${Date.now().toString(36)}_${crypto.randomBytes(6).toString("hex")}`; }
 function parseJson(value, fallback) { try { return value ? JSON.parse(value) : fallback; } catch { return fallback; } }
 function json(value) { return JSON.stringify(value || {}); }
 function hashJson(value) { return crypto.createHash("sha256").update(json(value)).digest("hex"); }
 function parseMaybeArray(value) { return Array.isArray(value) ? value : []; }
+
+function materializeSourceJob(job, db = dbStore.getDb()) {
+  const sourceJobId = job?.requestPayload?.sourceJobId || job?.requestPayload?.source_job_id;
+  if (!sourceJobId) return job;
+  const source = rowToJob(db.prepare("SELECT * FROM compute_jobs WHERE job_id = ?").get(String(sourceJobId)));
+  if (!source) throw new JobError("Source job not found", "SOURCE_JOB_NOT_FOUND", { sourceJobId });
+  if (source.project !== job.project) throw new JobError("Source job must use the same project", "SOURCE_PROJECT_MISMATCH", { sourceJobId });
+  const sourceRank = DATA_CLASSIFICATION_RANK[source.dataClassification] ?? DATA_CLASSIFICATION_RANK.private;
+  const targetRank = DATA_CLASSIFICATION_RANK[job.dataClassification] ?? DATA_CLASSIFICATION_RANK.private;
+  if (sourceRank > targetRank) throw new JobError("Source job classification exceeds follow-up classification", "SOURCE_CLASSIFICATION_MISMATCH", { sourceJobId });
+  if (source.status !== "completed") return null;
+  const content = typeof source.result?.content === "string" ? source.result.content : null;
+  if (!content) throw new JobError("Source job has no textual result", "SOURCE_RESULT_MISSING", { sourceJobId });
+  const prompt = String(job.requestPayload.prompt || "Review the supplied source result.");
+  const handoff = `${prompt}\n\n--- BEGIN SOURCE JOB ${sourceJobId} RESULT ---\n${content}\n--- END SOURCE JOB ${sourceJobId} RESULT ---`;
+  if (Buffer.byteLength(handoff, "utf8") > SOURCE_HANDOFF_MAX_BYTES) {
+    throw new JobError("Source result exceeds the review handoff limit", "SOURCE_RESULT_TOO_LARGE", { sourceJobId, maxBytes: SOURCE_HANDOFF_MAX_BYTES });
+  }
+  return { ...job, requestPayload: { ...job.requestPayload, prompt: handoff } };
+}
 
 function ensureSchema() {
   const db = dbStore.getDb();
@@ -331,6 +354,15 @@ function createJob({
 }) {
   ensureSchema();
   requestPayload = normalizeOutputBudgetPayload(jobType, requestPayload);
+  const sourceJobId = requestPayload?.sourceJobId || requestPayload?.source_job_id;
+  if (sourceJobId) {
+    const source = getJob(String(sourceJobId));
+    if (!source) throw new JobError("Source job not found", "SOURCE_JOB_NOT_FOUND", { sourceJobId });
+    if (source.project !== project) throw new JobError("Source job must use the same project", "SOURCE_PROJECT_MISMATCH", { sourceJobId });
+    const sourceRank = DATA_CLASSIFICATION_RANK[source.dataClassification] ?? DATA_CLASSIFICATION_RANK.private;
+    const targetRank = DATA_CLASSIFICATION_RANK[dataClassification] ?? DATA_CLASSIFICATION_RANK.private;
+    if (sourceRank > targetRank) throw new JobError("Source job classification exceeds follow-up classification", "SOURCE_CLASSIFICATION_MISMATCH", { sourceJobId });
+  }
   const validated = validateJobContract({ protocolVersion, jobType, capability, requestPayload, capabilityRequirements, routingPreferences, retryPolicy, resourceRequirements, artifactExpectations, outputLimits, priority, timeoutMs, expiresAt });
   // Placement choke point: callers must not smuggle infrastructure selection,
   // credentials, device/worker pinning, trust claims, or provenance into the
@@ -523,7 +555,17 @@ function claimNextJob(worker, { leaseDurationMs = 300000 } = {}) {
     const rows = db.prepare("SELECT * FROM compute_jobs WHERE status = 'queued' AND attempt < max_attempts AND (expires_at IS NULL OR expires_at > ?) ORDER BY priority ASC, created_at ASC LIMIT 50").all(nowIso());
     for (const row of rows) {
       const job = rowToJob(row);
-      const compatibility = workerCompatibility(freshWorker, job, { activeExecutorCounts });
+      let materialized;
+      try { materialized = materializeSourceJob(job, db); }
+      catch (e) {
+        recordSchedulingDiagnostics(db, job.jobId, { selected: false, workerId: worker.workerId, rejected: [{ workerId: worker.workerId, reasons: [e.code || "source_handoff_invalid"] }], checkedAt: nowIso() });
+        continue;
+      }
+      if (!materialized) {
+        recordSchedulingDiagnostics(db, job.jobId, { selected: false, workerId: worker.workerId, rejected: [{ workerId: worker.workerId, reasons: ["source_job_not_completed"] }], checkedAt: nowIso() });
+        continue;
+      }
+      const compatibility = workerCompatibility(freshWorker, materialized, { activeExecutorCounts });
       if (!compatibility.ok) {
         recordSchedulingDiagnostics(db, job.jobId, { selected: false, workerId: worker.workerId, rejected: [{ workerId: worker.workerId, reasons: compatibility.reasons }], checkedAt: nowIso() });
         continue;
@@ -548,7 +590,7 @@ function claimNextJob(worker, { leaseDurationMs = 300000 } = {}) {
       db.prepare("UPDATE compute_workers SET current_jobs = current_jobs + 1, updated_at = ? WHERE worker_id = ?").run(now, worker.workerId);
       db.exec("COMMIT");
       emitComputeEvent("compute.job_leased", leased, { worker_id: worker.workerId, lease_id: leaseId, attempt_id: attemptId });
-      return { job: getJob(job.jobId), attemptId, leaseId };
+      return { job: materialized, attemptId, leaseId };
     }
     db.exec("COMMIT");
     return null;
@@ -564,6 +606,10 @@ function claimNextJob(worker, { leaseDurationMs = 300000 } = {}) {
 // worker.
 function claimDirectJob(jobId, { leaseDurationMs = 900000 } = {}) {
   ensureSchema();
+  const queued = getJob(jobId);
+  if (!queued) return null;
+  const materializedQueued = materializeSourceJob(queued);
+  if (!materializedQueued) return null;
   const db = dbStore.getDb();
   const now = nowIso();
   const leaseId = generateId("direct_lease");
@@ -578,7 +624,7 @@ function claimDirectJob(jobId, { leaseDurationMs = 900000 } = {}) {
       WHERE job_id = ? AND status = 'queued' AND attempt < max_attempts
     `).run(leaseId, leaseExpires, now, now, now, jobId);
     if (result.changes !== 1) { db.exec("COMMIT"); return null; }
-    const job = rowToJob(db.prepare("SELECT * FROM compute_jobs WHERE job_id = ?").get(jobId));
+    const job = materializeSourceJob(rowToJob(db.prepare("SELECT * FROM compute_jobs WHERE job_id = ?").get(jobId)), db);
     const attemptId = generateId("attempt");
     db.prepare(`
       INSERT INTO compute_job_attempts (attempt_id, job_id, attempt_number, lease_id, status, started_at, lease_expires_at)
@@ -586,7 +632,7 @@ function claimDirectJob(jobId, { leaseDurationMs = 900000 } = {}) {
     `).run(attemptId, jobId, job.attempt, leaseId, now, leaseExpires);
     db.exec("COMMIT");
     emitComputeEvent("compute.job_started", job, { execution_path: "provider", lease_id: leaseId, attempt_id: attemptId });
-    return { job: getJob(jobId), leaseId, attemptId };
+    return { job, leaseId, attemptId };
   } catch (e) {
     try { db.exec("ROLLBACK"); } catch {}
     throw e;
@@ -1263,6 +1309,7 @@ function getJobStats() {
 module.exports = {
   ensureSchema,
   createJob,
+  materializeSourceJob,
   getJob,
   listJobs,
   transitionJob,
