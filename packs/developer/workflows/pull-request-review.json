@@ -5,7 +5,7 @@
   "title": "Pull Request Review",
   "description": "Perform a substantive engineering review of a change set. Grounds every finding in the actual diff: classification, API/schema impact, dependency changes, migrations, test and documentation coverage, security-sensitive paths, CI state, and the project's own verification result.",
   "mode": "mutating",
-  "tags": ["developer", "review", "read-only"],
+  "tags": ["developer", "review"],
   "inputs": {
     "path": { "type": "string", "required": true, "description": "Local repository path containing the change set" },
     "base": { "type": "string", "required": false, "default": "origin/main", "description": "Base ref the change is reviewed against" },

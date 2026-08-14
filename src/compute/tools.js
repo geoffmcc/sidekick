@@ -1,6 +1,7 @@
 const compute = require("./index");
 const { TRUST_LEVELS, DATA_CLASSIFICATIONS } = require("./errors");
 const { validateEndpoint } = require("./endpoint-guard");
+const toolContext = require("../tools/context");
 
 // Creating a provider grants CONNECTIVITY. It does not grant authority to
 // receive sensitive data — that is a separate, explicit promotion via update.
@@ -354,6 +355,9 @@ function validateExecutorRequest({ capability, capabilityRequirements, requestPa
 async function sidekick_compute_jobs({ action, job_id, ...args }) {
   try {
     compute.initialize();
+    const context = toolContext.getExecutionContext();
+    const source = context.source || "mcp";
+    const actor = context.actor || source;
     switch (action) {
       case "list": return ok(compute.jobManager.listJobs({
         status: args.status,
@@ -407,7 +411,7 @@ async function sidekick_compute_jobs({ action, job_id, ...args }) {
             maxAttempts: args.max_retries === undefined ? undefined : args.max_retries + 1,
             idempotencyKey: args.idempotency_key,
             project: args.project,
-            source: "mcp",
+            source,
           });
           return ok(j);
         } catch (e) {
@@ -416,12 +420,12 @@ async function sidekick_compute_jobs({ action, job_id, ...args }) {
       }
       case "cancel": {
         if (!job_id) return err("job_id required");
-        const j = compute.jobManager.cancelJob(job_id, { actor: "mcp", reason: args.reason || "user_cancelled" });
+        const j = compute.jobManager.cancelJob(job_id, { actor, reason: args.reason || `${source}_cancelled` });
         return ok(j);
       }
       case "retry": {
         if (!job_id) return err("job_id required");
-        const j = compute.jobManager.retryJob(job_id, { actor: "dashboard", reason: args.reason || "dashboard_retry" });
+        const j = compute.jobManager.retryJob(job_id, { actor, reason: args.reason || `${source}_retry` });
         return ok(j);
       }
       case "recover": {
