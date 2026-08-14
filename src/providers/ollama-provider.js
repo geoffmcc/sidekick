@@ -95,6 +95,11 @@ class OllamaProvider {
       model: options.model,
       messages,
       stream: false,
+      // Reasoning models such as qwen3.5 can spend a bounded planner budget
+      // entirely in hidden thinking and return no visible JSON. Keep thinking
+      // opt-in so structured Compute requests receive usable content by
+      // default; callers can still explicitly request it.
+      think: options.think === undefined ? false : Boolean(options.think),
       options: pruneUndefined({
         temperature: options.temperature ?? 0.7,
         num_ctx: options.contextLimit,
