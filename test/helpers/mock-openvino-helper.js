@@ -29,8 +29,8 @@ try {
 
 const AVAILABLE_DEVICES = control.devices;
 
-function targetDeviceFor(modelId) {
-  return String(modelId || "").includes("qwen") ? "NPU" : "CPU";
+function targetDeviceFor(modelId, requestedDevice) {
+  return requestedDevice || (String(modelId || "").includes("qwen") ? "GPU" : "CPU");
 }
 
 logStderr("INFO", "Mock helper starting", {
@@ -120,7 +120,7 @@ function handleLine(line) {
     }
     // A readiness probe targets the model's certified device only; it never
     // silently substitutes a fallback device.
-    const target = targetDeviceFor(modelId);
+    const target = targetDeviceFor(modelId, msg.requested_device);
     if (!AVAILABLE_DEVICES.includes(target)) {
       console.log(JSON.stringify({
         v: "1",
@@ -216,7 +216,8 @@ function handleLine(line) {
     arr[0] = 1.0; // simple L2 unit vector
 
     const fallbackOccurred = msg.fallback === "same_model_cpu" && modelId.includes("qwen");
-    const device = fallbackOccurred ? "CPU" : (modelId.includes("qwen") ? "NPU" : "CPU");
+    const requestedDevice = msg.requested_device || (modelId.includes("qwen") ? "GPU" : "CPU");
+    const device = fallbackOccurred ? "CPU" : requestedDevice;
 
     console.log(JSON.stringify({
       v: "1",
@@ -228,7 +229,7 @@ function handleLine(line) {
       dimensions: dims,
       embedding: arr,
       device: device,
-      requested_device: modelId.includes("qwen") ? "NPU" : "CPU",
+      requested_device: requestedDevice,
       fallback_occurred: fallbackOccurred,
       fallback_reason: fallbackOccurred ? "device_not_found:NPU" : null,
       sequence_length: 512,
