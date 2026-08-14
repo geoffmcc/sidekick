@@ -1,0 +1,17 @@
+{
+  "name": "jellyfin-tools",
+  "displayName": "Jellyfin Tools",
+  "version": "1.0.0",
+  "description": "Secure, bounded Jellyfin inspection, diagnosis and governed maintenance.",
+  "sidekick": ">=1.0.0",
+  "type": "plugin",
+  "entryPoint": "entry.js",
+  "capabilities": ["jellyfin-discovery", "jellyfin-playback-diagnosis", "jellyfin-maintenance"],
+  "configSchema": { "type": "object" },
+  "permissions": [{ "tool": "proxmox", "risk": "low" }],
+  "tools": {
+    "jellyfin": { "risk": "low", "category": "Media", "aliases": ["jf"] },
+    "jellyfin_maintenance": { "risk": "high", "category": "Media", "aliases": ["jf_maintenance"] }
+  },
+  "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
+}
