@@ -10,6 +10,7 @@ const { redactSensitive } = require("../redact");
 
 const POLL_INTERVAL_MS = 250;
 const MAX_CONCURRENCY = Math.max(1, Number(process.env.SIDEKICK_DIRECT_JOB_CONCURRENCY || 1));
+const MAX_CONTINUATIONS = 3;
 let timer = null;
 let inFlight = 0;
 
@@ -26,14 +27,7 @@ async function execute(claimed) {
   try {
     let result;
     if (job.jobType === "chat") {
-      result = await inferenceService.chat({
-        messages: payload.messages || [{ role: "user", content: payload.prompt }],
-        system: payload.system,
-        temperature: payload.temperature,
-        timeout: job.timeoutMs,
-        dataClassification: job.dataClassification,
-        preferences: { allowFallback: true },
-      });
+      result = await runChatToCompletion(job, payload);
     } else {
       result = await inferenceService.generate(payload.prompt, {
         system: payload.system,
@@ -56,6 +50,41 @@ async function execute(claimed) {
   } finally {
     inFlight -= 1;
   }
+}
+
+async function runChatToCompletion(job, payload) {
+  const originalMessages = payload.messages || [{ role: "user", content: payload.prompt }];
+  const messages = [...originalMessages];
+  const parts = [];
+  let result;
+  let continuationCount = 0;
+
+  for (let attempt = 0; attempt <= MAX_CONTINUATIONS; attempt++) {
+    result = await inferenceService.chat({
+      messages,
+      system: payload.system,
+      temperature: payload.temperature,
+      maxTokens: payload.maxTokens || 8192,
+      timeout: job.timeoutMs,
+      dataClassification: job.dataClassification,
+      preferences: { allowFallback: true },
+    });
+    if (result.content) parts.push(result.content);
+    if (result.finishReason !== "length" || attempt === MAX_CONTINUATIONS) break;
+
+    continuationCount += 1;
+    messages.push(
+      { role: "assistant", content: result.content || "" },
+      { role: "user", content: "Continue exactly where you stopped. Do not repeat earlier content. Finish the answer completely, including any unfinished code block or section." },
+    );
+  }
+
+  return {
+    ...result,
+    content: parts.join("\n\n"),
+    continuationCount,
+    complete: result.finishReason !== "length",
+  };
 }
 
 function runOnce() {

@@ -118,7 +118,7 @@ async function sidekick_ollama({ action, model }) {
   }
 }
 
-async function sidekick_llm({ prompt, system, temperature, async: asyncMode, timeout_ms: timeoutMs }) {
+async function sidekick_llm({ prompt, system, temperature, async: asyncMode, timeout_ms: timeoutMs, max_tokens: maxTokens }) {
   // Chat routes through Compute — the single inference authority. Provider/model
   // selection, credentials, health, and fallback belong to Placement; the tool
   // no longer reaches Ollama/Groq directly or accepts a provider pin. Requests
@@ -150,6 +150,7 @@ async function sidekick_llm({ prompt, system, temperature, async: asyncMode, tim
           prompt,
           system,
           temperature: temperature ?? 0.7,
+          maxTokens: maxTokens || 8192,
         },
         timeoutMs: timeoutMs || 900000,
         maxAttempts: 1,
@@ -188,8 +189,9 @@ const descriptors = Object.freeze([
       temperature: z.number().optional().default(0.7).describe("Sampling temperature (0-2)"),
       async: z.boolean().optional().default(false).describe("Queue the request durably and return a job ID instead of waiting for the model"),
       timeout_ms: z.number().int().min(1000).max(86400000).optional().describe("Maximum provider execution time for async requests"),
+      max_tokens: z.number().int().min(256).max(32768).optional().describe("Maximum output tokens per generation segment; truncated segments are continued automatically"),
     }),
-    args: { prompt: "string", system: "string (optional)", temperature: "number (optional)", async: "boolean (optional)", timeout_ms: "integer (optional, async execution timeout)" },
+    args: { prompt: "string", system: "string (optional)", temperature: "number (optional)", async: "boolean (optional)", timeout_ms: "integer (optional, async execution timeout)", max_tokens: "integer (optional, output segment limit)" },
     risk: "medium",
     category: "Core",
     source: "builtin",
