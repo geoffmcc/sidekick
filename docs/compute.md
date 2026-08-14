@@ -94,6 +94,11 @@ LLM output budgets are tiered by default: `normal` produces up to 4096 tokens,
 `complex` up to 8192, and `large` up to 16384. Use the `output_budget` field on
 `llm` or `compute_jobs` chat/generate requests; an explicit `max_tokens` (or
 `request_payload.maxTokens`) always overrides the tier.
+
+For review chains, `compute_jobs` accepts `source_job_id` with a review prompt.
+The source job must be completed, in the same project, and no more sensitive
+than the follow-up. Compute injects the full textual result after claim, so the
+job-creation request stays within its small control-plane payload limit.
 - `SIDEKICK_OLLAMA_TIMEOUT_MS`: maximum time allowed for one Ollama generation request; use a larger value for long coding tasks.
 
 Worker heartbeat and admin inspect APIs expose platform, architecture, worker version, protocol version, providers, executors, model inventory, limits, health, and utilization metadata.

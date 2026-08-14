@@ -88,6 +88,7 @@ const TOOL_SCHEMAS = {
     model: z.string().optional().describe("Model name (create convenience; mapped to request_payload.model)"),
     provider: z.string().optional().describe("Preferred provider hint (create convenience; mapped to request_payload.provider)"),
     output_budget: z.enum(["normal", "complex", "large"]).optional().describe("Output tier for chat/generate jobs: normal=4096, complex=8192, large=16384; explicit request_payload.maxTokens overrides"),
+    source_job_id: z.string().max(128).optional().describe("Completed Compute job whose result is injected into this chat/generate prompt after claim"),
     // create: limits
     timeout_ms: z.number().int().min(1000).max(86400000).optional().describe("Job timeout in ms (create), 1000..86400000"),
     max_retries: z.number().int().min(0).max(10).optional().describe("Max retries after the first attempt (create); maps to maxAttempts = max_retries + 1"),
