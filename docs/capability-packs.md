@@ -7,6 +7,9 @@ Sidekick Core no longer has to absorb every future area of functionality. A
 **capability pack** is an installable, manageable **area of competence**, built
 from the subsystems Sidekick already owns.
 
+For a step-by-step guide to creating and distributing a compatible external
+pack, see [`third-party-capability-packs.md`](third-party-capability-packs.md).
+
 ## The layers, and what each one is
 
 | Layer | What it is | Where it lives |
