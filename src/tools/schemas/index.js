@@ -26,7 +26,7 @@ const TOOL_SCHEMAS = {
     created_by: z.string().optional().describe("Enrollment token creator"),
     re_enrollment_of: z.string().optional().describe("Node ID being re-enrolled"),
     reason: z.string().optional().describe("Revoke reason"),
-    enable: z.boolean().optional().describe("Enable/disable maintenance"),
+    enable: z.boolean().optional().describe("Worker service state for maintenance action: true returns the worker to enabled service; false places it into maintenance"),
     state: z.string().optional().describe("Filter by worker state for list"),
     hardware_type: z.string().optional().describe("Filter by hardware_type for list"),
     provider: z.string().optional().describe("Filter by provider for list")

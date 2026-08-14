@@ -5,7 +5,7 @@
   "title": "Release Preparation",
   "description": "Determine whether a repository is ready for release and draft the release notes. Checks repository state, version consistency, changelog status, uncommitted work, verification, dependency state and migration/API warnings, then produces a readiness verdict. It never tags, never creates a GitHub release and never publishes.",
   "mode": "mutating",
-  "tags": ["developer", "release", "read-only"],
+  "tags": ["developer", "release"],
   "inputs": {
     "path": { "type": "string", "required": true, "description": "Repository path" },
     "since": { "type": "string", "required": true, "description": "Previous release ref (tag or commit) the notes are generated from" },
