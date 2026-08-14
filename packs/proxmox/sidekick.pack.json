@@ -95,6 +95,7 @@
               "token_ref": { "type": "string" },
               "ca_pem": { "type": "string" },
               "ca_secret_ref": { "type": "string" },
+              "tls_servername": { "type": "string", "description": "Optional DNS name used for TLS SNI and certificate validation when endpoint is an IP address." },
               "request_timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 120000 },
               "task_poll_interval_ms": { "type": "integer", "minimum": 250, "maximum": 10000 },
               "task_timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 1800000 },
