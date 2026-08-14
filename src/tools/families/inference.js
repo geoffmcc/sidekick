@@ -134,6 +134,7 @@ async function sidekick_llm({ prompt, system, temperature, async: asyncMode, tim
       // existing compute_jobs lifecycle.
       compute.initialize();
       const context = toolContext.getExecutionContext();
+      const workerModel = process.env.OLLAMA_MODEL || "qwen3.5:latest";
       const job = compute.jobManager.createJob({
         jobType: "chat",
         capability: "chat",
@@ -145,6 +146,7 @@ async function sidekick_llm({ prompt, system, temperature, async: asyncMode, tim
         taskId: context.taskId,
         sessionId: context.sessionId,
         dataClassification: "private",
+        capabilityRequirements: { executor: "ollama.inference", model: workerModel },
         requestPayload: {
           async: true,
           prompt,
@@ -152,6 +154,7 @@ async function sidekick_llm({ prompt, system, temperature, async: asyncMode, tim
           temperature: temperature ?? 0.7,
           maxTokens,
           contextLimit,
+          model: workerModel,
         },
         timeoutMs: timeoutMs || 86400000,
         maxAttempts: 1,
