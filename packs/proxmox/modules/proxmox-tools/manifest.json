@@ -60,6 +60,7 @@
             "token_ref": { "type": "string", "description": "Secret store reference for the API token, of the form secret:<name>. The value is resolved server-side and never returned." },
             "ca_pem": { "type": "string", "description": "Optional PEM CA certificate to pin (e.g. the Proxmox cluster CA) for self-signed installations. TLS verification stays on." },
             "ca_secret_ref": { "type": "string", "description": "Optional secret store reference (secret:<name>) holding the pinned CA PEM, as an alternative to ca_pem." },
+            "tls_servername": { "type": "string", "description": "Optional DNS name used for TLS SNI and certificate validation when endpoint is an IP address." },
             "request_timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 120000, "description": "Per-request timeout (default 15000)." },
             "task_poll_interval_ms": { "type": "integer", "minimum": 250, "maximum": 10000, "description": "Task status poll interval (default 1000)." },
             "task_timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 1800000, "description": "Maximum wait for a task to reach a terminal state (default 120000)." },

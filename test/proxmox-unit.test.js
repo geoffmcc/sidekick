@@ -238,6 +238,10 @@ test("U.21: parseProfile refuses inline credentials and non-https endpoints", ()
   const good = profiles.parseProfile("p", { endpoint: "https://h:8006", token_ref: "secret:t", allow_lifecycle: true });
   assert.strictEqual(good.ok, true);
   assert.strictEqual(good.profile.allow_lifecycle, true);
+  const namedTls = profiles.parseProfile("p", { endpoint: "https://192.0.2.10:8006", token_ref: "secret:t", tls_servername: "PVE.Example.Test" });
+  assert.strictEqual(namedTls.ok, true);
+  assert.strictEqual(namedTls.profile.tls_servername, "pve.example.test");
+  assert.strictEqual(profiles.parseProfile("p", { endpoint: "https://192.0.2.10:8006", token_ref: "secret:t", tls_servername: "not a hostname" }).ok, false);
 });
 
 test("U.22: resolveProfile handles default, ambiguity and unknown names", () => {
