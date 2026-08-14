@@ -323,16 +323,18 @@ function makeGitRepo() {
     global.__srLabCtx = ctx;
   });
 
-  await test("SR.18 lab cleanup requests an authorized shutdown and reports deletion pending/manual", async () => {
+  await test("SR.18 lab cleanup requests shutdown then consumes guarded retirement and remains pending when policy denies", async () => {
     const ctx = global.__srLabCtx;
     let guestCall = null;
     const fake = { dispatch: async (name, a) => {
       guestCall = { name, a };
-      return { content: [{ type: "text", text: JSON.stringify({ ok: true, action: "shutdown", outcome: "stopped" }) }] };
+      if (name === "proxmox_guest") return { content: [{ type: "text", text: JSON.stringify({ ok: true, action: "shutdown", outcome: "stopped" }) }] };
+      return { content: [{ type: "text", text: JSON.stringify({ ok: false, code: "destruction_denied" }) }] };
     } };
     const result = await labLib.cleanup(fake, ctx, {});
-    assert.strictEqual(guestCall.name, "proxmox_guest");
-    assert.strictEqual(guestCall.a.action, "shutdown");
+    assert.strictEqual(guestCall.name, "proxmox_retire");
+    assert.strictEqual(guestCall.a.action, "retire");
+    assert.strictEqual(guestCall.a.require_test, true);
     assert.strictEqual(result.cleanup, "pending_manual");
     assert.strictEqual(result.resources[0].deletion, "pending_manual");
     assert.strictEqual(result.resources[0].shutdown.ok, true);

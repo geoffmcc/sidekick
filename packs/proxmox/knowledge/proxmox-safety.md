@@ -39,12 +39,19 @@ not by disabling verification — there is no insecure mode. The cluster CA is a
 `/etc/pve/pve-root-ca.pem` on any node. A verification failure is reported as a
 distinct `tls_failure` with this guidance, never as a generic network error.
 
-## Cluster maintenance is deliberately not automated yet
+## Maintenance preflight and deferred host maintenance
 
-This release does not perform rolling cluster upgrades, node evacuation, or
-reboots-for-maintenance. Doing that safely requires reasoning about quorum, HA,
-guest placement, migration capability, storage and (where present) Ceph health,
-plus post-reboot verification — a durable, resumable workflow. The read tools
-here (`cluster_summary`, `capabilities`, `list_tasks`, `node_status`) are the
-inputs such a workflow will need; the workflow itself is future work. Until it
-exists, sequence maintenance yourself and use these tools to verify each step.
+`maintenance_preflight` combines cluster/quorum state, node online state,
+running guests and HA indicators, active backup/migration/replication tasks,
+and node storage visibility. It returns `safe_to_begin_preflight_only` only
+when the facts it can authoritatively obtain have no blocker. This is not a
+claim that package updates or reboots are safe.
+
+Rolling cluster updates, node evacuation, package changes and reboot recovery
+remain deferred until a durable workflow and an administrator-approved,
+bounded host-maintenance backend are available. Unknown or permission-limited
+safety facts must be treated as blocked; they are never promoted to safe.
+
+Migration and retirement are consequential operations: use their dry-run or
+explain paths first. A cancelled wait may leave a remote UPID running; inspect
+the task before deciding what to do next.

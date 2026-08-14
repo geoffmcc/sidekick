@@ -2,7 +2,7 @@
   "name": "proxmox-tools",
   "displayName": "Proxmox Tools",
   "version": "1.0.0",
-  "description": "Secure Proxmox VE inspection and controlled guest lifecycle operations over the Proxmox API, with administrator-configured profiles, pinned-CA TLS, and capability detection.",
+  "description": "Secure Proxmox VE inspection, deterministic maintenance preflight, same-cluster migration, controlled guest operations, governed provisioning, and provenance-gated retirement over administrator-configured profiles with pinned-CA TLS.",
   "author": "Sidekick",
   "type": "plugin",
   "entryPoint": "entry.js",
@@ -12,7 +12,10 @@
     "proxmox-capability-detection",
     "proxmox-guest-lifecycle",
     "proxmox-provisioning",
-    "proxmox-ansible"
+    "proxmox-ansible",
+    "proxmox-migration",
+    "proxmox-guarded-retirement",
+    "proxmox-maintenance-preflight"
   ],
   "configSchema": {
     "type": "object",
@@ -29,6 +32,11 @@
           },
           "additionalProperties": false
         }
+      },
+      "allow_destroy": {
+        "type": "boolean",
+        "default": false,
+        "description": "Explicit administrator enablement for guarded retirement of proven Sidekick-managed disposable guests."
       },
       "ansible": {
         "type": "object",
@@ -85,6 +93,16 @@
       "risk": "high",
       "category": "Infrastructure",
       "aliases": ["ansible_playbook"]
+    },
+    "proxmox_migrate": {
+      "risk": "high",
+      "category": "Infrastructure",
+      "aliases": ["pve_migrate"]
+    },
+    "proxmox_retire": {
+      "risk": "critical",
+      "category": "Infrastructure",
+      "aliases": ["pve_retire"]
     }
   },
   "permissions": [

@@ -1,7 +1,8 @@
 # Proxmox pack: operating model and tools
 
 The Proxmox capability pack lets Sidekick inspect and operate Proxmox VE
-environments through the Proxmox API. It contributes two governed tools.
+environments through the Proxmox API. It contributes governed inspection,
+lifecycle, migration, provisioning, and guarded retirement tools.
 
 ## Tools
 
@@ -26,6 +27,8 @@ One tool, many read actions. Every action selects an administrator-configured
 | `version` | Proxmox version |
 | `list_profiles` | configured profiles and their validity (no secrets) |
 | `detect_providers` | optional local automation detected on the Sidekick host |
+| `maintenance_preflight` (`node`) | API-only deterministic node safety facts; never updates or reboots |
+| `migration_plan` (`vmid`, `target_node`) | resolved same-cluster migration plan without changing state |
 
 ### `proxmox_guest` (risk: high, change)
 
@@ -36,8 +39,27 @@ monitors the Proxmox task to a terminal state. Success is derived from task
 completion, not from the request being accepted.
 
 It does **not** hard-stop, reset, suspend, delete, clone, migrate, or snapshot,
-and it changes no configuration. Those are deliberately absent from this
-release.
+and it changes no configuration. Migration is a separate governed tool.
+
+### `proxmox_migrate` (risk: high, change)
+
+Migrates one VM or LXC within the same PVE cluster. It resolves source and
+target nodes immediately before execution, rejects offline targets and
+same-node requests, makes local-storage implications explicit, monitors the
+UPID, honors cancellation, and verifies target placement. `dry_run` is the
+planning path. Cross-cluster migration is not implemented.
+
+### `proxmox_retire` (risk: critical, destructive)
+
+Retires only a currently proven Sidekick-managed guest. It is disabled unless
+the administrator sets `allow_destroy: true`, and still requires matching
+provenance, no configured or Proxmox protection, and (for disposable research
+cleanup) an exact recorded test marker. It waits for task completion and
+verifies absence. There is no force or provenance-bypass argument.
+
+SSH remains detection-only; governed Ansible remains optional and allowlisted.
+Direct PBS API access is not yet a first-class provider; PVE-side backup/PBS
+storage detection remains available.
 
 ## The capability report
 

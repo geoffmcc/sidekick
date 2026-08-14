@@ -83,6 +83,7 @@ function sendError(res, status, message) {
 
 const NODES = [
   { node: "pve1", type: "node", status: "online", cpu: 0.03, maxcpu: 2, mem: 1268707328, maxmem: 3115499520, disk: 6188195840, maxdisk: 8940331008, uptime: 508, level: "", ssl_fingerprint: "AA:BB" },
+  { node: "pve2", type: "node", status: "online", cpu: 0.02, maxcpu: 2, mem: 1000000000, maxmem: 3115499520, uptime: 600 },
 ];
 const RESOURCES = [
   ...NODES.map(n => ({ ...n, id: `node/${n.node}` })),
@@ -183,8 +184,9 @@ function handle(req, res, raw) {
   if (method === "GET" && p === "/version") return send(res, 200, { release: "9.2", version: "9.2.10", repoid: "deadbeef" });
   if (method === "GET" && p === "/cluster/status") {
     return send(res, 200, [
-      { type: "cluster", name: "pvetest", nodes: 1, quorate: 1 },
+      { type: "cluster", name: "pvetest", nodes: 2, quorate: 1 },
       { type: "node", name: "pve1", online: 1, ip: "10.0.0.11", local: 1 },
+      { type: "node", name: "pve2", online: 1, ip: "10.0.0.12", local: 0 },
     ]);
   }
   if (method === "GET" && p === "/cluster/resources") return send(res, 200, resourcesView());
@@ -194,9 +196,20 @@ function handle(req, res, raw) {
       { storage: "local-lvm", type: "lvmthin", content: "images,rootdir", shared: 0 },
     ]);
   }
+  if (method === "GET" && p === "/nodes/pve1/storage") {
+    return send(res, 200, [{ storage: "local", type: "dir", shared: 0, status: "available" }, { storage: "local-lvm", type: "lvmthin", shared: 0, status: "available" }]);
+  }
   if (method === "GET" && p === "/nodes") return send(res, 200, NODES);
   if (method === "GET" && p === "/nodes/pve1/status") {
     return send(res, 200, { uptime: 508, pveversion: "pve-manager/9.2.10", "current-kernel": { release: "7.0.14-11-pve" }, cpu: 0.03, cpuinfo: { cpus: 2 }, loadavg: ["0.1", "0.2", "0.3"], memory: { used: 1268707328, total: 3115499520 }, rootfs: { used: 6188195840, total: 8940331008 } });
+  }
+  const migrateMatch = p.match(/^\/nodes\/pve1\/(qemu|lxc)\/(\d+)\/migrate$/);
+  if (method === "POST" && migrateMatch) {
+    const g = store.get(Number(migrateMatch[2]));
+    if (!g) return sendError(res, 500, "does not exist");
+    g.node = body.target;
+    const upid = newUpid("qmigrate");
+    return send(res, 200, upid);
   }
   // node "leaky": returns a 500 whose body echoes the Authorization header,
   // simulating a Proxmox error that reflects request headers. The pack MUST
@@ -418,12 +431,34 @@ function storeToken() {
     assert.ok(dp.providers.ansible && dp.providers.ansible.state.match(/installed|not_installed/));
   });
 
+  await test("PX3.1: maintenance preflight returns a deterministic safe/blocked shape", async () => {
+    const r = json(await callInternalTool("proxmox", { action: "maintenance_preflight", profile: "main", node: "pve1" }));
+    assert.strictEqual(r.ok, true, JSON.stringify(r));
+    assert.strictEqual(r.node, "pve1");
+    assert.strictEqual(r.decision, "safe_to_begin_preflight_only");
+    assert.strictEqual(r.providers.host_maintenance, "not_claimed_without_governed_backend");
+    assert.strictEqual(r.guests.running, 1);
+  });
+
+  await test("PX3.2: migration dry-run and execution use the real dispatcher and verify target placement", async () => {
+    const dry = json(await callInternalTool("proxmox_migrate", { action: "migrate", profile: "main", vmid: 101, target_node: "pve2", dry_run: true }));
+    assert.strictEqual(dry.ok, true, JSON.stringify(dry));
+    assert.strictEqual(dry.dry_run, true);
+    assert.strictEqual(dry.explain.resolved.node, "pve1");
+    const moved = json(await callInternalTool("proxmox_migrate", { action: "migrate", profile: "main", vmid: 101, target_node: "pve2" }));
+    assert.strictEqual(moved.ok, true, JSON.stringify(moved));
+    assert.strictEqual(moved.outcome, "completed");
+    assert.strictEqual(moved.final_node, "pve2");
+  });
+
   // --- phase 2: provisioning, provenance, policy, guarded delete, ansible ---
 
   await test("PXV.1: proxmox_provision and ansible_run register with high risk", async () => {
     const reg = require("../src/tools-legacy");
     assert.strictEqual(reg.getToolRisk("proxmox_provision"), "high");
     assert.strictEqual(reg.getToolRisk("ansible_run"), "high");
+    assert.strictEqual(reg.getToolRisk("proxmox_migrate"), "high");
+    assert.strictEqual(reg.getToolRisk("proxmox_retire"), "critical");
   });
 
   await test("PXV.2: create_vm provisions a provenance-tagged guest through the tool", async () => {
@@ -513,6 +548,24 @@ function storeToken() {
     // Not configured (no playbook_dir) or ansible absent -> a clean not-ready code, never a crash.
     assert.strictEqual(dry.ok, false);
     assert.ok(["not_configured", "provider_unavailable"].includes(dry.code), dry.code);
+  });
+
+  await test("PXV.10: guarded retirement is disabled by default and dry-run explains the denial", async () => {
+    const created = json(await callInternalTool("proxmox_provision", { action: "create_vm", profile: "main", vm: { node: "pve1", name: "sk-retire-default", cores: 1, memory: 512 } }));
+    const r = json(await callInternalTool("proxmox_retire", { action: "retire", profile: "main", vmid: created.vmid, dry_run: true, require_test: true, marker: created.marker }));
+    assert.strictEqual(r.ok, false, JSON.stringify(r));
+    assert.strictEqual(r.outcome, "denied");
+    assert.ok(r.explain.decision.reasons.some(x => /destroy policy/i.test(x)));
+  });
+
+  await test("PXV.11: enabled retirement accepts only an exact disposable provenance marker and verifies absence", async () => {
+    const prov = provenance.buildProvenance({ run: "retire-test", test: true });
+    await directRequest(port, "POST", "/nodes/pve1/qemu", { vmid: 991, name: "sk-retire-test", tags: prov.tags, description: prov.description });
+    packLifecycle.configure("proxmox", { allow_destroy: true, profiles: { main: { endpoint, token_ref: "secret:proxmox_test_token", ca_pem: certPem, allow_lifecycle: true, task_poll_interval_ms: 300, task_timeout_ms: 5000, default: true } } });
+    const r = json(await callInternalTool("proxmox_retire", { action: "retire", profile: "main", vmid: 991, require_test: true, marker: prov.marker }));
+    assert.strictEqual(r.ok, true, JSON.stringify(r));
+    assert.strictEqual(r.outcome, "completed");
+    assert.strictEqual(r.verified_absent, true);
   });
 
   await test("PX.15: an invalid profile makes pack health fail closed, and is recoverable", async () => {

@@ -27,6 +27,9 @@ const provision = require("./lib/provision");
 const policy = require("./lib/policy");
 const provenance = require("./lib/provenance");
 const ansible = require("./lib/ansible");
+const migration = require("./lib/migration");
+const maintenance = require("./lib/maintenance");
+const retirement = require("./lib/retirement");
 const { ProxmoxError } = require("./lib/errors");
 const { scrubSecrets } = require("./lib/client");
 
@@ -92,7 +95,7 @@ async function handleRead(services, args, runtime) {
     let data;
     switch (action) {
       case "cluster_summary": data = await operations.clusterSummary(client); break;
-      case "capabilities": data = await capabilities.detectCapabilities(client, profile); break;
+      case "capabilities": data = await capabilities.detectCapabilities(client, profile, config); break;
       case "list_nodes": data = await operations.listNodes(client); break;
       case "node_status": data = await operations.nodeStatus(client, requireNode(args)); break;
       case "list_guests": data = await operations.listGuests(client, { node: optionalNode(args), type: args.type }); break;
@@ -104,6 +107,8 @@ async function handleRead(services, args, runtime) {
       case "list_snapshots": data = await provision.snapshotList(client, { node: requireNode(args), vmid: requireVmid(args) }); break;
       case "backup_status": data = await operations.backupStatus(client); break;
       case "version": data = await operations.versionStatus(client); break;
+      case "maintenance_preflight": data = await maintenance.preflight(client, requireNode(args)); break;
+      case "migration_plan": data = await migration.plan(client, requireVmid(args), args.target_node); break;
       default:
         return errorResult(new ProxmoxError("invalid_input", `Unknown action "${action}"`));
     }
@@ -150,7 +155,7 @@ async function handleGuest(services, args, runtime) {
 const READ_ACTIONS = [
   "cluster_summary", "capabilities", "list_nodes", "node_status", "list_guests",
   "guest_status", "list_storage", "storage_status", "list_tasks", "task_status",
-  "list_snapshots", "backup_status", "version", "list_profiles", "detect_providers",
+  "list_snapshots", "backup_status", "version", "maintenance_preflight", "migration_plan", "list_profiles", "detect_providers",
 ];
 
 const PROVISION_ACTIONS = ["create_vm", "create_lxc", "clone", "configure", "snapshot_create", "convert_template"];
@@ -253,6 +258,35 @@ async function handleAnsible(services, args, runtime) {
   return errorResult(new ProxmoxError("invalid_input", `Unknown ansible action "${action}"`));
 }
 
+async function handleMigration(services, args, runtime) {
+  const session = service.openSession(services.config || {}, args.profile, runtime && runtime.signal);
+  if (!session.ok) return errorResult(new ProxmoxError(session.code, session.message));
+  const { client, profile } = session;
+  try {
+    const vmid = requireVmid(args);
+    const plan = await migration.plan(client, vmid, args.target_node);
+    const decision = policy.decide({ matchers: protectedMatchers(services), target: { ...plan, node: plan.source_node, proxmox_protection: plan.protection }, provenance: { managed: true }, blockIfProtected: true });
+    const explain = policy.explain({ operation: "migrate", profile: profile.name, target: { ...plan, node: plan.source_node }, decision, expected_effect: plan.expected_effect });
+    if (decision.result === "denied") return jsonResult({ ok: false, code: "protected_resource", action: "migrate", profile: profile.name, explain });
+    if (args.dry_run === true) return jsonResult({ ok: true, action: "migrate", profile: profile.name, dry_run: true, explain });
+    const result = await migration.migrate(client, profile, vmid, args.target_node, { online: args.online, wait: args.wait, signal: runtime && runtime.signal });
+    return jsonResult({ ok: result.outcome === "completed" || result.outcome === "submitted", action: "migrate", profile: profile.name, explain, ...result });
+  } catch (error) { return errorResult(error); }
+}
+
+async function handleRetirement(services, args, runtime) {
+  const session = service.openSession(services.config || {}, args.profile, runtime && runtime.signal);
+  if (!session.ok) return errorResult(new ProxmoxError(session.code, session.message));
+  try {
+    const result = await retirement.retire(session.client, session.profile, {
+      ...args,
+      allow_destroy: services.config && services.config.allow_destroy === true,
+      protected_resources: protectedMatchers(services),
+    }, runtime && runtime.context, runtime && runtime.signal);
+    return jsonResult({ profile: session.profile.name, action: "retire", ...result });
+  } catch (error) { return errorResult(error); }
+}
+
 function expectedEffect(action, args, facts) {
   switch (action) {
     case "create_vm": return `Create a new QEMU VM${args.vm && args.vm.name ? ` named "${args.vm.name}"` : ""} tagged sidekick-managed.`;
@@ -283,6 +317,7 @@ const entry = {
           type: z.enum(["qemu", "lxc"]).optional().describe("Filter guests by type in list_guests"),
           limit: z.number().int().min(1).max(500).optional().describe("Max tasks to return in list_tasks (default 50)"),
           errors: z.boolean().optional().describe("Only error tasks in list_tasks"),
+          target_node: z.string().max(63).optional().describe("Migration target node for migration_plan"),
         }),
         args: {
           action: `string (${READ_ACTIONS.join("|")})`,
@@ -294,10 +329,31 @@ const entry = {
           type: "string (qemu|lxc)",
           limit: "number",
           errors: "boolean",
+          target_node: "string (migration target node)",
         },
         risk: "low",
         category: "Infrastructure",
         handler: (args, runtime) => handleRead(services, args, runtime),
+      },
+      {
+        name: "proxmox_migrate",
+        aliases: ["pve_migrate"],
+        description: "Governed same-cluster migration for a QEMU VM or LXC container. Resolves source/target nodes immediately before execution, validates online/offline and local-storage implications, monitors the UPID, honors cancellation, and verifies the guest on the target. Cross-cluster migration is unsupported.",
+        schema: z.object({ action: z.enum(["migrate"]), vmid: z.union([z.number().int(), z.string()]), target_node: z.string().max(63), profile: z.string().max(63).optional(), online: z.boolean().optional(), wait: z.boolean().optional(), dry_run: z.boolean().optional() }),
+        args: { action: "string (migrate)", vmid: "number|string", target_node: "string", profile: "string", online: "boolean", wait: "boolean", dry_run: "boolean" },
+        risk: "high",
+        category: "Infrastructure",
+        handler: (args, runtime) => handleMigration(services, args, runtime),
+      },
+      {
+        name: "proxmox_retire",
+        aliases: ["pve_retire"],
+        description: "Critical guarded retirement of a Sidekick-managed Proxmox guest. Disabled unless administrator configuration enables destruction; requires current positive provenance, no configured or Proxmox protection, optional exact disposable marker, policy approval, UPID completion, and post-delete absence verification. No force or bypass arguments exist.",
+        schema: z.object({ action: z.enum(["retire"]), vmid: z.union([z.number().int(), z.string()]), profile: z.string().max(63).optional(), dry_run: z.boolean().optional(), require_test: z.boolean().optional(), marker: z.string().max(128).optional() }),
+        args: { action: "string (retire)", vmid: "number|string", profile: "string", dry_run: "boolean", require_test: "boolean", marker: "string (exact recorded provenance marker)" },
+        risk: "critical",
+        category: "Infrastructure",
+        handler: (args, runtime) => handleRetirement(services, args, runtime),
       },
       {
         name: "proxmox_guest",
@@ -433,11 +489,12 @@ const entry = {
     const profileList = profilesLib.listProfiles(config || {});
     const invalid = profileList.filter(p => !p.valid);
     const details = {
-      tools: 4,
+      tools: 6,
       profiles: profileList.length,
       profile_names: profileList.map(p => p.name),
       invalid_profiles: invalid.map(p => ({ name: p.name, error: p.error })),
       lifecycle_enabled_profiles: profileList.filter(p => p.valid && p.allow_lifecycle).map(p => p.name),
+      destruction_enabled: config && config.allow_destroy === true,
     };
     if (invalid.length) {
       return { ok: false, error: `Invalid Proxmox profile configuration: ${invalid.map(p => p.name).join(", ")}`, details };
