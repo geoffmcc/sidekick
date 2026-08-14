@@ -97,7 +97,9 @@ class OllamaProvider {
       options: pruneUndefined({
         temperature: options.temperature ?? 0.7,
         num_ctx: options.contextLimit,
-        num_predict: options.maxTokens,
+        // Ollama's -1 means generate until the model naturally finishes.
+        // The caller may still provide an explicit bounded maxTokens value.
+        num_predict: options.maxTokens === undefined ? -1 : options.maxTokens,
       }),
     };
     if (options.format) body.format = options.format;
@@ -125,7 +127,7 @@ class OllamaProvider {
       options: pruneUndefined({
         temperature: options.temperature ?? 0.7,
         num_ctx: options.contextLimit,
-        num_predict: options.maxTokens,
+        num_predict: options.maxTokens === undefined ? -1 : options.maxTokens,
       }),
     };
     const result = await this._request("/api/generate", body, { timeout: options.timeout || this.timeout });

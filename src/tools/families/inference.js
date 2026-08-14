@@ -118,7 +118,7 @@ async function sidekick_ollama({ action, model }) {
   }
 }
 
-async function sidekick_llm({ prompt, system, temperature, async: asyncMode, timeout_ms: timeoutMs, max_tokens: maxTokens }) {
+async function sidekick_llm({ prompt, system, temperature, async: asyncMode, timeout_ms: timeoutMs, max_tokens: maxTokens, context_limit: contextLimit }) {
   // Chat routes through Compute — the single inference authority. Provider/model
   // selection, credentials, health, and fallback belong to Placement; the tool
   // no longer reaches Ollama/Groq directly or accepts a provider pin. Requests
@@ -150,9 +150,10 @@ async function sidekick_llm({ prompt, system, temperature, async: asyncMode, tim
           prompt,
           system,
           temperature: temperature ?? 0.7,
-          maxTokens: maxTokens || 8192,
+          maxTokens,
+          contextLimit,
         },
-        timeoutMs: timeoutMs || 900000,
+        timeoutMs: timeoutMs || 86400000,
         maxAttempts: 1,
         idempotencyKey: context.idempotencyKey || undefined,
       });
@@ -189,9 +190,10 @@ const descriptors = Object.freeze([
       temperature: z.number().optional().default(0.7).describe("Sampling temperature (0-2)"),
       async: z.boolean().optional().default(false).describe("Queue the request durably and return a job ID instead of waiting for the model"),
       timeout_ms: z.number().int().min(1000).max(86400000).optional().describe("Maximum provider execution time for async requests"),
-      max_tokens: z.number().int().min(256).max(32768).optional().describe("Maximum output tokens per generation segment; truncated segments are continued automatically"),
+      max_tokens: z.number().int().min(256).max(262144).optional().describe("Optional maximum output tokens; omitted means the provider may generate until it naturally finishes"),
+      context_limit: z.number().int().min(4096).max(262144).optional().describe("Optional model context window; omitted uses the registered model limit"),
     }),
-    args: { prompt: "string", system: "string (optional)", temperature: "number (optional)", async: "boolean (optional)", timeout_ms: "integer (optional, async execution timeout)", max_tokens: "integer (optional, output segment limit)" },
+    args: { prompt: "string", system: "string (optional)", temperature: "number (optional)", async: "boolean (optional)", timeout_ms: "integer (optional, async execution timeout)", max_tokens: "integer (optional, provider output limit)", context_limit: "integer (optional, model context limit)" },
     risk: "medium",
     category: "Core",
     source: "builtin",

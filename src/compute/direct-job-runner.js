@@ -32,6 +32,8 @@ async function execute(claimed) {
       result = await inferenceService.generate(payload.prompt, {
         system: payload.system,
         temperature: payload.temperature,
+        maxTokens: payload.maxTokens,
+        contextLimit: payload.contextLimit,
         timeout: job.timeoutMs,
         dataClassification: job.dataClassification,
         preferences: { allowFallback: true },
@@ -64,7 +66,8 @@ async function runChatToCompletion(job, payload) {
       messages,
       system: payload.system,
       temperature: payload.temperature,
-      maxTokens: payload.maxTokens || 8192,
+      maxTokens: payload.maxTokens,
+      contextLimit: payload.contextLimit,
       timeout: job.timeoutMs,
       dataClassification: job.dataClassification,
       preferences: { allowFallback: true },
@@ -93,7 +96,9 @@ function runOnce() {
     .filter(isDirectInferenceJob);
   for (const job of jobs) {
     if (inFlight >= MAX_CONCURRENCY) break;
-    const claimed = jobManager.claimDirectJob(job.jobId);
+    const claimed = jobManager.claimDirectJob(job.jobId, {
+      leaseDurationMs: Math.max((job.timeoutMs || 86400000) + 60000, 900000),
+    });
     if (!claimed) continue;
     inFlight += 1;
     void execute(claimed);
