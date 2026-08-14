@@ -20,7 +20,42 @@ const { resolveOutputTokenBudget } = require("../../compute/token-budget");
 let inferenceService = null;
 try { inferenceService = require("../../compute/inference-service"); } catch {}
 
-async function sidekick_embed({ text, model }) {
+const OPENVINO_EMBEDDING_MODEL = "qwen3-embedding-0.6b-int8";
+
+async function runOpenVinoEmbeddingJob({ text, model, device, context }) {
+  compute.initialize();
+  const job = compute.jobManager.createJob({
+    jobType: "text_embedding",
+    capability: "openvino.text_embedding",
+    source: context.source,
+    project: context.project,
+    requestingActor: context.actor,
+    rootExecutionId: context.rootExecutionId,
+    parentExecutionId: context.executionId,
+    taskId: context.taskId,
+    sessionId: context.sessionId,
+    dataClassification: "private",
+    capabilityRequirements: { executor: "openvino.text_embedding", model },
+    requestPayload: { model_id: model, input_kind: "query", text, fallback: "none", ...(device ? { requested_device: device } : {}) },
+    timeoutMs: 180000,
+    maxAttempts: 1,
+  });
+
+  const deadline = Date.now() + 180000;
+  while (Date.now() < deadline) {
+    const current = compute.jobManager.getJob(job.jobId);
+    if (!current) throw new Error("OpenVINO embedding job disappeared");
+    if (current.status === "completed") {
+      if (!current.result || !Array.isArray(current.result.embedding)) throw new Error("OpenVINO worker returned no embedding");
+      return current.result;
+    }
+    if (["failed", "cancelled", "expired"].includes(current.status)) throw new Error(current.errorMessage || `OpenVINO embedding job ${current.status}`);
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  throw new Error("Timed out waiting for OpenVINO embedding worker");
+}
+
+async function sidekick_embed({ text, model, device }) {
   const m = model || "nomic-embed-text";
   // Embeddings route through Compute — the single inference authority — not a
   // direct Ollama call. Requests are classified private, so placement keeps them
@@ -29,6 +64,18 @@ async function sidekick_embed({ text, model }) {
     return { content: [{ type: "text", text: "Embedding error: Compute inference service unavailable" }], isError: true };
   }
   try {
+    if (m === OPENVINO_EMBEDDING_MODEL) {
+      if (device && !["GPU", "NPU"].includes(device)) throw new Error("device must be GPU or NPU");
+      const result = await runOpenVinoEmbeddingJob({ text, model: m, device, context: toolContext.getExecutionContext() });
+      return { content: [{ type: "text", text: JSON.stringify({
+        embedding: result.embedding,
+        dimensions: result.embedding.length,
+        model: result.model_id || m,
+        device: result.device,
+        requested_device: result.requested_device,
+        fallback_occurred: result.fallback_occurred === true,
+      }, null, 2) }] };
+    }
     const result = await inferenceService.embed({
       input: text,
       model: m,
@@ -212,6 +259,7 @@ const descriptors = Object.freeze([
     schema: z.object({
       text: z.string().describe("Text to embed"),
       model: z.string().optional().default("nomic-embed-text").describe("Embedding model"),
+      device: z.enum(["GPU", "NPU"]).optional().describe("OpenVINO device profile (Qwen embeddings only)"),
     }),
     args: { text: "string (text to embed)", model: "string (optional, embedding model - default nomic-embed-text)" },
     risk: "low",

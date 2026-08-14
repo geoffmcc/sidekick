@@ -338,7 +338,8 @@ _MODEL_CONFIGS: dict[str, dict[str, Any]] = {
         "required_files": ["openvino_model.xml", "openvino_model.bin"],
     },
     "qwen3-embedding-0.6b-int8": {
-        "device": "NPU",
+        "device": "GPU",
+        "devices": ["GPU", "NPU"],
         "sequence_lengths": [128, 512],
         "output_dimensions": 1024,
         "embedding_space_id": "qwen3-embedding-0.6b",
@@ -656,6 +657,10 @@ class HelperRuntime:
 
         config = _MODEL_CONFIGS[model_id]
         primary_device = config["device"]
+        requested_device = payload.get("requested_device", primary_device)
+        if requested_device not in config.get("devices", [primary_device]):
+            _reply_err(request_id, "device_not_allowed", f"Device '{requested_device}' is not an approved profile")
+            return
 
         # --- Profile selection ---
         # Count tokens with the standalone tokenizer (no model compile) so we do
@@ -675,7 +680,7 @@ class HelperRuntime:
             return
 
         # --- Device selection ---
-        device = primary_device
+        device = requested_device
         fallback_occurred = False
         fallback_reason: str | None = None
 

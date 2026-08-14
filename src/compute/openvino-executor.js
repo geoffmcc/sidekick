@@ -461,7 +461,7 @@ async function awaitStartupReadiness(timeoutMs) {
     const modelCaps = getAdvertisedCapabilities(model.modelId, _availableDevices).filter((cap) => {
       const parts = String(cap).split(":");
       // After the tier suffix, there are now 6 parts. Device is at index 2.
-      return parts.length >= 5 && parts[2] === probedDevice;
+      return parts.length >= 5 && (probe.availableDevices || []).includes(parts[2]) && (model.certifiedDevices || [model.certifiedDevice]).includes(parts[2]);
     });
     if (modelCaps.length === 0) continue;
 
@@ -596,17 +596,20 @@ function validateHelperResponse(response, approvedModel, jobPayload) {
 
   // Validate device provenance — detect silent fallback.
   const certifiedDevice = approvedModel.certifiedDevice;
+  const requestedDevice = jobPayload.requested_device || certifiedDevice;
+  const certifiedDevices = approvedModel.certifiedDevices || [certifiedDevice];
+  if (!certifiedDevices.includes(requestedDevice)) return { valid: false, error: `Requested device '${requestedDevice}' is not certified for model '${jobPayload.model_id}'.` };
   const jobFallback = jobPayload.fallback || "none";
   const responseFallbackOccurred = Boolean(response.fallback_occurred);
   const responseDevice = response.device;
 
-  if (responseDevice !== certifiedDevice) {
+  if (responseDevice !== requestedDevice) {
     // A fallback occurred.  Only accept if fallback was explicitly authorized.
     if (jobFallback !== "same_model_cpu" || !approvedModel.fallbackDevice) {
       return {
         valid: false,
         error:
-          `BACKEND MISMATCH: requested device '${certifiedDevice}' but ` +
+          `BACKEND MISMATCH: requested device '${requestedDevice}' but ` +
           `helper ran on '${responseDevice}'.  Fallback not authorised ` +
           `(job.fallback='${jobFallback}').`,
       };
@@ -615,7 +618,7 @@ function validateHelperResponse(response, approvedModel, jobPayload) {
       return {
         valid: false,
         error:
-          `Device mismatch: requested '${certifiedDevice}', got '${responseDevice}', ` +
+          `Device mismatch: requested '${requestedDevice}', got '${responseDevice}', ` +
           `but helper did not report fallback_occurred=true.`,
       };
     }

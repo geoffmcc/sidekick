@@ -140,7 +140,8 @@ const APPROVED_MODELS = Object.freeze([
     outputDimensions: 1024,
 
     // Certified hardware.
-    certifiedDevice: DEVICE.NPU,
+    certifiedDevice: DEVICE.GPU,
+    certifiedDevices: Object.freeze([DEVICE.GPU, DEVICE.NPU]),
     fallbackDevice: DEVICE.CPU,         // Same model, same manifest, same space.
     defaultFallbackPolicy: FALLBACK_POLICY.SAME_MODEL_CPU,   // Worker admin enables.
 
@@ -169,6 +170,8 @@ const APPROVED_MODELS = Object.freeze([
 
     // Capability advertisement (both profiles × both certified devices).
     advertiseCapabilities: Object.freeze([
+      "openvino.text_embedding:qwen3-embedding-0.6b-int8:GPU:seq128:batch1",
+      "openvino.text_embedding:qwen3-embedding-0.6b-int8:GPU:seq512:batch1",
       "openvino.text_embedding:qwen3-embedding-0.6b-int8:NPU:seq128:batch1",
       "openvino.text_embedding:qwen3-embedding-0.6b-int8:NPU:seq512:batch1",
       "openvino.text_embedding:qwen3-embedding-0.6b-int8:CPU:seq128:batch1",
@@ -321,6 +324,10 @@ function validateJobRequest(jobPayload, workerConfig) {
   if (tier === CERTIFICATION_TIER.UNSUPPORTED) {
     return `Model '${modelId}' has lifecycle status '${model.status}' and is not currently certified or self-tested`;
   }
+  if (jobPayload.requested_device !== undefined && !(model.certifiedDevices || [model.certifiedDevice]).includes(jobPayload.requested_device)) {
+    return `Requested device '${jobPayload.requested_device}' is not certified for model '${modelId}'`;
+  }
+
 
   // --- input_kind ---
   const inputKind = jobPayload.input_kind;
