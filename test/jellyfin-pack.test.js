@@ -130,6 +130,56 @@ test("capabilities are optional and normalized", () => {
   assert.strictEqual(c.metrics, false);
   assert.strictEqual(c.events, false);
 });
-if (failures) {
-  process.exitCode = 1;
-} else console.log("All Jellyfin pack tests passed.");
+const entry = require(
+  path.join(pack, "modules/jellyfin-tools/entry.js"),
+);
+const asyncFailures = [];
+async function asyncTest(name, fn) {
+  try {
+    await fn();
+    console.log(`Passed: ${name}`);
+  } catch (e) {
+    asyncFailures.push(name);
+    console.error(`FAILED: ${name}\n${e.stack}`);
+  }
+}
+(async () => {
+  await asyncTest(
+    "handlers receive the module services facade (profiles resolve from config)",
+    async () => {
+      const services = {
+        config: {
+          profiles: {
+            homelab: {
+              endpoint: "http://10.0.0.5:8096",
+              api_key_ref: "secret:jf-homelab",
+              allow_insecure_http: true,
+              default: true,
+            },
+          },
+        },
+      };
+      const jellyfin = entry.buildDescriptors(services).find(
+        (d) => d.name === "jellyfin",
+      );
+      assert.ok(jellyfin, "jellyfin descriptor present");
+      const out = await jellyfin.handler({ action: "list_profiles" }, {});
+      const parsed = JSON.parse(out.content[0].text);
+      assert.strictEqual(parsed.profiles[0].name, "homelab");
+    },
+  );
+  await asyncTest(
+    "unconfigured module lists zero profiles instead of throwing",
+    async () => {
+      const jellyfin = entry.buildDescriptors({ config: {} }).find(
+        (d) => d.name === "jellyfin",
+      );
+      const out = await jellyfin.handler({ action: "list_profiles" }, {});
+      const parsed = JSON.parse(out.content[0].text);
+      assert.deepStrictEqual(parsed.profiles, []);
+    },
+  );
+  if (failures || asyncFailures.length) {
+    process.exitCode = 1;
+  } else console.log("All Jellyfin pack tests passed.");
+})();

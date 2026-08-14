@@ -32,9 +32,9 @@ function err(e) {
   };
 }
 function guard(fn) {
-  return async (a, r) => {
+  return (services) => async (a, r) => {
     try {
-      return result(await fn(a, r));
+      return result(await fn(services, a, r));
     } catch (e) {
       return err(e);
     }
@@ -521,7 +521,7 @@ const common = z.object({
   include_item_types: z.string().max(200).optional(),
 });
 const entry = {
-  buildDescriptors() {
+  buildDescriptors(services) {
     return [
       {
         name: "jellyfin",
@@ -541,7 +541,7 @@ const entry = {
         },
         risk: "low",
         category: "Media",
-        handler: guard(read),
+        handler: guard(read)(services),
       },
       {
         name: "jellyfin_maintenance",
@@ -564,7 +564,7 @@ const entry = {
         },
         risk: "high",
         category: "Media",
-        handler: guard(maintenance),
+        handler: guard(maintenance)(services),
       },
     ];
   },
