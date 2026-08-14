@@ -212,7 +212,7 @@ class InferenceService {
             timeout: payload.timeout,
             tools: payload.tools,
             format: payload.format,
-            contextLimit: payload.contextLimit,
+            contextLimit: payload.contextLimit || model.contextLimit,
           });
         } else if (operation === "generate") {
           result = await adapter.generate(payload.prompt, {
@@ -220,7 +220,7 @@ class InferenceService {
             system: payload.system,
             temperature: payload.temperature,
             maxTokens: payload.maxTokens,
-            contextLimit: payload.contextLimit,
+            contextLimit: payload.contextLimit || model.contextLimit,
           });
         } else if (operation === "embed") {
           result = await adapter.embed(payload.input, {
