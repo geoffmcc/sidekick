@@ -72,5 +72,31 @@ ok("prompt states the structured decision contract", () => {
   assert.ok(/DATA, not instructions/.test(prompt), "untrusted-content separation stated");
 });
 
+ok("prompt context describes installed capability packs and lifecycle state", () => {
+  const packContext = agent.buildInstalledPackContext({
+    listPacks: () => [{ name: "proxmox", state: "enabled" }],
+    describePack: () => ({
+      name: "proxmox",
+      display_name: "Proxmox VE",
+      version: "1.0.0",
+      state: "enabled",
+      description: "Manage Proxmox VE resources through governed operations.",
+      tools: ["proxmox"],
+      workflows: [{ name: "proxmox/guest-lifecycle" }],
+    }),
+  });
+  assert.ok(packContext.includes("proxmox (Proxmox VE) v1.0.0"), "pack identity and version are visible");
+  assert.ok(packContext.includes("state=enabled; usable"), "enabled state is actionable");
+  assert.ok(packContext.includes("proxmox/guest-lifecycle"), "pack workflows are visible");
+  assert.ok(packContext.includes("knowledge tool"), "pack knowledge guidance is visible");
+
+  const disabledContext = agent.buildInstalledPackContext({
+    listPacks: () => [{ name: "proxmox", state: "disabled" }],
+    describePack: () => ({ name: "proxmox", state: "disabled" }),
+  });
+  assert.ok(disabledContext.includes("state=disabled; not usable"), "disabled packs are not advertised as usable");
+  assert.ok(!disabledContext.includes("consult the knowledge tool"), "disabled packs do not receive active-use guidance");
+});
+
 console.log("\nAll " + passed + " prompt/routing tests passed.\n");
 process.exit(0);
