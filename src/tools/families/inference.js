@@ -13,6 +13,8 @@
 // legacy handlers that call it (teach, fresheyes, changelog, black_box).
 
 const { z } = require("zod");
+const compute = require("../../compute");
+const toolContext = require("../context");
 
 let inferenceService = null;
 try { inferenceService = require("../../compute/inference-service"); } catch {}
@@ -116,7 +118,7 @@ async function sidekick_ollama({ action, model }) {
   }
 }
 
-async function sidekick_llm({ prompt, system, temperature }) {
+async function sidekick_llm({ prompt, system, temperature, async: asyncMode, timeout_ms: timeoutMs }) {
   // Chat routes through Compute — the single inference authority. Provider/model
   // selection, credentials, health, and fallback belong to Placement; the tool
   // no longer reaches Ollama/Groq directly or accepts a provider pin. Requests
@@ -125,6 +127,44 @@ async function sidekick_llm({ prompt, system, temperature }) {
     return { content: [{ type: "text", text: "LLM error: Compute inference service unavailable" }], isError: true };
   }
   try {
+    if (asyncMode) {
+      // The MCP gateway may impose a shorter response deadline than a real
+      // model needs. Persist the request first, then let the compute runner
+      // execute it outside the tool invocation and expose it through the
+      // existing compute_jobs lifecycle.
+      compute.initialize();
+      const context = toolContext.getExecutionContext();
+      const job = compute.jobManager.createJob({
+        jobType: "chat",
+        capability: "chat",
+        source: context.source,
+        project: context.project,
+        requestingActor: context.actor,
+        rootExecutionId: context.rootExecutionId,
+        parentExecutionId: context.executionId,
+        taskId: context.taskId,
+        sessionId: context.sessionId,
+        dataClassification: "private",
+        requestPayload: {
+          async: true,
+          prompt,
+          system,
+          temperature: temperature ?? 0.7,
+        },
+        timeoutMs: timeoutMs || 900000,
+        maxAttempts: 1,
+        idempotencyKey: context.idempotencyKey || undefined,
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify({
+          async: true,
+          job_id: job.jobId,
+          status: job.status,
+          project: job.project,
+          poll: { tool: "compute_jobs", action: "get", job_id: job.jobId },
+        }, null, 2) }],
+      };
+    }
     const result = await inferenceService.chat({
       messages: [{ role: "user", content: prompt }],
       system,
@@ -146,8 +186,10 @@ const descriptors = Object.freeze([
       prompt: z.string().describe("The prompt to send to the LLM"),
       system: z.string().optional().describe("System prompt override"),
       temperature: z.number().optional().default(0.7).describe("Sampling temperature (0-2)"),
+      async: z.boolean().optional().default(false).describe("Queue the request durably and return a job ID instead of waiting for the model"),
+      timeout_ms: z.number().int().min(1000).max(86400000).optional().describe("Maximum provider execution time for async requests"),
     }),
-    args: { prompt: "string", system: "string (optional)", temperature: "number (optional)" },
+    args: { prompt: "string", system: "string (optional)", temperature: "number (optional)", async: "boolean (optional)", timeout_ms: "integer (optional, async execution timeout)" },
     risk: "medium",
     category: "Core",
     source: "builtin",

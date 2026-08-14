@@ -4,6 +4,7 @@ const { JOB_STATES, JOB_TERMINAL_STATES, JOB_TRANSITIONS, JobError, LeaseExpired
 const { validateJobContract } = require("./job-contract");
 const placement = require("./placement");
 const manifest = require("./openvino-model-manifest");
+const { redactSensitive } = require("../redact");
 let platformKernel = null;
 try { platformKernel = require("../platform/kernel"); } catch {}
 const artifactCustody = require("./artifact-custody");
@@ -553,6 +554,97 @@ function claimNextJob(worker, { leaseDurationMs = 300000 } = {}) {
     try { db.exec("ROLLBACK"); } catch {}
     throw e;
   }
+}
+
+// Direct-provider jobs use the same durable job ledger as worker jobs, but do
+// not have a worker lease or worker counter. The async LLM surface marks these
+// jobs explicitly so this path cannot steal work intended for an enrolled
+// worker.
+function claimDirectJob(jobId, { leaseDurationMs = 900000 } = {}) {
+  ensureSchema();
+  const db = dbStore.getDb();
+  const now = nowIso();
+  const leaseId = generateId("direct_lease");
+  const leaseExpires = new Date(Date.now() + leaseDurationMs).toISOString();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const row = db.prepare("SELECT * FROM compute_jobs WHERE job_id = ? AND status = 'queued' AND attempt < max_attempts").get(jobId);
+    if (!row) { db.exec("COMMIT"); return null; }
+    const result = db.prepare(`
+      UPDATE compute_jobs SET status = 'running', lease_id = ?, lease_expires_at = ?, lease_renewed_at = ?,
+        attempt = attempt + 1, started_at = ?, updated_at = ?
+      WHERE job_id = ? AND status = 'queued' AND attempt < max_attempts
+    `).run(leaseId, leaseExpires, now, now, now, jobId);
+    if (result.changes !== 1) { db.exec("COMMIT"); return null; }
+    const job = rowToJob(db.prepare("SELECT * FROM compute_jobs WHERE job_id = ?").get(jobId));
+    const attemptId = generateId("attempt");
+    db.prepare(`
+      INSERT INTO compute_job_attempts (attempt_id, job_id, attempt_number, lease_id, status, started_at, lease_expires_at)
+      VALUES (?, ?, ?, ?, 'running', ?, ?)
+    `).run(attemptId, jobId, job.attempt, leaseId, now, leaseExpires);
+    db.exec("COMMIT");
+    emitComputeEvent("compute.job_started", job, { execution_path: "provider", lease_id: leaseId, attempt_id: attemptId });
+    return { job: getJob(jobId), leaseId, attemptId };
+  } catch (e) {
+    try { db.exec("ROLLBACK"); } catch {}
+    throw e;
+  }
+}
+
+function completeDirectJob(jobId, leaseId, { result = {} } = {}) {
+  ensureSchema();
+  const db = dbStore.getDb();
+  const now = nowIso();
+  const current = getJob(jobId);
+  if (!current) throw new JobError("Job not found", "JOB_NOT_FOUND", { jobId });
+  if (current.status === "completed") return current;
+  if (current.status !== "running" || current.leaseId !== leaseId) throw new LeaseExpiredError(jobId, leaseId);
+  const providerId = result.providerId || null;
+  const modelId = result.modelId || null;
+  const resultHash = hashJson(result);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const update = db.prepare(`
+      UPDATE compute_jobs SET status = 'completed', selected_provider_id = ?, selected_model_id = ?,
+        result_json = ?, result_hash = ?, progress_percent = 100, completed_at = ?,
+        lease_id = NULL, lease_expires_at = NULL, lease_renewed_at = NULL, updated_at = ?
+      WHERE job_id = ? AND lease_id = ? AND status = 'running'
+    `).run(providerId, modelId, json(result), resultHash, now, now, jobId, leaseId);
+    if (update.changes !== 1) throw new LeaseExpiredError(jobId, leaseId);
+    db.prepare(`
+      UPDATE compute_job_attempts SET status = 'completed', completed_at = ?, result_json = ?, result_hash = ?,
+        provider_id = ?, model_id = ?, duration_ms = ?
+      WHERE job_id = ? AND lease_id = ?
+    `).run(now, json(result), resultHash, providerId, modelId, result.durationMs || null, jobId, leaseId);
+    db.exec("COMMIT");
+  } catch (e) {
+    try { db.exec("ROLLBACK"); } catch {}
+    throw e;
+  }
+  const completed = getJob(jobId);
+  emitComputeEvent("compute.job_completed", completed, { execution_path: "provider", lease_id: leaseId });
+  return completed;
+}
+
+function failDirectJob(jobId, leaseId, { errorCategory = "provider_error", errorMessage = "Provider execution failed" } = {}) {
+  ensureSchema();
+  const db = dbStore.getDb();
+  const current = getJob(jobId);
+  if (!current) throw new JobError("Job not found", "JOB_NOT_FOUND", { jobId });
+  if (current.status === "cancelled" || current.status === "failed" || current.status === "dead_letter") return current;
+  if (current.status !== "running" || current.leaseId !== leaseId) throw new LeaseExpiredError(jobId, leaseId);
+  const now = nowIso();
+  const message = redactSensitive(String(errorMessage)).slice(0, 1000);
+  db.prepare(`
+    UPDATE compute_jobs SET status = 'failed', error_category = ?, error_message = ?, completed_at = ?,
+      lease_id = NULL, lease_expires_at = NULL, lease_renewed_at = NULL, updated_at = ?
+    WHERE job_id = ? AND lease_id = ? AND status = 'running'
+  `).run(String(errorCategory).slice(0, 80), message, now, now, jobId, leaseId);
+  db.prepare(`UPDATE compute_job_attempts SET status = 'failed', completed_at = ?, error_category = ?, error_message = ? WHERE job_id = ? AND lease_id = ?`)
+    .run(now, String(errorCategory).slice(0, 80), message, jobId, leaseId);
+  const failed = getJob(jobId);
+  emitComputeEvent("compute.job_failed", failed, { execution_path: "provider", lease_id: leaseId }, "warning");
+  return failed;
 }
 
 function releaseRetryWaitJobs(db = dbStore.getDb()) {
@@ -1174,6 +1266,9 @@ module.exports = {
   transitionJob,
   leaseJob,
   claimNextJob,
+  claimDirectJob,
+  completeDirectJob,
+  failDirectJob,
   workerEligibleToClaim,
   renewLease,
   checkLeaseExpiration,

@@ -8,6 +8,7 @@ const healthMonitor = require("./health-monitor");
 const executorRegistry = require("./executor-registry");
 const placement = require("./placement");
 const errors = require("./errors");
+const directJobRunner = require("./direct-job-runner");
 
 // Reconciliation cadence. Workers heartbeat every ~30s; three missed beats
 // (90s) marks a connection stale. The timer is unref'd so it never keeps the
@@ -62,6 +63,7 @@ function startReconciliation() {
 
 function stopReconciliation() {
   if (reconcileTimer) { clearInterval(reconcileTimer); reconcileTimer = null; }
+  directJobRunner.stop();
 }
 
 function initialize() {
@@ -70,6 +72,7 @@ function initialize() {
   workerManager.ensureSchema();
   jobManager.ensureSchema();
   jobManager.recoverExpiredLeases();
+  directJobRunner.start();
   startReconciliation();
   try {
     const dbStore = require("../db");
