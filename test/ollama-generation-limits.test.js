@@ -9,6 +9,7 @@ const server = http.createServer((req, res) => {
   req.on("data", chunk => { body += chunk; });
   req.on("end", () => {
     const request = JSON.parse(body);
+    assert.strictEqual(request.think, false);
     assert.strictEqual(request.options.num_predict, 65536);
     assert.strictEqual(request.options.num_ctx, 262144);
     res.setHeader("Content-Type", "application/json");
