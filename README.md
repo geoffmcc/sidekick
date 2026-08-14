@@ -98,6 +98,8 @@ Sidekick exposes its tool catalog through the Model Context Protocol. Any compat
 
 Sidekick provides the persistent infrastructure; the connected assistant or agent decides when and how to use it. Exact prompting and automatic instruction-file loading depend on the MCP client.
 
+Capability packs extend Sidekick with focused areas of competence without requiring every future feature to be part of Core. Packs can contribute modules, tools, workflows, knowledge, and configuration, and can be bundled with Sidekick or supplied by compatible third parties.
+
 ## Usage
 
 Exact invocation syntax varies by MCP client. At the protocol level, a direct call identifies a tool and supplies its arguments. For example:
@@ -350,6 +352,21 @@ workflow   action="run" name="developer/repository-recon" inputs={ "path": "/srv
 ```
 
 or Dashboard → **Capabilities**.
+
+The same lifecycle supports both bundled and compatible third-party packs. A
+third-party pack is installed from an approved server-local package path and is
+inspected before installation; its manifest identifies the publisher,
+provenance, version, contributed components and required permissions. Once
+installed, its modules and other contributions use the same registry,
+dispatcher, policy, approval, redaction and audit boundaries as built-in and
+bundled functionality. Installation and enablement execute package code inside
+the Sidekick process, so only install packs you trust and use the restricted
+tool policy plus approval requirements for shared or public-facing deployments.
+
+For the package format, manifest requirements, inspection flow and lifecycle
+commands, see [`docs/capability-packs.md`](docs/capability-packs.md). To build
+your own compatible pack, follow the [third-party capability-pack authoring
+guide](docs/third-party-capability-packs.md).
 
 Packs compose the subsystems Sidekick already has: pack tools are normal
 descriptors in the one registry with the one dispatcher, pack modules install
