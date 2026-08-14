@@ -169,10 +169,53 @@ has migration `009_memory_intelligence.sql` and the matching tool registry. Use
 `tools action="overview"` before assuming `session`,
 `handoff`, or `memory` is callable.
 
+## 5. Current Sidekick operating model
+
+Treat these as runtime rules, not merely documentation hints:
+
+- `llm` and `embed` route through Compute, which is the single authority for
+  provider/model placement, credentials, trust, data classification, health,
+  and fallback. They are private by default. Never infer a provider from old
+  transcripts or bypass Compute with a direct provider request.
+- `llm` with `async=true` queues a durable `chat` job and returns its `job_id`.
+  Use `compute_jobs` to inspect the job and its artifacts; do not report a
+  queued job as a completed answer. Compute jobs are allowlisted workloads,
+  not arbitrary remote-shell access. `ollama` manages local Ollama models and
+  is not an alternate inference dispatcher.
+- Compute workers accept supported `chat`, `generate`, and `embeddings` jobs.
+  Their enrollment credential is distinct from non-secret configuration.
+  `maintenance` and `draining` preserve connectivity while refusing new
+  leases; revoked credentials require re-enrollment.
+- Artifacts are governed by the platform custody authority. Compute output is
+  registered at finalization after integrity checks; provenance and project
+  scope must come from artifact metadata, not assumption. A custody error is a
+  surfaced operational condition for reconciliation, not proof that the
+  artifact was safely registered.
+- Capability packs are ordinary governed contributors to the tool registry,
+  module lifecycle, workflow runner, knowledge system, and artifact path. They
+  are not a parallel execution framework. Installing or enabling a pack is a
+  critical-risk operation because it activates executable module code.
+- The bundled Developer pack is the preferred repository workflow: start with
+  `dev_repo_profile`, then use the relevant bounded workflow or `dev_verify`.
+  Its repository path must be visible to the Sidekick server; it cannot inspect
+  an unrelated local working tree on another machine. `implement-change` and
+  release preparation deliberately stop short of commit/push/merge/publish
+  unless a separate, explicitly authorized operation is requested.
+- The Agent Bridge is separate from MCP. It classifies goals, requires real
+  tool evidence for live-state requests, and dispatches through the same policy,
+  approval, timeout, audit, and redaction boundary. A follow-up is a bounded
+  child task with untrusted summarized context; it does not inherit approval or
+  automatically create a session, handoff, or memory. Use it only when the user
+  requests autonomous Agent Bridge execution.
+
+When a current result matters, inspect the live registry, job, artifact,
+session, or task state. Do not use a static count, stale transcript, or stored
+claim as a substitute for current evidence.
+
 Do not query registry tables manually for ordinary tool discovery when the
 catalog tool can provide current metadata and policy information.
 
-## 5. Tool-selection policy
+## 6. Tool-selection policy
 
 Prefer this order:
 
@@ -202,7 +245,7 @@ When a tool is blocked:
 - do not circumvent it
 - use another method only when it is genuinely different, authorized, and safe
 
-## 6. Handoff and resume retrieval
+## 7. Handoff and resume retrieval
 
 Treat these as separate Sidekick storage layers:
 
@@ -277,7 +320,7 @@ to preserve the full source artifact and link extracted memories to evidence.
 For compatibility, continue to maintain the canonical KV handoff and formal
 resume pointer when project instructions require them.
 
-## 7. Plan-scoped phase numbering
+## 8. Plan-scoped phase numbering
 
 Handoff plans are independent named sequences. Phase numbers are local to each
 plan and must never be treated as a global project-wide sequence.
@@ -353,7 +396,7 @@ their established historical handoff only when repository context or existing
 Sidekick state supports that conclusion. Do not rewrite or rename historical
 commits, PRs, reports, or handoff records.
 
-## 8. Handoff persistence protocol
+## 9. Handoff persistence protocol
 
 When creating or materially updating an active project handoff, save it in two
 linked layers during the same workflow.
@@ -448,7 +491,7 @@ A user request to save, update, prepare, or maintain a handoff authorizes both
 the KV write and the formal resume update. A request only to inspect or locate a
 handoff is read-only.
 
-## 9. Safe execution
+## 10. Safe execution
 
 Start with read-only inspection when practical.
 
@@ -469,7 +512,7 @@ When an operation changes authentication, firewall rules, credentials,
 databases, public exposure, deletion state, or broad permissions, treat it as
 consequential and verify authorization before proceeding.
 
-## 10. Privileged operations and passwords
+## 11. Privileged operations and passwords
 
 Never ask the user to provide a password, token, private key, or sudo password
 in chat.
@@ -500,7 +543,7 @@ upgrades unless they are specifically required and approved.
 User-scoped or project-scoped installs that do not require privileges may
 proceed when they are normal for the project and within the requested scope.
 
-## 11. Code and repository work
+## 12. Code and repository work
 
 Understand the repository before changing it.
 
@@ -540,7 +583,7 @@ Do not substitute one repository operation for another. Creating a repository,
 adding a remote, pushing a branch, opening a pull request, creating an issue,
 and publishing a release are separate actions.
 
-## 12. GitHub operations
+## 13. GitHub operations
 
 Prefer Sidekick's purpose-built GitHub tool for supported GitHub API operations.
 
@@ -563,10 +606,15 @@ Before creating a pull request, verify that:
 - the intended commits have been pushed
 - the user requested or approved pull-request creation
 
+For CI decisions, use the read-only `ci_status` tool when available. The
+legacy `github` `commit_status` action does not include GitHub Actions check
+runs, so a successful legacy status is not sufficient evidence that all PR
+checks passed.
+
 A failure from one GitHub action proves only that the attempted action failed.
 Do not infer unrelated permission failures without direct evidence.
 
-## 13. Secrets
+## 14. Secrets
 
 Use Sidekick's designated secret-management tool for credentials.
 
@@ -588,7 +636,7 @@ that uses it internally.
 Do not search project files, environment output, or logs for credentials as a
 shortcut.
 
-## 14. Memory and continuity
+## 15. Memory and continuity
 
 Use Sidekick knowledge for durable documentation and operational procedures.
 
@@ -629,7 +677,7 @@ Do not promote raw `tool_logs`, routine `get`/`store` calls, transient command
 output, or adjacency patterns into durable memory. Promote only supported
 conclusions with scope, evidence, source authority, currentness, and no secrets.
 
-## 15. Debugging
+## 16. Debugging
 
 Use this progression:
 
@@ -667,7 +715,7 @@ For network work, distinguish:
 Verify routing and application behavior separately. Do not assume every
 connectivity problem is a firewall problem.
 
-## 16. Deployment and infrastructure
+## 17. Deployment and infrastructure
 
 Prefer a current mission or documented runbook when one exists.
 
@@ -703,7 +751,7 @@ healthy.
 Do not assume service names, systemd scope, ports, addresses, usernames, or
 installation paths. Retrieve current procedures and inspect the live system.
 
-## 17. Research
+## 18. Research
 
 Use Sidekick knowledge first for Sidekick-specific procedures, policies, and
 architecture.
@@ -714,7 +762,7 @@ Cross-check consequential claims and distinguish verified facts from inference.
 
 Do not present remembered information as current when it can be checked.
 
-## 18. Knowledge and memory retention
+## 19. Knowledge and memory retention
 
 After verified work, store information only when it is durable and likely to
 help future sessions.
@@ -743,7 +791,7 @@ Do not store:
 When new information conflicts with existing memory, investigate and update or
 supersede the stale information rather than adding another contradictory record.
 
-## 19. MCP and Agent Bridge distinction
+## 20. MCP and Agent Bridge distinction
 
 The Sidekick MCP server supplies tools to this agent.
 
@@ -752,7 +800,7 @@ another AI collaborator, submit work to it, or access its internal listener
 unless the user explicitly requests Agent Bridge operation and the current
 documented procedure supports it.
 
-## 20. Verification
+## 21. Verification
 
 Never claim success based only on intention, tool invocation, command
 submission, or an unverified exit status.
@@ -774,7 +822,7 @@ Use independent evidence appropriate to the task:
 For longer tasks, verify at meaningful milestones rather than waiting until the
 end.
 
-## 21. Failure handling
+## 22. Failure handling
 
 When something fails:
 
@@ -791,7 +839,7 @@ Use an SSH or shell fallback only when it is available, authorized, required for
 recovery, and consistent with current documentation. Do not pretend an MCP
 operation occurred through another channel.
 
-## 22. Communication
+## 23. Communication
 
 For interactive troubleshooting where the user runs commands, provide one clear
 action at a time.

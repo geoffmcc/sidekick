@@ -123,6 +123,46 @@ to bypass a provider's policy or open an unrestricted shell — see
 `capability` is critical-risk: installing or enabling a pack activates
 executable module code inside the Sidekick process.
 
+### Current execution boundaries
+
+- `llm` and `embed` use Compute as the single inference authority. Do not
+  assume a provider, model, endpoint, credential, or fallback path from an old
+  prompt or transcript. Compute owns placement, trust and data-classification
+  gates, health, and fallback. LLM conversations and embeddings are private by
+  default and must fail closed rather than silently moving to an ineligible
+  provider.
+- `llm async=true` creates a durable Compute job and returns a `job_id`; it does
+  not return the model answer. Inspect or wait through `compute_jobs` using the
+  returned job identity. `compute_jobs` is an allowlisted job surface, not an
+  arbitrary remote shell.
+- `ollama` is for Ollama model administration (`list`, `ps`, `pull`, `show`),
+  not a separate inference path. Do not bypass Compute by calling a provider
+  endpoint directly.
+- Compute workers process only supported `chat`, `generate`, and `embeddings`
+  jobs. Enrollment credentials are separate from non-secret worker
+  configuration. `maintenance`/`draining` workers remain connected but do not
+  claim new jobs; revoked credentials are terminal until re-enrollment.
+- Compute and workflow output must use the platform artifact-custody path.
+  Compute artifact custody is finalized after hash/size verification; a
+  custody failure is surfaced and reconciled, not silently treated as success.
+  Do not claim provenance, project association, or redaction that the returned
+  artifact metadata does not establish.
+- Agent Bridge is a separate task system, not another MCP collaborator. A
+  live-state goal must produce evidence through the policy-gated tool loop.
+  Follow-ups create bounded child tasks with untrusted prior context; they do
+  not inherit approvals and do not automatically create sessions, handoffs, or
+  memories. Use MCP tools directly unless the user explicitly requests Agent
+  Bridge execution.
+- A repository path supplied to the Developer pack must be visible to the
+  Sidekick server. It cannot inspect a working tree that exists only on the
+  user's unrelated computer. Prefer `dev_repo_profile` and the pack's
+  read-only/review/verification workflows before ad hoc inspection; use
+  mutation workflows only when the user authorizes the change.
+- The `capability` lifecycle is explicit: discover with `available`/`list`,
+  inspect, then install, configure, enable, health-check, disable, upgrade, or
+  uninstall as the actual task requires. Installing or enabling is not a
+  harmless information lookup and must remain behind the critical-risk policy.
+
 ### Available Categories
 
 - **best-practices** — Interaction policies, debugging, tool selection, token efficiency
