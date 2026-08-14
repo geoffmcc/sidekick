@@ -43,6 +43,7 @@ const CONFIG_SCHEMA = {
       properties: {
         enabled: { type: "boolean" },
         url: { type: "string", format: "uri" },
+        model: { type: "string", maxLength: 256 },
       },
     },
   },
@@ -192,6 +193,7 @@ function applyConfigToEnv(fileConfig) {
   }
   if (fileConfig.ollama && typeof fileConfig.ollama === "object") {
     if (fileConfig.ollama.url !== undefined && fileConfig.ollama.enabled !== false) setIfUnset("OLLAMA_URL", fileConfig.ollama.url);
+    if (fileConfig.ollama.model !== undefined && fileConfig.ollama.enabled !== false) setIfUnset("OLLAMA_MODEL", fileConfig.ollama.model);
   }
 }
 
