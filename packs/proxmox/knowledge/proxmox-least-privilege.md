@@ -33,10 +33,17 @@ Datacenter → Permissions → Add → API Token Permission, with Propagate on `
 |---|---|---|
 | Read-only discovery and status | `PVEAuditor` on `/` | Covers cluster/node/guest/storage/task reads and the capability report |
 | Guest lifecycle (start/shutdown/reboot) | `PVEAuditor` + `VM.PowerMgmt` | Grant `VM.PowerMgmt` on `/vms` or on specific `/vms/<vmid>` |
+| Same-cluster migration | `PVEAuditor` + migration/storage privileges required by the selected guest | Local-disk migration may require additional storage ACLs; test exact source/target scope |
+| Guarded disposable retirement | `PVEAuditor` + guest delete privilege on the disposable scope | Also requires `allow_destroy`, approval, positive provenance, and no protection |
 | Broader management | project-specific | Not required by this release; grant deliberately, never root-equivalent by default |
 
 A read-only token is sufficient for everything except `proxmox_guest`, and a
 profile is read-only unless an administrator also sets `allow_lifecycle: true`.
+
+`allow_destroy` is a separate pack configuration switch and defaults to false;
+it does not grant Proxmox privileges and cannot override protected resources or
+missing provenance. SSH, PBS, and Ansible credentials are separate optional
+provider concerns; PVE tokens are not reused for PBS or host access.
 
 ## Permission failures are not outages
 

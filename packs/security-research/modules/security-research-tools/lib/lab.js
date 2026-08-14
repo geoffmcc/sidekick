@@ -14,12 +14,10 @@
  *
  * Two boundaries are deliberate:
  *   - Research intent confers no infrastructure privilege. The provision/cleanup
- *     calls go through `proxmox_provision`/`proxmox_guest`, which enforce their
- *     own profiles, `allow_lifecycle`, protected-resource and provenance
- *     controls. This pack cannot say "this is research, therefore bypass them".
- *   - The Proxmox pack exposes no VM *delete* by design. So cleanup performs an
- *     authorized shutdown and reports deletion as pending/manual rather than
- *     reintroducing a destructive path here.
+ *     calls go through `proxmox_provision`/`proxmox_guest`/`proxmox_retire`, which
+ *     enforce their own profiles, destroy policy, protected-resource and
+ *     provenance controls. This pack cannot say "this is research, therefore
+ *     bypass them".
  */
 
 const path = require("path");
@@ -168,9 +166,9 @@ function ownedResources(ctx) {
 
 /**
  * Request cleanup of the run's workflow-owned lab resources. Performs an
- * authorized graceful shutdown via proxmox_guest, and reports deletion as
- * pending/manual because the Proxmox pack exposes no delete — cleanup never
- * bypasses provider protections.
+ * authorized graceful shutdown, then consumes the Proxmox pack's guarded
+ * retirement capability. Research code never issues a DELETE itself and
+ * cannot bypass the provider's destroy policy or provenance checks.
  */
 async function cleanup(services, ctx, runtime) {
   const resources = ownedResources(ctx);
@@ -195,13 +193,27 @@ async function cleanup(services, ctx, runtime) {
       shutdown,
       deletion: "pending_manual",
     });
+    if (shutdown && shutdown.ok && vmid && profile) {
+      try {
+        const res = await services.dispatch("proxmox_retire", {
+          action: "retire", vmid, profile, dry_run: false, require_test: true, marker: resource.identity.marker,
+        }, { signal: runtime && runtime.signal, timeoutMs: ctx.timeoutMs, correlationId: ctx.executionId || ctx.runId });
+        const payload = parseResult(res);
+        results[results.length - 1].deletion = res.isError ? "pending_manual" : (payload.outcome || "pending_manual");
+        results[results.length - 1].deletion_code = res.isError ? (res.code || null) : (payload.code || null);
+      } catch (error) {
+        results[results.length - 1].deletion = "pending_manual";
+        results[results.length - 1].deletion_error = error.message;
+      }
+    }
   }
   // Reflect partial failure in the aggregate so a caller keying on the top-level
   // field cannot over-read success: any failed shutdown makes it incomplete.
   const shutdownIncomplete = results.some((r) => r.shutdown && r.shutdown.ok === false);
+  const deletionPending = results.some(r => r.deletion === "pending_manual" || r.deletion === "denied");
   return {
-    cleanup: shutdownIncomplete ? "shutdown_incomplete" : "pending_manual",
-    note: "The Proxmox pack exposes no VM delete by design. The disposable guest(s) were requested to shut down; delete them through an authorized administrative path."
+    cleanup: shutdownIncomplete ? "shutdown_incomplete" : deletionPending ? "pending_manual" : "completed",
+    note: "Cleanup consumes the Proxmox pack's guarded retirement capability. If destruction is disabled, policy denies the request and cleanup remains pending_manual."
       + (shutdownIncomplete ? " One or more shutdowns did not complete — see resources[].shutdown." : ""),
     resources: results,
   };

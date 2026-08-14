@@ -202,6 +202,10 @@ function createClient({ profile, token, signal }) {
     endpoint: profile.endpointParsed.value,
     get: (segments, params, options) => request("GET", segments, params, options),
     post: (segments, params, options) => request("POST", segments, params, { ...(options || {}), noRetry: true }),
+    // DELETE is deliberately exposed only to the guarded retirement module.
+    // Like POST, it is never retried: an ambiguous destructive request must
+    // be reconciled by reading state, never replayed.
+    delete: (segments, params, options) => request("DELETE", segments, params, { ...(options || {}), noRetry: true }),
     scrub: text => scrubSecrets(text, token),
   };
 }

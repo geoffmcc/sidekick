@@ -3,7 +3,7 @@
   "name": "proxmox",
   "display_name": "Proxmox VE",
   "version": "1.0.0",
-  "description": "Lets Sidekick securely discover, understand, monitor and operate Proxmox VE infrastructure: administrator-configured named profiles, pinned-CA TLS, normalized cluster/node/guest/storage/task discovery, capability detection (PBS, Ceph, SDN, QEMU guest agent, cloud-init, optional automation), and a controlled guest lifecycle (start, graceful shutdown, reboot) with correct asynchronous task handling.",
+  "description": "Lets Sidekick securely discover and operate Proxmox VE infrastructure through administrator-configured named profiles, pinned-CA TLS, normalized state, deterministic maintenance preflight, same-cluster guest migration, governed provisioning/lifecycle, optional Ansible, and critically guarded retirement of proven disposable resources.",
   "publisher": "Sidekick",
   "compatibility": {
     "sidekick": ">=1.0.0"
@@ -55,6 +55,11 @@
     "schema": {
       "type": "object",
       "properties": {
+        "allow_destroy": {
+          "type": "boolean",
+          "default": false,
+          "description": "Explicit administrator enablement for guarded retirement of positively proven Sidekick-managed disposable guests. Disabled by default; does not permit unmanaged or protected resources."
+        },
         "protected_resources": {
           "type": "array",
           "description": "Guests that mutating/destructive operations must never touch, matched by vmid, tag, or name glob. A match is a hard deny in addition to Proxmox's own protection flag.",

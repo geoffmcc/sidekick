@@ -35,11 +35,19 @@ async function probe(fn) {
   }
 }
 
-async function detectCapabilities(client, profile) {
+async function detectCapabilities(client, profile, config = {}) {
   const report = {
     profile: profile.name,
     endpoint: profile.endpointParsed.value,
     tls: profile.ca_pem ? "pinned_ca" : "system_ca",
+    operations: {
+      guest_lifecycle: profile.allow_lifecycle ? "enabled" : "disabled_by_profile",
+      provisioning: "enabled_via_governed_tool",
+      migration: "available_same_cluster_api",
+      maintenance_preflight: "available_via_pve_api",
+      host_maintenance: "unavailable_without_governed_backend",
+      destruction: config.allow_destroy === true ? "enabled_but_provenance_gated" : "disabled_by_administrator",
+    },
   };
 
   // --- PVE API: reachable + authenticated -------------------------------

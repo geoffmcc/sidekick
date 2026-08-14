@@ -23,6 +23,7 @@ const profiles = require(path.join(LIB, "profiles.js"));
 const provenance = require(path.join(LIB, "provenance.js"));
 const policy = require(path.join(LIB, "policy.js"));
 const ansible = require(path.join(LIB, "ansible.js"));
+const retirement = require(path.join(LIB, "retirement.js"));
 
 let failures = 0;
 function test(label, fn) {
@@ -399,6 +400,17 @@ test("U.32b: extractJsonObject isolates ansible JSON from trailing stderr warnin
   // Braces inside JSON strings must not confuse the extractor.
   assert.ok(ansible.extractJsonObject('prefix {"msg":"a } b {"} tail').includes('"msg":"a } b {"'));
 });
+
+test("U.33: guarded retirement fails closed for disabled, unmanaged, protected and marker-mismatch targets", () => {
+  const p = provenance.buildProvenance({ run: "u33", test: true });
+  const facts = { vmid: 200, node: "pve1", type: "qemu", name: "lab", protection: false, evidence: provenance.readProvenance({ tags: p.tags, description: p.description }) };
+  assert.strictEqual(retirement.decide({ tags: p.tags, description: p.description }, facts, { allowDestroy: false, requireTest: true, marker: p.marker }).result, "denied");
+  assert.strictEqual(retirement.decide({ tags: "", description: "" }, { ...facts, evidence: provenance.readProvenance({}) }, { allowDestroy: true }).result, "denied");
+  assert.strictEqual(retirement.decide({ tags: p.tags, description: p.description, protection: 1 }, { ...facts, protection: true }, { allowDestroy: true, requireTest: true, marker: p.marker }).result, "denied");
+  assert.strictEqual(retirement.decide({ tags: p.tags, description: p.description }, facts, { allowDestroy: true, requireTest: true, marker: "other" }).result, "denied");
+  assert.strictEqual(retirement.decide({ tags: p.tags, description: p.description }, facts, { allowDestroy: true, requireTest: true, marker: p.marker }).result, "allowed");
+});
+
 
 (async () => {
   console.log("Running Proxmox pack unit/security tests...\n");

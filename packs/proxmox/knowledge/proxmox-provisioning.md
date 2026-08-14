@@ -104,3 +104,11 @@ mechanism: a versionable definition that provisions a Sidekick-managed guest
 and validates it. Higher-level workflows (development, CI, testing, training,
 future research) compose these generic infrastructure capabilities; the Proxmox
 pack never needs to know why the environment exists.
+## Disposable cleanup
+
+Resources created for disposable work carry both the `sidekick-managed` tag
+and a Sidekick provenance marker. Security Research records the exact marker
+in run custody and requests cleanup through `proxmox_retire`; it never issues
+its own Proxmox DELETE. Retirement remains pending/manual when
+`allow_destroy` is disabled, provenance does not match, or either Sidekick or
+Proxmox protection applies.
