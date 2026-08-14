@@ -199,7 +199,7 @@ const descriptors = Object.freeze([
       output_budget: z.enum(["normal", "complex", "large"]).optional().default("normal").describe("Output tier: normal=4096, complex=8192, large=16384; max_tokens overrides it"),
       context_limit: z.number().int().min(4096).max(262144).optional().describe("Optional model context window; omitted uses the registered model limit"),
     }),
-    args: { prompt: "string", system: "string (optional)", temperature: "number (optional)", async: "boolean (optional)", timeout_ms: "integer (optional, async execution timeout)", max_tokens: "integer (optional, provider output limit; overrides output_budget)", output_budget: "string (normal|complex|large; defaults normal)", context_limit: "integer (optional, model context limit)" },
+    args: { prompt: "string", system: "string (optional)", temperature: "number (optional)", async: "boolean (optional)", timeout_ms: "integer (optional, async execution timeout)", max_tokens: "integer (optional, provider output limit; overrides output_budget)", output_budget: "string (optional: normal|complex|large; defaults normal)", context_limit: "integer (optional, model context limit)" },
     risk: "medium",
     category: "Core",
     source: "builtin",
