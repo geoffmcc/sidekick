@@ -63,6 +63,18 @@ ok("the child task becomes selected and is streamed", () => {
   assert.match(stream, /msg\.type === 'lineage'/, "renders the follow-up lineage event");
 });
 
+ok("Agent task selection survives tab changes and page reloads", () => {
+  assert.ok(clientJs.includes("const AGENT_LAST_TASK_KEY = 'sidekick_agent_last_task_id'"), "uses a dedicated persisted task pointer");
+  assert.match(clientJs, /function rememberAgentTask\(/, "persists the selected task");
+  assert.ok(clientJs.includes("localStorage.setItem(AGENT_LAST_TASK_KEY, taskId)"), "stores the task id locally");
+  const showPage = fnBody(clientJs, "showPage");
+  assert.match(showPage, /name === 'agent'\)\s*restoreAgentState\(\)/, "restores when the Agent page is selected");
+  const restore = fnBody(clientJs, "restoreAgentState");
+  assert.match(restore, /\/api\/agent\/run\/' \+ encodeURIComponent\(taskId\)/, "loads the durable transcript");
+  assert.match(restore, /streamAgentTask\(taskId, \{ reset: false, reconnect: true \}\)/, "reconnects active tasks");
+  assert.match(clientJs, /function renderAgentTranscript\(/, "renders completed transcript steps in the Agent log");
+});
+
 ok("parent/root metadata renders in detail and history", () => {
   const detail = fnBody(clientJs, "toggleRunDetail");
   assert.match(detail, /run\.parent_task_id/, "detail reads parent lineage");
