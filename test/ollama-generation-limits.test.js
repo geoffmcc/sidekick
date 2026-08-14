@@ -9,7 +9,7 @@ const server = http.createServer((req, res) => {
   req.on("data", chunk => { body += chunk; });
   req.on("end", () => {
     const request = JSON.parse(body);
-    assert.strictEqual(request.options.num_predict, -1);
+    assert.strictEqual(request.options.num_predict, 65536);
     assert.strictEqual(request.options.num_ctx, 262144);
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({
@@ -31,7 +31,7 @@ server.listen(0, "127.0.0.1", async () => {
     });
     assert.strictEqual(result.content, "complete");
     assert.strictEqual(result.finishReason, "stop");
-    console.log("✓ Ollama receives the registered context limit and unlimited generation default");
+    console.log("✓ Ollama receives the registered context limit and large finite generation default");
     server.close();
   } catch (error) {
     console.error(error.stack || error.message);
