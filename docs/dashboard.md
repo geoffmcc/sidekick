@@ -4,7 +4,7 @@ The dashboard is implemented in `src/dashboard.js` and defaults to port 4098. It
 
 ## Main UI areas
 
-The dashboard frontend is split across `src/dashboard.html`, `static/dashboard.css`, and `static/dashboard.js`. `src/dashboard.js` serves the private HTML shell from the authenticated root route and serves only CSS/JS/font assets through `/static`. The UI is organized around tabs for Mission Control, system status, activity, data, database, configuration, agent tasks, memory, tools, capabilities, and metrics.
+The dashboard frontend is split across `src/dashboard.html`, `static/dashboard.css`, and `static/dashboard.js`. `src/dashboard.js` serves the private HTML shell from the authenticated root route and serves only CSS/JS/font assets through `/static`. The UI is organized around tabs for Mission Control, system status, activity, data, database, configuration, agent tasks, memory, tools, capabilities, Compute, and metrics. Approvals are surfaced from Mission Control when pending.
 
 Typical dashboard functions:
 
@@ -18,6 +18,8 @@ Typical dashboard functions:
 - submit autonomous agent tasks;
 - stream agent progress;
 - view task history;
+- inspect enrolled Compute workers, jobs, leases, and job artifacts;
+- inspect and resolve pending approvals and ambiguous executions;
 - receive and inspect external webhook payloads;
 - clear logs, KV data, conversations, or all dashboard-managed data.
 
@@ -109,7 +111,7 @@ Metrics collection is handled by `sidekick-metrics.timer`, which runs `scripts/c
 
 `POST /api/webhook/:source` stores a webhook payload with a generated ID, source name, timestamp, and body. Webhook storage is backed by the `webhooks` document in the SQLite `json_documents` table.
 
-Use `sidekick_webhook` to list, retrieve, or clear stored webhook payloads from the MCP side.
+Use `webhook` to list, retrieve, or clear stored webhook payloads from the MCP side.
 
 ## Agent proxy
 

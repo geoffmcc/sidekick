@@ -130,7 +130,7 @@ SCP mode copies local files and does not create a Git working tree. Do not use i
 
 ## Packaged operations workflows
 
-Use `sidekick_ops` when you need a compact verdict instead of separate raw tool outputs.
+Use `ops` when you need a compact verdict instead of separate raw tool outputs.
 
 Available actions:
 

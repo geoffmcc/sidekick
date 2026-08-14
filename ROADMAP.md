@@ -10,9 +10,9 @@ What's planned for Sidekick.
 > feature list further below is a product history and is not the source of
 > truth for tool counts.
 
-**Where the platform stands (2026-08-12):**
+**Where the platform stands (2026-08-14):**
 
-- 105 built-in MCP tools in the core registry, plus tools contributed by
+- 106 built-in MCP tools in the core registry, plus tools contributed by
   installed modules (6 from the bundled `data-utilities` module; 3 more when
   the Developer capability pack is installed and enabled). Query the `tools`
   table for the authoritative live list.
@@ -159,8 +159,9 @@ The list below records features as they were added (tool names use the older
 - Migration `036_capability_packs.sql`.
 
 **Result:**
-- Core registry tools: 103 -> 105 (+3 more when the Developer pack is enabled)
-- B9 complete; B5, B6, B7 and B8 remain separate future campaigns
+- Core registry tools: 103 -> 106 (+3 more when the Developer pack is enabled)
+- B5, B6, B7 and B8 are complete; the remaining convergence work is the B7
+  connector fast-follow and the explicitly scoped Track C items.
 
 
 ### v1.20: Structured Memory Completion

@@ -22,7 +22,7 @@ Migrate Sidekick from current VPS (YOUR_VPS_IP) to local Proxmox VM on NucBox M7
 - **CPU:** 8 cores
 - **Storage:** 100GB VM disk + 50-100GB separate for Ollama models
 - **OS:** Ubuntu 24.04
-- **Network:** Behind WireGuard (10.0.0.10)
+- **Network:** Behind WireGuard (use the deployment's private VPN address)
 
 ### Service Architecture
 ```
@@ -33,7 +33,7 @@ Proxmox VM (Ubuntu 24.04, 12GB RAM)
 │   └── Agent Bridge (:4099)
 ├── Ollama (native, on-demand)
 │   └── Models stored on separate volume
-└── WireGuard client (10.0.0.10)
+└── WireGuard client (private VPN address)
     └── Caddy reverse proxy (:443)
 ```
 
@@ -78,7 +78,7 @@ Proxmox VM (Ubuntu 24.04, 12GB RAM)
 
 ### Network Architecture
 ```
-WireGuard (wg0 interface, 10.0.0.10)
+WireGuard (wg0 interface, private VPN address)
     ↓
 Caddy (listens on wg0 interface, port 443)
     ↓
@@ -243,7 +243,7 @@ See `CONTEXT.md` for detailed fix documentation.
 ### WireGuard Issues
 - Check connection: `wg show`
 - Verify router's WireGuard config has client's public key
-- Test connectivity: `ping 10.0.0.1` (router)
+- Test connectivity by pinging the configured router address.
 
 ### MCP Connection Issues
 - See `CONTEXT.md` for detailed troubleshooting
@@ -254,7 +254,7 @@ See `CONTEXT.md` for detailed fix documentation.
 ## Notes
 
 - Current VPS: 149.28.229.13
-- New VM IP: 10.0.0.10 (WireGuard)
+- New VM IP: the configured private WireGuard address
 - Domain: home.digitaltrainwreck.com (split DNS)
 - GPU: AMD Radeon 680M (RDNA2, 12 cores)
 - Node.js: 22.x (LTS)

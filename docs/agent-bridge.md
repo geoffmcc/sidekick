@@ -232,8 +232,7 @@ introduced.
 
 All Agent Bridge inference routes through **Compute** — the single inference
 authority (`src/compute/inference-service` → Placement). The bridge no longer
-maintains its own provider-selection/fallback tree (it previously tried Compute,
-then a direct Ollama call, then a direct Groq call). `callLLM` states
+maintains its own provider-selection/fallback tree. `callLLM` states
 requirements and lets Compute own provider, model, endpoint, credentials, health
 eligibility, and fallback across gate-passing providers.
 
@@ -243,7 +242,7 @@ than silently reaching a cloud provider. Provider configuration (including Groq
 and OpenAI-compatible cloud providers) is managed by Compute; see
 `docs/compute.md` → *Providers and credentials*. The `fallback` SSE event now
 reflects a Compute-internal fallback across providers rather than a fixed
-Ollama→Groq switch.
+provider switch.
 
 ## Conversation retention
 
