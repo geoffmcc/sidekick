@@ -293,11 +293,12 @@ async function runExecutorTests() {
     assert.strictEqual(res.embedding.length, 384);
   });
 
-  await test("Executes Qwen embedding (NPU)", async () => {
+  await test("Executes Qwen embedding (NPU profile)", async () => {
     const job = {
       model_id: "qwen3-embedding-0.6b-int8",
       input_kind: "query",
-      text: "Testing NPU"
+      text: "Testing NPU",
+      requested_device: "NPU"
     };
     const res = await executeOpenVinoEmbed(null, job);
     assert.strictEqual(res.device, "NPU");
@@ -310,6 +311,7 @@ async function runExecutorTests() {
       model_id: "qwen3-embedding-0.6b-int8",
       input_kind: "query",
       text: "Testing NPU fallback",
+      requested_device: "NPU",
       fallback: "same_model_cpu"
     };
     const res = await executeOpenVinoEmbed(null, job);

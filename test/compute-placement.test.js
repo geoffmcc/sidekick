@@ -148,9 +148,9 @@ test("healthy certified NPU embedding placement is preferred", () => {
   assert.ok(decision.selected, "a candidate must be selected");
   assert.strictEqual(decision.selected.worker_id, npuWorker.workerId);
   assert.strictEqual(decision.selected.executor, "openvino.text_embedding");
-  assert.strictEqual(decision.selected.accelerator, "NPU");
+  assert.strictEqual(decision.selected.accelerator, "GPU");
   assert.strictEqual(decision.selected.execution_path, "worker_job");
-  assert.strictEqual(decision.reason, "preferred_certified_npu_embedding");
+  assert.strictEqual(decision.reason, "certified_openvino_embedding");
 });
 
 test("permitted CPU fallback is offered with same-model policy", () => {

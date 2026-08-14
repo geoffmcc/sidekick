@@ -719,6 +719,7 @@ async function executeOpenVinoEmbed(_context, input) {
     input_kind: input.input_kind,
     text: input.text,
     fallback: effectiveFallback,
+    requested_device: input.requested_device || approvedModel.certifiedDevice,
   };
 
   const deadlineMs = _config.inferenceTimeoutMs;

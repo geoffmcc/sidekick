@@ -926,8 +926,9 @@ function deriveAttemptProvenance(job, result) {
   if (!approved) {
     return { accelerator: claimed, requestedAccelerator: requested, verification: "unverified", fallbackOccurred, fallbackReason };
   }
-  if (claimed === approved.certifiedDevice && !fallbackOccurred) {
-    return { accelerator: claimed, requestedAccelerator: requested || approved.certifiedDevice, verification: "manifest_confirmed", fallbackOccurred, fallbackReason };
+  const certifiedDevices = approved.certifiedDevices || [approved.certifiedDevice];
+  if (certifiedDevices.includes(claimed) && !fallbackOccurred && (!requested || requested === claimed)) {
+    return { accelerator: claimed, requestedAccelerator: requested || claimed, verification: "manifest_confirmed", fallbackOccurred, fallbackReason };
   }
   if (fallbackOccurred && approved.fallbackDevice && claimed === approved.fallbackDevice) {
     return { accelerator: claimed, requestedAccelerator: requested || approved.certifiedDevice, verification: "manifest_confirmed_fallback", fallbackOccurred, fallbackReason };
