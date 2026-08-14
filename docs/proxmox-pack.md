@@ -125,6 +125,7 @@ secret store.
 | `token_ref` | yes | `secret:<name>` reference to the API token in the secret store. |
 | `ca_pem` | no | PEM CA to pin (self-signed installs). TLS verification stays on. |
 | `ca_secret_ref` | no | `secret:<name>` holding the CA PEM, as an alternative to `ca_pem`. |
+| `tls_servername` | no | DNS name used for TLS SNI/certificate validation when connecting to an endpoint IP. |
 | `allow_lifecycle` | no | Default false. Must be true for `proxmox_guest` to act on this profile. |
 | `default` | no | Marks the default profile when several are configured. |
 | `request_timeout_ms` | no | Per-request timeout (default 15000, max 120000). |

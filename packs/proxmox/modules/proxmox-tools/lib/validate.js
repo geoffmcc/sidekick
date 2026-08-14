@@ -23,6 +23,7 @@ const NODE_NAME_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/;
 // Storage identifiers per pve-storage: alphanumeric start, then [a-zA-Z0-9-_.].
 const STORAGE_ID_RE = /^[A-Za-z][A-Za-z0-9\-_.]{0,99}$/;
 const SECRET_REF_RE = /^secret:[A-Za-z0-9_.:/-]{1,190}$/;
+const TLS_SERVER_NAME_RE = /^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
 // VMIDs are integers; PVE enforces 100 <= vmid < 999999999.
 const VMID_MIN = 100;
 const VMID_MAX = 999999999;
@@ -137,6 +138,13 @@ function validateSecretRef(value) {
     return invalid("token_ref", "token_ref must be a secret store reference of the form secret:<name>");
   }
   return { ok: true, value };
+}
+
+function validateTlsServerName(value) {
+  if (typeof value !== "string" || !TLS_SERVER_NAME_RE.test(value)) {
+    return invalid("tls_servername", "tls_servername must be a DNS hostname");
+  }
+  return { ok: true, value: value.toLowerCase() };
 }
 
 // --- provisioning field validators -----------------------------------------
@@ -261,6 +269,7 @@ module.exports = {
   NODE_NAME_RE,
   STORAGE_ID_RE,
   SECRET_REF_RE,
+  TLS_SERVER_NAME_RE,
   GUEST_NAME_RE,
   SNAPNAME_RE,
   VMID_MIN,
@@ -274,6 +283,7 @@ module.exports = {
   validateStorageId,
   validateEndpoint,
   validateSecretRef,
+  validateTlsServerName,
   parseUpid,
   validateGuestName,
   validateSnapname,

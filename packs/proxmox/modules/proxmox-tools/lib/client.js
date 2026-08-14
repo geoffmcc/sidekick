@@ -111,7 +111,9 @@ function createClient({ profile, token, signal }) {
         ...(profile.ca_pem ? { ca: profile.ca_pem } : {}),
         // SNI is only meaningful for hostnames; setting it to an IP literal is
         // an RFC 6066 violation Node warns about and future versions ignore.
-        ...(net.isIP(hostname) ? {} : { servername: hostname }),
+        ...(profile.tls_servername
+          ? { servername: profile.tls_servername }
+          : (net.isIP(hostname) ? {} : { servername: hostname })),
         headers: {
           Authorization: `PVEAPIToken=${token}`,
           Accept: "application/json",

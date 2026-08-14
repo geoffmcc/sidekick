@@ -77,6 +77,13 @@ function parseProfile(name, raw) {
     if (!caRef.ok) return { ok: false, code: "profile_invalid", message: `profile "${name}" ca_secret_ref: ${caRef.message}` };
   }
 
+  let tlsServername = null;
+  if (raw.tls_servername !== undefined) {
+    const serverName = validate.validateTlsServerName(raw.tls_servername);
+    if (!serverName.ok) return { ok: false, code: "profile_invalid", message: `profile "${name}" tls_servername: ${serverName.message}` };
+    tlsServername = serverName.value;
+  }
+
   return {
     ok: true,
     profile: {
@@ -85,6 +92,7 @@ function parseProfile(name, raw) {
       token_ref: tokenRef.value,
       ca_pem: raw.ca_pem || null,
       ca_secret_ref: raw.ca_secret_ref || null,
+      tls_servername: tlsServername,
       request_timeout_ms: clampInt(raw.request_timeout_ms, DEFAULTS.request_timeout_ms, MIN_TIMEOUT, MAX_REQUEST_TIMEOUT),
       task_poll_interval_ms: clampInt(raw.task_poll_interval_ms, DEFAULTS.task_poll_interval_ms, 250, 10000),
       task_timeout_ms: clampInt(raw.task_timeout_ms, DEFAULTS.task_timeout_ms, MIN_TIMEOUT, MAX_TASK_TIMEOUT),
