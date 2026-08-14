@@ -20,6 +20,9 @@ class InferenceService {
   }
 
   _getAdapter(provider) {
+    if (process.env.NODE_ENV === "production" && provider.providerType === "mock") {
+      throw new Error("Mock providers are test-only and cannot serve production inference");
+    }
     const cacheKey = provider.providerId + ":" + provider.endpoint;
     if (this._adapterCache.has(cacheKey)) return this._adapterCache.get(cacheKey);
     let adapter;

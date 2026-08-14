@@ -240,11 +240,12 @@ function configuredAccelerators() {
 }
 
 function configuredProviders() {
-  const providers = [{ type: "mock", endpoint: "in-process" }];
+  const providers = [];
   const configured = parseJsonEnv("SIDEKICK_WORKER_BACKENDS_JSON", []);
   if (Array.isArray(configured)) {
     for (const item of configured.slice(0, 16)) {
       const type = safeString(item.type || item.provider || item.name, 40);
+      if (process.env.NODE_ENV === "production" && ["mock", "deterministic"].includes(type.toLowerCase())) continue;
       if (type) providers.push({ type, endpoint: sanitizeEndpoint(item.endpoint || item.url), status: safeString(item.status || "configured", 40) });
     }
   }
@@ -264,7 +265,7 @@ function openVinoReadiness() {
 }
 
 function configuredExecutors() {
-  const executors = [{ type: "mock.inference", version: "1", capabilities: ["chat", "generate", "embeddings"] }];
+  const executors = [];
   if (process.env.OLLAMA_URL) executors.push({ type: "ollama.inference", version: "1", capabilities: ["chat", "generate", "embeddings"] });
   // Advertise the OpenVINO executor for routing ONLY once startup readiness has
   // established concrete certified profiles. Until then it is intentionally
@@ -285,14 +286,16 @@ function configuredExecutors() {
 }
 
 function configuredModelInventory() {
-  const models = [{ name: "deterministic-test", provider: "mock", capabilities: ["chat", "generate", "embeddings"] }];
+  const models = [];
   const configured = parseJsonEnv("SIDEKICK_WORKER_MODELS_JSON", []);
   if (Array.isArray(configured)) {
     for (const item of configured.slice(0, 64)) {
       const name = safeString(item.name || item.model, 160);
+      const provider = safeString(item.provider || item.backend || "unknown", 80);
+      if (process.env.NODE_ENV === "production" && (["mock", "deterministic"].includes(provider.toLowerCase()) || name.toLowerCase() === "deterministic-test")) continue;
       if (name) models.push({
         name,
-        provider: safeString(item.provider || item.backend || "unknown", 80),
+        provider,
         capabilities: normalizeCapabilities(item.capabilities, ["chat", "generate"]),
         contextWindow: Number.isFinite(Number(item.contextWindow || item.context_window)) ? Number(item.contextWindow || item.context_window) : undefined,
       });
@@ -634,6 +637,7 @@ async function executeJob(job, shouldCancel = async () => false) {
 const SYNTHETIC_MODEL = "deterministic-test";
 
 function isSyntheticRequest(payload) {
+  if (process.env.NODE_ENV === "production") return false;
   const model = String(payload.model || "").toLowerCase();
   const provider = String(payload.provider || payload.backend || "").toLowerCase();
   return model === SYNTHETIC_MODEL || provider === "mock" || provider === "deterministic";
@@ -921,4 +925,4 @@ function __setWorkerIdentityForTest(id, cred) {
   credential = cred;
 }
 
-module.exports = { collectSystemInfo, configuredExecutors, configuredModelInventory, configuredHealth, deterministicEmbedding, executeJob, validateJobResult, boundedInt, jitteredBackoff, redact, getOpenVinoExecutor, sendDisconnect, requestShutdown, rotateWorkerCredential, __setOpenVinoExecutorForTest, __setWorkerIdentityForTest };
+module.exports = { collectSystemInfo, configuredProviders, configuredExecutors, configuredModelInventory, configuredHealth, deterministicEmbedding, executeJob, validateJobResult, boundedInt, jitteredBackoff, redact, getOpenVinoExecutor, sendDisconnect, requestShutdown, rotateWorkerCredential, __setOpenVinoExecutorForTest, __setWorkerIdentityForTest };

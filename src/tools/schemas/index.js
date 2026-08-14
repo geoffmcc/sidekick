@@ -35,7 +35,7 @@ const TOOL_SCHEMAS = {
     action: z.enum(["list", "get", "create", "update", "delete", "health", "health_all"]).describe("Provider action"),
     provider_id: z.string().optional().describe("Provider ID"),
     name: z.string().optional().describe("Provider display name (required for create)"),
-    type: z.string().optional().describe("Provider type (ollama|openai|vllm|llamacpp|mlx|mock) — required for create, filters list"),
+    type: z.string().optional().describe("Provider type (ollama|openai|vllm|llamacpp|mlx) — required for create, filters list"),
     base_url: z.string().optional().describe("Provider endpoint. http/https only; loopback and private/RFC1918 addresses are allowed, link-local and cloud metadata endpoints are not"),
     api_key: z.string().optional().describe("Recorded on the provider row but NOT currently used to authenticate: no adapter reads it. Do not paste a live credential here"),
     priority: z.number().optional().describe("Placement priority; HIGHER wins (scores are summed and sorted descending). Default 50"),

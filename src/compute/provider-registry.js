@@ -90,6 +90,9 @@ function createProvider({
   mode = "direct", metadata = {},
 }) {
   ensureSchema();
+  if (process.env.NODE_ENV === "production" && providerType === "mock") {
+    throw new Error("Mock providers are test-only and cannot be registered in production");
+  }
   const providerId = generateId("prov");
   const db = dbStore.getDb();
   db.prepare(`
@@ -110,7 +113,9 @@ function createProvider({
 function getProvider(providerId) {
   ensureSchema();
   const db = dbStore.getDb();
-  const row = db.prepare("SELECT * FROM compute_providers WHERE provider_id = ?").get(providerId);
+  const row = db.prepare(process.env.NODE_ENV === "production"
+    ? "SELECT * FROM compute_providers WHERE provider_id = ? AND provider_type != 'mock'"
+    : "SELECT * FROM compute_providers WHERE provider_id = ?").get(providerId);
   return rowToProvider(row);
 }
 
@@ -119,6 +124,7 @@ function listProviders({ enabled, providerType, mode, healthStatus } = {}) {
   const db = dbStore.getDb();
   let sql = "SELECT * FROM compute_providers WHERE 1=1";
   const params = [];
+  if (process.env.NODE_ENV === "production") sql += " AND provider_type != 'mock'";
   if (enabled !== undefined) { sql += " AND enabled = ?"; params.push(enabled ? 1 : 0); }
   if (providerType) { sql += " AND provider_type = ?"; params.push(providerType); }
   if (mode) { sql += " AND mode = ?"; params.push(mode); }
@@ -132,6 +138,9 @@ function updateProvider(providerId, updates) {
   const db = dbStore.getDb();
   const existing = db.prepare("SELECT * FROM compute_providers WHERE provider_id = ?").get(providerId);
   if (!existing) return null;
+  if (process.env.NODE_ENV === "production" && existing.provider_type === "mock") {
+    throw new Error("Mock providers are test-only and cannot be modified in production");
+  }
 
   const fields = [];
   const params = [];
@@ -194,7 +203,7 @@ function updateHealth(providerId, { status, error, success }) {
     WHERE provider_id = ?
   `).run(
     status, now, success ? now : existing.health_last_success,
-    error || existing.health_last_error, failureCount,
+    status === "healthy" ? null : (error || existing.health_last_error), failureCount,
     circuitState, circuitOpenedAt, now, providerId
   );
   return getProvider(providerId);

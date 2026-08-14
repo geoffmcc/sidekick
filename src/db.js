@@ -1214,6 +1214,21 @@ function disableMemory(id) {
   return result.changes > 0;
 }
 
+// Re-enable a memory that was operationally disabled without reviving a
+// deleted or expired record. Deleted/expired records must use restoreMemory(),
+// which deliberately clears their lifecycle timestamps and is the only path
+// that can revive them.
+function enableMemory(id) {
+  if (!hasMemoriesTable()) return false;
+  const ts = nowIso();
+  const result = db.prepare(`
+    UPDATE memories
+    SET enabled = 1, updated_at = ?, last_seen_at = ?
+    WHERE id = ? AND state NOT IN ('deleted', 'expired')
+  `).run(ts, ts, id);
+  return result.changes > 0;
+}
+
 function trimAutomaticMemories(max) {
   if (!hasMemoriesTable()) return 0;
   const limit = Math.max(1, Number(max) || 500);
@@ -2890,6 +2905,7 @@ module.exports = {
   searchMemories,
   listMemories,
   disableMemory,
+  enableMemory,
   trimAutomaticMemories,
   memorySimilarity,
   exportMemories,

@@ -64,7 +64,13 @@ function createScheduledPlatformExecution(kind, item, options = {}) {
     }
     return execution;
   } catch (e) {
-    return null;
+    // A scheduled/runbook operation must never continue as an untracked
+    // process-lifetime action. The old null fallback let callers execute work
+    // after the durable ledger failed, making restart/recovery and audit claims
+    // false. Surface the failure so the governed caller can stop before work.
+    const error = new Error(`durable execution setup failed for ${kind}: ${e.message}`);
+    error.cause = e;
+    throw error;
   }
 }
 

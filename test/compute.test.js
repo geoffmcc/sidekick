@@ -194,6 +194,32 @@ test('updateProvider changes fields', () => {
   assertEqual(updated.priority, 99);
 });
 
+test('healthy provider checks clear stale errors', () => {
+  const provider = providerRegistry.getProvider(providerRegistry.listProviders()[0].providerId);
+  providerRegistry.updateHealth(provider.providerId, { status: 'unreachable', error: 'transient failure', success: false });
+  const recovered = providerRegistry.updateHealth(provider.providerId, { status: 'healthy', success: true });
+  assertEqual(recovered.health.lastError, null);
+  assertEqual(recovered.health.failureCount, 0);
+});
+
+test('mock providers cannot be registered in production', () => {
+  const mock = providerRegistry.createProvider({ displayName: 'persisted-mock', providerType: 'mock', endpoint: 'http://mock' });
+  const previous = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
+  try {
+    assert.throws(
+      () => providerRegistry.createProvider({ displayName: 'production-mock', providerType: 'mock', endpoint: 'http://mock' }),
+      /test-only.*production/
+    );
+    assertEqual(providerRegistry.getProvider(mock.providerId), null);
+    assert.throws(() => providerRegistry.updateProvider(mock.providerId, { enabled: false }), /test-only.*production/);
+  } finally {
+    if (previous === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previous;
+  }
+  providerRegistry.deleteProvider(mock.providerId);
+});
+
 test('deleteProvider removes provider', () => {
   const p = providerRegistry.createProvider({ displayName: 'temp', providerType: 'mock', endpoint: 'http://x' });
   const deleted = providerRegistry.deleteProvider(p.providerId);

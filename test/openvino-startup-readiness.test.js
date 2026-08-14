@@ -87,6 +87,31 @@ function ovModelEntries(sysInfo) {
 async function runShapingTests() {
   console.log("\nWorker advertisement shaping:");
 
+  await test("production: synthetic provider, executor, and model are not advertised", () => {
+    const previous = process.env.NODE_ENV;
+    const previousBackends = process.env.SIDEKICK_WORKER_BACKENDS_JSON;
+    const previousModels = process.env.SIDEKICK_WORKER_MODELS_JSON;
+    process.env.NODE_ENV = "production";
+    process.env.SIDEKICK_WORKER_BACKENDS_JSON = JSON.stringify([{ type: "mock", endpoint: "in-process" }, { type: "ollama", endpoint: "http://ollama" }]);
+    process.env.SIDEKICK_WORKER_MODELS_JSON = JSON.stringify([{ name: "deterministic-test", provider: "mock" }, { name: "real-model", provider: "ollama" }]);
+    try {
+      workerAgent.__setOpenVinoExecutorForTest(null);
+      const info = workerAgent.collectSystemInfo();
+      assert.ok(!info.providers.some(p => p.type === "mock"), "no mock provider");
+      assert.ok(!info.executors.some(e => e.type === "mock.inference"), "no mock executor");
+      assert.ok(!info.modelInventory.some(m => m.provider === "mock"), "no mock model");
+      assert.ok(!info.modelInventory.some(m => m.name === "deterministic-test"), "no synthetic model");
+      assert.ok(info.providers.some(p => p.type === "ollama"), "real configured provider remains visible");
+    } finally {
+      if (previous === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previous;
+      if (previousBackends === undefined) delete process.env.SIDEKICK_WORKER_BACKENDS_JSON;
+      else process.env.SIDEKICK_WORKER_BACKENDS_JSON = previousBackends;
+      if (previousModels === undefined) delete process.env.SIDEKICK_WORKER_MODELS_JSON;
+      else process.env.SIDEKICK_WORKER_MODELS_JSON = previousModels;
+    }
+  });
+
   await test("disabled: no OpenVINO executor, model, or health block", () => {
     delete process.env.SIDEKICK_OPENVINO_ENABLED;
     workerAgent.__setOpenVinoExecutorForTest(null);

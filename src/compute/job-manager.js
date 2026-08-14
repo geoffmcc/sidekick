@@ -423,7 +423,10 @@ function workerCompatibility(worker, job, { activeExecutorCounts = null } = {}) 
   const providers = parseMaybeArray(worker.providers).map(p => typeof p === "string" ? p : (p.type || p.providerType || p.name)).filter(Boolean);
   let capabilityOk = false;
   if (["chat", "generate", "embedding", "embeddings", "inference"].includes(job.jobType) || ["chat", "generate", "embeddings"].includes(job.capability)) {
-    capabilityOk = executors.includes("mock.inference") || executors.includes("ollama.inference") || providers.includes("mock") || providers.includes("ollama");
+    capabilityOk = executors.includes("ollama.inference") || providers.includes("ollama");
+    if (process.env.NODE_ENV !== "production") {
+      capabilityOk = capabilityOk || executors.includes("mock.inference") || providers.includes("mock");
+    }
   }
   capabilityOk = capabilityOk || executors.includes(job.jobType) || executors.includes(job.capability);
   if (!capabilityOk) reasons.push(`capability_missing:${job.capability || job.jobType}`);
