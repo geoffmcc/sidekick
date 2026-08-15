@@ -32,6 +32,7 @@
 const store = require("./store");
 const keys = require("./keys");
 const vocab = require("./vocabulary");
+const { RECONCILIATION_SPEC: RECONCILIATION_POLICY, isAuthorizedHuman: isAuthorizedHumanPolicy } = require("./reconciliation-policy");
 
 const BOUND = "approval_id = (SELECT current_approval_id FROM task_checkpoints WHERE task_id = ?)";
 
@@ -1250,7 +1251,7 @@ function enterReconciliation({ taskId, claimEpoch, recoveryExecutorId, approvalI
  * permission must FAIL CLOSED and leave the task in `reconciling` rather than
  * accept an unauthorized resolution.
  */
-const RECONCILIATION_SPEC = Object.freeze({
+const RECONCILIATION_SPEC_LEGACY = Object.freeze({
   confirm_executed: {
     approvalStatus: "completed",
     stepStatus: "completed",
@@ -1292,7 +1293,7 @@ const RECONCILIATION_SPEC = Object.freeze({
   },
 });
 
-const AUTOMATED_ACTORS = new Set([
+const AUTOMATED_ACTORS_LEGACY = new Set([
   "agent", "system", "dashboard", "brain", "planner", "runner", "recovery",
   "mcp", "internal", "approval", "test", "sweeper", "deadline", "task-runner",
   "automation", "root", "sidekick", "sidekick-agent", "service", "cron", "scheduler",
@@ -1300,7 +1301,7 @@ const AUTOMATED_ACTORS = new Set([
 
 // Zero-width and bidi controls. Present only to make two visually identical
 // strings compare unequal, which is exactly what a denylist bypass needs.
-const INVISIBLE_CHARS = /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g;
+const INVISIBLE_CHARS_LEGACY = /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g;
 
 /**
  * `reconciled_by` must be a REAL PRINCIPAL, not a surface name. The pre-ADR
@@ -1323,7 +1324,7 @@ const INVISIBLE_CHARS = /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g;
  * The caller is still required to fail closed when it has no authenticated
  * principal; this is the second line, not the first.
  */
-function isAuthorizedHuman(identity) {
+function isAuthorizedHumanLegacy(identity) {
   if (typeof identity !== "string") return false;
   const normalized = identity
     .normalize("NFKC")
@@ -1332,9 +1333,12 @@ function isAuthorizedHuman(identity) {
     .toLowerCase();
   if (!normalized) return false;
   if (normalized.startsWith("unattributed:")) return false;
-  if (AUTOMATED_ACTORS.has(normalized)) return false;
+  if (AUTOMATED_ACTORS_LEGACY.has(normalized)) return false;
   return true;
 }
+
+const RECONCILIATION_SPEC = RECONCILIATION_POLICY;
+const isAuthorizedHuman = isAuthorizedHumanPolicy;
 
 function resolveReconciliation({
   taskId, decision, reconciledBy, detail = null, now = store.nowIso(),
