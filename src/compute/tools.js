@@ -474,7 +474,26 @@ async function sidekick_compute_route({ action, ...args }) {
   try {
     compute.initialize();
     switch (action) {
-      case "explain": return ok(compute.explainRouting(args));
+      case "explain": {
+        // The tool surface is snake_case; explainRouting (capability router +
+        // placement dry run) expects camelCase. Unmapped, every argument was
+        // dropped and tool-level explain always evaluated a default
+        // chat/private request (documented limitation in docs/compute.md).
+        // Mapped explicitly, mirroring PROVIDER_FIELD_MAP's rationale: a
+        // silent mismatch is exactly the failure being fixed.
+        const capabilities = typeof args.capabilities_required === "string"
+          ? args.capabilities_required.split(",").map(s => s.trim()).filter(Boolean)
+          : [];
+        return ok(compute.explainRouting({
+          // Historical callers pass the workload as workload_class
+          // (chat|generate|embeddings); an explicit capabilities_required
+          // entry wins when supplied.
+          capability: capabilities[0] || args.workload_class,
+          workloadClass: args.workload_class,
+          dataClassification: args.data_classification,
+          trustLevel: args.trust_level,
+        }));
+      }
       case "list_rules": return ok(compute.getRoutingRules());
       case "create_rule": {
         const dbStore = require("../db");

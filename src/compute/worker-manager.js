@@ -94,6 +94,15 @@ function ensureSchema() {
   // Re-enrollment tracking (Phase 4)
   ensureColumn("compute_enrollment_tokens", "re_enrollment_of", "TEXT");
   ensureColumn("compute_enrollment_tokens", "replaced_worker_id", "TEXT");
+  // Index parity with migrations 022/023 (see test/compute-migration-parity):
+  // created AFTER the ensureColumn calls because a legacy runtime-bootstrapped
+  // database only gains these columns via the ALTERs above.
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_compute_workers_connection ON compute_workers(connection_state);
+    CREATE INDEX IF NOT EXISTS idx_compute_workers_admin ON compute_workers(admin_state);
+    CREATE INDEX IF NOT EXISTS idx_compute_workers_credential ON compute_workers(credential_state);
+    CREATE INDEX IF NOT EXISTS idx_compute_enrollment_reenroll ON compute_enrollment_tokens(re_enrollment_of);
+  `);
   // Backfill from existing state column for legacy workers
   backfillNewStateColumns();
 }

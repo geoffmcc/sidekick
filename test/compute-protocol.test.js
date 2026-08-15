@@ -365,6 +365,29 @@ async function main() {
     assert.strictEqual(recover.status, 200, 'recovery endpoint works');
     assert.ok(recover.data.recovered >= 1, 'expired lease recovered');
 
+    // Interrupted-attempt honesty: the lease expired without the attempt ever
+    // reporting an outcome, so even at attempt 1 of 1 the job requeues (with
+    // the attempt refunded) instead of dead-lettering for a whole crash.
+    const interrupted = await request('GET', `/compute/admin/jobs/${staleClaim.data.job.jobId}`, null, admin);
+    assert.ok(['retry_wait', 'queued'].includes(interrupted.data.job.status), `interrupted 1-of-1 requeues, got ${interrupted.data.job.status}`);
+    assert.strictEqual(interrupted.data.job.attempt, 0, 'interrupted attempt refunded');
+
+    // A REPORTED failure still consumes the budget: reclaim the job and fail
+    // it explicitly, which dead-letters a 1-of-1 job and keeps the concurrent
+    // retry race below meaningful.
+    await waitForJobStatus(staleClaim.data.job.jobId, 'queued', admin).catch(() => {});
+    let refailClaim = { data: { claimed: false } };
+    const refailDeadline = Date.now() + 15000;
+    while (!refailClaim.data.claimed && Date.now() < refailDeadline) {
+      refailClaim = await request('POST', '/compute/worker/jobs/claim', { leaseDurationMs: 60000 }, workerAuth);
+      if (!refailClaim.data.claimed) await new Promise(r => setTimeout(r, 250));
+    }
+    assert.strictEqual(refailClaim.data.claimed, true, 'refunded job is claimable again');
+    assert.strictEqual(refailClaim.data.job.jobId, staleClaim.data.job.jobId, 'replacement attempt is for the interrupted job');
+    const reportedFailure = await request('POST', `/compute/worker/jobs/${staleClaim.data.job.jobId}/fail`, { leaseId: refailClaim.data.leaseId, errorCategory: 'test_failure', errorMessage: 'reported failure' }, workerAuth);
+    assert.strictEqual(reportedFailure.status, 200, 'reported failure accepted');
+    assert.strictEqual(reportedFailure.data.job.status, 'dead_letter', 'reported failure on the final attempt dead-letters');
+
     const retryRace = await Promise.all([
       request('POST', `/compute/admin/jobs/${staleClaim.data.job.jobId}/retry`, { reason: 'test-retry-a' }, admin),
       request('POST', `/compute/admin/jobs/${staleClaim.data.job.jobId}/retry`, { reason: 'test-retry-b' }, admin),

@@ -98,7 +98,9 @@ function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_compute_jobs_status ON compute_jobs(status);
     CREATE INDEX IF NOT EXISTS idx_compute_jobs_type ON compute_jobs(job_type);
     CREATE INDEX IF NOT EXISTS idx_compute_jobs_worker ON compute_jobs(selected_worker_id);
+    CREATE INDEX IF NOT EXISTS idx_compute_jobs_provider ON compute_jobs(selected_provider_id);
     CREATE INDEX IF NOT EXISTS idx_compute_jobs_project ON compute_jobs(project);
+    CREATE INDEX IF NOT EXISTS idx_compute_jobs_created ON compute_jobs(created_at);
     CREATE INDEX IF NOT EXISTS idx_compute_jobs_cap ON compute_jobs(capability);
     CREATE INDEX IF NOT EXISTS idx_compute_jobs_lease ON compute_jobs(lease_id);
 
@@ -130,6 +132,7 @@ function ensureSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_compute_attempts_job ON compute_job_attempts(job_id);
     CREATE INDEX IF NOT EXISTS idx_compute_attempts_status ON compute_job_attempts(status);
+    CREATE INDEX IF NOT EXISTS idx_compute_attempts_worker ON compute_job_attempts(worker_id);
 
     CREATE TABLE IF NOT EXISTS compute_artifacts (
       artifact_id TEXT PRIMARY KEY,
@@ -152,6 +155,7 @@ function ensureSchema() {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_compute_artifacts_job ON compute_artifacts(job_id);
+    CREATE INDEX IF NOT EXISTS idx_compute_artifacts_type ON compute_artifacts(artifact_type);
   `);
   ensureColumn("compute_jobs", "cancel_requested_at", "TEXT");
   ensureColumn("compute_jobs", "cancel_requested_by", "TEXT");
@@ -180,6 +184,18 @@ function ensureSchema() {
   ensureColumn("compute_artifacts", "lease_id", "TEXT");
   ensureColumn("compute_artifacts", "state", "TEXT NOT NULL DEFAULT 'finalized'");
   ensureColumn("compute_artifacts", "finalized_at", "TEXT");
+  // Index parity with migrations 014/016/017 (see test/compute-migration-parity):
+  // created AFTER the ensureColumn calls because a legacy runtime-bootstrapped
+  // database only gains these columns via the ALTERs above. The idempotency
+  // unique index is not merely a performance detail — without it the runtime
+  // path enforced idempotency_key uniqueness only through the read-then-insert
+  // in createJob, which two concurrent creates can race.
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_compute_jobs_idempotency ON compute_jobs(idempotency_key) WHERE idempotency_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_compute_jobs_priority ON compute_jobs(priority, created_at);
+    CREATE INDEX IF NOT EXISTS idx_compute_jobs_expires ON compute_jobs(expires_at);
+    CREATE INDEX IF NOT EXISTS idx_compute_jobs_retry_after ON compute_jobs(status, retry_after);
+  `);
 }
 
 function ensureColumn(table, column, definition) {
@@ -367,7 +383,15 @@ function createJob({
   // Placement choke point: callers must not smuggle infrastructure selection,
   // credentials, device/worker pinning, trust claims, or provenance into the
   // job's free-form objects. Rejected explicitly, never silently dropped.
-  placement.assertNoForbiddenFields({ requestPayload, capabilityRequirements, routingPreferences }, "job", { allow: [] });
+  //
+  // `requested_device` is DELIBERATELY caller-suppliable: it selects among a
+  // model's manifest-certified device profiles (validated against the OpenVINO
+  // manifest allowlist by validateJobRequest and re-validated by the helper),
+  // not arbitrary infrastructure. Today it escapes FORBIDDEN_FIELDS only
+  // because no entry happens to normalize to "requested_device"; naming it in
+  // the allowlist makes the policy explicit so a future rename or addition in
+  // FORBIDDEN_FIELDS cannot silently forbid — or silently admit — it.
+  placement.assertNoForbiddenFields({ requestPayload, capabilityRequirements, routingPreferences }, "job", { allow: ["requested_device"] });
   jobType = validated.jobType;
   capability = validated.capability;
   protocolVersion = validated.protocolVersion;
@@ -449,7 +473,12 @@ function workerCompatibility(worker, job, { activeExecutorCounts = null } = {}) 
   // and manifest-authoritative certification all evaluate here — the same code
   // that backs explainPlacement, so claim decisions and dry runs cannot drift.
   const evaluation = placement.evaluateWorkerCandidate(
-    jobPlacementRequirement(job), worker, { executor: requiredExecutor, model: requiredModel }, { activeExecutorCounts }
+    jobPlacementRequirement(job), worker,
+    // requestedDevice makes placement device-aware: a worker that never
+    // probe-verified the pinned device is rejected at claim time instead of
+    // failing the job at runtime.
+    { executor: requiredExecutor, model: requiredModel, requestedDevice: job.requestPayload?.requested_device },
+    { activeExecutorCounts }
   );
   const reasons = evaluation.reasons.map(code => legacyCompatReason(code, worker, requiredExecutor, requiredModel));
 
@@ -493,7 +522,13 @@ function createPlatformExecutionForJob(job, workerId) {
       source: "compute",
     });
     return execution?.execution_id || null;
-  } catch { return null; }
+  } catch (error) {
+    // Best-effort by design (a ledger write must not fail the claim), but not
+    // silent: a job that never gets a platform execution is invisible to the
+    // execution ledger, and that used to happen with no trace at all.
+    console.error(`[JobManager] Failed to create platform execution for job ${job?.jobId || "(unknown)"}: ${error.message}`);
+    return null;
+  }
 }
 
 function emitComputeEvent(eventType, job, payload = {}, severity = "info") {
@@ -548,7 +583,9 @@ function claimNextJob(worker, { leaseDurationMs = 300000 } = {}) {
     // model) must not be double-claimed even when the worker-wide limit has
     // headroom.
     const activeExecutorCounts = {};
-    for (const active of db.prepare("SELECT capability_requirements_json, request_payload_json FROM compute_jobs WHERE selected_worker_id = ? AND status IN ('leased','starting','running')").all(worker.workerId)) {
+    // 'cancelling' counts as active: the worker still holds the lease (and the
+    // executor's resident model) until it acknowledges the cancellation.
+    for (const active of db.prepare("SELECT capability_requirements_json, request_payload_json FROM compute_jobs WHERE selected_worker_id = ? AND status IN ('leased','starting','running','cancelling')").all(worker.workerId)) {
       const executor = parseJson(active.capability_requirements_json, {}).executor || parseJson(active.request_payload_json, {}).executor;
       if (executor) activeExecutorCounts[executor] = (activeExecutorCounts[executor] || 0) + 1;
     }
@@ -812,7 +849,10 @@ function renewLease(jobId, leaseId, leaseDurationMs = 300000) {
   const job = getJob(jobId);
   if (!job) throw new JobError("Job not found", "JOB_NOT_FOUND", { jobId });
   if (job.leaseId !== leaseId || (job.leaseExpiresAt && new Date(job.leaseExpiresAt) < new Date())) throw new LeaseExpiredError(jobId, leaseId);
-  if (job.status !== "leased" && job.status !== "running") {
+  // 'cancelling' stays renewable: the executor legitimately holds the lease
+  // until its cancellation poll observes the request and acknowledges, and a
+  // lease that lapses first would hand finalization to recovery instead.
+  if (job.status !== "leased" && job.status !== "running" && job.status !== "cancelling") {
     throw new JobError("Job is not in a leaseable state", "NOT_LEASABLE", { jobId, status: job.status });
   }
   const now = nowIso();
@@ -827,15 +867,21 @@ function renewLease(jobId, leaseId, leaseDurationMs = 300000) {
   return getJob(jobId);
 }
 
+// Bound on lease-interruption requeues per job. A lease expiry is an
+// INTERRUPTED attempt — the holder vanished without ever reporting an outcome
+// — so it does not consume the max_attempts budget (reported failures do, in
+// failJob). Without a separate bound, a job that crashes its runner every time
+// would requeue forever; after this many interrupted attempts recovery
+// dead-letters it instead.
+const MAX_LEASE_INTERRUPTIONS = 3;
+
 function recoverExpiredLeases() {
   ensureSchema();
   const db = dbStore.getDb();
   const now = nowIso();
-  const rows = db.prepare("SELECT * FROM compute_jobs WHERE status IN ('leased', 'running') AND lease_expires_at < ?").all(now);
+  const rows = db.prepare("SELECT * FROM compute_jobs WHERE status IN ('leased', 'running', 'cancelling') AND lease_expires_at < ?").all(now);
   let recovered = 0;
   for (const row of rows) {
-    const exhausted = row.attempt >= row.max_attempts;
-    const nextStatus = exhausted ? "dead_letter" : "retry_wait";
     // Recovery now runs on a timer, potentially from more than one process
     // (server and dashboard both initialize compute). Each row is recovered
     // in its own transaction with a guarded UPDATE so a completion, renewal,
@@ -843,11 +889,38 @@ function recoverExpiredLeases() {
     // overwritten, and the attempt/counter writes happen exactly once.
     db.exec("BEGIN IMMEDIATE");
     try {
+      if (row.status === "cancelling") {
+        // Cancellation was requested but the lease lapsed without an ack: the
+        // holder is gone, so recovery finalizes the two-phase cancel itself.
+        const result = db.prepare(`
+          UPDATE compute_jobs SET status = 'cancelled', cancelled_at = ?, lease_id = NULL, lease_expires_at = NULL,
+            lease_renewed_at = NULL, updated_at = ?
+          WHERE job_id = ? AND lease_id = ? AND status = 'cancelling' AND lease_expires_at < ?
+        `).run(now, now, row.job_id, row.lease_id, now);
+        if (result.changes === 1) {
+          db.prepare("UPDATE compute_job_attempts SET status = 'cancelled', completed_at = ? WHERE job_id = ? AND lease_id = ?").run(now, row.job_id, row.lease_id);
+          if (row.selected_worker_id) db.prepare("UPDATE compute_workers SET current_jobs = MAX(current_jobs - 1, 0), updated_at = ? WHERE worker_id = ?").run(now, row.selected_worker_id);
+          recovered++;
+        }
+        db.exec("COMMIT");
+        continue;
+      }
+      // Prior interruptions are exactly the attempt rows this path marked
+      // 'expired'. Only the interruption bound dead-letters here: an expired
+      // lease on the final permitted attempt with no reported failure must
+      // requeue, not dead-letter — max_attempts counts reported outcomes.
+      const interruptions = db.prepare("SELECT COUNT(*) AS n FROM compute_job_attempts WHERE job_id = ? AND status = 'expired'").get(row.job_id)?.n || 0;
+      const exhausted = interruptions >= MAX_LEASE_INTERRUPTIONS;
+      const nextStatus = exhausted ? "dead_letter" : "retry_wait";
+      // Refund the interrupted attempt when the counter would otherwise pin
+      // the job below the claim guard (status='queued' AND attempt <
+      // max_attempts) forever — the attempt never reported, so it is returned.
+      const refund = !exhausted && row.attempt >= row.max_attempts ? 1 : 0;
       const result = db.prepare(`
-        UPDATE compute_jobs SET status = ?, lease_id = NULL, lease_expires_at = NULL, lease_renewed_at = NULL,
+        UPDATE compute_jobs SET status = ?, attempt = attempt - ?, lease_id = NULL, lease_expires_at = NULL, lease_renewed_at = NULL,
           selected_worker_id = NULL, error_category = ?, error_message = ?, retry_after = ?, updated_at = ?
         WHERE job_id = ? AND lease_id = ? AND status IN ('leased', 'running') AND lease_expires_at < ?
-      `).run(nextStatus, exhausted ? "attempts_exhausted" : "lease_expired", "Worker lease expired", exhausted ? null : new Date(Date.now() + retryDelayMs(rowToJob(row))).toISOString(), now, row.job_id, row.lease_id, now);
+      `).run(nextStatus, refund, exhausted ? "attempts_exhausted" : "lease_expired", "Worker lease expired", exhausted ? null : new Date(Date.now() + retryDelayMs(rowToJob(row))).toISOString(), now, row.job_id, row.lease_id, now);
       if (result.changes === 1) {
         db.prepare("UPDATE compute_job_attempts SET status = ?, completed_at = ?, error_category = 'lease_expired', error_message = 'Worker lease expired' WHERE job_id = ? AND lease_id = ?")
           .run(exhausted ? "dead_letter" : "expired", now, row.job_id, row.lease_id);
@@ -947,7 +1020,11 @@ function completeJob(jobId, workerId, leaseId, { result = {}, artifacts = [], ar
   const job = getJob(jobId);
   if (!job) throw new JobError("Job not found", "JOB_NOT_FOUND", { jobId });
   if (job.status === "completed") return job;
-  assertLeaseOwner(jobId, workerId, leaseId, ["leased", "starting", "running"]);
+  // 'cancelling' is completable (a legal transition): the worker finished the
+  // work before its cancellation poll observed the request, and a real result
+  // beats discarding finished work. Workers that DID observe the cancel ack
+  // instead of completing.
+  assertLeaseOwner(jobId, workerId, leaseId, ["leased", "starting", "running", "cancelling"]);
   validateCompletionArtifacts(jobId, workerId, leaseId, artifactIds.length ? artifactIds : artifact_ids);
   const db = dbStore.getDb();
   const now = nowIso();
@@ -956,7 +1033,7 @@ function completeJob(jobId, workerId, leaseId, { result = {}, artifacts = [], ar
   try {
     const update = db.prepare(`
       UPDATE compute_jobs SET status = 'completed', progress_percent = 100, result_json = ?, result_hash = ?, completed_at = ?, updated_at = ?
-      WHERE job_id = ? AND selected_worker_id = ? AND lease_id = ? AND status IN ('leased','starting','running')
+      WHERE job_id = ? AND selected_worker_id = ? AND lease_id = ? AND status IN ('leased','starting','running','cancelling')
     `).run(json(result), hashJson(result), now, now, jobId, workerId, leaseId);
     if (update.changes !== 1) throw new LeaseExpiredError(jobId, leaseId);
     // Provenance is written under the same lease-scoped guard as the result
@@ -1005,9 +1082,13 @@ function validateCompletionArtifacts(jobId, workerId, leaseId, artifactIds) {
 
 function failJob(jobId, workerId, leaseId, { errorCategory = "worker_error", errorMessage = "Worker reported failure" } = {}) {
   ensureSchema();
-  assertLeaseOwner(jobId, workerId, leaseId, ["leased", "starting", "running"]);
+  assertLeaseOwner(jobId, workerId, leaseId, ["leased", "starting", "running", "cancelling"]);
   const db = dbStore.getDb();
   const current = getJob(jobId);
+  // A failure reported while cancellation is pending finalizes the CANCEL,
+  // not a retry: the attempt was aborted on request, and cancelling→retry_wait
+  // is not a legal transition. The ack path releases the lease and counter.
+  if (current.status === "cancelling") return acknowledgeCancellation(jobId, workerId, leaseId);
   const nextStatus = current.attempt >= current.maxAttempts ? "dead_letter" : "retry_wait";
   const retryAfter = nextStatus === "retry_wait" ? new Date(Date.now() + retryDelayMs(current)).toISOString() : null;
   const now = nowIso();
@@ -1039,7 +1120,28 @@ function cancelJob(jobId, { actor = "admin", reason = "cancelled" } = {}) {
   const job = getJob(jobId);
   if (!job) throw new JobError("Job not found", "JOB_NOT_FOUND", { jobId });
   if (JOB_TERMINAL_STATES.has(job.status)) return job;
+  // Cancellation already requested; the executor's poll/ack (or lease-expiry
+  // recovery) finalizes it. A repeated cancel must not force-finalize a job
+  // whose runner may still be mid-abort.
+  if (job.status === "cancelling") return job;
   const now = nowIso();
+  // Two-phase cancellation for a job that is actually EXECUTING under a live
+  // lease: running→cancelled directly is not a legal transition (errors.js
+  // JOB_TRANSITIONS) and would yank the record out from under a runner that
+  // is still generating. Mark 'cancelling'; the runner's cancellation poll
+  // observes it, aborts, and acknowledges — the ack finalizes 'cancelled'.
+  // If the lease instead expires without an ack, recoverExpiredLeases
+  // finalizes. Everything not live-executing (queued, retry_wait, leased,
+  // waiting_for_approval, or an execution state whose lease already lapsed)
+  // cancels immediately, as before.
+  const leaseLive = job.leaseId && job.leaseExpiresAt && new Date(job.leaseExpiresAt) > new Date();
+  if (leaseLive && (job.status === "starting" || job.status === "running")) {
+    db.prepare("UPDATE compute_jobs SET status = 'cancelling', cancel_reason = ?, cancel_requested_at = ?, cancel_requested_by = ?, updated_at = ? WHERE job_id = ? AND status = ?")
+      .run(String(reason).slice(0, 500), now, String(actor).slice(0, 120), now, jobId, job.status);
+    const cancelling = getJob(jobId);
+    emitComputeEvent("compute.job_cancelling", cancelling, { actor, reason }, "warning");
+    return cancelling;
+  }
   db.prepare("UPDATE compute_jobs SET status = 'cancelled', cancelled_at = ?, cancel_reason = ?, cancel_requested_at = ?, cancel_requested_by = ?, updated_at = ? WHERE job_id = ?")
     .run(now, String(reason).slice(0, 500), now, String(actor).slice(0, 120), now, jobId);
   if (job.leaseId) db.prepare("UPDATE compute_job_attempts SET status = 'cancelled', completed_at = ? WHERE job_id = ? AND lease_id = ?").run(now, jobId, job.leaseId);
@@ -1072,9 +1174,36 @@ function acknowledgeCancellation(jobId, workerId, leaseId) {
   const status = getCancellationStatus(jobId, workerId, leaseId);
   if (!status.cancelled) throw new JobError("Job cancellation has not been requested", "CANCEL_NOT_REQUESTED", { jobId });
   const now = nowIso();
-  dbStore.getDb().prepare("UPDATE compute_jobs SET cancel_acknowledged_at = COALESCE(cancel_acknowledged_at, ?), cancel_acknowledged_by = COALESCE(cancel_acknowledged_by, ?), updated_at = ? WHERE job_id = ?")
-    .run(now, workerId, now, jobId);
+  const db = dbStore.getDb();
+  const current = getJob(jobId);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    // Two-phase finalization: the ack is what moves a live-leased 'cancelling'
+    // job to terminal 'cancelled' — the runner has confirmed it stopped, so
+    // the lease is released and the worker's admission counter freed here,
+    // not at cancel-request time. Guarded on the lease so a superseded holder
+    // cannot finalize; the straight-cancel path (queued/leased) already wrote
+    // 'cancelled' in cancelJob and only records the ack below.
+    const finalized = db.prepare(`
+      UPDATE compute_jobs SET status = 'cancelled', cancelled_at = ?, lease_id = NULL, lease_expires_at = NULL,
+        lease_renewed_at = NULL, updated_at = ?
+      WHERE job_id = ? AND lease_id = ? AND status = 'cancelling'
+    `).run(now, now, jobId, leaseId);
+    if (finalized.changes === 1) {
+      db.prepare("UPDATE compute_job_attempts SET status = 'cancelled', completed_at = ? WHERE job_id = ? AND lease_id = ?").run(now, jobId, leaseId);
+      if (current.selectedWorkerId) db.prepare("UPDATE compute_workers SET current_jobs = MAX(current_jobs - 1, 0), updated_at = ? WHERE worker_id = ?").run(now, current.selectedWorkerId);
+    }
+    db.prepare("UPDATE compute_jobs SET cancel_acknowledged_at = COALESCE(cancel_acknowledged_at, ?), cancel_acknowledged_by = COALESCE(cancel_acknowledged_by, ?), updated_at = ? WHERE job_id = ?")
+      .run(now, workerId || "direct-runner", now, jobId);
+    db.exec("COMMIT");
+  } catch (e) {
+    try { db.exec("ROLLBACK"); } catch {}
+    throw e;
+  }
   const job = getJob(jobId);
+  if (job.status === "cancelled" && current.status === "cancelling" && platformKernel && job.rootExecutionId) {
+    try { platformKernel.transitionExecution(job.rootExecutionId, "cancelled", { source: "compute", actor_id: workerId || "direct-runner", reason: job.cancelReason || "cancelled" }); } catch {}
+  }
   emitComputeEvent("compute.job_cancel_acknowledged", job, { worker_id: workerId, lease_id: leaseId }, "warning");
   return job;
 }
@@ -1294,7 +1423,8 @@ function getJobStats() {
     SELECT job_type, COUNT(*) as count FROM compute_jobs GROUP BY job_type
   `).all();
   const total = db.prepare("SELECT COUNT(*) as count FROM compute_jobs").get();
-  const activeLeases = db.prepare("SELECT COUNT(*) as count FROM compute_jobs WHERE lease_id IS NOT NULL AND status IN ('leased','starting','running')").get();
+  // 'cancelling' still holds its lease until the runner acknowledges.
+  const activeLeases = db.prepare("SELECT COUNT(*) as count FROM compute_jobs WHERE lease_id IS NOT NULL AND status IN ('leased','starting','running','cancelling')").get();
   const attempts = db.prepare("SELECT COUNT(*) as count FROM compute_job_attempts").get();
   const artifacts = db.prepare("SELECT state, COUNT(*) as count FROM compute_artifacts GROUP BY state").all();
   return {

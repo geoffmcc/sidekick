@@ -607,10 +607,16 @@ class HelperManager extends EventEmitter {
    * @param {number} [timeoutMs]
    * @returns {Promise<object>}
    */
-  async checkReady(modelId, timeoutMs) {
+  async checkReady(modelId, timeoutMs, requestedDevice) {
     const helper = await this._ensureReady();
     return helper.request(
-      { action: "ready", model_id: modelId },
+      {
+        action: "ready",
+        model_id: modelId,
+        // Per-device readiness: the caller may probe a specific certified
+        // profile so advertised capabilities reflect what was actually probed.
+        ...(requestedDevice ? { requested_device: requestedDevice } : {}),
+      },
       timeoutMs || 30000
     );
   }

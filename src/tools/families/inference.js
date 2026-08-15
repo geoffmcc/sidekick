@@ -182,7 +182,10 @@ async function sidekick_llm({ prompt, system, temperature, async: asyncMode, tim
       // existing compute_jobs lifecycle.
       compute.initialize();
       const context = toolContext.getExecutionContext();
-      const workerModel = process.env.OLLAMA_MODEL || "qwen3.5:latest";
+      // Same fallback chain as provider-bootstrap.js seedOllama: with only
+      // SIDEKICK_AGENT_MODEL set, the async job must not demand a model that
+      // no bootstrapped provider or enrolled worker advertises.
+      const workerModel = process.env.OLLAMA_MODEL || process.env.SIDEKICK_AGENT_MODEL || "qwen3.5:latest";
       const job = compute.jobManager.createJob({
         jobType: "chat",
         capability: "chat",

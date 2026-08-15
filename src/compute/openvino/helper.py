@@ -601,10 +601,15 @@ class HelperRuntime:
         self._states[key] = state
         return state
 
-    def handle_ready(self, request_id: str, model_id: str) -> None:
+    def handle_ready(self, request_id: str, model_id: str, requested_device: str | None = None) -> None:
         """
         Validate that the model store exists and contains required files,
         and that the device is available.  Does not compile or load.
+
+        `requested_device` lets the parent probe each certified device profile
+        individually (advertisement honesty: a capability string is only
+        advertised for a device whose own probe succeeded).  Absent, the
+        model's primary device is probed, preserving the legacy behaviour.
         """
         if model_id not in ALLOWED_MODELS:
             _reply_err(request_id, "unsupported_model", f"Unknown model_id: '{model_id}'")
@@ -612,6 +617,16 @@ class HelperRuntime:
 
         config = _MODEL_CONFIGS[model_id]
         target_device = config["device"]
+        if requested_device is not None:
+            # Same allowlist the embed path enforces: only approved profiles.
+            if requested_device not in config.get("devices", [target_device]):
+                _reply_err(
+                    request_id,
+                    "device_not_allowed",
+                    f"Device '{requested_device}' is not an approved profile",
+                )
+                return
+            target_device = requested_device
 
         if target_device not in self._available_devices:
             _reply_err(
@@ -688,11 +703,13 @@ class HelperRuntime:
             if fallback == "same_model_cpu" and config.get("fallback_device"):
                 device = config["fallback_device"]
                 fallback_occurred = True
-                fallback_reason = f"device_not_found:{primary_device}"
+                # Name the device the caller actually requested (which may be a
+                # non-primary certified profile), not the model's primary device.
+                fallback_reason = f"device_not_found:{requested_device}"
                 _warn(
-                    "Primary device unavailable; falling back to CPU",
+                    "Requested device unavailable; falling back to CPU",
                     model_id=model_id,
-                    primary_device=primary_device,
+                    requested_device=requested_device,
                     fallback_device=device,
                 )
             else:
@@ -798,7 +815,11 @@ class HelperRuntime:
             "dimensions": int(embedding.shape[0]),
             "embedding": embedding.tolist(),
             "device": device,
-            "requested_device": primary_device,
+            # Echo what the CALLER asked for, never the model's primary device:
+            # deriveAttemptProvenance cross-checks requested vs actual, so echoing
+            # primary_device here recorded a successful explicit-NPU embed as a
+            # rejected claim (requested "GPU", ran "NPU").
+            "requested_device": requested_device,
             "fallback_occurred": fallback_occurred,
             "fallback_reason": fallback_reason,
             "sequence_length": sequence_length,
@@ -995,7 +1016,12 @@ def main() -> int:
                         f"Unknown or missing model_id: '{model_id_raw}'",
                     )
                 else:
-                    runtime.handle_ready(request_id, model_id_raw)
+                    requested_device_raw = msg.get("requested_device")
+                    runtime.handle_ready(
+                        request_id,
+                        model_id_raw,
+                        requested_device_raw if isinstance(requested_device_raw, str) else None,
+                    )
             elif action == "embed":
                 runtime.handle_embed(request_id, msg)
         except Exception as exc:

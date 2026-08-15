@@ -269,6 +269,10 @@ async function runReadinessTests() {
     // Qwen CPU must NOT be advertised: it is only a job-time fallback, never
     // derived from the NPU model's certification.
     assert.ok(!r.capabilities.some(c => c.includes("qwen") && c.includes(":CPU:")), "no Qwen CPU capability");
+    // Both certified Qwen devices are present AND each was individually
+    // probed (per-device readiness), so the GPU profiles are advertised too.
+    assert.ok(r.capabilities.includes("openvino.text_embedding:qwen3-embedding-0.6b-int8:GPU:seq128:batch1:certified"), "Qwen GPU 128");
+    assert.ok(r.capabilities.includes("openvino.text_embedding:qwen3-embedding-0.6b-int8:GPU:seq512:batch1:certified"), "Qwen GPU 512");
     const names = r.models.map(m => m.name).sort();
     assert.deepStrictEqual(names, ["e5-small-v2-qint8", "qwen3-embedding-0.6b-int8"]);
     // Verify certificationTier on all models.
@@ -288,6 +292,26 @@ async function runReadinessTests() {
     assert.deepStrictEqual(r.capabilities, ["openvino.text_embedding:e5-small-v2-qint8:CPU:seq512:batch1:certified"]);
     assert.ok(!r.capabilities.some(c => c.includes(":NPU:")), "no NPU capability when NPU absent");
     assert.deepStrictEqual(r.models.map(m => m.name), ["e5-small-v2-qint8"]);
+    ovExecutor.shutdownOpenVinoExecutor();
+    await sleep(150);
+  });
+
+  await test("GPU absent: only the probed NPU profiles are advertised (advertisement honesty)", async () => {
+    const dir = scenarioDir({ devices: ["CPU", "NPU"] });
+    await ovExecutor.initOpenVinoExecutor(makeConfig(dir));
+    const r = await ovExecutor.awaitStartupReadiness(8000);
+    assert.strictEqual(r.state, "ready", `state was ${r.state}: ${r.reason}`);
+    // Before per-device probing this scenario was doubly dishonest: the single
+    // probe targeted Qwen's primary device (GPU), failed, and dropped the
+    // model entirely despite a working NPU — while a passing primary probe
+    // used to vouch for EVERY certified device present in available_devices.
+    // Now each advertised device carries its own successful probe.
+    assert.ok(r.capabilities.includes("openvino.text_embedding:qwen3-embedding-0.6b-int8:NPU:seq128:batch1:certified"), "Qwen NPU 128 probed and advertised");
+    assert.ok(r.capabilities.includes("openvino.text_embedding:qwen3-embedding-0.6b-int8:NPU:seq512:batch1:certified"), "Qwen NPU 512 probed and advertised");
+    assert.ok(!r.capabilities.some(c => c.includes(":GPU:")), "no GPU capability without a GPU device");
+    const qwen = r.models.find(m => m.name === "qwen3-embedding-0.6b-int8");
+    assert.ok(qwen, "Qwen stays in inventory via its ready NPU profile");
+    assert.strictEqual(qwen.device, "NPU", "inventory device is a probed device");
     ovExecutor.shutdownOpenVinoExecutor();
     await sleep(150);
   });
