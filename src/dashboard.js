@@ -28,6 +28,7 @@ const platformKernel = require("./platform/kernel");
 const compute = require("./compute");
 const { probeConnector } = require("./connectors/health");
 const { registerConnectorRoutes } = require("./dashboard/connectors-routes");
+const { registerKvRoutes } = require("./dashboard/kv-routes");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const PORT = parseInt(process.env.SIDEKICK_DASHBOARD_PORT || "4098", 10);
@@ -710,25 +711,6 @@ function summarizeActivity(sessions, calls) {
   };
 }
 
-function shapeKvEntry(key, entry) {
-  const isEnvelope = entry && typeof entry === "object" && !Array.isArray(entry) && Object.prototype.hasOwnProperty.call(entry, "value");
-  const value = isEnvelope ? entry.value : entry;
-  return {
-    key,
-    value,
-    value_text: safeString(value),
-    preview: summarizeValue(value, 180),
-    project: isEnvelope ? entry.project || null : null,
-    source: isEnvelope ? entry.source || null : null,
-    category: isEnvelope ? entry.category || null : null,
-    namespace: inferNamespace(key),
-    size: valueSize(value),
-    data_type: valueType(value),
-    created: isEnvelope ? entry.created || null : null,
-    updated: isEnvelope ? entry.updated || null : null
-  };
-}
-
 function memoryCategory(memory) {
   if (memory.type === "tool_call" || memory.source_tool && memory.type === "observation" && memory.source_tool !== "sidekick_agent") return "operational";
   if (memory.type === "session" || memory.type === "agent_task") return "sessions";
@@ -849,30 +831,6 @@ app.get("/api/logs", (req, res) => {
   entries = entries.slice(0, limit);
   const sessions = buildActivitySessions(entries);
   res.json({ entries, sessions, summary: summarizeActivity(sessions, entries), total: entries.length, fallback_grouping_ms: ACTIVITY_FALLBACK_GAP_MS });
-});
-
-app.get("/api/kv", (req, res) => {
-  const kv = readKV();
-  const entries = Object.entries(kv).map(([key, entry]) => shapeKvEntry(key, entry));
-  const namespaces = [...new Set(entries.map(entry => entry.namespace))].sort();
-  const projects = [...new Set(entries.map(entry => entry.project).filter(Boolean))].sort();
-  const totalSize = entries.reduce((sum, entry) => sum + entry.size, 0);
-  const recentCutoff = Date.now() - 24 * 60 * 60 * 1000;
-  const recentlyChanged = entries.filter(entry => entry.updated && new Date(entry.updated).getTime() >= recentCutoff).length;
-  res.json({
-    entries,
-    total: entries.length,
-    summary: {
-      total_entries: entries.length,
-      projects: projects.length,
-      total_size: totalSize,
-      recently_changed: recentlyChanged,
-      namespaces: namespaces.length,
-      largest_entries: [...entries].sort((a, b) => b.size - a.size).slice(0, 5).map(entry => ({ key: entry.key, size: entry.size }))
-    },
-    namespaces,
-    projects
-  });
 });
 
 app.get("/api/system", (req, res) => {
@@ -1358,61 +1316,16 @@ app.get("/api/config", (req, res) => {
   res.json({ config });
 });
 
-app.put("/api/kv/:key", (req, res) => {
-  try {
-    const { value, project } = req.body || {};
-    const kv = readKV();
-    const now = new Date().toISOString();
-    const existing = kv[req.params.key];
-    
-    if (existing && typeof existing === 'object' && 'value' in existing) {
-      kv[req.params.key] = {
-        value: value,
-        project: project !== undefined ? project : existing.project,
-        source: existing.source,
-        created: existing.created,
-        updated: now
-      };
-    } else {
-      kv[req.params.key] = {
-        value: value,
-        project: project || null,
-        source: "dashboard",
-        created: now,
-        updated: now
-      };
-    }
-    
-    writeKV(kv);
-    auditLog(req, 'kv.update', { value_length: value?.length, project });
-    res.json({ ok: true });
-  } catch { res.status(400).json({ error: "invalid body" }); }
-});
-
-app.get("/api/kv/projects", (req, res) => {
-  const kv = readKV();
-  const projects = new Set();
-  for (const entry of Object.values(kv)) {
-    if (typeof entry === 'object' && entry !== null && 'project' in entry) {
-      projects.add(entry.project);
-    }
-  }
-  res.json({ projects: Array.from(projects) });
-});
-
-app.delete("/api/kv/:key", (req, res) => {
-  const kv = readKV();
-  // Report what actually happened: deleting a key that does not exist used to
-  // answer {ok:true}, indistinguishable from a real deletion.
-  const existed = Object.prototype.hasOwnProperty.call(kv, req.params.key);
-  if (!existed) {
-    auditLog(req, 'kv.delete', { key: req.params.key, deleted: false });
-    return res.status(404).json({ ok: false, deleted: false, error: "key not found" });
-  }
-  delete kv[req.params.key];
-  writeKV(kv);
-  auditLog(req, 'kv.delete', { key: req.params.key, deleted: true });
-  res.json({ ok: true, deleted: true });
+registerKvRoutes({
+  app,
+  readKV,
+  writeKV,
+  safeString,
+  summarizeValue,
+  inferNamespace,
+  valueSize,
+  valueType,
+  auditLog,
 });
 
 app.get("/api/stats", (req, res) => {
