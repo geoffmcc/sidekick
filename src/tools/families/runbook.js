@@ -66,10 +66,20 @@ function syncInstanceFromLedger(instance) {
 
 function syncInstancesFromLedger(data) {
   let changed = false;
+  const failures = [];
   for (const instance of Object.values(data.instances || {})) {
     try {
       if (syncInstanceFromLedger(instance).changed) changed = true;
-    } catch {}
+    } catch (error) {
+      // Mirror sync stays best-effort per instance, but a failed sync is
+      // collected and logged instead of vanishing: an instance whose ledger
+      // read keeps failing would otherwise silently drift stale forever.
+      failures.push({ instance: instance?.id || "(unknown)", error: String(error.message || error) });
+    }
+  }
+  if (failures.length > 0) {
+    console.error(`[Runbook] Failed to sync ${failures.length} instance(s) from the execution ledger: ` +
+      failures.map(f => `${f.instance}: ${f.error}`).join("; "));
   }
   return changed;
 }

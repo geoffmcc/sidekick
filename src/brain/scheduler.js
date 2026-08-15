@@ -97,13 +97,29 @@ function startResumeScheduler({ buildDeps, intervalMs = getPollIntervalMs(), onP
   if (timer) return { started: false, reason: "already_running" };
   if (typeof buildDeps !== "function") return { started: false, reason: "buildDeps_required" };
 
+  // One stable runner identity for the scheduler's lifetime, shared by the
+  // liveness heartbeat and every claim it makes.
+  const runner = runnerIdentity();
+  const beat = () => {
+    // Best-effort: a transiently unavailable database must not kill the timer.
+    // The heartbeat is what lets executeApprovedTool (T2) answer honestly
+    // about whether an approved task will actually be resumed; without a
+    // fresh row, T2 reports the runner as absent instead of promising
+    // resumption that nothing will perform.
+    try { store.writeTaskRunnerHeartbeat({ runner, intervalMs }); } catch {}
+  };
+  beat();
+
   timer = setInterval(async () => {
+    // Written before the reentrancy check: a long in-flight pass still proves
+    // the runner is alive.
+    beat();
     // Non-reentrant: a slow pass must not stack passes that then race each
     // other for the same checkpoints.
     if (inFlight) return;
     inFlight = true;
     try {
-      const outcomes = await resumeClaimable({ buildDeps });
+      const outcomes = await resumeClaimable({ buildDeps, claimedBy: runner });
       if (outcomes.length && onPass) { try { onPass(outcomes); } catch {} }
       const resumed = outcomes.filter(o => o.state && !["not_claimed", "not_resumed"].includes(o.state));
       if (resumed.length) {

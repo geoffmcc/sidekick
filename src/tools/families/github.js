@@ -7,9 +7,11 @@
 // cipher, and (optionally) the connector authority — never on tools-legacy.js.
 // The GitHub integration is governed by the registered GitHub connector when
 // present: endpoint and credential come from the connector (its secret_ref
-// resolved at call time via connectors/resolve.js). A GITHUB_TOKEN env value
-// remains the highest-precedence override and the legacy secret-store key the
-// final fallback, so the tool works before/without a connector. The token is
+// resolved at call time via connectors/resolve.js) — the connector is the
+// credential authority and resolves first. A GITHUB_TOKEN env value and the
+// legacy secret-store key remain fallbacks (in that order), so the tool works
+// before/without a connector. Each API response feeds bounded connector
+// health observability (githubHealthDecision/noteGithubResponse). The token is
 // redacted from error text by redactGithubError before any output. The
 // helper quartet parseGithubArgs/getGithubArg/getCiRevisionSelector/
 // buildCiStatusResult (+formatCiStatusText) stays on the src/tools facade as
@@ -56,15 +58,20 @@ function githubConnector() {
 }
 
 function resolveGithubToken() {
-  // Precedence: explicit env override (BC) → the registered GitHub connector's
-  // secret reference → the legacy encrypted secret-store key.
-  if (process.env.GITHUB_TOKEN) return process.env.GITHUB_TOKEN;
-
+  // Authority order: the ACTIVE registered GitHub connector is the governing
+  // authority for this integration, so its secret_ref resolves FIRST. The
+  // GITHUB_TOKEN env var is a fallback for pre-connector deployments (and the
+  // escape hatch when no connector is live — including after the connector
+  // degrades to `error`, since only enabled/healthy connectors are "active"),
+  // not an override that silently bypasses the governed credential. The legacy
+  // encrypted secret-store key remains the final fallback.
   const connector = githubConnector();
   if (connector && connectorResolve) {
     const viaConnector = connectorResolve.resolveConnectorCredential(connector);
     if (viaConnector) return viaConnector;
   }
+
+  if (process.env.GITHUB_TOKEN) return process.env.GITHUB_TOKEN;
 
   try {
     const secrets = loadSecrets();
@@ -82,6 +89,57 @@ function resolveGithubApiBase() {
   const connector = githubConnector();
   if (connector && connector.endpoint) return String(connector.endpoint).replace(/\/$/, "");
   return "https://api.github.com";
+}
+
+// Pure decision helper for per-call connector health observability (unit
+// tested directly). Only state CHANGES are recorded — the kernel's
+// recordConnectorHealth writes a row and appends an event on every call, so
+// recording each successful request would turn API traffic into ledger churn:
+//   - 401/403 while the connector is enabled/healthy -> record degradation
+//     (transitions the connector to `error`; it then stops being the active
+//     credential source until an operator re-enables it).
+//   - success while the connector is merely `enabled` -> record ok (promotes
+//     enabled -> healthy, the one success-side state change that exists).
+//   - everything else (steady-state healthy success, repeat failures after the
+//     connector already errored, network errors/timeouts with status 0) is
+//     not recorded.
+function githubHealthDecision(connectorState, httpStatus) {
+  const status = Number(httpStatus) || 0;
+  const authFailure = status === 401 || status === 403;
+  const success = status >= 200 && status < 400;
+  if (authFailure && (connectorState === "enabled" || connectorState === "healthy")) {
+    return { record: true, ok: false, error: `github auth failure (HTTP ${status})` };
+  }
+  if (success && connectorState === "enabled") {
+    return { record: true, ok: true };
+  }
+  return { record: false };
+}
+
+// Best-effort per-call hook: observability must never break or slow the API
+// call itself, so every failure here is swallowed. Cheap by construction —
+// githubConnector() is a bounded kernel lookup and a write happens only on a
+// state change (see githubHealthDecision). Success-side last-used metadata is
+// deliberately NOT written per call for the same reason; the enabled->healthy
+// promotion (with its last_health_check_at stamp) is the durable evidence the
+// credential works.
+function noteGithubResponse(httpStatus) {
+  try {
+    if (!connectorResolve) return;
+    const connector = githubConnector();
+    if (!connector) return;
+    const decision = githubHealthDecision(connector.state, httpStatus);
+    if (!decision.record) return;
+    const kernel = require("../../platform/kernel");
+    kernel.recordConnectorHealth(
+      connector.connector_id,
+      decision.ok
+        ? { ok: true, status: Number(httpStatus) || 0, source: "github_tool" }
+        : { ok: false, status: Number(httpStatus) || 0, error: decision.error, source: "github_tool" }
+    );
+  } catch {
+    // Never let health recording interfere with the request path.
+  }
 }
 
 function redactGithubError(value, token) {
@@ -121,6 +179,7 @@ function githubRequest(token, method, endpoint, body) {
         } catch (e) {
           parsed = data;
         }
+        noteGithubResponse(res.statusCode);
         resolve({ status: res.statusCode, headers: res.headers || {}, data: parsed });
       });
     });
@@ -362,6 +421,7 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
         let data = "";
         res.on("data", (chunk) => data += chunk);
         res.on("end", () => {
+          noteGithubResponse(res.statusCode);
           try {
             const parsed = JSON.parse(data);
             resolve({ status: res.statusCode, data: parsed });
@@ -501,4 +561,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_github, sidekick_ci_status, parseGithubArgs, getGithubArg, getCiRevisionSelector, buildCiStatusResult, formatCiStatusText, resolveGithubToken, resolveGithubApiBase };
+module.exports = { descriptors, sidekick_github, sidekick_ci_status, parseGithubArgs, getGithubArg, getCiRevisionSelector, buildCiStatusResult, formatCiStatusText, resolveGithubToken, resolveGithubApiBase, githubHealthDecision, noteGithubResponse };

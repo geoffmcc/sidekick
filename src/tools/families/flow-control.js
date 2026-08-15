@@ -47,7 +47,37 @@ function saveQueue(queue) {
   fs.writeFileSync(QUEUE_FILE, JSON.stringify(queue, null, 2));
 }
 
-async function sidekick_queue({ action, id, tool, args, priority, status }) {
+const QUEUE_STUCK_MINUTES_DEFAULT = 10;
+
+// Poisoned-slot recovery. Execution is in-process: a task moves to
+// "processing" and, if the process dies mid-dispatch, nothing ever moves it
+// back — it sits in "processing" forever and `process` (which only picks
+// "pending" tasks) skips it for good. Reset any task stuck in "processing"
+// longer than the threshold back to "pending", with an audit note on the task
+// record so the re-queue is visible, not silent. attempts is preserved.
+function recoverStuckQueueTasks(queue, olderThanMinutes) {
+  const minutes = Number.isFinite(olderThanMinutes) && olderThanMinutes > 0 ? olderThanMinutes : QUEUE_STUCK_MINUTES_DEFAULT;
+  const cutoff = Date.now() - minutes * 60000;
+  const recovered = [];
+  for (const task of queue.tasks) {
+    if (task.status !== "processing") continue;
+    // startedAt is stamped when processing begins; legacy rows without it fall
+    // back to created so they are still recoverable.
+    const startedMs = Date.parse(task.startedAt || task.created || "");
+    if (!Number.isFinite(startedMs) || startedMs > cutoff) continue;
+    task.status = "pending";
+    task.recoveries = task.recoveries || [];
+    task.recoveries.push({
+      at: new Date().toISOString(),
+      note: `re-queued: stuck in processing since ${task.startedAt || task.created || "(unknown)"} (over ${minutes}m; interrupted execution assumed)`,
+    });
+    delete task.startedAt;
+    recovered.push(task.id);
+  }
+  return recovered;
+}
+
+async function sidekick_queue({ action, id, tool, args, priority, status, older_than_minutes }) {
   const queue = loadQueue();
 
   if (action === "add") {
@@ -89,7 +119,21 @@ async function sidekick_queue({ action, id, tool, args, priority, status }) {
     return { content: [{ type: "text", text: `Queue (${filtered.length} tasks):\n${summary}` }] };
   }
 
+  if (action === "recover") {
+    const recovered = recoverStuckQueueTasks(queue, older_than_minutes);
+    if (recovered.length === 0) {
+      return { content: [{ type: "text", text: `No tasks stuck in processing older than ${older_than_minutes || QUEUE_STUCK_MINUTES_DEFAULT} minutes` }] };
+    }
+    saveQueue(queue);
+    return { content: [{ type: "text", text: `Recovered ${recovered.length} stuck task(s) back to pending: ${recovered.join(", ")}` }] };
+  }
+
   if (action === "process") {
+    // Opportunistic recovery first: a slot poisoned by an interrupted run
+    // must not block processing forever.
+    const opportunistic = recoverStuckQueueTasks(queue);
+    if (opportunistic.length > 0) saveQueue(queue);
+
     const pending = queue.tasks.find(t => t.status === "pending");
 
     if (!pending) {
@@ -97,6 +141,7 @@ async function sidekick_queue({ action, id, tool, args, priority, status }) {
     }
 
     pending.status = "processing";
+    pending.startedAt = new Date().toISOString();
     pending.attempts++;
     saveQueue(queue);
 
@@ -154,7 +199,7 @@ async function sidekick_queue({ action, id, tool, args, priority, status }) {
     return { content: [{ type: "text", text: `Cleared tasks (status: ${clearStatus})` }] };
   }
 
-  return { content: [{ type: "text", text: "Unknown action. Use: add, list, process, remove, clear" }], isError: true };
+  return { content: [{ type: "text", text: "Unknown action. Use: add, list, process, remove, clear, recover" }], isError: true };
 }
 
 
@@ -550,12 +595,13 @@ async function sidekick_circuit({ action, target, tool, args, failure_threshold,
 
 const SCHEMAS = {
   queue: z.object({
-    action: z.enum(["add", "list", "process", "remove", "clear"]).describe("Queue action"),
+    action: z.enum(["add", "list", "process", "remove", "clear", "recover"]).describe("Queue action"),
     id: z.number().optional().describe("Task ID (for remove action)"),
     tool: z.string().optional().describe("Tool name to queue (for add action)"),
     args: z.record(z.any()).optional().describe("Tool arguments (for add action)"),
     priority: z.number().optional().describe("Task priority, higher = more important (default: 0)"),
-    status: z.string().optional().describe("Status filter for list/clear: pending, processing, completed, failed, or all")
+    status: z.string().optional().describe("Status filter for list/clear: pending, processing, completed, failed, or all"),
+    older_than_minutes: z.number().optional().describe("Recover: re-queue tasks stuck in processing longer than this many minutes (default 10)")
   }),
   retry: z.object({
     tool: z.string().describe("Tool name to retry"),
@@ -592,9 +638,9 @@ const SCHEMAS = {
 const descriptors = Object.freeze([
   Object.freeze({
     name: "queue",
-    description: "Persistent task queue with priorities",
+    description: "File-backed task queue with priorities; tasks run in-process when processed, and tasks interrupted mid-processing are re-queued by recover (also run automatically before process)",
     schema: SCHEMAS.queue,
-    args: { action: "string (add|list|process|remove|clear)", id: "number (optional, task id for remove)", tool: "string (optional, tool name for add)", args: "object (optional, tool args for add)", priority: "number (optional, priority for add, default 0)", status: "string (optional, status filter for list/clear)" },
+    args: { action: "string (add|list|process|remove|clear|recover)", id: "number (optional, task id for remove)", tool: "string (optional, tool name for add)", args: "object (optional, tool args for add)", priority: "number (optional, priority for add, default 0)", status: "string (optional, status filter for list/clear)", older_than_minutes: "number (optional, for recover - re-queue tasks stuck in processing longer than this, default 10)" },
     risk: "high",
     category: "Workflow",
     source: "builtin",

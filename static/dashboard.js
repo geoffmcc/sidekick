@@ -443,9 +443,13 @@ function loadSystem(){
   return authFetch('/api/system').then(r=>r.json()).then(d=>{
     if(d.error){ $('s-uptime').textContent='error'; return }
     $('s-uptime').textContent = d.uptime || '?';
-    const cpuVal = parseFloat(d.cpu);
-    $('s-cpu').textContent = d.cpu;
-    $('s-cpu').className = 's-val' + (cpuVal > 80 ? ' warn' : cpuVal > 50 ? '' : ' ok');
+    // load_1m is the 1-minute load average (not a percentage — the old code
+    // faked a percent from it). Thresholds are relative to the core count:
+    // load ≥ cores means saturated, ≥ half the cores means elevated.
+    const load1 = Number(d.load_1m);
+    const cores = Number(d.cpu_count) || 1;
+    $('s-cpu').textContent = Number.isFinite(load1) ? load1 + ' / ' + cores + ' cores' : '?';
+    $('s-cpu').className = 's-val' + (load1 >= cores ? ' warn' : load1 >= cores * 0.5 ? '' : ' ok');
     $('s-memory').textContent = d.memory.used + '/' + d.memory.total;
     $('s-disk').textContent = d.disk.free + ' free (' + d.disk.pct + ')';
   }).catch(e => apiError('/api/system', e, 0));
@@ -464,7 +468,8 @@ function loadDashboardSummary(){
     const scoreEl = $('healthScore');
     scoreEl.textContent = score;
     scoreEl.style.color = score >= 80 ? '#3fb950' : score >= 50 ? '#d29922' : '#f85149';
-    $('healthCpu').textContent = Math.round(d.health.cpu);
+    // Load average, honestly labeled (see the "Load 1m" tile label in the HTML).
+    $('healthCpu').textContent = d.health.load_1m + ' / ' + d.health.cpu_count + ' cores';
     $('healthMem').textContent = Math.round(d.health.memory);
     $('healthDisk').textContent = Math.round(d.health.disk);
     
@@ -595,7 +600,10 @@ function renderMissionServices(data){
 
 function renderMissionSystem(system, summary){
   if (!system || system.error) return;
-  const cpu = summary && summary.health ? Math.round(summary.health.cpu) + '%' : system.cpu;
+  // 1-minute load average with the core count for context — not a fake percent.
+  const cpu = summary && summary.health
+    ? summary.health.load_1m + ' / ' + summary.health.cpu_count + ' cores'
+    : (system.load_1m != null ? system.load_1m + ' / ' + (system.cpu_count || '?') + ' cores' : '--');
   const mem = system.memory ? system.memory.used + '/' + system.memory.total : '--';
   const disk = system.disk ? system.disk.free + ' free (' + system.disk.pct + ')' : '--';
   $('missionCpu').textContent = cpu;
@@ -639,7 +647,9 @@ function renderMissionAttention(summary, services, system, stats){
   }
   const health = summary && summary.health;
   if (health) {
-    if (health.cpu > 80) items.push({ level: 'warn', title: 'CPU pressure: ' + Math.round(health.cpu) + '%', detail: 'Check active processes if this persists.' });
+    // load_pct_of_cores > 100 means the 1m load average exceeds the core
+    // count — consistent with the metric's real meaning.
+    if (health.load_pct_of_cores > 100) items.push({ level: 'warn', title: 'Load pressure: ' + health.load_1m + ' (1m avg, ' + health.cpu_count + ' cores)', detail: 'Check active processes if this persists.' });
     if (health.memory > 80) items.push({ level: 'warn', title: 'Memory pressure: ' + Math.round(health.memory) + '%', detail: 'Agent and model workloads may slow down.' });
     if (health.disk > 80) items.push({ level: 'warn', title: 'Disk usage: ' + Math.round(health.disk) + '%', detail: 'Review backups, logs, and media before deploys.' });
   }
@@ -732,19 +742,25 @@ function formatDuration(ms) {
 }
 
 function loadLLM(){
+  // /api/llm reflects the Compute provider/model registry (the inference
+  // authority), not a single Ollama daemon. The endpoint never returned a
+  // `size` field; render the provider and health fields it actually sends.
   authFetch('/api/llm').then(r=>r.json()).then(d=>{
     const el = $('llmStatus');
     if (d.status === "unreachable") {
-      el.innerHTML = '<div class="llm-card"><span class="llm-dot off"></span><span class="empty">Ollama not reachable</span></div>';
+      el.innerHTML = '<div class="llm-card"><span class="llm-dot off"></span><span class="empty">Compute provider registry unavailable' + (d.error ? ': ' + esc(d.error) : '') + '</span></div>';
       return;
     }
     if (d.status === "no_models") {
-      el.innerHTML = '<div class="llm-card"><span class="llm-dot warn"></span><span class="empty">Ollama running, no models installed</span></div>';
+      el.innerHTML = '<div class="llm-card"><span class="llm-dot warn"></span><span class="empty">No enabled models in the Compute registry</span></div>';
       return;
     }
-    el.innerHTML = (d.models || []).map(m =>
-      '<div class="llm-card"><span class="llm-dot on"></span><span class="llm-name">' + esc(m.name) + '</span><span class="llm-size">' + m.size + '</span></div>'
-    ).join('');
+    el.innerHTML = (d.models || []).map(m => {
+      const healthy = m.health === 'healthy' || m.health === 'ok' || m.health === 'up';
+      const dot = healthy ? 'on' : (m.health === 'unknown' ? 'warn' : 'off');
+      const detail = [m.provider, m.health].filter(Boolean).join(' · ');
+      return '<div class="llm-card"><span class="llm-dot ' + dot + '"></span><span class="llm-name">' + esc(m.name) + '</span><span class="llm-size">' + esc(detail) + '</span></div>';
+    }).join('');
   }).catch(e => apiError('/api/llm', e, 0));
 }
 
@@ -1140,14 +1156,22 @@ function deleteKV(key){
     details: `<strong>Key:</strong> ${esc(key)}<br><strong>Project:</strong> ${esc(project)}<br><strong>Value:</strong> ${esc(valuePreview)}${valuePreview.length >= 50 ? '...' : ''}`,
     tier: 3,
     action: () => {
-      authFetch('/api/kv/' + encodeURIComponent(key), { 
+      authFetch('/api/kv/' + encodeURIComponent(key), {
         method: 'DELETE'
       })
-        .then(r => r.json()).then(d => { 
-          if (d.ok) { 
-            loadKV(); 
-            showToast('Entry deleted successfully', 'success'); 
-          } 
+        .then(r => r.json().then(d => ({ status: r.status, d })).catch(() => ({ status: r.status, d: {} })))
+        .then(({ status, d }) => {
+          // The route now reports what actually happened: deleted:true for a
+          // real deletion, 404 when the key was already gone.
+          if (d.ok && d.deleted) {
+            loadKV();
+            showToast('Entry deleted successfully', 'success');
+          } else if (status === 404 || d.deleted === false) {
+            loadKV();
+            showToast('Key not found — it may have already been deleted', 'warning');
+          } else {
+            showToast('Delete failed: ' + (d.error || ('HTTP ' + status)), 'error');
+          }
         }).catch(e => apiError('/api/kv/' + encodeURIComponent(key), e, 0));
     }
   });
@@ -1558,32 +1582,46 @@ function renderMemoryCard(m) {
   '</article>';
 }
 
+// Shared result check: the routes now return real status codes, and a
+// mutation that reports failure must not be presented as done — previously
+// the response body was ignored entirely for disable/enable/delete.
+async function memoryMutation(url, options) {
+  const res = await authFetch(url, options);
+  let d = {};
+  try { d = await res.json(); } catch {}
+  if (!res.ok || !d.ok) throw new Error((d && d.error) || ('HTTP ' + res.status));
+  return d;
+}
+
 async function disableMemory(id) {
   if (!confirm('Disable this memory?')) return;
   try {
-    await authFetch('/api/memories/' + encodeURIComponent(id) + '/disable', { method: 'POST' });
+    await memoryMutation('/api/memories/' + encodeURIComponent(id) + '/disable', { method: 'POST' });
+    showToast('Memory disabled', 'success');
     loadMemories();
   } catch (e) {
-    alert('Failed to disable: ' + e.message);
+    showToast('Failed to disable: ' + e.message, 'error');
   }
 }
 
 async function enableMemory(id) {
   try {
-    await authFetch('/api/memories/' + encodeURIComponent(id) + '/enable', { method: 'POST' });
+    await memoryMutation('/api/memories/' + encodeURIComponent(id) + '/enable', { method: 'POST' });
+    showToast('Memory enabled', 'success');
     loadMemories();
   } catch (e) {
-    alert('Failed to enable: ' + e.message);
+    showToast('Failed to enable: ' + e.message, 'error');
   }
 }
 
 async function deleteMemory(id) {
   if (!confirm('Delete this memory permanently?')) return;
   try {
-    await authFetch('/api/memories/' + encodeURIComponent(id), { method: 'DELETE' });
+    await memoryMutation('/api/memories/' + encodeURIComponent(id), { method: 'DELETE' });
+    showToast('Memory deleted', 'success');
     loadMemories();
   } catch (e) {
-    alert('Failed to delete: ' + e.message);
+    showToast('Failed to delete: ' + e.message, 'error');
   }
 }
 
@@ -1667,7 +1705,7 @@ function runAgent(){
   }).then(r=>r.json()).then(data => {
     if (data.error) {
       appendLog('<span class="agent-err">✖ Error: ' + esc(data.error) + '</span>');
-      stopAgent();
+      finishAgentStream();
       return;
     }
     const taskId = data.taskId;
@@ -1675,7 +1713,7 @@ function runAgent(){
   }).catch(e => {
     appendLog('<span class="agent-err"> Request failed: ' + esc(e.message) + '</span>');
     apiError('/api/agent/run', e, 0);
-    stopAgent();
+    finishAgentStream();
   });
 }
 
@@ -1706,10 +1744,10 @@ function streamAgentTask(taskId, opts){
         ', root ' + esc(msg.rootTaskId) + ' (depth ' + esc(String(msg.depth)) + ')</span>');
     } else if (msg.type === 'step') appendLog('<span class="agent-step">' + esc(msg.text) + '</span>');
     else if (msg.type === 'tool') appendLog('  <span class="agent-ok">' + esc(msg.tool) + '</span> ' + esc(msg.summary || ''));
-    else if (msg.type === 'error') { appendLog('<span class="agent-err">' + esc(msg.text) + '</span>'); stopAgent(); }
-    else if (msg.type === 'done') { appendLog('<span class="agent-done">' + esc(msg.text) + '</span>'); stopAgent(); }
+    else if (msg.type === 'error') { appendLog('<span class="agent-err">' + esc(msg.text) + '</span>'); finishAgentStream(); }
+    else if (msg.type === 'done') { appendLog('<span class="agent-done">' + esc(msg.text) + '</span>'); finishAgentStream(); }
   };
-  agentStream.onerror = () => stopAgent();
+  agentStream.onerror = () => finishAgentStream();
 }
 
 // Reveal a terminal task's detail (which contains the follow-up form) and focus it.
@@ -1741,7 +1779,7 @@ function submitFollowup(id){
     .then(({ status, data }) => {
       if (status >= 400 || !data || data.error) {
         appendLog('<span class="agent-err">' + esc((data && data.error) || ('HTTP ' + status)) + '</span>');
-        stopAgent();
+        finishAgentStream();
         if (btn) btn.disabled = false;
         if (input) input.disabled = false;
         return;
@@ -1751,7 +1789,7 @@ function submitFollowup(id){
     .catch(e => {
       appendLog('<span class="agent-err">Request failed: ' + esc(e.message) + '</span>');
       apiError('/api/agent/run/' + id + '/follow-up', e, 0);
-      stopAgent();
+      finishAgentStream();
       if (btn) btn.disabled = false;
       if (input) input.disabled = false;
     });
@@ -1799,8 +1837,15 @@ function restoreAgentState(){
     if (run) {
       rememberAgentTask(taskId);
       renderAgentTranscript(run);
-      const active = ['queued', 'running', 'pending', 'in_progress'].includes(run.status);
-      if (active) streamAgentTask(taskId, { reset: false, reconnect: true });
+      // Persisted transcripts only carry completed | failed | iteration_limit
+      // | cancelled | waiting_for_approval — the old queued/running check
+      // matched nothing and was dead. A parked task gets an explicit
+      // affordance instead of rendering as plain finished history.
+      if (run.status === 'waiting_for_approval') {
+        appendLog('<span class="agent-step">⏸ Task ' + esc(taskId) + ' is parked awaiting human approval' +
+          (run.brain && run.brain.awaiting_approval ? ' (approval ' + esc(String(run.brain.awaiting_approval)) + ')' : '') +
+          '. Decide it in the Approvals tab — the task runner resumes it after the decision.</span>');
+      }
       return;
     }
     // Active tasks do not get a durable transcript until terminal completion.
@@ -1811,12 +1856,36 @@ function restoreAgentState(){
   }).finally(() => { agentRestoreInFlight = false; });
 }
 
-function stopAgent(){
+// Local stream cleanup only — used when the task itself has ended (done/error
+// events, stream failure, failed start). It never cancels the backend task.
+function finishAgentStream(){
   if (agentStream) { agentStream.close(); agentStream = null; }
   agentRunning = false;
   currentAgentTaskId = null;
   $('agentGo').disabled = false;
   $('agentStop').disabled = true;
+}
+
+// Stop button: actually cancel the backend task, report the backend's answer,
+// then close the stream. Closing the EventSource alone only stopped WATCHING —
+// the task kept running to completion server-side.
+function stopAgent(){
+  const taskId = currentAgentTaskId;
+  if (taskId && agentRunning) {
+    authFetch('/api/agent/run/' + encodeURIComponent(taskId) + '/cancel', { method: 'POST' })
+      .then(r => r.json().then(d => ({ status: r.status, d })).catch(() => ({ status: r.status, d: {} })))
+      .then(({ status, d }) => {
+        if (status === 200 && d.ok) {
+          appendLog('<span class="agent-step">Cancellation requested for task ' + esc(taskId) + '; backend will stop it between steps</span>');
+        } else if (status === 404) {
+          appendLog('<span class="agent-step">Task ' + esc(taskId) + ' is no longer running; nothing to cancel</span>');
+        } else {
+          appendLog('<span class="agent-err">Cancel failed: ' + esc((d && d.error) || ('HTTP ' + status)) + '</span>');
+        }
+      })
+      .catch(e => appendLog('<span class="agent-err">Cancel request failed: ' + esc(e.message) + '</span>'));
+  }
+  finishAgentStream();
 }
 
 function toggleHistory(){

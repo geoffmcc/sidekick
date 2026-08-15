@@ -70,6 +70,13 @@ const MAX_ITERATIONS = parseInt(process.env.SIDEKICK_MAX_ITERATIONS || "15", 10)
 const BRAIN_STEP_TIMEOUT_MS = (() => {
   try { return require("./brain/config").BRAIN_LIMITS.MAX_STEP_MS; } catch { return 60000; }
 })();
+// Generation ceiling for every agent-side LLM call. The inference service only
+// enforces a timeout when the caller supplies one, so an unbounded chat request
+// could hang a task forever; reuse Brain's declared generation budget so the
+// two cannot drift, and stay defined when Brain is not loadable.
+const AGENT_GENERATION_TIMEOUT_MS = (() => {
+  try { return require("./brain/config").BRAIN_LIMITS.MAX_GENERATION_MS; } catch { return 120000; }
+})();
 const CONV_DIR = path.join(DATA_DIR, "conversations");
 fs.mkdirSync(CONV_DIR, { recursive: true });
 
@@ -225,6 +232,74 @@ try {
 } catch (e) {
   console.error(`Runbook recovery failed: ${e.message}`);
 }
+
+/**
+ * Terminalise agent-task executions stranded `running` by a previous process.
+ *
+ * startAgentExecution transitions its row to `running` but never CLAIMS it, so
+ * the kernel's lease-based recoverOrphanedExecutions can never see agent rows —
+ * a SIGKILL mid-task left `platform_executions` rows `running` forever. At
+ * boot, every `running` agent_task row older than boot is stranded by
+ * definition: this service is the only agent-task runner and it has not
+ * started any task yet.
+ *
+ * Uses existing kernel APIs only. `findActiveExecution` returns at most 10
+ * non-terminal rows per call (newest first), so the sweep loops until a pass
+ * finds nothing left to terminalise; the pass cap bounds a persistent
+ * transition failure. Parked (`awaiting_approval`) rows are deliberately left
+ * alone — they are legitimately suspended and owned by the task runner.
+ */
+function sweepStrandedAgentExecutions(bootIso = new Date().toISOString()) {
+  const swept = [];
+  try {
+    for (let pass = 0; pass < 20; pass++) {
+      const stranded = platformKernel
+        .findActiveExecution({ operation_type: "agent_task" })
+        .filter(row => row.state === "running" && (!row.updated_at || row.updated_at <= bootIso));
+      if (stranded.length === 0) break;
+      let progressed = false;
+      for (const row of stranded) {
+        try {
+          platformKernel.transitionExecution(row.execution_id, "failed", {
+            source: "agent",
+            actor_id: "agent",
+            result_status: "orphaned",
+            error_category: "orphaned",
+            reason: "agent service restarted while the task was running; agent tasks hold no claim and cannot be resumed",
+          });
+          platformKernel.appendEvent({
+            event_type: "agent.execution_orphaned",
+            source: "agent",
+            actor_id: "agent",
+            execution_id: row.execution_id,
+            root_execution_id: row.root_execution_id,
+            task_id: row.task_id,
+            project_id: row.project_id,
+            severity: "error",
+            payload: { swept_at: bootIso, last_updated_at: row.updated_at || null },
+            correlation_id: row.root_execution_id || row.execution_id,
+          });
+          swept.push(row.execution_id);
+          progressed = true;
+        } catch {
+          // One bad row must not stop the sweep; the pass cap ends retries.
+        }
+      }
+      if (!progressed) break;
+    }
+  } catch (e) {
+    console.error(`Agent execution sweep failed: ${e.message}`);
+  }
+  return swept;
+}
+
+try {
+  const sweptExecutions = sweepStrandedAgentExecutions();
+  if (sweptExecutions.length > 0) console.log(`Marked ${sweptExecutions.length} crash-stranded agent execution(s) failed after restart`);
+} catch (e) {
+  console.error(`Agent execution sweep failed: ${e.message}`);
+}
+
 loadAndScheduleDelays();
 
 const watchIntervals = {};
@@ -460,8 +535,12 @@ const app = express();
 app.use(express.json({ limit: "1mb" }));
 
 const taskEmitters = {};
+// Per-task cooperative cancellation, held beside the emitters: the cancel
+// route aborts the controller; the loop and Brain consume the flag between
+// steps, and the AbortSignal reaches in-flight tool dispatches.
+const taskCancels = {};
 
-function buildInstalledPackContext({
+function computeInstalledPackContext({
   listPacks = () => packRepository.listPacks(),
   describePack = (name) => packLifecycle.describe(name, { includeHealth: false }),
 } = {}) {
@@ -507,6 +586,24 @@ function buildInstalledPackContext({
   }
 
   return lines.join("\n");
+}
+
+// Short-TTL memoization: buildSystemPrompt is rebuilt on EVERY LLM turn, and
+// the pack context behind it hits the pack repository + a lifecycle describe()
+// per installed pack each time. Pack lifecycle changes are rare and take
+// effect within one TTL window; injected deps (the test seam) bypass the cache
+// entirely so a cached production value can never leak into a test's fakes.
+const PACK_CONTEXT_TTL_MS = 30000;
+let packContextCache = { at: 0, value: null };
+function buildInstalledPackContext(overrides) {
+  if (overrides !== undefined) return computeInstalledPackContext(overrides);
+  const now = Date.now();
+  if (packContextCache.value !== null && now - packContextCache.at < PACK_CONTEXT_TTL_MS) {
+    return packContextCache.value;
+  }
+  const value = computeInstalledPackContext();
+  packContextCache = { at: now, value };
+  return value;
 }
 
 function buildSystemPrompt() {
@@ -617,7 +714,9 @@ async function callLLM(messages, options = {}) {
 }
 
 async function callAgentLLM(messages) {
-  return callLLM(messages, { systemPrompt: buildSystemPrompt(), format: "json", temperature: 0.3 });
+  // timeoutMs makes the generation budget binding: without it the inference
+  // request is unbounded and a hung provider stalls the whole tool loop.
+  return callLLM(messages, { systemPrompt: buildSystemPrompt(), format: "json", temperature: 0.3, timeoutMs: AGENT_GENERATION_TIMEOUT_MS });
 }
 
 async function callDirectAnswerLLM(goal, combinedBrief, continuationBrief) {
@@ -627,7 +726,8 @@ async function callDirectAnswerLLM(goal, combinedBrief, continuationBrief) {
 
   return callLLM(messages, {
     systemPrompt: "You are a helpful assistant. Answer the user's question directly and succinctly in plain text. Do not use tools, JSON, or mention internal routing. If the answer is not known, say so briefly.",
-    temperature: 0.2
+    temperature: 0.2,
+    timeoutMs: AGENT_GENERATION_TIMEOUT_MS
   });
 }
 
@@ -703,7 +803,10 @@ function finishAgentExecution(execution, status, details = {}) {
   // (docs/adr-approval-continuation.md §5/T1). Map it to the kernel's real
   // `awaiting_approval` state so the platform timeline reads it as parked, not
   // failed, and so the resumed `awaiting_approval → completed` exit is legal.
-  const state = status === "completed" ? "completed" : status === "iteration_limit" ? "timed_out" : status === "waiting_for_approval" ? "awaiting_approval" : "failed";
+  // `cancelled` maps to the kernel's own first-class cancelled state
+  // (running → cancelled is a legal transition) so a user-stopped task never
+  // reads as a failure in the platform timeline.
+  const state = status === "completed" ? "completed" : status === "iteration_limit" ? "timed_out" : status === "waiting_for_approval" ? "awaiting_approval" : status === "cancelled" ? "cancelled" : "failed";
   try {
     platformKernel.transitionExecution(execution.execution_id, state, {
       source: "agent",
@@ -828,8 +931,14 @@ Return ONLY valid JSON.`;
   }
 }
 
-async function runAgent(goal, taskId, parentContext = null) {
+async function runAgent(goal, taskId, parentContext = null, cancelController = null) {
   const steps = [];
+  // Cooperative cancellation. The controller is aborted by the cancel route;
+  // the derived flag is consumed by the tool loop and Brain between steps, and
+  // the raw AbortSignal is threaded into every dispatcher call so an in-flight
+  // tool is cancelled too. Direct runAgent callers (tests) may pass nothing.
+  const cancelSignal = cancelController ? cancelController.signal : null;
+  const cancelFlag = { get aborted() { return !!(cancelSignal && cancelSignal.aborted); } };
   // A follow-up child inherits the parent's project identity when the child's
   // own goal doesn't infer one, so a thread stays scoped consistently.
   const inferredProject = inferProjectFromText(goal) || (parentContext && parentContext.project) || null;
@@ -867,7 +976,18 @@ async function runAgent(goal, taskId, parentContext = null) {
   let semanticRecall = [];
   if (inferredProject) {
     try {
-      semanticRecall = await recallMemoryForTextAsync(goal, { project: inferredProject, limit: 5 });
+      // Bound recall by the declared budget: a hung embedding/Qdrant call must
+      // not stall task startup indefinitely (BRAIN_LIMITS.MAX_MEMORY_RETRIEVAL_MS).
+      const recallBudgetMs = (() => {
+        try { return require("./brain/config").BRAIN_LIMITS.MAX_MEMORY_RETRIEVAL_MS; } catch { return 30000; }
+      })();
+      semanticRecall = await Promise.race([
+        recallMemoryForTextAsync(goal, { project: inferredProject, limit: 5 }),
+        new Promise((resolve) => {
+          const timer = setTimeout(() => resolve([]), recallBudgetMs);
+          if (typeof timer.unref === "function") timer.unref();
+        }),
+      ]);
     } catch {}
   }
 
@@ -924,6 +1044,10 @@ async function runAgent(goal, taskId, parentContext = null) {
       // Generated/dynamic capabilities remain dispatch-reachable but are
       // deny-by-default for Brain v0.1 (it must not plan or promote them).
       agentTools: brainAgentTools(),
+      // The same bounded pack context the non-Brain loop's system prompt gets
+      // (#296): without it the planner is pack-blind and never plans a pack
+      // tool for a domain the pack owns. Bounded again inside the planner.
+      packContext: buildInstalledPackContext(),
       callTool: (name, args) => callAgentTool(name, args, {
         taskId,
         project: inferredProject,
@@ -937,6 +1061,9 @@ async function runAgent(goal, taskId, parentContext = null) {
         // Without a deadline the dispatcher returns an unbounded promise, so a
         // hung tool call blocks the task past every declared Brain budget.
         timeoutMs: BRAIN_STEP_TIMEOUT_MS,
+        // Caller-side cancellation for an in-flight dispatch (the dispatcher
+        // honors context.signal); the loop-level flag stops future steps.
+        signal: cancelSignal || undefined,
       }),
       recallMemory: inferredProject
         ? async (q) => recallMemoryForTextAsync(q, { project: inferredProject, limit: 8 })
@@ -957,6 +1084,9 @@ async function runAgent(goal, taskId, parentContext = null) {
       },
       emit: (event) => emit(taskId, event),
       onEvent: (type, payload, severity) => appendAgentExecutionEvent(platformExecution, type, { task_id: taskId, ...payload }, severity),
+      // Brain's cooperative cancel seam: checked between plan steps and around
+      // planning/synthesis, so a cancel lands as a terminal `cancelled` state.
+      cancel: cancelFlag,
     });
     for (const s of outcome.steps) steps.push(s);
     // Durable, additive observability marker: records that Brain handled this
@@ -989,8 +1119,10 @@ async function runAgent(goal, taskId, parentContext = null) {
       status = "iteration_limit";
       terminalError = outcome.error || "Brain task timed out";
     } else if (outcome.state === "cancelled") {
-      status = "failed";
-      terminalError = outcome.error || "Brain task cancelled";
+      // Honest terminal status: a cancelled task is not a failure, and the
+      // kernel has a first-class `cancelled` state for exactly this exit.
+      status = "cancelled";
+      terminalError = outcome.error || "Task cancelled by user request";
     } else {
       status = "failed";
       terminalError = outcome.error || "Brain task failed";
@@ -1036,6 +1168,7 @@ async function runAgent(goal, taskId, parentContext = null) {
         executionId: platformExecution?.execution_id,
         rootExecutionId: platformExecution?.root_execution_id,
         timeoutMs: BRAIN_STEP_TIMEOUT_MS,
+        signal: cancelSignal || undefined,
       }),
       getToolDefs: () => getToolDefsForSource("agent").filter(t => t.enabled),
       maxIterations: MAX_ITERATIONS,
@@ -1043,6 +1176,7 @@ async function runAgent(goal, taskId, parentContext = null) {
       emit: (event) => emit(taskId, event),
       onEvent: (type, payload, severity) => appendAgentExecutionEvent(platformExecution, type, { task_id: taskId, ...payload }, severity),
       redact: redactSensitive,
+      cancel: cancelFlag,
     });
 
     for (const step of loop.steps) steps.push(step);
@@ -1061,9 +1195,17 @@ async function runAgent(goal, taskId, parentContext = null) {
     console.error("Agent task " + taskId + " threw: " + (e && e.stack ? e.stack : e));
   }
 
+  // Everything from here to the ledger transition runs under try/finally: the
+  // execution has been `running` since startAgentExecution, and a throw in
+  // transcript serialization, the memory recorder, or an SSE listener must not
+  // strand the row — finishAgentExecution is the one obligation this function
+  // may never skip.
+  try {
   // Durable transcript with additive lineage fields. Older transcripts without
   // these fields remain readable and normalize to a root task with no parent.
-  const transcript = JSON.stringify({
+  // Built lazily inside the publish try below so a serialization throw is
+  // reported like a failed write instead of skipping the terminal path.
+  const buildTranscript = () => JSON.stringify({
     goal,
     steps,
     status,
@@ -1097,11 +1239,11 @@ async function runAgent(goal, taskId, parentContext = null) {
   // before the complete JSON is written creates a race where a child can
   // observe a partially-published parent record.
   const temporaryTranscriptPath = `${transcriptPath}.${process.pid}.${Date.now()}.tmp`;
-  // A failed transcript write must not cost the caller the answer: the terminal
-  // stream event and the execution transition below still run, and the failure
-  // is reported instead of silently losing a completed task.
+  // A failed transcript build/write must not cost the caller the answer: the
+  // terminal stream event and the execution transition below still run, and
+  // the failure is reported instead of silently losing a completed task.
   try {
-    fs.writeFileSync(temporaryTranscriptPath, transcript, { encoding: "utf-8", mode: 0o600 });
+    fs.writeFileSync(temporaryTranscriptPath, buildTranscript(), { encoding: "utf-8", mode: 0o600 });
     fs.renameSync(temporaryTranscriptPath, transcriptPath);
     registerAgentTranscript(platformExecution, transcriptPath, taskId, status);
   } catch (e) {
@@ -1129,12 +1271,21 @@ async function runAgent(goal, taskId, parentContext = null) {
   // Terminal state first. Procedure suggestion is an optional post-task nicety
   // that calls a model with no deadline of its own; running it before this
   // point delayed the user-visible completion by however long that call took.
-  if (status === "completed") {
-    emit(taskId, { type: "done", text: finalResult });
-  } else {
-    emit(taskId, { type: "error", text: terminalError });
+  // A throwing SSE listener must not strand the execution row in `running`:
+  // the ledger transition in the finally below is the terminal state of
+  // record, so the emit is best-effort.
+  try {
+    if (status === "completed") {
+      emit(taskId, { type: "done", text: finalResult });
+    } else {
+      emit(taskId, { type: "error", text: terminalError });
+    }
+  } catch (e) {
+    console.error("Agent task " + taskId + " terminal emit failed: " + (e && e.message ? e.message : e));
   }
-  finishAgentExecution(platformExecution, status, { result_summary: status === "completed" ? finalResult : terminalError, reason: terminalError || "agent task completed", error_category: status === "completed" ? null : status });
+  } finally {
+    finishAgentExecution(platformExecution, status, { result_summary: status === "completed" ? finalResult : terminalError, reason: terminalError || "agent task completed", error_category: status === "completed" ? null : status });
+  }
 
   if (status === "completed") {
     try {
@@ -1151,6 +1302,9 @@ async function runAgent(goal, taskId, parentContext = null) {
 function beginTaskRun(res, { goal, parentContext = null }) {
   const taskId = crypto.randomUUID().slice(0, 8);
   taskEmitters[taskId] = new EventEmitter();
+  // Registered alongside the emitter, removed as soon as the run settles:
+  // cancelling a terminal task is meaningless, so the cancel route 404s then.
+  taskCancels[taskId] = new AbortController();
   const payload = { taskId };
   if (parentContext) {
     payload.parentTaskId = parentContext.parentTaskId;
@@ -1158,7 +1312,7 @@ function beginTaskRun(res, { goal, parentContext = null }) {
     payload.continuationDepth = parentContext.continuationDepth;
   }
   res.json(payload);
-  runAgent(goal, taskId, parentContext)
+  runAgent(goal, taskId, parentContext, taskCancels[taskId])
     .catch((e) => {
       // The client has already received the taskId; surface an unexpected
       // failure over the stream instead of letting it become an unhandled
@@ -1167,6 +1321,7 @@ function beginTaskRun(res, { goal, parentContext = null }) {
       console.error("Agent task " + taskId + " failed: " + (e && e.message ? e.message : e));
     })
     .finally(() => {
+      delete taskCancels[taskId];
       setTimeout(() => delete taskEmitters[taskId], 60000);
     });
   return taskId;
@@ -1244,6 +1399,25 @@ app.post("/api/agent/run/:taskId/follow-up", (req, res) => {
   beginTaskRun(res, { goal: goalCheck.goal, parentContext });
 });
 
+// Cancel a live task. Aborts the per-task controller: the AbortSignal cancels
+// any in-flight dispatcher call, and the loop/Brain consume the flag between
+// steps, ending the task with an honest terminal `cancelled` status (mapped to
+// the kernel's `cancelled` state). A task without a registered controller is
+// not running — either unknown or already terminal — and that is a 404, never
+// a fake success.
+app.post("/api/agent/run/:taskId/cancel", (req, res) => {
+  const taskId = req.params.taskId;
+  if (!validateTaskId(taskId)) return res.status(400).json({ error: "invalid task id" });
+  const controller = taskCancels[taskId];
+  if (!controller) return res.status(404).json({ error: "task is not running" });
+  const alreadyRequested = controller.signal.aborted;
+  if (!alreadyRequested) {
+    controller.abort();
+    try { emit(taskId, { type: "step", text: "Cancellation requested; stopping between steps" }); } catch {}
+  }
+  res.json({ ok: true, taskId, cancelling: true, alreadyRequested });
+});
+
 app.get("/api/agent/stream/:taskId", (req, res) => {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -1256,7 +1430,9 @@ app.get("/api/agent/stream/:taskId", (req, res) => {
   // never resolve to a non-emitter value and crash the stream mid-response.
   const ee = validateTaskId(req.params.taskId) ? taskEmitters[req.params.taskId] : null;
   if (!ee) {
-    res.write("data: " + JSON.stringify({ type: "done", text: "Task not found" }) + "\n\n");
+    // An error event, not a "done": clients render `done` as a successful
+    // answer, and "Task not found" is not an answer.
+    res.write("data: " + JSON.stringify({ type: "error", text: "Task not found" }) + "\n\n");
     res.end();
     return;
   }
@@ -1475,16 +1651,28 @@ function startApprovalContinuationJobs() {
   try {
     sweeper = require("./approvals/sweeper").startSweeper();
     scheduler = require("./brain/scheduler").startResumeScheduler({
-      buildDeps: async (taskId) => brain.makeResumeDeps({
-        callLLM: (messages, options) => callLLM(messages, options),
-        callTool: (name, args) => callAgentTool(name, args, {
-          taskId,
-          source: "agent",
-          correlationId: taskId,
-          timeoutMs: BRAIN_STEP_TIMEOUT_MS,
-        }),
-        redact: redactSensitive,
-      }),
+      buildDeps: async (taskId, checkpoint) => {
+        // Tool logs from a resumed task must carry the same project boundary
+        // as the live path; derive it from the checkpointed goal the same way
+        // runAgent does, so a resume doesn't write `project = null` rows.
+        let project = null;
+        try {
+          const store = require("./approvals/store");
+          const goal = checkpoint ? store.decryptJson(checkpoint.goal_encrypted) : null;
+          if (typeof goal === "string" && goal) project = inferProjectFromText(goal) || null;
+        } catch {}
+        return brain.makeResumeDeps({
+          callLLM: (messages, options) => callLLM(messages, options),
+          callTool: (name, args) => callAgentTool(name, args, {
+            taskId,
+            source: "agent",
+            correlationId: taskId,
+            project,
+            timeoutMs: BRAIN_STEP_TIMEOUT_MS,
+          }),
+          redact: redactSensitive,
+        });
+      },
       onPass: (outcomes) => {
         for (const entry of outcomes) {
           try {
@@ -1544,5 +1732,6 @@ module.exports = {
   startApprovalContinuationJobs,
   finalizeResumedTask,
   finishAgentExecution,
+  sweepStrandedAgentExecutions,
   __setLLMOverrideForTests,
 };
