@@ -47,6 +47,7 @@ const {
   startAgentExecution, appendAgentExecutionEvent, finishAgentExecution, registerAgentTranscript,
 } = require("./agent/execution");
 const { buildChildLineage } = require("./agent/continuation");
+const { createTaskRunner } = require("./agent/task-run");
 const { redactSensitive, redactSensitiveKeysDeep } = require("./redact");
 const {
   CONTINUATION_LIMITS,
@@ -1303,7 +1304,7 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
 // Shared task-start path used by both a normal task and a follow-up so the two
 // never develop separate execution routes. Creates the task id + emitter,
 // answers the client, and kicks the (async) run.
-function beginTaskRun(res, { goal, parentContext = null }) {
+function beginTaskRunLegacy(res, { goal, parentContext = null }) {
   const taskId = crypto.randomUUID().slice(0, 8);
   taskEmitters[taskId] = new EventEmitter();
   // Registered alongside the emitter, removed as soon as the run settles:
@@ -1330,6 +1331,14 @@ function beginTaskRun(res, { goal, parentContext = null }) {
     });
   return taskId;
 }
+
+const beginTaskRun = createTaskRunner({
+  taskEmitters,
+  taskCancels,
+  emit,
+  runAgent,
+  redactSensitive,
+});
 
 // Resolve the durable lineage + bounded, redacted continuation brief for a child
 // task from a terminal parent. Throws ContinuationError (with a safe status +
