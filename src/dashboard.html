@@ -37,7 +37,8 @@
 </nav>
 <div class="status-row">
   <div class="status-box"><div class="s-label">Uptime</div><div class="s-val" id="s-uptime">...</div></div>
-  <div class="status-box"><div class="s-label">CPU</div><div class="s-val" id="s-cpu">...</div></div>
+  <!-- 1-minute load average, not a CPU percentage: os.loadavg is load, and pretending otherwise faked a percent. -->
+  <div class="status-box"><div class="s-label">Load (1m)</div><div class="s-val" id="s-cpu">...</div></div>
   <div class="status-box"><div class="s-label">Memory</div><div class="s-val" id="s-memory">...</div></div>
   <div class="status-box"><div class="s-label">Disk</div><div class="s-val" id="s-disk">...</div></div>
 </div>
@@ -77,7 +78,7 @@
     <div class="card mission-panel">
       <div class="section-title">System Loadout</div>
       <div class="mission-metrics">
-        <div><span>CPU</span><strong id="missionCpu">--</strong></div>
+        <div><span>Load (1m)</span><strong id="missionCpu">--</strong></div>
         <div><span>Memory</span><strong id="missionMemory">--</strong></div>
         <div><span>Disk</span><strong id="missionDisk">--</strong></div>
         <div><span>Uptime</span><strong id="missionUptime">--</strong></div>
@@ -122,7 +123,7 @@
       <div style="display:flex;align-items:center;gap:12px">
         <div id="healthScore" style="font-size:2rem;font-weight:700;color:#3fb950">--</div>
         <div style="font-size:.75rem;color:#8b949e">
-          <div>CPU: <span id="healthCpu">--</span>%</div>
+          <div>LOAD 1m: <span id="healthCpu">--</span></div>
           <div>MEM: <span id="healthMem">--</span>%</div>
           <div>DISK: <span id="healthDisk">--</span>%</div>
         </div>
@@ -179,8 +180,8 @@
     </div>
   </div>
   
-  <!-- Row 3: Local LLM (full width) -->
-  <div class="section-title" style="margin-bottom:8px">Local LLM</div>
+  <!-- Row 3: Compute inference registry (full width) -->
+  <div class="section-title" style="margin-bottom:8px">Compute Models</div>
   <div id="llmStatus"><div class="empty">Checking...</div></div>
 </div>
 

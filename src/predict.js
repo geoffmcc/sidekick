@@ -151,9 +151,12 @@ function ensureColumn(db, table, column, definition) {
 /**
  * Creates the predict schema if absent and applies additive, idempotent evolution.
  *
- * This never drops or rewrites data. SQLite has no `ADD COLUMN IF NOT EXISTS`, so
- * column evolution is PRAGMA-guarded here rather than in a startup migration file:
- * a repeated ALTER in an auto-applied migration would throw on every boot.
+ * This never drops or rewrites data. The v2 identity columns below are owned by
+ * migration 037_runtime_schema_convergence.sql (the migration runner's
+ * execMigrationSql applies ADD COLUMN idempotently, so a repeated ALTER is a
+ * no-op in either boot order). The PRAGMA-guarded ensureColumn calls are kept
+ * so this module remains boot-order independent — it must work against a
+ * database the migrations have not touched yet.
  */
 function ensureSchema(force) {
   if (schemaReady && !force) return;

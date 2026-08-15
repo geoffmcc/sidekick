@@ -273,7 +273,11 @@ async function resumeBrainTask(opts) {
             operationId: claimed.operationId,
             idempotencyKey: checkpoint.current_idempotency_key,
             taskId,
-            timeoutMs: claimed.approval.timeout_ms || null,
+            // Default to the per-step budget when the approval carries none:
+            // `|| null` made the HIGHEST-risk step in the plan the only one
+            // with an unbounded dispatch, since the dispatcher enforces a
+            // timeout only when the caller supplies one.
+            timeoutMs: claimed.approval.timeout_ms || BRAIN_LIMITS.MAX_STEP_MS,
           });
         } catch (e) {
           acc.steps.push({ type: "tool", id: parkedStep.id, tool: parkedStep.tool, error: redact(String(e && e.message || e)) });

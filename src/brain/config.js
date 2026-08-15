@@ -27,8 +27,6 @@ function isEnabled() {
 const BRAIN_LIMITS = Object.freeze({
   MAX_STEPS: 12,                    // total steps in a plan
   MAX_PLANNING_ATTEMPTS: 2,         // bounded correction attempts for the planner
-  MAX_RETRIES_PER_STEP: 1,          // per-step retry budget
-  MAX_PARALLELISM: 1,               // v0.1 executes steps sequentially
   MAX_TOTAL_TASK_MS: 180000,        // overall Brain task wall-clock budget
   MAX_STEP_MS: 60000,               // per-step budget (tool step)
   MAX_MEMORY_RETRIEVAL_MS: 30000,   // embedding + recall ceiling (matches embed timeout)

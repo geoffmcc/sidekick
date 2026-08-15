@@ -124,16 +124,89 @@ test("github tool routes token + endpoint through the connector", () => {
   assert.strictEqual(github.resolveGithubToken(), "ghp_viaconnector_3");
 });
 
-test("env GITHUB_TOKEN overrides the connector (backwards compatibility)", () => {
+test("the active connector's secret_ref outranks env GITHUB_TOKEN (connector is the authority)", () => {
   resetConnectors();
   storeGithubSecret("ghp_fromsecret_4");
   bootstrapConnectors();
-  process.env.GITHUB_TOKEN = "ghp_fromenv_override";
+  process.env.GITHUB_TOKEN = "ghp_fromenv_fallback";
   try {
-    assert.strictEqual(github.resolveGithubToken(), "ghp_fromenv_override");
+    assert.strictEqual(github.resolveGithubToken(), "ghp_fromsecret_4");
   } finally {
     delete process.env.GITHUB_TOKEN;
   }
+});
+
+test("env GITHUB_TOKEN is the fallback when no connector is active", () => {
+  resetConnectors(); // removes secrets.enc, no connector registered
+  process.env.GITHUB_TOKEN = "ghp_fromenv_fallback2";
+  try {
+    assert.strictEqual(github.resolveGithubToken(), "ghp_fromenv_fallback2");
+  } finally {
+    delete process.env.GITHUB_TOKEN;
+  }
+});
+
+test("env GITHUB_TOKEN is used when the active connector's secret_ref cannot resolve", () => {
+  resetConnectors(); // no secrets.enc: the connector's secret_ref resolves to null
+  const conn = kernel.registerConnector({
+    name: "GH-noref", type: "github", endpoint: "https://api.github.com",
+    secret_ref: "secret:github_token", metadata: { managed: "connector-bootstrap" },
+  });
+  kernel.transitionConnector(conn.connector_id, "enabled");
+  process.env.GITHUB_TOKEN = "ghp_fromenv_fallback3";
+  try {
+    assert.strictEqual(github.resolveGithubToken(), "ghp_fromenv_fallback3");
+  } finally {
+    delete process.env.GITHUB_TOKEN;
+  }
+});
+
+// ---- per-call health observability -------------------------------------------
+
+test("githubHealthDecision records only state changes", () => {
+  // Auth failure while live -> record degradation.
+  assert.deepStrictEqual(github.githubHealthDecision("enabled", 401), { record: true, ok: false, error: "github auth failure (HTTP 401)" });
+  assert.deepStrictEqual(github.githubHealthDecision("healthy", 403), { record: true, ok: false, error: "github auth failure (HTTP 403)" });
+  // Success promotes enabled -> healthy (a state change) ...
+  assert.deepStrictEqual(github.githubHealthDecision("enabled", 200), { record: true, ok: true });
+  // ... but steady-state healthy success must NOT write per call.
+  assert.deepStrictEqual(github.githubHealthDecision("healthy", 200), { record: false });
+  // Non-auth failures and transport errors are not connector-credential evidence.
+  assert.deepStrictEqual(github.githubHealthDecision("healthy", 500), { record: false });
+  assert.deepStrictEqual(github.githubHealthDecision("healthy", 404), { record: false });
+  assert.deepStrictEqual(github.githubHealthDecision("enabled", 0), { record: false });
+  // Once errored, repeats record nothing (and the connector is no longer active anyway).
+  assert.deepStrictEqual(github.githubHealthDecision("error", 401), { record: false });
+});
+
+test("noteGithubResponse degrades the connector on 401 and heals enabled->healthy on success", () => {
+  resetConnectors();
+  storeGithubSecret("ghp_health_7");
+  bootstrapConnectors();
+  const before = kernel.listConnectors({ type: "github" })[0];
+  assert.strictEqual(before.state, "enabled");
+
+  // Success while enabled -> promoted to healthy (one recorded observation).
+  github.noteGithubResponse(200);
+  const healthy = kernel.getConnector(before.connector_id);
+  assert.strictEqual(healthy.state, "healthy");
+  assert.ok(healthy.last_health_check_at, "health check timestamp recorded");
+
+  // Steady-state healthy success records nothing further.
+  const stamp = healthy.last_health_check_at;
+  github.noteGithubResponse(200);
+  assert.strictEqual(kernel.getConnector(before.connector_id).last_health_check_at, stamp);
+
+  // Auth failure while healthy -> degraded to error with the failure recorded.
+  github.noteGithubResponse(401);
+  const degraded = kernel.getConnector(before.connector_id);
+  assert.strictEqual(degraded.state, "error");
+  assert.strictEqual(degraded.health.ok, false);
+  assert.match(String(degraded.health.error), /auth failure/);
+
+  // Errored connector is no longer active: further responses are no-ops.
+  github.noteGithubResponse(401);
+  assert.strictEqual(kernel.getConnector(before.connector_id).state, "error");
 });
 
 test("with no connector, github falls back to the legacy secret-store key and public API", () => {

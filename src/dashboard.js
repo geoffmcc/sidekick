@@ -44,7 +44,11 @@ app.use("/static", express.static(path.join(__dirname, "..", "static")));
 const http = require("http");
 const AGENT_PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 
-function getPublicIP() {
+// First non-internal IPv4 of a local interface. That is a PRIVATE address on
+// any NAT'd deployment — it was previously mislabeled as the public IP too.
+// The honest public value is "unknown" unless something real determines it;
+// no external lookup is performed.
+function getPrivateIPv4() {
   const interfaces = os.networkInterfaces();
   for (const name of Object.keys(interfaces)) {
     for (const iface of interfaces[name]) {
@@ -55,7 +59,7 @@ function getPublicIP() {
   }
   return 'unknown';
 }
-const VPS_IP = getPublicIP();
+const VPS_IP = getPrivateIPv4();
 
 function runCommand(program, args = [], opts = {}) {
   try {
@@ -108,13 +112,18 @@ function systemSnapshot() {
   const usedKb = totalKb && availableKb ? totalKb - availableKb : 0;
   const memPct = totalKb ? Math.round((usedKb / totalKb) * 100) : 0;
   const disk = parseDiskRoot();
-  const cpuPct = Number((os.loadavg()[0] || 0).toFixed(2));
+  // os.loadavg()[0] is the 1-minute LOAD AVERAGE, not a CPU percentage — it
+  // was previously rendered with a "%" suffix, which faked a percent. It is
+  // now reported as what it is, with the core count so consumers can judge
+  // pressure (load ≈ cores means saturated).
+  const load1m = Number((os.loadavg()[0] || 0).toFixed(2));
+  const cpuCount = os.cpus().length || 1;
   return {
     uptime: runCommand("uptime", ["-p"]),
     memory: { total: formatKb(memInfo.MemTotal), used: usedKb ? `${usedKb} kB` : "?", free: formatKb(memInfo.MemAvailable), pct: `${memPct}%`, pctNumber: memPct },
     disk,
-    cpu: `${cpuPct}%`,
-    cpuNumber: cpuPct,
+    load_1m: load1m,
+    cpu_count: cpuCount,
     load: parseLoadAverage()
   };
 }
@@ -467,10 +476,6 @@ app.use('/grafana', (req, res) => {
 
 // --- API ---
 
-function readLogs() {
-  return dbStore.readToolLogs();
-}
-
 function readKV() {
   return dbStore.loadKV({});
 }
@@ -756,8 +761,11 @@ function seedKV() {
     "server:processes": (() => { const ps = runCommand("ps", ["-e", "--no-headers"]); return ps === "?" ? "?" : String(ps.split("\n").filter(Boolean).length); })(),
     "server:uptime_at_start": runCommand("uptime", ["-p"]),
 
-    "network:public_ip": getPublicIP(),
-    "network:private_ip": getPublicIP(),
+    // public_ip stays "unknown" deliberately: the first non-internal local
+    // IPv4 is the private address, and nothing here performs the external
+    // lookup that a real public value would require.
+    "network:public_ip": "unknown",
+    "network:private_ip": getPrivateIPv4(),
     "network:interfaces": Object.keys(os.networkInterfaces()).join(","),
     "network:dns": (() => { try { return fs.readFileSync("/etc/resolv.conf", "utf-8").split("\n").map(line => line.match(/^nameserver\s+(\S+)/)?.[1]).filter(Boolean).join(","); } catch { return "?"; } })(),
     "network:gateway": (() => { const route = runCommand("ip", ["route", "show", "default"]); return route.match(/\bvia\s+(\S+)/)?.[1] || "?"; })(),
@@ -807,11 +815,22 @@ function seedKV() {
 
 app.get("/api/logs", (req, res) => {
   const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
-  let entries = readLogs().slice(0, limit).map(normalizeLogEntry);
-  if (req.query.source) entries = entries.filter(entry => entry.source === req.query.source);
-  if (req.query.status === "success") entries = entries.filter(entry => entry.ok);
-  if (req.query.status === "failure") entries = entries.filter(entry => !entry.ok);
-  if (req.query.tool) entries = entries.filter(entry => entry.tool === req.query.tool);
+  // Push the filters the store can express (tool, source, success) into the
+  // SQL query so they apply BEFORE the row limit — previously every filter ran
+  // after slice(0, limit), so a filtered view silently missed matches older
+  // than the newest <limit> rows. queryToolLogs cannot filter project/session/
+  // task/execution/search/min_duration (they live inside entry_json), so when
+  // those are requested we fetch a larger window before filtering — wider, but
+  // still bounded, and stated here rather than hidden.
+  const needsPostFilter = !!(req.query.project || req.query.session || req.query.task ||
+    req.query.execution || req.query.min_duration || req.query.errors_only === "true" || req.query.search);
+  const dbFilters = {
+    tool: req.query.tool || undefined,
+    source: req.query.source || undefined,
+    success: req.query.status === "success" ? true : req.query.status === "failure" ? false : undefined,
+    limit: needsPostFilter ? Math.min(limit * 10, 5000) : limit,
+  };
+  let entries = dbStore.queryToolLogs(dbFilters).map(normalizeLogEntry);
   if (req.query.project) entries = entries.filter(entry => entry.project === req.query.project);
   if (req.query.session) entries = entries.filter(entry => entry.session_id === req.query.session || entry.task_id === req.query.session || entry.execution_id === req.query.session || String(entry.id).includes(req.query.session));
   if (req.query.task) entries = entries.filter(entry => entry.task_id === req.query.task);
@@ -825,6 +844,8 @@ app.get("/api/logs", (req, res) => {
     const needle = String(req.query.search).toLowerCase();
     entries = entries.filter(entry => [entry.tool, entry.args, entry.result, entry.error, entry.summary, entry.source, entry.project, entry.session_id, entry.task_id].join(" ").toLowerCase().includes(needle));
   }
+  // Re-apply the requested bound after post-filtering the wider window.
+  entries = entries.slice(0, limit);
   const sessions = buildActivitySessions(entries);
   res.json({ entries, sessions, summary: summarizeActivity(sessions, entries), total: entries.length, fallback_grouping_ms: ACTIVITY_FALLBACK_GAP_MS });
 });
@@ -860,7 +881,9 @@ app.get("/api/system", (req, res) => {
       uptime: snapshot.uptime,
       memory: { total: snapshot.memory.total, used: snapshot.memory.used, free: snapshot.memory.free, pct: snapshot.memory.pct },
       disk: { total: snapshot.disk.total, free: snapshot.disk.free, pct: snapshot.disk.pct },
-      cpu: snapshot.cpu,
+      // Honest naming: this is the 1-minute load average, not a CPU percent.
+      load_1m: snapshot.load_1m,
+      cpu_count: snapshot.cpu_count,
       load: snapshot.load
     });
   } catch (e) {
@@ -872,7 +895,12 @@ app.get("/api/dashboard-summary", async (req, res) => {
   try {
     // Health score calculation
     const snapshot = systemSnapshot();
-    const cpuPct = snapshot.cpuNumber;
+    // Load pressure as percent-of-cores: the honest analogue of the old fake
+    // "CPU %" (which was the raw 1m load average with a % sign). 100 means the
+    // 1-minute load equals the core count, i.e. saturation.
+    const load1m = snapshot.load_1m;
+    const cpuCount = snapshot.cpu_count;
+    const loadPctOfCores = cpuCount ? Math.round((load1m / cpuCount) * 100) : 0;
     const memPct = snapshot.memory.pctNumber;
     const diskPct = parseFloat(snapshot.disk.pct) || 0;
 
@@ -898,10 +926,12 @@ app.get("/api/dashboard-summary", async (req, res) => {
       };
     } catch {}
     
-    // Calculate health score (100 = perfect, deduct for high usage)
+    // Calculate health score (100 = perfect, deduct for high usage). Load
+    // thresholds are percent-of-cores, consistent with the metric's new
+    // meaning: >100 saturated, >70 elevated.
     let healthScore = 100;
-    if (cpuPct > 80) healthScore -= 30;
-    else if (cpuPct > 50) healthScore -= 15;
+    if (loadPctOfCores > 100) healthScore -= 30;
+    else if (loadPctOfCores > 70) healthScore -= 15;
     if (memPct > 90) healthScore -= 30;
     else if (memPct > 70) healthScore -= 15;
     if (diskPct > 90) healthScore -= 30;
@@ -990,16 +1020,17 @@ app.get("/api/dashboard-summary", async (req, res) => {
     res.json({
       health: {
         score: healthScore,
-        cpu: cpuPct,
+        // Load average (1m), core count, and load as percent-of-cores. The
+        // old `cpu` field was the raw load average masquerading as a percent.
+        load_1m: load1m,
+        cpu_count: cpuCount,
+        load_pct_of_cores: loadPctOfCores,
         memory: memPct,
         disk: diskPct,
         modules: moduleHealth,
       },
-      toolStats: {
-        calls: 0, // Will be populated from /api/stats on frontend
-        successRate: 0,
-        avgTime: 0
-      },
+      // The canned toolStats {calls:0,...} placeholder is gone: it was never
+      // real data, and the client computes tool stats from /api/stats.
       storage: {
         kvCount,
         logSize,
@@ -1238,7 +1269,7 @@ app.get("/api/services", (req, res) => {
   res.json({ services: status });
 });
 
-app.post("/api/quick-actions/:action", (req, res) => {
+app.post("/api/quick-actions/:action", async (req, res) => {
   const action = req.params.action;
   const execution = startDashboardExecution(req, action);
   try {
@@ -1290,14 +1321,38 @@ app.post("/api/quick-actions/:action", (req, res) => {
         finishDashboardExecution(execution, "failed", { result_status: "invalid_request", error_category: "unsupported_service", result_summary: `Unsupported service: ${service}` });
         return res.status(400).json({ ok: false, error: "Unsupported service" });
       }
-      const logs = runCommand("sudo", ["-n", "/usr/bin/journalctl", "-u", service, "-n", "40", "--no-pager"]);
-      auditLog(req, "quick-action.service-logs", { service });
+      // Routed through the dispatcher (`service` tool, action=logs) instead of
+      // raw sudo journalctl, so policy, approval, redaction, and audit apply
+      // like they do for every other caller. A policy refusal is surfaced
+      // honestly — never worked around with a raw shell fallback.
+      const result = await callDashboardTool("service", { action: "logs", service, lines: 40 },
+        dashboardExecutionMetadata(req, authenticatedUser(req) || "dashboard"));
+      const text = result?.content?.[0]?.text || "";
+      auditLog(req, "quick-action.service-logs", { service, ok: !result?.isError });
+      if (result?.isError) {
+        finishDashboardExecution(execution, "failed", { result_status: result.code || "error", error_category: "service_logs", result_summary: text.slice(0, 200) });
+        const httpStatus = result.approvalRequired ? 202 : result.code === "policy_denied" ? 403 : 500;
+        return res.status(httpStatus).json({ ok: false, error: text || "service logs unavailable", approvalRequired: !!result.approvalRequired });
+      }
       finishDashboardExecution(execution, "completed", { result_status: "success", result_summary: `dashboard service logs returned for ${service}` });
-      return res.json({ ok: true, action, result: { service, logs } });
+      return res.json({ ok: true, action, result: { service, logs: text } });
     }
 
     if (action === "restart-agent") {
-      runCommand("sudo", ["systemctl", "restart", "sidekick-agent"], { timeout: 10000 });
+      // Restart is a governed mutation, not a raw sudo side effect: route it
+      // through the `service` tool so the dispatcher's policy/approval/audit
+      // decide. When default policy refuses or queues it for approval, say so
+      // — the button reports the governance outcome instead of pretending the
+      // restart ran.
+      const result = await callDashboardTool("service", { action: "restart", service: "sidekick-agent" },
+        dashboardExecutionMetadata(req, authenticatedUser(req) || "dashboard"));
+      const text = result?.content?.[0]?.text || "";
+      if (result?.isError) {
+        auditLog(req, "quick-action.restart-agent", { ok: false, code: result.code || "error" });
+        finishDashboardExecution(execution, "failed", { result_status: result.code || "error", error_category: "service_restart", result_summary: text.slice(0, 200) });
+        const httpStatus = result.approvalRequired ? 202 : result.code === "policy_denied" ? 403 : 500;
+        return res.status(httpStatus).json({ ok: false, error: text || "restart refused", approvalRequired: !!result.approvalRequired });
+      }
       const status = systemctlStatus("sidekick-agent");
       auditLog(req, "quick-action.restart-agent", { status });
       finishDashboardExecution(execution, status === "active" ? "completed" : "failed", { result_status: status === "active" ? "success" : "failed", result_summary: `sidekick-agent restart status: ${status}` });
@@ -1420,10 +1475,17 @@ app.get("/api/kv/projects", (req, res) => {
 
 app.delete("/api/kv/:key", (req, res) => {
   const kv = readKV();
+  // Report what actually happened: deleting a key that does not exist used to
+  // answer {ok:true}, indistinguishable from a real deletion.
+  const existed = Object.prototype.hasOwnProperty.call(kv, req.params.key);
+  if (!existed) {
+    auditLog(req, 'kv.delete', { key: req.params.key, deleted: false });
+    return res.status(404).json({ ok: false, deleted: false, error: "key not found" });
+  }
   delete kv[req.params.key];
   writeKV(kv);
-  auditLog(req, 'kv.delete', { key: req.params.key });
-  res.json({ ok: true });
+  auditLog(req, 'kv.delete', { key: req.params.key, deleted: true });
+  res.json({ ok: true, deleted: true });
 });
 
 app.get("/api/stats", (req, res) => {
@@ -1986,7 +2048,24 @@ app.post("/api/evolve/:id/run", (req, res) => {
   });
   setImmediate(async () => {
     try {
-      await callDashboardTool(cap.name, req.body?.args || {}, dashboardExecutionMetadata(req, actor, { executionId, timeoutMs }));
+      const result = await callDashboardTool(cap.name, req.body?.args || {}, dashboardExecutionMetadata(req, actor, { executionId, timeoutMs }));
+      // Policy denial and approval-required come back as an error RESULT
+      // (isError), not a throw — the pre-created execution row would sit
+      // `queued` forever while the route had already answered ok. Only touch
+      // rows the handler never finalized: a dispatched run that failed inside
+      // the generated workflow records its own, more specific, terminal state.
+      if (result && result.isError) {
+        const current = dbStore.getGeneratedToolExecution(executionId);
+        if (current && ["queued", "running"].includes(current.state)) {
+          dbStore.updateGeneratedToolExecution(executionId, {
+            state: "failed",
+            completedAt: new Date().toISOString(),
+            finalSummary: redactSensitive(result.content?.[0]?.text || result.code || "generated tool dispatch failed"),
+            errorCategory: result.code || "error",
+            successCriteriaSatisfied: false,
+          });
+        }
+      }
     } catch (error) {
       dbStore.updateGeneratedToolExecution(executionId, {
         state: "failed",
@@ -2297,64 +2376,105 @@ app.get("/api/memories/types", (req, res) => {
   }
 });
 
-app.post("/api/memories/:id/disable", (req, res) => {
+/**
+ * Memory mutations route through the dispatcher where a tool action exists
+ * (memory_manage delete/disable, memory_export, memory_import) so policy,
+ * redaction, and audit apply exactly as for MCP callers. Direct dbStore access
+ * remains only where no tool action exists (enable, bulk stale expiry), with
+ * audit. All failures carry real HTTP status codes — a missing id is 404 and
+ * an error is 4xx/5xx, never `{ok:false}` under HTTP 200.
+ */
+async function dispatchMemoryManage(req, res, args, auditAction) {
   try {
-    const success = dbStore.disableMemory(req.params.id);
-    auditLog(req, "memory_disable", { id: req.params.id });
-    res.json({ ok: success });
+    auditLog(req, auditAction, { id: args.id });
+    const result = await callDashboardTool("memory_manage", args,
+      dashboardExecutionMetadata(req, authenticatedUser(req) || "dashboard"));
+    const text = result?.content?.[0]?.text || "";
+    if (result?.isError) {
+      // The tool reports a missing id in its message text; that is the one
+      // signal available without widening the tool contract.
+      const httpStatus = /not found/i.test(text) ? 404 : 500;
+      return res.status(httpStatus).json({ ok: false, error: text || "memory operation failed" });
+    }
+    return res.json({ ok: true, message: text });
   } catch (error) {
-    res.json({ ok: false, error: error.message });
+    return res.status(500).json({ ok: false, error: error.message });
   }
-});
+}
+
+app.post("/api/memories/:id/disable", (req, res) =>
+  dispatchMemoryManage(req, res, { action: "disable", id: req.params.id }, "memory_disable"));
 
 app.post("/api/memories/:id/enable", (req, res) => {
+  // memory_manage has no "enable" action (its "restore" revives deleted or
+  // expired records, a different semantic), so this stays on dbStore directly
+  // — with audit and honest status codes.
   try {
     const success = dbStore.enableMemory(req.params.id);
-    auditLog(req, "memory_enable", { id: req.params.id });
-    res.json({ ok: success });
+    auditLog(req, "memory_enable", { id: req.params.id, ok: success });
+    if (!success) {
+      return res.status(404).json({ ok: false, error: "Memory not found or not enable-able (deleted/expired memories require restore)" });
+    }
+    res.json({ ok: true });
   } catch (error) {
-    res.json({ ok: false, error: error.message });
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
-app.delete("/api/memories/:id", (req, res) => {
-  try {
-    const success = dbStore.softDeleteMemory(req.params.id, "dashboard_delete");
-    auditLog(req, "memory_delete", { id: req.params.id, soft_deleted: success });
-    res.json({ ok: success });
-  } catch (error) {
-    res.json({ ok: false, error: error.message });
-  }
-});
+app.delete("/api/memories/:id", (req, res) =>
+  dispatchMemoryManage(req, res, { action: "delete", id: req.params.id, reason: "dashboard_delete" }, "memory_delete"));
 
-app.post("/api/memories/export", (req, res) => {
+app.post("/api/memories/export", async (req, res) => {
   try {
     const { project, type, include_disabled } = req.body || {};
-    const options = {};
-    if (project) options.project = project;
-    if (type) options.type = type;
-    if (include_disabled === false) options.includeDisabled = false;
-
-    const result = dbStore.exportMemories(options);
-    auditLog(req, "memory_export", { count: result.count, project, type });
-    res.json({ ok: true, data: result });
+    const result = await callDashboardTool("memory_export", {
+      ...(project ? { project } : {}),
+      ...(type ? { type } : {}),
+      ...(include_disabled === false ? { include_disabled: false } : {}),
+    }, dashboardExecutionMetadata(req, authenticatedUser(req) || "dashboard"));
+    const text = result?.content?.[0]?.text || "";
+    if (result?.isError) {
+      return res.status(500).json({ ok: false, error: text || "export failed" });
+    }
+    let data;
+    try { data = JSON.parse(text); } catch { data = null; }
+    if (!data) return res.status(500).json({ ok: false, error: "export produced an unreadable payload" });
+    auditLog(req, "memory_export", { count: data.count, project, type });
+    res.json({ ok: true, data });
   } catch (error) {
-    res.json({ ok: false, error: error.message });
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
-app.post("/api/memories/import", (req, res) => {
+app.post("/api/memories/import", async (req, res) => {
   try {
     const { data, on_conflict, preserve_ids } = req.body || {};
-    const options = {
-      onConflict: on_conflict || "merge",
-      preserveIds: preserve_ids === true
+    if (data === undefined || data === null) {
+      return res.status(400).json({ ok: false, error: "data required" });
+    }
+    const result = await callDashboardTool("memory_import", {
+      // The tool takes the export payload as a JSON string.
+      data: typeof data === "string" ? data : JSON.stringify(data),
+      ...(on_conflict ? { on_conflict } : {}),
+      ...(preserve_ids === true ? { preserve_ids: true } : {}),
+    }, dashboardExecutionMetadata(req, authenticatedUser(req) || "dashboard"));
+    const text = result?.content?.[0]?.text || "";
+    if (result?.isError) {
+      const httpStatus = /invalid json/i.test(text) ? 400 : 500;
+      return res.status(httpStatus).json({ ok: false, error: text || "import failed" });
+    }
+    // Recover the structured counts from the tool's summary line so existing
+    // clients keep their imported/updated/skipped fields.
+    const counts = text.match(/(\d+) imported, (\d+) updated, (\d+) skipped/);
+    const summary = {
+      imported: counts ? Number(counts[1]) : undefined,
+      updated: counts ? Number(counts[2]) : undefined,
+      skipped: counts ? Number(counts[3]) : undefined,
     };
-    const result = dbStore.importMemories(data, options);
-    auditLog(req, "memory_import", { imported: result.imported, updated: result.updated, skipped: result.skipped });
-    res.json({ ok: true, ...result });
+    auditLog(req, "memory_import", summary);
+    res.json({ ok: true, ...summary, message: text });
   } catch (error) {
-    res.json({ ok: false, error: error.message });
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
@@ -2368,13 +2488,19 @@ app.get("/api/memories/stats", (req, res) => {
 });
 
 app.post("/api/memories/expire", (req, res) => {
+  // Bulk stale expiry has no memory_manage action (`expire` there takes a
+  // single id; `process_auto_expirations` is a different sweep), so this stays
+  // on dbStore directly — with audit and honest status codes.
   try {
     const { stale_days } = req.body || {};
+    if (stale_days !== undefined && (!Number.isFinite(Number(stale_days)) || Number(stale_days) < 0)) {
+      return res.status(400).json({ ok: false, error: "stale_days must be a non-negative number" });
+    }
     const result = dbStore.expireStaleMemories({ staleDays: stale_days });
     auditLog(req, "memory_expire", { expired: result.expired, stale_days });
     res.json({ ok: true, ...result });
   } catch (error) {
-    res.json({ ok: false, error: error.message });
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
@@ -2543,7 +2669,10 @@ app.post("/api/db/query", async (req, res) => {
     const result = await callDashboardTool(
       "db_query",
       { sql, params: params || [], readonly: readonly !== false, limit: limit || 1000 },
-      dashboardExecutionMetadata(req, "dashboard")
+      // Attribute the real authenticated user when one exists — a write-mode
+      // query attributed to the literal "dashboard" cannot be traced to a
+      // person. The marker remains only for unauthenticated deployments.
+      dashboardExecutionMetadata(req, authenticatedUser(req) || "dashboard")
     );
     const duration = Date.now() - start;
     const text = result && result.content && result.content[0] ? result.content[0].text : "";
@@ -2592,28 +2721,28 @@ app.post("/api/db/backup", (req, res) => {
   }
 });
 
-app.get("/api/db/search", (req, res) => {
+app.get("/api/db/search", async (req, res) => {
   if (!requireDashboardTool(req, res, "sidekick_db_search")) return;
   try {
     const { q, limit } = req.query;
-    if (!q) return res.json({ ok: false, error: "No query provided" });
-    const db = dbStore.getDb();
-    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
-    const results = {};
-    const maxResults = parseInt(limit) || 50;
-    for (const t of tables) {
-      const quotedTable = `"${t.name.replace(/"/g, '""')}"`;
-      const columns = db.prepare(`PRAGMA table_info(${quotedTable})`).all();
-      const textCols = columns.filter(c => c.type === "TEXT" || c.type === "").map(c => c.name);
-      if (textCols.length === 0) continue;
-      const whereClause = textCols.map(c => `"${c.replace(/"/g, '""')}" LIKE ?`).join(" OR ");
-      const params = textCols.map(() => `%${q}%`);
-      const rows = db.prepare(`SELECT * FROM ${quotedTable} WHERE ${whereClause} LIMIT ?`).all(...params, maxResults);
-      if (rows.length > 0) results[t.name] = rows;
+    if (!q) return res.status(400).json({ ok: false, error: "No query provided" });
+    // Routed through the dispatcher's db_search tool so its redaction, policy,
+    // and audit apply — the previous raw LIKE-scan over every table returned
+    // row contents (including any stored secrets) with no redaction at all.
+    const result = await callDashboardTool(
+      "db_search",
+      { query: String(q), limit: parseInt(limit) || 50 },
+      dashboardExecutionMetadata(req, authenticatedUser(req) || "dashboard")
+    );
+    const text = result?.content?.[0]?.text || "";
+    if (result?.isError) {
+      return res.status(500).json({ ok: false, error: text || "search failed" });
     }
+    let results;
+    try { results = JSON.parse(text); } catch { results = text; }
     res.json({ ok: true, results });
   } catch (e) {
-    res.json({ ok: false, error: e.message });
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -2686,13 +2815,15 @@ app.delete("/api/data", (req, res) =>
     return { removed: clearConversationFiles() };
   }));
 
-// Error logging endpoint (for frontend errors)
+// Error logging endpoint (for frontend errors). Fire-and-forget by design:
+// 204 says "received, no body" without asserting the write succeeded — the
+// old {ok:true} claimed a persistence result this handler never verifies.
 app.post('/api/internal/error-log', (req, res) => {
   try {
     const entry = req.body || {};
     logError(entry.url, entry.status, entry.error, entry.page, entry.userAgent);
   } catch {}
-  res.json({ ok: true });
+  res.status(204).end();
 });
 
 // Webhook receiver endpoint
@@ -2753,6 +2884,14 @@ app.post("/api/agent/run", (req, res) => {
 // Canonical follow-up: create a child task continuing a terminal parent.
 app.post("/api/agent/run/:taskId/follow-up", (req, res) => {
   const body = JSON.stringify(req.body);
+  proxyAgent(req, res, "POST", body);
+});
+
+// Cancel a live task. The agent service owns the cancel semantics; the
+// dashboard only relays and reports the backend's honest answer (404 when the
+// task is not running).
+app.post("/api/agent/run/:taskId/cancel", (req, res) => {
+  const body = JSON.stringify(req.body || {});
   proxyAgent(req, res, "POST", body);
 });
 

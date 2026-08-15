@@ -108,6 +108,23 @@ async function sidekick_cron({ action, name, schedule, command, id }) {
     if (idx === -1) {
       return { content: [{ type: "text", text: "Job not found" }], isError: true };
     }
+    // Live-claim cancel path (same contract as delay cancel / runbook abort):
+    // when a claimed run is in flight, removing the definition out from under
+    // it would silently abandon the claimant. Request cancellation on the
+    // execution instead — the run path sees cancel_requested and disables the
+    // job — and leave the definition in place for that claimant to settle.
+    // Direct removal below stays the behavior when no live claim exists.
+    const cronJob = jobs[idx];
+    const cronClaimRow = cronJob.platform_execution_id ? platformKernel.getExecutionClaim(cronJob.platform_execution_id) : null;
+    const cronLiveClaim = Boolean(cronClaimRow?.claimed_by && cronClaimRow.lease_expires_at && cronClaimRow.lease_expires_at > new Date().toISOString());
+    if (cronLiveClaim) {
+      platformKernel.requestExecutionCancel(cronJob.platform_execution_id, {
+        source: "cron",
+        actor_id: getCurrentSource() || "unknown",
+        reason: "cron job removal requested while a run is in flight",
+      });
+      return { content: [{ type: "text", text: `Cancellation requested for cron job ${cronJob.id}: a claimed run is in flight (${cronClaimRow.claimed_by}); the job will be disabled when the claimant honors the cancel. Re-run remove afterwards to delete it.` }] };
+    }
     const removed = jobs.splice(idx, 1)[0];
     transitionScheduledPlatformExecution("cron", removed, "cancelled", {
       reason: "cron job removed",
@@ -731,6 +748,22 @@ async function sidekick_watch({ action, id, name, source, target, condition, int
       return { content: [{ type: "text", text: `Watch not found: ${id}` }], isError: true };
     }
 
+    // Live-claim cancel path (delay-cancel pattern): a check claimed by a live
+    // runner must receive a cancel request rather than having its definition
+    // yanked mid-flight. The claimant pauses the watch on cancel
+    // (pauseWatchForCancel); direct removal remains when no live claim exists.
+    const removeTarget = watches[idx];
+    const removeClaim = removeTarget.platform_execution_id ? platformKernel.getExecutionClaim(removeTarget.platform_execution_id) : null;
+    const removeLiveClaim = Boolean(removeClaim?.claimed_by && removeClaim.lease_expires_at && removeClaim.lease_expires_at > now);
+    if (removeLiveClaim) {
+      platformKernel.requestExecutionCancel(removeTarget.platform_execution_id, {
+        source: "watch",
+        actor_id: getCurrentSource() || "unknown",
+        reason: "watch removal requested while a check is in flight",
+      });
+      return { content: [{ type: "text", text: `Cancellation requested for watch ${id}: a claimed check is in flight (${removeClaim.claimed_by}); it will pause when the claimant honors the cancel. Re-run remove afterwards to delete it.` }] };
+    }
+
     const removed = watches.splice(idx, 1)[0];
     transitionScheduledPlatformExecution("watch", removed, "cancelled", {
       reason: "watch removed",
@@ -751,6 +784,23 @@ async function sidekick_watch({ action, id, name, source, target, condition, int
     const watch = watches.find(w => w.id === id);
     if (!watch) {
       return { content: [{ type: "text", text: `Watch not found: ${id}` }], isError: true };
+    }
+
+    // Disable direction only: pausing while a claimed check is in flight
+    // requests cancellation so the claimant pauses the watch itself instead of
+    // this writer transitioning the definition under a live lease. Resume
+    // (pause=false) never conflicts with a claimant and stays direct.
+    if (pause) {
+      const pauseClaim = watch.platform_execution_id ? platformKernel.getExecutionClaim(watch.platform_execution_id) : null;
+      const pauseLiveClaim = Boolean(pauseClaim?.claimed_by && pauseClaim.lease_expires_at && pauseClaim.lease_expires_at > now);
+      if (pauseLiveClaim) {
+        platformKernel.requestExecutionCancel(watch.platform_execution_id, {
+          source: "watch",
+          actor_id: getCurrentSource() || "unknown",
+          reason: "watch pause requested while a check is in flight",
+        });
+        return { content: [{ type: "text", text: `Cancellation requested for watch ${id}: a claimed check is in flight (${pauseClaim.claimed_by}); it will pause when the claimant honors the cancel.` }] };
+      }
     }
 
     watch.status = pause ? "paused" : "active";

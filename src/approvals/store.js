@@ -217,6 +217,12 @@ function ensureApprovalContinuationSchema(force = false) {
       reason TEXT,
       created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS approval_runtime_meta (
+      key        TEXT PRIMARY KEY,
+      value_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
 
   // Additive columns from migration 025. Applied here too so a test database
@@ -354,6 +360,61 @@ function listOverdueCheckpoints(now = nowIso()) {
 }
 
 // ---------------------------------------------------------------------------
+// Task-runner liveness heartbeat
+// ---------------------------------------------------------------------------
+
+/**
+ * The resume scheduler writes this every poll; `executeApprovedTool` (T2)
+ * reads it before promising that "the task will be resumed by the task
+ * runner". Lives in the approvals store because this store owns the
+ * checkpoint schema the promise is about — a runnable checkpoint and the
+ * heartbeat that proves something will claim it belong to the same authority.
+ *
+ * The freshness window derives from the WRITER's declared poll interval (kept
+ * inside the value), so the reader — usually a different process — never has
+ * to guess the runner's configuration from its own environment.
+ */
+const TASK_RUNNER_HEARTBEAT_KEY = "task_runner_heartbeat";
+
+function writeTaskRunnerHeartbeat({ runner, intervalMs } = {}) {
+  ensureApprovalContinuationSchema();
+  getDb().prepare(`
+    INSERT INTO approval_runtime_meta (key, value_json, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
+  `).run(TASK_RUNNER_HEARTBEAT_KEY, JSON.stringify({ runner: runner || null, interval_ms: Number(intervalMs) || null }), nowIso());
+}
+
+function getTaskRunnerHeartbeat() {
+  ensureApprovalContinuationSchema();
+  const row = getDb().prepare("SELECT value_json, updated_at FROM approval_runtime_meta WHERE key = ?").get(TASK_RUNNER_HEARTBEAT_KEY);
+  if (!row) return null;
+  let value = {};
+  try { value = JSON.parse(row.value_json) || {}; } catch { value = {}; }
+  return { runner: value.runner || null, intervalMs: Number(value.interval_ms) || null, updatedAt: row.updated_at };
+}
+
+/**
+ * Freshness check, fail-closed: no heartbeat, an unparseable timestamp, or one
+ * older than three declared poll intervals (min 30s, so a slow poller isn't
+ * declared dead by clock jitter) all report the runner as not live.
+ */
+function isTaskRunnerLive(now = Date.now()) {
+  let heartbeat;
+  try {
+    heartbeat = getTaskRunnerHeartbeat();
+  } catch {
+    return { live: false, reason: "heartbeat_unreadable" };
+  }
+  if (!heartbeat || !heartbeat.updatedAt) return { live: false, reason: "no_heartbeat" };
+  const at = Date.parse(heartbeat.updatedAt);
+  if (!Number.isFinite(at)) return { live: false, reason: "heartbeat_invalid" };
+  const windowMs = Math.max(3 * (heartbeat.intervalMs || 5000), 30000);
+  const ageMs = now - at;
+  if (ageMs > windowMs) return { live: false, reason: "stale_heartbeat", ageMs, windowMs };
+  return { live: true, ageMs, windowMs, runner: heartbeat.runner };
+}
+
+// ---------------------------------------------------------------------------
 // Audit
 // ---------------------------------------------------------------------------
 
@@ -440,5 +501,8 @@ module.exports = {
   listClaimableCheckpoints,
   listOverdueCheckpoints,
   recordRecoveryEvent,
+  writeTaskRunnerHeartbeat,
+  getTaskRunnerHeartbeat,
+  isTaskRunnerLive,
   LIVE_STATUS_SQL,
 };

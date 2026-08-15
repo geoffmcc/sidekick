@@ -50,6 +50,11 @@ function respondHint(getToolDefs) {
  * @param {(event:object)=>void} [opts.emit] Progress sink (SSE in production).
  * @param {(type:string,payload:object,severity?:string)=>void} [opts.onEvent] Observability sink.
  * @param {(text:string)=>string} [opts.redact] Redaction for logged summaries.
+ * @param {{aborted:boolean}} [opts.cancel] Cooperative cancellation flag, checked
+ *   between iterations. In-flight tool calls are cancelled separately by the
+ *   AbortSignal the bridge threads into the dispatcher; this flag is what makes
+ *   the LOOP stop asking the model for more work and end with an honest
+ *   terminal `cancelled` status instead of running to the iteration cap.
  * @returns {Promise<{status:string,finalResult:string,terminalError:string,steps:Array,evidenceCalls:number}>}
  */
 async function runToolLoop({
@@ -62,6 +67,7 @@ async function runToolLoop({
   emit = () => {},
   onEvent = () => {},
   redact = (text) => text,
+  cancel = null,
 } = {}) {
   const steps = [];
   let status = "iteration_limit";
@@ -89,6 +95,16 @@ async function runToolLoop({
   };
 
   for (let i = 0; i < maxIterations; i++) {
+    // Cooperative cancellation, consumed between iterations: a cancelled task
+    // must stop honestly rather than finishing the plan and reporting success
+    // for work the user asked to abandon.
+    if (cancel && cancel.aborted) {
+      status = "cancelled";
+      terminalError = "Task cancelled by user request";
+      steps.push({ type: "error", text: terminalError });
+      onEvent("agent.cancelled", { iteration: i }, "warning");
+      break;
+    }
     let response;
     try {
       response = await callLLM(history);
