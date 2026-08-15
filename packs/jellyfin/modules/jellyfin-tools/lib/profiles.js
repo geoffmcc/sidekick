@@ -84,6 +84,61 @@ function parse(name, raw, globalConfig = {}) {
     ),
   );
 
+  // Optional storage provider: how library storage availability can be
+  // INDEPENDENTLY established for this profile. Fail closed on shape errors —
+  // a half-configured provider must not silently degrade to "no provider",
+  // because the operator believes verification is happening.
+  let storageProvider = null;
+  if (raw.storage_provider !== undefined && raw.storage_provider !== null) {
+    const sp = raw.storage_provider;
+    if (!sp || typeof sp !== "object" || Array.isArray(sp)) {
+      throw new JellyfinError(
+        "invalid_input",
+        `profile "${name}" storage_provider must be an object`,
+      );
+    }
+    if (sp.type === "proxmox") {
+      for (const field of ["profile", "node", "storage"]) {
+        if (typeof sp[field] !== "string" || !sp[field].trim() || sp[field].length > 100) {
+          throw new JellyfinError(
+            "invalid_input",
+            `profile "${name}" storage_provider.${field} is required for type "proxmox"`,
+          );
+        }
+      }
+      if (sp.vmid !== undefined && (!Number.isInteger(sp.vmid) || sp.vmid < 100 || sp.vmid > 999999999)) {
+        throw new JellyfinError(
+          "invalid_input",
+          `profile "${name}" storage_provider.vmid must be a valid Proxmox VMID`,
+        );
+      }
+    } else if (sp.type !== "local") {
+      throw new JellyfinError(
+        "invalid_input",
+        `profile "${name}" storage_provider.type must be "proxmox" or "local"`,
+      );
+    }
+    const minFree = Number(sp.min_free_bytes);
+    const maxUsed = Number(sp.max_used_percent);
+    storageProvider = {
+      type: sp.type,
+      profile: sp.type === "proxmox" ? sp.profile : null,
+      node: sp.type === "proxmox" ? sp.node : null,
+      storage: sp.type === "proxmox" ? sp.storage : null,
+      vmid: sp.type === "proxmox" && Number.isInteger(sp.vmid) ? sp.vmid : null,
+      min_free_bytes: Number.isFinite(minFree) && minFree >= 0 ? Math.trunc(minFree) : 1024 * 1024 * 1024,
+      max_used_percent: Number.isFinite(maxUsed) && maxUsed >= 1 && maxUsed <= 100 ? Math.trunc(maxUsed) : 95,
+    };
+  }
+
+  // Postcondition verification poll interval. Bounded low so tests can run
+  // fast; bounded high so a mistyped value cannot stall a maintenance call.
+  const configuredPoll = Number(raw.verify_poll_interval_ms);
+  const verifyPollMs = Math.min(
+    10000,
+    Math.max(50, Number.isFinite(configuredPoll) ? Math.trunc(configuredPoll) : 2000),
+  );
+
   return {
     name,
     endpoint,
@@ -94,6 +149,8 @@ function parse(name, raw, globalConfig = {}) {
     insecure: insecureHttp,
     allow_writes: raw.allow_writes === true,
     is_default: raw.default === true,
+    storage_provider: storageProvider,
+    verify_poll_interval_ms: verifyPollMs,
   };
 }
 

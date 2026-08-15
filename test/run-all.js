@@ -59,6 +59,7 @@ const suites = [
   { file: 'test/task-runner-heartbeat.test.js', critical: false, description: 'Approval continuation runner liveness and stale-heartbeat honesty' },
   { file: 'test/queue-recover.test.js', critical: false, description: 'Queue poisoned-slot recovery and honest durability behavior' },
   { file: 'test/scheduling-cancel.test.js', critical: false, description: 'Cron/watch cancellation coordination for live execution claims' },
+  { file: 'test/jellyfin-pack.test.js', critical: false, description: 'Jellyfin pack evidence-backed reads, guarded maintenance, storage preflight, logs, and honest postconditions' },
   { file: 'test/tools.test.js', critical: false, description: 'Core tool behavior' },
   { file: 'test/dispatcher.test.cjs', critical: false, description: 'Centralized tool dispatcher behavior' },
   { file: 'test/tool-registry-contract.test.cjs', critical: false, description: 'Tool registry contract and descriptor coverage' },

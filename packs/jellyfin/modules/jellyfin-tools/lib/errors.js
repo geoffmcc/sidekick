@@ -9,6 +9,7 @@ const CODES = new Set([
   "connection_failed",
   "tls_failed",
   "timeout",
+  "rate_limited",
   "server_error",
   "unsupported_version",
   "unsupported_capability",
