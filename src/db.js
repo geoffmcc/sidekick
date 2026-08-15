@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const zlib = require("zlib");
 const crypto = require("crypto");
+const { createMemoryDomain } = require("./db/memory-domain");
 const { splitSqlStatements, parseAddColumn } = require("./core/sql-statements");
 const { createKvStore } = require("./db/kv-store");
 const { createToolLogStore } = require("./db/tool-logs");
@@ -853,7 +854,7 @@ function upsertMemory(memory) {
   return normalizeMemoryRow(db.prepare("SELECT * FROM memories WHERE id = ?").get(id));
 }
 
-function searchMemories({ query, project, type, limit = 10, includeDisabled = false } = {}) {
+function searchMemoriesLegacy({ query, project, type, limit = 10, includeDisabled = false } = {}) {
   if (!hasMemoriesTable()) return [];
 
   const clauses = [];
@@ -884,11 +885,11 @@ function searchMemories({ query, project, type, limit = 10, includeDisabled = fa
   return rows.map(normalizeMemoryRow);
 }
 
-function listMemories(options = {}) {
+function listMemoriesLegacy(options = {}) {
   return searchMemories({ ...options, query: undefined });
 }
 
-function getMemoryById(id, { includeDisabled = true } = {}) {
+function getMemoryByIdLegacy(id, { includeDisabled = true } = {}) {
   if (!hasMemoriesTable() || !id) return null;
   const row = db.prepare(`
     SELECT * FROM memories
@@ -898,7 +899,7 @@ function getMemoryById(id, { includeDisabled = true } = {}) {
   return normalizeMemoryRow(row);
 }
 
-function disableMemory(id) {
+function disableMemoryLegacy(id) {
   if (!hasMemoriesTable()) return false;
   const result = db.prepare("UPDATE memories SET enabled = 0, updated_at = ?, last_seen_at = ? WHERE id = ?").run(nowIso(), nowIso(), id);
   return result.changes > 0;
@@ -908,7 +909,7 @@ function disableMemory(id) {
 // deleted or expired record. Deleted/expired records must use restoreMemory(),
 // which deliberately clears their lifecycle timestamps and is the only path
 // that can revive them.
-function enableMemory(id) {
+function enableMemoryLegacy(id) {
   if (!hasMemoriesTable()) return false;
   const ts = nowIso();
   const result = db.prepare(`
@@ -919,7 +920,7 @@ function enableMemory(id) {
   return result.changes > 0;
 }
 
-function trimAutomaticMemories(max) {
+function trimAutomaticMemoriesLegacy(max) {
   if (!hasMemoriesTable()) return 0;
   const limit = Math.max(1, Number(max) || 500);
   const countRow = db.prepare("SELECT COUNT(*) AS count FROM memories WHERE automatic = 1 AND enabled = 1").get();
@@ -939,7 +940,7 @@ function trimAutomaticMemories(max) {
 
 // === Memory Lifecycle ===
 
-function expireStaleMemories(options = {}) {
+function expireStaleMemoriesLegacy(options = {}) {
   if (!hasMemoriesTable()) return { expired: 0 };
 
   const staleDays = options.staleDays || 90;
@@ -959,7 +960,7 @@ function expireStaleMemories(options = {}) {
   return { expired: result.changes, cutoff_date: cutoffDate };
 }
 
-function calculateMemoryDecay(memory) {
+function calculateMemoryDecayLegacy(memory) {
   if (!memory) return 0;
 
   const now = Date.now();
@@ -985,6 +986,18 @@ function calculateMemoryDecay(memory) {
 
   return Math.max(0, Math.min(1, decayedConfidence));
 }
+
+const memoryDomain = createMemoryDomain({ db, hasMemoriesTable, normalizeMemoryRow, nowIso });
+const {
+  searchMemories,
+  listMemories,
+  getMemoryById,
+  disableMemory,
+  enableMemory,
+  trimAutomaticMemories,
+  expireStaleMemories,
+  calculateMemoryDecay,
+} = memoryDomain;
 
 function getMemoryStats() {
   if (!hasMemoriesTable()) {
