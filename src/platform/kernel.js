@@ -5,6 +5,7 @@ const { AsyncLocalStorage } = require("async_hooks");
 const eventVocabulary = require("./event-vocabulary");
 const { createExecutionGuards } = require("./execution-guards");
 const { createConnectorStore } = require("./connectors");
+const { createArtifactStore } = require("./artifacts");
 const { redactSensitive, redactSensitiveKeysDeep } = require("../redact");
 const { KERNEL_SCHEMA_SQL } = require("./kernel-schema");
 const { ensurePlatformModuleSchema } = require("../modules/schema");
@@ -1166,7 +1167,7 @@ function getResearchDisclosure(disclosureId) { ensurePlatformKernelSchema(); ret
 function listResearchDisclosures(query = {}) { ensurePlatformKernelSchema(); const where = [], params = []; for (const key of ["project_id", "campaign_id", "report_id", "state"]) if (query[key]) { where.push(`${key} = ?`); params.push(query[key]); } const limit = Math.min(Math.max(Number(query.limit) || 50, 1), 100); return dbStore.getDb().prepare(`SELECT * FROM platform_research_disclosures ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY updated_at DESC LIMIT ?`).all(...params, limit).map(normalizeResearchDisclosure); }
 function transitionResearchDisclosure(disclosureId, state, details = {}) { ensurePlatformKernelSchema(); const current = getResearchDisclosure(disclosureId); if (!current || !RESEARCH_DISCLOSURE_STATES.includes(state) || !(DISCLOSURE_TRANSITIONS[current.state] || []).includes(state)) throw new Error(`Invalid disclosure transition: ${current ? `${current.state} -> ${state}` : "missing disclosure"}`); const actor = requiredText(details.actor_id, "actor_id"); if (state === "submitted" && !current.approval_ref) throw new Error("submitted disclosure requires approval_ref"); const ts = nowIso(), submittedAt = state === "submitted" ? ts : current.submitted_at; dbStore.getDb().prepare("UPDATE platform_research_disclosures SET state = ?, updated_at = ?, submitted_at = ? WHERE disclosure_id = ?").run(state, ts, submittedAt, disclosureId); appendEvent({ event_type: "research.disclosure.state_changed", source: details.source || "platform", actor_id: actor, subject_type: "research_disclosure", subject_id: disclosureId, project_id: current.project_id, payload: { from: current.state, to: state, approval_present: Boolean(current.approval_ref) }, correlation_id: current.campaign_id }); return getResearchDisclosure(disclosureId); }
 
-function registerArtifact(input = {}) {
+function registerArtifactLegacy(input = {}) {
   ensurePlatformKernelSchema();
   if (!input.storage_ref) throw new Error("storage_ref is required");
   const normalizedRef = path.posix.normalize(String(input.storage_ref).replace(/\\/g, "/"));
@@ -1239,12 +1240,12 @@ function registerArtifact(input = {}) {
   return normalizeArtifact(dbStore.getDb().prepare("SELECT * FROM platform_artifacts WHERE artifact_id = ?").get(artifactId));
 }
 
-function getArtifact(artifactId) {
+function getArtifactLegacy(artifactId) {
   ensurePlatformKernelSchema();
   return normalizeArtifact(dbStore.getDb().prepare("SELECT * FROM platform_artifacts WHERE artifact_id = ?").get(String(artifactId)));
 }
 
-function listArtifacts(query = {}) {
+function listArtifactsLegacy(query = {}) {
   ensurePlatformKernelSchema();
   const conditions = ["deleted_at IS NULL"];
   const params = [];
@@ -1258,6 +1259,9 @@ function listArtifacts(query = {}) {
   const limit = Math.max(1, Math.min(Number(query.limit) || 50, 100));
   return dbStore.getDb().prepare(`SELECT * FROM platform_artifacts WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC LIMIT ?`).all(...params, limit).map(normalizeArtifact);
 }
+
+const artifactStore = createArtifactStore({ ensureSchema: ensurePlatformKernelSchema, dbStore, normalizeArtifact, nowIso, newId, json, appendEvent });
+const { registerArtifact, getArtifact, listArtifacts } = artifactStore;
 
 function findActiveExecutionLegacy(query = {}) {
   ensurePlatformKernelSchema();
