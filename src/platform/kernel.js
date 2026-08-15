@@ -4,6 +4,7 @@ const dbStore = require("../db");
 const { AsyncLocalStorage } = require("async_hooks");
 const eventVocabulary = require("./event-vocabulary");
 const { createExecutionGuards } = require("./execution-guards");
+const { createConnectorStore } = require("./connectors");
 const { redactSensitive, redactSensitiveKeysDeep } = require("../redact");
 const { KERNEL_SCHEMA_SQL } = require("./kernel-schema");
 const { ensurePlatformModuleSchema } = require("../modules/schema");
@@ -841,7 +842,7 @@ function assertConnectorConfigSafe(value, pathName = "config") {
   }
 }
 
-function registerConnector(input = {}) {
+function registerConnectorLegacy(input = {}) {
   ensurePlatformKernelSchema();
   const name = String(input.name || "").trim();
   const type = String(input.type || "").trim();
@@ -863,12 +864,12 @@ function registerConnector(input = {}) {
   return connector;
 }
 
-function getConnector(connectorId) {
+function getConnectorLegacy(connectorId) {
   ensurePlatformKernelSchema();
   return normalizeConnector(dbStore.getDb().prepare("SELECT * FROM platform_connectors WHERE connector_id = ?").get(String(connectorId)));
 }
 
-function listConnectors({ state, type, limit = 50 } = {}) {
+function listConnectorsLegacy({ state, type, limit = 50 } = {}) {
   ensurePlatformKernelSchema();
   const conditions = [];
   const params = [];
@@ -878,7 +879,7 @@ function listConnectors({ state, type, limit = 50 } = {}) {
   return dbStore.getDb().prepare(`SELECT * FROM platform_connectors ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""} ORDER BY updated_at DESC LIMIT ?`).all(...params, boundedLimit).map(normalizeConnector);
 }
 
-function listConnectorEvents(connectorId, limit = 20) {
+function listConnectorEventsLegacy(connectorId, limit = 20) {
   ensurePlatformKernelSchema();
   const boundedLimit = Math.max(1, Math.min(Number(limit) || 20, 100));
   return dbStore.getDb().prepare(`
@@ -895,7 +896,7 @@ function listConnectorEvents(connectorId, limit = 20) {
   }));
 }
 
-function transitionConnector(connectorId, nextState, details = {}) {
+function transitionConnectorLegacy(connectorId, nextState, details = {}) {
   ensurePlatformKernelSchema();
   if (!CONNECTOR_STATES.includes(nextState)) throw new Error(`Invalid connector state: ${nextState}`);
   const current = getConnector(connectorId);
@@ -945,6 +946,25 @@ function checkConnectorHealth(connectorId, probe) {
     return recordConnectorHealth(connectorId, { ok: false, error: String(error.message || error).slice(0, 300) });
   }
 }
+
+const connectorStore = createConnectorStore({
+  ensureSchema: ensurePlatformKernelSchema,
+  dbStore,
+  states: CONNECTOR_STATES,
+  transitions: CONNECTOR_TRANSITIONS,
+  json,
+  parseJson,
+  nowIso,
+  newId,
+  appendEvent,
+});
+const {
+  registerConnector,
+  getConnector,
+  listConnectors,
+  listConnectorEvents,
+  transitionConnector,
+} = connectorStore;
 
 function canonicalScopeValue(value) {
   if (Array.isArray(value)) return value.map(canonicalScopeValue);
