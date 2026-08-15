@@ -15,6 +15,7 @@ const path = require("path");
 const crypto = require("crypto");
 const dbStore = require("./db");
 const { redactSensitive } = require("./redact");
+const { envInt, envNonNegativeInt, envBool, getConfig } = require("./predict/config");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const RULE_VERSION = "predict-v2";
@@ -103,39 +104,7 @@ const KEY_SEP = String.fromCharCode(0);
 
 // --- Configuration ---
 
-function envInt(name, fallback) {
-  const raw = process.env[name];
-  if (raw === undefined || raw === "") return fallback;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
-}
-
-// Retention accepts 0 ("every terminal record is eligible"), so it cannot use
-// envInt's strictly-positive rule.
-function envNonNegativeInt(name, fallback) {
-  const raw = process.env[name];
-  if (raw === undefined || raw === "") return fallback;
-  const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : fallback;
-}
-
-function envBool(name, fallback) {
-  const raw = process.env[name];
-  if (raw === undefined || raw === "") return fallback;
-  return ["1", "true", "yes", "on"].includes(String(raw).toLowerCase());
-}
-
-function getConfig() {
-  return {
-    retention_days: envNonNegativeInt("SIDEKICK_PREDICT_RETENTION_DAYS", 90),
-    sequence_gap_minutes: envInt("SIDEKICK_PREDICT_SEQUENCE_GAP_MINUTES", DEFAULT_SEQUENCE_GAP_MINUTES),
-    // Disabled by default: Sidekick has no relevance signal that ties a stored
-    // memory to the analysis target, and "recent" is not "relevant".
-    enable_relevant_context: envBool("SIDEKICK_PREDICT_ENABLE_RELEVANT_CONTEXT", false),
-    // How long a terminal identity suppresses recreation of the same logical prediction.
-    identity_cooldown_days: envInt("SIDEKICK_PREDICT_IDENTITY_COOLDOWN_DAYS", 7),
-  };
-}
+function getPredictConfig() { return getConfig(DEFAULT_SEQUENCE_GAP_MINUTES); }
 
 // --- Schema management ---
 
@@ -1489,7 +1458,7 @@ function feedbackWeight(project, ruleVersion, type) {
 function analyze(options) {
   ensureSchema();
   const start = Date.now();
-  const config = getConfig();
+  const config = getPredictConfig();
 
   const resolved = resolveScope(options);
   if (!resolved.ok) {
@@ -1827,7 +1796,7 @@ function selectPurgeable(db, retentionDays, opts) {
 function purgePreview(options) {
   ensureSchema();
   const db = dbStore.getDb();
-  const config = getConfig();
+  const config = getPredictConfig();
   const retentionDays = resolveRetentionDays(options && options.retention_days, config.retention_days);
   const { cutoff, purgeable, preserved } = selectPurgeable(db, retentionDays, options);
 
@@ -1886,7 +1855,7 @@ function purge(options) {
   }
 
   const db = dbStore.getDb();
-  const config = getConfig();
+  const config = getPredictConfig();
   const retentionDays = resolveRetentionDays(opts.retention_days, config.retention_days);
   const before = retentionCounts(db);
   const { cutoff, purgeable, preserved } = selectPurgeable(db, retentionDays, opts);
@@ -2013,7 +1982,7 @@ function diagnose() {
 function engineStatus() {
   ensureSchema();
   const db = dbStore.getDb();
-  const config = getConfig();
+  const config = getPredictConfig();
 
   const active = db.prepare("SELECT COUNT(*) as cnt FROM predictions WHERE status = 'active' AND enabled = 1").get().cnt;
   const total = db.prepare("SELECT COUNT(*) as cnt FROM predictions").get().cnt;
