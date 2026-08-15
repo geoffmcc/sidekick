@@ -116,6 +116,22 @@ function resolveActionRisk(canonical, args, toolRisk) {
 // TOOL_DEFS is immutable for the process lifetime. If built-in tools ever
 // become dynamically registerable, this memo must be invalidated.
 
+const { createPolicyCompat } = require("./tools/policy-compat");
+const {
+  getPolicyEntries,
+  findPolicyListMatch,
+  getApprovalMode,
+  getApprovalEntries,
+  getApprovalDecision,
+  getToolPolicyDecision,
+  enforceToolPolicy,
+} = createPolicyCompat({
+  parsePolicyList,
+  sourceEnvName,
+  getToolRisk,
+  getCurrentSource,
+});
+
 // Sync tool registry from code to database
 // This function is called on server startup to ensure the DB has current tool metadata
 function syncToolRegistry() {
@@ -212,113 +228,6 @@ function syncToolRegistry() {
   }
 }
 
-function getPolicyEntries(source, suffixes) {
-  const entries = [];
-  for (const suffix of suffixes) {
-    entries.push(...parsePolicyList(process.env["SIDEKICK_" + suffix]));
-    entries.push(...parsePolicyList(process.env[sourceEnvName(source, suffix)]));
-  }
-  return entries;
-}
-
-function findPolicyListMatch(entries, toolName, risk) {
-  // Case-fold the tool name symmetrically with the entries so a mixed-case
-  // requested name cannot evade a blocklist entry.
-  const canonical = stripSidekickPrefix(String(toolName || "").toLowerCase());
-  return entries.find(entry => {
-    const normalized = stripSidekickPrefix(entry.toLowerCase());
-    return normalized === canonical || normalized === ("risk:" + risk);
-  });
-}
-
-function getApprovalMode(source = getCurrentSource()) {
-  const sourceMode = process.env[sourceEnvName(source, "APPROVAL_MODE")];
-  return (sourceMode || process.env.SIDEKICK_APPROVAL_MODE || "off").toLowerCase();
-}
-
-function getApprovalEntries(source, suffixes) {
-  const entries = [];
-  for (const suffix of suffixes) {
-    entries.push(...parsePolicyList(process.env["SIDEKICK_APPROVAL_" + suffix]));
-    entries.push(...parsePolicyList(process.env[sourceEnvName(source, "APPROVAL_" + suffix)]));
-  }
-  return entries;
-}
-
-function getApprovalDecision(toolName, source = getCurrentSource(), args = undefined) {
-  const risk = getToolRisk(toolName, args);
-  const mode = getApprovalMode(source);
-  const requiredEntries = getApprovalEntries(source, ["REQUIRED_TOOLS"]);
-  const exemptEntries = getApprovalEntries(source, ["EXEMPT_TOOLS"]);
-
-  if (mode === "off" || mode === "disabled") {
-    return { required: false, source, mode, risk, reason: "approval mode is off" };
-  }
-
-  const exemptMatch = findPolicyListMatch(exemptEntries, toolName, risk);
-  if (exemptMatch) {
-    return { required: false, source, mode, risk, reason: "exempt from approval", matched: exemptMatch, list: "exempt" };
-  }
-
-  const requiredMatch = findPolicyListMatch(requiredEntries, toolName, risk);
-  if (requiredMatch) {
-    return { required: true, source, mode, risk, reason: "matched approval requirement", matched: requiredMatch, list: "required" };
-  }
-
-  if (mode === "strict" && RISK_ORDER[risk] >= RISK_ORDER.high) {
-    return { required: true, source, mode, risk, reason: "strict mode requires approval for high and critical risk tools", list: "mode" };
-  }
-
-  if (mode === "risky" && risk === "critical") {
-    return { required: true, source, mode, risk, reason: "risky mode requires approval for critical risk tools", list: "mode" };
-  }
-
-  return { required: false, source, mode, risk, reason: "approval not required" };
-}
-
-function getToolPolicyDecision(toolName, source = getCurrentSource(), args = undefined) {
-  const risk = getToolRisk(toolName, args);
-  const sourceMode = process.env[sourceEnvName(source, "TOOL_POLICY")];
-  const mode = (sourceMode || process.env.SIDEKICK_TOOL_POLICY || "open").toLowerCase();
-  const allowedEntries = getPolicyEntries(source, ["ALLOWED_TOOLS"]);
-  const blockedEntries = getPolicyEntries(source, ["DISABLED_TOOLS", "BLOCKED_TOOLS"]);
-
-  const blockedMatch = findPolicyListMatch(blockedEntries, toolName, risk);
-  if (blockedMatch) {
-    return { allowed: false, source, mode, risk, reason: "blocked by tool policy", matched: blockedMatch, list: "blocked" };
-  }
-
-  if (allowedEntries.length > 0) {
-    const allowedMatch = findPolicyListMatch(allowedEntries, toolName, risk);
-    return {
-      allowed: Boolean(allowedMatch),
-      source,
-      mode,
-      risk,
-      reason: allowedMatch ? "allowed by explicit allowlist" : "not in explicit allowlist",
-      matched: allowedMatch,
-      list: "allowed"
-    };
-  }
-
-  if (mode === "restricted" && RISK_ORDER[risk] >= RISK_ORDER.high) {
-    return { allowed: false, source, mode, risk, reason: "restricted policy blocks high and critical risk tools", list: "mode" };
-  }
-
-  return { allowed: true, source, mode, risk, reason: "allowed" };
-}
-
-function enforceToolPolicy(toolName, source = getCurrentSource(), args = undefined) {
-  const decision = getToolPolicyDecision(toolName, source, args);
-  if (decision.allowed) return null;
-  return {
-    content: [{
-      type: "text",
-      text: `Tool blocked by policy: ${toolName} (${decision.risk} risk, source=${decision.source}, mode=${decision.mode}). ${decision.reason}.`
-    }],
-    isError: true
-  };
-}
 
 
 const { createApprovalCompat } = require("./tools/approval-compat");
@@ -367,169 +276,20 @@ const {
   recordPlatformChangeSet,
 });
 
-function getToolDefsForSource(source = getCurrentSource()) {
-  try {
-    const db = dbStore.getDb();
-
-    // Check if tools table exists (fallback to in-memory if not)
-    const tableExists = db.prepare(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name='tools'"
-    ).get();
-
-    if (!tableExists) {
-      // Fallback to in-memory TOOL_DEFS if DB not ready
-      return TOOL_DEFS.map(def => {
-        const policy = getToolPolicyDecision(def.name, source);
-        const approval = getApprovalDecision(def.name, source);
-        return { ...def, category: def.category || TOOL_CATEGORIES[def.name] || "Uncategorized", risk: policy.risk, enabled: policy.allowed, policy: policy.reason, approval_required: approval.required, approval: approval.reason };
-      });
-    }
-
-    // Get all enabled, non-deprecated tools from database
-    const tools = db.prepare(`
-      SELECT t.name, t.description, t.args_json, t.risk, t.enabled,
-             tc.name as category
-      FROM tools t
-      LEFT JOIN tool_category_map tcm ON t.name = tcm.tool_name
-      LEFT JOIN tool_categories tc ON tcm.category_id = tc.id
-      WHERE t.enabled = 1 AND t.deprecated = 0
-      ORDER BY t.name
-    `).all();
-
-    // Intersect the DB catalog with the LIVE registry (builtin descriptors,
-    // which include active module tools, plus trial/active generated
-    // capabilities) the way src/agent.js's Brain allowlist does. The tools
-    // table is a mirror synced at startup; between syncs it can hold rows for
-    // tools that no longer exist in code, and a stale row must never be
-    // advertised to any consumer as callable — the dispatcher would refuse it
-    // anyway. Lazy require: the facade is fully initialized by the time this
-    // runs, so no load-order cycle. If the live registry cannot be read the
-    // filter is skipped (mirror-only behavior, as before) rather than hiding
-    // everything.
-    let liveNames = null;
-    try {
-      liveNames = new Set(require("./tools/index").getBuiltinRegistry().toolDefs().map(def => stripSidekickPrefix(def.name)));
-      for (const generated of dbStore.listGeneratedCapabilities({ states: ["trial", "active"] })) {
-        liveNames.add(stripSidekickPrefix(generated.name));
-      }
-    } catch { liveNames = null; }
-
-    return tools.filter(tool => !liveNames || liveNames.has(stripSidekickPrefix(tool.name))).map(tool => {
-      const policy = getToolPolicyDecision(tool.name, source);
-      const approval = getApprovalDecision(tool.name, source);
-      const args = tool.args_json ? JSON.parse(tool.args_json) : {};
-
-      return {
-        name: tool.name,
-        description: tool.description,
-        args: args,
-        category: tool.category || TOOL_CATEGORIES[tool.name] || "Uncategorized",
-        risk: policy.risk,
-        enabled: policy.allowed,
-        policy: policy.reason,
-        approval_required: approval.required,
-        approval: approval.reason
-      };
-    });
-  } catch (error) {
-    console.error('[ToolRegistry] Error reading from DB, falling back to in-memory:', error.message);
-    // Fallback to in-memory if DB query fails
-    return TOOL_DEFS.map(def => {
-      const policy = getToolPolicyDecision(def.name, source);
-      const approval = getApprovalDecision(def.name, source);
-      return { ...def, category: def.category || TOOL_CATEGORIES[def.name] || "Uncategorized", risk: policy.risk, enabled: policy.allowed, policy: policy.reason, approval_required: approval.required, approval: approval.reason };
-    });
-  }
-}
-
-// Get all tool categories with their tools
-function getToolCategoriesWithTools(source = getCurrentSource()) {
-  try {
-    const db = dbStore.getDb();
-
-    // Check if tables exist
-    const tableExists = db.prepare(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name='tool_categories'"
-    ).get();
-
-    if (!tableExists) {
-      // Return empty if DB not ready
-      return [];
-    }
-
-    // Get all categories with sort order
-    const categories = db.prepare(`
-      SELECT id, name, icon, sort_order
-      FROM tool_categories
-      ORDER BY sort_order
-    `).all();
-
-    // Get all tools with their categories
-    const tools = db.prepare(`
-      SELECT t.name, t.description, t.risk, t.enabled, tc.name as category
-      FROM tools t
-      LEFT JOIN tool_category_map tcm ON t.name = tcm.tool_name
-      LEFT JOIN tool_categories tc ON tcm.category_id = tc.id
-      WHERE t.enabled = 1 AND t.deprecated = 0
-      ORDER BY t.name
-    `).all();
-
-    // Group tools by category
-    const categoryMap = {};
-    for (const cat of categories) {
-      categoryMap[cat.name] = {
-        name: cat.name,
-        icon: cat.icon,
-        sort_order: cat.sort_order,
-        tools: []
-      };
-    }
-
-    for (const tool of tools) {
-      const policy = getToolPolicyDecision(tool.name, source);
-      const approval = getApprovalDecision(tool.name, source);
-      if (tool.category && categoryMap[tool.category]) {
-        categoryMap[tool.category].tools.push({
-          name: tool.name,
-          description: tool.description,
-          risk: policy.risk,
-          enabled: policy.allowed,
-          approval_required: approval.required
-        });
-      }
-    }
-
-    // Return as array, filtering out empty categories
-    return Object.values(categoryMap)
-      .filter(cat => cat.tools.length > 0)
-      .sort((a, b) => a.sort_order - b.sort_order);
-  } catch (error) {
-    console.error('[ToolRegistry] Error getting categories:', error.message);
-    return [];
-  }
-}
-
-
-function formatArgs(args) {
-  if (typeof args !== "object" || args === null) return "";
-  const parts = [];
-  for (const [key, value] of Object.entries(args)) {
-    // redactSensitive only sees the bare value here; a credential under a
-    // sensitive key name has no recognizable shape, so check the key first.
-    if (isSensitiveKey(key)) {
-      parts.push(key + "=[REDACTED]");
-      continue;
-    }
-    // Objects/arrays are sanitized with key context before serialization:
-    // String() loses their content and JSON quoting defeats redactSensitive.
-    const str = value && typeof value === "object"
-      ? JSON.stringify(redactSensitiveKeysDeep(value))
-      : String(value);
-    const truncated = str.length > 100 ? str.substring(0, 100) + "..." : str;
-    parts.push(key + "=" + redactSensitive(truncated));
-  }
-  return parts.join(", ");
-}
+const { TOOL_DEFS } = require("./tools/legacy-catalog");
+const { createRegistryCompat } = require("./tools/registry-compat");
+const {
+  getToolDefsForSource,
+  getToolCategoriesWithTools,
+  formatArgs,
+} = createRegistryCompat({
+  dbStore,
+  TOOL_DEFS,
+  TOOL_CATEGORIES,
+  getToolPolicyDecision,
+  getApprovalDecision,
+  getCurrentSource,
+});
 
 function logToolCall(name, args, duration, success, summary, metadata = {}) {
   try {
@@ -643,8 +403,6 @@ function recordPlatformToolCall(name, argsShape, duration, success, summary, met
     });
   } catch (e) {}
 }
-
-const { TOOL_DEFS } = require("./tools/legacy-catalog");
 
 module.exports = {
   TOOLS,
