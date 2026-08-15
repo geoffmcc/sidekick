@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "name": "fixture-observatory",
+  "display_name": "Fixture Observatory (third-party fixture)",
+  "version": "1.0.0",
+  "description": "Purpose-built synthetic THIRD-PARTY capability pack fixture: one module, one trivial tool, no workflows or knowledge. Exists so the pack lifecycle is exercised at least once with third_party provenance instead of only through bundled first_party installs.",
+  "publisher": "Example Vendor (test fixture)",
+  "compatibility": {
+    "sidekick": ">=1.0.0"
+  },
+  "modules": [
+    {
+      "name": "observatory-tools",
+      "path": "modules/observatory-tools",
+      "entry_point": "entry.js"
+    }
+  ],
+  "workflows": [],
+  "knowledge": []
+}

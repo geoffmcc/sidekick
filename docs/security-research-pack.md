@@ -82,8 +82,10 @@ Manage durable runs: `plan` (creates a platform execution + a test-run record),
 evidence — enforced by the kernel. For a run whose environment is kind
 `proxmox`, `provision` composes `proxmox_provision` to create a disposable guest
 (recording provenance as a custody artifact) and `cleanup` composes
-`proxmox_guest` for an authorized shutdown, reporting deletion as pending/manual
-since the Proxmox pack exposes no VM delete.
+`proxmox_guest` for an authorized shutdown, then consumes the Proxmox pack's
+guarded `proxmox_retire`. Deletion is reported as pending/manual whenever the
+provider denies it — `allow_destroy` off, provenance mismatch, or protection —
+and the pack never issues a delete itself.
 
 ### research_probe (risk `high`)
 
@@ -158,10 +160,10 @@ committed file.
 ## Dependencies
 
 The module dispatches `bash` (command probes), `web_fetch` (http probes), and —
-for a run with a `proxmox` environment — `proxmox_provision` and `proxmox_guest`
-(disposable-lab provision/cleanup). Those four are its entire permission
-allowlist. Its workflows additionally compose the `git` tool through the workflow
-engine. None are required to install; installing the Proxmox pack is required
+for a run with a `proxmox` environment — `proxmox_provision`, `proxmox_guest`
+and the guarded `proxmox_retire` (disposable-lab provision/cleanup/retirement).
+Those five are its entire permission allowlist. Its workflows additionally
+compose the `git` tool through the workflow engine. None are required to install; installing the Proxmox pack is required
 only to use `proxmox` environments, and `research_status` reports which
 capabilities are available. A run or probe that needs an absent capability
 returns a structured `dependency_missing`/`capability_unavailable` error — it
@@ -175,9 +177,11 @@ Proxmox pack profile (endpoint + `token_ref: secret:<name>`) and the
 committed. `research_run action=provision` clones the disposable guest and
 records its identity as a custody artifact linked to the run; probes then target
 it (an `http` probe reaches its address, scope-gated). `research_run
-action=cleanup` requests an authorized graceful shutdown and reports deletion as
-pending/manual. Provider policy is never bypassed: `allow_lifecycle`,
-protected-resource and provenance controls in the Proxmox pack still decide.
+action=cleanup` requests an authorized graceful shutdown, then requests guarded
+retirement through `proxmox_retire`; deletion remains pending/manual when the
+provider refuses. Provider policy is never bypassed: `allow_lifecycle`,
+`allow_destroy`, protected-resource and provenance controls in the Proxmox pack
+still decide.
 
 ## Health
 
@@ -232,7 +236,7 @@ live-lab validated  (deferred — compose the Proxmox pack against a synthetic t
 |---|---|---|
 | `workspace_missing` | No workspace configured | Set `workspace` or `SIDEKICK_RESEARCH_WORKSPACE`. |
 | `workspace_unsafe` | Workspace resolves inside the repo/data/store or is too shallow | Point it at an external private directory. |
-| `policy_denied` on a command probe | `allow_local_probes` is false | Target a lab environment, or enable local probes for a workspace-confined fixture. |
+| `policy_denied` on a command probe | `allow_local_probes` is false | Command probes execute on the Sidekick host only and cannot be routed to a lab. Enable `allow_local_probes` for a workspace-confined synthetic fixture, or reach a provisioned lab with an `http` probe instead. |
 | `scope_denied` on an http probe | Host not allowlisted / out of scope | Add the host to `http.allowed_hosts` or the campaign scope snapshot. |
 | `dependency_missing` | A composed pack/tool is not installed | Install the required pack (e.g. Proxmox). |
 | `state_conflict` | Illegal research state transition | Inspect the run/hypothesis state; start a new run to probe again. |

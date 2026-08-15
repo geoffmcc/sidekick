@@ -97,10 +97,10 @@ Return a JSON object with two properties:
 ${toolSchemas}
 Example format:
 {
-  "parameters": { "path": { "type": "string", "description": "Directory to check", "required": true } },
+  "parameters": { "key": { "type": "string", "description": "Storage key to read", "required": true } },
   "steps": [
-    {"tool": "bash", "args": {"command": "df -h {{path}}"}},
-    {"tool": "bash", "args": {"command": "du -sh {{path}}"}}
+    {"tool": "get", "args": {"key": "{{key}}"}},
+    {"tool": "store", "args": {"key": "{{key}}-checked", "value": "verified"}}
   ]
 }
 

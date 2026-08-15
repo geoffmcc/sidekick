@@ -70,6 +70,7 @@ try {
 // genuinely exercised.
 const tasks = new Map();
 let lastAuthHeader = null;
+let failNextConfigPost = false;
 
 function send(res, status, data) {
   const body = JSON.stringify({ data });
@@ -144,6 +145,12 @@ function handle(req, res, raw) {
   if (cfgMatch && method === "POST") {
     const g = store.get(Number(cfgMatch[1]));
     if (!g) return sendError(res, 500, "config does not exist");
+    // One-shot fault injection for the clone provenance-stamp path: the clone
+    // task succeeds, then the follow-up config POST (the stamp) fails once.
+    if (failNextConfigPost) {
+      failNextConfigPost = false;
+      return sendError(res, 500, "simulated failure while writing the config");
+    }
     Object.assign(g.config, Object.fromEntries(Object.entries(body).map(([k, v]) => [k, /^(cores|memory)$/.test(k) ? Number(v) : v])));
     return send(res, 200, null);
   }
@@ -566,6 +573,160 @@ function storeToken() {
     assert.strictEqual(r.ok, true, JSON.stringify(r));
     assert.strictEqual(r.outcome, "completed");
     assert.strictEqual(r.verified_absent, true);
+  });
+
+  await test("PXV.12: proxmox_guest refuses every lifecycle action on a protected guest, start included", async () => {
+    const mainProfile = { endpoint, token_ref: "secret:proxmox_test_token", ca_pem: certPem, allow_lifecycle: true, task_poll_interval_ms: 300, task_timeout_ms: 5000, default: true };
+    // A fresh STOPPED guest on pve1 (vmid 101 lives on pve2 after PX3.2's migration).
+    const created = json(await callInternalTool("proxmox_provision", { action: "create_vm", profile: "main", vm: { node: "pve1", name: "sk-prot-guest", cores: 1, memory: 512 } }));
+    assert.strictEqual(created.ok, true, JSON.stringify(created));
+    packLifecycle.configure("proxmox", { protected_resources: [{ vmid: 100 }, { vmid: created.vmid }], profiles: { main: mainProfile } });
+    const shutdown = json(await callInternalTool("proxmox_guest", { action: "shutdown", profile: "main", vmid: 100 }));
+    assert.strictEqual(shutdown.ok, false);
+    assert.strictEqual(shutdown.code, "protected_resource", JSON.stringify(shutdown));
+    const reboot = json(await callInternalTool("proxmox_guest", { action: "reboot", profile: "main", vmid: 100 }));
+    assert.strictEqual(reboot.code, "protected_resource");
+    // start of a DELIBERATELY STOPPED protected guest is denied too: protection
+    // is a uniform hard deny for all lifecycle mutations, not a shutdown-only
+    // carve-out — a quarantined guest must not be brought back up by an agent.
+    const start = json(await callInternalTool("proxmox_guest", { action: "start", profile: "main", vmid: created.vmid }));
+    assert.strictEqual(start.ok, false);
+    assert.strictEqual(start.code, "protected_resource");
+    // Removing the protection restores normal behaviour for the same guest.
+    packLifecycle.configure("proxmox", { profiles: { main: mainProfile } });
+    const unprotected = json(await callInternalTool("proxmox_guest", { action: "start", profile: "main", vmid: created.vmid }));
+    assert.strictEqual(unprotected.outcome, "completed", `removing protection restores normal behaviour: ${JSON.stringify(unprotected)}`);
+  });
+
+  await test("PXV.13: cloning a protected source VM is refused by the same deterministic policy", async () => {
+    const mainProfile = { endpoint, token_ref: "secret:proxmox_test_token", ca_pem: certPem, allow_lifecycle: true, task_poll_interval_ms: 300, task_timeout_ms: 5000, default: true };
+    const tmpl = json(await callInternalTool("proxmox_provision", { action: "create_vm", profile: "main", vm: { node: "pve1", name: "sk-prot-src", cores: 1, memory: 512, disk: { storage: "local-lvm", size_gb: 1 } } }));
+    assert.strictEqual(tmpl.ok, true, JSON.stringify(tmpl));
+    packLifecycle.configure("proxmox", { protected_resources: [{ vmid: tmpl.vmid }], profiles: { main: mainProfile } });
+    const before = json(await callInternalTool("proxmox", { action: "list_guests", profile: "main" })).total;
+    const clone = json(await callInternalTool("proxmox_provision", { action: "clone", profile: "main", clone: { node: "pve1", source_vmid: tmpl.vmid, name: "sk-prot-clone" } }));
+    assert.strictEqual(clone.ok, false);
+    assert.strictEqual(clone.code, "protected_resource", JSON.stringify(clone));
+    // The explain names the SOURCE guest the decision was made about.
+    assert.strictEqual(clone.explain.resolved.vmid, tmpl.vmid);
+    const after = json(await callInternalTool("proxmox", { action: "list_guests", profile: "main" })).total;
+    assert.strictEqual(after, before, "a denied clone creates nothing");
+    packLifecycle.configure("proxmox", { profiles: { main: mainProfile } });
+  });
+
+  await test("PXV.14: a clone whose provenance stamp fails is a loud reconciliation_required naming the orphan", async () => {
+    const tmpl = json(await callInternalTool("proxmox_provision", { action: "create_vm", profile: "main", vm: { node: "pve1", name: "sk-orphan-src", cores: 1, memory: 512, disk: { storage: "local-lvm", size_gb: 1 } } }));
+    assert.strictEqual(tmpl.ok, true, JSON.stringify(tmpl));
+    failNextConfigPost = true; // the clone task will succeed; the stamp POST fails
+    const clone = json(await callInternalTool("proxmox_provision", { action: "clone", profile: "main", clone: { node: "pve1", source_vmid: tmpl.vmid, name: "sk-orphan-clone" } }));
+    assert.strictEqual(clone.ok, false);
+    assert.strictEqual(clone.code, "reconciliation_required", JSON.stringify(clone));
+    const orphan = clone.details.orphaned_vmid;
+    assert.ok(Number.isInteger(orphan) && orphan !== tmpl.vmid, "the orphaned vmid is named");
+    assert.ok(String(clone.error).includes(String(orphan)), "the error message names the orphaned vmid");
+    assert.strictEqual(clone.details.cloned_from, tmpl.vmid);
+    // The guest really does exist on the provider WITHOUT provenance — that is
+    // exactly why the failure must be loud.
+    const status = json(await callInternalTool("proxmox", { action: "guest_status", profile: "main", vmid: orphan }));
+    assert.strictEqual(status.vmid, orphan);
+  });
+
+  await test("PXV.15: list_profiles surfaces a tls_servername override so operators can see it", async () => {
+    const mainProfile = { endpoint, token_ref: "secret:proxmox_test_token", ca_pem: certPem, allow_lifecycle: true, task_poll_interval_ms: 300, task_timeout_ms: 5000, default: true };
+    packLifecycle.configure("proxmox", { profiles: {
+      main: mainProfile,
+      sni: { endpoint, token_ref: "secret:proxmox_test_token", ca_pem: certPem, tls_servername: "pve.test" },
+    } });
+    const lp = json(await callInternalTool("proxmox", { action: "list_profiles" }));
+    const sni = lp.profiles.find(p => p.name === "sni");
+    assert.strictEqual(sni.valid, true);
+    assert.strictEqual(sni.tls, "pinned_ca");
+    assert.strictEqual(sni.tls_servername, "pve.test", "the SNI override is visible in the listing");
+    assert.strictEqual(lp.profiles.find(p => p.name === "main").tls_servername, undefined, "absent override stays absent");
+    packLifecycle.configure("proxmox", { profiles: { main: mainProfile } });
+  });
+
+  await test("PXV.16: tls_servername drives real SNI + certificate validation against an IP endpoint", async () => {
+    // A second mock with a DNS-only SAN: connecting by IP can only validate if
+    // the client presents the override as SNI/verification name. The server
+    // records the servername actually observed on the TLS socket.
+    const sniCert = path.join(TEST_DATA_DIR, "sni-cert.pem");
+    const sniKey = path.join(TEST_DATA_DIR, "sni-key.pem");
+    execFileSync("openssl", [
+      "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+      "-keyout", sniKey, "-out", sniCert, "-days", "2",
+      "-subj", "/CN=pve.test", "-addext", "subjectAltName=DNS:pve.test",
+    ], { stdio: ["ignore", "ignore", "ignore"] });
+    const sniCertPem = fs.readFileSync(sniCert, "utf8");
+    let observedServername = null;
+    const sniServer = https.createServer({ cert: sniCertPem, key: fs.readFileSync(sniKey, "utf8") }, (req, res) => {
+      observedServername = req.socket.servername || null;
+      if ((req.headers.authorization || null) !== `PVEAPIToken=${TOKEN}`) return sendError(res, 401, "authentication failure");
+      if (req.url.replace(/^\/api2\/json/, "") === "/version") return send(res, 200, { release: "9.2", version: "9.2.10", repoid: "cafef00d" });
+      return sendError(res, 501, "unmocked");
+    });
+    await new Promise(resolve => sniServer.listen(0, "127.0.0.1", resolve));
+    const sniPort = sniServer.address().port;
+    const mainProfile = { endpoint, token_ref: "secret:proxmox_test_token", ca_pem: certPem, allow_lifecycle: true, task_poll_interval_ms: 300, task_timeout_ms: 5000, default: true };
+    try {
+      packLifecycle.configure("proxmox", { profiles: {
+        main: mainProfile,
+        sni: { endpoint: `https://127.0.0.1:${sniPort}`, token_ref: "secret:proxmox_test_token", ca_pem: sniCertPem, tls_servername: "pve.test" },
+        "sni-missing": { endpoint: `https://127.0.0.1:${sniPort}`, token_ref: "secret:proxmox_test_token", ca_pem: sniCertPem },
+      } });
+      // Without the override the DNS-only certificate cannot match the IP.
+      const failed = json(await callInternalTool("proxmox", { action: "version", profile: "sni-missing" }));
+      assert.strictEqual(failed.ok, false);
+      assert.strictEqual(failed.code, "tls_failure", JSON.stringify(failed));
+      // With the override, validation succeeds AND the server saw the SNI.
+      const r = json(await callInternalTool("proxmox", { action: "version", profile: "sni" }));
+      assert.strictEqual(r.ok, true, JSON.stringify(r));
+      assert.strictEqual(r.version.version, "9.2.10");
+      assert.strictEqual(observedServername, "pve.test", "the TLS socket must carry the configured SNI");
+    } finally {
+      sniServer.close();
+      packLifecycle.configure("proxmox", { profiles: { main: mainProfile } });
+    }
+  });
+
+  await test("PXV.17: ansible_run run executes end to end through the governed bash tool and derives success from JSON stats", async () => {
+    // A shimmed ansible-playbook on PATH emits a captured-shape JSON stats
+    // document on stdout and a warning on stderr — the pack must run it
+    // through the REAL dispatcher/bash path, isolate the JSON from the
+    // appended stderr, and derive per-host success from the stats, never from
+    // "the command ran".
+    const binDir = path.join(TEST_DATA_DIR, "bin");
+    const playbookDir = path.join(TEST_DATA_DIR, "playbooks");
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.mkdirSync(playbookDir, { recursive: true });
+    fs.writeFileSync(path.join(playbookDir, "baseline.yml"), "- hosts: targets\n  tasks: []\n");
+    const stats = JSON.stringify({ plays: [{ play: { name: "fixture" } }], stats: { h1: { ok: 3, changed: 1, failures: 0, unreachable: 0, skipped: 0 } } });
+    fs.writeFileSync(path.join(binDir, "ansible-playbook"), `#!/bin/sh\necho '${stats}'\necho '[WARNING]: fixture deprecation {not json}' >&2\nexit 0\n`, { mode: 0o755 });
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${binDir}${path.delimiter}${previousPath}`;
+    const mainProfile = { endpoint, token_ref: "secret:proxmox_test_token", ca_pem: certPem, allow_lifecycle: true, task_poll_interval_ms: 300, task_timeout_ms: 5000, default: true };
+    try {
+      packLifecycle.configure("proxmox", {
+        profiles: { main: mainProfile },
+        ansible: { playbook_dir: playbookDir, allowed_playbooks: ["baseline.yml"] },
+      });
+      const det = json(await callInternalTool("ansible_run", { action: "detect" }));
+      assert.strictEqual(det.ansible.state, "ready", JSON.stringify(det.ansible));
+      const run = json(await callInternalTool("ansible_run", { action: "run", playbook: "baseline.yml", hosts: [{ alias: "h1", host: "10.0.0.9" }] }));
+      assert.strictEqual(run.ok, true, JSON.stringify(run));
+      assert.deepStrictEqual(run.hosts, ["h1"]);
+      assert.deepStrictEqual(run.per_host.h1, { ok: 3, changed: 1, failures: 0, unreachable: 0 });
+      // Success came from parsed stats: a stats block reporting a failure must
+      // flip the verdict even though the process exits 0.
+      fs.writeFileSync(path.join(binDir, "ansible-playbook"), `#!/bin/sh\necho '${JSON.stringify({ stats: { h1: { ok: 1, changed: 0, failures: 1, unreachable: 0 } } })}'\nexit 0\n`, { mode: 0o755 });
+      const failed = json(await callInternalTool("ansible_run", { action: "run", playbook: "baseline.yml", hosts: [{ alias: "h1", host: "10.0.0.9" }] }));
+      assert.strictEqual(failed.ok, false);
+      assert.strictEqual(failed.code, "ansible_failed");
+      assert.strictEqual(failed.per_host.h1.failures, 1);
+    } finally {
+      process.env.PATH = previousPath;
+      packLifecycle.configure("proxmox", { profiles: { main: mainProfile } });
+    }
   });
 
   await test("PX.15: an invalid profile makes pack health fail closed, and is recoverable", async () => {

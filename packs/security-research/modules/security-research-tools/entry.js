@@ -402,7 +402,7 @@ const entry = {
       },
       {
         name: "research_run",
-        description: "Manage durable research runs: plan (create execution + test run), start, status, resume, cancel, complete, provision, cleanup, or list. A run is backed by a platform execution and a kernel test-run record, so its state survives a restart. A completed run requires an outcome and evidence — enforced by the kernel. For a run whose environment is kind 'proxmox', 'provision' composes the Proxmox pack to create a disposable guest (recording provenance) and 'cleanup' requests an authorized shutdown, reporting deletion as pending/manual since the provider exposes no delete.",
+        description: "Manage durable research runs: plan (create execution + test run), start, status, resume, cancel, complete, provision, cleanup, or list. A run is backed by a platform execution and a kernel test-run record, so its state survives a restart. A completed run requires an outcome and evidence — enforced by the kernel. For a run whose environment is kind 'proxmox', 'provision' composes the Proxmox pack to create a disposable guest (recording provenance) and 'cleanup' requests an authorized shutdown then consumes the provider's guarded retirement (proxmox_retire); deletion stays pending/manual whenever the provider's destroy policy, provenance or protection controls deny it.",
         schema: z.object({
           action: z.enum(["plan", "start", "status", "resume", "cancel", "complete", "provision", "cleanup", "list"]),
           run_id: z.string().optional(),

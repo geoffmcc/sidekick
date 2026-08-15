@@ -73,6 +73,11 @@ signals; evidence-backed risk indicators with a severity and an overall risk
 level; explicitly listed **untracked files**, which no diff can show; and the
 raw per-file numbers the analysis was computed from.
 
+The result **pins what was analyzed**: `git_state` carries `head_sha`,
+`branch`, `worktree_clean` and `changed_file_count`, and `scope.base_sha`
+resolves the base ref to the exact commit — "diff against origin/main" is not
+reproducible once that ref moves, but "diff against `<sha>`" is.
+
 ### `dev_verify` (risk `high`, alias `verify_project`)
 
 Governed verification: selects the project's own commands and runs them through
@@ -95,7 +100,10 @@ decide whether a project typechecks.
 
 For every intent the result reports the selected command, why it was selected,
 the exact command executed, exit status, duration and bounded output (tail
-preserved — runners put the summary at the end).
+preserved — runners put the summary at the end). The result also pins the code
+it verified: `git_state` carries `head_sha`, `branch`, `worktree_clean` and
+`changed_file_count`, so a verdict can always be tied to the exact tree state
+it ran against.
 
 | Verdict | Meaning |
 |---|---|

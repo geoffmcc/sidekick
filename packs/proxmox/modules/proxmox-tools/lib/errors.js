@@ -33,6 +33,7 @@ const ERROR_CODES = Object.freeze([
   "ownership_unverified",   // provenance/ownership could not be proven
   "protected_resource",     // target is protected from the operation
   "ambiguous_state",        // mutation outcome could not be determined
+  "reconciliation_required", // an operation half-landed (e.g. clone created but unstamped, delete task done but guest present); the provider state needs operator reconciliation
   "api_error",              // other Proxmox API error
   "response_invalid",       // non-JSON / oversized / malformed response
   "task_failed",            // task reached a terminal state other than OK

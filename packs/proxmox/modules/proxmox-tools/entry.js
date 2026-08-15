@@ -143,6 +143,18 @@ async function handleGuest(services, args, runtime) {
   const { client, profile } = session;
   try {
     const vmid = requireVmid(args);
+    // protected_resources is documented as a hard deny for ALL mutating
+    // operations, and a lifecycle action mutates guest state. That includes
+    // `start`: a protected guest that is deliberately stopped (quarantine,
+    // maintenance, incident isolation) must not be brought back up by an agent
+    // any more than it may be shut down or rebooted, and one uniform hard deny
+    // is easier to reason about than per-verb carve-outs. An operator retains
+    // the Proxmox UI/API for deliberate action on protected guests.
+    const facts = await resolveTargetFacts(client, vmid);
+    const decision = policy.decide({ matchers: protectedMatchers(services), target: facts, provenance: facts.provenanceEvidence, requireOwnership: false, blockIfProtected: true });
+    if (decision.result === "denied") {
+      return jsonResult({ ok: false, action, profile: profile.name, vmid, code: "protected_resource", error: `Operation denied by policy: ${decision.reasons.join("; ")}` });
+    }
     const result = await lifecycle.performAction(client, profile, { action, vmid, wait: args.wait });
     return jsonResult({ ok: result.outcome !== "task_failed", action, profile: profile.name, ...result });
   } catch (error) {
@@ -205,6 +217,17 @@ async function handleProvision(services, args, runtime) {
       // operations, so every operation on an existing guest — snapshot
       // included — is refused when the target is protected.
       decision = policy.decide({ matchers: protectedMatchers(services), target: facts, provenance: facts.provenanceEvidence, requireOwnership: false, blockIfProtected: true });
+    } else if (action === "clone") {
+      // A clone also acts on an EXISTING guest: the source. Cloning a
+      // protected VM duplicates its disks (load, storage, data egress into an
+      // unprotected copy), so the source is resolved and policy-gated exactly
+      // like configure/convert_template/snapshot_create — it is not covered by
+      // PROVISION_ON_EXISTING only because the target facts for the dispatch
+      // come from args.clone, not from node/vmid.
+      const src = validate.validateVmid(args.clone && args.clone.source_vmid);
+      if (!src.ok) throw new ProxmoxError("invalid_input", src.message, { field: "clone.source_vmid" });
+      facts = await resolveTargetFacts(client, src.value);
+      decision = policy.decide({ matchers: protectedMatchers(services), target: facts, provenance: facts.provenanceEvidence, requireOwnership: false, blockIfProtected: true });
     }
 
     const expected = expectedEffect(action, args, facts);
@@ -265,8 +288,13 @@ async function handleMigration(services, args, runtime) {
   try {
     const vmid = requireVmid(args);
     const plan = await migration.plan(client, vmid, args.target_node);
-    const decision = policy.decide({ matchers: protectedMatchers(services), target: { ...plan, node: plan.source_node, proxmox_protection: plan.protection }, provenance: { managed: true }, blockIfProtected: true });
-    const explain = policy.explain({ operation: "migrate", profile: profile.name, target: { ...plan, node: plan.source_node }, decision, expected_effect: plan.expected_effect });
+    // Provenance and tags are RESOLVED from the guest, never asserted: a
+    // hardcoded { managed: true } here would silently satisfy a future
+    // requireOwnership flip with a lie, and without the real tags a tag-based
+    // protected_resources matcher could not protect against migration.
+    const facts = await resolveTargetFacts(client, vmid);
+    const decision = policy.decide({ matchers: protectedMatchers(services), target: { ...plan, node: plan.source_node, tags: facts.tags, proxmox_protection: plan.protection || facts.proxmox_protection }, provenance: facts.provenanceEvidence, blockIfProtected: true });
+    const explain = policy.explain({ operation: "migrate", profile: profile.name, target: { ...plan, node: plan.source_node }, decision, expected_effect: plan.expected_effect, provenance: facts.provenanceEvidence });
     if (decision.result === "denied") return jsonResult({ ok: false, code: "protected_resource", action: "migrate", profile: profile.name, explain });
     if (args.dry_run === true) return jsonResult({ ok: true, action: "migrate", profile: profile.name, dry_run: true, explain });
     const result = await migration.migrate(client, profile, vmid, args.target_node, { online: args.online, wait: args.wait, signal: runtime && runtime.signal });

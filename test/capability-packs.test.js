@@ -388,6 +388,45 @@ function buildUpgradeCandidate() {
     assert.ok(registry().has('dev_repo_profile'));
   });
 
+  // --- CP.17 third-party provenance ----------------------------------------
+  // Every other test installs through the bundled path, which stamps
+  // first_party — so the third_party default of packLifecycle.install() was
+  // never exercised. A purpose-built fixture pack (NOT a copy of a bundled
+  // pack: distinct name, one trivial self-contained tool) proves the whole
+  // lifecycle under third-party provenance.
+  await asyncTest('CP.17: a third-party pack installs with third_party provenance and its full lifecycle works', async () => {
+    const fixture = path.resolve(__dirname, 'fixtures', 'third-party-pack');
+    const inspectionResult = packLifecycle.inspect(fixture);
+    assert.strictEqual(inspectionResult.installable, true, inspectionResult.problems.join('; '));
+
+    packLifecycle.install(fixture);
+    const pack = packRepository.getPack('fixture-observatory');
+    assert.ok(pack, 'fixture pack registered');
+    assert.strictEqual(pack.provenance, 'third_party', 'a non-bundled install records third_party provenance');
+    assert.strictEqual(pack.state, 'installed', 'install does not auto-enable');
+    assert.strictEqual(registry().has('fixture_observation'), false, 'tool not active before enable');
+
+    const enabled = packLifecycle.enable('fixture-observatory');
+    assert.strictEqual(enabled.pack.state, 'enabled');
+    assert.strictEqual(packLifecycle.health('fixture-observatory').status, 'healthy');
+    assert.ok(registry().has('fixture_observation'), 'fixture tool registered after enable');
+    assert.strictEqual(registry().get('fixture_observation').source, 'module:observatory-tools');
+
+    // The tool dispatches through the real dispatcher like any other.
+    const result = await callInternalTool('fixture_observation', { value: 3 });
+    assert.strictEqual(result.isError, undefined, result.content[0].text.slice(0, 300));
+    const payload = JSON.parse(result.content[0].text);
+    assert.strictEqual(payload.result, 3);
+    assert.strictEqual(payload.provenance_fixture, true);
+
+    // Uninstall removes the capability and its managed installation.
+    const removed = packLifecycle.uninstall('fixture-observatory');
+    assert.deepStrictEqual(removed.removed.modules, ['observatory-tools']);
+    assert.strictEqual(packRepository.getPack('fixture-observatory'), null);
+    assert.strictEqual(moduleRepository.getModule('observatory-tools'), null);
+    assert.strictEqual(registry().has('fixture_observation'), false);
+  });
+
   console.log(`\n${failures === 0 ? 'All Capability Packs v1 tests passed.' : `${failures} capability-pack test(s) FAILED.`}`);
   process.exit(failures === 0 ? 0 : 1);
 })();

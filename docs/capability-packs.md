@@ -213,6 +213,18 @@ overall: healthy
 
 A pack whose required component is unusable is never reported healthy.
 
+### Client visibility after enable
+
+`restart_required` covers the server process; MCP **clients** have a separate,
+narrower visibility gap. An MCP client builds its tool list when its session
+connects, and Sidekick sends no `listChanged` notification afterwards — so a
+pack enabled mid-session registers its tools on the server immediately, but an
+*already-connected* client will not see them in its catalog until it
+reconnects (and, for the shared `sidekick-mcp` service, until that service has
+been restarted). The tools genuinely exist and dispatch fine; only the
+connected client's cached list is stale. If a freshly enabled pack's tools are
+"missing", reconnect the client before diagnosing the pack.
+
 ## First-party bundled packs
 
 Bundled packs ship inside the signed Sidekick repository under `packs/`. They

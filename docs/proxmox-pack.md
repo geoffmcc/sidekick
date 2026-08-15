@@ -48,7 +48,20 @@ required to use the pack.
   consequential operation, and each operation emits a `proxmox.*` event.
 - **Protected resources and deterministic policy**: `protected_resources`
   (vmid/tag/name-glob) plus Proxmox's protection flag are hard denies enforced
-  in code.
+  in code — on `configure`/`convert_template`/`snapshot_create`, on the
+  **source guest of a `clone`**, on every `proxmox_guest` lifecycle action
+  (start included: a deliberately stopped protected guest stays stopped), on
+  migration, and on retirement.
+- **Same-cluster migration** (`proxmox_migrate`): resolves source/target nodes
+  immediately before execution, validates online/offline and local-storage
+  implications, monitors the UPID and verifies the guest on the target.
+  Cross-cluster migration is unsupported.
+- **Guarded retirement** (`proxmox_retire`, risk `critical`): deletion of a
+  positively proven Sidekick-managed guest. Disabled unless an administrator
+  sets `allow_destroy: true`; requires current provenance (tag AND marker,
+  optionally the exact disposable marker), no configured or Proxmox
+  protection, policy approval, UPID completion, and post-delete absence
+  verification. There are no force or bypass arguments.
 - **Optional Ansible execution** (`ansible_run`): detect / dry_run / run of
   allowlisted playbooks against a generated inventory through the governed
   shell, with per-host results parsed from Ansible's JSON output.
@@ -57,12 +70,11 @@ required to use the pack.
 
 **Architected / deferred (not exposed as working):**
 
-- Destruction (delete VM/container/volume, destroy snapshot). No delete
-  capability and no client `delete()` method ship; a single test-only guarded
-  DELETE lives in the test/probe harness. Guarded destructive capabilities are
-  a future phase (identity + provenance + protection + policy + approval +
-  expected-effect preview + audit).
-- Migration, and host/cluster administration.
+- Destruction beyond guarded guest retirement: volume/disk destruction,
+  snapshot deletion, and any delete of a resource Sidekick cannot positively
+  prove it created. `proxmox_retire` is deliberately the ONLY delete path and
+  refuses everything outside its provenance/protection/policy envelope.
+- Host/cluster administration (node shutdown, cluster membership, quorum).
 - Direct Proxmox Backup Server API (datastores, verification, prune). Reads
   Proxmox-side (vzdump) backup configuration and task history only.
 - Execution through SSH, nodex or Terraform/OpenTofu — detection only.
@@ -146,23 +158,35 @@ secret.
 | Tool | Risk | Purpose |
 |---|---|---|
 | `proxmox` (alias `pve`) | **low** (read) | All read/discovery/capability actions. |
-| `proxmox_guest` (alias `pve_guest`) | **high** (change) | start / graceful shutdown / reboot. |
+| `proxmox_guest` (alias `pve_guest`) | **high** (change) | start / graceful shutdown / reboot; refuses protected guests. |
 | `proxmox_provision` (alias `pve_provision`) | **high** (mutating) | create_vm, create_lxc, clone, configure, snapshot_create, convert_template; `dry_run` for explain. |
+| `proxmox_migrate` (alias `pve_migrate`) | **high** (change) | governed same-cluster migration with resolved facts, UPID monitoring and target verification. |
+| `proxmox_retire` (alias `pve_retire`) | **critical** (destructive) | guarded deletion of a proven Sidekick-managed guest; disabled unless `allow_destroy: true`. |
 | `ansible_run` (alias `ansible_playbook`) | **high** | detect / dry_run / run of allowlisted playbooks (optional; dispatches the governed `bash` tool). |
 
 Operations are split into **separate tools by risk class** because a module
 tool's risk is fixed per tool and cannot be lowered per action — reads stay
-`low`, mutations stay `high` — so approval policy sees each correctly. The pack
-declares one dispatch permission (`bash`, for Ansible only); everything else it
-does over HTTPS itself, resolving credentials through Sidekick's secret resolver
-in-process.
+`low`, mutations stay `high`, destruction stays `critical` — so approval policy
+sees each correctly. The pack declares one dispatch permission (`bash`, for
+Ansible only); everything else it does over HTTPS itself, resolving credentials
+through Sidekick's secret resolver in-process.
 
-Destructive operations (delete, destroy disks, migrate, change cluster
-membership/quorum, host/guest shell, arbitrary playbooks) are **not present**.
-The runtime client exposes no `delete()` method. Destruction is treated as a
-privileged capability, not an ordinary HTTP verb, and will ship later only as an
-explicit guarded operation. See `packs/proxmox/knowledge/proxmox-provisioning.md`
-for the provisioning, provenance, policy and destructive-operation model.
+Destruction is treated as a privileged capability, not an ordinary HTTP verb.
+The **only** delete path is `proxmox_retire`, and it fails closed at every
+layer: an administrator must set `allow_destroy: true` in pack configuration
+(there is no argument that enables it per call); the guest must carry current,
+positive Sidekick provenance — the `sidekick-managed` tag AND a parseable
+marker, optionally matched against the exact recorded disposable marker; a
+configured `protected_resources` match or Proxmox's own protection flag is a
+hard deny; the deterministic policy decision and expected-effect explain are
+produced before the DELETE; the retirement task's UPID is monitored to a
+terminal state; and the guest's absence is verified afterward
+(`verified_absent: true`) — a completed task without verified absence is a
+`reconciliation_required` error, never a success. No force or bypass arguments
+exist. Broader destruction (volumes, snapshots, foreign guests, cluster
+administration) remains unshipped. See
+`packs/proxmox/knowledge/proxmox-provisioning.md` for the provisioning,
+provenance, policy and destructive-operation model.
 
 `proxmox` read actions: `cluster_summary`, `capabilities`, `list_nodes`,
 `node_status`, `list_guests`, `guest_status`, `list_storage`, `storage_status`,

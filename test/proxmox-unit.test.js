@@ -9,6 +9,8 @@
 // input could hit is asserted here.
 
 const assert = require("assert");
+const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
 process.env.SIDEKICK_SECRET_KEY = process.env.SIDEKICK_SECRET_KEY || "proxmox-unit-test-secret-key";
@@ -416,9 +418,71 @@ test("U.33: guarded retirement fails closed for disabled, unmanaged, protected a
 });
 
 
+async function asyncTest(label, fn) {
+  try {
+    await fn();
+    console.log(`Passed: ${label}`);
+  } catch (error) {
+    failures++;
+    console.error(`FAILED: ${label}\n  ${error && error.stack ? error.stack : error}`);
+  }
+}
+
 (async () => {
   console.log("Running Proxmox pack unit/security tests...\n");
-  // (all synchronous; wrapper kept for parity with other suites)
+
+  // ansible.run through a STUBBED governed-bash dispatch: proves the dispatch
+  // contract (approval parking retains the generated workspace the queued
+  // command references; a facade denial maps to permission_denied; success is
+  // derived from parsed JSON stats, never from "the command ran") without
+  // needing a real ansible or a real shell. A PATH shim satisfies the
+  // availability detection only.
+  await asyncTest("U.34: ansible.run retains the approval workspace, maps facade denials, and derives success from stats", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sk-ansible-unit-"));
+    const bin = path.join(tmp, "bin");
+    const pb = path.join(tmp, "playbooks");
+    fs.mkdirSync(bin);
+    fs.mkdirSync(pb);
+    fs.writeFileSync(path.join(pb, "baseline.yml"), "- hosts: targets\n  tasks: []\n");
+    fs.writeFileSync(path.join(bin, "ansible-playbook"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const prevPath = process.env.PATH;
+    process.env.PATH = `${bin}${path.delimiter}${prevPath}`;
+    try {
+      const cfg = { ansible: { playbook_dir: pb } };
+      const hosts = [{ alias: "h1", host: "10.0.0.9" }];
+
+      // Approval parking RETAINS the inventory/extra-vars files the queued
+      // command references — deleting them made approval structurally unusable.
+      const parked = await ansible.run(cfg, async () => ({ code: "approval_required", approvalId: "apr-1", content: [] }), { playbook: "baseline.yml", hosts });
+      assert.strictEqual(parked.ok, false);
+      assert.strictEqual(parked.code, "approval_required");
+      assert.strictEqual(parked.approval_id, "apr-1");
+      assert.ok(parked.retained_workspace && fs.existsSync(path.join(parked.retained_workspace, "inventory.ini")), "inventory must survive for the approved replay");
+      assert.ok(fs.existsSync(path.join(parked.retained_workspace, "extra_vars.json")), "extra-vars must survive for the approved replay");
+      fs.rmSync(parked.retained_workspace, { recursive: true, force: true });
+
+      // A module-facade permission denial is surfaced as permission_denied.
+      const denied = await ansible.run(cfg, async () => ({ code: "module_permission_denied", isError: true, content: [] }), { playbook: "baseline.yml", hosts });
+      assert.strictEqual(denied.ok, false);
+      assert.strictEqual(denied.code, "permission_denied");
+
+      // Success derivation: a bash-shaped result carrying the JSON stats block
+      // plus trailing stderr noise parses to per-host truth.
+      const stats = JSON.stringify({ stats: { h1: { ok: 2, changed: 1, failures: 0, unreachable: 0 } } });
+      const okRun = await ansible.run(cfg, async () => ({ content: [{ type: "text", text: `${stats}\n[WARNING]: fixture noise {not json}` }] }), { playbook: "baseline.yml", hosts });
+      assert.strictEqual(okRun.ok, true, JSON.stringify(okRun));
+      assert.deepStrictEqual(okRun.per_host.h1, { ok: 2, changed: 1, failures: 0, unreachable: 0 });
+
+      // A host missing from stats is unreachable, never a silent success.
+      const missing = await ansible.run(cfg, async () => ({ content: [{ type: "text", text: JSON.stringify({ stats: {} }) }] }), { playbook: "baseline.yml", hosts });
+      assert.strictEqual(missing.ok, false);
+      assert.strictEqual(missing.per_host.h1.unreachable, 1);
+    } finally {
+      process.env.PATH = prevPath;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   if (failures > 0) {
     console.error(`\n${failures} test(s) failed.`);
     process.exit(1);
