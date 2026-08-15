@@ -51,6 +51,7 @@ const { createTaskRunner } = require("./agent/task-run");
 const { createResumedTaskFinalizer } = require("./agent/recovery");
 const { createContinuationJobStarter } = require("./agent/continuation-jobs");
 const { createDelayScheduler } = require("./agent/delay-scheduler");
+const { createWatchRuntime } = require("./agent/watch-runtime");
 const { redactSensitive, redactSensitiveKeysDeep } = require("./redact");
 const {
   CONTINUATION_LIMITS,
@@ -295,7 +296,7 @@ function parseWatchInterval(interval) {
   return amount * multipliers[unit];
 }
 
-function checkService(serviceName) {
+function checkServiceLegacy(serviceName) {
   try {
     const output = execFileSync("systemctl", ["is-active", serviceName], { encoding: "utf-8", timeout: 5000 }).trim();
     return { status: output, active: output === "active" };
@@ -304,7 +305,7 @@ function checkService(serviceName) {
   }
 }
 
-function checkProcess(processName) {
+function checkProcessLegacy(processName) {
   try {
     const output = execFileSync("pgrep", ["-f", processName], { encoding: "utf-8", timeout: 5000 }).trim();
     return { running: output.length > 0, pids: output.split("\n").filter(Boolean) };
@@ -313,7 +314,7 @@ function checkProcess(processName) {
   }
 }
 
-function checkEndpoint(url) {
+function checkEndpointLegacy(url) {
   try {
     const output = execFileSync("curl", ["-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", url], { encoding: "utf-8", timeout: 10000 }).trim();
     return { status: parseInt(output), ok: output.startsWith("2") };
@@ -322,7 +323,7 @@ function checkEndpoint(url) {
   }
 }
 
-function checkFile(filePath, pattern) {
+function checkFileLegacy(filePath, pattern) {
   try {
     const output = fs.readFileSync(filePath, "utf-8");
     const matches = pattern ? output.includes(pattern) : true;
@@ -332,7 +333,7 @@ function checkFile(filePath, pattern) {
   }
 }
 
-function evaluateWatchCondition(watch, checkResult) {
+function evaluateWatchConditionLegacy(watch, checkResult) {
   const { source, condition, value } = watch;
   
   if (source === "service") {
@@ -363,7 +364,7 @@ function evaluateWatchCondition(watch, checkResult) {
   return false;
 }
 
-async function executeWatchAction(watch, checkResult, metadata = {}) {
+async function executeWatchActionLegacy(watch, checkResult, metadata = {}) {
   const { action_tool, action_args } = watch;
   if (!action_tool) return;
   
@@ -504,6 +505,8 @@ function loadAndScheduleWatches() {
   
   console.log(`Loaded ${active.length} active watches`);
 }
+
+const { checkService, checkProcess, checkEndpoint, checkFile, evaluateWatchCondition, executeWatchAction } = createWatchRuntime({ callAgentTool });
 
 loadAndScheduleWatches();
 
