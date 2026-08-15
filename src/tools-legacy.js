@@ -10,7 +10,7 @@ const { recordToolCallMemory, buildMemoryBrief, recallMemoryForText } = require(
 const dynamicTools = require("./dynamic-tools");
 const platformKernel = require("./platform/kernel");
 const { stripSidekickPrefix } = require("./core/tool-name");
-const computeTools = require("./compute/tools");
+const { TOOLS } = require("./tools/legacy-tool-map");
 const { TOOL_RISK, TOOL_ACTION_RISK, TOOL_CATEGORIES, RISK_LEVELS } = require("./tools/metadata");
 const toolContext = require("./tools/context");
 const { loadContext: loadSharedContext, findContextItemById: findSharedContextItemById, updateLegacyContextItem: updateSharedLegacyContextItem } = require("./tools/families/context");
@@ -25,6 +25,12 @@ const { generateId } = require("./core/ids");
 const { PROCEDURES_FILE, loadProcedures, saveProcedures } = require("./core/procedures-store");
 const { SECRETS_FILE, loadSecrets, saveSecrets } = require("./core/secrets-store");
 const { createScheduledPlatformExecution, transitionScheduledPlatformExecution, releaseScheduledClaim, startScheduledLeaseRenewal, appendScheduledPlatformEvent, claimScheduledDefinition } = require("./tools/scheduled-execution");
+const {
+  recordPlatformApprovalQueued,
+  transitionPlatformApproval,
+  recordPlatformApprovalEvent,
+  recordPlatformChangeSet,
+} = require("./tools/platform-approval");
 // github/ci_status moved to families/github.js in B-6; re-imported so their
 // helper quartet stays on the compatibility-export surface (contract test).
 const { parseGithubArgs, getGithubArg, getCiRevisionSelector, buildCiStatusResult, formatCiStatusText } = require("./tools/families/github");
@@ -1234,126 +1240,6 @@ function recordPlatformToolCall(name, argsShape, duration, success, summary, met
     });
   } catch (e) {}
 }
-
-function recordPlatformApprovalQueued(item) {
-  try {
-    const execution = platformKernel.createExecution({
-      actor_id: item.source || "unknown",
-      client_id: item.source || null,
-      trigger_type: "approval",
-      operation_type: "approval_request",
-      tool_name: item.tool,
-      risk: item.risk || "unknown",
-      approval_state: "pending",
-      deadline_at: item.expires_at || null,
-      source: "approvals",
-      correlation_id: item.id,
-      metadata: {
-        approval_id: item.id,
-        approval_mode: item.mode,
-        approval_reason: item.reason,
-      },
-    });
-    item.platform_execution_id = execution.execution_id;
-    platformKernel.transitionExecution(execution.execution_id, "awaiting_approval", {
-      source: "approvals",
-      actor_id: item.source || "unknown",
-      reason: "approval requested",
-      correlation_id: item.id,
-    });
-    platformKernel.appendEvent({
-      event_type: "approval.requested",
-      source: "approvals",
-      actor_id: item.source || "unknown",
-      subject_type: "approval",
-      subject_id: item.id,
-      execution_id: execution.execution_id,
-      root_execution_id: execution.root_execution_id,
-      payload: {
-        approval_id: item.id,
-        tool: item.tool,
-        risk: item.risk,
-        source: item.source,
-        mode: item.mode,
-        reason: item.reason,
-        expires_at: item.expires_at,
-      },
-      correlation_id: item.id,
-    });
-  } catch (e) {}
-}
-
-function transitionPlatformApproval(item, state, details = {}) {
-  try {
-    if (!item.platform_execution_id) return;
-    const guard = platformKernel.platformGuard(item.platform_execution_id, null, { allowTerminal: state === "failed" || state === "timed_out" });
-    if (!guard.allowed && guard.reason === "terminal_state") return;
-    platformKernel.transitionExecution(item.platform_execution_id, state, {
-      source: "approvals",
-      actor_id: details.actor_id || item.reviewed_by || item.source || "unknown",
-      reason: details.reason,
-      result_status: details.result_status,
-      error_category: details.error_category,
-      result_summary: details.result_summary,
-      correlation_id: item.id,
-    });
-  } catch (e) {}
-}
-
-function recordPlatformApprovalEvent(item, eventType, payload = {}, options = {}) {
-  try {
-    platformKernel.appendEvent({
-      event_type: eventType,
-      source: "approvals",
-      actor_id: options.actor_id || item.reviewed_by || item.source || "unknown",
-      subject_type: "approval",
-      subject_id: item.id,
-      execution_id: item.platform_execution_id || null,
-      root_execution_id: item.platform_execution_id || null,
-      severity: options.severity || "info",
-      payload: {
-        approval_id: item.id,
-        tool: item.tool,
-        status: item.status,
-        ...payload,
-      },
-      correlation_id: item.id,
-    });
-  } catch (e) {}
-}
-
-function recordPlatformChangeSet(item, decision, details = {}) {
-  try {
-    return platformKernel.createChangeSet({
-      execution_id: item.platform_execution_id || null,
-      approval_id: item.id,
-      tool_name: item.tool,
-      tool_action: details.tool_action || null,
-      operation_type: "approval",
-      state: decision,
-      actor_id: details.actor_id || item.reviewed_by || item.source || "unknown",
-      decision,
-      reason: details.reason || null,
-      args: details.args || item.args || {},
-      result_summary: details.result_summary || null,
-      project_id: details.project || null,
-      source: "approvals",
-    });
-  } catch (e) { return null; }
-}
-
-
-
-// --- Metrics Tool ---
-
-const TOOLS = {
-  compute: computeTools.sidekick_compute,
-  compute_nodes: computeTools.sidekick_compute_nodes,
-  compute_providers: computeTools.sidekick_compute_providers,
-  compute_models: computeTools.sidekick_compute_models,
-  compute_jobs: computeTools.sidekick_compute_jobs,
-  compute_route: computeTools.sidekick_compute_route,
-};
 
 const TOOL_DEFS = [
   { name: "bash", description: "Execute a shell command on the remote machine", args: { command: "string" } },
