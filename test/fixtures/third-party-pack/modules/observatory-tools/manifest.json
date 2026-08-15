@@ -1,0 +1,21 @@
+{
+  "name": "observatory-tools",
+  "displayName": "Observatory Tools (fixture)",
+  "version": "1.0.0",
+  "description": "Synthetic module owned by the third-party fixture pack. One self-contained low-risk tool, no dispatch fan-out, no permissions.",
+  "author": "Example Vendor (test fixture)",
+  "type": "plugin",
+  "entryPoint": "entry.js",
+  "sidekick": ">=1.0.0",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "label": { "type": "string" }
+    },
+    "additionalProperties": false
+  },
+  "tools": {
+    "fixture_observation": { "risk": "low", "category": "Monitoring", "aliases": [] }
+  },
+  "permissions": []
+}
