@@ -46,6 +46,7 @@ const platformKernel = require("./platform/kernel");
 const {
   startAgentExecution, appendAgentExecutionEvent, finishAgentExecution, registerAgentTranscript,
 } = require("./agent/execution");
+const { buildChildLineage } = require("./agent/continuation");
 const { redactSensitive, redactSensitiveKeysDeep } = require("./redact");
 const {
   CONTINUATION_LIMITS,
@@ -1333,7 +1334,7 @@ function beginTaskRun(res, { goal, parentContext = null }) {
 // Resolve the durable lineage + bounded, redacted continuation brief for a child
 // task from a terminal parent. Throws ContinuationError (with a safe status +
 // client message) for every rejection case. Never leaks paths/stack/secrets.
-function buildChildLineage(parentTaskId) {
+function buildChildLineageLegacy(parentTaskId) {
   const parent = normalizeTranscript(loadTranscript(CONV_DIR, parentTaskId), parentTaskId);
   // A transcript only exists once a task is terminal; this is a defensive guard.
   if (!isTerminalStatus(parent.status)) {
@@ -1392,7 +1393,7 @@ app.post("/api/agent/run/:taskId/follow-up", (req, res) => {
 
   let parentContext;
   try {
-    parentContext = buildChildLineage(parentTaskId);
+    parentContext = buildChildLineage(parentTaskId, CONV_DIR);
   } catch (e) {
     if (e && e.isContinuationError) {
       return res.status(e.httpStatus).json({ error: e.clientMessage });
