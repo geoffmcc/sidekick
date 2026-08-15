@@ -30,6 +30,7 @@ const { probeConnector } = require("./connectors/health");
 const { registerConnectorRoutes } = require("./dashboard/connectors-routes");
 const { registerKvRoutes } = require("./dashboard/kv-routes");
 const { registerSystemRoutes } = require("./dashboard/system-routes");
+const { registerLogsRoute } = require("./dashboard/logs-route");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const PORT = parseInt(process.env.SIDEKICK_DASHBOARD_PORT || "4098", 10);
@@ -797,42 +798,7 @@ function seedKV() {
   console.log("Seed KV written with", Object.keys(seed).length, "keys");
 }
 
-app.get("/api/logs", (req, res) => {
-  const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
-  // Push the filters the store can express (tool, source, success) into the
-  // SQL query so they apply BEFORE the row limit — previously every filter ran
-  // after slice(0, limit), so a filtered view silently missed matches older
-  // than the newest <limit> rows. queryToolLogs cannot filter project/session/
-  // task/execution/search/min_duration (they live inside entry_json), so when
-  // those are requested we fetch a larger window before filtering — wider, but
-  // still bounded, and stated here rather than hidden.
-  const needsPostFilter = !!(req.query.project || req.query.session || req.query.task ||
-    req.query.execution || req.query.min_duration || req.query.errors_only === "true" || req.query.search);
-  const dbFilters = {
-    tool: req.query.tool || undefined,
-    source: req.query.source || undefined,
-    success: req.query.status === "success" ? true : req.query.status === "failure" ? false : undefined,
-    limit: needsPostFilter ? Math.min(limit * 10, 5000) : limit,
-  };
-  let entries = dbStore.queryToolLogs(dbFilters).map(normalizeLogEntry);
-  if (req.query.project) entries = entries.filter(entry => entry.project === req.query.project);
-  if (req.query.session) entries = entries.filter(entry => entry.session_id === req.query.session || entry.task_id === req.query.session || entry.execution_id === req.query.session || String(entry.id).includes(req.query.session));
-  if (req.query.task) entries = entries.filter(entry => entry.task_id === req.query.task);
-  if (req.query.execution) entries = entries.filter(entry => entry.execution_id === req.query.execution);
-  if (req.query.min_duration) {
-    const minDuration = Number(req.query.min_duration);
-    if (Number.isFinite(minDuration)) entries = entries.filter(entry => Number(entry.duration_ms || 0) >= minDuration);
-  }
-  if (req.query.errors_only === "true") entries = entries.filter(entry => !entry.ok || entry.error);
-  if (req.query.search) {
-    const needle = String(req.query.search).toLowerCase();
-    entries = entries.filter(entry => [entry.tool, entry.args, entry.result, entry.error, entry.summary, entry.source, entry.project, entry.session_id, entry.task_id].join(" ").toLowerCase().includes(needle));
-  }
-  // Re-apply the requested bound after post-filtering the wider window.
-  entries = entries.slice(0, limit);
-  const sessions = buildActivitySessions(entries);
-  res.json({ entries, sessions, summary: summarizeActivity(sessions, entries), total: entries.length, fallback_grouping_ms: ACTIVITY_FALLBACK_GAP_MS });
-});
+registerLogsRoute({ app, dbStore, normalizeLogEntry, buildActivitySessions, summarizeActivity, fallbackGapMs: ACTIVITY_FALLBACK_GAP_MS });
 
 app.get("/api/dashboard-summary", async (req, res) => {
   try {
