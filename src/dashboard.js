@@ -31,6 +31,7 @@ const { registerConnectorRoutes } = require("./dashboard/connectors-routes");
 const { registerKvRoutes } = require("./dashboard/kv-routes");
 const { registerSystemRoutes } = require("./dashboard/system-routes");
 const { registerLogsRoute } = require("./dashboard/logs-route");
+const { registerApprovalRoutes } = require("./dashboard/approval-routes");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const PORT = parseInt(process.env.SIDEKICK_DASHBOARD_PORT || "4098", 10);
@@ -1843,9 +1844,7 @@ app.get("/api/evolve/executions/:executionId/stream", (req, res) => {
   req.on("close", off);
 });
 
-app.get("/api/approvals", (req, res) => {
-  res.json({ ok: true, approvals: listApprovals({ status: req.query.status, limit: req.query.limit }) });
-});
+registerApprovalRoutes({ app, listApprovals, renderContinuationApprovalPreview, authenticatedUser, auditLog, logError, resolveApproval });
 
 /**
  * On-demand argument preview for a task-originated approval (ADR §4.4).
@@ -1859,64 +1858,6 @@ app.get("/api/approvals", (req, res) => {
  * substituted payload reports as tampered rather than being displayed as
  * genuine — the reviewer is the control that catches exactly that.
  */
-app.get("/api/approvals/:id/preview", (req, res) => {
-  try {
-    // UNCONDITIONALLY requires an authenticated principal, like the
-    // reconciliation endpoint — deliberately NOT gated on
-    // `DASHBOARD_USER && DASHBOARD_PASS`. With authentication unconfigured that
-    // conjunction short-circuits and the global auth middleware is never
-    // registered either, so the check would vanish exactly where it is most
-    // needed and decrypted argument content would be served to anyone who can
-    // reach the port. Metadata and digests remain available to such a reader;
-    // plaintext does not.
-    if (!authenticatedUser(req)) {
-      return res.status(403).json({
-        ok: false,
-        error: "Rendering approval arguments requires an authenticated principal; configure dashboard authentication",
-      });
-    }
-    const preview = renderContinuationApprovalPreview(req.params.id);
-    if (!preview.ok) {
-      const status = preview.code === "not_found" ? 404 : 409;
-      return res.status(status).json({ ok: false, error: preview.code });
-    }
-    auditLog(req, "approval.preview", { id: req.params.id, viewer: authenticatedUser(req) });
-    res.json({ ok: true, preview });
-  } catch (error) {
-    logError(req.originalUrl, 500, error, "approvals", req.headers["user-agent"]);
-    res.status(500).json({ ok: false, error: error.message });
-  }
-});
-
-app.post("/api/approvals/:id/approve", async (req, res) => {
-  try {
-    // The approving identity is now the authenticated principal, not the
-    // literal "dashboard" (I19). Where no authentication is configured there is
-    // no attributable human; the request still proceeds under an explicitly
-    // unattributed marker so approval behaviour is unchanged for deployments
-    // without auth, but the record says so rather than claiming a reviewer.
-    const reviewer = authenticatedUser(req) || "unattributed:dashboard";
-    auditLog(req, "approval.approve", { id: req.params.id, reviewer });
-    const result = await resolveApproval(req.params.id, "approve", reviewer);
-    res.json({ ok: !result.isError, result: result.content?.[0]?.text || "" });
-  } catch (error) {
-    logError(req.originalUrl, 500, error, "approvals", req.headers["user-agent"]);
-    res.status(500).json({ ok: false, error: error.message });
-  }
-});
-
-app.post("/api/approvals/:id/reject", async (req, res) => {
-  try {
-    const reviewer = authenticatedUser(req) || "unattributed:dashboard";
-    auditLog(req, "approval.reject", { id: req.params.id, reviewer });
-    const result = await resolveApproval(req.params.id, "reject", reviewer);
-    res.json({ ok: !result.isError, result: result.content?.[0]?.text || "" });
-  } catch (error) {
-    logError(req.originalUrl, 500, error, "approvals", req.headers["user-agent"]);
-    res.status(500).json({ ok: false, error: error.message });
-  }
-});
-
 /**
  * Reconciliation surface (ADR §8.2, T10).
  *
