@@ -218,6 +218,22 @@ function workerModelNames(worker) {
   return parseMaybeArray(worker.modelInventory).map(m => typeof m === "string" ? m : (m.name || m.model || m.providerModelName)).filter(Boolean);
 }
 
+// Devices a worker itself advertises for a model, parsed from its per-device
+// executor capability strings (openvino.text_embedding:<model>:<device>:...).
+// Since the readiness path probes each device individually, a device appears
+// here only when its own probe succeeded on that worker.
+function workerAdvertisedDevices(worker, modelName) {
+  const devices = new Set();
+  for (const exec of parseMaybeArray(worker.executors)) {
+    if (typeof exec !== "object" || exec === null || !Array.isArray(exec.capabilities)) continue;
+    for (const cap of exec.capabilities) {
+      const parts = String(cap).split(":");
+      if (parts.length >= 5 && parts[1] === modelName && parts[2]) devices.add(parts[2]);
+    }
+  }
+  return Array.from(devices);
+}
+
 function workerClaimedTier(worker, modelName) {
   for (const m of parseMaybeArray(worker.modelInventory)) {
     if (typeof m === "object" && m !== null && (m.name || m.model || m.providerModelName) === modelName && m.certificationTier) {
@@ -279,6 +295,19 @@ function evaluateWorkerCandidate(validated, worker, needs = {}, { activeExecutor
   const requiredModel = needs.model || null;
   if (requiredExecutor && !executors.includes(requiredExecutor)) reasons.push("executor_missing");
   if (requiredModel && models.length > 0 && !models.includes(requiredModel)) reasons.push("model_missing");
+
+  // Device-aware placement: when the job pins a certified device profile
+  // (requested_device), a worker whose advertised per-device capability
+  // strings do not include that device cannot serve the job — runtime would
+  // fail honestly, but placement should never select it in the first place.
+  // Enforced only when the worker advertises per-model capability strings at
+  // all; bare executor declarations (legacy workers, minimal test fixtures)
+  // keep the previous behaviour rather than being rejected on absent data.
+  const requestedDevice = needs.requestedDevice || null;
+  if (requestedDevice && requiredExecutor === "openvino.text_embedding" && requiredModel) {
+    const advertised = workerAdvertisedDevices(worker, requiredModel);
+    if (advertised.length > 0 && !advertised.includes(requestedDevice)) reasons.push("requested_device_unavailable");
+  }
 
   // Per-executor concurrency: the OpenVINO executor keeps a single resident
   // NPU model (helper maxConcurrent: 1); a second simultaneous lease for the

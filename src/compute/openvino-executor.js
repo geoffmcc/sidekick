@@ -447,13 +447,27 @@ async function awaitStartupReadiness(timeoutMs) {
 
   for (const model of listApprovedModels()) {
     if (_shutdownRequested) break;
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) { probeTimedOut = true; break; }
+    if (deadline - Date.now() <= 0) { probeTimedOut = true; break; }
 
-    const probe = await probeCapability(model.modelId, Math.min(remaining, 30000));
-    if (probe.status !== "ready") continue;
+    // Advertisement honesty: probe EVERY certified device the model would be
+    // advertised on, not only its primary device. A single primary-device
+    // probe used to vouch for every certifiedDevices entry present in
+    // available_devices — advertising e.g. an NPU profile that only device
+    // enumeration (never a readiness probe) had ever seen. Probes are local
+    // helper `ready` round-trips, bounded per call and by the overall deadline.
+    const certifiedDevices = model.certifiedDevices || [model.certifiedDevice];
+    const readyDevices = [];
+    for (const device of certifiedDevices) {
+      if (_shutdownRequested) break;
+      if (!_availableDevices.has(device)) continue;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) { probeTimedOut = true; break; }
+      const probe = await probeCapability(model.modelId, Math.min(remaining, 30000), device);
+      // Only the exact device the probe validated may be advertised.
+      if (probe.status === "ready" && probe.device === device) readyDevices.push(device);
+    }
+    if (readyDevices.length === 0) continue;
 
-    const probedDevice = probe.device;
     // Use the tier-aware capability strings from the manifest, which include
     // the certification tier suffix (e.g. :certified, :detected_self_tested).
     // This guarantees every advertised capability carries its tier.
@@ -461,7 +475,9 @@ async function awaitStartupReadiness(timeoutMs) {
     const modelCaps = getAdvertisedCapabilities(model.modelId, _availableDevices).filter((cap) => {
       const parts = String(cap).split(":");
       // After the tier suffix, there are now 6 parts. Device is at index 2.
-      return parts.length >= 5 && (probe.availableDevices || []).includes(parts[2]) && (model.certifiedDevices || [model.certifiedDevice]).includes(parts[2]);
+      // readyDevices ⊆ certifiedDevices ∩ available_devices by construction,
+      // and every entry passed its own readiness probe.
+      return parts.length >= 5 && readyDevices.includes(parts[2]);
     });
     if (modelCaps.length === 0) continue;
 
@@ -470,7 +486,9 @@ async function awaitStartupReadiness(timeoutMs) {
     models.push({
       name: model.modelId,
       provider: "openvino",
-      device: probedDevice,
+      // certifiedDevices is ordered primary-first, so readyDevices[0] is the
+      // preferred ready device for inventory display.
+      device: readyDevices[0],
       dimensions: model.outputDimensions,
       embeddingSpaceId: model.embeddingSpaceId,
       capabilities: modelCaps,
@@ -782,9 +800,12 @@ async function executeOpenVinoEmbed(_context, input) {
  *
  * @param {string} modelId  Model to check.
  * @param {number} [timeoutMs]  Bound for the helper `ready` round-trip.
+ * @param {string} [device]  Specific certified device profile to probe.
+ *                           Omitted, the helper probes the model's primary
+ *                           device (legacy behaviour).
  * @returns {Promise<object>}
  */
-async function probeCapability(modelId, timeoutMs = 30000) {
+async function probeCapability(modelId, timeoutMs = 30000, device = undefined) {
   if (!_config || !_config.enabled) {
     return {
       status: "disabled",
@@ -811,7 +832,7 @@ async function probeCapability(modelId, timeoutMs = 30000) {
   }
 
   try {
-    const response = await _manager.checkReady(modelId, timeoutMs);
+    const response = await _manager.checkReady(modelId, timeoutMs, device);
     const approvedModel = getApprovedModel(modelId);
     const certificationTier = approvedModel ? statusToTier(approvedModel.status) : CERTIFICATION_TIER.UNSUPPORTED;
     return {

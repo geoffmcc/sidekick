@@ -141,7 +141,9 @@ function httpRequest(method, requestPath, body, extraHeaders = {}, options = {})
     const bodyStr = body ? JSON.stringify(body) : null;
     const headers = { "Content-Type": "application/json", ...extraHeaders };
     if (bodyStr) headers["Content-Length"] = Buffer.byteLength(bodyStr);
-    const req = mod.request({ hostname: url.hostname, port: url.port, path: `${url.pathname}${url.search}`, method, headers }, (res) => {
+    // options.signal lets a caller abort an in-flight request (cancellation
+    // observed DURING a long generation, not only before/after it).
+    const req = mod.request({ hostname: url.hostname, port: url.port, path: `${url.pathname}${url.search}`, method, headers, signal: options.signal }, (res) => {
       let data = "";
       res.on("data", c => { data += c; if (data.length > 2 * 1024 * 1024) req.destroy(new Error("Response too large")); });
       res.on("end", () => {
@@ -618,14 +620,14 @@ async function executeJob(job, shouldCancel = async () => false) {
     return { embedding: deterministicEmbedding(text), model: payload.model || SYNTHETIC_MODEL };
   }
   if (process.env.OLLAMA_URL && (payload.backend === "ollama" || payload.provider === "ollama")) {
-    return job.jobType === "chat" ? ollamaChat(payload) : ollamaGenerate(payload);
+    return job.jobType === "chat" ? ollamaChat(payload, shouldCancel) : ollamaGenerate(payload, shouldCancel);
   }
   // Fabricated content must never be returned as a real result. Previously any
   // chat/generate job that did not explicitly name the ollama backend fell
   // through to `mock:<prompt>` and completed as a SUCCESS — an answer the
   // caller had no way to tell apart from a real one.
   if (!isSyntheticRequest(payload)) {
-    if (process.env.OLLAMA_URL) return job.jobType === "chat" ? ollamaChat(payload) : ollamaGenerate(payload);
+    if (process.env.OLLAMA_URL) return job.jobType === "chat" ? ollamaChat(payload, shouldCancel) : ollamaGenerate(payload, shouldCancel);
     throw new Error(
       "No inference backend on this worker: set OLLAMA_URL (or request the ollama backend) to serve " +
       `this job. The "${SYNTHETIC_MODEL}" model is a test fixture and is only used when requested by name.`
@@ -648,7 +650,49 @@ function isSyntheticRequest(payload) {
   return model === SYNTHETIC_MODEL || provider === "mock" || provider === "deterministic";
 }
 
-async function ollamaGenerate(payload) {
+// Poll cancellation DURING a model request. A long generation used to be
+// uncancellable mid-flight: the worker only checked before and after the
+// Ollama HTTP call, so a cancel sat unacknowledged until the model finished.
+// The poll aborts the in-flight request; callers see the canonical
+// "Job cancellation requested" error and handleJob's existing path
+// acknowledges instead of failing or publishing.
+const CANCEL_POLL_MS = boundedInt(process.env.SIDEKICK_WORKER_CANCEL_POLL_MS, 2000, 250, 30000);
+
+async function withCancellationAbort(shouldCancel, run) {
+  if (!shouldCancel) return run(undefined);
+  const controller = new AbortController();
+  let cancelled = false;
+  let polling = false;
+  const poll = setInterval(async () => {
+    if (polling) return; // never stack slow polls
+    polling = true;
+    try {
+      if (await shouldCancel()) { cancelled = true; controller.abort(); }
+    } catch { /* a failed poll must never kill the request */ }
+    finally { polling = false; }
+  }, CANCEL_POLL_MS);
+  try {
+    return await run(controller.signal);
+  } catch (e) {
+    if (cancelled) throw new Error("Job cancellation requested");
+    throw e;
+  } finally {
+    clearInterval(poll);
+  }
+}
+
+// Generation options shared by chat and generate. num_ctx mirrors the direct
+// provider adapter (ollama-provider.js): the job payload's contextLimit was
+// silently dropped on the worker path, so a caller-tuned context window never
+// reached the model when an enrolled worker served the job.
+function ollamaOptions(payload) {
+  return {
+    num_predict: resolveOutputTokenBudget({ maxTokens: payload.maxTokens, outputBudget: payload.outputBudget }),
+    ...(Number.isFinite(Number(payload.contextLimit)) && Number(payload.contextLimit) > 0 ? { num_ctx: Number(payload.contextLimit) } : {}),
+  };
+}
+
+async function ollamaGenerate(payload, shouldCancel = null) {
   const endpoint = new URL("/api/generate", process.env.OLLAMA_URL);
   const body = {
     model: payload.model,
@@ -658,14 +702,18 @@ async function ollamaGenerate(payload) {
     // visible response. Callers may opt in explicitly, but normal Compute chat
     // jobs should return answer text in `response`.
     think: payload.think === undefined ? false : Boolean(payload.think),
-    options: { num_predict: resolveOutputTokenBudget({ maxTokens: payload.maxTokens, outputBudget: payload.outputBudget }) },
+    // Structured-output parity with the chat path and the provider adapter:
+    // format was silently dropped for generate jobs on the worker path.
+    ...(payload.format ? { format: payload.format } : {}),
+    options: ollamaOptions(payload),
   };
-  const result = await httpRequest("POST", endpoint.href, body, {}, { timeoutMs: OLLAMA_REQUEST_TIMEOUT_MS });
+  const result = await withCancellationAbort(shouldCancel, signal =>
+    httpRequest("POST", endpoint.href, body, {}, { timeoutMs: OLLAMA_REQUEST_TIMEOUT_MS, signal }));
   if (result.status !== 200) throw new Error(`Ollama request failed: ${result.status}`);
   return { content: result.data.response || "", model: payload.model, provider: "ollama" };
 }
 
-async function ollamaChat(payload) {
+async function ollamaChat(payload, shouldCancel = null) {
   const endpoint = new URL("/api/chat", process.env.OLLAMA_URL);
   const messages = Array.isArray(payload.messages) && payload.messages.length
     ? payload.messages.map(message => ({ role: message.role, content: String(message.content || "") }))
@@ -681,9 +729,10 @@ async function ollamaChat(payload) {
     // thinking is opt-in so it cannot consume the planner's JSON budget.
     think: payload.think === undefined ? false : Boolean(payload.think),
     ...(payload.format ? { format: payload.format } : {}),
-    options: { num_predict: resolveOutputTokenBudget({ maxTokens: payload.maxTokens, outputBudget: payload.outputBudget }) },
+    options: ollamaOptions(payload),
   };
-  const result = await httpRequest("POST", endpoint.href, body, {}, { timeoutMs: OLLAMA_REQUEST_TIMEOUT_MS });
+  const result = await withCancellationAbort(shouldCancel, signal =>
+    httpRequest("POST", endpoint.href, body, {}, { timeoutMs: OLLAMA_REQUEST_TIMEOUT_MS, signal }));
   if (result.status !== 200) throw new Error(`Ollama chat request failed: ${result.status}`);
   return {
     content: result.data.message?.content || result.data.response || "",

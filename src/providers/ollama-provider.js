@@ -131,6 +131,10 @@ class OllamaProvider {
       prompt,
       system: options.system,
       stream: false,
+      // Same rationale as chat(): reasoning models can spend the whole output
+      // budget in hidden thinking and return an empty response. Thinking is
+      // opt-in on both entry points so they cannot drift apart.
+      think: options.think === undefined ? false : Boolean(options.think),
       options: pruneUndefined({
         temperature: options.temperature ?? 0.7,
         num_ctx: options.contextLimit,

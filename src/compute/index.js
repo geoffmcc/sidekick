@@ -105,6 +105,7 @@ function initialize() {
       );
       CREATE INDEX IF NOT EXISTS idx_compute_routing_workload ON compute_routing_rules(workload_class);
       CREATE INDEX IF NOT EXISTS idx_compute_routing_priority ON compute_routing_rules(priority DESC);
+      CREATE INDEX IF NOT EXISTS idx_compute_routing_enabled ON compute_routing_rules(enabled);
 
       CREATE TABLE IF NOT EXISTS compute_benchmarks (
         benchmark_id TEXT PRIMARY KEY,
@@ -125,6 +126,9 @@ function initialize() {
         model_json TEXT NOT NULL DEFAULT '{}',
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
+      CREATE INDEX IF NOT EXISTS idx_compute_benchmarks_provider ON compute_benchmarks(provider_id);
+      CREATE INDEX IF NOT EXISTS idx_compute_benchmarks_type ON compute_benchmarks(benchmark_type);
+      CREATE INDEX IF NOT EXISTS idx_compute_benchmarks_created ON compute_benchmarks(created_at);
 
       CREATE TABLE IF NOT EXISTS compute_metrics (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -139,6 +143,7 @@ function initialize() {
         recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
       CREATE INDEX IF NOT EXISTS idx_compute_metrics_type ON compute_metrics(metric_type);
+      CREATE INDEX IF NOT EXISTS idx_compute_metrics_provider ON compute_metrics(provider_id);
       CREATE INDEX IF NOT EXISTS idx_compute_metrics_recorded ON compute_metrics(recorded_at);
     `);
   } catch {}
