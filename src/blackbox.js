@@ -8,6 +8,7 @@ const { redactSensitive } = require("./redact");
 const dbStore = require("./db");
 const platformKernel = require("./platform/kernel");
 const { createBlackboxStorage } = require("./blackbox/storage");
+const { createBlackboxQuery } = require("./blackbox/query");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const LEGACY_BLACKBOX_FILE = path.join(DATA_DIR, "blackbox.json");
@@ -936,7 +937,7 @@ async function captureIncident(options = {}) {
   return getCapture(captureId, { includeSources: true });
 }
 
-function listIncidents(filters = {}) {
+function listIncidentsLegacy(filters = {}) {
   ensureSchema();
   const where = [];
   const params = [];
@@ -955,7 +956,7 @@ function listIncidents(filters = {}) {
   return rows.map(row => incidentFromRow(row));
 }
 
-function incidentFromRow(row) {
+function incidentFromRowLegacy(row) {
   if (!row) return null;
   return {
     id: row.id,
@@ -987,7 +988,7 @@ function incidentFromRow(row) {
   };
 }
 
-function captureFromRow(row) {
+function captureFromRowLegacy(row) {
   if (!row) return null;
   return {
     id: row.id,
@@ -1018,7 +1019,7 @@ function captureFromRow(row) {
   };
 }
 
-function sourceFromRow(row, options = {}) {
+function sourceFromRowLegacy(row, options = {}) {
   if (!row) return null;
   const source = {
     id: row.id,
@@ -1053,7 +1054,7 @@ function sourceFromRow(row, options = {}) {
   return source;
 }
 
-function getIncident(id, options = {}) {
+function getIncidentLegacy(id, options = {}) {
   ensureSchema();
   safeId(id, "incident id");
   const db = dbStore.getDb();
@@ -1066,13 +1067,13 @@ function getIncident(id, options = {}) {
   return incident;
 }
 
-function listCaptures(incidentId) {
+function listCapturesLegacy(incidentId) {
   ensureSchema();
   safeId(incidentId, "incident id");
   return dbStore.getDb().prepare("SELECT * FROM blackbox_captures WHERE incident_id = ? ORDER BY started_at DESC").all(incidentId).map(captureFromRow);
 }
 
-function getCapture(captureId, options = {}) {
+function getCaptureLegacy(captureId, options = {}) {
   ensureSchema();
   safeId(captureId, "capture id");
   const db = dbStore.getDb();
@@ -1082,19 +1083,19 @@ function getCapture(captureId, options = {}) {
   return capture;
 }
 
-function listSources(captureId) {
+function listSourcesLegacy(captureId) {
   ensureSchema();
   safeId(captureId, "capture id");
   return dbStore.getDb().prepare("SELECT * FROM blackbox_sources WHERE capture_id = ? ORDER BY started_at ASC").all(captureId).map(row => sourceFromRow(row));
 }
 
-function getSource(sourceId, options = {}) {
+function getSourceLegacy(sourceId, options = {}) {
   ensureSchema();
   safeId(sourceId, "source id");
   return sourceFromRow(dbStore.getDb().prepare("SELECT * FROM blackbox_sources WHERE id = ?").get(sourceId), { includeArtifacts: true, ...options });
 }
 
-function listObservations(captureId) {
+function listObservationsLegacy(captureId) {
   ensureSchema();
   safeId(captureId, "capture id");
   return dbStore.getDb().prepare("SELECT * FROM blackbox_observations WHERE capture_id = ? ORDER BY severity DESC, observation_type").all(captureId).map(row => ({
@@ -1114,7 +1115,7 @@ function listObservations(captureId) {
   }));
 }
 
-function getTimeline(incidentId) {
+function getTimelineLegacy(incidentId) {
   ensureSchema();
   safeId(incidentId, "incident id");
   return dbStore.getDb().prepare("SELECT * FROM blackbox_events WHERE incident_id = ? ORDER BY created_at ASC, id ASC").all(incidentId).map(row => ({
@@ -1131,6 +1132,9 @@ function getTimeline(incidentId) {
     created_at: row.created_at
   }));
 }
+
+const blackboxQuery = createBlackboxQuery({ dbStore, ensureSchema, safeId, parseJson, nowIso, readArtifactByPath, listAnalyses });
+const { incidentFromRow, captureFromRow, sourceFromRow, listIncidents, getIncident, listCaptures, getCapture, listSources, getSource, listObservations, getTimeline } = blackboxQuery;
 
 function searchIncidents(query, options = {}) {
   ensureSchema();
