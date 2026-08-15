@@ -49,6 +49,7 @@ const {
 const { buildChildLineage } = require("./agent/continuation");
 const { createTaskRunner } = require("./agent/task-run");
 const { createResumedTaskFinalizer } = require("./agent/recovery");
+const { createContinuationJobStarter } = require("./agent/continuation-jobs");
 const { redactSensitive, redactSensitiveKeysDeep } = require("./redact");
 const {
   CONTINUATION_LIMITS,
@@ -1575,73 +1576,15 @@ const finalizeResumedTask = createResumedTaskFinalizer({
   recordAgentTaskMemory,
 });
 
-function startApprovalContinuationJobs() {
-  if (!brain || !brain.isEnabled()) return { started: false, reason: "brain_disabled" };
-  let sweeper;
-  let scheduler;
-  try {
-    sweeper = require("./approvals/sweeper").startSweeper();
-    scheduler = require("./brain/scheduler").startResumeScheduler({
-      buildDeps: async (taskId, checkpoint) => {
-        // Tool logs from a resumed task must carry the same project boundary
-        // as the live path; derive it from the checkpointed goal the same way
-        // runAgent does, so a resume doesn't write `project = null` rows.
-        let project = null;
-        try {
-          const store = require("./approvals/store");
-          const goal = checkpoint ? store.decryptJson(checkpoint.goal_encrypted) : null;
-          if (typeof goal === "string" && goal) project = inferProjectFromText(goal) || null;
-        } catch {}
-        return brain.makeResumeDeps({
-          callLLM: (messages, options) => callLLM(messages, options),
-          callTool: (name, args) => callAgentTool(name, args, {
-            taskId,
-            source: "agent",
-            correlationId: taskId,
-            project,
-            timeoutMs: BRAIN_STEP_TIMEOUT_MS,
-          }),
-          redact: redactSensitive,
-        });
-      },
-      onPass: (outcomes) => {
-        for (const entry of outcomes) {
-          try {
-            const delivered = finalizeResumedTask(entry);
-            // A resumed task is already marked completed in the continuation
-            // store, so the scheduler will never retry it. A delivery that
-            // returns not-ok therefore loses the synthesized answer silently
-            // unless it is reported here.
-            if (delivered && delivered.ok === false) {
-              console.error(JSON.stringify({
-                level: "error",
-                event: "brain.resume_delivery_incomplete",
-                task_id: entry.taskId,
-                reason: delivered.reason || "unknown",
-              }));
-            }
-          } catch (error) {
-            console.error(JSON.stringify({
-              level: "error",
-              event: "brain.resume_delivery_failed",
-              task_id: entry.taskId,
-              error: redactSensitive(String(error && error.message || error)).slice(0, 200),
-            }));
-          }
-        }
-      },
-    });
-  } catch (error) {
-    console.error(JSON.stringify({
-      level: "error",
-      event: "approval.continuation_jobs_failed",
-      error: redactSensitive(String(error && error.message || error)).slice(0, 200),
-    }));
-    return { started: false, reason: "error" };
-  }
-  console.log(`Approval continuation: sweeper ${sweeper.started ? "every " + sweeper.intervalMs + "ms" : "not started"}, resume scheduler ${scheduler.started ? "every " + scheduler.intervalMs + "ms" : "not started"}`);
-  return { started: true, sweeper, scheduler };
-}
+const startApprovalContinuationJobs = createContinuationJobStarter({
+  brain,
+  callLLM,
+  callAgentTool,
+  redactSensitive,
+  inferProjectFromText,
+  finalizeResumedTask,
+  stepTimeoutMs: BRAIN_STEP_TIMEOUT_MS,
+});
 
 // Only bind the port when run as the entrypoint. When required by a test the
 // module exports `app` so the suite can listen on its own port.
