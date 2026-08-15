@@ -12,6 +12,7 @@
 
 const { z } = require("zod");
 const dbStore = require("../../db");
+const { validateOutboundUrl } = require("../../security/outbound-url");
 
 function loadWebhooks() {
   return dbStore.loadDocument("webhooks", []);
@@ -32,6 +33,14 @@ async function sidekick_notify({ channel, webhook_url, recipient, message, title
     }
     if (!webhook_url) {
       return { content: [{ type: "text", text: "webhook_url required for " + channel + " (set DISCORD_WEBHOOK_URL or SLACK_WEBHOOK_URL env var)" }], isError: true };
+    }
+
+    // The webhook URL is caller-controlled (or env-configured); either way the
+    // request originates inside the trust boundary, so it must pass the same
+    // outbound destination policy as web_fetch (SSRF guard).
+    const urlError = validateOutboundUrl(webhook_url, "webhook_url");
+    if (urlError) {
+      return { content: [{ type: "text", text: urlError }], isError: true };
     }
 
     const payload = channel === "discord"

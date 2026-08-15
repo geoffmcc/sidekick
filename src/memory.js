@@ -1,7 +1,7 @@
 const dbStore = require("./db");
 const { redactSensitive, isSensitiveKey, redactSensitiveKeysDeep } = require("./redact");
 const { stripSidekickPrefix } = require("./core/tool-name");
-const { PROJECT_RE } = require("./core/project-identity");
+const { PROJECT_RE, canonicalizeProjectName } = require("./core/project-identity");
 
 let qdrantClient = null;
 try {
@@ -157,7 +157,9 @@ function inferProjectFromArgs(args, fallback) {
     for (const key of ["project", "name", "repo", "repository"]) {
       const value = args[key];
       if (typeof value === "string") {
-        const normalized = value.trim().toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
+        // One canonicalizer for every writer (src/core/project-identity.js) so
+        // an inferred name and a kernel-registered name resolve identically.
+        const normalized = canonicalizeProjectName(value);
         if (PROJECT_RE.test(normalized)) return normalized;
       }
     }
@@ -168,7 +170,9 @@ function inferProjectFromArgs(args, fallback) {
 function inferProjectFromText(text) {
   const match = String(text || "").match(/\b(?:project|repo|repository)\s+([a-z][a-z0-9_-]{1,60})\b/i);
   if (!match) return null;
-  const normalized = match[1].toLowerCase().replace(/[^a-z0-9_]+/g, "_");
+  // Same canonicalizer as the kernel registry (src/core/project-identity.js),
+  // not a local re-implementation of it.
+  const normalized = canonicalizeProjectName(match[1]);
   return PROJECT_RE.test(normalized) ? normalized : null;
 }
 

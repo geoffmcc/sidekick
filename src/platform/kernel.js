@@ -395,6 +395,11 @@ function appendEvent(input = {}) {
   const source = normalizeEventSource(input.source || "platform");
   const sensitivity = normalizeEventSensitivity(input.sensitivity);
   const causationId = input.causation_id || getAmbientCausationId();
+  // Canonicalize through the same choke point as the registry writers so a
+  // casing/charset variant of a project id never forks the event ledger's
+  // identity space. Null/empty stays null (events are not required to carry a
+  // project).
+  const projectId = input.project_id == null || input.project_id === "" ? null : normalizeProjectId(input.project_id);
   const insertEvent = db.prepare(`
     INSERT INTO platform_execution_events (
       event_id, event_type, schema_version, timestamp, source, actor_id, subject_type, subject_id,
@@ -417,7 +422,7 @@ function appendEvent(input = {}) {
         input.actor_id || null,
         input.subject_type || null,
         input.subject_id || null,
-        input.project_id || null,
+        projectId,
         input.environment || null,
         input.execution_id || null,
         input.root_execution_id || null,
@@ -964,9 +969,12 @@ function normalizeScopeSnapshot(row) {
 
 function createScopeSnapshot(input = {}) {
   ensurePlatformKernelSchema();
-  const projectId = String(input.project_id || "").trim();
+  if (!String(input.project_id || "").trim()) throw new Error("scope snapshot project_id is required");
+  // Canonicalize through the registry choke point: scope snapshots join the
+  // same project identity space as executions/events, so a casing variant must
+  // resolve to the one canonical id (evaluateScope compares project ids).
+  const projectId = normalizeProjectId(input.project_id);
   const createdBy = String(input.created_by || "").trim();
-  if (!projectId) throw new Error("scope snapshot project_id is required");
   if (!createdBy) throw new Error("scope snapshot created_by is required");
   if (!Array.isArray(input.targets) || input.targets.length === 0 || input.targets.length > 100) throw new Error("scope snapshot requires 1-100 targets");
   const targets = input.targets.map((target, index) => {
@@ -1700,11 +1708,15 @@ function createProjectWorkspace(input = {}) {
     secretEntries.push([name, stored]);
   }
   if (secretEntries.length > 0 && !hasSecretKey()) throw new Error("SIDEKICK_SECRET_KEY not set in .env");
+  // Canonicalize through the registry choke point so a workspace row's
+  // project_id can never fork from the canonical project identity. Null
+  // passthrough preserved (a workspace without a project is legal).
+  const projectId = input.project_id == null ? null : normalizeProjectId(input.project_id);
   const ts = nowIso();
   const wsId = newId("ws");
   dbStore.getDb().transaction(() => {
-    dbStore.getDb().prepare("INSERT INTO platform_project_workspaces (workspace_id, name, project_id, owner_id, state, config_json, secrets_json, environment, resource_limits_json, created_at, updated_at, metadata_json) VALUES (?, ?, ?, ?, 'active', ?, '{}', ?, ?, ?, ?, ?)").run(wsId, input.name || input.project_id, input.project_id, input.owner_id || "system", json(input.config), input.environment || "default", json(input.resource_limits), ts, ts, json(input.metadata));
-    appendEvent({ event_type: "workspace.created", source: input.source || "platform", actor_id: input.owner_id, subject_type: "workspace", subject_id: wsId, project_id: input.project_id, payload: { name: input.name || input.project_id }, correlation_id: wsId });
+    dbStore.getDb().prepare("INSERT INTO platform_project_workspaces (workspace_id, name, project_id, owner_id, state, config_json, secrets_json, environment, resource_limits_json, created_at, updated_at, metadata_json) VALUES (?, ?, ?, ?, 'active', ?, '{}', ?, ?, ?, ?, ?)").run(wsId, input.name || projectId, projectId, input.owner_id || "system", json(input.config), input.environment || "default", json(input.resource_limits), ts, ts, json(input.metadata));
+    appendEvent({ event_type: "workspace.created", source: input.source || "platform", actor_id: input.owner_id, subject_type: "workspace", subject_id: wsId, project_id: projectId, payload: { name: input.name || projectId }, correlation_id: wsId });
     for (const [name, stored] of secretEntries) {
       setWorkspaceSecret(wsId, name, stored, { source: input.source, actor_id: input.owner_id });
     }
@@ -1720,8 +1732,23 @@ function getProjectWorkspace(workspaceId) {
 
 function getWorkspaceByProject(projectId) {
   ensurePlatformKernelSchema();
-  const row = dbStore.getDb().prepare("SELECT * FROM platform_project_workspaces WHERE project_id = ? AND state = 'active'").get(projectId);
+  // Rows are stored canonical (createProjectWorkspace normalizes), so the
+  // lookup canonicalizes too: casing variants resolve to the same workspace.
+  const pid = projectId == null ? null : normalizeProjectId(projectId);
+  const row = dbStore.getDb().prepare("SELECT * FROM platform_project_workspaces WHERE project_id = ? AND state = 'active'").get(pid);
   return normalizeWorkspace(row, row ? getWorkspaceSecretNames(row.workspace_id) : []);
+}
+
+function listProjectWorkspaces(filters = {}) {
+  ensurePlatformKernelSchema();
+  const conditions = [];
+  const params = [];
+  if (filters.state) { conditions.push("state = ?"); params.push(String(filters.state)); }
+  if (filters.project_id) { conditions.push("project_id = ?"); params.push(normalizeProjectId(filters.project_id)); }
+  const limit = Math.max(1, Math.min(Number(filters.limit) || 50, 200));
+  const rows = dbStore.getDb().prepare(`SELECT * FROM platform_project_workspaces ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""} ORDER BY updated_at DESC LIMIT ?`).all(...params, limit);
+  // Secret NAMES only — normalizeWorkspace never returns values or envelopes.
+  return rows.map(row => normalizeWorkspace(row, getWorkspaceSecretNames(row.workspace_id)));
 }
 
 function updateProjectWorkspace(workspaceId, updates = {}) {
@@ -1863,11 +1890,16 @@ function backfillProjectSources(details = {}) {
   `);
   let written = 0;
   const perSource = {};
+  const errors = {};
   for (const scan of scans) {
     let rows;
     try {
       rows = dbStore.getDb().prepare(`SELECT ${scan.projectCol} AS project_id, COUNT(*) AS cnt FROM ${scan.table} WHERE ${scan.projectCol} IS NOT NULL AND ${scan.projectCol} != '' GROUP BY ${scan.projectCol}`).all();
-    } catch {
+    } catch (error) {
+      // An unreadable source (missing table, corrupt column, ...) must show up
+      // in the report — silently skipping it made a partial backfill look
+      // complete.
+      errors[scan.source] = { table: scan.table, error: String(error.message || error).slice(0, 300) };
       continue;
     }
     perSource[scan.source] = rows.length;
@@ -1884,9 +1916,9 @@ function backfillProjectSources(details = {}) {
     }
   }
   if (!dryRun) {
-    appendEvent({ event_type: "project.sources_backfilled", source: details.source || "platform", actor_id: details.actor_id || null, subject_type: "project", subject_id: "*", payload: { written, per_source: perSource }, correlation_id: details.correlation_id || null });
+    appendEvent({ event_type: "project.sources_backfilled", source: details.source || "platform", actor_id: details.actor_id || null, subject_type: "project", subject_id: "*", payload: { written, per_source: perSource, errors }, correlation_id: details.correlation_id || null });
   }
-  return { written, sources: perSource, dry_run: dryRun };
+  return { written, sources: perSource, errors, dry_run: dryRun };
 }
 
 function setWorkspaceSecret(workspaceId, name, value, details = {}) {
@@ -1939,6 +1971,11 @@ function listWorkspaceSecretNames(workspaceId) {
 function backfillWorkspaceSecrets(details = {}) {
   ensurePlatformKernelSchema();
   if (!hasSecretKey()) throw new Error("SIDEKICK_SECRET_KEY not set in .env");
+  // Optional report-only mode for the workspace tool surface: scans and
+  // classifies exactly like a real run but writes nothing (no envelopes, no
+  // plaintext clearing, no event). Defaults to the historical always-write
+  // behavior so existing callers are unaffected.
+  const dryRun = details.dry_run === true;
   const db = dbStore.getDb();
   const rows = db.prepare("SELECT workspace_id, secrets_json FROM platform_project_workspaces WHERE secrets_json IS NOT NULL AND secrets_json NOT IN ('', '{}', 'null')").all();
   // Envelopes are written before the plaintext is cleared, and existing
@@ -1980,6 +2017,21 @@ function backfillWorkspaceSecrets(details = {}) {
         retain = true;
         continue;
       }
+      if (dryRun) {
+        // Report-only classification: never encrypts or inserts.
+        const existingEnvelope = selectEnvelope.get(row.workspace_id, name);
+        if (!existingEnvelope) {
+          migrated++;
+          continue;
+        }
+        skippedExisting++;
+        try {
+          decryptColumn(existingEnvelope.envelope_json);
+        } catch {
+          retain = true;
+        }
+        continue;
+      }
       const plaintext = typeof value === "string" ? value : JSON.stringify(value);
       const result = insert.run(row.workspace_id, name, encryptColumn(plaintext), ts, ts);
       if (result.changes > 0) {
@@ -1997,6 +2049,10 @@ function backfillWorkspaceSecrets(details = {}) {
       retained.push(row.workspace_id);
       continue;
     }
+    if (dryRun) {
+      workspacesMigrated++;
+      continue;
+    }
     const cleared = clear.run(ts, row.workspace_id, row.secrets_json);
     if (cleared.changes === 0) {
       retained.push(row.workspace_id);
@@ -2004,8 +2060,10 @@ function backfillWorkspaceSecrets(details = {}) {
     }
     workspacesMigrated++;
   }
-  appendEvent({ event_type: "workspace.secrets_backfilled", source: details.source || "platform", actor_id: details.actor_id || null, subject_type: "workspace", subject_id: "*", payload: { workspaces_migrated: workspacesMigrated, secrets_migrated: migrated, secrets_skipped_existing: skippedExisting, secrets_skipped_null: skippedNull, workspaces_unreadable: unreadable.length, workspaces_retained: retained.length }, correlation_id: details.correlation_id || null });
-  return { workspaces_scanned: rows.length, workspaces_migrated: workspacesMigrated, secrets_migrated: migrated, secrets_skipped_existing: skippedExisting, secrets_skipped_null: skippedNull, workspaces_unreadable: unreadable, workspaces_retained: retained };
+  if (!dryRun) {
+    appendEvent({ event_type: "workspace.secrets_backfilled", source: details.source || "platform", actor_id: details.actor_id || null, subject_type: "workspace", subject_id: "*", payload: { workspaces_migrated: workspacesMigrated, secrets_migrated: migrated, secrets_skipped_existing: skippedExisting, secrets_skipped_null: skippedNull, workspaces_unreadable: unreadable.length, workspaces_retained: retained.length }, correlation_id: details.correlation_id || null });
+  }
+  return { workspaces_scanned: rows.length, workspaces_migrated: workspacesMigrated, secrets_migrated: migrated, secrets_skipped_existing: skippedExisting, secrets_skipped_null: skippedNull, workspaces_unreadable: unreadable, workspaces_retained: retained, dry_run: dryRun };
 }
 
 /**
@@ -2071,6 +2129,22 @@ function recordModelUsage(modelId) {
   return dbStore.getDb().prepare("SELECT * FROM platform_model_registry WHERE model_id = ?").get(modelId);
 }
 
+/**
+ * DEPRECATED — `platform_extensions` is a second module-ish lifecycle.
+ *
+ * `platform_modules` (via `src/modules/`) is the single module authority: it
+ * owns managed installation, integrity verification, activation, policy,
+ * health, and reconciliation, and capability packs compose on top of it. This
+ * extension registry predates that system, has never had a production caller —
+ * only tests — and running two parallel lifecycles is how they drift into
+ * disagreeing about what is installed and active.
+ *
+ * These functions are retained (not deleted) so the schema and its tests keep
+ * building, and are deliberately NOT bridged to `platform_modules`: a bridge
+ * would make the duplication permanent instead of ending it. Do not add
+ * callers. `test/deprecated-kernel-surfaces.test.js` fails if production code
+ * starts using them.
+ */
 function registerExtension(input = {}) {
   ensurePlatformKernelSchema();
   const ts = nowIso();
@@ -2180,7 +2254,10 @@ function createBackup(input = {}) {
   const db = dbStore.getDb();
   const rowCounts = {};
   for (const table of tables) {
-    try { rowCounts[table] = db.prepare(`SELECT COUNT(*) as cnt FROM ${table}`).get().cnt; } catch { rowCounts[table] = 0; }
+    // A missing/unreadable table is recorded as such, not as an empty table:
+    // a backup manifest claiming 0 rows for a table it never read is the kind
+    // of quiet lie that surfaces only during a restore.
+    try { rowCounts[table] = db.prepare(`SELECT COUNT(*) as cnt FROM ${table}`).get().cnt; } catch { rowCounts[table] = { error: "unreadable" }; }
   }
   dbStore.getDb().prepare("INSERT INTO platform_backups (backup_id, name, state, type, tables_included_json, row_counts_json, compression, created_at, metadata_json) VALUES (?, ?, 'created', ?, ?, ?, ?, ?, ?)").run(backupId, input.name || `backup_${Date.now()}`, input.type || "full", json(tables), json(rowCounts), input.compression || "none", ts, json(input.metadata));
   appendEvent({ event_type: "backup.created", source: input.source || "platform", actor_id: input.actor_id, subject_type: "backup", subject_id: backupId, payload: { name: input.name, type: input.type || "full", table_count: tables.length }, correlation_id: backupId });
@@ -2196,18 +2273,31 @@ function getBackup(backupId) {
 
 function completeBackup(backupId, details = {}) {
   ensurePlatformKernelSchema();
+  // NOTE: file_path/file_size_bytes/checksum are caller-asserted and recorded
+  // unverified — the kernel does not read the file back or recompute the
+  // checksum. The verified backup path is the db_backup tool (src/db.js
+  // createBackup), which produces the file it describes.
   const ts = details.timestamp || nowIso();
   dbStore.getDb().prepare("UPDATE platform_backups SET state = 'completed', completed_at = ?, file_path = ?, file_size_bytes = ?, checksum = ? WHERE backup_id = ?").run(ts, details.file_path || null, details.file_size_bytes || null, details.checksum || null, backupId);
   appendEvent({ event_type: "backup.completed", source: details.source || "platform", actor_id: details.actor_id, subject_type: "backup", subject_id: backupId, payload: { file_path: details.file_path, file_size_bytes: details.file_size_bytes }, correlation_id: backupId });
   return dbStore.getDb().prepare("SELECT * FROM platform_backups WHERE backup_id = ?").get(backupId);
 }
 
-function restoreBackup(backupId, details = {}) {
+function restoreBackup(backupId) {
   ensurePlatformKernelSchema();
-  const ts = details.timestamp || nowIso();
-  dbStore.getDb().prepare("UPDATE platform_backups SET state = 'restored', restored_at = ? WHERE backup_id = ?").run(ts, backupId);
-  appendEvent({ event_type: "backup.restored", source: details.source || "platform", actor_id: details.actor_id, subject_type: "backup", subject_id: backupId, payload: { restored_from: backupId }, correlation_id: backupId });
-  return dbStore.getDb().prepare("SELECT * FROM platform_backups WHERE backup_id = ?").get(backupId);
+  // Fail honestly instead of recording fake success. This function never
+  // performed a restore: it flipped the row to 'restored' and appended a
+  // backup.restored event while touching zero data — an audit trail claiming
+  // a recovery that never happened. Until a real kernel restore exists, the
+  // supported path is the db_backup/db_restore tools (src/db.js), which
+  // actually copy and verify the database file.
+  const error = new Error(
+    `platform restoreBackup is not supported: no kernel restore implementation exists. ` +
+    `Use the db_backup/db_restore tools for real database backup and restore. (backup_id: ${backupId})`
+  );
+  error.code = "not_supported";
+  error.backup_id = String(backupId);
+  throw error;
 }
 
 function listBackups(filters = {}) {
@@ -2356,6 +2446,7 @@ module.exports = {
   createProjectWorkspace,
   getProjectWorkspace,
   getWorkspaceByProject,
+  listProjectWorkspaces,
   updateProjectWorkspace,
   archiveProjectWorkspace,
   registerProject,

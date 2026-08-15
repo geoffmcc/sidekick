@@ -1,4 +1,14 @@
 "use strict";
+
+// Evaluation replay — OPTIONAL FOUNDATION, deliberately without production
+// callers. This is a pure, non-durable, side-effect-safe digest library for
+// replay records (no dispatcher reference; actions are hardcoded []). It is
+// kept as a building block for future evaluation/regression work, not as a
+// wired runtime capability; do not treat its absence from production paths as
+// a gap. evaluateReplay fails CLOSED: a record without an expected digest is
+// { ok: false, reason: "missing_expectation" } — an evaluation that never
+// stated its expectation has not passed anything.
+
 const crypto = require("crypto");
 
 function canonical(value) {
@@ -16,6 +26,11 @@ function createReplayRecord(input = {}) {
 function evaluateReplay(record, expected = {}) {
   if (!record || record.schema !== "replay-v1" || record.side_effects !== false || !Array.isArray(record.actions) || record.actions.length !== 0) throw new Error("replay record is not side-effect safe");
   const expectedDigest = expected.input_digest || null;
-  return Object.freeze({ ok: expectedDigest ? expectedDigest === record.input_digest : true, input_digest: record.input_digest, expected_digest: expectedDigest, side_effects: false, actions: [] });
+  // Fail closed: no expectation means no pass. The previous ok:true default
+  // made an evaluation with a forgotten expectation indistinguishable from a
+  // passing one.
+  const ok = Boolean(expectedDigest) && expectedDigest === record.input_digest;
+  const reason = !expectedDigest ? "missing_expectation" : (ok ? "match" : "digest_mismatch");
+  return Object.freeze({ ok, reason, input_digest: record.input_digest, expected_digest: expectedDigest, side_effects: false, actions: [] });
 }
 module.exports = Object.freeze({ canonical, digest, createReplayRecord, evaluateReplay });

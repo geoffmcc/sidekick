@@ -58,13 +58,33 @@ test("BK.3: completeBackup marks completed", () => {
   assert.strictEqual(completed.file_path, "/backups/full.bak");
 });
 
-// BK.4: restoreBackup marks restored
-test("BK.4: restoreBackup marks restored", () => {
+// BK.4: restoreBackup refuses honestly instead of recording fake success
+test("BK.4: restoreBackup throws a structured not_supported error and records nothing", () => {
   const bk = platformKernel.createBackup({ name: "restore_test" });
   platformKernel.completeBackup(bk.backup_id, { file_path: "/backups/restore.bak" });
-  const restored = platformKernel.restoreBackup(bk.backup_id, { actor_id: "admin" });
-  assert.strictEqual(restored.state, "restored");
-  assert.ok(restored.restored_at);
+  let thrown = null;
+  try {
+    platformKernel.restoreBackup(bk.backup_id, { actor_id: "admin" });
+  } catch (e) {
+    thrown = e;
+  }
+  assert.ok(thrown, "restoreBackup must throw");
+  assert.strictEqual(thrown.code, "not_supported");
+  assert.match(thrown.message, /db_backup\/db_restore/, "error points at the real restore path");
+  // No fake audit trail: the row is untouched and no backup.restored event exists.
+  const row = platformKernel.getBackup(bk.backup_id);
+  assert.strictEqual(row.state, "completed");
+  assert.strictEqual(row.restored_at, null);
+  const events = dbStore.getDb().prepare("SELECT COUNT(*) AS c FROM platform_execution_events WHERE event_type = 'backup.restored' AND subject_id = ?").get(bk.backup_id).c;
+  assert.strictEqual(events, 0);
+});
+
+// BK.4b: createBackup records unreadable tables as errors, not zero rows
+test("BK.4b: createBackup marks a missing table unreadable instead of claiming 0 rows", () => {
+  const bk = platformKernel.createBackup({ name: "unreadable_test", tables: ["platform_executions", "table_that_does_not_exist"] });
+  const got = platformKernel.getBackup(bk.backup_id);
+  assert.deepStrictEqual(got.row_counts["table_that_does_not_exist"], { error: "unreadable" });
+  assert.strictEqual(typeof got.row_counts["platform_executions"], "number");
 });
 
 // BK.5: listBackups lists all

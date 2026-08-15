@@ -46,7 +46,8 @@ console.log('Running Filesystem Family Tests...');
     }
     // Capability Packs v1 added `capability` and `workflow`: 103 -> 105.
     // B7 added `connector` (read-only connector inspection): 105 -> 106.
-    assert.strictEqual(registry.listInDefinitionOrder().length, 106);
+    // The workspace surface added `workspace` (workspaces + encrypted secrets): 106 -> 107.
+    assert.strictEqual(registry.listInDefinitionOrder().length, 107);
     assert.deepStrictEqual(registry.listInDefinitionOrder().map(d => d.name), legacy.TOOL_DEFS.map(d => d.name));
     assert.strictEqual(family.descriptors.length, names.length);
 
