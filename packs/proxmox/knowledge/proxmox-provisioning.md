@@ -61,23 +61,41 @@ through pack configuration:
 ```
 
 A match — or Proxmox's own `protection` flag — is a hard deny that no other
-policy overrides. This is enforced in `configure`/`convert_template` and is the
-same decision a future guarded delete will consume.
+policy overrides. It is enforced on every operation that acts on an existing
+guest: `configure`, `convert_template` and `snapshot_create`; the **source
+guest of a `clone`** (duplicating a protected VM's disks is itself an act on
+it); every `proxmox_guest` lifecycle action — `start` included, because a
+deliberately stopped protected guest (quarantine, maintenance) must stay
+stopped; `proxmox_migrate`; and `proxmox_retire`.
 
-## Destructive operations: deliberately not shipped
+## Destructive operations: guarded retirement only
 
-The pack ships **no** delete/destroy capability, and the runtime client exposes
-no `delete()` method. Destruction is a privileged capability, not an ordinary
-HTTP verb, and will be introduced later only as an explicit guarded operation
-that enforces identity, provenance, protection, policy, approval, expected-
-effect preview and audit before Proxmox ever receives a DELETE.
+Destruction is a privileged capability, not an ordinary HTTP verb. The pack
+ships exactly one delete path — `proxmox_retire` (risk `critical`) — and it
+fails closed at every layer, in order:
 
-Integration and live probes need to clean up the disposable resources they
-create, so a single **test-only** guarded DELETE lives in the test/probe
-harness. It generates a unique marker, tags the resource unmistakably, reads
-the target back before deleting, verifies the exact marker, refuses anything it
-cannot prove it created, and verifies the resource is gone afterward. It is not
-a pack capability, not a client method, and not reachable by any tool.
+1. **Administrator enablement.** `allow_destroy: true` must be set in pack
+   configuration. There is no per-call argument that enables destruction, and
+   no force or bypass flag exists anywhere in the tool schema.
+2. **Fresh facts.** The guest is looked up and its config read immediately
+   before the decision — never from a cached or caller-supplied claim.
+3. **Positive provenance.** The guest must carry the `sidekick-managed` tag
+   AND a parseable Sidekick marker block, both agreeing. `require_test`
+   demands the disposable-test marking, and `marker` demands the exact
+   recorded per-resource marker. Ownership is proven, never assumed.
+4. **Protection.** A configured `protected_resources` match or Proxmox's own
+   protection flag is a hard deny that nothing overrides.
+5. **Deterministic decision + explain.** The policy decision and
+   expected-effect plan are produced before Proxmox receives a DELETE;
+   `dry_run: true` returns the plan and stops.
+6. **Completion and absence verification.** The retirement task's UPID is
+   monitored to a terminal state, and the guest's absence is re-verified
+   afterward. A completed task whose guest still exists is
+   `reconciliation_required`, never a success.
+
+Anything outside this envelope — volumes, snapshots, foreign or unmarked
+guests, protected guests, host/cluster administration — remains deliberately
+unshipped.
 
 ## Optional Ansible: `ansible_run` (risk: high)
 

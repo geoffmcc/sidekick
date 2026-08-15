@@ -85,7 +85,16 @@ function makeGitRepo() {
   await test("SR.2 research_status reports configured workspace and available capabilities", async () => {
     const s = await okCall("research_status", {});
     assert.strictEqual(s.workspace.state, "configured");
-    assert.strictEqual(s.capabilities.bash, true);
+    // Server presence and pack dispatchability are DIFFERENT facts and must be
+    // reported separately: git is composed only through the workflow engine and
+    // must not be advertised as something the module facade would dispatch.
+    assert.strictEqual(s.capabilities.present_on_server.bash, true);
+    assert.strictEqual(s.capabilities.present_on_server.git, true);
+    assert.strictEqual(s.capabilities.dispatchable_by_pack.bash, true);
+    assert.strictEqual(s.capabilities.dispatchable_by_pack.git, undefined, "git is not in the module's permission allowlist");
+    assert.strictEqual(s.capabilities.dispatchable_by_pack.ansible_run, undefined, "ansible_run is not in the module's permission allowlist");
+    assert.strictEqual(s.capabilities.present_on_server.hash, undefined, "hash is never composed and is no longer advertised");
+    assert.ok(Object.prototype.hasOwnProperty.call(s.capabilities.dispatchable_by_pack, "proxmox_retire"), "guarded retirement dispatchability is reported");
     assert.strictEqual(s.policy.local_probes_enabled, true);
     assert.ok(s.ready);
   });
@@ -396,6 +405,31 @@ function makeGitRepo() {
     const result = await labLib.cleanup(failing, ctx, {});
     assert.strictEqual(result.cleanup, "shutdown_incomplete");
     assert.strictEqual(result.resources[0].shutdown.ok, false);
+  });
+
+  await test("SR.24 the REAL module facade permits every tool lab cleanup dispatches (permission gate, not a fake)", async () => {
+    // SR.17/SR.18 exercise lab.js through a FAKE dispatch, which passes even
+    // when the real facade would refuse the tool — exactly the defect that made
+    // guarded retirement unreachable dead code (manifest missing
+    // proxmox_retire). This test builds the real facade from the REAL manifest
+    // permissions, with the real Proxmox pack installed so each tool resolves
+    // to its true risk, and asserts the permission gate opens. The dispatch may
+    // still fail proxmox-side (no profile configured) — that is the provider
+    // refusing, which is fine; module_permission_denied is not.
+    bundled.installBundledPack("proxmox", { enable: true });
+    const { createModuleServices } = require(path.join(REPO, "src/modules/services.js"));
+    const manifest = JSON.parse(fs.readFileSync(path.join(REPO, "packs/security-research/modules/security-research-tools/manifest.json"), "utf8"));
+    const services = createModuleServices("security-research-tools", {}, { permissions: manifest.permissions });
+    for (const [tool, args] of [
+      ["proxmox_provision", { action: "clone", dry_run: true, clone: { source_vmid: 9000, node: "pve-fixture" } }],
+      ["proxmox_guest", { action: "shutdown", vmid: 9999 }],
+      ["proxmox_retire", { action: "retire", vmid: 9999, dry_run: true, require_test: true }],
+    ]) {
+      const res = await services.v1.dispatch(tool, args);
+      assert.notStrictEqual(res.code, "module_permission_denied", `facade must not deny declared tool ${tool}: ${JSON.stringify(res)}`);
+      // Unconfigured provider: the refusal must come from the Proxmox side.
+      assert.strictEqual(res.code, "not_configured", `${tool} should fail provider-side without a profile, got ${res.code}`);
+    }
   });
 
   await test("SR.23 report from a running (uncompleted) run counts its artifact-derived evidence", async () => {

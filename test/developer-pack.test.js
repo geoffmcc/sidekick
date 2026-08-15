@@ -202,6 +202,13 @@ function buildFixtureRepository() {
     assert.strictEqual(summary.totals.files, 5, JSON.stringify(summary.by_kind));
     assert.ok(summary.totals.insertions > 0 && summary.totals.deletions > 0);
 
+    // The analysis pins WHAT was analyzed: commit, branch and tree state.
+    assert.strictEqual(summary.git_state.head_sha, git(['rev-parse', 'HEAD']).trim());
+    assert.strictEqual(summary.git_state.branch, 'main');
+    assert.strictEqual(summary.git_state.worktree_clean, false, 'the fixture change set is pending');
+    assert.ok(summary.git_state.changed_file_count >= 5, `changed files pinned, got ${summary.git_state.changed_file_count}`);
+    assert.strictEqual(summary.scope.base_sha, null, 'no base was requested, so none is invented');
+
     assert.strictEqual(summary.by_kind.source.count, 1, 'src/auth.js');
     assert.strictEqual(summary.by_kind.test.count, 1, 'test/auth.test.js');
     assert.strictEqual(summary.by_kind.documentation.count, 1, 'README.md');
@@ -250,6 +257,16 @@ function buildFixtureRepository() {
     fs.rmSync(path.join(FIXTURE_REPO, 'src', 'brand-new.js'));
   });
 
+  await test('DP.4b: dev_change_summary resolves the base ref to its exact commit sha', async () => {
+    // "diff against HEAD" is only reproducible as "diff against <sha>": the
+    // scope must carry both the literal ref and the sha it resolved to.
+    const summary = json(await callInternalTool('dev_change_summary', { path: FIXTURE_REPO, base: 'HEAD' }));
+    assert.strictEqual(summary.scope.base, 'HEAD');
+    assert.strictEqual(summary.scope.base_sha, git(['rev-parse', 'HEAD']).trim());
+    const bogus = json(await callInternalTool('dev_change_summary', { path: FIXTURE_REPO, base: 'HEAD~0' }));
+    assert.strictEqual(bogus.scope.base_sha, git(['rev-parse', 'HEAD']).trim(), 'any committish resolves');
+  });
+
   // --- DP.5 dev_verify executes real commands ------------------------------
   await test('DP.5: dev_verify selects and executes real commands, reporting the evidence', async () => {
     const result = await callInternalTool('dev_verify', { path: FIXTURE_REPO, intents: ['test'] });
@@ -263,6 +280,12 @@ function buildFixtureRepository() {
     assert.ok(testCommand.command_executed.includes(FIXTURE_REPO), 'the executed command is reported verbatim');
     assert.strictEqual(testCommand.exit_code, 0);
     assert.ok(typeof testCommand.duration_ms === 'number');
+
+    // The verdict pins the exact code it verified.
+    assert.strictEqual(report.git_state.head_sha, git(['rev-parse', 'HEAD']).trim());
+    assert.strictEqual(report.git_state.branch, 'main');
+    assert.strictEqual(typeof report.git_state.worktree_clean, 'boolean');
+    assert.ok(Number.isInteger(report.git_state.changed_file_count));
   });
 
   await test('DP.6: dev_verify reports a real failure with its exit status and output', async () => {
@@ -294,6 +317,13 @@ function buildFixtureRepository() {
     fs.writeFileSync(path.join(bare, 'notes.txt'), 'no project here\n');
     const report = json(await callInternalTool('dev_verify', { path: bare, intents: ['test', 'lint', 'build', 'syntax'] }));
     assert.strictEqual(report.verdict, 'nothing_to_verify');
+    // git_state is always present. The bare directory sits INSIDE the Sidekick
+    // checkout, so git honestly resolves the enclosing repository — the pin
+    // reports what the commands actually ran against, it does not pretend the
+    // path is repository-free when it is not.
+    for (const key of ['head_sha', 'branch', 'worktree_clean', 'changed_file_count']) {
+      assert.ok(Object.prototype.hasOwnProperty.call(report.git_state, key), `git_state.${key} present`);
+    }
     assert.deepStrictEqual(report.summary.not_detected.sort(), ['build', 'lint', 'syntax', 'test']);
     for (const entry of report.commands) {
       assert.strictEqual(entry.executed, false);

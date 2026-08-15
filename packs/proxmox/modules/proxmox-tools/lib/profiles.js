@@ -109,7 +109,18 @@ function listProfiles(config) {
   for (const [name, raw] of Object.entries(profiles)) {
     const parsed = parseProfile(name, raw);
     entries.push(parsed.ok
-      ? { name, valid: true, endpoint: parsed.profile.endpointParsed.value, allow_lifecycle: parsed.profile.allow_lifecycle, is_default: parsed.profile.is_default, tls: parsed.profile.ca_pem || parsed.profile.ca_secret_ref ? "pinned_ca" : "system_ca" }
+      ? {
+          name,
+          valid: true,
+          endpoint: parsed.profile.endpointParsed.value,
+          allow_lifecycle: parsed.profile.allow_lifecycle,
+          is_default: parsed.profile.is_default,
+          tls: parsed.profile.ca_pem || parsed.profile.ca_secret_ref ? "pinned_ca" : "system_ca",
+          // An SNI/verification-name override changes which certificate name
+          // is accepted, so an operator auditing profiles must be able to SEE
+          // it is in effect — omitted entirely when not set.
+          ...(parsed.profile.tls_servername ? { tls_servername: parsed.profile.tls_servername } : {}),
+        }
       : { name, valid: false, error: parsed.message });
   }
   return entries;

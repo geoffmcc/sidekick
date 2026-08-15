@@ -205,7 +205,22 @@ async function cloneGuest(client, profile, params, context) {
   const cloneResult = await monitorCreate(client, node, upid, kind, newid, { skipExistsCheck: true });
 
   // Stamp provenance onto the clone and apply the validated cloud-init config.
-  await client.post(["nodes", node, kind, newid, "config"], cfg);
+  // This is necessarily a SECOND request after the clone task (the clone API
+  // accepts no tags): if it fails, a fully created guest exists WITHOUT the
+  // sidekick-managed tag/marker — a resource the pack can never again prove it
+  // owns, and therefore can never retire. That is a reconciliation problem the
+  // operator must see loudly and immediately, not a swallowed follow-up error,
+  // so the failure names the orphaned vmid while stating the clone succeeded.
+  try {
+    await client.post(["nodes", node, kind, newid, "config"], cfg);
+  } catch (error) {
+    recordResourceEvent(context, { type: "resource_created", profile: profile.name, node, vmid: newid, kind, name, marker: prov.marker, run: context && context.correlationId, result: "provenance_stamp_failed", extra: { cloned_from: sourceVmid } });
+    throw new ProxmoxError(
+      "reconciliation_required",
+      `The clone task completed (new VMID ${newid} on ${node}) but stamping provenance onto it failed, leaving the guest WITHOUT sidekick-managed tags — the pack cannot recognize or retire it. Reconcile VMID ${newid} manually (tag it or remove it). Underlying error: ${error && error.message ? error.message : error}`,
+      { orphaned_vmid: newid, node, cloned_from: sourceVmid, clone_outcome: cloneResult.outcome, clone_task: cloneResult.task || { upid } }
+    );
+  }
 
   recordResourceEvent(context, { type: "resource_created", profile: profile.name, node, vmid: newid, kind, name, marker: prov.marker, run: context && context.correlationId, result: cloneResult.outcome, extra: { cloned_from: sourceVmid } });
   return { operation: "clone", vmid: newid, node, type: kind, name: name || null, cloned_from: sourceVmid, marker: prov.marker, tags: provenance.normalizeTags(prov.tags), ...cloneResult };

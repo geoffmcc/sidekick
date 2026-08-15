@@ -182,7 +182,19 @@ async function devChangeSummary(services, { path: requestedPath, base, staged = 
   if (staged) diffScope.push("--cached");
   if (base) diffScope.push(base);
   const unified = await services.dispatch("git", { action: "diff", path: root, args: [...diffScope, "--unified=0"].join(" ").trim() });
+  // A failed unified-diff read must not be fed to the analyzer as if it were
+  // diff text — an error message contains no hunks, so the analysis would
+  // "succeed" on garbage. Same failure contract as collectDiff above.
+  if (!unified || unified.isError) {
+    return errorResult(`Could not read the change set diff: ${verify.textOf(unified).trim().slice(0, 500)}`, { code: "diff_unavailable", repository: root });
+  }
   const diffText = verify.textOf(unified).slice(0, max_diff_chars || 400000);
+
+  // Pin exactly what was analyzed: the commit, branch and tree state, and the
+  // base resolved to a sha — "diff against origin/main" is not reproducible
+  // once origin/main moves, but "diff against <sha>" is.
+  const gitState = await gitFacts.collectStateFacts(services, root);
+  const baseSha = base ? await gitFacts.resolveRefSha(services, root, base) : null;
 
   const analysis = changes.analyzeChangeSet({
     files: diffStats.files,
@@ -208,7 +220,13 @@ async function devChangeSummary(services, { path: requestedPath, base, staged = 
     tool: "dev_change_summary",
     generated_at: new Date().toISOString(),
     repository: root,
-    scope: { base: base || null, staged: Boolean(staged), description: base ? `diff against ${base}` : staged ? "staged changes" : "unstaged working-tree changes" },
+    scope: { base: base || null, base_sha: baseSha, staged: Boolean(staged), description: base ? `diff against ${base}` : staged ? "staged changes" : "unstaged working-tree changes" },
+    git_state: {
+      head_sha: gitState.head_sha,
+      branch: gitState.branch,
+      worktree_clean: gitState.worktree_clean,
+      changed_file_count: gitState.changed_file_count,
+    },
     ...analysis,
     untracked: {
       count: untracked.length,
@@ -267,6 +285,12 @@ async function devVerify(services, { path: requestedPath, mode, intents: request
   });
   const summary = verify.summarize(results, intents);
 
+  // Pin exactly what was verified. A verification verdict that cannot name
+  // the commit and tree state it ran against loses its meaning the moment the
+  // worktree changes; collected AFTER the run so the sha reflects the tree
+  // the commands actually saw (nothing here mutates the repository).
+  const gitState = await gitFacts.collectStateFacts(services, root);
+
   return {
     content: [{
       type: "text",
@@ -275,6 +299,12 @@ async function devVerify(services, { path: requestedPath, mode, intents: request
         tool: "dev_verify",
         generated_at: new Date().toISOString(),
         repository: root,
+        git_state: {
+          head_sha: gitState.head_sha,
+          branch: gitState.branch,
+          worktree_clean: gitState.worktree_clean,
+          changed_file_count: gitState.changed_file_count,
+        },
         mode: effectiveMode,
         requested_intents: intents,
         autodetect: autodetect,

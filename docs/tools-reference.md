@@ -76,7 +76,7 @@ Filesystem path guardrails are optional and default to open. Use `SIDEKICK_ALLOW
 | `hash` | Data Pipeline | Generate checksums (MD5, SHA1, SHA256, SHA512) for files or data with verification | `{ input: "string (optional, data to hash)", path: "string (optional, file path to hash)", algorithm: "string (optional, md5|sha1|sha256|sha512 - default sha256)", verify: "string (optional, expected hash to verify against)" }` |
 | `validate` | Data Pipeline | Validate data against JSON Schema | `{ data: "string|object (data to validate)", schema: "string|object (JSON Schema)" }` |
 | `template` | Data Pipeline | Render Handlebars templates with data | `{ template: "string (Handlebars template)", data: "string|object (template data)" }` |
-| `queue` | Workflow | Persistent task queue with priorities | `{ action: "string (add|list|process|remove|clear)", id: "number (optional, task id for remove)", tool: "string (optional, tool name for add)", args: "object (optional, tool args for add)", priority: "number (optional, priority for add, default 0)", status: "string (optional, status filter for list/clear)" }` |
+| `queue` | Workflow | File-backed task queue with priorities; tasks run in-process when processed, and tasks interrupted mid-processing are re-queued by recover (also run automatically before process) | `{ action: "string (add|list|process|remove|clear|recover)", id: "number (optional, task id for remove)", tool: "string (optional, tool name for add)", args: "object (optional, tool args for add)", priority: "number (optional, priority for add, default 0)", status: "string (optional, status filter for list/clear)", older_than_minutes: "number (optional, for recover - re-queue tasks stuck in processing longer than this, default 10)" }` |
 | `retry` | Workflow | Retry tool calls with exponential backoff | `{ tool: "string (tool to retry)", args: "object (optional, tool args)", max_attempts: "number (optional, default 3)", backoff: "string (optional, exponential|linear|fixed, default exponential)", initial_delay: "number (optional, ms, default 1000)" }` |
 | `evolve` | Meta | Evidence-driven workflow learning and generated-tool lifecycle management | `{ action: "string (analyze|candidates|inspect|validate|approve|activate_trial|promote|reject|deprecate|feedback|report)", id: "string (optional)", proposal: "string (optional structured JSON)", approver: "string (optional)", useful: "boolean (optional)", reason: "string (optional)" }` |
 | `orchestrate` | Workflow | Multi-agent coordination: create task graphs, execute subtasks with dependencies, track progress | `{ action: "string (create|execute|list|status|cancel)", id: "number (optional, task id for execute/status/cancel)", task_name: "string (optional, task name for create)", subtasks: "array (optional, subtask definitions for create)", dependencies: "object (optional, dependency map for create)", timeout: "number (optional, timeout in ms, default 1800000)" }` |
@@ -462,9 +462,9 @@ Arguments: `{ action: "string (add|list|remove|pause|check)", id: "string (optio
 
 ### `queue`
 
-Persistent task queue with priorities
+File-backed task queue with priorities; tasks run in-process when processed, and tasks interrupted mid-processing are re-queued by recover (also run automatically before process)
 
-Arguments: `{ action: "string (add|list|process|remove|clear)", id: "number (optional, task id for remove)", tool: "string (optional, tool name for add)", args: "object (optional, tool args for add)", priority: "number (optional, priority for add, default 0)", status: "string (optional, status filter for list/clear)" }`
+Arguments: `{ action: "string (add|list|process|remove|clear|recover)", id: "number (optional, task id for remove)", tool: "string (optional, tool name for add)", args: "object (optional, tool args for add)", priority: "number (optional, priority for add, default 0)", status: "string (optional, status filter for list/clear)", older_than_minutes: "number (optional, for recover - re-queue tasks stuck in processing longer than this, default 10)" }`
 
 ### `retry`
 

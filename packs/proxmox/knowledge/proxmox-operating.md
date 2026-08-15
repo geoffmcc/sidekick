@@ -39,7 +39,10 @@ monitors the Proxmox task to a terminal state. Success is derived from task
 completion, not from the request being accepted.
 
 It does **not** hard-stop, reset, suspend, delete, clone, migrate, or snapshot,
-and it changes no configuration. Migration is a separate governed tool.
+and it changes no configuration. Migration is a separate governed tool. A guest
+matching `protected_resources` (or carrying Proxmox's protection flag) is
+refused for every lifecycle action — `start` included, so a deliberately
+stopped protected guest stays stopped.
 
 ### `proxmox_migrate` (risk: high, change)
 

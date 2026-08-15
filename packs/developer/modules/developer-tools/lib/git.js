@@ -127,6 +127,45 @@ async function collectRepositoryFacts(services, repoPath) {
   return facts;
 }
 
+/**
+ * Pin WHAT code an analysis or verification ran against. A verdict that does
+ * not carry {head_sha, branch, worktree_clean, changed_file_count} cannot be
+ * tied back to a commit later — "tests passed" is meaningless once the tree
+ * moves. Reads go through the same governed git dispatch as every other fact,
+ * and a non-repository degrades to nulls rather than failing the tool.
+ */
+async function collectStateFacts(services, repoPath) {
+  const status = await gitRead(services, repoPath, "status", "--porcelain=v1 -b");
+  if (!status.ok) {
+    return { available: false, head_sha: null, branch: null, worktree_clean: null, changed_file_count: null };
+  }
+  const parsed = parseStatus(status.text);
+  const head = await gitRead(services, repoPath, "log", "-1 --pretty=format:%H");
+  return {
+    available: true,
+    // A malformed value is reported as null, never passed through: the sha is
+    // the anchor other evidence hangs off, so it is either a real sha or absent.
+    head_sha: head.ok && /^[0-9a-f]{40}$/.test(head.text) ? head.text : null,
+    branch: parsed.branch,
+    worktree_clean: parsed.clean,
+    changed_file_count: parsed.changed_file_count,
+  };
+}
+
+/**
+ * Resolve a ref (e.g. "origin/main") to its commit sha through the governed
+ * git tool. `rev-parse` is not in the git tool's action allowlist, so `log -1`
+ * on the ref — equivalent for any committish — keeps the read inside the
+ * governed surface. An unresolvable ref returns null; the caller reports the
+ * literal ref alongside, so nothing is silently invented.
+ */
+async function resolveRefSha(services, repoPath, ref) {
+  if (!ref || typeof ref !== "string") return null;
+  const out = await gitRead(services, repoPath, "log", `-1 --pretty=format:%H ${ref}`);
+  const sha = out.text.trim();
+  return out.ok && /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+}
+
 /** Structured diff statistics for a change set. */
 async function collectDiff(services, repoPath, { base, staged = false } = {}) {
   const scope = [];
@@ -164,4 +203,4 @@ async function collectDiff(services, repoPath, { base, staged = false } = {}) {
   return { ok: true, files, insertions, deletions, binary_files: binaryCount, file_count: files.length };
 }
 
-module.exports = { collectRepositoryFacts, collectDiff, parseStatus, parseLog, textOf, SEPARATOR };
+module.exports = { collectRepositoryFacts, collectStateFacts, resolveRefSha, collectDiff, parseStatus, parseLog, textOf, SEPARATOR };
