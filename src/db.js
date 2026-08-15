@@ -6,6 +6,7 @@ const { splitSqlStatements, parseAddColumn } = require("./core/sql-statements");
 const { createKvStore } = require("./db/kv-store");
 const { createToolLogStore } = require("./db/tool-logs");
 const { createGeneratedCapabilityStore } = require("./db/generated-capabilities");
+const { createGeneratedExecutionRowMappers } = require("./db/generated-execution-rows");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const DB_FILE = process.env.SIDEKICK_DB_FILE || path.join(DATA_DIR, "sidekick.db");
@@ -247,49 +248,7 @@ const { appendToolLog, readToolLogs, clearToolLogs } = createToolLogStore({ db, 
 
 const { saveGeneratedCapability, getGeneratedCapability, getGeneratedCapabilityByName, listGeneratedCapabilities, appendGeneratedToolAudit, listGeneratedToolAudit } = createGeneratedCapabilityStore({ db, parseJson, nowIso });
 
-function executionFromRow(row) {
-  if (!row) return null;
-  return {
-    id: row.id,
-    capabilityId: row.capability_id,
-    toolName: row.tool_name,
-    state: row.state,
-    source: row.source,
-    args: parseJson(row.args_json, {}),
-    successCriteria: row.success_criteria,
-    successCriteriaSatisfied: row.success_criteria_satisfied === null || row.success_criteria_satisfied === undefined ? null : Boolean(row.success_criteria_satisfied),
-    finalSummary: row.final_summary,
-    errorCategory: row.error_category,
-    cancelRequested: Boolean(row.cancel_requested),
-    timeoutMs: row.timeout_ms,
-    startedAt: row.started_at,
-    completedAt: row.completed_at,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    steps: [],
-  };
-}
-
-function executionStepFromRow(row) {
-  if (!row) return null;
-  return {
-    id: row.id,
-    executionId: row.execution_id,
-    stepNumber: row.step_number,
-    toolName: row.tool_name,
-    state: row.state,
-    args: parseJson(row.args_json, {}),
-    startedAt: row.started_at,
-    completedAt: row.completed_at,
-    durationMs: row.duration_ms,
-    resultSummary: row.result_summary,
-    retryCount: row.retry_count || 0,
-    errorCategory: row.error_category,
-    success: row.success === null || row.success === undefined ? null : Boolean(row.success),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
+const { executionFromRow, executionStepFromRow } = createGeneratedExecutionRowMappers(parseJson);
 
 function createGeneratedToolExecution(execution) {
   const now = nowIso();
