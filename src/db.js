@@ -3,6 +3,7 @@ const path = require("path");
 const zlib = require("zlib");
 const crypto = require("crypto");
 const { splitSqlStatements, parseAddColumn } = require("./core/sql-statements");
+const { createKvStore } = require("./db/kv-store");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const DB_FILE = process.env.SIDEKICK_DB_FILE || path.join(DATA_DIR, "sidekick.db");
@@ -238,89 +239,7 @@ function loadDocument(name, fallback) {
   return existing !== undefined ? existing : fallback;
 }
 
-function loadKV(fallback = {}) {
-  const rows = db.prepare("SELECT key, value_json FROM kv_store ORDER BY key").all();
-  if (rows.length > 0) {
-    const out = {};
-    for (const row of rows) out[row.key] = parseJson(row.value_json, null);
-    return out;
-  }
-  return fallback;
-}
-
-function clearKV() {
-  db.prepare("DELETE FROM kv_store").run();
-}
-
-function setKV(key, value, project, source, category) {
-  const ts = nowIso();
-  const existing = getKV(key);
-  const created = existing ? existing.created : ts;
-  const entry = {
-    value: value,
-    project: project || null,
-    category: category || null,
-    source: source || null,
-    created: created,
-    updated: ts
-  };
-  db.prepare(`
-    INSERT INTO kv_store (key, value_json, project, source, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT(key) DO UPDATE SET
-      value_json = excluded.value_json,
-      project = excluded.project,
-      source = excluded.source,
-      updated_at = excluded.updated_at
-  `).run(key, JSON.stringify(entry), project, source, ts, ts);
-}
-
-function getKV(key) {
-  const row = db.prepare("SELECT value_json FROM kv_store WHERE key = ?").get(key);
-  if (!row) return null;
-  return parseJson(row.value_json, null);
-}
-
-function deleteKV(key) {
-  db.prepare("DELETE FROM kv_store WHERE key = ?").run(key);
-}
-
-function listKVProjects() {
-  const rows = db.prepare("SELECT DISTINCT project FROM kv_store WHERE project IS NOT NULL").all();
-  return rows.map(r => r.project);
-}
-
-function getAllKV() {
-  const rows = db.prepare("SELECT key, value_json FROM kv_store ORDER BY key").all();
-  const out = {};
-  for (const row of rows) {
-    out[row.key] = parseJson(row.value_json, null);
-  }
-  return out;
-}
-
-function replaceKV(data) {
-  const ts = nowIso();
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    db.prepare("DELETE FROM kv_store").run();
-    const insert = db.prepare(`
-      INSERT INTO kv_store (key, value_json, project, source, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
-    for (const [key, value] of Object.entries(data || {})) {
-      const project = value && typeof value === "object" && !Array.isArray(value) ? value.project || null : null;
-      const source = value && typeof value === "object" && !Array.isArray(value) ? value.source || null : null;
-      const created = value && typeof value === "object" && !Array.isArray(value) ? value.created || ts : ts;
-      const updated = value && typeof value === "object" && !Array.isArray(value) ? value.updated || ts : ts;
-      insert.run(key, JSON.stringify(value), project, source, created, updated);
-    }
-    db.exec("COMMIT");
-  } catch (error) {
-    try { db.exec("ROLLBACK"); } catch {}
-    throw error;
-  }
-}
+const { loadKV, clearKV, replaceKV, setKV, getKV, deleteKV, listKVProjects, getAllKV } = createKvStore({ db, parseJson, nowIso });
 
 function appendToolLog(entry) {
   db.prepare(`
