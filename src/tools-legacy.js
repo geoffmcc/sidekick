@@ -59,16 +59,8 @@ const CRON_FILE = path.join(DATA_DIR, "cron.json");
 const WEBHOOK_FILE = path.join(DATA_DIR, "webhooks.json");
 const MAX_LOG = 1000;
 
-let compatibilitySource = "unknown";
-
-function setSource(source) {
-  compatibilitySource = source || "unknown";
-  toolContext.setExecutionSource(compatibilitySource);
-}
-
-function getCurrentSource() {
-  return toolContext.getExecutionSource() || compatibilitySource || "unknown";
-}
+const { createSourceCompat } = require("./tools/source-compat");
+const { setSource, getCurrentSource } = createSourceCompat({ toolContext });
 
 // Canonical names of every built-in tool, including those whose handlers have
 // moved to descriptor-owned families under src/tools/families/. Built lazily
