@@ -34,6 +34,7 @@ const { registerLogsRoute } = require("./dashboard/logs-route");
 const { registerApprovalRoutes } = require("./dashboard/approval-routes");
 const { registerQuickActionsRoute } = require("./dashboard/quick-actions-route");
 const { registerStatsToolsRoutes } = require("./dashboard/stats-tools-routes");
+const { registerSummaryRoute } = require("./dashboard/summary-route");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const PORT = parseInt(process.env.SIDEKICK_DASHBOARD_PORT || "4098", 10);
@@ -803,7 +804,7 @@ function seedKV() {
 
 registerLogsRoute({ app, dbStore, normalizeLogEntry, buildActivitySessions, summarizeActivity, fallbackGapMs: ACTIVITY_FALLBACK_GAP_MS });
 
-app.get("/api/dashboard-summary", async (req, res) => {
+async function dashboardSummaryHandler(req, res) {
   try {
     // Health score calculation
     const snapshot = systemSnapshot();
@@ -961,7 +962,9 @@ app.get("/api/dashboard-summary", async (req, res) => {
   } catch (e) {
     res.json({ error: e.message });
   }
-});
+}
+
+registerSummaryRoute({ app, handler: dashboardSummaryHandler });
 
 app.get("/api/artifacts", (req, res) => {
   try {
