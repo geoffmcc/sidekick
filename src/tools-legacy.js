@@ -134,99 +134,6 @@ const {
 
 // Sync tool registry from code to database
 // This function is called on server startup to ensure the DB has current tool metadata
-function syncToolRegistry() {
-  try {
-    const db = dbStore.getDb();
-    const now = new Date().toISOString();
-
-    // Check if tool_categories table exists (migration may not have run yet)
-    const tableExists = db.prepare(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name='tool_categories'"
-    ).get();
-
-    if (!tableExists) {
-      console.log('[ToolRegistry] Tables not yet created, skipping sync');
-      return;
-    }
-
-    // Get all current tools from code. Active module tools count as current
-    // so the catalog shows them and does not mark them deprecated; provision
-    // modules BEFORE calling this or their tools deprecate until the next sync.
-    const moduleDefs = require("./modules/loader").getActiveDescriptors().map(d => ({
-      name: d.name,
-      description: d.description,
-      args: d.args,
-      risk: d.risk,
-      category: d.category,
-    }));
-    const dynamicNames = new Set(dbStore.listGeneratedCapabilities({ states: ["trial", "active"] }).map(t => t.name));
-    const codeTools = new Set([...TOOL_DEFS.map(t => t.name), ...moduleDefs.map(t => t.name), ...dynamicNames]);
-
-    // Get all tools from database
-    const dbTools = db.prepare("SELECT name, deprecated FROM tools").all();
-    const dbToolNames = new Set(dbTools.map(t => t.name));
-
-    // Upsert tools from code into database
-    const upsertTool = db.prepare(`
-      INSERT INTO tools (name, description, args_json, risk, enabled, deprecated, updated_at)
-      VALUES (?, ?, ?, ?, 1, 0, ?)
-      ON CONFLICT(name) DO UPDATE SET
-        description = excluded.description,
-        args_json = excluded.args_json,
-        risk = excluded.risk,
-        enabled = 1,
-        deprecated = 0,
-        updated_at = excluded.updated_at
-    `);
-
-    // Map category names to IDs
-    const categoryMap = {};
-    const categories = db.prepare("SELECT id, name FROM tool_categories").all();
-    for (const cat of categories) {
-      categoryMap[cat.name] = cat.id;
-    }
-
-    // Clear existing tool-category mappings (we'll recreate them)
-    db.prepare("DELETE FROM tool_category_map").run();
-
-    // Insert/update each tool (module descriptors carry their own risk and
-    // category; legacy defs fall back to the static maps)
-    for (const toolDef of [...TOOL_DEFS, ...moduleDefs]) {
-      const risk = toolDef.risk || TOOL_RISK[toolDef.name] || "low";
-      const argsJson = JSON.stringify(toolDef.args || {});
-
-      upsertTool.run(
-        toolDef.name,
-        toolDef.description,
-        argsJson,
-        risk,
-        now
-      );
-
-      // Get the tool's category
-      const categoryName = toolDef.category || TOOL_CATEGORIES[toolDef.name];
-      if (categoryName && categoryMap[categoryName]) {
-        db.prepare(
-          "INSERT INTO tool_category_map (tool_name, category_id) VALUES (?, ?)"
-        ).run(toolDef.name, categoryMap[categoryName]);
-      }
-    }
-
-    // Mark tools that exist in DB but not in code as deprecated
-    for (const dbTool of dbTools) {
-      if (!codeTools.has(dbTool.name) && !dbTool.deprecated) {
-        db.prepare(
-          "UPDATE tools SET deprecated = 1, enabled = 0, updated_at = ? WHERE name = ?"
-        ).run(now, dbTool.name);
-      }
-    }
-
-    dbStore.syncGeneratedToolRegistry();
-    console.log(`[ToolRegistry] Synced ${TOOL_DEFS.length} built-in tools, ${moduleDefs.length} module tools, and ${dynamicNames.size} generated tools to database`);
-  } catch (error) {
-    console.error('[ToolRegistry] Error syncing tool registry:', error.message);
-  }
-}
 
 
 
@@ -291,118 +198,27 @@ const {
   getCurrentSource,
 });
 
-function logToolCall(name, args, duration, success, summary, metadata = {}) {
-  try {
-    // The secret tool's results carry raw credential values (`get` returns the
-    // decrypted value, `rotate` echoes the new one) and `store` receives the
-    // plaintext in args.value. Pattern redaction cannot recognize arbitrary
-    // secret values, so scrub these before any persistence below.
-    const canonical = stripSidekickPrefix(String(name || ""));
-    if (canonical === "secret") {
-      if (args && typeof args === "object" && args.value !== undefined) {
-        args = { ...args, value: "[REDACTED]" };
-      }
-      if (success && ["get", "rotate"].includes(args?.action)) {
-        // Phrased without redaction trigger words: summarizeResult re-applies
-        // redactSensitive, which would rewrite e.g. "secret value" itself.
-        summary = "(sensitive value withheld)";
-      }
-    }
-    const redactedSummary = evolveCommon.summarizeResult(summary);
-    const argsShape = evolveCommon.normalizeArgs(args || {});
-    dbStore.appendToolLog({
-      t: new Date().toISOString(),
-      n: name,
-      a: formatArgs(args),
-      d: Math.round(duration),
-      ok: success,
-      s: redactedSummary,
-      src: getCurrentSource(),
-      session_id: metadata.sessionId || metadata.session_id || process.env.SIDEKICK_SESSION_ID || null,
-      task_id: metadata.taskId || metadata.task_id || metadata.requestId || metadata.request_id || null,
-      project: metadata.project || process.env.SIDEKICK_PROJECT || null,
-      args_shape: argsShape,
-      arg_fingerprint: evolveCommon.fingerprint(argsShape),
-      error_category: success ? null : evolveCommon.errorCategory(redactedSummary),
-      result_summary: redactedSummary,
-      correlation_id: metadata.correlationId || metadata.correlation_id || null,
-      parent_id: metadata.parentId || metadata.parent_id || null,
-      execution_id: metadata.executionId || metadata.execution_id || null,
-      step_number: metadata.stepNumber || metadata.step_number || null,
-      retry: Boolean(metadata.retry),
-      generated_procedure: metadata.generatedProcedure || metadata.generated_procedure || null,
-      // Persisted via entry_json: attributes module-originated dispatches.
-      module: metadata.module || null
-    });
-    recordPlatformToolCall(name, argsShape, Math.round(duration), success, redactedSummary, metadata);
-    recordToolCallMemory({
-      name,
-      args,
-      duration,
-      success,
-      summary: redactedSummary,
-      source: getCurrentSource()
-    });
-  } catch (e) {}
-}
+const { createRegistrySyncCompat } = require("./tools/registry-sync-compat");
+const { syncToolRegistry } = createRegistrySyncCompat({
+  dbStore,
+  TOOL_DEFS,
+  TOOL_RISK,
+  TOOL_CATEGORIES,
+});
 
-function recordPlatformToolCall(name, argsShape, duration, success, summary, metadata = {}) {
-  try {
-    const currentSource = getCurrentSource();
-    if (!["mcp", "approval"].includes(currentSource)) return;
-    if (metadata.generatedProcedure || metadata.generated_procedure) return;
-    const execId = metadata.executionId || metadata.execution_id || null;
-    const guard = platformKernel.platformGuard(execId, null, {
-      operation_type: "tool_call",
-      tool_name: name,
-      allowConcurrent: true,
-    });
-    if (guard.execution && execId) {
-      platformKernel.transitionExecution(execId, success ? "completed" : "failed", {
-        source: currentSource,
-        reason: success ? `${currentSource} tool call completed` : `${currentSource} tool call failed`,
-        result_status: success ? "success" : "failure",
-        error_category: success ? null : evolveCommon.errorCategory(summary),
-        result_summary: summary,
-        correlation_id: guard.execution.root_execution_id,
-      });
-      return;
-    }
-    const startedAt = new Date(Date.now() - Math.max(Number(duration) || 0, 0)).toISOString();
-    const execution = platformKernel.createExecution({
-      execution_id: execId || undefined,
-      parent_execution_id: metadata.parentId || metadata.parent_id || null,
-      root_execution_id: metadata.rootExecutionId || metadata.root_execution_id || metadata.correlationId || metadata.correlation_id || metadata.executionId || metadata.execution_id || undefined,
-      task_id: metadata.taskId || metadata.task_id || metadata.requestId || metadata.request_id || null,
-      session_id: metadata.sessionId || metadata.session_id || process.env.SIDEKICK_SESSION_ID || null,
-      project_id: metadata.project || process.env.SIDEKICK_PROJECT || null,
-      actor_id: currentSource,
-      client_id: currentSource,
-      trigger_type: currentSource,
-      operation_type: "tool_call",
-      tool_name: name,
-      tool_action: argsShape && typeof argsShape.action === "string" ? argsShape.action : null,
-      risk: getToolRisk(name),
-      started_at: startedAt,
-      source: currentSource,
-      correlation_id: metadata.correlationId || metadata.correlation_id || metadata.executionId || metadata.execution_id || null,
-      metadata: {
-        args_shape: argsShape,
-        duration_ms: duration,
-        legacy_tool_log: true,
-      },
-    });
-    platformKernel.transitionExecution(execution.execution_id, "running", { source: currentSource, reason: `${currentSource} tool call started`, correlation_id: execution.root_execution_id });
-    platformKernel.transitionExecution(execution.execution_id, success ? "completed" : "failed", {
-      source: currentSource,
-      reason: success ? `${currentSource} tool call completed` : `${currentSource} tool call failed`,
-      result_status: success ? "success" : "failure",
-      error_category: success ? null : evolveCommon.errorCategory(summary),
-      result_summary: summary,
-      correlation_id: execution.root_execution_id,
-    });
-  } catch (e) {}
-}
+const { createLoggingCompat } = require("./tools/logging-compat");
+const {
+  logToolCall,
+  recordPlatformToolCall,
+} = createLoggingCompat({
+  evolveCommon,
+  dbStore,
+  getCurrentSource,
+  recordToolCallMemory,
+  platformKernel,
+  getToolRisk,
+  formatArgs,
+});
 
 module.exports = {
   TOOLS,
