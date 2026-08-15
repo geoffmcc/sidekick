@@ -29,6 +29,7 @@ const compute = require("./compute");
 const { probeConnector } = require("./connectors/health");
 const { registerConnectorRoutes } = require("./dashboard/connectors-routes");
 const { registerKvRoutes } = require("./dashboard/kv-routes");
+const { registerSystemRoutes } = require("./dashboard/system-routes");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const PORT = parseInt(process.env.SIDEKICK_DASHBOARD_PORT || "4098", 10);
@@ -833,23 +834,6 @@ app.get("/api/logs", (req, res) => {
   res.json({ entries, sessions, summary: summarizeActivity(sessions, entries), total: entries.length, fallback_grouping_ms: ACTIVITY_FALLBACK_GAP_MS });
 });
 
-app.get("/api/system", (req, res) => {
-  try {
-    const snapshot = systemSnapshot();
-    res.json({
-      uptime: snapshot.uptime,
-      memory: { total: snapshot.memory.total, used: snapshot.memory.used, free: snapshot.memory.free, pct: snapshot.memory.pct },
-      disk: { total: snapshot.disk.total, free: snapshot.disk.free, pct: snapshot.disk.pct },
-      // Honest naming: this is the 1-minute load average, not a CPU percent.
-      load_1m: snapshot.load_1m,
-      cpu_count: snapshot.cpu_count,
-      load: snapshot.load
-    });
-  } catch (e) {
-    res.json({ error: e.message });
-  }
-});
-
 app.get("/api/dashboard-summary", async (req, res) => {
   try {
     // Health score calculation
@@ -1145,15 +1129,6 @@ app.get("/api/llm", (req, res) => {
   }
 });
 
-app.get("/api/services", (req, res) => {
-  const services = ["sidekick-mcp", "sidekick-dashboard", "sidekick-agent", "ollama"];
-  const status = {};
-  for (const svc of services) {
-    status[svc] = systemctlStatus(svc);
-  }
-  res.json({ services: status });
-});
-
 app.post("/api/quick-actions/:action", async (req, res) => {
   const action = req.params.action;
   const execution = startDashboardExecution(req, action);
@@ -1253,56 +1228,15 @@ app.post("/api/quick-actions/:action", async (req, res) => {
   }
 });
 
-app.get("/api/metrics/status", async (req, res) => {
-  const grafanaConfigured = Boolean(GRAFANA_USER);
-  const influxToken = process.env.SIDEKICK_INFLUX_TOKEN || "";
-  const influxConfigured = Boolean(influxToken && influxToken !== "sidekick-influx-token");
-  const status = {
-    grafana: {
-      configured: grafanaConfigured,
-      reachable: false
-    },
-    influxdb: {
-      configured: influxConfigured,
-      reachable: false
-    },
-    collector: {
-      timerActive: false,
-      timerEnabled: false
-    }
-  };
-
-  try {
-    await getJsonFromLocalService(GRAFANA_PORT, "/api/health");
-    status.grafana.reachable = true;
-  } catch {}
-
-  try {
-    await new Promise((resolve, reject) => {
-      const req = http.get({ hostname: "127.0.0.1", port: 8086, path: "/ping", timeout: 3000 }, res => {
-        res.resume();
-        res.statusCode >= 200 && res.statusCode < 500 ? resolve() : reject(new Error(`HTTP ${res.statusCode}`));
-      });
-      req.on("timeout", () => req.destroy(new Error("timeout")));
-      req.on("error", reject);
-    });
-    status.influxdb.reachable = true;
-  } catch {}
-
-  try {
-    status.collector.timerActive = systemctlStatus("sidekick-metrics.timer", "is-active") === "active";
-    status.collector.timerEnabled = systemctlStatus("sidekick-metrics.timer", "is-enabled") === "enabled";
-  } catch {}
-
-  const issues = [];
-  if (!status.grafana.configured) issues.push("SIDEKICK_GRAFANA_ADMIN_USER is not configured for the Grafana auth proxy");
-  if (!status.grafana.reachable) issues.push("Grafana is not reachable on localhost");
-  if (!status.influxdb.configured) issues.push("SIDEKICK_INFLUX_TOKEN is not configured for metrics collection");
-  if (!status.influxdb.reachable) issues.push("InfluxDB is not reachable on localhost");
-  if (!status.collector.timerActive) issues.push("sidekick-metrics.timer is not active");
-  status.ok = issues.length === 0;
-  status.issues = issues;
-  res.json(status);
+registerSystemRoutes({
+  app,
+  systemSnapshot,
+  systemctlStatus,
+  getJsonFromLocalService,
+  http,
+  grafanaPort: GRAFANA_PORT,
+  grafanaConfigured: Boolean(GRAFANA_USER),
+  influxConfigured: Boolean((process.env.SIDEKICK_INFLUX_TOKEN || "") && process.env.SIDEKICK_INFLUX_TOKEN !== "sidekick-influx-token"),
 });
 
 app.get("/api/config", (req, res) => {
