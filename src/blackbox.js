@@ -448,6 +448,11 @@ function registerPlatformArtifact(execution, artifact, details = {}) {
 }
 
 function migrateSchema() {
+  // diagnostics_json and retry_of are owned by migration
+  // 037_runtime_schema_convergence.sql; these PRAGMA-guarded ALTERs remain so
+  // the module stays boot-order independent (a runtime-first boot gets the
+  // columns before the migrations run, and the migration's idempotent ADD
+  // COLUMN handling makes the overlap a no-op).
   const db = dbStore.getDb();
   try {
     const cols = db.prepare("PRAGMA table_info(blackbox_captures)").all().map(c => c.name);

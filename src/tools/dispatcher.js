@@ -340,14 +340,31 @@ async function executeApprovedTool({ approvalId, reviewer = "system", source } =
         : `Approval ${approvalId} could not be approved (${outcome.code})`;
       return errorResult(message, outcome.code);
     }
+    // Honesty check: "will be resumed by the task runner" is only true when a
+    // task runner is actually alive. The resume scheduler writes a heartbeat
+    // into the approvals store every poll; absent or stale means Brain is
+    // disabled or the agent service is down, and the task will simply stay
+    // parked. Report that instead of fabricating resumption. Fail closed: an
+    // unreadable heartbeat is reported as "not detected", never as live.
+    let runnerWarning = null;
+    try {
+      const liveness = require("../approvals/store").isTaskRunnerLive();
+      if (!liveness.live) {
+        runnerWarning = `No active task runner was detected (${liveness.reason}). The task is runnable but will remain parked until a task runner starts (agent service with SIDEKICK_BRAIN_ENABLED=1).`;
+      }
+    } catch {
+      runnerWarning = "Task runner liveness could not be determined. The task is runnable but may remain parked until a task runner claims it.";
+    }
     return normalizeResult({
       content: [{
         type: "text",
-        text: `Approved ${approvalId} for task ${outcome.taskId}. The task is runnable and will be resumed by the task runner.`,
+        text: `Approved ${approvalId} for task ${outcome.taskId}. ` +
+          (runnerWarning || "The task is runnable and will be resumed by the task runner."),
       }],
       approvalId,
       taskId: outcome.taskId,
       status: "task_runnable",
+      ...(runnerWarning ? { warning: runnerWarning } : {}),
     });
   }
 

@@ -16,12 +16,31 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const SECRETS_FILE = path.join(DATA_DIR, "secrets.enc");
 
+// One loud log per distinct failure per process: loadSecrets is called on hot
+// paths (every github/connector credential resolution), so a corrupt store
+// must be visible without producing a log line per call.
+const reportedLoadFailures = new Set();
+
 function loadSecrets() {
+  // Missing file is the normal empty-store case: silent, no error.
   if (!fs.existsSync(SECRETS_FILE)) return {};
   try {
     const data = fs.readFileSync(SECRETS_FILE, "utf-8");
     return JSON.parse(data);
-  } catch {
+  } catch (error) {
+    // The file EXISTS but cannot be read/parsed. Returning {} keeps boot and
+    // callers alive (their fallbacks apply), but silently mapping corruption
+    // onto "no secrets" hid real credential loss from the operator — so say
+    // so, loudly, distinguishing corrupt-existing from merely-missing.
+    const message = String(error.message || error);
+    if (!reportedLoadFailures.has(message)) {
+      reportedLoadFailures.add(message);
+      console.error(
+        `[SecretsStore] FAILED to load existing secrets file ${SECRETS_FILE} ` +
+        `(corrupt or unreadable, NOT missing): ${message}. ` +
+        `Treating the store as empty for this call; stored credentials are NOT gone from disk, but they are unavailable until this is fixed.`
+      );
+    }
     return {};
   }
 }

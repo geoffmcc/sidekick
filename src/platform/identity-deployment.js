@@ -1,5 +1,22 @@
 "use strict";
 
+// =============================================================================
+// EXPERIMENTAL FUTURE WORK — NOT A SUPPORTED CAPABILITY. DO NOT ADD PRODUCTION
+// CALLERS.
+//
+// This in-memory identity/teams/memberships/deployment-profile registry is a
+// contract sketch (PR #235): plain Maps, no durable tables, no integration
+// with authentication, authorization, or the platform kernel, and
+// `authorize()` ignores project_id entirely. Sidekick runs in single-operator
+// mode; real multi-user identity is Track C work that will land with durable
+// tables and a capability bridge — it will not grow out of this file.
+//
+// Mirrors the platform_model_registry deprecation pattern: kept so its test
+// stays buildable, deliberately unbridged, and guarded —
+// test/deprecated-kernel-surfaces.test.js fails if production code imports
+// this module.
+// =============================================================================
+
 const ROLES = new Set(["owner", "admin", "operator", "auditor"]);
 const PROFILE_STATES = new Set(["draft", "active", "retired"]);
 const PROFILE_ENVIRONMENTS = new Set(["development", "staging", "production"]);

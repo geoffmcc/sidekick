@@ -21,6 +21,7 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 const { z } = require("zod");
 const { enforcePathPolicy } = require("../path-policy");
+const { validateOutboundUrl } = require("../../security/outbound-url");
 const { validDownloadFormat, validLangCode, validScale, validTimestamp, validWhisperModel } = require("../../core/command-validation");
 
 const YAML = require("yaml");
@@ -506,8 +507,13 @@ async function sidekick_download({ url, output, format, audio_only }) {
     if (!url) {
       return { content: [{ type: "text", text: "Error: url required" }], isError: true };
     }
+    // Caller-supplied URL fetched from inside the trust boundary: apply the
+    // same outbound destination policy as web_fetch (SSRF guard).
+    const urlError = validateOutboundUrl(url, "url");
+    if (urlError) {
+      return { content: [{ type: "text", text: urlError }], isError: true };
+    }
     const parsedUrl = new URL(url);
-    if (!["http:", "https:"].includes(parsedUrl.protocol)) throw new Error("Only http and https URLs are supported");
     const outputTarget = output || "/tmp/%(title)s.%(ext)s";
     const outputPolicyError = enforcePathPolicy(outputTarget, "write");
     if (outputPolicyError) return outputPolicyError;

@@ -987,7 +987,25 @@ function getToolDefsForSource(source = getCurrentSource()) {
       ORDER BY t.name
     `).all();
 
-    return tools.map(tool => {
+    // Intersect the DB catalog with the LIVE registry (builtin descriptors,
+    // which include active module tools, plus trial/active generated
+    // capabilities) the way src/agent.js's Brain allowlist does. The tools
+    // table is a mirror synced at startup; between syncs it can hold rows for
+    // tools that no longer exist in code, and a stale row must never be
+    // advertised to any consumer as callable — the dispatcher would refuse it
+    // anyway. Lazy require: the facade is fully initialized by the time this
+    // runs, so no load-order cycle. If the live registry cannot be read the
+    // filter is skipped (mirror-only behavior, as before) rather than hiding
+    // everything.
+    let liveNames = null;
+    try {
+      liveNames = new Set(require("./tools/index").getBuiltinRegistry().toolDefs().map(def => stripSidekickPrefix(def.name)));
+      for (const generated of dbStore.listGeneratedCapabilities({ states: ["trial", "active"] })) {
+        liveNames.add(stripSidekickPrefix(generated.name));
+      }
+    } catch { liveNames = null; }
+
+    return tools.filter(tool => !liveNames || liveNames.has(stripSidekickPrefix(tool.name))).map(tool => {
       const policy = getToolPolicyDecision(tool.name, source);
       const approval = getApprovalDecision(tool.name, source);
       const args = tool.args_json ? JSON.parse(tool.args_json) : {};
@@ -1444,6 +1462,7 @@ const TOOL_DEFS = [
   { name: "capability", description: "Manage Sidekick capability packs: list installed and bundled packs, inspect a package, install, configure, enable, disable, check health, upgrade and uninstall. Installing or enabling a pack activates executable module code in the Sidekick process", args: { action: "string (list|available|show|inspect|install|configure|enable|disable|health|upgrade|uninstall - default list)", name: "string (pack name)", path: "string (server-local package path)", config: "object (pack configuration)", enable: "boolean (enable immediately after install)", allow_same_version: "boolean (upgrade: allow same-version replacement)", allow_downgrade: "boolean (upgrade: allow downgrade)", remove_knowledge: "boolean (uninstall: remove knowledge entries, default true)", remove_module_data: "boolean (uninstall: remove module-owned data where permitted)" } },
   { name: "workflow", description: "List, inspect and run registered workflow definitions, including those contributed by capability packs. Each step executes as a governed tool call through the single dispatcher with durable execution state, checkpoints, cancellation and approval continuation", args: { action: "string (list|show|run|resume - default list)", name: "string (workflow definition name)", inputs: "object (workflow inputs)", project: "string (canonical project name)", run_id: "string (run id for resume)", owner: "string (filter by owning pack)", include_evidence: "boolean (include full step evidence)" } },
   { name: "connector", description: "Inspect and health-check the platform connector authority; credential references are never exposed (only has_secret_ref)", args: { action: "string (list|get|events|health - default list)", connector_id: "string (required for get/events/health)", type: "string (optional, filter by type for list)", state: "string (optional, filter by state for list)", limit: "number (optional, max rows/events)" } },
+  { name: "workspace", description: "Project workspaces with encrypted secrets: list, inspect, create, and update workspaces; set or delete encrypted workspace secrets (names only are ever exposed); backfill legacy plaintext secrets into encrypted envelopes (dry-run by default). Secret writes require SIDEKICK_SECRET_KEY and fail closed without it", args: { action: "string (list|get|create|update|set_secret|delete_secret|backfill_secrets)", workspace_id: "string (workspace id; required for update/set_secret/delete_secret)", project: "string (project id; required for create, optional for get/list)", name: "string (optional, for create)", config: "object (optional, for create/update)", environment: "string (optional, for create/update)", resource_limits: "object (optional, for create/update)", metadata: "object (optional, for create/update)", secret_name: "string (for set_secret/delete_secret)", secret_value: "string (for set_secret; stored encrypted, never returned)", state: "string (optional, filter by state for list: active|archived)", limit: "number (optional, max results for list)", confirm: "boolean (required true for backfill_secrets with dry_run=false)", dry_run: "boolean (optional, for backfill_secrets - default true, report without writing)" } },
 ];
 
 module.exports = {

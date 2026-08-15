@@ -25,8 +25,10 @@ assert.deepStrictEqual([...descriptorNames].sort(), [...new Set([...legacyToolNa
 // Baseline moves only when a tool is deliberately added or removed.
 // Capability Packs v1 added `capability` (pack lifecycle) and `workflow`
 // (workflow definition registry + runner): 103 -> 105. B7 connector authority
-// added `connector` (read-only connector inspection): 105 -> 106.
-assert.strictEqual(descriptors.length, 106, 'Built-in tool count should remain at the current-main baseline');
+// added `connector` (read-only connector inspection): 105 -> 106. The
+// workspace surface added `workspace` (workspaces + encrypted secrets):
+// 106 -> 107.
+assert.strictEqual(descriptors.length, 107, 'Built-in tool count should remain at the current-main baseline');
 
 for (const descriptor of descriptors) {
   assert.strictEqual(typeof descriptor.name, 'string', `${descriptor.name} should have a name`);

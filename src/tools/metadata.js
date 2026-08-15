@@ -113,6 +113,9 @@ const TOOL_RISK = {
   metrics: "low",
   module: "high",
   project_registry: "high",
+  // Workspace writes provision project workspaces and manage encrypted
+  // secrets; reads expose secret names (never values).
+  workspace: "high",
   // Installing or enabling a capability pack activates third-party executable
   // module code inside the Sidekick process; that is a critical operation.
   capability: "critical",
@@ -226,6 +229,7 @@ const TOOL_CATEGORIES = {
   'metrics': 'Monitoring',
   'module': 'Services',
   'project_registry': 'Storage',
+  'workspace': 'Storage',
   'capability': 'Services',
   'workflow': 'Services',
   'connector': 'Services',

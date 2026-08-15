@@ -25,7 +25,9 @@ function resolveConnectionConfig() {
     database: process.env.SIDEKICK_POSTGRES_DB || DEFAULT_DATABASE,
     // Discrete fields rather than a composed URL: a password containing URL
     // metacharacters would otherwise need escaping to survive parsing.
-    password: process.env.SIDEKICK_POSTGRES_PASSWORD || DEFAULT_USER,
+    // No fallback: a missing password should surface as "no password supplied"
+    // rather than an authentication failure against a guessed default.
+    password: process.env.SIDEKICK_POSTGRES_PASSWORD || undefined,
   };
 }
 

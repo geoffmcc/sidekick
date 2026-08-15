@@ -102,7 +102,7 @@ function validateOutboundUrl(value, label = "url") {
   }
 
   if (url.protocol !== "http:" && url.protocol !== "https:") {
-    return `Invalid ${label} scheme "${url.protocol}": only http and https are allowed`;
+    return `Invalid ${label} scheme "${url.protocol}": Only http and https are allowed`;
   }
   if (url.username || url.password) {
     return `Invalid ${label}: credentials embedded in the URL are not allowed`;

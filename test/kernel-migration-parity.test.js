@@ -20,6 +20,24 @@ function capturePlatformSchema(db) {
   return rows.map(r => ({ type: r.type, name: r.name, tbl_name: r.tbl_name, sql: r.sql ? normalizeSql(r.sql) : null }));
 }
 
+// compute_% coverage map: table -> { columns:Set, indexes:Set } for every
+// compute table present in the given database.
+function captureComputeSchema(db) {
+  const map = {};
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'compute_%' ORDER BY name").all();
+  for (const t of tables) {
+    map[t.name] = {
+      columns: new Set(db.prepare(`PRAGMA table_info("${t.name}")`).all().map(c => c.name)),
+      indexes: new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL AND tbl_name = ?").all(t.name).map(i => i.name)),
+    };
+  }
+  return map;
+}
+
+function tableColumns(db, table) {
+  return new Set(db.prepare(`PRAGMA table_info("${table}")`).all().map(c => c.name));
+}
+
 console.log('Running Platform Kernel Migration Parity Tests...\n');
 
 (async () => {
@@ -32,7 +50,7 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
     const migrationStore = require('../src/db');
     const migrationResult = migrationStore.runPendingMigrations();
     const migrationApplied = migrationResult.applied;
-    assert.ok(migrationApplied >= 35, `Migrations through 036 should apply, got ${migrationApplied}`);
+    assert.ok(migrationApplied >= 36, `Migrations through 037 should apply, got ${migrationApplied}`);
     assert.ok(
       migrationResult.migrations.some(m => m.file === '026_platform_kernel_tables.sql'),
       'Migration 026 should be applied'
@@ -69,14 +87,32 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
       migrationResult.migrations.some(m => m.file === '036_capability_packs.sql'),
       'Migration 036 should be applied'
     );
+    assert.ok(
+      migrationResult.migrations.some(m => m.file === '037_runtime_schema_convergence.sql'),
+      'Migration 037 should be applied'
+    );
     const migratedSchema = capturePlatformSchema(migrationStore.getDb());
+    const migratedCompute = captureComputeSchema(migrationStore.getDb());
 
     console.log(`Test KMP.1: migrations-only boot applies ${migrationApplied} migrations`);
     assert.strictEqual(
       migrationStore.getDb().prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
-      String(36),
-      'schema_version should be 36'
+      String(37),
+      'schema_version should be 37'
     );
+    console.log('Passed\n');
+
+    console.log('Test KMP.1b: migration 037 owns the formerly runtime-only columns');
+    for (const [table, columns] of [
+      ['predictions', ['identity_key', 'last_seen_at', 'refresh_count', 'lifecycle_reason']],
+      ['prediction_feedback', ['scope_key']],
+      ['blackbox_captures', ['diagnostics_json', 'retry_of']],
+    ]) {
+      const present = tableColumns(migrationStore.getDb(), table);
+      for (const column of columns) {
+        assert.ok(present.has(column), `migrations-only boot must create ${table}.${column}`);
+      }
+    }
     console.log('Passed\n');
 
     // --- Boot path B: fresh database bootstrapped purely through the runtime kernel. ---
@@ -86,11 +122,23 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
     delete require.cache[require.resolve('../src/platform/kernel')];
     delete require.cache[require.resolve('../src/platform/kernel-schema')];
     delete require.cache[require.resolve('../src/redact')];
+    for (const mod of ['../src/compute/job-manager', '../src/compute/worker-manager', '../src/compute/provider-registry', '../src/compute/model-registry']) {
+      try { delete require.cache[require.resolve(mod)]; } catch {}
+    }
 
     const runtimeStore = require('../src/db');
     const kernel = require('../src/platform/kernel');
     kernel.ensurePlatformKernelSchema();
+    // The compute runtime bootstrap surface (the same four ensureSchema calls
+    // src/compute/index.js initialize() makes; its remaining inline tables —
+    // routing_rules/benchmarks/metrics — are covered by migration 013 and not
+    // recreated here because initialize() also starts timers).
+    require('../src/compute/provider-registry').ensureSchema();
+    require('../src/compute/model-registry').ensureSchema();
+    require('../src/compute/worker-manager').ensureSchema();
+    require('../src/compute/job-manager').ensureSchema();
     const runtimeSchema = capturePlatformSchema(runtimeStore.getDb());
+    const runtimeCompute = captureComputeSchema(runtimeStore.getDb());
 
     // --- Parity assertions. ---
     console.log('Test KMP.2: both boot paths produce the identical platform_* schema');
@@ -132,6 +180,25 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
       runtimeStore.getDb().prepare("SELECT value FROM meta WHERE key = 'platform_kernel_schema_version'").get().value,
       '6'
     );
+    console.log('Passed\n');
+
+    console.log('Test KMP.5: migrations cover every compute_% table, column, and index the runtime creates');
+    // Direction matters: migrations are the self-contained source of truth, so
+    // they may be a superset (e.g. tables initialize() creates inline, or
+    // indexes that exist only in migration files), but anything the runtime
+    // bootstrap creates MUST be reachable through migrations alone. A gap here
+    // is fixed by adding migration coverage, never by deleting runtime schema.
+    for (const [table, shape] of Object.entries(runtimeCompute)) {
+      const migrated = migratedCompute[table];
+      assert.ok(migrated, `compute table exists only in the runtime bootstrap: ${table}`);
+      for (const column of shape.columns) {
+        assert.ok(migrated.columns.has(column), `compute column exists only in the runtime bootstrap: ${table}.${column}`);
+      }
+      for (const index of shape.indexes) {
+        assert.ok(migrated.indexes.has(index), `compute index exists only in the runtime bootstrap: ${table} -> ${index}`);
+      }
+    }
+    assert.ok(Object.keys(runtimeCompute).length >= 7, 'runtime compute bootstrap should create the core compute tables');
     console.log('Passed\n');
 
     console.log('Test KMP.4: kernel schema module stays in sync with the runtime boot');
