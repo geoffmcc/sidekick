@@ -48,6 +48,7 @@ const {
 } = require("./agent/execution");
 const { buildChildLineage } = require("./agent/continuation");
 const { createTaskRunner } = require("./agent/task-run");
+const { createResumedTaskFinalizer } = require("./agent/recovery");
 const { redactSensitive, redactSensitiveKeysDeep } = require("./redact");
 const {
   CONTINUATION_LIMITS,
@@ -1566,96 +1567,13 @@ app.post("/api/watches/reload", (req, res) => {
  * platform execution is then transitioned `awaiting_approval → completed`
  * (or the matching failure exit) so the timeline agrees with the transcript.
  */
-function finalizeResumedTask({ taskId, state, outcome, checkpoint }) {
-  if (!taskId || !outcome) return { ok: false, reason: "nothing_to_record" };
-  // Only terminal resumptions carry an answer. `woken` and `reconciling` mean
-  // the task is still in flight and will be picked up again.
-  const terminalStates = { completed: "completed", failed: "failed", cancelled: "failed", timed_out: "iteration_limit" };
-  const mapped = terminalStates[state];
-  if (!mapped) return { ok: false, reason: "not_terminal", state };
-
-  const transcriptPath = path.join(CONV_DIR, taskId + ".json");
-  let record = {};
-  try {
-    record = JSON.parse(fs.readFileSync(transcriptPath, "utf-8"));
-  } catch {
-    return { ok: false, reason: "transcript_unreadable" };
-  }
-
-  const resumedSteps = Array.isArray(outcome.steps) ? outcome.steps : [];
-  const answer = state === "completed" ? String(outcome.result || "") : "";
-  const failure = state === "completed" ? null : redactSensitive(String(outcome.error || outcome.code || state));
-
-  const merged = {
-    ...record,
-    steps: (Array.isArray(record.steps) ? record.steps : []).concat(resumedSteps),
-    status: mapped,
-    result: answer,
-    error: failure,
-    resumed_at: new Date().toISOString(),
-    brain: { ...(record.brain || {}), state, resumed: true, awaiting_approval: null, error: failure },
-  };
-  // Republish atomically, exactly as runAgent does: follow-up callers treat the
-  // transcript as the terminal boundary, so an in-place rewrite lets a reader
-  // observe truncated JSON mid-write.
-  const temporaryTranscriptPath = `${transcriptPath}.${process.pid}.${Date.now()}.tmp`;
-  try {
-    fs.writeFileSync(temporaryTranscriptPath, JSON.stringify(merged), { encoding: "utf-8", mode: 0o600 });
-    fs.renameSync(temporaryTranscriptPath, transcriptPath);
-  } catch {
-    try { fs.unlinkSync(temporaryTranscriptPath); } catch {}
-    return { ok: false, reason: "transcript_unwritable" };
-  }
-
-  // Anything still streaming this task sees the terminal event, and the
-  // platform execution timeline records the resumption rather than ending at
-  // the park.
-  emit(taskId, state === "completed" ? { type: "done", text: answer } : { type: "error", text: failure });
-  const executionId = checkpoint && checkpoint.platform_execution_id;
-  try {
-    if (executionId) {
-      platformKernel.appendEvent({
-        execution_id: executionId,
-        root_execution_id: checkpoint.root_execution_id || null,
-        task_id: taskId,
-        event_type: state === "completed" ? "brain.resumed_completed" : "brain.resumed_failed",
-        payload: { state, evidence_count: outcome.evidenceCount || 0 },
-        severity: state === "completed" ? "info" : "error",
-        source: "agent",
-        actor_id: "task-runner",
-      });
-    }
-  } catch {}
-
-  // The park mapped the execution to `awaiting_approval` (finishAgentExecution);
-  // the resumed outcome is that state's real exit. Transition the platform
-  // execution to its terminal state so the timeline shows a completed task
-  // instead of one that ended parked and "failed". Failures/cancellations/
-  // timeouts already have legal exits from `awaiting_approval`; success needs
-  // `awaiting_approval → completed`, added to the kernel for this exit.
-  const terminalState = state === "completed" ? "completed" : state === "cancelled" ? "cancelled" : state === "timed_out" ? "timed_out" : "failed";
-  try {
-    if (executionId) {
-      platformKernel.transitionExecution(executionId, terminalState, {
-        source: "agent",
-        actor_id: "task-runner",
-        result_status: state === "completed" ? "success" : terminalState,
-        result_summary: state === "completed" ? answer : (failure || terminalState),
-        reason: state === "completed" ? "resumed task completed" : (failure || terminalState),
-        error_category: state === "completed" ? null : terminalState,
-      });
-    }
-  } catch {
-    // Platform observability must not interrupt answer delivery. An execution
-    // already terminal (e.g. a legacy park recorded as `failed`) stays as-is;
-    // the resumed event above still records what happened.
-  }
-
-  if (state === "completed") {
-    try { recordAgentTaskMemory({ goal: record.goal, steps: merged.steps, taskId, status: "completed" }); } catch {}
-  }
-  return { ok: true, taskId, status: mapped };
-}
+const finalizeResumedTask = createResumedTaskFinalizer({
+  convDir: CONV_DIR,
+  emit,
+  platformKernel,
+  redactSensitive,
+  recordAgentTaskMemory,
+});
 
 function startApprovalContinuationJobs() {
   if (!brain || !brain.isEnabled()) return { started: false, reason: "brain_disabled" };
