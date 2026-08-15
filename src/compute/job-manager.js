@@ -9,6 +9,7 @@ const { redactSensitive } = require("../redact");
 let platformKernel = null;
 try { platformKernel = require("../platform/kernel"); } catch {}
 const artifactCustody = require("./artifact-custody");
+const { createJobQuery } = require("./job-query");
 
 const SOURCE_HANDOFF_MAX_BYTES = 256 * 1024;
 const DATA_CLASSIFICATION_RANK = Object.freeze({ public: 0, internal: 1, private: 2 });
@@ -772,14 +773,14 @@ function retryDelayMs(job) {
   return Math.max(0, Number.isFinite(delay) ? delay : 1000);
 }
 
-function getJob(jobId) {
+function getJobLegacy(jobId) {
   ensureSchema();
   const db = dbStore.getDb();
   const row = db.prepare("SELECT * FROM compute_jobs WHERE job_id = ?").get(jobId);
   return rowToJob(row);
 }
 
-function listJobs({ status, jobType, project, providerId, workerId, capability, limit = 50 } = {}) {
+function listJobsLegacy({ status, jobType, project, providerId, workerId, capability, limit = 50 } = {}) {
   ensureSchema();
   const db = dbStore.getDb();
   let sql = "SELECT * FROM compute_jobs WHERE 1=1";
@@ -1407,13 +1408,13 @@ function listArtifacts(jobId) {
   return db.prepare("SELECT * FROM compute_artifacts WHERE job_id = ? ORDER BY created_at").all(jobId).map(rowToArtifact);
 }
 
-function listAttempts(jobId) {
+function listAttemptsLegacy(jobId) {
   ensureSchema();
   const db = dbStore.getDb();
   return db.prepare("SELECT * FROM compute_job_attempts WHERE job_id = ? ORDER BY attempt_number, created_at").all(jobId).map(rowToAttempt);
 }
 
-function getJobStats() {
+function getJobStatsLegacy() {
   ensureSchema();
   const db = dbStore.getDb();
   const stats = db.prepare(`
@@ -1436,6 +1437,9 @@ function getJobStats() {
     byType: Object.fromEntries(byType.map(t => [t.job_type, t.count])),
   };
 }
+
+const jobQuery = createJobQuery({ ensureSchema, db: () => dbStore.getDb(), rowToJob, rowToAttempt });
+const { getJob, listJobs, listAttempts, getJobStats } = jobQuery;
 
 module.exports = {
   ensureSchema,
