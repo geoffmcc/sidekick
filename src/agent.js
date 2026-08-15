@@ -50,6 +50,7 @@ const { buildChildLineage } = require("./agent/continuation");
 const { createTaskRunner } = require("./agent/task-run");
 const { createResumedTaskFinalizer } = require("./agent/recovery");
 const { createContinuationJobStarter } = require("./agent/continuation-jobs");
+const { createDelayScheduler } = require("./agent/delay-scheduler");
 const { redactSensitive, redactSensitiveKeysDeep } = require("./redact");
 const {
   CONTINUATION_LIMITS,
@@ -94,24 +95,6 @@ try {
     if (fs.statSync(p).mtimeMs < cutoff) fs.unlinkSync(p);
   });
 } catch (e) {}
-
-const delayTimers = {};
-
-function scheduleDelay(delay) {
-  const executeAt = new Date(delay.when).getTime();
-  const msUntil = executeAt - Date.now();
-
-  if (msUntil <= 0) {
-    executeDelay(delay).catch(e => console.error(`Delay ${delay.id} dispatch failed: ${e.message}`));
-    return;
-  }
-
-  delayTimers[delay.id] = setTimeout(() => {
-    executeDelay(delay).catch(e => console.error(`Delay ${delay.id} dispatch failed: ${e.message}`));
-  }, msUntil);
-  
-  console.log(`Scheduled delay ${delay.id} for ${delay.when} (${Math.round(msUntil / 60000)} minutes)`);
-}
 
 async function executeDelay(delay) {
   const delays = loadDelays();
@@ -216,16 +199,7 @@ async function executeDelay(delay) {
   delete delayTimers[delay.id];
 }
 
-function loadAndScheduleDelays() {
-  const delays = loadDelays();
-  const pending = delays.filter(d => d.status === "pending");
-
-  for (const delay of pending) {
-    scheduleDelay(delay);
-  }
-
-  console.log(`Loaded ${pending.length} pending delays`);
-}
+const { delayTimers, scheduleDelay, loadAndScheduleDelays } = createDelayScheduler({ loadDelays, executeDelay });
 
 try {
   const recovered = recoverStrandedDelays({ source: "agent", actor: "agent" });
