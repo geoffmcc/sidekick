@@ -3,6 +3,7 @@ const path = require("path");
 const dbStore = require("../db");
 const { AsyncLocalStorage } = require("async_hooks");
 const eventVocabulary = require("./event-vocabulary");
+const { createExecutionGuards } = require("./execution-guards");
 const { redactSensitive, redactSensitiveKeysDeep } = require("../redact");
 const { KERNEL_SCHEMA_SQL } = require("./kernel-schema");
 const { ensurePlatformModuleSchema } = require("../modules/schema");
@@ -1238,7 +1239,7 @@ function listArtifacts(query = {}) {
   return dbStore.getDb().prepare(`SELECT * FROM platform_artifacts WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC LIMIT ?`).all(...params, limit).map(normalizeArtifact);
 }
 
-function findActiveExecution(query = {}) {
+function findActiveExecutionLegacy(query = {}) {
   ensurePlatformKernelSchema();
   const conditions = ["state NOT IN ('completed','partial','failed','cancelled','timed_out','rolled_back','rollback_failed')"];
   const params = [];
@@ -1260,7 +1261,7 @@ function findActiveExecution(query = {}) {
   return rows.map(normalizeExecution);
 }
 
-function platformGuard(executionId, expectedState, options = {}) {
+function platformGuardLegacy(executionId, expectedState, options = {}) {
   ensurePlatformKernelSchema();
   if (options.capability && options.actor_id) {
     const cap = checkCapability(options.actor_id, options.capability, options.project_id);
@@ -1294,6 +1295,16 @@ function platformGuard(executionId, expectedState, options = {}) {
   }
   return { allowed: true, execution: null };
 }
+
+const executionGuards = createExecutionGuards({
+  ensureSchema: ensurePlatformKernelSchema,
+  dbStore,
+  normalizeExecution,
+  terminalStates: TERMINAL_STATES,
+  checkCapability: (actorId, capability, projectId) => checkCapability(actorId, capability, projectId),
+  getExecution,
+});
+const { findActiveExecution, platformGuard } = executionGuards;
 
 function grantCapability(input = {}) {
   ensurePlatformKernelSchema();
