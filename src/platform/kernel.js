@@ -1007,7 +1007,7 @@ function listScopeSnapshots({ project_id, state, limit = 50 } = {}) {
   ensurePlatformKernelSchema();
   const conditions = [];
   const params = [];
-  if (project_id) { conditions.push("project_id = ?"); params.push(String(project_id)); }
+  if (project_id) { conditions.push("project_id = ?"); params.push(normalizeProjectId(project_id)); }
   if (state) { conditions.push("state = ?"); params.push(String(state)); }
   const boundedLimit = Math.max(1, Math.min(Number(limit) || 50, 100));
   return dbStore.getDb().prepare(`SELECT * FROM platform_scope_snapshots ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""} ORDER BY created_at DESC LIMIT ?`).all(...params, boundedLimit).map(normalizeScopeSnapshot);
@@ -1022,7 +1022,7 @@ function evaluateScope(snapshotId, { project_id, target, target_kind, operation 
   if (!snapshot) reason = "snapshot_not_found";
   else if (snapshot.state !== "active") reason = "snapshot_inactive";
   else if (snapshot.expires_at && Date.parse(snapshot.expires_at) <= Date.now()) reason = "snapshot_expired";
-  else if (project_id && String(project_id) !== snapshot.project_id) reason = "project_mismatch";
+  else if (project_id && normalizeProjectId(project_id) !== snapshot.project_id) reason = "project_mismatch";
   else if (!targetValue || !operationName) reason = "target_and_operation_required";
   else if (!snapshot.targets.some(item => item.kind === targetKind && item.value_digest === scopeDigest({ kind: targetKind, value: targetValue }))) reason = "target_not_in_scope";
   else if (Array.isArray(snapshot.rules.allowed_operations) && !snapshot.rules.allowed_operations.includes("*") && !snapshot.rules.allowed_operations.includes(operationName)) reason = "operation_not_allowed";
