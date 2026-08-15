@@ -43,6 +43,9 @@ const packLifecycle = require("./packs/lifecycle");
 let brain = null;
 try { brain = require("./brain"); } catch {}
 const platformKernel = require("./platform/kernel");
+const {
+  startAgentExecution, appendAgentExecutionEvent, finishAgentExecution, registerAgentTranscript,
+} = require("./agent/execution");
 const { redactSensitive, redactSensitiveKeysDeep } = require("./redact");
 const {
   CONTINUATION_LIMITS,
@@ -741,7 +744,7 @@ function emit(taskId, data) {
   if (ee) ee.emit("data", data);
 }
 
-function startAgentExecution(goal, taskId, project, lineage = null) {
+function startAgentExecutionLegacy(goal, taskId, project, lineage = null) {
   try {
     const execution = platformKernel.createExecution({
       task_id: taskId,
@@ -774,7 +777,7 @@ function startAgentExecution(goal, taskId, project, lineage = null) {
   }
 }
 
-function appendAgentExecutionEvent(execution, eventType, payload = {}, severity = "info") {
+function appendAgentExecutionEventLegacy(execution, eventType, payload = {}, severity = "info") {
   if (!execution) return;
   try {
     platformKernel.appendEvent({
@@ -796,7 +799,7 @@ function appendAgentExecutionEvent(execution, eventType, payload = {}, severity 
   }
 }
 
-function finishAgentExecution(execution, status, details = {}) {
+function finishAgentExecutionLegacy(execution, status, details = {}) {
   if (!execution) return;
   // A Brain task parked at `waiting_for_approval` is not a failure: it is
   // suspended awaiting a human decision and will be resumed by the scheduler
@@ -821,7 +824,7 @@ function finishAgentExecution(execution, status, details = {}) {
   }
 }
 
-function registerAgentTranscript(execution, transcriptPath, taskId, status) {
+function registerAgentTranscriptLegacy(execution, transcriptPath, taskId, status) {
   if (!execution || !transcriptPath) return;
   try {
     const stat = fs.statSync(transcriptPath);
