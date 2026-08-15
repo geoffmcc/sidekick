@@ -7,6 +7,7 @@ const EventEmitter = require("events");
 const { redactSensitive } = require("./redact");
 const dbStore = require("./db");
 const platformKernel = require("./platform/kernel");
+const { createBlackboxStorage } = require("./blackbox/storage");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const LEGACY_BLACKBOX_FILE = path.join(DATA_DIR, "blackbox.json");
@@ -75,7 +76,7 @@ function truncateBuffer(buffer, limitBytes) {
   return { text: sliced.toString("utf8") + `\n[blackbox: truncated from ${buffer.length} bytes to ${limitBytes} bytes]`, originalBytes: buffer.length, storedBytes: limitBytes, truncated: true };
 }
 
-function artifactPath(incidentId, captureId, sourceId, stream) {
+function artifactPathLegacy(incidentId, captureId, sourceId, stream) {
   safeId(incidentId, "incident id");
   safeId(captureId, "capture id");
   safeId(sourceId, "source id");
@@ -83,7 +84,7 @@ function artifactPath(incidentId, captureId, sourceId, stream) {
   return path.join(BLACKBOX_DIR, incidentId, captureId, `${sourceId}.${stream}.txt`);
 }
 
-function writeArtifact(incidentId, captureId, sourceId, stream, content) {
+function writeArtifactLegacy(incidentId, captureId, sourceId, stream, content) {
   const safeContent = redact(content);
   const finalPath = artifactPath(incidentId, captureId, sourceId, stream);
   const dir = path.dirname(finalPath);
@@ -101,7 +102,7 @@ function writeArtifact(incidentId, captureId, sourceId, stream, content) {
   };
 }
 
-function readArtifactByPath(filePath, offset = 0, limit = 65536) {
+function readArtifactByPathLegacy(filePath, offset = 0, limit = 65536) {
   if (!filePath) return "";
   const resolved = path.resolve(filePath);
   const root = path.resolve(BLACKBOX_DIR);
@@ -110,7 +111,7 @@ function readArtifactByPath(filePath, offset = 0, limit = 65536) {
   return content.slice(offset, offset + limit);
 }
 
-function getRetentionConfig() {
+function getRetentionConfigLegacy() {
   const classTtls = {
     transient: Number(process.env.SIDEKICK_BLACKBOX_TTL_TRANSIENT_DAYS || 3),
     standard: Number(process.env.SIDEKICK_BLACKBOX_TTL_STANDARD_DAYS || 30),
@@ -129,7 +130,7 @@ function getRetentionConfig() {
   };
 }
 
-function expiresFor(retentionClass, createdAt, pinned, lifecycleState) {
+function expiresForLegacy(retentionClass, createdAt, pinned, lifecycleState) {
   if (pinned || lifecycleState === "open" || lifecycleState === "investigating") return null;
   const cfg = getRetentionConfig();
   const ttl = cfg.classTtls[retentionClass] === undefined ? cfg.classTtls[cfg.defaultClass] : cfg.classTtls[retentionClass];
@@ -138,6 +139,9 @@ function expiresFor(retentionClass, createdAt, pinned, lifecycleState) {
   date.setUTCDate(date.getUTCDate() + ttl);
   return date.toISOString();
 }
+
+const blackboxStorage = createBlackboxStorage({ rootDir: BLACKBOX_DIR, safeId, redact, hashText, nowIso, defaults: { dailyLimit: DEFAULT_DAILY_LIMIT, maxBytes: DEFAULT_MAX_BYTES, maxIncidents: DEFAULT_MAX_INCIDENTS } });
+const { artifactPath, writeArtifact, readArtifactByPath, getRetentionConfig, expiresFor } = blackboxStorage;
 
 function ensureSchema() {
   const db = dbStore.getDb();
