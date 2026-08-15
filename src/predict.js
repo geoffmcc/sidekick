@@ -23,6 +23,11 @@ const {
   MIN_OBSERVATIONS_FOR_PREDICTION, MIN_OBSERVATIONS_FOR_HIGH_CONFIDENCE,
   MIN_OBSERVATIONS_FOR_VERY_HIGH_CONFIDENCE,
 } = require("./predict/scoring");
+const {
+  normalizePrediction, getPrediction, getPredictionEvidence, getPredictionFeedback,
+  findActiveByFingerprint, findByIdentity, updatePrediction, insertAudit, insertFeedback,
+  expiresAtForHorizon, persistPrediction, isUniqueViolation,
+} = require("./predict/persistence");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 
@@ -775,100 +780,11 @@ function admitCandidate(candidate, ctx) {
 
 // --- Persistence ---
 
-function normalizePrediction(row) {
-  return {
-    ...row,
-    score_breakdown: parseJson(row.score_breakdown_json, {}),
-    recommended_action: parseJson(row.recommended_action_json, null),
-    legacy: !!row.legacy,
-    enabled: !!row.enabled
-  };
-}
-
-function getPrediction(id) {
-  ensureSchema();
-  const db = dbStore.getDb();
-  const row = db.prepare("SELECT * FROM predictions WHERE id = ?").get(id);
-  return row ? normalizePrediction(row) : null;
-}
-
-function getPredictionEvidence(predictionId) {
-  ensureSchema();
-  const db = dbStore.getDb();
-  return db.prepare("SELECT * FROM prediction_evidence WHERE prediction_id = ? ORDER BY created_at ASC").all(predictionId).map(r => ({
-    ...r,
-    safe_metadata: parseJson(r.safe_metadata_json, {})
-  }));
-}
-
-function getPredictionFeedback(predictionId) {
-  ensureSchema();
-  const db = dbStore.getDb();
-  return db.prepare("SELECT * FROM prediction_feedback WHERE prediction_id = ? ORDER BY created_at ASC").all(predictionId);
-}
-
-function findActiveByFingerprint(fingerprint) {
-  ensureSchema();
-  const db = dbStore.getDb();
-  const row = db.prepare("SELECT * FROM predictions WHERE fingerprint = ? AND status = 'active' AND enabled = 1").get(fingerprint);
-  return row ? normalizePrediction(row) : null;
-}
-
-/** Most recent row for a logical identity, in any status. */
-function findByIdentity(identityKey) {
-  const db = dbStore.getDb();
-  const row = db.prepare(
-    "SELECT * FROM predictions WHERE identity_key = ? ORDER BY (status = 'active') DESC, updated_at DESC LIMIT 1"
-  ).get(identityKey);
-  return row ? normalizePrediction(row) : null;
-}
-
-function updatePrediction(id, patch) {
-  const db = dbStore.getDb();
-  const sets = [];
-  const vals = [];
-  for (const [k, v] of Object.entries(patch)) {
-    if (k === "score_breakdown_json" || k === "recommended_action_json" || k === "score_breakdown" || k === "recommended_action") {
-      const dbKey = k === "score_breakdown" ? "score_breakdown_json" : k === "recommended_action" ? "recommended_action_json" : k;
-      sets.push(`${dbKey} = ?`);
-      vals.push(typeof v === "string" ? v : JSON.stringify(v));
-    } else {
-      sets.push(`${k} = ?`);
-      vals.push(v);
-    }
-  }
-  sets.push("updated_at = ?");
-  vals.push(nowIso());
-  vals.push(id);
-  db.prepare(`UPDATE predictions SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
-}
-
-function insertAudit(eventType, predictionId, details) {
-  const db = dbStore.getDb();
-  db.prepare(`
-    INSERT INTO prediction_audit (event_type, prediction_id, details_json, created_at)
-    VALUES (?, ?, ?, ?)
-  `).run(eventType, predictionId || null, JSON.stringify(details || {}), nowIso());
-}
-
-function insertFeedback(fb) {
-  const db = dbStore.getDb();
-  db.prepare(`
-    INSERT INTO prediction_feedback (prediction_id, feedback, project, rule_version, scope_key, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(fb.prediction_id, fb.feedback, fb.project || null, fb.rule_version || RULE_VERSION, fb.scope_key || null, nowIso());
-}
-
-function expiresAtForHorizon(horizon) {
-  const hours = HORIZON_EXPIRY_HOURS[horizon];
-  return hours === null || hours === undefined ? null : hoursFromNow(hours);
-}
-
 /**
  * Inserts a prediction together with its evidence and creation audit atomically.
  * A partial write (prediction without its evidence) is never committed.
  */
-function persistPrediction(pred, evidence) {
+function persistPredictionLegacy(pred, evidence) {
   const db = dbStore.getDb();
   const run = db.transaction(() => {
     db.prepare(`
@@ -909,7 +825,7 @@ function persistPrediction(pred, evidence) {
   run();
 }
 
-function isUniqueViolation(err) {
+function isUniqueViolationLegacy(err) {
   const msg = String((err && err.message) || "");
   return msg.includes("UNIQUE constraint failed") || (err && err.code === "SQLITE_CONSTRAINT_UNIQUE");
 }
