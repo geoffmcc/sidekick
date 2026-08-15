@@ -4,6 +4,7 @@ const zlib = require("zlib");
 const crypto = require("crypto");
 const { splitSqlStatements, parseAddColumn } = require("./core/sql-statements");
 const { createKvStore } = require("./db/kv-store");
+const { createToolLogStore } = require("./db/tool-logs");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const DB_FILE = process.env.SIDEKICK_DB_FILE || path.join(DATA_DIR, "sidekick.db");
@@ -241,57 +242,7 @@ function loadDocument(name, fallback) {
 
 const { loadKV, clearKV, replaceKV, setKV, getKV, deleteKV, listKVProjects, getAllKV } = createKvStore({ db, parseJson, nowIso });
 
-function appendToolLog(entry) {
-  db.prepare(`
-    INSERT INTO tool_logs (
-      timestamp, tool_name, args_summary, duration_ms, success, summary, source, entry_json,
-      session_id, task_id, project, args_shape_json, arg_fingerprint, error_category,
-      result_summary, correlation_id, parent_id, retry, generated_procedure
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    entry.t || nowIso(),
-    entry.n || "unknown",
-    entry.a || "",
-    Number.isFinite(entry.d) ? Math.round(entry.d) : null,
-    entry.ok ? 1 : 0,
-    entry.s || "",
-    entry.src || "unknown",
-    JSON.stringify(entry),
-    entry.session_id || null,
-    entry.task_id || entry.request_id || null,
-    entry.project || null,
-    entry.args_shape ? JSON.stringify(entry.args_shape) : null,
-    entry.arg_fingerprint || null,
-    entry.error_category || null,
-    entry.result_summary || entry.s || null,
-    entry.correlation_id || null,
-    entry.parent_id || null,
-    entry.retry ? 1 : 0,
-    entry.generated_procedure || null
-  );
-
-  const countRow = db.prepare("SELECT COUNT(*) AS count FROM tool_logs").get();
-  if (countRow.count > MAX_LOG) {
-    db.prepare(`
-      DELETE FROM tool_logs
-      WHERE id IN (
-        SELECT id FROM tool_logs
-        ORDER BY timestamp ASC, id ASC
-        LIMIT ?
-      )
-    `).run(countRow.count - MAX_LOG);
-  }
-}
-
-function readToolLogs(limit = MAX_LOG) {
-  const rows = db.prepare("SELECT id, entry_json FROM tool_logs ORDER BY timestamp DESC, id DESC LIMIT ?").all(limit);
-  return rows.map((row) => ({ id: row.id, ...parseJson(row.entry_json, null) })).filter(Boolean);
-}
-
-function clearToolLogs() {
-  db.prepare("DELETE FROM tool_logs").run();
-}
+const { appendToolLog, readToolLogs, clearToolLogs } = createToolLogStore({ db, parseJson, nowIso, maxLog: MAX_LOG });
 
 function generatedCapabilityFromRow(row) {
   if (!row) return null;
