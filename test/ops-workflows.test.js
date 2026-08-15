@@ -4,7 +4,7 @@ const path = require('path');
 const { getBuiltinRegistry } = require('../src/tools/index');
 
 const root = path.join(__dirname, '..');
-const toolsJs = fs.readFileSync(path.join(root, 'src', 'tools-legacy.js'), 'utf8');
+const catalogJs = fs.readFileSync(path.join(root, 'src', 'tools', 'legacy-catalog.js'), 'utf8');
 const schemasJs = fs.readFileSync(path.join(root, 'src', 'tools', 'schemas', 'index.js'), 'utf8');
 const opsFamilyJs = fs.readFileSync(path.join(root, 'src', 'tools', 'families', 'operations.js'), 'utf8');
 const registry = getBuiltinRegistry();
@@ -50,14 +50,14 @@ assert.match(
 );
 
 assert.match(
-  toolsJs,
-  /name:\s*"ops"[\s\S]*verify_deployed_commit\|restart_and_smoke_test\|deploy_current_main\|incident_snapshot/,
+  catalogJs,
+  /["']?name["']?\s*:\s*"ops"[\s\S]*verify_deployed_commit\|restart_and_smoke_test\|deploy_current_main\|incident_snapshot/,
   'ops metadata should list the packaged workflow actions'
 );
 
 assert.match(
-  toolsJs,
-  /name:\s*"mission"[\s\S]*profiles\|route\|preflight\|execute/,
+  catalogJs,
+  /["']?name["']?\s*:\s*"mission"[\s\S]*profiles\|route\|preflight\|execute/,
   'mission metadata should list Mission Control actions'
 );
 
