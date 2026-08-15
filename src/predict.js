@@ -28,6 +28,7 @@ const {
   findActiveByFingerprint, findByIdentity, updatePrediction, insertAudit, insertFeedback,
   expiresAtForHorizon, persistPrediction, isUniqueViolation,
 } = require("./predict/persistence");
+const { applyLifecycle, expireOldPredictions, retireContradictedPredictions } = require("./predict/lifecycle");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 
@@ -840,7 +841,7 @@ function isUniqueViolationLegacy(err) {
  * confirmed / did_not_occur -> preserve history; suppress recreation during the
  *               cooldown, then create a fresh row that supersedes nothing
  */
-function applyLifecycle(candidate, pred, config) {
+function applyLifecycleLegacy(candidate, pred, config) {
   const existing = findByIdentity(candidate.identity_key);
   if (!existing) return { action: "create" };
 
@@ -907,7 +908,7 @@ function applyLifecycle(candidate, pred, config) {
  * Transitions active predictions whose time horizon has passed.
  * Emits one batched audit row rather than one row per prediction.
  */
-function expireOldPredictions() {
+function expireOldPredictionsLegacy() {
   const db = dbStore.getDb();
   const now = nowIso();
   const rows = db.prepare(
@@ -933,7 +934,7 @@ function expireOldPredictions() {
  * prediction *about* a prediction, which is what produced recursive
  * "Prediction may be stale: Prediction may be stale: ..." chains.
  */
-function retireContradictedPredictions(ctx) {
+function retireContradictedPredictionsLegacy(ctx) {
   const db = dbStore.getDb();
   const retired = [];
 
