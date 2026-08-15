@@ -1,5 +1,5 @@
 # Jellyfin pack: profiles and safety
 
-Store API keys in Sidekick's secret store and reference them as `secret:<name>`. Use HTTPS with normal certificate verification. A custom CA may be pinned with administrator configuration. Plain HTTP is denied unless explicitly opted in for an internal deployment. Authenticated redirects are refused so credentials cannot cross origins.
+Store API keys in Sidekick's secret store and reference them as `secret:<name>`. Use HTTPS with normal certificate verification. A custom CA may be pinned with administrator configuration via `ca_pem` or `ca_secret_ref`; the resolved CA is threaded into the HTTP client so pinning applies in both forms. Plain HTTP is denied unless explicitly opted in for an internal deployment. Authenticated redirects are refused so credentials cannot cross origins.
 
-Writes require profile-level administrator enablement and Sidekick risk policy. The pack has no arbitrary URL, endpoint-path, force, or protection-bypass argument.
+Writes require profile-level administrator enablement and Sidekick risk policy, and libraries listed in `protected_resources` are hard-denied for mutation. The pack has no arbitrary URL, endpoint-path, force, or protection-bypass argument. Its only outbound-fetch use is the fixed official release lookup for `upgrade_readiness`, dispatched through the governed `web_fetch` tool under the module's deny-by-default manifest permissions; log filenames passed to the log route must exactly match names the server itself listed.

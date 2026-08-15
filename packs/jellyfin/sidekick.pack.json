@@ -2,8 +2,8 @@
   "schema_version": 1,
   "name": "jellyfin",
   "display_name": "Jellyfin",
-  "version": "1.0.0",
-  "description": "Governed Jellyfin server discovery, playback diagnosis, library and maintenance intelligence over administrator-named profiles.",
+  "version": "1.1.0",
+  "description": "Governed Jellyfin server discovery, playback diagnosis, library, log and maintenance intelligence over administrator-named profiles.",
   "publisher": "Sidekick",
   "compatibility": { "sidekick": ">=1.0.0" },
   "modules": [{ "name": "jellyfin-tools", "path": "modules/jellyfin-tools", "entry_point": "entry.js", "config_from_pack": true }],
@@ -20,25 +20,39 @@
     { "path": "knowledge/playback.md", "title": "Jellyfin pack: playback diagnosis", "category": "operations", "tags": ["jellyfin", "playback", "transcoding"] },
     { "path": "knowledge/maintenance.md", "title": "Jellyfin pack: maintenance and storage safety", "category": "operations", "tags": ["jellyfin", "maintenance", "storage"] }
   ],
-  "requires": { "tools": [], "optional_tools": ["secret", "proxmox"] },
+  "requires": { "tools": [], "optional_tools": ["secret", "proxmox", "status", "web_fetch"] },
   "configuration": {
     "schema": {
       "type": "object",
       "properties": {
         "allow_insecure_http": { "type": "boolean", "default": false },
-        "allow_destructive": { "type": "boolean", "default": false },
         "protected_resources": { "type": "array", "items": { "type": "object", "additionalProperties": false, "properties": { "kind": { "type": "string" }, "id": { "type": "string" }, "name": { "type": "string" } } } },
         "profiles": {
           "type": "object", "additionalProperties": { "type": "object", "additionalProperties": false,
             "properties": {
               "endpoint": { "type": "string" }, "api_key_ref": { "type": "string" },
               "ca_pem": { "type": "string" }, "ca_secret_ref": { "type": "string" },
-              "allow_insecure_http": { "type": "boolean" }, "request_timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 120000 }, "default": { "type": "boolean" }, "allow_writes": { "type": "boolean" }
+              "allow_insecure_http": { "type": "boolean" }, "request_timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 120000 }, "default": { "type": "boolean" }, "allow_writes": { "type": "boolean" },
+              "verify_poll_interval_ms": { "type": "integer", "minimum": 50, "maximum": 10000, "description": "Postcondition verification poll interval for maintenance operations (default 2000)." },
+              "storage_provider": {
+                "type": "object", "additionalProperties": false,
+                "description": "Independent evidence source for library storage availability. type=proxmox reads the named Proxmox storage through the governed proxmox tool; type=local reads the Sidekick host root filesystem through the status tool (Jellyfin must run on the Sidekick host).",
+                "properties": {
+                  "type": { "type": "string", "enum": ["proxmox", "local"] },
+                  "profile": { "type": "string", "description": "Proxmox pack profile name (type=proxmox)." },
+                  "node": { "type": "string", "description": "Proxmox node carrying the library storage (type=proxmox)." },
+                  "storage": { "type": "string", "description": "Proxmox storage id backing the libraries (type=proxmox)." },
+                  "vmid": { "type": "integer", "minimum": 100, "maximum": 999999999, "description": "Optional VMID of the guest running Jellyfin; enables vzdump backup evidence for backup_readiness." },
+                  "min_free_bytes": { "type": "integer", "minimum": 0, "description": "Free-space floor below which storage is unsafe for library mutation (default 1 GiB)." },
+                  "max_used_percent": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Utilization ceiling at or above which storage is unsafe (default 95)." }
+                },
+                "required": ["type"]
+              }
             }, "required": ["endpoint", "api_key_ref"]
           }
         }
       }, "additionalProperties": false
     },
-    "defaults": { "allow_insecure_http": false, "allow_destructive": false, "profiles": {} }
+    "defaults": { "allow_insecure_http": false, "profiles": {} }
   }
 }
