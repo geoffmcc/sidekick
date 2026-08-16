@@ -59,12 +59,21 @@ function showAuthModal(onSuccess) {
       modal.close();
     });
 
-    modal.querySelector('form').addEventListener('submit', (e) => {
+    modal.querySelector('form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const user = document.getElementById('auth-username').value;
       const pass = document.getElementById('auth-password').value;
-      const auth = btoa(user + ':' + pass);
-      sessionStorage.setItem('sidekick_auth', auth);
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ username: user, password: pass })
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        alert(detail.error || 'Authentication failed');
+        return;
+      }
       modal.close();
       if (onSuccess) onSuccess();
     });
@@ -72,6 +81,45 @@ function showAuthModal(onSuccess) {
 
   document.getElementById('auth-username').value = '';
   document.getElementById('auth-password').value = '';
+  modal.showModal();
+}
+
+function showBootstrapModal() {
+  let modal = document.getElementById('bootstrap-modal');
+  if (!modal) {
+    modal = document.createElement('dialog');
+    modal.id = 'bootstrap-modal';
+    modal.innerHTML = `
+      <form method="dialog" style="max-width: 340px; padding: 20px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; color: #c9d1d9;">
+        <h3 style="margin-top: 0; color: #58a6ff;">Create Sidekick Owner</h3>
+        <p style="font-size: .85rem;">This one-time setup creates the first local Owner account.</p>
+        <input type="text" id="bootstrap-username" placeholder="Username" required style="width: 100%; padding: 8px; margin-bottom: 10px; box-sizing: border-box;">
+        <input type="text" id="bootstrap-display-name" placeholder="Display name" required style="width: 100%; padding: 8px; margin-bottom: 10px; box-sizing: border-box;">
+        <input type="password" id="bootstrap-password" placeholder="Password (12+ characters)" required style="width: 100%; padding: 8px; margin-bottom: 15px; box-sizing: border-box;">
+        <button type="submit" style="padding: 8px 16px; background: #238636; color: white; border: none; border-radius: 4px; cursor: pointer;">Create Owner</button>
+      </form>`;
+    document.body.appendChild(modal);
+    modal.querySelector('form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const response = await fetch('/api/auth/bootstrap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          username: document.getElementById('bootstrap-username').value,
+          displayName: document.getElementById('bootstrap-display-name').value,
+          password: document.getElementById('bootstrap-password').value
+        })
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        alert(detail.error || 'Owner bootstrap failed');
+        return;
+      }
+      modal.close();
+      location.reload();
+    });
+  }
   modal.showModal();
 }
 
@@ -91,6 +139,11 @@ function authFetch(url, options) {
       clearAuth();
       showAuthModal(function() { location.reload(); });
       throw new Error('Authentication required');
+    }
+    if (res.status === 503) {
+      res.clone().json().then(function(detail) {
+        if (detail && detail.code === 'bootstrap-required') showBootstrapModal();
+      }).catch(function() {});
     }
     return res;
   });
