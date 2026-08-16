@@ -52,9 +52,12 @@ const MODULE_TRANSITIONS = Object.freeze({
   error: ["installed", "configured", "disabled", "enabled"],
 });
 
+const CORE_PERMISSION_RE = /^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+$/;
+
 const TOOL_DECLARATION_SCHEMA = z.object({
   risk: z.enum(RISK_LEVELS),
   category: z.string().optional(),
+  permission: z.string().regex(CORE_PERMISSION_RE).optional(),
   aliases: z.array(z.string().regex(/^[a-z][a-z0-9_]*$/)).default([]),
 });
 

@@ -547,6 +547,22 @@ app.post("/api/auth/password", (req, res) => {
   }
 });
 
+app.post("/api/auth/users", (req, res) => {
+  if (!requireIdentityAdministrator(req, res)) return;
+  try {
+    const principal = identity.createHumanUser({
+      username: req.body?.username,
+      password: req.body?.password,
+      displayName: req.body?.display_name,
+      actorPrincipalId: req.authPrincipal.principal_id,
+    });
+    if (req.body?.role) identity.assignRole(principal.principal_id, req.body.role, req.authPrincipal.principal_id);
+    res.status(201).json({ principal: identity.getPrincipal(principal.principal_id) });
+  } catch (error) {
+    res.status(400).json({ error: error.message, code: 'user_create_failed' });
+  }
+});
+
 app.post("/api/auth/users/:id/password-reset", (req, res) => {
   if (!requireIdentityAdministrator(req, res)) return;
   try {
@@ -565,6 +581,21 @@ app.get("/api/auth/principals", (req, res) => {
   res.set("Cache-Control", "no-store");
   res.json({ principals: identity.listPrincipals({ type: req.query.type, enabled: req.query.enabled === undefined ? undefined : req.query.enabled !== "false", limit: req.query.limit }) });
 });
+
+function setPrincipalStateRoute(req, res) {
+  if (!requireIdentityPermission(req, res, "principals.manage")) return;
+  if (!['enable', 'disable'].includes(req.params.state)) return res.status(404).json({ error: "Unknown principal state" });
+  try {
+    const principal = identity.setPrincipalEnabled(req.params.id, req.params.state === 'enable', req.authPrincipal.principal_id);
+    if (req.params.state === 'disable') authentication.invalidatePrincipalSessions(principal.principal_id);
+    res.json({ principal });
+  } catch (error) {
+    res.status(error.message.includes('Owner') ? 409 : 400).json({ error: error.message, code: 'principal_state_change_rejected' });
+  }
+}
+
+app.post("/api/auth/principals/:id/enable", (req, res) => { req.params.state = 'enable'; setPrincipalStateRoute(req, res); });
+app.post("/api/auth/principals/:id/disable", (req, res) => { req.params.state = 'disable'; setPrincipalStateRoute(req, res); });
 
 app.post("/api/auth/principals/:id/roles", (req, res) => {
   if (!requireIdentityPermission(req, res, "roles.manage")) return;

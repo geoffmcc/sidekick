@@ -325,11 +325,72 @@ function showPage(name){
   if (name === 'approvals') { loadApprovals(); loadReconciliations(); }
   if (name === 'tools') loadTools();
   if (name === 'capabilities') loadCapabilities();
+  if (name === 'identity') loadIdentityAdmin();
   if (name === 'agent') restoreAgentState();
   if (name === 'evolve') loadEvolve();
   if (name === 'compute') loadCompute();
   if (name === 'predict') { loadPredictStatus(); loadPredict(); }
   if (name === 'metrics') loadGrafanaDashboard();
+}
+
+function identityError(message) {
+  const el = $('identityError');
+  if (el) el.innerHTML = message ? '<div class="card" style="padding:10px;border-color:#f85149;color:#f85149">' + esc(message) + '</div>' : '';
+}
+
+async function loadIdentityAdmin() {
+  identityError('');
+  try {
+    const res = await authFetch('/api/auth/principals');
+    const data = await res.json();
+    if (!res.ok || data.error) { identityError(data.error || 'Identity administration is not available for this account'); return; }
+    const principals = data.principals || [];
+    $('identityCount').textContent = principals.length;
+    $('identityList').innerHTML = principals.map(principal => {
+      const stateAction = principal.enabled ? 'disable' : 'enable';
+      const stateLabel = principal.enabled ? 'Disable' : 'Enable';
+      const roles = (principal.roles || []).map(role => '<span class="metrics-status-pill ' + (role === 'owner' ? 'warn' : 'ok') + '">' + esc(role) + '</span>').join(' ');
+      return '<div class="card" style="padding:12px;margin-bottom:10px">'
+        + '<div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">'
+        + '<div><div style="font-weight:600">' + esc(principal.display_name) + '</div>'
+        + '<div class="sub">' + esc(principal.principal_id) + ' · ' + esc(principal.principal_type) + ' · ' + (principal.enabled ? 'enabled' : 'disabled') + '</div></div>'
+        + '<div>' + roles + '</div></div>'
+        + '<div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn btn-sm btn-outline" onclick="toggleIdentityPrincipal(' + jsArg(principal.principal_id) + ', ' + jsArg(stateAction) + ')">' + stateLabel + '</button>'
+        + '<select id="identity-role-' + attr(principal.principal_id) + '"><option value="viewer">Viewer</option><option value="operator">Operator</option><option value="auditor">Auditor</option><option value="administrator">Administrator</option><option value="owner">Owner</option></select>'
+        + '<button class="btn btn-sm btn-outline" onclick="assignIdentityRole(' + jsArg(principal.principal_id) + ')">Assign role</button></div>'
+        + '</div>';
+    }).join('') || '<div class="sub">No principals found.</div>';
+  } catch (error) { identityError(error.message); }
+}
+
+async function createIdentityUser() {
+  const body = {
+    username: $('identityNewUsername').value,
+    display_name: $('identityNewDisplayName').value,
+    password: $('identityNewPassword').value,
+    role: $('identityNewRole').value,
+  };
+  const res = await authFetch('/api/auth/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await res.json();
+  if (!res.ok || data.error) { identityError(data.error || 'User creation failed'); return; }
+  $('identityNewPassword').value = '';
+  loadIdentityAdmin();
+}
+
+async function assignIdentityRole(id) {
+  const role = $('identity-role-' + id).value;
+  const res = await authFetch('/api/auth/principals/' + encodeURIComponent(id) + '/roles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role }) });
+  const data = await res.json();
+  if (!res.ok || data.error) identityError(data.error || 'Role assignment failed');
+  else loadIdentityAdmin();
+}
+
+async function toggleIdentityPrincipal(id, state) {
+  if (state === 'disable' && !confirm('Disable this principal? Existing sessions will be invalidated.')) return;
+  const res = await authFetch('/api/auth/principals/' + encodeURIComponent(id) + '/' + state, { method: 'POST' });
+  const data = await res.json();
+  if (!res.ok || data.error) identityError(data.error || 'Principal state change failed');
+  else loadIdentityAdmin();
 }
 
 function loadGrafanaDashboard() {

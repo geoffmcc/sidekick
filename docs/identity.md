@@ -70,9 +70,13 @@ existing source policy and approval checks remain authoritative and are not
 duplicated. Legacy installation-wide API-key access remains an explicit
 transitional compatibility path and is not the new authorization model.
 
-Capability Pack permission declarations remain pack metadata. Packs do not own
-users, roles, credentials, or authorization; their declared tool/risk grants
-are consumed by Core at the existing dispatcher seam.
+Capability Packs do not own users, roles, credentials, or authorization. A pack
+may optionally declare a Core permission requirement on a tool in its manifest,
+for example `proxmox.vm.read`. That declaration is metadata and never grants
+authority: the single Core dispatcher resolves the named permission against the
+current principal, credential scope, delegation, and policy. Unknown or
+unregistered permission names fail closed. Existing tool/risk declarations
+remain the module-facade allowlist for what a pack may dispatch internally.
 
 ## Approval identity and brokered secret use
 
@@ -93,9 +97,9 @@ approval/audit output. Legacy environment and unscoped resolver behavior is
 retained only for pre-identity compatibility paths without an authenticated
 principal and is not a substitute for a scoped identity credential.
 
-Resource ownership and the remaining administration UI are subsequent PR work
-and must consume these Core services rather than create parallel identity
-stores.
+Resource ownership and administration consume these Core services rather than
+creating parallel identity stores. The dashboard Identity page is a view over
+the principal routes; direct API calls receive the same server-side checks.
 
 ## Workflow execution identity
 

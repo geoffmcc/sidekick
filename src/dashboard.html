@@ -30,6 +30,7 @@
   <a onclick="showPage('approvals')" id="nav-approvals">Approvals</a>
   <a onclick="showPage('tools')" id="nav-tools">Tools</a>
   <a onclick="showPage('capabilities')" id="nav-capabilities">Capabilities</a>
+  <a onclick="showPage('identity')" id="nav-identity">Identity</a>
   <a onclick="showPage('evolve')" id="nav-evolve">Evolve</a>
   <a onclick="showPage('compute')" id="nav-compute">Compute</a>
   <a onclick="showPage('predict')" id="nav-predict">Predict</a>
@@ -614,6 +615,29 @@
     </div>
     <pre id="capInspect" style="margin-top:10px;display:none;max-height:400px;overflow:auto"></pre>
   </div>
+</div>
+
+<!-- Identity Page -->
+<div class="page" id="page-identity">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div>
+      <div class="section-title" style="margin:0">Identity Administration (<span id="identityCount">0</span>)</div>
+      <div style="color:#8b949e;font-size:.82rem;margin-top:4px">Principals, roles, and account state in this Sidekick trust domain. Authorization remains enforced by Core on every request.</div>
+    </div>
+    <button class="btn btn-sm" onclick="loadIdentityAdmin()"><i class="fas fa-sync"></i> Refresh</button>
+  </div>
+  <div id="identityError"></div>
+  <div class="card" style="padding:12px;margin-bottom:14px">
+    <div class="section-title">Create human account</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+      <input id="identityNewUsername" placeholder="username" autocomplete="off">
+      <input id="identityNewDisplayName" placeholder="display name" autocomplete="off">
+      <input id="identityNewPassword" type="password" placeholder="temporary password" autocomplete="new-password">
+      <select id="identityNewRole"><option value="viewer">Viewer</option><option value="operator">Operator</option><option value="auditor">Auditor</option><option value="administrator">Administrator</option></select>
+      <button class="btn btn-sm" onclick="createIdentityUser()">Create user</button>
+    </div>
+  </div>
+  <div id="identityList"><div class="empty">Loading identity...</div></div>
 </div>
 
 <!-- Compute Page -->

@@ -195,8 +195,9 @@ function buildModuleDescriptors(record, entry) {
   if (!Array.isArray(built)) {
     throw new Error(`Module "${record.name}" buildDescriptors must return an array of descriptors`);
   }
-  return built.map(input =>
-    normalizeDescriptor({
+  return built.map(input => {
+    const declaredTool = record.manifest.tools[stripSidekickPrefix(input.name)];
+    return normalizeDescriptor({
       ...input,
       // Detach plain-data metadata from the entry's objects so the module
       // cannot mutate what was reviewed at activation (schema and handler are
@@ -205,8 +206,9 @@ function buildModuleDescriptors(record, entry) {
       aliases: [...(input.aliases || [])],
       source: `module:${record.name}`,
       family: null,
+      authorizationPermission: declaredTool?.permission || null,
     })
-  );
+  });
 }
 
 /**
