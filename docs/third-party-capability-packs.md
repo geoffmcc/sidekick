@@ -64,6 +64,7 @@ with one module, one workflow, one knowledge asset, and pack configuration:
 ```json
 {
   "schema_version": 1,
+  "pack_api": 1,
   "name": "my-pack",
   "display_name": "My Capability Pack",
   "version": "1.0.0",
@@ -93,6 +94,12 @@ with one module, one workflow, one knowledge asset, and pack configuration:
     "tools": ["read"],
     "optional_tools": ["notify"]
   },
+  "permissions": [
+    { "tool": "read", "risk": "low" }
+  ],
+  "depends": {
+    "packs": []
+  },
   "configuration": {
     "schema": {
       "type": "object",
@@ -121,6 +128,18 @@ Manifest rules:
   `configuration.schema`.
 - A configuration schema is standard JSON Schema as accepted by the Sidekick
   runtime. Defaults are merged before validation.
+- `pack_api` declares the platform contract version the pack targets (current:
+  `1`; omitting it means 1). An unsupported value is refused at inspection.
+- `permissions` must list, exactly, every `{tool, risk}` grant declared across
+  the pack's module manifests. Inspection refuses a mismatch in either
+  direction, so an operator reviewing the pack manifest sees the pack's true
+  dispatch surface. Omitting the key entirely is accepted for older packs, but
+  `capability validate` will tell you the exact declaration to add.
+- `depends.packs` declares other packs this one requires (or optionally uses),
+  each with an optional semver range. Required dependencies must be installed
+  before yours installs and enabled before yours enables; required-dependency
+  cycles are refused. Optional dependencies never block and are reported by
+  health.
 - Do not put passwords, API keys, certificates, private keys, or other secrets
   in the package or configuration. Store credentials with Sidekick's `secret`
   facility and reference the secret by name.
@@ -262,9 +281,15 @@ code:
 ```
 
 Inspection reads manifests, walks files, computes a deterministic package hash,
-validates module packages and workflow definitions, checks compatibility and
-required tools, and reports an explicit `problems` list. It does not import or
-execute pack code.
+validates module packages and workflow definitions, checks compatibility, the
+Pack API version, required tools, permission agreement, and dependency
+resolution (including cycles), and reports an explicit `problems` list. It
+does not import or execute pack code.
+
+For authoring, prefer `action: "validate"` with the same `path`: it returns a
+structured report where every finding names the file, the field where one
+applies, the problem, and the correction — including on manifests too broken
+for `inspect` to process.
 
 Before installation, test the module's own code and ensure that the package
 contains no `.env`, private-key, certificate, credential, or other sensitive

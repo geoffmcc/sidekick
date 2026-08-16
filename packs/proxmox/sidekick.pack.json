@@ -1,8 +1,9 @@
 {
   "schema_version": 1,
+  "pack_api": 1,
   "name": "proxmox",
   "display_name": "Proxmox VE",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Lets Sidekick securely discover and operate Proxmox VE infrastructure through administrator-configured named profiles, pinned-CA TLS, normalized state, deterministic maintenance preflight, same-cluster guest migration, governed provisioning/lifecycle, optional Ansible, and critically guarded retirement of proven disposable resources.",
   "publisher": "Sidekick",
   "compatibility": {
@@ -51,6 +52,9 @@
     "tools": [],
     "optional_tools": ["secret", "netdiag"]
   },
+  "permissions": [
+    { "tool": "bash", "risk": "critical" }
+  ],
   "configuration": {
     "schema": {
       "type": "object",

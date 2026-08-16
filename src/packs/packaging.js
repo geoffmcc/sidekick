@@ -15,7 +15,8 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const { PACK_MANIFEST_FILENAME, parsePackManifestFile, checkPackCompatibility } = require("./manifest");
+const { PACK_MANIFEST_FILENAME, parsePackManifestFile, checkPackCompatibility, checkPackApi, comparePackPermissions } = require("./manifest");
+const packDependencies = require("./dependencies");
 const modulePackaging = require("../modules/packaging");
 const { normalizeDefinition } = require("../workflows/definition");
 
@@ -88,6 +89,22 @@ function inspectPackPackage(sourcePath, options = {}) {
   if (!compatibility.ok) {
     problems.push(`Pack requires Sidekick ${compatibility.requires} but this Sidekick is ${sidekickVersion}`);
   }
+  const packApi = checkPackApi(manifest);
+  if (!packApi.ok) {
+    problems.push(`Pack declares pack_api ${packApi.pack_api} but this Sidekick supports pack_api ${packApi.supported.join(", ")}`);
+  }
+
+  // Dependencies: a required dependency that is missing, version-incompatible
+  // or cyclic is refused here — before any file is copied — with the same
+  // fail-closed posture as every other component check. The repository view is
+  // injectable so inspection of a candidate can be tested without a live DB.
+  const dependencyView = options.packContext || {};
+  const dependencyResolution = packDependencies.resolveDependencies(manifest, dependencyView);
+  problems.push(...dependencyResolution.problems);
+  const dependencyCycle = packDependencies.findDependencyCycle(manifest, dependencyView);
+  if (dependencyCycle) {
+    problems.push(`Pack dependency cycle: ${dependencyCycle.join(" -> ")}`);
+  }
 
   // Modules: inspected with the module rules, so descriptor collisions,
   // traversal and packaging violations surface here rather than mid-install.
@@ -119,6 +136,23 @@ function inspectPackPackage(sourcePath, options = {}) {
       modules.push({ reference, inspection, module_root: moduleRoot });
     } catch (error) {
       problems.push(`module ${reference.name}: ${error.message}`);
+    }
+  }
+
+  // Permissions: when the pack declares them, the declaration must agree
+  // EXACTLY with the aggregate its modules hold — in both directions. The
+  // module-level allowlist is what enforces dispatch; this check makes the
+  // pack manifest a truthful, reviewable statement of that enforcement. A
+  // manifest with no `permissions` key is a pre-contract pack: accepted, and
+  // reported as undeclared rather than silently equated with "none".
+  const inspectedModuleManifests = modules.map(entry => entry.inspection?.manifest).filter(Boolean);
+  const permissionComparison = comparePackPermissions(manifest.permissions, inspectedModuleManifests);
+  if (manifest.permissions) {
+    if (permissionComparison.missing.length) {
+      problems.push(`Pack permissions omit module-held grants: ${permissionComparison.missing.join(", ")}`);
+    }
+    if (permissionComparison.extra.length) {
+      problems.push(`Pack permissions declare grants no module holds: ${permissionComparison.extra.join(", ")}`);
     }
   }
 
@@ -175,10 +209,26 @@ function inspectPackPackage(sourcePath, options = {}) {
     files: entries,
     file_count: entries.length,
     package_hash,
+    pack_api: Object.freeze({
+      declared: packApi.pack_api,
+      supported: Object.freeze(packApi.supported),
+      compatible: packApi.ok,
+    }),
     compatibility: Object.freeze({
       requires: compatibility.requires,
       sidekick_version: compatibility.sidekick_version,
       compatible: compatibility.ok,
+    }),
+    permissions: Object.freeze({
+      declared: manifest.permissions ? Object.freeze(manifest.permissions.map(p => Object.freeze({ ...p }))) : null,
+      derived: Object.freeze(permissionComparison.aggregate.map(p => Object.freeze({ ...p }))),
+      consistent: manifest.permissions ? permissionComparison.ok : null,
+    }),
+    dependencies: Object.freeze({
+      declared: Object.freeze(manifest.depends.packs.map(d => Object.freeze({ ...d }))),
+      resolutions: Object.freeze(dependencyResolution.resolutions.map(r => Object.freeze({ ...r }))),
+      cycle: dependencyCycle ? Object.freeze([...dependencyCycle]) : null,
+      ok: dependencyResolution.ok && !dependencyCycle,
     }),
     modules: Object.freeze(modules.map(m => Object.freeze({
       name: m.reference.name,

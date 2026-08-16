@@ -17,7 +17,30 @@ const { normalizePackManifest, validatePackConfig, PROVENANCE } = require("./man
 const { compareVersions } = require("../modules/manifest");
 
 const PACK_STATES = Object.freeze(["installed", "configured", "enabled", "disabled", "error"]);
+
+// Legal lifecycle transitions, mirroring the module subsystem's discipline
+// (src/modules/manifest.js MODULE_TRANSITIONS): every persisted state change is
+// validated against this table, same-state writes are permitted (idempotent
+// re-enable after a restart is normal), and anything else fails instead of
+// silently rewriting history. `error` is recoverable toward any operational
+// state; nothing returns to `installed` — that is the registration state only.
+const PACK_TRANSITIONS = Object.freeze({
+  installed: Object.freeze(["configured", "enabled", "disabled", "error"]),
+  configured: Object.freeze(["enabled", "disabled", "error"]),
+  enabled: Object.freeze(["disabled", "error"]),
+  disabled: Object.freeze(["enabled", "error"]),
+  error: Object.freeze(["configured", "enabled", "disabled"]),
+});
+
 const COMPONENT_KINDS = Object.freeze(["module", "workflow", "knowledge"]);
+
+function assertPackTransition(from, to) {
+  if (from === to) return;
+  const allowed = Object.prototype.hasOwnProperty.call(PACK_TRANSITIONS, from) ? PACK_TRANSITIONS[from] : [];
+  if (!allowed.includes(to)) {
+    throw new Error(`Invalid capability pack state transition: ${from} -> ${to}`);
+  }
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -107,6 +130,7 @@ function setPackState(name, state, { error = null } = {}) {
   if (!PACK_STATES.includes(state)) throw new Error(`Invalid pack state: ${state}`);
   const record = getPack(name);
   if (!record) throw new Error(`Capability pack "${name}" is not installed`);
+  assertPackTransition(record.state, state);
   const timestampColumn = { enabled: "enabled_at", disabled: "disabled_at", configured: "configured_at" }[state];
   const sets = ["state = ?"];
   const params = [state];
@@ -116,7 +140,18 @@ function setPackState(name, state, { error = null } = {}) {
   }
   sets.push("error = ?");
   params.push(state === "error" ? String(error || "unknown pack error") : null);
-  getDb().prepare(`UPDATE platform_capability_packs SET ${sets.join(", ")} WHERE pack_id = ?`).run(...params, record.pack_id);
+  // The observed state is part of the WHERE clause: if another process moved
+  // the pack between our read and this write, the transition we validated is
+  // not the transition we would be performing — fail instead of clobbering.
+  const outcome = getDb()
+    .prepare(`UPDATE platform_capability_packs SET ${sets.join(", ")} WHERE pack_id = ? AND state = ?`)
+    .run(...params, record.pack_id, record.state);
+  if (outcome.changes === 0) {
+    const current = getPack(name);
+    throw new Error(
+      `Capability pack "${name}" state changed concurrently (expected ${record.state}, found ${current ? current.state : "missing"})`
+    );
+  }
   recordPackEvent(name, "pack.transition", { from: record.state, to: state, error: error ? String(error).slice(0, 300) : undefined });
   return getPack(name);
 }
@@ -197,8 +232,18 @@ function deletePack(name) {
   ensureStorage();
   const record = getPack(name);
   if (!record) return { removed: false };
-  getDb().prepare("DELETE FROM platform_capability_pack_components WHERE pack_name = ?").run(record.name);
-  getDb().prepare("DELETE FROM platform_capability_packs WHERE pack_id = ?").run(record.pack_id);
+  // One transaction: a crash between the two deletes must not leave ownership
+  // rows for a pack that no longer exists (or vice versa).
+  const db = getDb();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("DELETE FROM platform_capability_pack_components WHERE pack_name = ?").run(record.name);
+    db.prepare("DELETE FROM platform_capability_packs WHERE pack_id = ?").run(record.pack_id);
+    db.exec("COMMIT");
+  } catch (error) {
+    try { db.exec("ROLLBACK"); } catch {}
+    throw error;
+  }
   recordPackEvent(name, "pack.uninstalled", { version: record.version });
   return { removed: true, pack: record };
 }
@@ -301,6 +346,7 @@ function recordPackEvent(packName, eventType, payload = {}) {
 
 module.exports = {
   PACK_STATES,
+  PACK_TRANSITIONS,
   COMPONENT_KINDS,
   ensureStorage,
   getPack,

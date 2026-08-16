@@ -40,8 +40,8 @@ test("pack and module versions agree at 1.1.0", () => {
       "utf8",
     ),
   );
-  assert.strictEqual(packManifest.version, "1.1.0");
-  assert.strictEqual(moduleManifest.version, "1.1.0");
+  assert.strictEqual(packManifest.version, "1.1.1");
+  assert.strictEqual(moduleManifest.version, "1.1.1");
   // Every services.dispatch target used by the module must be declared.
   const declared = moduleManifest.permissions.map((x) => x.tool).sort();
   assert.deepStrictEqual(declared, ["proxmox", "status", "web_fetch"]);

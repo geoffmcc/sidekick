@@ -1,8 +1,9 @@
 {
   "schema_version": 1,
+  "pack_api": 1,
   "name": "jellyfin",
   "display_name": "Jellyfin",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Governed Jellyfin server discovery, playback diagnosis, library, log and maintenance intelligence over administrator-named profiles.",
   "publisher": "Sidekick",
   "compatibility": { "sidekick": ">=1.0.0" },
@@ -21,6 +22,16 @@
     { "path": "knowledge/maintenance.md", "title": "Jellyfin pack: maintenance and storage safety", "category": "operations", "tags": ["jellyfin", "maintenance", "storage"] }
   ],
   "requires": { "tools": [], "optional_tools": ["secret", "proxmox", "status", "web_fetch"] },
+  "permissions": [
+    { "tool": "proxmox", "risk": "low" },
+    { "tool": "status", "risk": "medium" },
+    { "tool": "web_fetch", "risk": "medium" }
+  ],
+  "depends": {
+    "packs": [
+      { "name": "proxmox", "optional": true }
+    ]
+  },
   "configuration": {
     "schema": {
       "type": "object",

@@ -57,6 +57,7 @@ A pack package is a directory containing `sidekick.pack.json`:
 ```json
 {
   "schema_version": 1,
+  "pack_api": 1,
   "name": "developer",
   "display_name": "Developer / Software Engineering",
   "version": "1.0.0",
@@ -76,12 +77,24 @@ A pack package is a directory containing `sidekick.pack.json`:
     "tools": ["git", "bash", "read", "list", "search"],
     "optional_tools": ["github", "ci_status"]
   },
+  "permissions": [
+    { "tool": "git", "risk": "medium" },
+    { "tool": "bash", "risk": "critical" }
+  ],
+  "depends": {
+    "packs": [ { "name": "proxmox", "version": "^1.0.0", "optional": true } ]
+  },
   "configuration": { "schema": { "…JSON Schema…" }, "defaults": { } }
 }
 ```
 
 Every field has runtime meaning:
 
+- `pack_api` names the platform contract the pack was written against —
+  distinct from `schema_version` (the manifest's shape) and
+  `compatibility.sidekick` (the application version). A manifest that omits it
+  is a Pack API 1 pack; an unsupported value is refused at inspection, before
+  any code is copied or executed. The current Pack API is **1**.
 - `modules[]` are installed through the module subsystem (B9), into the managed
   module store. `config_from_pack: true` means the pack's validated
   configuration *is* that module's configuration — the only configuration
@@ -92,6 +105,21 @@ Every field has runtime meaning:
   agents find pack knowledge through the ordinary `knowledge` tool.
 - `requires.tools` is verified at install; a missing required tool blocks the
   install. `requires.optional_tools` is reported by health as available or not.
+- `permissions` is the pack-level statement of every cross-tool grant its
+  modules hold (the same `{tool, risk}` vocabulary as module manifests).
+  Inspection refuses a pack whose declaration disagrees — in either
+  direction — with the aggregate of its module manifests, so the pack manifest
+  is a truthful, reviewable statement of what the module-level allowlist
+  (`src/modules/services.js`) actually enforces at dispatch. A manifest that
+  omits the key entirely is a pre-contract pack: accepted, reported by health
+  as `undeclared`, and flagged by `capability validate` with the exact
+  declaration to add.
+- `depends.packs` declares required and optional pack dependencies, each with
+  an optional semver range. Required dependencies must be installed (and
+  satisfy the range) before install, and be enabled before enable; cycles
+  through required dependencies are refused at inspection. Optional
+  dependencies never block — they are resolved and reported by health and
+  `capability show` so degraded composition is visible.
 - `configuration.schema` validates pack configuration; `defaults` are applied.
 
 ## Lifecycle
@@ -110,9 +138,16 @@ page. Both go through the same governed path.
 
 Reads the manifest, walks the package, computes a deterministic whole-package
 hash, recursively inspects each owned **module package** with the module rules,
-validates each workflow definition, and checks compatibility and required
-tools. Nothing is executed. `installable: false` with an explicit `problems`
-list is the answer for anything disqualifying.
+validates each workflow definition, and checks compatibility, Pack API
+version, required tools, permission agreement (declared vs module aggregate),
+and dependency resolution including cycle detection. Nothing is executed.
+`installable: false` with an explicit `problems` list is the answer for
+anything disqualifying.
+
+`capability action="validate"` runs the same checks but always returns a
+structured report — every finding names the file, the field where one applies,
+the problem, and the correction — instead of throwing on a malformed manifest.
+It is the authoring-time contract check.
 
 ### Install
 
@@ -155,6 +190,18 @@ registry, workflow definitions become un-runnable, knowledge rows are
 withdrawn from search. Nothing is destroyed — registrations, definitions and
 knowledge content all survive, and historical execution records are untouched.
 
+Dependencies order both operations: a pack cannot enable while a required
+dependency is not itself enabled, and a provider cannot disable while an
+enabled pack requires it (the dependents are named in the refusal; disable
+them first).
+
+Pack lifecycle states move only along a validated transition table
+(`PACK_TRANSITIONS` in `src/packs/repository.js`, mirroring the module
+subsystem's discipline): `installed → configured → enabled ⇄ disabled`, with
+`error` reachable from anywhere and recoverable toward any operational state,
+and nothing ever returning to `installed`. An illegal transition — or a state
+changed concurrently by another process — fails instead of rewriting history.
+
 ### Upgrade
 
 Stages the candidate beside the live installation, verifies it, promotes it,
@@ -173,6 +220,8 @@ Ambiguous replacement is refused unless explicitly allowed:
 | same version, different package | refused (`allow_same_version` to proceed) |
 | lower version | refused (`allow_downgrade` to proceed) |
 | incompatible with this Sidekick | refused |
+| breaks an installed dependent's declared version range | refused (the dependents are named) |
+| introduces a required-dependency cycle | refused |
 
 A failed upgrade never destroys the working installation.
 
@@ -180,7 +229,10 @@ A failed upgrade never destroys the working installation.
 
 Disables the pack, uninstalls owned modules through the module lifecycle,
 removes owned workflow definitions and knowledge, removes ownership rows,
-removes the managed package directory, and removes the pack record.
+removes the managed package directory, and removes the pack record. A pack
+with installed required dependents cannot be uninstalled — even disabled
+dependents would be left permanently unable to enable; uninstall the
+dependents first.
 
 **Historical execution and audit evidence is preserved.** Tool logs, kernel
 ledger events and completed workflow runs survive the removal of the thing that
@@ -193,12 +245,22 @@ Pack health is **derived from components**, never set by hand:
 ```
 Developer Pack
   compatibility:             ok (>=1.0.0)
+  pack_api:                  v1
   configuration:             valid
+  permissions:               consistent (2 declared)
   module developer-tools:    healthy
+  dependency proxmox:        1.0.0 (enabled), optional
   workflow definitions (7):  registered
   knowledge (8):             enabled
 overall: healthy
 ```
+
+The `permissions` component verifies the stored pack declaration still agrees
+with what the **installed** module manifests hold — a module upgraded out from
+under the pack would otherwise silently change the pack's real grant surface.
+Dependency components report each declared dependency's installed version and
+state; a missing required dependency is a `component_failure`, an
+installed-but-unready or unhealthy one degrades, and optional gaps inform.
 
 | Status | Meaning |
 |---|---|
@@ -326,6 +388,7 @@ proceed; the durable record and the cursor both stay accurate.
 capability action="list"
 capability action="available"
 capability action="inspect"   name="developer"     # or path="/srv/pack"
+capability action="validate"  name="developer"     # or path=… — structured file/field/problem/correction report
 capability action="install"   name="developer"     # or path=…, config={…}, enable=true
 capability action="configure" name="developer" config={ "verification_mode": "full" }
 capability action="enable"    name="developer"
