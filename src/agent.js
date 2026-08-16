@@ -934,6 +934,9 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
         parentTaskId: parentContext.parentTaskId,
         rootTaskId: parentContext.rootTaskId,
         continuationDepth: parentContext.continuationDepth,
+        requestedByPrincipalId: parentContext.requestedByPrincipalId || null,
+        actorPrincipalId: parentContext.actorPrincipalId || null,
+        actingForPrincipalId: parentContext.actingForPrincipalId || null,
       }
     : null;
   const platformExecution = startAgentExecution(goal, taskId, inferredProject, executionLineage);
@@ -1209,6 +1212,9 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
     root_task_id: parentContext ? parentContext.rootTaskId : taskId,
     continuation_depth: parentContext ? parentContext.continuationDepth : 0,
     session_id: parentContext ? (parentContext.sessionId || null) : null,
+    requested_by_principal_id: parentContext ? (parentContext.requestedByPrincipalId || null) : null,
+    actor_principal_id: parentContext ? (parentContext.actorPrincipalId || null) : null,
+    acting_for_principal_id: parentContext ? (parentContext.actingForPrincipalId || null) : null,
     project: inferredProject || null,
     routing: { requires_tools: useTools, reason: classification.reason },
     brain: brainInfo,

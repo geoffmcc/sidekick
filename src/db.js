@@ -1364,7 +1364,7 @@ function verifyHandoffProvenance(packet, { requireResume = true } = {}) {
  *  - content_hash remains the hash of the REDACTED content (memory extraction
  *    fingerprints embed it; changing its meaning would duplicate memories).
  */
-function saveHandoff({ id, kv_key, project, title, source, task_id, content, previous_id, extraction_state, extraction_version, expectedVersion, packet }) {
+function saveHandoff({ id, kv_key, project, title, source, task_id, content, previous_id, extraction_state, extraction_version, expectedVersion, packet, owner_principal_id, created_by_principal_id }) {
   if (!hasTable("memory_handoffs")) throw new Error("memory_handoffs table is not available; run migrations");
   const ts = nowIso();
   const redacted = require("./redact").redactSensitive(String(content || ""));
@@ -1391,9 +1391,11 @@ function saveHandoff({ id, kv_key, project, title, source, task_id, content, pre
         task_id = COALESCE(?, task_id),
         kv_key = COALESCE(?, kv_key),
         extraction_state = COALESCE(?, extraction_state),
-        extraction_version = COALESCE(?, extraction_version)
+        extraction_version = COALESCE(?, extraction_version),
+        owner_principal_id = COALESCE(?, owner_principal_id),
+        created_by_principal_id = COALESCE(?, created_by_principal_id)
       WHERE id = ?
-    `).run(ts, project || null, title || null, source || null, task_id || null, kv_key || null, extraction_state || null, extraction_version || null, existing.id);
+    `).run(ts, project || null, title || null, source || null, task_id || null, kv_key || null, extraction_state || null, extraction_version || null, owner_principal_id || null, created_by_principal_id || null, existing.id);
     const touched = getHandoff(existing.id);
     persistHandoffLinks(touched);
     return touched;
@@ -1438,7 +1440,9 @@ function saveHandoff({ id, kv_key, project, title, source, task_id, content, pre
           task_id = COALESCE(?, task_id),
           kv_key = COALESCE(?, kv_key),
           extraction_state = ?,
-          extraction_version = COALESCE(?, extraction_version)
+          extraction_version = COALESCE(?, extraction_version),
+          owner_principal_id = COALESCE(?, owner_principal_id),
+          created_by_principal_id = COALESCE(?, created_by_principal_id)
         WHERE id = ? AND version = ?
       `).run(
         nextVersion,
@@ -1454,6 +1458,8 @@ function saveHandoff({ id, kv_key, project, title, source, task_id, content, pre
         kv_key || null,
         extraction_state || "pending",
         extraction_version || null,
+        owner_principal_id || null,
+        created_by_principal_id || null,
         existing.id,
         existing.version
       );
@@ -1483,8 +1489,9 @@ function saveHandoff({ id, kv_key, project, title, source, task_id, content, pre
   db.prepare(`
     INSERT INTO memory_handoffs (
       id, kv_key, project, title, source, task_id, version, previous_id, content_hash,
-      content, redacted_content, extraction_state, extraction_version, created_at, updated_at, packet_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      content, redacted_content, extraction_state, extraction_version, created_at, updated_at, packet_json,
+      owner_principal_id, created_by_principal_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     handoffId,
     kv_key || null,
@@ -1501,7 +1508,9 @@ function saveHandoff({ id, kv_key, project, title, source, task_id, content, pre
     extraction_version || null,
     ts,
     ts,
-    packetJson || "{}"
+    packetJson || "{}",
+    owner_principal_id || null,
+    created_by_principal_id || null
   );
   auditMemoryEvent("handoff_created", "handoff", handoffId, { kv_key, project, version: 1, content_hash: hash }, source || "system");
   return getHandoff(handoffId);
@@ -1621,6 +1630,8 @@ function normalizeHandoffRow(row) {
     created_at: row.created_at,
     updated_at: row.updated_at,
     archived_at: row.archived_at,
+    owner_principal_id: row.owner_principal_id || null,
+    created_by_principal_id: row.created_by_principal_id || null,
     links: getHandoffLinks(row.id, row.version)
   };
 }
@@ -1671,8 +1682,9 @@ function saveTaskSession(session) {
       id, goal, project, source, client_session_id, working_directory, repository, branch,
       environment, tags_json, supplied_context, state, current_plan, current_hypothesis,
       completed_steps_json, blockers_json, next_step, artifacts_json, outcome,
-      final_summary, acceptance_state, memory_brief_json, created_at, updated_at, ended_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      final_summary, acceptance_state, memory_brief_json, created_at, updated_at, ended_at,
+      owner_principal_id, created_by_principal_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       goal = COALESCE(excluded.goal, goal), project = COALESCE(excluded.project, project),
       source = COALESCE(excluded.source, source), client_session_id = COALESCE(excluded.client_session_id, client_session_id),
@@ -1684,7 +1696,9 @@ function saveTaskSession(session) {
       blockers_json = excluded.blockers_json, next_step = COALESCE(excluded.next_step, next_step), artifacts_json = excluded.artifacts_json,
       outcome = COALESCE(excluded.outcome, outcome), final_summary = COALESCE(excluded.final_summary, final_summary),
       acceptance_state = COALESCE(excluded.acceptance_state, acceptance_state), memory_brief_json = COALESCE(excluded.memory_brief_json, memory_brief_json),
-      updated_at = excluded.updated_at, ended_at = COALESCE(excluded.ended_at, ended_at)
+      updated_at = excluded.updated_at, ended_at = COALESCE(excluded.ended_at, ended_at),
+      owner_principal_id = COALESCE(excluded.owner_principal_id, owner_principal_id),
+      created_by_principal_id = COALESCE(excluded.created_by_principal_id, created_by_principal_id)
   `).run(
     id,
     session.goal || "task",
@@ -1710,7 +1724,9 @@ function saveTaskSession(session) {
     session.memory_brief ? JSON.stringify(session.memory_brief) : null,
     session.created_at || ts,
     ts,
-    session.ended_at || null
+    session.ended_at || null,
+    session.owner_principal_id || null,
+    session.created_by_principal_id || null
   );
   auditMemoryEvent("task_session_saved", "task_session", id, { state: session.state || "active", project: session.project || null }, session.source || "system");
   return getTaskSession(id);
@@ -1744,6 +1760,8 @@ function normalizeTaskSessionRow(row) {
     created_at: row.created_at,
     updated_at: row.updated_at,
     ended_at: row.ended_at
+    ,owner_principal_id: row.owner_principal_id || null,
+    created_by_principal_id: row.created_by_principal_id || null
   };
 }
 
