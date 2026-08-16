@@ -1266,6 +1266,26 @@ function parseHandoffPacket(value) {
   try { return JSON.parse(value); } catch { return {}; }
 }
 
+function getHandoffLinks(handoffId, version = null) {
+  if (!hasTable("memory_handoff_links")) return [];
+  const rows = version === null
+    ? db.prepare("SELECT * FROM memory_handoff_links WHERE handoff_id = ? ORDER BY version DESC, link_type, created_at").all(handoffId)
+    : db.prepare("SELECT * FROM memory_handoff_links WHERE handoff_id = ? AND version = ? ORDER BY link_type, created_at").all(handoffId, Number(version));
+  return rows.map(row => ({ id: row.id, handoff_id: row.handoff_id, version: row.version, type: row.link_type, payload: parseJson(row.payload_json, {}), created_at: row.created_at }));
+}
+
+function persistHandoffLinks(handoff) {
+  if (!handoff || !hasTable("memory_handoff_links")) return;
+  const packet = handoff.packet || {};
+  for (const type of ["evidence", "artifacts", "relationships"]) {
+    const linkType = type === "artifacts" ? "artifact" : type === "relationships" ? "relationship" : "evidence";
+    for (const [index, payload] of (Array.isArray(packet[type]) ? packet[type] : []).entries()) {
+      const id = stableId("hl", `${handoff.id}|${handoff.version}|${linkType}|${JSON.stringify(payload)}|${index}`);
+      db.prepare("INSERT OR IGNORE INTO memory_handoff_links (id, handoff_id, version, link_type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(id, handoff.id, handoff.version, linkType, JSON.stringify(payload), handoff.updated_at || nowIso());
+    }
+  }
+}
+
 function validateHandoffPacket(packet, { requireResume = false } = {}) {
   const value = normalizeHandoffPacket(packet || {});
   const issues = [];
@@ -1368,7 +1388,9 @@ function saveHandoff({ id, kv_key, project, title, source, task_id, content, pre
         extraction_version = COALESCE(?, extraction_version)
       WHERE id = ?
     `).run(ts, project || null, title || null, source || null, task_id || null, kv_key || null, extraction_state || null, extraction_version || null, existing.id);
-    return getHandoff(existing.id);
+    const touched = getHandoff(existing.id);
+    persistHandoffLinks(touched);
+    return touched;
   }
 
   if (existing) {
@@ -1438,7 +1460,9 @@ function saveHandoff({ id, kv_key, project, title, source, task_id, content, pre
       throw error;
     }
     auditMemoryEvent("handoff_updated", "handoff", existing.id, { kv_key: existing.kv_key, project: project || existing.project, version: nextVersion, content_hash: hash }, source || "system");
-    return getHandoff(existing.id);
+    const updated = getHandoff(existing.id);
+    persistHandoffLinks(updated);
+    return updated;
   }
 
   // New handoff. Creation-time dedupe applies only when the caller supplied no
@@ -1590,7 +1614,8 @@ function normalizeHandoffRow(row) {
     extraction_version: row.extraction_version,
     created_at: row.created_at,
     updated_at: row.updated_at,
-    archived_at: row.archived_at
+    archived_at: row.archived_at,
+    links: getHandoffLinks(row.id, row.version)
   };
 }
 
@@ -1601,7 +1626,9 @@ function getHandoff(idOrKey) {
   const row =
     db.prepare("SELECT * FROM memory_handoffs WHERE id = ?").get(idOrKey) ||
     db.prepare("SELECT * FROM memory_handoffs WHERE kv_key = ?").get(idOrKey);
-  return normalizeHandoffRow(row);
+  const created = normalizeHandoffRow(row);
+  persistHandoffLinks(created);
+  return created;
 }
 
 function listHandoffs({ project, includeArchived = false, limit = 50 } = {}) {
@@ -2927,6 +2954,7 @@ module.exports = {
   normalizeHandoffPacket,
   validateHandoffPacket,
   verifyHandoffProvenance,
+  getHandoffLinks,
   saveTaskSession,
   getTaskSession,
   listTaskSessions,

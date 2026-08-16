@@ -62,6 +62,9 @@ function parse(result) {
   };
   const packetCreated = parse(await TOOLS.handoff({ action: "create", key: "hv-packet", project: "hv-test", content: "Fact: structured packet.", packet }));
   assert.deepStrictEqual(packetCreated.handoff.packet, packet, "structured packet must be returned intact");
+  assert.strictEqual(packetCreated.handoff.links.filter(link => link.type === "evidence").length, 1, "evidence should be persisted as a first-class link");
+  assert.strictEqual(packetCreated.handoff.links.filter(link => link.type === "artifact").length, 1, "artifacts should be persisted as first-class links");
+  assert.strictEqual(packetCreated.handoff.links.filter(link => link.type === "relationship").length, 1, "relationships should be persisted as first-class links");
   const packetValidation = parse(await TOOLS.handoff({ action: "validate", id: packetCreated.handoff.id }));
   assert.strictEqual(packetValidation.valid, true, "complete resume packet should validate");
   const verifiedPacket = parse(await TOOLS.handoff({ action: "create", project: "hv-test", content: "Fact: provenance verification.", packet: {
