@@ -103,6 +103,16 @@ const PACK_PERMISSION_SCHEMA = z.union([
   z.object({ capability: z.string().min(1) }),
 ]);
 
+const SERVICE_CAPABILITIES = Object.freeze({
+  secrets: ["metadata", "use", "write"],
+  storage: ["read", "write", "delete"],
+});
+
+const SERVICE_SCHEMA = z.object({
+  secrets: z.array(z.enum(SERVICE_CAPABILITIES.secrets)).default([]),
+  storage: z.array(z.enum(SERVICE_CAPABILITIES.storage)).default([]),
+}).default({ secrets: [], storage: [] });
+
 const PACK_DEPENDENCY_SCHEMA = z.object({
   name: z.string().regex(PACK_NAME_RE),
   // Optional semver range the installed dependency must satisfy. Full grammar
@@ -138,6 +148,7 @@ const packManifestSchema = z.object({
   // that declares them — even as [] — is held to exact agreement with its
   // modules. The distinction is what makes backward compatibility honest.
   permissions: z.array(PACK_PERMISSION_SCHEMA).optional(),
+  services: SERVICE_SCHEMA,
   depends: z.object({
     packs: z.array(PACK_DEPENDENCY_SCHEMA).default([]),
   }).default({ packs: [] }),
@@ -156,6 +167,19 @@ function normalizePackManifest(input) {
     throw new Error(`Invalid capability pack manifest${details ? ": " + details : ""}`);
   }
   const manifest = parsed.data;
+  const servicePermissions = [
+    ...manifest.services.secrets.map(name => ({ capability: `pack.secrets.${name}` })),
+    ...manifest.services.storage.map(name => ({ capability: `pack.storage.${name}` })),
+  ];
+  if (manifest.permissions !== undefined || servicePermissions.length) {
+    const declaredPermissionKeys = new Set((manifest.permissions || []).map(permissionKey));
+    manifest.permissions = [...(manifest.permissions || []), ...servicePermissions.filter(permission => {
+      const key = permissionKey(permission);
+      if (declaredPermissionKeys.has(key)) return false;
+      declaredPermissionKeys.add(key);
+      return true;
+    })];
+  }
   if (!parseVersion(manifest.version)) throw new Error(`Invalid capability pack version: ${manifest.version}`);
 
   const moduleNames = new Set();

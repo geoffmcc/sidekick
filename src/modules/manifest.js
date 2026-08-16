@@ -66,6 +66,16 @@ const PERMISSION_SCHEMA = z.union([
   z.object({ capability: z.string().min(1) }),
 ]);
 
+const SERVICE_CAPABILITIES = Object.freeze({
+  secrets: ["metadata", "use", "write"],
+  storage: ["read", "write", "delete"],
+});
+
+const SERVICE_SCHEMA = z.object({
+  secrets: z.array(z.enum(SERVICE_CAPABILITIES.secrets)).default([]),
+  storage: z.array(z.enum(SERVICE_CAPABILITIES.storage)).default([]),
+}).default({ secrets: [], storage: [] });
+
 const MIGRATION_SCHEMA = z.object({
   name: z.string().regex(/^[a-z][a-z0-9_-]*$/),
   sql: z.string().min(1),
@@ -91,6 +101,7 @@ const manifestSchema = z.object({
   capabilities: z.array(z.string().min(1)).default([]),
   configSchema: z.any().optional().nullable(),
   permissions: z.array(PERMISSION_SCHEMA).default([]),
+  services: SERVICE_SCHEMA,
   tools: z.record(TOOL_DECLARATION_SCHEMA).default({}),
   workflows: z.array(z.string().min(1)).default([]),
   agents: z.array(z.string().min(1)).default([]),
@@ -197,6 +208,17 @@ function normalizeManifest(input) {
       .join("; ");
     throw new Error(`Invalid module manifest${details ? ": " + details : ""}`);
   }
+  const servicePermissions = [
+    ...parsed.data.services.secrets.map(name => ({ capability: `pack.secrets.${name}` })),
+    ...parsed.data.services.storage.map(name => ({ capability: `pack.storage.${name}` })),
+  ];
+  const declaredPermissionJson = new Set(parsed.data.permissions.map(permission => JSON.stringify(permission)));
+  parsed.data.permissions = [...parsed.data.permissions, ...servicePermissions.filter(permission => {
+    const key = JSON.stringify(permission);
+    if (declaredPermissionJson.has(key)) return false;
+    declaredPermissionJson.add(key);
+    return true;
+  })];
   if (!parseVersion(parsed.data.version)) {
     throw new Error(`Invalid module version: ${parsed.data.version}`);
   }

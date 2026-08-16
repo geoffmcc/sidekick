@@ -771,6 +771,25 @@ function health(name) {
   // disabled, not "unhealthy": report DISABLED unless something is actually wrong.
   if (!enabled && (status === HEALTH_STATUS.DEGRADED || status === HEALTH_STATUS.DISABLED)) status = HEALTH_STATUS.DISABLED;
 
+  const categoryFor = component => {
+    if (component.component === "compatibility" || component.component === "pack_api") return "compatibility";
+    if (component.component === "configuration") return "configuration";
+    if (component.component === "permissions") return "authorization";
+    if (component.kind === "dependency") return "dependencies";
+    if (component.kind === "module" && /integrity|missing/i.test(`${component.status} ${component.detail}`)) return "integrity";
+    return "components";
+  };
+  const categories = {};
+  for (const component of components) {
+    const category = categoryFor(component);
+    if (!categories[category]) categories[category] = { ok: true, failures: 0, components: [] };
+    categories[category].components.push(component.component);
+    if (!component.ok) {
+      categories[category].ok = false;
+      categories[category].failures += 1;
+    }
+  }
+
   return {
     name: record.name,
     display_name: record.display_name,
@@ -782,6 +801,7 @@ function health(name) {
     package_hash: record.package_hash,
     install_path: record.install_path,
     components,
+    categories,
     optional_tools_unavailable: optionalMissing,
     error: record.error || null,
     checked_at: new Date().toISOString(),
@@ -797,6 +817,22 @@ function toolAvailable(name) {
   } catch {
     return false;
   }
+}
+
+/** Produce an operator-oriented repair report without mutating the pack. */
+function doctor(name) {
+  const report = health(name);
+  const actions = [];
+  for (const component of report.components.filter(entry => entry.ok === false)) {
+    if (component.kind === "dependency") actions.push({ component: component.component, action: "install or enable the required dependency" });
+    else if (component.component === "configuration") actions.push({ component: component.component, action: "update the pack configuration to satisfy its schema" });
+    else if (component.component === "permissions") actions.push({ component: component.component, action: "align pack permissions with the owned module manifests" });
+    else if (component.kind === "module") actions.push({ component: component.component, action: "inspect module health and repair integrity/configuration before enabling" });
+    else if (component.kind === "workflow") actions.push({ component: component.component, action: "re-register or upgrade the workflow definition" });
+    else if (component.kind === "knowledge") actions.push({ component: component.component, action: "restore the owned knowledge row or reinstall the pack" });
+    else actions.push({ component: component.component, action: "inspect the component detail and correct the reported condition" });
+  }
+  return { ok: report.ok, status: report.status, checked_at: report.checked_at, health: report, actions };
 }
 
 /** Operator-facing summary of one installed pack. */
@@ -970,4 +1006,4 @@ function classifyInspectionProblem(problem) {
   return "package";
 }
 
-module.exports = { HEALTH_STATUS, inspect, install, configure, enable, disable, upgrade, uninstall, health, describe, validate };
+module.exports = { HEALTH_STATUS, inspect, install, configure, enable, disable, upgrade, uninstall, health, doctor, describe, validate };

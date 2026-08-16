@@ -30,9 +30,13 @@ function installAsset(packName, packVersion, asset, filePath) {
   const content = fs.readFileSync(filePath, "utf-8");
   const now = new Date().toISOString();
   const existing = db
-    .prepare("SELECT id FROM knowledge WHERE category = ? AND title = ?")
+    .prepare("SELECT id, tags FROM knowledge WHERE category = ? AND title = ?")
     .get(asset.category, asset.title);
   if (existing) {
+    const existingTags = String(existing.tags || "").split(",").filter(Boolean);
+    if (!existingTags.includes(ownerTag(packName))) {
+      throw new Error(`knowledge asset "${asset.category}/${asset.title}" already exists outside capability pack "${packName}"`);
+    }
     db.prepare("UPDATE knowledge SET content = ?, tags = ?, enabled = 1, version_added = ?, updated_at = ? WHERE id = ?")
       .run(content, tagString(packName, asset.tags), packVersion, now, existing.id);
     return { id: existing.id, replaced: true, bytes: Buffer.byteLength(content) };

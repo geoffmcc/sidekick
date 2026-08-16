@@ -190,8 +190,11 @@ function buildModuleDescriptors(record, entry) {
   }
   const services = createModuleServices(record.name, record.config, {
     permissions: Array.isArray(record.manifest.permissions) ? record.manifest.permissions : [],
+    packName: (() => {
+      try { return require("../packs/repository").findComponentOwner("module", record.name)?.pack_name || null; } catch { return null; }
+    })(),
   });
-  const built = entry.buildDescriptors(services.v1);
+  const built = entry.buildDescriptors(services.v2 || services.v1);
   if (!Array.isArray(built)) {
     throw new Error(`Module "${record.name}" buildDescriptors must return an array of descriptors`);
   }

@@ -14,6 +14,7 @@ const path = require('path');
 const root = path.join(__dirname, '..');
 
 const suites = [
+  { file: 'test/pack-services.test.js', critical: true, description: 'Capability Pack scoped services v2 and namespace isolation' },
   { file: 'test/identity-foundation.test.js', critical: true, description: 'Durable principals, users, password hashing, Owner bootstrap, and lifecycle foundation' },
   { file: 'test/identity-approval-governance.test.js', critical: true, description: 'Approval principal provenance, human approval, and self-approval enforcement' },
   { file: 'test/identity-authentication.test.js', critical: true, description: 'Server-side identity sessions and scoped machine credentials' },

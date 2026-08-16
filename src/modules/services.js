@@ -61,7 +61,7 @@ function permissionDenied(moduleName, message) {
   return errorResult(`Module "${moduleName}" ${message}`, "module_permission_denied");
 }
 
-function createModuleServices(moduleName, config = {}, { permissions = [] } = {}) {
+function createModuleServices(moduleName, config = {}, { permissions = [], packName = null } = {}) {
   const frozenConfig = Object.freeze({ ...(config || {}) });
   const permissionMap = buildPermissionMap(permissions);
 
@@ -111,10 +111,17 @@ function createModuleServices(moduleName, config = {}, { permissions = [] } = {}
     paths,
   });
 
-  return Object.freeze({
+  let v2 = null;
+  if (packName) {
+    v2 = require("./pack-services").createPackServices(packName, permissions, v1);
+  }
+
+  const facade = {
     moduleName,
     v1,
-  });
+  };
+  if (v2) facade.v2 = v2;
+  return Object.freeze(facade);
 }
 
 module.exports = { createModuleServices, NARROW_SERVICE_KEYS };
