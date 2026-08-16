@@ -472,6 +472,22 @@ function packWithModule(name, moduleName, modulePermissions, packOverrides = {})
     }
   });
 
+  test('PC.32: nested symlinks and sensitive files are refused before installation', () => {
+    const symlinkDir = path.join(TEST_DATA_DIR, 'fixture-nested-symlink');
+    fs.mkdirSync(path.join(symlinkDir, 'assets'), { recursive: true });
+    fs.writeFileSync(path.join(symlinkDir, 'sidekick.pack.json'), `${JSON.stringify(baseManifest('nested-symlink'))}\n`);
+    const outside = path.join(TEST_DATA_DIR, 'outside-pack-file.txt');
+    fs.writeFileSync(outside, 'must not be packaged');
+    fs.symlinkSync(outside, path.join(symlinkDir, 'assets', 'escaped.txt'));
+    assert.throws(() => packLifecycle.inspect(symlinkDir), /contains a symlink/);
+
+    const sensitiveDir = path.join(TEST_DATA_DIR, 'fixture-sensitive-file');
+    fs.mkdirSync(sensitiveDir, { recursive: true });
+    fs.writeFileSync(path.join(sensitiveDir, 'sidekick.pack.json'), `${JSON.stringify(baseManifest('sensitive-file'))}\n`);
+    fs.writeFileSync(path.join(sensitiveDir, '.env'), 'PACK_SECRET=fixture-only\n');
+    assert.throws(() => packLifecycle.inspect(sensitiveDir), /contains a sensitive file/);
+  });
+
   console.log(failures ? `\n${failures} test(s) FAILED` : '\nAll pack contract tests passed');
   process.exit(failures ? 1 : 0);
 })();
