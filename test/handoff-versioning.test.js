@@ -40,6 +40,38 @@ function parse(result) {
   assert.strictEqual(created.handoff.version, 1);
   const handoffId = created.handoff.id;
 
+  // --- HV.0 structured resume packet is stored with the handoff ------------
+  const packet = {
+    objective: "Preserve handoff context across sessions",
+    status: "active",
+    next_step: "Review the implementation",
+    completed_steps: ["Created the handoff"],
+    decisions: ["Use append-only versions"],
+    blockers: [],
+    acceptance_criteria: ["Previous content remains retrievable"],
+    provenance: {
+      repository: "https://github.com/geoffmcc/sidekick",
+      branch: "feat/handoff-v2",
+      commit_sha: "0123456789abcdef0123456789abcdef01234567",
+      verification: ["node test/handoff-versioning.test.js"]
+    },
+    evidence: [{ type: "test", label: "focused handoff test", status: "pending" }],
+    artifacts: [{ type: "file", path: "test/handoff-versioning.test.js" }],
+    relationships: [{ type: "implements", target: "handoff-v2" }]
+  };
+  const packetCreated = parse(await TOOLS.handoff({ action: "create", key: "hv-packet", project: "hv-test", content: "Fact: structured packet.", packet }));
+  assert.deepStrictEqual(packetCreated.handoff.packet, packet, "structured packet must be returned intact");
+  const packetValidation = parse(await TOOLS.handoff({ action: "validate", id: packetCreated.handoff.id }));
+  assert.strictEqual(packetValidation.valid, true, "complete resume packet should validate");
+  const packetUpdated = parse(await TOOLS.handoff({ action: "update", id: packetCreated.handoff.id, packet: { ...packet, next_step: "Run the focused test" } }));
+  assert.strictEqual(packetUpdated.handoff.version, 2, "packet-only changes must be versioned");
+  const packetHistory = parse(await TOOLS.handoff({ action: "get", id: packetCreated.handoff.id, version: 1 }));
+  assert.strictEqual(packetHistory.handoff.packet.next_step, "Review the implementation", "historical packet must be preserved");
+  const packetRestored = parse(await TOOLS.handoff({ action: "restore", id: packetCreated.handoff.id, version: 1 }));
+  assert.strictEqual(packetRestored.handoff.version, 3, "restoring a packet-only version must append a new version");
+  assert.strictEqual(packetRestored.handoff.packet.next_step, "Review the implementation", "packet restore must restore historical structured state");
+  console.log("HV.0 passed: structured packet, validation, and packet history");
+
   const updated = parse(await TOOLS.handoff({
     action: "update",
     id: handoffId,
