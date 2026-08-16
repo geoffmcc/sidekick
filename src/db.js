@@ -180,6 +180,12 @@ for (const [column, definition] of Object.entries({
   parent_id: "TEXT",
   retry: "INTEGER NOT NULL DEFAULT 0",
   generated_procedure: "TEXT",
+  requested_by_principal_id: "TEXT",
+  actor_principal_id: "TEXT",
+  acting_for_principal_id: "TEXT",
+  approved_by_principal_id: "TEXT",
+  executed_by_principal_id: "TEXT",
+  provenance_json: "TEXT NOT NULL DEFAULT '{}'",
 })) {
   ensureColumn("tool_logs", column, definition);
 }
