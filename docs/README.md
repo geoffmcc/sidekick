@@ -56,6 +56,7 @@ sqlite3 data/sidekick.db "SELECT COUNT(*) FROM knowledge WHERE version_added = '
 | `ollama.md` | Local Ollama model setup. |
 | `dashboard.md` | Dashboard UI, API routes, approvals/reconciliation, webhooks, and agent proxy. |
 | `security.md` | Authentication, IP allowlists, redaction, command safety, tool policy, path policy, approvals. |
+| `identity.md` | Core principal model and first-run Owner foundation. |
 
 **Capability documentation** — what Sidekick can do:
 
