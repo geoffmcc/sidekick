@@ -21,6 +21,7 @@ try {
 const dbStore = require("./db");
 const identity = require("./core/identity");
 const authentication = require("./core/authentication");
+const authorization = require("./core/authorization");
 const { allowedActions } = require("./evolve/lifecycle");
 const { redactSensitive } = require("./redact");
 const crypto = require("crypto");
@@ -513,13 +514,18 @@ if ((DASHBOARD_USER && DASHBOARD_PASS) || bootstrapCompleted()) {
   });
 }
 
-function requireIdentityAdministrator(req, res) {
-  const roles = req.authPrincipal?.roles || [];
-  if (!req.authPrincipal || !roles.some(role => role === "owner" || role === "administrator")) {
-    res.status(403).json({ error: "Forbidden", code: "insufficient_authority" });
+function requireIdentityPermission(req, res, permission) {
+  const principalId = req.authPrincipal?.principal_id;
+  const decision = authorization.authorize({ principalId, permission });
+  if (!decision.ok) {
+    res.status(decision.code === "unauthenticated" ? 401 : 403).json({ error: "Forbidden", code: decision.code, permission });
     return false;
   }
   return true;
+}
+
+function requireIdentityAdministrator(req, res) {
+  return requireIdentityPermission(req, res, "users.manage");
 }
 
 app.get("/api/auth/me", (req, res) => {
@@ -554,14 +560,67 @@ app.post("/api/auth/users/:id/password-reset", (req, res) => {
   }
 });
 
+app.get("/api/auth/principals", (req, res) => {
+  if (!requireIdentityPermission(req, res, "principals.read")) return;
+  res.set("Cache-Control", "no-store");
+  res.json({ principals: identity.listPrincipals({ type: req.query.type, enabled: req.query.enabled === undefined ? undefined : req.query.enabled !== "false", limit: req.query.limit }) });
+});
+
+app.post("/api/auth/principals/:id/roles", (req, res) => {
+  if (!requireIdentityPermission(req, res, "roles.manage")) return;
+  try {
+    res.status(201).json({ principal: identity.assignRole(req.params.id, req.body?.role, req.authPrincipal.principal_id) });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.delete("/api/auth/principals/:id/roles/:role", (req, res) => {
+  if (!requireIdentityPermission(req, res, "roles.manage")) return;
+  try {
+    res.json({ principal: identity.removeRole(req.params.id, req.params.role, req.authPrincipal.principal_id) });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.get("/api/auth/delegations", (req, res) => {
+  if (!requireIdentityPermission(req, res, "principals.read")) return;
+  const rows = dbStore.getDb().prepare("SELECT delegation_id FROM identity_delegations WHERE delegate_principal_id = ? OR delegator_principal_id = ? ORDER BY created_at DESC LIMIT ?").all(req.authPrincipal.principal_id, req.authPrincipal.principal_id, Math.max(1, Math.min(Number(req.query.limit) || 100, 500)));
+  res.set("Cache-Control", "no-store");
+  res.json({ delegations: rows.map(row => authorization.getDelegation(row.delegation_id)) });
+});
+
+app.post("/api/auth/delegations", (req, res) => {
+  const delegatorPrincipalId = req.body?.delegator_principal_id;
+  if (!req.authPrincipal || (delegatorPrincipalId !== req.authPrincipal.principal_id && !authorization.authorize({ principalId: req.authPrincipal.principal_id, permission: "principals.manage" }).ok)) {
+    return res.status(403).json({ error: "Delegation must be created by the delegator or an authorized administrator", code: "insufficient_delegation" });
+  }
+  try {
+    const delegation = authorization.createDelegation({ delegatorPrincipalId, delegatePrincipalId: req.body?.delegate_principal_id, permissions: req.body?.permissions, expiresAt: req.body?.expires_at, actorPrincipalId: req.authPrincipal.principal_id });
+    res.status(201).json({ delegation });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/auth/delegations/:id/revoke", (req, res) => {
+  if (!req.authPrincipal) return res.status(401).json({ error: "Authentication required", code: "unauthenticated" });
+  try {
+    res.json({ delegation: authorization.revokeDelegation(req.params.id, req.authPrincipal.principal_id) });
+  } catch (error) {
+    res.status(403).json({ error: error.message, code: "insufficient_delegation" });
+  }
+});
+
 app.get("/api/auth/credentials", (req, res) => {
-  if (!requireIdentityAdministrator(req, res)) return;
+  if (!requireIdentityPermission(req, res, "credentials.read")) return;
   res.set("Cache-Control", "no-store");
   res.json({ credentials: authentication.listCredentials(req.query.principal_id || null) });
 });
 
 app.post("/api/auth/credentials", (req, res) => {
-  if (!requireIdentityAdministrator(req, res)) return;
+  if (!requireIdentityPermission(req, res, "credentials.create")) return;
   try {
     const created = authentication.createCredential({
       principalId: req.body?.principal_id,
@@ -577,12 +636,12 @@ app.post("/api/auth/credentials", (req, res) => {
 });
 
 app.post("/api/auth/credentials/:id/revoke", (req, res) => {
-  if (!requireIdentityAdministrator(req, res)) return;
+  if (!requireIdentityPermission(req, res, "credentials.revoke")) return;
   res.json({ revoked: authentication.revokeCredential(req.params.id) });
 });
 
 app.post("/api/auth/credentials/:id/rotate", (req, res) => {
-  if (!requireIdentityAdministrator(req, res)) return;
+  if (!requireIdentityPermission(req, res, "credentials.revoke")) return;
   try {
     const replacement = authentication.rotateCredential(req.params.id, req.authPrincipal.principal_id);
     res.status(201).json({ credential: replacement.credential, token: replacement.token });
@@ -668,6 +727,13 @@ function dashboardExecutionMetadata(req, actor, extra = {}) {
   const body = req?.body && typeof req.body === "object" ? req.body : {};
   return {
     actor,
+    authIdentity: req?.authPrincipal ? {
+      principal_id: req.authPrincipal.principal_id,
+      principal_type: req.authPrincipal.principal_type,
+      scopes: null,
+      authentication_method: "browser_session",
+      delegation_id: req.authPrincipal.delegation_id || null,
+    } : null,
     sessionId,
     project: body.project || req?.query?.project || header("x-sidekick-project") || null,
     taskId: body.task_id || body.taskId || req?.query?.task_id || header("x-sidekick-task-id") || null,

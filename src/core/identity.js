@@ -156,8 +156,29 @@ function assignRole(principalIdValue, role, actorPrincipalId = null) {
   validateRole(role);
   const principal = getPrincipal(principalIdValue);
   if (!principal) throw new Error("principal not found");
+  if (role === "owner") {
+    if (!actorPrincipalId) throw new Error("Owner promotion requires an authorized actor");
+    const authorization = require("./authorization");
+    if (!authorization.authorize({ principalId: actorPrincipalId, permission: "roles.manage" }).ok) throw new Error("Owner promotion requires roles.manage");
+  }
   dbStore.getDb().prepare("INSERT INTO principal_roles (principal_id, role_name, assigned_by_principal_id, assigned_at) VALUES (?, ?, ?, ?)").run(principal.principal_id, role, actorPrincipalId, now());
   audit("role.assigned", principal.principal_id, actorPrincipalId, { role });
+  return getPrincipal(principal.principal_id);
+}
+
+function removeRole(principalIdValue, role, actorPrincipalId = null) {
+  validateRole(role);
+  const principal = getPrincipal(principalIdValue);
+  if (!principal) throw new Error("principal not found");
+  if (role === "owner") {
+    const remaining = dbStore.getDb().prepare(`SELECT COUNT(*) AS count FROM principal_roles pr JOIN principals p ON p.principal_id = pr.principal_id WHERE pr.role_name = 'owner' AND p.enabled = 1 AND pr.principal_id <> ?`).get(principal.principal_id).count;
+    if (remaining < 1) throw new Error("cannot remove the final usable Owner");
+    if (!actorPrincipalId) throw new Error("Owner demotion requires an authorized actor");
+    const authorization = require("./authorization");
+    if (!authorization.authorize({ principalId: actorPrincipalId, permission: "roles.manage" }).ok) throw new Error("Owner demotion requires roles.manage");
+  }
+  dbStore.getDb().prepare("DELETE FROM principal_roles WHERE principal_id = ? AND role_name = ?").run(principal.principal_id, role);
+  audit("role.removed", principal.principal_id, actorPrincipalId, { role });
   return getPrincipal(principal.principal_id);
 }
 
@@ -182,6 +203,10 @@ function bootstrapOwner({ username, password, displayName, metadata = {} } = {})
 function setPrincipalEnabled(id, enabled, actorPrincipalId = null) {
   const principal = getPrincipal(id);
   if (!principal) throw new Error("principal not found");
+  if (!enabled && principal.roles.includes("owner")) {
+    const remaining = dbStore.getDb().prepare(`SELECT COUNT(*) AS count FROM principal_roles pr JOIN principals p ON p.principal_id = pr.principal_id WHERE pr.role_name = 'owner' AND p.enabled = 1 AND pr.principal_id <> ?`).get(principal.principal_id).count;
+    if (remaining < 1) throw new Error("cannot disable the final usable Owner");
+  }
   const timestamp = now();
   dbStore.getDb().prepare("UPDATE principals SET enabled = ?, disabled_at = ?, updated_at = ? WHERE principal_id = ?").run(enabled ? 1 : 0, enabled ? null : timestamp, timestamp, principal.principal_id);
   audit(enabled ? "principal.enabled" : "principal.disabled", principal.principal_id, actorPrincipalId, {});
@@ -206,4 +231,4 @@ function verifyUserPassword(username, password) {
   return getPrincipal(row.principal_id);
 }
 
-module.exports = Object.freeze({ PRINCIPAL_TYPES, ROLE_NAMES, PASSWORD_SCHEME, MIN_PASSWORD_LENGTH, passwordHash, verifyPassword, getPrincipal, getHumanUser, listPrincipals, createPrincipal, createHumanUser, updatePrincipal, updateUsername, assignRole, bootstrapOwner, setPrincipalEnabled, changePassword, verifyUserPassword, recordAuditEvent });
+module.exports = Object.freeze({ PRINCIPAL_TYPES, ROLE_NAMES, PASSWORD_SCHEME, MIN_PASSWORD_LENGTH, passwordHash, verifyPassword, getPrincipal, getHumanUser, listPrincipals, createPrincipal, createHumanUser, updatePrincipal, updateUsername, assignRole, removeRole, bootstrapOwner, setPrincipalEnabled, changePassword, verifyUserPassword, recordAuditEvent });
