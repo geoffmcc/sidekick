@@ -141,6 +141,9 @@ function baseDefinition(overrides = {}) {
     assert.strictEqual(execution.state, 'completed');
     assert.strictEqual(execution.operation_type, 'workflow_definition_run');
     assert.strictEqual(execution.project_id, 'workflow_suite');
+    const runnerSession = dbStore.getDb().prepare('SELECT * FROM platform_runner_sessions WHERE workflow_id = ? ORDER BY started_at DESC LIMIT 1').get(firstRun.run_id);
+    assert.ok(runnerSession, 'workflow run creates a durable runner session');
+    assert.strictEqual(runnerSession.state, 'completed');
 
     // Checkpointed state is durable.
     const checkpoint = JSON.parse(workflow.checkpoint_json);
