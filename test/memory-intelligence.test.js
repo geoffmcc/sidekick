@@ -81,6 +81,11 @@ dbStore.runPendingMigrations();
     outcome: "success",
     final_summary: "Memory intelligence session completed",
     acceptance_state: "accepted",
+    handoff_id: createData.handoff.id,
+    next_step: null,
+    reports: [{ id: "subagent-1", source: "test-agent", title: "Verification report", content: "Focused tests passed and the handoff remains resumable.", evidence: ["test/memory-intelligence.test.js"] }],
+    artifacts: [{ type: "test", path: "test/memory-intelligence.test.js" }],
+    do_not_repeat: ["Do not promote raw tool-log adjacency as durable memory"],
     verified_facts: ["Project sidekick memory intelligence tests passed in temp DB"],
     decisions: ["Use explicit sidekick_handoff ingestion for mutable handoffs"],
     failed_approaches: ["Do not promote raw tool-log adjacency as durable memory"],
@@ -88,6 +93,11 @@ dbStore.runPendingMigrations();
   });
   const endData = JSON.parse(end.content[0].text);
   assert.ok(endData.memories_created >= 4, "ending session should create supported memories");
+  assert.strictEqual(endData.continuation_packet.artifacts.length, 2, "session finalization should retain reports and artifacts");
+  assert.strictEqual(endData.continuation_packet.provenance.task_id, beginData.session.id, "continuation packet should retain task provenance");
+  const finalizedHandoff = JSON.parse((await TOOLS.handoff({ action: "get", id: createData.handoff.id })).content[0].text);
+  assert.strictEqual(finalizedHandoff.handoff.packet.status, "completed", "linked handoff should receive the finalized continuation packet");
+  assert.ok(finalizedHandoff.handoff.links.some(link => link.type === "artifact" && link.payload.type === "subagent_report"), "subagent report should be a first-class handoff artifact");
   const endEvent = dbStore.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_type = 'memory.session_completed' AND subject_id = ?").get(beginData.session.id);
   assert.ok(endEvent, "session end should emit a platform memory event");
 

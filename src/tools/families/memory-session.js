@@ -55,7 +55,64 @@ function buildScopedMemoryBrief(goal, project, options = {}) {
   return { goal: goal || null, project: project || null, selected: current.slice(0, options.limit || 10), sections: legacyBrief, excluded_policy: "Expired, deleted, disabled, superseded, and unrelated project memories are excluded from normal recall.", generated_at: new Date().toISOString() };
 }
 
-async function sidekick_session({ action, id, goal, project, source, working_directory, repository, branch, environment, client_session_id, tags, supplied_context, current_plan, completed_steps, current_hypothesis, evidence, blockers, next_step, artifacts, outcome, final_summary, user_visible_result, acceptance_state, decisions, verified_facts, unresolved_issues, resolved_issues, failed_approaches, procedures_learned, follow_ups, usefulness_feedback, limit }) {
+function buildContinuationPacket(existing, input = {}) {
+  const reports = Array.isArray(input.reports) ? input.reports : [];
+  const reportArtifacts = reports.map((report, index) => ({
+    type: "subagent_report",
+    id: report.id || `${existing.id}-report-${index + 1}`,
+    source: report.source || report.agent || "subagent",
+    title: report.title || `Subagent report ${index + 1}`,
+    content: redactSensitive(String(report.content || report.summary || "")),
+    evidence: Array.isArray(report.evidence) ? report.evidence : [],
+  })).filter(report => report.content);
+  const contextArtifacts = [];
+  if (existing.supplied_context) contextArtifacts.push({ type: "session_context", content: redactSensitive(existing.supplied_context), source_task_id: existing.id });
+  if (existing.current_plan) contextArtifacts.push({ type: "session_plan", content: redactSensitive(existing.current_plan), source_task_id: existing.id });
+  const allArtifacts = [...(Array.isArray(input.artifacts) ? input.artifacts : existing.artifacts || []), ...contextArtifacts, ...reportArtifacts];
+  const evidenceItems = (Array.isArray(input.evidence) ? input.evidence : input.evidence ? [input.evidence] : []).map((item, index) => ({
+    type: "session",
+    label: `Session evidence ${index + 1}`,
+    status: "recorded",
+    content: redactSensitive(String(item)),
+    source_task_id: existing.id,
+  }));
+  const acceptance = input.acceptance_state || existing.acceptance_state;
+  return {
+    objective: existing.goal,
+    summary: redactSensitive(input.final_summary || input.user_visible_result || input.outcome || existing.outcome || ""),
+    status: input.state || "completed",
+    completed_steps: input.completed_steps || existing.completed_steps || [],
+    decisions: input.decisions || [],
+    blockers: input.blockers || existing.blockers || [],
+    next_step: input.next_step || existing.next_step || null,
+    acceptance_criteria: acceptance ? [`Session acceptance: ${acceptance}`] : [],
+    risks: input.risks || [],
+    provenance: {
+      repository: existing.repository || null,
+      branch: existing.branch || null,
+      working_directory: existing.working_directory || null,
+      environment: existing.environment || null,
+      task_id: existing.id,
+    },
+    evidence: evidenceItems,
+    artifacts: allArtifacts,
+    relationships: input.relationships || [],
+    failed_approaches: input.failed_approaches || [],
+    do_not_repeat: input.do_not_repeat || [],
+  };
+}
+
+function continuationQualityIssues(packet) {
+  const issues = [];
+  if (!packet.objective) issues.push("continuation packet requires the session goal");
+  if (!packet.summary) issues.push("continuation packet requires a current summary");
+  if (!packet.next_step && !["completed", "abandoned"].includes(packet.status)) issues.push("continuation packet requires an exact next step");
+  if (packet.status === "completed" && (!Array.isArray(packet.acceptance_criteria) || packet.acceptance_criteria.length === 0)) issues.push("completed continuation packet requires acceptance_state");
+  if (!packet.provenance || !packet.provenance.task_id) issues.push("continuation packet requires task provenance");
+  return issues;
+}
+
+async function sidekick_session({ action, id, goal, project, source, working_directory, repository, branch, environment, client_session_id, tags, supplied_context, current_plan, completed_steps, current_hypothesis, evidence, blockers, next_step, artifacts, reports, risks, relationships, do_not_repeat, outcome, final_summary, user_visible_result, acceptance_state, decisions, verified_facts, unresolved_issues, resolved_issues, failed_approaches, procedures_learned, follow_ups, usefulness_feedback, handoff_id, limit }) {
   if (action === "begin") {
     if (!goal) return { content: [{ type: "text", text: "goal required" }], isError: true };
     const brief = buildScopedMemoryBrief(goal, project, { limit: 12 });
@@ -76,7 +133,18 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     const existing = dbStore.getTaskSession(id);
     if (!existing) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     const state = action === "abandon" ? "abandoned" : "completed";
-    const session = dbStore.saveTaskSession({ ...existing, outcome, final_summary: redactSensitive(final_summary || user_visible_result || outcome || ""), acceptance_state, state, ended_at: new Date().toISOString() });
+    const continuationPacket = handoff_id ? buildContinuationPacket(existing, { state, evidence, artifacts, reports, risks, relationships, do_not_repeat, outcome, final_summary, user_visible_result, acceptance_state, decisions, failed_approaches, next_step, completed_steps, blockers }) : null;
+    if (handoff_id) {
+      const qualityIssues = continuationQualityIssues(continuationPacket);
+      const validation = dbStore.validateHandoffPacket(continuationPacket, { requireResume: true });
+      if (qualityIssues.length || !validation.valid) {
+        return { content: [{ type: "text", text: `handoff quality gate failed: ${[...qualityIssues, ...validation.issues].join("; ")}` }], isError: true };
+      }
+      const handoff = dbStore.getHandoff(handoff_id);
+      if (!handoff) return { content: [{ type: "text", text: `handoff quality gate failed: handoff "${handoff_id}" was not found` }], isError: true };
+      dbStore.saveHandoff({ id: handoff.id, project: handoff.project, title: handoff.title, source: handoff.source, task_id: id, content: continuationPacket.summary, packet: continuationPacket, extraction_state: "pending" });
+    }
+    const session = dbStore.saveTaskSession({ ...existing, artifacts: continuationPacket ? continuationPacket.artifacts : (artifacts || existing.artifacts), outcome, final_summary: redactSensitive(final_summary || user_visible_result || outcome || ""), acceptance_state, state, ended_at: new Date().toISOString() });
     const created = [];
     const projectName = project || existing.project;
     const add = (type, values, memoryClass, confidence) => {
@@ -92,7 +160,7 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     }
     add("negative", failed_approaches, "negative", 0.76); add("open_thread", [...(unresolved_issues || []), ...(follow_ups || [])], "prospective", 0.78); add("observation", evidence, "observational", 0.62);
     recordPlatformMemoryEvent(action === "abandon" ? "memory.session_abandoned" : "memory.session_completed", { session_id: session.id, project: session.project, memories_created: created.length, state: session.state, outcome }, { subjectType: "memory_task_session", subjectId: session.id, project: session.project, taskId: session.id, severity: action === "abandon" ? "warning" : "info" });
-    return jsonText({ ok: true, session, memories_created: created.length, memories: created });
+    return jsonText({ ok: true, session, handoff_id: handoff_id || null, continuation_packet: continuationPacket, memories_created: created.length, memories: created });
   }
   if (action === "resume" || action === "status") {
     if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
@@ -109,9 +177,9 @@ const descriptors = Object.freeze([Object.freeze({
   description: "Explicit task/session memory envelope. Begin, checkpoint, end, abandon, resume, and list scoped work with a purpose-built memory brief.",
   schema: z.object({
     action: z.enum(["begin", "update", "checkpoint", "end", "abandon", "resume", "status", "list"]).describe("Session action"),
-    id: z.string().optional().describe("Task/session ID"), goal: z.string().optional().describe("Task goal, required for begin"), project: z.string().optional().describe("Project scope"), source: z.string().optional().describe("Client/source label"), working_directory: z.string().optional(), repository: z.string().optional(), branch: z.string().optional(), environment: z.string().optional(), client_session_id: z.string().optional(), tags: z.union([z.string(), z.array(z.string())]).optional(), supplied_context: z.string().optional(), current_plan: z.string().optional(), completed_steps: z.array(z.any()).optional(), current_hypothesis: z.string().optional(), evidence: z.union([z.string(), z.array(z.string())]).optional(), blockers: z.array(z.any()).optional(), next_step: z.string().optional(), artifacts: z.array(z.any()).optional(), outcome: z.string().optional(), final_summary: z.string().optional(), user_visible_result: z.string().optional(), acceptance_state: z.string().optional(), decisions: z.array(z.string()).optional(), verified_facts: z.array(z.string()).optional(), unresolved_issues: z.array(z.string()).optional(), resolved_issues: z.array(z.string()).optional(), failed_approaches: z.array(z.string()).optional(), procedures_learned: z.array(z.string()).optional(), follow_ups: z.array(z.string()).optional(), usefulness_feedback: z.string().optional(), limit: z.number().optional(),
+    id: z.string().optional().describe("Task/session ID"), goal: z.string().optional().describe("Task goal, required for begin"), project: z.string().optional().describe("Project scope"), source: z.string().optional().describe("Client/source label"), working_directory: z.string().optional(), repository: z.string().optional(), branch: z.string().optional(), environment: z.string().optional(), client_session_id: z.string().optional(), tags: z.union([z.string(), z.array(z.string())]).optional(), supplied_context: z.string().optional(), current_plan: z.string().optional(), completed_steps: z.array(z.any()).optional(), current_hypothesis: z.string().optional(), evidence: z.union([z.string(), z.array(z.string())]).optional(), next_step: z.string().optional(), blockers: z.array(z.any()).optional(), artifacts: z.array(z.any()).optional(), reports: z.array(z.any()).optional(), risks: z.array(z.any()).optional(), relationships: z.array(z.any()).optional(), do_not_repeat: z.array(z.any()).optional(), handoff_id: z.string().optional().describe("Structured handoff to finalize with the continuation packet on end/abandon"), outcome: z.string().optional(), final_summary: z.string().optional(), user_visible_result: z.string().optional(), acceptance_state: z.string().optional(), decisions: z.array(z.string()).optional(), verified_facts: z.array(z.string()).optional(), unresolved_issues: z.array(z.string()).optional(), resolved_issues: z.array(z.string()).optional(), failed_approaches: z.array(z.string()).optional(), procedures_learned: z.array(z.string()).optional(), follow_ups: z.array(z.string()).optional(), usefulness_feedback: z.string().optional(), limit: z.number().optional(),
   }),
-  args: { action: "string (begin|update|checkpoint|end|abandon|resume|status|list)", id: "string (optional task/session id)", goal: "string (required for begin)", project: "string (optional)", source: "string (optional)", working_directory: "string (optional)", repository: "string (optional)", branch: "string (optional)", environment: "string (optional)", tags: "string|array (optional)", current_plan: "string (optional)", completed_steps: "array (optional)", blockers: "array (optional)", next_step: "string (optional)", outcome: "string (optional)", final_summary: "string (optional)", acceptance_state: "string (optional)", verified_facts: "array (optional)", decisions: "array (optional)", failed_approaches: "array (optional)", follow_ups: "array (optional)" },
+  args: { action: "string (begin|update|checkpoint|end|abandon|resume|status|list)", id: "string (optional task/session id)", goal: "string (required for begin)", project: "string (optional)", source: "string (optional)", working_directory: "string (optional)", repository: "string (optional)", branch: "string (optional)", environment: "string (optional)", tags: "string|array (optional)", current_plan: "string (optional)", completed_steps: "array (optional)", blockers: "array (optional)", next_step: "string (optional)", artifacts: "array (optional)", reports: "array of subagent reports (optional, retained on linked handoff)", handoff_id: "string (optional, required to finalize a handoff on end/abandon)", risks: "array (optional)", relationships: "array (optional)", do_not_repeat: "array (optional)", outcome: "string (optional)", final_summary: "string (optional)", acceptance_state: "string (optional)", verified_facts: "array (optional)", decisions: "array (optional)", failed_approaches: "array (optional)", follow_ups: "array (optional)" },
   risk: "medium",
   category: "Context & Learning",
   source: "builtin",
