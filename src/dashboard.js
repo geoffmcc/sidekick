@@ -5,7 +5,7 @@ const path = require("path");
 const os = require("os");
 const { timingSafeCompare } = require("./crypto-utils");
 const { execFileSync } = require("child_process");
-const { callDashboardTool, getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval, renderContinuationApprovalPreview, loadWatches } = require("./tools");
+const { callDashboardTool, getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval, renderContinuationApprovalPreview, loadWatches, syncToolRegistry } = require("./tools");
 const dynamicTools = require("./dynamic-tools");
 
 // Restore persisted platform modules in this process so module tools resolve
@@ -19,6 +19,8 @@ try {
   console.error("[Modules] Builtin module provisioning failed:", error.message);
 }
 const dbStore = require("./db");
+const identity = require("./core/identity");
+const authentication = require("./core/authentication");
 const { allowedActions } = require("./evolve/lifecycle");
 const { redactSensitive } = require("./redact");
 const crypto = require("crypto");
@@ -47,8 +49,14 @@ if (!MCP_API_KEY || MCP_API_KEY === "sk-sidekick-local-dev" || MCP_API_KEY === "
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
+// The dashboard is a separate process in production. Converge migrations here
+// as well as in the MCP process so authentication routes never race startup.
+dbStore.runPendingMigrations();
+syncToolRegistry();
+
 const app = express();
 app.use("/static", express.static(path.join(__dirname, "..", "static")));
+app.use(express.json({ limit: "1mb" }));
 const http = require("http");
 const AGENT_PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 
@@ -142,9 +150,11 @@ const DASHBOARD_ALLOWED_IPS = (process.env.SIDEKICK_DASHBOARD_ALLOWED_IPS || "")
 const GRAFANA_USER = process.env.SIDEKICK_GRAFANA_ADMIN_USER || "sidekick";
 const GRAFANA_PASS = process.env.SIDEKICK_GRAFANA_ADMIN_PASSWORD || "";
 
-// Session cookie auth
+// Legacy signed-cookie compatibility remains available only for the configured
+// dashboard Basic Auth account. Identity sessions below are server-side and
+// revocable; they are the normal local-user path.
 const SESSION_SECRET = process.env.SIDEKICK_SECRET_KEY || crypto.randomBytes(32).toString("hex");
-const SESSION_TTL = 86400000; // 24h
+const SESSION_TTL = 86400000;
 
 function makeSessionToken(user) {
   const payload = JSON.stringify({ u: user, e: Date.now() + SESSION_TTL });
@@ -208,6 +218,21 @@ function isSameOrigin(origin, host) {
   } catch {
     return false;
   }
+}
+
+function requestCookie(req, name) {
+  const prefix = `${name}=`;
+  return String(req.headers.cookie || "").split(";").map(value => value.trim())
+    .find(value => value.startsWith(prefix))?.slice(prefix.length) || null;
+}
+
+function setIdentityCookie(res, token, maxAge = Math.floor(authentication.SESSION_TTL_MS / 1000), req = null) {
+  const secure = Boolean(req?.secure || req?.headers?.["x-forwarded-proto"] === "https");
+  res.setHeader("Set-Cookie", `sidekick_identity=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${secure ? "; Secure" : ""}`);
+}
+
+function clearIdentityCookie(res) {
+  res.setHeader("Set-Cookie", "sidekick_identity=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
 }
 
 // Audit logging
@@ -348,7 +373,6 @@ app.use((req, res, next) => {
 });
 
 // Request size limit
-app.use(express.json({ limit: '1mb' }));
 app.use((req, res, next) => {
   const contentLength = parseInt(req.headers['content-length'] || '0');
   if (contentLength > 1024 * 1024) {
@@ -388,10 +412,70 @@ function authenticatedUser(req) {
   return (req && typeof req.authUser === "string" && req.authUser) ? req.authUser : null;
 }
 
-if (DASHBOARD_USER && DASHBOARD_PASS) {
+function bootstrapCompleted() {
+  return Boolean(dbStore.getDb().prepare("SELECT 1 FROM identity_bootstrap WHERE singleton_id = 1").get());
+}
+
+// Local identity endpoints intentionally sit before the authenticated route
+// guard: bootstrap and login must be reachable without a prior session, while
+// logout remains harmless when called without one.
+app.get("/api/auth/bootstrap-status", (req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json({ bootstrap_required: !bootstrapCompleted() });
+});
+
+app.post("/api/auth/bootstrap", (req, res) => {
+  try {
+    if (bootstrapCompleted()) return res.status(409).json({ error: "Owner bootstrap has already been completed" });
+    const principal = identity.bootstrapOwner(req.body || {});
+    const session = authentication.createSession(principal.principal_id, {
+      userAgent: req.headers["user-agent"] || null,
+      ipAddress: req.ip || null,
+    });
+    setIdentityCookie(res, session.token, undefined, req);
+    res.status(201).json({ principal, expires_at: session.expires_at });
+  } catch (error) {
+    res.status(/already|completed/i.test(error.message) ? 409 : 400).json({ error: error.message });
+  }
+});
+
+app.post("/api/auth/login", (req, res) => {
+  const username = req.body?.username;
+  const principal = identity.verifyUserPassword(username, req.body?.password);
+  if (!principal) return res.status(401).json({ error: "Invalid username or password" });
+  const session = authentication.createSession(principal.principal_id, {
+    userAgent: req.headers["user-agent"] || null,
+    ipAddress: req.ip || null,
+  });
+  setIdentityCookie(res, session.token, undefined, req);
+  res.set("Cache-Control", "no-store");
+  res.json({ principal, expires_at: session.expires_at });
+});
+
+app.post("/api/auth/logout", (req, res) => {
+  const token = requestCookie(req, "sidekick_identity");
+  authentication.invalidateSession(token);
+  clearIdentityCookie(res);
+  res.status(204).end();
+});
+
+if ((DASHBOARD_USER && DASHBOARD_PASS) || bootstrapCompleted()) {
   app.use((req, res, next) => {
     if (req.path.startsWith('/static/')) return next();
     // Check session cookie first (browsers always send cookies with iframe sub-resources)
+    const identityToken = requestCookie(req, "sidekick_identity");
+    const identitySession = authentication.getSession(identityToken);
+    if (identitySession) {
+      const principal = identity.getPrincipal(identitySession.principal_id);
+      if (!principal || !principal.enabled) return res.status(401).json({ error: "Authentication required", code: "principal-disabled" });
+      req.authPrincipal = { ...identitySession, ...principal };
+      req.authPrincipalId = identitySession.principal_id;
+      req.authUser = identitySession.display_name;
+      return next();
+    }
+    if (!DASHBOARD_USER || !DASHBOARD_PASS) {
+      return res.status(401).json({ error: "Authentication required", code: "unauthenticated" });
+    }
     const cookie = req.headers.cookie || "";
     for (const part of cookie.split(";")) {
       const trimmed = part.trim();
@@ -419,7 +503,93 @@ if (DASHBOARD_USER && DASHBOARD_PASS) {
     res.set("WWW-Authenticate", 'Basic realm="Sidekick Dashboard"');
     res.status(401).send("Authentication required");
   });
+} else {
+  // Before the first Owner exists, only the explicit bootstrap/login status
+  // surface is public. The rest of the dashboard fails closed rather than
+  // becoming an anonymous administrative console.
+  app.use((req, res, next) => {
+    if (req.path.startsWith("/static/") || ["/api/auth/bootstrap-status", "/api/auth/bootstrap", "/api/auth/login", "/api/auth/logout"].includes(req.path)) return next();
+    res.status(503).json({ error: "Owner bootstrap required", code: "bootstrap-required" });
+  });
 }
+
+function requireIdentityAdministrator(req, res) {
+  const roles = req.authPrincipal?.roles || [];
+  if (!req.authPrincipal || !roles.some(role => role === "owner" || role === "administrator")) {
+    res.status(403).json({ error: "Forbidden", code: "insufficient_authority" });
+    return false;
+  }
+  return true;
+}
+
+app.get("/api/auth/me", (req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json({ principal: req.authPrincipal || null, legacy: !req.authPrincipal && Boolean(req.authUser) });
+});
+
+app.post("/api/auth/password", (req, res) => {
+  const principalId = req.authPrincipal?.principal_id;
+  const account = principalId ? identity.getHumanUser(principalId) : null;
+  if (!account) return res.status(403).json({ error: "A local identity session is required", code: "insufficient_identity" });
+  if (!identity.verifyUserPassword(account.username, req.body?.current_password)) return res.status(401).json({ error: "Current password is incorrect" });
+  try {
+    identity.changePassword(principalId, req.body?.new_password, principalId);
+    authentication.invalidatePrincipalSessions(principalId);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/auth/users/:id/password-reset", (req, res) => {
+  if (!requireIdentityAdministrator(req, res)) return;
+  try {
+    const target = identity.getHumanUser(req.params.id);
+    if (!target) return res.status(404).json({ error: "Human principal not found" });
+    identity.changePassword(target.principal.principal_id, req.body?.new_password, req.authPrincipal.principal_id);
+    authentication.invalidatePrincipalSessions(target.principal.principal_id);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.get("/api/auth/credentials", (req, res) => {
+  if (!requireIdentityAdministrator(req, res)) return;
+  res.set("Cache-Control", "no-store");
+  res.json({ credentials: authentication.listCredentials(req.query.principal_id || null) });
+});
+
+app.post("/api/auth/credentials", (req, res) => {
+  if (!requireIdentityAdministrator(req, res)) return;
+  try {
+    const created = authentication.createCredential({
+      principalId: req.body?.principal_id,
+      displayName: req.body?.display_name,
+      scopes: req.body?.scopes,
+      expiresAt: req.body?.expires_at,
+      createdByPrincipalId: req.authPrincipal.principal_id,
+    });
+    res.status(201).json({ credential: created.credential, token: created.token });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/auth/credentials/:id/revoke", (req, res) => {
+  if (!requireIdentityAdministrator(req, res)) return;
+  res.json({ revoked: authentication.revokeCredential(req.params.id) });
+});
+
+app.post("/api/auth/credentials/:id/rotate", (req, res) => {
+  if (!requireIdentityAdministrator(req, res)) return;
+  try {
+    const replacement = authentication.rotateCredential(req.params.id, req.authPrincipal.principal_id);
+    res.status(201).json({ credential: replacement.credential, token: replacement.token });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
 
 // Grafana auth proxy doesn't create a real session token,
 // so token rotation always 401s. Return a mock success to
@@ -1155,12 +1325,16 @@ registerKvRoutes({
 registerStatsToolsRoutes({ app, dbStore, getToolDefsForSource });
 
 app.get("/api/tool-policy", (req, res) => {
-  let records = getToolDefsForSource("dashboard");
+  const sources = String(req.query.source || "mcp,dashboard,agent").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+  // A single-source inspection must use that source's live catalog. The
+  // dashboard catalog is intentionally narrower than the agent/MCP catalogs;
+  // using it unconditionally makes valid requests such as source=agent,
+  // name=bash appear to be missing.
+  let records = getToolDefsForSource(sources.length === 1 ? sources[0] : "dashboard");
   if (req.query.name) records = records.filter(tool => tool.name === req.query.name);
   if (req.query.name && records.length === 0) return res.status(404).json({ ok: false, error: "Tool not found: " + req.query.name });
   const limit = Number.parseInt(req.query.limit || "100", 10);
   records = records.slice(0, Number.isFinite(limit) && limit > 0 ? Math.min(limit, 200) : 100);
-  const sources = String(req.query.source || "mcp,dashboard,agent").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
   const decisions = buildPolicyInspection(records, sources);
   res.json({ total: decisions.length, sources, summary: summarizePolicyInspection(decisions), decisions });
 });

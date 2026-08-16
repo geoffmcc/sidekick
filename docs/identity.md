@@ -17,8 +17,37 @@ create two initial Owners. There is no default password. Lifecycle events are
 stored in the identity audit table with principal IDs and without password or
 credential material.
 
-This is PR 1 of the Identity & Authorization project. Authentication sessions,
-scoped machine credentials, the Core permission evaluator, bounded delegation,
-approval identity, resource/workflow authority, and administration routes are
-subsequent PRs and must consume this Core model rather than create parallel
-identity stores.
+## Authentication foundation
+
+PR 2 adds SQLite-backed browser sessions and scoped machine credentials. A
+session token is opaque to the database: only its SHA-256 verifier is stored.
+Sessions have expiry, last-use tracking, server-side invalidation, and are
+rejected when the principal is disabled. Browser sessions use an HttpOnly,
+SameSite cookie and are invalidated on password change.
+
+Machine credentials belong to a principal and include a bounded scope list,
+expiry, revocation, rotation, creation metadata, and last-use tracking. The
+raw credential is returned only by the create/rotate response; normal listing
+and database records expose metadata and verifier material only. Credential
+authentication is checked on every MCP request, so expiry, revocation, and
+principal disablement take effect without a stale authorization cache.
+
+The dashboard exposes local bootstrap, login, logout, current-account,
+password-change, and administrator credential lifecycle routes. Before the
+first Owner exists, all other dashboard routes fail closed. Existing
+installation-wide API-key clients remain an explicit compatibility path while
+they migrate to named scoped credentials; it is not the long-term identity
+model.
+
+Owner recovery uses a short-lived, single-use token generated under local host
+control. Recovery tokens are stored only as hashes, expire quickly, invalidate
+Owner sessions, and cannot be replayed through the dashboard or MCP API.
+
+Headless administration is available through `scripts/identity-admin.js`.
+Bootstrap and recovery password material are read from standard input; raw
+passwords and recovery tokens should not be placed in shell arguments or logs.
+
+The central permission evaluator, bounded delegation, approval identity,
+resource/workflow authority, and full administration policy remain subsequent
+PRs. They must consume this Core authentication model rather than create
+parallel identity stores.

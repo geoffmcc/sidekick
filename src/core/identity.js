@@ -74,9 +74,21 @@ function audit(eventType, principalIdValue, actorPrincipalId, details = {}) {
   dbStore.getDb().prepare(`INSERT INTO identity_audit_events (event_id, event_type, principal_id, actor_principal_id, details_json, created_at) VALUES (?, ?, ?, ?, ?, ?)`).run(eventId(), eventType, principalIdValue || null, actorPrincipalId || null, JSON.stringify(details), now());
 }
 
+function recordAuditEvent(eventType, principalIdValue, actorPrincipalId = null, details = {}) {
+  requiredText(eventType, "event_type", 120);
+  audit(eventType, principalIdValue, actorPrincipalId, details);
+}
+
 function getPrincipal(id) {
   const row = dbStore.getDb().prepare("SELECT * FROM principals WHERE principal_id = ?").get(requiredText(id, "principal_id"));
   return toPrincipal(row, row ? getRoles(row.principal_id) : []);
+}
+
+function getHumanUser(id) {
+  const principal = getPrincipal(id);
+  if (!principal || principal.principal_type !== "human") return null;
+  const row = dbStore.getDb().prepare("SELECT username FROM human_users WHERE principal_id = ?").get(principal.principal_id);
+  return row ? { principal, username: row.username } : null;
 }
 
 function listPrincipals({ type, enabled, limit = 100 } = {}) {
@@ -194,4 +206,4 @@ function verifyUserPassword(username, password) {
   return getPrincipal(row.principal_id);
 }
 
-module.exports = Object.freeze({ PRINCIPAL_TYPES, ROLE_NAMES, PASSWORD_SCHEME, MIN_PASSWORD_LENGTH, passwordHash, verifyPassword, getPrincipal, listPrincipals, createPrincipal, createHumanUser, updatePrincipal, updateUsername, assignRole, bootstrapOwner, setPrincipalEnabled, changePassword, verifyUserPassword });
+module.exports = Object.freeze({ PRINCIPAL_TYPES, ROLE_NAMES, PASSWORD_SCHEME, MIN_PASSWORD_LENGTH, passwordHash, verifyPassword, getPrincipal, getHumanUser, listPrincipals, createPrincipal, createHumanUser, updatePrincipal, updateUsername, assignRole, bootstrapOwner, setPrincipalEnabled, changePassword, verifyUserPassword, recordAuditEvent });

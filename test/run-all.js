@@ -15,6 +15,7 @@ const root = path.join(__dirname, '..');
 
 const suites = [
   { file: 'test/identity-foundation.test.js', critical: true, description: 'Durable principals, users, password hashing, Owner bootstrap, and lifecycle foundation' },
+  { file: 'test/identity-authentication.test.js', critical: true, description: 'Server-side identity sessions and scoped machine credentials' },
   { file: 'test/github-setup.test.js', critical: true, description: 'GitHub workflow and package script checks' },
   { file: 'test/static-code-quality.test.js', critical: true, description: 'Static safety checks' },
   { file: 'test/security.test.js', critical: true, description: 'Redaction and dangerous command checks' },

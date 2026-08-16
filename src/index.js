@@ -11,6 +11,7 @@ const { getBuiltinRegistry } = require("./tools/index");
 const dynamicTools = require("./dynamic-tools");
 const { stripSidekickPrefix } = require("./core/tool-name");
 const dbStore = require("./db");
+const authentication = require("./core/authentication");
 const packageJson = require("../package.json");
 
 const APP_VERSION = packageJson.version || "0.0.0";
@@ -240,7 +241,8 @@ function registerSession(sessionId, server, transport, metadata = {}) {
     lastAccess: Date.now(),
     initialized: false,
     userAgent: metadata.userAgent || null,
-    clientInfo: metadata.clientInfo || null
+    clientInfo: metadata.clientInfo || null,
+    authIdentity: metadata.authIdentity || null
   });
 }
 
@@ -346,10 +348,29 @@ app.get("/health", (req, res) => {
 app.use((req, res, next) => {
   if (isComputeAuthBypassPath(req.path)) return next();
   const token = getBearerOrQueryToken(req);
-  if (!timingSafeCompare(token, API_KEY)) {
+  const credential = authentication.authenticateCredential(token);
+  if (credential) {
+    req.authIdentity = {
+      principal_id: credential.principal_id,
+      principal_type: credential.principal_type,
+      scopes: credential.scopes,
+      credential_id: credential.credential_id,
+      authentication_method: "scoped_credential",
+    };
+    return next();
+  }
+  if (timingSafeCompare(token, API_KEY)) {
+    // Compatibility only: this legacy installation-wide key remains visible
+    // as legacy authentication until scoped credentials replace its clients.
+    req.authIdentity = { authentication_method: "legacy_api_key", scopes: ["legacy"] };
+    return next();
+  }
+  if (!token) {
+    return res.status(401).json({ error: "Authentication required", code: "unauthenticated" });
+  }
+  if (!credential) {
     return res.status(401).json({ error: "Unauthorized" });
   }
-  next();
 });
 
 app.use(express.json({ limit: "1mb" }));
@@ -419,7 +440,8 @@ app.post("/mcp", async (req, res) => {
 
     const metadata = {
       userAgent: wh["user-agent"],
-      clientInfo: req.body?.params?.clientInfo || null
+      clientInfo: req.body?.params?.clientInfo || null,
+      authIdentity: req.authIdentity || null
     };
     const { transport, isNew, newSessionId, staleRedirect, replacedStaleSession } = await getTransportForRequest(sessionId, metadata, {
       allowStalePost: true
