@@ -11,6 +11,7 @@ const assert = require("assert");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { execFileSync } = require("child_process");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-handoff-versioning-test-"));
 process.env.SIDEKICK_DATA_DIR = tempDir;
@@ -63,6 +64,21 @@ function parse(result) {
   assert.deepStrictEqual(packetCreated.handoff.packet, packet, "structured packet must be returned intact");
   const packetValidation = parse(await TOOLS.handoff({ action: "validate", id: packetCreated.handoff.id }));
   assert.strictEqual(packetValidation.valid, true, "complete resume packet should validate");
+  const verifiedPacket = parse(await TOOLS.handoff({ action: "create", project: "hv-test", content: "Fact: provenance verification.", packet: {
+    ...packet,
+    provenance: {
+      ...packet.provenance,
+      working_directory: process.cwd(),
+      branch: "HEAD",
+      commit_sha: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim()
+    }
+  } }));
+  const provenanceVerification = parse(await TOOLS.handoff({ action: "verify", id: verifiedPacket.handoff.id }));
+  assert.strictEqual(provenanceVerification.status, "verified", "visible Git provenance should verify");
+  assert.strictEqual(provenanceVerification.valid, true);
+  const unverifiableVerification = parse(await TOOLS.handoff({ action: "verify", id: packetCreated.handoff.id }));
+  assert.strictEqual(unverifiableVerification.status, "unverifiable", "remote-only provenance should not be guessed as verified");
+  console.log("HV.0a passed: provenance verification is bounded and honest");
   const packetUpdated = parse(await TOOLS.handoff({ action: "update", id: packetCreated.handoff.id, packet: { ...packet, next_step: "Run the focused test" } }));
   assert.strictEqual(packetUpdated.handoff.version, 2, "packet-only changes must be versioned");
   const packetHistory = parse(await TOOLS.handoff({ action: "get", id: packetCreated.handoff.id, version: 1 }));

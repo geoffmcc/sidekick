@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const zlib = require("zlib");
 const crypto = require("crypto");
+const { execFileSync } = require("child_process");
 const { createMemoryDomain } = require("./db/memory-domain");
 const { splitSqlStatements, parseAddColumn } = require("./core/sql-statements");
 const { createKvStore } = require("./db/kv-store");
@@ -1273,6 +1274,46 @@ function validateHandoffPacket(packet, { requireResume = false } = {}) {
   if (value.status === "blocked" && (!Array.isArray(value.blockers) || value.blockers.length === 0)) issues.push("blocked packet requires at least one blocker");
   if (value.status === "completed" && (!Array.isArray(value.acceptance_criteria) || value.acceptance_criteria.length === 0)) issues.push("completed packet requires acceptance_criteria");
   return { valid: issues.length === 0, issues, packet: value };
+}
+
+function verifyHandoffProvenance(packet, { requireResume = true } = {}) {
+  const validation = validateHandoffPacket(packet, { requireResume });
+  const provenance = validation.packet.provenance;
+  const checks = [];
+  const issues = [...validation.issues];
+  if (!provenance || typeof provenance !== "object") {
+    return { status: validation.valid ? "unverifiable" : "invalid", valid: validation.valid, issues: [...issues, "packet has no provenance to verify"], checks, packet: validation.packet };
+  }
+
+  const commit = provenance.commit_sha ? String(provenance.commit_sha) : "";
+  if (commit && !/^[0-9a-f]{7,64}$/i.test(commit)) issues.push("provenance.commit_sha must be a Git commit SHA");
+  const repo = provenance.working_directory && fs.existsSync(String(provenance.working_directory))
+    ? String(provenance.working_directory)
+    : null;
+  if (!repo) {
+    checks.push({ name: "repository", status: "unverifiable", detail: "working_directory is not visible to the Sidekick server" });
+  } else if (!commit) {
+    checks.push({ name: "commit", status: "unverifiable", detail: "provenance.commit_sha is missing" });
+  } else {
+    try {
+      execFileSync("git", ["-C", repo, "cat-file", "-e", `${commit}^{commit}`], { stdio: "ignore" });
+      checks.push({ name: "commit", status: "verified", commit_sha: commit });
+      if (provenance.branch) {
+        try {
+          execFileSync("git", ["-C", repo, "merge-base", "--is-ancestor", commit, String(provenance.branch)], { stdio: "ignore" });
+          checks.push({ name: "branch", status: "verified", branch: String(provenance.branch) });
+        } catch {
+          checks.push({ name: "branch", status: "stale", branch: String(provenance.branch), detail: "branch is missing or does not contain the recorded commit" });
+          issues.push("provenance.branch does not contain the recorded commit");
+        }
+      }
+    } catch {
+      checks.push({ name: "commit", status: "stale", commit_sha: commit, detail: "recorded commit is not present in the visible repository" });
+      issues.push("provenance.commit_sha is not present in the visible repository");
+    }
+  }
+  const status = issues.length ? "invalid" : checks.some(check => check.status === "stale") ? "stale" : checks.some(check => check.status === "unverifiable") ? "unverifiable" : "verified";
+  return { status, valid: status === "verified", issues, checks, packet: validation.packet };
 }
 
 /**
@@ -2885,6 +2926,7 @@ module.exports = {
   purgeHandoffVersion,
   normalizeHandoffPacket,
   validateHandoffPacket,
+  verifyHandoffProvenance,
   saveTaskSession,
   getTaskSession,
   listTaskSessions,
