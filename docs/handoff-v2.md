@@ -43,9 +43,14 @@ criteria.
 - `get` and `versions` return the packet for the selected version.
 - `inspect` returns packet validation alongside extracted memories.
 - `validate` checks whether a handoff contains enough information to resume safely.
+- `verify` performs that structural validation plus bounded local Git provenance checks.
 
 Validation is structural and evidence-aware metadata is preserved as supplied; it does not
 pretend that a referenced commit, file, or URL still exists without a separate verification.
+
+`verify` returns `verified`, `stale`, `unverifiable`, or `invalid`. It only verifies a commit
+and branch when `provenance.working_directory` is visible to the Sidekick server. Remote-only
+repository URLs are reported as `unverifiable`; the operation never treats metadata as proof.
 
 ## Validated resume
 
