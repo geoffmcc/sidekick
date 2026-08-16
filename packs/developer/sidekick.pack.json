@@ -1,8 +1,9 @@
 {
   "schema_version": 1,
+  "pack_api": 1,
   "name": "developer",
   "display_name": "Developer / Software Engineering",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Makes Sidekick substantially better at understanding, investigating, modifying, verifying and maintaining software projects: structured repository profiling, change-set impact analysis, governed project verification, and seven runnable engineering workflows.",
   "publisher": "Sidekick",
   "compatibility": {
@@ -79,6 +80,10 @@
     "tools": ["git", "bash", "read", "list", "search"],
     "optional_tools": ["github", "ci_status", "handoff", "project", "changelog", "summarize", "depend"]
   },
+  "permissions": [
+    { "tool": "git", "risk": "medium" },
+    { "tool": "bash", "risk": "critical" }
+  ],
   "configuration": {
     "schema": {
       "type": "object",

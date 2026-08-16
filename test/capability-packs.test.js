@@ -94,7 +94,7 @@ function buildUpgradeCandidate() {
     assert.strictEqual(developer.installed, false);
     assert.strictEqual(developer.provenance, 'first_party');
     assert.strictEqual(developer.compatible, true);
-    assert.strictEqual(developer.version, '1.0.0');
+    assert.strictEqual(developer.version, '1.0.1');
     assert.deepStrictEqual(developer.modules, ['developer-tools']);
     assert.strictEqual(developer.workflows, 7);
     assert.strictEqual(developer.knowledge, 8);
@@ -135,9 +135,9 @@ function buildUpgradeCandidate() {
     const pack = packRepository.getPack(PACK);
     assert.strictEqual(pack.state, 'installed', 'a newly installed pack is not automatically enabled');
     assert.strictEqual(pack.provenance, 'first_party');
-    assert.strictEqual(pack.version, '1.0.0');
+    assert.strictEqual(pack.version, '1.0.1');
     assert.strictEqual(pack.package_hash, inspection.package_hash);
-    assert.strictEqual(pack.install_path, packStore.versionDir(PACK, '1.0.0'));
+    assert.strictEqual(pack.install_path, packStore.versionDir(PACK, '1.0.1'));
     assert.strictEqual(pack.source.kind, 'bundled');
     assert.ok(fs.existsSync(path.join(pack.install_path, 'sidekick.pack.json')));
 
@@ -304,14 +304,14 @@ function buildUpgradeCandidate() {
     assert.strictEqual(before.filter(c => c.kind === 'workflow').length, 7);
 
     const result = packLifecycle.upgrade(PACK, candidate);
-    assert.strictEqual(result.previous_version, '1.0.0');
+    assert.strictEqual(result.previous_version, '1.0.1');
     assert.strictEqual(result.version, '1.1.0');
     assert.strictEqual(result.health.status, 'healthy');
 
     const pack = packRepository.getPack(PACK);
     assert.strictEqual(pack.state, 'enabled', 'an enabled pack stays enabled across an upgrade');
     assert.strictEqual(pack.install_path, packStore.versionDir(PACK, '1.1.0'));
-    assert.strictEqual(fs.existsSync(packStore.versionDir(PACK, '1.0.0')), false, 'superseded pack version removed');
+    assert.strictEqual(fs.existsSync(packStore.versionDir(PACK, '1.0.1')), false, 'superseded pack version removed');
     assert.strictEqual(pack.config.verification_mode, 'quick', 'compatible configuration is preserved');
 
     // The dropped workflow is gone from ownership AND from the definition registry.
@@ -383,7 +383,7 @@ function buildUpgradeCandidate() {
     bundled.installBundledPack(PACK, { enable: true });
     const pack = packRepository.getPack(PACK);
     assert.strictEqual(pack.state, 'enabled');
-    assert.strictEqual(pack.version, '1.0.0');
+    assert.strictEqual(pack.version, '1.0.1');
     assert.strictEqual(packLifecycle.health(PACK).status, 'healthy');
     assert.ok(registry().has('dev_repo_profile'));
   });

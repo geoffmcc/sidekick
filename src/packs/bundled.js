@@ -18,6 +18,18 @@ const { PACK_MANIFEST_FILENAME, parsePackManifestFile, checkPackCompatibility } 
 const repository = require("./repository");
 const lifecycle = require("./lifecycle");
 const { sidekickVersion } = require("../modules/packaging");
+const { compareVersions } = require("../modules/manifest");
+
+/** True when the bundled version is semver-newer than the installed one. */
+function bundledVersionIsNewer(bundledVersion, installedVersion) {
+  try {
+    return compareVersions(bundledVersion, installedVersion) > 0;
+  } catch {
+    // Unparseable version on either side: fall back to inequality so the
+    // operator still sees that the bundled copy differs.
+    return bundledVersion !== installedVersion;
+  }
+}
 
 function bundledRoot() {
   return process.env.SIDEKICK_BUNDLED_PACKS_DIR || path.resolve(__dirname, "..", "..", "packs");
@@ -50,7 +62,7 @@ function listBundledPacks() {
         requires_sidekick: compatibility.requires,
         installed: Boolean(installed),
         installed_version: installed ? installed.version : null,
-        upgrade_available: Boolean(installed) && installed.version !== manifest.version,
+        upgrade_available: Boolean(installed) && bundledVersionIsNewer(manifest.version, installed.version),
         modules: manifest.modules.map(m => m.name),
         workflows: manifest.workflows.length,
         knowledge: manifest.knowledge.length,

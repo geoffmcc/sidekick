@@ -81,6 +81,20 @@ async function sidekick_capability({ action = "list", name, path: sourcePath, co
       return jsonText({ ok: true, action, inspection: lifecycle.inspect(target) });
     }
 
+    if (action === "validate") {
+      // Structured contract validation of a bundled pack or a server-local
+      // package path: file/field/problem/correction findings, no install.
+      let target = sourcePath;
+      if (!target && name) {
+        const candidate = bundled.getBundledPack(name);
+        if (!candidate) return failure(`No bundled capability pack named "${name}" and no path supplied`, { code: "not_found" });
+        target = candidate.path;
+      }
+      if (!target) return failure("validate requires either a bundled pack name or a server-local path", { code: "invalid_arguments" });
+      const report = lifecycle.validate(target);
+      return jsonText({ ok: report.valid, action, report });
+    }
+
     if (action === "install") {
       const result = sourcePath
         ? lifecycle.install(sourcePath, { config, enable: enable === true, provenance: "third_party", source: { kind: "local_path" } })
@@ -139,7 +153,7 @@ async function sidekick_capability({ action = "list", name, path: sourcePath, co
     }
 
     return failure(
-      `Unknown capability action: ${action}. Use list, available, show, inspect, install, configure, enable, disable, health, upgrade, or uninstall`,
+      `Unknown capability action: ${action}. Use list, available, show, inspect, validate, install, configure, enable, disable, health, upgrade, or uninstall`,
       { code: "unknown_action" }
     );
   } catch (error) {
@@ -156,14 +170,14 @@ const descriptors = Object.freeze([
     name: "capability",
     aliases: ["capability_pack", "pack"],
     description:
-      "Manage Sidekick capability packs: list installed and bundled packs, inspect a package, install, configure, enable, disable, check health, upgrade and uninstall. Installing or enabling a pack activates executable module code in the Sidekick process.",
+      "Manage Sidekick capability packs: list installed and bundled packs, inspect or validate a package, install, configure, enable, disable, check health, upgrade and uninstall. Installing or enabling a pack activates executable module code in the Sidekick process.",
     schema: z.object({
       action: z
-        .enum(["list", "available", "show", "inspect", "install", "configure", "enable", "disable", "health", "upgrade", "uninstall"])
+        .enum(["list", "available", "show", "inspect", "validate", "install", "configure", "enable", "disable", "health", "upgrade", "uninstall"])
         .optional()
         .describe("Capability pack action (default: list)"),
       name: z.string().optional().describe("Pack name (required for show/configure/enable/disable/health/upgrade/uninstall, and for installing a bundled pack)"),
-      path: z.string().optional().describe("Server-local package path for inspect/install/upgrade of a non-bundled pack"),
+      path: z.string().optional().describe("Server-local package path for inspect/validate/install/upgrade of a non-bundled pack"),
       config: z.record(z.any()).optional().describe("Pack configuration object, validated against the pack's configuration schema"),
       enable: z.boolean().optional().describe("Enable the pack immediately after install (default false)"),
       allow_same_version: z.boolean().optional().describe("Permit replacing the installed version with the same version (upgrade)"),
@@ -172,7 +186,7 @@ const descriptors = Object.freeze([
       remove_module_data: z.boolean().optional().describe("Request removal of module-owned data on uninstall, where the module's manifest permits it (default false)"),
     }),
     args: {
-      action: "string (list|available|show|inspect|install|configure|enable|disable|health|upgrade|uninstall - default list)",
+      action: "string (list|available|show|inspect|validate|install|configure|enable|disable|health|upgrade|uninstall - default list)",
       name: "string (pack name)",
       path: "string (server-local package path)",
       config: "object (pack configuration)",

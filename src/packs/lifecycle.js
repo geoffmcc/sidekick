@@ -24,7 +24,16 @@ const repository = require("./repository");
 const store = require("./store");
 const packKnowledge = require("./knowledge");
 const { inspectPackPackage, hashInstalledPack } = require("./packaging");
-const { validatePackConfig, checkPackCompatibility, PACK_MANIFEST_FILENAME } = require("./manifest");
+const {
+  validatePackConfig,
+  checkPackCompatibility,
+  checkPackApi,
+  comparePackPermissions,
+  packManifestSchema,
+  readPackManifestFile,
+  PACK_MANIFEST_FILENAME,
+} = require("./manifest");
+const packDependencies = require("./dependencies");
 const moduleLifecycle = require("../modules/lifecycle");
 const moduleRepository = require("../modules/repository");
 const moduleLoader = require("../modules/loader");
@@ -243,9 +252,28 @@ function enable(name) {
     repository.setPackState(name, "error", { error: `incompatible: requires Sidekick ${compatibility.requires}` });
     throw new Error(`Capability pack "${name}" requires Sidekick ${compatibility.requires} but this Sidekick is ${compatibility.sidekick_version}`);
   }
+  const packApi = checkPackApi(record.manifest);
+  if (!packApi.ok) {
+    repository.setPackState(name, "error", { error: `unsupported pack_api ${packApi.pack_api}` });
+    throw new Error(`Capability pack "${name}" declares pack_api ${packApi.pack_api} but this Sidekick supports pack_api ${packApi.supported.join(", ")}`);
+  }
   const configResult = validatePackConfig(record.manifest, record.config);
   if (!configResult.ok) {
     throw new Error(`Capability pack "${name}" configuration is invalid: ${configResult.errors.map(e => `${e.path}: ${e.message}`).join("; ")}`);
+  }
+
+  // Required dependencies must be live before this pack's capabilities are:
+  // a dependent that enabled ahead of its provider would advertise tools and
+  // workflows whose collaborators are absent.
+  const dependencyResolution = packDependencies.resolveDependencies(record.manifest);
+  const dependencyBlockers = [];
+  for (const resolution of dependencyResolution.resolutions) {
+    if (resolution.optional) continue;
+    if (!resolution.satisfied) dependencyBlockers.push(resolution.problem);
+    else if (resolution.state !== "enabled") dependencyBlockers.push(`pack "${resolution.name}" is installed but ${resolution.state}; enable it first`);
+  }
+  if (dependencyBlockers.length) {
+    throw new Error(`Capability pack "${name}" cannot be enabled: required dependency not ready: ${dependencyBlockers.join("; ")}`);
   }
 
   const activated = { modules: [], workflows: [], knowledge: [] };
@@ -301,6 +329,16 @@ function enable(name) {
 function disable(name) {
   const record = repository.getPack(name);
   if (!record) throw new Error(`Capability pack "${name}" is not installed`);
+
+  // Refuse to pull a provider out from under live dependents. The dependents
+  // are named so the remedy is obvious; disabling them first is the path.
+  const enabledDependents = packDependencies.listRequiredDependents(name, { enabledOnly: true });
+  if (enabledDependents.length) {
+    throw new Error(
+      `Capability pack "${name}" cannot be disabled: enabled pack(s) require it: ${enabledDependents.map(p => p.name).join(", ")}. Disable those packs first.`
+    );
+  }
+
   const deactivated = { modules: [], workflows: [], knowledge: [] };
 
   for (const component of repository.listComponents(name, { kind: "module" })) {
@@ -348,6 +386,14 @@ function upgrade(name, sourcePath, { allowSameVersion = false, allowDowngrade = 
     throw new Error(`Capability pack upgrade candidate cannot be installed: ${inspection.problems.join("; ")}`);
   }
   assertNoForeignOwnership(inspection, { allowPack: name });
+
+  // Upgrade compatibility: every installed dependent's declared range must
+  // still accept the candidate version. Optional dependents warn; required
+  // dependents refuse.
+  const dependentCheck = packDependencies.checkDependentConstraints(name, inspection.version);
+  if (!dependentCheck.ok) {
+    throw new Error(`Capability pack "${name}" cannot be upgraded to ${inspection.version}: ${dependentCheck.broken.join("; ")}`);
+  }
 
   const previousInstallPath = record.install_path;
   const previousVersion = record.version;
@@ -483,6 +529,15 @@ function uninstall(name, { removeKnowledge = true, removeModuleData = false } = 
   const record = repository.getPack(name);
   if (!record) throw new Error(`Capability pack "${name}" is not installed`);
 
+  // A pack with installed required dependents cannot be removed — even
+  // disabled dependents would be left permanently unable to enable.
+  const dependents = packDependencies.listRequiredDependents(name);
+  if (dependents.length) {
+    throw new Error(
+      `Capability pack "${name}" cannot be uninstalled: installed pack(s) require it: ${dependents.map(p => p.name).join(", ")}. Uninstall those packs first.`
+    );
+  }
+
   if (record.state === "enabled") {
     try { disable(name); } catch {}
   }
@@ -553,6 +608,15 @@ function health(name) {
   components.push({ component: "compatibility", kind: "pack", ok: compatibility.ok, detail: compatibility.requires || "unconstrained" });
   if (!compatibility.ok) escalate(HEALTH_STATUS.INCOMPATIBLE);
 
+  const packApi = checkPackApi(record.manifest);
+  components.push({
+    component: "pack_api",
+    kind: "pack",
+    ok: packApi.ok,
+    detail: packApi.ok ? `v${packApi.pack_api}` : `declares v${packApi.pack_api}; supported: ${packApi.supported.join(", ")}`,
+  });
+  if (!packApi.ok) escalate(HEALTH_STATUS.INCOMPATIBLE);
+
   const configResult = validatePackConfig(record.manifest, record.config);
   components.push({
     component: "configuration",
@@ -592,6 +656,75 @@ function health(name) {
     else if (moduleHealth.status === "configuration_required") escalate(HEALTH_STATUS.CONFIGURATION_REQUIRED);
     else if (moduleHealth.status === "restart_required") escalate(HEALTH_STATUS.RESTART_REQUIRED);
     else if (enabled && !moduleHealth.ok) escalate(HEALTH_STATUS.COMPONENT_FAILURE);
+  }
+
+  // Permissions: the stored pack declaration must still agree with what the
+  // INSTALLED module manifests hold — a module upgraded out from under the
+  // pack would silently change the pack's real grant surface otherwise.
+  const installedModuleManifests = repository
+    .listComponents(record.name, { kind: "module" })
+    .map(component => moduleRepository.getModule(component.ref)?.manifest)
+    .filter(Boolean);
+  if (record.manifest.permissions) {
+    const permissionComparison = comparePackPermissions(record.manifest.permissions, installedModuleManifests);
+    components.push({
+      component: "permissions",
+      kind: "pack",
+      ok: permissionComparison.ok,
+      status: permissionComparison.ok ? "consistent" : "mismatch",
+      detail: permissionComparison.ok
+        ? `${record.manifest.permissions.length} declared`
+        : [
+            permissionComparison.missing.length ? `undeclared module grants: ${permissionComparison.missing.join(", ")}` : null,
+            permissionComparison.extra.length ? `declared but unheld: ${permissionComparison.extra.join(", ")}` : null,
+          ].filter(Boolean).join("; "),
+    });
+    if (!permissionComparison.ok) escalate(HEALTH_STATUS.DEGRADED);
+  } else {
+    const derived = comparePackPermissions(undefined, installedModuleManifests).aggregate;
+    components.push({
+      component: "permissions",
+      kind: "pack",
+      ok: true,
+      status: "undeclared",
+      detail: derived.length ? `pre-contract manifest; modules hold: ${derived.map(p => p.tool || p.capability).join(", ")}` : "pre-contract manifest; no module grants",
+    });
+  }
+
+  // Dependencies: a missing required dependency is a component failure; an
+  // installed-but-unready or unhealthy one degrades; optional gaps inform.
+  for (const resolution of packDependencies.resolveDependencies(record.manifest).resolutions) {
+    const dependencyRecord = resolution.installed ? repository.getPack(resolution.name) : null;
+    const lastHealth = dependencyRecord?.health?.status || null;
+    let ok = true;
+    let detail;
+    if (!resolution.installed) {
+      ok = resolution.optional;
+      detail = "not installed";
+      if (!resolution.optional) escalate(HEALTH_STATUS.COMPONENT_FAILURE);
+    } else if (!resolution.satisfied) {
+      ok = resolution.optional;
+      detail = resolution.problem;
+      if (!resolution.optional) escalate(HEALTH_STATUS.DEGRADED);
+    } else if (enabled && !resolution.optional && resolution.state !== "enabled") {
+      ok = false;
+      detail = `installed but ${resolution.state}`;
+      escalate(HEALTH_STATUS.DEGRADED);
+    } else if (enabled && !resolution.optional && lastHealth && lastHealth !== "healthy") {
+      ok = false;
+      detail = `enabled but last health was ${lastHealth}`;
+      escalate(HEALTH_STATUS.DEGRADED);
+    } else {
+      detail = `${resolution.installed_version} (${resolution.state})`;
+    }
+    components.push({
+      component: resolution.name,
+      kind: "dependency",
+      ok,
+      status: resolution.installed ? resolution.state : "missing",
+      optional: resolution.optional,
+      detail: resolution.requires_version ? `${detail}; requires ${resolution.requires_version}` : detail,
+    });
   }
 
   for (const component of repository.listComponents(record.name, { kind: "workflow" })) {
@@ -690,6 +823,13 @@ function describe(name, { includeHealth = true } = {}) {
     package_hash: record.package_hash,
     install_path: record.install_path,
     compatibility: record.compatibility,
+    pack_api: checkPackApi(record.manifest).pack_api,
+    permissions: describePermissions(record),
+    depends: {
+      declared: (record.manifest.depends?.packs || []).map(d => ({ ...d })),
+      resolutions: packDependencies.resolveDependencies(record.manifest).resolutions,
+      dependents: packDependencies.listRequiredDependents(record.name).map(p => p.name),
+    },
     configuration: {
       schema: record.manifest.configuration?.schema || null,
       values: record.config,
@@ -705,4 +845,129 @@ function describe(name, { includeHealth = true } = {}) {
   };
 }
 
-module.exports = { HEALTH_STATUS, inspect, install, configure, enable, disable, upgrade, uninstall, health, describe };
+function describePermissions(record) {
+  const moduleManifests = repository
+    .listComponents(record.name, { kind: "module" })
+    .map(component => moduleRepository.getModule(component.ref)?.manifest)
+    .filter(Boolean);
+  const comparison = comparePackPermissions(record.manifest.permissions, moduleManifests);
+  return {
+    declared: record.manifest.permissions ? record.manifest.permissions.map(p => ({ ...p })) : null,
+    derived: comparison.aggregate.map(p => ({ ...p })),
+    consistent: record.manifest.permissions ? comparison.ok : null,
+  };
+}
+
+/**
+ * Structured validation of a pack package for authors and operators.
+ *
+ * Unlike inspect (which throws on a malformed manifest), validate always
+ * returns a report: every finding names the file, the field where one applies,
+ * the problem, and the correction. Nothing is installed or executed.
+ */
+function validate(sourcePath) {
+  const findings = [];
+  const finding = (severity, area, problem, { file = null, field = null, correction = null } = {}) => {
+    findings.push({ severity, area, file, field, problem, correction });
+  };
+
+  const root = path.resolve(sourcePath);
+  const manifestPath = path.join(root, PACK_MANIFEST_FILENAME);
+  if (!fs.existsSync(manifestPath)) {
+    finding("error", "manifest", `no ${PACK_MANIFEST_FILENAME} found`, {
+      file: PACK_MANIFEST_FILENAME,
+      correction: `create a ${PACK_MANIFEST_FILENAME} at the package root (see docs/capability-packs.md)`,
+    });
+    return { valid: false, path: root, findings, summary: summarizeFindings(findings) };
+  }
+
+  let rawManifest;
+  try {
+    // Guarded read: symlink refusal, size bound, sanitized parse errors — the
+    // same rules inspect applies, so validate is never a weaker read path.
+    rawManifest = readPackManifestFile(manifestPath);
+  } catch (error) {
+    finding("error", "manifest", error.message, {
+      file: PACK_MANIFEST_FILENAME,
+      correction: "fix the JSON syntax",
+    });
+    return { valid: false, path: root, findings, summary: summarizeFindings(findings) };
+  }
+
+  const parsed = packManifestSchema.safeParse(rawManifest);
+  if (!parsed.success) {
+    for (const issue of parsed.error.issues) {
+      finding("error", "manifest", issue.message, {
+        file: PACK_MANIFEST_FILENAME,
+        field: issue.path.join(".") || null,
+        correction: manifestCorrectionHint(issue),
+      });
+    }
+    return { valid: false, path: root, findings, summary: summarizeFindings(findings) };
+  }
+
+  let inspection = null;
+  try {
+    inspection = inspectPackPackage(root);
+  } catch (error) {
+    finding("error", "package", error.message, { file: PACK_MANIFEST_FILENAME });
+    return { valid: false, path: root, findings, summary: summarizeFindings(findings) };
+  }
+
+  for (const problem of inspection.problems) {
+    finding("error", classifyInspectionProblem(problem), problem, { file: PACK_MANIFEST_FILENAME });
+  }
+  if (!inspection.manifest.permissions && inspection.permissions.derived.length) {
+    finding(
+      "warning",
+      "permissions",
+      "manifest declares no pack-level permissions but its modules hold tool grants",
+      {
+        file: PACK_MANIFEST_FILENAME,
+        field: "permissions",
+        correction: `declare: ${JSON.stringify(inspection.permissions.derived)}`,
+      }
+    );
+  }
+
+  return {
+    valid: findings.every(entry => entry.severity !== "error"),
+    path: root,
+    name: inspection.name,
+    version: inspection.version,
+    pack_api: inspection.pack_api,
+    package_hash: inspection.package_hash,
+    findings,
+    summary: summarizeFindings(findings),
+  };
+}
+
+function summarizeFindings(findings) {
+  const errors = findings.filter(entry => entry.severity === "error").length;
+  const warnings = findings.filter(entry => entry.severity === "warning").length;
+  return { errors, warnings };
+}
+
+function manifestCorrectionHint(issue) {
+  const field = issue.path.join(".");
+  if (field === "name") return "use a lowercase identifier matching ^[a-z][a-z0-9-]*$";
+  if (field.startsWith("permissions")) return 'each permission is {"tool": "<name>", "risk": "low|medium|high|critical"} or {"capability": "<name>"}';
+  if (field.startsWith("depends")) return 'each dependency is {"name": "<pack>", "version": "<range, optional>", "optional": true|false}';
+  if (field === "pack_api") return "declare a positive integer Pack API version (current: 1)";
+  if (field.startsWith("modules")) return "each module is {\"name\", \"path\", optional \"entry_point\", optional \"config_from_pack\"}";
+  return "see the manifest reference in docs/capability-packs.md";
+}
+
+function classifyInspectionProblem(problem) {
+  if (problem.startsWith("module ")) return "modules";
+  if (problem.startsWith("workflow ")) return "workflows";
+  if (problem.startsWith("knowledge ")) return "knowledge";
+  if (problem.includes("dependency") || problem.includes("dependency cycle") || problem.startsWith("Pack dependency")) return "dependencies";
+  if (problem.includes("pack_api")) return "compatibility";
+  if (problem.includes("Sidekick")) return "compatibility";
+  if (problem.includes("permission")) return "permissions";
+  if (problem.includes("required tool")) return "requires";
+  return "package";
+}
+
+module.exports = { HEALTH_STATUS, inspect, install, configure, enable, disable, upgrade, uninstall, health, describe, validate };
