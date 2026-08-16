@@ -124,6 +124,7 @@ const suites = [
   { file: 'test/memory-deferred.test.js', critical: false, description: 'Deferred memory lifecycle behavior' },
   { file: 'test/memory-sync.test.js', critical: false, description: 'Memory sync behavior' },
   { file: 'test/memory-intelligence.test.js', critical: false, description: 'Memory intelligence handoff/session behavior' },
+  { file: 'test/handoff-versioning.test.js', critical: true, description: 'Handoff versioning: append-only history, optimistic concurrency, restore, metadata preservation, kv_key chain regression' },
   { file: 'test/integration.test.js', critical: false, description: 'Integration behavior' },
   { file: 'test/dashboard-api.test.js', critical: false, description: 'Dashboard API behavior' },
   { file: 'test/compute.test.js', critical: false, description: 'Compute provider-neutral inference and job system' },

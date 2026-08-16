@@ -1230,43 +1230,140 @@ function auditMemoryEvent(eventType, targetType, targetId, details = {}, actor =
   return result.lastInsertRowid;
 }
 
-function saveHandoff({ id, kv_key, project, title, source, task_id, content, previous_id, extraction_state, extraction_version }) {
+/**
+ * Save a handoff.
+ *
+ * A handoff is a durable, versioned artifact: the memory_handoffs row is
+ * always the LATEST version, and every superseded version is preserved
+ * verbatim in memory_handoff_versions before the row changes. Nothing about a
+ * save can destroy prior content.
+ *
+ * Rules:
+ *  - `existing` is resolved by id first, then kv_key — so id-based handoffs
+ *    version correctly (they previously overwrote in place at version 1) and
+ *    kv_key-based handoffs update their one row (they previously violated the
+ *    kv_key UNIQUE constraint by inserting a second row).
+ *  - Omitted metadata (project/title/source/task_id) NEVER nulls existing
+ *    values; supplied metadata replaces.
+ *  - `expectedVersion`, when supplied, must equal the current version or the
+ *    save throws — the caller was editing a version that is no longer latest.
+ *  - Unchanged content is a metadata-only touch: no version bump, no snapshot,
+ *    so extraction idempotency keyed on (id, content_hash) is preserved.
+ *  - content_hash remains the hash of the REDACTED content (memory extraction
+ *    fingerprints embed it; changing its meaning would duplicate memories).
+ */
+function saveHandoff({ id, kv_key, project, title, source, task_id, content, previous_id, extraction_state, extraction_version, expectedVersion }) {
   if (!hasTable("memory_handoffs")) throw new Error("memory_handoffs table is not available; run migrations");
   const ts = nowIso();
   const redacted = require("./redact").redactSensitive(String(content || ""));
   const hash = stableHash(redacted);
-  const existing = kv_key ? db.prepare("SELECT * FROM memory_handoffs WHERE kv_key = ?").get(kv_key) : null;
-  const existingByHash = db.prepare("SELECT * FROM memory_handoffs WHERE content_hash = ? AND COALESCE(project, '') = COALESCE(?, '') ORDER BY version DESC LIMIT 1").get(hash, project || null);
+
+  const existing =
+    (id ? db.prepare("SELECT * FROM memory_handoffs WHERE id = ?").get(id) : null) ||
+    (kv_key ? db.prepare("SELECT * FROM memory_handoffs WHERE kv_key = ?").get(kv_key) : null);
+
+  if (existing && expectedVersion !== undefined && expectedVersion !== null && Number(expectedVersion) !== Number(existing.version)) {
+    throw new Error(`Handoff "${existing.id}" changed concurrently: expected version ${expectedVersion}, found ${existing.version}`);
+  }
+
   if (existing && existing.content_hash === hash) {
     db.prepare(`
-      UPDATE memory_handoffs SET updated_at = ?, extraction_state = COALESCE(?, extraction_state), extraction_version = COALESCE(?, extraction_version)
+      UPDATE memory_handoffs SET
+        updated_at = ?,
+        project = COALESCE(?, project),
+        title = COALESCE(?, title),
+        source = COALESCE(?, source),
+        task_id = COALESCE(?, task_id),
+        kv_key = COALESCE(?, kv_key),
+        extraction_state = COALESCE(?, extraction_state),
+        extraction_version = COALESCE(?, extraction_version)
       WHERE id = ?
-    `).run(ts, extraction_state || null, extraction_version || null, existing.id);
+    `).run(ts, project || null, title || null, source || null, task_id || null, kv_key || null, extraction_state || null, extraction_version || null, existing.id);
     return getHandoff(existing.id);
   }
-  if (!existing && existingByHash) return normalizeHandoffRow(existingByHash);
+
+  if (existing) {
+    // Content changed: preserve the current version verbatim, then advance the
+    // main row. Both happen in one transaction — a new latest version cannot
+    // exist without its predecessor being in history.
+    if (!hasTable("memory_handoff_versions")) {
+      throw new Error("memory_handoff_versions table is not available; run migrations before updating handoff content");
+    }
+    const nextVersion = Number(existing.version || 1) + 1;
+    const inTransaction = db.inTransaction;
+    if (!inTransaction) db.exec("BEGIN IMMEDIATE");
+    try {
+      db.prepare(`
+        INSERT OR IGNORE INTO memory_handoff_versions (
+          handoff_id, version, title, project, source, task_id, content, redacted_content, content_hash, created_at, superseded_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(existing.id, existing.version, existing.title, existing.project, existing.source, existing.task_id, existing.content, existing.redacted_content, existing.content_hash, existing.updated_at || existing.created_at, ts);
+      // The history row at (id, version) must hold THIS content — whether we
+      // just wrote it or an identical concurrent snapshot beat us to it. A
+      // mismatched pre-existing row (out-of-band write, restored backup) would
+      // otherwise let the update proceed while history preserves the wrong
+      // bytes; fail loudly inside the transaction instead.
+      const snapshot = db.prepare("SELECT content_hash FROM memory_handoff_versions WHERE handoff_id = ? AND version = ?").get(existing.id, existing.version);
+      if (!snapshot || snapshot.content_hash !== existing.content_hash) {
+        throw new Error(`Handoff "${existing.id}" history at version ${existing.version} does not match the current content; refusing to overwrite the latest version (inspect memory_handoff_versions)`);
+      }
+      const outcome = db.prepare(`
+        UPDATE memory_handoffs SET
+          version = ?,
+          content = ?,
+          redacted_content = ?,
+          content_hash = ?,
+          updated_at = ?,
+          project = COALESCE(?, project),
+          title = COALESCE(?, title),
+          source = COALESCE(?, source),
+          task_id = COALESCE(?, task_id),
+          kv_key = COALESCE(?, kv_key),
+          extraction_state = ?,
+          extraction_version = COALESCE(?, extraction_version)
+        WHERE id = ? AND version = ?
+      `).run(
+        nextVersion,
+        String(content || ""),
+        redacted,
+        hash,
+        ts,
+        project || null,
+        title || null,
+        source || null,
+        task_id || null,
+        kv_key || null,
+        extraction_state || "pending",
+        extraction_version || null,
+        existing.id,
+        existing.version
+      );
+      if (outcome.changes === 0) {
+        throw new Error(`Handoff "${existing.id}" changed concurrently during save (version ${existing.version} is no longer current)`);
+      }
+      if (!inTransaction) db.exec("COMMIT");
+    } catch (error) {
+      if (!inTransaction) { try { db.exec("ROLLBACK"); } catch {} }
+      throw error;
+    }
+    auditMemoryEvent("handoff_updated", "handoff", existing.id, { kv_key: existing.kv_key, project: project || existing.project, version: nextVersion, content_hash: hash }, source || "system");
+    return getHandoff(existing.id);
+  }
+
+  // New handoff. Creation-time dedupe applies only when the caller supplied no
+  // identity at all — re-ingesting identical content must not mint duplicates,
+  // but an explicit id or key is a request for that specific handoff.
+  if (!id && !kv_key) {
+    const existingByHash = db.prepare("SELECT * FROM memory_handoffs WHERE content_hash = ? AND COALESCE(project, '') = COALESCE(?, '') ORDER BY version DESC LIMIT 1").get(hash, project || null);
+    if (existingByHash) return normalizeHandoffRow(existingByHash);
+  }
 
   const handoffId = id || stableId("handoff", `${kv_key || project || "global"}|${hash}`);
-  const version = existing ? Number(existing.version || 1) + 1 : 1;
   db.prepare(`
     INSERT INTO memory_handoffs (
       id, kv_key, project, title, source, task_id, version, previous_id, content_hash,
       content, redacted_content, extraction_state, extraction_version, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-      kv_key = excluded.kv_key,
-      project = excluded.project,
-      title = excluded.title,
-      source = excluded.source,
-      task_id = excluded.task_id,
-      version = excluded.version,
-      previous_id = excluded.previous_id,
-      content_hash = excluded.content_hash,
-      content = excluded.content,
-      redacted_content = excluded.redacted_content,
-      extraction_state = excluded.extraction_state,
-      extraction_version = excluded.extraction_version,
-      updated_at = excluded.updated_at
   `).run(
     handoffId,
     kv_key || null,
@@ -1274,18 +1371,110 @@ function saveHandoff({ id, kv_key, project, title, source, task_id, content, pre
     title || kv_key || "handoff",
     source || "handoff",
     task_id || null,
-    version,
-    previous_id || existing?.id || null,
+    1,
+    previous_id || null,
     hash,
     String(content || ""),
     redacted,
     extraction_state || "pending",
     extraction_version || null,
-    existing?.created_at || ts,
+    ts,
     ts
   );
-  auditMemoryEvent(existing ? "handoff_updated" : "handoff_created", "handoff", handoffId, { kv_key, project, version, content_hash: hash }, source || "system");
+  auditMemoryEvent("handoff_created", "handoff", handoffId, { kv_key, project, version: 1, content_hash: hash }, source || "system");
   return getHandoff(handoffId);
+}
+
+/** Version history for a handoff: prior versions plus the current row, newest first. */
+function listHandoffVersions(handoffId) {
+  const current = getHandoff(handoffId);
+  if (!current) return [];
+  const history = hasTable("memory_handoff_versions")
+    ? db.prepare("SELECT * FROM memory_handoff_versions WHERE handoff_id = ? ORDER BY version DESC").all(current.id)
+    : [];
+  return [
+    { handoff_id: current.id, version: current.version, title: current.title, project: current.project, source: current.source, task_id: current.task_id, content_hash: current.content_hash, content_bytes: Buffer.byteLength(current.content || ""), created_at: current.updated_at, superseded_at: null, current: true },
+    ...history.map(row => ({ handoff_id: row.handoff_id, version: row.version, title: row.title, project: row.project, source: row.source, task_id: row.task_id, content_hash: row.content_hash, content_bytes: Buffer.byteLength(row.content || ""), created_at: row.created_at, superseded_at: row.superseded_at, current: false })),
+  ];
+}
+
+/** Fetch one specific version of a handoff (the current one or a historical one). */
+function getHandoffVersion(handoffId, version) {
+  const current = getHandoff(handoffId);
+  if (!current) return null;
+  if (Number(version) === Number(current.version)) return { ...current, current: true };
+  if (!hasTable("memory_handoff_versions")) return null;
+  const row = db.prepare("SELECT * FROM memory_handoff_versions WHERE handoff_id = ? AND version = ?").get(current.id, Number(version));
+  if (!row) return null;
+  return {
+    id: row.handoff_id,
+    kv_key: current.kv_key,
+    project: row.project,
+    title: row.title,
+    source: row.source,
+    task_id: row.task_id,
+    version: row.version,
+    content_hash: row.content_hash,
+    content: row.content,
+    redacted_content: row.redacted_content,
+    created_at: row.created_at,
+    superseded_at: row.superseded_at,
+    current: false,
+  };
+}
+
+/**
+ * Restore a historical version by appending its content as a NEW latest
+ * version. History is never deleted or rewritten — a restore is itself a
+ * recorded version, so even a mistaken restore is recoverable.
+ */
+function restoreHandoffVersion(handoffId, version, { source } = {}) {
+  const current = getHandoff(handoffId);
+  if (!current) throw new Error(`Handoff not found: ${handoffId}`);
+  const target = getHandoffVersion(current.id, version);
+  if (!target) throw new Error(`Handoff "${current.id}" has no version ${version}`);
+  // Restoring the current version — or any version whose content already
+  // equals the current content — changes nothing; report that honestly
+  // instead of minting a phantom version transition in the audit trail.
+  if (Number(version) === Number(current.version) || target.content_hash === current.content_hash) {
+    return { handoff: current, restored_from: Number(version), no_op: true };
+  }
+  const saved = saveHandoff({
+    id: current.id,
+    content: target.content,
+    source: source || "restore",
+    extraction_state: "pending",
+  });
+  auditMemoryEvent("handoff_restored", "handoff", current.id, { restored_from: Number(version), new_version: saved.version }, source || "restore");
+  return { handoff: saved, restored_from: Number(version), no_op: false };
+}
+
+function unarchiveHandoff(idOrKey) {
+  const handoff = getHandoff(idOrKey);
+  if (!handoff) return false;
+  db.prepare("UPDATE memory_handoffs SET archived_at = NULL, updated_at = ? WHERE id = ?").run(nowIso(), handoff.id);
+  auditMemoryEvent("handoff_unarchived", "handoff", handoff.id, {}, "system");
+  return true;
+}
+
+/**
+ * Deliberately and audibly remove ONE historical version's content — the
+ * remediation path for a credential accidentally pasted into an old version.
+ * The current version can never be purged (update past it first), and the
+ * audit event records what was removed so the deletion itself is history.
+ */
+function purgeHandoffVersion(handoffId, version, { reason, source } = {}) {
+  const current = getHandoff(handoffId);
+  if (!current) throw new Error(`Handoff not found: ${handoffId}`);
+  if (Number(version) === Number(current.version)) {
+    throw new Error(`Handoff "${current.id}" version ${version} is the CURRENT version; update the handoff first, then purge the historical version`);
+  }
+  if (!hasTable("memory_handoff_versions")) throw new Error("memory_handoff_versions table is not available; run migrations");
+  const row = db.prepare("SELECT content_hash FROM memory_handoff_versions WHERE handoff_id = ? AND version = ?").get(current.id, Number(version));
+  if (!row) throw new Error(`Handoff "${current.id}" has no historical version ${version}`);
+  db.prepare("DELETE FROM memory_handoff_versions WHERE handoff_id = ? AND version = ?").run(current.id, Number(version));
+  auditMemoryEvent("handoff_version_purged", "handoff", current.id, { version: Number(version), content_hash: row.content_hash, reason: String(reason || "unspecified").slice(0, 300) }, source || "system");
+  return { purged: true, handoff_id: current.id, version: Number(version), content_hash: row.content_hash };
 }
 
 function normalizeHandoffRow(row) {
@@ -1312,7 +1501,11 @@ function normalizeHandoffRow(row) {
 
 function getHandoff(idOrKey) {
   if (!hasTable("memory_handoffs")) return null;
-  const row = db.prepare("SELECT * FROM memory_handoffs WHERE id = ? OR kv_key = ?").get(idOrKey, idOrKey);
+  // id takes precedence over kv_key so a kv_key that collides with another
+  // row's id resolves deterministically (same order saveHandoff uses).
+  const row =
+    db.prepare("SELECT * FROM memory_handoffs WHERE id = ?").get(idOrKey) ||
+    db.prepare("SELECT * FROM memory_handoffs WHERE kv_key = ?").get(idOrKey);
   return normalizeHandoffRow(row);
 }
 
@@ -2629,8 +2822,13 @@ module.exports = {
   saveHandoff,
   getHandoff,
   listHandoffs,
+  listHandoffVersions,
+  getHandoffVersion,
+  restoreHandoffVersion,
   updateHandoffExtraction,
   archiveHandoff,
+  unarchiveHandoff,
+  purgeHandoffVersion,
   saveTaskSession,
   getTaskSession,
   listTaskSessions,
