@@ -62,3 +62,12 @@ The project `resume` record can link to a structured handoff with `handoff_id` o
 before returning it. Missing or incomplete linked handoffs fail closed with `resume_blocked`
 and validation issues. Legacy resume records without a link continue to use the original
 behavior.
+
+## Continuation-quality finalization
+
+Ending a session with `handoff_id` finalizes that handoff from the session envelope. The
+session may provide `reports`, `artifacts`, evidence, decisions, failed approaches, risks,
+and `do_not_repeat` guidance. Subagent reports are retained as handoff artifacts, while the
+generated packet carries the goal, summary, state, next step, acceptance state, provenance,
+and source task ID. The finalization quality gate fails closed when continuation-critical
+fields are missing, so a session cannot be marked complete with an unusable linked handoff.
