@@ -1230,6 +1230,51 @@ function auditMemoryEvent(eventType, targetType, targetId, details = {}, actor =
   return result.lastInsertRowid;
 }
 
+const HANDOFF_PACKET_STATUSES = new Set(["active", "blocked", "ready", "completed", "abandoned"]);
+
+function normalizeHandoffPacket(packet) {
+  if (packet === undefined || packet === null) return null;
+  if (!packet || typeof packet !== "object" || Array.isArray(packet)) {
+    throw new Error("Handoff packet must be an object");
+  }
+  const normalized = { ...packet };
+  if (normalized.status !== undefined && !HANDOFF_PACKET_STATUSES.has(String(normalized.status))) {
+    throw new Error(`Handoff packet status must be one of: ${Array.from(HANDOFF_PACKET_STATUSES).join(", ")}`);
+  }
+  for (const field of ["completed_steps", "decisions", "blockers", "acceptance_criteria", "risks"]) {
+    if (normalized[field] !== undefined && !Array.isArray(normalized[field])) {
+      throw new Error(`Handoff packet ${field} must be an array`);
+    }
+  }
+  for (const field of ["artifacts", "evidence", "relationships"]) {
+    if (normalized[field] !== undefined && !Array.isArray(normalized[field])) {
+      throw new Error(`Handoff packet ${field} must be an array`);
+    }
+    if (Array.isArray(normalized[field]) && normalized[field].some(item => !item || typeof item !== "object" || Array.isArray(item))) {
+      throw new Error(`Handoff packet ${field} entries must be objects`);
+    }
+  }
+  if (normalized.provenance !== undefined && (!normalized.provenance || typeof normalized.provenance !== "object" || Array.isArray(normalized.provenance))) {
+    throw new Error("Handoff packet provenance must be an object");
+  }
+  return normalized;
+}
+
+function parseHandoffPacket(value) {
+  if (!value) return {};
+  try { return JSON.parse(value); } catch { return {}; }
+}
+
+function validateHandoffPacket(packet, { requireResume = false } = {}) {
+  const value = normalizeHandoffPacket(packet || {});
+  const issues = [];
+  if (!value.objective && !value.summary) issues.push("packet requires objective or summary");
+  if (requireResume && !value.next_step && value.status !== "completed" && value.status !== "abandoned") issues.push("packet requires next_step before resume");
+  if (value.status === "blocked" && (!Array.isArray(value.blockers) || value.blockers.length === 0)) issues.push("blocked packet requires at least one blocker");
+  if (value.status === "completed" && (!Array.isArray(value.acceptance_criteria) || value.acceptance_criteria.length === 0)) issues.push("completed packet requires acceptance_criteria");
+  return { valid: issues.length === 0, issues, packet: value };
+}
+
 /**
  * Save a handoff.
  *
@@ -1252,11 +1297,13 @@ function auditMemoryEvent(eventType, targetType, targetId, details = {}, actor =
  *  - content_hash remains the hash of the REDACTED content (memory extraction
  *    fingerprints embed it; changing its meaning would duplicate memories).
  */
-function saveHandoff({ id, kv_key, project, title, source, task_id, content, previous_id, extraction_state, extraction_version, expectedVersion }) {
+function saveHandoff({ id, kv_key, project, title, source, task_id, content, previous_id, extraction_state, extraction_version, expectedVersion, packet }) {
   if (!hasTable("memory_handoffs")) throw new Error("memory_handoffs table is not available; run migrations");
   const ts = nowIso();
   const redacted = require("./redact").redactSensitive(String(content || ""));
   const hash = stableHash(redacted);
+  const packetValue = normalizeHandoffPacket(packet);
+  const packetJson = packetValue === null ? null : JSON.stringify(packetValue);
 
   const existing =
     (id ? db.prepare("SELECT * FROM memory_handoffs WHERE id = ?").get(id) : null) ||
@@ -1266,7 +1313,8 @@ function saveHandoff({ id, kv_key, project, title, source, task_id, content, pre
     throw new Error(`Handoff "${existing.id}" changed concurrently: expected version ${expectedVersion}, found ${existing.version}`);
   }
 
-  if (existing && existing.content_hash === hash) {
+  const packetChanged = existing && packetValue !== null && packetJson !== (existing.packet_json || "{}");
+  if (existing && existing.content_hash === hash && !packetChanged) {
     db.prepare(`
       UPDATE memory_handoffs SET
         updated_at = ?,
@@ -1295,9 +1343,9 @@ function saveHandoff({ id, kv_key, project, title, source, task_id, content, pre
     try {
       db.prepare(`
         INSERT OR IGNORE INTO memory_handoff_versions (
-          handoff_id, version, title, project, source, task_id, content, redacted_content, content_hash, created_at, superseded_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(existing.id, existing.version, existing.title, existing.project, existing.source, existing.task_id, existing.content, existing.redacted_content, existing.content_hash, existing.updated_at || existing.created_at, ts);
+          handoff_id, version, title, project, source, task_id, content, redacted_content, content_hash, created_at, superseded_at, packet_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(existing.id, existing.version, existing.title, existing.project, existing.source, existing.task_id, existing.content, existing.redacted_content, existing.content_hash, existing.updated_at || existing.created_at, ts, existing.packet_json || "{}");
       // The history row at (id, version) must hold THIS content — whether we
       // just wrote it or an identical concurrent snapshot beat us to it. A
       // mismatched pre-existing row (out-of-band write, restored backup) would
@@ -1313,6 +1361,7 @@ function saveHandoff({ id, kv_key, project, title, source, task_id, content, pre
           content = ?,
           redacted_content = ?,
           content_hash = ?,
+          packet_json = ?,
           updated_at = ?,
           project = COALESCE(?, project),
           title = COALESCE(?, title),
@@ -1327,6 +1376,7 @@ function saveHandoff({ id, kv_key, project, title, source, task_id, content, pre
         String(content || ""),
         redacted,
         hash,
+        packetJson === null ? (existing.packet_json || "{}") : packetJson,
         ts,
         project || null,
         title || null,
@@ -1362,8 +1412,8 @@ function saveHandoff({ id, kv_key, project, title, source, task_id, content, pre
   db.prepare(`
     INSERT INTO memory_handoffs (
       id, kv_key, project, title, source, task_id, version, previous_id, content_hash,
-      content, redacted_content, extraction_state, extraction_version, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      content, redacted_content, extraction_state, extraction_version, created_at, updated_at, packet_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     handoffId,
     kv_key || null,
@@ -1379,7 +1429,8 @@ function saveHandoff({ id, kv_key, project, title, source, task_id, content, pre
     extraction_state || "pending",
     extraction_version || null,
     ts,
-    ts
+    ts,
+    packetJson || "{}"
   );
   auditMemoryEvent("handoff_created", "handoff", handoffId, { kv_key, project, version: 1, content_hash: hash }, source || "system");
   return getHandoff(handoffId);
@@ -1393,8 +1444,8 @@ function listHandoffVersions(handoffId) {
     ? db.prepare("SELECT * FROM memory_handoff_versions WHERE handoff_id = ? ORDER BY version DESC").all(current.id)
     : [];
   return [
-    { handoff_id: current.id, version: current.version, title: current.title, project: current.project, source: current.source, task_id: current.task_id, content_hash: current.content_hash, content_bytes: Buffer.byteLength(current.content || ""), created_at: current.updated_at, superseded_at: null, current: true },
-    ...history.map(row => ({ handoff_id: row.handoff_id, version: row.version, title: row.title, project: row.project, source: row.source, task_id: row.task_id, content_hash: row.content_hash, content_bytes: Buffer.byteLength(row.content || ""), created_at: row.created_at, superseded_at: row.superseded_at, current: false })),
+    { handoff_id: current.id, version: current.version, title: current.title, project: current.project, source: current.source, task_id: current.task_id, content_hash: current.content_hash, packet: current.packet, content_bytes: Buffer.byteLength(current.content || ""), created_at: current.updated_at, superseded_at: null, current: true },
+    ...history.map(row => ({ handoff_id: row.handoff_id, version: row.version, title: row.title, project: row.project, source: row.source, task_id: row.task_id, content_hash: row.content_hash, packet: parseHandoffPacket(row.packet_json), content_bytes: Buffer.byteLength(row.content || ""), created_at: row.created_at, superseded_at: row.superseded_at, current: false })),
   ];
 }
 
@@ -1417,6 +1468,7 @@ function getHandoffVersion(handoffId, version) {
     content_hash: row.content_hash,
     content: row.content,
     redacted_content: row.redacted_content,
+    packet: parseHandoffPacket(row.packet_json),
     created_at: row.created_at,
     superseded_at: row.superseded_at,
     current: false,
@@ -1436,12 +1488,13 @@ function restoreHandoffVersion(handoffId, version, { source } = {}) {
   // Restoring the current version — or any version whose content already
   // equals the current content — changes nothing; report that honestly
   // instead of minting a phantom version transition in the audit trail.
-  if (Number(version) === Number(current.version) || target.content_hash === current.content_hash) {
+  if (Number(version) === Number(current.version) || (target.content_hash === current.content_hash && JSON.stringify(target.packet || {}) === JSON.stringify(current.packet || {}))) {
     return { handoff: current, restored_from: Number(version), no_op: true };
   }
   const saved = saveHandoff({
     id: current.id,
     content: target.content,
+    packet: target.packet,
     source: source || "restore",
     extraction_state: "pending",
   });
@@ -1491,6 +1544,7 @@ function normalizeHandoffRow(row) {
     content_hash: row.content_hash,
     content: row.content,
     redacted_content: row.redacted_content,
+    packet: parseHandoffPacket(row.packet_json),
     extraction_state: row.extraction_state,
     extraction_version: row.extraction_version,
     created_at: row.created_at,
@@ -2829,6 +2883,8 @@ module.exports = {
   archiveHandoff,
   unarchiveHandoff,
   purgeHandoffVersion,
+  normalizeHandoffPacket,
+  validateHandoffPacket,
   saveTaskSession,
   getTaskSession,
   listTaskSessions,
