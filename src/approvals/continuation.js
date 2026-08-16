@@ -33,6 +33,8 @@ const store = require("./store");
 const keys = require("./keys");
 const vocab = require("./vocabulary");
 const { RECONCILIATION_SPEC: RECONCILIATION_POLICY, isAuthorizedHuman: isAuthorizedHumanPolicy } = require("./reconciliation-policy");
+const identity = require("../core/identity");
+const authorization = require("../core/authorization");
 
 const BOUND = "approval_id = (SELECT current_approval_id FROM task_checkpoints WHERE task_id = ?)";
 
@@ -197,6 +199,11 @@ function park({
   mode = null,
   reason = null,
   requesterIdentity = null,
+  requestedByPrincipalId = null,
+  actorPrincipalId = null,
+  actingForPrincipalId = null,
+  requiresHumanApproval = false,
+  approvalPolicy = null,
   timeoutMs = null,
   evidence = null,
   evidenceChars = 0,
@@ -285,14 +292,16 @@ function park({
         INSERT INTO approvals (
           approval_id, status, tool_name, risk, source, mode, reason_encrypted,
           task_id, step_id, plan_version, args_digest, idempotency_key, args_encrypted,
-          requester_identity, requested_at, expires_at, updated_at,
-          attempt_count, reconciliation_status, platform_execution_id, timeout_ms
-        ) VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'not_required', ?, ?)
+          requester_identity, requested_by_principal_id, actor_principal_id, acting_for_principal_id,
+          requested_at, expires_at, updated_at, attempt_count, reconciliation_status,
+          platform_execution_id, timeout_ms, requires_human_approval, approval_policy
+        ) VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'not_required', ?, ?, ?, ?)
       `).run(
         approvalId, toolName, risk, source, mode, store.encryptJson(reason),
         taskId, stepId, planVersion, digest, idempotencyKey, store.encryptJson(args),
-        requesterIdentity, now, expiresAt, now,
-        platformExecutionId, timeoutMs
+        requesterIdentity, requestedByPrincipalId, actorPrincipalId, actingForPrincipalId,
+        now, expiresAt, now, platformExecutionId, timeoutMs,
+        requiresHumanApproval ? 1 : 0, approvalPolicy
       );
     } catch (error) {
       // The unique indexes are the anti-re-request rule (§4.1a) and the
@@ -321,19 +330,32 @@ function park({
  * runnable — an authorization that can never be consumed and never expires,
  * because expiry only applies to `pending`.
  */
-function approve({ approvalId, approverIdentity, now = store.nowIso() }) {
+function approve({ approvalId, approverIdentity, approverPrincipalId = null, now = store.nowIso() }) {
   if (!approverIdentity) return { ok: false, code: "approver_identity_required" };
+  if (approverPrincipalId) {
+    const approver = identity.getPrincipal(approverPrincipalId);
+    if (!approver) return { ok: false, code: "principal-not-found" };
+    if (!approver.enabled) return { ok: false, code: "principal-disabled" };
+    if (approver.principal_type !== "human") return { ok: false, code: "human_approval_required" };
+    const grant = authorization.authorize({ principalId: approverPrincipalId, permission: "approvals.grant" });
+    if (!grant.ok) return { ok: false, code: grant.code };
+  }
 
   return tx(db => {
     const approval = db.prepare("SELECT * FROM approvals WHERE approval_id = ?").get(approvalId);
     if (!approval) abort("approval_not_found");
     if (!approval.task_id) abort("not_task_originated");
+    if (approverPrincipalId && Number(approval.requires_human_approval) === 1) {
+      if ([approval.requested_by_principal_id, approval.actor_principal_id].includes(approverPrincipalId)) {
+        abort("self_approval_denied");
+      }
+    }
 
     const first = db.prepare(`
       UPDATE approvals
-         SET status = 'approved', approver_identity = ?, decided_at = ?, updated_at = ?
+         SET status = 'approved', approver_identity = ?, approved_by_principal_id = ?, decided_at = ?, updated_at = ?
        WHERE approval_id = ? AND status = 'pending' AND expires_at > ? AND ${BOUND}
-    `).run(approverIdentity, now, now, approvalId, now, approval.task_id);
+    `).run(approverIdentity, approverPrincipalId || null, now, now, approvalId, now, approval.task_id);
     // Concurrently denied, expired, already approved — or not the approval this
     // task is currently bound to. The operator-facing meaning differs from the
     // checkpoint failure below, so the two are reported separately.

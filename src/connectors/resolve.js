@@ -13,15 +13,36 @@
 
 const { loadSecrets } = require("../core/secrets-store");
 const { decryptSecret } = require("../core/secret-cipher");
+const { getExecutionContext } = require("../tools/context");
+const authorization = require("../core/authorization");
 
 let kernel = null;
 try { kernel = require("../platform/kernel"); } catch { kernel = null; }
 
-// Resolve `secret:<name>` to plaintext, or null. Never throws, never logs.
-function resolveSecretRef(secretRef) {
+// Resolve `secret:<name>` to plaintext, or null when absent. Authorization
+// failures throw before decryption so callers cannot fall through to a weaker
+// credential source.
+function authorizeSecretUse(context, resource) {
+  const principalId = context?.authIdentity?.principal_id || null;
+  if (!principalId) return { ok: true, compatibility: true };
+  return authorization.authorize({ principalId, permission: "secrets.use", resource });
+}
+
+function resolveSecretRef(secretRef, { context = getExecutionContext(), requireIdentity = false } = {}) {
   if (!secretRef || typeof secretRef !== "string") return null;
   const match = /^secret:(.+)$/.exec(secretRef);
   if (!match) return null;
+  const decision = authorizeSecretUse(context, match[1]);
+  if (requireIdentity && !context?.authIdentity?.principal_id) {
+    const error = new Error("secret use requires an authenticated principal");
+    error.code = "unauthenticated";
+    throw error;
+  }
+  if (!decision.ok) {
+    const error = new Error("secret use is not authorized");
+    error.code = decision.code;
+    throw error;
+  }
   try {
     const secret = loadSecrets()[match[1]];
     if (secret) {
@@ -52,9 +73,9 @@ function getActiveConnector(type) {
 }
 
 // Resolve a connector's credential (plaintext) from its secret_ref, or null.
-function resolveConnectorCredential(connector) {
+function resolveConnectorCredential(connector, options = {}) {
   if (!connector) return null;
-  return resolveSecretRef(connector.secret_ref);
+  return resolveSecretRef(connector.secret_ref, options);
 }
 
-module.exports = { resolveSecretRef, getActiveConnector, resolveConnectorCredential };
+module.exports = { resolveSecretRef, getActiveConnector, resolveConnectorCredential, authorizeSecretUse };

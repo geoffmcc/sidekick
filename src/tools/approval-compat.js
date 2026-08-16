@@ -398,7 +398,7 @@ function listApprovals({ status, limit } = {}) {
   return combined.slice(0, max);
 }
 
-async function resolveApproval(id, action, reviewer = "dashboard") {
+async function resolveApproval(id, action, reviewer = "dashboard", options = {}) {
   // Task-originated approvals are decided through the continuation
   // transactions, not the legacy document: approving is T2 (approval approved
   // AND task runnable, atomically) and rejecting is T5 (structured step outcome
@@ -427,7 +427,7 @@ async function resolveApproval(id, action, reviewer = "dashboard") {
     if (action !== "approve") {
       return { content: [{ type: "text", text: "Invalid approval action: " + action }], isError: true };
     }
-    return require("./dispatcher").executeApprovedTool({ approvalId: id, reviewer, source: reviewer });
+    return require("./dispatcher").executeApprovedTool({ approvalId: id, reviewer, reviewerPrincipalId: options.reviewerPrincipalId || null, source: reviewer });
   }
 
   const approvals = loadApprovals();
@@ -463,7 +463,7 @@ async function resolveApproval(id, action, reviewer = "dashboard") {
     return { content: [{ type: "text", text: "Invalid approval action: " + action }], isError: true };
   }
 
-  return require("./dispatcher").executeApprovedTool({ approvalId: id, reviewer, source: reviewer });
+  return require("./dispatcher").executeApprovedTool({ approvalId: id, reviewer, reviewerPrincipalId: options.reviewerPrincipalId || null, source: reviewer });
 }
 
 function claimApprovalExecution({ approvalId, reviewer = "dashboard", source, allowStaleReclaim = false } = {}) {
