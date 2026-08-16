@@ -156,6 +156,21 @@ function getWorkspaceSecretNames(workspaceId) {
 function ensurePlatformKernelSchema() {
   const db = dbStore.getDb();
   db.exec(KERNEL_SCHEMA_SQL);
+  for (const [table, column] of [
+    ["platform_executions", "requested_by_principal_id"],
+    ["platform_executions", "actor_principal_id"],
+    ["platform_executions", "acting_for_principal_id"],
+    ["platform_executions", "executed_by_principal_id"],
+    ["platform_workflows", "requested_by_principal_id"],
+    ["platform_workflows", "actor_principal_id"],
+    ["platform_workflows", "acting_for_principal_id"],
+    ["platform_workflows", "executed_by_principal_id"],
+  ]) {
+    const present = db.prepare(`PRAGMA table_info(${table})`).all().some(row => row.name === column);
+    if (!present) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT`);
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_platform_executions_actor_principal ON platform_executions(actor_principal_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_platform_workflows_actor_principal ON platform_workflows(actor_principal_id)");
   ensurePlatformModuleSchema();
   ensureCapabilityPackSchema();
   ensureWorkflowDefinitionSchema();
@@ -187,6 +202,10 @@ function normalizeExecution(row) {
     incident_id: row.incident_id,
     change_set_id: row.change_set_id,
     actor_id: row.actor_id,
+    requested_by_principal_id: row.requested_by_principal_id || null,
+    actor_principal_id: row.actor_principal_id || null,
+    acting_for_principal_id: row.acting_for_principal_id || null,
+    executed_by_principal_id: row.executed_by_principal_id || null,
     client_id: row.client_id,
     trigger_type: row.trigger_type,
     operation_type: row.operation_type,
@@ -228,10 +247,11 @@ function createExecution(input = {}) {
   db.prepare(`
     INSERT INTO platform_executions (
       execution_id, parent_execution_id, root_execution_id, task_id, session_id, workflow_id,
-      project_id, incident_id, change_set_id, actor_id, client_id, trigger_type, operation_type,
+      project_id, incident_id, change_set_id, actor_id, requested_by_principal_id, actor_principal_id,
+      acting_for_principal_id, executed_by_principal_id, client_id, trigger_type, operation_type,
       tool_name, tool_action, resource_scope, environment, state, risk, approval_state, started_at,
       updated_at, deadline_at, heartbeat_at, trace_id, span_id, schema_version, metadata_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
   `).run(
     executionId,
     input.parent_execution_id || null,
@@ -243,6 +263,10 @@ function createExecution(input = {}) {
     input.incident_id || null,
     input.change_set_id || null,
     input.actor_id || null,
+    input.requested_by_principal_id || null,
+    input.actor_principal_id || null,
+    input.acting_for_principal_id || null,
+    input.executed_by_principal_id || null,
     input.client_id || null,
     input.trigger_type || null,
     input.operation_type || "operation",
@@ -1454,9 +1478,9 @@ function createWorkflow(input = {}) {
   const steps = input.steps || [];
   const db = dbStore.getDb();
   db.prepare(`
-    INSERT INTO platform_workflows (workflow_id, name, description, state, current_step, total_steps, execution_id, project_id, created_by, created_at, updated_at, checkpoint_json, metadata_json)
-    VALUES (?, ?, ?, 'defined', 0, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(workflowId, input.name || "unnamed", input.description || null, steps.length, input.execution_id || null, input.project_id || null, input.created_by || null, ts, ts, json(input.checkpoint || {}), json(input.metadata || {}));
+    INSERT INTO platform_workflows (workflow_id, name, description, state, current_step, total_steps, execution_id, project_id, created_by, requested_by_principal_id, actor_principal_id, acting_for_principal_id, executed_by_principal_id, created_at, updated_at, checkpoint_json, metadata_json)
+    VALUES (?, ?, ?, 'defined', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(workflowId, input.name || "unnamed", input.description || null, steps.length, input.execution_id || null, input.project_id || null, input.created_by || null, input.requested_by_principal_id || null, input.actor_principal_id || null, input.acting_for_principal_id || null, input.executed_by_principal_id || null, ts, ts, json(input.checkpoint || {}), json(input.metadata || {}));
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
     const stepId = step.step_id || newId("ws");

@@ -117,6 +117,10 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
     return { ok: false, code: "workflow_unavailable", error: `Workflow "${name}" is ${record.state}` };
   }
   const definition = record.definition;
+  const executionContext = toolContext.getExecutionContext();
+  const requestedByPrincipalId = options.requestedByPrincipalId || executionContext.authIdentity?.requested_by_principal_id || executionContext.authIdentity?.principal_id || null;
+  const actorPrincipalId = options.actorPrincipalId || executionContext.authIdentity?.principal_id || null;
+  const actingForPrincipalId = options.actingForPrincipalId || executionContext.authIdentity?.acting_for_principal_id || null;
 
   let state;
   let workflow;
@@ -164,6 +168,10 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
         owner_name: record.owner_name,
         mode: definition.mode,
         steps: definition.steps.length,
+        requested_by_principal_id: requestedByPrincipalId,
+        actor_principal_id: actorPrincipalId,
+        acting_for_principal_id: actingForPrincipalId,
+        executed_by_principal_id: actorPrincipalId,
       },
       reason: "workflow definition run started",
     });
@@ -181,6 +189,10 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
       execution_id: executionId,
       project_id: options.project || toolContext.getExecutionContext().project || null,
       created_by: options.actor || toolContext.getExecutionContext().actor || "workflow-runner",
+      requested_by_principal_id: requestedByPrincipalId,
+      actor_principal_id: actorPrincipalId,
+      acting_for_principal_id: actingForPrincipalId,
+      executed_by_principal_id: actorPrincipalId,
       source: "workflow-runner",
       metadata: {
         workflow_version: definition.version,
