@@ -63,6 +63,8 @@ try {
   check(manifest.events.publishes.length === 0 && manifest.events.consumes.length === 0, 'events default to empty');
   check(manifest.tools.parse.risk === 'low', 'tool declaration risk preserved');
   check(manifest.tools.diff.aliases.includes('compare'), 'tool declaration alias preserved');
+  const permissionManifest = normalizeManifest({ ...validManifest, tools: { parse: { risk: 'low', permission: 'packs.read' } } });
+  check(permissionManifest.tools.parse.permission === 'packs.read', 'Core permission declaration preserved');
 
   // --- Validation failures ---
   checkThrows(() => normalizeManifest({ ...validManifest, name: 'Data-Utilities' }), 'uppercase name rejected');
@@ -73,6 +75,7 @@ try {
   checkThrows(() => normalizeManifest({ ...validManifest, sidekick: 'not a range' }), 'invalid sidekick range rejected');
   checkThrows(() => normalizeManifest({ ...validManifest, tools: { parse: { risk: 'extreme' } } }), 'invalid tool risk rejected');
   checkThrows(() => normalizeManifest({ ...validManifest, tools: { parse: { risk: 'low', aliases: ['bad-alias!'] } } }), 'invalid alias rejected');
+  checkThrows(() => normalizeManifest({ ...validManifest, tools: { parse: { risk: 'low', permission: 'not-a-permission' } } }), 'invalid Core permission rejected');
   checkThrows(() => normalizeManifest({ ...validManifest, migrations: [{ name: 'a', sql: 'SELECT 1' }, { name: 'a', sql: 'SELECT 2' }] }), 'duplicate migration names rejected');
   checkThrows(() => normalizeManifest({ ...validManifest, permissions: [{ tool: 'parse', risk: 'extreme' }] }), 'permission tool risk validated');
   checkThrows(() => normalizeManifest({ ...validManifest, permissions: [{ capability: '' }] }), 'empty capability permission rejected');

@@ -81,6 +81,7 @@ function validationError(name, parsed) {
 }
 
 function requiredToolPermission(descriptor, args = {}) {
+  if (descriptor.authorizationPermission) return descriptor.authorizationPermission;
   if (descriptor.name === "workflow") {
     return ["run", "resume"].includes(args.action) ? "workflows.execute" : "workflows.read";
   }

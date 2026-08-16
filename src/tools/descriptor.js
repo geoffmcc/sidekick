@@ -30,6 +30,7 @@ function normalizeDescriptor(input) {
     aliases: Object.freeze([...(input.aliases || [])]),
     version: input.version || null,
     provenance: input.provenance || null,
+    authorizationPermission: input.authorizationPermission || null,
     approval: input.approval || null,
     capabilities: Object.freeze([...(input.capabilities || [])]),
     visibility: input.visibility || "public",
