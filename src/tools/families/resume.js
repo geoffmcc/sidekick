@@ -46,12 +46,14 @@ function formatResumeItem(item) {
     `Next step: ${item.next_step || "(none)"}`,
     item.branch ? `Branch: ${item.branch}` : null,
     item.url ? `URL: ${item.url}` : null,
+    item.handoff_id ? `Handoff: ${item.handoff_id}` : (item.handoff_key ? `Handoff key: ${item.handoff_key}` : null),
+    item.handoff_validation ? `Handoff validation: ${item.handoff_validation.valid ? "valid" : "blocked"}` : null,
     item.notes ? `Notes: ${item.notes}` : null,
     `Updated: ${item.updated_at}`
   ].filter(Boolean).join("\n");
 }
 
-async function sidekick_resume({ action, project, summary, next_step, status, branch, url, notes, plan_name, current_phase, include_cleared, format }) {
+async function sidekick_resume({ action, project, summary, next_step, status, branch, url, notes, plan_name, current_phase, handoff_id, handoff_key, include_cleared, format }) {
   const selectedAction = action || "check";
   const selectedFormat = format || "text";
   const doc = loadResumeDocument();
@@ -75,7 +77,22 @@ async function sidekick_resume({ action, project, summary, next_step, status, br
     if (!item || ["cleared", "done", "complete"].includes(item.status)) {
       return { content: [{ type: "text", text: `No pending resume item for project: ${project}` }] };
     }
-    const text = selectedFormat === "json" ? JSON.stringify(item, null, 2) : formatResumeItem(item);
+    let enriched = { ...item };
+    if (item.handoff_id || item.handoff_key) {
+      const handoffRef = item.handoff_id || item.handoff_key;
+      const handoff = dbStore.getHandoff(handoffRef);
+      const validation = handoff
+        ? dbStore.validateHandoffPacket(handoff.packet, { requireResume: true })
+        : { valid: false, issues: ["linked handoff not found"], packet: {} };
+      enriched = { ...enriched, handoff_id: handoff?.id || item.handoff_id || null, handoff_version: handoff?.version || null, handoff_validation: { valid: validation.valid, issues: validation.issues } };
+      if (!validation.valid) {
+        const text = selectedFormat === "json"
+          ? JSON.stringify({ ...enriched, resume_blocked: true }, null, 2)
+          : `${formatResumeItem(enriched)}\nResume blocked: ${validation.issues.join("; ")}`;
+        return { content: [{ type: "text", text }], isError: true };
+      }
+    }
+    const text = selectedFormat === "json" ? JSON.stringify(enriched, null, 2) : formatResumeItem(enriched);
     return { content: [{ type: "text", text }] };
   }
 
@@ -93,12 +110,19 @@ async function sidekick_resume({ action, project, summary, next_step, status, br
       next_step: next_step !== undefined ? redactSensitive(next_step) : existing.next_step || null,
       branch: branch !== undefined ? redactSensitive(branch) : existing.branch || null,
       url: url !== undefined ? redactSensitive(url) : existing.url || null,
+      handoff_id: handoff_id !== undefined ? handoff_id : existing.handoff_id || null,
+      handoff_key: handoff_key !== undefined ? redactSensitive(handoff_key) : existing.handoff_key || null,
       notes: notes !== undefined ? redactSensitive(notes) : existing.notes || null,
       plan_name: plan_name !== undefined ? redactSensitive(plan_name) : existing.plan_name || null,
       current_phase: current_phase !== undefined ? current_phase : existing.current_phase || null,
       created_at: existing.created_at || now,
       updated_at: now
     };
+    if (item.handoff_id || item.handoff_key) {
+      if (!dbStore.getHandoff(item.handoff_id || item.handoff_key)) {
+        return { content: [{ type: "text", text: "linked handoff_id or handoff_key was not found" }], isError: true };
+      }
+    }
     doc.items[project] = item;
     saveResumeDocument(doc);
     const text = selectedFormat === "json" ? JSON.stringify(item, null, 2) : `Resume set for project: ${project} (${item.id})`;
@@ -132,6 +156,8 @@ const SCHEMAS = {
     status: z.string().optional().describe("Resume status for action=set (default active)"),
     branch: z.string().optional().describe("Related branch name for action=set"),
     url: z.string().optional().describe("Related PR/issue URL for action=set"),
+    handoff_id: z.string().optional().describe("Structured handoff id to validate before resume"),
+    handoff_key: z.string().optional().describe("Structured handoff key to validate before resume"),
     notes: z.string().optional().describe("Additional notes for set/clear"),
     plan_name: z.string().optional().describe("Descriptive handoff plan name for action=set"),
     current_phase: z.number().int().positive().optional().describe("Current phase number within the named plan for action=set"),
@@ -143,9 +169,9 @@ const SCHEMAS = {
 const descriptors = Object.freeze([
   Object.freeze({
     name: "resume",
-    description: "Manage first-class project resume handoffs stored in the resume document. Use to check, set, clear, or list pending work without relying on ad hoc KV keys.",
+    description: "Manage first-class project resume handoffs stored in the resume document. Linked structured handoffs are validated before check returns them; legacy resume items remain supported.",
     schema: SCHEMAS.resume,
-    args: { action: "string (check|set|clear|list - default check)", project: "string (required for check/set/clear)", summary: "string (optional, for set)", next_step: "string (optional, for set)", status: "string (optional, for set - default active)", branch: "string (optional, for set)", url: "string (optional, for set)", notes: "string (optional)", plan_name: "string (optional, for set - descriptive handoff plan name)", current_phase: "number (optional, for set - current phase number within the named plan)", include_cleared: "boolean (optional, for list)", format: "string (optional, text|json - default text)" },
+    args: { action: "string (check|set|clear|list - default check)", project: "string (required for check/set/clear)", summary: "string (optional, for set)", next_step: "string (optional, for set)", status: "string (optional, for set - default active)", branch: "string (optional, for set)", url: "string (optional, for set)", handoff_id: "string (optional, structured handoff id to validate before resume)", handoff_key: "string (optional, structured handoff key to validate before resume)", notes: "string (optional)", plan_name: "string (optional, for set - descriptive handoff plan name)", current_phase: "number (optional, for set - current phase number within the named plan)", include_cleared: "boolean (optional, for list)", format: "string (optional, text|json - default text)" },
     risk: "low",
     category: "Storage",
     source: "builtin",
