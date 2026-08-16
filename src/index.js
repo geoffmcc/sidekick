@@ -79,13 +79,13 @@ function buildProcedureSchema(parameters) {
  * `project` is recorded only when the call itself names one, so scope is observed
  * rather than guessed.
  */
-function toolCallContext(args, extra, authIdentityProvider = () => null) {
+function toolCallContext(args, extra) {
   const context = { requestId: extra?.requestInfo?.requestId };
   if (extra?.sessionId) context.sessionId = extra.sessionId;
   if (args && typeof args.project === "string" && args.project.trim()) {
     context.project = args.project.trim();
   }
-  context.authIdentity = authIdentityProvider() || null;
+  context.authIdentity = extra?.authIdentity || null;
   return context;
 }
 
@@ -104,7 +104,9 @@ function createMcpServer(authIdentityProvider = () => null) {
       description: descriptor.description,
       inputSchema: descriptor.schema
     }, async (args, extra) => {
-      return callMcpTool(descriptor.name, args, toolCallContext(args, extra, authIdentityProvider));
+      extra = extra || {};
+      extra.authIdentity = authIdentityProvider();
+      return callMcpTool(descriptor.name, args, toolCallContext(args, extra));
     });
   }
 
@@ -119,8 +121,10 @@ function createMcpServer(authIdentityProvider = () => null) {
       description: `[procedure] ${proc.description}${paramDesc}`,
       inputSchema: paramSchema
     }, async (args, extra) => {
+      extra = extra || {};
+      extra.authIdentity = authIdentityProvider();
       return callMcpTool("teach", { action: "execute", name: procName, args },
-        { ...toolCallContext(args, extra, authIdentityProvider), generatedProcedure: internalName });
+        { ...toolCallContext(args, extra), generatedProcedure: internalName });
     });
   }
 
@@ -132,8 +136,10 @@ function createMcpServer(authIdentityProvider = () => null) {
       description: def.description,
       inputSchema: dynamicSchemas[def.name]
     }, async (args, extra) => {
+      extra = extra || {};
+      extra.authIdentity = authIdentityProvider();
       return callMcpTool(def.name, args,
-        { ...toolCallContext(args, extra, authIdentityProvider), generatedProcedure: def.name, correlationId: def.capabilityId });
+        { ...toolCallContext(args, extra), generatedProcedure: def.name, correlationId: def.capabilityId });
     });
   }
 
