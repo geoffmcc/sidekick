@@ -77,6 +77,7 @@ function buildContinuationPacket(existing, input = {}) {
     source_task_id: existing.id,
   }));
   const acceptance = input.acceptance_state || existing.acceptance_state;
+  const priorProvenance = input.handoff?.packet?.provenance || {};
   return {
     objective: existing.goal,
     summary: redactSensitive(input.final_summary || input.user_visible_result || input.outcome || existing.outcome || ""),
@@ -88,10 +89,11 @@ function buildContinuationPacket(existing, input = {}) {
     acceptance_criteria: acceptance ? [`Session acceptance: ${acceptance}`] : [],
     risks: input.risks || [],
     provenance: {
-      repository: existing.repository || null,
-      branch: existing.branch || null,
-      working_directory: existing.working_directory || null,
-      environment: existing.environment || null,
+      ...priorProvenance,
+      repository: existing.repository || priorProvenance.repository || null,
+      branch: existing.branch || priorProvenance.branch || null,
+      working_directory: existing.working_directory || priorProvenance.working_directory || null,
+      environment: existing.environment || priorProvenance.environment || null,
       task_id: existing.id,
     },
     evidence: evidenceItems,
@@ -133,16 +135,16 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     const existing = dbStore.getTaskSession(id);
     if (!existing) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     const state = action === "abandon" ? "abandoned" : "completed";
-    const continuationPacket = handoff_id ? buildContinuationPacket(existing, { state, evidence, artifacts, reports, risks, relationships, do_not_repeat, outcome, final_summary, user_visible_result, acceptance_state, decisions, failed_approaches, next_step, completed_steps, blockers }) : null;
+    const linkedHandoff = handoff_id ? dbStore.getHandoff(handoff_id) : null;
+    const continuationPacket = handoff_id ? buildContinuationPacket(existing, { handoff: linkedHandoff, state, evidence, artifacts, reports, risks, relationships, do_not_repeat, outcome, final_summary, user_visible_result, acceptance_state, decisions, failed_approaches, next_step, completed_steps, blockers }) : null;
     if (handoff_id) {
       const qualityIssues = continuationQualityIssues(continuationPacket);
       const validation = dbStore.validateHandoffPacket(continuationPacket, { requireResume: true });
       if (qualityIssues.length || !validation.valid) {
         return { content: [{ type: "text", text: `handoff quality gate failed: ${[...qualityIssues, ...validation.issues].join("; ")}` }], isError: true };
       }
-      const handoff = dbStore.getHandoff(handoff_id);
-      if (!handoff) return { content: [{ type: "text", text: `handoff quality gate failed: handoff "${handoff_id}" was not found` }], isError: true };
-      dbStore.saveHandoff({ id: handoff.id, project: handoff.project, title: handoff.title, source: handoff.source, task_id: id, content: continuationPacket.summary, packet: continuationPacket, extraction_state: "pending" });
+      if (!linkedHandoff) return { content: [{ type: "text", text: `handoff quality gate failed: handoff "${handoff_id}" was not found` }], isError: true };
+      dbStore.saveHandoff({ id: linkedHandoff.id, project: linkedHandoff.project, title: linkedHandoff.title, source: linkedHandoff.source, task_id: id, content: continuationPacket.summary, packet: continuationPacket, extraction_state: "pending" });
     }
     const session = dbStore.saveTaskSession({ ...existing, artifacts: continuationPacket ? continuationPacket.artifacts : (artifacts || existing.artifacts), outcome, final_summary: redactSensitive(final_summary || user_visible_result || outcome || ""), acceptance_state, state, ended_at: new Date().toISOString() });
     const created = [];
