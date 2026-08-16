@@ -93,6 +93,16 @@ approval/audit output. Legacy environment and unscoped resolver behavior is
 retained only for pre-identity compatibility paths without an authenticated
 principal and is not a substitute for a scoped identity credential.
 
-Resource ownership, workflow authority, and the remaining administration UI
-are subsequent PR work and must consume these Core services rather than create
-parallel identity stores.
+Resource ownership and the remaining administration UI are subsequent PR work
+and must consume these Core services rather than create parallel identity
+stores.
+
+## Workflow execution identity
+
+Workflow definition discovery uses `workflows.read`; running or resuming a
+workflow uses `workflows.execute` through the Core dispatcher. Workflow runs
+and their platform execution ledger rows persist requester, actor,
+acting-for, and executor principal IDs. The runner carries the authenticated
+request context into each governed step, so a workflow does not silently
+become an unrestricted process-level Owner. Workflow definition ownership
+(`core` or a named Capability Pack) remains separate from authorization.
