@@ -129,6 +129,12 @@ async function sidekick_capability({ action = "list", name, path: sourcePath, co
       return jsonText({ ok: report.ok, action, health: report });
     }
 
+    if (action === "doctor") {
+      const report = lifecycle.doctor(requireName(name, action));
+      repository.recordPackHealth(name, report.health);
+      return jsonText({ ok: report.ok, action, doctor: report });
+    }
+
     if (action === "upgrade") {
       const packName = requireName(name, action);
       const options = { allowSameVersion: allow_same_version === true, allowDowngrade: allow_downgrade === true, config };
@@ -153,7 +159,7 @@ async function sidekick_capability({ action = "list", name, path: sourcePath, co
     }
 
     return failure(
-      `Unknown capability action: ${action}. Use list, available, show, inspect, validate, install, configure, enable, disable, health, upgrade, or uninstall`,
+      `Unknown capability action: ${action}. Use list, available, show, inspect, validate, install, configure, enable, disable, health, doctor, upgrade, or uninstall`,
       { code: "unknown_action" }
     );
   } catch (error) {
@@ -173,7 +179,7 @@ const descriptors = Object.freeze([
       "Manage Sidekick capability packs: list installed and bundled packs, inspect or validate a package, install, configure, enable, disable, check health, upgrade and uninstall. Installing or enabling a pack activates executable module code in the Sidekick process.",
     schema: z.object({
       action: z
-        .enum(["list", "available", "show", "inspect", "validate", "install", "configure", "enable", "disable", "health", "upgrade", "uninstall"])
+        .enum(["list", "available", "show", "inspect", "validate", "install", "configure", "enable", "disable", "health", "doctor", "upgrade", "uninstall"])
         .optional()
         .describe("Capability pack action (default: list)"),
       name: z.string().optional().describe("Pack name (required for show/configure/enable/disable/health/upgrade/uninstall, and for installing a bundled pack)"),
@@ -186,7 +192,7 @@ const descriptors = Object.freeze([
       remove_module_data: z.boolean().optional().describe("Request removal of module-owned data on uninstall, where the module's manifest permits it (default false)"),
     }),
     args: {
-      action: "string (list|available|show|inspect|validate|install|configure|enable|disable|health|upgrade|uninstall - default list)",
+      action: "string (list|available|show|inspect|validate|install|configure|enable|disable|health|doctor|upgrade|uninstall - default list)",
       name: "string (pack name)",
       path: "string (server-local package path)",
       config: "object (pack configuration)",

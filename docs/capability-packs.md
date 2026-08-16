@@ -114,6 +114,23 @@ Every field has runtime meaning:
   omits the key entirely is a pre-contract pack: accepted, reported by health
   as `undeclared`, and flagged by `capability validate` with the exact
   declaration to add.
+- Pack modules receive the additive `services.v2` facade. It retains the v1
+  `moduleName`, `config`, `dispatch`, and `paths` members and adds Core-owned
+  `secrets` and `storage` namespaces. These namespaces are scoped to the
+  owning pack, not to the module name: modules in one pack may share their
+  state, while a module from another pack cannot address it.
+- Pack secret and storage access is deny-by-default and requires capability
+  declarations in the module/pack permission contract: `pack.secrets.metadata`,
+  `pack.secrets.use`, `pack.secrets.write`, `pack.storage.read`,
+  `pack.storage.write`, and `pack.storage.delete`. Secret values remain in the
+  existing encrypted secret store; pack state remains in the existing SQLite
+  KV store under a Core-generated namespace. Raw stores are never exposed to
+  module handlers.
+- The manifest may declare these service capabilities in `services.secrets`
+  (`metadata`, `use`, `write`) and `services.storage` (`read`, `write`,
+  `delete`). Normalization converts them into the same reviewed capability
+  permissions used by the module facade, so the declaration is enforced by
+  the existing pack-to-module permission agreement.
 - `depends.packs` declares required and optional pack dependencies, each with
   an optional semver range. Required dependencies must be installed (and
   satisfy the range) before install, and be enabled before enable; cycles

@@ -218,6 +218,11 @@ function buildUpgradeCandidate() {
     assert.strictEqual(byComponent['developer-tools'].status, 'healthy');
     assert.strictEqual(byComponent['developer/repository-recon'].ok, true);
     assert.strictEqual(byComponent['Developer pack: verification strategy'].ok, true);
+    assert.strictEqual(report.categories.configuration.ok, true);
+    assert.strictEqual(report.categories.components.ok, true);
+    const diagnosis = packLifecycle.doctor(PACK);
+    assert.strictEqual(diagnosis.ok, true);
+    assert.deepStrictEqual(diagnosis.actions, []);
   });
 
   // --- CP.9 configuration --------------------------------------------------
