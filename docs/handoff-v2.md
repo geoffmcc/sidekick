@@ -52,6 +52,9 @@ pretend that a referenced commit, file, or URL still exists without a separate v
 and branch when `provenance.working_directory` is visible to the Sidekick server. Remote-only
 repository URLs are reported as `unverifiable`; the operation never treats metadata as proof.
 
+Evidence, artifact, and relationship entries are also stored as append-only first-class links
+with their handoff version, while remaining mirrored in the packet for compatibility.
+
 ## Validated resume
 
 The project `resume` record can link to a structured handoff with `handoff_id` or
