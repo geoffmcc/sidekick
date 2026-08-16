@@ -277,6 +277,27 @@ function packWithModule(name, moduleName, modulePermissions, packOverrides = {})
     assert.strictEqual(result.pack.state, 'enabled');
   });
 
+  test('PC.16a: readiness predicate reports missing, version, and disabled required providers', () => {
+    const manifest = packManifest.normalizePackManifest(baseManifest('needs-provider', {
+      depends: { packs: [{ name: 'provider', version: '^2.0.0' }] },
+    }));
+    const view = {
+      getPack: () => ({ name: 'provider', version: '1.0.0', state: 'disabled' }),
+      listPacks: () => [],
+    };
+    assert.deepStrictEqual(
+      packDependencies.requiredReadinessProblems(manifest, { requireEnabled: true, ...view }),
+      ['pack "provider" is 1.0.0 but ^2.0.0 is required']
+    );
+    const disabledManifest = packManifest.normalizePackManifest(baseManifest('needs-disabled', {
+      depends: { packs: [{ name: 'provider' }] },
+    }));
+    assert.deepStrictEqual(
+      packDependencies.requiredReadinessProblems(disabledManifest, { requireEnabled: true, ...view }),
+      ['pack "provider" is installed but disabled; enable it first']
+    );
+  });
+
   test('PC.17: disabling a provider with an enabled dependent is refused with the dependent named', () => {
     assert.throws(() => packLifecycle.disable('base-pack'), /cannot be disabled.*needs-base/s);
     packLifecycle.disable('needs-base');
