@@ -91,14 +91,18 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
       migrationResult.migrations.some(m => m.file === '037_runtime_schema_convergence.sql'),
       'Migration 037 should be applied'
     );
+    assert.ok(
+      migrationResult.migrations.some(m => m.file === '038_handoff_versions.sql'),
+      'Migration 038 should be applied'
+    );
     const migratedSchema = capturePlatformSchema(migrationStore.getDb());
     const migratedCompute = captureComputeSchema(migrationStore.getDb());
 
     console.log(`Test KMP.1: migrations-only boot applies ${migrationApplied} migrations`);
     assert.strictEqual(
       migrationStore.getDb().prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
-      String(37),
-      'schema_version should be 37'
+      String(38),
+      'schema_version should be 38'
     );
     console.log('Passed\n');
 

@@ -51,21 +51,76 @@ function recordHandoffEvent(eventType, payload, options = {}) {
   } catch (e) {}
 }
 
-async function sidekick_handoff({ action, id, key, project, title, content, source, task_id, reprocess, include_archived, limit }) {
+async function sidekick_handoff({ action, id, key, project, title, content, source, task_id, reprocess, include_archived, limit, version, expected_version, reason }) {
   if (action === "create" || action === "update") {
     const handoffContent = content || (key ? dbStore.getKV(key)?.value : null);
     if (!handoffContent) return { content: [{ type: "text", text: "content required, or provide key for an existing KV handoff" }], isError: true };
-    if (key && content) dbStore.setKV(key, content, project || dbStore.getKV(key)?.project || null, source || toolContext.getExecutionSource(), "handoff");
-    const handoff = dbStore.saveHandoff({ id, kv_key: key, project, title, source: source || toolContext.getExecutionSource(), task_id, content: handoffContent, extraction_state: "pending" });
+    // create and update are distinct intents: update must never silently mint
+    // a new handoff (a typo'd id would fork the plan), and create must never
+    // silently overwrite an existing one.
+    const existing = id || key ? dbStore.getHandoff(id || key) : null;
+    if (action === "update" && !existing) {
+      return { content: [{ type: "text", text: `handoff update requires an existing handoff; ${id || key ? `"${id || key}" was not found` : "provide id or key"}. Use create for a new handoff.` }], isError: true };
+    }
+    if (action === "create" && existing) {
+      return { content: [{ type: "text", text: `Handoff "${existing.id}" already exists (v${existing.version}). Use update to add a new version.` }], isError: true };
+    }
+    let handoff;
+    try {
+      handoff = dbStore.saveHandoff({ id, kv_key: key, project, title, source: source || toolContext.getExecutionSource(), task_id, content: handoffContent, extraction_state: "pending", expectedVersion: action === "update" ? expected_version : undefined });
+    } catch (error) {
+      return { content: [{ type: "text", text: String(error && error.message ? error.message : error) }], isError: true };
+    }
+    // Mirror to KV only AFTER the save succeeded: a rejected save (e.g. stale
+    // expected_version) must not poison the KV entry that a later content-less
+    // update would read back as authoritative.
+    if (key && content) dbStore.setKV(key, handoff.content, project || dbStore.getKV(key)?.project || null, source || toolContext.getExecutionSource(), "handoff");
     const memories = extractHandoffMemories(handoff, { project });
     recordHandoffEvent("memory.handoff_processed", { handoff_id: handoff.id, key: handoff.kv_key, project: handoff.project, version: handoff.version, memories_created: memories.length, extraction_state: "processed" }, { subjectType: "memory_handoff", subjectId: handoff.id, project: handoff.project, taskId: handoff.task_id });
     return jsonText({ ok: true, handoff: dbStore.getHandoff(handoff.id), memories_created: memories.length, memories });
   }
   if (action === "get") {
     if (!id && !key) return { content: [{ type: "text", text: "handoff get requires id or key. To retrieve by project, use handoff list or resume check." }], isError: true };
-    const handoff = dbStore.getHandoff(id || key);
-    if (!handoff) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
+    const handoff = version === undefined || version === null
+      ? dbStore.getHandoff(id || key)
+      : dbStore.getHandoffVersion(id || key, version);
+    if (!handoff) return { content: [{ type: "text", text: version === undefined || version === null ? "Handoff not found" : `Handoff or version not found (v${version})` }], isError: true };
     return jsonText({ ok: true, handoff });
+  }
+  if (action === "versions") {
+    if (!id && !key) return { content: [{ type: "text", text: "handoff versions requires id or key" }], isError: true };
+    const versions = dbStore.listHandoffVersions(id || key);
+    if (!versions.length) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
+    return jsonText({ ok: true, handoff_id: versions[0].handoff_id, latest_version: versions[0].version, versions });
+  }
+  if (action === "restore") {
+    if ((!id && !key) || version === undefined || version === null) return { content: [{ type: "text", text: "handoff restore requires id (or key) and version" }], isError: true };
+    try {
+      const result = dbStore.restoreHandoffVersion(id || key, version, { source: source || toolContext.getExecutionSource() });
+      if (!result.no_op) {
+        const memories = extractHandoffMemories(result.handoff, { project: project || result.handoff.project });
+        recordHandoffEvent("memory.handoff_restored", { handoff_id: result.handoff.id, restored_from: result.restored_from, new_version: result.handoff.version, memories_created: memories.length }, { subjectType: "memory_handoff", subjectId: result.handoff.id, project: result.handoff.project, taskId: result.handoff.task_id });
+      }
+      return jsonText({ ok: true, restored_from: result.restored_from, no_op: result.no_op === true, handoff: dbStore.getHandoff(result.handoff.id) });
+    } catch (error) {
+      return { content: [{ type: "text", text: String(error && error.message ? error.message : error) }], isError: true };
+    }
+  }
+  if (action === "unarchive") {
+    const ok = dbStore.unarchiveHandoff(id || key);
+    if (ok) recordHandoffEvent("memory.handoff_unarchived", { handoff_id: id || key }, { subjectType: "memory_handoff", subjectId: id || key, project });
+    return { content: [{ type: "text", text: ok ? "Handoff unarchived" : "Handoff not found" }], isError: !ok };
+  }
+  if (action === "purge_version") {
+    if ((!id && !key) || version === undefined || version === null) return { content: [{ type: "text", text: "handoff purge_version requires id (or key) and version, plus a reason" }], isError: true };
+    if (!reason) return { content: [{ type: "text", text: "handoff purge_version requires an explicit reason (recorded in the audit trail)" }], isError: true };
+    try {
+      const result = dbStore.purgeHandoffVersion(id || key, version, { reason, source: source || toolContext.getExecutionSource() });
+      recordHandoffEvent("memory.handoff_version_purged", { handoff_id: result.handoff_id, version: result.version, reason }, { subjectType: "memory_handoff", subjectId: result.handoff_id, project, severity: "warning" });
+      return jsonText({ ok: true, ...result });
+    } catch (error) {
+      return { content: [{ type: "text", text: String(error && error.message ? error.message : error) }], isError: true };
+    }
   }
   if (action === "list") return jsonText({ ok: true, handoffs: dbStore.listHandoffs({ project, includeArchived: include_archived === true, limit: limit || 50 }) });
   if (action === "inspect") {
@@ -88,17 +143,24 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
     return { content: [{ type: "text", text: ok ? "Handoff archived" : "Handoff not found" }], isError: !ok };
   }
   if (action === "compare") {
+    // With an id/key: summarize that handoff's own version history. Without:
+    // legacy behavior (two most recent handoffs for the project).
+    if (id || key) {
+      const versions = dbStore.listHandoffVersions(id || key);
+      if (!versions.length) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
+      return jsonText({ ok: true, comparison: versions.map(v => ({ id: v.handoff_id, version: v.version, hash: v.content_hash, bytes: v.content_bytes, created_at: v.created_at, current: v.current })) });
+    }
     const handoffs = dbStore.listHandoffs({ project, includeArchived: true, limit: 2 });
     return jsonText({ ok: true, comparison: handoffs.map(h => ({ id: h.id, key: h.kv_key, version: h.version, hash: h.content_hash, updated_at: h.updated_at })) });
   }
-  return { content: [{ type: "text", text: "Invalid action. Use create, update, get, list, compare, inspect, reprocess, archive" }], isError: true };
+  return { content: [{ type: "text", text: "Invalid action. Use create, update, get, list, versions, restore, compare, inspect, reprocess, archive, unarchive, purge_version" }], isError: true };
 }
 
 const descriptors = Object.freeze([Object.freeze({
   name: "handoff",
-  description: "First-class handoff storage and ingestion. Preserves full handoff artifacts while extracting redacted, evidence-linked structured memories idempotently. get/inspect require id or key; use list or resume check for project-level queries.",
-  schema: z.object({ action: z.enum(["create", "update", "get", "list", "compare", "inspect", "reprocess", "archive"]).describe("Handoff action"), id: z.string().optional(), key: z.string().optional().describe("KV key for backward-compatible handoffs"), project: z.string().optional(), title: z.string().optional(), content: z.string().optional(), source: z.string().optional(), task_id: z.string().optional(), reprocess: z.boolean().optional(), include_archived: z.boolean().optional(), limit: z.number().optional() }),
-  args: { action: "string (create|update|get|list|compare|inspect|reprocess|archive)", id: "string (required for get/inspect, optional for other actions)", key: "string (required for get/inspect when id is omitted, optional for other actions)", project: "string (optional, for create/update/list/compare)", title: "string (optional)", content: "string (for create/update)", source: "string (optional)", task_id: "string (optional)", include_archived: "boolean (optional)", limit: "number (optional)" },
+  description: "First-class versioned handoff storage and ingestion. Every content update preserves the prior version in append-only history; update requires an existing handoff and supports optimistic concurrency via expected_version; versions lists history and restore appends a historical version as the new latest. Extracts redacted, evidence-linked structured memories idempotently. get/inspect require id or key; use list or resume check for project-level queries.",
+  schema: z.object({ action: z.enum(["create", "update", "get", "list", "versions", "restore", "compare", "inspect", "reprocess", "archive", "unarchive", "purge_version"]).describe("Handoff action"), id: z.string().optional(), key: z.string().optional().describe("KV key for backward-compatible handoffs"), project: z.string().optional(), title: z.string().optional(), content: z.string().optional(), source: z.string().optional(), task_id: z.string().optional(), reprocess: z.boolean().optional(), include_archived: z.boolean().optional(), limit: z.number().optional(), version: z.number().optional().describe("Version selector for get/restore/purge_version"), expected_version: z.number().optional().describe("Optimistic concurrency guard for update: fails if the current version differs"), reason: z.string().optional().describe("Required for purge_version; recorded in the audit trail") }),
+  args: { action: "string (create|update|get|list|versions|restore|compare|inspect|reprocess|archive|unarchive|purge_version)", id: "string (required for get/inspect/versions/restore/purge_version, optional for other actions)", key: "string (required for get/inspect when id is omitted, optional for other actions)", project: "string (optional, for create/update/list/compare)", title: "string (optional)", content: "string (for create/update)", source: "string (optional)", task_id: "string (optional)", include_archived: "boolean (optional)", limit: "number (optional)", version: "number (get: fetch a historical version; restore/purge_version: target version)", expected_version: "number (update: fail if current version differs)", reason: "string (purge_version: required audit reason)" },
   risk: "medium",
   category: "Context & Learning",
   source: "builtin",
