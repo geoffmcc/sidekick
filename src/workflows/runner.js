@@ -118,9 +118,9 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
   }
   const definition = record.definition;
   const executionContext = toolContext.getExecutionContext();
-  const requestedByPrincipalId = options.requestedByPrincipalId || executionContext.authIdentity?.requested_by_principal_id || executionContext.authIdentity?.principal_id || null;
-  const actorPrincipalId = options.actorPrincipalId || executionContext.authIdentity?.principal_id || null;
-  const actingForPrincipalId = options.actingForPrincipalId || executionContext.authIdentity?.acting_for_principal_id || null;
+  let requestedByPrincipalId = options.requestedByPrincipalId || executionContext.authIdentity?.requested_by_principal_id || executionContext.authIdentity?.principal_id || null;
+  let actorPrincipalId = options.actorPrincipalId || executionContext.authIdentity?.principal_id || null;
+  let actingForPrincipalId = options.actingForPrincipalId || executionContext.authIdentity?.acting_for_principal_id || null;
 
   let state;
   let workflow;
@@ -134,6 +134,14 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
     }
     if (!["paused", "running", "defined"].includes(workflow.state)) {
       return { ok: false, code: "run_not_resumable", error: `Workflow run ${workflow.workflow_id} is ${workflow.state}` };
+    }
+    // Resume carries the recorded identity only as an input to the current
+    // Core authorization check. It is not trusted as a bypass: the current
+    // principal must still be authenticated and enabled when the step is
+    // dispatched, so disablement/revocation takes effect on resume.
+    requestedByPrincipalId = requestedByPrincipalId || workflow.requested_by_principal_id || null;
+    if (workflow.actor_principal_id && !actorPrincipalId) {
+      return { ok: false, code: "unauthenticated", error: "Resuming an identity-bound workflow requires the current actor identity" };
     }
     let checkpoint = {};
     try {
@@ -211,6 +219,22 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
   const claim = claimResult.ok ? claimResult.claim : null;
 
   const runItem = { id: workflow.workflow_id, platform_execution_id: executionId };
+  // A runner is a durable execution identity, not an authorization bypass.
+  // Its principal/delegation context is recorded so scheduled work remains
+  // inspectable and every step can be evaluated against the same bounded
+  // authority through the Core dispatcher.
+  const runnerSession = platformKernel.createRunnerSession({
+    execution_id: executionId,
+    workflow_id: workflow.workflow_id,
+    requested_by_principal_id: requestedByPrincipalId,
+    actor_principal_id: actorPrincipalId,
+    acting_for_principal_id: actingForPrincipalId,
+    executed_by_principal_id: actorPrincipalId,
+    resource_limits: options.resourceLimits || {},
+    metadata: { workflow: definition.name, workflow_version: definition.version },
+    source: "workflow-runner",
+    actor_id: options.actor || actorPrincipalId || "workflow-runner",
+  });
   const started = Date.now();
   const stepReports = [];
   let verdict = "completed";
@@ -261,6 +285,13 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
       // and audit all apply exactly as they would for a direct call.
       const result = await require("../tools/dispatcher").callInternalTool(step.tool, args, {
         actor: options.actor || "workflow-runner",
+        authIdentity: executionContext.authIdentity || (actorPrincipalId ? {
+          principal_id: actorPrincipalId,
+          requested_by_principal_id: requestedByPrincipalId,
+          acting_for_principal_id: actingForPrincipalId,
+          scopes: options.scopes || null,
+          delegation_id: options.delegationId || null,
+        } : null),
         timeoutMs: step.timeout_ms || options.stepTimeoutMs || DEFAULT_STEP_TIMEOUT_MS,
         executionId,
         project: options.project || undefined,
@@ -345,6 +376,10 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
   }
 
   if (executionId && claim && verdict !== "awaiting_approval") releaseScheduledClaim(executionId, claim);
+  if (runnerSession && verdict !== "awaiting_approval") {
+    if (verdict === "completed") platformKernel.completeRunnerSession(runnerSession.runner_id, { source: "workflow-runner", actor_id: options.actor || actorPrincipalId || "workflow-runner" });
+    else platformKernel.terminateRunnerSession(runnerSession.runner_id, { source: "workflow-runner", actor_id: options.actor || actorPrincipalId || "workflow-runner", reason: failure?.error || verdict });
+  }
 
   return {
     ok: verdict === "completed",
