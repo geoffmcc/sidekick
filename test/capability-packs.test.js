@@ -65,6 +65,19 @@ function copyTree(from, to) {
   fs.cpSync(from, to, { recursive: true });
 }
 
+test('pack store recovery removes only abandoned staging directories', () => {
+  const staging = packStore.stagePackFiles('recovery-fixture', BUNDLED_PATH, ['sidekick.pack.json']);
+  assert.ok(fs.existsSync(staging));
+  const version = packStore.versionDir('recovery-fixture', '9.9.9');
+  fs.mkdirSync(version, { recursive: true });
+  const removed = packStore.recoverStaging('recovery-fixture');
+  assert.deepStrictEqual(removed, [staging]);
+  assert.strictEqual(fs.existsSync(staging), false);
+  assert.strictEqual(fs.existsSync(version), true, 'recovery must not remove installed versions');
+  packStore.removeDirectory(version);
+  fs.rmSync(packStore.packDir('recovery-fixture'), { recursive: true, force: true });
+});
+
 /** Build a v1.1.0 upgrade candidate that drops one workflow and adds knowledge. */
 function buildUpgradeCandidate() {
   copyTree(BUNDLED_PATH, UPGRADE_DIR);
