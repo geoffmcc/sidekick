@@ -74,6 +74,25 @@ Capability Pack permission declarations remain pack metadata. Packs do not own
 users, roles, credentials, or authorization; their declared tool/risk grants
 are consumed by Core at the existing dispatcher seam.
 
-Secret use-vs-disclosure, approval identity, resource/workflow authority, and
-the remaining administration UI are subsequent PR work and must consume these
-Core services rather than create parallel identity stores.
+## Approval identity and brokered secret use
+
+Task-originated approvals persist the stable requester, actor, and optional
+acting-for principal IDs, the approval policy, the original argument digest,
+and whether a human decision is required. Dashboard approve/reject operations
+require `approvals.grant`. A human approver must be enabled and authorized;
+agents and services cannot satisfy a human approval requirement, and a
+requester or acting actor cannot self-approve it. The approval transaction
+records `approved_by_principal_id` while preserving the existing encrypted
+arguments and digest binding.
+
+Connector and compute-provider credential resolution uses the existing
+encrypted secret store. When an authenticated principal is present, Core
+checks `secrets.use` at resolution time; the plaintext is passed only to the
+governed provider call and is never included in connector/provider records or
+approval/audit output. Legacy environment and unscoped resolver behavior is
+retained only for pre-identity compatibility paths without an authenticated
+principal and is not a substitute for a scoped identity credential.
+
+Resource ownership, workflow authority, and the remaining administration UI
+are subsequent PR work and must consume these Core services rather than create
+parallel identity stores.

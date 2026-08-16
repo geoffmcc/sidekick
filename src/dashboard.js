@@ -1962,7 +1962,7 @@ app.get("/api/evolve/executions/:executionId/stream", (req, res) => {
   req.on("close", off);
 });
 
-registerApprovalRoutes({ app, listApprovals, renderContinuationApprovalPreview, authenticatedUser, auditLog, logError, resolveApproval });
+registerApprovalRoutes({ app, listApprovals, renderContinuationApprovalPreview, authenticatedUser, auditLog, logError, resolveApproval, requireIdentityPermission });
 
 /**
  * On-demand argument preview for a task-originated approval (ADR §4.4).

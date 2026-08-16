@@ -352,7 +352,7 @@ async function executeAuthorizedTaskStep(toolName, args, meta = {}) {
   });
 }
 
-async function executeApprovedTool({ approvalId, reviewer = "system", source } = {}) {
+async function executeApprovedTool({ approvalId, reviewer = "system", reviewerPrincipalId = null, source } = {}) {
   // ADR §1: an approval authorizes an action, it never performs one. For a
   // TASK-ORIGINATED approval this call is a STATE TRANSITION (T2) — mark the
   // approval approved and the task runnable, atomically — and returns. The task
@@ -376,7 +376,7 @@ async function executeApprovedTool({ approvalId, reviewer = "system", source } =
 
   if (taskApproval) {
     const { approve } = require("../approvals/continuation");
-    const outcome = approve({ approvalId, approverIdentity: reviewer });
+    const outcome = approve({ approvalId, approverIdentity: reviewer, approverPrincipalId: reviewerPrincipalId });
     if (!outcome.ok) {
       const message = outcome.code === "task_not_waiting"
         ? `Approval ${approvalId} was decided, but its task is no longer waiting for it`
@@ -431,6 +431,8 @@ async function executeApprovedTool({ approvalId, reviewer = "system", source } =
       args: claim.args,
       context: createApprovalExecutionContext({
         actor: reviewer,
+        authIdentity: reviewerPrincipalId ? { principal_id: reviewerPrincipalId, principal_type: "human" } : null,
+        provenance: { approved_by: reviewerPrincipalId, executed_by: reviewerPrincipalId },
         approvalId,
         operationId: claim.operationId,
         idempotencyKey: claim.idempotencyKey,

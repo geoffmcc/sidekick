@@ -21,6 +21,8 @@
  */
 
 const providerRegistry = require("./provider-registry");
+const { getExecutionContext } = require("../tools/context");
+const authorization = require("../core/authorization");
 
 /**
  * Resolve the API key for a provider, or null when none is configured/resolvable.
@@ -35,6 +37,15 @@ function resolveProviderApiKey(provider) {
   let ref = null;
   try { ref = providerRegistry.getAuthSecretRef(provider.providerId); } catch { ref = null; }
   if (ref) {
+    const principalId = getExecutionContext()?.authIdentity?.principal_id || null;
+    if (principalId) {
+      const decision = authorization.authorize({ principalId, permission: "secrets.use", resource: ref });
+      if (!decision.ok) {
+        const error = new Error("provider credential use is not authorized");
+        error.code = decision.code;
+        throw error;
+      }
+    }
     try {
       const { loadSecrets } = require("../core/secrets-store");
       const { decryptSecret } = require("../core/secret-cipher");

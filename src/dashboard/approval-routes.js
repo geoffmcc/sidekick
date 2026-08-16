@@ -1,5 +1,5 @@
 /** Register dashboard approval inspection and resolution routes. */
-function registerApprovalRoutes({ app, listApprovals, renderContinuationApprovalPreview, authenticatedUser, auditLog, logError, resolveApproval }) {
+function registerApprovalRoutes({ app, listApprovals, renderContinuationApprovalPreview, authenticatedUser, auditLog, logError, resolveApproval, requireIdentityPermission }) {
   app.get("/api/approvals", (req, res) => {
     res.json({ ok: true, approvals: listApprovals({ status: req.query.status, limit: req.query.limit }) });
   });
@@ -22,9 +22,15 @@ function registerApprovalRoutes({ app, listApprovals, renderContinuationApproval
   for (const [action, verb] of [["approve", "approve"], ["reject", "reject"]]) {
     app.post(`/api/approvals/:id/${action}`, async (req, res) => {
       try {
-        const reviewer = authenticatedUser(req) || "unattributed:dashboard";
-        auditLog(req, `approval.${action}`, { id: req.params.id, reviewer });
-        const result = await resolveApproval(req.params.id, verb, reviewer);
+        const principalId = req.authPrincipal?.principal_id || null;
+        if (!principalId) return res.status(401).json({ ok: false, error: "unauthenticated" });
+        const permitted = requireIdentityPermission
+          ? requireIdentityPermission(req, res, "approvals.grant")
+          : true;
+        if (!permitted) return;
+        const reviewer = principalId;
+        auditLog(req, `approval.${action}`, { id: req.params.id, reviewer_principal_id: principalId });
+        const result = await resolveApproval(req.params.id, verb, reviewer, { reviewerPrincipalId: principalId });
         res.json({ ok: !result.isError, result: result.content?.[0]?.text || "" });
       } catch (error) {
         logError(req.originalUrl, 500, error, "approvals", req.headers["user-agent"]);

@@ -148,7 +148,14 @@ function ensureApprovalContinuationSchema(force = false) {
       idempotency_key       TEXT NOT NULL,
       args_encrypted        TEXT,
       requester_identity    TEXT,
+      requested_by_principal_id TEXT,
+      actor_principal_id    TEXT,
+      acting_for_principal_id TEXT,
       approver_identity     TEXT,
+      approved_by_principal_id TEXT,
+      executed_by_principal_id TEXT,
+      requires_human_approval INTEGER NOT NULL DEFAULT 0,
+      approval_policy       TEXT,
       terminalized_by       TEXT,
       terminalized_at       TEXT,
       reconciled_by         TEXT,
@@ -251,6 +258,24 @@ function ensureApprovalContinuationSchema(force = false) {
       if (!/duplicate column name/i.test(String(error && error.message || ""))) throw error;
     }
   }
+  const approvalColumns = new Set(db.prepare("PRAGMA table_info(approvals)").all().map(c => c.name));
+  const approvalAdditions = [
+    ["requested_by_principal_id", "TEXT"],
+    ["actor_principal_id", "TEXT"],
+    ["acting_for_principal_id", "TEXT"],
+    ["approved_by_principal_id", "TEXT"],
+    ["executed_by_principal_id", "TEXT"],
+    ["requires_human_approval", "INTEGER NOT NULL DEFAULT 0"],
+    ["approval_policy", "TEXT"],
+  ];
+  for (const [column, type] of approvalAdditions) {
+    if (approvalColumns.has(column)) continue;
+    try { db.exec(`ALTER TABLE approvals ADD COLUMN ${column} ${type}`); }
+    catch (error) { if (!/duplicate column name/i.test(String(error && error.message || ""))) throw error; }
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_approvals_requested_principal ON approvals(requested_by_principal_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_approvals_actor_principal ON approvals(actor_principal_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_approvals_approved_principal ON approvals(approved_by_principal_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_approval_recovery_reason_code ON approval_execution_recovery_events(reason_code)");
 
   ensured = true;
