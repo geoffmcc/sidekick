@@ -2185,6 +2185,7 @@ app.get("/api/memories/projects", (req, res) => {
     const rows = db.prepare(`
       SELECT DISTINCT project FROM memories
       WHERE project IS NOT NULL AND project != ''
+        AND enabled = 1
       ORDER BY project
     `).all();
     res.json({ ok: true, projects: rows.map(r => r.project) });
