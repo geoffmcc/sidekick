@@ -242,6 +242,13 @@ Ambiguous replacement is refused unless explicitly allowed:
 
 A failed upgrade never destroys the working installation.
 
+Upgrade candidates are copied into a narrowly named `.staging-*` directory
+under the managed pack store and verified before promotion. If Sidekick is
+interrupted after staging but before promotion, the next install or upgrade
+for that pack removes only those abandoned staging directories; installed
+version directories are retained. This recovery is deliberately bounded to
+the pack's managed store and cannot sweep arbitrary files.
+
 ### Uninstall
 
 Disables the pack, uninstalls owned modules through the module lifecycle,

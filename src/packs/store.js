@@ -84,6 +84,28 @@ function stagePackFiles(name, sourceRoot, files) {
   return materialize(sourceRoot, staging, files);
 }
 
+/**
+ * Remove abandoned upgrade staging directories after a process crash.
+ *
+ * Staging directories are never active installations: promotion is one rename
+ * into the version directory.  Only the narrowly named `.staging-*` children
+ * of this pack are eligible, so recovery cannot sweep a version or an
+ * operator-created directory.  The caller should run this before starting a
+ * new install/upgrade attempt and may expose the result in diagnostics.
+ */
+function recoverStaging(name) {
+  const directory = packDir(name);
+  if (!fs.existsSync(directory)) return [];
+  const removed = [];
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    if (!entry.name.startsWith(".staging-") || (!entry.isDirectory() && !entry.isSymbolicLink())) continue;
+    const candidate = path.join(directory, entry.name);
+    removeDirectory(candidate);
+    removed.push(candidate);
+  }
+  return removed;
+}
+
 function promoteStaged(name, version, stagingDir) {
   if (!isManagedPath(stagingDir)) throw new Error("Refusing to promote a staging directory outside the managed pack store");
   const target = versionDir(name, version);
@@ -111,6 +133,7 @@ module.exports = {
   isManagedPath,
   installPackFiles,
   stagePackFiles,
+  recoverStaging,
   promoteStaged,
   removeDirectory,
   removePack,

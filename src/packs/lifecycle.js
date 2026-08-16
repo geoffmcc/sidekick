@@ -77,6 +77,7 @@ function install(sourcePath, { config, provenance = "third_party", source = {}, 
     throw new Error(`Capability pack "${inspection.name}" is already installed`);
   }
   assertNoForeignOwnership(inspection);
+  store.recoverStaging(inspection.name);
 
   const configResult = validatePackConfig(inspection.manifest, config);
   if (!configResult.ok) {
@@ -397,6 +398,7 @@ function upgrade(name, sourcePath, { allowSameVersion = false, allowDowngrade = 
 
   const previousInstallPath = record.install_path;
   const previousVersion = record.version;
+  store.recoverStaging(name);
   const staged = store.stagePackFiles(name, inspection._components.root, inspection.files.map(file => file.path));
   let promoted = null;
   try {
