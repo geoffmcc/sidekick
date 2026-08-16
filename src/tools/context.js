@@ -1,5 +1,6 @@
 const { AsyncLocalStorage } = require("async_hooks");
 const crypto = require("crypto");
+const { buildProvenance } = require("../core/provenance");
 
 const storage = new AsyncLocalStorage();
 const SOURCE_CAPABILITY = Symbol("sidekick.trustedSourceContext");
@@ -100,6 +101,7 @@ function getExecutionSource() {
 }
 
 function dispatcherMetadata(context = getExecutionContext(), extra = {}) {
+  const provenance = buildProvenance(context, context.provenance || {});
   return {
     requestId: context.requestId,
     taskId: context.taskId,
@@ -117,6 +119,12 @@ function dispatcherMetadata(context = getExecutionContext(), extra = {}) {
     actor: context.actor,
     source: context.source,
     module: context.module,
+    requestedBy: provenance.requested_by,
+    actorPrincipalId: provenance.actor,
+    actingFor: provenance.acting_for,
+    approvedBy: provenance.approved_by,
+    executedBy: provenance.executed_by,
+    provenance,
     ...extra,
   };
 }

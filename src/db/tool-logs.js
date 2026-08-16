@@ -7,9 +7,11 @@ function createToolLogStore({ db, parseJson, nowIso, maxLog }) {
       INSERT INTO tool_logs (
         timestamp, tool_name, args_summary, duration_ms, success, summary, source, entry_json,
         session_id, task_id, project, args_shape_json, arg_fingerprint, error_category,
-        result_summary, correlation_id, parent_id, retry, generated_procedure
+        result_summary, correlation_id, parent_id, retry, generated_procedure,
+        requested_by_principal_id, actor_principal_id, acting_for_principal_id,
+        approved_by_principal_id, executed_by_principal_id, provenance_json
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       entry.t || nowIso(), entry.n || "unknown", entry.a || "",
       Number.isFinite(entry.d) ? Math.round(entry.d) : null,
@@ -19,6 +21,9 @@ function createToolLogStore({ db, parseJson, nowIso, maxLog }) {
       entry.arg_fingerprint || null, entry.error_category || null,
       entry.result_summary || entry.s || null, entry.correlation_id || null,
       entry.parent_id || null, entry.retry ? 1 : 0, entry.generated_procedure || null,
+      entry.requested_by_principal_id || null, entry.actor_principal_id || null,
+      entry.acting_for_principal_id || null, entry.approved_by_principal_id || null,
+      entry.executed_by_principal_id || null, entry.provenance_json || "{}",
     );
 
     const count = db.prepare("SELECT COUNT(*) AS count FROM tool_logs").get().count;

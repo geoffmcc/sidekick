@@ -18,6 +18,7 @@ const {
 } = require("./context");
 const { normalizeResult, errorResult, sanitizeText } = require("./result");
 const authorization = require("../core/authorization");
+const { recordSecurityEvent } = require("../core/security-audit");
 
 const APPROVED_EXECUTION_CAPABILITY = Symbol("sidekick.approvedExecution");
 const TEST_DESCRIPTOR_CAPABILITY = Symbol("sidekick.testDescriptorExecution");
@@ -79,7 +80,12 @@ function validationError(name, parsed) {
   return errorResult(`Invalid arguments for ${name}${details ? ": " + details : ""}`, "validation_failed");
 }
 
-function requiredToolPermission(descriptor) {
+function requiredToolPermission(descriptor, args = {}) {
+  if (descriptor.name === "secret") {
+    if (args.action === "list") return "secrets.read_metadata";
+    if (args.action === "get") return "secrets.read";
+    return "secrets.manage";
+  }
   if (descriptor.risk === "critical") return "tools.execute_critical";
   if (descriptor.risk === "high") return "tools.execute_high";
   return "tools.execute";
@@ -146,12 +152,17 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
   if (!parsed.success) return validationError(descriptor.name, parsed);
   const executionArgs = freezeDeep(clonePlain(parsed.data));
 
+  const requiresIdentity = descriptor.name === "secret";
+  if (requiresIdentity && !context.authIdentity?.principal_id) {
+    return errorResult("Authentication required for secret operations", "unauthenticated");
+  }
+
   // Authenticated HTTP/MCP callers are subject to Core authorization in
   // addition to the existing source policy and approval layers. Explicit
   // legacy API-key compatibility remains transitional and is intentionally
   // visible as a separate authentication method.
   if (context.authIdentity?.principal_id) {
-    const permission = requiredToolPermission(descriptor);
+    const permission = requiredToolPermission(descriptor, executionArgs);
     const decision = authorization.authorize({
       principalId: context.authIdentity.principal_id,
       permission,
@@ -159,7 +170,16 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
       delegationId: context.authIdentity.delegation_id || context.authIdentity.delegationId || null,
       resource: { tool: descriptor.name, source: context.source },
     });
-    if (!decision.ok) return errorResult(`Authorization denied: ${decision.code}`, "authorization_denied", { authorization: decision });
+    if (!decision.ok) {
+      try {
+        recordSecurityEvent("authorization.denied", {
+          context,
+          principalId: context.authIdentity.principal_id,
+          details: { permission, tool: descriptor.name, code: decision.code },
+        });
+      } catch {}
+      return errorResult(`Authorization denied: ${decision.code}`, "authorization_denied", { authorization: decision });
+    }
   }
 
   let policyError;

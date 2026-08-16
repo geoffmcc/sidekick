@@ -112,7 +112,7 @@ async function sidekick_secret({ action, key, value, generate }) {
     };
     saveSecrets(secrets);
 
-    return { content: [{ type: "text", text: `Rotated secret: ${key}\nNew value: ${newValue}` }] };
+    return { content: [{ type: "text", text: `Rotated secret: ${key}` }] };
   }
 
   return { content: [{ type: "text", text: "Unknown action. Use: store, get, delete, list, rotate" }], isError: true };

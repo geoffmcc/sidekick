@@ -43,6 +43,12 @@ function logToolCall(name, args, duration, success, summary, metadata = {}) {
       step_number: metadata.stepNumber || metadata.step_number || null,
       retry: Boolean(metadata.retry),
       generated_procedure: metadata.generatedProcedure || metadata.generated_procedure || null,
+      requested_by_principal_id: metadata.requestedBy || null,
+      actor_principal_id: metadata.actorPrincipalId || null,
+      acting_for_principal_id: metadata.actingFor || null,
+      approved_by_principal_id: metadata.approvedBy || null,
+      executed_by_principal_id: metadata.executedBy || null,
+      provenance_json: JSON.stringify(metadata.provenance || {}),
       // Persisted via entry_json: attributes module-originated dispatches.
       module: metadata.module || null
     });
