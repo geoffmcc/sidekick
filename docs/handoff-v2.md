@@ -46,3 +46,11 @@ criteria.
 
 Validation is structural and evidence-aware metadata is preserved as supplied; it does not
 pretend that a referenced commit, file, or URL still exists without a separate verification.
+
+## Validated resume
+
+The project `resume` record can link to a structured handoff with `handoff_id` or
+`handoff_key`. When `resume action="check"` sees a link, it validates the handoff packet
+before returning it. Missing or incomplete linked handoffs fail closed with `resume_blocked`
+and validation issues. Legacy resume records without a link continue to use the original
+behavior.

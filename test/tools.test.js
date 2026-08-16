@@ -23,7 +23,7 @@ const {
   getGithubArg,
   missionRoute
 } = tools;
-const { store, get, delete: del, resume, list_projects, get_by_project, tools: toolsFn, knowledge, read, write, search } = TOOLS;
+const { store, get, delete: del, resume, handoff, list_projects, get_by_project, tools: toolsFn, knowledge, read, write, search } = TOOLS;
 
 console.log('Running Tools Tests...\n');
 (async () => {
@@ -238,6 +238,41 @@ console.log('Running Tools Tests...\n');
     assert.ok(!listActiveAfterClear.items.some(item => item.project === 'resume_test'), 'Default list should hide cleared items');
     const listCleared = JSON.parse((await resume({ action: 'list', include_cleared: true, format: 'json' })).content[0].text);
     assert.ok(listCleared.items.some(item => item.project === 'resume_test' && item.status === 'cleared'), 'include_cleared should show cleared items');
+
+    // Linked structured handoffs must validate before resume returns them.
+    dbStore.runPendingMigrations();
+    const linkedHandoff = JSON.parse((await handoff({
+      action: 'create',
+      key: 'resume-linked-handoff-test',
+      project: 'resume_test',
+      content: 'Fact: linked resume handoff.',
+      packet: {
+        objective: 'Validate a linked resume handoff',
+        status: 'ready',
+        next_step: 'Continue the linked task',
+        acceptance_criteria: ['Resume check validates the packet'],
+        blockers: []
+      }
+    })).content[0].text);
+    const linkedSet = await resume({
+      action: 'set',
+      project: 'resume_linked_test',
+      summary: 'Resume linked handoff',
+      next_step: 'Continue linked work',
+      handoff_id: linkedHandoff.handoff.id,
+      format: 'json'
+    });
+    assert.ok(!linkedSet.isError, 'Resume should accept an existing linked handoff');
+    const linkedCheck = await resume({ action: 'check', project: 'resume_linked_test', format: 'json' });
+    const linkedCheckData = JSON.parse(linkedCheck.content[0].text);
+    assert.strictEqual(linkedCheckData.handoff_validation.valid, true, 'Resume check should validate linked handoff');
+    await handoff({ action: 'update', id: linkedHandoff.handoff.id, packet: { objective: 'Validate a linked resume handoff', status: 'active', next_step: null, acceptance_criteria: ['Resume check validates the packet'], blockers: [] } });
+    const blockedCheck = await resume({ action: 'check', project: 'resume_linked_test', format: 'json' });
+    assert.ok(blockedCheck.isError, 'Resume should fail closed for an invalid linked handoff');
+    const blockedData = JSON.parse(blockedCheck.content[0].text);
+    assert.strictEqual(blockedData.resume_blocked, true, 'Blocked resume should identify the safety gate');
+    await resume({ action: 'clear', project: 'resume_linked_test' });
+    await handoff({ action: 'archive', id: linkedHandoff.handoff.id });
     console.log('✓ Passed\n');
 
     // Test 2.0aba: plan-scoped resume fields and phase numbering
