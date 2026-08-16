@@ -85,10 +85,11 @@ function toolCallContext(args, extra) {
   if (args && typeof args.project === "string" && args.project.trim()) {
     context.project = args.project.trim();
   }
+  context.authIdentity = extra?.authIdentity || null;
   return context;
 }
 
-function createMcpServer() {
+function createMcpServer(authIdentityProvider = () => null) {
   const server = new McpServer({
     name: "sidekick-mcp-server",
     version: APP_VERSION
@@ -103,6 +104,8 @@ function createMcpServer() {
       description: descriptor.description,
       inputSchema: descriptor.schema
     }, async (args, extra) => {
+      extra = extra || {};
+      extra.authIdentity = authIdentityProvider();
       return callMcpTool(descriptor.name, args, toolCallContext(args, extra));
     });
   }
@@ -118,6 +121,8 @@ function createMcpServer() {
       description: `[procedure] ${proc.description}${paramDesc}`,
       inputSchema: paramSchema
     }, async (args, extra) => {
+      extra = extra || {};
+      extra.authIdentity = authIdentityProvider();
       return callMcpTool("teach", { action: "execute", name: procName, args },
         { ...toolCallContext(args, extra), generatedProcedure: internalName });
     });
@@ -131,6 +136,8 @@ function createMcpServer() {
       description: def.description,
       inputSchema: dynamicSchemas[def.name]
     }, async (args, extra) => {
+      extra = extra || {};
+      extra.authIdentity = authIdentityProvider();
       return callMcpTool(def.name, args,
         { ...toolCallContext(args, extra), generatedProcedure: def.name, correlationId: def.capabilityId });
     });
@@ -154,6 +161,7 @@ async function getTransportForRequest(sessionId, metadata = {}, options = {}) {
   
   if (sessionId && sessions.has(sessionId)) {
     const entry = sessions.get(sessionId);
+    if (metadata.authIdentity !== undefined && entry.authState) entry.authState.current = metadata.authIdentity;
     const age = Date.now() - entry.createdAt;
     const idle = Date.now() - entry.lastAccess;
     entry.lastAccess = Date.now();
@@ -168,6 +176,7 @@ async function getTransportForRequest(sessionId, metadata = {}, options = {}) {
       logDebug("STALE_SESSION_KNOWN_REPLACEMENT", { staleSessionId: sessionId, replacementId });
       if (options.allowStalePost) {
         const entry = sessions.get(replacementId);
+        if (metadata.authIdentity !== undefined && entry.authState) entry.authState.current = metadata.authIdentity;
         entry.lastAccess = Date.now();
         return { transport: entry.transport, isNew: false, newSessionId: replacementId, staleRedirect: false, replacedStaleSession: true };
       }
@@ -177,13 +186,14 @@ async function getTransportForRequest(sessionId, metadata = {}, options = {}) {
     logDebug("STALE_SESSION_CREATING_REPLACEMENT", { staleSessionId: sessionId, sessionCount: sessions.size });
 
     const newSessionId = generateSessionId();
-    const server = createMcpServer();
+    const authState = { current: metadata.authIdentity || null };
+    const server = createMcpServer(() => authState.current);
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: () => newSessionId,
       enableJsonResponse: true
     });
 
-    registerSession(newSessionId, server, transport, metadata);
+    registerSession(newSessionId, server, transport, { ...metadata, authState });
     await server.connect(transport);
 
     staleSessionMap.set(sessionId, { replacementId: newSessionId, createdAt: Date.now() });
@@ -200,13 +210,14 @@ async function getTransportForRequest(sessionId, metadata = {}, options = {}) {
   }
 
   const newSessionId = generateSessionId();
-  const server = createMcpServer();
+  const authState = { current: metadata.authIdentity || null };
+  const server = createMcpServer(() => authState.current);
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: () => newSessionId,
     enableJsonResponse: true
   });
 
-  registerSession(newSessionId, server, transport, metadata);
+  registerSession(newSessionId, server, transport, { ...metadata, authState });
   await server.connect(transport);
 
   logDebug("CREATED_NEW_TRANSPORT", { newSessionId });
@@ -242,7 +253,8 @@ function registerSession(sessionId, server, transport, metadata = {}) {
     initialized: false,
     userAgent: metadata.userAgent || null,
     clientInfo: metadata.clientInfo || null,
-    authIdentity: metadata.authIdentity || null
+    authIdentity: metadata.authIdentity || null,
+    authState: metadata.authState || { current: metadata.authIdentity || null }
   });
 }
 
@@ -379,13 +391,16 @@ app.use(express.json({ limit: "1mb" }));
 
 app.get("/sse", async (req, res) => {
   try {
-    const server = createMcpServer();
+    const authState = { current: req.authIdentity || null };
+    const server = createMcpServer(() => authState.current);
     const transport = new SSEServerTransport("/messages", res);
     
     const sessionId = transport.sessionId;
     const metadata = {
       userAgent: req.headers["user-agent"],
-      clientInfo: null
+      clientInfo: null,
+      authIdentity: req.authIdentity || null,
+      authState
     };
     registerSession(sessionId, server, transport, metadata);
     await server.connect(transport);
@@ -405,6 +420,7 @@ app.post("/messages", async (req, res) => {
     }
     
     const entry = sessions.get(sessionId);
+    if (entry.authState) entry.authState.current = req.authIdentity || null;
     const transport = entry.transport;
     if (!(transport instanceof SSEServerTransport)) {
       return res.status(400).json({ error: "Not an SSE session" });
@@ -512,7 +528,7 @@ app.get("/mcp", async (req, res) => {
       });
     }
 
-    const { transport, newSessionId, staleRedirect } = await getTransportForRequest(sessionId);
+    const { transport, newSessionId, staleRedirect } = await getTransportForRequest(sessionId, { authIdentity: req.authIdentity || null });
     if (staleRedirect) {
       return sendInvalidSession(res, {
         sessionId,
@@ -567,7 +583,7 @@ app.delete("/mcp", async (req, res) => {
       });
     }
 
-    const { transport, newSessionId, staleRedirect } = await getTransportForRequest(sessionId);
+    const { transport, newSessionId, staleRedirect } = await getTransportForRequest(sessionId, { authIdentity: req.authIdentity || null });
     if (staleRedirect) {
       return sendInvalidSession(res, {
         sessionId,

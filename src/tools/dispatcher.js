@@ -17,6 +17,7 @@ const {
   dispatcherMetadata,
 } = require("./context");
 const { normalizeResult, errorResult, sanitizeText } = require("./result");
+const authorization = require("../core/authorization");
 
 const APPROVED_EXECUTION_CAPABILITY = Symbol("sidekick.approvedExecution");
 const TEST_DESCRIPTOR_CAPABILITY = Symbol("sidekick.testDescriptorExecution");
@@ -76,6 +77,12 @@ function validationError(name, parsed) {
   const issues = parsed.error?.issues || [];
   const details = issues.map(issue => `${issue.path.join(".") || "args"}: ${issue.message}`).join("; ");
   return errorResult(`Invalid arguments for ${name}${details ? ": " + details : ""}`, "validation_failed");
+}
+
+function requiredToolPermission(descriptor) {
+  if (descriptor.risk === "critical") return "tools.execute_critical";
+  if (descriptor.risk === "high") return "tools.execute_high";
+  return "tools.execute";
 }
 
 function withTimeoutAndCancellation(handler, args, runtime, context) {
@@ -138,6 +145,22 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
   const parsed = descriptor.schema.safeParse(clonePlain(args || {}));
   if (!parsed.success) return validationError(descriptor.name, parsed);
   const executionArgs = freezeDeep(clonePlain(parsed.data));
+
+  // Authenticated HTTP/MCP callers are subject to Core authorization in
+  // addition to the existing source policy and approval layers. Explicit
+  // legacy API-key compatibility remains transitional and is intentionally
+  // visible as a separate authentication method.
+  if (context.authIdentity?.principal_id) {
+    const permission = requiredToolPermission(descriptor);
+    const decision = authorization.authorize({
+      principalId: context.authIdentity.principal_id,
+      permission,
+      credentialScopes: context.authIdentity.scopes,
+      delegationId: context.authIdentity.delegation_id || context.authIdentity.delegationId || null,
+      resource: { tool: descriptor.name, source: context.source },
+    });
+    if (!decision.ok) return errorResult(`Authorization denied: ${decision.code}`, "authorization_denied", { authorization: decision });
+  }
 
   let policyError;
   try {

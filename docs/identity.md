@@ -47,7 +47,33 @@ Headless administration is available through `scripts/identity-admin.js`.
 Bootstrap and recovery password material are read from standard input; raw
 passwords and recovery tokens should not be placed in shell arguments or logs.
 
-The central permission evaluator, bounded delegation, approval identity,
-resource/workflow authority, and full administration policy remain subsequent
-PRs. They must consume this Core authentication model rather than create
-parallel identity stores.
+## Authorization and delegation foundation
+
+PR 3 adds one Core-owned permission registry and evaluator. Built-in roles are
+permission bundles, not authorization logic: `owner`, `administrator`,
+`operator`, `viewer`, and `auditor` resolve through the
+`identity_role_permissions` table. Unknown permissions, missing identities,
+disabled principals, expired or revoked delegations, and insufficient grants
+deny by default.
+
+Machine credential scopes are intersected with the principal's effective
+permissions. A delegation is an explicit, expirable, revocable record whose
+permissions are intersected with the delegator's current authority, so a
+delegator cannot grant authority it does not currently possess. Delegates do
+not inherit the delegator's entire role set. Owner promotion/demotion requires
+`roles.manage`, and the final usable Owner cannot be disabled or removed.
+
+Authenticated dashboard and MCP dispatcher requests carry their principal
+identity into the existing policy, approval, redaction, and audit path. The
+Core authorization decision is an additional gate before tool execution;
+existing source policy and approval checks remain authoritative and are not
+duplicated. Legacy installation-wide API-key access remains an explicit
+transitional compatibility path and is not the new authorization model.
+
+Capability Pack permission declarations remain pack metadata. Packs do not own
+users, roles, credentials, or authorization; their declared tool/risk grants
+are consumed by Core at the existing dispatcher seam.
+
+Secret use-vs-disclosure, approval identity, resource/workflow authority, and
+the remaining administration UI are subsequent PR work and must consume these
+Core services rather than create parallel identity stores.
