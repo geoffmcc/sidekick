@@ -19,6 +19,7 @@ const suites = [
   { file: 'test/identity-authentication.test.js', critical: true, description: 'Server-side identity sessions and scoped machine credentials' },
   { file: 'test/identity-authorization.test.js', critical: true, description: 'Core permission bundles, authorization, bounded delegation, and Owner safety' },
   { file: 'test/identity-governance.test.js', critical: true, description: 'Provenance, secret authorization, safe logging, and authorization audit' },
+  { file: 'test/identity-resource-authority.test.js', critical: true, description: 'Runner, artifact, task-session, and handoff ownership/provenance persistence' },
   { file: 'test/github-setup.test.js', critical: true, description: 'GitHub workflow and package script checks' },
   { file: 'test/static-code-quality.test.js', critical: true, description: 'Static safety checks' },
   { file: 'test/security.test.js', critical: true, description: 'Redaction and dangerous command checks' },

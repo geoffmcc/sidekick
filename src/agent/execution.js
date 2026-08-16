@@ -16,6 +16,10 @@ function startAgentExecution(goal, taskId, project, lineage = null) {
       actor_id: "agent", client_id: "agent-bridge", trigger_type: "agent",
       operation_type: "agent_task", tool_name: "sidekick_agent", tool_action: "run",
       resource_scope: project || "agent", environment: process.env.SIDEKICK_ENVIRONMENT || null,
+      requested_by_principal_id: lineage?.requestedByPrincipalId || null,
+      actor_principal_id: lineage?.actorPrincipalId || null,
+      acting_for_principal_id: lineage?.actingForPrincipalId || null,
+      executed_by_principal_id: lineage?.actorPrincipalId || null,
       risk: "medium", source: "agent", correlation_id: taskId,
       metadata: {
         goal_summary: redactSensitive(String(goal || "")).slice(0, 300),
@@ -65,6 +69,8 @@ function registerAgentTranscript(execution, transcriptPath, taskId, status) {
       content_type: "application/json", byte_size: stat.size, sensitivity: "sensitive",
       redaction_state: "unknown", source: "agent", correlation_id: execution.root_execution_id,
       metadata: { status },
+      ownerPrincipalId: execution.actor_principal_id || execution.requested_by_principal_id || null,
+      createdByPrincipalId: execution.actor_principal_id || execution.requested_by_principal_id || null,
     });
   } catch { /* Existing conversation storage remains authoritative. */ }
 }

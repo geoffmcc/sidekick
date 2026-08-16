@@ -115,10 +115,13 @@ function continuationQualityIssues(packet) {
 }
 
 async function sidekick_session({ action, id, goal, project, source, working_directory, repository, branch, environment, client_session_id, tags, supplied_context, current_plan, completed_steps, current_hypothesis, evidence, blockers, next_step, artifacts, reports, risks, relationships, do_not_repeat, outcome, final_summary, user_visible_result, acceptance_state, decisions, verified_facts, unresolved_issues, resolved_issues, failed_approaches, procedures_learned, follow_ups, usefulness_feedback, handoff_id, limit }) {
+  const authIdentity = toolContext.getExecutionContext().authIdentity || null;
+  const ownerPrincipalId = authIdentity?.acting_for_principal_id || authIdentity?.principal_id || null;
+  const actorPrincipalId = authIdentity?.principal_id || null;
   if (action === "begin") {
     if (!goal) return { content: [{ type: "text", text: "goal required" }], isError: true };
     const brief = buildScopedMemoryBrief(goal, project, { limit: 12 });
-    const session = dbStore.saveTaskSession({ id, goal, project, source: source || toolContext.getExecutionSource(), client_session_id, working_directory, repository, branch, environment, tags: normalizeTags(tags), supplied_context, state: "active", memory_brief: brief });
+    const session = dbStore.saveTaskSession({ id, goal, project, source: source || toolContext.getExecutionSource(), client_session_id, working_directory, repository, branch, environment, tags: normalizeTags(tags), supplied_context, state: "active", memory_brief: brief, owner_principal_id: ownerPrincipalId, created_by_principal_id: actorPrincipalId });
     recordPlatformMemoryEvent("memory.session_started", { session_id: session.id, project: session.project, source: session.source, selected_memories: brief.selected.length }, { subjectType: "memory_task_session", subjectId: session.id, project: session.project, taskId: session.id });
     return jsonText({ ok: true, session, memory_brief: brief });
   }
@@ -126,7 +129,7 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
     const existing = dbStore.getTaskSession(id);
     if (!existing) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
-    const session = dbStore.saveTaskSession({ ...existing, current_plan, completed_steps: completed_steps || existing.completed_steps, current_hypothesis, blockers: blockers || existing.blockers, next_step, artifacts: artifacts || existing.artifacts, state: "active" });
+    const session = dbStore.saveTaskSession({ ...existing, current_plan, completed_steps: completed_steps || existing.completed_steps, current_hypothesis, blockers: blockers || existing.blockers, next_step, artifacts: artifacts || existing.artifacts, state: "active", owner_principal_id: existing.owner_principal_id || ownerPrincipalId, created_by_principal_id: existing.created_by_principal_id || actorPrincipalId });
     recordPlatformMemoryEvent(action === "checkpoint" ? "memory.session_checkpointed" : "memory.session_updated", { session_id: session.id, project: session.project, action, completed_steps: Array.isArray(session.completed_steps) ? session.completed_steps.length : 0 }, { subjectType: "memory_task_session", subjectId: session.id, project: session.project, taskId: session.id });
     return jsonText({ ok: true, session, checkpoint: action === "checkpoint" });
   }
@@ -144,9 +147,9 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
         return { content: [{ type: "text", text: `handoff quality gate failed: ${[...qualityIssues, ...validation.issues].join("; ")}` }], isError: true };
       }
       if (!linkedHandoff) return { content: [{ type: "text", text: `handoff quality gate failed: handoff "${handoff_id}" was not found` }], isError: true };
-      dbStore.saveHandoff({ id: linkedHandoff.id, project: linkedHandoff.project, title: linkedHandoff.title, source: linkedHandoff.source, task_id: id, content: continuationPacket.summary, packet: continuationPacket, extraction_state: "pending" });
+      dbStore.saveHandoff({ id: linkedHandoff.id, project: linkedHandoff.project, title: linkedHandoff.title, source: linkedHandoff.source, task_id: id, content: continuationPacket.summary, packet: continuationPacket, extraction_state: "pending", owner_principal_id: linkedHandoff.owner_principal_id || ownerPrincipalId, created_by_principal_id: linkedHandoff.created_by_principal_id || actorPrincipalId });
     }
-    const session = dbStore.saveTaskSession({ ...existing, artifacts: continuationPacket ? continuationPacket.artifacts : (artifacts || existing.artifacts), outcome, final_summary: redactSensitive(final_summary || user_visible_result || outcome || ""), acceptance_state, state, ended_at: new Date().toISOString() });
+    const session = dbStore.saveTaskSession({ ...existing, artifacts: continuationPacket ? continuationPacket.artifacts : (artifacts || existing.artifacts), outcome, final_summary: redactSensitive(final_summary || user_visible_result || outcome || ""), acceptance_state, state, ended_at: new Date().toISOString(), owner_principal_id: existing.owner_principal_id || ownerPrincipalId, created_by_principal_id: existing.created_by_principal_id || actorPrincipalId });
     const created = [];
     const projectName = project || existing.project;
     const add = (type, values, memoryClass, confidence) => {

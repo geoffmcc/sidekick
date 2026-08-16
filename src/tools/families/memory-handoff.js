@@ -52,6 +52,9 @@ function recordHandoffEvent(eventType, payload, options = {}) {
 }
 
 async function sidekick_handoff({ action, id, key, project, title, content, source, task_id, reprocess, include_archived, limit, version, expected_version, reason, packet }) {
+  const authIdentity = toolContext.getExecutionContext().authIdentity || null;
+  const ownerPrincipalId = authIdentity?.acting_for_principal_id || authIdentity?.principal_id || null;
+  const actorPrincipalId = authIdentity?.principal_id || null;
   if (action === "create" || action === "update") {
     const existing = id || key ? dbStore.getHandoff(id || key) : null;
     const handoffContent = content !== undefined && content !== null
@@ -77,7 +80,7 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
     }
     let handoff;
     try {
-      handoff = dbStore.saveHandoff({ id, kv_key: key, project, title, source: source || toolContext.getExecutionSource(), task_id, content: handoffContent, packet, extraction_state: "pending", expectedVersion: action === "update" ? expected_version : undefined });
+      handoff = dbStore.saveHandoff({ id, kv_key: key, project, title, source: source || toolContext.getExecutionSource(), task_id, content: handoffContent, packet, extraction_state: "pending", expectedVersion: action === "update" ? expected_version : undefined, owner_principal_id: existing?.owner_principal_id || ownerPrincipalId, created_by_principal_id: existing?.created_by_principal_id || actorPrincipalId });
     } catch (error) {
       return { content: [{ type: "text", text: String(error && error.message ? error.message : error) }], isError: true };
     }

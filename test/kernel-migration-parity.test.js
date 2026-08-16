@@ -109,8 +109,8 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
     console.log(`Test KMP.1: migrations-only boot applies ${migrationApplied} migrations`);
     assert.strictEqual(
       migrationStore.getDb().prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
-      String(47),
-      'schema_version should be 47'
+      String(48),
+      'schema_version should be 48'
     );
     console.log('Passed\n');
 
@@ -161,9 +161,10 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
     );
     // Capability Packs v1 (migration 036) adds platform_capability_packs,
     // platform_capability_pack_components and platform_workflow_definitions
-    // (31 -> 34 tables) with 9 more explicit indexes (66 -> 75).
+    // (31 -> 34 tables) with 11 more explicit indexes (66 -> 77), including
+    // the identity owner/actor indexes added by migration 048.
     const expectedTables = 34;
-    const expectedIndexes = 75;
+    const expectedIndexes = 77;
     const migratedTables = migratedSchema.filter(o => o.type === 'table').length;
     const migratedIndexes = migratedSchema.filter(o => o.type === 'index' && o.sql).length;
     const migratedAutoindexes = migratedSchema.filter(o => o.type === 'index' && !o.sql).length;

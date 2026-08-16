@@ -23,6 +23,9 @@ function buildChildLineage(parentTaskId, conversationDir) {
     project: parent.project || null,
     parentExecutionId: parent.lineage.platform_execution_id || null,
     rootExecutionId: parent.lineage.root_execution_id || null,
+    requestedByPrincipalId: parent.requested_by_principal_id || null,
+    actorPrincipalId: parent.actor_principal_id || null,
+    actingForPrincipalId: parent.acting_for_principal_id || null,
   };
 }
 

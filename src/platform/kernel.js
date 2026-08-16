@@ -165,12 +165,20 @@ function ensurePlatformKernelSchema() {
     ["platform_workflows", "actor_principal_id"],
     ["platform_workflows", "acting_for_principal_id"],
     ["platform_workflows", "executed_by_principal_id"],
+    ["platform_runner_sessions", "requested_by_principal_id"],
+    ["platform_runner_sessions", "actor_principal_id"],
+    ["platform_runner_sessions", "acting_for_principal_id"],
+    ["platform_runner_sessions", "executed_by_principal_id"],
+    ["platform_artifacts", "owner_principal_id"],
+    ["platform_artifacts", "created_by_principal_id"],
   ]) {
     const present = db.prepare(`PRAGMA table_info(${table})`).all().some(row => row.name === column);
     if (!present) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT`);
   }
   db.exec("CREATE INDEX IF NOT EXISTS idx_platform_executions_actor_principal ON platform_executions(actor_principal_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_platform_workflows_actor_principal ON platform_workflows(actor_principal_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_platform_runner_sessions_actor_principal ON platform_runner_sessions(actor_principal_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_platform_artifacts_owner_principal ON platform_artifacts(owner_principal_id)");
   ensurePlatformModuleSchema();
   ensureCapabilityPackSchema();
   ensureWorkflowDefinitionSchema();
@@ -1221,8 +1229,9 @@ function registerArtifactLegacy(input = {}) {
     INSERT INTO platform_artifacts (
       artifact_id, type, name, project_id, execution_id, task_id, session_id, producer, storage_ref,
       content_type, byte_size, content_hash, created_at, retention_class, sensitivity, redaction_state,
-      schema_version, lineage_json, verification_json, supersedes_artifact_id, metadata_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+      schema_version, lineage_json, verification_json, supersedes_artifact_id, metadata_json,
+      owner_principal_id, created_by_principal_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
   `).run(
     artifactId,
     input.type || "artifact",
@@ -1243,7 +1252,9 @@ function registerArtifactLegacy(input = {}) {
     json(lineage),
     json(input.verification || {}),
     input.supersedes_artifact_id || null,
-    json(input.metadata || {})
+    json(input.metadata || {}),
+    input.ownerPrincipalId || input.owner_principal_id || null,
+    input.createdByPrincipalId || input.created_by_principal_id || input.actor_principal_id || null
   );
   if (input.execution_id) {
     dbStore.getDb().prepare("UPDATE platform_executions SET artifact_count = artifact_count + 1, updated_at = ? WHERE execution_id = ?").run(ts, input.execution_id);
@@ -1587,9 +1598,11 @@ function createRunnerSession(input = {}) {
   const runnerId = input.runner_id || newId("run");
   const ts = input.started_at || nowIso();
   dbStore.getDb().prepare(`
-    INSERT INTO platform_runner_sessions (runner_id, execution_id, workflow_id, state, resource_limits_json, started_at, metadata_json)
-    VALUES (?, ?, ?, 'active', ?, ?, ?)
-  `).run(runnerId, input.execution_id || null, input.workflow_id || null, json(input.resource_limits || {}), ts, json(input.metadata || {}));
+    INSERT INTO platform_runner_sessions (runner_id, execution_id, workflow_id, state, resource_limits_json, started_at, metadata_json,
+      requested_by_principal_id, actor_principal_id, acting_for_principal_id, executed_by_principal_id)
+    VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)
+  `).run(runnerId, input.execution_id || null, input.workflow_id || null, json(input.resource_limits || {}), ts, json(input.metadata || {}),
+    input.requested_by_principal_id || null, input.actor_principal_id || null, input.acting_for_principal_id || null, input.executed_by_principal_id || input.actor_principal_id || null);
   appendEvent({ event_type: "runner.created", source: input.source || "platform", actor_id: input.actor_id, execution_id: input.execution_id || null, subject_type: "runner", subject_id: runnerId, payload: { workflow_id: input.workflow_id || null }, correlation_id: runnerId });
   return dbStore.getDb().prepare("SELECT * FROM platform_runner_sessions WHERE runner_id = ?").get(runnerId);
 }
