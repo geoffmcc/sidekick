@@ -74,6 +74,25 @@ function resolveDependencies(manifest, options = {}) {
 }
 
 /**
+ * Return blockers for an operation that is about to activate a pack.
+ * Keeping this predicate in the dependency authority prevents lifecycle
+ * callers from disagreeing about whether an installed provider is usable.
+ */
+function requiredReadinessProblems(manifest, { requireEnabled = false, ...options } = {}) {
+  const resolution = resolveDependencies(manifest, options);
+  const problems = [];
+  for (const item of resolution.resolutions) {
+    if (item.optional) continue;
+    if (!item.satisfied) {
+      problems.push(item.problem);
+    } else if (requireEnabled && item.state !== "enabled") {
+      problems.push(`pack "${item.name}" is installed but ${item.state}; enable it first`);
+    }
+  }
+  return problems;
+}
+
+/**
  * Detect a required-dependency cycle in the graph formed by the installed
  * packs plus (or as replaced by) the candidate manifest. Returns the cycle as
  * an ordered name path, or null.
@@ -156,6 +175,7 @@ function checkDependentConstraints(name, nextVersion, overrides = {}) {
 module.exports = {
   declaredDependencies,
   resolveDependencies,
+  requiredReadinessProblems,
   findDependencyCycle,
   listRequiredDependents,
   checkDependentConstraints,

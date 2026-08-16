@@ -212,6 +212,12 @@ dependency is not itself enabled, and a provider cannot disable while an
 enabled pack requires it (the dependents are named in the refusal; disable
 them first).
 
+Enablement checks required dependencies again after owned modules activate and
+before workflows, knowledge, or the pack state become live. If a provider was
+disabled, removed, or made incompatible during activation, the dependent
+modules are rolled back and the pack enters `error` rather than exposing a
+partially authorized capability set.
+
 Pack lifecycle states move only along a validated transition table
 (`PACK_TRANSITIONS` in `src/packs/repository.js`, mirroring the module
 subsystem's discipline): `installed → configured → enabled ⇄ disabled`, with

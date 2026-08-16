@@ -266,13 +266,7 @@ function enable(name) {
   // Required dependencies must be live before this pack's capabilities are:
   // a dependent that enabled ahead of its provider would advertise tools and
   // workflows whose collaborators are absent.
-  const dependencyResolution = packDependencies.resolveDependencies(record.manifest);
-  const dependencyBlockers = [];
-  for (const resolution of dependencyResolution.resolutions) {
-    if (resolution.optional) continue;
-    if (!resolution.satisfied) dependencyBlockers.push(resolution.problem);
-    else if (resolution.state !== "enabled") dependencyBlockers.push(`pack "${resolution.name}" is installed but ${resolution.state}; enable it first`);
-  }
+  const dependencyBlockers = packDependencies.requiredReadinessProblems(record.manifest, { requireEnabled: true });
   if (dependencyBlockers.length) {
     throw new Error(`Capability pack "${name}" cannot be enabled: required dependency not ready: ${dependencyBlockers.join("; ")}`);
   }
@@ -302,6 +296,23 @@ function enable(name) {
     const error = new Error(`Capability pack "${name}" could not be enabled: ${failures.map(f => `${f.kind} ${f.ref}: ${f.error}`).join("; ")}`);
     error.failures = failures;
     throw error;
+  }
+
+  // A provider can change in another process while module activation is in
+  // progress. Re-read the dependency set before making workflows, knowledge,
+  // and the pack itself live; otherwise a dependent could become visible
+  // after its authority was withdrawn. Roll back activated modules and fail
+  // closed if the second check disagrees with the first.
+  const lateDependencyBlockers = packDependencies.requiredReadinessProblems(record.manifest, { requireEnabled: true });
+  if (lateDependencyBlockers.length) {
+    for (const module of activated.modules) {
+      try { moduleLifecycle.disable(module.name); } catch {}
+      repository.setComponentState(name, "module", module.name, "installed");
+    }
+    repository.setPackState(name, "error", {
+      error: `required dependency changed during enable: ${lateDependencyBlockers.join("; ")}`,
+    });
+    throw new Error(`Capability pack "${name}" cannot be enabled: required dependency changed during enable: ${lateDependencyBlockers.join("; ")}`);
   }
 
   for (const component of repository.listComponents(name, { kind: "workflow" })) {
