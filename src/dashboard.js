@@ -5,7 +5,7 @@ const path = require("path");
 const os = require("os");
 const { timingSafeCompare } = require("./crypto-utils");
 const { execFileSync } = require("child_process");
-const { callDashboardTool, getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval, renderContinuationApprovalPreview, loadWatches } = require("./tools");
+const { callDashboardTool, getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval, renderContinuationApprovalPreview, loadWatches, syncToolRegistry } = require("./tools");
 const dynamicTools = require("./dynamic-tools");
 
 // Restore persisted platform modules in this process so module tools resolve
@@ -52,6 +52,7 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 // The dashboard is a separate process in production. Converge migrations here
 // as well as in the MCP process so authentication routes never race startup.
 dbStore.runPendingMigrations();
+syncToolRegistry();
 
 const app = express();
 app.use("/static", express.static(path.join(__dirname, "..", "static")));
@@ -1324,12 +1325,16 @@ registerKvRoutes({
 registerStatsToolsRoutes({ app, dbStore, getToolDefsForSource });
 
 app.get("/api/tool-policy", (req, res) => {
-  let records = getToolDefsForSource("dashboard");
+  const sources = String(req.query.source || "mcp,dashboard,agent").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+  // A single-source inspection must use that source's live catalog. The
+  // dashboard catalog is intentionally narrower than the agent/MCP catalogs;
+  // using it unconditionally makes valid requests such as source=agent,
+  // name=bash appear to be missing.
+  let records = getToolDefsForSource(sources.length === 1 ? sources[0] : "dashboard");
   if (req.query.name) records = records.filter(tool => tool.name === req.query.name);
   if (req.query.name && records.length === 0) return res.status(404).json({ ok: false, error: "Tool not found: " + req.query.name });
   const limit = Number.parseInt(req.query.limit || "100", 10);
   records = records.slice(0, Number.isFinite(limit) && limit > 0 ? Math.min(limit, 200) : 100);
-  const sources = String(req.query.source || "mcp,dashboard,agent").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
   const decisions = buildPolicyInspection(records, sources);
   res.json({ total: decisions.length, sources, summary: summarizePolicyInspection(decisions), decisions });
 });
