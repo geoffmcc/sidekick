@@ -182,6 +182,8 @@ assert.strictEqual(requiresToolUse("How should Sidekick phrase a blocked-tool wa
 assert.strictEqual(requiresToolUse("Review the Sidekick routing heuristics for edge cases."), false);
 assert.strictEqual(requiresToolUse("What tools should we build next for Sidekick?"), false);
 assert.strictEqual(requiresToolUse("Which models should Sidekick support next?"), false);
+assert.strictEqual(requiresToolUse("Use the browser automation capability to verify the login page."), true);
+assert.strictEqual(classifyEvidenceRequirement("Use the browser automation capability to verify the login page.").reason, "named_capability_request");
 assert.strictEqual(requiresToolUse("What is the capital of France?"), false);
 assert.strictEqual(requiresToolUse("Explain quantum entanglement in simple terms."), false);
 
