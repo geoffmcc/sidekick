@@ -26,6 +26,7 @@ const repository = require('../src/workflows/repository');
 const runner = require('../src/workflows/runner');
 const platformKernel = require('../src/platform/kernel');
 const dbStore = require('../src/db');
+const dispatcher = require('../src/tools/dispatcher');
 
 let failures = 0;
 async function test(label, fn) {
@@ -215,6 +216,42 @@ function baseDefinition(overrides = {}) {
     assert.strictEqual(workflow.steps[1].state, 'pending', 'the later step never ran');
     const execution = platformKernel.getExecution(run.execution_id);
     assert.strictEqual(execution.state, 'failed');
+  });
+
+  await test('WD.7a: always cleanup runs after an unexpected dispatcher exception', async () => {
+    repository.registerWorkflowDefinition({
+      name: 'core/exception-cleanup-flow',
+      version: '1.0.0',
+      title: 'Exception cleanup flow',
+      description: 'Ensures cleanup survives a thrown dispatch error',
+      inputs: {},
+      steps: [
+        { name: 'throws', tool: 'get', args: { key: 'throwing-key' }, expect: 'text', on_error: 'fail' },
+        { name: 'cleanup', tool: 'store', args: { key: 'workflow-cleanup-key', value: 'cleanup-ran' }, expect: 'text', on_error: 'continue', always: true },
+      ],
+      result: {},
+    }, { ownerKind: 'core' });
+
+    const originalDispatch = dispatcher.callInternalTool;
+    dispatcher.callInternalTool = async (tool, args, options) => {
+      if (tool === 'get' && args.key === 'throwing-key') {
+        const error = new Error('unsanitized internal failure should not escape');
+        error.code = 'fixture_dispatch_failure';
+        throw error;
+      }
+      return originalDispatch(tool, args, options);
+    };
+    try {
+      const run = await runner.runWorkflowDefinition('core/exception-cleanup-flow', {});
+      assert.strictEqual(run.status, 'failed', JSON.stringify(run));
+      assert.strictEqual(run.steps[0].status, 'failed');
+      assert.strictEqual(run.steps[1].status, 'ok', 'cleanup step must still dispatch');
+      assert.ok(!JSON.stringify(run).includes('unsanitized internal failure'), 'raw thrown error leaked into the run result');
+      const stored = dbStore.getDb().prepare('SELECT value_json FROM kv_store WHERE key = ?').get('workflow-cleanup-key');
+      assert.strictEqual(JSON.parse(stored.value_json).value, 'cleanup-ran');
+    } finally {
+      dispatcher.callInternalTool = originalDispatch;
+    }
   });
 
   // --- WD.8 conditions -----------------------------------------------------
