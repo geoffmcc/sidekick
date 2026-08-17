@@ -9,6 +9,10 @@
 const { z } = require("zod");
 const dbStore = require("../../db");
 
+function refreshKnowledgeFts() {
+  if (typeof dbStore.rebuildKnowledgeFts === "function") dbStore.rebuildKnowledgeFts();
+}
+
 // --- Knowledge Tool ---
 
 async function sidekick_knowledge({ action, id, category, title, content, tags, query, limit }) {
@@ -20,18 +24,37 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
       if (!query) return { content: [{ type: "text", text: "Error: query is required for search" }], isError: true };
       const searchLimit = limit || 10;
 
-      // Search in title, content, and tags
-      const rows = db.prepare(`
-        SELECT id, category, title, content, tags, updated_at
-        FROM knowledge
-        WHERE enabled = 1 AND (
-          title LIKE ? OR
-          content LIKE ? OR
-          tags LIKE ?
-        )
-        ORDER BY updated_at DESC
-        LIMIT ?
-      `).all(`%${query}%`, `%${query}%`, `%${query}%`, searchLimit);
+      const ftsQuery = query.trim().split(/\s+/).filter(Boolean)
+        .map(term => `"${term.replace(/"/g, '""')}"`).join(" AND ");
+      const categoryClause = category ? " AND k.category = ?" : "";
+      const ftsParams = category ? [ftsQuery, category, searchLimit] : [ftsQuery, searchLimit];
+      let rows;
+      try {
+        rows = db.prepare(`
+          SELECT k.id, k.category, k.title, k.content, k.tags, k.updated_at
+          FROM knowledge k
+          JOIN knowledge_fts f ON f.rowid = k.id
+          WHERE k.enabled = 1 AND knowledge_fts MATCH ?${categoryClause}
+          ORDER BY bm25(knowledge_fts), k.updated_at DESC
+          LIMIT ?
+        `).all(...ftsParams);
+      } catch (error) {
+        const fallbackCategoryClause = category ? " AND category = ?" : "";
+        const fallbackParams = category
+          ? [`%${query}%`, `%${query}%`, `%${query}%`, category, searchLimit]
+          : [`%${query}%`, `%${query}%`, `%${query}%`, searchLimit];
+        rows = db.prepare(`
+          SELECT id, category, title, content, tags, updated_at
+          FROM knowledge
+          WHERE enabled = 1 AND (
+            title LIKE ? OR
+            content LIKE ? OR
+            tags LIKE ?
+          )${fallbackCategoryClause}
+          ORDER BY updated_at DESC
+          LIMIT ?
+        `).all(...fallbackParams);
+      }
 
       return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }] };
     }
@@ -82,6 +105,7 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
         INSERT INTO knowledge (category, title, content, tags, enabled, version_added, updated_at)
         VALUES (?, ?, ?, ?, 1, ?, ?)
       `).run(category, title, content, tags || '', now, now);
+      refreshKnowledgeFts();
 
       return { content: [{ type: "text", text: `Added knowledge entry with id: ${result.lastInsertRowid}` }] };
     }
@@ -106,6 +130,7 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
       params.push(id);
 
       db.prepare(`UPDATE knowledge SET ${updates.join(", ")} WHERE id = ? AND enabled = 1`).run(...params);
+      refreshKnowledgeFts();
 
       return { content: [{ type: "text", text: `Updated knowledge entry ${id}` }] };
     }
@@ -113,6 +138,7 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
     if (action === "delete") {
       if (!id) return { content: [{ type: "text", text: "Error: id is required for delete" }], isError: true };
       db.prepare("UPDATE knowledge SET enabled = 0, updated_at = ? WHERE id = ?").run(now, id);
+      refreshKnowledgeFts();
       return { content: [{ type: "text", text: `Soft-deleted knowledge entry ${id}` }] };
     }
 
@@ -124,6 +150,7 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
         return { content: [{ type: "text", text: "Error: purge only removes disabled entries. Run action=delete first to soft-delete the entry." }], isError: true };
       }
       db.prepare("DELETE FROM knowledge WHERE id = ? AND enabled = 0").run(id);
+      refreshKnowledgeFts();
       return { content: [{ type: "text", text: `Purged disabled knowledge entry ${id}` }] };
     }
 

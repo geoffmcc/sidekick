@@ -34,18 +34,26 @@ function main() {
 
   const count = db.prepare("SELECT COUNT(*) AS count FROM knowledge WHERE enabled = 1").get().count;
   if (count > 0 && !force) {
+    const fts = typeof dbStore.rebuildKnowledgeFts === "function"
+      ? dbStore.rebuildKnowledgeFts()
+      : null;
     console.log(`[KnowledgeSeed] Skipped: knowledge table already has ${count} enabled entr${count === 1 ? "y" : "ies"}`);
+    if (fts && fts.success) console.log(`[KnowledgeSeed] Rebuilt knowledge FTS index (${fts.count} rows)`);
     return;
   }
 
   const sql = fs.readFileSync(seedPath, "utf8");
   db.exec(sql);
+  const fts = typeof dbStore.rebuildKnowledgeFts === "function"
+    ? dbStore.rebuildKnowledgeFts()
+    : null;
 
   const seeded = db.prepare(
     "SELECT COUNT(*) AS count FROM knowledge WHERE version_added = ? AND enabled = 1"
   ).get("seed-2026-06-16-current").count;
 
   console.log(`[KnowledgeSeed] Imported ${seeded} seeded knowledge entries`);
+  if (fts && fts.success) console.log(`[KnowledgeSeed] Rebuilt knowledge FTS index (${fts.count} rows)`);
 }
 
 try {

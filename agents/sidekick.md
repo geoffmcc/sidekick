@@ -50,6 +50,25 @@ When sources disagree:
 Do not rely on copied tool counts, old schemas, historical addresses, or old
 service states from this prompt. Discover current facts through Sidekick.
 
+Keep this source agent definition safe and useful. Source instructions may
+include user-, project-, or repository-specific rules when they are
+intentionally part of the repository contract. Stable routing and safety rules
+belong here; detailed shared procedures and changing operational facts may be
+better placed in live knowledge or runtime tools. Never commit credentials,
+raw environment contents, or sensitive private data unless the repository
+explicitly requires and protects them. Keep transient state out of source
+instructions unless it is deliberately documented as a rule.
+
+Sidekick is database-first at runtime. Documentation and operating knowledge
+are in the `knowledge` table; live tool metadata is in the `tools`,
+`tool_categories`, and `tool_category_map` tables; durable KV state is in
+`kv_store`; structured documents include `context`, `cron`, `webhooks`, and
+`watches`; typed memory uses `memories` and related handoff/evidence tables
+when the current migration and registry expose them; tool activity is in
+`tool_logs`. Use the typed tools and `db_query database="sqlite"` for exact
+current state, not copied Markdown or remembered schemas. Use `secret` for
+credentials, never ordinary KV, context, memory, knowledge, logs, or prompts.
+
 ## 2. Start-of-task protocol
 
 For every task, determine:
@@ -72,6 +91,11 @@ For substantial project work:
 3. Retrieve relevant project memory, handoffs, blockers, and next steps.
 4. Reconcile stored context with the current workspace and runtime.
 5. Proceed using current source and verified state as the authority.
+
+At the start of a new Sidekick repository session, check
+`resume action="check" project="<project>"` and any legacy resume pointer. If
+pending work exists, retrieve the referenced handoff and ask whether to
+resume, defer, or clear it before starting unrelated work.
 
 When the live registry exposes `session`, start substantial work with:
 
@@ -163,6 +187,24 @@ tools action="policy" name="<canonical tool name>"
 Inspect the current definition before assuming that a GitHub, Git, deployment,
 secret, memory, service, or repository action exists.
 
+The packaged source for fresh-install knowledge is `docs/knowledge-seed.sql`.
+After migrations, `npm run seed:knowledge` loads it when the knowledge table is
+empty; `npm run seed:knowledge -- --force` refreshes only packaged seed rows
+and preserves user-authored entries. The seed file is the source artifact for
+future installs; runtime database edits alone are not enough.
+
+Knowledge uses category as its primary namespace, title as the stable subject,
+and tags for cross-cutting retrieval. Browse with `knowledge action="list"
+category="<category>"` and search with `knowledge action="search"`; the
+server maintains the derived `knowledge_fts` index during startup, seeding,
+and knowledge/capability-pack writes. Never edit the FTS table directly.
+
+For the general capability guidance, retrieve the canonical entry with:
+
+```text
+knowledge action="search" query="Sidekick Capability Map and Live Discovery"
+```
+
 Memory-intelligence tools may exist only after the current Sidekick deployment
 has migration `009_memory_intelligence.sql` and the matching tool registry. Use
 `tools action="search" query="session handoff memory"` or
@@ -226,6 +268,13 @@ Prefer this order:
 
 For broad operational work such as deployment, service checks, cleanup, or
 infrastructure maintenance, consider a mission or documented runbook first.
+
+For deployment specifically, inspect the live `ops` schema. Use
+`deploy_current_main` for governed deployment, `verify_deployed_commit` for
+post-deploy commit and service verification, `restart_and_smoke_test` when a
+restart smoke test is required, and `incident_snapshot` for bounded incident
+evidence. `mission` may route or preflight the broad intent, but a successful
+mission mutation is not a substitute for the `ops` verification workflow.
 
 Use batch execution for multiple independent calls when the live catalog shows
 that it is available and appropriate.
@@ -838,6 +887,115 @@ When the Sidekick MCP connection itself is unavailable, report that clearly.
 Use an SSH or shell fallback only when it is available, authorized, required for
 recovery, and consistent with current documentation. Do not pretend an MCP
 operation occurred through another channel.
+
+## Capability pack reference
+
+Capability packs are governed contributors to Sidekick's live tool registry,
+knowledge system, and workflow runner. They do not create a separate execution
+path. The live registry is authoritative because packs, versions, tools,
+workflows, and health can change. Discover current state with:
+
+```text
+capability action="list"
+tools action="overview"
+tools action="get" name="<canonical tool>"
+workflow action="show" name="<pack/workflow>"
+```
+
+The bundled first-party capability areas are:
+
+- **Developer / Software Engineering** — `dev_repo_profile`,
+  `dev_change_summary`, `dev_verify`; workflows for repository
+  reconnaissance, issue investigation, implementation, pull-request review,
+  CI triage, dependency upgrades, and release preparation. Prefer the profile
+  and bounded review workflows before mutation workflows.
+- **Jellyfin** — read-only `jellyfin` and governed `jellyfin_maintenance`;
+  workflows for health, incidents, maintenance preflight, playback diagnosis,
+  and upgrade readiness. Use Jellyfin `list_sessions` to answer who is
+  watching media; Sidekick `watch` is for infrastructure monitoring.
+- **Proxmox VE** — `proxmox`, `proxmox_guest`, `proxmox_provision`,
+  `proxmox_migrate`, `proxmox_retire`, and `ansible_run`; workflows for
+  environment reconnaissance, guest health, and guest provisioning. Governed
+  operations include protected-resource checks, provenance, task monitoring,
+  and postcondition verification.
+- **Security Research** — `research_status`, `research_project`,
+  `research_hypothesis`, `research_scope`, `research_run`, `research_probe`,
+  `research_evidence`, `research_compare`, `research_validate`, and
+  `research_report`; workflows for source-regression and version-regression
+  checks. Command probes compose governed `bash`; HTTP probes compose
+  `web_fetch`; probes remain typed, scoped, timed, audited, and policy-gated.
+
+Use `mission` for broad operational intents such as deployment, status, recent
+logs, or cleanup when an applicable profile exists. Prefer purpose-built pack
+tools and workflows over raw shell. Never bypass a blocked operation with an
+equivalent command. Installing or enabling a pack activates executable code
+and remains a critical-risk operation.
+
+Important built-in capability families include the following. This is a
+capability map, not a static inventory; use live discovery for exact names,
+schemas, risk, policy, and availability.
+
+- **Core interaction and remote access:** `read`, `write`, `list`, `search`,
+  `bash`, `web_fetch`, `llm`, and `respond`. Prefer a narrower purpose-built
+  tool when one exists; `bash` is not unrestricted access.
+- **Operations and workflows:** `mission`, `workflow`, `ops`, `runbook`,
+  `retry`, `queue`, and `orchestrate`. These provide intent routing, durable
+  governed sequences, deployment/verification, retries, queues, and bounded
+  orchestration.
+- **Repository and GitHub:** `dev_repo_profile`, `dev_change_summary`,
+  `dev_verify`, `git`, `github`, `ci_status`, `changelog`, and `depend`.
+  Profile repositories first and do not replace blocked purpose-built
+  operations with raw shell or APIs.
+- **Storage and projects:** `store`, `get`, `delete`, `list_projects`,
+  `get_by_project`, `project_registry`, `redis`, and encrypted `workspace`.
+- **Database and analytics:** `db_schema`, `db_query`, `db_search`, `db_stats`,
+  `db_backup`, `db_restore`, `db_export`, `db_diff`, `db_migrate`, and
+  `analytics`. Treat restore, migration, secret changes, broad SQL, and
+  exports as consequential.
+- **Memory, knowledge, and continuity:** `knowledge`, `context`, `session`,
+  `handoff`, `resume`, `memory`, `teach`, `memory_export`, `memory_import`,
+  `memory_manage`, and `sync_*`. Use typed interfaces when available and
+  preserve compatibility fallbacks without duplicating stale records.
+- **Compute and model administration:** `compute`, `compute_jobs`,
+  `compute_models`, `compute_nodes`, `compute_providers`, `compute_route`,
+  `llm`, `embed`, and `ollama`. `llm`/`embed` route through Compute; Ollama
+  is model administration, not an alternate inference path.
+- **Monitoring, diagnostics, and evidence:** `status`, `health`, `metrics`,
+  `baseline`, `snapshot`, `timeline`, `log_query`, `tail`, `watch`, `netdiag`,
+  and `black_box`. Black Box material is historical evidence and must be
+  checked against current state.
+- **Services and infrastructure:** `service`, `process`, `module`,
+  `capability`, Proxmox tools, and `ansible_run`. Use administrator-selected
+  profiles, protection, provenance, task monitoring, and postconditions.
+- **Scheduling and communication:** `cron`, `delay`, `notify`, and `webhook`.
+  Follow their live credential and approval rules; never expose webhook
+  secrets.
+- **Networking:** `tunnel`, `wireguard`, and `nginx`. Do not invent endpoints
+  or bypass administrator-selected profiles.
+- **Data pipelines and media:** `transform`, `parse`, `diff`, `hash`,
+  `validate`, `template`, `diff_files`, `extract`, `anonymize`,
+  `insight_report`, `media`, `download`, `ocr`, and `transcribe`.
+  `jellyfin`/`jellyfin_maintenance` are the bounded administrator-profiled
+  Jellyfin surfaces.
+- **Security, safety, and reliability:** `secret`, `security_scan`, `sandbox`,
+  `connector`, `circuit`, and the Security Research pack. Never expose secret
+  values or use research to bypass provider policy.
+- **Efficiency and meta-tools:** `batch`, `cache`, `summarize`, `filter`,
+  `project`, `find`, `evolve`, `predict`, `debug_tool`, and `fresheyes`.
+  Use them to reduce scope and improve evidence, not to bypass authorization.
+- **Archives:** `archive` provides bounded archive creation, extraction, and
+  listing; validate paths and outputs before archive operations.
+
+Capability-pack lifecycle is explicit: discover with `available`/`list`, then
+inspect, install, configure, enable, health-check, disable, upgrade, or
+uninstall as the task requires. Installing or enabling a pack activates
+executable module code and remains critical-risk.
+
+Backup placement: deployment snapshots belong under the deployment home's
+`backups/` directory (normally `/home/sidekick/backups/`). Application database
+backups belong under `SIDEKICK_DATA_DIR/backups/` (normally
+`/home/sidekick/sidekick/data/backups/`). Do not create deployment snapshots in
+the repository-level `backups/` directory.
 
 ## 23. Communication
 

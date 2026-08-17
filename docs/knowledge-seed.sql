@@ -20,15 +20,26 @@ DELETE FROM knowledge WHERE version_added = 'seed-2026-06-16-current';
 
 INSERT INTO knowledge (category, title, content, tags, enabled, version_added, updated_at) VALUES
 ('architecture', 'Database-First Access Model',
-'Sidekick runtime knowledge is database-first. Agents should not treat markdown files as the primary runtime source of truth. The database file is SIDEKICK_DB_FILE when set, otherwise SIDEKICK_DATA_DIR/sidekick.db. In the standard deployment this is /home/sidekick/sidekick/data/sidekick.db.
+'Sidekick runtime knowledge is database-first. Agents should not treat Markdown files as the primary runtime source of truth. The database file is SIDEKICK_DB_FILE when set, otherwise SIDEKICK_DATA_DIR/sidekick.db. In the standard deployment it is /home/sidekick/sidekick/data/sidekick.db.
+
+Authoritative runtime areas:
+- knowledge: documentation, procedures, policies, operations, architecture, and pack guidance.
+- tools, tool_categories, tool_category_map: live tool names, schemas, categories, risk, enabled/deprecated state, and mappings.
+- kv_store: compatibility key-value project state; use typed memory and handoff tools when available.
+- json_documents: named structured documents such as context, cron, webhooks, and watches.
+- memories and memory intelligence tables: bounded typed memories, handoffs, evidence, entities, relationships, task sessions, and audit events when the current migration and registry expose them.
+- tool_logs: redacted activity history, useful for recent telemetry but not durable knowledge.
 
 Default retrieval order:
-1. Use sidekick_knowledge for documentation, policies, operations, protocols, and architecture.
-2. Use sidekick_tools for broad tool overview, grouped manifests, and capability search.
-3. Query the tools registry tables for exact current tool metadata.
-4. Use KV/context tools for project memory and prior decisions.
-5. Read markdown files only when the database entry is missing, stale, or the task is to edit docs.',
-'database,agent,access,sqlite,knowledge', 1, 'seed-2026-06-16-current', datetime('now')),
+1. Search knowledge for documentation, policies, procedures, operations, and architecture.
+2. Use tools action="overview" or action="search" for broad capability discovery.
+3. Use tools action="get" and action="policy", or read-only db_query against the registry tables, for exact current schemas and policy.
+4. Prefer session, handoff, and memory for scoped continuity when available.
+5. Use KV/context/resume compatibility tools when typed memory is unavailable.
+6. Read Markdown when the database entry is missing, stale, or the task is editing documentation.
+
+Use secret for credentials, never ordinary KV, context, memory, knowledge, logs, prompts, or source files.',
+'database,agent,access,sqlite,knowledge,memory', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('architecture', 'Authoritative SQLite Tables',
 'Core Sidekick tables:
@@ -36,14 +47,15 @@ Default retrieval order:
 - tools: synced tool name, description, args_json, risk, enabled, deprecated, and updated_at metadata.
 - tool_categories: category name, icon, and sort_order.
 - tool_category_map: tool-to-category mapping.
-- kv_store: durable key-value memory with project and source metadata.
-- memories: structured automatic and extracted memories with type, project, confidence, source, confirmation, lifecycle, and sync metadata.
+- kv_store: durable compatibility key-value memory with project and source metadata.
 - json_documents: named structured documents such as context, cron, webhooks, and watches.
-- tool_logs: redacted tool activity history.
+- memories: structured memories with type, project, confidence, source, confirmation, lifecycle, and sync metadata.
+- memory_handoffs, memory_evidence, memory_entities, memory_relationships, memory_task_sessions, and memory_audit_events: first-class continuity, provenance, entity, relationship, task-session, and audit artifacts when migration 009_memory_intelligence.sql is applied.
+- tool_logs: redacted tool activity history; telemetry is not automatically durable knowledge.
 - meta: schema metadata including schema_version.
 
-Use sidekick_db_schema to inspect the schema and sidekick_db_query database="sqlite" for exact current rows.',
-'database,schema,tables,sqlite', 1, 'seed-2026-06-16-current', datetime('now')),
+Use db_schema to inspect the schema and read-only db_query database="sqlite" for exact current rows. Do not assume a table, migration, column, or typed tool exists without checking the live schema and registry.',
+'database,schema,tables,sqlite,knowledge,memory', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('architecture', 'Runtime Services',
 'Sidekick normally runs three Node.js services:
@@ -182,15 +194,18 @@ Use sidekick_db_backup for SQLite backup. Treat all backups as sensitive operati
 
 ('best-practices', 'Agent Retrieval Protocol',
 'When an agent needs information about Sidekick:
-1. Search sidekick_knowledge with specific terms.
-2. If the question is about available tools, use sidekick_tools action="overview" or sidekick_tools action="search".
-3. If the question is about project-specific memory, use sidekick_get, sidekick_delete, sidekick_get_by_project, or sidekick_context.
-4. If the question is about recent activity, use sidekick_log_query.
-5. Query the tools registry tables when exact raw registry rows are needed.
-6. Read markdown files only when the database is missing the answer or when editing documentation.
+1. Search knowledge with specific terms for documentation, policies, procedures, operations, and architecture.
+2. If the question is about available tools, use tools action="overview" or tools action="search".
+3. Before an unfamiliar or consequential call, use tools action="get" name="<canonical>" and tools action="policy" name="<canonical>".
+4. If the task is repository work, prefer dev_repo_profile and the Developer pack''s bounded workflows.
+5. If the task is broad operations, prefer mission or a documented workflow; inspect ops for packaged deployment and verification actions.
+6. If the task is project continuity, prefer session, handoff, memory, and resume; use get, store, context, and project compatibility paths when typed tools are unavailable.
+7. If the question is about recent activity, use log_query or the relevant monitoring/evidence tool.
+8. Query the tools registry tables when exact raw registry rows are needed.
+9. Read Markdown only when the database is missing the answer, the entry is stale, or the task is editing documentation.
 
-This keeps prompts small and reduces stale documentation drift.',
-'agent,protocol,retrieval,tokens', 1, 'seed-2026-06-16-current', datetime('now')),
+When sources disagree, verify current repository/runtime state and update or supersede stale knowledge rather than creating contradictory duplicates. Keep retrieval scoped and do not load unrelated context.',
+'agent,protocol,retrieval,tokens,knowledge,tools,memory', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('best-practices', 'Proactive Durable Memory Policy',
 'Agents working with Sidekick should proactively store durable findings without waiting for the user to prompt.
@@ -206,15 +221,22 @@ Do not store trivial transient status. If unsure, briefly state what will be sto
 'memory,policy,agents,workflow,durable-findings', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('best-practices', 'Tool Selection Policy',
-'Prefer narrow, structured tools before broad tools:
-- Use sidekick_mission for broad operational intents before raw shell or ad hoc tool chains.
-- Use sidekick_search, sidekick_find, sidekick_filter, and sidekick_summarize before reading huge files.
-- Use sidekick_db_schema and read-only sidekick_db_query for database inspection.
-- Use sidekick_status or sidekick_health before raw process/service commands.
-- Use sidekick_log_query for tool history.
-- Use sidekick_bash only when no narrower tool fits.
-- Use sidekick_write, sidekick_db_restore, sidekick_evolve, sidekick_runbook, and sidekick_sandbox only when the task explicitly needs their power.',
-'tool-selection,best-practices,safety', 1, 'seed-2026-06-16-current', datetime('now')),
+'Prefer the narrowest structured tool that can safely complete the task:
+- Use a purpose-built Sidekick tool before a broad tool.
+- Use mission for broad operational intent when an applicable profile exists.
+- Use workflow for durable governed multi-step execution.
+- Use ops for packaged deployment, deployed-commit verification, restart smoke tests, and incident snapshots after inspecting its live schema.
+- Use dev_repo_profile before ad hoc repository inspection.
+- Use status or health before raw process/service commands.
+- Use db_schema and read-only db_query for database inspection.
+- Use log_query, monitoring, and black_box tools for current evidence and historical incident captures respectively.
+- Use search, find, filter, summarize, tail, or batch to bound large inputs when available.
+- Use bash only when no narrower suitable tool exists; never use it to bypass a policy block.
+- Honor the returned risk, approval, and confirmation requirements.
+- Verify consequential postconditions with a fresh independent read.
+
+Do not assume tool names, actions, argument schemas, risk levels, or approval modes from old transcripts. Discover them with tools overview/search/get/policy. Do not claim success, provenance, artifact custody, redaction, or project association beyond returned evidence.',
+'tool-selection,best-practices,safety,risk,approval,workflow', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('best-practices', 'Token Efficiency',
 'For token efficiency, avoid dumping large files or logs. Search first, then read the smallest relevant slice.
@@ -255,14 +277,16 @@ Avoid direct writes unless you understand the schema and have a backup.',
 'database,safety,readonly,sql', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('best-practices', 'Documentation Update Policy',
-'When Sidekick behavior changes, update both human docs and agent-facing knowledge:
-- Human docs live under docs/ and README.md.
-- Runtime agent guidance should be inserted into the knowledge table.
-- AGENTS.md should stay short and point agents to database-backed knowledge.
-- Tool changes should update TOOL_DEFS, TOOL_SCHEMAS, TOOL_CATEGORIES, TOOL_RISK, docs/tools-reference.md, and relevant knowledge entries.
+'When Sidekick behavior or operating guidance changes, keep the correct layer authoritative:
+- Human-facing explanations and repository history live under docs/ and README.md.
+- Runtime agent guidance and procedures belong in the knowledge table.
+- AGENTS.md is a repository instruction contract. It may contain user-, project-, or repository-specific rules when they are intentionally part of that repository''s contract.
+- agents/sidekick.md is the Sidekick execution-subagent contract and may also contain scoped project or user instructions when deliberately configured for that repository.
+- Keep stable retrieval rules, safety boundaries, capability families, and tool-selection patterns in source instructions; put detailed shared procedures and changing operational facts in knowledge or the live registry when that is the better maintenance layer.
+- Tool changes should update the registry definitions, schemas, categories, risk metadata, relevant docs, and relevant knowledge entries.
 
-Do not rely only on markdown if the information is needed by agents during normal operation.',
-'documentation,knowledge,maintenance', 1, 'seed-2026-06-16-current', datetime('now')),
+Do not commit credentials, raw environment contents, or sensitive private data unless the repository explicitly requires and protects them. Keep transient state out of source instructions unless it is deliberately documented as a rule. Update existing canonical knowledge entries before creating duplicates.',
+'documentation,knowledge,maintenance,agents,source', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('best-practices', 'Security Operating Posture',
 'Treat Sidekick as remote shell access. The safest normal posture is private network access plus strong credentials.
@@ -420,16 +444,16 @@ The dashboard proxies agent routes to 127.0.0.1:SIDEKICK_AGENT_PORT.',
 'agent,troubleshooting,llm,operations', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('operations', 'Packaged Operations Workflows',
-'Use sidekick_mission for broad operational intents. It provides run profiles, deterministic routing, preflight checks, and optional execution through safer existing tools before raw shell.
+'Use mission for broad operational intents. It provides run profiles, deterministic routing, preflight checks, and optional execution through safer existing tools before raw shell.
 
-Use sidekick_ops for compact operational verdicts:
-- verify_deployed_commit: fetch origin/main, compare HEAD to origin/main, report dirty files, and check core services.
-- restart_and_smoke_test: restart sidekick-dashboard and sidekick-agent, check MCP health, and optionally schedule sidekick-mcp restart with restart_mcp=true.
-- deploy_current_main: require a clean working tree, fast-forward to origin/main, run npm install --omit=dev, restart dashboard and agent, and schedule MCP restart after the response.
-- incident_snapshot: collect service state, resource status, git state, top processes, and recent service logs.
+Inspect the live ops schema before use. The packaged ops actions are:
+- verify_deployed_commit: fetch origin/main, compare the deployed checkout with origin/main, report dirty/ahead/behind state, and verify core services.
+- restart_and_smoke_test: restart the governed Sidekick services, check MCP health, and optionally schedule a sidekick-mcp restart with restart_mcp=true.
+- deploy_current_main: require the applicable clean-tree/preflight conditions, advance to origin/main, install production dependencies as defined by the live workflow, restart services, and schedule MCP restart when required.
+- incident_snapshot: collect bounded service, resource, Git, process, and recent-log evidence.
 
-sidekick_mission and sidekick_ops are critical risk because they can deploy code and restart services. MCP self-restarts are scheduled after the response so the caller can receive a verdict before reconnecting.',
-'operations,deploy,runbook,workflow,smoke-test,incident', 1, 'seed-2026-06-16-current', datetime('now')),
+Use mission for routing/preflight and ops for these specialized operational verdicts. A successful mutation or script exit is not deployment proof; verify the deployed commit and service health. Honor policy and approval results. MCP self-restarts are scheduled after the response when the workflow requires it so the caller can receive a verdict before reconnecting.',
+'operations,deploy,runbook,workflow,smoke-test,incident,ops', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('development', 'Adding Built-In Tools',
 'A built-in tool requires coordinated code updates:
@@ -446,10 +470,16 @@ After restart, syncToolRegistry writes the updated metadata into the database.',
 'development,tools,registry,workflow', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('development', 'Knowledge Versus Markdown',
-'Markdown docs are useful for humans and repository history. The knowledge table is useful for agents at runtime. Keep both aligned when behavior matters operationally.
+'Markdown docs are useful for humans and repository history. The knowledge table and live tool registry are useful for agents at runtime. Keep the layers aligned when behavior matters operationally.
 
-AGENTS.md should remain compact and mostly point into the knowledge table and tool registry. Long procedural guidance belongs in knowledge entries. Full explanations belong in docs/ and can be mirrored into knowledge as concise operational entries.',
-'development,docs,knowledge,agents', 1, 'seed-2026-06-16-current', datetime('now')),
+AGENTS.md is a repository instruction contract, not necessarily a generic-only file. It may contain user-, project-, or repository-specific instructions that future agents need to follow. agents/sidekick.md is the execution-subagent contract and may likewise be scoped intentionally to a repository or project. Long shared procedural guidance belongs in knowledge entries; source files should retain whatever local instructions are necessary for correct work.
+
+When guidance changes:
+1. Update the canonical knowledge entry or create one only if no suitable entry exists.
+2. Update source instructions for stable bootstrap, routing, safety, verification, or intentionally scoped project/repository rules.
+3. Do not commit credentials, raw environment contents, or sensitive private data unless explicitly required and protected.
+4. Verify that future agents can discover the entry through knowledge search and the relevant tool schema through the live registry.',
+'development,docs,knowledge,agents,source', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('best-practices', 'Agent autonomy for low-risk follow-through',
 'When an agent identifies a low-risk follow-up that is clearly part of the active task, the agent should do it immediately instead of only suggesting it or waiting for a separate go-ahead. This includes updating Sidekick resume keys, cleanup notes, documentation or handoff records, and running reasonable verification commands.
@@ -457,7 +487,29 @@ AGENTS.md should remain compact and mostly point into the knowledge table and to
 Agents should still ask first before destructive actions, broad refactors, deploys, merges, credential or secret changes, production-impacting operations, or changes that could affect unrelated user work.
 
 Use generic agent language in project policies so the guidance applies across tools and clients, not just one agent implementation. Prefer storing durable operating policies in the Sidekick knowledge base, with AGENTS.md acting as a pointer to retrieve project policy and operating knowledge from the database first.',
-'agent-policy,autonomy,handoff,best-practices', 1, 'seed-2026-06-16-current', datetime('now'));
+'agent-policy,autonomy,handoff,best-practices', 1, 'seed-2026-06-16-current', datetime('now')),
+
+('architecture', 'Sidekick Capability Map and Live Discovery',
+'Sidekick exposes a broad governed capability surface. This map helps agents choose a family; the live registry remains authoritative for exact names, schemas, risk, policy, and availability.
+
+Capability families include:
+- Core interaction and remote access: bounded read/write/list/search, bash, web_fetch, llm, and respond.
+- Storage and project state: KV/store, project registry, Redis, and encrypted workspace.
+- Databases and analytics: schema, read-only/query, search, stats, backup, restore, export, diff, migration, and analytics.
+- Git and development: repository profiling, change summaries, verification, Git, GitHub, CI, changelog, and dependency tools.
+- Services and infrastructure: process, service, module, capability-pack lifecycle, Proxmox, and Ansible.
+- Operations and workflows: mission, workflow, ops, runbook, retry, queue, and orchestrate.
+- Scheduling and communication: cron, delay, notifications, and webhooks.
+- Monitoring and evidence: status, health, metrics, baselines, snapshots, timelines, logs, tailing, watches, network diagnostics, and Black Box.
+- Context and learning: knowledge, context, sessions, handoffs, typed memory, teaching, embeddings, portability, and model administration.
+- Compute: provider-neutral providers, models, workers, jobs, routing, LLM, and embedding paths; Ollama is administration, not a separate inference route.
+- Data and media: bounded transformation, parsing, diffing, hashing, validation, templating, extraction, anonymization, reporting, media, download, OCR, transcription, and Jellyfin.
+- Security and reliability: secrets, security scanning, sandbox rollback, connectors, circuit breakers, and authorized security research.
+- Efficiency and meta-tools: batch, cache, summarize, filter, project scoping, find, evolution, prediction, debugging memory, and independent review.
+- Archive operations: bounded archive creation, extraction, and listing.
+
+Installed or bundled capability packs must be discovered with capability action="list"/"available"; inspect before install or enable because pack activation runs executable module code. Registered workflows must be discovered with workflow action="list"/"show" and run through workflow, not recreated ad hoc. Prefer purpose-built tools and workflows over raw shell, honor policy/approval, and verify consequential results with fresh evidence.',
+'capabilities,tools,registry,packs,workflows,discovery', 1, 'seed-2026-06-16-current', datetime('now'));
 
 INSERT INTO knowledge (category, title, content, tags, enabled, version_added, updated_at) VALUES
 ('operations', 'Deployment and Bootstrap Repair',

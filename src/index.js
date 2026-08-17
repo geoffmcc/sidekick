@@ -628,6 +628,17 @@ try {
   throw error;
 }
 
+// Repair the knowledge FTS index on every server boot. This also creates the
+// index on installations that predate FTS-backed knowledge search.
+try {
+  const knowledgeFts = dbStore.rebuildKnowledgeFts();
+  if (knowledgeFts.success) {
+    console.log(`[Knowledge] Rebuilt FTS index (${knowledgeFts.count} rows)`);
+  }
+} catch (error) {
+  console.error('[Knowledge] FTS index repair failed:', error.message);
+}
+
 // Converge the approval-continuation schema after migrations. Migration 025
 // deliberately leaves the additive `approval_execution_recovery_events` columns
 // to this idempotent owner, because migrations run only in this process while
