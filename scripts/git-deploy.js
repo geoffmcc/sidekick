@@ -64,7 +64,26 @@ function acquireLock(result) {
     result.lock = LOCK_DIR;
     return true;
   } catch (error) {
-    fail(result, 'deployment lock is already held', { lock: LOCK_DIR });
+    const pidPath = path.join(LOCK_DIR, 'pid');
+    let lockPid = null;
+    try { lockPid = Number(fs.readFileSync(pidPath, 'utf8').trim()); } catch {}
+    let alive = true;
+    if (Number.isInteger(lockPid) && lockPid > 0) {
+      try {
+        process.kill(lockPid, 0);
+      } catch (probeError) {
+        alive = probeError.code !== 'ESRCH';
+      }
+    }
+    if (Number.isInteger(lockPid) && lockPid > 0 && !alive) {
+      fs.rmSync(LOCK_DIR, { recursive: true, force: true });
+      fs.mkdirSync(LOCK_DIR, { mode: 0o700 });
+      fs.writeFileSync(pidPath, String(process.pid));
+      result.lock = LOCK_DIR;
+      result.stale_lock_recovered = lockPid;
+      return true;
+    }
+    fail(result, 'deployment lock is already held', { lock: LOCK_DIR, lock_pid: lockPid });
     return false;
   }
 }
@@ -90,6 +109,12 @@ function runSeed(cwd) {
 
 function service(action, name) {
   return run('sudo', ['systemctl', action, name], { timeout: 30000, maxBuffer: 1024 * 1024 });
+}
+
+function deploymentServices() {
+  return process.env.SIDEKICK_DEPLOY_SKIP_MCP_LIFECYCLE === '1'
+    ? SERVICES.filter(serviceName => serviceName !== 'sidekick-mcp')
+    : SERVICES;
 }
 
 function serviceStates() {
@@ -181,7 +206,7 @@ function rollbackDeploy(result, previousCommit) {
 
 function restartServices(result) {
   result.restarted_services = result.restarted_services || [];
-  for (const svc of SERVICES) {
+  for (const svc of deploymentServices()) {
     const restart = service('restart', svc);
     result.restarted_services.push({ service: svc, status: restart.ok ? 'restarted' : 'failed' });
   }
@@ -192,7 +217,7 @@ function restartServices(result) {
 
 function stopServices(result) {
   result.stopped_services = {};
-  for (const svc of SERVICES) {
+  for (const svc of deploymentServices()) {
     const stop = service('stop', svc);
     result.stopped_services[svc] = stop.ok ? 'stopped' : 'failed';
     if (!stop.ok) return false;

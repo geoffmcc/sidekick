@@ -41,7 +41,8 @@ function runOpsCommand(command, args, options = {}) {
       timeout: options.timeout || 30000,
       encoding: "utf-8",
       maxBuffer: options.maxBuffer || 10 * 1024 * 1024,
-      cwd: options.cwd
+      cwd: options.cwd,
+      env: options.env ? { ...process.env, ...options.env } : process.env
     });
     return { ok: true, stdout: stdout.trim(), stderr: "" };
   } catch (e) {
@@ -185,7 +186,14 @@ async function sidekick_ops({ action, repo_path, restart_mcp }) {
   if (action === "deploy_current_main") {
     const script = deployScriptPath(repoPath);
     if (!fs.existsSync(script)) return { content: [{ type: "text", text: "Deployment helper not found: " + script }], isError: true };
-    const deployResult = runOpsCommand("node", [script, "deploy"], { timeout: 300000, maxBuffer: 20 * 1024 * 1024 });
+    const deployResult = runOpsCommand("node", [script, "deploy"], {
+      timeout: 300000,
+      maxBuffer: 20 * 1024 * 1024,
+      // The helper runs inside sidekick-mcp. Keep MCP alive until the helper
+      // releases its deployment lock; the restart is scheduled only after the
+      // response has been returned to the caller.
+      env: { SIDEKICK_DEPLOY_SKIP_MCP_LIFECYCLE: "1" },
+    });
     const parsed = parseOpsJson(deployResult);
     const ok = deployResult.ok && parsed?.status === "ok";
     if (ok) scheduleMcpRestart();
