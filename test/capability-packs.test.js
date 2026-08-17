@@ -36,6 +36,7 @@ const { callInternalTool } = require('../src/tools/dispatcher');
 const PACK = 'developer';
 const BUNDLED_PATH = path.resolve(__dirname, '..', 'packs', 'developer');
 const UPGRADE_DIR = path.join(TEST_DATA_DIR, 'developer-1.1.0');
+const FIXTURE_UPGRADE_DIR = path.join(TEST_DATA_DIR, 'fixture-observatory-1.1.0');
 
 let failures = 0;
 function test(label, fn) {
@@ -474,6 +475,40 @@ function buildUpgradeCandidate() {
     const removed = packLifecycle.uninstall('fixture-observatory');
     assert.deepStrictEqual(removed.removed.modules, ['observatory-tools']);
     assert.strictEqual(packRepository.getPack('fixture-observatory'), null);
+  });
+
+  test('CP.19: failed removal of a dropped upgrade component restores package metadata', () => {
+    const fixture = path.resolve(__dirname, 'fixtures', 'third-party-pack');
+    copyTree(fixture, FIXTURE_UPGRADE_DIR);
+    const manifestPath = path.join(FIXTURE_UPGRADE_DIR, 'sidekick.pack.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+    manifest.version = '1.1.0';
+    manifest.modules = [];
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    fs.rmSync(path.join(FIXTURE_UPGRADE_DIR, 'modules'), { recursive: true, force: true });
+
+    packLifecycle.install(fixture, { enable: true });
+    const before = packRepository.getPack('fixture-observatory');
+    const originalUninstall = moduleLifecycle.uninstall;
+    moduleLifecycle.uninstall = () => { throw new Error('simulated component removal failure'); };
+    try {
+      assert.throws(
+        () => packLifecycle.upgrade('fixture-observatory', FIXTURE_UPGRADE_DIR),
+        /simulated component removal failure/
+      );
+    } finally {
+      moduleLifecycle.uninstall = originalUninstall;
+    }
+
+    const restored = packRepository.getPack('fixture-observatory');
+    assert.strictEqual(restored.version, before.version);
+    assert.strictEqual(restored.install_path, before.install_path);
+    assert.ok(fs.existsSync(restored.install_path), 'rollback keeps the previous package installed');
+    assert.ok(moduleRepository.getModule('observatory-tools'), 'dropped module ownership remains after failed cleanup');
+    assert.strictEqual(moduleLoader.isModuleActive('observatory-tools'), true);
+
+    packLifecycle.uninstall('fixture-observatory');
+    fs.rmSync(FIXTURE_UPGRADE_DIR, { recursive: true, force: true });
   });
 
   console.log(`\n${failures === 0 ? 'All Capability Packs v1 tests passed.' : `${failures} capability-pack test(s) FAILED.`}`);

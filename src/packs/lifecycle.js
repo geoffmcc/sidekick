@@ -448,6 +448,19 @@ function upgrade(name, sourcePath, { allowSameVersion = false, allowDowngrade = 
 
     upgradeComponents(updated, inspection, promoted, previousVersion);
   } catch (error) {
+    // updatePackPackage runs before component reconciliation. If a dropped
+    // component cannot be removed, restore the prior package record before
+    // removing the promoted files; otherwise the registry would point at a
+    // deleted package and the old ownership graph would be misreported.
+    try {
+      const current = repository.getPack(name);
+      if (current && (current.version !== previousVersion || current.install_path === promoted)) {
+        repository.restorePackPackage(name, record);
+      }
+    } catch (restoreError) {
+      error.message = `${error.message}; pack metadata rollback failed: ${restoreError.message}`;
+      error.code = "pack_upgrade_rollback_failed";
+    }
     try { if (staged && fs.existsSync(staged)) store.removeDirectory(staged); } catch {}
     try {
       if (promoted && promoted !== previousInstallPath && previousInstallPath && fs.existsSync(previousInstallPath)) store.removeDirectory(promoted);
@@ -476,18 +489,18 @@ function upgradeComponents(record, inspection, installPath, previousVersion) {
   // Components dropped by the new version are removed entirely.
   for (const component of repository.listComponents(record.name, { kind: "module" })) {
     if (nextModules.has(component.ref)) continue;
-    try { moduleLifecycle.uninstall(component.ref); } catch {}
+    moduleLifecycle.uninstall(component.ref);
     repository.removeComponent(record.name, "module", component.ref);
   }
   for (const component of repository.listComponents(record.name, { kind: "workflow" })) {
     if (nextWorkflows.has(component.ref)) continue;
-    try { workflowRepository.removeWorkflowDefinition(component.ref); } catch {}
+    workflowRepository.removeWorkflowDefinition(component.ref);
     repository.removeComponent(record.name, "workflow", component.ref);
   }
   for (const component of repository.listComponents(record.name, { kind: "knowledge" })) {
     if (nextKnowledge.has(component.ref)) continue;
     if (component.detail?.knowledge_id) {
-      try { packKnowledge.removeAsset(component.detail.knowledge_id); } catch {}
+      packKnowledge.removeAsset(component.detail.knowledge_id);
     }
     repository.removeComponent(record.name, "knowledge", component.ref);
   }
