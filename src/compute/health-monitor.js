@@ -17,13 +17,13 @@ class HealthMonitor {
         const adapter = this._getAdapter(provider);
         if (!adapter) return;
         const result = await adapter.health();
-        providerRegistry.updateHealth(providerId, {
+        this._recordHealth(providerId, {
           status: result.healthy ? "healthy" : "unreachable",
           error: result.error || null,
           success: result.healthy,
         });
       } catch (e) {
-        providerRegistry.updateHealth(providerId, {
+        this._recordHealth(providerId, {
           status: "unreachable",
           error: e.message,
           success: false,
@@ -36,6 +36,13 @@ class HealthMonitor {
     // test/CLI processes alive after their foreground work has completed.
     if (timer.unref) timer.unref();
     this._intervals.set(providerId, timer);
+  }
+
+  _recordHealth(providerId, update) {
+    // A short-lived test/CLI process may close its database while a probe is
+    // completing. Health telemetry is advisory; never let that shutdown race
+    // escape as an uncaught exception or fail the foreground operation.
+    try { providerRegistry.updateHealth(providerId, update); } catch {}
   }
 
   stop(providerId) {
@@ -68,14 +75,14 @@ class HealthMonitor {
     if (!adapter) return { healthy: false, error: "No adapter for provider type" };
     try {
       const result = await adapter.health();
-      providerRegistry.updateHealth(providerId, {
+      this._recordHealth(providerId, {
         status: result.healthy ? "healthy" : "unreachable",
         error: result.error || null,
         success: result.healthy,
       });
       return result;
     } catch (e) {
-      providerRegistry.updateHealth(providerId, {
+      this._recordHealth(providerId, {
         status: "unreachable",
         error: e.message,
         success: false,
