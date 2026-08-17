@@ -8,14 +8,58 @@
 
 const { z } = require("zod");
 const dbStore = require("../../db");
+const { loadProcedures } = require("../../core/procedures-store");
+const { redactSensitiveKeysDeep } = require("../../redact");
 
 function refreshKnowledgeFts() {
   if (typeof dbStore.rebuildKnowledgeFts === "function") dbStore.rebuildKnowledgeFts();
 }
 
+function json(value) {
+  return JSON.stringify(redactSensitiveKeysDeep(value));
+}
+
+function promotedContent(sourceType, item) {
+  const body = sourceType === "evolve"
+    ? {
+        kind: "evolved-capability",
+        name: item.name,
+        description: item.description,
+        parameters: item.parameters || {},
+        steps: item.steps || [],
+        validation: item.validation || null,
+        evidence: item.evidence || [],
+      }
+    : {
+        kind: "taught-procedure",
+        name: item.name,
+        description: item.description,
+        parameters: item.parameters || {},
+        steps: item.steps || [],
+        trigger_phrases: item.triggerPhrases || [],
+      };
+  return `Promoted ${sourceType} knowledge.\n\n${JSON.stringify(redactSensitiveKeysDeep(body), null, 2)}`;
+}
+
+function findPromotionSource(source, sourceId) {
+  if (source === "evolve") {
+    const item = dbStore.getGeneratedCapability(sourceId) || dbStore.getGeneratedCapabilityByName(sourceId);
+    if (!item) return { error: `Evolve capability not found: ${sourceId}` };
+    if (item.state !== "active") return { error: `Evolve capability must be active before knowledge promotion (current state: ${item.state})` };
+    if ((item.successCount || 0) < 1) return { error: "Evolve capability must have a successful trial before knowledge promotion" };
+    return { item, version: String(item.version || 1), id: item.id };
+  }
+  if (source === "procedure") {
+    const item = loadProcedures()[sourceId];
+    if (!item) return { error: `Taught procedure not found: ${sourceId}` };
+    return { item, version: String(item.updatedAt || item.createdAt || "1"), id: sourceId };
+  }
+  return { error: "source must be evolve or procedure" };
+}
+
 // --- Knowledge Tool ---
 
-async function sidekick_knowledge({ action, id, category, title, content, tags, query, limit }) {
+async function sidekick_knowledge({ action, id, category, title, content, tags, query, limit, source, source_id, approver }) {
   try {
     const db = dbStore.getDb();
     const now = new Date().toISOString();
@@ -110,6 +154,52 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
       return { content: [{ type: "text", text: `Added knowledge entry with id: ${result.lastInsertRowid}` }] };
     }
 
+    if (action === "promote") {
+      if (!source || !source_id || !category || !approver) {
+        return { content: [{ type: "text", text: "source, source_id, category, and approver are required for promote" }], isError: true };
+      }
+      const resolved = findPromotionSource(source, source_id);
+      if (resolved.error) return { content: [{ type: "text", text: `Error: ${resolved.error}` }], isError: true };
+      const promotedTitle = title || resolved.item.title || resolved.item.name;
+      if (!promotedTitle) return { content: [{ type: "text", text: "Error: promoted source has no title or name" }], isError: true };
+      const existing = db.prepare(`
+        SELECT id FROM knowledge
+        WHERE source_type = ? AND source_id = ? AND source_version = ? AND enabled = 1
+        ORDER BY id DESC LIMIT 1
+      `).get(source, resolved.id, resolved.version);
+      if (existing) {
+        return { content: [{ type: "text", text: JSON.stringify({ promoted: false, existing_id: existing.id, source, source_id: resolved.id, source_version: resolved.version }, null, 2) }] };
+      }
+      const provenance = {
+        source_type: source,
+        source_id: resolved.id,
+        source_version: resolved.version,
+        approved_by: String(approver),
+        approved_at: now,
+      };
+      const result = db.prepare(`
+        INSERT INTO knowledge (
+          category, title, content, tags, enabled, version_added, updated_at,
+          source_type, source_id, source_version, provenance_json, approved_by, approved_at
+        ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        category,
+        promotedTitle,
+        promotedContent(source, resolved.item),
+        [tags, `source:${source}`].filter(Boolean).join(","),
+        `promoted-${source}`,
+        now,
+        source,
+        resolved.id,
+        resolved.version,
+        json(provenance),
+        String(approver),
+        now,
+      );
+      refreshKnowledgeFts();
+      return { content: [{ type: "text", text: JSON.stringify({ promoted: true, id: result.lastInsertRowid, source, source_id: resolved.id, source_version: resolved.version, approved_by: String(approver) }, null, 2) }] };
+    }
+
     if (action === "update") {
       if (!id) return { content: [{ type: "text", text: "Error: id is required for update" }], isError: true };
 
@@ -154,7 +244,7 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
       return { content: [{ type: "text", text: `Purged disabled knowledge entry ${id}` }] };
     }
 
-    return { content: [{ type: "text", text: "Error: Invalid action. Use: search, get, list, add, update, delete, purge" }], isError: true };
+    return { content: [{ type: "text", text: "Error: Invalid action. Use: search, get, list, add, promote, update, delete, purge" }], isError: true };
   } catch (e) {
     return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
   }
@@ -162,23 +252,26 @@ async function sidekick_knowledge({ action, id, category, title, content, tags, 
 
 const SCHEMAS = {
   knowledge: z.object({
-    action: z.enum(["search", "get", "list", "add", "update", "delete", "purge"]).describe("Knowledge base action"),
+    action: z.enum(["search", "get", "list", "add", "promote", "update", "delete", "purge"]).describe("Knowledge base action"),
     id: z.number().optional().describe("Entry ID (for get/update/delete)"),
-    category: z.string().optional().describe("Category (for list/add/update)"),
-    title: z.string().optional().describe("Title (for add/update)"),
+    category: z.string().optional().describe("Category (for list/add/promote/update)"),
+    title: z.string().optional().describe("Title (for add/promote/update)"),
     content: z.string().optional().describe("Content (for add/update)"),
     tags: z.string().optional().describe("Comma-separated tags (for add/update)"),
     query: z.string().optional().describe("Search query (for search)"),
-    limit: z.number().optional().describe("Max results (for search/list)")
+    limit: z.number().optional().describe("Max results (for search/list)"),
+    source: z.enum(["evolve", "procedure"]).optional().describe("Promotion source type"),
+    source_id: z.string().optional().describe("Generated capability ID/name or taught procedure name"),
+    approver: z.string().optional().describe("Explicit human/operator approver for promotion")
   }),
 };
 
 const descriptors = Object.freeze([
   Object.freeze({
     name: "knowledge",
-    description: "Knowledge base management: search, get, list, add, update, soft-delete, and purge disabled entries",
+    description: "Knowledge base management: search, get, list, add, promote reviewed evolved/taught knowledge, update, soft-delete, and purge disabled entries",
     schema: SCHEMAS.knowledge,
-    args: { action: "string (search|get|list|add|update|delete|purge)", id: "number (optional, entry ID for get/update/delete/purge)", category: "string (optional, category for list/add/update)", title: "string (optional, title for add/update)", content: "string (optional, content for add/update)", tags: "string (optional, comma-separated tags for add/update)", query: "string (optional, search query for search)", limit: "number (optional, max results for search/list)" },
+    args: { action: "string (search|get|list|add|promote|update|delete|purge)", id: "number (optional, entry ID for get/update/delete/purge)", category: "string (optional, category for list/add/promote/update)", title: "string (optional, title for add/promote/update)", content: "string (optional, content for add/update)", tags: "string (optional, comma-separated tags for add/promote/update)", query: "string (optional, search query for search)", limit: "number (optional, max results for search/list)", source: "string (optional, evolve or procedure for promote)", source_id: "string (optional, source capability/procedure ID for promote)", approver: "string (optional, explicit approver for promote)" },
     risk: "low",
     category: "Context & Learning",
     source: "builtin",

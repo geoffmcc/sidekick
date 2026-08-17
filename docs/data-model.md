@@ -186,7 +186,7 @@ Lifecycle operations differ by store:
 
 ## Knowledge base
 
-The `knowledge` table is the documentation store for Sidekick's agent-facing operational knowledge. `sidekick_knowledge` supports `search`, `get`, `list`, `add`, `update`, and `delete`. The dashboard exposes a read endpoint at `/api/knowledge`.
+The `knowledge` table is the documentation store for Sidekick's agent-facing operational knowledge. `sidekick_knowledge` supports `search`, `get`, `list`, `add`, `promote`, `update`, and `delete`. Promoted rows retain `source_type`, `source_id`, `source_version`, `provenance_json`, `approved_by`, and `approved_at`; promotion accepts only active successfully trialed Evolve capabilities or named taught procedures and redacts sensitive fields before storage. The dashboard exposes a read endpoint at `/api/knowledge`.
 
 Typical query:
 

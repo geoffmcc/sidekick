@@ -68,6 +68,7 @@ const suites = [
   { file: 'test/scheduling-cancel.test.js', critical: false, description: 'Cron/watch cancellation coordination for live execution claims' },
   { file: 'test/pack-manifest-consistency.test.js', critical: false, description: 'Capability-pack module dispatch and manifest permission consistency' },
   { file: 'test/tools.test.js', critical: false, description: 'Core tool behavior' },
+  { file: 'test/knowledge-promotion.test.js', critical: true, description: 'Governed promotion of taught procedures into redacted, attributed knowledge' },
   { file: 'test/dispatcher.test.cjs', critical: false, description: 'Centralized tool dispatcher behavior' },
   { file: 'test/tool-registry-contract.test.cjs', critical: false, description: 'Tool registry contract and descriptor coverage' },
   { file: 'test/tool-family-data-utilities.test.cjs', critical: false, description: 'Extracted data-utilities tool family behavior and dispatcher integration' },

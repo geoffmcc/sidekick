@@ -288,6 +288,9 @@ function getStaticToolCategory(name) {
  * an extra prompt; the cost of adding one wrongly is a silent bypass.
  */
 const TOOL_ACTION_RISK = Object.freeze({
+  knowledge: Object.freeze({
+    promote: "high",
+  }),
   // Read-only pack inspection. `inspect` is deliberately ABSENT: it reads a
   // caller-supplied path, so it keeps the tool-level risk.
   capability: Object.freeze({
