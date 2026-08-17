@@ -215,7 +215,7 @@ function classifyEvidenceRequirement(goal) {
   // request even when it does not mention a concrete tool. Routing it into
   // the governed tool loop lets the planner select the pack's structured
   // tools; the dispatcher still owns authorization, policy, and approval.
-  const namedCapabilityPattern = /\b(?:use|run|perform|execute|invoke|call|check|verify|capture|extract|navigate|browse|automate|download|upload|login)\b[\s\S]{0,80}\b(?:browser[ -]automation|capability\s+pack|pack)\b|\b(?:browser[ -]automation|capability\s+pack|pack)\b[\s\S]{0,80}\b(?:use|run|perform|execute|invoke|call|check|verify|capture|extract|navigate|browse|automate|download|upload|login)\b/;
+  const namedCapabilityPattern = /\b(?:use|run|perform|execute|invoke|call|check|verify|capture|extract|navigate|browse|automate|download|upload|login)\b[\s\S]{0,80}\b(?:browser[ -]automation|security[ -]research|developer|jellyfin|proxmox|capability\s+pack|pack)\b|\b(?:browser[ -]automation|security[ -]research|developer|jellyfin|proxmox|capability\s+pack|pack)\b[\s\S]{0,80}\b(?:use|run|perform|execute|invoke|call|check|verify|capture|extract|navigate|browse|automate|download|upload|login)\b/;
   // "How can I / how does someone ..." is a request for instructions, not for
   // Sidekick to inspect anything — unlike "how much disk space is free", which
   // asks about actual current state and stays on the tool path.

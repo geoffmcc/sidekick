@@ -184,6 +184,15 @@ assert.strictEqual(requiresToolUse("What tools should we build next for Sidekick
 assert.strictEqual(requiresToolUse("Which models should Sidekick support next?"), false);
 assert.strictEqual(requiresToolUse("Use the browser automation capability to verify the login page."), true);
 assert.strictEqual(classifyEvidenceRequirement("Use the browser automation capability to verify the login page.").reason, "named_capability_request");
+for (const packRequest of [
+  "Use the developer pack to inspect this repository.",
+  "Run the Jellyfin capability to list current sessions.",
+  "Check Proxmox for the current guest status.",
+  "Use the security research pack to inspect the authorized campaign.",
+]) {
+  assert.strictEqual(requiresToolUse(packRequest), true, `named pack request must use tools: ${packRequest}`);
+  assert.strictEqual(classifyEvidenceRequirement(packRequest).reason, "named_capability_request");
+}
 assert.strictEqual(requiresToolUse("What is the capital of France?"), false);
 assert.strictEqual(requiresToolUse("Explain quantum entanglement in simple terms."), false);
 
