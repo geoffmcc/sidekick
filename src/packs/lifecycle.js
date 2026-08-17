@@ -352,11 +352,29 @@ function disable(name) {
   }
 
   const deactivated = { modules: [], workflows: [], knowledge: [] };
+  const disabledModules = [];
+  const disableFailures = [];
 
+  // Teardown is part of the security boundary: never mark a component (or
+  // the pack) disabled if its live module could not actually be stopped.
+  // Restore modules already stopped when a later module fails, preserving the
+  // all-or-nothing contract as far as the in-process loader permits.
   for (const component of repository.listComponents(name, { kind: "module" })) {
-    if (moduleRepository.getModule(component.ref)) {
-      try { moduleLifecycle.disable(component.ref); } catch {}
+    if (!moduleRepository.getModule(component.ref) || !moduleLoader.isModuleActive(component.ref)) continue;
+    try {
+      moduleLifecycle.disable(component.ref);
+      disabledModules.push(component.ref);
+    } catch (error) {
+      disableFailures.push({ ref: component.ref, error: error.message });
     }
+  }
+  if (disableFailures.length) {
+    for (const ref of disabledModules) {
+      try { moduleLifecycle.enable(ref); } catch {}
+    }
+    throw new Error(`Capability pack "${name}" could not be disabled: ${disableFailures.map(f => `${f.ref}: ${f.error}`).join("; ")}`);
+  }
+  for (const component of repository.listComponents(name, { kind: "module" })) {
     repository.setComponentState(name, "module", component.ref, "disabled");
     deactivated.modules.push(component.ref);
   }
@@ -551,9 +569,7 @@ function uninstall(name, { removeKnowledge = true, removeModuleData = false } = 
     );
   }
 
-  if (record.state === "enabled") {
-    try { disable(name); } catch {}
-  }
+  if (record.state === "enabled") disable(name);
 
   const removed = { modules: [], workflows: [], knowledge: [] };
   for (const component of repository.listComponents(name, { kind: "module" })) {

@@ -27,6 +27,7 @@ const packStore = require('../src/packs/store');
 const bundled = require('../src/packs/bundled');
 const moduleRepository = require('../src/modules/repository');
 const moduleLoader = require('../src/modules/loader');
+const moduleLifecycle = require('../src/modules/lifecycle');
 const moduleStore = require('../src/modules/store');
 const workflowRepository = require('../src/workflows/repository');
 const dbStore = require('../src/db');
@@ -443,6 +444,36 @@ function buildUpgradeCandidate() {
     assert.strictEqual(packRepository.getPack('fixture-observatory'), null);
     assert.strictEqual(moduleRepository.getModule('observatory-tools'), null);
     assert.strictEqual(registry().has('fixture_observation'), false);
+  });
+
+  test('CP.18: failed module teardown does not falsely disable or uninstall a live pack', () => {
+    const fixture = path.resolve(__dirname, 'fixtures', 'third-party-pack');
+    packLifecycle.install(fixture, { enable: true });
+    assert.strictEqual(moduleLoader.isModuleActive('observatory-tools'), true);
+
+    const originalDisable = moduleLifecycle.disable;
+    moduleLifecycle.disable = () => { throw new Error('simulated teardown failure'); };
+    try {
+      assert.throws(
+        () => packLifecycle.disable('fixture-observatory'),
+        /could not be disabled: observatory-tools: simulated teardown failure/
+      );
+      assert.strictEqual(packRepository.getPack('fixture-observatory').state, 'enabled');
+      assert.strictEqual(moduleLoader.isModuleActive('observatory-tools'), true);
+
+      assert.throws(
+        () => packLifecycle.uninstall('fixture-observatory'),
+        /could not be disabled: observatory-tools: simulated teardown failure/
+      );
+      assert.ok(packRepository.getPack('fixture-observatory'), 'failed uninstall preserves the pack record');
+      assert.ok(moduleRepository.getModule('observatory-tools'), 'failed uninstall preserves the module record');
+    } finally {
+      moduleLifecycle.disable = originalDisable;
+    }
+
+    const removed = packLifecycle.uninstall('fixture-observatory');
+    assert.deepStrictEqual(removed.removed.modules, ['observatory-tools']);
+    assert.strictEqual(packRepository.getPack('fixture-observatory'), null);
   });
 
   console.log(`\n${failures === 0 ? 'All Capability Packs v1 tests passed.' : `${failures} capability-pack test(s) FAILED.`}`);
