@@ -141,6 +141,8 @@ const suites = [
   { file: 'test/compute-provider-bootstrap.test.js', critical: false, description: 'Compute provider/model bootstrap from env, idempotency, secure-by-default cloud, and secret-reference credential resolution' },
   { file: 'test/inference-convergence.test.js', critical: true, description: 'Production inference callers route only through Compute (no direct Ollama/Groq egress)' },
   { file: 'test/connector-authority.test.js', critical: false, description: 'GitHub connector bootstrap, secret-ref resolution, github tool routing through the connector authority, and read-only connector tool redaction' },
+  { file: 'test/browser-egress.test.js', critical: true, description: 'Governed Browser Automation egress/policy: metadata/link-local/private fail-closed, DNS-rebinding pin, allowed_hosts narrowing, scheme refusal, live proxy enforcement, config clamping, secret scrubbing' },
+  { file: 'test/browser-subsystem.test.js', critical: false, description: 'Governed Browser Automation real-Chromium E2E through the dispatcher: sessions, navigation, JS-rendered inspection, extraction, forms, secret-safe login, consequential submit, screenshot/download custody, upload, popups, redirects, cancellation, isolation, hostile-page handling, no leaked processes (self-skips if the browser runtime is not installed)' },
   { file: 'test/compute-recovery.test.js', critical: false, description: 'Scheduled lease recovery and heartbeat counter integrity' },
   { file: 'test/compute-worker-lifecycle.test.js', critical: false, description: 'Compute worker multi-dimensional lifecycle state model' },
   { file: 'test/compute-worker-disconnect.test.js', critical: false, description: 'Compute worker graceful disconnect protocol' },

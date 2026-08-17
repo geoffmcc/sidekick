@@ -34,6 +34,7 @@
     "zod": "^4.4.3",
     "better-sqlite3": "^12.10.0",
     "pg": "^8.13.0",
-    "ioredis": "^5.4.0"
+    "ioredis": "^5.4.0",
+    "playwright-core": "1.62.1"
   }
 }
