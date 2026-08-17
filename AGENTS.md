@@ -88,6 +88,13 @@ the stable human-facing subject and tags for cross-cutting retrieval. Use
 and repairs the `knowledge_fts` index at startup, after seeding, and after
 knowledge or capability-pack writes; do not edit that derived index directly.
 
+Generated or taught material is not durable knowledge automatically. Promote it
+only after review with `knowledge action="promote"`, supplying `source="evolve"`
+for an active, successfully trialed Evolve capability or `source="procedure"`
+for a named taught procedure, plus a category and explicit approver. Promotion
+redacts sensitive fields, records source/version/provenance metadata, and is
+idempotent for the same source version.
+
 The packaged source for fresh-install knowledge is `docs/knowledge-seed.sql`.
 After migrations, `npm run seed:knowledge` loads it when the knowledge table is
 empty; `npm run seed:knowledge -- --force` refreshes only packaged rows marked

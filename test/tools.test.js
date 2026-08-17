@@ -23,7 +23,7 @@ const {
   getGithubArg,
   missionRoute
 } = tools;
-const { store, get, delete: del, resume, handoff, list_projects, get_by_project, tools: toolsFn, knowledge, read, write, search } = TOOLS;
+const { store, get, delete: del, resume, handoff, list_projects, get_by_project, tools: toolsFn, knowledge, teach, read, write, search } = TOOLS;
 
 console.log('Running Tools Tests...\n');
 (async () => {
@@ -431,6 +431,35 @@ console.log('Running Tools Tests...\n');
     const searchResult = await knowledge({ action: 'search', query: 'temporary content', category: 'test' });
     const searchRows = JSON.parse(searchResult.content[0].text);
     assert.ok(searchRows.some(row => row.id === addedId), 'FTS search should find a repaired knowledge row');
+    const taught = await teach({
+      action: 'teach_procedure',
+      name: 'promote-knowledge-test',
+      description: 'A procedure used to verify governed knowledge promotion',
+      steps: [{ tool: 'get', args: { key: 'api_token', token: 'super-secret-value' } }]
+    });
+    assert.ok(taught.content[0].text.includes('Taught procedure'), 'Should create a taught procedure for promotion');
+    const promoted = await knowledge({
+      action: 'promote',
+      source: 'procedure',
+      source_id: 'promote-knowledge-test',
+      category: 'development',
+      title: 'Governed knowledge promotion test',
+      approver: 'test-operator'
+    });
+    const promotedPayload = JSON.parse(promoted.content[0].text);
+    assert.strictEqual(promotedPayload.promoted, true, 'Should promote an approved procedure into knowledge');
+    const promotedRow = dbStore.getDb().prepare('SELECT source_type, source_id, approved_by, content FROM knowledge WHERE id = ?').get(promotedPayload.id);
+    assert.strictEqual(promotedRow.source_type, 'procedure', 'Promoted knowledge should retain its source type');
+    assert.strictEqual(promotedRow.source_id, 'promote-knowledge-test', 'Promoted knowledge should retain its source id');
+    assert.strictEqual(promotedRow.approved_by, 'test-operator', 'Promoted knowledge should retain its approver');
+    assert.ok(!promotedRow.content.includes('super-secret-value'), 'Promoted knowledge must redact sensitive values');
+    const duplicatePromotion = await knowledge({
+      action: 'promote', source: 'procedure', source_id: 'promote-knowledge-test', category: 'development', approver: 'test-operator'
+    });
+    assert.ok(JSON.parse(duplicatePromotion.content[0].text).existing_id, 'Repeated promotion should be idempotent');
+    await teach({ action: 'remove', name: 'promote-knowledge-test' });
+    await knowledge({ action: 'delete', id: promotedPayload.id });
+    await knowledge({ action: 'purge', id: promotedPayload.id });
     const activePurgeResult = await knowledge({ action: 'purge', id: addedId });
     assert.ok(activePurgeResult.isError, 'Should not purge enabled entries');
     assert.ok(activePurgeResult.content[0].text.includes('Run action=delete first'), 'Should require soft delete before purge');

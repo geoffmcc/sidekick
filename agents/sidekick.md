@@ -203,6 +203,12 @@ The standard categories are `best-practices`, `architecture`, `operations`,
 is extensible for capability packs and repository-owned knowledge. IDs are
 database keys only; use category, title, tags, and indexed content for
 organization and retrieval, and list live categories before assuming one.
+Generated or taught material is not durable automatically. Use
+`knowledge action="promote"` only after review, with `source="evolve"` for an
+active successfully trialed capability or `source="procedure"` for a named
+taught procedure, plus category and explicit approver. Promotion redacts
+sensitive fields and stores source/version/provenance metadata; repeated
+promotion of the same source version is idempotent.
 
 For the general capability guidance, retrieve the canonical entry with:
 
