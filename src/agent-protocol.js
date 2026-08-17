@@ -211,6 +211,11 @@ function classifyEvidenceRequirement(goal) {
   const localResourcePattern = /\b(tools?|repo|repository|project|memory|context|deploy(?:ment)?|service|services|health|status|logs?|history|conversation|transcript|task|tasks|model|models|ollama|database|db|knowledge|kv|watch(?:es)?|delay(?:s)?)\b/;
   const localActionPattern = /\b(list|count|show|inspect|check|look up|lookup|find|fetch|get|read|open|delete|remove|update|create|store|save|set|merge|deploy|restart|stop|start|run|recall|search|query)\b/;
   const exactnessPattern = /\b(current|currently|latest|recent|right now|today|exact|exactly|available|configured|enabled|running|active|pending|in this repo|in the repo|in this project|on disk)\b/;
+  // An explicit request to use a named capability pack is an operational
+  // request even when it does not mention a concrete tool. Routing it into
+  // the governed tool loop lets the planner select the pack's structured
+  // tools; the dispatcher still owns authorization, policy, and approval.
+  const namedCapabilityPattern = /\b(?:use|run|perform|execute|invoke|call|check|verify|capture|extract|navigate|browse|automate|download|upload|login)\b[\s\S]{0,80}\b(?:browser[ -]automation|capability\s+pack|pack)\b|\b(?:browser[ -]automation|capability\s+pack|pack)\b[\s\S]{0,80}\b(?:use|run|perform|execute|invoke|call|check|verify|capture|extract|navigate|browse|automate|download|upload|login)\b/;
   // "How can I / how does someone ..." is a request for instructions, not for
   // Sidekick to inspect anything — unlike "how much disk space is free", which
   // asks about actual current state and stays on the tool path.
@@ -229,6 +234,8 @@ function classifyEvidenceRequirement(goal) {
     "|\\b(?:how\\s+much|how\\s+full|how\\s+many|usage|used|using|in\\s+use|free|full|utili[sz]ation)\\b");
 
   if (toolNamePattern.test(text)) return { requiresTools: true, reason: "explicit_tool_reference" };
+
+  if (namedCapabilityPattern.test(text)) return { requiresTools: true, reason: "named_capability_request" };
 
   if (conceptualPromptPattern.test(text) && !exactnessPattern.test(text)) {
     return { requiresTools: false, reason: "conceptual_prompt" };

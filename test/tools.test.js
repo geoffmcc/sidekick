@@ -413,8 +413,27 @@ console.log('Running Tools Tests...\n');
     assert.strictEqual(policyRoute.recommended_args.source, 'agent', 'Policy route should pass requested source');
     console.log('✓ Passed\n');
 
-    // Test 2.0d: knowledge soft delete and purge
-    console.log('Test 2.0d: knowledge soft delete and purge');
+    // Test 2.0d: multi-word knowledge retrieval must match each term, not the
+    // full query as one literal substring (regression for issue #356).
+    console.log('Test 2.0d: knowledge multi-word search');
+    const multiWordKnowledge = await knowledge({
+      action: 'add',
+      category: 'test',
+      title: 'Deployment process regression test',
+      content: 'This entry documents the deployment process for a controlled test.'
+    });
+    const multiWordId = Number(multiWordKnowledge.content[0].text.match(/id: (\d+)/)[1]);
+    const multiWordSearch = await knowledge({
+      action: 'search',
+      query: 'deployment process',
+      category: 'test'
+    });
+    const multiWordRows = JSON.parse(multiWordSearch.content[0].text);
+    assert.ok(multiWordRows.some(row => row.id === multiWordId), 'FTS search should match all terms in a multi-word query');
+    console.log('✓ Passed\n');
+
+    // Test 2.0e: knowledge soft delete and purge
+    console.log('Test 2.0e: knowledge soft delete and purge');
     dbStore.runPendingMigrations();
     const addKnowledgeResult = await knowledge({
       action: 'add',
