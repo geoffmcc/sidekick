@@ -1554,6 +1554,10 @@ function engineStatus() {
   ensureSchema();
   const db = dbStore.getDb();
   const config = getPredictConfig();
+  // Status is an operator-facing lifecycle surface, so reconcile time-horizon
+  // expiry before taking any counts. Without this, an expired row remains
+  // visibly active until an unrelated analysis happens to run.
+  const expired = expireOldPredictions();
 
   const active = db.prepare("SELECT COUNT(*) as cnt FROM predictions WHERE status = 'active' AND enabled = 1").get().cnt;
   const total = db.prepare("SELECT COUNT(*) as cnt FROM predictions").get().cnt;
@@ -1598,6 +1602,7 @@ function engineStatus() {
 
     total_evidence: db.prepare("SELECT COUNT(*) as cnt FROM prediction_evidence").get().cnt,
     total_feedback: db.prepare("SELECT COUNT(*) as cnt FROM prediction_feedback").get().cnt,
+    expired_on_status: expired,
 
     last_analyzed: lastAnalysisRow ? lastAnalysisRow.created_at : null,
     last_analysis: lastAnalysisRow ? lastAnalysisRow.created_at : null,
@@ -1624,8 +1629,8 @@ function engineStatus() {
     },
 
     detectors,
-    type_breakdown: db.prepare("SELECT type, COUNT(*) as cnt FROM predictions WHERE status = 'active' GROUP BY type").all(),
-    confidence_breakdown: db.prepare("SELECT confidence, COUNT(*) as cnt FROM predictions WHERE status = 'active' GROUP BY confidence").all(),
+    type_breakdown: db.prepare("SELECT type, COUNT(*) as cnt FROM predictions WHERE status = 'active' AND enabled = 1 GROUP BY type ORDER BY type").all(),
+    confidence_breakdown: db.prepare("SELECT confidence, COUNT(*) as cnt FROM predictions WHERE status = 'active' AND enabled = 1 GROUP BY confidence ORDER BY confidence").all(),
     rules: db.prepare("SELECT * FROM prediction_rules ORDER BY rule_version").all().map(r => ({ ...r, config: parseJson(r.config_json, {}) })),
     uptime: process.uptime ? Math.round(process.uptime()) : null,
   };
