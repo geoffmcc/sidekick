@@ -143,4 +143,8 @@ ok("history control exposes and updates real expanded state", () => {
   assert.match(body, /agentHistoryChevron/, "updates the visible chevron");
 });
 
+ok("history control is wired to its real toggle handler", () => {
+  assert.match(dashHtml, /id="agentHistoryToggle"[^>]*onclick="toggleHistory\(\)"/, "button invokes toggleHistory");
+});
+
 console.log("\nAll " + passed + " follow-up UI tests passed.\n");
