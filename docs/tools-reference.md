@@ -126,6 +126,8 @@ Filesystem path guardrails are optional and default to open. Use `SIDEKICK_ALLOW
 | `ollama` | Context & Learning | Manage Ollama models: list, ps, pull, show | `{ action: "string (list|ps|pull|show)", model: "string (optional)" }` |
 | `tunnel` | Networking | Manage Cloudflare tunnels: start, stop, list | `{ action: "string (start|stop|list)", port: "number", name: "string (optional)" }` |
 | `download` | Media | Download videos/audio using yt-dlp | `{ url: "string", output: "string (optional)", format: "string (optional)", audio_only: "boolean (optional)" }` |
+
+When `download` is called without an explicit `output`, Sidekick stores the result under its managed data directory and registers it through artifact custody. The result includes an `artifact_id` and `storage_ref`; explicit output paths retain their caller-selected destination.
 | `wireguard` | Networking | Manage WireGuard VPN peers and keys | `{ action: "string", interface_name: "string", peer_name: "string", public_key: "string", endpoint: "string (optional)", allowed_ips: "string (optional)" }` |
 | `nginx` | Networking | Manage Nginx reverse proxy sites | `{ action: "string", site_name: "string", domain: "string", upstream_port: "number", ssl_email: "string (optional)" }` |
 | `knowledge` | Context & Learning | Knowledge base management: search, get, list, add, update, soft-delete, and purge disabled entries | `{ action: "string (search|get|list|add|update|delete|purge)", id: "number (optional)", category: "string (optional)", title: "string (optional)", content: "string (optional)", tags: "string (optional)", query: "string (optional)", limit: "number (optional)" }` |
