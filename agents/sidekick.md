@@ -198,6 +198,11 @@ and tags for cross-cutting retrieval. Browse with `knowledge action="list"
 category="<category>"` and search with `knowledge action="search"`; the
 server maintains the derived `knowledge_fts` index during startup, seeding,
 and knowledge/capability-pack writes. Never edit the FTS table directly.
+The standard categories are `best-practices`, `architecture`, `operations`,
+`protocols`, `development`, `infrastructure`, and `plans`, but the taxonomy
+is extensible for capability packs and repository-owned knowledge. IDs are
+database keys only; use category, title, tags, and indexed content for
+organization and retrieval, and list live categories before assuming one.
 
 For the general capability guidance, retrieve the canonical entry with:
 

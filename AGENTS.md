@@ -192,6 +192,14 @@ executable module code inside the Sidekick process.
 - **operations** — Deployment, configuration, security, troubleshooting
 - **protocols** — Context recall and other protocols
 - **development** — Source layout and extension workflow
+- **infrastructure** — Environment and infrastructure-specific operating knowledge
+- **plans** — Deliberate planning artifacts and implementation direction
+
+This is the standard taxonomy, not a closed enum. Capability packs and
+repository owners may add appropriate categories. Do not encode organization
+in entry IDs: IDs are database keys, while category, title, tags, and indexed
+content provide the retrieval structure. Confirm the live category list with
+`knowledge action="list"` before assuming a category exists.
 
 ### Quick Examples
 
