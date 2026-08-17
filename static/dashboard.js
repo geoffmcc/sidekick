@@ -2024,8 +2024,15 @@ function stopAgent(){
 
 function toggleHistory(){
   const el = $('agentHistory');
-  el.style.display = el.style.display === 'none' ? 'block' : 'none';
-  if (el.style.display === 'block') {
+  const toggle = $('agentHistoryToggle');
+  const expanded = el.style.display === 'none';
+  el.style.display = expanded ? 'block' : 'none';
+  if (toggle) {
+    toggle.setAttribute('aria-expanded', String(expanded));
+    const chevron = $('agentHistoryChevron');
+    if (chevron) chevron.textContent = expanded ? '▲' : '▼';
+  }
+  if (expanded) {
       authFetch('/api/agent/history').then(r=>r.json()).then(d=>{
       let html = '<div style="color:#8b949e;font-size:.78rem;margin-bottom:12px;padding:8px;background:#161b22;border-radius:6px">' +
         '<i class="fas fa-info-circle"></i> Agent history shows tasks submitted via this dashboard. ' +

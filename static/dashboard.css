@@ -84,6 +84,8 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
 .history-item{padding:8px 0;border-bottom:1px solid #21262d;font-size:.82rem;cursor:pointer;display:flex;gap:8px;align-items:center}
 .history-item:hover{background:#161b22}
 .history-item:last-child{border-bottom:none}
+.agent-history-toggle{display:block;width:100%;padding:0;border:0;background:transparent;color:inherit;text-align:left;font:inherit;cursor:pointer}
+.agent-history-toggle:focus-visible{outline:2px solid #58a6ff;outline-offset:3px}
 .history-detail{padding:8px 0 8px 20px;background:#0d1117;border-left:2px solid #21262d;margin:4px 0;font-family:var(--font);font-size:.78rem;white-space:pre-wrap;line-height:1.4;max-height:400px;overflow-y:auto}
 .search-bar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
 .search-bar input,.search-bar select{padding:6px 12px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#c9d1d9;font-size:.82rem}

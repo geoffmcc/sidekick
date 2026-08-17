@@ -130,7 +130,17 @@ ok("existing Agent tab anchors are preserved (no dashboard redesign)", () => {
   assert.match(dashHtml, /id="agentGoal"/);
   assert.match(dashHtml, /id="agentLog"/);
   assert.match(dashHtml, /id="agentHistory"/);
+  assert.match(dashHtml, /id="agentHistoryToggle"[^>]*type="button"/);
+  assert.match(dashHtml, /aria-expanded="false"/);
+  assert.match(dashHtml, /aria-controls="agentHistory"/);
   assert.match(clientJs, /function runAgent\(/, "the normal new-task flow is preserved");
+});
+
+ok("history control exposes and updates real expanded state", () => {
+  const body = fnBody(clientJs, "toggleHistory");
+  assert.match(body, /agentHistoryToggle/, "uses the semantic history button");
+  assert.match(body, /setAttribute\('aria-expanded', String\(expanded\)\)/, "updates expanded state");
+  assert.match(body, /agentHistoryChevron/, "updates the visible chevron");
 });
 
 console.log("\nAll " + passed + " follow-up UI tests passed.\n");
