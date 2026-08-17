@@ -349,6 +349,11 @@ async function createSessionProxy(policy, { onBlocked = () => {}, onRequest = ()
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
   });
+  // The CONNECT counter above bounds tunnels, but ordinary absolute-URI HTTP
+  // requests use the same per-session server and must not have an unbounded
+  // socket path around that ceiling. Node enforces maxConnections at the
+  // accepted-socket boundary for both request types.
+  server.maxConnections = MAX_PROXY_CONNECTIONS;
   selfPort = server.address().port;
 
   // Post-listen resilience: a runtime server error or a malformed client

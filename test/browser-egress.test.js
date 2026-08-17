@@ -230,6 +230,15 @@ const CLOSED = egress.buildSessionPolicy({ allowPrivateNetwork: false }, { allow
     }
   });
 
+  await test("session proxy applies its connection ceiling to HTTP requests too", async () => {
+    const proxy = await egress.createSessionProxy(CLOSED);
+    try {
+      assert.strictEqual(proxy.server.maxConnections, 64, "HTTP proxy sockets must share the bounded session ceiling");
+    } finally {
+      await proxy.close();
+    }
+  });
+
   // --- Config clamping -----------------------------------------------------
 
   await test("config clamps out-of-range values and defaults dangerous posture off", () => {
