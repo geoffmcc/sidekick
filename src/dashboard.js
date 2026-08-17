@@ -157,6 +157,26 @@ const GRAFANA_PASS = process.env.SIDEKICK_GRAFANA_ADMIN_PASSWORD || "";
 const SESSION_SECRET = process.env.SIDEKICK_SECRET_KEY || crypto.randomBytes(32).toString("hex");
 const SESSION_TTL = 86400000;
 
+// The dashboard Basic Auth account predates the identity service. Give that
+// already-authenticated account a stable service principal so identity
+// administration does not require a second, unrelated password.
+function legacyDashboardPrincipal(username) {
+  if (!username) return null;
+  try {
+    const db = dbStore.getDb();
+    const row = db.prepare("SELECT principal_id FROM principals WHERE principal_type = 'service' AND json_extract(metadata_json, '$.legacy_dashboard_username') = ? LIMIT 1").get(username);
+    if (row) return identity.getPrincipal(row.principal_id);
+    const principal = identity.createPrincipal({
+      type: "service",
+      displayName: `Dashboard (${username})`,
+      metadata: { legacy_dashboard_username: username },
+    });
+    return identity.assignRole(principal.principal_id, "administrator");
+  } catch {
+    return null;
+  }
+}
+
 function makeSessionToken(user) {
   const payload = JSON.stringify({ u: user, e: Date.now() + SESSION_TTL });
   const b64 = Buffer.from(payload).toString("base64");
@@ -442,7 +462,10 @@ app.post("/api/auth/bootstrap", (req, res) => {
 
 app.post("/api/auth/login", (req, res) => {
   const username = req.body?.username;
-  const principal = identity.verifyUserPassword(username, req.body?.password);
+  let principal = identity.verifyUserPassword(username, req.body?.password);
+  if (!principal && DASHBOARD_USER && DASHBOARD_PASS && timingSafeCompare(username, DASHBOARD_USER) && timingSafeCompare(req.body?.password, DASHBOARD_PASS)) {
+    principal = legacyDashboardPrincipal(DASHBOARD_USER);
+  }
   if (!principal) return res.status(401).json({ error: "Invalid username or password" });
   const session = authentication.createSession(principal.principal_id, {
     userAgent: req.headers["user-agent"] || null,
@@ -482,7 +505,12 @@ if ((DASHBOARD_USER && DASHBOARD_PASS) || bootstrapCompleted()) {
       const trimmed = part.trim();
       if (trimmed.startsWith("sidekick_sid=")) {
         const user = verifySessionToken(trimmed.slice("sidekick_sid=".length));
-        if (user === DASHBOARD_USER) { req.authUser = user; return next(); }
+        if (user === DASHBOARD_USER) {
+          req.authUser = user;
+          req.authPrincipal = legacyDashboardPrincipal(user);
+          req.authPrincipalId = req.authPrincipal?.principal_id || null;
+          return next();
+        }
       }
     }
     // Fall back to Basic Auth
@@ -499,6 +527,8 @@ if ((DASHBOARD_USER && DASHBOARD_PASS) || bootstrapCompleted()) {
       // Set session cookie for subsequent requests (including iframe sub-resources)
       res.setHeader("Set-Cookie", `sidekick_sid=${makeSessionToken(user)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400`);
       req.authUser = user;
+      req.authPrincipal = legacyDashboardPrincipal(user);
+      req.authPrincipalId = req.authPrincipal?.principal_id || null;
       return next();
     }
     res.set("WWW-Authenticate", 'Basic realm="Sidekick Dashboard"');

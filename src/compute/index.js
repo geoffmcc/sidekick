@@ -66,6 +66,16 @@ function stopReconciliation() {
   directJobRunner.stop();
 }
 
+function startProviderHealthMonitoring() {
+  // Provider health used to remain at its last persisted value because the
+  // monitor existed but was never started. Start one bounded probe loop for
+  // every enabled provider after environment bootstrap has populated the
+  // registry; this keeps local Ollama and cloud providers independently fresh.
+  for (const provider of providerRegistry.listProviders({ enabled: true })) {
+    healthMonitor.start(provider.providerId);
+  }
+}
+
 function initialize() {
   providerRegistry.ensureSchema();
   modelRegistry.ensureSchema();
@@ -157,6 +167,7 @@ function initialize() {
     try { require("./provider-bootstrap").bootstrapProviders(); }
     catch (e) { logRecoveryFailure("provider_bootstrap", e); }
   }
+  startProviderHealthMonitoring();
 }
 
 function overview() {
