@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "name": "browser-automation/ui-smoke",
+  "version": "1.0.0",
+  "title": "UI Smoke Verification",
+  "description": "Open an isolated governed browser session, navigate to a URL, assert that expected rendered content is visible, capture a screenshot as evidence, and report pass/fail. Read-only.",
+  "mode": "read_only",
+  "tags": ["browser", "smoke", "verification", "read-only"],
+  "inputs": {
+    "url": { "type": "string", "required": true, "description": "Absolute http/https URL to verify" },
+    "expect_text": { "type": "string", "required": true, "description": "Visible text that proves the page rendered correctly" },
+    "allowed_hosts": { "type": "array", "required": false, "description": "Optional host allowlist for the session (narrows egress; *.example.com supported)" },
+    "allow_private_network": { "type": "boolean", "required": false, "default": false, "description": "Allow private/loopback targets (needs the operator ceiling too)" },
+    "project": { "type": "string", "required": false, "description": "Project association for isolation and custody" }
+  },
+  "steps": [
+    {
+      "name": "open",
+      "title": "Open an isolated browser session",
+      "tool": "browser",
+      "args": { "action": "open", "label": "ui-smoke", "allowed_hosts": "${inputs.allowed_hosts}", "allow_private_network": "${inputs.allow_private_network}", "project": "${inputs.project}" },
+      "expect": "json",
+      "on_error": "fail"
+    },
+    {
+      "name": "navigate",
+      "title": "Navigate to the target URL",
+      "tool": "browser",
+      "args": { "action": "navigate", "session": "${steps.open.json.session.id}", "url": "${inputs.url}" },
+      "expect": "json",
+      "on_error": "continue"
+    },
+    {
+      "name": "verify",
+      "title": "Assert expected rendered content is visible",
+      "tool": "browser",
+      "args": { "action": "assert", "session": "${steps.open.json.session.id}", "assertions": [ { "kind": "text_visible", "value": "${inputs.expect_text}" } ] },
+      "expect": "json",
+      "on_error": "continue"
+    },
+    {
+      "name": "evidence",
+      "title": "Capture a screenshot as evidence",
+      "tool": "browser",
+      "args": { "action": "screenshot", "session": "${steps.open.json.session.id}", "label": "ui-smoke" },
+      "expect": "json",
+      "on_error": "continue"
+    },
+    {
+      "name": "close",
+      "title": "Close the browser session",
+      "tool": "browser",
+      "args": { "action": "close", "session": "${steps.open.json.session.id}" },
+      "expect": "json",
+      "on_error": "continue"
+    }
+  ],
+  "result": {
+    "passed": "${steps.verify.json.passed}",
+    "url": "${steps.navigate.json.page.url}",
+    "title": "${steps.navigate.json.page.title}",
+    "status": "${steps.navigate.json.status}",
+    "assertions": "${steps.verify.json.assertions}",
+    "evidence": "${steps.evidence.json.artifact}"
+  }
+}

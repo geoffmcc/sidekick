@@ -147,6 +147,11 @@ function createFixtureSite() {
     return send(404, "text/plain", "not found");
   });
 
+  // Sockets reset routinely when the browser closes a session mid-request;
+  // swallow those so the test process is never taken down by a teardown reset.
+  server.on("clientError", (_err, socket) => { try { socket.destroy(); } catch { /* gone */ } });
+  server.on("connection", (socket) => { socket.on("error", () => {}); });
+
   return {
     server,
     async listen() {

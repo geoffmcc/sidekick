@@ -199,6 +199,12 @@ async function createSessionProxy(policy, { onBlocked = () => {}, onRequest = ()
   }
 
   const server = http.createServer(async (req, res) => {
+    // A client or upstream reset mid-request emits 'error' on these streams;
+    // without listeners Node throws it as an unhandled error and takes the whole
+    // process down. A proxy sees resets routinely (a page navigates away, a
+    // session closes), so swallow them here — teardown, not a fault.
+    req.on("error", () => {});
+    res.on("error", () => {});
     if (!authorized(req)) {
       res.writeHead(407, { "Content-Type": "text/plain", "Proxy-Authenticate": "Basic realm=\"sidekick-browser\"" });
       res.end("Sidekick browser proxy: proxy authentication required");
@@ -259,10 +265,21 @@ async function createSessionProxy(policy, { onBlocked = () => {}, onRequest = ()
       if (!res.headersSent) res.writeHead(502, { "Content-Type": "text/plain" });
       res.end(`Sidekick browser proxy upstream error: ${error.code || error.message}`);
     });
+    // A client reset must tear the upstream down too: node's pipe() leaves the
+    // source running when the destination dies, so without this a reset client
+    // leaks the upstream socket/fd until the origin finishes. (The HTTP path is
+    // not covered by the CONNECT concurrency cap, so this matters.)
+    const tearDownUpstream = () => { try { upstream.destroy(); } catch { /* already gone */ } };
+    res.on("close", tearDownUpstream);
+    req.on("error", tearDownUpstream);
     req.pipe(upstream);
   });
 
   server.on("connect", async (req, clientSocket) => {
+    // Guard the tunnel client socket immediately: it can reset during the async
+    // policy/DNS checks below, before the upstream is wired up, and an
+    // unhandled reset would crash the process.
+    clientSocket.on("error", () => {});
     if (!authorized(req)) {
       clientSocket.end("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"sidekick-browser\"\r\n\r\n");
       return;
@@ -311,7 +328,13 @@ async function createSessionProxy(policy, { onBlocked = () => {}, onRequest = ()
       upstream.pipe(clientSocket);
       clientSocket.pipe(upstream);
     });
+    // Idempotent teardown: both sockets fire error AND close, and destroying one
+    // fires the other's close, so an unguarded handler would decrement
+    // `connections` several times per tunnel and drift the cap toward zero.
+    let torn = false;
     const done = () => {
+      if (torn) return;
+      torn = true;
       connections = Math.max(0, connections - 1);
       upstream.destroy();
       clientSocket.destroy();
@@ -327,6 +350,13 @@ async function createSessionProxy(policy, { onBlocked = () => {}, onRequest = ()
     server.listen(0, "127.0.0.1", resolve);
   });
   selfPort = server.address().port;
+
+  // Post-listen resilience: a runtime server error or a malformed client
+  // request must never crash the process. clientError destroys the offending
+  // socket; a generic error is swallowed (the proxy is per-session and
+  // disposable — a fault tears down the session, not Sidekick).
+  server.on("error", () => {});
+  server.on("clientError", (_err, socket) => { try { socket.destroy(); } catch { /* already gone */ } });
 
   return {
     port: selfPort,

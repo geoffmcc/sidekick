@@ -184,6 +184,33 @@ const CLOSED = egress.buildSessionPolicy({ allowPrivateNetwork: false }, { allow
     }
   });
 
+  await test("a client reset tears down the upstream socket (no fd leak)", async () => {
+    let originClosed = false;
+    const origin = http.createServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.write("first-chunk"); // then hold the response open (slow origin)
+      req.on("close", () => { originClosed = true; });
+    });
+    await new Promise((r) => origin.listen(0, "127.0.0.1", r));
+    const originPort = origin.address().port;
+    const proxy = await egress.createSessionProxy(OPEN);
+    try {
+      await new Promise((resolve, reject) => {
+        const socket = net.connect(proxy.port, "127.0.0.1", () => {
+          socket.write(`GET http://127.0.0.1:${originPort}/ HTTP/1.1\r\nHost: x\r\n\r\n`);
+        });
+        socket.on("data", () => { socket.destroy(); resolve(); }); // reset after first bytes
+        socket.on("error", reject);
+      });
+      // Give the teardown a moment to propagate to the origin.
+      await new Promise((r) => setTimeout(r, 300));
+      assert.ok(originClosed, "origin upstream socket was not torn down after client reset");
+    } finally {
+      await proxy.close();
+      await new Promise((r) => origin.close(r));
+    }
+  });
+
   await test("session proxy refuses a request that targets the proxy itself", async () => {
     const blocked = [];
     const proxy = await egress.createSessionProxy(OPEN, { onBlocked: (r) => blocked.push(r) });
