@@ -231,6 +231,13 @@ async function fetchLatestStable(services) {
 // ---- read tool -------------------------------------------------------------
 
 async function read(services, args, runtime) {
+  const userFilterActions = new Set(["activity", "user_status", "user_access_audit"]);
+  if ((args.user_id || args.username) && !userFilterActions.has(args.action)) {
+    throw new JellyfinError(
+      "invalid_input",
+      `user_id/username filtering is not supported for action "${args.action}"`,
+    );
+  }
   if (args.action === "list_profiles")
     return { profiles: profiles.list(services.config || {}) };
   const { p, c } = await open(services, args, runtime);
