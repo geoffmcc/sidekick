@@ -18,7 +18,7 @@
       "default_allowed_hosts": {
         "type": "array",
         "items": { "type": "string" },
-        "description": "Default host allowlist applied to sessions opened by this pack's tools (*.example.com patterns supported). A per-call allowed_hosts overrides it. Narrows egress policy; never widens it."
+        "description": "Host ceiling applied to sessions opened by this pack's tools (*.example.com patterns supported). A per-call allowed_hosts may narrow it but never widen it. Narrows egress policy; never widens it."
       },
       "allow_private_network": {
         "type": "boolean",

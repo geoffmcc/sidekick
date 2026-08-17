@@ -56,8 +56,8 @@ function handleComposeError(error) {
 
 async function webCapture(services, args) {
   const config = services.config || {};
-  const openOptions = resolveOpenOptions(config, args);
   try {
+    const openOptions = resolveOpenOptions(config, args);
     const out = await withEphemeralSession(services, openOptions, async (sessionId) => {
       const nav = await browserAction(services, {
         action: "navigate", session: sessionId, url: args.url, wait_until: args.wait_until,
@@ -99,8 +99,8 @@ async function webCapture(services, args) {
 
 async function webExtract(services, args) {
   const config = services.config || {};
-  const openOptions = resolveOpenOptions(config, args);
   try {
+    const openOptions = resolveOpenOptions(config, args);
     const out = await withEphemeralSession(services, openOptions, async (sessionId) => {
       const nav = await browserAction(services, {
         action: "navigate", session: sessionId, url: args.url, wait_until: args.wait_until,
@@ -133,8 +133,8 @@ async function webExtract(services, args) {
 
 async function webCheck(services, args) {
   const config = services.config || {};
-  const openOptions = resolveOpenOptions(config, args);
   try {
+    const openOptions = resolveOpenOptions(config, args);
     const out = await withEphemeralSession(services, openOptions, async (sessionId) => {
       const nav = await browserAction(services, {
         action: "navigate", session: sessionId, url: args.url, wait_until: args.wait_until,

@@ -75,14 +75,36 @@ function errorResult(message, extra = {}) {
 }
 
 /**
- * Resolve the effective open options for a tool call, layering the pack config
- * defaults under the per-call arguments. allowed_hosts and allow_private_network
- * are governance knobs; the pack config provides defaults, the call may narrow.
+ * Resolve the effective open options for a tool call. A configured host list is
+ * a pack-level ceiling: a call may narrow it, but must never replace it with a
+ * broader list. Core remains authoritative for the final egress decision.
  */
 function resolveOpenOptions(config, args) {
   const options = {};
-  const allowedHosts = args.allowed_hosts
-    || (Array.isArray(config.default_allowed_hosts) && config.default_allowed_hosts.length ? config.default_allowed_hosts : null);
+  const configuredHosts = Array.isArray(config.default_allowed_hosts)
+    ? config.default_allowed_hosts.map((host) => String(host).trim().toLowerCase()).filter(Boolean)
+    : [];
+  const requestedHosts = Array.isArray(args.allowed_hosts) ? args.allowed_hosts : null;
+  const allowedHosts = requestedHosts || (configuredHosts.length ? configuredHosts : null);
+  if (requestedHosts && configuredHosts.length) {
+    const uncovered = requestedHosts.filter((requested) => {
+      const pattern = String(requested).trim().toLowerCase();
+      return !configuredHosts.some((ceiling) => {
+        if (ceiling === pattern) return true;
+        if (!ceiling.startsWith("*.")) return false;
+        const suffix = ceiling.slice(1);
+        const requestedHost = pattern.startsWith("*.") ? pattern.slice(1) : pattern;
+        return requestedHost.endsWith(suffix) && requestedHost.length > suffix.length;
+      });
+    });
+    if (uncovered.length) {
+      const error = new Error(
+        `allowed_hosts cannot widen the browser-automation pack ceiling; uncovered host pattern(s): ${uncovered.join(", ")}`,
+      );
+      error.code = "browser_pack_allowlist_widened";
+      throw error;
+    }
+  }
   if (allowedHosts) options.allowed_hosts = allowedHosts;
   const allowPrivate = args.allow_private_network === true
     || (args.allow_private_network === undefined && config.allow_private_network === true);
