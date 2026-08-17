@@ -724,6 +724,13 @@ function renderMissionSystem(system, summary){
   $('missionMemory').textContent = mem;
   $('missionDisk').textContent = disk;
   $('missionUptime').textContent = system.uptime || '--';
+  // Keep the global status strip in sync with Mission Control's first render.
+  // Previously these values were only filled by loadSystem(), which made the
+  // initial Mission Control view show ellipses until another tab was opened.
+  $('s-uptime').textContent = system.uptime || '?';
+  $('s-cpu').textContent = system.load_1m != null ? system.load_1m + ' / ' + (system.cpu_count || '?') + ' cores' : '?';
+  $('s-memory').textContent = system.memory ? system.memory.used + '/' + system.memory.total : '?';
+  $('s-disk').textContent = system.disk ? system.disk.free + ' free (' + system.disk.pct + ')' : '?';
 }
 
 function renderMissionStats(data){
@@ -1810,6 +1817,7 @@ function runAgent(){
   agentRunning = true;
   $('agentGo').disabled = true;
   $('agentStop').disabled = false;
+  $('agentClear').disabled = true;
   $('agentLog').innerHTML = '<span class="agent-step">► Starting agent...</span>\n';
 
   authFetch('/api/agent/run', {
@@ -1841,6 +1849,7 @@ function streamAgentTask(taskId, opts){
   rememberAgentTask(taskId);
   $('agentGo').disabled = true;
   $('agentStop').disabled = false;
+  $('agentClear').disabled = true;
   if (opts.reset) $('agentLog').innerHTML = '';
   if (opts.parentTaskId) {
     appendLog('<span class="agent-step">Follow-up to task ' + esc(opts.parentTaskId) +
@@ -1881,6 +1890,7 @@ function submitFollowup(id){
   agentRunning = true;
   $('agentGo').disabled = true;
   $('agentStop').disabled = false;
+  $('agentClear').disabled = true;
   if (btn) btn.disabled = true;
   if (input) input.disabled = true;
   $('agentLog').innerHTML = '';
@@ -1978,6 +1988,16 @@ function finishAgentStream(){
   currentAgentTaskId = null;
   $('agentGo').disabled = false;
   $('agentStop').disabled = true;
+  $('agentClear').disabled = false;
+}
+
+function clearAgent(){
+  if (agentRunning) return;
+  if (agentStream) { agentStream.close(); agentStream = null; }
+  currentAgentTaskId = null;
+  try { localStorage.removeItem(AGENT_LAST_TASK_KEY); } catch (e) {}
+  $('agentGoal').value = '';
+  $('agentLog').innerHTML = '<span class="empty">Submit a task above</span>';
 }
 
 // Stop button: actually cancel the backend task, report the backend's answer,
