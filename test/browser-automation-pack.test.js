@@ -134,6 +134,17 @@ function parse(result) {
     const { callMcpTool } = require("../src/tools");
     const call = (name, args) => callMcpTool(name, args, { source: "mcp", actor: "pack-test", project: "ba-pack" });
 
+    await t("configured host ceiling cannot be widened by a per-call allowlist", async () => {
+      const result = parse(await call("web_capture", {
+        url: "https://example.com/",
+        allowed_hosts: ["example.com"],
+        include_text: false,
+      }));
+      assert.strictEqual(result.ok, false, JSON.stringify(result));
+      assert.strictEqual(result.code, "browser_pack_allowlist_widened", JSON.stringify(result));
+      assert.match(result.error, /cannot widen/i);
+    });
+
     await t("web_capture drives a real browser and registers a screenshot artifact", async () => {
       const result = parse(await call("web_capture", { url: `${base}/`, allow_private_network: true, include_text: true }));
       assert.strictEqual(result.ok, true, JSON.stringify(result));
