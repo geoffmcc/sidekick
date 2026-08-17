@@ -2,9 +2,9 @@
 
 Sidekick can operate a real Chromium browser through its normal governed
 execution architecture. This document covers the **Core browser subsystem**
-(`src/browser/`) and the `browser` tool. The operator-facing capability pack
-(`browser-automation`) that builds workflows and knowledge on top of this Core
-is documented separately once installed.
+(`src/browser/`) and the `browser` tool, and the **Governed Browser Automation
+capability pack** (`packs/browser-automation`) that builds task-level tools,
+workflows and knowledge on top of it (see the "Capability pack" section below).
 
 ## What it is
 
@@ -242,6 +242,49 @@ real launch probe.
 - **Screenshot refused as sensitive** — a secret was filled into a visible
   field; pass `acknowledge_sensitive=true` to capture it as a sensitive
   artifact.
+
+## Capability pack: Governed Browser Automation
+
+`packs/browser-automation` is the operator-facing capability pack built on the
+Core `browser` tool. It adds task-level structure; it never touches Chromium
+directly and reimplements no boundary. It requires the `browser` tool and
+installs/enables/uninstalls through the normal capability lifecycle
+(`capability action="install" name="browser-automation"`, then `enable`).
+
+**Tools** (each opens an ephemeral isolated session, works, and always closes
+it — every step dispatches through the Core `browser` tool):
+
+- `web_capture` — navigate and capture evidence in one call: a real screenshot
+  registered in artifact custody plus a bounded visible-text snapshot.
+- `web_extract` — navigate a JS-rendered page and return bounded, deterministic
+  structured data from caller-supplied field locators; missing required fields
+  are reported, never invented.
+- `web_check` — navigate and evaluate deterministic UI assertions, returning a
+  pass/fail verdict, optionally with a screenshot as evidence.
+
+**Workflows** (bounded step sequences over the `browser` tool, run through the
+governed workflow runner):
+
+- `browser-automation/ui-smoke` (read-only) — navigate, assert content, capture
+  evidence, report pass/fail.
+- `browser-automation/authenticated-ui-check` (mutating) — governed login using
+  a `secret:<name>` reference bound to `expected_host`, verify a post-login
+  state, capture evidence.
+- `browser-automation/download-verification` (read-only) — trigger a permitted
+  download and report its artifact reference, size and hash.
+
+**Configuration**: `default_allowed_hosts` (default host allowlist that a call
+may override; narrows egress, never widens it), `allow_private_network`
+(default for private/loopback requests — still gated by the Core operator
+ceiling), `full_page`, and `max_text_chars`. Secrets never belong in pack
+configuration; pass a `secret:<name>` reference instead.
+
+**Pack health** reports the pack's own state plus best-effort browser runtime
+readiness (`healthy` when the runtime is installed, `degraded` when it is not,
+with the install instruction). The pack tools are `medium` risk (bounded
+read/capture/verify); open-ended consequential interaction stays on the Core
+`browser` tool, which carries the full governed action surface. This pack does
+not provide screenshot pixel-diff comparison — verification is assertion-based.
 
 ## Security model summary
 

@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "name": "browser-automation/authenticated-ui-check",
+  "version": "1.0.0",
+  "title": "Authenticated UI Verification",
+  "description": "Perform a governed login using a Sidekick secret reference (the password plaintext never reaches the caller), verify a post-login UI state, capture evidence, and close the isolated session. The credential is bound to the login host via expected_host.",
+  "mode": "mutating",
+  "tags": ["browser", "authentication", "verification"],
+  "inputs": {
+    "login_url": { "type": "string", "required": true, "description": "Login page URL" },
+    "expected_host": { "type": "string", "required": true, "description": "Host the credential is bound to (must equal the login page host)" },
+    "username": { "type": "string", "required": true, "description": "Username to enter" },
+    "password_secret_ref": { "type": "string", "required": true, "description": "Secret reference for the password, e.g. secret:site_password" },
+    "username_selector": { "type": "string", "required": true, "description": "Selector/locator for the username field" },
+    "password_selector": { "type": "string", "required": true, "description": "Selector/locator for the password field" },
+    "submit_selector": { "type": "string", "required": true, "description": "Selector/locator for the submit control" },
+    "success_text": { "type": "string", "required": true, "description": "Visible text that proves login succeeded" },
+    "allowed_hosts": { "type": "array", "required": false, "description": "Optional host allowlist for the session" },
+    "allow_private_network": { "type": "boolean", "required": false, "default": false, "description": "Allow private/loopback targets (needs the operator ceiling too)" },
+    "project": { "type": "string", "required": false, "description": "Project association for isolation and custody" }
+  },
+  "steps": [
+    {
+      "name": "open",
+      "title": "Open an isolated browser session",
+      "tool": "browser",
+      "args": { "action": "open", "label": "authenticated-ui-check", "allowed_hosts": "${inputs.allowed_hosts}", "allow_private_network": "${inputs.allow_private_network}", "project": "${inputs.project}" },
+      "expect": "json",
+      "on_error": "fail"
+    },
+    {
+      "name": "navigate",
+      "title": "Navigate to the login page",
+      "tool": "browser",
+      "args": { "action": "navigate", "session": "${steps.open.json.session.id}", "url": "${inputs.login_url}" },
+      "expect": "json",
+      "on_error": "continue"
+    },
+    {
+      "name": "fill_username",
+      "title": "Enter the username",
+      "tool": "browser",
+      "args": { "action": "fill", "session": "${steps.open.json.session.id}", "target": "${inputs.username_selector}", "value": "${inputs.username}" },
+      "expect": "json",
+      "on_error": "continue"
+    },
+    {
+      "name": "fill_password",
+      "title": "Enter the password from a secret reference (destination-bound)",
+      "tool": "browser",
+      "args": { "action": "secret_fill", "session": "${steps.open.json.session.id}", "target": "${inputs.password_selector}", "secret_ref": "${inputs.password_secret_ref}", "expected_host": "${inputs.expected_host}" },
+      "expect": "json",
+      "on_error": "continue"
+    },
+    {
+      "name": "submit",
+      "title": "Submit the login form",
+      "tool": "browser",
+      "args": { "action": "click", "session": "${steps.open.json.session.id}", "target": "${inputs.submit_selector}" },
+      "expect": "json",
+      "on_error": "continue"
+    },
+    {
+      "name": "verify",
+      "title": "Assert the post-login state",
+      "tool": "browser",
+      "args": { "action": "assert", "session": "${steps.open.json.session.id}", "assertions": [ { "kind": "text_visible", "value": "${inputs.success_text}" } ] },
+      "expect": "json",
+      "on_error": "continue"
+    },
+    {
+      "name": "evidence",
+      "title": "Capture a screenshot of the authenticated state",
+      "tool": "browser",
+      "args": { "action": "screenshot", "session": "${steps.open.json.session.id}", "label": "authenticated-ui-check" },
+      "expect": "json",
+      "on_error": "continue"
+    },
+    {
+      "name": "close",
+      "title": "Close the browser session",
+      "tool": "browser",
+      "args": { "action": "close", "session": "${steps.open.json.session.id}" },
+      "expect": "json",
+      "on_error": "continue"
+    }
+  ],
+  "result": {
+    "passed": "${steps.verify.json.passed}",
+    "url": "${steps.verify.json.page.url}",
+    "title": "${steps.verify.json.page.title}",
+    "assertions": "${steps.verify.json.assertions}",
+    "evidence": "${steps.evidence.json.artifact}"
+  }
+}

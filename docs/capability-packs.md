@@ -345,6 +345,13 @@ Currently bundled:
   playback diagnosis, library/task inspection, maintenance preflight and
   governed scheduled-task operations. It keeps host, storage, GPU and
   hypervisor questions in their appropriate capability packs.
+- **Governed Browser Automation** (`packs/browser-automation`) — task-level
+  browser tools (`web_capture`, `web_extract`, `web_check`) and workflows
+  (UI smoke, authenticated UI verification with governed credentials, download
+  verification) built on the Core `browser` tool. It composes the Core browser
+  subsystem's egress policy, isolation, secret handling and artifact custody
+  rather than reimplementing them, and requires the `browser` tool. See
+  `docs/browser-automation.md`.
 
 ## Workflow definitions
 

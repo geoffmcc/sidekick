@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "pack_api": 1,
+  "name": "browser-automation",
+  "display_name": "Governed Browser Automation",
+  "version": "1.0.0",
+  "description": "Real, governed browser automation built on Sidekick's Core browser subsystem: task-level tools for web evidence capture, rendered structured extraction and deterministic UI checks, plus runnable workflows for UI smoke verification, authenticated UI verification with governed credentials, and download verification. Every browser operation runs through the Core browser tool's egress policy, isolation, secret handling, artifact custody, approval and audit.",
+  "publisher": "Sidekick",
+  "compatibility": {
+    "sidekick": ">=1.0.0"
+  },
+  "modules": [
+    {
+      "name": "browser-tools",
+      "path": "modules/browser-tools",
+      "entry_point": "entry.js",
+      "config_from_pack": true
+    }
+  ],
+  "workflows": [
+    { "path": "workflows/ui-smoke.json" },
+    { "path": "workflows/authenticated-ui-check.json" },
+    { "path": "workflows/download-verification.json" }
+  ],
+  "knowledge": [
+    {
+      "path": "knowledge/browser-automation-overview.md",
+      "title": "Browser automation: capabilities and governance",
+      "category": "development",
+      "tags": ["browser", "automation", "governance"]
+    },
+    {
+      "path": "knowledge/browser-scope-and-credentials.md",
+      "title": "Browser automation: scope, authorization and credentials",
+      "category": "development",
+      "tags": ["browser", "security", "credentials", "scope"]
+    },
+    {
+      "path": "knowledge/browser-evidence.md",
+      "title": "Browser automation: evidence and artifact expectations",
+      "category": "development",
+      "tags": ["browser", "evidence", "artifacts"]
+    }
+  ],
+  "requires": {
+    "tools": ["browser"],
+    "optional_tools": ["handoff", "project"]
+  },
+  "permissions": [
+    { "tool": "browser", "risk": "high" }
+  ],
+  "configuration": {
+    "schema": {
+      "type": "object",
+      "properties": {
+        "default_allowed_hosts": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Default host allowlist applied to sessions opened by this pack's tools (*.example.com patterns supported). A per-call allowed_hosts overrides it. Narrows egress policy; never widens it. Secrets never belong in pack configuration."
+        },
+        "allow_private_network": {
+          "type": "boolean",
+          "description": "Default for whether this pack's tools may request private/loopback egress. Still requires the Core operator ceiling SIDEKICK_BROWSER_ALLOW_PRIVATE_NETWORK=true. Off by default."
+        },
+        "full_page": {
+          "type": "boolean",
+          "description": "Default for full-page screenshots in web_capture."
+        },
+        "max_text_chars": {
+          "type": "integer",
+          "minimum": 500,
+          "maximum": 200000,
+          "description": "Default bound on captured visible text in web_capture."
+        }
+      },
+      "additionalProperties": false
+    },
+    "defaults": {
+      "allow_private_network": false,
+      "full_page": false,
+      "max_text_chars": 20000
+    }
+  }
+}

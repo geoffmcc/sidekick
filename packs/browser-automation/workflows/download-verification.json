@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "name": "browser-automation/download-verification",
+  "version": "1.0.0",
+  "title": "Download Verification",
+  "description": "Navigate to a page, trigger a permitted download, and report the downloaded file's artifact reference, size and hash. The file is captured through the Core browser tool's artifact custody; no raw host path is returned. Read-only.",
+  "mode": "read_only",
+  "tags": ["browser", "download", "artifacts", "verification"],
+  "inputs": {
+    "url": { "type": "string", "required": true, "description": "Page URL that hosts the download trigger" },
+    "trigger_selector": { "type": "string", "required": true, "description": "Selector/locator that starts the download" },
+    "timeout_ms": { "type": "number", "required": false, "default": 15000, "description": "How long to wait for the download to complete" },
+    "allowed_hosts": { "type": "array", "required": false, "description": "Optional host allowlist for the session" },
+    "allow_private_network": { "type": "boolean", "required": false, "default": false, "description": "Allow private/loopback targets (needs the operator ceiling too)" },
+    "project": { "type": "string", "required": false, "description": "Project association for isolation and custody" }
+  },
+  "steps": [
+    {
+      "name": "open",
+      "title": "Open an isolated browser session",
+      "tool": "browser",
+      "args": { "action": "open", "label": "download-verification", "allowed_hosts": "${inputs.allowed_hosts}", "allow_private_network": "${inputs.allow_private_network}", "project": "${inputs.project}" },
+      "expect": "json",
+      "on_error": "fail"
+    },
+    {
+      "name": "navigate",
+      "title": "Navigate to the download page",
+      "tool": "browser",
+      "args": { "action": "navigate", "session": "${steps.open.json.session.id}", "url": "${inputs.url}" },
+      "expect": "json",
+      "on_error": "continue"
+    },
+    {
+      "name": "trigger",
+      "title": "Trigger the download",
+      "tool": "browser",
+      "args": { "action": "click", "session": "${steps.open.json.session.id}", "target": "${inputs.trigger_selector}" },
+      "expect": "json",
+      "on_error": "continue"
+    },
+    {
+      "name": "wait_download",
+      "title": "Wait for the download to complete and register custody",
+      "tool": "browser",
+      "args": { "action": "wait", "session": "${steps.open.json.session.id}", "for": "download", "timeout_ms": "${inputs.timeout_ms}" },
+      "expect": "json",
+      "on_error": "continue"
+    },
+    {
+      "name": "close",
+      "title": "Close the browser session",
+      "tool": "browser",
+      "args": { "action": "close", "session": "${steps.open.json.session.id}" },
+      "expect": "json",
+      "on_error": "continue"
+    }
+  ],
+  "result": {
+    "url": "${steps.navigate.json.page.url}",
+    "download": "${steps.wait_download.json.download}"
+  }
+}

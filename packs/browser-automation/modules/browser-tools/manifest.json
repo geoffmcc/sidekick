@@ -1,0 +1,64 @@
+{
+  "name": "browser-tools",
+  "displayName": "Browser Automation Tools",
+  "version": "1.0.0",
+  "description": "Task-level browser tools that compose the governed Core browser tool: evidence capture, structured extraction, and deterministic UI checks",
+  "author": "Sidekick",
+  "type": "plugin",
+  "entryPoint": "entry.js",
+  "sidekick": ">=1.0.0",
+  "capabilities": [
+    "web-evidence-capture",
+    "rendered-extraction",
+    "ui-verification"
+  ],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "default_allowed_hosts": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Default host allowlist applied to sessions opened by this pack's tools (*.example.com patterns supported). A per-call allowed_hosts overrides it. Narrows egress policy; never widens it."
+      },
+      "allow_private_network": {
+        "type": "boolean",
+        "description": "Default for whether this pack's tools may request private/loopback egress. Still requires the Core operator ceiling SIDEKICK_BROWSER_ALLOW_PRIVATE_NETWORK=true. Off by default."
+      },
+      "full_page": {
+        "type": "boolean",
+        "description": "Default for full-page screenshots in web_capture."
+      },
+      "max_text_chars": {
+        "type": "integer",
+        "minimum": 500,
+        "maximum": 200000,
+        "description": "Default bound on captured visible text in web_capture."
+      }
+    },
+    "additionalProperties": false
+  },
+  "tools": {
+    "web_capture": {
+      "risk": "medium",
+      "category": "Networking",
+      "aliases": ["capture_page"]
+    },
+    "web_extract": {
+      "risk": "medium",
+      "category": "Networking",
+      "aliases": ["extract_page"]
+    },
+    "web_check": {
+      "risk": "medium",
+      "category": "Networking",
+      "aliases": ["ui_check"]
+    }
+  },
+  "permissions": [
+    { "tool": "browser", "risk": "high" }
+  ],
+  "lifecycle": {
+    "disable": "stop_new_work",
+    "uninstall": "retain_data"
+  }
+}
