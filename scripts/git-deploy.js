@@ -117,9 +117,9 @@ function deploymentServices() {
     : SERVICES;
 }
 
-function serviceStates() {
+function serviceStates(list = SERVICES) {
   const states = {};
-  for (const svc of SERVICES) {
+  for (const svc of list) {
     const res = run('systemctl', ['is-active', svc], { timeout: 5000, maxBuffer: 1024 * 1024 });
     states[svc] = res.ok ? res.stdout : (res.stdout || 'unknown');
   }
@@ -222,8 +222,12 @@ function stopServices(result) {
     result.stopped_services[svc] = stop.ok ? 'stopped' : 'failed';
     if (!stop.ok) return false;
   }
+  // Report every service's state for transparency, but verify only the ones
+  // this deploy actually stopped. deploy_current_main intentionally leaves
+  // sidekick-mcp running (SIDEKICK_DEPLOY_SKIP_MCP_LIFECYCLE), so requiring ALL
+  // services stopped would fail the verification on a service we never stopped.
   result.stopped_services = serviceStates();
-  return servicesStopped(result.stopped_services);
+  return servicesStopped(serviceStates(deploymentServices()));
 }
 
 function pruneDeployBackups() {
