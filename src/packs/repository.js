@@ -228,6 +228,19 @@ function updatePackPackage(name, manifestInput, { packageHash, installPath, sour
   return getPack(name);
 }
 
+/** Restore the persisted package metadata captured before an upgrade attempt. */
+function restorePackPackage(name, previous) {
+  if (!previous || !previous.manifest) throw new Error(`Cannot restore pack "${name}" without the previous package record`);
+  return updatePackPackage(name, previous.manifest, {
+    packageHash: previous.package_hash,
+    installPath: previous.install_path,
+    source: previous.source,
+    config: previous.config,
+    allowSameVersion: true,
+    allowDowngrade: true,
+  });
+}
+
 function deletePack(name) {
   ensureStorage();
   const record = getPack(name);
@@ -356,6 +369,7 @@ module.exports = {
   setPackConfig,
   recordPackHealth,
   updatePackPackage,
+  restorePackPackage,
   deletePack,
   recordComponent,
   getComponent,
