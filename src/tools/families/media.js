@@ -16,6 +16,7 @@
 // src/tools/metadata.js and gated by the dispatcher.
 
 const fs = require("fs");
+const crypto = require("crypto");
 const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
@@ -29,6 +30,8 @@ const { XMLParser, XMLBuilder } = require("fast-xml-parser");
 const INI = require("ini");
 
 const { detectFormat } = require("../../core/format");
+const { DATA_DIR } = require("../../db");
+const platformKernel = require("../../platform/kernel");
 
 function safeExecFileSync(command, args, options = {}) {
   return execFileSync(command, args, {
@@ -37,6 +40,12 @@ function safeExecFileSync(command, args, options = {}) {
     maxBuffer: options.maxBuffer || 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"],
   });
+}
+
+function mediaContentType(filePath, audioOnly) {
+  if (audioOnly) return "audio/mpeg";
+  const types = { ".mp4": "video/mp4", ".webm": "video/webm", ".mkv": "video/x-matroska", ".mov": "video/quicktime", ".avi": "video/x-msvideo", ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".opus": "audio/opus" };
+  return types[path.extname(filePath).toLowerCase()] || "application/octet-stream";
 }
 
 async function sidekick_ocr({ path: imagePath, language, psm }) {
@@ -514,7 +523,10 @@ async function sidekick_download({ url, output, format, audio_only }) {
       return { content: [{ type: "text", text: urlError }], isError: true };
     }
     const parsedUrl = new URL(url);
-    const outputTarget = output || "/tmp/%(title)s.%(ext)s";
+    const managedDownload = !output;
+    const downloadDir = path.join(DATA_DIR, "downloads");
+    if (managedDownload) fs.mkdirSync(downloadDir, { recursive: true, mode: 0o750 });
+    const outputTarget = output || path.join(downloadDir, "%(title)s.%(ext)s");
     const outputPolicyError = enforcePathPolicy(outputTarget, "write");
     if (outputPolicyError) return outputPolicyError;
 
@@ -534,10 +546,29 @@ async function sidekick_download({ url, output, format, audio_only }) {
     const outputMatch = result.match(/\[download\] Destination: (.+)/);
     const downloadedFile = outputMatch ? outputMatch[1] : null;
 
+    let artifact = null;
+    if (managedDownload && downloadedFile && fs.existsSync(downloadedFile)) {
+      const bytes = fs.readFileSync(downloadedFile);
+      const storageRef = path.relative(DATA_DIR, downloadedFile).split(path.sep).join("/");
+      artifact = platformKernel.registerArtifact({
+        type: "media_download",
+        name: path.basename(downloadedFile),
+        producer: "download",
+        storage_ref: storageRef,
+        content_type: mediaContentType(downloadedFile, audio_only),
+        byte_size: bytes.length,
+        content_hash: `sha256:${crypto.createHash("sha256").update(bytes).digest("hex")}`,
+        redaction_state: "not_required",
+        verification: { verified: true, method: "sha256", source_url: url },
+        metadata: { source_url: url, audio_only: Boolean(audio_only) },
+      });
+    }
+
     return { content: [{ type: "text", text: JSON.stringify({
       status: "success",
       url: url,
       output: downloadedFile || "Downloaded",
+      ...(artifact ? { artifact_id: artifact.artifact_id, storage_ref: artifact.storage_ref } : {}),
       log: result.substring(0, 500)
     }, null, 2) }] };
   } catch (e) {
