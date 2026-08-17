@@ -887,6 +887,14 @@ async function asyncTest(name, fn) {
     assert.strictEqual(byName.out.isError, undefined);
     assert.strictEqual(activityQueries[1].UserId, "u1");
   });
+  await asyncTest("unsupported user filters fail closed instead of being ignored", async () => {
+    setFixtures(baseFixtures());
+    const { read } = tools(servicesFor());
+    const { out } = await call(read, { action: "version", username: "roger" });
+    assert.ok(out.isError);
+    assert.strictEqual(out.code, "invalid_input");
+    assert.match(out.content[0].text, /filtering is not supported/i);
+  });
   await asyncTest("logs_summary returns bounded redacted intelligence, never raw content", async () => {
     setFixtures(baseFixtures());
     const { read } = tools(servicesFor());
