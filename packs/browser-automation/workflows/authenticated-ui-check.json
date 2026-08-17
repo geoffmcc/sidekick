@@ -34,7 +34,7 @@
       "tool": "browser",
       "args": { "action": "navigate", "session": "${steps.open.json.session.id}", "url": "${inputs.login_url}" },
       "expect": "json",
-      "on_error": "continue"
+      "on_error": "fail"
     },
     {
       "name": "fill_username",
@@ -42,7 +42,7 @@
       "tool": "browser",
       "args": { "action": "fill", "session": "${steps.open.json.session.id}", "target": "${inputs.username_selector}", "value": "${inputs.username}" },
       "expect": "json",
-      "on_error": "continue"
+      "on_error": "fail"
     },
     {
       "name": "fill_password",
@@ -50,7 +50,7 @@
       "tool": "browser",
       "args": { "action": "secret_fill", "session": "${steps.open.json.session.id}", "target": "${inputs.password_selector}", "secret_ref": "${inputs.password_secret_ref}", "expected_host": "${inputs.expected_host}" },
       "expect": "json",
-      "on_error": "continue"
+      "on_error": "fail"
     },
     {
       "name": "submit",
@@ -58,7 +58,7 @@
       "tool": "browser",
       "args": { "action": "click", "session": "${steps.open.json.session.id}", "target": "${inputs.submit_selector}" },
       "expect": "json",
-      "on_error": "continue"
+      "on_error": "fail"
     },
     {
       "name": "verify",
@@ -82,7 +82,8 @@
       "tool": "browser",
       "args": { "action": "close", "session": "${steps.open.json.session.id}" },
       "expect": "json",
-      "on_error": "continue"
+      "on_error": "continue",
+      "always": true
     }
   ],
   "result": {

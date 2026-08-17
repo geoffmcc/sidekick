@@ -51,6 +51,10 @@ const STEP_SCHEMA = z.object({
   // `fail` stops the workflow. Optional steps are the common case for
   // enrichment that may legitimately be unavailable (e.g. no GitHub token).
   on_error: z.enum(["fail", "continue"]).default("fail"),
+  // Cleanup/compensation steps still run after a failure or cancellation. They
+  // must be side-effect-safe and should normally use on_error=continue so a
+  // cleanup failure cannot hide the original failure.
+  always: z.boolean().default(false),
   when: z.string().optional(),
   timeout_ms: z.number().int().positive().max(600000).optional(),
 });
