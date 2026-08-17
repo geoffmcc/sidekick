@@ -223,6 +223,25 @@ try {
   assert.strictEqual(result.status, 'failed', 'existing lock should block concurrent deployment');
   fs.rmSync(path.join(tempHome, '.sidekick-deploy.lock'), { recursive: true, force: true });
 
+  resetApp();
+  fs.mkdirSync(path.join(tempHome, '.sidekick-deploy.lock'), { recursive: true });
+  fs.writeFileSync(path.join(tempHome, '.sidekick-deploy.lock', 'pid'), '2147483647');
+  makeMock();
+  result = gitDeploy.deploy();
+  assert.strictEqual(result.status, 'ok', 'dead deployment lock owner should be recoverable');
+  assert.strictEqual(result.stale_lock_recovered, 2147483647, 'recovery should identify the stale lock owner');
+
+  resetApp();
+  process.env.SIDEKICK_DEPLOY_SKIP_MCP_LIFECYCLE = '1';
+  state = makeMock();
+  result = gitDeploy.deploy();
+  delete process.env.SIDEKICK_DEPLOY_SKIP_MCP_LIFECYCLE;
+  assert.strictEqual(result.status, 'ok', 'ops lifecycle mode should deploy successfully');
+  assert.ok(!state.calls.includes('sudo systemctl stop sidekick-mcp'), 'ops lifecycle mode must not stop MCP from inside MCP');
+  assert.ok(!state.calls.includes('sudo systemctl restart sidekick-mcp'), 'ops lifecycle mode must not restart MCP from inside MCP');
+  assert.ok(state.calls.includes('sudo systemctl restart sidekick-agent'), 'ops lifecycle mode should restart agent');
+  assert.ok(state.calls.includes('sudo systemctl restart sidekick-dashboard'), 'ops lifecycle mode should restart dashboard');
+
   const deploySh = fs.readFileSync(path.join(root, 'deploy.sh'), 'utf8');
   const deployPs1 = fs.readFileSync(path.join(root, 'deploy.ps1'), 'utf8');
   const opsFamilyJs = fs.readFileSync(path.join(root, 'src', 'tools', 'families', 'operations.js'), 'utf8');
@@ -239,6 +258,7 @@ try {
   assert.doesNotMatch(deployPs1, /rm -rf \$REMOTE_DIR/, 'deploy.ps1 should not destructively remove live directory');
   assert.match(opsFamilyJs, /SIDEKICK_DEPLOY_REPO_PATH = "\/home\/sidekick\/sidekick"/, 'sidekick_ops should use fixed deployment path');
   assert.match(opsFamilyJs, /deployScriptPath\(repoPath\)/, 'sidekick_ops should delegate to git deployment helper');
+  assert.match(opsFamilyJs, /SIDEKICK_DEPLOY_SKIP_MCP_LIFECYCLE/, 'sidekick_ops should keep MCP alive until the helper releases its lock');
   assert.match(opsFamilyJs, /ops:\s*z\.object/, 'ops schema should remain registered');
 
   console.log('Git deployment hardening tests passed\n');
