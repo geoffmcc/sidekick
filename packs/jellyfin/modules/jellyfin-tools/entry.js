@@ -238,6 +238,32 @@ async function read(services, args, runtime) {
       `user_id/username filtering is not supported for action "${args.action}"`,
     );
   }
+  const noArgumentActions = new Set([
+    "list_profiles",
+    "status",
+    "health",
+    "server_profile",
+    "version",
+    "capabilities",
+    "system_info",
+    "metrics_summary",
+    "upgrade_readiness",
+    "live_tv_status",
+    "tuner_status",
+    "recording_status",
+    "list_devices",
+  ]);
+  if (noArgumentActions.has(args.action)) {
+    const ignored = Object.entries(args)
+      .filter(([key, value]) => key !== "action" && key !== "profile" && value !== undefined)
+      .map(([key]) => key);
+    if (ignored.length) {
+      throw new JellyfinError(
+        "invalid_input",
+        `action "${args.action}" does not support argument(s): ${ignored.join(", ")}`,
+      );
+    }
+  }
   if (args.action === "list_profiles")
     return { profiles: profiles.list(services.config || {}) };
   const { p, c } = await open(services, args, runtime);
