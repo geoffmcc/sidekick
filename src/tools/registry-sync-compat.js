@@ -4,6 +4,7 @@ function createRegistrySyncCompat({ dbStore, TOOL_DEFS, TOOL_RISK, TOOL_CATEGORI
 function syncToolRegistry() {
   try {
     const db = dbStore.getDb();
+    const sync = db.transaction(() => {
     const now = new Date().toISOString();
 
     // Check if tool_categories table exists (migration may not have run yet)
@@ -47,7 +48,7 @@ function syncToolRegistry() {
     `);
 
     // Map category names to IDs
-    const categoryMap = {};
+    const categoryMap = Object.create(null);
     const categories = db.prepare("SELECT id, name FROM tool_categories").all();
     for (const cat of categories) {
       categoryMap[cat.name] = cat.id;
@@ -72,11 +73,15 @@ function syncToolRegistry() {
 
       // Get the tool's category
       const categoryName = toolDef.category || TOOL_CATEGORIES[toolDef.name];
-      if (categoryName && categoryMap[categoryName]) {
-        db.prepare(
-          "INSERT INTO tool_category_map (tool_name, category_id) VALUES (?, ?)"
-        ).run(toolDef.name, categoryMap[categoryName]);
+      if (!categoryName) {
+        throw new Error(`Tool "${toolDef.name}" has no category metadata`);
       }
+      if (!categoryMap[categoryName]) {
+        throw new Error(`Tool "${toolDef.name}" references missing category "${categoryName}"`);
+      }
+      db.prepare(
+        "INSERT INTO tool_category_map (tool_name, category_id) VALUES (?, ?)"
+      ).run(toolDef.name, categoryMap[categoryName]);
     }
 
     // Mark tools that exist in DB but not in code as deprecated
@@ -90,8 +95,11 @@ function syncToolRegistry() {
 
     dbStore.syncGeneratedToolRegistry();
     console.log(`[ToolRegistry] Synced ${TOOL_DEFS.length} built-in tools, ${moduleDefs.length} module tools, and ${dynamicNames.size} generated tools to database`);
+    });
+    sync();
   } catch (error) {
     console.error('[ToolRegistry] Error syncing tool registry:', error.message);
+    throw error;
   }
 }
 

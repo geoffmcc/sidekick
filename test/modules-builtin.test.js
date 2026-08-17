@@ -68,6 +68,27 @@ console.log('Running Builtin Module Provisioning Tests...\n');
     assert.strictEqual(row.enabled, 1, 'parse should be enabled in the catalog');
     assert.strictEqual(row.deprecated, 0, 'parse should not be deprecated in the catalog');
     assert.strictEqual(row.risk, 'low', 'Catalog risk should match the module declaration');
+    const uncategorized = dbStore.getDb().prepare(`
+      SELECT t.name
+      FROM tools t
+      LEFT JOIN tool_category_map tcm ON tcm.tool_name = t.name
+      WHERE t.enabled = 1 AND t.deprecated = 0
+      GROUP BY t.name
+      HAVING COUNT(tcm.category_id) = 0
+      ORDER BY t.name
+    `).all();
+    assert.deepStrictEqual(uncategorized, [], 'every enabled non-deprecated tool must have a persisted category');
+    for (const [toolName, category] of [['browser', 'Networking'], ['compute', 'Compute'], ['download', 'Media']]) {
+      const mapped = dbStore.getDb().prepare(`
+        SELECT tc.name
+        FROM tools t
+        JOIN tool_category_map tcm ON tcm.tool_name = t.name
+        JOIN tool_categories tc ON tc.id = tcm.category_id
+        WHERE t.name = ?
+      `).get(toolName);
+      assert.ok(mapped, `${toolName} should have a category mapping`);
+      assert.strictEqual(mapped.name, category, `${toolName} category must remain ${category}`);
+    }
     console.log('Passed\n');
 
     console.log('Test MB.4: restart restores the module without re-registering');
@@ -85,6 +106,16 @@ console.log('Running Builtin Module Provisioning Tests...\n');
       1,
       'Exactly one module row should exist after restart'
     );
+    const uncategorizedAfterRestart = dbStore.getDb().prepare(`
+      SELECT t.name
+      FROM tools t
+      LEFT JOIN tool_category_map tcm ON tcm.tool_name = t.name
+      WHERE t.enabled = 1 AND t.deprecated = 0
+      GROUP BY t.name
+      HAVING COUNT(tcm.category_id) = 0
+      ORDER BY t.name
+    `).all();
+    assert.deepStrictEqual(uncategorizedAfterRestart, [], 'restart sync must preserve complete category coverage');
     const reParsed = await tools.callInternalTool('template', { template: 'hi {{n}}', data: '{"n":"x"}' });
     assert.ok(!reParsed.isError, 'Module tools should dispatch after restore');
     assert.strictEqual(reParsed.content[0].text, 'hi x', 'template should render after restore');
