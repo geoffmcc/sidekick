@@ -157,19 +157,39 @@ const GRAFANA_PASS = process.env.SIDEKICK_GRAFANA_ADMIN_PASSWORD || "";
 const SESSION_SECRET = process.env.SIDEKICK_SECRET_KEY || crypto.randomBytes(32).toString("hex");
 const SESSION_TTL = 86400000;
 
-// The dashboard Basic Auth account predates the identity service. Give that
-// already-authenticated account a stable service principal so identity
-// administration does not require a second, unrelated password.
-function legacyDashboardPrincipal(username) {
+// The dashboard Basic Auth account predates the identity service. Adopt its
+// existing bridge principal as the same human identity once the configured
+// dashboard credentials have authenticated. This avoids creating a second
+// personal account while preserving the existing administrator role.
+function legacyDashboardPrincipal(username, password = null) {
   if (!username) return null;
   try {
     const db = dbStore.getDb();
-    const row = db.prepare("SELECT principal_id FROM principals WHERE principal_type = 'service' AND json_extract(metadata_json, '$.legacy_dashboard_username') = ? LIMIT 1").get(username);
-    if (row) return identity.getPrincipal(row.principal_id);
-    const principal = identity.createPrincipal({
-      type: "service",
-      displayName: `Dashboard (${username})`,
-      metadata: { legacy_dashboard_username: username },
+    const rows = db.prepare("SELECT * FROM principals WHERE json_extract(metadata_json, '$.legacy_dashboard_username') = ? LIMIT 1").all(username);
+    const row = rows[0] || null;
+    if (row && row.principal_type === "human") return identity.getPrincipal(row.principal_id);
+    if (row && !password) return identity.getPrincipal(row.principal_id);
+
+    if (row) {
+      const metadata = JSON.parse(row.metadata_json || "{}");
+      metadata.adopted_legacy_dashboard = true;
+      const passwordHash = identity.passwordHash(password);
+      const adopt = db.transaction(() => {
+        db.prepare("UPDATE principals SET principal_type = 'human', metadata_json = ?, updated_at = ? WHERE principal_id = ?")
+          .run(JSON.stringify(metadata), new Date().toISOString(), row.principal_id);
+        db.prepare("INSERT INTO human_users (principal_id, username, password_hash, password_scheme, password_changed_at) VALUES (?, ?, ?, ?, ?)")
+          .run(row.principal_id, username, passwordHash, identity.PASSWORD_SCHEME, new Date().toISOString());
+      });
+      adopt();
+      return identity.getPrincipal(row.principal_id);
+    }
+
+    if (!password) return null;
+    const principal = identity.createHumanUser({
+      username,
+      password,
+      displayName: username,
+      metadata: { legacy_dashboard_username: username, adopted_legacy_dashboard: true },
     });
     return identity.assignRole(principal.principal_id, "administrator");
   } catch {
@@ -464,7 +484,7 @@ app.post("/api/auth/login", (req, res) => {
   const username = req.body?.username;
   let principal = identity.verifyUserPassword(username, req.body?.password);
   if (!principal && DASHBOARD_USER && DASHBOARD_PASS && timingSafeCompare(username, DASHBOARD_USER) && timingSafeCompare(req.body?.password, DASHBOARD_PASS)) {
-    principal = legacyDashboardPrincipal(DASHBOARD_USER);
+    principal = legacyDashboardPrincipal(DASHBOARD_USER, DASHBOARD_PASS);
   }
   if (!principal) return res.status(401).json({ error: "Invalid username or password" });
   const session = authentication.createSession(principal.principal_id, {
@@ -507,7 +527,7 @@ if ((DASHBOARD_USER && DASHBOARD_PASS) || bootstrapCompleted()) {
         const user = verifySessionToken(trimmed.slice("sidekick_sid=".length));
         if (user === DASHBOARD_USER) {
           req.authUser = user;
-          req.authPrincipal = legacyDashboardPrincipal(user);
+          req.authPrincipal = legacyDashboardPrincipal(user, DASHBOARD_PASS);
           req.authPrincipalId = req.authPrincipal?.principal_id || null;
           return next();
         }
@@ -527,7 +547,7 @@ if ((DASHBOARD_USER && DASHBOARD_PASS) || bootstrapCompleted()) {
       // Set session cookie for subsequent requests (including iframe sub-resources)
       res.setHeader("Set-Cookie", `sidekick_sid=${makeSessionToken(user)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400`);
       req.authUser = user;
-      req.authPrincipal = legacyDashboardPrincipal(user);
+      req.authPrincipal = legacyDashboardPrincipal(user, pass);
       req.authPrincipalId = req.authPrincipal?.principal_id || null;
       return next();
     }
