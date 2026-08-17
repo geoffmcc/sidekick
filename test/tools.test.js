@@ -423,6 +423,14 @@ console.log('Running Tools Tests...\n');
       content: 'temporary content'
     });
     const addedId = Number(addKnowledgeResult.content[0].text.match(/id: (\d+)/)[1]);
+    const initialFts = dbStore.rebuildKnowledgeFts();
+    assert.strictEqual(initialFts.success, true, 'Knowledge writes should maintain a usable FTS index');
+    dbStore.getDb().prepare('DELETE FROM knowledge_fts WHERE rowid = ?').run(addedId);
+    const repairedFts = dbStore.rebuildKnowledgeFts();
+    assert.strictEqual(repairedFts.success, true, 'Knowledge FTS rebuild should repair missing rows');
+    const searchResult = await knowledge({ action: 'search', query: 'temporary content', category: 'test' });
+    const searchRows = JSON.parse(searchResult.content[0].text);
+    assert.ok(searchRows.some(row => row.id === addedId), 'FTS search should find a repaired knowledge row');
     const activePurgeResult = await knowledge({ action: 'purge', id: addedId });
     assert.ok(activePurgeResult.isError, 'Should not purge enabled entries');
     assert.ok(activePurgeResult.content[0].text.includes('Run action=delete first'), 'Should require soft delete before purge');

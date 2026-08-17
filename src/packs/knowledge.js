@@ -24,6 +24,10 @@ function tagString(packName, tags = []) {
   return [...new Set([ownerTag(packName), ...tags])].join(",");
 }
 
+function refreshKnowledgeFts() {
+  if (typeof dbStore.rebuildKnowledgeFts === "function") dbStore.rebuildKnowledgeFts();
+}
+
 /** Insert or update one knowledge asset, returning its row id. */
 function installAsset(packName, packVersion, asset, filePath) {
   const db = dbStore.getDb();
@@ -39,11 +43,13 @@ function installAsset(packName, packVersion, asset, filePath) {
     }
     db.prepare("UPDATE knowledge SET content = ?, tags = ?, enabled = 1, version_added = ?, updated_at = ? WHERE id = ?")
       .run(content, tagString(packName, asset.tags), packVersion, now, existing.id);
+    refreshKnowledgeFts();
     return { id: existing.id, replaced: true, bytes: Buffer.byteLength(content) };
   }
   const result = db
     .prepare("INSERT INTO knowledge (category, title, content, tags, enabled, version_added, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)")
     .run(asset.category, asset.title, content, tagString(packName, asset.tags), packVersion, now);
+  refreshKnowledgeFts();
   return { id: result.lastInsertRowid, replaced: false, bytes: Buffer.byteLength(content) };
 }
 
@@ -53,11 +59,13 @@ function setAssetEnabled(id, enabled) {
   const result = db
     .prepare("UPDATE knowledge SET enabled = ?, updated_at = ? WHERE id = ?")
     .run(enabled ? 1 : 0, new Date().toISOString(), id);
+  if (result.changes > 0) refreshKnowledgeFts();
   return result.changes > 0;
 }
 
 function removeAsset(id) {
   const result = dbStore.getDb().prepare("DELETE FROM knowledge WHERE id = ?").run(id);
+  if (result.changes > 0) refreshKnowledgeFts();
   return result.changes > 0;
 }
 

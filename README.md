@@ -496,7 +496,7 @@ Access Grafana directly at `http://YOUR_REMOTE_IP:3000/` using `sidekick` and th
 
 Sidekick includes a structured knowledge base for storing and retrieving project documentation:
 
-- **34 packaged self-knowledge seed entries** across categories: best-practices, architecture, operations, protocols, development
+- **35 packaged self-knowledge seed entries** across categories: best-practices, architecture, operations, protocols, development
 - **Database-backed live content** that can include imported, custom, or migrated entries beyond the packaged seed
 - **Full-text search** with semantic similarity
 - **Manual import helper** for migrating CONTEXT.md into structured knowledge entries

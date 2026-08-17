@@ -2283,6 +2283,26 @@ function exportTable(tableName, format = "json") {
   throw new Error(`Unsupported export format: ${format}`);
 }
 
+function rebuildKnowledgeFts() {
+  const hasKnowledge = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'knowledge'").get();
+  if (!hasKnowledge) return { success: false, skipped: true };
+
+  try {
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
+        category, title, content, tags, version_added, updated_at
+      );
+      DELETE FROM knowledge_fts;
+      INSERT INTO knowledge_fts (rowid, category, title, content, tags, version_added, updated_at)
+      SELECT id, category, title, content, tags, version_added, updated_at
+      FROM knowledge;
+    `);
+    return { success: true, count: db.prepare("SELECT COUNT(*) AS count FROM knowledge_fts").get().count };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
 function setupFTS5() {
   const tables = getTableList().filter(t => t.type === "table");
   
@@ -3000,6 +3020,7 @@ module.exports = {
   restoreBackup,
   queryToolLogs,
   exportTable,
+  rebuildKnowledgeFts,
   setupFTS5,
   searchAllTables,
   getMigrationVersion,
