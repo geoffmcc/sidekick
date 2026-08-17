@@ -680,6 +680,21 @@ try {
   console.error("[Compute] Init failed (non-fatal):", e.message);
 }
 
+// Initialize the browser subsystem: directories, orphaned-Chromium reaping,
+// and the idle-session reaper. Launches nothing; the browser starts on first
+// use and a missing runtime is a health state, not a startup failure.
+try {
+  const browserSubsystem = require("./browser");
+  const browserInit = browserSubsystem.initialize();
+  if (browserInit.initialized) {
+    console.log(`[Browser] Subsystem initialized (orphans reaped: ${browserInit.orphans_reaped})`);
+  } else {
+    console.log(`[Browser] Subsystem not initialized: ${browserInit.reason}`);
+  }
+} catch (e) {
+  console.error("[Browser] Init failed (non-fatal):", e.message);
+}
+
 // Register managed connectors (GitHub) in the platform connector authority so
 // the github tool routes through a governed connector rather than reaching the
 // API directly. Idempotent and non-fatal.

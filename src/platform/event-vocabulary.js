@@ -301,6 +301,7 @@ const KNOWN_EVENT_SOURCES = Object.freeze([
   "approvals",
   "blackbox",
   "bootstrap",
+  "browser",
   "capability-packs",
   "compute",
   "cron",

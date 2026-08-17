@@ -67,6 +67,32 @@ SOFTWARE.
 
 ---
 
+## playwright-core 1.62.1
+
+**License:** Apache License 2.0
+
+**Source:** https://github.com/microsoft/playwright (npm package `playwright-core`, pinned exactly in `package.json` / `package-lock.json`)
+
+**Copyright:** © Microsoft Corporation
+
+**Distribution:** Bundled as a normal production dependency (`node_modules/playwright-core`). It is the browser-automation engine that drives the Governed Browser Automation subsystem (`src/browser/`). `playwright-core` performs **no** browser download at install time — see the Chromium entry below.
+
+**License Text:** Apache-2.0, full text at `node_modules/playwright-core/LICENSE`. The Apache-2.0 license permits redistribution provided the license and copyright notices are preserved.
+
+---
+
+## Chromium (Chrome for Testing) — build 151.0.7922.34 (Playwright revision 1234)
+
+**License:** BSD 3-Clause and a combination of other open-source licenses (see the Chromium project's `LICENSE` and `credits`).
+
+**Source:** Fetched from the Playwright browser CDN via `node scripts/install-browser.js`. The exact Chromium build is pinned by `playwright-core`'s own `browsers.json`, so the lockfile that pins `playwright-core` transitively pins the browser build.
+
+**Copyright:** © The Chromium Authors and others.
+
+**Distribution:** **Not stored in this repository.** An operator installs it once per host with `node scripts/install-browser.js`, which downloads the pinned build into the Sidekick data directory (`SIDEKICK_DATA_DIR/browser/ms-playwright`), outside the application checkout so deployments do not remove it. Nothing in Sidekick downloads the browser implicitly at runtime — a missing runtime is a health state and an actionable error, never a silent fetch. The installed Chromium retains its own bundled `LICENSE` and `credits` files.
+
+---
+
 ## Summary
 
-Font Awesome and JetBrains Mono are bundled locally to support airgap deployments and eliminate external dependencies. WinSW is fetched at package-build time (pinned version, SHA-256 verified) and ships only in the built compute-worker artifact. All license requirements have been met by including the original license files or full license text and preserving copyright notices.
+Font Awesome and JetBrains Mono are bundled locally to support airgap deployments and eliminate external dependencies. WinSW is fetched at package-build time (pinned version, SHA-256 verified) and ships only in the built compute-worker artifact. `playwright-core` is a normal pinned production dependency that ships no browser binary. Chromium is fetched by a deliberate operator install step (`scripts/install-browser.js`), pinned transitively through `playwright-core`, and installed into the data directory rather than committed. All license requirements have been met by including the original license files or full license text and preserving copyright notices.

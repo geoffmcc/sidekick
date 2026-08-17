@@ -124,6 +124,10 @@ const TOOL_RISK = {
   workflow: "high",
   // Health probes update connector state and emit health evidence events.
   connector: "medium",
+  // Browser actions spend the server's network identity against arbitrary
+  // sites and can mutate remote state (clicks, form submissions, uploads).
+  // Read-level observation actions are downgraded in TOOL_ACTION_RISK.
+  browser: "high",
 };
 
 const TOOL_CATEGORIES = {
@@ -308,6 +312,21 @@ const TOOL_ACTION_RISK = Object.freeze({
   workflow: Object.freeze({
     list: "low",
     show: "low",
+  }),
+  // Browser observation of an ALREADY-OPEN session. `list` and `status` touch
+  // no page at all. snapshot/extract/assert/pages/downloads read the rendered
+  // page without navigating, clicking, or submitting — they cannot mutate
+  // remote state or spend credentials, and their output is scrubbed of tracked
+  // secrets. Everything that navigates, interacts, uploads, screenshots a
+  // sensitive page, or runs a sequence keeps the tool-level `high`.
+  browser: Object.freeze({
+    list: "low",
+    status: "low",
+    snapshot: "medium",
+    extract: "medium",
+    assert: "medium",
+    pages: "medium",
+    downloads: "medium",
   }),
 });
 
