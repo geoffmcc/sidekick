@@ -156,6 +156,29 @@ test('persisted predictions carry a horizon-consistent expiry', () => {
   }
 });
 
+console.log('LC.6b: status reconciles expired active predictions');
+test('status expires overdue active rows before reporting lifecycle counts', () => {
+  const id = 'pred_status_expiry';
+  const old = new Date(T0 - 86400000).toISOString();
+  db.prepare(`
+    INSERT INTO predictions (id, type, subject, explanation, project, time_horizon, probability,
+      confidence, score_breakdown_json, status, identity_key, rule_version, observation_count,
+      created_at, expires_at, updated_at, enabled)
+    VALUES (?, 'next_action', 'status expiry', 'status expiry', ?, 'current_session', 0.5,
+      'medium', '{}', 'active', ?, ?, 1, ?, ?, ?, 1)
+  `).run(id, PROJECT, 'status-expiry-identity', predictEngine.RULE_VERSION, old, old, old);
+
+  const status = predictEngine.engineStatus();
+  const row = db.prepare('SELECT status, lifecycle_reason FROM predictions WHERE id = ?').get(id);
+  assert.equal(row.status, 'expired', 'overdue active row is transitioned');
+  assert.equal(row.lifecycle_reason, 'time_horizon_passed', 'expiry reason is recorded');
+  assert.ok(status.expired_on_status >= 1, 'status reports the reconciliation');
+  assert.equal(status.active, db.prepare("SELECT COUNT(*) AS cnt FROM predictions WHERE status = 'active' AND enabled = 1").get().cnt,
+    'active count is taken after reconciliation');
+  assert.equal(status.type_breakdown.reduce((sum, item) => sum + item.cnt, 0), status.active,
+    'active type breakdown matches active count');
+});
+
 console.log('LC.7: outcomes, feedback and dismissal');
 test('recordFeedback stores feedback and rejects duplicates', () => {
   const id = testPredictions[0].id;
