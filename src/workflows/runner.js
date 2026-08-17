@@ -311,20 +311,35 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
       // The single governed dispatch path. `callInternalTool` is the seam
       // Sidekick's own subsystems use; policy, approvals, timeouts, redaction
       // and audit all apply exactly as they would for a direct call.
-      const result = await require("../tools/dispatcher").callInternalTool(step.tool, args, {
-        actor: options.actor || "workflow-runner",
-        authIdentity: executionContext.authIdentity || (actorPrincipalId ? {
-          principal_id: actorPrincipalId,
-          requested_by_principal_id: requestedByPrincipalId,
-          acting_for_principal_id: actingForPrincipalId,
-          scopes: options.scopes || null,
-          delegation_id: options.delegationId || null,
-        } : null),
-        timeoutMs: step.timeout_ms || options.stepTimeoutMs || DEFAULT_STEP_TIMEOUT_MS,
-        executionId,
-        project: options.project || undefined,
-        correlationId: workflow.workflow_id,
-      });
+      let result;
+      try {
+        result = await require("../tools/dispatcher").callInternalTool(step.tool, args, {
+          actor: options.actor || "workflow-runner",
+          authIdentity: executionContext.authIdentity || (actorPrincipalId ? {
+            principal_id: actorPrincipalId,
+            requested_by_principal_id: requestedByPrincipalId,
+            acting_for_principal_id: actingForPrincipalId,
+            scopes: options.scopes || null,
+            delegation_id: options.delegationId || null,
+          } : null),
+          timeoutMs: step.timeout_ms || options.stepTimeoutMs || DEFAULT_STEP_TIMEOUT_MS,
+          executionId,
+          project: options.project || undefined,
+          correlationId: workflow.workflow_id,
+        });
+      } catch (error) {
+        if (!hasAlwaysSteps) throw error;
+        // Preserve cleanup after an unexpected dispatcher exception without
+        // echoing an unsanitized error (which could contain a secret). The
+        // normal governed result path records the bounded failure and lets an
+        // always=true cleanup step run.
+        const code = error && error.code ? String(error.code).slice(0, 120) : "tool_dispatch_error";
+        result = {
+          isError: true,
+          code,
+          content: [{ type: "text", text: `Workflow tool dispatch failed (${code})` }],
+        };
+      }
       const durationMs = Date.now() - stepStarted;
 
       if (result && result.approvalRequired) {
