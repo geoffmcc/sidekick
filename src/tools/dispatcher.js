@@ -82,6 +82,14 @@ function validationError(name, parsed) {
 
 function requiredToolPermission(descriptor, args = {}) {
   if (descriptor.authorizationPermission) return descriptor.authorizationPermission;
+  if (descriptor.name === "capability") {
+    // Capability packs are a critical tool because some actions activate
+    // executable module code.  That risk must not make harmless inventory and
+    // inspection unavailable to administrators, who are explicitly granted
+    // packs.read.  Keep lifecycle changes behind the stronger manage grant.
+    const readActions = new Set(["list", "available", "show", "inspect", "validate", "health", "doctor"]);
+    return readActions.has(args.action || "list") ? "packs.read" : "packs.manage";
+  }
   if (descriptor.name === "workflow") {
     return ["run", "resume"].includes(args.action) ? "workflows.execute" : "workflows.read";
   }
