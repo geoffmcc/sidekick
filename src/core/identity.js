@@ -157,9 +157,17 @@ function assignRole(principalIdValue, role, actorPrincipalId = null) {
   const principal = getPrincipal(principalIdValue);
   if (!principal) throw new Error("principal not found");
   if (role === "owner") {
-    if (!actorPrincipalId) throw new Error("Owner promotion requires an authorized actor");
-    const authorization = require("./authorization");
-    if (!authorization.authorize({ principalId: actorPrincipalId, permission: "roles.manage" }).ok) throw new Error("Owner promotion requires roles.manage");
+    // The legacy dashboard bridge is adopted in place as a human account.
+    // Its administrator role intentionally lacks roles.manage, so allow that
+    // one account to promote itself and complete first-owner setup. All other
+    // owner promotions still require an existing roles.manage authority.
+    const adoptedSelfPromotion = actorPrincipalId === principal.principal_id &&
+      principal.principal_type === "human" && principal.metadata?.adopted_legacy_dashboard === true;
+    if (!actorPrincipalId && !adoptedSelfPromotion) throw new Error("Owner promotion requires an authorized actor");
+    if (!adoptedSelfPromotion) {
+      const authorization = require("./authorization");
+      if (!authorization.authorize({ principalId: actorPrincipalId, permission: "roles.manage" }).ok) throw new Error("Owner promotion requires an authorized actor");
+    }
   }
   dbStore.getDb().prepare("INSERT INTO principal_roles (principal_id, role_name, assigned_by_principal_id, assigned_at) VALUES (?, ?, ?, ?)").run(principal.principal_id, role, actorPrincipalId, now());
   audit("role.assigned", principal.principal_id, actorPrincipalId, { role });
