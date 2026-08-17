@@ -11,6 +11,7 @@ const SERVICES = ['sidekick-dashboard', 'sidekick-agent', 'sidekick-mcp'];
 const LOCK_DIR = path.join(HOME_DIR, '.sidekick-deploy.lock');
 const WORK_DIR = path.join(HOME_DIR, 'deploy-work');
 const BACKUP_ROOT = path.join(HOME_DIR, 'backups');
+const BACKUP_RETENTION = Math.max(1, Number(process.env.SIDEKICK_DEPLOY_BACKUP_RETENTION || 5));
 let execFileSyncImpl = childProcess.execFileSync;
 
 function setExecFileSyncForTest(fn) {
@@ -174,8 +175,68 @@ function rollbackDeploy(result, previousCommit) {
   }
   const install = npmInstall(APP_DIR);
   result.rollback_dependency_install = install.ok ? 'ok' : 'failed';
-  for (const svc of ['sidekick-agent', 'sidekick-dashboard']) service('restart', svc);
+  for (const svc of SERVICES) service('restart', svc);
   result.rollback_status = install.ok ? 'completed' : 'partial';
+}
+
+function restartServices(result) {
+  result.restarted_services = result.restarted_services || [];
+  for (const svc of SERVICES) {
+    const restart = service('restart', svc);
+    result.restarted_services.push({ service: svc, status: restart.ok ? 'restarted' : 'failed' });
+  }
+  const states = serviceStates();
+  result.health = { services: states, ok: servicesActive(states) };
+  return result.health.ok;
+}
+
+function stopServices(result) {
+  result.stopped_services = {};
+  for (const svc of SERVICES) {
+    const stop = service('stop', svc);
+    result.stopped_services[svc] = stop.ok ? 'stopped' : 'failed';
+    if (!stop.ok) return false;
+  }
+  result.stopped_services = serviceStates();
+  return servicesStopped(result.stopped_services);
+}
+
+function pruneDeployBackups() {
+  if (!fs.existsSync(BACKUP_ROOT)) return;
+  const backups = fs.readdirSync(BACKUP_ROOT, { withFileTypes: true })
+    .filter(entry => entry.isDirectory() && /^deploy-\d{8}T\d{6}Z$/.test(entry.name))
+    .map(entry => entry.name)
+    .sort()
+    .reverse();
+  for (const name of backups.slice(BACKUP_RETENTION)) {
+    fs.rmSync(path.join(BACKUP_ROOT, name), { recursive: true, force: true });
+  }
+}
+
+function createDeployBackup(result, previousCommit) {
+  const stamp = utcStamp();
+  const backup = path.join(BACKUP_ROOT, `deploy-${stamp}`);
+  fs.mkdirSync(BACKUP_ROOT, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(backup, { recursive: true, mode: 0o700 });
+  const envSource = path.join(APP_DIR, '.env');
+  const dataSource = path.join(APP_DIR, 'data');
+  if (!fs.existsSync(envSource) || !fs.existsSync(dataSource)) throw new Error('backup source validation failed');
+  fs.cpSync(envSource, path.join(backup, '.env'), { preserveTimestamps: true });
+  fs.chmodSync(path.join(backup, '.env'), 0o600);
+  fs.cpSync(dataSource, path.join(backup, 'data'), { recursive: true, dereference: false, preserveTimestamps: true });
+  fs.writeFileSync(path.join(backup, 'previous-commit.txt'), `${previousCommit}\n`, { mode: 0o600 });
+  fs.writeFileSync(path.join(backup, 'manifest.json'), `${JSON.stringify({
+    created_at: new Date().toISOString(),
+    previous_commit: previousCommit,
+    contents: ['.env', 'data']
+  }, null, 2)}\n`, { mode: 0o600 });
+  if (!fs.existsSync(path.join(backup, '.env')) || !fs.existsSync(path.join(backup, 'data'))) {
+    throw new Error('backup validation failed');
+  }
+  result.backup = backup;
+  result.backup_retention = BACKUP_RETENTION;
+  pruneDeployBackups();
+  return backup;
 }
 
 function verify(mode = 'verify') {
@@ -203,6 +264,7 @@ function verify(mode = 'verify') {
 function deploy() {
   const result = { mode: 'deploy', status: 'unknown', repo_path: APP_DIR, restarted_services: [] };
   if (!acquireLock(result)) return result;
+  let servicesStoppedForBackup = false;
   try {
     if (!fs.existsSync(path.join(APP_DIR, '.git'))) return fail(result, 'deployment path is not a Git checkout', { repo_path: APP_DIR });
     const preflight = repoInfo(APP_DIR);
@@ -215,6 +277,15 @@ function deploy() {
     if (!compareWithOrigin(result)) return result;
 
     const oldHead = result.previous_commit;
+    if (result.behind > 0) {
+      servicesStoppedForBackup = true;
+      if (!stopServices(result)) return fail(result, 'service stop verification failed', { services: result.stopped_services });
+      try {
+        createDeployBackup(result, oldHead);
+      } catch (error) {
+        return fail(result, redact(error.message));
+      }
+    }
     const merge = git(['merge', '--ff-only', 'origin/main']);
     result.fast_forward = merge.ok ? 'ok' : 'failed';
     if (!merge.ok) return fail(result, 'fast-forward failed', { stderr: merge.stderr });
@@ -243,14 +314,12 @@ function deploy() {
       return fail(result, 'knowledge seed failed', { stderr: seed.stderr });
     }
 
-    for (const svc of ['sidekick-agent', 'sidekick-dashboard']) {
-      const restart = service('restart', svc);
-      result.restarted_services.push({ service: svc, status: restart.ok ? 'restarted' : 'failed' });
-      if (!restart.ok) {
-        if (result.changed) rollbackDeploy(result, oldHead);
-        return fail(result, 'service restart failed', { service: svc, stderr: restart.stderr });
-      }
+    if (!restartServices(result)) {
+      if (result.changed) rollbackDeploy(result, oldHead);
+      const restartFailed = result.restarted_services.some(item => item.status === 'failed');
+      return fail(result, restartFailed ? 'service restart failed' : 'service health check failed', { services: result.health.services });
     }
+    servicesStoppedForBackup = false;
 
     result.mcp_restart = 'scheduled by caller when running inside MCP';
     const states = serviceStates();
@@ -268,6 +337,7 @@ function deploy() {
     result.status = 'ok';
     return result;
   } finally {
+    if (servicesStoppedForBackup) restartServices(result);
     releaseLock();
   }
 }

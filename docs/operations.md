@@ -107,6 +107,10 @@ Use the deployment scripts from the workstation for first-time conversion or nor
 
 The first conversion from a non-Git deployment uses a deployment lock, clones into staging, installs production dependencies, stops Sidekick services before the final state backup, stores backups under `/home/sidekick/backups/deploy-<UTC timestamp>/`, moves the previous app directory to `/home/sidekick/sidekick.rollback-<UTC timestamp>`, restores `.env` and `data/`, disables Git push, restarts services, and keeps both backup and rollback directories for operator-controlled cleanup.
 
+Every Git deploy that advances `main` also creates a pre-deploy snapshot under `/home/sidekick/backups/deploy-<UTC timestamp>/`. The deploy temporarily stops the Sidekick services, copies `.env` and `data/`, records the previous commit and backup manifest, then resumes the deployment. The newest five deploy snapshots are retained by default; set `SIDEKICK_DEPLOY_BACKUP_RETENTION` to change that policy. Git rollback protects tracked code, while these snapshots protect mutable configuration and runtime data.
+
+Keep backup purposes separate: `/home/sidekick/backups/` is for deployment snapshots; `${SIDEKICK_DATA_DIR}/backups/` (normally `/home/sidekick/sidekick/data/backups/`) is for application database backups created by `db_backup`. Do not create new deployment snapshots in the repository-level `backups/` directory.
+
 Rollback after conversion:
 
 ```bash

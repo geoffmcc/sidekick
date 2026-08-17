@@ -139,6 +139,11 @@ try {
   assert.strictEqual(result.changed, true, 'fast-forward deploy should report changed');
   assert.strictEqual(result.previous_commit, 'aaa111');
   assert.strictEqual(result.deployed_commit, 'bbb222');
+  assert.ok(result.backup, 'changed deploy should create a pre-deploy backup');
+  assert.ok(fs.existsSync(path.join(result.backup, '.env')), 'backup should include .env');
+  assert.ok(fs.existsSync(path.join(result.backup, 'data')), 'backup should include data');
+  assert.ok(fs.existsSync(path.join(result.backup, 'manifest.json')), 'backup should include a manifest');
+  assert.ok(state.calls.includes('sudo systemctl stop sidekick-mcp'), 'backup should quiesce MCP before copying mutable state');
   assert.strictEqual(gitDeploy.allowedFetchUrl('git://github.com/geoffmcc/sidekick.git'), false, 'git protocol should not be allowed for deploy origin');
 
   for (const [name, overrides, expected] of [
