@@ -242,11 +242,13 @@ const realClient = require(clientPath);
 let fixtures = {};
 let postLog = [];
 let delLog = [];
+let activityQueries = [];
 const captured = { createClientCalls: [] };
 function setFixtures(next) {
   fixtures = next;
   postLog = [];
   delLog = [];
+  activityQueries = [];
 }
 function fakeCreateClient(profile, key, signal, ca) {
   captured.createClientCalls.push({ profile: profile.name, key, ca });
@@ -408,7 +410,9 @@ function baseFixtures() {
     "/Plugins": [
       { Id: "p1", Name: "Trakt", Version: "1.0.0", Status: "Active", CanUninstall: true },
     ],
-    "/System/ActivityLog/Entries": (q) => ({
+    "/System/ActivityLog/Entries": (q) => {
+      activityQueries.push(q || {});
+      return {
       Items: [
         {
           Id: 1,
@@ -421,7 +425,8 @@ function baseFixtures() {
       ],
       TotalRecordCount: 5,
       StartIndex: q?.StartIndex ?? 0,
-    }),
+      };
+    },
     "/LiveTv/Info": { IsEnabled: false, Services: [], EnabledUsers: [] },
     "/System/Logs": [
       { Name: "log_20260814.log", Size: 5000, DateModified: RECENT },
@@ -870,6 +875,17 @@ async function asyncTest(name, fn) {
     assert.strictEqual(parsed.start_index, 3);
     assert.strictEqual(parsed.items.length, 1);
     assert.strictEqual(parsed.items[0].severity, "Information");
+  });
+  await asyncTest("activity forwards user filters without silently widening scope", async () => {
+    setFixtures(baseFixtures());
+    const { read } = tools(servicesFor());
+    const byId = await call(read, { action: "activity", user_id: "u2", limit: 10 });
+    assert.strictEqual(byId.out.isError, undefined);
+    assert.strictEqual(activityQueries[0].UserId, "u2");
+
+    const byName = await call(read, { action: "activity", username: "ADMIN", limit: 10 });
+    assert.strictEqual(byName.out.isError, undefined);
+    assert.strictEqual(activityQueries[1].UserId, "u1");
   });
   await asyncTest("logs_summary returns bounded redacted intelligence, never raw content", async () => {
     setFixtures(baseFixtures());
