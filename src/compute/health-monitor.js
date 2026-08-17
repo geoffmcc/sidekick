@@ -31,7 +31,11 @@ class HealthMonitor {
       }
     };
     check();
-    this._intervals.set(providerId, setInterval(check, interval));
+    const timer = setInterval(check, interval);
+    // Health monitoring is background work and must not keep short-lived
+    // test/CLI processes alive after their foreground work has completed.
+    if (timer.unref) timer.unref();
+    this._intervals.set(providerId, timer);
   }
 
   stop(providerId) {
