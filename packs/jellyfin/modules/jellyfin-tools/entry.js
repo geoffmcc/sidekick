@@ -810,9 +810,19 @@ async function read(services, args, runtime) {
   }
   if (args.action === "activity") {
     // Real response shape is { Items, TotalRecordCount } (ActivityLogEntryQueryResult).
+    let userId = args.user_id || null;
+    if (!userId && args.username) {
+      const users = await getAll(c, "/Users", null, 100);
+      const user = users.find(
+        (x) => String(x.Name || "").toLowerCase() === String(args.username).toLowerCase(),
+      );
+      if (!user) throw new JellyfinError("not_found", "no matching Jellyfin user");
+      userId = user.Id;
+    }
     const a = await c.get("/System/ActivityLog/Entries", {
       Limit: bounded(args.limit, 50),
       StartIndex: Math.max(0, args.start_index ?? args.start ?? 0),
+      ...(userId ? { UserId: userId } : {}),
     });
     const items = Array.isArray(a?.Items) ? a.Items : [];
     return {
