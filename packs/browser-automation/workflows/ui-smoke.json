@@ -28,7 +28,7 @@
       "tool": "browser",
       "args": { "action": "navigate", "session": "${steps.open.json.session.id}", "url": "${inputs.url}" },
       "expect": "json",
-      "on_error": "continue"
+      "on_error": "fail"
     },
     {
       "name": "verify",
@@ -36,7 +36,7 @@
       "tool": "browser",
       "args": { "action": "assert", "session": "${steps.open.json.session.id}", "assertions": [ { "kind": "text_visible", "value": "${inputs.expect_text}" } ] },
       "expect": "json",
-      "on_error": "continue"
+      "on_error": "fail"
     },
     {
       "name": "evidence",
@@ -52,7 +52,8 @@
       "tool": "browser",
       "args": { "action": "close", "session": "${steps.open.json.session.id}" },
       "expect": "json",
-      "on_error": "continue"
+      "on_error": "continue",
+      "always": true
     }
   ],
   "result": {

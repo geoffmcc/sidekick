@@ -417,6 +417,13 @@ cancellation, redaction and audit logging. On top of that the runner provides:
 `on_error: "continue"` records the step as **failed** while letting the run
 proceed; the durable record and the cursor both stay accurate.
 
+Set `always: true` on a cleanup or compensation step that must still be
+dispatched after an earlier step fails or cancellation is requested. The step
+continues through the normal dispatcher and governance path; it should usually
+use `on_error: "continue"` so a cleanup failure does not hide the original
+failure. Workflows without `always` steps retain the normal stop-at-failure and
+stop-at-cancellation behavior.
+
 ## Operator surfaces
 
 ### `capability` tool (risk: `critical`)

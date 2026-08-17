@@ -192,7 +192,7 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
         name: step.name,
         tool_name: step.tool,
         args: step.args,
-        metadata: { title: step.title || step.name, on_error: step.on_error, expect: step.expect },
+        metadata: { title: step.title || step.name, on_error: step.on_error, always: step.always, expect: step.expect },
       })),
       execution_id: executionId,
       project_id: options.project || toolContext.getExecutionContext().project || null,
@@ -240,17 +240,12 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
   let verdict = "completed";
   let approval = null;
   let failure = null;
+  const hasAlwaysSteps = definition.steps.some(step => step.always === true);
 
   try {
     for (let index = state.nextStep; index < definition.steps.length; index++) {
       const step = definition.steps[index];
       state.nextStep = index;
-
-      if (cancelRequested(executionId)) {
-        verdict = "cancelled";
-        stepReports.push({ step: step.name, status: "cancelled", reason: "cancel requested before dispatch" });
-        break;
-      }
 
       const scope = stepScope(state);
       // Advance the kernel cursor for EVERY step, including skipped ones: the
@@ -259,6 +254,39 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
       platformKernel.advanceWorkflow(workflow.workflow_id, { source: "workflow-runner", actor_id: options.actor });
       const live = platformKernel.getWorkflow(workflow.workflow_id);
       const liveStep = live.steps.find(candidate => candidate.step_index === index);
+
+      // Once a workflow has failed or been cancelled, ordinary steps are
+      // skipped but explicitly-marked cleanup steps still run. This keeps
+      // resource-owning workflows honest: a browser session, lease, or other
+      // temporary resource cannot be stranded merely because an earlier step
+      // failed. Cleanup is still a normal governed dispatch.
+      if (hasAlwaysSteps && verdict !== "completed" && !step.always) {
+        state.steps[step.name] = { ok: false, skipped: true, text: "", json: null };
+        if (liveStep) {
+          platformKernel.completeWorkflowStep(workflow.workflow_id, liveStep.step_id, {
+            success: true,
+            source: "workflow-runner",
+            actor_id: options.actor,
+            result_summary: `skipped after ${verdict}`,
+          });
+        }
+        stepReports.push({ step: step.name, tool: step.tool, status: "skipped", reason: `workflow ${verdict}` });
+        state.nextStep = index + 1;
+        checkpointState(workflow.workflow_id, state);
+        continue;
+      }
+
+      if (cancelRequested(executionId) && (!hasAlwaysSteps || !step.always)) {
+        verdict = "cancelled";
+        if (!hasAlwaysSteps) {
+          stepReports.push({ step: step.name, status: "cancelled", reason: "cancel requested before dispatch" });
+          break;
+        }
+        stepReports.push({ step: step.name, status: "cancelled", reason: "cancel requested before dispatch" });
+        state.nextStep = index + 1;
+        checkpointState(workflow.workflow_id, state);
+        continue;
+      }
 
       if (step.when !== undefined && !isTruthy(resolveValue(step.when, scope))) {
         state.steps[step.name] = { ok: true, skipped: true, text: "", json: null };
@@ -323,7 +351,7 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
           result_summary: truncate(projection.text, 500).text,
           error: projection.ok ? null : (result?.code || "tool_error"),
           error_category: projection.ok ? null : (result?.code || "tool_error"),
-          advance: step.on_error === "continue",
+          advance: step.on_error === "continue" || step.always,
         });
       }
       stepReports.push({
@@ -342,6 +370,12 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
       if (!projection.ok && step.on_error === "fail") {
         verdict = "failed";
         failure = { step: step.name, tool: step.tool, error: truncate(projection.text, 1000).text, code: result?.code || null };
+        if (hasAlwaysSteps) {
+          // Continue through the remaining steps so `always` cleanup steps can
+          // release resources. Non-cleanup steps are skipped at the top of the
+          // next iteration.
+          continue;
+        }
         break;
       }
     }

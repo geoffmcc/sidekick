@@ -29,7 +29,7 @@
       "tool": "browser",
       "args": { "action": "navigate", "session": "${steps.open.json.session.id}", "url": "${inputs.url}" },
       "expect": "json",
-      "on_error": "continue"
+      "on_error": "fail"
     },
     {
       "name": "trigger",
@@ -37,7 +37,7 @@
       "tool": "browser",
       "args": { "action": "click", "session": "${steps.open.json.session.id}", "target": "${inputs.trigger_selector}" },
       "expect": "json",
-      "on_error": "continue"
+      "on_error": "fail"
     },
     {
       "name": "wait_download",
@@ -45,7 +45,7 @@
       "tool": "browser",
       "args": { "action": "wait", "session": "${steps.open.json.session.id}", "for": "download", "timeout_ms": "${inputs.timeout_ms}" },
       "expect": "json",
-      "on_error": "continue"
+      "on_error": "fail"
     },
     {
       "name": "close",
@@ -53,7 +53,8 @@
       "tool": "browser",
       "args": { "action": "close", "session": "${steps.open.json.session.id}" },
       "expect": "json",
-      "on_error": "continue"
+      "on_error": "continue",
+      "always": true
     }
   ],
   "result": {

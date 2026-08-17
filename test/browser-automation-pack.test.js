@@ -207,6 +207,30 @@ function parse(result) {
       assert.ok(run.result.evidence && run.result.evidence.artifact_id, "no evidence artifact from ui-smoke");
     });
 
+    await t("download-verification workflow captures a real download artifact and closes on failure", async () => {
+      const { runWorkflowDefinition } = require("../src/workflows/runner");
+      const run = await runWorkflowDefinition("browser-automation/download-verification", {
+        url: `${base}/`,
+        trigger_selector: "#dl",
+        allow_private_network: true,
+        allowed_hosts: ["127.0.0.1"],
+      }, { source: "mcp", actor: "pack-test", project: "ba-pack" });
+      assert.ok(["completed", "succeeded", "ok"].includes(run.status) || run.result, `workflow did not complete: ${JSON.stringify(run.status)}`);
+      assert.ok(run.result.download && run.result.download.artifact_id, `download artifact missing: ${JSON.stringify(run.result)}`);
+      assert.strictEqual(run.result.download.custody.status, "registered", JSON.stringify(run.result.download));
+      assert.strictEqual(run.result.download.byte_size, Buffer.byteLength("sidekick-fixture-download-payload"));
+
+      const failed = await runWorkflowDefinition("browser-automation/download-verification", {
+        url: `${base}/`,
+        trigger_selector: "#missing-download-control",
+        allow_private_network: true,
+        allowed_hosts: ["127.0.0.1"],
+      }, { source: "mcp", actor: "pack-test", project: "ba-pack" });
+      assert.strictEqual(failed.status, "failed", `missing download must fail: ${JSON.stringify(failed)}`);
+      const health = await browserSubsystem.health({ deep: false });
+      assert.strictEqual(health.sessions.open, 0, "failed download workflow leaked its browser session");
+    });
+
     await t("authenticated-ui-check workflow performs a governed secret login", async () => {
       // Seed the fixture credential in the secret store.
       const all = secretsStore.loadSecrets();
