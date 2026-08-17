@@ -43,6 +43,15 @@ function makeMock(overrides = {}) {
     calls: [],
     ...overrides
   };
+  // Per-service state so the mock can model sidekick-mcp staying active while
+  // only dashboard/agent are stopped (the deploy_current_main / SKIP_MCP case).
+  state.svcStates = {
+    'sidekick-dashboard': state.services,
+    'sidekick-agent': state.services,
+    'sidekick-mcp': state.services,
+  };
+  const getSvc = (name) => (name in state.svcStates ? state.svcStates[name] : state.services);
+  const setSvc = (name, val) => { state.svcStates[name] = val; };
 
   function fail(message) {
     const error = new Error(message);
@@ -64,13 +73,16 @@ function makeMock(overrides = {}) {
       return 'ok\n';
     }
     if (cmd === 'sudo') {
-      if (state.failStop && args[1] === 'stop') fail('stop failed');
-      if (state.failRestart && args[1] === 'restart') fail('restart failed');
-      if (args[1] === 'stop') state.services = 'inactive';
-      if (args[1] === 'restart' && !state.keepServiceFailure) state.services = 'active';
+      const action = args[1];
+      const svc = args[2];
+      if (state.failStop && action === 'stop') fail('stop failed');
+      if (state.failRestart && action === 'restart') fail('restart failed');
+      if (action === 'stop') { state.services = 'inactive'; setSvc(svc, 'inactive'); }
+      if (action === 'restart' && !state.keepServiceFailure) { state.services = 'active'; setSvc(svc, 'active'); }
       return 'ok\n';
     }
-    if (cmd === 'systemctl') return `${state.services}\n`;
+    // systemctl is-active <svc>
+    if (cmd === 'systemctl') return `${getSvc(args[1])}\n`;
     if (cmd === 'git') {
       const joined = args.join(' ');
       if (args[0] === 'clone') {
