@@ -167,7 +167,7 @@ function legacyDashboardPrincipal(username, password = null) {
     const db = dbStore.getDb();
     const rows = db.prepare("SELECT * FROM principals WHERE json_extract(metadata_json, '$.legacy_dashboard_username') = ? LIMIT 1").all(username);
     const row = rows[0] || null;
-    if (row && row.principal_type === "human") return identity.getPrincipal(row.principal_id);
+    if (row && row.principal_type === "human") return promoteFirstDashboardOwner(identity.getPrincipal(row.principal_id));
     if (row && !password) return identity.getPrincipal(row.principal_id);
 
     if (row) {
@@ -181,10 +181,19 @@ function legacyDashboardPrincipal(username, password = null) {
           .run(row.principal_id, username, passwordHash, identity.PASSWORD_SCHEME, new Date().toISOString());
       });
       adopt();
-      return identity.getPrincipal(row.principal_id);
+      return promoteFirstDashboardOwner(identity.getPrincipal(row.principal_id));
     }
 
     if (!password) return null;
+    const hasOwner = Boolean(db.prepare("SELECT 1 FROM principal_roles WHERE role_name = 'owner' LIMIT 1").get());
+    if (!hasOwner) {
+      return identity.bootstrapOwner({
+        username,
+        password,
+        displayName: username,
+        metadata: { legacy_dashboard_username: username, adopted_legacy_dashboard: true },
+      });
+    }
     const principal = identity.createHumanUser({
       username,
       password,
@@ -195,6 +204,17 @@ function legacyDashboardPrincipal(username, password = null) {
   } catch {
     return null;
   }
+}
+
+function promoteFirstDashboardOwner(principal) {
+  if (!principal || !principal.metadata?.adopted_legacy_dashboard) return principal;
+  try {
+    const db = dbStore.getDb();
+    if (!db.prepare("SELECT 1 FROM principal_roles WHERE role_name = 'owner' LIMIT 1").get()) {
+      return identity.assignRole(principal.principal_id, "owner", principal.principal_id);
+    }
+  } catch {}
+  return principal;
 }
 
 function makeSessionToken(user) {
@@ -648,7 +668,11 @@ app.post("/api/auth/principals/:id/enable", (req, res) => { req.params.state = '
 app.post("/api/auth/principals/:id/disable", (req, res) => { req.params.state = 'disable'; setPrincipalStateRoute(req, res); });
 
 app.post("/api/auth/principals/:id/roles", (req, res) => {
-  if (!requireIdentityPermission(req, res, "roles.manage")) return;
+  const adoptedSelfPromotion = req.body?.role === "owner" &&
+    req.params.id === req.authPrincipal?.principal_id &&
+    req.authPrincipal?.principal_type === "human" &&
+    req.authPrincipal?.metadata?.adopted_legacy_dashboard === true;
+  if (!adoptedSelfPromotion && !requireIdentityPermission(req, res, "roles.manage")) return;
   try {
     res.status(201).json({ principal: identity.assignRole(req.params.id, req.body?.role, req.authPrincipal.principal_id) });
   } catch (error) {
