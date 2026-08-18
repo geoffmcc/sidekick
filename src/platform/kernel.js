@@ -1,4 +1,5 @@
 const crypto = require("crypto");
+const fs = require("fs");
 const path = require("path");
 const dbStore = require("../db");
 const { AsyncLocalStorage } = require("async_hooks");
@@ -2345,13 +2346,47 @@ function getBackup(backupId) {
 
 function completeBackup(backupId, details = {}) {
   ensurePlatformKernelSchema();
-  // NOTE: file_path/file_size_bytes/checksum are caller-asserted and recorded
-  // unverified — the kernel does not read the file back or recompute the
-  // checksum. The verified backup path is the db_backup tool (src/db.js
-  // createBackup), which produces the file it describes.
+  const row = dbStore.getDb().prepare("SELECT backup_id, state FROM platform_backups WHERE backup_id = ?").get(backupId);
+  if (!row) throw new Error("backup not found");
+  if (row.state !== "created") throw new Error(`backup is not awaiting completion: ${row.state}`);
+  if (typeof details.file_path !== "string" || !details.file_path.trim()) throw new Error("file_path is required");
+  const backupRoot = fs.realpathSync(path.resolve(dbStore.BACKUP_DIR));
+  const lexicalPath = path.resolve(details.file_path);
+  if (lexicalPath !== backupRoot && !lexicalPath.startsWith(`${backupRoot}${path.sep}`)) {
+    throw new Error("backup file must be inside the managed backup directory");
+  }
+  const stat = fs.lstatSync(lexicalPath);
+  if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("backup file must be a regular, non-symlink file");
+  const resolvedPath = fs.realpathSync(lexicalPath);
+  if (resolvedPath !== backupRoot && !resolvedPath.startsWith(`${backupRoot}${path.sep}`)) {
+    throw new Error("backup file escaped the managed backup directory");
+  }
+  const actualStat = fs.statSync(resolvedPath);
+  const hash = crypto.createHash("sha256");
+  const fd = fs.openSync(resolvedPath, "r");
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  try {
+    let position = 0;
+    let bytesRead;
+    do {
+      bytesRead = fs.readSync(fd, buffer, 0, buffer.length, position);
+      if (bytesRead) hash.update(buffer.subarray(0, bytesRead));
+      position += bytesRead;
+    } while (bytesRead);
+  } finally {
+    fs.closeSync(fd);
+  }
+  const actualSize = actualStat.size;
+  const actualChecksum = hash.digest("hex");
+  if (details.file_size_bytes !== undefined && Number(details.file_size_bytes) !== actualSize) {
+    throw new Error("backup file size does not match the supplied metadata");
+  }
+  if (details.checksum !== undefined && String(details.checksum).replace(/^sha256:/i, "").toLowerCase() !== actualChecksum) {
+    throw new Error("backup checksum does not match the file contents");
+  }
   const ts = details.timestamp || nowIso();
-  dbStore.getDb().prepare("UPDATE platform_backups SET state = 'completed', completed_at = ?, file_path = ?, file_size_bytes = ?, checksum = ? WHERE backup_id = ?").run(ts, details.file_path || null, details.file_size_bytes || null, details.checksum || null, backupId);
-  appendEvent({ event_type: "backup.completed", source: details.source || "platform", actor_id: details.actor_id, subject_type: "backup", subject_id: backupId, payload: { file_path: details.file_path, file_size_bytes: details.file_size_bytes }, correlation_id: backupId });
+  dbStore.getDb().prepare("UPDATE platform_backups SET state = 'completed', completed_at = ?, file_path = ?, file_size_bytes = ?, checksum = ? WHERE backup_id = ? AND state = 'created'").run(ts, resolvedPath, actualSize, `sha256:${actualChecksum}`, backupId);
+  appendEvent({ event_type: "backup.completed", source: details.source || "platform", actor_id: details.actor_id, subject_type: "backup", subject_id: backupId, payload: { file_path: resolvedPath, file_size_bytes: actualSize, checksum: `sha256:${actualChecksum}` }, correlation_id: backupId });
   return dbStore.getDb().prepare("SELECT * FROM platform_backups WHERE backup_id = ?").get(backupId);
 }
 

@@ -208,8 +208,8 @@ The platform kernel provides backup/restore operations and release tracking:
 
 - `createBackup({ name, type, tables, compression })` creates a backup record with automatic row counts for all platform tables. Backups start in `created` state.
 - `getBackup(backupId)` retrieves backup details with parsed tables and row counts.
-- `completeBackup(backupId, { file_path, file_size_bytes, checksum })` marks backup as completed with file metadata.
-- `restoreBackup(backupId)` marks backup as restored.
+- `completeBackup(backupId, { file_path, file_size_bytes, checksum })` verifies a regular file inside the managed backup directory, recomputes its size and SHA-256, and only then marks the backup completed.
+- `restoreBackup(backupId)` is deliberately unsupported in the platform kernel; use the governed `db_backup`/`db_restore` path for real database recovery.
 - `listBackups({ state, type, limit })` filters and lists backups.
 - Backups emit `backup.created`, `backup.completed`, and `backup.restored` events.
 
