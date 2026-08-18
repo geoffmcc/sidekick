@@ -567,7 +567,7 @@ async function upload(session, args, runtime) {
   let filePath;
   let provenance;
   if (args.artifact_id) {
-    const resolved = browserArtifacts.resolveArtifactFile(args.artifact_id);
+    const resolved = browserArtifacts.resolveArtifactFile(args.artifact_id, { project: session.project });
     if (resolved.error) throw new BrowserActionError(`upload source: ${resolved.error}`, "invalid_argument");
     filePath = resolved.path;
     provenance = { kind: "artifact", artifact_id: args.artifact_id, name: resolved.artifact.name || null };

@@ -279,6 +279,20 @@ function countChromeProcesses() {
     assert.strictEqual(result.provenance.artifact_id, downloadArtifactId);
   });
 
+  await test("artifact upload is denied across project boundaries", async () => {
+    const otherProjectDispatch = (args) => dispatch(args, { project: "browser-e2e-other" });
+    const opened = parse(await otherProjectDispatch({ action: "open", label: "other-project", allow_private_network: true }));
+    const otherSessionId = opened.session.id;
+    try {
+      await otherProjectDispatch({ action: "navigate", session: otherSessionId, url: `${base}/form` });
+      const result = parse(await otherProjectDispatch({ action: "upload", session: otherSessionId, target: "#attachment", artifact_id: downloadArtifactId }));
+      assert.strictEqual(result.ok, false, JSON.stringify(result));
+      assert.match(result.error, /different project/);
+    } finally {
+      await otherProjectDispatch({ action: "close", session: otherSessionId });
+    }
+  });
+
   await test("popup / new tab is adopted into the session", async () => {
     await dispatch({ action: "navigate", session: sessionId, url: `${base}/` });
     await dispatch({ action: "click", session: sessionId, target: "#popup-link" });

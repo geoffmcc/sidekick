@@ -125,7 +125,7 @@ function storeArtifact({
  * Only artifacts whose storage_ref resolves inside the data dir are usable.
  * Returns { path, artifact } or { error }.
  */
-function resolveArtifactFile(artifactId) {
+function resolveArtifactFile(artifactId, { project = undefined } = {}) {
   if (!platformKernel || typeof platformKernel.getArtifact !== "function") {
     return { error: "platform kernel unavailable" };
   }
@@ -134,6 +134,12 @@ function resolveArtifactFile(artifactId) {
     return { error: String(error.message || error).slice(0, 300) };
   }
   if (!artifact) return { error: `artifact "${artifactId}" not found` };
+  // A browser session is project-scoped. Do not let a caller use an artifact
+  // from another project (or a global artifact) as an upload source merely by
+  // guessing its opaque id.
+  if (project !== undefined && String(artifact.project_id || "") !== String(project || "")) {
+    return { error: "artifact belongs to a different project" };
+  }
   const root = path.resolve(dataDir());
   const lexical = path.resolve(root, String(artifact.storage_ref || ""));
   // Guard the lexical path against `..`/absolute storage_ref, then realpath and
