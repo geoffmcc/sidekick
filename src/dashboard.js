@@ -44,7 +44,7 @@ const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "da
 const PORT = parseInt(process.env.SIDEKICK_DASHBOARD_PORT || "4098", 10);
 const MCP_PORT = parseInt(process.env.SIDEKICK_PORT || "4097", 10);
 const GRAFANA_PORT = parseInt(process.env.SIDEKICK_GRAFANA_PORT || "3000", 10);
-const MCP_API_KEY = readSecret("SIDEKICK_API_KEY");
+const MCP_API_KEY = readSecret("SIDEKICK_API_KEY", { required: true });
 if (!MCP_API_KEY || MCP_API_KEY === "sk-sidekick-local-dev" || MCP_API_KEY === "sk-your-key-here") {
   throw new Error("SIDEKICK_API_KEY must be set to a non-placeholder value");
 }

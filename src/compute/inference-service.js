@@ -34,7 +34,7 @@ class InferenceService {
       const OpenAICompatibleProvider = require("../providers/openai-compatible-provider");
       // Resolve the provider's credential reference through the secret authority
       // as late as possible (here, at first dispatch) rather than trusting the
-      // adapter's OPENAI_API_KEY env fallback. The plaintext key never touches
+      // adapter's protected credential authority. The plaintext key never touches
       // the provider record, an API response, or a log line.
       const { resolveProviderApiKey } = require("./provider-credentials");
       const apiKey = resolveProviderApiKey(provider);

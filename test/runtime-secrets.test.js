@@ -11,10 +11,12 @@ const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-secrets-"));
 const saved = {
   SIDEKICK_SECRET_DIR: process.env.SIDEKICK_SECRET_DIR,
   SIDEKICK_API_KEY: process.env.SIDEKICK_API_KEY,
-  SIDEKICK_API_KEY_FILE: process.env.SIDEKICK_API_KEY_FILE
+  SIDEKICK_API_KEY_FILE: process.env.SIDEKICK_API_KEY_FILE,
+  NODE_ENV: process.env.NODE_ENV
 };
 
 try {
+  process.env.NODE_ENV = "test";
   delete process.env.SIDEKICK_SECRET_DIR;
   delete process.env.SIDEKICK_API_KEY_FILE;
   process.env.SIDEKICK_API_KEY = "environment-value";
@@ -35,6 +37,15 @@ try {
 
   process.env.SIDEKICK_API_KEY_FILE = path.join(tempDir, "missing");
   assert.throws(() => readSecret("SIDEKICK_API_KEY"), /secret file is unavailable/);
+
+  delete process.env.SIDEKICK_API_KEY_FILE;
+  delete process.env.SIDEKICK_SECRET_DIR;
+  process.env.NODE_ENV = "production";
+  assert.throws(() => readSecret("SIDEKICK_API_KEY"), /must be supplied through a secret file/);
+
+  process.env.SIDEKICK_SECRET_DIR = tempDir;
+  assert.strictEqual(readSecret("GROQ_API_KEY"), "");
+  assert.throws(() => readSecret("GROQ_API_KEY", { required: true }), /secret file is unavailable/);
   console.log("runtime secret tests passed");
 } finally {
   for (const [key, value] of Object.entries(saved)) {

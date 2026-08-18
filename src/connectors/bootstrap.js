@@ -19,9 +19,12 @@
 let kernel = null;
 try { kernel = require("../platform/kernel"); } catch { kernel = null; }
 const { loadSecrets } = require("../core/secrets-store");
+const { hasSecret } = require("../core/runtime-secrets");
 
 function hasGithubCredential() {
-  if (process.env.GITHUB_TOKEN || process.env.SIDEKICK_GITHUB_TOKEN) return true;
+  try {
+    if (hasSecret("GITHUB_TOKEN") || hasSecret("SIDEKICK_GITHUB_TOKEN")) return true;
+  } catch { return false; }
   try { return Boolean(loadSecrets()["github_token"]); } catch { return false; }
 }
 

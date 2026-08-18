@@ -204,7 +204,7 @@ for (const suite of selected) {
   const result = spawnSync(process.execPath, [suite.file], {
     cwd: root,
     stdio: 'inherit',
-    env: { ...process.env },
+    env: { ...process.env, NODE_ENV: 'test' },
   });
 
   if (result.status === 0) {

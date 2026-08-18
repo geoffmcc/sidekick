@@ -179,20 +179,16 @@ test("private inference fails closed on cloud; local serves it", () => {
   }
 });
 
-// ---- Cloud without a master key (env compatibility fallback) ----------------
+// ---- Cloud without a master key (fail closed) -------------------------------
 
-test("without a master key, cloud records an env fallback that still resolves", () => {
+test("without a master key, cloud provider bootstrap fails closed", () => {
   resetRegistry();
   // No SIDEKICK_SECRET_KEY: the secret store cannot be used.
   process.env.OPENAI_API_KEY = "sk-openai-test-value";
   try {
     bootstrapProviders();
     const openai = managed("openai");
-    assert.ok(openai, "openai provider seeded");
-    assert.strictEqual(openai.hasAuth, false, "no secret reference stored without a master key");
-    assert.strictEqual(providerRegistry.getAuthSecretRef(openai.providerId), null);
-    assert.strictEqual(openai.metadata.envCredentialVar, "OPENAI_API_KEY", "env fallback recorded");
-    assert.strictEqual(resolveProviderApiKey(openai), "sk-openai-test-value", "resolves via env fallback");
+    assert.strictEqual(openai, null, "cloud provider is not seeded without encrypted secret authority");
   } finally {
     delete process.env.OPENAI_API_KEY;
   }

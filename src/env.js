@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const { FILE_SECRET_NAMES } = require("./core/runtime-secrets");
 
 const envPath = path.join(__dirname, "..", ".env");
 if (fs.existsSync(envPath)) {
@@ -7,8 +8,13 @@ if (fs.existsSync(envPath)) {
     line = line.trim();
     if (line && !line.startsWith("#")) {
       const idx = line.indexOf("=");
-      if (idx > 0 && !process.env[line.substring(0, idx).trim()]) {
-        process.env[line.substring(0, idx).trim()] = line.substring(idx + 1).trim();
+      if (idx > 0) {
+        const key = line.substring(0, idx).trim();
+        const value = line.substring(idx + 1).trim();
+        if (FILE_SECRET_NAMES.has(key) && value && process.env.NODE_ENV !== "test") {
+          throw new Error(`${key} must be supplied through a protected secret file, not .env`);
+        }
+        if (!process.env[key]) process.env[key] = value;
       }
     }
   });

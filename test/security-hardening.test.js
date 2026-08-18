@@ -29,6 +29,15 @@ assert.match(compose, /DOCKER_INFLUXDB_INIT_ADMIN_TOKEN_FILE: \/run\/secrets\/si
 assert.match(compose, /GF_SECURITY_ADMIN_PASSWORD__FILE: \/run\/secrets\/sidekick_grafana_admin_password/);
 assert.doesNotMatch(compose, /SIDEKICK_INFLUX_TOKEN:\s*\$\{/);
 
+const envExample = fs.readFileSync(path.join(__dirname, "..", ".env.example"), "utf8");
+for (const name of [
+  "SIDEKICK_API_KEY", "SIDEKICK_SECRET_KEY", "GROQ_API_KEY", "OPENAI_API_KEY",
+  "GITHUB_TOKEN", "SIDEKICK_GITHUB_TOKEN", "DISCORD_WEBHOOK_URL",
+  "SLACK_WEBHOOK_URL", "SMTP_PASS"
+]) {
+  assert.doesNotMatch(envExample, new RegExp(`^${name}=`, "m"), `${name} must not be an .env value`);
+}
+
 const ci = fs.readFileSync(path.join(__dirname, "..", ".github", "workflows", "ci.yml"), "utf8");
 assert.match(ci, /npm audit --omit=dev --audit-level=moderate/);
 

@@ -134,10 +134,10 @@ authority has real providers to route to without manual operator setup:
   `trusted` for `public`/`internal`/`private` at high priority, with a chat model
   (`OLLAMA_MODEL` / `SIDEKICK_AGENT_MODEL`) and an embedding model
   (`SIDEKICK_EMBEDDING_MODEL`, default `nomic-embed-text`).
-- **Groq (cloud)** when `GROQ_API_KEY` is set — registered as an
+- **Groq (cloud)** when the protected `groq_api_key` file is present — registered as an
   `openai-compatible` provider at `https://api.groq.com/openai/v1` with
   `GROQ_MODEL`.
-- **OpenAI-compatible (cloud)** when `OPENAI_API_KEY` is set (`OPENAI_BASE_URL`,
+- **OpenAI-compatible (cloud)** when the protected `openai_api_key` file is present (`OPENAI_BASE_URL`,
   `OPENAI_MODEL`, `OPENAI_EMBEDDING_MODEL`).
 
 Bootstrap is **idempotent and secure by default**:
@@ -158,12 +158,12 @@ Bootstrap is **idempotent and secure by default**:
 A provider's `auth_secret_key` column is a **reference** — the name of a secret
 in Sidekick's encrypted secret store (`data/secrets.enc`, the same store the
 `secret` tool manages) — never a plaintext key. Bootstrap migrates a cloud
-provider's env key into that store and keeps only the reference on the record.
+provider's protected file into that store and keeps only the reference on the record.
 `src/compute/provider-credentials.js` resolves the reference to a usable key as
 late as possible (at adapter dispatch); the plaintext never appears in a provider
 API response, a log line, or the dashboard (records expose only `hasAuth`). When
-no master `SIDEKICK_SECRET_KEY` is configured, the originating env-var name is
-recorded in provider metadata and read as a compatibility fallback instead.
+provider metadata never records a raw credential fallback; credentials must be
+resolved through the encrypted secret reference or protected file authority.
 
 ## Placement (v1)
 
