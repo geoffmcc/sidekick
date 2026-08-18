@@ -44,9 +44,9 @@ function makeRequest(method, path, body = null, optionsOverride = {}) {
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
         try {
-          resolve({ status: res.statusCode, data: JSON.parse(data) });
+          resolve({ status: res.statusCode, data: JSON.parse(data), headers: res.headers });
         } catch (e) {
-          resolve({ status: res.statusCode, data: data });
+          resolve({ status: res.statusCode, data: data, headers: res.headers });
         }
       });
     });
@@ -187,6 +187,17 @@ setTimeout(async () => {
       console.log('Passed\n');
     }
 
+    console.log('Test 3.0aa2: HTTPS legacy login sessions set Secure cookies');
+    {
+      const response = await makeRequest('GET', '/', null, {
+        headers: { 'X-Forwarded-Proto': 'https' }
+      });
+      assert.strictEqual(response.status, 200, 'Configured Basic Auth should succeed in the test harness');
+      const cookies = Array.isArray(response.headers['set-cookie']) ? response.headers['set-cookie'].join(';') : String(response.headers['set-cookie'] || '');
+      assert.match(cookies, /sidekick_sid=.*Secure/, 'HTTPS legacy sessions must set Secure cookies');
+      console.log('Passed\n');
+    }
+
     // Test 3.0b: mutating requests reject deceptive cross-origin hosts
     console.log('Test 3.0b: mutating requests reject deceptive cross-origin hosts');
     {
@@ -197,6 +208,17 @@ setTimeout(async () => {
         }
       });
       assert.strictEqual(response.status, 403, 'Should reject non-matching Origin host');
+      console.log('Passed\n');
+    }
+
+    // Test 3.0b2: Grafana auth-proxy token rotation is explicit, not fake success
+    console.log('Test 3.0b2: Grafana token rotation reports unsupported behavior');
+    {
+      const response = await makeRequest('POST', '/grafana/api/user/auth-tokens/rotate', {}, {
+        headers: { Origin: 'http://127.0.0.1:4098', Host: '127.0.0.1:4098' }
+      });
+      assert.strictEqual(response.status, 501, 'Unsupported Grafana token rotation must not return success');
+      assert.strictEqual(response.data.code, 'unsupported_operation', 'Unsupported operation should be machine-readable');
       console.log('Passed\n');
     }
 
