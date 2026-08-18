@@ -8,7 +8,7 @@
 // src/tools/metadata.js and gated by the dispatcher.
 
 const { z } = require("zod");
-const { validateOutboundUrl, filterRequestHeaders } = require("../../security/outbound-url");
+const { resolveOutboundUrl, filterRequestHeaders } = require("../../security/outbound-url");
 
 const DEFAULT_TIMEOUT_MS = 30000;
 // Responses are accumulated in memory and returned as tool output, so an
@@ -25,8 +25,8 @@ async function sidekick_web_fetch({ url: targetUrl, method, headers, body }, run
 
   // Destination policy first: this tool makes requests with the server's own
   // network identity, so an unvalidated target reaches anything the host can.
-  const refusal = validateOutboundUrl(targetUrl);
-  if (refusal) return errorText("Error: " + refusal);
+  const destination = await resolveOutboundUrl(targetUrl);
+  if (destination.refusal) return errorText("Error: " + destination.refusal);
 
   // The dispatcher's deadline governs the socket too, not just the wrapper
   // promise — otherwise a cancelled call leaves the request running.
@@ -35,16 +35,18 @@ async function sidekick_web_fetch({ url: targetUrl, method, headers, body }, run
     : DEFAULT_TIMEOUT_MS;
 
   return new Promise((resolve) => {
-    const urlObj = new URL(targetUrl);
+    const urlObj = destination.url;
     const lib = urlObj.protocol === "https:" ? https : http;
     const options = {
-      hostname: urlObj.hostname,
+      hostname: destination.address,
       port: urlObj.port || (urlObj.protocol === "https:" ? 443 : 80),
       path: urlObj.pathname + urlObj.search,
       method: method || "GET",
       headers: { "User-Agent": "Sidekick-MCP/1.0" },
       timeout: timeoutMs
     };
+    options.headers.Host = urlObj.host;
+    if (urlObj.protocol === "https:") options.servername = urlObj.hostname.replace(/^\[|\]$/g, "");
     if (headers) {
       let parsed = null;
       try { parsed = JSON.parse(headers); } catch {

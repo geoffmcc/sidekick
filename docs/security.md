@@ -10,7 +10,7 @@ The MCP server requires an API key. Clients can send it as:
 Authorization: Bearer YOUR_SIDEKICK_API_KEY
 ```
 
-or as an `api_key` query parameter. Use the header form whenever possible.
+Query-string API keys are not supported because URLs are routinely exposed in logs, browser history, proxy metadata, and referrer headers.
 
 Set `SIDEKICK_API_KEY` to a strong non-placeholder value before starting the MCP server or dashboard.
 

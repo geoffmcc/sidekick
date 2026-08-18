@@ -301,13 +301,13 @@ setInterval(() => {
 
 const app = express();
 
-function getBearerOrQueryToken(req) {
+function getBearerToken(req) {
   const authHeader = req.headers["authorization"];
   if (typeof authHeader === "string") {
     const match = authHeader.match(/^Bearer\s+(.+)$/i);
     return match ? match[1] : null;
   }
-  return typeof req.query.api_key === "string" ? req.query.api_key : null;
+  return null;
 }
 
 if (ALLOWED_IPS.length) {
@@ -328,7 +328,7 @@ app.get("/health", (req, res) => {
   const seconds = uptimeSeconds % 60;
   const uptimeStr = `${hours}h ${minutes}m ${seconds}s`;
 
-  const includeDetails = timingSafeCompare(getBearerOrQueryToken(req), API_KEY);
+  const includeDetails = timingSafeCompare(getBearerToken(req), API_KEY);
 
   const payload = {
     status: "healthy",
@@ -360,7 +360,7 @@ app.get("/health", (req, res) => {
 
 app.use((req, res, next) => {
   if (isComputeAuthBypassPath(req.path)) return next();
-  const token = getBearerOrQueryToken(req);
+  const token = getBearerToken(req);
   const credential = authentication.authenticateCredential(token);
   if (credential) {
     req.authIdentity = {

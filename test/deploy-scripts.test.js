@@ -488,8 +488,12 @@ console.log('Test 3.4: bootstrap.sh configures sudoers');
     'bootstrap.sh should allow starting sidekick-metrics.timer'
   );
   assert.ok(
-    bootstrapShContent.includes('docker compose --env-file /home/sidekick/sidekick/.env'),
-    'bootstrap.sh should allow Docker Compose with the repo .env file'
+    !bootstrapShContent.includes('NOPASSWD: /usr/bin/docker'),
+    'bootstrap.sh must not grant root-equivalent Docker wildcard access'
+  );
+  assert.ok(
+    !bootstrapShContent.includes('eval echo ~'),
+    'bootstrap.sh must not evaluate an untrusted username'
   );
   console.log('✓ Sudoers configuration present\n');
 }

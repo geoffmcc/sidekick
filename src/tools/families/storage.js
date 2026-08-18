@@ -22,19 +22,45 @@ function getCurrentSource() {
   return toolContext.getExecutionSource() || "unknown";
 }
 
+function currentScope() {
+  const context = toolContext.getExecutionContext();
+  const principalId = context.authIdentity?.principal_id || null;
+  const project = context.project || null;
+  return { principalId, project };
+}
+
+// Legacy KV predates identity ownership columns. Keep installation-wide legacy
+// callers compatible, but bind authenticated callers to a namespace that they
+// cannot name or enumerate outside their own principal/project scope.
+function scopedKey(key, project = currentScope().project) {
+  const { principalId } = currentScope();
+  if (!principalId) return key;
+  return `__sidekick_principal_v1:${encodeURIComponent(principalId)}:${encodeURIComponent(project || "global")}:${key}`;
+}
+
+function scopedPrefix(project = currentScope().project) {
+  const { principalId } = currentScope();
+  return principalId
+    ? `__sidekick_principal_v1:${encodeURIComponent(principalId)}:${encodeURIComponent(project || "global")}:`
+    : "";
+}
+
 async function sidekick_store({ key, value, project, category }) {
   if (project !== undefined && project !== null && !PROJECT_RE.test(project)) {
     return { content: [{ type: "text", text: "Invalid project name. Must match /^[a-z][a-z0-9_]*$/" }], isError: true };
   }
 
-  const existing = dbStore.getKV(key);
-  dbStore.setKV(key, value, project !== undefined ? project : (existing?.project || null), getCurrentSource(), category !== undefined ? category : (existing?.category || null));
+  const scope = currentScope();
+  const effectiveProject = project !== undefined ? project : scope.project;
+  const storageKey = scopedKey(key, effectiveProject);
+  const existing = dbStore.getKV(storageKey);
+  dbStore.setKV(storageKey, value, effectiveProject !== undefined ? effectiveProject : (existing?.project || null), getCurrentSource(), category !== undefined ? category : (existing?.category || null));
 
   return { content: [{ type: "text", text: "Stored key \"" + key + "\" (" + value.length + " chars)" }] };
 }
 
 async function sidekick_get({ key }) {
-  const entry = dbStore.getKV(key);
+  const entry = dbStore.getKV(scopedKey(key));
   if (!entry) {
     return { content: [{ type: "text", text: "Key not found: " + key }], isError: true };
   }
@@ -43,26 +69,38 @@ async function sidekick_get({ key }) {
 }
 
 async function sidekick_delete({ key }) {
-  const existing = dbStore.getKV(key);
+  const storageKey = scopedKey(key);
+  const existing = dbStore.getKV(storageKey);
   if (!existing) {
     return { content: [{ type: "text", text: "Key not found: " + key }], isError: true };
   }
-  dbStore.deleteKV(key);
+  dbStore.deleteKV(storageKey);
   return { content: [{ type: "text", text: "Deleted key \"" + key + "\"" }] };
 }
 
 async function sidekick_list_projects() {
-  const projects = dbStore.listKVProjects();
+  const { principalId } = currentScope();
+  const projects = principalId
+    ? [...new Set(Object.entries(dbStore.getAllKV()).flatMap(([key]) => {
+      const prefix = "__sidekick_principal_v1:" + encodeURIComponent(principalId) + ":";
+      if (!key.startsWith(prefix)) return [];
+      const remainder = key.slice(prefix.length);
+      const separator = remainder.indexOf(":");
+      return separator < 0 ? [] : [decodeURIComponent(remainder.slice(0, separator))];
+    }))]
+    : dbStore.listKVProjects();
   return { content: [{ type: "text", text: JSON.stringify(projects) }] };
 }
 
 async function sidekick_get_by_project({ project }) {
   const allKV = dbStore.getAllKV();
   const results = [];
+  const prefix = scopedPrefix(project);
   for (const [key, entry] of Object.entries(allKV)) {
+    if (prefix && !key.startsWith(prefix)) continue;
     if (typeof entry === "object" && entry !== null && "project" in entry) {
       if (entry.project === project) {
-        results.push({ key, value: entry.value });
+        results.push({ key: prefix ? key.slice(prefix.length) : key, value: entry.value });
       }
     }
   }
@@ -71,6 +109,8 @@ async function sidekick_get_by_project({ project }) {
 
 async function sidekick_cache({ action, key, ttl, value }) {
   const now = Date.now();
+  const cacheKey = scopedKey(key || "", null);
+  const cachePrefix = scopedPrefix(null);
   let useRedis = false;
   try {
     const conn = await redisStore.testConnection();
@@ -82,47 +122,48 @@ async function sidekick_cache({ action, key, ttl, value }) {
   if (action === "clear") {
     if (useRedis) {
       if (key) {
-        await redisStore.del(`cache:${key}`);
+        await redisStore.del(`cache:${cacheKey}`);
         return { content: [{ type: "text", text: "Cleared cache: " + key + " (redis)" }] };
       }
-      const keys = await redisStore.keys("cache:*");
+      const keys = await redisStore.keys(`cache:${cachePrefix || ""}*`);
       if (keys.length > 0) await Promise.all(keys.map(k => redisStore.del(k)));
       return { content: [{ type: "text", text: "Cleared " + keys.length + " cache entries (redis)" }] };
     }
     if (key) {
-      sessionCache.delete(key);
+      sessionCache.delete(cacheKey);
       return { content: [{ type: "text", text: "Cleared cache: " + key }] };
     }
-    const count = sessionCache.size;
-    sessionCache.clear();
+    const matching = [...sessionCache.keys()].filter(k => !cachePrefix || k.startsWith(cachePrefix));
+    for (const k of matching) sessionCache.delete(k);
+    const count = matching.length;
     return { content: [{ type: "text", text: "Cleared " + count + " cache entries" }] };
   }
 
   if (action === "list") {
     if (useRedis) {
-      const keys = await redisStore.keys("cache:*");
+      const keys = await redisStore.keys(`cache:${cachePrefix || ""}*`);
       const entries = [];
       for (const k of keys) {
         const ttlVal = await redisStore.ttl(k);
-        entries.push({ key: k.replace("cache:", ""), expires_in_seconds: ttlVal > 0 ? ttlVal : null });
+        entries.push({ key: k.slice(("cache:" + cachePrefix).length), expires_in_seconds: ttlVal > 0 ? ttlVal : null });
       }
       return { content: [{ type: "text", text: JSON.stringify(entries) }] };
     }
     const entries = [];
-    for (const [k, v] of sessionCache) entries.push({ key: k, expires_in_ms: v.expires - now, size: v.value.length });
+    for (const [k, v] of sessionCache) if (!cachePrefix || k.startsWith(cachePrefix)) entries.push({ key: cachePrefix ? k.slice(cachePrefix.length) : k, expires_in_ms: v.expires - now, size: v.value.length });
     return { content: [{ type: "text", text: JSON.stringify(entries) }] };
   }
 
   if (action === "get") {
     if (!key) return { content: [{ type: "text", text: "key required" }], isError: true };
     if (useRedis) {
-      const val = await redisStore.get(`cache:${key}`);
+      const val = await redisStore.get(`cache:${cacheKey}`);
       if (val === null) return { content: [{ type: "text", text: "Cache miss: " + key }], isError: true };
       return { content: [{ type: "text", text: redactSensitive(val) }] };
     }
-    const entry = sessionCache.get(key);
+    const entry = sessionCache.get(cacheKey);
     if (!entry || entry.expires < now) {
-      if (entry) sessionCache.delete(key);
+      if (entry) sessionCache.delete(cacheKey);
       return { content: [{ type: "text", text: "Cache miss: " + key }], isError: true };
     }
     return { content: [{ type: "text", text: redactSensitive(entry.value) }] };
@@ -133,10 +174,10 @@ async function sidekick_cache({ action, key, ttl, value }) {
     const duration = parseDuration(ttl);
     const ttlSeconds = Math.ceil(duration / 1000);
     if (useRedis) {
-      await redisStore.set(`cache:${key}`, String(value), ttlSeconds);
+      await redisStore.set(`cache:${cacheKey}`, String(value), ttlSeconds);
       return { content: [{ type: "text", text: "Cached " + key + " (TTL: " + ttl + ", redis)" }] };
     }
-    sessionCache.set(key, { value: String(value), expires: now + duration });
+    sessionCache.set(cacheKey, { value: String(value), expires: now + duration });
     return { content: [{ type: "text", text: "Cached " + key + " (TTL: " + ttl + ")" }] };
   }
 

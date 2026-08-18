@@ -22,13 +22,13 @@
 // link-local hosts stay refused even then: that escape hatch exists for
 // homelab reachability, not for credential endpoints.
 //
-// SCOPE LIMIT — this validates URL TEXT before the request. It cannot stop a
-// hostname that resolves to a denied address (DNS rebinding), nor a redirect
-// that lands on one. Redirects are not followed by any current caller, which is
-// what keeps that gap closed today; any future redirect support must re-check
-// every hop against this same function.
+// Direct HTTP callers use resolveOutboundUrl below, which pins DNS results to
+// the socket and rejects denied answers. Redirects are not followed by current
+// direct callers; any future redirect support must resolve and validate every
+// hop before opening its socket.
 
 const net = require("net");
+const dns = require("dns").promises;
 const { METADATA_HOSTS } = require("../compute/endpoint-guard");
 
 function stripBrackets(hostname) {
@@ -124,6 +124,47 @@ function validateOutboundUrl(value, label = "url") {
   return null;
 }
 
+/**
+ * Resolve and pin a caller-supplied destination before opening a socket.
+ *
+ * Text validation alone is not an SSRF boundary: an attacker-controlled DNS
+ * name can resolve to loopback/private space after validation.  Callers must
+ * connect to the returned address and retain the original hostname for TLS
+ * SNI and the HTTP Host header.  If a name has multiple answers, reject it if
+ * any answer is forbidden; otherwise a later resolver choice could select a
+ * denied address.
+ */
+async function resolveOutboundUrl(value, label = "url") {
+  const refusal = validateOutboundUrl(value, label);
+  if (refusal) return { refusal };
+
+  const url = new URL(String(value));
+  const hostname = stripBrackets(url.hostname).toLowerCase();
+  const ipVersion = net.isIP(hostname);
+  if (ipVersion) return { url, address: hostname, family: ipVersion };
+
+  let records;
+  try {
+    records = await dns.lookup(hostname, { all: true, verbatim: true });
+  } catch (error) {
+    return { refusal: `Unable to resolve ${label}: ${error.code || "DNS lookup failed"}` };
+  }
+  if (!records || records.length === 0) return { refusal: `Unable to resolve ${label}: no addresses returned` };
+
+  for (const record of records) {
+    const address = stripBrackets(String(record.address || "").toLowerCase());
+    if (METADATA_HOSTS.has(address) || isLinkLocal(address)) {
+      return { refusal: `Refused ${label}: resolved address is a protected link-local or metadata endpoint` };
+    }
+    if (isPrivateAddress(address) && !privateFetchAllowed()) {
+      return { refusal: `Refused ${label}: hostname resolves to a private or loopback address` };
+    }
+  }
+
+  const first = records[0];
+  return { url, address: first.address, family: first.family };
+}
+
 // Request headers a caller must never control: they either impersonate a
 // different destination or attach credentials the caller should not be able to
 // set on a request the server makes with its own network identity.
@@ -152,6 +193,7 @@ function filterRequestHeaders(headers) {
 
 module.exports = {
   validateOutboundUrl,
+  resolveOutboundUrl,
   filterRequestHeaders,
   isPrivateAddress,
   isLinkLocal,
