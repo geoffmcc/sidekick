@@ -37,7 +37,7 @@ jobs:
       run: npm ci
 
     - name: Audit production dependencies
-      run: npm audit --omit=dev --audit-level=high
+      run: npm audit --omit=dev --audit-level=moderate
 
     - name: Install browser runtime for Governed Browser Automation tests
       run: node scripts/install-browser.js

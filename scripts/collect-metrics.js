@@ -6,9 +6,11 @@
  * Run via cron every minute: * * * * * /usr/bin/node /home/sidekick/sidekick/scripts/collect-metrics.js
  */
 
-const { execSync } = require('child_process');
+const os = require('os');
+const { execFileSync } = require('child_process');
 const path = require('path');
 const Database = require('better-sqlite3');
+const { validateInfluxUrl } = require('../src/influx-endpoint-policy');
 
 const INFLUX_URL = process.env.SIDEKICK_INFLUX_URL || 'http://localhost:8086';
 const INFLUX_TOKEN = process.env.SIDEKICK_INFLUX_TOKEN || '';
@@ -25,6 +27,7 @@ if (require.main === module && (!INFLUX_TOKEN || INFLUX_TOKEN === 'sidekick-infl
 
 // Write metrics to InfluxDB using line protocol
 async function writeMetrics(measurement, tags, fields, timestamp) {
+  validateInfluxUrl(INFLUX_URL);
   const ts = timestamp || Date.now() * 1000000; // nanoseconds
   
   // Build line protocol
@@ -72,27 +75,20 @@ async function writeMetrics(measurement, tags, fields, timestamp) {
 // Collect system metrics
 function collectSystemMetrics() {
   try {
-    // CPU usage (1 minute average)
-    const cpuLine = execSync("top -bn1 | grep 'Cpu(s)' | awk '{print $2}'").toString().trim();
-    const cpuPercent = parseFloat(cpuLine) || 0;
-    
-    // Memory usage
-    const memInfo = execSync("free -b | grep Mem").toString().trim().split(/\s+/);
-    const memTotal = parseInt(memInfo[1]) || 0;
-    const memUsed = parseInt(memInfo[2]) || 0;
+    const cpuCount = Math.max(1, os.cpus().length);
+    const loadAvg = os.loadavg();
+    const load1m = Number(loadAvg[0]) || 0;
+    const load5m = Number(loadAvg[1]) || 0;
+    const load15m = Number(loadAvg[2]) || 0;
+    const cpuPercent = Math.min(100, (load1m / cpuCount) * 100);
+    const memTotal = os.totalmem();
+    const memUsed = memTotal - os.freemem();
     const memPercent = memTotal > 0 ? (memUsed / memTotal) * 100 : 0;
-    
-    // Disk usage
-    const diskInfo = execSync("df -B1 / | tail -1").toString().trim().split(/\s+/);
-    const diskTotal = parseInt(diskInfo[1]) || 0;
-    const diskUsed = parseInt(diskInfo[2]) || 0;
+    const diskOutput = execFileSync('df', ['-B1', '/'], { encoding: 'utf8', timeout: 5000 });
+    const diskInfo = diskOutput.trim().split(/\r?\n/).pop().trim().split(/\s+/);
+    const diskTotal = parseInt(diskInfo[1], 10) || 0;
+    const diskUsed = parseInt(diskInfo[2], 10) || 0;
     const diskPercent = diskTotal > 0 ? (diskUsed / diskTotal) * 100 : 0;
-    
-    // Load average
-    const loadAvg = execSync("cat /proc/loadavg").toString().trim().split(/\s+/);
-    const load1m = parseFloat(loadAvg[0]) || 0;
-    const load5m = parseFloat(loadAvg[1]) || 0;
-    const load15m = parseFloat(loadAvg[2]) || 0;
     
     return {
       cpu_percent: cpuPercent,
@@ -212,13 +208,13 @@ function collectDatabaseMetrics() {
 // Collect Docker container metrics
 function collectDockerMetrics() {
   try {
-    const containers = execSync('docker ps --format "{{.Names}}"').toString().trim().split('\n').filter(Boolean);
+    const containers = execFileSync('docker', ['ps', '--format', '{{.Names}}'], { encoding: 'utf8', timeout: 5000 }).trim().split('\n').filter(Boolean);
     const metrics = [];
     
     for (const container of containers) {
       try {
         // Get container stats
-        const stats = execSync(`docker stats ${container} --no-stream --format "{{.CPUPerc}}|{{.MemUsage}}|{{.NetIO}}|{{.BlockIO}}"`).toString().trim();
+        const stats = execFileSync('docker', ['stats', container, '--no-stream', '--format', '{{.CPUPerc}}|{{.MemUsage}}|{{.NetIO}}|{{.BlockIO}}'], { encoding: 'utf8', timeout: 10000 }).trim();
         const [cpuPerc, memUsage, netIO, blockIO] = stats.split('|');
         
         // Parse CPU percentage
@@ -287,7 +283,7 @@ function parseSize(sizeStr) {
 function collectOllamaMetrics() {
   try {
     // Get list of running models
-    const running = execSync('curl -s http://localhost:11434/api/ps').toString();
+    const running = execFileSync('curl', ['--silent', '--show-error', '--max-time', '5', 'http://localhost:11434/api/ps'], { encoding: 'utf8', timeout: 10000 });
     const runningData = JSON.parse(running);
     const models = runningData.models || [];
     
@@ -318,7 +314,10 @@ function collectServiceMetrics() {
     const metrics = {};
     
     for (const service of services) {
-      const status = execSync(`systemctl is-active ${service} 2>/dev/null || echo "inactive"`).toString().trim();
+      let status = 'inactive';
+      try {
+        status = execFileSync('systemctl', ['is-active', service], { encoding: 'utf8', timeout: 5000 }).trim();
+      } catch {}
       metrics[service.replace(/-/g, '_')] = status === 'active' ? 1 : 0;
     }
     
@@ -397,4 +396,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { collectToolMetrics, collectDatabaseMetrics };
+module.exports = { collectToolMetrics, collectDatabaseMetrics, collectSystemMetrics, writeMetrics };
