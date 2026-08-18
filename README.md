@@ -2,7 +2,7 @@
 
 **Autonomous Agent Platform**
 
-Sidekick is a self-hosted platform that gives AI assistants and agents durable infrastructure: a remote machine they can operate, persistent project memory and knowledge that survive any single session, a governed catalog of 112 built-in MCP tools, an autonomous task runner, and distributed model compute. The connected assistant or agent is replaceable — you can switch clients, models, or vendors — while the projects, memory, tools, policy, and history stay on your machine, under your control.
+Sidekick is a self-hosted platform that gives AI assistants and agents durable infrastructure: a remote machine they can operate, persistent project memory and knowledge that survive any single session, a governed and dynamically discoverable MCP tool catalog, an autonomous task runner, and distributed model compute. The connected assistant or agent is replaceable — you can switch clients, models, or vendors — while the projects, memory, tools, policy, and history stay on your machine, under your control.
 
 **Why use it?** Because most AI work loses everything between sessions. With Sidekick, one session's decisions, handoffs, and stored facts are retrievable by the next session — or by a completely different agent. Typical uses that the current implementation supports:
 
@@ -301,7 +301,7 @@ Sidekick has used its own tools to test storage and recall behavior, investigate
 
 | Service | Port | Description |
 |---------|------|-------------|
-| **MCP Server** | 4097 | 112 built-in tools across 20 categories; approved generated tools may add runtime entries |
+| **MCP Server** | 4097 | Dynamically discovered built-in, module, pack, and approved generated tools across 20 categories |
 | **Dashboard** | 4098 | Web UI for system health, activity, data, memory, approvals, tools, Compute, agent tasks, and metrics |
 | **Agent Bridge** | 4099 | AI agent loop — LLM plans and calls MCP tools autonomously |
 | **Ollama** | 11434 | Local LLM inference (qwen2.5-coder:7b, llama3.1:8b, nomic-embed-text) |
@@ -314,7 +314,7 @@ All tools are exposed via the MCP server at `http://YOUR_REMOTE_IP:4097/mcp`.
 
 ### Tool Categories
 
-The built-in tools are organized into 20 categories. 106 live in the core registry; the six Data Pipeline utilities (`parse`, `extract`, `transform`, `diff`, `validate`, `template`) are provided by the bundled `data-utilities` module. Installing a capability pack adds its own tools to the same registry — the Developer pack adds `dev_repo_profile`, `dev_change_summary` and `dev_verify`:
+The tool catalog is organized into 20 categories. Core, module, capability-pack, and approved generated tools share one live registry; use `tools action="overview"` or the database catalog for the current count and enabled state. Installing a capability pack adds its tools to the same registry — the Developer pack adds `dev_repo_profile`, `dev_change_summary` and `dev_verify`:
 - **Core** — bash, tools, read, write, list, search, web_fetch, llm, respond
 - **Storage** — store, get, delete, resume, list_projects, get_by_project, redis
 - **Database** — db_schema, db_query, db_stats, db_backup, db_restore, db_export, log_query, db_search, db_migrate, db_diff, analytics
@@ -374,19 +374,17 @@ through the module lifecycle, pack workflows register in the workflow
 definition registry, and pack knowledge lands in the ordinary knowledge base.
 There is no second plugin runtime and no remote marketplace.
 
-Three first-party packs ship bundled: the **Developer / Software Engineering**
-pack (structured repository profiling, change-set impact analysis, governed
-verification, seven engineering workflows), the **Proxmox VE** pack (secure
-discovery, capability detection and a controlled guest lifecycle), and the
-**Security Research** pack (governed research orchestration — campaigns,
-hypotheses, runs, bounded probes, evidence integrity and redaction, comparison,
-validation and report material — composing the controlled-execution and HTTP
-tools, and Git via its workflows, while enforcing a hard public/private
-workspace boundary). See
+Five first-party packs ship bundled: the **Developer / Software Engineering**
+pack, the **Jellyfin** pack, the **Proxmox VE** pack, the **Security Research**
+pack, and the **Governed Browser Automation** pack. They provide structured
+repository work, named-profile media operations, guarded infrastructure,
+governed research, and task-level browser workflows respectively. See
 [`docs/capability-packs.md`](docs/capability-packs.md),
 [`docs/developer-pack.md`](docs/developer-pack.md),
+[`docs/jellyfin-pack.md`](docs/jellyfin-pack.md),
 [`docs/proxmox-pack.md`](docs/proxmox-pack.md) and
-[`docs/security-research-pack.md`](docs/security-research-pack.md).
+ [`docs/security-research-pack.md`](docs/security-research-pack.md), plus
+ [`docs/browser-automation.md`](docs/browser-automation.md).
 
 > Installing or enabling a pack activates executable module code inside the
 > Sidekick process. Inspection never executes package code, and every installed
@@ -411,7 +409,7 @@ ORDER BY tc.sort_order, t.name
 
 To avoid confusion, it's important to understand what each component is:
 
-- **Sidekick** = The self-hosted agent platform: 112 built-in MCP tools (plus module- and pack-contributed tools) + persistent memory + knowledge base + Dashboard + Agent Bridge + metrics + approved generated capabilities + Sidekick Compute + capability packs
+- **Sidekick** = The self-hosted agent platform: a governed live MCP catalog (core, module, pack, and approved generated tools) + persistent memory + knowledge base + Dashboard + Agent Bridge + metrics + Sidekick Compute + capability packs
 - **The assistant or agent** = Any compatible MCP client, coding assistant, or automation agent that uses Sidekick's platform
 - **Tool runtime** = The descriptor registry and dispatcher that validate, authorize, approve, execute, redact, and audit tool calls across MCP, dashboard, agent, scheduler, and generated-tool paths
 - **Agent Bridge** = Sidekick's autonomous task runner, accessed through the Dashboard and API
@@ -419,8 +417,8 @@ To avoid confusion, it's important to understand what each component is:
 - **Sidekick Compute** = The allowlisted worker/provider/model/job system for distributed inference workloads
 - **Module** = A runtime implementation contributed to Sidekick: code that builds tool descriptors and reports health, managed through a full install/configure/enable/upgrade/uninstall lifecycle
 - **Workflow** = A durable, reusable multi-step execution defined as data and run through the tool dispatcher, with checkpoints, project identity, cancellation and approval continuation
-- **Capability Pack** = An installable *area of competence* composed from modules, workflows, knowledge and configuration. The Developer / Software Engineering pack ships bundled. See `docs/capability-packs.md`.
-- **Connector** = A managed relationship with an external service or system. **Future work** (roadmap slice B7); the framework exists but no real provider is wired.
+- **Capability Pack** = An installable *area of competence* composed from modules, workflows, knowledge and configuration. Five first-party packs ship bundled; use live capability discovery for exact installed state. See `docs/capability-packs.md`.
+- **Connector** = A managed relationship with an external service or system. GitHub is the current governed provider; broader connector health, mutation, dashboard coverage, and additional providers remain future work.
 - **Metrics System** = InfluxDB + Grafana for system health, tool usage, and service monitoring
 
 When a connected client calls Sidekick tools, the work executes through Sidekick on the remote machine. The assistant or agent chooses the operation; Sidekick supplies and governs the capability.
@@ -787,8 +785,11 @@ This follows the principle of least privilege: after initial setup, the sidekick
 │   ├── qdrant.js           Qdrant vector DB client for semantic search
 │   └── crypto-utils.js     Timing-safe comparison helpers
 ├── packs/
-│   └── developer/      Bundled first-party Developer / Software Engineering capability pack
-│                       (developer-tools module, 7 workflows, 8 knowledge assets)
+│   ├── browser-automation/  Bundled Governed Browser Automation capability pack
+│   ├── developer/           Bundled Developer / Software Engineering capability pack
+│   ├── jellyfin/            Bundled Jellyfin capability pack
+│   ├── proxmox/             Bundled Proxmox VE capability pack
+│   └── security-research/   Bundled Security Research capability pack
 ├── scripts/
 │   ├── bootstrap.sh    VM bootstrap script (creates user, installs Node.js, etc.)
 │   ├── setup-tools.sh  Server tooling setup (Docker, databases, media tools, etc.)

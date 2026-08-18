@@ -214,7 +214,7 @@ Current search is a SQLite `LIKE` search across title, content, and tags. It is 
 
 ## 7. Tool System
 
-Current `main` contains 112 built-in tools across 20 categories: 106 in the core registry plus 6 provided by the bundled `data-utilities` module. Canonical MCP names are unprefixed; older `sidekick_`-prefixed forms are compatibility aliases. Approved trial/active generated capabilities may add runtime tools beyond that built-in count.
+Current `main` exposes a dynamically discovered catalog across 20 categories. Core, module, capability-pack, and approved generated tools share one governed registry. Canonical MCP names are unprefixed; older `sidekick_`-prefixed forms are compatibility aliases. Query the live `tools` manifest for the current count and enabled state.
 
 The authoritative execution path is descriptor- and dispatcher-based:
 

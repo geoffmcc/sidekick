@@ -18,7 +18,7 @@ pack, see [`third-party-capability-packs.md`](third-party-capability-packs.md).
 | **Module** | A runtime implementation contributed to Sidekick: code that builds tool descriptors and reports health. | `platform_modules`, `src/modules/*` |
 | **Workflow** | A durable, reusable multi-step execution defined as data and run through the tool dispatcher. | `platform_workflow_definitions`, `platform_workflows`, `src/workflows/*` |
 | **Capability Pack** | An installable area of competence composed from modules, workflows, knowledge and configuration. | `platform_capability_packs`, `src/packs/*` |
-| **Connector** | A managed relationship with an external service or system. | **Future work — B7.** `platform_connectors` exists; no real provider is wired. |
+| **Connector** | A managed relationship with an external service or system. | GitHub is the current governed provider; broader provider coverage and mutating connector management remain future work. |
 | **Learned Capability** | Reusable behaviour created through Sidekick's `teach` / `evolve` mechanisms. | `generated_capabilities`, `src/evolve/*` |
 
 These layers **compose**; they do not replace one another. A pack owns modules,
