@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+require('../src/env');
+
 /**
  * Sidekick Metrics Collector
  * Collects system and tool usage metrics and writes to InfluxDB
@@ -10,10 +12,11 @@ const os = require('os');
 const { execFileSync } = require('child_process');
 const path = require('path');
 const Database = require('better-sqlite3');
+const { readSecret } = require('../src/core/runtime-secrets');
 const { validateInfluxUrl } = require('../src/influx-endpoint-policy');
 
 const INFLUX_URL = process.env.SIDEKICK_INFLUX_URL || 'http://localhost:8086';
-const INFLUX_TOKEN = process.env.SIDEKICK_INFLUX_TOKEN || '';
+const INFLUX_TOKEN = readSecret('SIDEKICK_INFLUX_TOKEN');
 const INFLUX_ORG = process.env.SIDEKICK_INFLUX_ORG || 'sidekick';
 const INFLUX_BUCKET = process.env.SIDEKICK_INFLUX_BUCKET || 'sidekick';
 const DB_PATH = process.env.SIDEKICK_DB_FILE || path.join(__dirname, '..', 'data', 'sidekick.db');

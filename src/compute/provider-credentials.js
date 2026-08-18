@@ -23,6 +23,7 @@
 const providerRegistry = require("./provider-registry");
 const { getExecutionContext } = require("../tools/context");
 const authorization = require("../core/authorization");
+const { FILE_SECRET_NAMES, readSecret } = require("../core/runtime-secrets");
 
 /**
  * Resolve the API key for a provider, or null when none is configured/resolvable.
@@ -63,6 +64,9 @@ function resolveProviderApiKey(provider) {
   // 2) Backwards-compatible env fallback recorded at bootstrap time when no
   // master key was available to migrate the credential into the secret store.
   const envVar = provider.metadata && provider.metadata.envCredentialVar;
+  if (envVar && FILE_SECRET_NAMES.has(envVar)) {
+    try { return readSecret(envVar) || null; } catch { return null; }
+  }
   if (envVar && process.env[envVar]) return process.env[envVar];
 
   return null;

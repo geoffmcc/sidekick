@@ -1,4 +1,5 @@
 const { Pool } = require("pg");
+const { readSecret } = require("./core/runtime-secrets");
 
 // Connection config is resolved lazily, not at import time, so a deployment
 // that sets the environment after this module is first required still connects
@@ -27,7 +28,7 @@ function resolveConnectionConfig() {
     // metacharacters would otherwise need escaping to survive parsing.
     // No fallback: a missing password should surface as "no password supplied"
     // rather than an authentication failure against a guessed default.
-    password: process.env.SIDEKICK_POSTGRES_PASSWORD || undefined,
+    password: readSecret("SIDEKICK_POSTGRES_PASSWORD") || undefined,
   };
 }
 

@@ -4,6 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const { timingSafeCompare } = require("./crypto-utils");
+const { readSecret, hasSecret } = require("./core/runtime-secrets");
 const { execFileSync } = require("child_process");
 const { callDashboardTool, getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval, renderContinuationApprovalPreview, loadWatches, syncToolRegistry } = require("./tools");
 const dynamicTools = require("./dynamic-tools");
@@ -43,7 +44,7 @@ const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "da
 const PORT = parseInt(process.env.SIDEKICK_DASHBOARD_PORT || "4098", 10);
 const MCP_PORT = parseInt(process.env.SIDEKICK_PORT || "4097", 10);
 const GRAFANA_PORT = parseInt(process.env.SIDEKICK_GRAFANA_PORT || "3000", 10);
-const MCP_API_KEY = process.env.SIDEKICK_API_KEY;
+const MCP_API_KEY = readSecret("SIDEKICK_API_KEY");
 if (!MCP_API_KEY || MCP_API_KEY === "sk-sidekick-local-dev" || MCP_API_KEY === "sk-your-key-here") {
   throw new Error("SIDEKICK_API_KEY must be set to a non-placeholder value");
 }
@@ -146,15 +147,15 @@ function systemSnapshot() {
 }
 
 const DASHBOARD_USER = process.env.SIDEKICK_DASHBOARD_USER || "";
-const DASHBOARD_PASS = process.env.SIDEKICK_DASHBOARD_PASS || "";
+const DASHBOARD_PASS = readSecret("SIDEKICK_DASHBOARD_PASS");
 const DASHBOARD_ALLOWED_IPS = (process.env.SIDEKICK_DASHBOARD_ALLOWED_IPS || "").split(",").map(s => s.trim()).filter(Boolean);
 const GRAFANA_USER = process.env.SIDEKICK_GRAFANA_ADMIN_USER || "sidekick";
-const GRAFANA_PASS = process.env.SIDEKICK_GRAFANA_ADMIN_PASSWORD || "";
+const GRAFANA_PASS = readSecret("SIDEKICK_GRAFANA_ADMIN_PASSWORD");
 
 // Legacy signed-cookie compatibility remains available only for the configured
 // dashboard Basic Auth account. Identity sessions below are server-side and
 // revocable; they are the normal local-user path.
-const SESSION_SECRET = process.env.SIDEKICK_SECRET_KEY || crypto.randomBytes(32).toString("hex");
+const SESSION_SECRET = readSecret("SIDEKICK_SECRET_KEY") || crypto.randomBytes(32).toString("hex");
 const SESSION_TTL = 86400000;
 
 // The dashboard Basic Auth account predates the identity service. Adopt its
@@ -1490,7 +1491,7 @@ registerSystemRoutes({
   http,
   grafanaPort: GRAFANA_PORT,
   grafanaConfigured: Boolean(GRAFANA_USER),
-  influxConfigured: Boolean((process.env.SIDEKICK_INFLUX_TOKEN || "") && process.env.SIDEKICK_INFLUX_TOKEN !== "sidekick-influx-token"),
+  influxConfigured: Boolean(hasSecret("SIDEKICK_INFLUX_TOKEN") && readSecret("SIDEKICK_INFLUX_TOKEN") !== "sidekick-influx-token"),
 });
 
 app.get("/api/config", (req, res) => {

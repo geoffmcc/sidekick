@@ -97,6 +97,28 @@ Set a strong MCP API key before any non-local deployment:
 SIDEKICK_API_KEY=replace-with-a-long-random-value
 ```
 
+For production, use a root-owned secret directory rather than putting
+credential values in `.env`:
+
+```env
+SIDEKICK_SECRET_DIR=/etc/sidekick/secrets
+```
+
+Place these files there: `sidekick_api_key`, `sidekick_dashboard_pass`,
+`sidekick_grafana_admin_password`, `sidekick_influx_token`,
+`sidekick_influx_password`, `sidekick_postgres_password`, and
+`sidekick_secret_key`. The loader rejects missing, non-regular, oversized,
+symlinked, or group/world-writable files. Explicit `<SECRET_NAME>_FILE` paths
+are also supported. Environment values remain a local-development
+compatibility fallback; a configured file always takes precedence and
+failures do not fall back to an environment value.
+
+The bundled PostgreSQL, InfluxDB, and Grafana Compose services consume Docker
+Secrets from this directory. Compose fails closed if `SIDEKICK_SECRET_DIR` or
+any required service secret is missing. Grafana receives the Influx token only
+inside its startup process so it can resolve the provisioned datasource; the
+token is not present in Compose's service environment configuration.
+
 Set dashboard credentials if the dashboard is reachable from a browser:
 
 ```env

@@ -768,12 +768,9 @@ console.log('Test 6.3: Both deploy scripts preserve .env');
 // ============================================================================
 
 // Grafana interpolates ${VAR} in provisioning files from its OWN process
-// environment. Compose's --env-file drives compose-level substitution, not the
-// container environment, so a variable referenced in a provisioning file but
-// absent from the grafana service's `environment:` block silently resolves to
-// an empty string — the datasource provisions with no credential and simply
-// stops returning data, with no error anywhere. That is what happened when the
-// deploy-time envsubst step was removed as part of read-only git deploys.
+// environment. The token is therefore loaded from the Docker secret by the
+// Grafana startup command, rather than being exposed in Compose's service
+// environment configuration.
 {
   console.log('Grafana provisioning environment:');
 
@@ -801,7 +798,10 @@ console.log('Test 6.3: Both deploy scripts preserve .env');
     for (const m of body.matchAll(/\$\{([A-Z_][A-Z0-9_]*)[^}]*\}/g)) referenced.add(m[1]);
   }
 
-  const missing = [...referenced].filter(v => !new RegExp(`^\\s+${v}:`, 'm').test(grafanaBlock));
+  const missing = [...referenced].filter(v =>
+    !new RegExp(`^\\s+${v}:`, 'm').test(grafanaBlock) &&
+    !new RegExp(`SIDEKICK_INFLUX_TOKEN=\\$\\$\\(cat /run/secrets/sidekick_influx_token\\)`).test(grafanaBlock)
+  );
   assert.deepStrictEqual(
     missing, [],
     'every variable referenced in grafana/provisioning must be passed into the grafana ' +
@@ -809,16 +809,21 @@ console.log('Test 6.3: Both deploy scripts preserve .env');
   );
   console.log(`✓ all ${referenced.size} provisioning variable(s) passed into the grafana container\n`);
 
-  // The specific regression: the InfluxDB datasource token.
+  // The specific regression: the InfluxDB datasource token must come from a
+  // Docker secret at startup, never from Compose interpolation.
   assert.ok(
-    /SIDEKICK_INFLUX_TOKEN:/.test(grafanaBlock),
-    'grafana must receive SIDEKICK_INFLUX_TOKEN for the InfluxDB datasource'
+    /sidekick_influx_token/.test(grafanaBlock),
+    'grafana must mount the InfluxDB token Docker secret'
   );
   assert.ok(
-    /SIDEKICK_INFLUX_TOKEN:\s*\$\{SIDEKICK_INFLUX_TOKEN:\?/.test(grafanaBlock),
-    'SIDEKICK_INFLUX_TOKEN must fail closed (:?) rather than provision an empty token'
+    /SIDEKICK_INFLUX_TOKEN=\$\$\(cat \/run\/secrets\/sidekick_influx_token\)/.test(grafanaBlock),
+    'grafana must load SIDEKICK_INFLUX_TOKEN from the Docker secret at startup'
   );
-  console.log('✓ InfluxDB datasource token passed through and fails closed\n');
+  assert.ok(
+    !/SIDEKICK_INFLUX_TOKEN:\s*\$\{/.test(grafanaBlock),
+    'SIDEKICK_INFLUX_TOKEN must not be interpolated by Compose'
+  );
+  console.log('✓ InfluxDB datasource token is loaded from a Docker secret at startup\n');
 }
 
 // ============================================================================

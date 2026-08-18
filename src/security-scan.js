@@ -235,8 +235,19 @@ function scanSecurityConfig({
     } else if (canAccess(envPath)) {
       try {
         const env = parseEnvFile(fs.readFileSync(envPath, "utf8"));
-        const apiKey = env.get("SIDEKICK_API_KEY") || "";
-        const secretKey = env.get("SIDEKICK_SECRET_KEY") || "";
+        const secretConfigured = (name) => {
+          if (env.get(name)) return true;
+          if (env.get(`${name}_FILE`)) return true;
+          const secretDir = env.get("SIDEKICK_SECRET_DIR");
+          if (!secretDir) return false;
+          const fileName = {
+            SIDEKICK_API_KEY: "sidekick_api_key",
+            SIDEKICK_SECRET_KEY: "sidekick_secret_key"
+          }[name];
+          return Boolean(fileName && fs.existsSync(path.resolve(scanRoot, secretDir, fileName)));
+        };
+        const apiKey = secretConfigured("SIDEKICK_API_KEY") ? "configured" : "";
+        const secretKey = secretConfigured("SIDEKICK_SECRET_KEY") ? "configured" : "";
         const approvalMode = (env.get("SIDEKICK_APPROVAL_MODE") || "off").toLowerCase();
         if (!apiKey || apiKey === "sk-sidekick-local-dev" || apiKey === "sk-your-key-here") {
           addFinding("critical", "unsafe_api_key", envPath,

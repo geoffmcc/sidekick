@@ -16,9 +16,10 @@
  */
 
 const crypto = require("crypto");
+const { readSecret } = require("./runtime-secrets");
 
 function getSecretKey() {
-  const key = process.env.SIDEKICK_SECRET_KEY;
+  const key = readSecret("SIDEKICK_SECRET_KEY");
   if (!key) {
     throw new Error("SIDEKICK_SECRET_KEY not set in .env");
   }
@@ -26,7 +27,7 @@ function getSecretKey() {
 }
 
 function hasSecretKey() {
-  return Boolean(process.env.SIDEKICK_SECRET_KEY);
+  return Boolean(readSecret("SIDEKICK_SECRET_KEY"));
 }
 
 function encryptSecret(value) {
