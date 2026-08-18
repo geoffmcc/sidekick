@@ -44,6 +44,14 @@ function looksBinary(buffer) {
   return false;
 }
 
+function requireProjectArtifact(artifact, projectId) {
+  if (!artifact) throw new ResearchError("not_found", "evidence not found");
+  if (!projectId || !artifact.project_id || String(artifact.project_id) !== String(projectId)) {
+    throw new ResearchError("not_found", "evidence not found");
+  }
+  return artifact;
+}
+
 /**
  * Capture a piece of evidence into the workspace and register its custody
  * record. Returns { evidence_id, reference, content_hash, byte_size,
@@ -119,9 +127,8 @@ function capture(ctx, input) {
  * mutated; a new derivative artifact is registered that supersedes it.
  */
 function redactEvidence(ctx, evidenceId) {
-  const { root } = ctx;
-  const original = kernel().getArtifact(evidenceId);
-  if (!original) throw new ResearchError("not_found", `evidence not found: ${evidenceId}`);
+  const { root, projectId } = ctx;
+  const original = requireProjectArtifact(kernel().getArtifact(evidenceId), projectId);
   if (original.custody_role !== "original") {
     throw new ResearchError("invalid_input", "only an original evidence artifact can be redacted");
   }
@@ -183,12 +190,12 @@ function redactEvidence(ctx, evidenceId) {
 
 // Resolve opaque artifact:<id> references to metadata (never bytes), using the
 // pre-existing evidence-vault contract with the kernel resolver injected.
-function inspect(references) {
+function inspect(references, { projectId } = {}) {
   const vault = evidenceVault();
   const k = kernel();
   return vault.resolveEvidenceReferences(references, {
     resolve: (artifactId) => {
-      const artifact = k.getArtifact(artifactId);
+      const artifact = requireProjectArtifact(k.getArtifact(artifactId), projectId);
       if (!artifact) return null;
       return {
         artifact_id: artifact.artifact_id,

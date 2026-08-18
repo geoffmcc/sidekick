@@ -159,10 +159,10 @@ function makeGitRepo() {
   });
 
   await test("SR.8 deterministic comparison of the two observations", async () => {
-    const cmp = await okCall("research_compare", { baseline_evidence: baselineRef, candidate_evidence: candidateRef, mode: "text" });
+    const cmp = await okCall("research_compare", { run_id: runId, baseline_evidence: baselineRef, candidate_evidence: candidateRef, mode: "text" });
     assert.strictEqual(cmp.comparison.changed, true);
     // Comparing evidence must not echo the raw evidence values back into the result.
-    const statusCmp = await okCall("research_compare", { baseline_evidence: baselineRef, candidate_evidence: candidateRef, mode: "status" });
+    const statusCmp = await okCall("research_compare", { run_id: runId, baseline_evidence: baselineRef, candidate_evidence: candidateRef, mode: "status" });
     assert.strictEqual(statusCmp.comparison.changed, true);
     assert.strictEqual(statusCmp.comparison.values_redacted, true);
     assert.strictEqual(statusCmp.comparison.baseline, undefined, "raw evidence values must not be echoed");
@@ -183,13 +183,23 @@ function makeGitRepo() {
   await test("SR.10 evidence list (by run) / inspect (metadata only) / redact (derivative)", async () => {
     const list = await okCall("research_evidence", { action: "list", run_id: runId });
     assert.ok(list.evidence.length >= 2);
-    const inspect = await okCall("research_evidence", { action: "inspect", references: [baselineRef] });
+    const inspect = await okCall("research_evidence", { action: "inspect", run_id: runId, references: [baselineRef] });
     assert.strictEqual(inspect.evidence[0].reference, baselineRef);
     assert.strictEqual(inspect.evidence[0].output, undefined, "inspect must not return raw evidence content");
     const evidenceId = baselineRef.replace("artifact:", "");
-    const red = await okCall("research_evidence", { action: "redact", evidence_id: evidenceId });
+    const red = await okCall("research_evidence", { action: "redact", run_id: runId, evidence_id: evidenceId });
     assert.strictEqual(red.evidence.redaction_state, "redacted");
     assert.strictEqual(red.evidence.supersedes, evidenceId);
+    const foreign = platformKernel.registerArtifact({
+      project_id: "foreign_project",
+      type: "research-evidence",
+      name: "foreign-evidence",
+      storage_ref: "evidence/foreign.txt",
+      content_hash: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    });
+    const denied = await call("research_evidence", { action: "inspect", run_id: runId, references: [`artifact:${foreign.artifact_id}`] });
+    assert.strictEqual(denied.isError, true, "cross-project evidence inspection must be denied");
+    assert.match(String(denied.j.error || ""), /not found/i, "cross-project evidence must not disclose existence");
   });
 
   await test("SR.11 report material is evidence-linked and written into the workspace", async () => {
