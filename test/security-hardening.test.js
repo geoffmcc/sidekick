@@ -23,6 +23,12 @@ const collector = fs.readFileSync(path.join(__dirname, "..", "scripts", "collect
 assert.doesNotMatch(collector, /execSync\s*\(/, "metrics collection must not execute shell pipelines");
 assert.match(collector, /execFileSync\(\s*['"]df['"]/, "disk collection should use an argument-bounded execFile call");
 
+const compose = fs.readFileSync(path.join(__dirname, "..", "docker", "docker-compose.yml"), "utf8");
+assert.match(compose, /POSTGRES_PASSWORD_FILE: \/run\/secrets\/sidekick_postgres_password/);
+assert.match(compose, /DOCKER_INFLUXDB_INIT_ADMIN_TOKEN_FILE: \/run\/secrets\/sidekick_influx_token/);
+assert.match(compose, /GF_SECURITY_ADMIN_PASSWORD__FILE: \/run\/secrets\/sidekick_grafana_admin_password/);
+assert.doesNotMatch(compose, /SIDEKICK_INFLUX_TOKEN:\s*\$\{/);
+
 const ci = fs.readFileSync(path.join(__dirname, "..", ".github", "workflows", "ci.yml"), "utf8");
 assert.match(ci, /npm audit --omit=dev --audit-level=moderate/);
 

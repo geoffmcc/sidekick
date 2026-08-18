@@ -12,8 +12,10 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: sidekick
-      POSTGRES_PASSWORD: ${SIDEKICK_POSTGRES_PASSWORD:?}
+      POSTGRES_PASSWORD_FILE: /run/secrets/sidekick_postgres_password
       POSTGRES_DB: sidekick
+    secrets:
+      - sidekick_postgres_password
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
@@ -70,10 +72,13 @@ services:
     environment:
       DOCKER_INFLUXDB_INIT_MODE: setup
       DOCKER_INFLUXDB_INIT_USERNAME: sidekick
-      DOCKER_INFLUXDB_INIT_PASSWORD: ${SIDEKICK_INFLUX_PASSWORD:?}
+      DOCKER_INFLUXDB_INIT_PASSWORD_FILE: /run/secrets/sidekick_influx_password
       DOCKER_INFLUXDB_INIT_ORG: sidekick
       DOCKER_INFLUXDB_INIT_BUCKET: sidekick
-      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${SIDEKICK_INFLUX_TOKEN:?set SIDEKICK_INFLUX_TOKEN}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN_FILE: /run/secrets/sidekick_influx_token
+    secrets:
+      - sidekick_influx_password
+      - sidekick_influx_token
     ports:
       - "127.0.0.1:8086:8086"
     volumes:
@@ -93,7 +98,7 @@ services:
     user: "${SIDEKICK_UID:?set SIDEKICK_UID}:${SIDEKICK_GID:?set SIDEKICK_GID}"
     environment:
       GF_SECURITY_ADMIN_USER: sidekick
-      GF_SECURITY_ADMIN_PASSWORD: ${SIDEKICK_GRAFANA_ADMIN_PASSWORD:?}
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/sidekick_grafana_admin_password
       GF_SERVER_HTTP_PORT: "3000"
       GF_INSTALL_PLUGINS: "grafana-clock-panel"
       GF_SECURITY_ALLOW_EMBEDDING: "true"
@@ -103,13 +108,11 @@ services:
       GF_AUTH_PROXY_HEADER_NAME: "X-WEBAUTH-USER"
       GF_AUTH_PROXY_HEADER_PROPERTY: "username"
       GF_AUTH_PROXY_AUTO_SIGN_UP: "true"
-      # Grafana interpolates ${VAR} in provisioning files from its OWN process
-      # environment, so the InfluxDB datasource token in
-      # grafana/provisioning/datasources/influxdb.yml only resolves if the
-      # variable is passed into THIS container. Compose's --env-file drives
-      # compose-level substitution, not the container environment. Fail closed
-      # (:?) rather than silently provisioning an empty token again.
-      SIDEKICK_INFLUX_TOKEN: ${SIDEKICK_INFLUX_TOKEN:?set SIDEKICK_INFLUX_TOKEN}
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["set -eu; SIDEKICK_INFLUX_TOKEN=$$(cat /run/secrets/sidekick_influx_token); export SIDEKICK_INFLUX_TOKEN; exec /run.sh"]
+    secrets:
+      - sidekick_grafana_admin_password
+      - sidekick_influx_token
     ports:
       - "0.0.0.0:3000:3000"
     volumes:
@@ -125,3 +128,13 @@ services:
       retries: 5
     profiles:
       - grafana
+
+secrets:
+  sidekick_postgres_password:
+    file: ${SIDEKICK_SECRET_DIR:?set SIDEKICK_SECRET_DIR}/sidekick_postgres_password
+  sidekick_influx_password:
+    file: ${SIDEKICK_SECRET_DIR:?set SIDEKICK_SECRET_DIR}/sidekick_influx_password
+  sidekick_influx_token:
+    file: ${SIDEKICK_SECRET_DIR:?set SIDEKICK_SECRET_DIR}/sidekick_influx_token
+  sidekick_grafana_admin_password:
+    file: ${SIDEKICK_SECRET_DIR:?set SIDEKICK_SECRET_DIR}/sidekick_grafana_admin_password
