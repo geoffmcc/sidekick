@@ -131,6 +131,26 @@ function collectToolMetrics() {
       WHERE timestamp >= ?
       GROUP BY tool_name
     `).all(oneHourAgo);
+
+    const durations = db.prepare(`
+      SELECT tool_name, duration_ms
+      FROM tool_logs
+      WHERE timestamp >= ? AND duration_ms IS NOT NULL
+      ORDER BY tool_name, duration_ms
+    `).all(oneHourAgo);
+    const byTool = new Map();
+    for (const row of durations) {
+      if (!byTool.has(row.tool_name)) byTool.set(row.tool_name, []);
+      byTool.get(row.tool_name).push(Number(row.duration_ms));
+    }
+    for (const row of stats) {
+      const values = byTool.get(row.tool_name) || [];
+      row.p50_ms = percentile(values, 0.50);
+      row.p95_ms = percentile(values, 0.95);
+      row.p99_ms = percentile(values, 0.99);
+      row.min_ms = values.length ? values[0] : 0;
+      row.max_ms = values.length ? values[values.length - 1] : 0;
+    }
     
     db.close();
     return stats;
@@ -138,6 +158,12 @@ function collectToolMetrics() {
     console.error(`Tool metrics collection error: ${error.message}`);
     return [];
   }
+}
+
+function percentile(values, quantile) {
+  if (!values.length) return 0;
+  const index = Math.min(values.length - 1, Math.max(0, Math.ceil(values.length * quantile) - 1));
+  return values[index];
 }
 
 // Collect database performance metrics
@@ -320,7 +346,12 @@ async function collectAll() {
       count: tool.count,
       success_rate: tool.success_rate,
       error_count: tool.error_count,
-      duration_ms: tool.duration_ms
+      duration_ms: tool.duration_ms,
+      p50_ms: tool.p50_ms,
+      p95_ms: tool.p95_ms,
+      p99_ms: tool.p99_ms,
+      min_ms: tool.min_ms,
+      max_ms: tool.max_ms
     }, timestamp);
   }
   

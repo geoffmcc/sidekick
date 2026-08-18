@@ -51,6 +51,9 @@ function createExecutionContext(input = {}) {
     stepNumber: input.stepNumber || input.step_number || null,
     timeoutMs: Number(input.timeoutMs || input.timeout_ms || 0) || null,
     signal: input.signal || parent?.signal || null,
+    // Internal dispatcher telemetry. It is intentionally not included in
+    // persisted provenance and each dispatch supplies its own tracker.
+    latencyTracker: input.latencyTracker || parent?.latencyTracker || null,
     startedAt: input.startedAt || new Date().toISOString(),
     security: input.security || parent?.security || null,
   });

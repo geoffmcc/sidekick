@@ -48,6 +48,9 @@ console.log('Running Dispatcher Tests...');
     assert.strictEqual(agentLog.project, 'agent-project');
     assert.strictEqual(dashboardLog.session_id, 'dashboard-session');
     assert.strictEqual(dashboardLog.project, 'dashboard-project');
+    assert.ok(agentLog.latency, 'tool logs should include latency telemetry');
+    assert.ok(Number.isFinite(agentLog.latency.total_ms), 'latency total should be numeric');
+    assert.ok(Number.isFinite(agentLog.latency.phase_ms.handler), 'handler phase should be numeric');
 
     result = await dispatchTool({ name: 'sidekick_missing', args: {}, context: { source: 'mcp', requestId: 'req_unknown' } });
     assert.ok(result.isError, 'unknown tool should fail');

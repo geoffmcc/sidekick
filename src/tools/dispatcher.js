@@ -19,9 +19,39 @@ const {
 const { normalizeResult, errorResult, sanitizeText } = require("./result");
 const authorization = require("../core/authorization");
 const { recordSecurityEvent } = require("../core/security-audit");
+const { performance } = require("perf_hooks");
 
 const APPROVED_EXECUTION_CAPABILITY = Symbol("sidekick.approvedExecution");
 const TEST_DESCRIPTOR_CAPABILITY = Symbol("sidekick.testDescriptorExecution");
+
+function roundMilliseconds(value) {
+  return Math.round(value * 1000) / 1000;
+}
+
+function createLatencyTracker() {
+  const started = performance.now();
+  const phaseMs = Object.create(null);
+  let previous = started;
+  let activePhase = "dispatch";
+  let finished = null;
+
+  return {
+    mark(nextPhase) {
+      if (finished) return;
+      const now = performance.now();
+      phaseMs[activePhase] = roundMilliseconds((phaseMs[activePhase] || 0) + now - previous);
+      activePhase = nextPhase;
+      previous = now;
+    },
+    finish() {
+      if (finished) return finished;
+      const now = performance.now();
+      phaseMs[activePhase] = roundMilliseconds((phaseMs[activePhase] || 0) + now - previous);
+      finished = { total_ms: roundMilliseconds(now - started), phase_ms: { ...phaseMs } };
+      return finished;
+    },
+  };
+}
 
 function clonePlain(value) {
   if (value == null || typeof value !== "object") return value;
@@ -139,7 +169,11 @@ function withTimeoutAndCancellation(handler, args, runtime, context) {
 function log(name, args, started, result, context, extra = {}) {
   try {
     const summary = sanitizeText(result.content?.[0]?.text || (result.isError ? result.code || "error" : "(ok)")).substring(0, 1000);
-    legacy.logToolCall(name, clonePlain(args), Date.now() - started, !result.isError, summary, dispatcherMetadata(context, extra));
+    const latency = context.latencyTracker?.finish();
+    legacy.logToolCall(name, clonePlain(args), Date.now() - started, !result.isError, summary, dispatcherMetadata(context, {
+      ...extra,
+      ...(latency ? { latency } : {}),
+    }));
     return result;
   } catch (e) {
     const safe = sanitizeText(e.message || e);
@@ -161,8 +195,12 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
     return errorResult(`Tool ${descriptor.name} has no executable schema`, "dispatcher_internal_error");
   }
   const parsed = descriptor.schema.safeParse(clonePlain(args || {}));
-  if (!parsed.success) return validationError(descriptor.name, parsed);
+  if (!parsed.success) {
+    context.latencyTracker?.mark("validation");
+    return validationError(descriptor.name, parsed);
+  }
   const executionArgs = freezeDeep(clonePlain(parsed.data));
+  context.latencyTracker?.mark("validation");
 
   const requiresIdentity = descriptor.name === "secret";
   if (requiresIdentity && !context.authIdentity?.principal_id) {
@@ -194,6 +232,8 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
     }
   }
 
+  context.latencyTracker?.mark("policy");
+
   let policyError;
   try {
     policyError = legacy.enforceToolPolicy(descriptor.name, context.source, executionArgs);
@@ -201,6 +241,8 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
     return errorResult("Policy evaluation failed", "policy_evaluation_failed");
   }
   if (policyError) return { ...normalizeResult(policyError), code: "policy_denied", status: "policy_denied" };
+
+  context.latencyTracker?.mark("approval");
 
   if (!options.approvedExecution) {
     let approval;
@@ -223,6 +265,7 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
     }
   }
 
+  context.latencyTracker?.mark("handler");
   try {
     return normalizeResult(await withTimeoutAndCancellation(
       descriptor.handler,
@@ -241,6 +284,7 @@ function isApprovedInternal(request) {
 
 async function dispatchCore(request, context, started) {
   const registry = getBuiltinRegistry();
+  context.latencyTracker?.mark("registry");
   if (request.descriptor && request.internalCapability !== TEST_DESCRIPTOR_CAPABILITY) {
     const result = errorResult("Caller-provided descriptors are not accepted by production dispatch", "descriptor_injection_denied");
     return log(request.name || request.descriptor.name || "unknown", request.args || {}, started, result, context);
@@ -256,6 +300,7 @@ async function dispatchCore(request, context, started) {
     }
     descriptor = dynamicDescriptor;
   }
+  context.latencyTracker?.mark("resolution");
   if (!descriptor) {
     const result = errorResult("Unknown tool: " + name, "unknown_tool");
     return log(name || "unknown", request.args || {}, started, result, context);
@@ -480,7 +525,8 @@ async function dispatchTool(input, maybeArgs, maybeContext) {
   const name = request.name || request.descriptor?.name;
   const canonical = stripSidekickPrefix(name || "");
   const trusted = isApprovedInternal(request);
-  const context = childContext({ ...publicContextInput(request), ...(trusted ? { approvedExecution: true, approvalId: request.context?.approvalId } : {}), toolName: canonical });
+  const latencyTracker = createLatencyTracker();
+  const context = childContext({ ...publicContextInput(request), ...(trusted ? { approvedExecution: true, approvalId: request.context?.approvalId } : {}), toolName: canonical, latencyTracker });
   return runWithContext(context, async () => {
     const started = Date.now();
     try {

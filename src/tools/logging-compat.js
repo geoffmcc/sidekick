@@ -49,6 +49,8 @@ function logToolCall(name, args, duration, success, summary, metadata = {}) {
       approved_by_principal_id: metadata.approvedBy || null,
       executed_by_principal_id: metadata.executedBy || null,
       provenance_json: JSON.stringify(metadata.provenance || {}),
+      // Persisted inside entry_json to preserve the existing SQLite schema.
+      latency: metadata.latency || null,
       // Persisted via entry_json: attributes module-originated dispatches.
       module: metadata.module || null
     });
