@@ -565,7 +565,8 @@ if ((DASHBOARD_USER && DASHBOARD_PASS) || bootstrapCompleted()) {
     const pass = separator >= 0 ? decoded.slice(separator + 1) : "";
     if (timingSafeCompare(user, DASHBOARD_USER) && timingSafeCompare(pass, DASHBOARD_PASS)) {
       // Set session cookie for subsequent requests (including iframe sub-resources)
-      res.setHeader("Set-Cookie", `sidekick_sid=${makeSessionToken(user)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400`);
+      const secure = Boolean(req.secure || req.headers["x-forwarded-proto"] === "https");
+      res.setHeader("Set-Cookie", `sidekick_sid=${makeSessionToken(user)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400${secure ? "; Secure" : ""}`);
       req.authUser = user;
       req.authPrincipal = legacyDashboardPrincipal(user, pass);
       req.authPrincipalId = req.authPrincipal?.principal_id || null;
@@ -755,11 +756,14 @@ app.post("/api/auth/credentials/:id/rotate", (req, res) => {
   }
 });
 
-// Grafana auth proxy doesn't create a real session token,
-// so token rotation always 401s. Return a mock success to
-// prevent the SPA from retrying in an infinite loop.
+// Grafana auth-proxy mode does not create a Grafana session token. Do not
+// report a fake rotation success: callers must treat this operation as
+// unsupported and continue using the authenticated proxy header.
 app.post('/grafana/api/user/auth-tokens/rotate', (req, res) => {
-  res.json({});
+  res.status(501).json({
+    error: "Grafana auth-proxy token rotation is not supported",
+    code: "unsupported_operation"
+  });
 });
 
 app.use('/grafana', (req, res) => {
