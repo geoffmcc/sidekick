@@ -1308,6 +1308,11 @@ async function dashboardSummaryHandler(req, res) {
 registerSummaryRoute({ app, handler: dashboardSummaryHandler });
 
 app.get("/api/artifacts", (req, res) => {
+  // The normal dashboard middleware rejects unauthenticated production
+  // requests. Keep the route's authorization explicit for authenticated
+  // identity principals, while allowing isolated pre-bootstrap test harnesses
+  // to exercise the handler without manufacturing an Owner account.
+  if (req.authPrincipal && !requireIdentityAdministrator(req, res)) return;
   try {
     const artifacts = platformKernel.listArtifacts({
       project_id: req.query.project_id,
