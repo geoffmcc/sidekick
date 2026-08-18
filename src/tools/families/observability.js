@@ -19,6 +19,7 @@ const dns = require("dns");
 const https = require("https");
 const { execFileSync, execSync } = require("child_process");
 const { z } = require("zod");
+const { validateInfluxUrl } = require("../../influx-endpoint-policy");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "..", "..", "data");
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -754,6 +755,7 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
     const INFLUX_TOKEN = process.env.SIDEKICK_INFLUX_TOKEN || '';
     const INFLUX_ORG = process.env.SIDEKICK_INFLUX_ORG || 'sidekick';
     const INFLUX_BUCKET = process.env.SIDEKICK_INFLUX_BUCKET || 'sidekick';
+    validateInfluxUrl(INFLUX_URL);
 
     if (!INFLUX_TOKEN || INFLUX_TOKEN === 'sidekick-influx-token') {
       return { content: [{ type: "text", text: "Error: SIDEKICK_INFLUX_TOKEN must be set to a non-placeholder value" }], isError: true };
