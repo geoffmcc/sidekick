@@ -52,16 +52,35 @@ test("BK.2: getBackup returns parsed fields", () => {
 // BK.3: completeBackup marks completed
 test("BK.3: completeBackup marks completed", () => {
   const bk = platformKernel.createBackup({ name: "complete_test" });
-  const completed = platformKernel.completeBackup(bk.backup_id, { file_path: "/backups/full.bak", file_size_bytes: 1024, checksum: "abc123" });
+  const backupPath = path.join(dbStore.BACKUP_DIR, "full.bak");
+  fs.writeFileSync(backupPath, "verified backup");
+  const completed = platformKernel.completeBackup(bk.backup_id, { file_path: backupPath });
   assert.strictEqual(completed.state, "completed");
   assert.ok(completed.completed_at);
-  assert.strictEqual(completed.file_path, "/backups/full.bak");
+  assert.strictEqual(completed.file_path, fs.realpathSync(backupPath));
+  assert.strictEqual(completed.file_size_bytes, Buffer.byteLength("verified backup"));
+  assert.match(completed.checksum, /^sha256:[a-f0-9]{64}$/);
+});
+
+test("BK.3b: completeBackup rejects unverified or out-of-custody files", () => {
+  const outsidePath = path.join(DATA_DIR, "outside.bak");
+  fs.writeFileSync(outsidePath, "outside backup");
+  const outside = platformKernel.createBackup({ name: "outside_backup" });
+  assert.throws(() => platformKernel.completeBackup(outside.backup_id, { file_path: outsidePath }), /managed backup directory/);
+
+  const mismatchPath = path.join(dbStore.BACKUP_DIR, "mismatch.bak");
+  fs.writeFileSync(mismatchPath, "actual bytes");
+  const mismatch = platformKernel.createBackup({ name: "mismatch_backup" });
+  assert.throws(() => platformKernel.completeBackup(mismatch.backup_id, { file_path: mismatchPath, checksum: "sha256:" + "0".repeat(64) }), /checksum does not match/);
+  assert.strictEqual(platformKernel.getBackup(mismatch.backup_id).state, "created");
 });
 
 // BK.4: restoreBackup refuses honestly instead of recording fake success
 test("BK.4: restoreBackup throws a structured not_supported error and records nothing", () => {
   const bk = platformKernel.createBackup({ name: "restore_test" });
-  platformKernel.completeBackup(bk.backup_id, { file_path: "/backups/restore.bak" });
+  const backupPath = path.join(dbStore.BACKUP_DIR, "restore.bak");
+  fs.writeFileSync(backupPath, "restore fixture");
+  platformKernel.completeBackup(bk.backup_id, { file_path: backupPath });
   let thrown = null;
   try {
     platformKernel.restoreBackup(bk.backup_id, { actor_id: "admin" });
@@ -98,7 +117,7 @@ test("BK.5: listBackups lists all", () => {
 // BK.6: listBackups filters by state
 test("BK.6: listBackups filters by state", () => {
   const bk = platformKernel.createBackup({ name: "filter_bk" });
-  platformKernel.completeBackup(bk.backup_id);
+  assert.throws(() => platformKernel.completeBackup(bk.backup_id), /file_path is required/);
   const completed = platformKernel.listBackups({ state: "completed" });
   assert.ok(completed.every(b => b.state === "completed"));
 });
@@ -113,7 +132,9 @@ test("BK.7: backup emits events", () => {
 // BK.8: complete emits event
 test("BK.8: complete emits event", () => {
   const bk = platformKernel.createBackup({ name: "complete_event_bk" });
-  platformKernel.completeBackup(bk.backup_id, { file_path: "/test.bak" });
+  const backupPath = path.join(dbStore.BACKUP_DIR, "event.bak");
+  fs.writeFileSync(backupPath, "event fixture");
+  platformKernel.completeBackup(bk.backup_id, { file_path: backupPath });
   const events = dbStore.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_type = 'backup.completed' AND subject_id = ?").all(bk.backup_id);
   assert.ok(events.length > 0);
 });
