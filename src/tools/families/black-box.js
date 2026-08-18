@@ -35,7 +35,13 @@ async function sidekick_black_box(args = {}) {
 
     if (action === "get" || action === "get_incident") {
       if (!args.incident_id) return { content: [{ type: "text", text: "incident_id required" }], isError: true };
-      const incident = blackbox.getIncident(args.incident_id, { includeTimeline: true, includeAnalysis: true });
+      // Keep the structured retrieval response bounded. Timelines and full
+      // analysis history are opt-in because a normal Sidekick capture can
+      // contain hundreds of event metadata objects.
+      const incident = blackbox.getIncident(args.incident_id, {
+        includeTimeline: args.include_timeline === true,
+        includeAnalysis: args.include_analysis === true
+      });
       if (!incident) return { content: [{ type: "text", text: `Incident not found: ${args.incident_id}` }], isError: true };
       if (action === "get" && args.raw !== false) {
         const firstCapture = (incident.captures || [])[0];
@@ -43,6 +49,12 @@ async function sidekick_black_box(args = {}) {
         const raw = [`# Black Box Incident ${incident.id}`, `Title: ${incident.title}`, `State: ${incident.lifecycle_state}`, ""];
         for (const source of sources) raw.push(`## ${source.display_name} (${source.state})`, source.stdout || "", source.stderr ? `\nSTDERR:\n${source.stderr}` : "");
         return { content: [{ type: "text", text: raw.join("\n") }] };
+      }
+      if (args.include_sources !== false) {
+        incident.captures = (incident.captures || []).map(capture => ({
+          ...capture,
+          sources: blackbox.listSources(capture.id)
+        }));
       }
       return { content: [{ type: "text", text: JSON.stringify(incident, null, 2) }] };
     }
@@ -77,6 +89,7 @@ async function sidekick_black_box(args = {}) {
     if (action === "get_source") return { content: [{ type: "text", text: JSON.stringify(blackbox.getSource(args.source_id, { offset: args.offset, limit: args.limit }), null, 2) }] };
     if (action === "search") return { content: [{ type: "text", text: JSON.stringify({ results: blackbox.searchIncidents(args.query, args) }, null, 2) }] };
     if (action === "analyze") return { content: [{ type: "text", text: JSON.stringify(await blackbox.analyzeIncident(args.incident_id, { capture_id: args.capture_id, llm: args.use_llm === false ? null : sidekick_llm, actor: getCurrentSource() }), null, 2) }] };
+    if (action === "analyze_async") return { content: [{ type: "text", text: JSON.stringify(await blackbox.startAnalysis(args.incident_id, { capture_id: args.capture_id, llm: sidekick_llm, timeout_ms: args.analysis_timeout_ms, actor: getCurrentSource() }), null, 2) }] };
     if (action === "compare") return { content: [{ type: "text", text: JSON.stringify(blackbox.compareCaptures(args.capture_id, args.compare_capture_id), null, 2) }] };
     if (action === "add_note") return { content: [{ type: "text", text: JSON.stringify(blackbox.addNote(args.incident_id, { content: args.note || args.content, type: args.note_type, source: getCurrentSource() }), null, 2) }] };
     if (action === "update_incident") return { content: [{ type: "text", text: JSON.stringify(blackbox.updateIncident(args.incident_id, args, getCurrentSource()), null, 2) }] };
@@ -104,7 +117,7 @@ const SCHEMAS = {
     action: z.enum([
       "capture", "capture_status", "cancel_capture", "retry_capture", "repair", "list", "get", "delete", "analyze",
       "list_incidents", "get_incident", "list_captures", "get_capture", "list_sources", "get_source",
-      "search", "compare", "add_note", "update_incident", "verify", "pin", "extend_retention",
+      "search", "compare", "add_note", "update_incident", "verify", "pin", "extend_retention", "analyze_async",
       "archive", "export", "storage_status", "purge_preview", "purge", "profiles"
     ]),
     name: z.string().optional().describe("Incident name/title"),
@@ -119,7 +132,11 @@ const SCHEMAS = {
     profile: z.enum(["quick", "standard", "deep", "network", "service", "sidekick", "repository", "custom"]).optional(),
     include: z.array(z.string()).optional().describe("Legacy sections or collector keys"),
     analyze_with_llm: z.boolean().optional().default(false),
-    use_llm: z.boolean().optional().default(true),
+    use_llm: z.boolean().optional().default(false),
+    include_timeline: z.boolean().optional().default(false),
+    include_analysis: z.boolean().optional().default(false),
+    include_sources: z.boolean().optional().default(true),
+    analysis_timeout_ms: z.number().int().min(1000).max(86400000).optional(),
     incident_id: z.string().optional(),
     capture_id: z.string().optional(),
     compare_capture_id: z.string().optional(),
