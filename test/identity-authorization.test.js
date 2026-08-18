@@ -26,6 +26,9 @@ try {
   const agent = identity.createPrincipal({ type: "agent", displayName: "Build Agent", actorPrincipalId: owner.principal_id });
 
   test("authorization evaluates permissions rather than role names", () => {
+    assert.ok(db.getDb().prepare("SELECT 1 FROM identity_permissions WHERE permission = 'blackbox.read'").get());
+    assert.strictEqual(authorization.authorize({ principalId: owner.principal_id, permission: "blackbox.read" }).ok, true);
+    assert.strictEqual(authorization.authorize({ principalId: operator.principal_id, permission: "blackbox.read" }).code, "forbidden");
     assert.strictEqual(authorization.authorize({ principalId: operator.principal_id, permission: "workflows.execute" }).ok, true);
     assert.strictEqual(authorization.authorize({ principalId: operator.principal_id, permission: "users.manage" }).code, "forbidden");
     assert.strictEqual(authorization.authorize({ principalId: operator.principal_id, permission: "not.registered" }).code, "unknown-permission");
