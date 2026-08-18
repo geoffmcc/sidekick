@@ -51,6 +51,14 @@ run_remote() { ssh -i "$SSH_KEY" $SSH_OPTS "$VPS" "$@" 2>&1; }
 copy_to_vps() { scp -i "$SSH_KEY" $SSH_OPTS "$1" "$VPS:$2" 2>&1; }
 restart_service() { echo -e "  \033[33mrestarting $1...\033[0m"; run_remote "sudo systemctl restart $1" >/dev/null; }
 
+ensure_secret_config() {
+  echo -e "  \033[33mEnsuring protected secret configuration...\033[0m"
+  if ! run_remote "test -x $REMOTE_DIR/scripts/ensure-secret-config.sh && bash $REMOTE_DIR/scripts/ensure-secret-config.sh $REMOTE_DIR" >/dev/null; then
+    echo -e "\033[31mERROR: Failed to configure SIDEKICK_SECRET_DIR\033[0m"
+    exit 1
+  fi
+}
+
 ensure_ssh_key() {
   if [ -f "$SSH_KEY" ]; then
     echo -e "  \033[90mSSH key found at $SSH_KEY\033[0m"
@@ -402,6 +410,13 @@ if [ "$SCP_MODE" = true ]; then
   fi
   changed+=("seed-knowledge.js")
 
+  if ! copy_to_vps "$PROJECT_DIR/scripts/ensure-secret-config.sh" "$REMOTE_DIR/scripts/ensure-secret-config.sh" >/dev/null; then
+    echo -e "\033[31mERROR: Failed to copy ensure-secret-config.sh\033[0m"
+    exit 1
+  fi
+  run_remote "chmod 700 $REMOTE_DIR/scripts/ensure-secret-config.sh" >/dev/null
+  changed+=("ensure-secret-config.sh")
+
   if ! copy_to_vps "$PROJECT_DIR/docs/knowledge-seed.sql" "$REMOTE_DIR/docs/knowledge-seed.sql" >/dev/null; then
     echo -e "\033[31mERROR: Failed to copy knowledge-seed.sql\033[0m"
     exit 1
@@ -470,6 +485,7 @@ else
 fi
 
 repair_optional_tools
+ensure_secret_config
 
 if [ "$git_mode_used" = true ]; then
   echo ""

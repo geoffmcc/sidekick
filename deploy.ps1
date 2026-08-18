@@ -56,6 +56,14 @@ function Restart-SidekickService {
   Run-Remote "sudo systemctl restart $Name" | Out-Null
 }
 
+function Ensure-SecretConfig {
+  Write-Host "  Ensuring protected secret configuration..." -ForegroundColor Yellow
+  Run-Remote "test -x $REMOTE_DIR/scripts/ensure-secret-config.sh && bash $REMOTE_DIR/scripts/ensure-secret-config.sh $REMOTE_DIR" | Out-Null
+  if ($LASTEXITCODE -ne 0) {
+    throw "Failed to configure SIDEKICK_SECRET_DIR"
+  }
+}
+
 function Ensure-SSHKey {
   if (Test-Path $SSH_KEY) {
     Write-Host "  SSH key found at $SSH_KEY" -ForegroundColor Gray
@@ -424,6 +432,12 @@ try {
     }
     $changed += "seed-knowledge.js"
 
+    if (-not (Copy-ToVPS (Join-Path $PROJECT_DIR "scripts\ensure-secret-config.sh") "$REMOTE_DIR/scripts/ensure-secret-config.sh")) {
+      throw "Failed to copy ensure-secret-config.sh"
+    }
+    Run-Remote "chmod 700 $REMOTE_DIR/scripts/ensure-secret-config.sh" | Out-Null
+    $changed += "ensure-secret-config.sh"
+
     if (-not (Copy-ToVPS (Join-Path $PROJECT_DIR "docs\knowledge-seed.sql") "$REMOTE_DIR/docs/knowledge-seed.sql")) {
       throw "Failed to copy knowledge-seed.sql"
     }
@@ -492,6 +506,7 @@ try {
   }
 
   Repair-OptionalTools
+  Ensure-SecretConfig
 
   # Generate version.json from local git
   Write-Host "  Generating version.json..." -ForegroundColor Green

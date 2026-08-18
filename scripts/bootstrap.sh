@@ -93,7 +93,7 @@ apt-get update -qq
 
 # Install required packages
 log "Installing required packages..."
-apt-get install -y -qq curl ca-certificates gnupg build-essential python3 make g++ git > /dev/null
+apt-get install -y -qq curl ca-certificates gnupg build-essential python3 make g++ git openssl > /dev/null
 
 # Create user if doesn't exist
 if id "$USERNAME" &>/dev/null; then
@@ -191,6 +191,40 @@ mkdir -p "$USER_HOME/sidekick/src"
 mkdir -p "$USER_HOME/sidekick/data"
 chown -R "$USERNAME:$USERNAME" "$USER_HOME/sidekick"
 log "Directories created: $USER_HOME/sidekick/src, $USER_HOME/sidekick/data"
+
+# Create the protected runtime secret directory and generate only the core
+# bootstrap secrets. External credentials (GitHub, Groq, SMTP, webhooks, and
+# worker enrollment tokens) must be provisioned separately by the operator.
+SECRET_DIR="/etc/sidekick/secrets"
+log "Preparing protected secret directory..."
+install -d -o "$USERNAME" -g "$USERNAME" -m 700 "$SECRET_DIR"
+generate_secret_file() {
+  local name="$1"
+  if [ -s "$SECRET_DIR/$name" ]; then
+    chmod 600 "$SECRET_DIR/$name"
+    chown "$USERNAME:$USERNAME" "$SECRET_DIR/$name"
+    return
+  fi
+  if ! command -v openssl >/dev/null 2>&1; then
+    error "openssl is required to generate $name"
+  fi
+  umask 077
+  openssl rand -hex 32 > "$SECRET_DIR/$name"
+  chown "$USERNAME:$USERNAME" "$SECRET_DIR/$name"
+  chmod 600 "$SECRET_DIR/$name"
+  log "Generated protected secret: $name"
+}
+for secret_name in \
+  sidekick_api_key \
+  sidekick_dashboard_pass \
+  sidekick_grafana_admin_password \
+  sidekick_influx_token \
+  sidekick_influx_password \
+  sidekick_postgres_password \
+  sidekick_secret_key; do
+  generate_secret_file "$secret_name"
+done
+log "Protected secret directory ready: $SECRET_DIR"
 
 # Configure UFW if active
 if command -v ufw &> /dev/null; then

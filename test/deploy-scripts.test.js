@@ -827,6 +827,19 @@ console.log('Test 6.3: Both deploy scripts preserve .env');
 }
 
 // ============================================================================
+// ============================================================================
+// PROTECTED SECRET BOOTSTRAP
+// ============================================================================
+console.log('Protected secret bootstrap coverage');
+assert.ok(deployShContent.includes('ensure_secret_config'), 'deploy.sh should configure protected secret settings');
+assert.ok(deployPs1Content.includes('Ensure-SecretConfig'), 'deploy.ps1 should configure protected secret settings');
+assert.ok(deployShContent.includes('ensure-secret-config.sh'), 'deploy.sh should sync the secret config helper');
+assert.ok(deployPs1Content.includes('ensure-secret-config.sh'), 'deploy.ps1 should sync the secret config helper');
+assert.ok(bootstrapShContent.includes('/etc/sidekick/secrets'), 'bootstrap.sh should create the protected secret directory');
+assert.ok(bootstrapShContent.includes('generate_secret_file'), 'bootstrap.sh should generate missing core secret files');
+assert.ok(bootstrapShContent.includes('chmod 600'), 'bootstrap.sh should protect generated secret files');
+console.log('✓ both deploy routes and bootstrap configure protected secrets\n');
+
 // SUMMARY
 // ============================================================================
 
