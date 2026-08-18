@@ -23,11 +23,15 @@ const PROJECT_ROOT = path.join(__dirname, '..');
 const DEPLOY_SH_PATH = path.join(PROJECT_ROOT, 'deploy.sh');
 const DEPLOY_PS1_PATH = path.join(PROJECT_ROOT, 'deploy.ps1');
 const BOOTSTRAP_SH_PATH = path.join(PROJECT_ROOT, 'scripts', 'bootstrap.sh');
+const SETUP_TOOLS_SH_PATH = path.join(PROJECT_ROOT, 'scripts', 'setup-tools.sh');
+const SUDOERS_PATH = path.join(PROJECT_ROOT, 'systemd', 'sidekick-sudoers');
 
 // Read script contents
 let deployShContent = '';
 let deployPs1Content = '';
 let bootstrapShContent = '';
+let setupToolsShContent = '';
+let sudoersContent = '';
 
 try {
   deployShContent = fs.readFileSync(DEPLOY_SH_PATH, 'utf8');
@@ -49,6 +53,9 @@ try {
   console.error('ERROR: scripts/bootstrap.sh not found at', BOOTSTRAP_SH_PATH);
   process.exit(1);
 }
+
+setupToolsShContent = fs.readFileSync(SETUP_TOOLS_SH_PATH, 'utf8');
+sudoersContent = fs.readFileSync(SUDOERS_PATH, 'utf8');
 
 // ============================================================================
 // DEPLOY.SH TESTS
@@ -495,6 +502,13 @@ console.log('Test 3.4: bootstrap.sh configures sudoers');
     !bootstrapShContent.includes('eval echo ~'),
     'bootstrap.sh must not evaluate an untrusted username'
   );
+  for (const [name, content] of [['bootstrap.sh', bootstrapShContent], ['setup-tools.sh', setupToolsShContent], ['systemd/sidekick-sudoers', sudoersContent]]) {
+    assert.ok(!content.includes('NOPASSWD: /usr/bin/wg,'), `${name} must not grant unrestricted wg access`);
+    assert.ok(!content.includes('NOPASSWD: /usr/bin/wg-quick'), `${name} must not grant unrestricted wg-quick access`);
+    assert.ok(!content.includes('NOPASSWD: /usr/sbin/nginx,'), `${name} must not grant unrestricted nginx arguments`);
+    assert.ok(content.includes('/usr/local/sbin/sidekick-wg'), `${name} must use the constrained WireGuard wrapper`);
+  }
+  assert.ok(setupToolsShContent.includes('install -o root -g root -m 0755 "$SCRIPT_DIR/sidekick-wg-wrapper.sh" /usr/local/sbin/sidekick-wg'), 'setup-tools.sh must install the root-owned WireGuard wrapper');
   console.log('✓ Sudoers configuration present\n');
 }
 

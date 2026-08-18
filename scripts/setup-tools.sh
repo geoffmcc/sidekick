@@ -416,6 +416,8 @@ echo ""
 # ─────────────────────────────────────────────
 log "Phase 9: Updating sudoers for new services..."
 
+install -o root -g root -m 0755 "$SCRIPT_DIR/sidekick-wg-wrapper.sh" /usr/local/sbin/sidekick-wg
+
 cat > /etc/sudoers.d/sidekick << 'SUDOERS'
 # Sidekick user permissions - core services
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-mcp, /usr/bin/systemctl stop sidekick-mcp, /usr/bin/systemctl restart sidekick-mcp, /usr/bin/systemctl status sidekick-mcp
@@ -436,10 +438,10 @@ sidekick ALL=(ALL) NOPASSWD: /usr/bin/journalctl -u sidekick-postgres, /usr/bin/
 sidekick ALL=(ALL) NOPASSWD: /usr/sbin/ufw allow 4097/tcp, /usr/sbin/ufw allow 4098/tcp, /usr/sbin/ufw allow 4099/tcp, /usr/sbin/ufw allow 3000/tcp
 
 # WireGuard
-sidekick ALL=(ALL) NOPASSWD: /usr/bin/wg, /usr/bin/wg-quick
+sidekick ALL=(ALL) NOPASSWD: /usr/local/sbin/sidekick-wg
 
 # Nginx
-sidekick ALL=(ALL) NOPASSWD: /usr/sbin/nginx, /usr/sbin/nginx -t, /usr/sbin/nginx -s reload, /usr/bin/systemctl start nginx, /usr/bin/systemctl stop nginx, /usr/bin/systemctl restart nginx, /usr/bin/systemctl reload nginx, /usr/bin/systemctl status nginx
+sidekick ALL=(ALL) NOPASSWD: /usr/sbin/nginx -t, /usr/bin/systemctl start nginx, /usr/bin/systemctl stop nginx, /usr/bin/systemctl restart nginx, /usr/bin/systemctl reload nginx, /usr/bin/systemctl status nginx
 
 # Data directory
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/chown -R sidekick\:sidekick /home/sidekick/sidekick/data/, /usr/bin/chmod -R 755 /home/sidekick/sidekick/data/

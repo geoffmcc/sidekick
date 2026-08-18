@@ -14,6 +14,7 @@ const path = require("path");
 const { execFileSync, spawn } = require("child_process");
 const { z } = require("zod");
 const { validIdentifier, validPort, validDomainName, validAllowedIps, validWireGuardEndpoint, validWireGuardPublicKey } = require("../../core/command-validation");
+const { DATA_DIR } = require("../../db");
 
 async function sidekick_tunnel({ action, url, port, name }) {
   try {
@@ -95,7 +96,7 @@ async function sidekick_tunnel({ action, url, port, name }) {
 async function sidekick_wireguard({ action, interface_name, peer_name, public_key, endpoint, allowed_ips }) {
   try {
     if (action === "status") {
-      const result = execFileSync("sudo", ["wg", "show", "all"], { timeout: 5000, encoding: "utf-8" });
+      const result = execFileSync("sudo", ["/usr/local/sbin/sidekick-wg", "show", "all"], { timeout: 5000, encoding: "utf-8" });
       if (!result.trim()) {
         return { content: [{ type: "text", text: "No WireGuard interfaces found" }] };
       }
@@ -107,7 +108,7 @@ async function sidekick_wireguard({ action, interface_name, peer_name, public_ke
         return { content: [{ type: "text", text: "Error: interface_name required" }], isError: true };
       }
       const iface = validIdentifier(interface_name, "interface name", 32);
-      const result = execFileSync("sudo", ["wg", "show", iface, "peers"], { timeout: 5000, encoding: "utf-8" });
+      const result = execFileSync("sudo", ["/usr/local/sbin/sidekick-wg", "show", iface, "peers"], { timeout: 5000, encoding: "utf-8" });
       const peers = result.trim().split('\n').filter(line => line && !line.startsWith('Warning')).map(line => {
         const parts = line.split('\t');
         return {
@@ -131,7 +132,7 @@ async function sidekick_wireguard({ action, interface_name, peer_name, public_ke
       const key = validWireGuardPublicKey(public_key);
       const ips = validAllowedIps(allowed_ips);
       const peerEndpoint = validWireGuardEndpoint(endpoint);
-      const args = ["wg", "set", iface, "peer", key, "allowed-ips", ips];
+      const args = ["/usr/local/sbin/sidekick-wg", "set", iface, "peer", key, "allowed-ips", ips];
       if (peerEndpoint) args.push("endpoint", peerEndpoint);
       execFileSync("sudo", args, { timeout: 5000 });
       return { content: [{ type: "text", text: `Added peer ${peerName} to ${iface}` }] };
@@ -143,7 +144,7 @@ async function sidekick_wireguard({ action, interface_name, peer_name, public_ke
       }
       const iface = validIdentifier(interface_name, "interface name", 32);
       const key = validWireGuardPublicKey(public_key);
-      execFileSync("sudo", ["wg", "set", iface, "peer", key, "remove"], { timeout: 5000 });
+      execFileSync("sudo", ["/usr/local/sbin/sidekick-wg", "set", iface, "peer", key, "remove"], { timeout: 5000 });
       return { content: [{ type: "text", text: `Removed peer from ${iface}` }] };
     }
 
@@ -193,10 +194,11 @@ async function sidekick_nginx({ action, site_name, domain, upstream_port, ssl_em
     }
 }`;
 
-      const tmpPath = path.join("/tmp", siteName);
+      const tmpDir = fs.mkdtempSync(path.join(DATA_DIR, ".nginx-"));
+      const tmpPath = path.join(tmpDir, siteName);
       const availablePath = `/etc/nginx/sites-available/${siteName}`;
       const enabledPath = `/etc/nginx/sites-enabled/${siteName}`;
-      fs.writeFileSync(tmpPath, config);
+      fs.writeFileSync(tmpPath, config, { flag: "wx", mode: 0o600 });
       execFileSync("sudo", ["install", "-m", "0644", tmpPath, availablePath], { timeout: 5000 });
       execFileSync("sudo", ["ln", "-sf", availablePath, enabledPath], { timeout: 5000 });
 
@@ -210,7 +212,7 @@ async function sidekick_nginx({ action, site_name, domain, upstream_port, ssl_em
         const detail = (e.stderr || e.stdout || e.message || "").toString();
         return { content: [{ type: "text", text: `Error: Invalid nginx config: ${detail}` }], isError: true };
       } finally {
-        try { fs.unlinkSync(tmpPath); } catch {}
+        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
       }
     }
 
