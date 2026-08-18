@@ -22,7 +22,7 @@ Required packages in the isolated Python environment
 ----------------------------------------------------
 openvino==2026.2.1
 numpy
-transformers==4.57.6
+transformers==5.5.0
 
 Run
 ---
