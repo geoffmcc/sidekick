@@ -142,7 +142,7 @@ function expiresForLegacy(retentionClass, createdAt, pinned, lifecycleState) {
 }
 
 const blackboxStorage = createBlackboxStorage({ rootDir: BLACKBOX_DIR, safeId, redact, hashText, nowIso, defaults: { dailyLimit: DEFAULT_DAILY_LIMIT, maxBytes: DEFAULT_MAX_BYTES, maxIncidents: DEFAULT_MAX_INCIDENTS } });
-const { artifactPath, writeArtifact, readArtifactByPath, getRetentionConfig, expiresFor } = blackboxStorage;
+const { artifactPath, writeArtifact, readArtifactByPath, removeIncidentArtifacts, getRetentionConfig, expiresFor } = blackboxStorage;
 
 function ensureSchema() {
   const db = dbStore.getDb();
@@ -1434,7 +1434,7 @@ function deleteIncident(incidentId, actor = "mcp") {
   if (!incident) return false;
   insertEvent({ incidentId, eventType: "incident.deleted", actor, reason: "explicit delete" });
   dbStore.getDb().prepare("DELETE FROM blackbox_incidents WHERE id = ?").run(incidentId);
-  fs.rmSync(path.join(BLACKBOX_DIR, incidentId), { recursive: true, force: true });
+  removeIncidentArtifacts(incidentId);
   return true;
 }
 
