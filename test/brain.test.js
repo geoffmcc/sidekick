@@ -430,6 +430,26 @@ test("selectToolsForGoal shortlists by goal relevance, deterministically, within
   assert.ok(cold.includes("health"));
 });
 
+test("selectToolsForGoal retains first-class tools for named capability packs", () => {
+  const catalog = [
+    { name: "status", description: "system status" },
+    { name: "web_capture", description: "capture a web page" },
+    { name: "web_extract", description: "extract web data" },
+    { name: "web_check", description: "check web assertions" },
+    { name: "dev_repo_profile", description: "profile a repository" },
+    { name: "jellyfin", description: "inspect Jellyfin" },
+    { name: "proxmox_guest", description: "inspect Proxmox guests" },
+    { name: "research_status", description: "inspect security research" },
+  ];
+  const browser = selectToolsForGoal(catalog, "Use the browser automation capability to verify the login page", 5).map(t => t.name);
+  assert.deepStrictEqual(browser.slice(0, 3), ["web_capture", "web_check", "web_extract"], "browser pack tools must survive shortlist bounds");
+  const namesFor = goal => selectToolsForGoal(catalog, goal, 4).map(t => t.name);
+  assert.ok(namesFor("Use the developer pack to inspect this repository").includes("dev_repo_profile"));
+  assert.ok(namesFor("Run the Jellyfin capability to inspect current sessions").includes("jellyfin"));
+  assert.ok(namesFor("Use Proxmox to inspect a guest").includes("proxmox_guest"));
+  assert.ok(namesFor("Use the security research pack to inspect the campaign").includes("research_status"));
+});
+
 test("planner prompt includes a concrete example plan and the no-wrap rule", () => {
   const prompt = buildPlannerSystemPrompt([{ name: "health" }]);
   assert.ok(prompt.includes('"version":1,"goal":"Check recent errors'), "concrete example plan present");

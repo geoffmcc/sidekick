@@ -31,6 +31,20 @@ const CORE_PLANNING_TOOLS = new Set([
   "find", "read", "list", "get", "search", "git", "llm", "respond",
 ]);
 
+// A named pack request is stronger than ordinary word overlap. Pack context is
+// bounded and the planner shortlist is bounded separately; without an explicit
+// boost, a request such as "use browser automation" can receive only generic
+// tools while the pack's first-class tools are omitted from the model prompt.
+// This is a prompt-selection hint only. The full registry and dispatcher still
+// own tool existence, authorization, policy, approval, and execution.
+const NAMED_CAPABILITY_HINTS = [
+  { pattern: /\bbrowser[ -]automation\b|\bbrowser\b/, tool: name => /^(browser|web_capture|web_extract|web_check)$/.test(name) },
+  { pattern: /\bdeveloper\b|\bsoftware engineering\b|\bdeveloper pack\b/, tool: name => /^dev_/.test(name) },
+  { pattern: /\bjellyfin\b/, tool: name => /^jellyfin(?:_|$)/.test(name) },
+  { pattern: /\bproxmox\b/, tool: name => /^proxmox(?:_|$)|^ansible_run$/.test(name) },
+  { pattern: /\bsecurity[ -]research\b|\bresearch pack\b/, tool: name => /^research_/.test(name) },
+];
+
 // Deterministic goal-relevance shortlist. The FULL catalog (100+ live tools)
 // renders to ~40k chars of system prompt, which collapses a small model's
 // instruction-following — the schema and example drown. ~24 tools with full
@@ -38,13 +52,16 @@ const CORE_PLANNING_TOOLS = new Set([
 // ONLY the prompt: plans still validate against the full agent-visible
 // catalog, so this narrows nothing security-relevant.
 function selectToolsForGoal(agentTools, goal, cap = 24) {
+  const text = String(goal || "").toLowerCase();
+  const namedHints = NAMED_CAPABILITY_HINTS.filter(hint => hint.pattern.test(text));
   const words = new Set(
-    (String(goal || "").toLowerCase().match(/[a-z0-9_]+/g) || []).filter(w => w.length > 2)
+    (text.match(/[a-z0-9_]+/g) || []).filter(w => w.length > 2)
   );
   const scored = agentTools.map(t => {
     const hay = (t.name + " " + (typeof t.description === "string" ? t.description : "")).toLowerCase();
     let score = 0;
     for (const w of words) if (hay.includes(w)) score++;
+    if (namedHints.some(hint => hint.tool(String(t.name)))) score += 100;
     if (CORE_PLANNING_TOOLS.has(String(t.name).replace(/^sidekick_/, ""))) score += 1;
     return { t, score };
   });
