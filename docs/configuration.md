@@ -97,6 +97,17 @@ Set a strong MCP API key before any non-local deployment:
 SIDEKICK_API_KEY=replace-with-a-long-random-value
 ```
 
+For production, prefer a root-owned secret directory over putting credential
+values in `.env`. Set `SIDEKICK_SECRET_DIR` to a directory readable by the
+Sidekick service account and place these files there: `sidekick_api_key`,
+`sidekick_dashboard_pass`, `sidekick_grafana_admin_password`,
+`sidekick_influx_token`, `sidekick_postgres_password`, and
+`sidekick_secret_key`. The loader rejects missing, non-regular, oversized, or
+group/world-writable files. Explicit `<SECRET_NAME>_FILE` paths are also
+supported. Environment values remain a local-development compatibility
+fallback; a configured file always takes precedence and failures do not fall
+back to an environment value.
+
 Set dashboard credentials if the dashboard is reachable from a browser:
 
 ```env

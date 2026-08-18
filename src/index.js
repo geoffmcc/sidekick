@@ -2,6 +2,7 @@ require("./env");
 const express = require("express");
 const cors = require("cors");
 const { timingSafeCompare } = require("./crypto-utils");
+const { readSecret } = require("./core/runtime-secrets");
 const { McpServer } = require("@modelcontextprotocol/sdk/server/mcp.js");
 const { WebStandardStreamableHTTPServerTransport } = require("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js");
 const { SSEServerTransport } = require("@modelcontextprotocol/sdk/server/sse.js");
@@ -17,7 +18,7 @@ const packageJson = require("../package.json");
 const APP_VERSION = packageJson.version || "0.0.0";
 const NODE_REQUIREMENT = packageJson.engines?.node || "unspecified";
 
-const API_KEY = process.env.SIDEKICK_API_KEY;
+const API_KEY = readSecret("SIDEKICK_API_KEY");
 if (!API_KEY || API_KEY === "sk-sidekick-local-dev" || API_KEY === "sk-your-key-here") {
   throw new Error("SIDEKICK_API_KEY must be set to a non-placeholder value");
 }
