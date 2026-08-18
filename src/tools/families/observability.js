@@ -731,6 +731,23 @@ async function sidekick_netdiag({ action, target, port_range, timeout, format })
   return { content: [{ type: "text", text: "Unknown action. Use: check, dns, route, ports, listeners, connectivity" }], isError: true };
 }
 
+const METRICS_METADATA_TTL_MS = 30_000;
+const metricsMetadataCache = new Map();
+
+function cachedMetricsMetadata(key) {
+  const entry = metricsMetadataCache.get(key);
+  if (!entry || entry.expiresAt <= Date.now()) {
+    metricsMetadataCache.delete(key);
+    return null;
+  }
+  return entry.value;
+}
+
+function cacheMetricsMetadata(key, value) {
+  metricsMetadataCache.set(key, { value, expiresAt: Date.now() + METRICS_METADATA_TTL_MS });
+  return value;
+}
+
 async function sidekick_metrics({ action, measurement, fields, tags, timestamp, query, time_range }) {
   try {
     const INFLUX_URL = process.env.SIDEKICK_INFLUX_URL || 'http://localhost:8086';
@@ -817,6 +834,10 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
     }
 
     if (action === "list_measurements") {
+      const cacheKey = `measurements:${INFLUX_BUCKET}`;
+      const cached = cachedMetricsMetadata(cacheKey);
+      if (cached) return { content: [{ type: "text", text: JSON.stringify(cached) }] };
+
       const fluxQuery = `from(bucket: "${INFLUX_BUCKET}")
   |> range(start: -30d)
   |> group()
@@ -839,7 +860,8 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
       }
 
       const result = await response.text();
-      return { content: [{ type: "text", text: JSON.stringify(parseInfluxCsvColumn(result, "_measurement")) }] };
+      const values = cacheMetricsMetadata(cacheKey, parseInfluxCsvColumn(result, "_measurement"));
+      return { content: [{ type: "text", text: JSON.stringify(values) }] };
     }
 
     if (action === "list_fields") {
@@ -848,6 +870,10 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
       }
 
       const range = time_range || '-30d';
+      const cacheKey = `fields:${INFLUX_BUCKET}:${measurement}:${range}`;
+      const cached = cachedMetricsMetadata(cacheKey);
+      if (cached) return { content: [{ type: "text", text: JSON.stringify(cached) }] };
+
       const safeMeasurement = String(measurement).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
       const fluxQuery = `from(bucket: "${INFLUX_BUCKET}")
   |> range(start: ${range})
@@ -872,7 +898,8 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
       }
 
       const result = await response.text();
-      return { content: [{ type: "text", text: JSON.stringify(parseInfluxCsvColumn(result, "_field")) }] };
+      const values = cacheMetricsMetadata(cacheKey, parseInfluxCsvColumn(result, "_field"));
+      return { content: [{ type: "text", text: JSON.stringify(values) }] };
     }
 
     return { content: [{ type: "text", text: "Error: Invalid action. Use: write, query, list_measurements, list_fields" }], isError: true };
