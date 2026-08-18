@@ -172,7 +172,8 @@ All documentation, best practices, and project context stored in a searchable da
 ### 📊 Built-in Metrics & Monitoring
 Comprehensive metrics collection with Grafana dashboards:
 - System health (CPU, memory, disk, load)
-- Tool usage analytics (call counts, success rates, duration)
+- Tool usage analytics (call counts, success rates, average, p50, p95, p99, min, and max duration)
+- Dispatcher phase latency (registry, resolution, validation, policy, approval, and handler timing) in redacted tool activity records
 - Service status monitoring
 - Database performance metrics
 - Docker container stats

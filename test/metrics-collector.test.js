@@ -78,13 +78,18 @@ test("no database tool calls yields null rather than a zero-filled point", () =>
 });
 
 test("tool metrics are grouped per tool and unaffected by name shape", () => {
-  seed([["bash", 1, 10], ["bash", 0, 30], ["db_query", 1, 5]]);
+  seed([["bash", 1, 10], ["bash", 0, 30], ["bash", 1, 20], ["bash", 1, 40], ["db_query", 1, 5]]);
   const rows = collector.collectToolMetrics();
   const byName = Object.fromEntries(rows.map(r => [r.tool_name, r]));
   assert.strictEqual(rows.length, 2, "one row per distinct tool");
-  assert.strictEqual(byName.bash.count, 2);
+  assert.strictEqual(byName.bash.count, 4);
   assert.strictEqual(byName.bash.error_count, 1);
-  assert.strictEqual(byName.bash.success_rate, 50);
+  assert.strictEqual(byName.bash.success_rate, 75);
+  assert.strictEqual(byName.bash.p50_ms, 20);
+  assert.strictEqual(byName.bash.p95_ms, 40);
+  assert.strictEqual(byName.bash.p99_ms, 40);
+  assert.strictEqual(byName.bash.min_ms, 10);
+  assert.strictEqual(byName.bash.max_ms, 40);
   assert.strictEqual(byName.db_query.count, 1);
 });
 
