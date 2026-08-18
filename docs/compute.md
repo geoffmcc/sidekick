@@ -150,6 +150,12 @@ Bootstrap is **idempotent and secure by default**:
   providers and **fails closed** rather than silently egressing to a cloud API.
   Authorizing a cloud provider for private data is an explicit operator step
   (`compute` `action=update` with `data_classifications`).
+- Provider endpoints are checked when registered and resolved again before
+  every adapter request. The HTTP layer pins the validated address, preserves
+  the configured Host/TLS SNI, refuses metadata/link-local answers, does not
+  follow redirects, and caps response bodies. Explicitly configured private
+  providers remain supported; this is separate from the caller-facing
+  `SIDEKICK_ALLOW_PRIVATE_FETCH` policy.
 - Set `SIDEKICK_DISABLE_PROVIDER_BOOTSTRAP=1` to manage providers entirely by
   hand, or `SIDEKICK_DISABLE_OLLAMA_BOOTSTRAP=1` to skip only the local default.
 

@@ -1,5 +1,4 @@
-const http = require("http");
-const https = require("https");
+const { requestJson } = require("../compute/provider-http");
 const DEFAULT_MAX_OUTPUT_TOKENS = 65536;
 
 // Drop keys whose value is undefined so optional generation options
@@ -33,37 +32,7 @@ class OllamaProvider {
   }
 
   _request(path, body, options = {}) {
-    return new Promise((resolve, reject) => {
-      const url = new URL(path, this.endpoint);
-      const isHttps = url.protocol === "https:";
-      const mod = isHttps ? https : http;
-      const bodyStr = body ? JSON.stringify(body) : null;
-      const headers = { "Content-Type": "application/json" };
-      if (bodyStr) headers["Content-Length"] = Buffer.byteLength(bodyStr);
-
-      const req = mod.request({
-        hostname: url.hostname,
-        port: url.port,
-        path: url.pathname,
-        method: options.method || "POST",
-        headers,
-      }, (res) => {
-        let data = "";
-        res.on("data", (c) => data += c);
-        res.on("end", () => {
-          if (res.statusCode >= 400) {
-            let errMsg;
-            try { errMsg = JSON.parse(data); } catch { errMsg = { error: data.substring(0, 200) }; }
-            return reject(new Error("Ollama " + res.statusCode + ": " + (errMsg.error || data.substring(0, 200))));
-          }
-          try { resolve(JSON.parse(data)); } catch { reject(new Error("Ollama parse error")); }
-        });
-      });
-      req.setTimeout(options.timeout || this.timeout, () => { req.destroy(); reject(new Error("Ollama timeout")); });
-      req.on("error", reject);
-      if (bodyStr) req.write(bodyStr);
-      req.end();
-    });
+    return requestJson({ endpoint: this.endpoint, path, method: options.method || "POST", headers: { "Content-Type": "application/json" }, body, timeout: options.timeout || this.timeout, label: "Ollama endpoint", errorPrefix: "Ollama" });
   }
 
   async health() {

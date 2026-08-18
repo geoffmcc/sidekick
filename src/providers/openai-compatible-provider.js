@@ -1,5 +1,4 @@
-const https = require("https");
-const http = require("http");
+const { requestJson } = require("../compute/provider-http");
 
 class OpenAICompatibleProvider {
   constructor(config = {}) {
@@ -22,41 +21,9 @@ class OpenAICompatibleProvider {
   }
 
   _request(path, body, options = {}) {
-    return new Promise((resolve, reject) => {
-      const url = new URL(path, this.endpoint);
-      const isHttps = url.protocol === "https:";
-      const mod = isHttps ? https : http;
-      const bodyStr = body ? JSON.stringify(body) : null;
-      const headers = { "Content-Type": "application/json" };
-      if (this.apiKey) headers["Authorization"] = "Bearer " + this.apiKey;
-      if (bodyStr) headers["Content-Length"] = Buffer.byteLength(bodyStr);
-
-      const req = mod.request({
-        hostname: url.hostname,
-        port: url.port,
-        path: url.pathname,
-        method: options.method || "POST",
-        headers,
-      }, (res) => {
-        let data = "";
-        res.on("data", (c) => data += c);
-        res.on("end", () => {
-          if (res.statusCode === 429) {
-            return reject(new Error("Rate limited"));
-          }
-          if (res.statusCode >= 400) {
-            let errMsg;
-            try { errMsg = JSON.parse(data); } catch { errMsg = { error: { message: data.substring(0, 200) } }; }
-            return reject(new Error("OpenAI " + res.statusCode + ": " + (errMsg.error?.message || data.substring(0, 200))));
-          }
-          try { resolve(JSON.parse(data)); } catch { reject(new Error("Parse error")); }
-        });
-      });
-      req.setTimeout(options.timeout || this.timeout, () => { req.destroy(); reject(new Error("Timeout")); });
-      req.on("error", reject);
-      if (bodyStr) req.write(bodyStr);
-      req.end();
-    });
+    const headers = { "Content-Type": "application/json" };
+    if (this.apiKey) headers.Authorization = "Bearer " + this.apiKey;
+    return requestJson({ endpoint: this.endpoint, path, method: options.method || "POST", headers, body, timeout: options.timeout || this.timeout, label: "OpenAI-compatible endpoint", errorPrefix: "OpenAI", rateLimitError: "Rate limited" });
   }
 
   async health() {

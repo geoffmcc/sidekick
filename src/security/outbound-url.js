@@ -93,7 +93,7 @@ function privateFetchAllowed() {
  * the URL may be requested. `label` names the argument in the message so the
  * caller sees which input was rejected.
  */
-function validateOutboundUrl(value, label = "url") {
+function validateOutboundUrl(value, label = "url", options = {}) {
   let url;
   try {
     url = new URL(String(value));
@@ -117,7 +117,8 @@ function validateOutboundUrl(value, label = "url") {
   if (isLinkLocal(host)) {
     return `Refused ${label} host "${host}": link-local addresses are never a valid fetch target`;
   }
-  if (isPrivateAddress(host) && !privateFetchAllowed()) {
+  const allowPrivate = options.allowPrivate === true || (options.allowPrivate !== false && privateFetchAllowed());
+  if (isPrivateAddress(host) && !allowPrivate) {
     return `Refused ${label} host "${host}": private and loopback addresses are not fetchable. ` +
       "Set SIDEKICK_ALLOW_PRIVATE_FETCH=true to allow requests to your own network.";
   }
@@ -134,8 +135,8 @@ function validateOutboundUrl(value, label = "url") {
  * any answer is forbidden; otherwise a later resolver choice could select a
  * denied address.
  */
-async function resolveOutboundUrl(value, label = "url") {
-  const refusal = validateOutboundUrl(value, label);
+async function resolveOutboundUrl(value, label = "url", options = {}) {
+  const refusal = validateOutboundUrl(value, label, options);
   if (refusal) return { refusal };
 
   const url = new URL(String(value));
@@ -156,7 +157,8 @@ async function resolveOutboundUrl(value, label = "url") {
     if (METADATA_HOSTS.has(address) || isLinkLocal(address)) {
       return { refusal: `Refused ${label}: resolved address is a protected link-local or metadata endpoint` };
     }
-    if (isPrivateAddress(address) && !privateFetchAllowed()) {
+    const allowPrivate = options.allowPrivate === true || (options.allowPrivate !== false && privateFetchAllowed());
+    if (isPrivateAddress(address) && !allowPrivate) {
       return { refusal: `Refused ${label}: hostname resolves to a private or loopback address` };
     }
   }

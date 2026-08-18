@@ -8,12 +8,11 @@
 // provider typically listens on http://127.0.0.1:11434, and an accelerator host
 // is commonly a private LAN address.
 //
-// SCOPE LIMIT — this validates URL TEXT at write time only. It cannot stop a
-// hostname that resolves to a denied address later (DNS rebinding), nor a
-// redirect chain that lands on one. Enforcing that requires checking the
-// resolved peer address on every request and every redirect hop, in the HTTP
-// layer the adapters share. Until that exists, treat this as a guard against
-// obvious misuse rather than a security boundary.
+// This is the write-time policy guard. Provider adapters additionally resolve
+// and pin the destination before every request; metadata/link-local answers
+// remain forbidden, and redirects are not followed. Keeping both checks is
+// intentional: registry policy rejects unsafe configuration while the HTTP
+// layer closes DNS-rebinding and post-registration resolution gaps.
 const net = require("net");
 
 // Hostnames that serve cloud instance credentials. Reaching any of these from
