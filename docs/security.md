@@ -144,6 +144,18 @@ Three limits are worth stating plainly. A hard link is not a symlink and has no 
 
 The guard applies to direct path arguments on file, archive, search, diff, database export/backup/restore, media, watch, snapshot, changelog, and ops tools. It does not parse arbitrary commands passed to shell-capable tools, so keep `bash`, sandbox execution, deploy workflows, and other high-power tools behind tool policy and approval.
 
+### Media download egress
+
+The `download` tool performs a DNS preflight before invoking yt-dlp and refuses
+private, loopback, metadata, and link-local destinations unless the operator
+explicitly enables private fetches. It also disables yt-dlp call-home/cache
+behavior, uses a socket timeout, restricts filenames, caps the download size
+(`SIDEKICK_MAX_DOWNLOAD_BYTES`, bounded to 1 MiB–2 GiB), and canonicalizes and
+revalidates the resulting file before custody registration. yt-dlp remains a
+third-party downloader that may follow site-specific redirects or request
+additional CDN URLs; deployments requiring strict egress isolation must run it
+behind an OS/network-level egress policy or proxy.
+
 ## Approval queue
 
 The approval queue is an optional dashboard review layer for allowed tools. It does not enable tools that policy blocks. The default `SIDEKICK_APPROVAL_MODE=off` preserves existing behavior.
