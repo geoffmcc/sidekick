@@ -211,6 +211,27 @@ setTimeout(async () => {
       console.log('Passed\n');
     }
 
+    console.log('Test 3.0b1: mutating requests reject same-host wrong-scheme origins');
+    {
+      const response = await makeRequest('PUT', '/api/kv/csrf-scheme-test', { value: 'blocked' }, {
+        headers: {
+          Origin: 'https://127.0.0.1:4100',
+          Host: '127.0.0.1:4100'
+        }
+      });
+      assert.strictEqual(response.status, 403, 'Should reject an HTTPS origin on an HTTP request');
+
+      const forwardedResponse = await makeRequest('PUT', '/api/kv/csrf-scheme-test', { value: 'allowed' }, {
+        headers: {
+          Origin: 'https://127.0.0.1:4100',
+          Host: '127.0.0.1:4100',
+          'X-Forwarded-Proto': 'https'
+        }
+      });
+      assert.notStrictEqual(forwardedResponse.status, 403, 'Should honor the effective HTTPS scheme behind a trusted proxy');
+      console.log('Passed\n');
+    }
+
     // Test 3.0b2: Grafana auth-proxy token rotation is explicit, not fake success
     console.log('Test 3.0b2: Grafana token rotation reports unsupported behavior');
     {

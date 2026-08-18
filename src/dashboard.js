@@ -272,10 +272,20 @@ function shouldRateLimit(req) {
   return true;
 }
 
-function isSameOrigin(origin, host) {
-  if (!origin || !host) return false;
+function requestProtocol(req) {
+  const forwarded = String(req?.headers?.["x-forwarded-proto"] || "")
+    .split(",", 1)[0]
+    .trim()
+    .toLowerCase();
+  if (forwarded === "http" || forwarded === "https") return forwarded;
+  return req?.secure || req?.protocol === "https" ? "https" : "http";
+}
+
+function isSameOrigin(origin, host, protocol = "http") {
+  if (!origin || !host || !protocol) return false;
   try {
-    return new URL(origin).host === host;
+    const parsed = new URL(origin);
+    return parsed.protocol === `${protocol}:` && parsed.host === host;
   } catch {
     return false;
   }
@@ -447,7 +457,7 @@ app.use((req, res, next) => {
   if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) {
     const origin = req.headers.origin;
     const host = req.headers.host;
-    if (origin && !isSameOrigin(origin, host)) {
+    if (origin && !isSameOrigin(origin, host, requestProtocol(req))) {
       return res.status(403).json({ error: 'Invalid origin' });
     }
   }
