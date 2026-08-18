@@ -69,7 +69,7 @@ Optional infrastructure services include sidekick-postgres, sidekick-redis, side
 ('architecture', 'MCP Server Behavior',
 'The MCP server in src/index.js registers built-in tools from TOOL_DEFS and learned procedures from procedures.json. It supports POST /mcp, GET /mcp, DELETE /mcp, GET /sse, POST /messages, and GET /health.
 
-MCP routes require Authorization: Bearer SIDEKICK_API_KEY or an api_key query parameter. SIDEKICK_ALLOWED_IPS can restrict callers by IPv4 address or CIDR.
+MCP routes require Authorization: Bearer SIDEKICK_API_KEY. Query-string API keys are deliberately rejected because URLs can leak through logs, history, and referrer metadata. SIDEKICK_ALLOWED_IPS can restrict callers by IPv4 address or CIDR.
 
 Streamable HTTP sessions are held in memory. GET and DELETE require a valid mcp-session-id. Inactive sessions are cleaned up after about one hour. Stale POST sessions return a JSON-RPC error with a replacement session ID header so the client can reinitialize.',
 'mcp,sessions,auth,architecture', 1, 'seed-2026-06-16-current', datetime('now')),

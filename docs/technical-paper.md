@@ -247,7 +247,7 @@ Sources include:
 - legacy SSE at `/sse` and `/messages`;
 - diagnostics at `/health`.
 
-The MCP routes require a bearer token or `api_key` query parameter. `SIDEKICK_ALLOWED_IPS` can restrict remote access by IP or CIDR. Localhost remains allowed.
+The MCP routes require an `Authorization: Bearer` token. API keys are deliberately not accepted in query parameters because URLs are routinely copied into logs, history, and referrer metadata. `SIDEKICK_ALLOWED_IPS` can restrict remote access by IP or CIDR. Localhost remains allowed.
 
 The server maintains in-memory sessions. Each session includes:
 

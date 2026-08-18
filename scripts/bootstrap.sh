@@ -52,6 +52,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ ! "$USERNAME" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+  echo "Invalid username: use a Linux account name (lowercase letters, digits, _ or -)" >&2
+  exit 1
+fi
+if [[ ! "$NODE_VERSION" =~ ^[0-9]+$ ]]; then
+  echo "Invalid Node.js major version" >&2
+  exit 1
+fi
+
 # Logging function
 log() {
   echo -e "${GREEN}[BOOTSTRAP]${NC} $1"
@@ -126,11 +135,6 @@ sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-grafana, /usr/bin
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-metrics.timer, /usr/bin/systemctl stop sidekick-metrics.timer, /usr/bin/systemctl restart sidekick-metrics.timer, /usr/bin/systemctl status sidekick-metrics.timer
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/journalctl -u sidekick-postgres, /usr/bin/journalctl -u sidekick-redis, /usr/bin/journalctl -u sidekick-qdrant, /usr/bin/journalctl -u sidekick-influxdb, /usr/bin/journalctl -u sidekick-grafana
 
-# Docker management (needed for on-demand services)
-sidekick ALL=(ALL) NOPASSWD: /usr/bin/docker compose -f /home/sidekick/sidekick/docker/docker-compose.yml *
-sidekick ALL=(ALL) NOPASSWD: /usr/bin/docker compose --env-file /home/sidekick/sidekick/.env -f /home/sidekick/sidekick/docker/docker-compose.yml *
-sidekick ALL=(ALL) NOPASSWD: /usr/bin/docker start *, /usr/bin/docker stop *, /usr/bin/docker restart *, /usr/bin/docker ps, /usr/bin/docker logs *
-
 # UFW
 sidekick ALL=(ALL) NOPASSWD: /usr/sbin/ufw allow 4097/tcp, /usr/sbin/ufw allow 4098/tcp, /usr/sbin/ufw allow 4099/tcp, /usr/sbin/ufw allow 3000/tcp
 
@@ -167,7 +171,10 @@ fi
 
 # Setup SSH directory for sidekick user
 log "Setting up SSH directory for $USERNAME..."
-USER_HOME=$(eval echo ~$USERNAME)
+USER_HOME=$(getent passwd "$USERNAME" | cut -d: -f6)
+if [ -z "$USER_HOME" ] || [ ! -d "$USER_HOME" ]; then
+  error "Could not resolve a home directory for $USERNAME"
+fi
 mkdir -p "$USER_HOME/.ssh"
 touch "$USER_HOME/.ssh/authorized_keys"
 chmod 700 "$USER_HOME/.ssh"

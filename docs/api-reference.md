@@ -9,7 +9,7 @@ This reference is generated from Express route declarations in `src/index.js`, `
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/health` | Diagnostics: uptime, session counts, version. |
-| POST | `/mcp` | Primary Streamable HTTP MCP endpoint (bearer token or `api_key`). |
+| POST | `/mcp` | Primary Streamable HTTP MCP endpoint (Authorization bearer token). |
 | GET | `/mcp` | Streamable HTTP GET path (requires `mcp-session-id`). |
 | DELETE | `/mcp` | Session teardown (requires `mcp-session-id`). |
 | GET | `/sse` | Legacy SSE transport session creation. |

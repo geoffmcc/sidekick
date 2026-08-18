@@ -39,7 +39,7 @@ The MCP server creates an `McpServer` from `@modelcontextprotocol/sdk`, register
 - `GET /health` for diagnostics;
 - authenticated `/compute/enrollment/*`, `/compute/worker/*`, and `/compute/admin/*` routes for Sidekick Compute.
 
-The server requires `Authorization: Bearer <SIDEKICK_API_KEY>` or `?api_key=<key>` for MCP and administrative routes and can enforce `SIDEKICK_ALLOWED_IPS`. Worker protocol routes use scoped worker credentials, while enrollment exchange uses one-time enrollment tokens.
+The server requires `Authorization: Bearer <SIDEKICK_API_KEY>` for MCP and administrative routes and can enforce `SIDEKICK_ALLOWED_IPS`. API keys are not accepted in query strings because URLs can leak through logs, history, and referrer metadata. Worker protocol routes use scoped worker credentials, while enrollment exchange uses one-time enrollment tokens.
 
 ### Tool runtime: `src/tools/`
 

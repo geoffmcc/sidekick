@@ -432,11 +432,6 @@ sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-grafana, /usr/bin
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/systemctl start sidekick-metrics.timer, /usr/bin/systemctl stop sidekick-metrics.timer, /usr/bin/systemctl restart sidekick-metrics.timer, /usr/bin/systemctl status sidekick-metrics.timer
 sidekick ALL=(ALL) NOPASSWD: /usr/bin/journalctl -u sidekick-postgres, /usr/bin/journalctl -u sidekick-redis, /usr/bin/journalctl -u sidekick-qdrant, /usr/bin/journalctl -u sidekick-influxdb, /usr/bin/journalctl -u sidekick-grafana
 
-# Docker management (needed for on-demand services)
-sidekick ALL=(ALL) NOPASSWD: /usr/bin/docker compose -f /home/sidekick/sidekick/docker/docker-compose.yml *
-sidekick ALL=(ALL) NOPASSWD: /usr/bin/docker compose --env-file /home/sidekick/sidekick/.env -f /home/sidekick/sidekick/docker/docker-compose.yml *
-sidekick ALL=(ALL) NOPASSWD: /usr/bin/docker start *, /usr/bin/docker stop *, /usr/bin/docker restart *, /usr/bin/docker ps, /usr/bin/docker logs *
-
 # UFW
 sidekick ALL=(ALL) NOPASSWD: /usr/sbin/ufw allow 4097/tcp, /usr/sbin/ufw allow 4098/tcp, /usr/sbin/ufw allow 4099/tcp, /usr/sbin/ufw allow 3000/tcp
 

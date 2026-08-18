@@ -12,7 +12,7 @@
 
 const { z } = require("zod");
 const dbStore = require("../../db");
-const { validateOutboundUrl } = require("../../security/outbound-url");
+const { resolveOutboundUrl } = require("../../security/outbound-url");
 const { readSecret } = require("../../core/runtime-secrets");
 
 function loadWebhooks() {
@@ -39,9 +39,9 @@ async function sidekick_notify({ channel, webhook_url, recipient, message, title
     // The webhook URL is caller-controlled (or env-configured); either way the
     // request originates inside the trust boundary, so it must pass the same
     // outbound destination policy as web_fetch (SSRF guard).
-    const urlError = validateOutboundUrl(webhook_url, "webhook_url");
-    if (urlError) {
-      return { content: [{ type: "text", text: urlError }], isError: true };
+    const destination = await resolveOutboundUrl(webhook_url, "webhook_url");
+    if (destination.refusal) {
+      return { content: [{ type: "text", text: destination.refusal }], isError: true };
     }
 
     const payload = channel === "discord"
@@ -49,10 +49,10 @@ async function sidekick_notify({ channel, webhook_url, recipient, message, title
       : JSON.stringify({ text: title ? `*${title}*\n${message}` : message });
 
     return new Promise((resolve) => {
-      const urlObj = new URL(webhook_url);
+      const urlObj = destination.url;
       const lib = urlObj.protocol === "https:" ? https : http;
-      const req = lib.request({
-        hostname: urlObj.hostname,
+      const requestOptions = {
+        hostname: destination.address,
         port: urlObj.port || (urlObj.protocol === "https:" ? 443 : 80),
         path: urlObj.pathname + urlObj.search,
         method: "POST",
@@ -61,7 +61,10 @@ async function sidekick_notify({ channel, webhook_url, recipient, message, title
           "Content-Length": Buffer.byteLength(payload)
         },
         timeout: 10000
-      }, (res) => {
+      };
+      requestOptions.headers.Host = urlObj.host;
+      if (urlObj.protocol === "https:") requestOptions.servername = urlObj.hostname.replace(/^\[|\]$/g, "");
+      const req = lib.request(requestOptions, (res) => {
         let data = "";
         res.on("data", (chunk) => data += chunk);
         res.on("end", () => {
