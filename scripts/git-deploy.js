@@ -107,6 +107,25 @@ function runSeed(cwd) {
   return run('npm', ['run', 'seed:knowledge'], { cwd, timeout: 60000, maxBuffer: 10 * 1024 * 1024 });
 }
 
+function ensureComposeIdentity(envPath = path.join(APP_DIR, '.env')) {
+  if (!fs.existsSync(envPath) || typeof process.getuid !== 'function' || typeof process.getgid !== 'function') return false;
+  const uid = process.getuid();
+  const gid = process.getgid();
+  if (!Number.isInteger(uid) || !Number.isInteger(gid) || uid < 0 || gid < 0) return false;
+  let content = fs.readFileSync(envPath, 'utf8');
+  const set = (name, value) => {
+    const line = `${name}=${value}`;
+    const pattern = new RegExp(`^${name}=.*$`, 'm');
+    if (pattern.test(content)) content = content.replace(pattern, line);
+    else content += `${content.endsWith('\n') ? '' : '\n'}${line}\n`;
+  };
+  set('SIDEKICK_UID', uid);
+  set('SIDEKICK_GID', gid);
+  fs.writeFileSync(envPath, content, { mode: 0o600 });
+  fs.chmodSync(envPath, 0o600);
+  return true;
+}
+
 function service(action, name) {
   return run('sudo', ['systemctl', action, name], { timeout: 30000, maxBuffer: 1024 * 1024 });
 }
@@ -329,6 +348,8 @@ function deploy() {
     if (newHead !== origin) return fail(result, 'HEAD does not equal origin/main after deployment');
     if (pushUrl !== PUSH_URL) return fail(result, 'origin push URL is not disabled after deployment', { push_url: redact(pushUrl) });
 
+    ensureComposeIdentity();
+
     const install = npmInstall(APP_DIR);
     result.dependency_install = install.ok ? 'ok' : 'failed';
     if (!install.ok) {
@@ -434,6 +455,7 @@ function convert() {
     copyIfExists(path.join(backup, '.env'), path.join(staging, '.env'));
     copyIfExists(path.join(backup, 'data'), path.join(staging, 'data'));
     fs.chmodSync(path.join(staging, '.env'), 0o600);
+    ensureComposeIdentity(path.join(staging, '.env'));
     const chown = run('chown', ['-R', 'sidekick:sidekick', staging]);
     if (!chown.ok) return fail(result, 'ownership fix failed', { stderr: chown.stderr });
 
@@ -496,6 +518,7 @@ module.exports = {
   redact,
   allowedFetchUrl,
   hasCredential,
+  ensureComposeIdentity,
   setExecFileSyncForTest,
   verify,
   deploy,
