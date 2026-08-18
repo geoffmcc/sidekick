@@ -25,6 +25,7 @@ const suites = [
   { file: 'test/static-code-quality.test.js', critical: true, description: 'Static safety checks' },
   { file: 'test/security.test.js', critical: true, description: 'Redaction and dangerous command checks' },
   { file: 'test/outbound-url-security.test.js', critical: true, description: 'DNS-pinned outbound URL and SSRF regression checks' },
+  { file: 'test/provider-outbound-security.test.js', critical: true, description: 'DNS-pinned provider endpoint regression checks' },
   { file: 'test/storage-isolation-security.test.js', critical: true, description: 'Principal/project KV isolation regression checks' },
   { file: 'test/tool-log-redaction.test.js', critical: true, description: 'Tool-log and auto-memory credential redaction' },
   { file: 'test/structured-tools-security.test.js', critical: true, description: 'Structured command-backed tool hardening' },
