@@ -17,6 +17,8 @@ const API_KEY = 'sk-e2e-worker-key';
 const admin = { Authorization: `Bearer ${API_KEY}` };
 const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-srv-'));
 const WORK_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-wrk-'));
+const SECRET_DIR = path.join(WORK_DIR, 'secrets');
+fs.mkdirSync(SECRET_DIR, { recursive: true });
 const CRED = path.join(WORK_DIR, 'worker-credential.json');
 const NODE_ID = 'node_e2e_worker_01';
 
@@ -36,7 +38,10 @@ function req(method, p, body) {
     if (data) r.write(data); r.end();
   });
 }
-const cliEnv = { ...process.env, SIDEKICK_URL: `http://127.0.0.1:${PORT}`, SIDEKICK_WORKER_CONFIG: CRED, SIDEKICK_NODE_ID: NODE_ID, SIDEKICK_NODE_NAME: 'e2e-worker' };
+const cliEnv = { ...process.env, SIDEKICK_SECRET_DIR: SECRET_DIR, SIDEKICK_URL: `http://127.0.0.1:${PORT}`, SIDEKICK_WORKER_CONFIG: CRED, SIDEKICK_NODE_ID: NODE_ID, SIDEKICK_NODE_NAME: 'e2e-worker' };
+function writeEnrollmentToken(token) {
+  fs.writeFileSync(path.join(SECRET_DIR, 'sidekick_enroll_token'), token, { mode: 0o600 });
+}
 function cli(args, expectFail = false) {
   try { return execFileSync('node', [AGENT, ...args], { encoding: 'utf8', env: cliEnv }); }
   catch (e) { if (expectFail) return (e.stdout || '') + (e.stderr || ''); throw e; }
@@ -54,6 +59,7 @@ async function main() {
 
     // enroll
     const tok = await req('POST', '/compute/enrollment/tokens', { displayName: 'e2e-worker', expiresInMs: 600000 });
+    writeEnrollmentToken(tok.data.token);
     cli(['enroll', '--service', '--token', tok.data.token]);
     check('credential file written', fs.existsSync(CRED));
     if (process.platform !== 'win32') check('credential file is 0600', (fs.statSync(CRED).mode & 0o777) === 0o600);
@@ -78,6 +84,7 @@ async function main() {
     // re-enroll (recover): remove local credential, use a node-scoped token
     fs.rmSync(CRED, { force: true });
     const reTok = await req('POST', '/compute/enrollment/tokens', { displayName: 'e2e-reenroll', expiresInMs: 600000, reEnrollmentOf: NODE_ID });
+    writeEnrollmentToken(reTok.data.token);
     cli(['enroll', '--service', '--token', reTok.data.token]);
     check('re-enroll restores an authenticated worker', /Authenticated heartbeat succeeded/.test(cli(['doctor'])));
     const recovered = (await req('GET', '/compute/admin/workers')).data.workers.find(w => w.nodeId === NODE_ID);

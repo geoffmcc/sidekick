@@ -33,6 +33,7 @@
 
 const providerRegistry = require("./provider-registry");
 const modelRegistry = require("./model-registry");
+const { readSecret } = require("../core/runtime-secrets");
 const { hasSecretKey, encryptSecret } = require("../core/secret-cipher");
 const { loadSecrets, saveSecrets } = require("../core/secrets-store");
 
@@ -109,16 +110,16 @@ function seedOllama() {
 
 function seedOpenAiCompatible(opts) {
   const {
-    bootstrapKey, displayName, endpoint, apiKey, envVar, secretName,
+    bootstrapKey, displayName, endpoint, apiKey, secretName,
     chatModel, embedModel, supportsEmbedding,
   } = opts;
   if (findManaged(bootstrapKey)) return null;
 
   const ref = ensureSecretRef(secretName, apiKey);
-  const metadata = { managed: "env-bootstrap", bootstrapKey, source: envVar };
-  // No master key available to migrate the credential: record the env-var name
-  // so provider-credentials.js can resolve it at dispatch (compatibility path).
-  if (!ref) metadata.envCredentialVar = envVar;
+  // A cloud credential must be persisted in the encrypted secret authority;
+  // never create a provider that would need a plaintext fallback at dispatch.
+  if (!ref) return null;
+  const metadata = { managed: "file-bootstrap", bootstrapKey, source: "protected-file" };
 
   const provider = providerRegistry.createProvider({
     providerType: "openai-compatible",
@@ -178,13 +179,13 @@ function bootstrapProviders() {
       if (p) seeded.push(p.providerId);
     }
 
-    if (process.env.GROQ_API_KEY) {
+    const groqApiKey = readSecret("GROQ_API_KEY");
+    if (groqApiKey) {
       const p = seedOpenAiCompatible({
         bootstrapKey: "groq",
         displayName: "Groq (cloud)",
         endpoint: "https://api.groq.com/openai/v1",
-        apiKey: process.env.GROQ_API_KEY,
-        envVar: "GROQ_API_KEY",
+        apiKey: groqApiKey,
         secretName: "compute_provider_groq_api_key",
         chatModel: process.env.GROQ_MODEL || "llama-3.1-8b-instant",
         supportsEmbedding: false,
@@ -192,13 +193,13 @@ function bootstrapProviders() {
       if (p) seeded.push(p.providerId);
     }
 
-    if (process.env.OPENAI_API_KEY) {
+    const openaiApiKey = readSecret("OPENAI_API_KEY");
+    if (openaiApiKey) {
       const p = seedOpenAiCompatible({
         bootstrapKey: "openai",
         displayName: "OpenAI (cloud)",
         endpoint: process.env.OPENAI_BASE_URL || process.env.OPENAI_API_BASE || "https://api.openai.com/v1",
-        apiKey: process.env.OPENAI_API_KEY,
-        envVar: "OPENAI_API_KEY",
+        apiKey: openaiApiKey,
         secretName: "compute_provider_openai_api_key",
         chatModel: process.env.OPENAI_MODEL || "gpt-4o-mini",
         embedModel: process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small",

@@ -6,11 +6,13 @@ const { spawn } = require('child_process');
 const packageJson = require('../package.json');
 
 const TEST_DIR = path.join(__dirname, 'test-data-compute-protocol');
+const SECRET_DIR = path.join(TEST_DIR, 'secrets');
 const API_KEY = 'sk-test-compute-protocol-key';
 const PORT = 49197;
 
 fs.rmSync(TEST_DIR, { recursive: true, force: true });
 fs.mkdirSync(TEST_DIR, { recursive: true });
+fs.mkdirSync(SECRET_DIR, { recursive: true });
 
 function request(method, route, body, headers = {}) {
   return new Promise((resolve, reject) => {
@@ -407,10 +409,12 @@ async function main() {
     const agentToken = await request('POST', '/compute/enrollment/tokens', { displayName: 'agent-worker', expiresInMs: 600000 }, admin);
     assert.strictEqual(agentToken.status, 200, 'admin can create agent enrollment token');
     const agentConfig = path.join(TEST_DIR, 'agent-worker-credential.json');
+    fs.writeFileSync(path.join(SECRET_DIR, 'sidekick_enroll_token'), agentToken.data.token, { mode: 0o600 });
     const agentEnv = {
       ...process.env,
       SIDEKICK_URL: `http://127.0.0.1:${PORT}`,
-      SIDEKICK_ENROLL_TOKEN: agentToken.data.token,
+      SIDEKICK_SECRET_DIR: SECRET_DIR,
+      SIDEKICK_ENROLL_TOKEN: '',
       SIDEKICK_NODE_ID: 'proto-agent-node',
       SIDEKICK_NODE_NAME: 'Protocol Agent Worker',
       SIDEKICK_WORKER_CONFIG: agentConfig,

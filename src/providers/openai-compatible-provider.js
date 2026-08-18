@@ -6,7 +6,7 @@ class OpenAICompatibleProvider {
     this.type = "openai-compatible";
     this.name = config.name || "OpenAI Compatible";
     this.endpoint = config.endpoint || "https://api.openai.com/v1";
-    this.apiKey = config.apiKey || process.env.OPENAI_API_KEY || "";
+    this.apiKey = config.apiKey || "";
     this.timeout = config.timeout || 60000;
     this.capabilities = ["chat", "embeddings", "model_listing"];
     this.supports = {

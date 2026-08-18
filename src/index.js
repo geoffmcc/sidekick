@@ -18,7 +18,7 @@ const packageJson = require("../package.json");
 const APP_VERSION = packageJson.version || "0.0.0";
 const NODE_REQUIREMENT = packageJson.engines?.node || "unspecified";
 
-const API_KEY = readSecret("SIDEKICK_API_KEY");
+const API_KEY = readSecret("SIDEKICK_API_KEY", { required: true });
 if (!API_KEY || API_KEY === "sk-sidekick-local-dev" || API_KEY === "sk-your-key-here") {
   throw new Error("SIDEKICK_API_KEY must be set to a non-placeholder value");
 }

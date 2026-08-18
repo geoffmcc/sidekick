@@ -8,6 +8,7 @@ const workerConfig = require("./worker-config");
 const workerCredential = require("./worker-credential");
 const workerCli = require("./worker-cli");
 const workerReconnect = require("./worker-reconnect");
+const { readSecret } = require("./worker-secrets");
 const { resolveOutputTokenBudget } = require("./token-budget");
 
 // OpenVINO executor — optional; gracefully absent when disabled or on non-Windows.
@@ -44,7 +45,7 @@ try {
 }
 
 const SERVER_URL = process.env.SIDEKICK_URL || process.env.SIDEKICK_SERVER_URL || "http://127.0.0.1:4097";
-const ENROLLMENT_TOKEN = process.env.SIDEKICK_ENROLL_TOKEN || process.env.COMPUTE_TOKEN || "";
+const ENROLLMENT_TOKEN = readSecret("SIDEKICK_ENROLL_TOKEN") || readSecret("COMPUTE_TOKEN");
 const NODE_ID = process.env.SIDEKICK_NODE_ID || workerConfig.generateStableNodeId();
 const DISPLAY_NAME = process.env.SIDEKICK_NODE_NAME || os.hostname();
 const HEARTBEAT_MS = boundedInt(process.env.SIDEKICK_HEARTBEAT_MS, 30000, 1000, 300000);
@@ -403,7 +404,7 @@ async function enrollIfNeeded() {
     log(`Loaded worker credential for ${workerId}`);
     return;
   }
-  if (!ENROLLMENT_TOKEN) throw new Error("No enrollment token. Set SIDEKICK_ENROLL_TOKEN for first enrollment.");
+  if (!ENROLLMENT_TOKEN) throw new Error("No enrollment token. Configure the protected sidekick_enroll_token file for first enrollment.");
   const sysInfo = collectSystemInfo();
   log(`Enrolling with ${SERVER_URL} as ${DISPLAY_NAME} (${NODE_ID})`);
   const result = await requestWithRetry("POST", "/compute/enrollment/exchange", {

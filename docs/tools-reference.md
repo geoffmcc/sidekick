@@ -382,7 +382,7 @@ Arguments: `{ channel: "string", webhook_url: "string (optional)", recipient: "s
 
 GitHub API integration (PRs, issues, commits, releases)
 
-Credentials: `github` uses `GITHUB_TOKEN` from the MCP process environment first, then encrypted `secret` key `github_token`. Do not store GitHub tokens in KV storage.
+Credentials: `github` uses the protected `github_token` or `sidekick_github_token` secret file, then the encrypted `secret` key `github_token`. Raw environment-variable credentials are rejected. Do not store GitHub tokens in KV storage.
 
 Arguments: `{ action: "string", repo: "string", args: "string (optional)" }`
 
@@ -396,7 +396,7 @@ Read-only GitHub CI/check-run inspection for a PR head, commit SHA, ref, or bran
 
 GitHub has two CI result surfaces: legacy commit statuses and modern check runs. Legacy statuses come from integrations that write status contexts. GitHub Actions and many apps publish check runs. `ci_status` reads both check runs and legacy statuses, paginates results, and aggregates them into `failure`, `pending`, `success`, or `no_checks`.
 
-Credentials: `ci_status` uses `GITHUB_TOKEN` from the MCP process environment first, then encrypted `secret` key `github_token`. Do not store GitHub tokens in KV storage. Required permissions are read-only repository metadata plus commit status/check read access; for private repositories, use a token that can read the repository and checks.
+Credentials: `ci_status` uses the protected `github_token` or `sidekick_github_token` secret file, then the encrypted `secret` key `github_token`. Raw environment-variable credentials are rejected. Do not store GitHub tokens in KV storage. Required permissions are read-only repository metadata plus commit status/check read access; for private repositories, use a token that can read the repository and checks.
 
 Arguments: `{ repo: "owner/repository", pr: "number (optional)", pull_number: "number (optional)", sha: "string (optional)", commit: "string (optional)", ref: "string (optional)", branch: "string (optional)", format: "text|json (optional, default text)" }`
 

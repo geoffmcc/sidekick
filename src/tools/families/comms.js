@@ -13,6 +13,7 @@
 const { z } = require("zod");
 const dbStore = require("../../db");
 const { validateOutboundUrl } = require("../../security/outbound-url");
+const { readSecret } = require("../../core/runtime-secrets");
 
 function loadWebhooks() {
   return dbStore.loadDocument("webhooks", []);
@@ -27,12 +28,12 @@ async function sidekick_notify({ channel, webhook_url, recipient, message, title
   const http = require("http");
 
   if (channel === "discord" || channel === "slack") {
-    // Fall back to environment variables if webhook_url not provided
+    // Resolve the configured webhook only from the protected secret store.
     if (!webhook_url) {
-      webhook_url = channel === "discord" ? process.env.DISCORD_WEBHOOK_URL : process.env.SLACK_WEBHOOK_URL;
+      webhook_url = channel === "discord" ? readSecret("DISCORD_WEBHOOK_URL") : readSecret("SLACK_WEBHOOK_URL");
     }
     if (!webhook_url) {
-      return { content: [{ type: "text", text: "webhook_url required for " + channel + " (set DISCORD_WEBHOOK_URL or SLACK_WEBHOOK_URL env var)" }], isError: true };
+      return { content: [{ type: "text", text: "webhook_url required for " + channel + " (configure the protected webhook secret)" }], isError: true };
     }
 
     // The webhook URL is caller-controlled (or env-configured); either way the
@@ -85,11 +86,11 @@ async function sidekick_notify({ channel, webhook_url, recipient, message, title
 
     const smtpHost = process.env.SMTP_HOST || "smtp.gmail.com";
     const smtpPort = parseInt(process.env.SMTP_PORT || "587", 10);
-    const smtpUser = process.env.SMTP_USER || "";
-    const smtpPass = process.env.SMTP_PASS || "";
+    const smtpUser = readSecret("SMTP_USER");
+    const smtpPass = readSecret("SMTP_PASS");
 
     if (!smtpUser || !smtpPass) {
-      return { content: [{ type: "text", text: "SMTP_USER and SMTP_PASS env vars required" }], isError: true };
+      return { content: [{ type: "text", text: "SMTP credentials are not configured in the protected secret store" }], isError: true };
     }
 
     const subject = title || "Sidekick Notification";

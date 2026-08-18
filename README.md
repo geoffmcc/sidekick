@@ -700,13 +700,13 @@ This follows the principle of least privilege: after initial setup, the sidekick
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SIDEKICK_API_KEY` | — | API key for MCP server auth |
+| `SIDEKICK_SECRET_DIR` | `/etc/sidekick/secrets` | Directory containing protected secret files; raw secret environment values are rejected |
 | `SIDEKICK_ALLOWED_IPS` | — | Comma-separated IP whitelist for MCP server (empty = allow all) |
 | `SIDEKICK_PORT` | 4097 | MCP server port |
 | `SIDEKICK_DASHBOARD_PORT` | 4098 | Dashboard port |
 | `SIDEKICK_AGENT_PORT` | 4099 | Agent bridge port |
 | `SIDEKICK_DASHBOARD_USER` | — | Dashboard basic auth username (empty = disabled) |
-| `SIDEKICK_DASHBOARD_PASS` | — | Dashboard basic auth password (empty = disabled) |
+| `sidekick_dashboard_pass` | — | Secret file for dashboard basic auth password (missing = disabled) |
 | `SIDEKICK_DATA_DIR` | `./data` | Data directory for logs, KV, conversations |
 | `SIDEKICK_TOOL_POLICY` | `open` | Tool policy mode: `open` or `restricted` |
 | `SIDEKICK_BLOCKED_TOOLS` | — | Comma-separated global blocklist of tool names or risk selectors |
@@ -720,9 +720,9 @@ This follows the principle of least privilege: after initial setup, the sidekick
 | `SIDEKICK_APPROVAL_EXEMPT_TOOLS` | — | Comma-separated tools or risk selectors exempt from approval |
 | `OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama API URL for the local Compute provider |
 | `OLLAMA_MODEL` | `qwen2.5-coder:7b` | Default Ollama model |
-| `GROQ_API_KEY` | — | Optional Groq credential; Compute registers the provider when set |
+| `groq_api_key` | — | Optional protected Groq credential file; Compute registers the provider when present |
 | `GROQ_MODEL` | `llama-3.1-8b-instant` | Groq model name |
-| `OPENAI_API_KEY` | — | Optional OpenAI-compatible provider credential |
+| `openai_api_key` | — | Optional protected OpenAI-compatible credential file |
 | `OPENAI_BASE_URL` | — | Optional OpenAI-compatible provider endpoint |
 | `OPENAI_MODEL` | `gpt-4o-mini` | OpenAI-compatible chat model |
 | `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | OpenAI-compatible embedding model |
@@ -739,10 +739,10 @@ This follows the principle of least privilege: after initial setup, the sidekick
 | `SIDEKICK_REDIS_URL` | `redis://127.0.0.1:6379` | Redis connection string |
 | `SIDEKICK_QDRANT_URL` | `http://127.0.0.1:6333` | Qdrant vector DB URL |
 | `SIDEKICK_INFLUX_URL` | `http://127.0.0.1:8086` | InfluxDB URL |
-| `SIDEKICK_INFLUX_TOKEN` | — | InfluxDB authentication token; required for metrics and Grafana provisioning |
-| `SIDEKICK_POSTGRES_PASSWORD` | — | Required when starting the bundled PostgreSQL container via `docker/docker-compose.yml` |
-| `SIDEKICK_INFLUX_PASSWORD` | — | Required when starting the bundled InfluxDB container via `docker/docker-compose.yml` |
-| `SIDEKICK_GRAFANA_ADMIN_PASSWORD` | — | Required when starting the bundled Grafana container via `docker/docker-compose.yml` |
+| `sidekick_influx_token` | — | Protected InfluxDB token file; required for metrics and Grafana provisioning |
+| `sidekick_postgres_password` | — | Protected PostgreSQL password file for bundled Compose service |
+| `sidekick_influx_password` | — | Protected InfluxDB password file for bundled Compose service |
+| `sidekick_grafana_admin_password` | — | Protected Grafana password file for bundled Compose service |
 | `SIDEKICK_GRAFANA_PORT` | `3000` | Local Grafana port used by dashboard health checks and proxying |
 | `SIDEKICK_GRAFANA_ROOT_URL` | `http://localhost:4098/grafana/` | Compose-only Grafana public root URL |
 | `SIDEKICK_ALLOW_PRIVATE_FETCH` | `false` | Allow web fetches to loopback/private destinations; metadata and link-local remain blocked |

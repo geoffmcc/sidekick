@@ -8,9 +8,8 @@
 // The GitHub integration is governed by the registered GitHub connector when
 // present: endpoint and credential come from the connector (its secret_ref
 // resolved at call time via connectors/resolve.js) — the connector is the
-// credential authority and resolves first. A GITHUB_TOKEN env value and the
-// legacy secret-store key remain fallbacks (in that order), so the tool works
-// before/without a connector. Each API response feeds bounded connector
+// credential authority and resolves first. File-backed credentials and the
+// legacy secret-store key remain supported for migration. Each API response feeds bounded connector
 // health observability (githubHealthDecision/noteGithubResponse). The token is
 // redacted from error text by redactGithubError before any output. The
 // helper quartet parseGithubArgs/getGithubArg/getCiRevisionSelector/
@@ -23,6 +22,7 @@ const { z } = require("zod");
 const { redactSensitive } = require("../../redact");
 const { loadSecrets } = require("../../core/secrets-store");
 const { decryptSecret } = require("../../core/secret-cipher");
+const { readSecret } = require("../../core/runtime-secrets");
 
 // Reuse TLS connections for the GitHub API. Most calls are short read
 // sequences, so avoiding a new handshake per request materially reduces
@@ -76,7 +76,15 @@ function resolveGithubToken() {
     if (viaConnector) return viaConnector;
   }
 
-  if (process.env.GITHUB_TOKEN) return process.env.GITHUB_TOKEN;
+  try {
+    const fileToken = readSecret("GITHUB_TOKEN");
+    if (fileToken) return fileToken;
+    const sidekickToken = readSecret("SIDEKICK_GITHUB_TOKEN");
+    if (sidekickToken) return sidekickToken;
+  } catch (error) {
+    // A configured file failure is fail-closed; do not fall back to an env value.
+    return undefined;
+  }
 
   try {
     const secrets = loadSecrets();

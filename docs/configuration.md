@@ -57,9 +57,9 @@ credentials*):
 
 - `OLLAMA_URL` (default `http://127.0.0.1:11434`) → local Ollama, trusted for all
   data classifications, preferred over cloud.
-- `GROQ_API_KEY` (+ optional `GROQ_MODEL`) → Groq as an OpenAI-compatible cloud
+- `groq_api_key` (+ optional `GROQ_MODEL`) → Groq as an OpenAI-compatible cloud
   provider.
-- `OPENAI_API_KEY` (+ optional `OPENAI_BASE_URL`, `OPENAI_MODEL`,
+- `openai_api_key` (+ optional `OPENAI_BASE_URL`, `OPENAI_MODEL`,
   `OPENAI_EMBEDDING_MODEL`) → OpenAI-compatible cloud provider.
 
 Cloud providers are seeded **secure by default**: they serve `public`/`internal`
@@ -67,10 +67,9 @@ data only and rank below local, so private inference stays local and fails close
 rather than silently egressing to the cloud. Promote a cloud provider to private
 data explicitly via the `compute` tool (`action=update`, `data_classifications`).
 
-When `SIDEKICK_SECRET_KEY` is set, a cloud provider's API key is migrated into the
-encrypted secret store and the provider record keeps only a reference (never the
-plaintext). Set `SIDEKICK_DISABLE_PROVIDER_BOOTSTRAP=1` to manage providers by
-hand.
+Cloud provider credentials are file-backed and the provider record keeps only a
+reference (never the plaintext). Set `SIDEKICK_DISABLE_PROVIDER_BOOTSTRAP=1` to
+manage providers by hand.
 
 ## Platform event delivery
 
@@ -91,11 +90,8 @@ tuning and for turning it off.
 
 ## Security and tool policy
 
-Set a strong MCP API key before any non-local deployment:
-
-```env
-SIDEKICK_API_KEY=replace-with-a-long-random-value
-```
+The MCP API key is file-backed as `sidekick_api_key`; raw secret values must not
+be placed in `.env`.
 
 For production, use a root-owned secret directory rather than putting
 credential values in `.env`:
@@ -107,11 +103,16 @@ SIDEKICK_SECRET_DIR=/etc/sidekick/secrets
 Place these files there: `sidekick_api_key`, `sidekick_dashboard_pass`,
 `sidekick_grafana_admin_password`, `sidekick_influx_token`,
 `sidekick_influx_password`, `sidekick_postgres_password`, and
-`sidekick_secret_key`. The loader rejects missing, non-regular, oversized,
-symlinked, or group/world-writable files. Explicit `<SECRET_NAME>_FILE` paths
-are also supported. Environment values remain a local-development
-compatibility fallback; a configured file always takes precedence and
-failures do not fall back to an environment value.
+`sidekick_secret_key`. Optional integration files include `groq_api_key`,
+`openai_api_key`, `github_token`, `sidekick_github_token`,
+`discord_webhook_url`, `slack_webhook_url`, `smtp_user`, `smtp_pass`,
+`sidekick_enroll_token`, `compute_token`, and
+`sidekick_compute_live_api_key`. The loader rejects missing, non-regular,
+oversized, symlinked, or group/world-writable files. Explicit
+`<SECRET_NAME>_FILE` paths are also supported. Raw secret values in environment
+variables are rejected; production and development runtimes require a
+configured file. The test harness may inject synthetic fixtures only for
+isolated tests.
 
 The bundled PostgreSQL, InfluxDB, and Grafana Compose services consume Docker
 Secrets from this directory. Compose fails closed if `SIDEKICK_SECRET_DIR` or

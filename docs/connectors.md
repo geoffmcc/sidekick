@@ -27,8 +27,8 @@ integration is not a tool reaching an API directly with an ambient token.
 ## GitHub connector
 
 On startup `src/connectors/bootstrap.js` idempotently registers a managed GitHub
-connector when a GitHub credential is available (a `github_token` secret, or a
-`GITHUB_TOKEN`/`SIDEKICK_GITHUB_TOKEN` env value):
+connector when a GitHub credential is available (a `github_token` encrypted
+secret or a protected `github_token`/`sidekick_github_token` file):
 
 - `type: github`, `endpoint: https://api.github.com`,
   `secret_ref: secret:github_token`, capabilities `repo`/`pull_request`/
@@ -40,9 +40,9 @@ connector when a GitHub credential is available (a `github_token` secret, or a
 The `github` and `ci_status` tools (`src/tools/families/github.js`) resolve their
 endpoint and token through the connector authority. Precedence:
 
-1. `GITHUB_TOKEN` env — highest-precedence override (backwards compatible).
-2. The registered GitHub connector's `secret_ref` (resolved via the secret
+1. The registered GitHub connector's `secret_ref` (resolved via the secret
    store) and its `endpoint`.
+2. Protected file-backed GitHub credentials.
 3. The legacy `github_token` secret-store key and the public API base.
 
 This means the tool works before/without a connector, and pointing the connector

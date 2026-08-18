@@ -23,12 +23,15 @@ async function test(name, fn) {
 }
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'wenroll-'));
+const SECRET_DIR = path.join(TMP, 'secrets');
+fs.mkdirSync(SECRET_DIR, { recursive: true });
 let seq = 0;
 const freshPath = () => path.join(TMP, `sub-${++seq}`, 'credential.json');
 
 const OLD = { workerId: 'wk_old111', nodeId: 'node_aaaabbbbccccdddd', credential: 'wksec_oldsecretvalue' };
 const NEW_SECRET = 'wksec_freshsecretvalue';
 const TOKEN = 'enroll_deadbeef_0123456789abcdef';
+fs.writeFileSync(path.join(SECRET_DIR, 'sidekick_enroll_token'), TOKEN, { mode: 0o600 });
 
 // Stub server. `plan` is swapped per test.
 let plan = {};
@@ -62,7 +65,7 @@ function runEnroll(credPath) {
       '--token', TOKEN,
       '--config', credPath,
       '--config-file', path.join(TMP, 'no-such-config.json'),
-    ], { env: { ...process.env, SIDEKICK_ENROLL_TOKEN: '', SIDEKICK_WORKER_CONFIG: credPath } });
+    ], { env: { ...process.env, SIDEKICK_SECRET_DIR: SECRET_DIR, SIDEKICK_ENROLL_TOKEN: '', SIDEKICK_WORKER_CONFIG: credPath } });
     let stdout = '', stderr = '';
     child.stdout.on('data', d => { stdout += d; });
     child.stderr.on('data', d => { stderr += d; });
