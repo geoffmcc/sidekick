@@ -24,6 +24,11 @@ const { redactSensitive } = require("../../redact");
 const { loadSecrets } = require("../../core/secrets-store");
 const { decryptSecret } = require("../../core/secret-cipher");
 
+// Reuse TLS connections for the GitHub API. Most calls are short read
+// sequences, so avoiding a new handshake per request materially reduces
+// handler time without changing request semantics.
+const githubHttpAgent = new https.Agent({ keepAlive: true, maxSockets: 8 });
+
 function parseGithubArgs(extraArgs) {
   if (extraArgs === undefined || extraArgs === null || extraArgs === "") return {};
   if (typeof extraArgs === "object") return extraArgs;
@@ -161,7 +166,8 @@ function githubRequest(token, method, endpoint, body) {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "Sidekick-MCP/1.0"
-      }
+      },
+      agent: githubHttpAgent
     };
     let bodyStr = null;
     if (body) {
@@ -369,12 +375,13 @@ async function sidekick_ci_status(args = {}) {
     }
 
     const encodedRef = encodeURIComponent(ref);
-    const checks = await githubPaginatedRequest(token, `/repos/${args.repo}/commits/${encodedRef}/check-runs?per_page=100`, "check_runs");
+    const [checks, legacy] = await Promise.all([
+      githubPaginatedRequest(token, `/repos/${args.repo}/commits/${encodedRef}/check-runs?per_page=100`, "check_runs"),
+      githubPaginatedRequest(token, `/repos/${args.repo}/commits/${encodedRef}/status?per_page=100`, "statuses")
+    ]);
     if (checks.response?.status < 200 || checks.response?.status >= 300) {
       return { content: [{ type: "text", text: redactGithubError(checks.response.data, token) }], isError: true };
     }
-
-    const legacy = await githubPaginatedRequest(token, `/repos/${args.repo}/commits/${encodedRef}/status?per_page=100`, "statuses");
     if (legacy.response?.status < 200 || legacy.response?.status >= 300) {
       return { content: [{ type: "text", text: redactGithubError(legacy.response.data, token) }], isError: true };
     }
@@ -410,7 +417,8 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
           "Authorization": "token " + token,
           "Accept": "application/vnd.github.v3+json",
           "User-Agent": "Sidekick-MCP/1.0"
-        }
+        },
+        agent: githubHttpAgent
       };
       if (body) {
         const bodyStr = JSON.stringify(body);
