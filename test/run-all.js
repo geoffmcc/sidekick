@@ -44,6 +44,7 @@ const suites = [
   { file: 'test/reconciliation-ui.test.js', critical: false, description: 'Reconciliation surface wiring, decision vocabulary parity, and confirmation on the redispatching decision' },
   { file: 'test/deploy-scripts.test.js', critical: false, description: 'Deploy script checks' },
   { file: 'test/metrics-collector.test.js', critical: false, description: 'Metrics collector tool_logs queries and dashboard variable pinning' },
+  { file: 'test/metrics-surface.test.js', critical: false, description: 'Influx measurement and field result normalization' },
   { file: 'test/git-deploy.test.js', critical: false, description: 'Read-only Git deployment hardening' },
   { file: 'test/mcp-session.test.js', critical: false, description: 'MCP stale session recovery behavior' },
   { file: 'test/ops-workflows.test.js', critical: false, description: 'Packaged operations workflow metadata' },

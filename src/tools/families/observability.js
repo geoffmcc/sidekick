@@ -839,7 +839,7 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
       }
 
       const result = await response.text();
-      return { content: [{ type: "text", text: result }] };
+      return { content: [{ type: "text", text: JSON.stringify(parseInfluxCsvColumn(result, "_measurement")) }] };
     }
 
     if (action === "list_fields") {
@@ -848,9 +848,10 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
       }
 
       const range = time_range || '-30d';
+      const safeMeasurement = String(measurement).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
       const fluxQuery = `from(bucket: "${INFLUX_BUCKET}")
   |> range(start: ${range})
-  |> filter(fn: (r) => r._measurement == "${measurement}")
+  |> filter(fn: (r) => r._measurement == "${safeMeasurement}")
   |> group()
   |> distinct(column: "_field")
   |> keep(columns: ["_field"])`;
@@ -871,13 +872,27 @@ async function sidekick_metrics({ action, measurement, fields, tags, timestamp, 
       }
 
       const result = await response.text();
-      return { content: [{ type: "text", text: result }] };
+      return { content: [{ type: "text", text: JSON.stringify(parseInfluxCsvColumn(result, "_field")) }] };
     }
 
     return { content: [{ type: "text", text: "Error: Invalid action. Use: write, query, list_measurements, list_fields" }], isError: true };
   } catch (e) {
     return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
   }
+}
+
+// InfluxDB's annotated CSV includes result/table metadata before the actual
+// column header. Normalize it at the tool boundary so callers receive useful
+// values rather than transport headers.
+function parseInfluxCsvColumn(csv, column) {
+  const lines = String(csv || "").split(/\r?\n/).filter(line => line && !line.startsWith("#"));
+  if (!lines.length) return [];
+  const header = lines[0].split(",");
+  const index = header.indexOf(column);
+  if (index < 0) return [];
+  return [...new Set(lines.slice(1)
+    .map(line => line.split(",")[index])
+    .filter(value => value !== undefined && value !== ""))].sort();
 }
 
 const descriptors = Object.freeze([
