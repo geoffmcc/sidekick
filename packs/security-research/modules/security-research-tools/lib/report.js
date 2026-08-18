@@ -21,13 +21,16 @@ const { requireText } = require("./identity");
 
 // Validate that every referenced evidence id resolves, so a report cannot claim
 // support from evidence that does not exist.
-function verifyEvidenceRefs(refs) {
+function verifyEvidenceRefs(refs, projectId) {
   const k = kernel();
   const resolved = [];
   for (const ref of refs) {
     const id = String(ref).replace(/^artifact:/, "");
     const artifact = k.getArtifact(id);
     if (!artifact) throw new ResearchError("not_found", `report references unknown evidence: ${ref}`);
+    if (!projectId || !artifact.project_id || String(artifact.project_id) !== String(projectId)) {
+      throw new ResearchError("not_found", `report references unknown evidence: ${ref}`);
+    }
     resolved.push({ reference: `artifact:${id}`, content_hash: artifact.content_hash, redaction_state: artifact.redaction_state });
   }
   return resolved;
@@ -56,7 +59,7 @@ function materialize(ctx, input, actor) {
     try { run = runs.get(input.run_id); } catch { run = null; }
     if (run) for (const ref of (run.evidence || [])) evidenceRefs.add(ref);
   }
-  const verifiedEvidence = verifyEvidenceRefs([...evidenceRefs]);
+  const verifiedEvidence = verifyEvidenceRefs([...evidenceRefs], campaign.project_id);
 
   const material = {
     schema: "security-research/report-material/v1",

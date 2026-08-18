@@ -68,6 +68,17 @@ function runContext(services, runId, runtime) {
   };
 }
 
+function projectScope(args, runtime, run = null) {
+  const runtimeProject = runtime && runtime.context && runtime.context.project;
+  const runProject = run && (run.project_id || run.projectId);
+  const projectId = runtimeProject || runProject || args.project_id;
+  if (!projectId) throw new ResearchError("invalid_input", "project scope is required for evidence access");
+  if (runtimeProject && args.project_id && String(runtimeProject) !== String(args.project_id)) {
+    throw new ResearchError("not_found", "evidence not found");
+  }
+  return String(projectId);
+}
+
 // --- research_status --------------------------------------------------------
 
 function handleStatus(services) {
@@ -204,13 +215,17 @@ function handleEvidence(services, args, runtime) {
       // research-evidence artifacts linked to its execution.
       let executionId = args.execution_id;
       if (args.run_id && !executionId) executionId = runsLib.get(args.run_id).execution_id;
-      return ok({ evidence: evidenceLib.list({ project_id: args.project_id, execution_id: executionId, limit: args.limit }) });
+      const run = args.run_id ? runsLib.get(args.run_id) : null;
+      return ok({ evidence: evidenceLib.list({ project_id: projectScope(args, runtime, run), execution_id: executionId, limit: args.limit }) });
     }
-    case "inspect":
-      return ok({ evidence: evidenceLib.inspect(args.references) });
+    case "inspect": {
+      const run = args.run_id ? runsLib.get(args.run_id) : null;
+      return ok({ evidence: evidenceLib.inspect(args.references, { projectId: projectScope(args, runtime, run) }) });
+    }
     case "redact": {
       const root = requireWorkspace(services);
-      return ok({ evidence: evidenceLib.redactEvidence({ root }, args.evidence_id) });
+      const run = args.run_id ? runsLib.get(args.run_id) : null;
+      return ok({ evidence: evidenceLib.redactEvidence({ root, projectId: projectScope(args, runtime, run) }, args.evidence_id) });
     }
     default:
       return errorResult(new ResearchError("invalid_input", `unknown action: ${args.action}`));
@@ -219,12 +234,12 @@ function handleEvidence(services, args, runtime) {
 
 // --- research_compare -------------------------------------------------------
 
-function extractObservationOutput(services, ref) {
+function extractObservationOutput(services, ref, projectId) {
   const root = requireWorkspace(services);
   const id = String(ref).replace(/^artifact:/, "");
   const kernel = require("./lib/platform").kernel();
   const artifact = kernel.getArtifact(id);
-  if (!artifact) throw new ResearchError("not_found", `evidence not found: ${ref}`);
+  if (!artifact || !projectId || !artifact.project_id || String(artifact.project_id) !== String(projectId)) throw new ResearchError("not_found", `evidence not found: ${ref}`);
   const bytes = workspace.readInside(root, require("path").join(root, artifact.storage_ref));
   try {
     const parsed = JSON.parse(bytes.toString("utf8"));
@@ -234,12 +249,14 @@ function extractObservationOutput(services, ref) {
   }
 }
 
-function handleCompare(services, args) {
+function handleCompare(services, args, runtime) {
   let baseline = args.baseline;
   let candidate = args.candidate;
   const fromEvidence = Boolean(args.baseline_evidence || args.candidate_evidence);
-  if (args.baseline_evidence) baseline = extractObservationOutput(services, args.baseline_evidence);
-  if (args.candidate_evidence) candidate = extractObservationOutput(services, args.candidate_evidence);
+  const run = args.run_id ? runsLib.get(args.run_id) : null;
+  const projectId = fromEvidence ? projectScope(args, runtime, run) : null;
+  if (args.baseline_evidence) baseline = extractObservationOutput(services, args.baseline_evidence, projectId);
+  if (args.candidate_evidence) candidate = extractObservationOutput(services, args.candidate_evidence, projectId);
   if (baseline === undefined || candidate === undefined) {
     return errorResult(new ResearchError("invalid_input", "compare requires baseline and candidate (values or evidence references)"));
   }
@@ -483,12 +500,13 @@ const entry = {
           candidate: z.any().optional(),
           baseline_evidence: z.string().optional(),
           candidate_evidence: z.string().optional(),
+          run_id: z.string().optional(),
           mode: z.enum(["status", "hash", "text", "json", "auto"]).optional(),
         }),
-        args: { baseline: "any", candidate: "any", baseline_evidence: "artifact:<id>", candidate_evidence: "artifact:<id>", mode: "string (status|hash|text|json|auto)" },
+        args: { baseline: "any", candidate: "any", baseline_evidence: "artifact:<id>", candidate_evidence: "artifact:<id>", run_id: "string (optional run scope for evidence)", mode: "string (status|hash|text|json|auto)" },
         risk: "low",
         category: "Security",
-        handler: guard((args) => handleCompare(services, args)),
+        handler: guard((args, runtime) => handleCompare(services, args, runtime)),
       },
       {
         name: "research_validate",
