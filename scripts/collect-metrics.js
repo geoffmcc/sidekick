@@ -332,17 +332,18 @@ function collectServiceMetrics() {
 // Main collection function
 async function collectAll() {
   const timestamp = Date.now() * 1000000;
+  const writes = [];
   
   // System metrics
   const systemMetrics = collectSystemMetrics();
   if (systemMetrics) {
-    await writeMetrics('system_health', {}, systemMetrics, timestamp);
+    writes.push(writeMetrics('system_health', {}, systemMetrics, timestamp));
   }
   
   // Tool usage metrics
   const toolMetrics = collectToolMetrics();
   for (const tool of toolMetrics) {
-    await writeMetrics('tool_calls', { tool_name: tool.tool_name }, {
+    writes.push(writeMetrics('tool_calls', { tool_name: tool.tool_name }, {
       count: tool.count,
       success_rate: tool.success_rate,
       error_count: tool.error_count,
@@ -352,35 +353,37 @@ async function collectAll() {
       p99_ms: tool.p99_ms,
       min_ms: tool.min_ms,
       max_ms: tool.max_ms
-    }, timestamp);
+    }, timestamp));
   }
   
   // Service status
   const serviceMetrics = collectServiceMetrics();
   if (Object.keys(serviceMetrics).length > 0) {
-    await writeMetrics('service_status', {}, serviceMetrics, timestamp);
+    writes.push(writeMetrics('service_status', {}, serviceMetrics, timestamp));
   }
   
   // Database performance metrics
   const dbMetrics = collectDatabaseMetrics();
   if (dbMetrics) {
     const { database, ...fields } = dbMetrics;
-    await writeMetrics('database_performance', { database }, fields, timestamp);
+    writes.push(writeMetrics('database_performance', { database }, fields, timestamp));
   }
   
   // Docker container metrics
   const dockerMetrics = collectDockerMetrics();
   for (const container of dockerMetrics) {
     const { container_name, ...fields } = container;
-    await writeMetrics('docker_containers', { container_name }, fields, timestamp);
+    writes.push(writeMetrics('docker_containers', { container_name }, fields, timestamp));
   }
   
   // Ollama metrics
   const ollamaMetrics = collectOllamaMetrics();
   for (const ollama of ollamaMetrics) {
     const { model, ...fields } = ollama;
-    await writeMetrics('ollama', { model }, fields, timestamp);
+    writes.push(writeMetrics('ollama', { model }, fields, timestamp));
   }
+
+  await Promise.all(writes);
   
   console.log(`[${new Date().toISOString()}] Metrics collected: system=${systemMetrics ? 'ok' : 'fail'}, tools=${toolMetrics.length}, db=${dbMetrics ? 'ok' : 'skip'}, docker=${dockerMetrics.length}, ollama=${ollamaMetrics.length}, services=${Object.keys(serviceMetrics).length}`);
 }
