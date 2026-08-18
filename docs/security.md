@@ -216,4 +216,4 @@ Recommended safest setup:
 5. Enable `SIDEKICK_APPROVAL_MODE=risky` or source-specific approval for autonomous/background actions.
 6. Keep the Agent Bridge private; access it through the dashboard proxy only.
 7. Use HTTPS if crossing an untrusted network.
-7. Back up the data directory but protect backups because they can contain sensitive operational history.
+8. Back up the data directory but protect backups because they can contain sensitive operational history.
