@@ -164,10 +164,19 @@ console.log('Running Platform Kernel Tests...\n');
     const report = kernel.createResearchReport({ campaign_id: campaign.campaign_id, artifact_id: artifact.artifact_id, title: 'Synthetic report metadata', finding_refs: [analysisFinding.finding_id, confirmedFinding.finding_id], created_by: 'test-operator' });
     assert.strictEqual(report.finding_refs.length, 2, 'Reports should retain finding references without embedding evidence');
     assert.strictEqual(kernel.listResearchReports({ project_id: 'sidekick' }).length >= 1, true, 'Reports should be project-filterable');
+    const foreignArtifact = kernel.registerArtifact({
+      project_id: 'other-project',
+      type: 'report',
+      name: 'foreign-project-evidence',
+      storage_ref: 'reports/foreign-project-evidence.md',
+      content_hash: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+    });
+    assert.throws(() => kernel.createResearchReport({ campaign_id: campaign.campaign_id, artifact_id: foreignArtifact.artifact_id, title: 'Cross-project report', created_by: 'test-operator' }), /belong to the research campaign project/, 'Reports must not bind foreign-project artifacts');
     console.log('Passed\n');
 
     console.log('Test PK.9: disclosure transitions require explicit human approval');
     const disclosure = kernel.createResearchDisclosure({ campaign_id: campaign.campaign_id, report_id: report.report_id, recipient_ref: 'recipient:synthetic', created_by: 'test-operator' });
+    assert.throws(() => kernel.createResearchDisclosure({ campaign_id: campaign.campaign_id, report_id: report.report_id, artifact_id: foreignArtifact.artifact_id, recipient_ref: 'recipient:foreign', created_by: 'test-operator' }), /belong to the research campaign project/, 'Disclosures must not bind foreign-project artifacts');
     kernel.transitionResearchDisclosure(disclosure.disclosure_id, 'internal_review', { actor_id: 'test-operator' });
     kernel.transitionResearchDisclosure(disclosure.disclosure_id, 'ready', { actor_id: 'test-operator' });
     assert.throws(() => kernel.transitionResearchDisclosure(disclosure.disclosure_id, 'submitted', { actor_id: 'test-operator' }), /requires approval_ref/, 'Disclosure submission must require approval metadata');
