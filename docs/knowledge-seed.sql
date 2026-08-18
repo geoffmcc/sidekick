@@ -85,7 +85,7 @@ Dashboard protections include optional Basic Auth, optional dashboard IP allowli
 ('architecture', 'Agent Bridge Behavior',
 'The Agent Bridge in src/agent.js accepts goals, builds a system prompt from policy-filtered tool metadata, asks the LLM for tool-call JSON, executes tools through callTool, streams Server-Sent Events, and writes transcripts to data/conversations.
 
-It tries local Ollama first. If Ollama fails and GROQ_API_KEY is set, it falls back to Groq. The loop stops when the LLM returns done, an error occurs, or SIDEKICK_MAX_ITERATIONS is reached.
+It tries local Ollama first. If Ollama fails and the protected groq_api_key secret file is configured, it falls back to Groq. The loop stops when the LLM returns done, an error occurs, or SIDEKICK_MAX_ITERATIONS is reached.
 
 The Agent Bridge also loads scheduled delays and active watches at startup. It builds a compact memory brief from structured memories before planning. It is bound to 127.0.0.1 by default and is normally accessed through the dashboard proxy.',
 'agent,autonomous,llm,ollama,groq', 1, 'seed-2026-06-16-current', datetime('now')),
@@ -177,7 +177,7 @@ Use sidekick_db_backup for SQLite backup. Treat all backups as sensitive operati
 - SIDEKICK_MAX_LOG: retained tool log row count.
 - SIDEKICK_TOOL_POLICY: open or restricted.
 - OLLAMA_URL and OLLAMA_MODEL for local LLM calls.
-- GROQ_API_KEY and GROQ_MODEL for Groq.
+- The protected groq_api_key secret file and GROQ_MODEL for Groq.
 - SIDEKICK_SECRET_KEY for encrypted secrets.',
 'configuration,env,defaults', 1, 'seed-2026-06-16-current', datetime('now')),
 
@@ -439,7 +439,7 @@ The dashboard proxies agent routes to 127.0.0.1:SIDEKICK_AGENT_PORT.',
 - Check sudo journalctl -u sidekick-agent -n 100 --no-pager.
 - Check curl http://127.0.0.1:4099/api/agent/status.
 - Verify Ollama is reachable if using local LLM.
-- Verify GROQ_API_KEY if relying on Groq fallback.
+- Verify the protected groq_api_key secret file if relying on Groq fallback.
 - Check SIDEKICK_MAX_ITERATIONS.
 - Check agent tool policy; blocked tools are not offered as enabled.
 - Use sidekick_log_query source="agent" success=false for failed calls.',

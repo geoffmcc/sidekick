@@ -8,7 +8,7 @@ const workerConfig = require("./worker-config");
 const workerCredential = require("./worker-credential");
 const workerCli = require("./worker-cli");
 const workerReconnect = require("./worker-reconnect");
-const { readSecret } = require("../core/runtime-secrets");
+const { readSecret } = require("./worker-secrets");
 const { resolveOutputTokenBudget } = require("./token-budget");
 
 // OpenVINO executor — optional; gracefully absent when disabled or on non-Windows.
