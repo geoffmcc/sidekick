@@ -329,6 +329,25 @@ for svc in "${SERVICES[@]}"; do
 done
 
 ENV_FILE="/home/$USERNAME/sidekick/.env"
+if [ -f "$ENV_FILE" ]; then
+  # Compose runs bind-mounted services as the deployment account. Persist the
+  # actual host identity so the configuration remains portable across hosts.
+  SIDEKICK_UID_VALUE=$(id -u "$USERNAME")
+  SIDEKICK_GID_VALUE=$(id -g "$USERNAME")
+  if grep -q '^SIDEKICK_UID=' "$ENV_FILE"; then
+    sed -i "s/^SIDEKICK_UID=.*/SIDEKICK_UID=$SIDEKICK_UID_VALUE/" "$ENV_FILE"
+  else
+    printf '\nSIDEKICK_UID=%s\n' "$SIDEKICK_UID_VALUE" >> "$ENV_FILE"
+  fi
+  if grep -q '^SIDEKICK_GID=' "$ENV_FILE"; then
+    sed -i "s/^SIDEKICK_GID=.*/SIDEKICK_GID=$SIDEKICK_GID_VALUE/" "$ENV_FILE"
+  else
+    printf 'SIDEKICK_GID=%s\n' "$SIDEKICK_GID_VALUE" >> "$ENV_FILE"
+  fi
+  chmod 600 "$ENV_FILE"
+  chown "$USERNAME:$USERNAME" "$ENV_FILE"
+  pass "Compose bind-mount identity configured ($SIDEKICK_UID_VALUE:$SIDEKICK_GID_VALUE)"
+fi
 if [ -f "$ENV_FILE" ] && grep -q '^SIDEKICK_INFLUX_TOKEN=.' "$ENV_FILE" && ! grep -q '^SIDEKICK_INFLUX_TOKEN=sidekick-influx-token$' "$ENV_FILE"; then
   systemctl enable --now sidekick-metrics.timer 2>/dev/null
   pass "sidekick-metrics.timer enabled"
