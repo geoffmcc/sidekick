@@ -1,6 +1,6 @@
 # Overview
 
-Sidekick is a self-hosted agent platform for compatible MCP clients and automation agents. It provides a remote MCP server, browser dashboard, autonomous Agent Bridge, persistent memory and knowledge, and an optional distributed Compute worker system. Current `main` contains 112 built-in tools across 20 categories (106 in the core registry plus 6 from the bundled `data-utilities` module), with separately approved generated tools added at runtime.
+Sidekick is a self-hosted agent platform for compatible MCP clients and automation agents. It provides a remote MCP server, browser dashboard, autonomous Agent Bridge, persistent memory and knowledge, and an optional distributed Compute worker system. Current `main` exposes a dynamically discovered tool catalog across 20 categories; core, module, capability-pack, and separately approved generated tools share the same registry. Query the live `tools` manifest for the current count and enabled state.
 
 ## Core idea
 

@@ -1,6 +1,6 @@
 # Tools Reference
 
-This catalog reflects the descriptor registry and compatibility definitions exported through `src/tools/index.js`. Current `main` contains 112 built-in tools across 20 categories: 106 in the core registry plus 6 (`parse`, `extract`, `transform`, `diff`, `validate`, `template`) provided by the bundled `data-utilities` module. Approved trial/active generated capabilities are additional runtime tools and are not included in the built-in count. The runtime `tools` table and `tools` manifest remain authoritative for enabled/deprecated and generated-tool state.
+This catalog reflects the descriptor registry and compatibility definitions exported through `src/tools/index.js`. Current `main` exposes a dynamically discovered catalog across 20 categories, including core, module, capability-pack, and approved generated tools. The runtime `tools` table and `tools` manifest are authoritative for the current count, enabled/deprecated state, categories, and generated-tool state.
 
 Tool names below use the canonical MCP form: `bash`, `knowledge`, `compute_jobs`, and so on. The dispatcher and registry still normalize older `sidekick_`-prefixed names for compatibility, but those aliases are deprecated for documentation and new integrations.
 
