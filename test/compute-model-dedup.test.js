@@ -7,7 +7,6 @@
 const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
-const { execSync } = require("child_process");
 
 const TEST_DATA_DIR = path.join(__dirname, "test-data-compute-model-dedup");
 fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
@@ -30,6 +29,21 @@ function test(name, fn) {
 }
 
 const SRC = path.join(__dirname, "..", "src");
+function sourceFiles() {
+  const files = [];
+  const visit = dir => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) visit(full);
+      else if (entry.isFile() && /\.(?:js|cjs)$/.test(entry.name)) files.push({ path: full, text: fs.readFileSync(full, "utf8") });
+    }
+  };
+  visit(SRC);
+  return files;
+}
+function sourceText() {
+  return sourceFiles().map(file => file.text).join("\n");
+}
 
 // ---- one model authority ----------------------------------------------------
 
@@ -37,15 +51,9 @@ test("the deprecated platform model registry has no production callers", () => {
   // The point of deprecating rather than deleting is that it stays buildable.
   // The risk of deprecating rather than deleting is that someone calls it
   // anyway, so the absence of callers is asserted rather than assumed.
-  const raw = execSync(
-    `grep -rnE '\\b(registerModel|getModelByName|deprecateModel|recordModelUsage)\\(' ${SRC} || true`,
-    { encoding: "utf8", shell: "/bin/bash" }
-  );
-  const callers = raw.split("\n")
-    .filter(Boolean)
-    // The kernel's own definitions and its export list are the deprecated
-    // surface itself, not callers of it.
-    .filter(line => !line.includes("src/platform/kernel.js"));
+  const callers = sourceFiles().filter(file => !file.path.endsWith(path.join("platform", "kernel.js")))
+    .flatMap(file => [...file.text.matchAll(/\b(?:registerModel|getModelByName|deprecateModel|recordModelUsage)\(/g)]
+      .map(match => `${file.path}: ${match[0]}`));
   assert.deepStrictEqual(callers, [],
     `platform_model_registry must stay caller-free; compute_models is the model authority. Found:\n${callers.join("\n")}`);
 });
@@ -107,8 +115,7 @@ test("the superseded offline writer is gone", () => {
   // model that reconcileWorkerStates maintains.
   assert.strictEqual(workerManager.checkWorkersOffline, undefined, "checkWorkersOffline is removed");
   assert.strictEqual(typeof workerManager.reconcileWorkerStates, "function", "the multi-dimensional reconciler remains");
-  const raw = execSync(`grep -rn 'checkWorkersOffline' ${SRC} || true`, { encoding: "utf8", shell: "/bin/bash" });
-  assert.strictEqual(raw.trim(), "", "no references remain in src/");
+  assert.doesNotMatch(sourceText(), /checkWorkersOffline/, "no references remain in src/");
 });
 
 // ---- health_state is maintained rather than inert ---------------------------

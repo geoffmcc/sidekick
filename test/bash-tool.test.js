@@ -15,16 +15,18 @@ assert.ok(bashHandler, 'bash tool handler should be registered');
 
 console.log('Running Bash Tool Tests...\n');
 
+const nodeExecutable = process.platform === 'win32' ? `"${process.execPath}"` : process.execPath;
+
 (async () => {
   try {
     console.log('Test 1: returns stdout on success');
-    const ok = await bashHandler({ command: 'printf "hello-from-bash"' });
+    const ok = await bashHandler({ command: `${nodeExecutable} -e "process.stdout.write('hello-from-bash')"` });
     assert.strictEqual(ok.isError, undefined, 'should not be an error');
     assert.ok(ok.content[0].text.includes('hello-from-bash'), 'stdout should be returned');
     console.log('✓ Passed\n');
 
     console.log('Test 2: reports non-zero exit code with output');
-    const err = await bashHandler({ command: 'printf out; printf err >&2; exit 7' });
+    const err = await bashHandler({ command: `${nodeExecutable} -e "process.stdout.write('out'); process.stderr.write('err'); process.exit(7)"` });
     assert.strictEqual(err.isError, true, 'should be an error');
     assert.ok(err.content[0].text.includes('Exit code: 7'), 'should report exit code');
     assert.ok(err.content[0].text.includes('out'), 'should include stdout');
@@ -44,7 +46,7 @@ console.log('Running Bash Tool Tests...\n');
     try {
       const started = Date.now();
       const result = await bashHandler({
-        command: `node -e "require('http').get('http://127.0.0.1:${port}/ping', r => { let b=''; r.on('data', c => b += c); r.on('end', () => console.log(b)); })"`,
+        command: `${nodeExecutable} -e "require('http').get('http://127.0.0.1:${port}/ping', r => { let b=''; r.on('data', c => b += c); r.on('end', () => console.log(b)); })"`,
       });
       const elapsed = Date.now() - started;
       assert.ok(!result.isError, `expected success, got: ${result.content[0].text}`);

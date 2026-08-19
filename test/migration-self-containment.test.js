@@ -138,6 +138,7 @@ test('SC.4 real runner applies edited 007 idempotently on runtime boot', () => {
     const cols = store.getDb().prepare('PRAGMA table_info(tool_logs)').all().map(c => c.name);
     assert.ok(cols.includes('session_id') && cols.includes('arg_fingerprint'), 'telemetry columns present after real runner');
   } finally {
+    try { require('../src/db').closeDatabase?.(); } catch {}
     delete require.cache[require.resolve('../src/db')];
     if (prev.dir === undefined) delete process.env.SIDEKICK_DATA_DIR; else process.env.SIDEKICK_DATA_DIR = prev.dir;
     if (prev.file === undefined) delete process.env.SIDEKICK_DB_FILE; else process.env.SIDEKICK_DB_FILE = prev.file;
@@ -178,6 +179,7 @@ test('SC.6 runMigration rejects traversal and non-filename names', () => {
     const leaked = store.getDb().prepare("SELECT name FROM sqlite_master WHERE name='should_not_exist'").get();
     assert.ok(!leaked, 'rejected migration must not execute any SQL');
   } finally {
+    try { require('../src/db').closeDatabase?.(); } catch {}
     delete require.cache[require.resolve('../src/db')];
     if (prev.dir === undefined) delete process.env.SIDEKICK_DATA_DIR; else process.env.SIDEKICK_DATA_DIR = prev.dir;
     if (prev.file === undefined) delete process.env.SIDEKICK_DB_FILE; else process.env.SIDEKICK_DB_FILE = prev.file;

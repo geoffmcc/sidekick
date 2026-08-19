@@ -23,7 +23,10 @@ const GIT_EXTERNAL_EXECUTION_OPTIONS = /^(?:-c(?:$|=)|--config(?:=|-env(?:=|$))|
 
 function parseGitExtraArgs(extraArgs) {
   if (!extraArgs) return [];
-  const parsed = String(extraArgs).split(/\s+/).filter(Boolean);
+  // Git pretty formats use ASCII unit separator (\x1f) as a field delimiter.
+  // JavaScript classifies it as whitespace, so /\s+/ would silently split a
+  // single --pretty argument and corrupt structured history parsing.
+  const parsed = String(extraArgs).split(/[ \t\r\n]+/).filter(Boolean);
   if (parsed.some(arg => GIT_EXTERNAL_EXECUTION_OPTIONS.test(arg))) {
     throw new Error("Git arguments that alter configuration, helpers, execution paths, or pagers are not permitted");
   }

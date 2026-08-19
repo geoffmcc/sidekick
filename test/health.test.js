@@ -9,6 +9,11 @@ process.env.SIDEKICK_DATA_DIR = testDataDir;
 delete require.cache[require.resolve("../src/tools")];
 const { TOOLS, setSource, checkNetwork } = require("../src/tools");
 
+function cleanup() {
+  try { require("../src/db").closeDatabase?.(); } catch {}
+  fs.rmSync(testDataDir, { recursive: true, force: true });
+}
+
 (async () => {
   try {
     setSource("test");
@@ -53,10 +58,10 @@ const { TOOLS, setSource, checkNetwork } = require("../src/tools");
 
     console.log("Health tests passed");
   } finally {
-    fs.rmSync(testDataDir, { recursive: true, force: true });
+    cleanup();
   }
 })().catch(error => {
   console.error(error);
-  fs.rmSync(testDataDir, { recursive: true, force: true });
+  cleanup();
   process.exit(1);
 });

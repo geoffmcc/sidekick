@@ -12,6 +12,11 @@ process.env.SIDEKICK_DATA_DIR = dataDir;
 delete require.cache[require.resolve("../src/tools")];
 const { TOOLS, setSource } = require("../src/tools");
 
+function cleanup() {
+  try { require("../src/db").closeDatabase?.(); } catch {}
+  fs.rmSync(testRoot, { recursive: true, force: true });
+}
+
 function write(relative, content, mode) {
   const target = path.join(testRoot, relative);
   fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -93,10 +98,10 @@ function write(relative, content, mode) {
 
     console.log("Security scan tests passed");
   } finally {
-    fs.rmSync(testRoot, { recursive: true, force: true });
+    cleanup();
   }
 })().catch(error => {
   console.error(error);
-  fs.rmSync(testRoot, { recursive: true, force: true });
+  cleanup();
   process.exit(1);
 });

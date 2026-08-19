@@ -2936,6 +2936,10 @@ function getDb() {
   return db;
 }
 
+function closeDatabase() {
+  if (db && db.open) db.close();
+}
+
 module.exports = {
   admitMemory,
   isTelemetryMemoryType,
@@ -2945,6 +2949,7 @@ module.exports = {
   MIGRATIONS_DIR,
   db,
   getDb,
+  closeDatabase,
   getDocument,
   setDocument,
   loadDocument,
