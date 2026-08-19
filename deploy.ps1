@@ -539,7 +539,7 @@ try {
   if ($dataOwner -match "root") {
     Write-Host "  Data directory owned by root, attempting fix..." -ForegroundColor Yellow
     # Try to fix permissions - this works if NOPASSWD includes chown or if running as initial user
-    $fixResult = Run-Remote "sudo chown -R sidekick:sidekick $REMOTE_DIR/data/ 2>&1 && sudo chmod -R 755 $REMOTE_DIR/data/ 2>&1 && echo 'FIXED' || echo 'FAILED'"
+    $fixResult = Run-Remote "sudo chown -R sidekick:sidekick $REMOTE_DIR/data/ 2>&1 && sudo chmod -R 700 $REMOTE_DIR/data/ 2>&1 && echo 'FIXED' || echo 'FAILED'"
     if ($fixResult -match "FIXED") {
       Write-Host "  Data directory permissions fixed" -ForegroundColor Green
     } else {
