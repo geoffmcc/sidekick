@@ -101,6 +101,9 @@ services:
       GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/sidekick_grafana_admin_password
       GF_SERVER_HTTP_PORT: "3000"
       GF_INSTALL_PLUGINS: "grafana-clock-panel"
+      # The image's bundled plugins live in a read-only layer when Grafana
+      # runs as the deployment user; do not try to update them at startup.
+      GF_PLUGINS_PREINSTALL_AUTO_UPDATE: "false"
       GF_SECURITY_ALLOW_EMBEDDING: "true"
       GF_SERVER_ROOT_URL: ${SIDEKICK_GRAFANA_ROOT_URL:-http://localhost:4098/grafana/}
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"

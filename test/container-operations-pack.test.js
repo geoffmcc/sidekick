@@ -41,6 +41,7 @@ test("CO.1c: Compose declares bounded Grafana origins", () => {
   const composeText = fs.readFileSync(require.resolve("../docker/docker-compose.yml"), "utf8");
   assert.match(composeText, /GF_LIVE_ALLOWED_ORIGINS:/);
   assert.match(composeText, /SIDEKICK_GRAFANA_ALLOWED_ORIGINS/);
+  assert.match(composeText, /GF_PLUGINS_PREINSTALL_AUTO_UPDATE: "false"/);
 });
 
 test("CO.2: normalized discovery retains health, security, networks and ports", async () => {
