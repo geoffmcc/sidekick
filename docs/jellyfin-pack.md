@@ -147,6 +147,7 @@ capability action="configure" name="jellyfin" config={
 | `ca_secret_ref` | no | `secret:<name>` holding the CA PEM, as an alternative to `ca_pem`. |
 | `allow_insecure_http` | no | Default false. Explicit opt-in for internal plain-HTTP deployments. |
 | `allow_writes` | no | Default false. Must be true for `jellyfin_maintenance` to act on this profile. |
+| `allow_playback_control` | no | Default false. Must be true for `jellyfin_playback` to issue targeted pause, resume, stop, seek, volume, or PlayNow commands. |
 | `default` | no | Marks the default profile when several are configured. |
 | `request_timeout_ms` | no | Per-request timeout (default 15000, max 120000). |
 | `verify_poll_interval_ms` | no | Postcondition poll interval for maintenance verification (default 2000, min 50). |
@@ -193,7 +194,7 @@ configuration implying a capability that does not exist.
 |---|---|---|
 | `jellyfin` (alias `jf`) | **low** (read) | All read/discovery/diagnosis/readiness actions. |
 | `jellyfin_maintenance` (alias `jf_maintenance`) | **high** (change) | run_task / cancel_task / scan_library with dry-run and postcondition verification. |
-| `jellyfin_playback` (alias `jf_playback`) | **high** (change) | Targeted PlayNow command for an active device session with user-scoped item verification. |
+| `jellyfin_playback` (alias `jf_playback`) | **high** (change) | Targeted PlayNow, pause, resume, stop, seek, and volume commands for an active device session with user-scoped verification. |
 
 `jellyfin` read actions: `list_profiles`, `status`, `health`,
 `server_profile`, `version`, `capabilities`, `system_info`, `list_libraries`,
@@ -250,6 +251,24 @@ Per-action honesty notes:
   instead of silently picking one of several.
 - An authentication failure surfaces as `authentication_failed` everywhere —
   it is never converted into "capability unavailable".
+
+`jellyfin_playback` semantics:
+
+- Every action requires the profile's `allow_playback_control` and an active
+  media-control-capable session selected by exact session ID, exact device ID,
+  exact device name, or one unambiguous eligible session.
+- `play` requires an item ID and resolves it through the selected session's
+  Jellyfin user. `pause`, `resume`, and `stop` use the matching play-state
+  command; `seek` accepts absolute or relative seconds; `set_volume` accepts
+  only 0 through 100.
+- User identity is always taken from the selected session's `UserId`; a
+  configured or assumed username is never substituted. Every command returns
+  bounded postcondition evidence and reports `request_accepted` when the
+  target does not confirm the new state within the verification window.
+- The pack's ten manifest-registered knowledge documents cover operating
+  model, catalog, Live TV, server audit, user media, analytics, safety,
+  playback diagnosis, targeted playback control, and maintenance. New users
+  receive these entries when the pack is installed or refreshed.
 
 `jellyfin_maintenance` semantics:
 

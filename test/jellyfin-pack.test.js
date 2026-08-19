@@ -371,6 +371,7 @@ function baseFixtures() {
         DeviceId: "tv-device-1",
         DeviceName: "tv",
         SupportsMediaControl: true,
+        SupportedCommands: ["Pause", "Unpause", "Stop", "Seek", "SetVolume"],
         NowPlayingItem: {
           Id: "i1",
           Name: "Film",
@@ -1215,6 +1216,24 @@ async function asyncTest(name, fn) {
     assert.ok(result.out.isError);
     assert.strictEqual(result.out.code, "policy_denied");
     assert.deepStrictEqual(postLog, []);
+  });
+  await asyncTest("targeted playback controls use the selected session", async () => {
+    const controls = [
+      { action: "pause", path: "/Sessions/s1/Playing/Pause" },
+      { action: "resume", path: "/Sessions/s1/Playing/Unpause" },
+      { action: "stop", path: "/Sessions/s1/Playing/Stop" },
+      { action: "seek", args: { position_seconds: 120 }, path: "/Sessions/s1/Playing/Seek", query: { seekPositionTicks: 1200000000 } },
+      { action: "set_volume", args: { volume: 35 }, path: "/Sessions/s1/Command", body: { Name: "SetVolume", Arguments: ["volume=35"] } },
+    ];
+    for (const control of controls) {
+      setFixtures(baseFixtures());
+      const { playback } = tools(servicesFor({ profileExtra: { allow_playback_control: true } }));
+      const result = await call(playback, { action: control.action, device_id: "tv-device-1", ...(control.args || {}) });
+      assert.ok(!result.out.isError, result.out.content[0].text);
+      assert.strictEqual(postLog[0].path, control.path);
+      if (control.query) assert.deepStrictEqual(postLog[0].query, control.query);
+      if (control.body) assert.deepStrictEqual(postLog[0].body, control.body);
+    }
   });
   await asyncTest("user_status and user_access_audit surface policy evidence", async () => {
     setFixtures(baseFixtures());
