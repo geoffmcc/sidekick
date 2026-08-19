@@ -178,7 +178,10 @@ async function githubRequest(token, method, endpoint, body) {
         "Authorization": "Bearer " + token,
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "Sidekick-MCP/1.0"
+        "User-Agent": "Sidekick-MCP/1.0",
+        // The socket is pinned to the resolved address; preserve the
+        // original virtual-host destination for HTTP routing.
+        "Host": url.host
       },
       agent: githubHttpAgent,
       servername: url.hostname.replace(/^\[|\]$/g, "")
@@ -434,7 +437,8 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
         headers: {
           "Authorization": "token " + token,
           "Accept": "application/vnd.github.v3+json",
-          "User-Agent": "Sidekick-MCP/1.0"
+          "User-Agent": "Sidekick-MCP/1.0",
+          "Host": url.host
         },
         agent: githubHttpAgent,
         servername: url.hostname.replace(/^\[|\]$/g, "")

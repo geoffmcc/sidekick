@@ -5,6 +5,11 @@ const fs = require("fs");
 const http = require("http");
 const os = require("os");
 const path = require("path");
+const githubSource = fs.readFileSync(require.resolve("../src/tools/families/github"), "utf8");
+const githubHealthSource = fs.readFileSync(require.resolve("../src/connectors/health"), "utf8");
+
+assert.match(githubSource, /["']Host["']:\s*url\.host/, "pinned GitHub requests must preserve the original HTTP Host");
+assert.match(githubHealthSource, /Host:\s*base\.host/, "GitHub health probes must preserve the original HTTP Host");
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "sk-phase-09-dashboard-"));
 process.env.NODE_ENV = "test";
