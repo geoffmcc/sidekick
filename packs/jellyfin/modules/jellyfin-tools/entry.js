@@ -1748,6 +1748,24 @@ function isSeekAction(action) {
   return ["seek", "fast_forward", "rewind"].includes(action);
 }
 
+function isDlnaSession(session) {
+  return [session?.Client, session?.AppName, session?.DeviceProfile?.Name]
+    .filter(Boolean)
+    .some((value) => /^dlna$/i.test(String(value).trim()));
+}
+
+function supportsPlaybackCommand(session, action, requiredCommand) {
+  const supported = Array.isArray(session?.SupportedCommands) ? session.SupportedCommands : [];
+  if (!requiredCommand || !supported.length || supported.includes(requiredCommand)) return true;
+  // DLNA renderers commonly advertise only volume/audio commands even when
+  // Jellyfin can route the standard session play-state endpoints to them.
+  // Keep the compatibility exception bounded to media-control-enabled DLNA
+  // sessions, and require an affirmative CanSeek value for seek operations.
+  if (!isDlnaSession(session) || session.SupportsMediaControl !== true) return false;
+  if (isSeekAction(action) && session.PlayState?.CanSeek !== true) return false;
+  return ["pause", "resume", "stop", "seek", "fast_forward", "rewind"].includes(action);
+}
+
 async function playback(services, args, runtime) {
   const { p, c } = await open(services, args, runtime);
   if (!p.allow_playback_control)
@@ -1793,11 +1811,12 @@ async function playback(services, args, runtime) {
     });
   const supported = Array.isArray(target.SupportedCommands) ? target.SupportedCommands : [];
   const requiredCommand = playbackCommandFor(args.action);
-  if (requiredCommand && supported.length && !supported.includes(requiredCommand))
+  if (!supportsPlaybackCommand(target, args.action, requiredCommand))
     throw new JellyfinError("unsupported_capability", `the selected session does not support ${args.action}`, {
       target: playbackCandidateView(target),
       required_command: requiredCommand,
       supported_commands: supported.slice(0, 50),
+      dlna_compatibility: isDlnaSession(target),
     });
 
   let resolvedItem = null;
@@ -1851,6 +1870,7 @@ async function playback(services, args, runtime) {
           ? { general_command: "SetVolume", volume: args.volume }
           : { playstate_command: requiredCommand },
     watch_state_source: "Jellyfin session user and user-scoped item lookup",
+    compatibility: isDlnaSession(target) ? "dlna_session_playstate" : null,
   };
   if (args.dry_run === true) return { dry_run: true, ...plan, changes_made: false };
 

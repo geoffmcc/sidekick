@@ -30,7 +30,7 @@ test("all Jellyfin JSON assets parse", () => {
     .filter((x) => x.endsWith(".json")))
     JSON.parse(fs.readFileSync(path.join(pack, f), "utf8"));
 });
-test("pack and module versions agree at 1.4.0", () => {
+test("pack and module versions agree at 1.4.1", () => {
   const packManifest = JSON.parse(
     fs.readFileSync(path.join(pack, "sidekick.pack.json"), "utf8"),
   );
@@ -40,8 +40,8 @@ test("pack and module versions agree at 1.4.0", () => {
       "utf8",
     ),
   );
-  assert.strictEqual(packManifest.version, "1.4.0");
-  assert.strictEqual(moduleManifest.version, "1.4.0");
+  assert.strictEqual(packManifest.version, "1.4.1");
+  assert.strictEqual(moduleManifest.version, "1.4.1");
   // Every services.dispatch target used by the module must be declared.
   const declared = moduleManifest.permissions.map((x) => x.tool).sort();
   assert.deepStrictEqual(declared, ["proxmox", "status", "web_fetch"]);
@@ -1235,6 +1235,28 @@ async function asyncTest(name, fn) {
       assert.strictEqual(postLog[0].path, control.path);
       if (control.query) assert.deepStrictEqual(postLog[0].query, control.query);
       if (control.body) assert.deepStrictEqual(postLog[0].body, control.body);
+    }
+  });
+  await asyncTest("DLNA sessions can use Jellyfin play-state controls despite incomplete command advertisements", async () => {
+    setFixtures(baseFixtures());
+    fixtures["/Sessions"][0] = {
+      ...fixtures["/Sessions"][0],
+      Client: "DLNA",
+      SupportedCommands: ["SetVolume"],
+      PlayState: { ...fixtures["/Sessions"][0].PlayState, CanSeek: true },
+    };
+    const { playback } = tools(servicesFor({ profileExtra: { allow_playback_control: true } }));
+    for (const args of [
+      { action: "pause" },
+      { action: "resume" },
+      { action: "stop" },
+      { action: "seek", position_seconds: 120 },
+      { action: "fast_forward", offset_seconds: 30 },
+      { action: "rewind", offset_seconds: 30 },
+    ]) {
+      const result = await call(playback, { ...args, device_id: "tv-device-1", dry_run: true });
+      assert.ok(!result.out.isError, result.out.content[0].text);
+      assert.strictEqual(result.parsed.compatibility, "dlna_session_playstate");
     }
   });
   await asyncTest("user_status and user_access_audit surface policy evidence", async () => {
