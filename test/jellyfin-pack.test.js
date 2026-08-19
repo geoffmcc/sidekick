@@ -677,6 +677,49 @@ async function asyncTest(name, fn) {
     },
   );
   await asyncTest(
+    "list_media forwards structured genre/library filters and enumerates the whole library",
+    async () => {
+      setFixtures(baseFixtures());
+      const requested = [];
+      fixtures["/Items"] = (q) => {
+        requested.push(q);
+        const all = [
+          { Id: "m1", Name: "Action Film", Type: "Movie", Genres: ["Action"], ProductionYear: 2020 },
+          { Id: "s1", Name: "Drama Series", Type: "Series", Genres: ["Drama"], ProductionYear: 2021 },
+          { Id: "m2", Name: "Action Two", Type: "Movie", Genres: ["Action"], ProductionYear: 2022 },
+        ];
+        if (q?.Genres === "Action") return { Items: [all[0], all[2]], TotalRecordCount: 2 };
+        const start = q?.StartIndex || 0;
+        return { Items: all.slice(start, start + (q?.Limit || 100)), TotalRecordCount: 3 };
+      };
+      const { read } = tools(servicesFor());
+      let result = await call(read, {
+        action: "list_media",
+        library_id: "lib1",
+        genre: "Action",
+        include_item_types: "Movie",
+        sort_by: "PremiereDate",
+        sort_order: "Descending",
+        limit: 10,
+      });
+      assert.ok(!result.out.isError, result.out.content[0].text);
+      assert.deepStrictEqual(result.parsed.items.map((x) => x.name), ["Action Film", "Action Two"]);
+      assert.strictEqual(requested[0].Genres, "Action");
+      assert.strictEqual(requested[0].ParentId, "lib1");
+      assert.strictEqual(requested[0].IncludeItemTypes, "Movie");
+
+      result = await call(read, { action: "list_media", all: true, limit: 2, max_items: 10 });
+      assert.ok(!result.out.isError, result.out.content[0].text);
+      assert.deepStrictEqual(result.parsed.items.map((x) => x.id), ["m1", "s1", "m2"]);
+      assert.strictEqual(result.parsed.full_library, true);
+      assert.strictEqual(result.parsed.truncated, false);
+      assert.strictEqual(requested[1].StartIndex, 0);
+      assert.strictEqual(requested[2].StartIndex, 2);
+      assert.deepStrictEqual(postLog, []);
+      assert.deepStrictEqual(delLog, []);
+    },
+  );
+  await asyncTest(
     "library and server audits are bounded and redact configuration secrets",
     async () => {
       setFixtures(baseFixtures());
