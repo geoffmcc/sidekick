@@ -75,6 +75,33 @@ async function getAll(client, path, query, limit = 100) {
         ? data.items
         : [];
 }
+async function getPagedItems(client, query, { limit = 100, maxItems = 10000 } = {}) {
+  const cap = Math.min(10000, Math.max(1, maxItems));
+  const pageSize = Math.min(100, cap, Math.max(1, limit));
+  const items = [];
+  let startIndex = Math.max(0, Number(query?.StartIndex) || 0);
+  let totalRecordCount = null;
+  do {
+    const data = await client.get("/Items", {
+      ...query,
+      Limit: pageSize,
+      StartIndex: startIndex,
+      EnableTotalRecordCount: true,
+    });
+    const page = Array.isArray(data?.Items) ? data.Items : [];
+    if (totalRecordCount === null && Number.isFinite(Number(data?.TotalRecordCount)))
+      totalRecordCount = Number(data.TotalRecordCount);
+    items.push(...page);
+    if (!page.length || page.length < pageSize || (totalRecordCount !== null && startIndex + page.length >= totalRecordCount))
+      break;
+    startIndex += page.length;
+  } while (items.length < cap);
+  return {
+    items: items.slice(0, cap),
+    totalRecordCount,
+    truncated: items.length > cap || (totalRecordCount !== null && items.length < totalRecordCount),
+  };
+}
 function sleep(ms, signal) {
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, ms);
@@ -172,6 +199,23 @@ function mediaItemView(x) {
     media_streams: Array.isArray(x?.MediaStreams)
       ? x.MediaStreams.slice(0, 50).map(streamView)
       : [],
+  };
+}
+
+function mediaListView(x) {
+  return {
+    id: x?.Id || null,
+    name: x?.Name || null,
+    type: x?.Type || null,
+    series_id: x?.SeriesId || null,
+    production_year: x?.ProductionYear ?? null,
+    premiere_date: x?.PremiereDate || null,
+    genres: Array.isArray(x?.Genres) ? x.Genres.slice(0, 50) : [],
+    tags: Array.isArray(x?.Tags) ? x.Tags.slice(0, 50) : [],
+    path: x?.Path || null,
+    overview: x?.Overview || null,
+    provider_ids: x?.ProviderIds || {},
+    runtime_minutes: runtimeView(x).runtime_minutes,
   };
 }
 
@@ -686,6 +730,48 @@ async function read(services, args, runtime) {
       total_record_count: data?.TotalRecordCount ?? null,
       candidates,
       note: "Name+year grouping from a bounded sample — CANDIDATES only, not confirmed duplicates; editions/qualities legitimately share name and year.",
+    };
+  }
+  if (args.action === "list_media") {
+    const filters = {
+      Recursive: true,
+      ParentId: args.library_id || undefined,
+      SearchTerm: args.query || undefined,
+      IncludeItemTypes: args.include_item_types || "Movie,Series",
+      Genres: args.genre || args.genres || undefined,
+      Tags: args.tags || undefined,
+      Years: args.years || undefined,
+      IsFavorite: args.is_favorite,
+      MinCommunityRating: args.min_community_rating,
+      MinPremiereDate: args.min_premiere_date || undefined,
+      MaxPremiereDate: args.max_premiere_date || undefined,
+      SortBy: args.sort_by || "SortName",
+      SortOrder: args.sort_order || "Ascending",
+      Fields: "Overview,Path,ProviderIds,Genres,Tags,RunTimeTicks,PremiereDate,DateCreated",
+      StartIndex: Math.max(0, args.start_index ?? args.start ?? 0),
+    };
+    const pageSize = bounded(args.limit, 100);
+    const fullLibrary = args.all === true;
+    const page = fullLibrary
+      ? await getPagedItems(c, filters, { limit: pageSize, maxItems: args.max_items || 10000 })
+      : (() => null)();
+    const data = fullLibrary ? null : await c.get("/Items", {
+      ...filters,
+      Limit: pageSize,
+      EnableTotalRecordCount: true,
+    });
+    const items = fullLibrary ? page.items : (Array.isArray(data?.Items) ? data.Items : []);
+    return {
+      profile: p.name,
+      items: items.map(mediaListView),
+      sample_size: items.length,
+      total_record_count: fullLibrary ? page.totalRecordCount : (data?.TotalRecordCount ?? null),
+      filters_used: filters,
+      full_library: fullLibrary,
+      truncated: fullLibrary ? page.truncated : false,
+      note: fullLibrary
+        ? "Full-library enumeration is paged through Jellyfin and capped at max_items (default 10000)."
+        : "Use all=true to enumerate every matching item, subject to max_items.",
     };
   }
   if (args.action === "search_media") {
@@ -1848,6 +1934,7 @@ const readActions = [
   "library_status",
   "library_health",
   "search_media",
+  "list_media",
   "item_details",
   "media_info",
   "list_collections",
@@ -1910,6 +1997,18 @@ const common = z.object({
   start: z.number().int().min(0).max(100000).optional(),
   start_index: z.number().int().min(0).max(100000).optional(),
   include_item_types: z.string().max(200).optional(),
+  genre: z.string().max(200).optional(),
+  genres: z.string().max(500).optional(),
+  tags: z.string().max(500).optional(),
+  years: z.string().max(100).optional(),
+  sort_by: z.string().max(100).optional(),
+  sort_order: z.enum(["Ascending", "Descending"]).optional(),
+  is_favorite: z.boolean().optional(),
+  min_community_rating: z.number().min(0).max(10).optional(),
+  min_premiere_date: z.string().max(40).optional(),
+  max_premiere_date: z.string().max(40).optional(),
+  all: z.boolean().optional(),
+  max_items: z.number().int().min(1).max(10000).optional(),
 });
 const entry = {
   buildDescriptors(services) {
@@ -1928,6 +2027,18 @@ const entry = {
           item_id: "string",
           season_id: "string",
           include_item_types: "string",
+          genre: "string",
+          genres: "string (comma-separated)",
+          tags: "string (comma-separated)",
+          years: "string (comma-separated)",
+          sort_by: "string",
+          sort_order: "string (Ascending|Descending)",
+          is_favorite: "boolean",
+          min_community_rating: "number",
+          min_premiere_date: "string",
+          max_premiere_date: "string",
+          all: "boolean (enumerate all matching items through bounded pagination)",
+          max_items: "number (full-library cap, default 10000)",
           task_id: "string",
           user_id: "string",
           username: "string",
