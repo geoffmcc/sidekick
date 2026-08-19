@@ -844,11 +844,18 @@ function leaseJob(jobId, workerId, leaseDurationMs = 300000) {
   return getJob(jobId);
 }
 
-function renewLease(jobId, leaseId, leaseDurationMs = 300000) {
+function renewLease(jobId, workerIdOrLeaseId, leaseIdOrDuration = 300000, leaseDurationMaybe) {
   ensureSchema();
+  // Keep the internal direct-runner/test call shape (jobId, leaseId, duration)
+  // while requiring the authenticated worker route to provide its worker id.
+  const legacyShape = typeof leaseIdOrDuration === "number" || leaseIdOrDuration === undefined;
+  const workerId = legacyShape ? null : workerIdOrLeaseId;
+  const leaseId = legacyShape ? workerIdOrLeaseId : leaseIdOrDuration;
+  const leaseDurationMs = legacyShape ? (leaseIdOrDuration === undefined ? 300000 : leaseIdOrDuration) : (leaseDurationMaybe === undefined ? 300000 : leaseDurationMaybe);
   const db = dbStore.getDb();
   const job = getJob(jobId);
   if (!job) throw new JobError("Job not found", "JOB_NOT_FOUND", { jobId });
+  if (workerId && job.selectedWorkerId !== workerId) throw new LeaseExpiredError(jobId, leaseId);
   if (job.leaseId !== leaseId || (job.leaseExpiresAt && new Date(job.leaseExpiresAt) < new Date())) throw new LeaseExpiredError(jobId, leaseId);
   // 'cancelling' stays renewable: the executor legitimately holds the lease
   // until its cancellation poll observes the request and acknowledges, and a

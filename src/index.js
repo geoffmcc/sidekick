@@ -984,7 +984,7 @@ function startJobHandler(req, res) {
 }
 
 function renewJobHandler(req, res) {
-  try { res.json({ ok: true, job: compute.jobManager.renewLease(req.params.jobId, req.body?.leaseId || req.body?.lease_id, req.body?.leaseDurationMs || req.body?.lease_duration_ms || 300000) }); }
+  try { res.json({ ok: true, job: compute.jobManager.renewLease(req.params.jobId, req.computeWorker.workerId, req.body?.leaseId || req.body?.lease_id, req.body?.leaseDurationMs || req.body?.lease_duration_ms || 300000) }); }
   catch (e) { sendComputeError(res, e, 409); }
 }
 
