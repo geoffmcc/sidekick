@@ -23,6 +23,7 @@
 
 const path = require("path");
 const { spawnSync } = require("child_process");
+const { childProcessEnv } = require("../src/security/child-process");
 
 const { browserConfig } = require("../src/browser/config");
 const driver = require("../src/browser/driver");
@@ -56,7 +57,7 @@ function main() {
   console.log(`Running: node ${installArgs.join(" ")}`);
   const result = spawnSync(process.execPath, installArgs, {
     stdio: "inherit",
-    env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: config.browsersPath },
+    env: childProcessEnv({ PLAYWRIGHT_BROWSERS_PATH: config.browsersPath }),
   });
   if (result.status !== 0) {
     console.error(`Browser installation failed (exit ${result.status}).`);

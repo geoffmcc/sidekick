@@ -17,6 +17,18 @@ const { redactSensitive } = require("../../redact");
 const { enforcePathPolicy } = require("../path-policy");
 const { validIdentifier } = require("../../core/command-validation");
 const { sidekick_llm } = require("./inference");
+const { childProcessEnv } = require("../../security/child-process");
+
+const GIT_EXTERNAL_EXECUTION_OPTIONS = /^(?:-c(?:$|=)|--config(?:=|-env(?:=|$))|--(?:exec-path|upload-pack|receive-pack|git-dir|work-tree)(?:=|$)|--(?:ext-diff|paginate)(?:=|$))/;
+
+function parseGitExtraArgs(extraArgs) {
+  if (!extraArgs) return [];
+  const parsed = String(extraArgs).split(/\s+/).filter(Boolean);
+  if (parsed.some(arg => GIT_EXTERNAL_EXECUTION_OPTIONS.test(arg))) {
+    throw new Error("Git arguments that alter configuration, helpers, execution paths, or pagers are not permitted");
+  }
+  return parsed;
+}
 
 function windowsPathToWslPath(value) {
   const text = String(value || "");
@@ -40,20 +52,23 @@ async function sidekick_git({ action, path: repoPath, args: extraArgs }) {
   }
 
   const gitFile = path.join(repo, ".git");
-  let gitEnv = process.env;
+  let gitEnv = childProcessEnv();
   let cmdArgs = ["-C", repo, action];
   if (fs.existsSync(gitFile) && fs.statSync(gitFile).isFile()) {
     const content = fs.readFileSync(gitFile, "utf-8").trim();
     const match = content.match(/^gitdir:\s*(.+)$/i);
     if (match) {
       const gitDir = windowsPathToWslPath(match[1].trim());
-      gitEnv = { ...process.env, GIT_DIR: gitDir, GIT_WORK_TREE: repo };
+      gitEnv = childProcessEnv({ GIT_DIR: gitDir, GIT_WORK_TREE: repo });
       cmdArgs = [action];
     }
   }
   if (extraArgs) {
-    const parsed = extraArgs.split(/\s+/).filter(Boolean);
-    cmdArgs.push(...parsed);
+    try {
+      cmdArgs.push(...parseGitExtraArgs(extraArgs));
+    } catch (error) {
+      return { content: [{ type: "text", text: error.message }], isError: true };
+    }
   }
 
   try {
@@ -107,7 +122,7 @@ async function sidekick_changelog({ action, from, to, format, group_by, use_llm,
 
   let logOutput = "";
   try {
-    logOutput = execFileSync("git", ["log", `${from}..${toRef}`, "--pretty=format:%H|%s|%an|%ad", "--date=short"], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], cwd });
+    logOutput = execFileSync("git", ["log", `${from}..${toRef}`, "--pretty=format:%H|%s|%an|%ad", "--date=short"], { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], cwd, env: childProcessEnv() });
   } catch (e) {
     return { content: [{ type: "text", text: `Git log failed: ${e.message}\n\nMake sure you're in a git repository and the refs exist.` }], isError: true };
   }
@@ -588,4 +603,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_git, sidekick_changelog, sidekick_depend };
+module.exports = { descriptors, sidekick_git, sidekick_changelog, sidekick_depend, parseGitExtraArgs };
