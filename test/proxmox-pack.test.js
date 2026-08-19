@@ -417,6 +417,14 @@ function storeToken() {
     assert.strictEqual(history.total_tasks, 0);
     assert.strictEqual(history.latest, null);
     assert.ok(history.note.includes("does not verify restoreability"));
+    const storageAudit = json(await callInternalTool("proxmox", { action: "storage_backend_audit", profile: "main" }));
+    assert.strictEqual(storageAudit.total, 2);
+    assert.strictEqual(storageAudit.backup_capable_count, 1);
+    assert.ok(storageAudit.storage.some((x) => x.storage === "local" && x.backup_capable));
+    const backupAudit = json(await callInternalTool("proxmox", { action: "backup_verification_audit", profile: "main" }));
+    assert.strictEqual(backupAudit.coverage.uncovered_guests.length, 2);
+    assert.ok(backupAudit.findings.some((x) => x.code === "backup_jobs_not_configured"));
+    assert.ok(backupAudit.note.includes("does not prove backup contents"));
   });
 
   await test("PX.6: guest lifecycle start submits, monitors the task, and reports completion", async () => {

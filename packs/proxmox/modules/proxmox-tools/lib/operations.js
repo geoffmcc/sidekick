@@ -461,6 +461,79 @@ async function backupHistory(client) {
   };
 }
 
+async function storageBackendAudit(client) {
+  const inventory = await listStorage(client);
+  const findings = [];
+  const backends = inventory.storage.map(storage => ({
+    storage: storage.storage,
+    type: storage.type,
+    node: storage.node,
+    content: storage.content,
+    shared: storage.shared,
+    enabled: storage.enabled,
+    active: storage.active,
+    capacity: {
+      total_bytes: storage.total_bytes,
+      used_bytes: storage.used_bytes,
+      avail_bytes: storage.avail_bytes,
+      used_fraction_pct: storage.used_fraction_pct,
+    },
+    pbs: storage.type === "pbs",
+    backup_capable: storage.type === "pbs" || storage.content.includes("backup"),
+    verification: storage.type === "pbs" ? "configured_not_verified" : "pve_storage_observed",
+  }));
+  const backupCapable = backends.filter(storage => storage.backup_capable);
+  const pbs = backends.filter(storage => storage.pbs);
+  if (!backupCapable.length) findings.push({ code: "backup_storage_not_observed", detail: "No storage row advertised backup content or a PBS backend." });
+  if (pbs.length) findings.push({ code: "pbs_datastore_not_verified", detail: "PBS storage configuration was observed, but datastore contents and verification status were not queried." });
+  for (const storage of backends) {
+    if (storage.enabled === false) findings.push({ storage: storage.storage, code: "storage_disabled", detail: "Proxmox reports this backend as disabled." });
+    if (storage.active === false) findings.push({ storage: storage.storage, code: "storage_inactive", detail: "Proxmox reports this backend as inactive." });
+  }
+  return {
+    status: findings.some(finding => ["storage_disabled", "storage_inactive", "backup_storage_not_observed"].includes(finding.code)) ? "attention" : "observed",
+    total: backends.length,
+    backup_capable_count: backupCapable.length,
+    pbs_count: pbs.length,
+    storage: backends,
+    findings,
+    bounded: true,
+    note: "This observes Proxmox storage configuration only. It does not query PBS datastore contents, filesystem health, ZFS/Ceph internals or restoreability.",
+  };
+}
+
+async function backupVerificationAudit(client) {
+  const [backup, coverage, storage] = await Promise.all([
+    backupStatus(client),
+    backupCoverage(client),
+    storageBackendAudit(client),
+  ]);
+  const findings = [];
+  if (!backup.jobs.total) findings.push({ code: "backup_jobs_not_configured", detail: "No Proxmox-side vzdump jobs were returned." });
+  if (backup.recent_backups.failures) findings.push({ code: "recent_backup_failures", detail: `${backup.recent_backups.failures} recent backup task(s) failed.` });
+  if (coverage.uncovered_guests.length) findings.push({ code: "guests_without_configured_coverage", detail: `${coverage.uncovered_guests.length} guest(s) were not selected by the observed vzdump jobs.` });
+  if (storage.pbs_count) findings.push({ code: "pbs_restoreability_unknown", detail: "PBS was configured, but datastore verification and restoreability evidence are unavailable in this read-only view." });
+  if (!storage.backup_capable_count) findings.push({ code: "backup_storage_not_observed", detail: "No backup-capable storage backend was observed." });
+  return {
+    status: findings.length ? "attention" : "observed",
+    jobs: backup.jobs,
+    recent_backups: backup.recent_backups,
+    coverage: {
+      guest_count: coverage.guest_count,
+      configured_selection_count: coverage.configured_selection_count,
+      uncovered_guests: coverage.uncovered_guests,
+    },
+    storage: {
+      backup_capable_count: storage.backup_capable_count,
+      pbs_count: storage.pbs_count,
+      verification: storage.storage.filter(item => item.backup_capable).map(item => ({ storage: item.storage, type: item.type, verification: item.verification })),
+    },
+    findings,
+    bounded: true,
+    note: "Verification is limited to Proxmox job selections, bounded vzdump task outcomes and storage configuration. It does not prove backup contents, retention, encryption or restoreability.",
+  };
+}
+
 async function versionStatus(client) {
   const version = await client.get(["version"]);
   return { version: normalize.normalizeVersion(version) };
@@ -570,6 +643,8 @@ module.exports = {
   backupStatus,
   backupCoverage,
   backupHistory,
+  storageBackendAudit,
+  backupVerificationAudit,
   versionStatus,
   clusterHealth,
   storageCapacity,
