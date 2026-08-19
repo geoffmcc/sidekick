@@ -23,6 +23,7 @@ try {
 const dbStore = require("./db");
 const identity = require("./core/identity");
 const authentication = require("./core/authentication");
+const { AuthRateLimiter } = require("./core/auth-rate-limit");
 const authorization = require("./core/authorization");
 const { allowedActions } = require("./evolve/lifecycle");
 const { redactSensitive } = require("./redact");
@@ -158,6 +159,32 @@ const GRAFANA_PASS = readSecret("SIDEKICK_GRAFANA_ADMIN_PASSWORD");
 // revocable; they are the normal local-user path.
 const SESSION_SECRET = readSecret("SIDEKICK_SECRET_KEY") || crypto.randomBytes(32).toString("hex");
 const SESSION_TTL = 86400000;
+const authRateLimiter = new AuthRateLimiter();
+
+function authAttemptKeys(req, username = "") {
+  const address = req.ip || req.socket?.remoteAddress || "unknown";
+  return [
+    `ip|${address}`,
+    `account|${address}|${String(username).trim().toLowerCase().slice(0, 160)}`
+  ];
+}
+
+function rejectIfAuthThrottled(req, res, keys) {
+  const decisions = keys.map(key => authRateLimiter.check(key));
+  const decision = decisions.find(item => !item.allowed);
+  if (!decision) return false;
+  res.set("Retry-After", String(Math.ceil(decision.retryAfterMs / 1000)));
+  res.status(429).json({ error: "Too many authentication attempts", code: "auth_rate_limited" });
+  return true;
+}
+
+function recordAuthFailure(req, keys) {
+  for (const key of keys) authRateLimiter.recordFailure(key);
+}
+
+function clearAuthFailures(keys) {
+  for (const key of keys) authRateLimiter.clear(key);
+}
 
 // The dashboard Basic Auth account predates the identity service. Adopt its
 // existing bridge principal as the same human identity once the configured
@@ -532,11 +559,17 @@ app.post("/api/auth/bootstrap", (req, res) => {
 
 app.post("/api/auth/login", (req, res) => {
   const username = req.body?.username;
+  const attemptKeys = authAttemptKeys(req, username);
+  if (rejectIfAuthThrottled(req, res, attemptKeys)) return;
   let principal = identity.verifyUserPassword(username, req.body?.password);
   if (!principal && DASHBOARD_USER && DASHBOARD_PASS && timingSafeCompare(username, DASHBOARD_USER) && timingSafeCompare(req.body?.password, DASHBOARD_PASS)) {
     principal = legacyDashboardPrincipal(DASHBOARD_USER, DASHBOARD_PASS);
   }
-  if (!principal) return res.status(401).json({ error: "Invalid username or password" });
+  if (!principal) {
+    recordAuthFailure(req, attemptKeys);
+    return res.status(401).json({ error: "Invalid username or password" });
+  }
+  clearAuthFailures(attemptKeys);
   const session = authentication.createSession(principal.principal_id, {
     userAgent: req.headers["user-agent"] || null,
     ipAddress: req.ip || null,
@@ -593,6 +626,8 @@ if ((DASHBOARD_USER && DASHBOARD_PASS) || bootstrapCompleted()) {
     const separator = decoded.indexOf(":");
     const user = separator >= 0 ? decoded.slice(0, separator) : "";
     const pass = separator >= 0 ? decoded.slice(separator + 1) : "";
+    const attemptKeys = authAttemptKeys(req, user);
+    if (rejectIfAuthThrottled(req, res, attemptKeys)) return;
     if (timingSafeCompare(user, DASHBOARD_USER) && timingSafeCompare(pass, DASHBOARD_PASS)) {
       // Set session cookie for subsequent requests (including iframe sub-resources)
       const secure = Boolean(req.secure || req.headers["x-forwarded-proto"] === "https");
@@ -600,8 +635,10 @@ if ((DASHBOARD_USER && DASHBOARD_PASS) || bootstrapCompleted()) {
       req.authUser = user;
       req.authPrincipal = legacyDashboardPrincipal(user, pass);
       req.authPrincipalId = req.authPrincipal?.principal_id || null;
+      clearAuthFailures(attemptKeys);
       return next();
     }
+    recordAuthFailure(req, attemptKeys);
     res.set("WWW-Authenticate", 'Basic realm="Sidekick Dashboard"');
     res.status(401).send("Authentication required");
   });
