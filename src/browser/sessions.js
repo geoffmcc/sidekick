@@ -34,6 +34,18 @@ function record(list, entry) {
   list.push(entry);
 }
 
+// Download filenames are hostile HTTP metadata. Artifact custody sanitizes
+// the filesystem name later, but the session record is returned before that
+// and may be logged or handed to an agent. Bound it and remove controls here
+// so a remote Content-Disposition value cannot inject terminal/log controls or
+// consume unbounded response memory.
+function safeDownloadFilename(value) {
+  const safe = String(value || "download")
+    .replace(/[\u0000-\u001f\u007f]/g, "_")
+    .slice(0, 200);
+  return safe || "download";
+}
+
 function sessionSummary(session) {
   return {
     id: session.id,
@@ -88,7 +100,7 @@ async function captureDownload(session, download) {
   const entry = {
     at: new Date().toISOString(),
     url: String(download.url() || "").slice(0, 500),
-    suggested_filename: download.suggestedFilename(),
+    suggested_filename: safeDownloadFilename(download.suggestedFilename()),
     status: "pending",
   };
   record(session.downloads, entry);
@@ -424,6 +436,7 @@ module.exports = {
   trackSecret,
   markPageSensitive,
   isPageSensitive,
+  safeDownloadFilename,
   scrubSecrets,
   scrubSecretsDeep,
 };
