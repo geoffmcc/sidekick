@@ -107,6 +107,9 @@ async function handleRead(services, args, runtime) {
       case "list_snapshots": data = await provision.snapshotList(client, { node: requireNode(args), vmid: requireVmid(args) }); break;
       case "backup_status": data = await operations.backupStatus(client); break;
       case "version": data = await operations.versionStatus(client); break;
+      case "cluster_health": data = await operations.clusterHealth(client); break;
+      case "storage_capacity": data = await operations.storageCapacity(client); break;
+      case "upgrade_readiness": data = await operations.upgradeReadiness(client); break;
       case "maintenance_preflight": data = await maintenance.preflight(client, requireNode(args)); break;
       case "migration_plan": data = await migration.plan(client, requireVmid(args), args.target_node); break;
       default:
@@ -167,7 +170,7 @@ async function handleGuest(services, args, runtime) {
 const READ_ACTIONS = [
   "cluster_summary", "capabilities", "list_nodes", "node_status", "list_guests",
   "guest_status", "list_storage", "storage_status", "list_tasks", "task_status",
-  "list_snapshots", "backup_status", "version", "maintenance_preflight", "migration_plan", "list_profiles", "detect_providers",
+  "list_snapshots", "backup_status", "version", "cluster_health", "storage_capacity", "upgrade_readiness", "maintenance_preflight", "migration_plan", "list_profiles", "detect_providers",
 ];
 
 const PROVISION_ACTIONS = ["create_vm", "create_lxc", "clone", "configure", "snapshot_create", "convert_template"];

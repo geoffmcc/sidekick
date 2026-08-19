@@ -371,6 +371,18 @@ function storeToken() {
     assert.ok(storage.types.includes("lvmthin"));
   });
 
+  await test("PX.5a: read-only health, capacity and upgrade readiness remain evidence-based", async () => {
+    const health = json(await callInternalTool("proxmox", { action: "cluster_health", profile: "main" }));
+    assert.strictEqual(health.status, "healthy", JSON.stringify(health));
+    assert.deepStrictEqual(health.blockers, []);
+    const capacity = json(await callInternalTool("proxmox", { action: "storage_capacity", profile: "main" }));
+    assert.strictEqual(capacity.total, 2);
+    assert.strictEqual(capacity.totals.total_bytes, null, "mock rows omit capacity and must remain unknown");
+    const readiness = json(await callInternalTool("proxmox", { action: "upgrade_readiness", profile: "main" }));
+    assert.strictEqual(readiness.status, "blocked_or_review");
+    assert.ok(readiness.blockers.some((x) => x.code === "backup_evidence_missing"));
+  });
+
   await test("PX.6: guest lifecycle start submits, monitors the task, and reports completion", async () => {
     const r = json(await callInternalTool("proxmox_guest", { action: "start", profile: "main", vmid: 101 }));
     assert.strictEqual(r.ok, true, JSON.stringify(r));
