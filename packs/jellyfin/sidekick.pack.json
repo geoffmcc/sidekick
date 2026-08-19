@@ -3,7 +3,7 @@
   "pack_api": 1,
   "name": "jellyfin",
   "display_name": "Jellyfin",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "Governed Jellyfin media inventory, server discovery, playback diagnosis, library, log and maintenance intelligence over administrator-named profiles.",
   "publisher": "Sidekick",
   "compatibility": { "sidekick": ">=1.0.0" },
