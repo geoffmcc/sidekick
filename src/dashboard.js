@@ -59,6 +59,30 @@ dbStore.runPendingMigrations();
 syncToolRegistry();
 
 const app = express();
+// Forwarded headers are only authoritative when the deployment explicitly
+// declares a trusted reverse proxy. Treating a client-supplied
+// X-Forwarded-Proto as truth can otherwise make an HTTP session look secure
+// (or make origin checks compare against attacker-controlled scheme data).
+const TRUST_PROXY = process.env.SIDEKICK_DASHBOARD_TRUST_PROXY === "true";
+app.set("trust proxy", TRUST_PROXY);
+app.disable("x-powered-by");
+
+// Establish browser-facing security invariants in one place. Grafana is a
+// separately rendered application and keeps its own response policy.
+app.use((req, res, next) => {
+  const isGrafana = req.path.startsWith("/grafana/") || req.path === "/grafana";
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()");
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  if (!isGrafana) {
+    res.setHeader("Content-Security-Policy", "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; form-action 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-src 'self'");
+  }
+  if (req.path === "/" || req.path.startsWith("/api/")) res.setHeader("Cache-Control", "no-store");
+  if (req.secure) res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  next();
+});
 app.use("/static", express.static(path.join(__dirname, "..", "static")));
 app.use(express.json({ limit: "1mb" }));
 const http = require("http");
@@ -306,11 +330,6 @@ function shouldRateLimit(req) {
 }
 
 function requestProtocol(req) {
-  const forwarded = String(req?.headers?.["x-forwarded-proto"] || "")
-    .split(",", 1)[0]
-    .trim()
-    .toLowerCase();
-  if (forwarded === "http" || forwarded === "https") return forwarded;
   return req?.secure || req?.protocol === "https" ? "https" : "http";
 }
 
@@ -331,7 +350,7 @@ function requestCookie(req, name) {
 }
 
 function setIdentityCookie(res, token, maxAge = Math.floor(authentication.SESSION_TTL_MS / 1000), req = null) {
-  const secure = Boolean(req?.secure || req?.headers?.["x-forwarded-proto"] === "https");
+  const secure = Boolean(req?.secure);
   res.setHeader("Set-Cookie", `sidekick_identity=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${secure ? "; Secure" : ""}`);
 }
 
@@ -630,7 +649,7 @@ if ((DASHBOARD_USER && DASHBOARD_PASS) || bootstrapCompleted()) {
     if (rejectIfAuthThrottled(req, res, attemptKeys)) return;
     if (timingSafeCompare(user, DASHBOARD_USER) && timingSafeCompare(pass, DASHBOARD_PASS)) {
       // Set session cookie for subsequent requests (including iframe sub-resources)
-      const secure = Boolean(req.secure || req.headers["x-forwarded-proto"] === "https");
+      const secure = Boolean(req.secure);
       res.setHeader("Set-Cookie", `sidekick_sid=${makeSessionToken(user)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400${secure ? "; Secure" : ""}`);
       req.authUser = user;
       req.authPrincipal = legacyDashboardPrincipal(user, pass);

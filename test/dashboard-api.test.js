@@ -14,6 +14,8 @@ process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_DASHBOARD_PORT = '4100';
 process.env.SIDEKICK_DASHBOARD_USER = 'test-user';
 process.env.SIDEKICK_DASHBOARD_PASS = 'test-pass';
+// The test harness represents a deployment behind a trusted HTTPS proxy.
+process.env.SIDEKICK_DASHBOARD_TRUST_PROXY = 'true';
 process.env.SIDEKICK_API_KEY = 'test-sidekick-api-key';
 process.env.SIDEKICK_TOOL_POLICY = 'open';
 process.env.SIDEKICK_APPROVAL_MODE = 'off';
