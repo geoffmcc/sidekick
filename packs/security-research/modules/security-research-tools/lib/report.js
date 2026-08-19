@@ -11,6 +11,7 @@
  */
 
 const path = require("path");
+const crypto = require("crypto");
 const { kernel } = require("./platform");
 const { ResearchError } = require("./errors");
 const workspace = require("./workspace");
@@ -18,6 +19,15 @@ const evidence = require("./evidence");
 const records = require("./records");
 const runs = require("./runs");
 const { requireText } = require("./identity");
+
+// Date.now() alone is not unique when two report requests are materialized in
+// the same millisecond. A collision would make two custody records point at
+// one mutable file, so the later report could silently change the bytes
+// attributed to the earlier report. Keep the timestamp for operator-friendly
+// ordering, but add cryptographic uniqueness for concurrent callers.
+function materialFilename(now = Date.now()) {
+  return `report-material-${now}-${crypto.randomBytes(8).toString("hex")}.json`;
+}
 
 // Validate that every referenced evidence id resolves, so a report cannot claim
 // support from evidence that does not exist.
@@ -86,7 +96,7 @@ function materialize(ctx, input, actor) {
 
   // Write the material document into the workspace and register custody.
   const dir = workspace.reportDir(ctx.root, campaign.campaign_id);
-  const filename = `report-material-${Date.now()}.json`;
+  const filename = materialFilename();
   const abs = path.join(dir, filename);
   const buffer = Buffer.from(JSON.stringify(material, null, 2), "utf8");
   workspace.atomicWrite(ctx.root, abs, buffer);
@@ -127,4 +137,4 @@ function materialize(ctx, input, actor) {
   };
 }
 
-module.exports = { materialize, verifyEvidenceRefs };
+module.exports = { materialize, verifyEvidenceRefs, materialFilename };
