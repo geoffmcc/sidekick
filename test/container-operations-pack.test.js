@@ -25,6 +25,8 @@ test("CO.2: normalized discovery retains health, security, networks and ports", 
   const listed = await operations.list(client);
   assert.equal(listed[0].name, "web"); assert.equal(listed[0].health, "healthy"); assert.deepEqual(listed[0].networks, ["demo"]);
   const summary = await operations.summary(client); assert.equal(summary.counts.running, 1); assert.equal(summary.health, "healthy");
+  const listShape = operations.normalizeContainer({ Id: "listed", Names: ["/listed"], Image: "sha256:listed", State: "running", Status: "Up 5 minutes", Labels: {}, NetworkSettings: { Networks: {} }, Mounts: [] });
+  assert.equal(listShape.running, true); assert.equal(listShape.state, "running");
 });
 
 test("CO.3: logs and stats are bounded and use structured provider calls", async () => {

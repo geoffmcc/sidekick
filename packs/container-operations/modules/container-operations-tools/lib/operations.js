@@ -12,12 +12,17 @@ function safeContainerName(value) {
 }
 
 function normalizeContainer(raw) {
-  const state = raw.State || {};
+  // Docker's list endpoint returns State as a status string, while inspect
+  // returns State as an object. Normalize both shapes before deriving runtime
+  // state so discovery and health never report running containers as stopped.
+  const rawState = raw.State;
+  const state = rawState && typeof rawState === "object" ? rawState : {};
+  const status = state.Status || (typeof rawState === "string" ? rawState : raw.Status) || "unknown";
   const health = state.Health?.Status || "unknown";
   const mounts = asArray(raw.Mounts).map(m => ({ type: m.Type, source: m.Source, destination: m.Destination, read_only: m.RW === false }));
   const security = { privileged: state?._privileged === true || raw.HostConfig?.Privileged === true, host_network: raw.HostConfig?.NetworkMode === "host", host_pid: raw.HostConfig?.PidMode === "host", socket_mount: mounts.some(m => /(?:^|\/)(?:var\/run\/)?(?:docker|podman)\.sock$/.test(String(m.source || ""))) };
   security.host_root_mount = mounts.some(m => m.source === "/" || m.destination === "/" || m.destination === "/host");
-  return { id: raw.Id, name: String(raw.Name || "").replace(/^\//, ""), names: asArray(raw.Names).map(String).slice(0, 16), image: raw.Config?.Image || raw.Image, image_id: raw.Image, created: raw.Created, state: state.Status || raw.State, running: state.Running === true, exit_code: state.ExitCode, restart_count: raw.RestartCount || 0, started_at: state.StartedAt, finished_at: state.FinishedAt, health, health_log: asArray(state.Health?.Log).slice(-5).map(x => ({ start: x.Start, end: x.End, exit_code: x.ExitCode, output: String(x.Output || "").slice(0, 1000) })), labels: Object.fromEntries(Object.entries(raw.Labels || {}).slice(0, 100)), mounts, networks: Object.keys(raw.NetworkSettings?.Networks || {}), ports: raw.NetworkSettings?.Ports || {}, host_config: { restart_policy: raw.HostConfig?.RestartPolicy?.Name || "none", memory_limit: raw.HostConfig?.Memory || 0, cpu_quota: raw.HostConfig?.CpuQuota || 0 }, security, compose: { project: raw.Labels?.["com.docker.compose.project"] || null, service: raw.Labels?.["com.docker.compose.service"] || null, config_files: raw.Labels?.["com.docker.compose.project.config_files"] || null } };
+  return { id: raw.Id, name: String(raw.Name || "").replace(/^\//, ""), names: asArray(raw.Names).map(String).slice(0, 16), image: raw.Config?.Image || raw.Image, image_id: raw.Image, created: raw.Created, state: status, running: state.Running === true || status === "running", exit_code: state.ExitCode, restart_count: raw.RestartCount || 0, started_at: state.StartedAt, finished_at: state.FinishedAt, health, health_log: asArray(state.Health?.Log).slice(-5).map(x => ({ start: x.Start, end: x.End, exit_code: x.ExitCode, output: String(x.Output || "").slice(0, 1000) })), labels: Object.fromEntries(Object.entries(raw.Labels || {}).slice(0, 100)), mounts, networks: Object.keys(raw.NetworkSettings?.Networks || {}), ports: raw.NetworkSettings?.Ports || {}, host_config: { restart_policy: raw.HostConfig?.RestartPolicy?.Name || "none", memory_limit: raw.HostConfig?.Memory || 0, cpu_quota: raw.HostConfig?.CpuQuota || 0 }, security, compose: { project: raw.Labels?.["com.docker.compose.project"] || null, service: raw.Labels?.["com.docker.compose.service"] || null, config_files: raw.Labels?.["com.docker.compose.project.config_files"] || null } };
 }
 
 async function info(client) { return client.get("/info"); }
