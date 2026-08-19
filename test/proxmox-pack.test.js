@@ -196,6 +196,8 @@ function handle(req, res, raw) {
       { type: "node", name: "pve2", online: 1, ip: "10.0.0.12", local: 0 },
     ]);
   }
+  if (method === "GET" && p === "/cluster/ha/status/current") return send(res, 200, [{ sid: "vm:100", type: "vm", node: "pve1", status: "started" }]);
+  if (method === "GET" && p === "/cluster/replication") return send(res, 200, [{ id: "100-0", type: "local", guest: 100, node: "pve1", target: "pve2", disable: 0, status: "idle", fail_count: 0 }]);
   if (method === "GET" && p === "/cluster/resources") return send(res, 200, resourcesView());
   if (method === "GET" && p === "/storage") {
     return send(res, 200, [
@@ -399,6 +401,12 @@ function storeToken() {
     assert.strictEqual(audit.config.network_count, 0);
     assert.ok(audit.findings.some((x) => x.code === "guest_agent_unreachable"));
     assert.ok(Array.isArray(audit.redacted_fields));
+    const compliance = json(await callInternalTool("proxmox", { action: "cluster_compliance_audit", profile: "main" }));
+    assert.strictEqual(compliance.status, "observed", JSON.stringify(compliance));
+    assert.strictEqual(compliance.cluster.quorate, true);
+    assert.strictEqual(compliance.ha.total, 1);
+    assert.strictEqual(compliance.replication.jobs[0].guest, 100);
+    assert.strictEqual(compliance.task_trends.failed, 0);
   });
 
   await test("PX.5c: storage health and backup history preserve unknown evidence", async () => {
