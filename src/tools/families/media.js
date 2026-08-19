@@ -22,7 +22,7 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 const { z } = require("zod");
 const { enforcePathPolicy } = require("../path-policy");
-const { validateOutboundUrl } = require("../../security/outbound-url");
+const { validateOutboundUrl, resolveOutboundUrl } = require("../../security/outbound-url");
 const { validDownloadFormat, validLangCode, validScale, validTimestamp, validWhisperModel } = require("../../core/command-validation");
 
 const YAML = require("yaml");
@@ -522,7 +522,11 @@ async function sidekick_download({ url, output, format, audio_only }) {
     if (urlError) {
       return { content: [{ type: "text", text: urlError }], isError: true };
     }
-    const parsedUrl = new URL(url);
+    const destination = await resolveOutboundUrl(url, "url");
+    if (destination.refusal) {
+      return { content: [{ type: "text", text: destination.refusal }], isError: true };
+    }
+    const parsedUrl = destination.url;
     const managedDownload = !output;
     const downloadDir = path.join(DATA_DIR, "downloads");
     if (managedDownload) fs.mkdirSync(downloadDir, { recursive: true, mode: 0o750 });
@@ -533,29 +537,54 @@ async function sidekick_download({ url, output, format, audio_only }) {
     const venvPath = "/home/sidekick/.sidekick-tools/bin/yt-dlp";
     const ytdlpCmd = fs.existsSync(venvPath) ? venvPath : "yt-dlp";
 
-    const args = ["--no-playlist"];
+    const maxDownloadBytes = Math.max(1 * 1024 * 1024, Math.min(2 * 1024 * 1024 * 1024, Number(process.env.SIDEKICK_MAX_DOWNLOAD_BYTES) || 512 * 1024 * 1024));
+    const args = [
+      "--no-playlist",
+      "--no-cache-dir",
+      "--no-call-home",
+      "--restrict-filenames",
+      "--socket-timeout", "30",
+      "--max-filesize", `${Math.floor(maxDownloadBytes / (1024 * 1024))}M`,
+      "--print", "after_move:filepath",
+    ];
     if (audio_only) {
       args.push("-x", "--audio-format", "mp3");
     } else if (format) {
       args.push("-f", validDownloadFormat(format));
     }
-    args.push("-o", outputTarget, parsedUrl.href);
+    args.push("--paths", `temp:${path.dirname(outputTarget)}`, "-o", outputTarget, parsedUrl.href);
     const result = safeExecFileSync(ytdlpCmd, args, { timeout: 300000, maxBuffer: 2 * 1024 * 1024 });
 
-    // Try to find the output file
+    // Prefer yt-dlp's post-move path, but retain the legacy destination line
+    // for older versions. Revalidate the actual path before reading or
+    // registering it: downloader output is untrusted subprocess output.
     const outputMatch = result.match(/\[download\] Destination: (.+)/);
-    const downloadedFile = outputMatch ? outputMatch[1] : null;
+    const printedPaths = result.split(/\r?\n/).map(line => line.trim()).filter(line => line && fs.existsSync(line));
+    const downloadedFile = printedPaths[printedPaths.length - 1] || (outputMatch ? outputMatch[1].trim() : null);
+
+    if (!downloadedFile || !fs.existsSync(downloadedFile)) {
+      throw new Error("yt-dlp did not produce a verifiable output file");
+    }
+    const canonicalFile = fs.realpathSync(downloadedFile);
+    const downloadedPolicyError = enforcePathPolicy(canonicalFile, "write");
+    if (downloadedPolicyError) return downloadedPolicyError;
+    const stat = fs.statSync(canonicalFile);
+    if (!stat.isFile()) throw new Error("yt-dlp output is not a regular file");
+    if (stat.size > maxDownloadBytes) {
+      try { fs.unlinkSync(canonicalFile); } catch {}
+      throw new Error(`download exceeds the ${maxDownloadBytes}-byte limit`);
+    }
 
     let artifact = null;
-    if (managedDownload && downloadedFile && fs.existsSync(downloadedFile)) {
-      const bytes = fs.readFileSync(downloadedFile);
-      const storageRef = path.relative(DATA_DIR, downloadedFile).split(path.sep).join("/");
+    if (managedDownload) {
+      const bytes = fs.readFileSync(canonicalFile);
+      const storageRef = path.relative(DATA_DIR, canonicalFile).split(path.sep).join("/");
       artifact = platformKernel.registerArtifact({
         type: "media_download",
-        name: path.basename(downloadedFile),
+        name: path.basename(canonicalFile),
         producer: "download",
         storage_ref: storageRef,
-        content_type: mediaContentType(downloadedFile, audio_only),
+        content_type: mediaContentType(canonicalFile, audio_only),
         byte_size: bytes.length,
         content_hash: `sha256:${crypto.createHash("sha256").update(bytes).digest("hex")}`,
         redaction_state: "not_required",
@@ -567,7 +596,7 @@ async function sidekick_download({ url, output, format, audio_only }) {
     return { content: [{ type: "text", text: JSON.stringify({
       status: "success",
       url: url,
-      output: downloadedFile || "Downloaded",
+      output: canonicalFile,
       ...(artifact ? { artifact_id: artifact.artifact_id, storage_ref: artifact.storage_ref } : {}),
       log: result.substring(0, 500)
     }, null, 2) }] };
