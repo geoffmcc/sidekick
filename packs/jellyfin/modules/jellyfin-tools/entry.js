@@ -1712,6 +1712,114 @@ async function read(services, args, runtime) {
 
 // ---- maintenance tool ------------------------------------------------------
 
+function playbackCandidateView(session) {
+  return {
+    session_id: session?.Id || null,
+    device_id: session?.DeviceId || null,
+    device_name: session?.DeviceName || null,
+    app_name: session?.Client || session?.AppName || null,
+    user_id: session?.UserId || null,
+    user_name: session?.UserName || null,
+    supports_media_control: session?.SupportsMediaControl ?? null,
+  };
+}
+
+function playbackMatches(session, args) {
+  if (args.session_id) return session.Id === args.session_id;
+  if (args.device_id) return session.DeviceId === args.device_id;
+  if (args.device_name)
+    return String(session.DeviceName || "").toLowerCase() === String(args.device_name).toLowerCase();
+  return session.SupportsMediaControl !== false;
+}
+
+async function playback(services, args, runtime) {
+  const { p, c } = await open(services, args, runtime);
+  if (!p.allow_playback_control)
+    throw new JellyfinError(
+      "policy_denied",
+      `remote playback is disabled for Jellyfin profile "${p.name}"`,
+    );
+  if (!args.item_id) throw new JellyfinError("invalid_input", "item_id is required");
+  const selectorCount = [args.session_id, args.device_id, args.device_name].filter(Boolean).length;
+  if (selectorCount > 1)
+    throw new JellyfinError("invalid_input", "session_id, device_id and device_name are mutually exclusive");
+
+  const sessions = await c.get("/Sessions");
+  const candidates = (Array.isArray(sessions) ? sessions : []).filter((session) => playbackMatches(session, args));
+  if (!candidates.length)
+    throw new JellyfinError(
+      args.session_id || args.device_id || args.device_name ? "not_found" : "state_conflict",
+      "no eligible Jellyfin device session was found",
+      { requested: { session_id: args.session_id || null, device_id: args.device_id || null, device_name: args.device_name || null } },
+    );
+  if (candidates.length > 1)
+    throw new JellyfinError("state_conflict", "playback target is ambiguous; select an exact session or device", {
+      candidates: candidates.slice(0, 20).map(playbackCandidateView),
+    });
+  const target = candidates[0];
+  if (target.SupportsMediaControl === false)
+    throw new JellyfinError("unsupported_capability", "the selected Jellyfin session does not support media control", {
+      target: playbackCandidateView(target),
+    });
+  if (!target.UserId)
+    throw new JellyfinError("state_conflict", "the selected session has no resolved Jellyfin user identity", {
+      target: playbackCandidateView(target),
+    });
+
+  // Resolve the item through the target session's user. This both prevents
+  // accidentally playing inaccessible media and ensures watch state belongs
+  // to the active user rather than to a configured or guessed username.
+  const item = await c.get(`/Users/${encodeURIComponent(target.UserId)}/Items/${encodeURIComponent(args.item_id)}`, {
+    Fields: "Overview,MediaSources,MediaStreams,ProviderIds,UserData,Path",
+  });
+  const resolvedItem = {
+    id: item?.Id || null,
+    name: item?.Name || null,
+    type: item?.Type || null,
+    user_data: item?.UserData || {},
+  };
+  if (!resolvedItem.id)
+    throw new JellyfinError("not_found", "the requested item is not available to the selected Jellyfin user");
+
+  const plan = {
+    profile: p.name,
+    operation: "play",
+    target: playbackCandidateView(target),
+    user: { id: target.UserId, name: target.UserName || null, source: "target_session" },
+    item: { id: resolvedItem.id, name: resolvedItem.name, type: resolvedItem.type },
+    endpoint: `/Sessions/${target.Id}/Playing`,
+    command: { play_command: "PlayNow", item_ids: [resolvedItem.id] },
+    watch_state_source: "Jellyfin session user and user-scoped item lookup",
+  };
+  if (args.dry_run === true) return { dry_run: true, ...plan, changes_made: false };
+
+  await c.post(`/Sessions/${encodeURIComponent(target.Id)}/Playing`, null, {
+    playCommand: "PlayNow",
+    itemIds: resolvedItem.id,
+  });
+  let observed = false;
+  let observedSession = null;
+  for (let i = 0; i < 3; i += 1) {
+    await sleep(p.verify_poll_interval_ms, runtime?.signal);
+    if (runtime?.signal?.aborted) break;
+    const now = await c.get("/Sessions");
+    observedSession = (Array.isArray(now) ? now : []).find((session) => session.Id === target.Id) || null;
+    if (observedSession?.NowPlayingItem?.Id === resolvedItem.id) {
+      observed = true;
+      break;
+    }
+  }
+  return {
+    ...plan,
+    outcome: observed ? "verified" : "request_accepted",
+    postcondition: {
+      playback_observed: observed,
+      now_playing_item_id: observedSession?.NowPlayingItem?.Id || null,
+    },
+    changes_made: true,
+  };
+}
+
 async function pollForTransition(c, taskId, predicate, { interval, signal, polls = 3 }) {
   let lastSeen = null;
   for (let i = 0; i < polls; i += 1) {
@@ -2081,6 +2189,33 @@ const entry = {
         risk: "high",
         category: "Media",
         handler: guard(maintenance)(services),
+      },
+      {
+        name: "jellyfin_playback",
+        aliases: ["jf_playback"],
+        description:
+          "Governed targeted Jellyfin playback for an active device session. Resolves the user from the selected session and refuses ambiguous targets.",
+        schema: z.object({
+          action: z.enum(["play"]),
+          profile: z.string().optional(),
+          item_id: z.string().min(1),
+          session_id: z.string().optional(),
+          device_id: z.string().optional(),
+          device_name: z.string().max(200).optional(),
+          dry_run: z.boolean().optional(),
+        }),
+        args: {
+          action: "string (play)",
+          profile: "string",
+          item_id: "string (required)",
+          session_id: "string (exact active session selector)",
+          device_id: "string (exact device selector)",
+          device_name: "string (case-insensitive exact device-name selector)",
+          dry_run: "boolean",
+        },
+        risk: "high",
+        category: "Media",
+        handler: guard(playback)(services),
       },
     ];
   },

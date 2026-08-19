@@ -148,6 +148,7 @@ function parse(name, raw, globalConfig = {}) {
     timeout,
     insecure: insecureHttp,
     allow_writes: raw.allow_writes === true,
+    allow_playback_control: raw.allow_playback_control === true,
     is_default: raw.default === true,
     storage_provider: storageProvider,
     verify_poll_interval_ms: verifyPollMs,

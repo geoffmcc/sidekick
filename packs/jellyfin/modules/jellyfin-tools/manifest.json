@@ -13,6 +13,7 @@
     "jellyfin-live-tv-inspection",
     "jellyfin-server-audit",
     "jellyfin-user-media",
+    "jellyfin-playback-control",
     "jellyfin-analytics",
     "jellyfin-playback-diagnosis",
     "jellyfin-log-intelligence",
@@ -27,7 +28,8 @@
   ],
   "tools": {
     "jellyfin": { "risk": "low", "category": "Media", "aliases": ["jf"] },
-    "jellyfin_maintenance": { "risk": "high", "category": "Media", "aliases": ["jf_maintenance"] }
+    "jellyfin_maintenance": { "risk": "high", "category": "Media", "aliases": ["jf_maintenance"] },
+    "jellyfin_playback": { "risk": "high", "category": "Media", "aliases": ["jf_playback"] }
   },
   "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
 }
