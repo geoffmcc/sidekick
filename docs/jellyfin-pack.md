@@ -1,6 +1,6 @@
 # Jellyfin Capability Pack
 
-Status: shipped (v1.2.0, bundled first-party pack)
+Status: shipped (v1.3.0, bundled first-party pack)
 Depends on: Capability Packs v1
 
 The Jellyfin pack lets Sidekick securely inspect, diagnose and maintain
@@ -62,7 +62,8 @@ use the read surface.
 - Read-only catalog, content-health, Live TV and server-audit workflows:
   `jellyfin/media-info`, `jellyfin/library-audit`,
   `jellyfin/content-health`, `jellyfin/live-tv-status`,
-  `jellyfin/server-audit`, alongside the health, playback, maintenance
+  `jellyfin/server-audit`, `jellyfin/catalog-browse`,
+  `jellyfin/user-media-overview`, alongside the health, playback, maintenance
   preflight, upgrade readiness and incident workflows.
 
 **Architected / deferred (not exposed as working):**
@@ -196,7 +197,8 @@ configuration implying a capability that does not exist.
 `logs_summary`, `incident_diagnose`, `backup_readiness`, `upgrade_readiness`,
 `library_audit`, `content_health`, `server_audit`, `live_tv_status`,
 `tuner_status`, `recording_status`, `live_tv_channels`, `live_tv_guide`,
-`live_tv_timers`.
+`live_tv_timers`, `list_collections`, `list_playlists`, `user_media_state`,
+`user_unwatched`.
 
 Per-action honesty notes:
 
@@ -217,6 +219,10 @@ Per-action honesty notes:
   returned.
 - `live_tv_channels`, `live_tv_guide` and `live_tv_timers` are GET-only and
   report bounded channel/program/timer data when Live TV is enabled.
+- `list_collections` and `list_playlists` are bounded catalog reads. The
+  user-scoped `user_media_state` and `user_unwatched` actions require an
+  explicit `user_id` or exact `username`; the latter is an unplayed view, not
+  a recommendation or behavioral inference.
 - `user_status` requires `user_id` or `username`; `plugin_status` requires
   `plugin_id` (or `query` for an exact name match). `user_access_audit`
   flags administrators, disabled accounts, remote access, all-folder vs
@@ -298,6 +304,8 @@ HTTPS client. No shell permission exists.
 | `jellyfin/content-health` | read-only | Bounded missing metadata/image/provider/runtime findings. |
 | `jellyfin/live-tv-status` | read-only | Live TV services, channels, guide, recordings and timers. |
 | `jellyfin/server-audit` | read-only | Sanitized server configuration and operational summary. |
+| `jellyfin/catalog-browse` | read-only | Collections and playlist inventory. |
+| `jellyfin/user-media-overview` | read-only | Explicitly user-scoped unplayed media and watch state. |
 
 ---
 

@@ -374,7 +374,7 @@ async function fetchLatestStable(services) {
 // ---- read tool -------------------------------------------------------------
 
 async function read(services, args, runtime) {
-  const userFilterActions = new Set(["activity", "user_status", "user_access_audit"]);
+  const userFilterActions = new Set(["activity", "user_status", "user_access_audit", "user_media_state", "user_unwatched"]);
   if ((args.user_id || args.username) && !userFilterActions.has(args.action)) {
     throw new JellyfinError(
       "invalid_input",
@@ -633,6 +633,99 @@ async function read(services, args, runtime) {
         media_streams: x.MediaStreams || [],
         provider_ids: x.ProviderIds || {},
       },
+    };
+  }
+  if (["list_collections", "list_playlists"].includes(args.action)) {
+    const itemType = args.action === "list_collections" ? "BoxSet" : "Playlist";
+    const data = await c.get("/Items", {
+      Recursive: true,
+      IncludeItemTypes: itemType,
+      Fields: "Overview,ProviderIds,Path,ChildCount",
+      SortBy: "SortName",
+      SortOrder: "Ascending",
+      Limit: bounded(args.limit, 50),
+      StartIndex: Math.max(0, args.start_index ?? args.start ?? 0),
+      EnableTotalRecordCount: true,
+    });
+    const items = Array.isArray(data?.Items) ? data.Items : [];
+    return {
+      profile: p.name,
+      kind: args.action === "list_collections" ? "collections" : "playlists",
+      items: items.slice(0, 100).map((x) => ({
+        id: x.Id,
+        name: x.Name,
+        type: x.Type,
+        child_count: x.ChildCount ?? null,
+        overview: x.Overview || null,
+        provider_ids: x.ProviderIds || {},
+      })),
+      total_record_count: data?.TotalRecordCount ?? null,
+      bounded: true,
+    };
+  }
+  if (["user_media_state", "user_unwatched"].includes(args.action)) {
+    if (!args.user_id && !args.username)
+      throw new JellyfinError("invalid_input", "user_id or username is required (use list_users to enumerate)");
+    const users = await getAll(c, "/Users", null, 100);
+    const user =
+      users.find((x) => args.user_id && x.Id === args.user_id) ||
+      users.find((x) => args.username && String(x.Name || "").toLowerCase() === String(args.username).toLowerCase());
+    if (!user) throw new JellyfinError("not_found", "no matching Jellyfin user");
+    if (args.action === "user_media_state") {
+      if (!args.item_id) throw new JellyfinError("invalid_input", "item_id is required");
+      const item = await c.get(`/Users/${encodeURIComponent(user.Id)}/Items/${encodeURIComponent(args.item_id)}`, {
+        Fields: "Overview,MediaSources,MediaStreams,ProviderIds,UserData,Path",
+      });
+      const data = item.UserData || {};
+      return {
+        profile: p.name,
+        user: { id: user.Id, name: user.Name || null },
+        item: { id: item.Id, name: item.Name || null, type: item.Type || null },
+        state: {
+          is_favorite: data.IsFavorite === true,
+          played: data.Played === true,
+          play_count: data.PlayCount ?? 0,
+          playback_position_ticks: data.PlaybackPositionTicks ?? 0,
+          last_played_date: data.LastPlayedDate || null,
+          rating: data.Rating ?? null,
+          played_percentage: data.PlayedPercentage ?? null,
+          is_unplayed: data.Played !== true,
+        },
+        bounded: true,
+      };
+    }
+    const data = await c.get(`/Users/${encodeURIComponent(user.Id)}/Items`, {
+      Recursive: true,
+      IncludeItemTypes: args.include_item_types || "Movie,Series,Episode",
+      Filters: "IsUnplayed",
+      SortBy: "DateCreated",
+      SortOrder: "Descending",
+      Fields: "Overview,MediaSources,MediaStreams,ProviderIds,UserData,Path",
+      Limit: bounded(args.limit, 50),
+      StartIndex: Math.max(0, args.start_index ?? args.start ?? 0),
+      EnableUserData: true,
+      EnableTotalRecordCount: true,
+    });
+    const items = Array.isArray(data?.Items) ? data.Items : [];
+    return {
+      profile: p.name,
+      user: { id: user.Id, name: user.Name || null },
+      items: items.slice(0, 100).map((x) => ({
+        id: x.Id,
+        name: x.Name,
+        type: x.Type,
+        series_name: x.SeriesName || null,
+        production_year: x.ProductionYear ?? null,
+        runtime_minutes: runtimeView(x).runtime_minutes,
+        user_state: {
+          is_favorite: x.UserData?.IsFavorite === true,
+          played: x.UserData?.Played === true,
+          playback_position_ticks: x.UserData?.PlaybackPositionTicks ?? 0,
+        },
+      })),
+      total_record_count: data?.TotalRecordCount ?? null,
+      bounded: true,
+      note: "This is a user-scoped unplayed view, not a server-side recommendation ranking.",
     };
   }
   if (args.action === "media_info") {
@@ -1660,6 +1753,10 @@ const readActions = [
   "search_media",
   "item_details",
   "media_info",
+  "list_collections",
+  "list_playlists",
+  "user_media_state",
+  "user_unwatched",
   "recent_media",
   "metadata_issues",
   "duplicate_candidates",
@@ -1731,6 +1828,7 @@ const entry = {
           session_id: "string",
           item_id: "string",
           season_id: "string",
+          include_item_types: "string",
           task_id: "string",
           user_id: "string",
           username: "string",
