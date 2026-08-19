@@ -325,6 +325,24 @@ async function backupCoverage(client) {
   };
 }
 
+async function backupHistory(client) {
+  const backup = await backupStatus(client);
+  const tasks = backup.recent_backups.most_recent || [];
+  const completed = tasks.filter((task) => task.ok === true);
+  const failed = tasks.filter((task) => task.ok === false);
+  return {
+    total_tasks: tasks.length,
+    completed: completed.length,
+    failed: failed.length,
+    latest: tasks[0] || null,
+    latest_success: completed[0] || null,
+    latest_failure: failed[0] || null,
+    tasks,
+    bounded: true,
+    note: "History is limited to the most recent Proxmox-side vzdump task evidence and does not verify restoreability or PBS retention.",
+  };
+}
+
 async function versionStatus(client) {
   const version = await client.get(["version"]);
   return { version: normalize.normalizeVersion(version) };
@@ -376,6 +394,25 @@ async function storageCapacity(client) {
   };
 }
 
+async function storageHealth(client, { node } = {}) {
+  const inventory = await listStorage(client, { node });
+  const findings = [];
+  for (const storage of inventory.storage) {
+    if (storage.enabled === false) findings.push({ storage: storage.storage, code: "storage_disabled", detail: "Proxmox reports this storage as disabled." });
+    if (storage.active === false) findings.push({ storage: storage.storage, code: "storage_inactive", detail: "Proxmox reports this storage as inactive." });
+    if (storage.used_fraction_pct !== null && storage.used_fraction_pct >= 90) findings.push({ storage: storage.storage, code: "storage_high_usage", detail: `Reported usage is ${storage.used_fraction_pct}%.` });
+    if (storage.total_bytes === null) findings.push({ storage: storage.storage, code: "capacity_unknown", detail: "The storage row did not include total capacity." });
+  }
+  return {
+    status: findings.some((finding) => ["storage_disabled", "storage_inactive", "storage_high_usage"].includes(finding.code)) ? "attention" : "observed",
+    scope: inventory.scope,
+    storage: inventory.storage,
+    findings,
+    bounded: true,
+    note: "Storage health is limited to Proxmox storage-row evidence; it does not probe filesystems, ZFS/Ceph internals or PBS datastores.",
+  };
+}
+
 async function upgradeReadiness(client) {
   const [version, health, backup] = await Promise.all([
     versionStatus(client),
@@ -412,8 +449,10 @@ module.exports = {
   taskStatus,
   backupStatus,
   backupCoverage,
+  backupHistory,
   versionStatus,
   clusterHealth,
   storageCapacity,
+  storageHealth,
   upgradeReadiness,
 };
