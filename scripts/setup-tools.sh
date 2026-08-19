@@ -298,6 +298,10 @@ mkdir -p "$DOCKER_DIR/data/qdrant"
 mkdir -p "$DOCKER_DIR/data/influxdb"
 mkdir -p "$DOCKER_DIR/data/grafana"
 chown -R "$USERNAME:$USERNAME" "$DOCKER_DIR"
+# The official postgres:16-alpine image runs as UID/GID 999. The other
+# bind-mounted services use the deployment account, but PostgreSQL must own
+# its data directory or background workers will repeatedly fail to open files.
+chown -R 999:999 "$DOCKER_DIR/data/postgres"
 
 # Copy docker-compose.yml if not already there
 if [ -f "$DOCKER_DIR/docker-compose.yml" ]; then

@@ -4,6 +4,7 @@ const assert = require("assert");
 const operations = require("../packs/container-operations/modules/container-operations-tools/lib/operations");
 const profiles = require("../packs/container-operations/modules/container-operations-tools/lib/profiles");
 const compose = require("../packs/container-operations/modules/container-operations-tools/lib/compose");
+const fs = require("fs");
 const packManifest = require("../packs/container-operations/sidekick.pack.json");
 
 function fakeClient() {
@@ -29,6 +30,17 @@ test("CO.1a: fresh installs provide a read-only local Docker Compose default", (
   assert.equal(profile.profile.allow_mutations, false);
   assert.deepEqual(profile.profile.compose.project_roots, ["/home/sidekick/sidekick/docker"]);
   assert.deepEqual(config.repository_roots, ["/home/sidekick/sidekick"]);
+});
+
+test("CO.1b: the bundled pack version advances when its runtime module changes", () => {
+  assert.equal(packManifest.version, "1.0.1");
+  assert.equal(require("../packs/container-operations/modules/container-operations-tools/manifest.json").version, "1.0.1");
+});
+
+test("CO.1c: Compose declares bounded Grafana origins", () => {
+  const composeText = fs.readFileSync(require.resolve("../docker/docker-compose.yml"), "utf8");
+  assert.match(composeText, /GF_LIVE_ALLOWED_ORIGINS:/);
+  assert.match(composeText, /SIDEKICK_GRAFANA_ALLOWED_ORIGINS/);
 });
 
 test("CO.2: normalized discovery retains health, security, networks and ports", async () => {
