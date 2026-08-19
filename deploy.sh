@@ -494,9 +494,9 @@ if [ "$git_mode_used" = true ]; then
 else
   echo ""
   echo -e "\033[36m--- Installing Dependencies ---\033[0m"
-  echo -e "\033[32mRunning npm install...\033[0m"
-  if ! run_remote "cd $REMOTE_DIR && npm install --omit=dev --no-package-lock 2>&1"; then
-    echo -e "\033[31mERROR: npm install failed\033[0m"
+  echo -e "\033[32mRunning npm ci from package-lock.json...\033[0m"
+  if ! run_remote "cd $REMOTE_DIR && npm ci --omit=dev 2>&1"; then
+    echo -e "\033[31mERROR: npm ci failed\033[0m"
     exit 1
   fi
 
