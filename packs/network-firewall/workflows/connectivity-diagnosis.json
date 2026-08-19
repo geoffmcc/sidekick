@@ -1,0 +1,8 @@
+{
+  "name": "network-firewall/connectivity-diagnosis",
+  "display_name": "Network/firewall connectivity diagnosis",
+  "owner": "network-firewall",
+  "description": "Analyze routing, zones, ordered policy, NAT, and provider evidence without claiming certainty when effective policy is unknown.",
+  "inputs": { "profile": { "type": "string", "required": false }, "source": { "type": "string", "required": true }, "destination": { "type": "string", "required": true }, "protocol": { "type": "string", "required": true }, "port": { "type": "integer", "required": false } },
+  "steps": [ { "id": "path", "tool": "network", "arguments": { "action": "path", "profile": "{{profile}}", "source": "{{source}}", "destination": "{{destination}}", "protocol": "{{protocol}}", "port": "{{port}}" } }, { "id": "policy", "tool": "firewall", "arguments": { "action": "evaluate", "profile": "{{profile}}", "source": "{{source}}", "destination": "{{destination}}", "protocol": "{{protocol}}", "port": "{{port}}" } } ]
+}

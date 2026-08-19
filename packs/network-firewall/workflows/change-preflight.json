@@ -1,0 +1,8 @@
+{
+  "name": "network-firewall/change-preflight",
+  "display_name": "Network/firewall change preflight",
+  "owner": "network-firewall",
+  "description": "Produce a deterministic bounded plan and lockout assessment before any network/firewall mutation.",
+  "inputs": { "profile": { "type": "string", "required": true }, "change_type": { "type": "string", "required": true }, "id": { "type": "string", "required": false }, "management_path": { "type": "string", "required": true } },
+  "steps": [ { "id": "preflight", "tool": "network_change", "arguments": { "action": "preflight", "profile": "{{profile}}", "change_type": "{{change_type}}", "id": "{{id}}", "management_path": "{{management_path}}" } } ]
+}
