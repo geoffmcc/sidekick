@@ -177,7 +177,10 @@ function isOlderThan7Days(dateStr) {
 async function sidekick_debug_tool({ action, session_name, key, value, service, issue, redact }) {
   loadDebugSessions();
   const now = Date.now();
-  const shouldRedact = redact !== false; // Default to true
+  // Debug findings are persistent data and can contain copied command output.
+  // Redaction is mandatory; a caller-controlled opt-out would turn this low-risk
+  // helper into an intentional secret sink.
+  const shouldRedact = true;
 
   // --- Persistent storage actions (new) ---
 
@@ -431,7 +434,7 @@ const SCHEMAS = {
     value: z.string().optional().describe("Value to cache/store"),
     service: z.string().optional().describe("Service name (for store/recall)"),
     issue: z.string().optional().describe("Issue description (for store)"),
-    redact: z.boolean().optional().describe("Default true - set false to skip redaction")
+    redact: z.boolean().optional().describe("Deprecated compatibility field; redaction is always enforced")
   }),
   fresheyes: z.object({
     problem: z.string().describe("Problem description"),

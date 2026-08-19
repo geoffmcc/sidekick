@@ -3,7 +3,7 @@
 const { z } = require("zod");
 const dbStore = require("../../db");
 const redisStore = require("../../redis");
-const { redactSensitive } = require("../../redact");
+const { redactSensitive, isSensitiveKey } = require("../../redact");
 const toolContext = require("../context");
 const { PROJECT_RE } = require("../../core/project-identity");
 
@@ -46,6 +46,9 @@ function scopedPrefix(project = currentScope().project) {
 }
 
 async function sidekick_store({ key, value, project, category }) {
+  if (isSensitiveKey(key)) {
+    return { content: [{ type: "text", text: "Sensitive-looking keys must use the encrypted secret store, not ordinary KV storage" }], isError: true };
+  }
   if (project !== undefined && project !== null && !PROJECT_RE.test(project)) {
     return { content: [{ type: "text", text: "Invalid project name. Must match /^[a-z][a-z0-9_]*$/" }], isError: true };
   }
@@ -60,6 +63,9 @@ async function sidekick_store({ key, value, project, category }) {
 }
 
 async function sidekick_get({ key }) {
+  if (isSensitiveKey(key)) {
+    return { content: [{ type: "text", text: "Sensitive-looking keys are not readable through ordinary KV storage" }], isError: true };
+  }
   const entry = dbStore.getKV(scopedKey(key));
   if (!entry) {
     return { content: [{ type: "text", text: "Key not found: " + key }], isError: true };
@@ -100,7 +106,8 @@ async function sidekick_get_by_project({ project }) {
     if (prefix && !key.startsWith(prefix)) continue;
     if (typeof entry === "object" && entry !== null && "project" in entry) {
       if (entry.project === project) {
-        results.push({ key: prefix ? key.slice(prefix.length) : key, value: entry.value });
+        const publicKey = prefix ? key.slice(prefix.length) : key;
+        results.push({ key: publicKey, value: isSensitiveKey(publicKey) ? "[REDACTED]" : redactSensitive(entry.value) });
       }
     }
   }
