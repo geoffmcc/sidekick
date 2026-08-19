@@ -30,7 +30,7 @@ test("all Jellyfin JSON assets parse", () => {
     .filter((x) => x.endsWith(".json")))
     JSON.parse(fs.readFileSync(path.join(pack, f), "utf8"));
 });
-test("pack and module versions agree at 1.4.1", () => {
+test("pack and module versions agree at 1.4.2", () => {
   const packManifest = JSON.parse(
     fs.readFileSync(path.join(pack, "sidekick.pack.json"), "utf8"),
   );
@@ -40,8 +40,8 @@ test("pack and module versions agree at 1.4.1", () => {
       "utf8",
     ),
   );
-  assert.strictEqual(packManifest.version, "1.4.1");
-  assert.strictEqual(moduleManifest.version, "1.4.1");
+  assert.strictEqual(packManifest.version, "1.4.2");
+  assert.strictEqual(moduleManifest.version, "1.4.2");
   // Every services.dispatch target used by the module must be declared.
   const declared = moduleManifest.permissions.map((x) => x.tool).sort();
   assert.deepStrictEqual(declared, ["proxmox", "status", "web_fetch"]);
@@ -175,6 +175,17 @@ test("direct play and missing evidence degrade honestly", () => {
     normalize.diagnose({}).classification,
     "insufficient_evidence",
   );
+});
+test("session normalization exposes the current item's runtime", () => {
+  const s = normalize.session({
+    NowPlayingItem: { RunTimeTicks: 45 * 60 * 10000000 },
+    PlayState: { PositionTicks: 10 * 10000000 },
+  });
+  assert.deepStrictEqual(s.media.runtime, {
+    ticks: 45 * 60 * 10000000,
+    seconds: 2700,
+    minutes: 45,
+  });
 });
 test("capabilities are optional and normalized", () => {
   const c = normalize.capabilities({
@@ -375,6 +386,7 @@ function baseFixtures() {
         NowPlayingItem: {
           Id: "i1",
           Name: "Film",
+          RunTimeTicks: 45 * 60 * 10000000,
           MediaStreams: [{ Type: "Video", Codec: "hevc" }],
         },
         PlayState: { PlayMethod: "Transcode", PositionTicks: 7543210000, IsPaused: false, CanSeek: true },
