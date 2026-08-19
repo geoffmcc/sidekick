@@ -23,6 +23,7 @@ const evolveCommon = require("../../evolve/common");
 const platformKernel = require("../../platform/kernel");
 const toolContext = require("../context");
 const { enforcePathPolicy } = require("../path-policy");
+const { childProcessEnv } = require("../../security/child-process");
 const { generateId } = require("../../core/ids");
 const { callTool } = require("../dispatch-seam");
 const {
@@ -65,6 +66,9 @@ async function sidekick_cron({ action, name, schedule, command, id }) {
   if (action === "add") {
     if (!name || !schedule || !command) {
       return { content: [{ type: "text", text: "name, schedule, and command required" }], isError: true };
+    }
+    if (name.length > 200 || schedule.length > 100 || command.length > 8192 || /[\u0000\r\n]/.test(schedule) || /[\u0000\r\n]/.test(command)) {
+      return { content: [{ type: "text", text: "cron name, schedule, or command exceeds its safe size or contains a control character" }], isError: true };
     }
     const newJob = {
       id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
@@ -177,7 +181,7 @@ async function sidekick_cron({ action, name, schedule, command, id }) {
       metadata: { cron_job_id: job.id, schedule: job.schedule },
     });
     try {
-      const stdout = execSync(job.command, { timeout: 300000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
+      const stdout = execSync(job.command, { timeout: 300000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: childProcessEnv() });
       job.lastRun = new Date().toISOString();
       job.lastResult = "success";
       saveCronJobs(jobs);
@@ -216,7 +220,7 @@ function syncCrontab(jobs) {
   try {
     const enabledJobs = jobs.filter(j => j.enabled);
     if (enabledJobs.length === 0) {
-      try { execFileSync("crontab", ["-r"], { encoding: "utf-8" }); } catch {}
+      try { execFileSync("crontab", ["-r"], { encoding: "utf-8", env: childProcessEnv() }); } catch {}
       return;
     }
     const lines = enabledJobs.map(j => {
@@ -224,7 +228,7 @@ function syncCrontab(jobs) {
       return `${j.schedule} ${script} # sidekick:${j.id}`;
     });
     const crontabContent = lines.join("\n") + "\n";
-    execFileSync("crontab", ["-"], { input: crontabContent, encoding: "utf-8" });
+    execFileSync("crontab", ["-"], { input: crontabContent, encoding: "utf-8", env: childProcessEnv() });
   } catch (e) {
     // Silently fail if crontab not available
   }
@@ -560,7 +564,7 @@ function saveWatches(watches) {
 
 function checkService(serviceName) {
   try {
-    const output = execFileSync("systemctl", ["is-active", serviceName], { encoding: "utf-8" }).trim();
+    const output = execFileSync("systemctl", ["is-active", serviceName], { encoding: "utf-8", timeout: 5000, env: childProcessEnv() }).trim();
     return { status: output, active: output === "active" };
   } catch {
     return { status: "unknown", active: false };
@@ -569,7 +573,7 @@ function checkService(serviceName) {
 
 function checkProcess(processName) {
   try {
-    const output = execFileSync("pgrep", ["-f", processName], { encoding: "utf-8" }).trim();
+    const output = execFileSync("pgrep", ["-f", processName], { encoding: "utf-8", timeout: 5000, env: childProcessEnv() }).trim();
     return { running: output.length > 0, pids: output.split("\n").filter(Boolean) };
   } catch {
     return { running: false, pids: [] };
@@ -578,7 +582,7 @@ function checkProcess(processName) {
 
 function checkEndpoint(url) {
   try {
-    const output = execFileSync("curl", ["-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", url], { encoding: "utf-8" }).trim();
+    const output = execFileSync("curl", ["-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", url], { encoding: "utf-8", timeout: 10000, env: childProcessEnv() }).trim();
     return { status: parseInt(output), ok: output.startsWith("2") };
   } catch {
     return { status: 0, ok: false };
@@ -915,9 +919,9 @@ async function sidekick_watch({ action, id, name, source, target, condition, int
 const SCHEMAS = {
   cron: z.object({
     action: z.enum(["add", "list", "remove", "run"]).describe("Cron action to perform"),
-    name: z.string().optional().describe("Job name (required for add, optional for remove/run)"),
-    schedule: z.string().optional().describe("Cron schedule expression (e.g. '0 * * * *' for hourly)"),
-    command: z.string().optional().describe("Command to execute (required for add)"),
+    name: z.string().max(200).optional().describe("Job name (required for add, optional for remove/run)"),
+    schedule: z.string().max(100).optional().describe("Cron schedule expression (e.g. '0 * * * *' for hourly)"),
+    command: z.string().max(8192).optional().describe("Command to execute (required for add)"),
     id: z.string().optional().describe("Job ID (for remove/run)")
   }),
   delay: z.object({

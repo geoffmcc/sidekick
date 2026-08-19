@@ -13,6 +13,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
+const { childProcessEnv } = require("../security/child-process");
 
 // Absolute path: resolving "icacls" by name would let a non-admin who controls
 // a PATH entry run code inside the elevated `enroll` the installer performs.
@@ -37,12 +38,12 @@ function defaultCredentialPath() {
 // Best-effort — a failure is reported to the caller but never throws.
 function applyWindowsAcl(filePath) {
   try {
-    execFileSync(ICACLS, [filePath, "/inheritance:r"], { stdio: "ignore" });
+    execFileSync(ICACLS, [filePath, "/inheritance:r"], { stdio: "ignore", env: childProcessEnv() });
     const user = process.env.USERNAME
       ? `${process.env.USERDOMAIN || os.hostname()}\\${process.env.USERNAME}`
       : null;
-    if (user) execFileSync(ICACLS, [filePath, "/grant:r", `${user}:F`], { stdio: "ignore" });
-    execFileSync(ICACLS, [filePath, "/grant:r", "*S-1-5-18:(R)"], { stdio: "ignore" });
+    if (user) execFileSync(ICACLS, [filePath, "/grant:r", `${user}:F`], { stdio: "ignore", env: childProcessEnv() });
+    execFileSync(ICACLS, [filePath, "/grant:r", "*S-1-5-18:(R)"], { stdio: "ignore", env: childProcessEnv() });
     return true;
   } catch {
     return false;

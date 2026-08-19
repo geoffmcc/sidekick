@@ -3,6 +3,7 @@ const path = require("path");
 const zlib = require("zlib");
 const crypto = require("crypto");
 const { execFileSync } = require("child_process");
+const { childProcessEnv } = require("./security/child-process");
 const { createMemoryDomain } = require("./db/memory-domain");
 const { splitSqlStatements, parseAddColumn } = require("./core/sql-statements");
 const { createKvStore } = require("./db/kv-store");
@@ -1322,11 +1323,11 @@ function verifyHandoffProvenance(packet, { requireResume = true } = {}) {
     checks.push({ name: "commit", status: "unverifiable", detail: "provenance.commit_sha is missing" });
   } else {
     try {
-      execFileSync("git", ["-C", repo, "cat-file", "-e", `${commit}^{commit}`], { stdio: "ignore" });
+      execFileSync("git", ["-C", repo, "cat-file", "-e", `${commit}^{commit}`], { stdio: "ignore", env: childProcessEnv() });
       checks.push({ name: "commit", status: "verified", commit_sha: commit });
       if (provenance.branch) {
         try {
-          execFileSync("git", ["-C", repo, "merge-base", "--is-ancestor", commit, String(provenance.branch)], { stdio: "ignore" });
+          execFileSync("git", ["-C", repo, "merge-base", "--is-ancestor", commit, String(provenance.branch)], { stdio: "ignore", env: childProcessEnv() });
           checks.push({ name: "branch", status: "verified", branch: String(provenance.branch) });
         } catch {
           checks.push({ name: "branch", status: "stale", branch: String(provenance.branch), detail: "branch is missing or does not contain the recorded commit" });

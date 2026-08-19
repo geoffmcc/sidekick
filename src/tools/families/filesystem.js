@@ -3,6 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
+const { childProcessEnv } = require("../../security/child-process");
 const { z } = require("zod");
 const { redactSensitive } = require("../../redact");
 const { enforcePathPolicy } = require("../path-policy");
@@ -45,7 +46,7 @@ async function sidekick_search({ pattern, path: searchPath, include }) {
 
   let useRg = false;
   try {
-    execFileSync("which", ["rg"], { stdio: "ignore" });
+    execFileSync("which", ["rg"], { stdio: "ignore", env: childProcessEnv() });
     useRg = true;
   } catch (e) {}
 
@@ -55,12 +56,12 @@ async function sidekick_search({ pattern, path: searchPath, include }) {
       const args = ["--json", "--max-count", "100"];
       if (include) args.push("-g", include);
       args.push(pattern, targetPath);
-      stdout = execFileSync("rg", args, { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024 });
+      stdout = execFileSync("rg", args, { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024, env: childProcessEnv() });
     } else {
       const args = ["-rn", "--max-count=100"];
       if (include) args.push("--include=" + include);
       args.push(pattern, targetPath);
-      stdout = execFileSync("grep", args, { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024 });
+      stdout = execFileSync("grep", args, { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024, env: childProcessEnv() });
     }
     return { content: [{ type: "text", text: redactSensitive(stdout || "(no matches)") }] };
   } catch (e) {

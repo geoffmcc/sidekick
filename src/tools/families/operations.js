@@ -18,6 +18,7 @@ const { z } = require("zod");
 const { enforcePathPolicy } = require("../path-policy");
 const { sidekick_status } = require("./observability");
 const { callTool } = require("../dispatch-seam");
+const { childProcessEnv } = require("../../security/child-process");
 
 const SIDEKICK_SERVICES = ["sidekick-mcp", "sidekick-dashboard", "sidekick-agent"];
 const SIDEKICK_DEPLOY_REPO_PATH = "/home/sidekick/sidekick";
@@ -42,7 +43,7 @@ function runOpsCommand(command, args, options = {}) {
       encoding: "utf-8",
       maxBuffer: options.maxBuffer || 10 * 1024 * 1024,
       cwd: options.cwd,
-      env: options.env ? { ...process.env, ...options.env } : process.env
+      env: childProcessEnv(options.env)
     });
     return { ok: true, stdout: stdout.trim(), stderr: "" };
   } catch (e) {
@@ -61,7 +62,8 @@ function runOpsCommandAsync(command, args, options = {}) {
       timeout: options.timeout || 30000,
       encoding: "utf-8",
       maxBuffer: options.maxBuffer || 10 * 1024 * 1024,
-      cwd: options.cwd
+      cwd: options.cwd,
+      env: childProcessEnv(options.env)
     }, (error, stdout, stderr) => {
       resolve({
         ok: !error,
@@ -111,7 +113,8 @@ function scheduleMcpRestart(delaySeconds = 2) {
   setTimeout(() => {
     const child = spawn("sudo", ["systemctl", "restart", "sidekick-mcp"], {
       detached: true,
-      stdio: "ignore"
+      stdio: "ignore",
+      env: childProcessEnv()
     });
     child.unref();
   }, delayMs).unref();

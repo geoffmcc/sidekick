@@ -20,9 +20,14 @@ const { execFileSync, execSync } = require("child_process");
 const { z } = require("zod");
 const { validateInfluxUrl } = require("../../influx-endpoint-policy");
 const { readSecret } = require("../../core/runtime-secrets");
+const { childProcessEnv } = require("../../security/child-process");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "..", "..", "data");
 fs.mkdirSync(DATA_DIR, { recursive: true });
+
+function safeExecFileSync(program, args, options = {}) {
+  return execFileSync(program, args, { ...options, env: childProcessEnv(options.env) });
+}
 
 const HEALTH_HISTORY_FILE = path.join(DATA_DIR, "health_history.json");
 const MAX_HEALTH_HISTORY = 100;
@@ -48,7 +53,7 @@ function checkServices(serviceList) {
   let healthy = 0;
   for (const svc of services) {
     try {
-      const output = execFileSync("systemctl", ["is-active", svc], { encoding: "utf-8", timeout: 5000 }).trim();
+      const output = safeExecFileSync("systemctl", ["is-active", svc], { encoding: "utf-8", timeout: 5000 }).trim();
       const isActive = output === "active";
       results.push({ service: svc, status: output, healthy: isActive });
       if (isActive) healthy++;
@@ -69,7 +74,7 @@ function checkServices(serviceList) {
 
 function checkProcesses() {
   try {
-    const output = execFileSync("ps", ["aux", "--sort=-%cpu"], {
+    const output = safeExecFileSync("ps", ["aux", "--sort=-%cpu"], {
       encoding: "utf-8",
       timeout: 5000,
       maxBuffer: 5 * 1024 * 1024
@@ -104,7 +109,7 @@ function checkProcesses() {
 
 function checkDisk() {
   try {
-    const output = execFileSync("df", ["-P"], { encoding: "utf-8", timeout: 5000 });
+    const output = safeExecFileSync("df", ["-P"], { encoding: "utf-8", timeout: 5000 });
     const lines = output.trim().split("\n").slice(1);
     const disks = lines.map(line => {
       const parts = line.split(/\s+/);
@@ -186,7 +191,7 @@ async function checkNetwork(options = {}) {
   }
   const dnsProbe = options.dnsProbe || probeDns;
   const httpsProbe = options.httpsProbe || probeHttps;
-  const runFile = options.execFileSyncImpl || execFileSync;
+  const runFile = options.execFileSyncImpl || safeExecFileSync;
   const services = ["sidekick-mcp", "sidekick-dashboard", "sidekick-agent"];
   const servicePorts = {
     "sidekick-mcp": 4097,
@@ -256,7 +261,7 @@ function checkCustom(commands) {
   let allPassed = true;
   for (const cmd of cmdList) {
     try {
-      const output = execSync(cmd, { encoding: "utf-8", timeout: 10000 }).trim();
+      const output = execSync(cmd, { encoding: "utf-8", timeout: 10000, maxBuffer: 2 * 1024 * 1024, env: childProcessEnv() }).trim();
       results.push({ command: cmd, output, success: true });
     } catch (e) {
       results.push({ command: cmd, error: e.message, success: false });
@@ -472,7 +477,7 @@ async function sidekick_status({ include, services }) {
     output.services = {};
     for (const svc of svcList) {
       try {
-        const stdout = execFileSync("systemctl", ["is-active", svc], { timeout: 5000, encoding: "utf-8" }).trim();
+        const stdout = safeExecFileSync("systemctl", ["is-active", svc], { timeout: 5000, encoding: "utf-8" }).trim();
         output.services[svc] = stdout;
       } catch (e) {
         output.services[svc] = (e.stdout || "unknown").trim();
@@ -481,7 +486,7 @@ async function sidekick_status({ include, services }) {
   }
   if (sections.includes("disk")) {
     try {
-      const stdout = execFileSync("df", ["-h", "--output=target,size,used,avail,pcent", "/"], {
+      const stdout = safeExecFileSync("df", ["-h", "--output=target,size,used,avail,pcent", "/"], {
         timeout: 5000, encoding: "utf-8"
       }).trim();
       const lines = stdout.split("\n");
@@ -493,7 +498,7 @@ async function sidekick_status({ include, services }) {
   }
   if (sections.includes("memory")) {
     try {
-      const stdout = execFileSync("free", ["-h"], { timeout: 5000, encoding: "utf-8" }).trim();
+      const stdout = safeExecFileSync("free", ["-h"], { timeout: 5000, encoding: "utf-8" }).trim();
       const lines = stdout.split("\n");
       if (lines.length > 1) {
         const parts = lines[1].trim().split(/\s+/);
@@ -510,7 +515,7 @@ async function sidekick_status({ include, services }) {
   }
   if (sections.includes("uptime")) {
     try {
-      const stdout = execFileSync("uptime", ["-p"], { timeout: 5000, encoding: "utf-8" }).trim();
+      const stdout = safeExecFileSync("uptime", ["-p"], { timeout: 5000, encoding: "utf-8" }).trim();
       output.uptime = stdout;
     } catch (e) { output.uptime = { error: e.message }; }
   }
@@ -532,7 +537,7 @@ async function sidekick_status({ include, services }) {
   }
   if (sections.includes("processes")) {
     try {
-      const stdout = execFileSync("ps", ["aux", "--sort=-%cpu"], { timeout: 5000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024 });
+      const stdout = safeExecFileSync("ps", ["aux", "--sort=-%cpu"], { timeout: 5000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024 });
       const lines = stdout.trim().split("\n").slice(0, 11);
       output.processes_top = lines.slice(1).map(l => {
         const p = l.trim().split(/\s+/);
@@ -564,7 +569,7 @@ const MAX_NETDIAG_TIMEOUT_MS = 30000;
 function runNetDiagCommand(program, args, timeout = 5000) {
   try {
     const boundedTimeout = Math.max(MIN_NETDIAG_TIMEOUT_MS, Math.min(Number(timeout) || 5000, MAX_NETDIAG_TIMEOUT_MS));
-    const output = execFileSync(program, args, { encoding: "utf8", timeout: boundedTimeout, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 2 * 1024 * 1024 });
+    const output = safeExecFileSync(program, args, { encoding: "utf8", timeout: boundedTimeout, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 2 * 1024 * 1024 });
     return { success: true, output: output.trim() };
   } catch (e) {
     return { success: false, output: (e.stdout || "") + (e.stderr || ""), error: e.message };

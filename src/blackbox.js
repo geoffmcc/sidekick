@@ -3,6 +3,7 @@ const path = require("path");
 const os = require("os");
 const crypto = require("crypto");
 const { execFile } = require("child_process");
+const { childProcessEnv } = require("./security/child-process");
 const EventEmitter = require("events");
 const { redactSensitive } = require("./redact");
 const dbStore = require("./db");
@@ -715,7 +716,7 @@ async function runCollector(incidentId, captureId, collector, index, total, plat
   let errorMessage = null;
   let errorCategory = null;
   await new Promise(resolve => {
-    const child = execFile(collector.program, collector.args || [], { timeout: timeoutMs, maxBuffer: outputLimit * 2, windowsHide: true }, (error, out, err) => {
+    const child = execFile(collector.program, collector.args || [], { timeout: timeoutMs, maxBuffer: outputLimit * 2, windowsHide: true, env: childProcessEnv() }, (error, out, err) => {
       stdout = Buffer.isBuffer(out) ? out : Buffer.from(String(out || ""));
       stderr = Buffer.isBuffer(err) ? err : Buffer.from(String(err || ""));
       if (error) {

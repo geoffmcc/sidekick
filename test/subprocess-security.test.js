@@ -10,6 +10,7 @@ const observabilitySource = fs.readFileSync(observabilityPath, "utf8");
 const netdiagStart = observabilitySource.indexOf("const MAX_NETDIAG_COMMANDS");
 const netdiagSource = observabilitySource.slice(netdiagStart);
 const { sidekick_netdiag } = require(observabilityPath);
+const { childProcessEnv } = require(path.join(__dirname, "..", "src", "security", "child-process"));
 
 function text(result) {
   return result?.content?.[0]?.text || "";
@@ -18,7 +19,19 @@ function text(result) {
 assert.ok(!agentSource.includes("execFileSync"), "agent.js must not retain the removed legacy subprocess helpers");
 assert.ok(!netdiagSource.includes("execSync("), "netdiag must not execute shell command strings");
 assert.ok(!netdiagSource.includes("shellEscape"), "netdiag must not rely on shell escaping");
-assert.match(netdiagSource, /execFileSync\(program, args/);
+assert.match(netdiagSource, /safeExecFileSync\(program, args/);
+
+const savedSecret = process.env.SIDEKICK_API_KEY;
+const savedNodeOptions = process.env.NODE_OPTIONS;
+process.env.SIDEKICK_API_KEY = "must-not-cross-process-boundary";
+process.env.NODE_OPTIONS = "--require attacker-hook";
+const filteredEnv = childProcessEnv();
+assert.strictEqual(filteredEnv.SIDEKICK_API_KEY, undefined, "child processes must not inherit service credentials");
+assert.strictEqual(filteredEnv.NODE_OPTIONS, undefined, "child processes must not inherit runtime loader hooks");
+if (savedSecret === undefined) delete process.env.SIDEKICK_API_KEY;
+else process.env.SIDEKICK_API_KEY = savedSecret;
+if (savedNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+else process.env.NODE_OPTIONS = savedNodeOptions;
 
 (async () => {
   for (const target of ["-x", "example.com; touch /tmp/pwned", "example.com\nwhoami", "a".repeat(2049)]) {

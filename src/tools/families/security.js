@@ -18,6 +18,7 @@ const { z } = require("zod");
 const { redactSensitive } = require("../../redact");
 const { enforcePathPolicy, getPathPolicyDecision } = require("../path-policy");
 const { scanSecurityConfig } = require("../../security-scan");
+const { childProcessEnv } = require("../../security/child-process");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "..", "..", "data");
 
@@ -391,7 +392,7 @@ async function sidekick_sandbox({ action, sandbox_name, command, files, auto_bac
     let output = "";
     let exitCode = 0;
     try {
-      output = execSync(command, { timeout: 30000, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+      output = execSync(command, { timeout: 30000, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], maxBuffer: 10 * 1024 * 1024, env: childProcessEnv() });
     } catch (e) {
       output = (e.stdout || "") + (e.stderr || "");
       exitCode = e.status || 1;

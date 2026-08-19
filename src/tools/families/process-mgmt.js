@@ -13,6 +13,7 @@
 const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
+const { childProcessEnv } = require("../../security/child-process");
 const { z } = require("zod");
 const { redactSensitive } = require("../../redact");
 const { enforcePathPolicy } = require("../path-policy");
@@ -43,7 +44,7 @@ async function sidekick_process({ action, filter, pid, name, signal }) {
   }
 
   try {
-    let stdout = execFileSync(cmd[0], cmd[1], { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024 });
+    let stdout = execFileSync(cmd[0], cmd[1], { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024, env: childProcessEnv() });
     if (action === "list" && filter) {
       const needle = String(filter).toLowerCase();
       stdout = stdout.split("\n").filter(line => line.toLowerCase().includes(needle)).join("\n");
@@ -80,7 +81,7 @@ async function sidekick_service({ action, service, lines }) {
   }
 
   try {
-    const stdout = execFileSync(cmd[0], cmd[1], { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024 });
+    const stdout = execFileSync(cmd[0], cmd[1], { timeout: 30000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024, env: childProcessEnv() });
     return { content: [{ type: "text", text: redactSensitive(stdout || "OK") }] };
   } catch (e) {
     return { content: [{ type: "text", text: redactSensitive("Error: " + (e.stderr || e.stdout || e.message)) }], isError: true };
@@ -142,7 +143,7 @@ async function sidekick_archive({ action, path: sourcePath, output, format }) {
   }
 
   try {
-    const stdout = execFileSync(cmd[0], cmd[1], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
+    const stdout = execFileSync(cmd[0], cmd[1], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: childProcessEnv() });
     return { content: [{ type: "text", text: redactSensitive(stdout || "OK") }] };
   } catch (e) {
     return { content: [{ type: "text", text: redactSensitive("Error: " + (e.stderr || e.stdout || e.message)) }], isError: true };

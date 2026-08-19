@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
+const { childProcessEnv } = require("./security/child-process");
 
 const IGNORED_DIRECTORIES = new Set([".git", "node_modules"]);
 const CONTENT_IGNORED_ROOTS = new Set(["data", "docs", "test"]);
@@ -144,7 +145,8 @@ function scanSecurityConfig({
       encoding: "utf8",
       timeout: 5000,
       maxBuffer: 5 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"]
+      stdio: ["ignore", "pipe", "ignore"],
+      env: childProcessEnv()
     });
     trackedFiles = new Set(output.split("\0").filter(Boolean).map(item => item.replace(/\\/g, "/")));
   } catch {
