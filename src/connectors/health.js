@@ -18,7 +18,7 @@ async function probeGithub(connector, { timeoutMs = 10000 } = {}) {
   const path = `${base.pathname.replace(/\/$/, "")}/rate_limit`;
   return new Promise(resolve => {
     const request = https.request({ hostname: resolved.address, port: base.port || 443, servername: base.hostname, path, method: "GET", timeout: timeoutMs,
-      headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "Sidekick-MCP/1.0" } }, response => {
+      headers: { Host: base.host, Authorization: "Bearer " + token, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "Sidekick-MCP/1.0" } }, response => {
       response.resume();
       response.on("end", () => { const status = Number(response.statusCode || 0); resolve({ ok: status >= 200 && status < 300, status, endpoint: base.origin }); });
     });
