@@ -395,6 +395,16 @@ function storeToken() {
     assert.ok(coverage.note.includes("does not verify PBS"));
   });
 
+  await test("PX.5c: storage health and backup history preserve unknown evidence", async () => {
+    const storage = json(await callInternalTool("proxmox", { action: "storage_health", profile: "main" }));
+    assert.strictEqual(storage.status, "observed");
+    assert.strictEqual(storage.findings.filter((x) => x.code === "capacity_unknown").length, 2);
+    const history = json(await callInternalTool("proxmox", { action: "backup_history", profile: "main" }));
+    assert.strictEqual(history.total_tasks, 0);
+    assert.strictEqual(history.latest, null);
+    assert.ok(history.note.includes("does not verify restoreability"));
+  });
+
   await test("PX.6: guest lifecycle start submits, monitors the task, and reports completion", async () => {
     const r = json(await callInternalTool("proxmox_guest", { action: "start", profile: "main", vmid: 101 }));
     assert.strictEqual(r.ok, true, JSON.stringify(r));
