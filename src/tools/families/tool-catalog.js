@@ -165,7 +165,10 @@ async function sidekick_tools({ action, query, name, category, format, include_d
   const maxResults = Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 200) : 100;
   let records = getToolRecordsForSource(getCurrentSource());
 
-  if (selectedAction !== "policy" && !include_disabled) {
+  // Metadata lookup remains available for blocked tools so operators can
+  // inspect risk and policy without first enabling the tool. Overview/search
+  // continue to hide disabled entries unless explicitly requested.
+  if (selectedAction !== "policy" && selectedAction !== "get" && !include_disabled) {
     records = records.filter(tool => tool.enabled);
   }
 
