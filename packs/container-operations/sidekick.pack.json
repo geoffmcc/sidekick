@@ -83,6 +83,26 @@
       },
       "additionalProperties": false
     },
-    "defaults": { "profiles": {}, "max_log_bytes": 200000, "max_log_lines": 1000, "repository_roots": [] }
+    "defaults": {
+      "profiles": {
+        "local-docker": {
+          "provider": "docker",
+          "display_name": "Local Docker Engine",
+          "socket": "/var/run/docker.sock",
+          "compose": {
+            "implementation": "docker compose",
+            "binary": "docker",
+            "project_roots": ["/home/sidekick/sidekick/docker"]
+          },
+          "request_timeout_ms": 10000,
+          "operation_timeout_ms": 120000,
+          "allow_mutations": false,
+          "default": true
+        }
+      },
+      "max_log_bytes": 200000,
+      "max_log_lines": 1000,
+      "repository_roots": ["/home/sidekick/sidekick"]
+    }
   }
 }

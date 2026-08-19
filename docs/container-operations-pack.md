@@ -4,6 +4,8 @@ The `container-operations` first-party pack belongs to the **Infrastructure & Ho
 
 Profiles use a local engine socket (`socket`) or authenticated HTTPS (`endpoint`). HTTPS profiles require TLS verification; IP endpoints require `tls.servername`. Credentials and client certificates are referenced with `secret:<name>` and are never accepted inline. The pack never changes socket ownership or permissions.
 
+Fresh installs include a read-only `local-docker` profile for the standard Sidekick deployment at `/home/sidekick/sidekick`. It includes Docker Compose validation for `/home/sidekick/sidekick/docker`. Deployments using another application root should override `repository_roots` and the profile's `compose.project_roots` during pack configuration; the default never enables lifecycle mutations.
+
 Install, configure, enable, health-check, disable, re-enable, upgrade, and uninstall through the normal `capability` lifecycle. Use `containers` for bounded inspection and `container_lifecycle` for governed lifecycle actions. Use `compose` for provider-authoritative validation under configured `project_roots`. Workflows are `docker-podman/health-assessment`, `docker-podman/update-check`, `docker-podman/troubleshoot`, and `docker-podman/controlled-update`.
 
 The pack ships ten agent-facing Knowledge assets covering operating model, safety, unhealthy containers, restart loops, reachability, update interpretation, preflight, Compose drift, dangerous configuration, and orphan candidates. Schedule the read-only `docker-podman/update-check` workflow through Sidekick's existing scheduler/watch facilities; the pack does not create a second scheduler.
