@@ -23,15 +23,20 @@ assert.match(netdiagSource, /safeExecFileSync\(program, args/);
 
 const savedSecret = process.env.SIDEKICK_API_KEY;
 const savedNodeOptions = process.env.NODE_OPTIONS;
+const savedLowerNodeOptions = process.env.node_options;
 process.env.SIDEKICK_API_KEY = "must-not-cross-process-boundary";
 process.env.NODE_OPTIONS = "--require attacker-hook";
+process.env.node_options = "--require attacker-hook-lowercase";
 const filteredEnv = childProcessEnv();
 assert.strictEqual(filteredEnv.SIDEKICK_API_KEY, undefined, "child processes must not inherit service credentials");
 assert.strictEqual(filteredEnv.NODE_OPTIONS, undefined, "child processes must not inherit runtime loader hooks");
+assert.strictEqual(filteredEnv.node_options, undefined, "loader filtering must be case-insensitive on Windows");
 if (savedSecret === undefined) delete process.env.SIDEKICK_API_KEY;
 else process.env.SIDEKICK_API_KEY = savedSecret;
 if (savedNodeOptions === undefined) delete process.env.NODE_OPTIONS;
 else process.env.NODE_OPTIONS = savedNodeOptions;
+if (savedLowerNodeOptions === undefined) delete process.env.node_options;
+else process.env.node_options = savedLowerNodeOptions;
 
 (async () => {
   for (const target of ["-x", "example.com; touch /tmp/pwned", "example.com\nwhoami", "a".repeat(2049)]) {

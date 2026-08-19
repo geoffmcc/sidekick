@@ -10,15 +10,19 @@ const LOADER_ENV_KEYS = new Set([
   "RUBYLIB", "PERL5LIB", "PERL5OPT", "GIT_ASKPASS",
 ]);
 
+function isLoaderEnvKey(key) {
+  return LOADER_ENV_KEYS.has(String(key || "").toUpperCase());
+}
+
 function childProcessEnv(overrides = {}) {
   const env = {};
   for (const [key, value] of Object.entries(process.env)) {
-    if (SECRET_ENV_KEY.test(key) || LOADER_ENV_KEYS.has(key) || /(?:_FILE|_PATH)$/i.test(key) && SECRET_ENV_KEY.test(key)) continue;
+    if (SECRET_ENV_KEY.test(key) || isLoaderEnvKey(key) || /(?:_FILE|_PATH)$/i.test(key) && SECRET_ENV_KEY.test(key)) continue;
     env[key] = value;
   }
   for (const [key, value] of Object.entries(overrides || {})) {
     if (value == null) delete env[key];
-    else if (!SECRET_ENV_KEY.test(key) && !LOADER_ENV_KEYS.has(key)) env[key] = String(value);
+    else if (!SECRET_ENV_KEY.test(key) && !isLoaderEnvKey(key)) env[key] = String(value);
   }
   return env;
 }

@@ -43,7 +43,11 @@ This is a guardrail, not a full sandbox. It will not detect every destructive co
 
 ## Tool permission policy
 
-Sidekick now supports a config-driven tool policy. The default `SIDEKICK_TOOL_POLICY=open` preserves existing behavior: tools are allowed unless explicitly blocked.
+Sidekick now supports a config-driven tool policy. Fresh installations default
+to `SIDEKICK_TOOL_POLICY=restricted`, which blocks high- and critical-risk tools
+unless they are explicitly allowed. Existing installations that explicitly set
+the policy remain unchanged; `open` is an intentional opt-in for trusted
+deployments.
 
 Set `SIDEKICK_TOOL_POLICY=restricted` to block high and critical risk tools unless they are explicitly allowed. You can also set source-specific policies for `mcp`, `dashboard`, and `agent`:
 
@@ -158,7 +162,10 @@ behind an OS/network-level egress policy or proxy.
 
 ## Approval queue
 
-The approval queue is an optional dashboard review layer for allowed tools. It does not enable tools that policy blocks. The default `SIDEKICK_APPROVAL_MODE=off` preserves existing behavior.
+The approval queue is a dashboard review layer for allowed tools. It does not
+enable tools that policy blocks. Fresh installations default to
+`SIDEKICK_APPROVAL_MODE=strict`, requiring approval for high- and critical-risk
+tools; existing installations that explicitly set the mode remain unchanged.
 
 Set `SIDEKICK_APPROVAL_MODE=risky` to queue critical-risk tools for dashboard approval, or `SIDEKICK_APPROVAL_MODE=strict` to queue high and critical tools. Approval lists accept exact tool names and risk selectors, and source-specific variables are available for `MCP`, `DASHBOARD`, and `AGENT` sources:
 

@@ -711,13 +711,13 @@ This follows the principle of least privilege: after initial setup, the sidekick
 | `SIDEKICK_DASHBOARD_USER` | — | Dashboard basic auth username (empty = disabled) |
 | `sidekick_dashboard_pass` | — | Secret file for dashboard basic auth password (missing = disabled) |
 | `SIDEKICK_DATA_DIR` | `./data` | Data directory for logs, KV, conversations |
-| `SIDEKICK_TOOL_POLICY` | `open` | Tool policy mode: `open` or `restricted` |
+| `SIDEKICK_TOOL_POLICY` | `restricted` | Tool policy mode: `open` or `restricted` |
 | `SIDEKICK_BLOCKED_TOOLS` | — | Comma-separated global blocklist of tool names or risk selectors |
 | `SIDEKICK_ALLOWED_TOOLS` | — | Comma-separated global allowlist of tool names or risk selectors |
 | `SIDEKICK_AGENT_TOOL_POLICY` | — | Source-specific tool policy override for the Agent Bridge |
 | `SIDEKICK_MCP_TOOL_POLICY` | — | Source-specific tool policy override for MCP clients |
 | `SIDEKICK_DASHBOARD_TOOL_POLICY` | — | Source-specific tool policy override for dashboard-originated calls |
-| `SIDEKICK_APPROVAL_MODE` | `off` | Optional dashboard approval mode: `off`, `risky`, or `strict` |
+| `SIDEKICK_APPROVAL_MODE` | `strict` | Dashboard approval mode: `off`, `risky`, or `strict` |
 | `SIDEKICK_APPROVAL_TTL_SECONDS` | `3600` | Maximum age of a pending approval; approval payloads require `SIDEKICK_SECRET_KEY` |
 | `SIDEKICK_APPROVAL_REQUIRED_TOOLS` | — | Comma-separated tools or risk selectors that always require approval |
 | `SIDEKICK_APPROVAL_EXEMPT_TOOLS` | — | Comma-separated tools or risk selectors exempt from approval |
