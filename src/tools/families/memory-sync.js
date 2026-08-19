@@ -2,6 +2,7 @@
 
 const { z } = require("zod");
 const dbStore = require("../../db");
+const { scopedProject } = require("./memory-scope");
 
 async function sidekick_sync_identity({ action, user_id }) {
   if (action === "get") {
@@ -22,8 +23,9 @@ async function sidekick_sync_identity({ action, user_id }) {
 }
 
 async function sidekick_sync_export({ project, since, include_disabled }) {
+  let effectiveProject; try { effectiveProject = scopedProject(project); } catch (e) { return { content: [{ type: "text", text: e.message }], isError: true }; }
   const options = {};
-  if (project) options.project = project;
+  if (effectiveProject) options.project = effectiveProject;
   if (since) options.since = since;
   if (include_disabled === false) options.includeDisabled = false;
 
@@ -43,6 +45,7 @@ async function sidekick_sync_import({ data, strategy, preserve_ids }) {
     strategy: strategy || "newest",
     preserveIds: preserve_ids === true,
   };
+  try { options.projectScope = scopedProject(); } catch (e) { return { content: [{ type: "text", text: e.message }], isError: true }; }
 
   const result = dbStore.importFromSync(parsed, options);
   const summary = `Sync complete: ${result.imported} imported, ${result.conflicts} conflicts resolved, ${result.skipped} skipped`;
