@@ -49,8 +49,30 @@ function versionDir(name, version) {
 
 function isManagedPath(candidate) {
   if (!candidate) return false;
-  const relative = path.relative(packStoreRoot(), path.resolve(String(candidate)));
-  return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
+  const root = packStoreRoot();
+  const resolved = path.resolve(String(candidate));
+  const relative = path.relative(root, resolved);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return false;
+
+  // A database/path tamper must not turn a lexical in-root path containing a
+  // symlinked ancestor into access to arbitrary files outside the pack store.
+  // Resolve the nearest existing ancestor to protect fresh staging paths too.
+  let existing = resolved;
+  while (!fs.existsSync(existing)) {
+    const parent = path.dirname(existing);
+    if (parent === existing) return false;
+    existing = parent;
+  }
+  let canonicalRoot;
+  let canonicalExisting;
+  try {
+    canonicalRoot = fs.realpathSync(root);
+    canonicalExisting = fs.realpathSync(existing);
+  } catch {
+    return false;
+  }
+  const canonicalRelative = path.relative(canonicalRoot, canonicalExisting);
+  return Boolean(canonicalRelative) && !canonicalRelative.startsWith("..") && !path.isAbsolute(canonicalRelative);
 }
 
 function materialize(sourceRoot, targetDir, files) {
