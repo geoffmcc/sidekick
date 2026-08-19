@@ -466,6 +466,20 @@ app.use((req, res, next) => {
     if (origin && !isSameOrigin(origin, host, requestProtocol(req))) {
       return res.status(403).json({ error: 'Invalid origin' });
     }
+    // Modern browsers send Fetch Metadata even when Origin is omitted. Reject
+    // an explicitly cross-site mutation rather than relying on the caller to
+    // provide Origin. This preserves non-browser API clients that omit both
+    // headers while closing the browser CSRF path.
+    if (!origin && String(req.headers['sec-fetch-site'] || '').toLowerCase() === 'cross-site') {
+      return res.status(403).json({ error: 'Cross-site request refused' });
+    }
+    // Once a dashboard session cookie is present, an originless mutation is
+    // ambiguous and must fail closed. Basic-auth clients without a cookie keep
+    // their existing compatibility behavior and are covered by Fetch Metadata
+    // when used from a browser.
+    if (!origin && (requestCookie(req, 'sidekick_identity') || requestCookie(req, 'sidekick_sid'))) {
+      return res.status(403).json({ error: 'Origin required for authenticated state changes' });
+    }
   }
   next();
 });

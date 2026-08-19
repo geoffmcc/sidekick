@@ -211,6 +211,30 @@ setTimeout(async () => {
       console.log('Passed\n');
     }
 
+    console.log('Test 3.0b0: originless browser cross-site mutations are rejected');
+    {
+      const response = await makeRequest('PUT', '/api/kv/csrf-fetch-metadata-test', { value: 'blocked' }, {
+        headers: {
+          'Sec-Fetch-Site': 'cross-site',
+          Host: '127.0.0.1:4100'
+        }
+      });
+      assert.strictEqual(response.status, 403, 'Fetch Metadata must reject originless cross-site mutations');
+      console.log('Passed\n');
+    }
+
+    console.log('Test 3.0b0a: authenticated session mutations require Origin');
+    {
+      const response = await makeRequest('PUT', '/api/kv/csrf-session-test', { value: 'blocked' }, {
+        headers: {
+          Cookie: 'sidekick_sid=valid-looking-session',
+          Host: '127.0.0.1:4100'
+        }
+      });
+      assert.strictEqual(response.status, 403, 'Session-authenticated originless mutations must be rejected');
+      console.log('Passed\n');
+    }
+
     console.log('Test 3.0b1: mutating requests reject same-host wrong-scheme origins');
     {
       const response = await makeRequest('PUT', '/api/kv/csrf-scheme-test', { value: 'blocked' }, {
