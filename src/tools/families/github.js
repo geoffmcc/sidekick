@@ -20,6 +20,7 @@
 const https = require("https");
 const { z } = require("zod");
 const { redactSensitive } = require("../../redact");
+const { resolveOutboundUrl } = require("../../security/outbound-url");
 const { loadSecrets } = require("../../core/secrets-store");
 const { decryptSecret } = require("../../core/secret-cipher");
 const { readSecret } = require("../../core/runtime-secrets");
@@ -161,12 +162,16 @@ function redactGithubError(value, token) {
   return redactSensitive(text);
 }
 
-function githubRequest(token, method, endpoint, body) {
+async function githubRequest(token, method, endpoint, body) {
   const apiBase = resolveGithubApiBase();
+  const url = new URL(apiBase + endpoint);
+  if (url.protocol !== "https:") return { status: 0, headers: {}, data: "GitHub API endpoint must use HTTPS" };
+  const resolved = await resolveOutboundUrl(url.href, "GitHub API endpoint", { allowPrivate: true });
+  if (resolved.refusal) return { status: 0, headers: {}, data: resolved.refusal };
   return new Promise((resolve) => {
-    const url = new URL(apiBase + endpoint);
     const options = {
-      hostname: url.hostname,
+      hostname: resolved.address,
+      port: url.port || 443,
       path: url.pathname + url.search,
       method,
       headers: {
@@ -175,7 +180,8 @@ function githubRequest(token, method, endpoint, body) {
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "Sidekick-MCP/1.0"
       },
-      agent: githubHttpAgent
+      agent: githubHttpAgent,
+      servername: url.hostname.replace(/^\[|\]$/g, "")
     };
     let bodyStr = null;
     if (body) {
@@ -417,8 +423,12 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
   function ghRequest(method, endpoint, body) {
     return new Promise((resolve) => {
       const url = new URL(apiBase + endpoint);
+      if (url.protocol !== "https:") return resolve({ status: 0, data: "GitHub API endpoint must use HTTPS" });
+      resolveOutboundUrl(url.href, "GitHub API endpoint", { allowPrivate: true }).then(resolved => {
+        if (resolved.refusal) return resolve({ status: 0, data: resolved.refusal });
       const options = {
-        hostname: url.hostname,
+        hostname: resolved.address,
+        port: url.port || 443,
         path: url.pathname + url.search,
         method,
         headers: {
@@ -426,7 +436,8 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
           "Accept": "application/vnd.github.v3+json",
           "User-Agent": "Sidekick-MCP/1.0"
         },
-        agent: githubHttpAgent
+        agent: githubHttpAgent,
+        servername: url.hostname.replace(/^\[|\]$/g, "")
       };
       if (body) {
         const bodyStr = JSON.stringify(body);
@@ -450,6 +461,7 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
       req.setTimeout(30000, () => { req.destroy(); resolve({ status: 0, data: "timeout" }); });
       if (body) req.write(JSON.stringify(body));
       req.end();
+      }).catch(error => resolve({ status: 0, data: error.message }));
     });
   }
 

@@ -866,6 +866,14 @@ function validateConnectorEndpoint(endpoint) {
   return parsed.toString();
 }
 
+function validateConnectorEndpointForType(type, endpoint) {
+  const normalized = validateConnectorEndpoint(endpoint);
+  if (normalized && String(type || "").toLowerCase() === "github" && !normalized.startsWith("https://")) {
+    throw new Error("github connector endpoint must use HTTPS");
+  }
+  return normalized;
+}
+
 function assertConnectorConfigSafe(value, pathName = "config") {
   if (!value || typeof value !== "object") return;
   for (const [key, child] of Object.entries(value)) {
@@ -884,7 +892,6 @@ function registerConnectorLegacy(input = {}) {
   if (!type) throw new Error("connector type is required");
   const config = input.config || {};
   assertConnectorConfigSafe(config);
-  const endpoint = validateConnectorEndpoint(input.endpoint);
   const secretRef = validateConnectorSecretRef(input.secret_ref);
   const connectorId = input.connector_id || newId("connector");
   const ts = nowIso();
@@ -892,7 +899,7 @@ function registerConnectorLegacy(input = {}) {
     INSERT INTO platform_connectors
       (connector_id, name, type, state, endpoint, secret_ref, capabilities_json, config_json, registered_at, updated_at, metadata_json)
     VALUES (?, ?, ?, 'registered', ?, ?, ?, ?, ?, ?, ?)
-  `).run(connectorId, name, type, endpoint, secretRef, json(input.capabilities || []), json(config), ts, ts, json(input.metadata || {}));
+  `).run(connectorId, name, type, validateConnectorEndpointForType(type, input.endpoint), secretRef, json(input.capabilities || []), json(config), ts, ts, json(input.metadata || {}));
   const connector = getConnector(connectorId);
   appendEvent({ event_type: "connector.registered", source: input.source || "platform", subject_type: "connector", subject_id: connectorId, payload: { name, type, secret_ref: secretRef ? "present" : null }, correlation_id: connectorId });
   return connector;
