@@ -249,6 +249,10 @@ Per-action honesty notes:
 - `playback_diagnose` reports `session_chosen` with the selection reason when
   no `session_id` was given, and returns `ambiguous_sessions` with candidates
   instead of silently picking one of several.
+- `list_sessions` includes the active item's runtime under
+  `media.runtime` (`ticks`, `seconds`, and `minutes`) when Jellyfin provides
+  `RunTimeTicks`, so remaining playback time can be calculated from the live
+  position without a second item lookup.
 - An authentication failure surfaces as `authentication_failed` everywhere —
   it is never converted into "capability unavailable".
 

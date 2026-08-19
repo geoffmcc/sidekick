@@ -46,6 +46,14 @@ function session(raw) {
   const transcoding = raw?.TranscodingInfo || null;
   const video = item.MediaStreams?.find((stream) => stream.Type === "Video");
   const audio = item.MediaStreams?.find((stream) => stream.Type === "Audio");
+  const runtimeTicks = Number(item?.RunTimeTicks);
+  const runtime = Number.isFinite(runtimeTicks) && runtimeTicks >= 0
+    ? {
+        ticks: runtimeTicks,
+        seconds: Math.round((runtimeTicks / 10000000) * 100) / 100,
+        minutes: Math.round((runtimeTicks / 10000000 / 60) * 100) / 100,
+      }
+    : { ticks: null, seconds: null, minutes: null };
   const positionTicks = Number(raw?.PlayState?.PositionTicks ?? raw?.PositionTicks);
   const playbackPosition = Number.isFinite(positionTicks) && positionTicks >= 0
     ? {
@@ -71,6 +79,7 @@ function session(raw) {
       container: item.Container || null,
       video_codec: video?.Codec || null,
       audio_codec: audio?.Codec || null,
+      runtime,
     },
     playback_method: raw?.PlayState?.PlayMethod || raw?.PlayMethod || null,
     is_paused: raw?.PlayState?.IsPaused ?? null,
