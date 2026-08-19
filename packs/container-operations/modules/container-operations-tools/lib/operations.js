@@ -27,7 +27,14 @@ function normalizeContainer(raw) {
 
 async function info(client) { return client.get("/info"); }
 async function version(client) { return client.get("/version"); }
-async function list(client, all = true) { return (await client.get(`/containers/json?all=${all ? 1 : 0}`)).map(normalizeContainer); }
+async function list(client, all = true) {
+  const listed = (await client.get(`/containers/json?all=${all ? 1 : 0}`)).map(normalizeContainer);
+  // The list endpoint can expose a stale or incomplete Running flag. Reconcile
+  // each result with inspect so aggregate discovery matches authoritative state.
+  return Promise.all(listed.map(async container => {
+    try { return await inspect(client, container.id); } catch { return container; }
+  }));
+}
 async function inspect(client, target) { const raw = await client.get(`/containers/${id(safeContainerName(target))}/json`); return normalizeContainer(raw); }
 async function images(client) { return (await client.get("/images/json?all=1")).map(image => ({ id: image.Id, parent_id: image.ParentId, repo_tags: asArray(image.RepoTags).slice(0, 32), repo_digests: asArray(image.RepoDigests).slice(0, 32), created: image.Created, size: image.Size, containers: image.Containers, dangling: asArray(image.RepoTags).length === 0 })); }
 async function networks(client) { return (await client.get("/networks")).map(n => ({ id: n.Id, name: n.Name, driver: n.Driver, scope: n.Scope, internal: n.Internal, labels: Object.fromEntries(Object.entries(n.Labels || {}).slice(0, 50)), containers: Object.keys(n.Containers || {}).slice(0, 200) })); }
