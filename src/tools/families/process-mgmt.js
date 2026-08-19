@@ -18,6 +18,20 @@ const { z } = require("zod");
 const { redactSensitive } = require("../../redact");
 const { enforcePathPolicy } = require("../path-policy");
 
+function validateArchiveEntryNames(entries) {
+  for (const entry of entries) {
+    const raw = String(entry || "").replace(/\r$/, "");
+    if (!raw || raw.includes("\0")) throw new Error("archive contains an invalid entry name");
+    const normalized = raw.replace(/\\/g, "/");
+    if (normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized)) {
+      throw new Error("archive contains an absolute entry path");
+    }
+    const components = normalized.split("/").filter(Boolean);
+    if (components.includes("..")) throw new Error("archive contains a path traversal entry");
+  }
+  return true;
+}
+
 async function sidekick_process({ action, filter, pid, name, signal }) {
   const allowedActions = ["list", "top", "kill", "tree"];
   if (!allowedActions.includes(action)) {
@@ -105,6 +119,8 @@ async function sidekick_archive({ action, path: sourcePath, output, format }) {
     return { content: [{ type: "text", text: "Path not found: " + sourcePath }], isError: true };
   }
 
+  const sourceAbsolute = path.resolve(sourcePath);
+
   const fmt = format || "tar.gz";
   let cmd;
 
@@ -115,28 +131,37 @@ async function sidekick_archive({ action, path: sourcePath, output, format }) {
     const outputPolicyError = enforcePathPolicy(output, "write");
     if (outputPolicyError) return outputPolicyError;
     if (fmt === "tar.gz" || fmt === "tgz") {
-      cmd = ["tar", ["-czf", output, "-C", path.dirname(sourcePath), path.basename(sourcePath)]];
+      cmd = ["tar", ["-czf", path.resolve(output), "-C", path.dirname(sourceAbsolute), path.basename(sourceAbsolute)]];
     } else if (fmt === "zip") {
-      cmd = ["zip", ["-r", output, sourcePath]];
+      cmd = ["zip", ["-r", path.resolve(output), sourceAbsolute]];
     } else {
       return { content: [{ type: "text", text: "Invalid format. Use: tar.gz, tgz, or zip" }], isError: true };
     }
   } else if (action === "extract") {
-    const extractTarget = process.cwd();
+    const extractTarget = output ? path.resolve(output) : process.cwd();
     const outputPolicyError = enforcePathPolicy(extractTarget, "write");
     if (outputPolicyError) return outputPolicyError;
-    if (sourcePath.endsWith(".tar.gz") || sourcePath.endsWith(".tgz")) {
-      cmd = ["tar", ["-xzf", sourcePath]];
-    } else if (sourcePath.endsWith(".zip")) {
-      cmd = ["unzip", [sourcePath]];
-    } else {
-      return { content: [{ type: "text", text: "Unsupported archive format" }], isError: true };
+    try {
+      fs.mkdirSync(extractTarget, { recursive: true });
+      if (sourcePath.endsWith(".tar.gz") || sourcePath.endsWith(".tgz")) {
+        const listing = execFileSync("tar", ["-tzf", sourceAbsolute], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: childProcessEnv() });
+        validateArchiveEntryNames(listing.split("\n"));
+        cmd = ["tar", ["-xzf", sourceAbsolute, "-C", extractTarget, "--no-same-owner", "--no-overwrite-dir"]];
+      } else if (sourcePath.endsWith(".zip")) {
+        const listing = execFileSync("unzip", ["-Z1", sourceAbsolute], { timeout: 60000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: childProcessEnv() });
+        validateArchiveEntryNames(listing.split("\n"));
+        cmd = ["unzip", [sourceAbsolute, "-d", extractTarget]];
+      } else {
+        return { content: [{ type: "text", text: "Unsupported archive format" }], isError: true };
+      }
+    } catch (e) {
+      return { content: [{ type: "text", text: redactSensitive("Archive preflight failed: " + (e.stderr || e.stdout || e.message)) }], isError: true };
     }
   } else if (action === "list") {
     if (sourcePath.endsWith(".tar.gz") || sourcePath.endsWith(".tgz")) {
-      cmd = ["tar", ["-tzf", sourcePath]];
+      cmd = ["tar", ["-tzf", sourceAbsolute]];
     } else if (sourcePath.endsWith(".zip")) {
-      cmd = ["unzip", ["-l", sourcePath]];
+      cmd = ["unzip", ["-l", sourceAbsolute]];
     } else {
       return { content: [{ type: "text", text: "Unsupported archive format" }], isError: true };
     }
@@ -201,4 +226,4 @@ const descriptors = Object.freeze([
   }),
 ]);
 
-module.exports = { descriptors, sidekick_process, sidekick_service, sidekick_archive };
+module.exports = { descriptors, sidekick_process, sidekick_service, sidekick_archive, validateArchiveEntryNames };
