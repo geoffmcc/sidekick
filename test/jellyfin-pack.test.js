@@ -30,7 +30,7 @@ test("all Jellyfin JSON assets parse", () => {
     .filter((x) => x.endsWith(".json")))
     JSON.parse(fs.readFileSync(path.join(pack, f), "utf8"));
 });
-test("pack and module versions agree at 1.2.0", () => {
+test("pack and module versions agree at 1.3.0", () => {
   const packManifest = JSON.parse(
     fs.readFileSync(path.join(pack, "sidekick.pack.json"), "utf8"),
   );
@@ -40,8 +40,8 @@ test("pack and module versions agree at 1.2.0", () => {
       "utf8",
     ),
   );
-  assert.strictEqual(packManifest.version, "1.2.0");
-  assert.strictEqual(moduleManifest.version, "1.2.0");
+  assert.strictEqual(packManifest.version, "1.3.0");
+  assert.strictEqual(moduleManifest.version, "1.3.0");
   // Every services.dispatch target used by the module must be declared.
   const declared = moduleManifest.permissions.map((x) => x.tool).sort();
   assert.deepStrictEqual(declared, ["proxmox", "status", "web_fetch"]);
@@ -448,6 +448,10 @@ function baseFixtures() {
     "/Items": (q) => {
       if (q?.SearchTerm !== undefined)
         return { Items: [{ Id: "i1", Name: "Film", Type: "Movie" }], TotalRecordCount: 1 };
+      if (q?.IncludeItemTypes === "BoxSet")
+        return { Items: [{ Id: "c1", Name: "Favorites", Type: "BoxSet", ChildCount: 2 }], TotalRecordCount: 1 };
+      if (q?.IncludeItemTypes === "Playlist")
+        return { Items: [{ Id: "p1", Name: "Weekend", Type: "Playlist", ChildCount: 3 }], TotalRecordCount: 1 };
       return {
         Items: [
           {
@@ -488,6 +492,16 @@ function baseFixtures() {
       Type: "Series",
       Overview: "A test series",
       ProviderIds: { Tvdb: "123" },
+    },
+    "/Users/u1/Items/i1": {
+      Id: "i1",
+      Name: "Film",
+      Type: "Movie",
+      UserData: { IsFavorite: true, Played: false, PlayCount: 0, PlaybackPositionTicks: 10000000, PlayedPercentage: 2.5 },
+    },
+    "/Users/u1/Items": {
+      Items: [{ Id: "i1", Name: "Film", Type: "Movie", ProductionYear: 2020, RunTimeTicks: 120 * 60 * 10000000, UserData: { IsFavorite: true, Played: false, PlaybackPositionTicks: 10000000 } }],
+      TotalRecordCount: 1,
     },
     "/Shows/series1/Seasons": {
       Items: [
@@ -591,6 +605,8 @@ async function asyncTest(name, fn) {
       const extra = {
         item_details: { item_id: "i1" },
         media_info: { item_id: "series1" },
+        user_media_state: { user_id: "u1", item_id: "i1" },
+        user_unwatched: { user_id: "u1" },
         task_status: { task_id: "t1" },
         user_status: { user_id: "u1" },
         plugin_status: { plugin_id: "p1" },
@@ -639,6 +655,23 @@ async function asyncTest(name, fn) {
       assert.strictEqual(parsed.seasons[0].runtimes.shortest_minutes, 30);
       assert.strictEqual(parsed.seasons[0].runtimes.longest_minutes, 150);
       assert.strictEqual(parsed.seasons[0].episodes[0].media_streams[0].codec, "h264");
+      assert.deepStrictEqual(postLog, []);
+      assert.deepStrictEqual(delLog, []);
+    },
+  );
+  await asyncTest(
+    "collections, playlists and user-scoped media reads are bounded and read-only",
+    async () => {
+      setFixtures(baseFixtures());
+      const { read } = tools(servicesFor());
+      let result = await call(read, { action: "list_collections", limit: 10 });
+      assert.strictEqual(result.parsed.items[0].child_count, 2);
+      result = await call(read, { action: "list_playlists", limit: 10 });
+      assert.strictEqual(result.parsed.items[0].child_count, 3);
+      result = await call(read, { action: "user_media_state", user_id: "u1", item_id: "i1" });
+      assert.strictEqual(result.parsed.state.is_favorite, true);
+      result = await call(read, { action: "user_unwatched", user_id: "u1", limit: 10 });
+      assert.strictEqual(result.parsed.items[0].user_state.played, false);
       assert.deepStrictEqual(postLog, []);
       assert.deepStrictEqual(delLog, []);
     },
