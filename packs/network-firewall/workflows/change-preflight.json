@@ -1,8 +1,10 @@
 {
   "name": "network-firewall/change-preflight",
-  "display_name": "Network/firewall change preflight",
+  "version": "1.0.0",
+  "title": "Network/firewall change preflight",
+  "mode": "read_only",
   "owner": "network-firewall",
   "description": "Produce a deterministic bounded plan and lockout assessment before any network/firewall mutation.",
-  "inputs": { "profile": { "type": "string", "required": true }, "change_type": { "type": "string", "required": true }, "id": { "type": "string", "required": false }, "management_path": { "type": "string", "required": true } },
-  "steps": [ { "id": "preflight", "tool": "network_change", "arguments": { "action": "preflight", "profile": "{{profile}}", "change_type": "{{change_type}}", "id": "{{id}}", "management_path": "{{management_path}}" } } ]
+  "inputs": { "profile": { "type": "string", "required": true }, "change_type": { "type": "string", "required": true }, "id": { "type": "string", "required": false, "default": "" }, "management_path": { "type": "string", "required": true } },
+  "steps": [ { "name": "preflight", "title": "Change safety preflight", "tool": "network_change", "args": { "action": "preflight", "profile": "${inputs.profile}", "change_type": "${inputs.change_type}", "id": "${inputs.id}", "management_path": "${inputs.management_path}" }, "expect": "json", "on_error": "fail" } ]
 }

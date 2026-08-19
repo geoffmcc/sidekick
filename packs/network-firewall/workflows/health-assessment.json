@@ -1,8 +1,10 @@
 {
   "name": "network-firewall/health-assessment",
-  "display_name": "Network/firewall health assessment",
+  "version": "1.0.0",
+  "title": "Network/firewall health assessment",
+  "mode": "read_only",
   "owner": "network-firewall",
   "description": "Assess device, interfaces, routes, DHCP, firewall, and VPN evidence while retaining unknown and permission-limited states.",
-  "inputs": { "profile": { "type": "string", "required": false } },
-  "steps": [ { "id": "health", "tool": "network", "arguments": { "action": "health", "profile": "{{profile}}" } }, { "id": "summary", "tool": "network", "arguments": { "action": "summary", "profile": "{{profile}}" } } ]
+  "inputs": { "profile": { "type": "string", "required": false, "default": "" } },
+  "steps": [ { "name": "health", "title": "Health checks", "tool": "network", "args": { "action": "health", "profile": "${inputs.profile}" }, "expect": "json", "on_error": "fail" }, { "name": "summary", "title": "Health summary", "tool": "network", "args": { "action": "summary", "profile": "${inputs.profile}" }, "expect": "json", "on_error": "continue" } ]
 }
