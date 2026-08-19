@@ -6,6 +6,11 @@ const dataDir = path.join(__dirname, `test-data-identity-governance-${Date.now()
 fs.mkdirSync(dataDir, { recursive: true });
 process.env.SIDEKICK_DATA_DIR = dataDir;
 process.env.SIDEKICK_SECRET_KEY = "identity-governance-test-key";
+// This fixture exercises the Core authorization decision for an owner secret
+// mutation. The production default is restricted/strict; opt into the legacy
+// execution policy explicitly so this test isolates identity governance.
+process.env.SIDEKICK_TOOL_POLICY = "open";
+process.env.SIDEKICK_APPROVAL_MODE = "off";
 delete require.cache[require.resolve("../src/db")];
 const db = require("../src/db");
 db.runPendingMigrations();

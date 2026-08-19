@@ -296,6 +296,12 @@ function getStaticToolCategory(name) {
  * an extra prompt; the cost of adding one wrongly is a silent bypass.
  */
 const TOOL_ACTION_RISK = Object.freeze({
+  // Listing secret names is metadata-only and is separately authorized as
+  // secrets.read_metadata. Secret disclosure and all mutations retain the
+  // tool-level high risk.
+  secret: Object.freeze({
+    list: "low",
+  }),
   knowledge: Object.freeze({
     promote: "high",
   }),
