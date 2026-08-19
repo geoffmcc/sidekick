@@ -4,7 +4,6 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const EventEmitter = require("events");
-const { execFileSync } = require("child_process");
 const { callAgentTool, getBuiltinRegistry, DATA_DIR, loadDelays, saveDelays, loadWatches, saveWatches, getToolDefsForSource, transitionScheduledPlatformExecution, appendScheduledPlatformEvent, createScheduledPlatformExecution, releaseScheduledClaim, startScheduledLeaseRenewal, recoverStrandedDelays, recoverStrandedRunbooks, claimScheduledDefinition, pauseWatchForCancel } = require("./tools");
 const { stripSidekickPrefix } = require("./core/tool-name");
 
@@ -294,95 +293,6 @@ function parseWatchInterval(interval) {
   const unit = match[2];
   const multipliers = { s: 1000, m: 60000, h: 3600000 };
   return amount * multipliers[unit];
-}
-
-function checkServiceLegacy(serviceName) {
-  try {
-    const output = execFileSync("systemctl", ["is-active", serviceName], { encoding: "utf-8", timeout: 5000 }).trim();
-    return { status: output, active: output === "active" };
-  } catch {
-    return { status: "unknown", active: false };
-  }
-}
-
-function checkProcessLegacy(processName) {
-  try {
-    const output = execFileSync("pgrep", ["-f", processName], { encoding: "utf-8", timeout: 5000 }).trim();
-    return { running: output.length > 0, pids: output.split("\n").filter(Boolean) };
-  } catch {
-    return { running: false, pids: [] };
-  }
-}
-
-function checkEndpointLegacy(url) {
-  try {
-    const output = execFileSync("curl", ["-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", url], { encoding: "utf-8", timeout: 10000 }).trim();
-    return { status: parseInt(output), ok: output.startsWith("2") };
-  } catch {
-    return { status: 0, ok: false };
-  }
-}
-
-function checkFileLegacy(filePath, pattern) {
-  try {
-    const output = fs.readFileSync(filePath, "utf-8");
-    const matches = pattern ? output.includes(pattern) : true;
-    return { exists: true, matches, content: output.substring(0, 200) };
-  } catch {
-    return { exists: false, matches: false };
-  }
-}
-
-function evaluateWatchConditionLegacy(watch, checkResult) {
-  const { source, condition, value } = watch;
-  
-  if (source === "service") {
-    if (condition === "status!=active") return !checkResult.active;
-    if (condition === "status=active") return checkResult.active;
-  }
-  
-  if (source === "process") {
-    if (condition === "not_running") return !checkResult.running;
-    if (condition === "running") return checkResult.running;
-  }
-  
-  if (source === "endpoint") {
-    if (condition === "status!=200") return checkResult.status !== 200;
-    if (condition === "status=200") return checkResult.status === 200;
-    if (condition.startsWith("status>=")) {
-      const threshold = parseInt(condition.substring(8));
-      return checkResult.status >= threshold;
-    }
-  }
-  
-  if (source === "file") {
-    if (condition === "content_matches") return checkResult.exists && checkResult.matches;
-    if (condition === "not_exists") return !checkResult.exists;
-    if (condition === "exists") return checkResult.exists;
-  }
-  
-  return false;
-}
-
-async function executeWatchActionLegacy(watch, checkResult, metadata = {}) {
-  const { action_tool, action_args } = watch;
-  if (!action_tool) return;
-  
-  const args = { ...action_args };
-  if (args.message) {
-    args.message = args.message
-      .replace(/\{\{source\}\}/g, watch.source)
-      .replace(/\{\{target\}\}/g, watch.target)
-      .replace(/\{\{status\}\}/g, JSON.stringify(checkResult))
-      .replace(/\{\{time\}\}/g, new Date().toISOString());
-  }
-  
-  try {
-    return await callAgentTool(action_tool, args, metadata);
-  } catch (e) {
-    console.error(`Watch ${watch.id} action failed: ${e.message}`);
-    return { content: [{ type: "text", text: "Error: " + e.message }], isError: true };
-  }
 }
 
 async function checkWatch(watch) {
