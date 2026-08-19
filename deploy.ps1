@@ -557,12 +557,12 @@ try {
   } else {
     Write-Host ""
     Write-Host "--- Installing Dependencies ---" -ForegroundColor Cyan
-    Write-Host "  Running npm install..." -ForegroundColor Green
-    $npmOutput = Run-Remote "cd $REMOTE_DIR && npm install --omit=dev --no-package-lock 2>&1"
+    Write-Host "  Running npm ci from package-lock.json..." -ForegroundColor Green
+    $npmOutput = Run-Remote "cd $REMOTE_DIR && npm ci --omit=dev 2>&1"
     if ($LASTEXITCODE -ne 0) {
-      Write-Host "  npm install failed:" -ForegroundColor Red
+      Write-Host "  npm ci failed:" -ForegroundColor Red
       Write-Host $npmOutput
-      throw "npm install failed"
+      throw "npm ci failed"
     }
 
     Write-Host ""
