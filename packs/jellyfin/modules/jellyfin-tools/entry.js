@@ -1738,8 +1738,14 @@ function playbackCommandFor(action) {
     resume: "Unpause",
     stop: "Stop",
     seek: "Seek",
+    fast_forward: "Seek",
+    rewind: "Seek",
     set_volume: "SetVolume",
   }[action] || null;
+}
+
+function isSeekAction(action) {
+  return ["seek", "fast_forward", "rewind"].includes(action);
 }
 
 async function playback(services, args, runtime) {
@@ -1750,10 +1756,14 @@ async function playback(services, args, runtime) {
       `remote playback is disabled for Jellyfin profile "${p.name}"`,
     );
   if (args.action === "play" && !args.item_id) throw new JellyfinError("invalid_input", "item_id is required for play");
-  if (args.action === "seek" && args.position_seconds === undefined && args.offset_seconds === undefined)
+  if (isSeekAction(args.action) && args.position_seconds === undefined && args.offset_seconds === undefined)
     throw new JellyfinError("invalid_input", "position_seconds or offset_seconds is required for seek");
-  if (args.action === "seek" && args.position_seconds !== undefined && args.offset_seconds !== undefined)
+  if (isSeekAction(args.action) && args.position_seconds !== undefined && args.offset_seconds !== undefined)
     throw new JellyfinError("invalid_input", "position_seconds and offset_seconds are mutually exclusive");
+  if (["fast_forward", "rewind"].includes(args.action) && args.position_seconds !== undefined)
+    throw new JellyfinError("invalid_input", `${args.action} requires offset_seconds`);
+  if (["fast_forward", "rewind"].includes(args.action) && args.offset_seconds <= 0)
+    throw new JellyfinError("invalid_input", `${args.action} requires a positive offset_seconds`);
   if (args.action === "set_volume" && args.volume === undefined)
     throw new JellyfinError("invalid_input", "volume is required for set_volume");
   const selectorCount = [args.session_id, args.device_id, args.device_name].filter(Boolean).length;
@@ -1809,17 +1819,22 @@ async function playback(services, args, runtime) {
   }
 
   let seekPositionTicks = null;
-  if (args.action === "seek") {
+  if (isSeekAction(args.action)) {
     const currentTicks = Number(target?.PlayState?.PositionTicks || 0);
+    const requestedOffset = args.action === "fast_forward"
+      ? Math.abs(args.offset_seconds || 0)
+      : args.action === "rewind"
+        ? -Math.abs(args.offset_seconds || 0)
+        : args.offset_seconds;
     const requestedSeconds = args.position_seconds !== undefined
       ? args.position_seconds
-      : Math.max(0, Math.round(currentTicks / 10000000) + args.offset_seconds);
+      : Math.max(0, currentTicks / 10000000 + requestedOffset);
     seekPositionTicks = Math.max(0, Math.round(requestedSeconds * 10000000));
   }
 
   const plan = {
     profile: p.name,
-    operation: "play",
+    operation: args.action,
     target: playbackCandidateView(target),
     user: { id: target.UserId, name: target.UserName || null, source: "target_session" },
     item: resolvedItem ? { id: resolvedItem.id, name: resolvedItem.name, type: resolvedItem.type } : null,
@@ -1830,7 +1845,7 @@ async function playback(services, args, runtime) {
         : `/Sessions/${target.Id}/Playing/${args.action === "resume" ? "Unpause" : args.action[0].toUpperCase() + args.action.slice(1)}`,
     command: args.action === "play"
       ? { play_command: "PlayNow", item_ids: [resolvedItem.id] }
-      : args.action === "seek"
+      : isSeekAction(args.action)
         ? { playstate_command: "Seek", seek_position_ticks: seekPositionTicks }
         : args.action === "set_volume"
           ? { general_command: "SetVolume", volume: args.volume }
@@ -1844,7 +1859,7 @@ async function playback(services, args, runtime) {
       playCommand: "PlayNow",
       itemIds: resolvedItem.id,
     });
-  } else if (args.action === "seek") {
+  } else if (isSeekAction(args.action)) {
     await c.post(`/Sessions/${encodeURIComponent(target.Id)}/Playing/Seek`, null, {
       seekPositionTicks,
     });
@@ -1871,7 +1886,7 @@ async function playback(services, args, runtime) {
           ? observedSession?.PlayState?.IsPaused === false
           : args.action === "stop"
             ? !observedSession?.NowPlayingItem
-            : args.action === "seek"
+            : isSeekAction(args.action)
               ? Math.abs(Number(observedSession?.PlayState?.PositionTicks || 0) - seekPositionTicks) <= 10000000
               : Number(observedSession?.PlayState?.VolumeLevel) === args.volume;
     if (stateObserved) {
@@ -2269,7 +2284,7 @@ const entry = {
         description:
           "Governed targeted Jellyfin playback controls for an active device session. Resolves the user from the selected session and refuses ambiguous targets.",
         schema: z.object({
-          action: z.enum(["play", "pause", "resume", "stop", "seek", "set_volume"]),
+          action: z.enum(["play", "pause", "resume", "stop", "seek", "fast_forward", "rewind", "set_volume"]),
           profile: z.string().optional(),
           item_id: z.string().min(1).optional(),
           session_id: z.string().optional(),
@@ -2281,7 +2296,7 @@ const entry = {
           dry_run: z.boolean().optional(),
         }),
         args: {
-          action: "string (play|pause|resume|stop|seek|set_volume)",
+          action: "string (play|pause|resume|stop|seek|fast_forward|rewind|set_volume)",
           profile: "string",
           item_id: "string (required for play)",
           session_id: "string (exact active session selector)",

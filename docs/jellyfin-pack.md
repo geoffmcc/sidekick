@@ -259,8 +259,9 @@ Per-action honesty notes:
   exact device name, or one unambiguous eligible session.
 - `play` requires an item ID and resolves it through the selected session's
   Jellyfin user. `pause`, `resume`, and `stop` use the matching play-state
-  command; `seek` accepts absolute or relative seconds; `set_volume` accepts
-  only 0 through 100.
+  command; `seek` accepts absolute or signed relative seconds;
+  `fast_forward` and `rewind` accept a positive relative offset in seconds
+  (for example, 1800 for 30 minutes); `set_volume` accepts only 0 through 100.
 - User identity is always taken from the selected session's `UserId`; a
   configured or assumed username is never substituted. Every command returns
   bounded postcondition evidence and reports `request_accepted` when the

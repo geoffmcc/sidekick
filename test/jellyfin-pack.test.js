@@ -1223,6 +1223,8 @@ async function asyncTest(name, fn) {
       { action: "resume", path: "/Sessions/s1/Playing/Unpause" },
       { action: "stop", path: "/Sessions/s1/Playing/Stop" },
       { action: "seek", args: { position_seconds: 120 }, path: "/Sessions/s1/Playing/Seek", query: { seekPositionTicks: 1200000000 } },
+      { action: "fast_forward", args: { offset_seconds: 1800 }, path: "/Sessions/s1/Playing/Seek", query: { seekPositionTicks: 25543210000 } },
+      { action: "rewind", args: { offset_seconds: 1800 }, path: "/Sessions/s1/Playing/Seek", query: { seekPositionTicks: 0 } },
       { action: "set_volume", args: { volume: 35 }, path: "/Sessions/s1/Command", body: { Name: "SetVolume", Arguments: ["volume=35"] } },
     ];
     for (const control of controls) {
