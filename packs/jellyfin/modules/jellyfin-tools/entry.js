@@ -1732,6 +1732,16 @@ function playbackMatches(session, args) {
   return session.SupportsMediaControl !== false;
 }
 
+function playbackCommandFor(action) {
+  return {
+    pause: "Pause",
+    resume: "Unpause",
+    stop: "Stop",
+    seek: "Seek",
+    set_volume: "SetVolume",
+  }[action] || null;
+}
+
 async function playback(services, args, runtime) {
   const { p, c } = await open(services, args, runtime);
   if (!p.allow_playback_control)
@@ -1739,7 +1749,13 @@ async function playback(services, args, runtime) {
       "policy_denied",
       `remote playback is disabled for Jellyfin profile "${p.name}"`,
     );
-  if (!args.item_id) throw new JellyfinError("invalid_input", "item_id is required");
+  if (args.action === "play" && !args.item_id) throw new JellyfinError("invalid_input", "item_id is required for play");
+  if (args.action === "seek" && args.position_seconds === undefined && args.offset_seconds === undefined)
+    throw new JellyfinError("invalid_input", "position_seconds or offset_seconds is required for seek");
+  if (args.action === "seek" && args.position_seconds !== undefined && args.offset_seconds !== undefined)
+    throw new JellyfinError("invalid_input", "position_seconds and offset_seconds are mutually exclusive");
+  if (args.action === "set_volume" && args.volume === undefined)
+    throw new JellyfinError("invalid_input", "volume is required for set_volume");
   const selectorCount = [args.session_id, args.device_id, args.device_name].filter(Boolean).length;
   if (selectorCount > 1)
     throw new JellyfinError("invalid_input", "session_id, device_id and device_name are mutually exclusive");
@@ -1765,38 +1781,81 @@ async function playback(services, args, runtime) {
     throw new JellyfinError("state_conflict", "the selected session has no resolved Jellyfin user identity", {
       target: playbackCandidateView(target),
     });
+  const supported = Array.isArray(target.SupportedCommands) ? target.SupportedCommands : [];
+  const requiredCommand = playbackCommandFor(args.action);
+  if (requiredCommand && supported.length && !supported.includes(requiredCommand))
+    throw new JellyfinError("unsupported_capability", `the selected session does not support ${args.action}`, {
+      target: playbackCandidateView(target),
+      required_command: requiredCommand,
+      supported_commands: supported.slice(0, 50),
+    });
 
-  // Resolve the item through the target session's user. This both prevents
-  // accidentally playing inaccessible media and ensures watch state belongs
-  // to the active user rather than to a configured or guessed username.
-  const item = await c.get(`/Users/${encodeURIComponent(target.UserId)}/Items/${encodeURIComponent(args.item_id)}`, {
-    Fields: "Overview,MediaSources,MediaStreams,ProviderIds,UserData,Path",
-  });
-  const resolvedItem = {
-    id: item?.Id || null,
-    name: item?.Name || null,
-    type: item?.Type || null,
-    user_data: item?.UserData || {},
-  };
-  if (!resolvedItem.id)
-    throw new JellyfinError("not_found", "the requested item is not available to the selected Jellyfin user");
+  let resolvedItem = null;
+  if (args.action === "play") {
+    // Resolve the item through the target session's user. This both prevents
+    // accidentally playing inaccessible media and ensures watch state belongs
+    // to the active user rather than to a configured or guessed username.
+    const item = await c.get(`/Users/${encodeURIComponent(target.UserId)}/Items/${encodeURIComponent(args.item_id)}`, {
+      Fields: "Overview,MediaSources,MediaStreams,ProviderIds,UserData,Path",
+    });
+    resolvedItem = {
+      id: item?.Id || null,
+      name: item?.Name || null,
+      type: item?.Type || null,
+      user_data: item?.UserData || {},
+    };
+    if (!resolvedItem.id)
+      throw new JellyfinError("not_found", "the requested item is not available to the selected Jellyfin user");
+  }
+
+  let seekPositionTicks = null;
+  if (args.action === "seek") {
+    const currentTicks = Number(target?.PlayState?.PositionTicks || 0);
+    const requestedSeconds = args.position_seconds !== undefined
+      ? args.position_seconds
+      : Math.max(0, Math.round(currentTicks / 10000000) + args.offset_seconds);
+    seekPositionTicks = Math.max(0, Math.round(requestedSeconds * 10000000));
+  }
 
   const plan = {
     profile: p.name,
     operation: "play",
     target: playbackCandidateView(target),
     user: { id: target.UserId, name: target.UserName || null, source: "target_session" },
-    item: { id: resolvedItem.id, name: resolvedItem.name, type: resolvedItem.type },
-    endpoint: `/Sessions/${target.Id}/Playing`,
-    command: { play_command: "PlayNow", item_ids: [resolvedItem.id] },
+    item: resolvedItem ? { id: resolvedItem.id, name: resolvedItem.name, type: resolvedItem.type } : null,
+    endpoint: args.action === "play"
+      ? `/Sessions/${target.Id}/Playing`
+      : args.action === "set_volume"
+        ? `/Sessions/${target.Id}/Command`
+        : `/Sessions/${target.Id}/Playing/${args.action === "resume" ? "Unpause" : args.action[0].toUpperCase() + args.action.slice(1)}`,
+    command: args.action === "play"
+      ? { play_command: "PlayNow", item_ids: [resolvedItem.id] }
+      : args.action === "seek"
+        ? { playstate_command: "Seek", seek_position_ticks: seekPositionTicks }
+        : args.action === "set_volume"
+          ? { general_command: "SetVolume", volume: args.volume }
+          : { playstate_command: requiredCommand },
     watch_state_source: "Jellyfin session user and user-scoped item lookup",
   };
   if (args.dry_run === true) return { dry_run: true, ...plan, changes_made: false };
 
-  await c.post(`/Sessions/${encodeURIComponent(target.Id)}/Playing`, null, {
-    playCommand: "PlayNow",
-    itemIds: resolvedItem.id,
-  });
+  if (args.action === "play") {
+    await c.post(`/Sessions/${encodeURIComponent(target.Id)}/Playing`, null, {
+      playCommand: "PlayNow",
+      itemIds: resolvedItem.id,
+    });
+  } else if (args.action === "seek") {
+    await c.post(`/Sessions/${encodeURIComponent(target.Id)}/Playing/Seek`, null, {
+      seekPositionTicks,
+    });
+  } else if (args.action === "set_volume") {
+    await c.post(`/Sessions/${encodeURIComponent(target.Id)}/Command`, {
+      Name: "SetVolume",
+      Arguments: [`volume=${args.volume}`],
+    });
+  } else {
+    await c.post(`/Sessions/${encodeURIComponent(target.Id)}/Playing/${args.action === "resume" ? "Unpause" : args.action[0].toUpperCase() + args.action.slice(1)}`);
+  }
   let observed = false;
   let observedSession = null;
   for (let i = 0; i < 3; i += 1) {
@@ -1804,7 +1863,18 @@ async function playback(services, args, runtime) {
     if (runtime?.signal?.aborted) break;
     const now = await c.get("/Sessions");
     observedSession = (Array.isArray(now) ? now : []).find((session) => session.Id === target.Id) || null;
-    if (observedSession?.NowPlayingItem?.Id === resolvedItem.id) {
+    const stateObserved = args.action === "play"
+      ? observedSession?.NowPlayingItem?.Id === resolvedItem.id
+      : args.action === "pause"
+        ? observedSession?.PlayState?.IsPaused === true
+        : args.action === "resume"
+          ? observedSession?.PlayState?.IsPaused === false
+          : args.action === "stop"
+            ? !observedSession?.NowPlayingItem
+            : args.action === "seek"
+              ? Math.abs(Number(observedSession?.PlayState?.PositionTicks || 0) - seekPositionTicks) <= 10000000
+              : Number(observedSession?.PlayState?.VolumeLevel) === args.volume;
+    if (stateObserved) {
       observed = true;
       break;
     }
@@ -1815,6 +1885,9 @@ async function playback(services, args, runtime) {
     postcondition: {
       playback_observed: observed,
       now_playing_item_id: observedSession?.NowPlayingItem?.Id || null,
+      position_ticks: observedSession?.PlayState?.PositionTicks ?? null,
+      paused: observedSession?.PlayState?.IsPaused ?? null,
+      volume: observedSession?.PlayState?.VolumeLevel ?? null,
     },
     changes_made: true,
   };
@@ -2194,23 +2267,29 @@ const entry = {
         name: "jellyfin_playback",
         aliases: ["jf_playback"],
         description:
-          "Governed targeted Jellyfin playback for an active device session. Resolves the user from the selected session and refuses ambiguous targets.",
+          "Governed targeted Jellyfin playback controls for an active device session. Resolves the user from the selected session and refuses ambiguous targets.",
         schema: z.object({
-          action: z.enum(["play"]),
+          action: z.enum(["play", "pause", "resume", "stop", "seek", "set_volume"]),
           profile: z.string().optional(),
-          item_id: z.string().min(1),
+          item_id: z.string().min(1).optional(),
           session_id: z.string().optional(),
           device_id: z.string().optional(),
           device_name: z.string().max(200).optional(),
+          position_seconds: z.number().int().min(0).max(604800).optional(),
+          offset_seconds: z.number().int().min(-604800).max(604800).optional(),
+          volume: z.number().int().min(0).max(100).optional(),
           dry_run: z.boolean().optional(),
         }),
         args: {
-          action: "string (play)",
+          action: "string (play|pause|resume|stop|seek|set_volume)",
           profile: "string",
-          item_id: "string (required)",
+          item_id: "string (required for play)",
           session_id: "string (exact active session selector)",
           device_id: "string (exact device selector)",
           device_name: "string (case-insensitive exact device-name selector)",
+          position_seconds: "number (absolute seek target in seconds)",
+          offset_seconds: "number (relative seek offset in seconds)",
+          volume: "number (0-100 for set_volume)",
           dry_run: "boolean",
         },
         risk: "high",

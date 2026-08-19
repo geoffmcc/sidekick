@@ -33,6 +33,7 @@
     { "path": "knowledge/analytics.md", "title": "Jellyfin pack: library analytics and metadata completeness", "category": "operations", "tags": ["jellyfin", "analytics", "metadata"] },
     { "path": "knowledge/security.md", "title": "Jellyfin pack: profiles and safety", "category": "operations", "tags": ["jellyfin", "security", "tls"] },
     { "path": "knowledge/playback.md", "title": "Jellyfin pack: playback diagnosis", "category": "operations", "tags": ["jellyfin", "playback", "transcoding"] },
+    { "path": "knowledge/playback-control.md", "title": "Jellyfin pack: targeted playback control", "category": "operations", "tags": ["jellyfin", "playback", "control", "watch-state"] },
     { "path": "knowledge/maintenance.md", "title": "Jellyfin pack: maintenance and storage safety", "category": "operations", "tags": ["jellyfin", "maintenance", "storage"] }
   ],
   "requires": { "tools": [], "optional_tools": ["secret", "proxmox", "status", "web_fetch"] },
