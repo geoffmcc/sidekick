@@ -266,6 +266,11 @@ Per-action honesty notes:
   configured or assumed username is never substituted. Every command returns
   bounded postcondition evidence and reports `request_accepted` when the
   target does not confirm the new state within the verification window.
+- DLNA renderers may advertise only volume/audio commands even when Jellyfin
+  can route pause, stop, and seek through the session play-state endpoints.
+  The pack permits those controls only for an explicitly identified DLNA
+  session with `SupportsMediaControl: true`; seek additionally requires
+  `PlayState.CanSeek: true`.
 - The pack's ten manifest-registered knowledge documents cover operating
   model, catalog, Live TV, server audit, user media, analytics, safety,
   playback diagnosis, targeted playback control, and maintenance. New users
