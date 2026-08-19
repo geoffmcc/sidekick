@@ -334,6 +334,11 @@ Currently bundled:
   a controlled guest lifecycle over the Proxmox API, with administrator
   configured profiles, pinned-CA TLS and correct asynchronous task handling.
   See `docs/proxmox-pack.md`.
+- **Container Operations (Docker / Podman)** (`packs/container-operations`) —
+  named-engine discovery, bounded container health/logs/stats, images,
+  networks, volumes, Compose validation, update checks and governed lifecycle
+  operations. It is an independent **Infrastructure & Homelab** pack and does
+  not depend on Proxmox. See `docs/container-operations-pack.md`.
 - **Security Research** (`packs/security-research`) — a governed, reproducible
   framework for authorized security research: campaigns, hypotheses, durable
   runs, bounded probes, evidence with integrity and redaction, deterministic

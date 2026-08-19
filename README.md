@@ -375,15 +375,18 @@ through the module lifecycle, pack workflows register in the workflow
 definition registry, and pack knowledge lands in the ordinary knowledge base.
 There is no second plugin runtime and no remote marketplace.
 
-Five first-party packs ship bundled: the **Developer / Software Engineering**
-pack, the **Jellyfin** pack, the **Proxmox VE** pack, the **Security Research**
-pack, and the **Governed Browser Automation** pack. They provide structured
-repository work, named-profile media operations, guarded infrastructure,
-governed research, and task-level browser workflows respectively. See
+Six first-party packs ship bundled: the **Developer / Software Engineering**
+pack, the **Jellyfin** pack, the **Proxmox VE** pack, the **Container
+Operations (Docker / Podman)** pack, the **Security Research** pack, and the
+**Governed Browser Automation** pack. They provide structured repository work,
+named-profile media operations, guarded infrastructure, independent container
+operations, governed research, and task-level browser workflows respectively.
+See
 [`docs/capability-packs.md`](docs/capability-packs.md),
 [`docs/developer-pack.md`](docs/developer-pack.md),
 [`docs/jellyfin-pack.md`](docs/jellyfin-pack.md),
 [`docs/proxmox-pack.md`](docs/proxmox-pack.md) and
+[`docs/container-operations-pack.md`](docs/container-operations-pack.md),
  [`docs/security-research-pack.md`](docs/security-research-pack.md), plus
  [`docs/browser-automation.md`](docs/browser-automation.md).
 
@@ -418,7 +421,7 @@ To avoid confusion, it's important to understand what each component is:
 - **Sidekick Compute** = The allowlisted worker/provider/model/job system for distributed inference workloads
 - **Module** = A runtime implementation contributed to Sidekick: code that builds tool descriptors and reports health, managed through a full install/configure/enable/upgrade/uninstall lifecycle
 - **Workflow** = A durable, reusable multi-step execution defined as data and run through the tool dispatcher, with checkpoints, project identity, cancellation and approval continuation
-- **Capability Pack** = An installable *area of competence* composed from modules, workflows, knowledge and configuration. Five first-party packs ship bundled; use live capability discovery for exact installed state. See `docs/capability-packs.md`.
+- **Capability Pack** = An installable *area of competence* composed from modules, workflows, knowledge and configuration. Six first-party packs ship bundled; use live capability discovery for exact installed state. See `docs/capability-packs.md`.
 - **Connector** = A managed relationship with an external service or system. GitHub is the current governed provider; broader connector health, mutation, dashboard coverage, and additional providers remain future work.
 - **Metrics System** = InfluxDB + Grafana for system health, tool usage, and service monitoring
 
@@ -789,6 +792,7 @@ This follows the principle of least privilege: after initial setup, the sidekick
 │   ├── browser-automation/  Bundled Governed Browser Automation capability pack
 │   ├── developer/           Bundled Developer / Software Engineering capability pack
 │   ├── jellyfin/            Bundled Jellyfin capability pack
+│   ├── container-operations/ Bundled Docker / Podman Container Operations pack
 │   ├── proxmox/             Bundled Proxmox VE capability pack
 │   └── security-research/   Bundled Security Research capability pack
 ├── scripts/

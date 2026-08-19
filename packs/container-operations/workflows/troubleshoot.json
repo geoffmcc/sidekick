@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "name": "docker-podman/troubleshoot",
+  "version": "1.0.0",
+  "title": "Docker / Podman container troubleshooting",
+  "description": "Collects bounded evidence for a named container: runtime state, health, recent logs, resource usage, mounts, networks, ports, and security-sensitive settings.",
+  "mode": "read_only",
+  "inputs": {
+    "profile": { "type": "string", "required": false, "default": "" },
+    "target": { "type": "string", "required": true },
+    "tail": { "type": "number", "required": false, "default": 100 }
+  },
+  "steps": [
+    { "name": "inspect", "tool": "containers", "args": { "action": "inspect", "profile": "${inputs.profile}", "target": "${inputs.target}" }, "expect": "json" },
+    { "name": "logs", "tool": "containers", "args": { "action": "logs", "profile": "${inputs.profile}", "target": "${inputs.target}", "tail": "${inputs.tail}" }, "expect": "json", "on_error": "continue" },
+    { "name": "stats", "tool": "containers", "args": { "action": "stats", "profile": "${inputs.profile}", "target": "${inputs.target}" }, "expect": "json", "on_error": "continue" }
+  ],
+  "result": { "container": "${steps.inspect.json}", "logs": "${steps.logs.json}", "stats": "${steps.stats.json}" },
+  "tags": ["docker", "podman", "troubleshooting"]
+}

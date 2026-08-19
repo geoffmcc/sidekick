@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "pack_api": 1,
+  "name": "container-operations",
+  "display_name": "Container Operations (Docker / Podman)",
+  "version": "1.0.0",
+  "description": "Governed Docker and Podman engine discovery, container health, logs, resources, images, networks, volumes, Compose inspection, update checks, and controlled lifecycle operations.",
+  "publisher": "Sidekick",
+  "compatibility": { "sidekick": ">=1.0.0" },
+  "modules": [
+    {
+      "name": "container-operations-tools",
+      "path": "modules/container-operations-tools",
+      "entry_point": "entry.js",
+      "config_from_pack": true
+    }
+  ],
+  "workflows": [
+    { "path": "workflows/health-assessment.json" },
+    { "path": "workflows/update-check.json" },
+    { "path": "workflows/troubleshoot.json" },
+    { "path": "workflows/controlled-update.json" }
+  ],
+  "knowledge": [
+    { "path": "knowledge/operating.md", "title": "Container Operations: operating model", "category": "operations", "tags": ["containers", "docker", "podman", "operations"] },
+    { "path": "knowledge/safety.md", "title": "Container Operations: safety and update procedure", "category": "operations", "tags": ["containers", "docker", "podman", "security", "updates"] },
+    { "path": "knowledge/unhealthy.md", "title": "Container Operations: investigating unhealthy containers", "category": "operations", "tags": ["containers", "health", "troubleshooting"] },
+    { "path": "knowledge/restart-loops.md", "title": "Container Operations: diagnosing restart loops", "category": "operations", "tags": ["containers", "restarts", "troubleshooting"] },
+    { "path": "knowledge/reachability.md", "title": "Container Operations: diagnosing unreachable services", "category": "operations", "tags": ["containers", "networking", "traefik", "nginx"] },
+    { "path": "knowledge/updates.md", "title": "Container Operations: interpreting image updates", "category": "operations", "tags": ["containers", "images", "registries", "updates"] },
+    { "path": "knowledge/preflight.md", "title": "Container Operations: update preflight", "category": "operations", "tags": ["containers", "updates", "preflight"] },
+    { "path": "knowledge/drift.md", "title": "Container Operations: Compose drift and validation", "category": "operations", "tags": ["compose", "drift", "configuration"] },
+    { "path": "knowledge/dangerous-config.md", "title": "Container Operations: dangerous container configuration", "category": "operations", "tags": ["containers", "security", "privileged"] },
+    { "path": "knowledge/orphans.md", "title": "Container Operations: orphan candidates and cleanup", "category": "operations", "tags": ["containers", "orphans", "cleanup"] }
+  ],
+  "requires": { "tools": [], "optional_tools": ["secret", "netdiag", "watch"] },
+  "permissions": [],
+  "configuration": {
+    "schema": {
+      "type": "object",
+      "properties": {
+        "profiles": {
+          "type": "object",
+          "description": "Named administrator-configured Docker or Podman engine profiles. Credentials are secret references, never values.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "provider": { "type": "string", "enum": ["docker", "podman"] },
+              "display_name": { "type": "string", "minLength": 1, "maxLength": 120 },
+              "socket": { "type": "string", "minLength": 1, "maxLength": 500 },
+              "endpoint": { "type": "string", "maxLength": 500 },
+              "tls": {
+                "type": "object",
+                "properties": {
+                  "ca_ref": { "type": "string", "pattern": "^secret:[A-Za-z0-9_.:@/-]+$" },
+                  "cert_ref": { "type": "string", "pattern": "^secret:[A-Za-z0-9_.:@/-]+$" },
+                  "key_ref": { "type": "string", "pattern": "^secret:[A-Za-z0-9_.:@/-]+$" },
+                  "servername": { "type": "string", "maxLength": 253 }
+                },
+                "additionalProperties": false
+              },
+              "compose": {
+                "type": "object",
+                "properties": {
+                  "implementation": { "type": "string", "enum": ["docker-compose", "docker compose", "podman-compose", "podman compose"] },
+                  "binary": { "type": "string", "enum": ["docker", "docker-compose", "podman", "podman-compose"] },
+                  "project_roots": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 500 }, "maxItems": 32 }
+                },
+                "additionalProperties": false
+              },
+              "request_timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 120000 },
+              "operation_timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 1800000 },
+              "allow_mutations": { "type": "boolean", "default": false },
+              "default": { "type": "boolean" }
+            },
+            "required": ["provider"],
+            "additionalProperties": false
+          }
+        },
+        "max_log_bytes": { "type": "integer", "minimum": 1024, "maximum": 1000000, "default": 200000 },
+        "max_log_lines": { "type": "integer", "minimum": 1, "maximum": 10000, "default": 1000 },
+        "repository_roots": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 500 }, "maxItems": 64 }
+      },
+      "additionalProperties": false
+    },
+    "defaults": { "profiles": {}, "max_log_bytes": 200000, "max_log_lines": 1000, "repository_roots": [] }
+  }
+}
