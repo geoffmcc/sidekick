@@ -113,9 +113,12 @@ else
   log "User $USERNAME created"
 fi
 
-# Add user to sudo group
-log "Adding $USERNAME to sudo group..."
-usermod -aG sudo "$USERNAME"
+# Keep the service account out of the administrator group. Its narrowly scoped
+# sudoers entries below provide the operational commands it actually needs.
+if id -nG "$USERNAME" | tr ' ' '\n' | grep -qx sudo; then
+  log "Removing $USERNAME from the unrestricted sudo group..."
+  gpasswd -d "$USERNAME" sudo >/dev/null
+fi
 
 # Setup sudoers for passwordless service management
 log "Configuring sudoers..."
@@ -154,7 +157,7 @@ sidekick ALL=(ALL) NOPASSWD: /usr/local/sbin/sidekick-wg
 sidekick ALL=(ALL) NOPASSWD: /usr/sbin/nginx -t, /usr/bin/systemctl start nginx, /usr/bin/systemctl stop nginx, /usr/bin/systemctl restart nginx, /usr/bin/systemctl reload nginx, /usr/bin/systemctl status nginx
 
 # Data directory
-sidekick ALL=(ALL) NOPASSWD: /usr/bin/chown -R sidekick\:sidekick /home/sidekick/sidekick/data/, /usr/bin/chmod -R 755 /home/sidekick/sidekick/data/
+sidekick ALL=(ALL) NOPASSWD: /usr/bin/chown -R sidekick\:sidekick /home/sidekick/sidekick/data/, /usr/bin/chmod -R 700 /home/sidekick/sidekick/data/
 EOF
 
 chmod 440 /etc/sudoers.d/sidekick

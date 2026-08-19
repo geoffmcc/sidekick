@@ -448,7 +448,7 @@ sidekick ALL=(ALL) NOPASSWD: /usr/local/sbin/sidekick-wg
 sidekick ALL=(ALL) NOPASSWD: /usr/sbin/nginx -t, /usr/bin/systemctl start nginx, /usr/bin/systemctl stop nginx, /usr/bin/systemctl restart nginx, /usr/bin/systemctl reload nginx, /usr/bin/systemctl status nginx
 
 # Data directory
-sidekick ALL=(ALL) NOPASSWD: /usr/bin/chown -R sidekick\:sidekick /home/sidekick/sidekick/data/, /usr/bin/chmod -R 755 /home/sidekick/sidekick/data/
+sidekick ALL=(ALL) NOPASSWD: /usr/bin/chown -R sidekick\:sidekick /home/sidekick/sidekick/data/, /usr/bin/chmod -R 700 /home/sidekick/sidekick/data/
 SUDOERS
 
 chmod 440 /etc/sudoers.d/sidekick
