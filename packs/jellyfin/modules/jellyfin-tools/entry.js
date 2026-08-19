@@ -214,9 +214,91 @@ function mediaListView(x) {
     tags: Array.isArray(x?.Tags) ? x.Tags.slice(0, 50) : [],
     path: x?.Path || null,
     overview: x?.Overview || null,
+    community_rating: x?.CommunityRating ?? null,
+    critic_rating: x?.CriticRating ?? null,
+    official_rating: x?.OfficialRating || null,
+    artwork: {
+      primary: Boolean(x?.ImageTags?.Primary),
+      backdrop: Boolean(x?.BackdropImageTags?.length || x?.ImageTags?.Backdrop),
+    },
+    credits: Array.isArray(x?.People)
+      ? x.People.slice(0, 10).map((person) => ({ name: person?.Name || null, role: person?.Role || null, type: person?.Type || null }))
+      : [],
+    collection_ids: Array.isArray(x?.CollectionIds) ? x.CollectionIds.slice(0, 20) : [],
     provider_ids: x?.ProviderIds || {},
     runtime_minutes: runtimeView(x).runtime_minutes,
   };
+}
+
+const ITEM_DETAIL_FIELD_GROUPS = {
+  core: ["Overview", "Path", "ProviderIds", "Genres", "Tags", "RunTimeTicks", "PremiereDate", "ProductionYear", "DateCreated"],
+  ratings: ["CommunityRating", "CriticRating", "OfficialRating", "Ratings"],
+  credits: ["People", "Studios"],
+  artwork: ["ImageTags", "BackdropImageTags", "ParentThumbItemId", "ParentThumbImageTag"],
+  collections: ["CollectionIds", "ParentId"],
+  external_links: ["ExternalUrls"],
+  watch_state: ["UserData"],
+  chapters: ["Chapters"],
+  media_sources: ["MediaSources", "MediaStreams"],
+};
+const ITEM_DETAIL_DEFAULT_GROUPS = Object.keys(ITEM_DETAIL_FIELD_GROUPS);
+
+function itemDetailFields(value) {
+  const requested = String(value || "").split(",").map((field) => field.trim().toLowerCase()).filter(Boolean);
+  const groups = requested.length ? requested : ITEM_DETAIL_DEFAULT_GROUPS;
+  const unknown = groups.filter((group) => !ITEM_DETAIL_FIELD_GROUPS[group]);
+  if (unknown.length) throw new JellyfinError("invalid_input", `unsupported item detail field group(s): ${unknown.join(", ")}`);
+  const fields = new Set(["Id", "Name", "Type"]);
+  for (const group of groups) {
+    for (const field of ITEM_DETAIL_FIELD_GROUPS[group] || []) fields.add(field);
+  }
+  return { groups: groups.filter((group) => ITEM_DETAIL_FIELD_GROUPS[group]), fields: Array.from(fields) };
+}
+
+function creditView(person) {
+  return {
+    id: person?.Id || null,
+    name: person?.Name || null,
+    role: person?.Role || null,
+    type: person?.Type || null,
+    image_tag: person?.PrimaryImageTag || null,
+  };
+}
+
+function mediaSourceView(source) {
+  return {
+    id: source?.Id || null,
+    name: source?.Name || null,
+    path: source?.Path || null,
+    container: source?.Container || null,
+    size: source?.Size ?? null,
+    bitrate: source?.Bitrate ?? null,
+    protocol: source?.Protocol || null,
+    video_type: source?.VideoType || null,
+    video_3d_format: source?.Video3DFormat || null,
+    supports_direct_play: source?.SupportsDirectPlay ?? null,
+    supports_direct_stream: source?.SupportsDirectStream ?? null,
+    supports_transcoding: source?.SupportsTranscoding ?? null,
+    streams: Array.isArray(source?.MediaStreams) ? source.MediaStreams.slice(0, 50).map(streamView) : [],
+  };
+}
+
+function itemDetailView(x, groups) {
+  const view = {
+    id: x?.Id || null,
+    name: x?.Name || null,
+    type: x?.Type || null,
+  };
+  if (groups.has("core")) Object.assign(view, { overview: x?.Overview || null, path: x?.Path || null, genres: Array.isArray(x?.Genres) ? x.Genres.slice(0, 50) : [], tags: Array.isArray(x?.Tags) ? x.Tags.slice(0, 50) : [], runtime: runtimeView(x), premiere_date: x?.PremiereDate || null, production_year: x?.ProductionYear ?? null, date_created: x?.DateCreated || null, provider_ids: x?.ProviderIds || {} });
+  if (groups.has("ratings")) Object.assign(view, { community_rating: x?.CommunityRating ?? null, critic_rating: x?.CriticRating ?? null, official_rating: x?.OfficialRating || null, ratings: x?.Ratings || {} });
+  if (groups.has("credits")) Object.assign(view, { credits: Array.isArray(x?.People) ? x.People.slice(0, 100).map(creditView) : [], studios: Array.isArray(x?.Studios) ? x.Studios.slice(0, 50).map((studio) => ({ id: studio?.Id || null, name: studio?.Name || null })) : [] });
+  if (groups.has("artwork")) Object.assign(view, { artwork: { image_tags: x?.ImageTags || {}, backdrop_image_tags: x?.BackdropImageTags || [], parent_thumb_item_id: x?.ParentThumbItemId || null, parent_thumb_image_tag: x?.ParentThumbImageTag || null } });
+  if (groups.has("collections")) Object.assign(view, { collection_ids: Array.isArray(x?.CollectionIds) ? x.CollectionIds.slice(0, 20) : [], parent_id: x?.ParentId || null });
+  if (groups.has("external_links")) view.external_links = Array.isArray(x?.ExternalUrls) ? x.ExternalUrls.slice(0, 50).map((link) => ({ name: link?.Name || null, url: link?.Url || null })) : [];
+  if (groups.has("watch_state")) view.user_state = x?.UserData ? { played: x.UserData.Played ?? null, play_count: x.UserData.PlayCount ?? null, is_favorite: x.UserData.IsFavorite ?? null, playback_position_ticks: x.UserData.PlaybackPositionTicks ?? null, played_percentage: x.UserData.PlayedPercentage ?? null } : null;
+  if (groups.has("chapters")) view.chapters = Array.isArray(x?.Chapters) ? x.Chapters.slice(0, 100).map((chapter) => ({ name: chapter?.Name || null, start_position_ticks: chapter?.StartPositionTicks ?? null, image_tag: chapter?.ImageTag || null })) : [];
+  if (groups.has("media_sources")) Object.assign(view, { media_sources: Array.isArray(x?.MediaSources) ? x.MediaSources.slice(0, 20).map(mediaSourceView) : [], media_streams: Array.isArray(x?.MediaStreams) ? x.MediaStreams.slice(0, 50).map(streamView) : [] });
+  return view;
 }
 
 async function seasonEpisodeSummary(client, seriesId, seasonId) {
@@ -418,7 +500,7 @@ async function fetchLatestStable(services) {
 // ---- read tool -------------------------------------------------------------
 
 async function read(services, args, runtime) {
-  const userFilterActions = new Set(["activity", "user_status", "user_access_audit", "user_media_state", "user_unwatched"]);
+  const userFilterActions = new Set(["activity", "user_status", "user_access_audit", "user_media_state", "user_unwatched", "item_details"]);
   if ((args.user_id || args.username) && !userFilterActions.has(args.action)) {
     throw new JellyfinError(
       "invalid_input",
@@ -747,7 +829,7 @@ async function read(services, args, runtime) {
       MaxPremiereDate: args.max_premiere_date || undefined,
       SortBy: args.sort_by || "SortName",
       SortOrder: args.sort_order || "Ascending",
-      Fields: "Overview,Path,ProviderIds,Genres,Tags,RunTimeTicks,PremiereDate,DateCreated",
+      Fields: "Overview,Path,ProviderIds,Genres,Tags,RunTimeTicks,PremiereDate,DateCreated,CommunityRating,CriticRating,OfficialRating,ImageTags,BackdropImageTags,People,CollectionIds",
       StartIndex: Math.max(0, args.start_index ?? args.start ?? 0),
     };
     const pageSize = bounded(args.limit, 100);
@@ -802,20 +884,25 @@ async function read(services, args, runtime) {
   if (args.action === "item_details") {
     if (!args.item_id)
       throw new JellyfinError("invalid_input", "item_id is required");
-    const x = await c.get(`/Items/${encodeURIComponent(args.item_id)}`, {
-      Fields: "MediaSources,MediaStreams,Path,ProviderIds",
+    const detail = itemDetailFields(args.fields);
+    let user = null;
+    let itemPath = `/Items/${encodeURIComponent(args.item_id)}`;
+    if (args.user_id || args.username) {
+      const users = await getAll(c, "/Users", null, 100);
+      user = users.find((candidate) => args.user_id && candidate.Id === args.user_id)
+        || users.find((candidate) => args.username && String(candidate.Name || "").toLowerCase() === String(args.username).toLowerCase());
+      if (!user) throw new JellyfinError("not_found", "no matching Jellyfin user");
+      itemPath = `/Users/${encodeURIComponent(user.Id)}/Items/${encodeURIComponent(args.item_id)}`;
+    }
+    const x = await c.get(itemPath, {
+      Fields: detail.fields.join(","),
+      EnableUserData: Boolean(user),
     });
     return {
       profile: p.name,
-      item: {
-        id: x.Id,
-        name: x.Name,
-        type: x.Type,
-        path: x.Path || null,
-        media_sources: x.MediaSources || [],
-        media_streams: x.MediaStreams || [],
-        provider_ids: x.ProviderIds || {},
-      },
+      fields: detail.groups,
+      user: user ? { id: user.Id, name: user.Name || null } : null,
+      item: itemDetailView(x, new Set(detail.groups)),
     };
   }
   if (["list_collections", "list_playlists"].includes(args.action)) {
@@ -1886,7 +1973,7 @@ async function playback(services, args, runtime) {
   } else if (args.action === "set_volume") {
     await c.post(`/Sessions/${encodeURIComponent(target.Id)}/Command`, {
       Name: "SetVolume",
-      Arguments: [`volume=${args.volume}`],
+      Arguments: { volume: String(args.volume) },
     });
   } else {
     await c.post(`/Sessions/${encodeURIComponent(target.Id)}/Playing/${args.action === "resume" ? "Unpause" : args.action[0].toUpperCase() + args.action.slice(1)}`);
@@ -2225,6 +2312,7 @@ const common = z.object({
   max_premiere_date: z.string().max(40).optional(),
   all: z.boolean().optional(),
   max_items: z.number().int().min(1).max(10000).optional(),
+  fields: z.string().max(500).optional(),
 });
 const entry = {
   buildDescriptors(services) {
@@ -2255,6 +2343,7 @@ const entry = {
           max_premiere_date: "string",
           all: "boolean (enumerate all matching items through bounded pagination)",
           max_items: "number (full-library cap, default 10000)",
+          fields: "string (item_details groups: core,ratings,credits,artwork,collections,external_links,watch_state,chapters,media_sources)",
           task_id: "string",
           user_id: "string",
           username: "string",
