@@ -1,0 +1,9 @@
+{
+  "name": "network-firewall/safe-change",
+  "display_name": "Network/firewall safe change",
+  "owner": "network-firewall",
+  "mode": "mutating",
+  "description": "Run the provider-safe change lifecycle through the normal policy and approval path.",
+  "inputs": { "profile": { "type": "string", "required": true }, "change_type": { "type": "string", "required": true }, "id": { "type": "string", "required": false }, "management_path": { "type": "string", "required": true } },
+  "steps": [ { "id": "apply", "tool": "network_change", "arguments": { "action": "apply", "profile": "{{profile}}", "change_type": "{{change_type}}", "id": "{{id}}", "management_path": "{{management_path}}" } } ]
+}

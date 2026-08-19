@@ -1,0 +1,14 @@
+{
+  "name": "network-firewall/environment-recon",
+  "display_name": "Network/firewall environment reconnaissance",
+  "owner": "network-firewall",
+  "description": "Collect a bounded provider summary, capabilities, interfaces, routes, DHCP, firewall, VPN, and health evidence.",
+  "inputs": { "profile": { "type": "string", "required": false } },
+  "steps": [
+    { "id": "summary", "tool": "network", "arguments": { "action": "summary", "profile": "{{profile}}" } },
+    { "id": "capabilities", "tool": "network", "arguments": { "action": "capabilities", "profile": "{{profile}}" } },
+    { "id": "firewall", "tool": "firewall", "arguments": { "action": "rules", "profile": "{{profile}}" } },
+    { "id": "dhcp", "tool": "dhcp", "arguments": { "action": "status", "profile": "{{profile}}" } },
+    { "id": "vpn", "tool": "vpn", "arguments": { "action": "status", "profile": "{{profile}}" } }
+  ]
+}

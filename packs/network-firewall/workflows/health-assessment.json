@@ -1,0 +1,8 @@
+{
+  "name": "network-firewall/health-assessment",
+  "display_name": "Network/firewall health assessment",
+  "owner": "network-firewall",
+  "description": "Assess device, interfaces, routes, DHCP, firewall, and VPN evidence while retaining unknown and permission-limited states.",
+  "inputs": { "profile": { "type": "string", "required": false } },
+  "steps": [ { "id": "health", "tool": "network", "arguments": { "action": "health", "profile": "{{profile}}" } }, { "id": "summary", "tool": "network", "arguments": { "action": "summary", "profile": "{{profile}}" } } ]
+}

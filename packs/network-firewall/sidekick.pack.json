@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "pack_api": 1,
+  "name": "network-firewall",
+  "display_name": "Network & Firewall Operations",
+  "version": "1.0.0",
+  "description": "Evidence-based network and firewall inspection, bounded diagnostics, capability negotiation, and governed safe changes for OpenWrt, OPNsense, pfSense, and UniFi Network.",
+  "publisher": "Sidekick",
+  "compatibility": { "sidekick": ">=1.0.0" },
+  "modules": [{ "name": "network-firewall-tools", "path": "modules/network-firewall-tools", "entry_point": "entry.js", "config_from_pack": true }],
+  "workflows": [
+    { "path": "workflows/environment-recon.json" },
+    { "path": "workflows/connectivity-diagnosis.json" },
+    { "path": "workflows/change-preflight.json" },
+    { "path": "workflows/safe-change.json" },
+    { "path": "workflows/health-assessment.json" }
+  ],
+  "knowledge": [
+    { "path": "knowledge/network-firewall-operating.md", "title": "Network & Firewall pack: operating model and provider limits", "category": "infrastructure", "tags": ["network", "firewall", "openwrt", "opnsense", "pfsense", "unifi"] },
+    { "path": "knowledge/network-firewall-safety.md", "title": "Network & Firewall pack: safe changes and management-path protection", "category": "infrastructure", "tags": ["network", "firewall", "lockout", "rollback", "safety"] },
+    { "path": "knowledge/network-firewall-diagnosis.md", "title": "Network & Firewall pack: connectivity and DHCP diagnosis", "category": "infrastructure", "tags": ["network", "firewall", "diagnosis", "dhcp", "routing"] }
+  ],
+  "requires": { "tools": [], "optional_tools": ["netdiag", "secret"] },
+  "permissions": [],
+  "configuration": {
+    "schema": {
+      "type": "object",
+      "properties": {
+        "profiles": {
+          "type": "object",
+          "description": "Named provider profiles. Credentials are secret references only; endpoints are never supplied per call.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "provider": { "type": "string", "enum": ["openwrt", "opnsense", "pfsense", "unifi"] },
+              "display_name": { "type": "string", "maxLength": 160 },
+              "endpoint": { "type": "string" },
+              "site_id": { "type": "string", "maxLength": 160 },
+              "credential_ref": { "type": "string" },
+              "ca_pem": { "type": "string" },
+              "ca_secret_ref": { "type": "string" },
+              "tls_servername": { "type": "string", "maxLength": 253 },
+              "request_timeout_ms": { "type": "integer", "minimum": 1000, "maximum": 120000 },
+              "allow_mutations": { "type": "boolean", "default": false },
+              "ssh": { "type": "object", "additionalProperties": false },
+              "default": { "type": "boolean" }
+            },
+            "required": ["provider", "endpoint", "credential_ref"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "defaults": { "profiles": {} }
+  }
+}
