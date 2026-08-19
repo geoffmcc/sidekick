@@ -127,12 +127,17 @@ SIDEKICK_DASHBOARD_USER=admin
 SIDEKICK_DASHBOARD_PASS=replace-with-a-long-random-value
 ```
 
-Use IP allowlists when practical:
+Fresh-install templates are loopback-only. Add only the trusted client
+subnets required by the deployment:
 
 ```env
 SIDEKICK_ALLOWED_IPS=192.168.1.0/24
 SIDEKICK_DASHBOARD_ALLOWED_IPS=192.168.1.0/24
 ```
+
+The runtime preserves existing installations' explicit environment values.
+Leaving an existing allowlist empty remains an explicit compatibility choice;
+new deployments should start from `.env.example` and opt in to remote ranges.
 
 Tool policy defaults to `restricted` so a fresh deployment cannot expose shell,
 infrastructure, or other high-impact tools solely because policy configuration

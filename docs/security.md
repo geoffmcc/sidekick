@@ -22,7 +22,12 @@ IP allowlists are useful but should not be the only protection if the service is
 
 ## Dashboard authentication
 
-Set both `SIDEKICK_DASHBOARD_USER` and `SIDEKICK_DASHBOARD_PASS` to enable Basic Auth for the dashboard HTML, API routes, and agent event streams. Static assets remain public so authenticated browsers can load CSS and fonts. For public exposure, Basic Auth alone is not ideal; combine it with TLS and network restrictions.
+Fresh installations use the local identity bootstrap/login flow for dashboard
+HTML, API routes, and agent event streams. `SIDEKICK_DASHBOARD_USER` and
+`SIDEKICK_DASHBOARD_PASS` enable the legacy Basic Auth compatibility path when
+explicitly configured. Static assets remain public so authenticated browsers
+can load CSS and fonts. For public exposure, combine authentication with TLS
+and network restrictions.
 
 ## Dashboard protections
 
