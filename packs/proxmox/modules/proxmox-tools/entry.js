@@ -103,6 +103,7 @@ async function handleRead(services, args, runtime) {
       case "guest_status": data = await operations.guestStatus(client, { vmid: requireVmid(args), node: optionalNode(args) }); break;
       case "guest_readiness": data = await operations.guestReadiness(client, { vmid: requireVmid(args), node: optionalNode(args) }); break;
       case "guest_config_audit": data = await operations.guestConfigAudit(client, { vmid: requireVmid(args), node: optionalNode(args) }); break;
+      case "cluster_compliance_audit": data = await operations.clusterComplianceAudit(client); break;
       case "list_storage": data = await operations.listStorage(client, { node: optionalNode(args) }); break;
       case "storage_status": data = await operations.storageStatus(client, { node: requireNode(args), storage: requireStorage(args) }); break;
       case "list_tasks": data = await operations.listTasks(client, { node: optionalNode(args), limit: args.limit, errors: args.errors }); break;
@@ -174,7 +175,7 @@ async function handleGuest(services, args, runtime) {
 // --- module contract -------------------------------------------------------
 
 const READ_ACTIONS = [
-  "cluster_summary", "capabilities", "list_nodes", "node_status", "list_guests",
+  "cluster_summary", "capabilities", "cluster_compliance_audit", "list_nodes", "node_status", "list_guests",
   "guest_status", "guest_inventory", "guest_readiness", "guest_config_audit", "list_storage", "storage_status", "list_tasks", "task_status",
   "list_snapshots", "backup_status", "backup_coverage", "backup_history", "version", "cluster_health", "storage_capacity", "storage_health", "upgrade_readiness", "maintenance_preflight", "migration_plan", "list_profiles", "detect_providers",
 ];
@@ -343,7 +344,7 @@ const entry = {
         name: "proxmox",
         aliases: ["pve"],
         description:
-          "Inspect a Proxmox VE environment (read-only): cluster_summary, capabilities (detect PBS/Ceph/SDN/guest-agent/cloud-init/optional automation), list_nodes, node_status, list_guests, guest_status (with QEMU guest-agent enrichment when available), guest_config_audit (normalized safe configuration facts and findings), list_storage, storage_status, list_tasks, task_status, backup_status, version, list_profiles, detect_providers. Selects an administrator-configured profile by name; never accepts a raw endpoint.",
+          "Inspect a Proxmox VE environment (read-only): cluster_summary, capabilities (detect PBS/Ceph/SDN/guest-agent/cloud-init/optional automation), cluster_compliance_audit (bounded quorum, node, version, HA, replication and task observations), list_nodes, node_status, list_guests, guest_status (with QEMU guest-agent enrichment when available), guest_config_audit (normalized safe configuration facts and findings), list_storage, storage_status, list_tasks, task_status, backup_status, version, list_profiles, detect_providers. Selects an administrator-configured profile by name; never accepts a raw endpoint.",
         schema: z.object({
           action: z.enum(READ_ACTIONS).describe("The read operation to perform"),
           profile: z.string().max(63).optional().describe("Configured Proxmox profile name (omit when only one profile is configured)"),

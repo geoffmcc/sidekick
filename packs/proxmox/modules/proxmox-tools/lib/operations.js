@@ -266,6 +266,79 @@ async function guestConfigAudit(client, { vmid, node }) {
   };
 }
 
+async function clusterComplianceAudit(client) {
+  const summary = await clusterSummary(client);
+  const [haResponse, replicationResponse, tasks, nodeStatuses] = await Promise.all([
+    client.get(["cluster", "ha", "status", "current"]).catch(() => null),
+    client.get(["cluster", "replication"]).catch(() => null),
+    listTasks(client, { limit: 50 }),
+    Promise.all(summary.nodes.list.slice(0, 16).map(async ({ node }) => nodeStatus(client, node).catch(() => null))),
+  ]);
+  const rows = value => Array.isArray(value) ? value : value && Array.isArray(value.data) ? value.data : [];
+  const haRows = rows(haResponse);
+  const replicationRows = rows(replicationResponse);
+  const versions = nodeStatuses.map(status => status && status.pve_version).filter(Boolean);
+  const uniqueVersions = [...new Set(versions)].sort();
+  const failedTasks = tasks.tasks.filter(task => task && task.ok === false);
+  const taskTypes = {};
+  for (const task of tasks.tasks) {
+    const type = task && task.type ? task.type : "unknown";
+    taskTypes[type] = (taskTypes[type] || 0) + 1;
+  }
+  const findings = [];
+  const unknowns = [];
+  if (summary.cluster.quorate === false) findings.push({ code: "cluster_not_quorate", detail: "Proxmox reports the cluster is not quorate." });
+  if (summary.nodes.online < summary.nodes.total) findings.push({ code: "nodes_offline", detail: `${summary.nodes.total - summary.nodes.online} node(s) are not online.` });
+  if (uniqueVersions.length > 1) findings.push({ code: "node_version_mismatch", detail: "Reported Proxmox versions differ across the nodes that returned status." });
+  if (haResponse === null) unknowns.push({ code: "ha_status_unavailable", detail: "The Proxmox HA status endpoint did not return data." });
+  if (replicationResponse === null) unknowns.push({ code: "replication_status_unavailable", detail: "The Proxmox replication endpoint did not return data." });
+  if (failedTasks.length) findings.push({ code: "recent_task_failures", detail: `${failedTasks.length} failed task(s) were found in the bounded task sample.` });
+  return {
+    status: findings.length ? "attention" : "observed",
+    cluster: summary.cluster,
+    nodes: {
+      ...summary.nodes,
+      versions: uniqueVersions,
+      version_evidence_count: versions.length,
+    },
+    ha: {
+      available: haResponse !== null,
+      total: haRows.length,
+      resources: haRows.slice(0, 100).map(row => ({
+        id: normalize.str(row.sid || row.id),
+        type: normalize.str(row.type),
+        node: normalize.str(row.node),
+        status: normalize.str(row.status),
+      })),
+    },
+    replication: {
+      available: replicationResponse !== null,
+      total: replicationRows.length,
+      jobs: replicationRows.slice(0, 100).map(row => ({
+        id: normalize.str(row.id),
+        type: normalize.str(row.type),
+        guest: normalize.num(row.guest ?? row.vmid),
+        source: normalize.str(row.node),
+        target: normalize.str(row.target),
+        disabled: row.disable === undefined ? null : normalize.bool(row.disable),
+        state: normalize.str(row.log || row.status),
+        fail_count: normalize.num(row.fail_count),
+      })),
+    },
+    task_trends: {
+      sample_size: tasks.tasks.length,
+      failed: failedTasks.length,
+      failure_rate_pct: tasks.tasks.length ? Math.round((failedTasks.length / tasks.tasks.length) * 10000) / 100 : null,
+      by_type: taskTypes,
+      latest_failure: failedTasks[0] || null,
+    },
+    findings,
+    unknowns,
+    bounded: true,
+    note: "This is a bounded current-state observation. It does not compare against a stored baseline, inspect guest operating systems, or claim that unavailable HA/replication evidence is healthy.",
+  };
+}
+
 async function listStorage(client, { node } = {}) {
   const rows = node ? await client.get(["nodes", node, "storage"]) : await client.get(["storage"]);
   const storage = (Array.isArray(rows) ? rows : []).map(s => normalize.normalizeStorage({ ...s, node: s.node || node || null })).filter(Boolean);
@@ -489,6 +562,7 @@ module.exports = {
   guestStatus,
   guestReadiness,
   guestConfigAudit,
+  clusterComplianceAudit,
   listStorage,
   storageStatus,
   listTasks,
