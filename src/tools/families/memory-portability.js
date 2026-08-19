@@ -2,10 +2,12 @@
 
 const { z } = require("zod");
 const dbStore = require("../../db");
+const { scopedProject } = require("./memory-scope");
 
 async function sidekick_memory_export({ project, type, include_disabled, automatic_only }) {
+  let effectiveProject; try { effectiveProject = scopedProject(project); } catch (e) { return { content: [{ type: "text", text: e.message }], isError: true }; }
   const options = {};
-  if (project) options.project = project;
+  if (effectiveProject) options.project = effectiveProject;
   if (type) options.type = type;
   if (include_disabled === false) options.includeDisabled = false;
   if (automatic_only === true) options.automatic = true;
@@ -26,6 +28,7 @@ async function sidekick_memory_import({ data, on_conflict, preserve_ids }) {
     onConflict: on_conflict || "merge",
     preserveIds: preserve_ids === true,
   };
+  try { options.projectScope = scopedProject(); } catch (e) { return { content: [{ type: "text", text: e.message }], isError: true }; }
 
   const result = dbStore.importMemories(parsed, options);
   const summary = `Import complete: ${result.imported} imported, ${result.updated || 0} updated, ${result.skipped} skipped`;

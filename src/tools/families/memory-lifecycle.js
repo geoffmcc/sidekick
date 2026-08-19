@@ -3,8 +3,15 @@
 const { z } = require("zod");
 const dbStore = require("../../db");
 const { loadContext, findContextItemById, updateLegacyContextItem } = require("./context");
+const { scopedProject, assertInScope } = require("./memory-scope");
 
 async function sidekick_memory_manage({ action, id, confirmed_by, days, reason, limit, project }) {
+  let effectiveProject;
+  try { effectiveProject = scopedProject(project); } catch (error) { return { content: [{ type: "text", text: error.message }], isError: true }; }
+  if (!["list_by_state", "pending_confirmations", "process_auto_expirations"].includes(action) && id) {
+    const memory = dbStore.getMemoryById(id, { includeDisabled: true });
+    try { assertInScope(memory); } catch { return { content: [{ type: "text", text: "Memory not found: " + id }], isError: true }; }
+  }
   if (action === "confirm") {
     if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
     const legacy = findContextItemById(loadContext(), id, "all");
@@ -42,15 +49,15 @@ async function sidekick_memory_manage({ action, id, confirmed_by, days, reason, 
 
   if (action === "list_by_state") {
     if (!id) return { content: [{ type: "text", text: "state required (passed as id param)" }], isError: true };
-    const memories = dbStore.getMemoriesByState(id, { limit: limit || 50, project });
+    const memories = dbStore.getMemoriesByState(id, { limit: limit || 50, project: effectiveProject });
     return { content: [{ type: "text", text: JSON.stringify({ count: memories.length, memories }, null, 2) }] };
   }
   if (action === "pending_confirmations") {
-    const memories = dbStore.getPendingConfirmations({ limit: limit || 50 });
+    const memories = dbStore.getPendingConfirmations({ limit: limit || 50, project: effectiveProject });
     return { content: [{ type: "text", text: JSON.stringify({ count: memories.length, memories }, null, 2) }] };
   }
   if (action === "process_auto_expirations") {
-    const result = dbStore.processAutoExpirations();
+    const result = dbStore.processAutoExpirations({ project: effectiveProject });
     return { content: [{ type: "text", text: `Processed auto-expirations: ${result.expired} memories expired` }] };
   }
 

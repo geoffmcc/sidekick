@@ -1187,14 +1187,16 @@ function getPendingConfirmations(options = {}) {
   if (!hasMemoriesTable()) return [];
   const limit = options.limit || 50;
   
+  const projectClause = options.project ? " AND project = ?" : "";
   const rows = db.prepare(`
     SELECT * FROM memories
     WHERE requires_confirmation = 1
       AND (state = 'pending' OR state = 'active')
       AND (last_confirmed_at IS NULL OR last_confirmed_at < created_at)
+      ${projectClause}
     ORDER BY confidence DESC, created_at DESC
     LIMIT ?
-  `).all(limit);
+  `).all(...(options.project ? [options.project, limit] : [limit]));
   
   return rows.map(normalizeMemoryRow);
 }
@@ -1210,9 +1212,10 @@ function setAutoExpire(id, daysFromNow) {
   return result.changes > 0;
 }
 
-function processAutoExpirations() {
+function processAutoExpirations(options = {}) {
   if (!hasMemoriesTable()) return { expired: 0 };
   const ts = nowIso();
+  const projectClause = options.project ? " AND project = ?" : "";
   const result = db.prepare(`
     UPDATE memories
     SET state = 'expired',
@@ -1223,7 +1226,8 @@ function processAutoExpirations() {
     WHERE expires_at IS NOT NULL
       AND expires_at <= ?
       AND state = 'active'
-  `).run(ts, ts, ts);
+      ${projectClause}
+  `).run(...(options.project ? [ts, ts, ts, options.project] : [ts, ts, ts]));
   return { expired: result.changes };
 }
 
@@ -1895,6 +1899,11 @@ function importMemories(data, options = {}) {
   db.exec("BEGIN IMMEDIATE");
   try {
     for (const raw of data.memories) {
+      if (options.projectScope && raw.project !== options.projectScope) {
+        errors.push("skipped: memory is outside the execution project scope");
+        skipped++;
+        continue;
+      }
       if (!raw.type || !raw.content) {
         errors.push(`skipped: missing type or content for memory`);
         skipped++;
@@ -2716,6 +2725,11 @@ function importFromSync(data, options = {}) {
   db.exec("BEGIN IMMEDIATE");
   try {
     for (const raw of data.memories) {
+      if (options.projectScope && raw.project !== options.projectScope) {
+        errors.push("skipped: memory is outside the execution project scope");
+        skipped++;
+        continue;
+      }
       if (!raw.type || !raw.content) {
         errors.push(`skipped: missing type or content`);
         skipped++;
