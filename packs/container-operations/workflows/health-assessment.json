@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "name": "docker-podman/health-assessment",
+  "version": "1.0.0",
+  "title": "Docker / Podman health assessment",
+  "description": "Read-only deterministic assessment of one configured Docker or Podman engine, including engine reachability, container health, restart loops, and resource inventory.",
+  "mode": "read_only",
+  "inputs": { "profile": { "type": "string", "required": false, "default": "" } },
+  "steps": [
+    { "name": "capabilities", "tool": "containers", "args": { "action": "capabilities", "profile": "${inputs.profile}" }, "expect": "json" },
+    { "name": "summary", "tool": "containers", "args": { "action": "summary", "profile": "${inputs.profile}" }, "expect": "json", "on_error": "continue" }
+  ],
+  "result": { "capabilities": "${steps.capabilities.json}", "summary": "${steps.summary.json}" },
+  "tags": ["docker", "podman", "health", "read-only"]
+}

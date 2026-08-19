@@ -1,0 +1,19 @@
+{
+  "name": "container-operations-tools",
+  "displayName": "Container Operations Tools",
+  "version": "1.0.0",
+  "description": "Safe Docker and Podman engine API operations with bounded output and governed lifecycle actions.",
+  "author": "Sidekick",
+  "type": "plugin",
+  "entryPoint": "entry.js",
+  "sidekick": ">=1.0.0",
+  "capabilities": ["docker-operations", "podman-operations", "compose-inspection", "container-health", "container-updates"],
+  "tools": {
+    "containers": { "risk": "low", "category": "Infrastructure & Homelab" },
+    "container_lifecycle": { "risk": "high", "category": "Infrastructure & Homelab" },
+    "compose": { "risk": "low", "category": "Infrastructure & Homelab" },
+    "compose_mutation": { "risk": "high", "category": "Infrastructure & Homelab" }
+  },
+  "permissions": [],
+  "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
+}

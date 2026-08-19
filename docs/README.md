@@ -85,6 +85,7 @@ sqlite3 data/sidekick.db "SELECT COUNT(*) FROM knowledge WHERE version_added = '
 | `artifact-custody.md` | Kernel artifact custody, compute worker registration, custody failure reporting, and the orphan reconciler. |
 | `connectors.md` | Connector authority: managed integrations, credential references, lifecycle, and the GitHub connector. |
 | `browser-automation.md` | Governed Browser Automation: the Core Chromium subsystem, the `browser` tool, egress policy, isolation, secrets, artifacts, and the runtime install step. |
+| `container-operations-pack.md` | Container Operations (Docker / Podman): engine profiles, bounded inspection, Compose validation, updates, lifecycle safety, and limitations. |
 | `workspace-secret-references.md` | Encrypted workspace secret storage at the kernel boundary. |
 | `adr-approval-continuation.md` | ADR: durable approval continuation for parked tasks (implemented). |
 | `adr-brain.md` | ADR: Brain v0.1 orchestration boundary (implemented, feature-flagged). |

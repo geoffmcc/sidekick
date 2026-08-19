@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "name": "docker-podman/controlled-update",
+  "version": "1.0.0",
+  "title": "Docker / Podman controlled container update",
+  "description": "Governed update sequence for an explicitly selected container: capture current state, pull the selected image, recreate from the captured provider configuration, and verify the replacement. Rollback is reported unavailable when no exact previous deployment restore hook is configured.",
+  "mode": "mutating",
+  "inputs": {
+    "profile": { "type": "string", "required": false, "default": "" },
+    "target": { "type": "string", "required": true },
+    "image": { "type": "string", "required": true }
+  },
+  "steps": [
+    { "name": "preflight", "tool": "containers", "args": { "action": "inspect", "profile": "${inputs.profile}", "target": "${inputs.target}" }, "expect": "json" },
+    { "name": "pull", "tool": "container_lifecycle", "args": { "action": "pull", "profile": "${inputs.profile}", "image": "${inputs.image}" }, "expect": "json" },
+    { "name": "recreate", "tool": "container_lifecycle", "args": { "action": "recreate", "profile": "${inputs.profile}", "target": "${inputs.target}" }, "expect": "json" },
+    { "name": "verify", "tool": "containers", "args": { "action": "inspect", "profile": "${inputs.profile}", "target": "${inputs.target}" }, "expect": "json", "on_error": "fail" }
+  ],
+  "result": { "preflight": "${steps.preflight.json}", "pull": "${steps.pull.json}", "recreate": "${steps.recreate.json}", "verify": "${steps.verify.json}", "rollback": "unavailable_without_explicit_restore_hook" },
+  "tags": ["docker", "podman", "update", "approval-required"]
+}

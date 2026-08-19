@@ -42,6 +42,7 @@ const NAMED_CAPABILITY_HINTS = [
   { pattern: /\bdeveloper\b|\bsoftware engineering\b|\bdeveloper pack\b/, tool: name => /^dev_/.test(name) },
   { pattern: /\bjellyfin\b/, tool: name => /^jellyfin(?:_|$)/.test(name) },
   { pattern: /\bproxmox\b/, tool: name => /^proxmox(?:_|$)|^ansible_run$/.test(name) },
+  { pattern: /\b(?:docker|podman|container operations|containerized services)\b/, tool: name => /^(containers|container_lifecycle|compose|compose_mutation)$/.test(name) },
   { pattern: /\bsecurity[ -]research\b|\bresearch pack\b/, tool: name => /^research_/.test(name) },
 ];
 

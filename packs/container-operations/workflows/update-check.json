@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "docker-podman/update-check",
+  "version": "1.0.0",
+  "title": "Docker / Podman read-only update check",
+  "description": "Read-only update status check. Registry failures and unsupported comparisons remain unknown and are never reported as current.",
+  "mode": "read_only",
+  "inputs": { "profile": { "type": "string", "required": false, "default": "" } },
+  "steps": [ { "name": "updates", "tool": "containers", "args": { "action": "updates", "profile": "${inputs.profile}" }, "expect": "json" } ],
+  "result": { "updates": "${steps.updates.json}" },
+  "tags": ["docker", "podman", "updates", "read-only"]
+}
