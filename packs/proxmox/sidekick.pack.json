@@ -3,7 +3,7 @@
   "pack_api": 1,
   "name": "proxmox",
   "display_name": "Proxmox VE",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Lets Sidekick securely discover and operate Proxmox VE infrastructure through administrator-configured named profiles, pinned-CA TLS, normalized state, deterministic maintenance preflight, same-cluster guest migration, governed provisioning/lifecycle, optional Ansible, and critically guarded retirement of proven disposable resources.",
   "publisher": "Sidekick",
   "compatibility": {
@@ -20,6 +20,8 @@
   "workflows": [
     { "path": "workflows/environment-recon.json" },
     { "path": "workflows/cluster-compliance-audit.json" },
+    { "path": "workflows/storage-backend-audit.json" },
+    { "path": "workflows/backup-verification-audit.json" },
     { "path": "workflows/guest-health.json" },
     { "path": "workflows/cluster-health.json" },
     { "path": "workflows/storage-capacity.json" },
@@ -86,6 +88,12 @@
       "title": "Proxmox pack: cluster compliance and task observations",
       "category": "operations",
       "tags": ["proxmox", "cluster", "ha", "replication", "compliance", "read-only"]
+    },
+    {
+      "path": "knowledge/proxmox-storage-backup-readiness.md",
+      "title": "Proxmox pack: storage, PBS and backup verification readiness",
+      "category": "operations",
+      "tags": ["proxmox", "storage", "pbs", "backups", "readiness", "read-only"]
     }
   ],
   "requires": {
