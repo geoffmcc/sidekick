@@ -1,5 +1,7 @@
 # Sidekick
 
+[![M8ven Live Monitored](https://m8ven.ai/badge/mcp/geoffmcc-sidekick-1j2km0)](https://m8ven.ai/mcp/geoffmcc-sidekick-1j2km0)
+
 **Autonomous Agent Platform**
 
 Sidekick is a self-hosted platform that gives AI assistants and agents durable infrastructure: a remote machine they can operate, persistent project memory and knowledge that survive any single session, a governed and dynamically discoverable MCP tool catalog, an autonomous task runner, and distributed model compute. The connected assistant or agent is replaceable — you can switch clients, models, or vendors — while the projects, memory, tools, policy, and history stay on your machine, under your control.
