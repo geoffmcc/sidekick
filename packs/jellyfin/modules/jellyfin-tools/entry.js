@@ -108,6 +108,149 @@ function libView(x) {
     refresh_progress: x.RefreshProgress ?? null,
   };
 }
+
+function runtimeView(x) {
+  const ticks = Number(x?.RunTimeTicks);
+  if (!Number.isFinite(ticks) || ticks < 0) {
+    return { runtime_ticks: null, runtime_seconds: null, runtime_minutes: null };
+  }
+  const seconds = ticks / 10000000;
+  return {
+    runtime_ticks: ticks,
+    runtime_seconds: Math.round(seconds),
+    runtime_minutes: Math.round((seconds / 60) * 10) / 10,
+  };
+}
+
+function streamView(x) {
+  return {
+    type: x?.Type || null,
+    codec: x?.Codec || null,
+    language: x?.Language || null,
+    title: x?.DisplayTitle || x?.Title || null,
+    channels: x?.Channels ?? null,
+    bitrate: x?.BitRate ?? null,
+    width: x?.Width ?? null,
+    height: x?.Height ?? null,
+    video_range: x?.VideoRange || null,
+    video_range_type: x?.VideoRangeType || null,
+    profile: x?.Profile || null,
+  };
+}
+
+function mediaItemView(x) {
+  return {
+    id: x?.Id || null,
+    name: x?.Name || null,
+    type: x?.Type || null,
+    series_id: x?.SeriesId || null,
+    season_id: x?.SeasonId || null,
+    index_number: x?.IndexNumber ?? null,
+    parent_index_number: x?.ParentIndexNumber ?? null,
+    production_year: x?.ProductionYear ?? null,
+    premiere_date: x?.PremiereDate || null,
+    path: x?.Path || null,
+    container: x?.Container || null,
+    overview: x?.Overview || null,
+    genres: Array.isArray(x?.Genres) ? x.Genres.slice(0, 50) : [],
+    provider_ids: x?.ProviderIds || {},
+    ...runtimeView(x),
+    media_sources: Array.isArray(x?.MediaSources)
+      ? x.MediaSources.slice(0, 20).map((source) => ({
+          id: source.Id || null,
+          name: source.Name || null,
+          container: source.Container || null,
+          size: source.Size ?? null,
+          bitrate: source.Bitrate ?? null,
+          video_type: source.VideoType || null,
+          video_3d_format: source.Video3DFormat || null,
+          streams: Array.isArray(source.MediaStreams)
+            ? source.MediaStreams.slice(0, 50).map(streamView)
+            : [],
+        }))
+      : [],
+    media_streams: Array.isArray(x?.MediaStreams)
+      ? x.MediaStreams.slice(0, 50).map(streamView)
+      : [],
+  };
+}
+
+async function seasonEpisodeSummary(client, seriesId, seasonId) {
+  const data = await client.get(`/Shows/${encodeURIComponent(seriesId)}/Episodes`, {
+    SeasonId: seasonId,
+    Fields: "Overview,MediaSources,MediaStreams,ProviderIds,Path",
+    Limit: 100,
+    EnableTotalRecordCount: true,
+  });
+  const episodes = Array.isArray(data?.Items) ? data.Items : [];
+  const runtimes = episodes
+    .map((episode) => runtimeView(episode).runtime_seconds)
+    .filter((seconds) => seconds !== null);
+  const totalRuntime = runtimes.reduce((sum, seconds) => sum + seconds, 0);
+  return {
+    episode_count: Number.isFinite(Number(data?.TotalRecordCount))
+      ? Number(data.TotalRecordCount)
+      : episodes.length,
+    returned_episode_count: episodes.length,
+    runtimes: {
+      episodes_with_runtime: runtimes.length,
+      episodes_without_runtime: episodes.length - runtimes.length,
+      total_seconds: totalRuntime,
+      total_minutes: Math.round((totalRuntime / 60) * 10) / 10,
+      average_minutes: runtimes.length
+        ? Math.round((totalRuntime / runtimes.length / 60) * 10) / 10
+        : null,
+      shortest_minutes: runtimes.length ? Math.round(Math.min(...runtimes) / 6) / 10 : null,
+      longest_minutes: runtimes.length ? Math.round(Math.max(...runtimes) / 6) / 10 : null,
+    },
+    episodes: episodes.slice(0, 100).map(mediaItemView),
+    bounded: true,
+    source: `/Shows/${seriesId}/Episodes?SeasonId=${seasonId}`,
+  };
+}
+
+function auditItem(x) {
+  const runtime = runtimeView(x);
+  const streams = Array.isArray(x?.MediaStreams) ? x.MediaStreams : [];
+  return {
+    id: x?.Id || null,
+    name: x?.Name || null,
+    type: x?.Type || null,
+    library_id: x?.ParentId || null,
+    series_id: x?.SeriesId || null,
+    season_id: x?.SeasonId || null,
+    production_year: x?.ProductionYear ?? null,
+    runtime_minutes: runtime.runtime_minutes,
+    path: x?.Path || null,
+    has_overview: Boolean(String(x?.Overview || "").trim()),
+    has_primary_image: Boolean(x?.ImageTags?.Primary),
+    provider_ids: x?.ProviderIds || {},
+    video_codecs: [...new Set(streams.filter((s) => s.Type === "Video").map((s) => s.Codec).filter(Boolean))],
+    audio_languages: [...new Set(streams.filter((s) => s.Type === "Audio").map((s) => s.Language).filter(Boolean))],
+    subtitle_languages: [...new Set(streams.filter((s) => s.Type === "Subtitle").map((s) => s.Language).filter(Boolean))],
+  };
+}
+
+function increment(map, key) {
+  if (key === null || key === undefined || key === "") return;
+  const value = String(key);
+  map[value] = (map[value] || 0) + 1;
+}
+
+function sanitizeConfiguration(value, depth = 0) {
+  if (depth > 3) return "[TRUNCATED]";
+  if (Array.isArray(value)) return value.slice(0, 50).map((x) => sanitizeConfiguration(x, depth + 1));
+  if (!value || typeof value !== "object") return value;
+  const output = {};
+  for (const [key, item] of Object.entries(value).slice(0, 100)) {
+    if (/(password|token|secret|apikey|api_key|credential|certificate|privatekey|accesskey)/i.test(key)) {
+      output[key] = "[REDACTED]";
+    } else {
+      output[key] = sanitizeConfiguration(item, depth + 1);
+    }
+  }
+  return output;
+}
 // protected_resources: pack-level config entries {kind,id,name}. Entries
 // without a kind, or kind "library", protect Jellyfin libraries here.
 function protectedLibraryMatch(services, lib) {
@@ -491,6 +634,53 @@ async function read(services, args, runtime) {
         provider_ids: x.ProviderIds || {},
       },
     };
+  }
+  if (args.action === "media_info") {
+    if (!args.item_id)
+      throw new JellyfinError("invalid_input", "item_id is required");
+    const item = await c.get(`/Items/${encodeURIComponent(args.item_id)}`, {
+      Fields: "Overview,MediaSources,MediaStreams,ProviderIds,Path",
+    });
+    const seriesId = item.Type === "Series" ? item.Id : item.SeriesId;
+    const requestedSeasonId = args.season_id || (item.Type === "Season" ? item.Id : null);
+    if (requestedSeasonId) {
+      if (!seriesId)
+        throw new JellyfinError("invalid_input", "season_id requires a series item or an item belonging to a series");
+      return {
+        profile: p.name,
+        item: mediaItemView(item),
+        season: {
+          id: requestedSeasonId,
+          name: item.Type === "Season" ? item.Name : null,
+          series_id: seriesId,
+          ...(await seasonEpisodeSummary(c, seriesId, requestedSeasonId)),
+        },
+      };
+    }
+    if (item.Type === "Series") {
+      const seasonsData = await c.get(`/Shows/${encodeURIComponent(item.Id)}/Seasons`, {
+        Fields: "Overview,ProviderIds,Path",
+        Limit: 100,
+        EnableTotalRecordCount: true,
+      });
+      const seasons = Array.isArray(seasonsData?.Items) ? seasonsData.Items.slice(0, 100) : [];
+      return {
+        profile: p.name,
+        item: mediaItemView(item),
+        season_count: Number.isFinite(Number(seasonsData?.TotalRecordCount))
+          ? Number(seasonsData.TotalRecordCount)
+          : seasons.length,
+        seasons: await Promise.all(
+          seasons.map(async (season) => ({
+            ...mediaItemView(season),
+            ...(await seasonEpisodeSummary(c, item.Id, season.Id)),
+          })),
+        ),
+        bounded: true,
+        note: "Season and episode results are capped at 100 seasons and 100 returned episodes per season; episode_count uses Jellyfin's total record count when provided.",
+      };
+    }
+    return { profile: p.name, item: mediaItemView(item) };
   }
   if (
     [
@@ -1025,8 +1215,90 @@ async function read(services, args, runtime) {
       note: "No upgrade is performed; this is evidence for an operator decision.",
     };
   }
+  if (args.action === "library_audit" || args.action === "content_health") {
+    const rawLibraries = await c.get("/Library/VirtualFolders");
+    const librariesView = (Array.isArray(rawLibraries) ? rawLibraries : []).slice(0, 100);
+    const selected = args.library_id
+      ? librariesView.filter((library) => library.ItemId === args.library_id)
+      : librariesView;
+    if (args.library_id && !selected.length)
+      throw new JellyfinError("not_found", "library_id does not match any /Library/VirtualFolders ItemId");
+    const reports = [];
+    for (const library of selected) {
+      const data = await c.get("/Items", {
+        ParentId: library.ItemId,
+        Recursive: true,
+        IncludeItemTypes: "Movie,Series,Season,Episode,Audio,MusicAlbum",
+        Fields: "Overview,MediaStreams,MediaSources,ProviderIds,Path,RunTimeTicks",
+        Limit: 100,
+        StartIndex: 0,
+        EnableTotalRecordCount: true,
+      });
+      const items = Array.isArray(data?.Items) ? data.Items.slice(0, 100) : [];
+      const normalized = items.map(auditItem);
+      const byType = {};
+      const byYear = {};
+      const codecs = {};
+      let missingOverview = 0;
+      let missingImage = 0;
+      let missingProviderId = 0;
+      let missingRuntime = 0;
+      for (const item of normalized) {
+        increment(byType, item.type);
+        increment(byYear, item.production_year);
+        item.video_codecs.forEach((codec) => increment(codecs, codec));
+        if (!item.has_overview) missingOverview += 1;
+        if (!item.has_primary_image) missingImage += 1;
+        if (!Object.keys(item.provider_ids).length) missingProviderId += 1;
+        if (["Movie", "Episode"].includes(item.type) && item.runtime_minutes === null) missingRuntime += 1;
+      }
+      reports.push({
+        library: { id: library.ItemId || null, name: library.Name || null, collection_type: library.CollectionType || null },
+        sample_size: normalized.length,
+        total_record_count: data?.TotalRecordCount ?? null,
+        counts: { by_type: byType, by_year: byYear, video_codecs: codecs },
+        health: { missing_overview: missingOverview, missing_primary_image: missingImage, missing_provider_id: missingProviderId, missing_runtime: missingRuntime },
+        sample_items: args.action === "library_audit" ? normalized.slice(0, 100) : undefined,
+      });
+    }
+    return {
+      profile: p.name,
+      libraries: reports,
+      bounded: true,
+      note: "Audit metrics describe the first 100 items returned for each selected library; total_record_count is Jellyfin's reported total when available.",
+    };
+  }
+  if (args.action === "server_audit") {
+    system = await c.get("/System/Info");
+    const configuration = await optional(() => c.get("/System/Configuration"));
+    const taskRows = (await optional(() => c.get("/ScheduledTasks"))) || [];
+    const pluginRows = (await optional(() => c.get("/Plugins"))) || [];
+    const userRows = (await optional(() => c.get("/Users"))) || [];
+    const sessionRows = (await optional(() => c.get("/Sessions"))) || [];
+    const failedTasks = taskRows.filter((task) => ["Failed", "Aborted"].includes(lastExec(task)?.status));
+    const malfunctioningPlugins = pluginRows.filter((plugin) => /malfunction|error/i.test(String(plugin.Status || "")));
+    return {
+      profile: p.name,
+      server: n.systemInfo(system),
+      configuration: configuration ? sanitizeConfiguration(configuration) : null,
+      configuration_available: Boolean(configuration),
+      summary: {
+        users: userRows.length,
+        active_sessions: sessionRows.length,
+        scheduled_tasks: taskRows.length,
+        failed_tasks: failedTasks.length,
+        plugins: pluginRows.length,
+        malfunctioning_plugins: malfunctioningPlugins.length,
+        pending_restart: system?.HasPendingRestart === true,
+      },
+      failed_tasks: failedTasks.slice(0, 25).map((task) => ({ id: task.Id, name: task.Name, last_execution: lastExec(task) })),
+      malfunctioning_plugins: malfunctioningPlugins.slice(0, 25).map((plugin) => ({ id: plugin.Id, name: plugin.Name, version: plugin.Version, status: plugin.Status || null })),
+      raw_configuration_withheld: !configuration,
+      bounded: true,
+    };
+  }
   if (
-    ["live_tv_status", "tuner_status", "recording_status"].includes(args.action)
+    ["live_tv_status", "tuner_status", "recording_status", "live_tv_channels", "live_tv_guide", "live_tv_timers"].includes(args.action)
   ) {
     const info = await optional(() => c.get("/LiveTv/Info"));
     if (!info)
@@ -1061,6 +1333,50 @@ async function read(services, args, runtime) {
         })),
         note: "Jellyfin has no dedicated tuner-listing endpoint; tuner identities come from LiveTvInfo.Services[].Tuners.",
       };
+    if (args.action === "live_tv_channels") {
+      const channels = await c.get("/LiveTv/Channels", {
+        Limit: bounded(args.limit, 50),
+        StartIndex: Math.max(0, args.start_index ?? args.start ?? 0),
+        EnableTotalRecordCount: true,
+      });
+      const items = Array.isArray(channels?.Items) ? channels.Items : [];
+      return {
+        profile: p.name,
+        available: true,
+        channels: items.slice(0, 100).map((channel) => ({ id: channel.Id, name: channel.Name, number: channel.ChannelNumber || null, type: channel.Type || null, station_id: channel.StationId || null, user_data: channel.UserData || null })),
+        total_record_count: channels?.TotalRecordCount ?? null,
+        bounded: true,
+      };
+    }
+    if (args.action === "live_tv_guide") {
+      const programs = await c.get("/LiveTv/Programs", {
+        MinStartDate: args.min_start_date || undefined,
+        MaxEndDate: args.max_end_date || undefined,
+        ChannelIds: args.channel_id || undefined,
+        Limit: bounded(args.limit, 50),
+        StartIndex: Math.max(0, args.start_index ?? args.start ?? 0),
+        EnableTotalRecordCount: true,
+      });
+      const items = Array.isArray(programs?.Items) ? programs.Items : [];
+      return {
+        profile: p.name,
+        available: true,
+        programs: items.slice(0, 100).map((program) => ({ id: program.Id, name: program.Name, channel_name: program.ChannelName || null, channel_id: program.ChannelId || null, start_date: program.StartDate || null, end_date: program.EndDate || null, is_repeat: program.IsRepeat ?? null, is_premiere: program.IsPremiere ?? null, is_series: program.IsSeries ?? null, has_image: Boolean(program.ImageTags) })),
+        total_record_count: programs?.TotalRecordCount ?? null,
+        bounded: true,
+      };
+    }
+    if (args.action === "live_tv_timers") {
+      const timers = await c.get("/LiveTv/Timers", { Limit: bounded(args.limit, 50), StartIndex: Math.max(0, args.start_index ?? args.start ?? 0), EnableTotalRecordCount: true });
+      const items = Array.isArray(timers?.Items) ? timers.Items : [];
+      return {
+        profile: p.name,
+        available: true,
+        timers: items.slice(0, 100).map((timer) => ({ id: timer.Id, name: timer.Name, channel_name: timer.ChannelName || null, start_date: timer.StartDate || null, end_date: timer.EndDate || null, status: timer.Status || null, type: timer.Type || null })),
+        total_record_count: timers?.TotalRecordCount ?? null,
+        bounded: true,
+      };
+    }
     const rec = await c.get("/LiveTv/Recordings", {
       Limit: bounded(args.limit, 25),
       StartIndex: Math.max(0, args.start_index ?? args.start ?? 0),
@@ -1343,6 +1659,7 @@ const readActions = [
   "library_health",
   "search_media",
   "item_details",
+  "media_info",
   "recent_media",
   "metadata_issues",
   "duplicate_candidates",
@@ -1366,9 +1683,15 @@ const readActions = [
   "incident_diagnose",
   "backup_readiness",
   "upgrade_readiness",
+  "library_audit",
+  "content_health",
+  "server_audit",
   "live_tv_status",
   "tuner_status",
   "recording_status",
+  "live_tv_channels",
+  "live_tv_guide",
+  "live_tv_timers",
 ];
 const common = z.object({
   action: z.enum(readActions),
@@ -1376,8 +1699,12 @@ const common = z.object({
   query: z.string().max(200).optional(),
   session_id: z.string().optional(),
   item_id: z.string().optional(),
+  season_id: z.string().optional(),
   task_id: z.string().optional(),
   library_id: z.string().optional(),
+  channel_id: z.string().optional(),
+  min_start_date: z.string().optional(),
+  max_end_date: z.string().optional(),
   user_id: z.string().max(100).optional(),
   username: z.string().max(100).optional(),
   plugin_id: z.string().max(100).optional(),
@@ -1403,6 +1730,7 @@ const entry = {
           query: "string",
           session_id: "string",
           item_id: "string",
+          season_id: "string",
           task_id: "string",
           user_id: "string",
           username: "string",
@@ -1412,6 +1740,10 @@ const entry = {
           limit: "number",
           start: "number",
           start_index: "number",
+          library_id: "string",
+          channel_id: "string",
+          min_start_date: "string",
+          max_end_date: "string",
         },
         risk: "low",
         category: "Media",

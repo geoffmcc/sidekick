@@ -30,7 +30,7 @@ test("all Jellyfin JSON assets parse", () => {
     .filter((x) => x.endsWith(".json")))
     JSON.parse(fs.readFileSync(path.join(pack, f), "utf8"));
 });
-test("pack and module versions agree at 1.1.0", () => {
+test("pack and module versions agree at 1.2.0", () => {
   const packManifest = JSON.parse(
     fs.readFileSync(path.join(pack, "sidekick.pack.json"), "utf8"),
   );
@@ -40,8 +40,8 @@ test("pack and module versions agree at 1.1.0", () => {
       "utf8",
     ),
   );
-  assert.strictEqual(packManifest.version, "1.1.1");
-  assert.strictEqual(moduleManifest.version, "1.1.1");
+  assert.strictEqual(packManifest.version, "1.2.0");
+  assert.strictEqual(moduleManifest.version, "1.2.0");
   // Every services.dispatch target used by the module must be declared.
   const declared = moduleManifest.permissions.map((x) => x.tool).sort();
   assert.deepStrictEqual(declared, ["proxmox", "status", "web_fetch"]);
@@ -428,6 +428,10 @@ function baseFixtures() {
       };
     },
     "/LiveTv/Info": { IsEnabled: false, Services: [], EnabledUsers: [] },
+    "/LiveTv/Channels": { Items: [{ Id: "ch1", Name: "News", ChannelNumber: "1", Type: "TvChannel" }], TotalRecordCount: 1 },
+    "/LiveTv/Programs": { Items: [{ Id: "pr1", Name: "Morning News", ChannelName: "News", ChannelId: "ch1", StartDate: RECENT, EndDate: new Date(NOW + 3600000).toISOString(), IsRepeat: false }], TotalRecordCount: 1 },
+    "/LiveTv/Timers": { Items: [{ Id: "tm1", Name: "Record News", ChannelName: "News", StartDate: RECENT, EndDate: new Date(NOW + 3600000).toISOString(), Status: "Scheduled", Type: "Timer" }], TotalRecordCount: 1 },
+    "/System/Configuration": { EnableUPnP: false, HttpServerPortNumber: 8096, PasswordAuthenticationProvider: "Jellyfin.Server.Implementations.Users.DefaultAuthenticationProvider", ApiKey: "do-not-return" },
     "/System/Logs": [
       { Name: "log_20260814.log", Size: 5000, DateModified: RECENT },
     ],
@@ -478,6 +482,43 @@ function baseFixtures() {
       MediaSources: [],
       MediaStreams: [],
     },
+    "/Items/series1": {
+      Id: "series1",
+      Name: "Synthetic Show",
+      Type: "Series",
+      Overview: "A test series",
+      ProviderIds: { Tvdb: "123" },
+    },
+    "/Shows/series1/Seasons": {
+      Items: [
+        { Id: "season1", Name: "Season 1", Type: "Season", SeriesId: "series1", IndexNumber: 1 },
+      ],
+      TotalRecordCount: 1,
+    },
+    "/Shows/series1/Episodes": (q) => ({
+      Items: [
+        {
+          Id: "ep1",
+          Name: "Pilot",
+          Type: "Episode",
+          SeriesId: "series1",
+          SeasonId: q.SeasonId,
+          IndexNumber: 1,
+          RunTimeTicks: 150 * 60 * 10000000,
+          MediaStreams: [{ Type: "Video", Codec: "h264", Width: 1920, Height: 1080 }],
+        },
+        {
+          Id: "ep2",
+          Name: "Second",
+          Type: "Episode",
+          SeriesId: "series1",
+          SeasonId: q.SeasonId,
+          IndexNumber: 2,
+          RunTimeTicks: 30 * 60 * 10000000,
+        },
+      ],
+      TotalRecordCount: 2,
+    }),
   };
 }
 // entry get() uses template /Items/${id}; fixture key must match exactly.
@@ -549,6 +590,7 @@ async function asyncTest(name, fn) {
       assert.ok(actions.length >= 38, "expected the full declared action list");
       const extra = {
         item_details: { item_id: "i1" },
+        media_info: { item_id: "series1" },
         task_status: { task_id: "t1" },
         user_status: { user_id: "u1" },
         plugin_status: { plugin_id: "p1" },
@@ -581,6 +623,57 @@ async function asyncTest(name, fn) {
       assert.ok(!out.isError);
       const last = captured.createClientCalls[captured.createClientCalls.length - 1];
       assert.strictEqual(last.ca, "RESOLVED_CA_PEM");
+    },
+  );
+  await asyncTest(
+    "media_info summarizes seasons, episode counts and runtimes without writes",
+    async () => {
+      setFixtures(baseFixtures());
+      const { read } = tools(servicesFor());
+      const { out, parsed } = await call(read, { action: "media_info", item_id: "series1" });
+      assert.ok(!out.isError, out.content[0].text);
+      assert.strictEqual(parsed.season_count, 1);
+      assert.strictEqual(parsed.seasons[0].episode_count, 2);
+      assert.strictEqual(parsed.seasons[0].runtimes.total_minutes, 180);
+      assert.strictEqual(parsed.seasons[0].runtimes.average_minutes, 90);
+      assert.strictEqual(parsed.seasons[0].runtimes.shortest_minutes, 30);
+      assert.strictEqual(parsed.seasons[0].runtimes.longest_minutes, 150);
+      assert.strictEqual(parsed.seasons[0].episodes[0].media_streams[0].codec, "h264");
+      assert.deepStrictEqual(postLog, []);
+      assert.deepStrictEqual(delLog, []);
+    },
+  );
+  await asyncTest(
+    "library and server audits are bounded and redact configuration secrets",
+    async () => {
+      setFixtures(baseFixtures());
+      const { read } = tools(servicesFor());
+      let result = await call(read, { action: "library_audit" });
+      assert.ok(!result.out.isError, result.out.content[0].text);
+      assert.strictEqual(result.parsed.libraries[0].sample_size, 2);
+      result = await call(read, { action: "content_health" });
+      assert.ok(!result.out.isError, result.out.content[0].text);
+      result = await call(read, { action: "server_audit" });
+      assert.ok(!result.out.isError, result.out.content[0].text);
+      assert.strictEqual(result.parsed.configuration.ApiKey, "[REDACTED]");
+      assert.ok(!JSON.stringify(result.parsed).includes("do-not-return"));
+      assert.deepStrictEqual(postLog, []);
+      assert.deepStrictEqual(delLog, []);
+    },
+  );
+  await asyncTest(
+    "Live TV inspection remains read-only and returns bounded channels, guide and timers",
+    async () => {
+      setFixtures(baseFixtures());
+      fixtures["/LiveTv/Info"] = { IsEnabled: true, Services: [{ Name: "Synthetic TV", Status: "Ok", Tuners: [] }] };
+      const { read } = tools(servicesFor());
+      for (const action of ["live_tv_channels", "live_tv_guide", "live_tv_timers"]) {
+        const { out, parsed } = await call(read, { action, limit: 10 });
+        assert.ok(!out.isError, out.content[0].text);
+        assert.strictEqual(parsed.available, true);
+      }
+      assert.deepStrictEqual(postLog, []);
+      assert.deepStrictEqual(delLog, []);
     },
   );
   await asyncTest(
