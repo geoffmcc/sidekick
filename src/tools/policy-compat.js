@@ -26,7 +26,10 @@ function findPolicyListMatch(entries, toolName, risk) {
 
 function getApprovalMode(source = getCurrentSource()) {
   const sourceMode = process.env[sourceEnvName(source, "APPROVAL_MODE")];
-  return (sourceMode || process.env.SIDEKICK_APPROVAL_MODE || "off").toLowerCase();
+  // Omitted approval configuration must protect explicitly allowed high-risk
+  // tools as well as the restricted policy's default deny. Existing explicit
+  // values, including `off`, remain authoritative for compatibility.
+  return (sourceMode || process.env.SIDEKICK_APPROVAL_MODE || "strict").toLowerCase();
 }
 
 function getApprovalEntries(source, suffixes) {
@@ -72,7 +75,10 @@ function getApprovalDecision(toolName, source = getCurrentSource(), args = undef
 function getToolPolicyDecision(toolName, source = getCurrentSource(), args = undefined) {
   const risk = getToolRisk(toolName, args);
   const sourceMode = process.env[sourceEnvName(source, "TOOL_POLICY")];
-  const mode = (sourceMode || process.env.SIDEKICK_TOOL_POLICY || "open").toLowerCase();
+  // A fresh installation must not expose shell, infrastructure, or other
+  // high-impact tools merely because the operator omitted policy settings.
+  // Existing explicit configuration still wins for compatibility.
+  const mode = (sourceMode || process.env.SIDEKICK_TOOL_POLICY || "restricted").toLowerCase();
   const allowedEntries = getPolicyEntries(source, ["ALLOWED_TOOLS"]);
   const blockedEntries = getPolicyEntries(source, ["DISABLED_TOOLS", "BLOCKED_TOOLS"]);
 

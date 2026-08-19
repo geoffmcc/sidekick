@@ -17,6 +17,10 @@ process.env.SIDEKICK_API_KEY = "sk-sidekick-test-key";
 // The approval queue encrypts reason/args at rest, so queueing needs a key. Without
 // it the queue fails and a required-approval case reports as unavailable instead.
 process.env.SIDEKICK_SECRET_KEY = "per-action-risk-test-key";
+// This suite tests approval decisions for explicitly reachable capability
+// actions. The production default is restricted/strict; opt into the legacy
+// tool policy so policy does not preempt the approval assertions.
+process.env.SIDEKICK_TOOL_POLICY = "open";
 
 delete require.cache[require.resolve("../src/db")];
 const legacy = require("../src/tools-legacy");

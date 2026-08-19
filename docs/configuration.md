@@ -134,7 +134,11 @@ SIDEKICK_ALLOWED_IPS=192.168.1.0/24
 SIDEKICK_DASHBOARD_ALLOWED_IPS=192.168.1.0/24
 ```
 
-Tool policy defaults to `open` for backward compatibility. Use `restricted` for shared or public-facing deployments:
+Tool policy defaults to `restricted` so a fresh deployment cannot expose shell,
+infrastructure, or other high-impact tools solely because policy configuration
+was omitted. Existing installations that explicitly set `SIDEKICK_TOOL_POLICY`
+continue to use that value. Use an explicit `open` setting only for a trusted,
+deliberately configured deployment:
 
 ```env
 SIDEKICK_TOOL_POLICY=restricted
@@ -162,7 +166,9 @@ SIDEKICK_AGENT_ALLOWED_PATHS=/home/sidekick/projects
 
 The path guard applies to direct file and repo path arguments such as read, write, list, search, archive, hash, summarize, filter, find, extract, diff files, database backup/export/restore paths, media file inputs/outputs, file watches, snapshots, changelog repo paths, and ops repo paths. It does not parse arbitrary shell commands; keep high-power command tools gated with tool policy and approval.
 
-Approval mode defaults to `off`, so allowed tools execute immediately. Use it when you want allowed high-risk actions to wait in the dashboard Approvals tab:
+Approval mode defaults to `strict`, so allowed high- and critical-risk tools
+wait for dashboard approval. Existing installations that explicitly set
+`SIDEKICK_APPROVAL_MODE=off` continue to execute allowed tools immediately:
 
 ```env
 SIDEKICK_SECRET_KEY=replace-with-a-strong-random-secret

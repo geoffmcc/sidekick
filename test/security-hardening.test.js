@@ -4,8 +4,33 @@ const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 const { validateInfluxUrl } = require("../src/influx-endpoint-policy");
+const { createPolicyCompat } = require("../src/tools/policy-compat");
+const { TOOL_RISK, TOOL_ACTION_RISK, RISK_LEVELS } = require("../src/tools/metadata");
+const { createRiskCompat } = require("../src/tools/risk-compat");
 
 console.log("Running focused security-hardening tests...");
+
+const savedPolicy = process.env.SIDEKICK_TOOL_POLICY;
+delete process.env.SIDEKICK_TOOL_POLICY;
+const policy = createPolicyCompat({
+  parsePolicyList: value => String(value || "").split(",").map(item => item.trim()).filter(Boolean),
+  sourceEnvName: source => `SIDEKICK_${String(source).toUpperCase()}_TOOL_POLICY`,
+  getToolRisk: name => name === "bash" ? "critical" : name === "deploy" ? "high" : "low",
+  getCurrentSource: () => "mcp",
+});
+assert.strictEqual(policy.getToolPolicyDecision("bash", "mcp").allowed, false, "fresh policy must deny critical tools");
+assert.strictEqual(policy.getApprovalDecision("deploy", "mcp").required, true, "fresh approval policy must require high-risk approval");
+if (savedPolicy === undefined) delete process.env.SIDEKICK_TOOL_POLICY;
+else process.env.SIDEKICK_TOOL_POLICY = savedPolicy;
+
+const risk = createRiskCompat({
+  dbStore: { getGeneratedCapabilityByName: () => null },
+  TOOL_RISK,
+  TOOL_ACTION_RISK,
+  RISK_LEVELS,
+});
+assert.strictEqual(risk.getToolRisk("secret", { action: "list" }), "low", "secret metadata listing must remain available under restricted defaults");
+assert.strictEqual(risk.getToolRisk("secret", { action: "get" }), "high", "secret disclosure must remain high risk");
 
 assert.strictEqual(validateInfluxUrl("http://localhost:8086").hostname, "localhost");
 assert.strictEqual(validateInfluxUrl("http://sidekick-influxdb:8086").hostname, "sidekick-influxdb");
