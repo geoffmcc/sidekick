@@ -446,13 +446,19 @@ The Knowledge Base replaces the need for large markdown files. Instead of re-rea
 | Layer | Measure |
 |-------|---------|
 | **MCP Server** | Bearer token auth + IP whitelist (`SIDEKICK_ALLOWED_IPS`) + dangerous command blocklist + configurable tool policy |
-| **Dashboard** | HTTP Basic Auth (`SIDEKICK_DASHBOARD_USER`/`PASS`) + rate limiting + CSRF protection + audit logging + tool policy visibility |
+| **Dashboard** | Local identity sessions + optional Basic Auth compatibility + rate limiting + CSRF protection + audit logging + tool policy visibility |
 | **Agent Bridge** | Binds to `127.0.0.1` only, accessible exclusively through the dashboard proxy |
 | **Sidekick user** | Sudo restricted to service management commands only (no wildcard `ALL`) |
 | **Infrastructure** | SSH key-only, fail2ban, UFW, unattended-upgrades, `.env` file permissions locked to owner |
 | **Data Redaction** | All tool outputs automatically redact SSH keys, GitHub tokens, API keys, passwords, database URLs, etc. |
 
-The dashboard auth and IP whitelist are disabled by default (empty env var = no restriction). Set them in `.env` before exposing to the internet. For shared or public-facing deployments, set `SIDEKICK_TOOL_POLICY=restricted` and explicitly allow only the high-risk tools your workflow needs.
+Fresh `.env.example` configurations allow only loopback clients by default and
+use restricted tools with strict approval. Add explicit trusted client
+subnets to `SIDEKICK_ALLOWED_IPS` and `SIDEKICK_DASHBOARD_ALLOWED_IPS` before
+remote exposure. Dashboard identity bootstrap/login protects the UI and API;
+`SIDEKICK_DASHBOARD_USER`/`SIDEKICK_DASHBOARD_PASS` are optional legacy Basic
+Auth compatibility credentials. Existing installations keep their explicit
+environment values, including intentionally broad allowlists or `open` policy.
 
 **Capability Tool Warning:** `capability` is critical-risk because installing or enabling a capability pack activates executable module code inside the Sidekick process. Inspection is safe and never executes package code, but installation and enablement are deployments. Packages are refused for path traversal, symlinks, escaping entry points, descriptor collisions, built-in tool shadowing and packaged secrets, and every installed package is integrity-verified before it loads — but none of that is a sandbox. For shared or public-facing deployments, set `SIDEKICK_TOOL_POLICY=restricted` and require approval for `capability`.
 
