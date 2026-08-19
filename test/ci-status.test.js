@@ -8,7 +8,10 @@ const https = require('https');
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-ci-status-'));
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.GITHUB_TOKEN = 'ghp_test_token_secret';
-process.on('exit', () => fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true }));
+process.on('exit', () => {
+  try { require('../src/db').closeDatabase?.(); } catch {}
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+});
 
 delete require.cache[require.resolve('../src/tools')];
 const { TOOLS, TOOL_DEFS, getToolRisk } = require('../src/tools');

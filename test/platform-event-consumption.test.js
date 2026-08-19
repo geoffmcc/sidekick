@@ -8,7 +8,6 @@
 const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
-const { execSync } = require("child_process");
 
 const TEST_DATA_DIR = path.join(__dirname, "test-data-event-consumption");
 fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
@@ -71,13 +70,21 @@ test("every event_type published by src/ has a registered namespace", () => {
   // `event_type:` directly, and a type passed positionally into one of the
   // publisher helpers — so both are scanned.
   const SRC = path.join(__dirname, "..", "src");
-  const direct = execSync(`grep -rhoE 'event_type: *"[a-z0-9_.]+"' ${SRC} || true`, { encoding: "utf8" });
-  const helpers = execSync(
-    `grep -rhoE '(appendScheduledPlatformEvent|recordPlatformApprovalEvent|appendAgentExecutionEvent|appendPlatformCaptureEvent|recordPackEvent|onEvent)\\([^;]*' ${SRC} | grep -ohE '"[a-z][a-z0-9_]*\\.[a-z0-9_.]+"' || true`,
-    { encoding: "utf8", shell: "/bin/bash" }
+  const files = [];
+  const visit = dir => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) visit(full);
+      else if (entry.isFile() && /\.(?:js|cjs)$/.test(entry.name)) files.push(fs.readFileSync(full, "utf8"));
+    }
+  };
+  visit(SRC);
+  const source = files.join("\n");
+  const direct = [...source.matchAll(/event_type:\s*"([a-z0-9_.]+)"/g)].map(m => m[1]);
+  const helperCalls = [...source.matchAll(/(?:appendScheduledPlatformEvent|recordPlatformApprovalEvent|appendAgentExecutionEvent|appendPlatformCaptureEvent|recordPackEvent|onEvent)\([\s\S]*?\)/g)].flatMap(m =>
+    [...m[0].matchAll(/"([a-z][a-z0-9_]*\.[a-z0-9_.]+)"/g)].map(x => x[1])
   );
-  const collect = raw => raw.split("\n").map(l => (l.match(/"([a-z0-9_.]+)"/) || [])[1]).filter(Boolean);
-  const published = Array.from(new Set([...collect(direct), ...collect(helpers)]));
+  const published = Array.from(new Set([...direct, ...helperCalls]));
   assert.ok(published.length > 90, `expected to find the publisher event types, found ${published.length}`);
   const orphans = published.filter(t => !vocabulary.isKnownNamespace(t));
   assert.deepStrictEqual(orphans, [], `event types with no namespace in event-vocabulary.js: ${orphans.join(", ")}`);

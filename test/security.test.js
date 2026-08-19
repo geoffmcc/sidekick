@@ -565,6 +565,10 @@ console.log('Test 3.4: Tool definitions include policy metadata');
 
 // Clean up test data
 if (fs.existsSync(TEST_DATA_DIR)) {
+  // The security suite loads the SQLite-backed tool registry using this
+  // directory. Close that native handle before recursive removal so Windows
+  // does not retain the directory after all assertions have passed.
+  try { require('../src/db').closeDatabase?.(); } catch {}
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
 }
 

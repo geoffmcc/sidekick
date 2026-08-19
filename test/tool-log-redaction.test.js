@@ -188,5 +188,6 @@ test("no credential value survives anywhere in the stored context", () => {
 });
 
 console.log("\nTool Log Redaction tests: " + passed + " passed, " + failed + " failed\n");
+dbStore.closeDatabase?.();
 fs.rmSync(tempDir, { recursive: true, force: true });
 if (failed > 0) process.exit(1);

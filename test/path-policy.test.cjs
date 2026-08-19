@@ -3,6 +3,11 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+function cleanupData() {
+  try { require('../src/db').closeDatabase?.(); } catch {}
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+}
+
 const TEST_DATA_DIR = path.join(__dirname, 'test-data-path-policy');
 fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
 fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
@@ -740,13 +745,13 @@ function setupSymlinkFixtures() {
     resetPathEnv();
     toolContext.setExecutionSource('mcp');
     console.log('All path policy tests passed.');
-    fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+    cleanupData();
     cleanupLinkRoot();
     process.exit(0);
   } catch (error) {
     console.error('\n✗ Test failed:', error.message);
     console.error(error.stack);
-    fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+    cleanupData();
     cleanupLinkRoot();
     process.exit(1);
   }

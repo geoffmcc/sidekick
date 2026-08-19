@@ -48,7 +48,10 @@ function fakeFs(files) {
 }
 
 const path = require("path");
-const CONV = "/data/conversations";
+// Use a platform-neutral absolute fixture root. A POSIX-looking /data path
+// becomes a drive-root-relative path on Windows, while production resolution
+// canonicalizes it to C:\\data and the fake filesystem keys no longer match.
+const CONV = path.resolve(__dirname, "fixtures", "conversations");
 const P = (id) => path.join(CONV, id + ".json");
 
 // ---------------------------------------------------------------------------
