@@ -39,6 +39,18 @@ jobs:
     - name: Audit production dependencies
       run: npm audit --omit=dev --audit-level=moderate
 
+    - name: Validate Docker Compose configuration
+      env:
+        SIDEKICK_SECRET_DIR: ${{ runner.temp }}/sidekick-secrets
+        SIDEKICK_UID: "1000"
+        SIDEKICK_GID: "1000"
+      run: |
+        mkdir -p "$SIDEKICK_SECRET_DIR"
+        for name in sidekick_postgres_password sidekick_influx_password sidekick_influx_token sidekick_grafana_admin_password; do
+          printf 'ci-placeholder\n' > "$SIDEKICK_SECRET_DIR/$name"
+        done
+        docker compose -f docker/docker-compose.yml config --quiet
+
     - name: Install browser runtime for Governed Browser Automation tests
       run: node scripts/install-browser.js
 
