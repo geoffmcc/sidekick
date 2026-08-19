@@ -4,6 +4,7 @@ const assert = require("assert");
 const operations = require("../packs/container-operations/modules/container-operations-tools/lib/operations");
 const profiles = require("../packs/container-operations/modules/container-operations-tools/lib/profiles");
 const compose = require("../packs/container-operations/modules/container-operations-tools/lib/compose");
+const packManifest = require("../packs/container-operations/sidekick.pack.json");
 
 function fakeClient() {
   const calls = [];
@@ -18,6 +19,16 @@ test("CO.1: Docker and Podman profiles require safe named transports", () => {
   assert.equal(profiles.parseProfile("podman-rootless", { provider: "podman", socket: "/run/user/1000/podman/podman.sock" }).ok, true);
   assert.equal(profiles.parseProfile("bad", { provider: "docker", endpoint: "http://127.0.0.1:2375" }).ok, false);
   assert.equal(profiles.parseProfile("bad", { provider: "docker", endpoint: "https://127.0.0.1:2376" }).ok, false);
+});
+
+test("CO.1a: fresh installs provide a read-only local Docker Compose default", () => {
+  const config = packManifest.configuration.defaults;
+  const profile = profiles.parseProfile("local-docker", config.profiles["local-docker"]);
+  assert.equal(profile.ok, true);
+  assert.equal(profile.profile.default, true);
+  assert.equal(profile.profile.allow_mutations, false);
+  assert.deepEqual(profile.profile.compose.project_roots, ["/home/sidekick/sidekick/docker"]);
+  assert.deepEqual(config.repository_roots, ["/home/sidekick/sidekick"]);
 });
 
 test("CO.2: normalized discovery retains health, security, networks and ports", async () => {
