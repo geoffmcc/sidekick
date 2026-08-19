@@ -128,6 +128,8 @@ test("cancel of a running job requests 'cancelling'; the worker's ack finalizes 
   // The worker's poll sees the request and may keep renewing while aborting.
   const status = jobManager.getCancellationStatus(job.jobId, worker.workerId, claim.leaseId);
   assert.strictEqual(status.cancelled, true, "cancellation poll observes the request");
+  assert.throws(() => jobManager.renewLease(job.jobId, "wk_attacker", claim.leaseId, 300000), /Lease expired|lease/i,
+    "a different authenticated worker must not renew this worker's lease");
   jobManager.renewLease(job.jobId, claim.leaseId);
 
   // Repeated admin cancel must not force-finalize under the runner.
