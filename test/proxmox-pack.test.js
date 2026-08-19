@@ -383,6 +383,18 @@ function storeToken() {
     assert.ok(readiness.blockers.some((x) => x.code === "backup_evidence_missing"));
   });
 
+  await test("PX.5b: guest inventory, readiness and backup coverage are bounded reads", async () => {
+    const inventory = json(await callInternalTool("proxmox", { action: "guest_inventory", profile: "main" }));
+    assert.strictEqual(inventory.total, 2);
+    assert.strictEqual(inventory.counts.running, 1);
+    const readiness = json(await callInternalTool("proxmox", { action: "guest_readiness", profile: "main", vmid: 100 }));
+    assert.strictEqual(readiness.status, "attention");
+    assert.ok(readiness.findings.some((x) => x.code === "guest_agent_unreachable"));
+    const coverage = json(await callInternalTool("proxmox", { action: "backup_coverage", profile: "main" }));
+    assert.strictEqual(coverage.uncovered_guests.length, 2);
+    assert.ok(coverage.note.includes("does not verify PBS"));
+  });
+
   await test("PX.6: guest lifecycle start submits, monitors the task, and reports completion", async () => {
     const r = json(await callInternalTool("proxmox_guest", { action: "start", profile: "main", vmid: 101 }));
     assert.strictEqual(r.ok, true, JSON.stringify(r));

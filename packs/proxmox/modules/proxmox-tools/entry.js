@@ -99,13 +99,16 @@ async function handleRead(services, args, runtime) {
       case "list_nodes": data = await operations.listNodes(client); break;
       case "node_status": data = await operations.nodeStatus(client, requireNode(args)); break;
       case "list_guests": data = await operations.listGuests(client, { node: optionalNode(args), type: args.type }); break;
+      case "guest_inventory": data = await operations.guestInventory(client, { node: optionalNode(args), type: args.type }); break;
       case "guest_status": data = await operations.guestStatus(client, { vmid: requireVmid(args), node: optionalNode(args) }); break;
+      case "guest_readiness": data = await operations.guestReadiness(client, { vmid: requireVmid(args), node: optionalNode(args) }); break;
       case "list_storage": data = await operations.listStorage(client, { node: optionalNode(args) }); break;
       case "storage_status": data = await operations.storageStatus(client, { node: requireNode(args), storage: requireStorage(args) }); break;
       case "list_tasks": data = await operations.listTasks(client, { node: optionalNode(args), limit: args.limit, errors: args.errors }); break;
       case "task_status": data = await operations.taskStatus(client, { upid: requireUpid(args), node: optionalNode(args) }); break;
       case "list_snapshots": data = await provision.snapshotList(client, { node: requireNode(args), vmid: requireVmid(args) }); break;
       case "backup_status": data = await operations.backupStatus(client); break;
+      case "backup_coverage": data = await operations.backupCoverage(client); break;
       case "version": data = await operations.versionStatus(client); break;
       case "cluster_health": data = await operations.clusterHealth(client); break;
       case "storage_capacity": data = await operations.storageCapacity(client); break;
@@ -169,8 +172,8 @@ async function handleGuest(services, args, runtime) {
 
 const READ_ACTIONS = [
   "cluster_summary", "capabilities", "list_nodes", "node_status", "list_guests",
-  "guest_status", "list_storage", "storage_status", "list_tasks", "task_status",
-  "list_snapshots", "backup_status", "version", "cluster_health", "storage_capacity", "upgrade_readiness", "maintenance_preflight", "migration_plan", "list_profiles", "detect_providers",
+  "guest_status", "guest_inventory", "guest_readiness", "list_storage", "storage_status", "list_tasks", "task_status",
+  "list_snapshots", "backup_status", "backup_coverage", "version", "cluster_health", "storage_capacity", "upgrade_readiness", "maintenance_preflight", "migration_plan", "list_profiles", "detect_providers",
 ];
 
 const PROVISION_ACTIONS = ["create_vm", "create_lxc", "clone", "configure", "snapshot_create", "convert_template"];
