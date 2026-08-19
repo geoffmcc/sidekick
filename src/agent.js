@@ -805,21 +805,13 @@ Return ONLY valid JSON.`;
       return;
     }
 
-    const result = await callAgentTool("sidekick_teach", {
-      action: "teach_procedure",
-      name: suggestion.name,
-      description: suggestion.description,
-      parameters: suggestion.parameters || {},
-      steps: suggestion.steps,
-      trigger_phrases: []
-    }, { taskId });
-
-    if (result.isError) {
-      emit(taskId, { type: "step", text: `Procedure save failed: ${result.content?.[0]?.text}` });
-    } else {
-      const paramCount = Object.keys(suggestion.parameters || {}).length;
-      emit(taskId, { type: "step", text: `Auto-saved procedure: ${suggestion.name} (${suggestion.steps.length} steps, ${paramCount} params) — available as sidekick_${suggestion.name} after restart` });
-    }
+    // Never promote model-generated procedure content automatically. A task
+    // goal, tool result, repository, or web page can be hostile input, and an
+    // approval-off/default policy must not turn that untrusted content into
+    // persistent executable capability. Keep the suggestion visible while
+    // requiring an explicit, separately governed teach_procedure action.
+    const paramCount = Object.keys(suggestion.parameters || {}).length;
+    emit(taskId, { type: "step", text: `Procedure suggestion available but not saved automatically: ${suggestion.name} (${suggestion.steps.length} steps, ${paramCount} params). Explicit teach_procedure is required.` });
   } catch (e) {
     emit(taskId, { type: "step", text: `Procedure suggestion failed: ${e.message}` });
   }
