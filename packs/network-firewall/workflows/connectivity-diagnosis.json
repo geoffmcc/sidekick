@@ -1,8 +1,10 @@
 {
   "name": "network-firewall/connectivity-diagnosis",
-  "display_name": "Network/firewall connectivity diagnosis",
+  "version": "1.0.0",
+  "title": "Network/firewall connectivity diagnosis",
+  "mode": "read_only",
   "owner": "network-firewall",
   "description": "Analyze routing, zones, ordered policy, NAT, and provider evidence without claiming certainty when effective policy is unknown.",
-  "inputs": { "profile": { "type": "string", "required": false }, "source": { "type": "string", "required": true }, "destination": { "type": "string", "required": true }, "protocol": { "type": "string", "required": true }, "port": { "type": "integer", "required": false } },
-  "steps": [ { "id": "path", "tool": "network", "arguments": { "action": "path", "profile": "{{profile}}", "source": "{{source}}", "destination": "{{destination}}", "protocol": "{{protocol}}", "port": "{{port}}" } }, { "id": "policy", "tool": "firewall", "arguments": { "action": "evaluate", "profile": "{{profile}}", "source": "{{source}}", "destination": "{{destination}}", "protocol": "{{protocol}}", "port": "{{port}}" } } ]
+  "inputs": { "profile": { "type": "string", "required": false, "default": "" }, "source": { "type": "string", "required": true }, "destination": { "type": "string", "required": true }, "protocol": { "type": "string", "required": true }, "port": { "type": "number", "required": false } },
+  "steps": [ { "name": "path", "title": "Route and path analysis", "tool": "network", "args": { "action": "path", "profile": "${inputs.profile}", "source": "${inputs.source}", "destination": "${inputs.destination}", "protocol": "${inputs.protocol}", "port": "${inputs.port}" }, "expect": "json", "on_error": "fail" }, { "name": "policy", "title": "Firewall policy analysis", "tool": "firewall", "args": { "action": "evaluate", "profile": "${inputs.profile}", "source": "${inputs.source}", "destination": "${inputs.destination}", "protocol": "${inputs.protocol}", "port": "${inputs.port}" }, "expect": "json", "on_error": "continue" } ]
 }

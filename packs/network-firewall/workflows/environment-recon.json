@@ -1,14 +1,16 @@
 {
   "name": "network-firewall/environment-recon",
-  "display_name": "Network/firewall environment reconnaissance",
+  "version": "1.0.0",
+  "title": "Network/firewall environment reconnaissance",
+  "mode": "read_only",
   "owner": "network-firewall",
   "description": "Collect a bounded provider summary, capabilities, interfaces, routes, DHCP, firewall, VPN, and health evidence.",
   "inputs": { "profile": { "type": "string", "required": false } },
   "steps": [
-    { "id": "summary", "tool": "network", "arguments": { "action": "summary", "profile": "{{profile}}" } },
-    { "id": "capabilities", "tool": "network", "arguments": { "action": "capabilities", "profile": "{{profile}}" } },
-    { "id": "firewall", "tool": "firewall", "arguments": { "action": "rules", "profile": "{{profile}}" } },
-    { "id": "dhcp", "tool": "dhcp", "arguments": { "action": "status", "profile": "{{profile}}" } },
-    { "id": "vpn", "tool": "vpn", "arguments": { "action": "status", "profile": "{{profile}}" } }
+    { "name": "summary", "title": "Network summary", "tool": "network", "args": { "action": "summary", "profile": "${inputs.profile}" }, "expect": "json", "on_error": "fail" },
+    { "name": "capabilities", "title": "Capability negotiation", "tool": "network", "args": { "action": "capabilities", "profile": "${inputs.profile}" }, "expect": "json", "on_error": "continue" },
+    { "name": "firewall", "title": "Firewall policy", "tool": "firewall", "args": { "action": "rules", "profile": "${inputs.profile}" }, "expect": "json", "on_error": "continue" },
+    { "name": "dhcp", "title": "DHCP state", "tool": "dhcp", "args": { "action": "status", "profile": "${inputs.profile}" }, "expect": "json", "on_error": "continue" },
+    { "name": "vpn", "title": "VPN state", "tool": "vpn", "args": { "action": "status", "profile": "${inputs.profile}" }, "expect": "json", "on_error": "continue" }
   ]
 }
