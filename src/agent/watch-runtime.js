@@ -1,23 +1,24 @@
 const { execFileSync } = require("child_process");
+const { childProcessEnv } = require("../security/child-process");
 
 function createWatchRuntime({ callAgentTool }) {
   function checkService(serviceName) {
     try {
-      const output = execFileSync("systemctl", ["is-active", serviceName], { encoding: "utf-8", timeout: 5000 }).trim();
+      const output = execFileSync("systemctl", ["is-active", serviceName], { encoding: "utf-8", timeout: 5000, env: childProcessEnv() }).trim();
       return { status: output, active: output === "active" };
     } catch { return { status: "unknown", active: false }; }
   }
 
   function checkProcess(processName) {
     try {
-      const output = execFileSync("pgrep", ["-f", processName], { encoding: "utf-8", timeout: 5000 }).trim();
+      const output = execFileSync("pgrep", ["-f", processName], { encoding: "utf-8", timeout: 5000, env: childProcessEnv() }).trim();
       return { running: output.length > 0, pids: output.split("\n").filter(Boolean) };
     } catch { return { running: false, pids: [] }; }
   }
 
   function checkEndpoint(url) {
     try {
-      const output = execFileSync("curl", ["-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", url], { encoding: "utf-8", timeout: 10000 }).trim();
+      const output = execFileSync("curl", ["-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", url], { encoding: "utf-8", timeout: 10000, env: childProcessEnv() }).trim();
       return { status: parseInt(output), ok: output.startsWith("2") };
     } catch { return { status: 0, ok: false }; }
   }

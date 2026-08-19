@@ -6,6 +6,11 @@ const { z } = require("zod");
 const dbStore = require("../../db");
 const { redactSensitive } = require("../../redact");
 const { enforcePathPolicy } = require("../path-policy");
+const { childProcessEnv } = require("../../security/child-process");
+
+function safeExecFileSync(program, args, options = {}) {
+  return execFileSync(program, args, { ...options, env: childProcessEnv(options.env) });
+}
 
 async function sidekick_tail({ source, pattern, lines, since }) {
   const maxLines = lines || 50;
@@ -27,7 +32,7 @@ async function sidekick_tail({ source, pattern, lines, since }) {
   } else if (source === "journalctl") {
     try {
       const svc = pattern || "sidekick-mcp";
-      const stdout = execFileSync("journalctl", ["-u", svc, "-n", String(maxLines), "--no-pager"], {
+      const stdout = safeExecFileSync("journalctl", ["-u", svc, "-n", String(maxLines), "--no-pager"], {
         timeout: 10000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024
       });
       content = stdout;
@@ -59,7 +64,7 @@ if (!fs.existsSync(SNAPSHOTS_DIR)) {
 
 function captureProcesses() {
   try {
-    const output = execFileSync("ps", ["aux", "--sort=-%mem"], { encoding: "utf-8" });
+    const output = safeExecFileSync("ps", ["aux", "--sort=-%mem"], { encoding: "utf-8" });
     const lines = output.trim().split("\n");
     return lines.slice(1).map(line => {
       const parts = line.split(/\s+/);
@@ -78,7 +83,7 @@ function captureProcesses() {
 
 function captureServices() {
   try {
-    const output = execFileSync("systemctl", ["list-units", "--type=service", "--state=running", "--no-pager"], { encoding: "utf-8" });
+    const output = safeExecFileSync("systemctl", ["list-units", "--type=service", "--state=running", "--no-pager"], { encoding: "utf-8" });
     const lines = output.trim().split("\n").slice(1, -5);
     return lines.map(line => {
       const parts = line.trim().split(/\s+/);
@@ -97,7 +102,7 @@ function captureServices() {
 
 function captureDisk() {
   try {
-    const output = execFileSync("df", ["-h", "--output=source,size,used,avail,pcent,target"], { encoding: "utf-8" });
+    const output = safeExecFileSync("df", ["-h", "--output=source,size,used,avail,pcent,target"], { encoding: "utf-8" });
     const lines = output.trim().split("\n");
     return lines.slice(1).map(line => {
       const parts = line.trim().split(/\s+/);
@@ -132,7 +137,7 @@ function captureFiles(filePaths) {
 
 function capturePackages() {
   try {
-    const output = execFileSync("dpkg-query", ["-W", "-f=${Package} ${Version}\n"], { encoding: "utf-8" });
+    const output = safeExecFileSync("dpkg-query", ["-W", "-f=${Package} ${Version}\n"], { encoding: "utf-8" });
     return output.trim().split("\n").map(line => {
       const [name, version] = line.split(" ");
       return { name, version };
@@ -144,11 +149,11 @@ function capturePackages() {
 
 function captureNetwork() {
   try {
-    const interfaces = execFileSync("ip", ["-o", "link", "show"], { encoding: "utf-8" }).trim().split("\n").map(line => line.split(":")[1]?.trim()).filter(Boolean);
+    const interfaces = safeExecFileSync("ip", ["-o", "link", "show"], { encoding: "utf-8" }).trim().split("\n").map(line => line.split(":")[1]?.trim()).filter(Boolean);
     const result = {};
     for (const iface of interfaces) {
       try {
-        const output = execFileSync("ip", ["-o", "-4", "addr", "show", iface], { encoding: "utf-8" }).trim();
+      const output = safeExecFileSync("ip", ["-o", "-4", "addr", "show", iface], { encoding: "utf-8" }).trim();
         const ip = output.match(/\binet\s+(\S+)/)?.[1] || "none";
         result[iface] = { ip };
       } catch {
@@ -424,7 +429,7 @@ async function sidekick_timeline({ action, since, until, sources, pattern, sever
   if (useSources.includes("journalctl")) {
     try {
       const sinceStr = startTime.toISOString();
-      const result = execFileSync("journalctl", ["--since", sinceStr, "--no-pager", "-n", "500"], {
+      const result = safeExecFileSync("journalctl", ["--since", sinceStr, "--no-pager", "-n", "500"], {
         encoding: "utf8",
         timeout: 10000,
         stdio: ["pipe", "pipe", "pipe"]
@@ -445,7 +450,7 @@ async function sidekick_timeline({ action, since, until, sources, pattern, sever
   if (useSources.includes("git")) {
     try {
       const sinceDate = startTime.toISOString();
-      const result = execFileSync("git", ["log", `--since=${sinceDate}`, "--pretty=format:%H%x09%ad%x09%s", "--date=iso", "-n", "100"], {
+      const result = safeExecFileSync("git", ["log", `--since=${sinceDate}`, "--pretty=format:%H%x09%ad%x09%s", "--date=iso", "-n", "100"], {
         encoding: "utf8",
         timeout: 10000,
         cwd: "/home/sidekick/sidekick",
@@ -632,7 +637,7 @@ async function sidekick_baseline({ action, metric_name, value, source, command, 
     let currentValue = value;
     if (currentValue === undefined && source === "command" && command) {
       try {
-        const result = execSync(command, { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] });
+        const result = execSync(command, { encoding: "utf8", timeout: 5000, maxBuffer: 2 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"], env: childProcessEnv() });
         currentValue = parseFloat(result.trim());
       } catch (e) {
         return { content: [{ type: "text", text: `Command failed: ${e.message}` }], isError: true };

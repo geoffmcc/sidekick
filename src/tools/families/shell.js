@@ -14,6 +14,7 @@ const { exec } = require("child_process");
 const { promisify } = require("util");
 const { z } = require("zod");
 const { redactSensitive } = require("../../redact");
+const { childProcessEnv } = require("../../security/child-process");
 
 const DANGEROUS_PATTERNS = [
   /\brm\s+-(?:[a-z]*r[a-z]*f|[a-z]*f[a-z]*r)[a-z]*\s+(?:--no-preserve-root\s+)?\/(?:\s|$|[/*])/i,
@@ -55,7 +56,7 @@ async function sidekick_bash({ command }, runtime = {}) {
     ? Math.max(1000, Math.min(requested, MAX_TIMEOUT_MS) - 250)
     : DEFAULT_TIMEOUT_MS;
   try {
-    const { stdout } = await execAsync(command, { timeout, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
+    const { stdout } = await execAsync(command, { timeout, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: childProcessEnv() });
     return { content: [{ type: "text", text: redactSensitive(stdout || "(empty output)") }] };
   } catch (e) {
     const text = e.killed || e.signal || e.code === "ETIMEDOUT"

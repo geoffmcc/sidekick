@@ -20,6 +20,7 @@ const crypto = require("crypto");
 const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
+const { childProcessEnv } = require("../../security/child-process");
 const { z } = require("zod");
 const { enforcePathPolicy } = require("../path-policy");
 const { validateOutboundUrl, resolveOutboundUrl } = require("../../security/outbound-url");
@@ -39,6 +40,7 @@ function safeExecFileSync(command, args, options = {}) {
     encoding: options.encoding || "utf8",
     maxBuffer: options.maxBuffer || 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"],
+    env: childProcessEnv(options.env),
   });
 }
 
@@ -177,7 +179,7 @@ async function sidekick_analytics({ query, file, format }) {
       const tmpFile = path.join(os.tmpdir(), "sidekick_analytics_" + Date.now() + ".py");
       try {
         fs.writeFileSync(tmpFile, pyScript);
-        return execFileSync(pythonCmd, [tmpFile], { timeout: 60000, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+        return execFileSync(pythonCmd, [tmpFile], { timeout: 60000, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], env: childProcessEnv() });
       } finally {
         try { fs.unlinkSync(tmpFile); } catch (e) {}
       }

@@ -6,6 +6,7 @@ const os = require("os");
 const { timingSafeCompare } = require("./crypto-utils");
 const { readSecret, hasSecret } = require("./core/runtime-secrets");
 const { execFileSync } = require("child_process");
+const { childProcessEnv } = require("./security/child-process");
 const { callDashboardTool, getToolDefsForSource, getToolCategoriesWithTools, buildPolicyInspection, summarizePolicyInspection, enforceToolPolicy, listApprovals, resolveApproval, renderContinuationApprovalPreview, loadWatches, syncToolRegistry } = require("./tools");
 const dynamicTools = require("./dynamic-tools");
 
@@ -81,7 +82,7 @@ const VPS_IP = getPrivateIPv4();
 
 function runCommand(program, args = [], opts = {}) {
   try {
-    return execFileSync(program, args, { encoding: "utf-8", timeout: 5000, ...opts }).trim();
+    return execFileSync(program, args, { encoding: "utf-8", timeout: 5000, ...opts, env: childProcessEnv(opts.env) }).trim();
   } catch { return "?"; }
 }
 

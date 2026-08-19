@@ -5,11 +5,10 @@
 // Extracted from src/tools-legacy.js. Depends only on Node builtins and zod —
 // never on tools-legacy.js; the platform-module repository/loader are required
 // lazily inside the module checks, exactly as before. `health` and `netdiag`
-// are `high` risk (custom health commands run through a shell; netdiag builds
-// shell command strings), preserved from src/tools/metadata.js and gated by
-// the dispatcher. netdiag interpolates every user-supplied value through
-// shellEscape before the string reaches execSync; that escaping is moved
-// verbatim. checkNetwork keeps its injectable probe seams
+// are `high` risk (custom health commands run through a shell), preserved from
+// src/tools/metadata.js and gated by the dispatcher. Network diagnostics use
+// fixed executables and argument arrays; user-supplied targets never become
+// shell source. checkNetwork keeps its injectable probe seams
 // ({dnsProbe, httpsProbe, execFileSyncImpl}) for test/health.test.js and is
 // re-exported through the src/tools facade as a compatibility export.
 
@@ -21,15 +20,13 @@ const { execFileSync, execSync } = require("child_process");
 const { z } = require("zod");
 const { validateInfluxUrl } = require("../../influx-endpoint-policy");
 const { readSecret } = require("../../core/runtime-secrets");
+const { childProcessEnv } = require("../../security/child-process");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "..", "..", "data");
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
-const SHELL_META = /[`$\\!#&|;()*?<>[\]{}"'\n\r]/;
-function shellEscape(arg) {
-  if (arg === "") return "''";
-  if (!SHELL_META.test(arg)) return arg;
-  return "'" + arg.replace(/'/g, "'\\''") + "'";
+function safeExecFileSync(program, args, options = {}) {
+  return execFileSync(program, args, { ...options, env: childProcessEnv(options.env) });
 }
 
 const HEALTH_HISTORY_FILE = path.join(DATA_DIR, "health_history.json");
@@ -56,7 +53,7 @@ function checkServices(serviceList) {
   let healthy = 0;
   for (const svc of services) {
     try {
-      const output = execFileSync("systemctl", ["is-active", svc], { encoding: "utf-8", timeout: 5000 }).trim();
+      const output = safeExecFileSync("systemctl", ["is-active", svc], { encoding: "utf-8", timeout: 5000 }).trim();
       const isActive = output === "active";
       results.push({ service: svc, status: output, healthy: isActive });
       if (isActive) healthy++;
@@ -77,7 +74,7 @@ function checkServices(serviceList) {
 
 function checkProcesses() {
   try {
-    const output = execFileSync("ps", ["aux", "--sort=-%cpu"], {
+    const output = safeExecFileSync("ps", ["aux", "--sort=-%cpu"], {
       encoding: "utf-8",
       timeout: 5000,
       maxBuffer: 5 * 1024 * 1024
@@ -112,7 +109,7 @@ function checkProcesses() {
 
 function checkDisk() {
   try {
-    const output = execFileSync("df", ["-P"], { encoding: "utf-8", timeout: 5000 });
+    const output = safeExecFileSync("df", ["-P"], { encoding: "utf-8", timeout: 5000 });
     const lines = output.trim().split("\n").slice(1);
     const disks = lines.map(line => {
       const parts = line.split(/\s+/);
@@ -194,7 +191,7 @@ async function checkNetwork(options = {}) {
   }
   const dnsProbe = options.dnsProbe || probeDns;
   const httpsProbe = options.httpsProbe || probeHttps;
-  const runFile = options.execFileSyncImpl || execFileSync;
+  const runFile = options.execFileSyncImpl || safeExecFileSync;
   const services = ["sidekick-mcp", "sidekick-dashboard", "sidekick-agent"];
   const servicePorts = {
     "sidekick-mcp": 4097,
@@ -264,7 +261,7 @@ function checkCustom(commands) {
   let allPassed = true;
   for (const cmd of cmdList) {
     try {
-      const output = execSync(cmd, { encoding: "utf-8", timeout: 10000 }).trim();
+      const output = execSync(cmd, { encoding: "utf-8", timeout: 10000, maxBuffer: 2 * 1024 * 1024, env: childProcessEnv() }).trim();
       results.push({ command: cmd, output, success: true });
     } catch (e) {
       results.push({ command: cmd, error: e.message, success: false });
@@ -480,7 +477,7 @@ async function sidekick_status({ include, services }) {
     output.services = {};
     for (const svc of svcList) {
       try {
-        const stdout = execFileSync("systemctl", ["is-active", svc], { timeout: 5000, encoding: "utf-8" }).trim();
+        const stdout = safeExecFileSync("systemctl", ["is-active", svc], { timeout: 5000, encoding: "utf-8" }).trim();
         output.services[svc] = stdout;
       } catch (e) {
         output.services[svc] = (e.stdout || "unknown").trim();
@@ -489,7 +486,7 @@ async function sidekick_status({ include, services }) {
   }
   if (sections.includes("disk")) {
     try {
-      const stdout = execFileSync("df", ["-h", "--output=target,size,used,avail,pcent", "/"], {
+      const stdout = safeExecFileSync("df", ["-h", "--output=target,size,used,avail,pcent", "/"], {
         timeout: 5000, encoding: "utf-8"
       }).trim();
       const lines = stdout.split("\n");
@@ -501,7 +498,7 @@ async function sidekick_status({ include, services }) {
   }
   if (sections.includes("memory")) {
     try {
-      const stdout = execFileSync("free", ["-h"], { timeout: 5000, encoding: "utf-8" }).trim();
+      const stdout = safeExecFileSync("free", ["-h"], { timeout: 5000, encoding: "utf-8" }).trim();
       const lines = stdout.split("\n");
       if (lines.length > 1) {
         const parts = lines[1].trim().split(/\s+/);
@@ -518,7 +515,7 @@ async function sidekick_status({ include, services }) {
   }
   if (sections.includes("uptime")) {
     try {
-      const stdout = execFileSync("uptime", ["-p"], { timeout: 5000, encoding: "utf-8" }).trim();
+      const stdout = safeExecFileSync("uptime", ["-p"], { timeout: 5000, encoding: "utf-8" }).trim();
       output.uptime = stdout;
     } catch (e) { output.uptime = { error: e.message }; }
   }
@@ -540,7 +537,7 @@ async function sidekick_status({ include, services }) {
   }
   if (sections.includes("processes")) {
     try {
-      const stdout = execFileSync("ps", ["aux", "--sort=-%cpu"], { timeout: 5000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024 });
+      const stdout = safeExecFileSync("ps", ["aux", "--sort=-%cpu"], { timeout: 5000, encoding: "utf-8", maxBuffer: 5 * 1024 * 1024 });
       const lines = stdout.trim().split("\n").slice(0, 11);
       output.processes_top = lines.slice(1).map(l => {
         const p = l.trim().split(/\s+/);
@@ -554,10 +551,25 @@ async function sidekick_status({ include, services }) {
 
 const MAX_NETDIAG_COMMANDS = 15;
 const COMMON_PORTS = [22, 80, 443, 3000, 3001, 4000, 5000, 8080, 8443, 9090];
+const MAX_NETDIAG_TARGET_LENGTH = 2048;
 
-function runNetDiagCommand(cmd, timeout = 5000) {
+function validateNetDiagTarget(value) {
+  if (typeof value !== "string" || value.length === 0 || value.length > MAX_NETDIAG_TARGET_LENGTH) {
+    return "target must be a non-empty string of at most 2048 characters";
+  }
+  if (/^-/.test(value) || /[\u0000-\u001f\u007f\s;&|$`()<>[\]{}'"\\]/.test(value)) {
+    return "target contains an invalid option or control character";
+  }
+  return null;
+}
+
+const MIN_NETDIAG_TIMEOUT_MS = 1000;
+const MAX_NETDIAG_TIMEOUT_MS = 30000;
+
+function runNetDiagCommand(program, args, timeout = 5000) {
   try {
-    const output = execSync(cmd, { encoding: "utf8", timeout, stdio: ["pipe", "pipe", "pipe"] });
+    const boundedTimeout = Math.max(MIN_NETDIAG_TIMEOUT_MS, Math.min(Number(timeout) || 5000, MAX_NETDIAG_TIMEOUT_MS));
+    const output = safeExecFileSync(program, args, { encoding: "utf8", timeout: boundedTimeout, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 2 * 1024 * 1024 });
     return { success: true, output: output.trim() };
   } catch (e) {
     return { success: false, output: (e.stdout || "") + (e.stderr || ""), error: e.message };
@@ -567,6 +579,10 @@ function runNetDiagCommand(cmd, timeout = 5000) {
 async function sidekick_netdiag({ action, target, port_range, timeout, format }) {
   if (!target && action !== "listeners") {
     return { content: [{ type: "text", text: "target required (host, URL, or IP)" }], isError: true };
+  }
+  if (target) {
+    const targetError = validateNetDiagTarget(target);
+    if (targetError) return { content: [{ type: "text", text: targetError }], isError: true };
   }
 
   const fmt = format || "detailed";
@@ -582,11 +598,11 @@ async function sidekick_netdiag({ action, target, port_range, timeout, format })
 
   if (action === "dns") {
     checkLimit();
-    const dnsResult = runNetDiagCommand(`dig +short ${shellEscape(target)} A`, to);
+    const dnsResult = runNetDiagCommand("dig", ["+short", target, "A"], to);
     checkLimit();
-    const dnsAny = runNetDiagCommand(`dig +short ${shellEscape(target)} ANY`, to);
+    const dnsAny = runNetDiagCommand("dig", ["+short", target, "ANY"], to);
     checkLimit();
-    const reverse = runNetDiagCommand(`dig +short -x ${shellEscape(target)}`, to);
+    const reverse = runNetDiagCommand("dig", ["+short", "-x", target], to);
 
     let result = `DNS Resolution for: ${target}\n\n`;
     result += `A Records:\n${dnsResult.output || "None"}\n\n`;
@@ -598,7 +614,7 @@ async function sidekick_netdiag({ action, target, port_range, timeout, format })
 
   if (action === "route") {
     checkLimit();
-    const traceResult = runNetDiagCommand(`traceroute -m 10 -w 2 ${shellEscape(target)}`, to * 2);
+    const traceResult = runNetDiagCommand("traceroute", ["-m", "10", "-w", "2", target], to * 2);
 
     let result = `Route to: ${target}\n\n`;
     result += traceResult.output || "Traceroute failed or timed out";
@@ -609,21 +625,26 @@ async function sidekick_netdiag({ action, target, port_range, timeout, format })
   if (action === "ports") {
     let ports = COMMON_PORTS;
     if (port_range) {
-      const match = port_range.match(/(\d+)-(\d+)/);
+      const match = /^\s*(\d+)\s*-\s*(\d+)\s*$/.exec(port_range);
       if (match) {
         const start = parseInt(match[1]);
         const end = parseInt(match[2]);
+        if (start < 1 || end > 65535 || start > end) {
+          return { content: [{ type: "text", text: "port_range must be within 1-65535 and ascending" }], isError: true };
+        }
         ports = [];
         for (let i = start; i <= end && ports.length < 20; i++) {
           ports.push(i);
         }
+      } else {
+        return { content: [{ type: "text", text: "port_range must use the form start-end" }], isError: true };
       }
     }
 
     checkLimit();
     const results = [];
     for (const port of ports) {
-      const ncResult = runNetDiagCommand(`nc -z -w 2 ${shellEscape(target)} ${port} 2>&1`, 3000);
+      const ncResult = runNetDiagCommand("nc", ["-z", "-w", "2", target, String(port)], 3000);
       const isOpen = ncResult.success && !ncResult.output.includes("failed");
       results.push({ port, open: isOpen });
     }
@@ -646,7 +667,7 @@ async function sidekick_netdiag({ action, target, port_range, timeout, format })
 
   if (action === "listeners") {
     checkLimit();
-    const ssResult = runNetDiagCommand("ss -tlnp", to);
+    const ssResult = runNetDiagCommand("ss", ["-tlnp"], to);
 
     let result = "Local Listening Ports\n\n";
     result += ssResult.output || "No listeners found or ss command failed";
@@ -656,11 +677,13 @@ async function sidekick_netdiag({ action, target, port_range, timeout, format })
 
   if (action === "connectivity") {
     const targets = target.split(",").map(t => t.trim());
+    const invalidTarget = targets.map(validateNetDiagTarget).find(Boolean);
+    if (invalidTarget) return { content: [{ type: "text", text: invalidTarget }], isError: true };
     const results = [];
 
     for (const t of targets) {
       checkLimit();
-      const pingResult = runNetDiagCommand(`ping -c 2 -W 2 ${shellEscape(t)} 2>&1`, to);
+      const pingResult = runNetDiagCommand("ping", ["-c", "2", "-W", "2", t], to);
       const isUp = pingResult.success && pingResult.output.includes("bytes from");
       results.push({ target: t, up: isUp, latency: isUp ? pingResult.output.match(/time[=<](\d+\.?\d*)/)?.[1] + "ms" : "N/A" });
     }
@@ -687,16 +710,16 @@ async function sidekick_netdiag({ action, target, port_range, timeout, format })
     const report = { target, host, timestamp: new Date().toISOString(), checks: {} };
 
     checkLimit();
-    const dnsResult = runNetDiagCommand(`dig +short ${shellEscape(host)} A`, to);
+    const dnsResult = runNetDiagCommand("dig", ["+short", host, "A"], to);
     report.checks.dns = dnsResult.output || "Failed";
 
     checkLimit();
-    const pingResult = runNetDiagCommand(`ping -c 2 -W 2 ${shellEscape(host)} 2>&1`, to);
+    const pingResult = runNetDiagCommand("ping", ["-c", "2", "-W", "2", host], to);
     report.checks.ping = pingResult.success && pingResult.output.includes("bytes from") ? "OK" : "Failed";
 
     if (url) {
       checkLimit();
-      const curlResult = runNetDiagCommand(`curl -s -o /dev/null -w "%{http_code}|%{time_total}|%{ssl_verify_result}" --max-time ${to / 1000} ${shellEscape(url)}`, to);
+      const curlResult = runNetDiagCommand("curl", ["-s", "-o", "/dev/null", "-w", "%{http_code}|%{time_total}|%{ssl_verify_result}", "--max-time", String(Math.max(1, Math.ceil(to / 1000))), url], to);
       if (curlResult.success) {
         const parts = curlResult.output.split("|");
         report.checks.http = {
@@ -710,7 +733,7 @@ async function sidekick_netdiag({ action, target, port_range, timeout, format })
     }
 
     checkLimit();
-    const portResult = runNetDiagCommand(`nc -z -w 2 ${shellEscape(host)} 22 2>&1`, 3000);
+    const portResult = runNetDiagCommand("nc", ["-z", "-w", "2", host, "22"], 3000);
     report.checks.ssh = portResult.success && !portResult.output.includes("failed") ? "Open" : "Closed";
 
     let result = `Network Diagnostic Report\n`;
