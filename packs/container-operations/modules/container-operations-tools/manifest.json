@@ -9,10 +9,10 @@
   "sidekick": ">=1.0.0",
   "capabilities": ["docker-operations", "podman-operations", "compose-inspection", "container-health", "container-updates"],
   "tools": {
-    "containers": { "risk": "low", "category": "Infrastructure & Homelab" },
-    "container_lifecycle": { "risk": "high", "category": "Infrastructure & Homelab" },
-    "compose": { "risk": "low", "category": "Infrastructure & Homelab" },
-    "compose_mutation": { "risk": "high", "category": "Infrastructure & Homelab" }
+    "containers": { "risk": "low", "category": "Infrastructure" },
+    "container_lifecycle": { "risk": "high", "category": "Infrastructure" },
+    "compose": { "risk": "low", "category": "Infrastructure" },
+    "compose_mutation": { "risk": "high", "category": "Infrastructure" }
   },
   "permissions": [],
   "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
