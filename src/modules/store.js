@@ -66,8 +66,30 @@ function versionDir(name, version) {
 function isManagedPath(candidate) {
   if (!candidate) return false;
   const root = moduleStoreRoot();
-  const relative = path.relative(root, path.resolve(String(candidate)));
-  return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
+  const resolved = path.resolve(String(candidate));
+  const relative = path.relative(root, resolved);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return false;
+
+  // Lexical containment is not sufficient: a tampered install path can place
+  // a symlinked ancestor under the managed root while resolving outside it.
+  // Canonicalize the nearest existing ancestor so nonexistent staging targets
+  // receive the same protection as existing installations.
+  let existing = resolved;
+  while (!fs.existsSync(existing)) {
+    const parent = path.dirname(existing);
+    if (parent === existing) return false;
+    existing = parent;
+  }
+  let canonicalRoot;
+  let canonicalExisting;
+  try {
+    canonicalRoot = fs.realpathSync(root);
+    canonicalExisting = fs.realpathSync(existing);
+  } catch {
+    return false;
+  }
+  const canonicalRelative = path.relative(canonicalRoot, canonicalExisting);
+  return Boolean(canonicalRelative) && !canonicalRelative.startsWith("..") && !path.isAbsolute(canonicalRelative);
 }
 
 function ensureStoreRoot() {
