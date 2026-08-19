@@ -21,8 +21,10 @@ playback was verified unless the target session reports the requested item as
 now playing.
 
 The control surface supports `play` (`PlayNow`), `pause`, `resume`, `stop`,
-`seek`, and `set_volume`. Seek accepts either an absolute `position_seconds`
-or a relative `offset_seconds`; volume is bounded from 0 through 100. These
-commands are sent only to the selected session and report bounded
-postcondition evidence. Mute and other remote-control commands are not
-implemented and must not be invented or substituted by an agent.
+`seek`, `fast_forward`, `rewind`, and `set_volume`. Seek accepts either an
+absolute `position_seconds` or a signed relative `offset_seconds`. The named
+`fast_forward` and `rewind` actions accept a positive `offset_seconds` amount;
+for example, 30 minutes is `1800` seconds. These commands are sent only to
+the selected session and report bounded postcondition evidence. Mute and
+other remote-control commands are not implemented and must not be invented or
+substituted by an agent.
