@@ -1237,7 +1237,7 @@ async function asyncTest(name, fn) {
       { action: "seek", args: { position_seconds: 120 }, path: "/Sessions/s1/Playing/Seek", query: { seekPositionTicks: 1200000000 } },
       { action: "fast_forward", args: { offset_seconds: 1800 }, path: "/Sessions/s1/Playing/Seek", query: { seekPositionTicks: 25543210000 } },
       { action: "rewind", args: { offset_seconds: 1800 }, path: "/Sessions/s1/Playing/Seek", query: { seekPositionTicks: 0 } },
-      { action: "set_volume", args: { volume: 35 }, path: "/Sessions/s1/Command", body: { Name: "SetVolume", Arguments: ["volume=35"] } },
+      { action: "set_volume", args: { volume: 35 }, path: "/Sessions/s1/Command", body: { Name: "SetVolume", Arguments: { volume: "35" } } },
     ];
     for (const control of controls) {
       setFixtures(baseFixtures());
@@ -1248,6 +1248,73 @@ async function asyncTest(name, fn) {
       if (control.query) assert.deepStrictEqual(postLog[0].query, control.query);
       if (control.body) assert.deepStrictEqual(postLog[0].body, control.body);
     }
+  });
+  await asyncTest("movie metadata exposes bounded ratings, credits, artwork and selectable details", async () => {
+    setFixtures(baseFixtures());
+    const requested = [];
+    fixtures["/Items"] = (q) => {
+      requested.push(q);
+      return {
+        Items: [{
+          Id: "m1",
+          Name: "Film",
+          Type: "Movie",
+          CommunityRating: 8.4,
+          CriticRating: 91,
+          OfficialRating: "R",
+          ImageTags: { Primary: "primary" },
+          BackdropImageTags: ["backdrop"],
+          People: [{ Name: "Director One", Role: "Director", Type: "Director" }],
+          CollectionIds: ["collection-1"],
+          ProviderIds: { Imdb: "tt123" },
+        }],
+        TotalRecordCount: 1,
+      };
+    };
+    fixtures["/Items/m1"] = {
+      Id: "m1",
+      Name: "Film",
+      Type: "Movie",
+      CommunityRating: 8.4,
+      CriticRating: 91,
+      OfficialRating: "R",
+      People: [
+        { Id: "p1", Name: "Director One", Role: "Director", Type: "Director", PrimaryImageTag: "p" },
+        { Id: "p2", Name: "Actor One", Role: "Lead", Type: "Actor" },
+      ],
+      Studios: [{ Id: "studio-1", Name: "Studio" }],
+      ImageTags: { Primary: "primary" },
+      BackdropImageTags: ["backdrop"],
+      CollectionIds: ["collection-1"],
+      ExternalUrls: [{ Name: "IMDb", Url: "https://imdb.example/tt123" }],
+      Chapters: [{ Name: "Opening", StartPositionTicks: 10000000 }],
+      MediaSources: [{ Id: "source-1", Path: "/media/film.mkv", Container: "mkv", MediaStreams: [] }],
+      MediaStreams: [],
+      ProviderIds: { Imdb: "tt123" },
+    };
+    fixtures["/Users/u1/Items/m1"] = {
+      ...fixtures["/Items/m1"],
+      UserData: { Played: true, PlayCount: 2, IsFavorite: true, PlaybackPositionTicks: 1000000, PlayedPercentage: 3.5 },
+    };
+    const { read } = tools(servicesFor());
+    let result = await call(read, { action: "list_media", include_item_types: "Movie" });
+    assert.strictEqual(result.parsed.items[0].community_rating, 8.4);
+    assert.strictEqual(result.parsed.items[0].critic_rating, 91);
+    assert.deepStrictEqual(result.parsed.items[0].artwork, { primary: true, backdrop: true });
+    assert.strictEqual(requested[0].Fields.includes("CommunityRating"), true);
+
+    result = await call(read, { action: "item_details", item_id: "m1", fields: "ratings,credits,artwork,external_links,chapters,media_sources" });
+    assert.deepStrictEqual(result.parsed.fields, ["ratings", "credits", "artwork", "external_links", "chapters", "media_sources"]);
+    assert.strictEqual(result.parsed.item.community_rating, 8.4);
+    assert.strictEqual(result.parsed.item.credits[0].role, "Director");
+    assert.deepStrictEqual(result.parsed.item.external_links, [{ name: "IMDb", url: "https://imdb.example/tt123" }]);
+    assert.strictEqual(result.parsed.item.chapters[0].name, "Opening");
+    assert.strictEqual(result.parsed.item.media_sources[0].path, "/media/film.mkv");
+    assert.strictEqual(result.parsed.item.overview, undefined);
+    result = await call(read, { action: "item_details", item_id: "m1", username: "ADMIN", fields: "watch_state" });
+    assert.deepStrictEqual(result.parsed.user, { id: "u1", name: "admin" });
+    assert.deepStrictEqual(result.parsed.item.user_state, { played: true, play_count: 2, is_favorite: true, playback_position_ticks: 1000000, played_percentage: 3.5 });
+    assert.deepStrictEqual(postLog, []);
   });
   await asyncTest("DLNA sessions can use Jellyfin play-state controls despite incomplete command advertisements", async () => {
     setFixtures(baseFixtures());
