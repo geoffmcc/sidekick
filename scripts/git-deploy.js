@@ -2,6 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const childProcess = require('child_process');
+const { childProcessEnv } = require('../src/security/child-process');
 
 const APP_DIR = process.env.SIDEKICK_DEPLOY_APP_DIR || '/home/sidekick/sidekick';
 const HOME_DIR = process.env.SIDEKICK_DEPLOY_HOME_DIR || '/home/sidekick';
@@ -33,7 +34,8 @@ function run(cmd, args, options = {}) {
       encoding: 'utf8',
       timeout: options.timeout || 30000,
       maxBuffer: options.maxBuffer || 10 * 1024 * 1024,
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: childProcessEnv(options.env)
     });
     return { ok: true, stdout: stdout.trim(), stderr: '' };
   } catch (error) {
