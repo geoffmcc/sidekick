@@ -13,10 +13,14 @@ assert.ok(fs.existsSync(workflowPath), 'Missing .github/workflows/ci.yml');
 const workflow = fs.readFileSync(workflowPath, 'utf8');
 assert.match(workflow, /on:\s*\n\s*push:/, 'Workflow should run on push');
 assert.match(workflow, /pull_request:/, 'Workflow should run on pull requests');
+assert.match(workflow, /permissions:\s*\{\}/, 'Workflow should default to no token permissions');
+assert.match(workflow, /test:\s*\n\s+permissions:\s*\n\s+contents:\s+read/, 'Test job should request read-only repository contents');
 assert.match(workflow, /actions\/checkout@[0-9a-f]{40}\s+# v5/, 'Workflow should pin checkout v5 to an immutable commit');
+assert.match(workflow, /persist-credentials:\s*false/, 'Checkout must not persist the GitHub token');
 assert.match(workflow, /actions\/setup-node@[0-9a-f]{40}\s+# v5/, 'Workflow should pin setup-node v5 to an immutable commit');
 assert.match(workflow, /node-version:\s*\[22\.x,\s*24\.x\]/, 'Workflow should test Node 22.x and 24.x');
 assert.match(workflow, /npm run test:ci/, 'Workflow should run npm run test:ci');
+assert.doesNotMatch(workflow, /pull_request_target|secrets\./, 'Fork-safe CI must not use privileged PR triggers or secrets');
 assert.ok(!/dashboard-password-from-local-test-data|ghp_|github_pat_|BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY/.test(workflow), 'Workflow must not contain obvious secrets');
 
 const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
