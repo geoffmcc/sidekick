@@ -1,6 +1,6 @@
 # Jellyfin Capability Pack
 
-Status: shipped (v1.1.0, bundled first-party pack)
+Status: shipped (v1.2.0, bundled first-party pack)
 Depends on: Capability Packs v1
 
 The Jellyfin pack lets Sidekick securely inspect, diagnose and maintain
@@ -59,9 +59,11 @@ use the read surface.
   protected-resource hard denies, storage-preflight gating, and bounded
   postcondition polls that report `state_before/state_after/
   transition_observed` — `verified` only when the transition was observed.
-- Five workflows: `jellyfin/health`, `jellyfin/playback-diagnose`,
-  `jellyfin/maintenance-preflight` (fails on unverified storage),
-  `jellyfin/upgrade-readiness`, `jellyfin/incident`.
+- Read-only catalog, content-health, Live TV and server-audit workflows:
+  `jellyfin/media-info`, `jellyfin/library-audit`,
+  `jellyfin/content-health`, `jellyfin/live-tv-status`,
+  `jellyfin/server-audit`, alongside the health, playback, maintenance
+  preflight, upgrade readiness and incident workflows.
 
 **Architected / deferred (not exposed as working):**
 
@@ -192,7 +194,9 @@ configuration implying a capability that does not exist.
 `list_users`, `user_status`, `user_access_audit`, `list_devices`,
 `list_plugins`, `plugin_status`, `metrics_summary`, `activity`,
 `logs_summary`, `incident_diagnose`, `backup_readiness`, `upgrade_readiness`,
-`live_tv_status`, `tuner_status`, `recording_status`.
+`library_audit`, `content_health`, `server_audit`, `live_tv_status`,
+`tuner_status`, `recording_status`, `live_tv_channels`, `live_tv_guide`,
+`live_tv_timers`.
 
 Per-action honesty notes:
 
@@ -205,6 +209,14 @@ Per-action honesty notes:
 - `metadata_issues` / `duplicate_candidates` are bounded samples and return
   the exact filters used; duplicate groups are labelled *candidates*, never
   confirmed duplicates.
+- `library_audit` and `content_health` inspect bounded per-library samples and
+  report counts, codecs, years, missing metadata, images, provider IDs and
+  runtimes without claiming filesystem health.
+- `server_audit` returns a bounded server/task/plugin/user/session summary and
+  recursively redacts sensitive configuration keys; raw secrets are never
+  returned.
+- `live_tv_channels`, `live_tv_guide` and `live_tv_timers` are GET-only and
+  report bounded channel/program/timer data when Live TV is enabled.
 - `user_status` requires `user_id` or `username`; `plugin_status` requires
   `plugin_id` (or `query` for an exact name match). `user_access_audit`
   flags administrators, disabled accounts, remote access, all-folder vs
@@ -281,6 +293,11 @@ HTTPS client. No shell permission exists.
 | `jellyfin/maintenance-preflight` | read-only | Storage step passes `require_safe: true`, so the workflow **fails** unless storage is verified safe. |
 | `jellyfin/upgrade-readiness` | read-only | Evidence-derived readiness + plugin inventory. |
 | `jellyfin/incident` | read-only | Diagnosis, log summary, activity, sessions, tasks; each step carries its own evidence — no source is claimed unless its step succeeded. |
+| `jellyfin/media-info` | read-only | Item, series, season, episode, runtime and stream inspection. |
+| `jellyfin/library-audit` | read-only | Bounded per-library catalog aggregates and item sample. |
+| `jellyfin/content-health` | read-only | Bounded missing metadata/image/provider/runtime findings. |
+| `jellyfin/live-tv-status` | read-only | Live TV services, channels, guide, recordings and timers. |
+| `jellyfin/server-audit` | read-only | Sanitized server configuration and operational summary. |
 
 ---
 
@@ -295,7 +312,8 @@ HTTPS client. No shell permission exists.
 - Log retrieval depends on the server honouring `Range` for large files; a
   large file without range support is refused honestly
   (`log_too_large_without_range_support`), not partially misrepresented.
-- Live TV data comes from `LiveTv/Info` and `LiveTv/Recordings`; tuner
+- Live TV data comes from `LiveTv/Info`, `LiveTv/Channels`,
+  `LiveTv/Programs`, `LiveTv/Recordings` and `LiveTv/Timers`; tuner
   enumeration beyond `Services[].Tuners` does not exist in the Jellyfin API.
 
 ---
