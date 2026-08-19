@@ -393,6 +393,12 @@ function storeToken() {
     const coverage = json(await callInternalTool("proxmox", { action: "backup_coverage", profile: "main" }));
     assert.strictEqual(coverage.uncovered_guests.length, 2);
     assert.ok(coverage.note.includes("does not verify PBS"));
+    const audit = json(await callInternalTool("proxmox", { action: "guest_config_audit", profile: "main", vmid: 100 }));
+    assert.strictEqual(audit.config.memory_bytes, 2147483648);
+    assert.strictEqual(audit.config.disk_count, 2);
+    assert.strictEqual(audit.config.network_count, 0);
+    assert.ok(audit.findings.some((x) => x.code === "guest_agent_unreachable"));
+    assert.ok(Array.isArray(audit.redacted_fields));
   });
 
   await test("PX.5c: storage health and backup history preserve unknown evidence", async () => {
