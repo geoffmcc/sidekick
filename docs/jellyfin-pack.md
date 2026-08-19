@@ -1,6 +1,6 @@
 # Jellyfin Capability Pack
 
-Status: shipped (v1.3.0, bundled first-party pack)
+Status: in development (v1.4.0, next bundled first-party release)
 Depends on: Capability Packs v1
 
 The Jellyfin pack lets Sidekick securely inspect, diagnose and maintain
@@ -35,7 +35,8 @@ use the read surface.
 - **Library intelligence**: `library_status` (virtual folders + item counts +
   scan-task state), `library_health` (evidence-based findings — zero-location
   libraries, failed/stale scans — with filesystem accessibility explicitly
-  reported as *not verified*), `recent_media`, bounded `metadata_issues` and
+  reported as *not verified*), `recent_media`, bounded `library_analytics`,
+  `metadata_completeness`, `metadata_issues` and
   `duplicate_candidates` samples that label themselves as samples.
 - **Deterministic playback diagnosis** from active-session `TranscodingInfo`,
   naming the chosen session and refusing to guess between several.
@@ -63,7 +64,8 @@ use the read surface.
   `jellyfin/media-info`, `jellyfin/library-audit`,
   `jellyfin/content-health`, `jellyfin/live-tv-status`,
   `jellyfin/server-audit`, `jellyfin/catalog-browse`,
-  `jellyfin/user-media-overview`, alongside the health, playback, maintenance
+  `jellyfin/user-media-overview`, `jellyfin/library-analytics`,
+  `jellyfin/metadata-completeness`, alongside the health, playback, maintenance
   preflight, upgrade readiness and incident workflows.
 
 **Architected / deferred (not exposed as working):**
@@ -189,7 +191,8 @@ configuration implying a capability that does not exist.
 `jellyfin` read actions: `list_profiles`, `status`, `health`,
 `server_profile`, `version`, `capabilities`, `system_info`, `list_libraries`,
 `library_status`, `library_health`, `search_media`, `item_details`,
-`recent_media`, `metadata_issues`, `duplicate_candidates`, `list_sessions`,
+`recent_media`, `library_analytics`, `metadata_completeness`, `metadata_issues`,
+`duplicate_candidates`, `list_sessions`,
 `playback_diagnose`, `directplay_analysis`, `transcoding_summary`,
 `list_tasks`, `task_status`, `maintenance_plan`, `storage_preflight`,
 `list_users`, `user_status`, `user_access_audit`, `list_devices`,

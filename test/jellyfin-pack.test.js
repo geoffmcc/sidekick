@@ -30,7 +30,7 @@ test("all Jellyfin JSON assets parse", () => {
     .filter((x) => x.endsWith(".json")))
     JSON.parse(fs.readFileSync(path.join(pack, f), "utf8"));
 });
-test("pack and module versions agree at 1.3.0", () => {
+test("pack and module versions agree at 1.4.0", () => {
   const packManifest = JSON.parse(
     fs.readFileSync(path.join(pack, "sidekick.pack.json"), "utf8"),
   );
@@ -40,8 +40,8 @@ test("pack and module versions agree at 1.3.0", () => {
       "utf8",
     ),
   );
-  assert.strictEqual(packManifest.version, "1.3.0");
-  assert.strictEqual(moduleManifest.version, "1.3.0");
+  assert.strictEqual(packManifest.version, "1.4.0");
+  assert.strictEqual(moduleManifest.version, "1.4.0");
   // Every services.dispatch target used by the module must be declared.
   const declared = moduleManifest.permissions.map((x) => x.tool).sort();
   assert.deepStrictEqual(declared, ["proxmox", "status", "web_fetch"]);
@@ -373,7 +373,7 @@ function baseFixtures() {
           Name: "Film",
           MediaStreams: [{ Type: "Video", Codec: "hevc" }],
         },
-        PlayState: { PlayMethod: "Transcode" },
+        PlayState: { PlayMethod: "Transcode", PositionTicks: 7543210000, IsPaused: false, CanSeek: true },
         TranscodingInfo: { TranscodeReasons: ["ContainerBitrateExceedsLimit"] },
       },
     ],
@@ -686,6 +686,12 @@ async function asyncTest(name, fn) {
       assert.strictEqual(result.parsed.libraries[0].sample_size, 2);
       result = await call(read, { action: "content_health" });
       assert.ok(!result.out.isError, result.out.content[0].text);
+      result = await call(read, { action: "library_analytics", limit: 10 });
+      assert.strictEqual(result.parsed.summary.sample_size, 2);
+      assert.ok(result.parsed.summary.runtime.total_minutes >= 0);
+      result = await call(read, { action: "metadata_completeness", limit: 10 });
+      assert.strictEqual(result.parsed.summary.sample_size, 2);
+      assert.ok(Array.isArray(result.parsed.issues));
       result = await call(read, { action: "server_audit" });
       assert.ok(!result.out.isError, result.out.content[0].text);
       assert.strictEqual(result.parsed.configuration.ApiKey, "[REDACTED]");
@@ -1129,6 +1135,7 @@ async function asyncTest(name, fn) {
     let { parsed } = await call(read, { action: "playback_diagnose" });
     assert.strictEqual(parsed.profile, "home");
     assert.deepStrictEqual(parsed.session_chosen, { id: "s1", reason: "only_session_with_active_playback" });
+    assert.strictEqual(parsed.observed.find((x) => x.fact === "playback_position")?.value.seconds, 754.32);
     setFixtures(baseFixtures());
     fixtures["/Sessions"] = [
       fixtures["/Sessions"] && baseFixtures()["/Sessions"][0],

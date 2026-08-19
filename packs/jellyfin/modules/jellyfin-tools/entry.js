@@ -530,6 +530,103 @@ async function read(services, args, runtime) {
       bounded: true,
     };
   }
+  if (["library_analytics", "metadata_completeness"].includes(args.action)) {
+    const filters = {
+      Recursive: true,
+      ParentId: args.library_id || undefined,
+      IncludeItemTypes: args.include_item_types || "Movie,Series,Season,Episode",
+      Fields: "Overview,MediaStreams,RunTimeTicks,ImageTags,BackdropImageTags,ProviderIds,Genres,DateCreated",
+      SortBy: "SortName",
+      SortOrder: "Ascending",
+      Limit: bounded(args.limit, 100),
+      StartIndex: Math.max(0, args.start_index ?? args.start ?? 0),
+      EnableTotalRecordCount: true,
+    };
+    const data = await c.get("/Items", filters);
+    const items = Array.isArray(data?.Items) ? data.Items : [];
+    const counts = {};
+    const genres = {};
+    const video_codecs = {};
+    const audio_languages = {};
+    const subtitle_languages = {};
+    let runtime_ticks = 0;
+    let items_with_runtime = 0;
+    const completeness = {
+      overview: 0,
+      primary_image: 0,
+      backdrop_image: 0,
+      production_year: 0,
+      provider_ids: 0,
+      genres: 0,
+      runtime: 0,
+    };
+    const issues = [];
+    for (const item of items) {
+      increment(counts, item.Type || "Unknown");
+      for (const genre of Array.isArray(item.Genres) ? item.Genres : []) increment(genres, genre);
+      const streams = Array.isArray(item.MediaStreams) ? item.MediaStreams : [];
+      for (const stream of streams.filter((x) => x.Type === "Video")) increment(video_codecs, stream.Codec);
+      for (const stream of streams.filter((x) => x.Type === "Audio")) increment(audio_languages, stream.Language);
+      for (const stream of streams.filter((x) => x.Type === "Subtitle")) increment(subtitle_languages, stream.Language);
+      const runtime = runtimeView(item);
+      if (runtime.runtime_ticks !== null) {
+        runtime_ticks += runtime.runtime_ticks;
+        items_with_runtime += 1;
+      }
+      const missing = [];
+      const fields = {
+        overview: Boolean(String(item.Overview || "").trim()),
+        primary_image: Boolean(item.ImageTags?.Primary),
+        backdrop_image: Boolean(item.BackdropImageTags?.length || item.ImageTags?.Backdrop),
+        production_year: item.ProductionYear !== null && item.ProductionYear !== undefined,
+        provider_ids: Object.keys(item.ProviderIds || {}).length > 0,
+        genres: Array.isArray(item.Genres) && item.Genres.length > 0,
+        runtime: runtime.runtime_ticks !== null,
+      };
+      for (const [field, present] of Object.entries(fields)) {
+        if (present) completeness[field] += 1;
+        else missing.push(field);
+      }
+      if (args.action === "metadata_completeness" && missing.length)
+        issues.push({ id: item.Id, name: item.Name, type: item.Type, missing });
+    }
+    const total = items.length;
+    const percentages = Object.fromEntries(
+      Object.entries(completeness).map(([key, value]) => [key, total ? Math.round((value / total) * 1000) / 10 : null]),
+    );
+    const summary = {
+      sample_size: total,
+      total_record_count: data?.TotalRecordCount ?? null,
+      counts_by_type: counts,
+      runtime: {
+        items_with_runtime,
+        items_without_runtime: total - items_with_runtime,
+        total_seconds: Math.round(runtime_ticks / 10000000),
+        total_minutes: Math.round((runtime_ticks / 10000000 / 60) * 10) / 10,
+      },
+      genres,
+      video_codecs,
+      audio_languages,
+      subtitle_languages,
+    };
+    if (args.action === "library_analytics")
+      return {
+        profile: p.name,
+        filters_used: filters,
+        summary,
+        bounded_sample: true,
+        note: "Analytics describe only the bounded sample returned by Jellyfin; use start or start_index to page.",
+      };
+    return {
+      profile: p.name,
+      filters_used: filters,
+      summary: { ...summary, completeness_counts: completeness, completeness_percentages: percentages },
+      issues_in_sample: issues.length,
+      issues: issues.slice(0, 100),
+      bounded_sample: true,
+      note: "Completeness findings are observations from the bounded Jellyfin DTO sample, not proof of media corruption.",
+    };
+  }
   if (args.action === "metadata_issues") {
     const filters = {
       Recursive: true,
@@ -1758,6 +1855,8 @@ const readActions = [
   "user_media_state",
   "user_unwatched",
   "recent_media",
+  "library_analytics",
+  "metadata_completeness",
   "metadata_issues",
   "duplicate_candidates",
   "list_sessions",
