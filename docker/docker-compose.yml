@@ -108,6 +108,10 @@ services:
       GF_AUTH_PROXY_HEADER_NAME: "X-WEBAUTH-USER"
       GF_AUTH_PROXY_HEADER_PROPERTY: "username"
       GF_AUTH_PROXY_AUTO_SIGN_UP: "true"
+      # Grafana Live rejects websocket requests whose browser origin is not
+      # explicitly allowed. Keep the default origins narrow; deployments with
+      # a different dashboard host should override this variable in .env.
+      GF_LIVE_ALLOWED_ORIGINS: ${SIDEKICK_GRAFANA_ALLOWED_ORIGINS:-http://localhost:4098,http://127.0.0.1:4098,http://10.47.20.20:4098}
     entrypoint: ["/bin/sh", "-c"]
     command: ["set -eu; SIDEKICK_INFLUX_TOKEN=$$(cat /run/secrets/sidekick_influx_token); export SIDEKICK_INFLUX_TOKEN; exec /run.sh"]
     secrets:

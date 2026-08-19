@@ -1,7 +1,7 @@
 {
   "name": "container-operations-tools",
   "displayName": "Container Operations Tools",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Safe Docker and Podman engine API operations with bounded output and governed lifecycle actions.",
   "author": "Sidekick",
   "type": "plugin",

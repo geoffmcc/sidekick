@@ -3,7 +3,7 @@
   "pack_api": 1,
   "name": "container-operations",
   "display_name": "Container Operations (Docker / Podman)",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Governed Docker and Podman engine discovery, container health, logs, resources, images, networks, volumes, Compose inspection, update checks, and controlled lifecycle operations.",
   "publisher": "Sidekick",
   "compatibility": { "sidekick": ">=1.0.0" },
