@@ -105,6 +105,30 @@ async function listGuests(client, { node, type } = {}) {
   };
 }
 
+async function guestInventory(client, { node, type } = {}) {
+  const inventory = await listGuests(client, { node, type });
+  const counts = { running: 0, stopped: 0, templates: 0, qemu: 0, lxc: 0, locked: 0 };
+  const byNode = {};
+  for (const guest of inventory.guests) {
+    if (guest.type === "qemu") counts.qemu++;
+    if (guest.type === "lxc") counts.lxc++;
+    if (guest.template) counts.templates++;
+    else if (guest.status === "running") counts.running++;
+    else counts.stopped++;
+    if (guest.lock) counts.locked++;
+    if (guest.node) byNode[guest.node] = (byNode[guest.node] || 0) + 1;
+  }
+  return {
+    total: inventory.total,
+    filtered_by: inventory.filtered_by,
+    counts,
+    guests: inventory.guests,
+    guests_by_node: byNode,
+    bounded: true,
+    note: "Inventory reflects the current /cluster/resources view and does not inspect guest operating-system health unless guest_readiness is requested for a specific VM.",
+  };
+}
+
 async function guestStatus(client, { vmid, node: hintNode }) {
   const located = hintNode ? { node: hintNode, type: null } : await findGuest(client, vmid);
   const node = located.node;
@@ -179,6 +203,22 @@ async function guestStatus(client, { vmid, node: hintNode }) {
     }
   }
   return result;
+}
+
+async function guestReadiness(client, { vmid, node }) {
+  const guest = await guestStatus(client, { vmid, node });
+  const findings = [];
+  if (guest.status !== "running") findings.push({ code: "guest_not_running", detail: `Guest status is ${guest.status || "unknown"}.` });
+  if (guest.lock) findings.push({ code: "guest_locked", detail: `Proxmox reports lock ${guest.lock}.` });
+  if (guest.guest_agent.configured && guest.guest_agent.state !== "reachable") findings.push({ code: "guest_agent_unreachable", detail: "The configured QEMU guest agent did not return enrichment data." });
+  if (!guest.guest_agent.configured && guest.type === "qemu") findings.push({ code: "guest_agent_not_configured", detail: "QEMU guest-agent enrichment is unavailable because the agent is not configured." });
+  return {
+    status: findings.length ? "attention" : "ready_for_review",
+    guest,
+    findings,
+    bounded: true,
+    note: "Readiness covers Proxmox state and optional guest-agent evidence; it does not prove application health inside the guest.",
+  };
 }
 
 async function listStorage(client, { node } = {}) {
@@ -261,6 +301,30 @@ async function backupStatus(client) {
   };
 }
 
+async function backupCoverage(client) {
+  const [backup, inventory] = await Promise.all([backupStatus(client), listGuests(client)]);
+  const covered = new Set();
+  for (const job of backup.jobs.list) {
+    if (job.selection === "all") {
+      for (const guest of inventory.guests) covered.add(guest.vmid);
+      continue;
+    }
+    for (const value of String(job.selection || "").split(/[;,\s]+/)) {
+      const vmid = Number(value);
+      if (Number.isInteger(vmid)) covered.add(vmid);
+    }
+  }
+  const uncovered = inventory.guests.filter((guest) => !guest.template && !covered.has(guest.vmid)).map((guest) => ({ vmid: guest.vmid, name: guest.name, node: guest.node, type: guest.type }));
+  return {
+    backup_status: backup,
+    guest_count: inventory.total,
+    configured_selection_count: covered.size,
+    uncovered_guests: uncovered,
+    bounded: true,
+    note: "Coverage is derived from Proxmox vzdump job selections only; it does not verify PBS datastore contents, retention, or restoreability.",
+  };
+}
+
 async function versionStatus(client) {
   const version = await client.get(["version"]);
   return { version: normalize.normalizeVersion(version) };
@@ -339,12 +403,15 @@ module.exports = {
   listNodes,
   nodeStatus,
   listGuests,
+  guestInventory,
   guestStatus,
+  guestReadiness,
   listStorage,
   storageStatus,
   listTasks,
   taskStatus,
   backupStatus,
+  backupCoverage,
   versionStatus,
   clusterHealth,
   storageCapacity,
