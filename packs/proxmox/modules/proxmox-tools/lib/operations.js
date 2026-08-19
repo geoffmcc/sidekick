@@ -221,6 +221,51 @@ async function guestReadiness(client, { vmid, node }) {
   };
 }
 
+async function guestConfigAudit(client, { vmid, node }) {
+  const guest = await guestStatus(client, { vmid, node });
+  const config = await client.get(["nodes", guest.node, guest.type, vmid, "config"]).catch(() => ({}));
+  const safeConfig = {
+    cpu: {
+      cores: normalize.num(config.cores),
+      sockets: normalize.num(config.sockets),
+    },
+    memory_bytes: Number.isFinite(Number(config.memory)) ? Number(config.memory) * 1048576 : null,
+    boot: normalize.str(config.boot),
+    onboot: config.onboot === undefined ? null : normalize.bool(config.onboot),
+    startup: normalize.str(config.startup),
+    protection: config.protection === undefined ? null : normalize.bool(config.protection),
+    agent: guest.type === "qemu" ? {
+      configured: config.agent !== undefined,
+      enabled: config.agent === undefined ? false : normalize.bool(String(config.agent).split(",")[0]),
+    } : null,
+    cloud_init: guest.cloud_init,
+    disk_count: Object.keys(config).filter(key => /^(ide|sata|scsi|virtio)\d+$/.test(key)).length,
+    network_count: Object.keys(config).filter(key => /^net\d+$/.test(key)).length,
+    tags: normalize.str(config.tags) ? normalize.str(config.tags).split(/[;,\s]+/).filter(Boolean).sort() : [],
+  };
+  const findings = [];
+  if (guest.lock) findings.push({ code: "guest_locked", detail: `Proxmox reports lock ${guest.lock}.` });
+  if (safeConfig.protection === true) findings.push({ code: "protection_enabled", detail: "Proxmox protection is enabled for this guest." });
+  if (safeConfig.network_count === 0) findings.push({ code: "no_network_interface", detail: "No network interface was reported in the guest configuration." });
+  if (guest.type === "qemu" && safeConfig.disk_count === 0) findings.push({ code: "no_disk_definition", detail: "No QEMU disk definition was reported in the guest configuration." });
+  if (guest.type === "qemu" && !safeConfig.agent.configured) findings.push({ code: "guest_agent_not_configured", detail: "QEMU guest-agent enrichment is unavailable because the agent is not configured." });
+  if (guest.guest_agent.configured && guest.guest_agent.state !== "reachable") findings.push({ code: "guest_agent_unreachable", detail: "The configured QEMU guest agent did not return enrichment data." });
+  const redactedFields = Object.keys(config).filter(key => /password|passwd|secret|sshkeys|cipassword|hookscript/i.test(key)).sort();
+  return {
+    vmid: guest.vmid,
+    node: guest.node,
+    type: guest.type,
+    name: guest.name,
+    status: guest.status,
+    template: guest.template,
+    config: safeConfig,
+    findings,
+    redacted_fields: redactedFields,
+    bounded: true,
+    note: "This is a normalized Proxmox configuration observation. It does not compare against a baseline, inspect guest operating-system configuration, or return raw or secret-bearing fields.",
+  };
+}
+
 async function listStorage(client, { node } = {}) {
   const rows = node ? await client.get(["nodes", node, "storage"]) : await client.get(["storage"]);
   const storage = (Array.isArray(rows) ? rows : []).map(s => normalize.normalizeStorage({ ...s, node: s.node || node || null })).filter(Boolean);
@@ -443,6 +488,7 @@ module.exports = {
   guestInventory,
   guestStatus,
   guestReadiness,
+  guestConfigAudit,
   listStorage,
   storageStatus,
   listTasks,
