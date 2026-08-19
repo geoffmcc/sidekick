@@ -55,6 +55,12 @@ use the read surface.
   (version, sessions, tasks, plugins, backup + storage state, optional
   official latest-release lookup; status derived from blockers, never a
   constant).
+- **Governed targeted playback** (`jellyfin_playback`): issue a bounded
+  `PlayNow` command only to an explicitly selected active device session.
+  The Jellyfin user is resolved from that session and the item is looked up
+  through `/Users/{session.UserId}/Items/{itemId}`, so watch state is tracked
+  per user without assuming a username. Ambiguous or media-control-disabled
+  sessions fail closed.
 - **Governed maintenance** (`jellyfin_maintenance`): run/cancel scheduled
   tasks and library scans with profile write opt-in, per-action dry-run,
   protected-resource hard denies, storage-preflight gating, and bounded
@@ -187,6 +193,7 @@ configuration implying a capability that does not exist.
 |---|---|---|
 | `jellyfin` (alias `jf`) | **low** (read) | All read/discovery/diagnosis/readiness actions. |
 | `jellyfin_maintenance` (alias `jf_maintenance`) | **high** (change) | run_task / cancel_task / scan_library with dry-run and postcondition verification. |
+| `jellyfin_playback` (alias `jf_playback`) | **high** (change) | Targeted PlayNow command for an active device session with user-scoped item verification. |
 
 `jellyfin` read actions: `list_profiles`, `status`, `health`,
 `server_profile`, `version`, `capabilities`, `system_info`, `list_libraries`,

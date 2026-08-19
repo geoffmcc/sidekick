@@ -301,7 +301,7 @@ function createClient(profile, key, signal, ca) {
 
   return {
     get: (path, query) => request("GET", path, query, null),
-    post: (path, body) => request("POST", path, null, body),
+    post: (path, body, query) => request("POST", path, query, body),
     del: (path) => request("DELETE", path, null, null),
     getTail,
     origin: origin.origin,

@@ -264,8 +264,8 @@ function fakeCreateClient(profile, key, signal, ca) {
       if (fx instanceof Error) throw fx;
       return JSON.parse(JSON.stringify(fx));
     },
-    post: async (p, b) => {
-      postLog.push({ path: p, body: b });
+    post: async (p, b, q) => {
+      postLog.push({ path: p, body: b, query: q });
       return {};
     },
     del: async (p) => {
@@ -366,8 +366,11 @@ function baseFixtures() {
     "/Sessions": [
       {
         Id: "s1",
+        UserId: "u1",
         UserName: "geoff",
+        DeviceId: "tv-device-1",
         DeviceName: "tv",
+        SupportsMediaControl: true,
         NowPlayingItem: {
           Id: "i1",
           Name: "Film",
@@ -562,6 +565,7 @@ function tools(services) {
   return {
     read: built.find((d) => d.name === "jellyfin"),
     maint: built.find((d) => d.name === "jellyfin_maintenance"),
+    playback: built.find((d) => d.name === "jellyfin_playback"),
   };
 }
 async function call(descriptor, args) {
@@ -1188,6 +1192,29 @@ async function asyncTest(name, fn) {
     assert.strictEqual(parsed.classification, "ambiguous_sessions");
     assert.strictEqual(parsed.candidates.length, 2);
     assert.ok(parsed.recommended_next_check.includes("session_id"));
+  });
+  await asyncTest("targeted playback derives watch identity from the selected device session", async () => {
+    setFixtures(baseFixtures());
+    const { playback } = tools(servicesFor({ profileExtra: { allow_playback_control: true } }));
+    const result = await call(playback, { action: "play", item_id: "i1", device_id: "tv-device-1" });
+    assert.ok(!result.out.isError, result.out.content[0].text);
+    assert.strictEqual(result.parsed.outcome, "verified");
+    assert.deepStrictEqual(result.parsed.user, { id: "u1", name: "geoff", source: "target_session" });
+    assert.strictEqual(result.parsed.item.id, "i1");
+    assert.deepStrictEqual(postLog[0], {
+      path: "/Sessions/s1/Playing",
+      body: null,
+      query: { playCommand: "PlayNow", itemIds: "i1" },
+    });
+    assert.strictEqual(postLog.length, 1);
+  });
+  await asyncTest("targeted playback fails closed when control is not explicitly enabled", async () => {
+    setFixtures(baseFixtures());
+    const { playback } = tools(servicesFor());
+    const result = await call(playback, { action: "play", item_id: "i1", device_id: "tv-device-1" });
+    assert.ok(result.out.isError);
+    assert.strictEqual(result.out.code, "policy_denied");
+    assert.deepStrictEqual(postLog, []);
   });
   await asyncTest("user_status and user_access_audit surface policy evidence", async () => {
     setFixtures(baseFixtures());
