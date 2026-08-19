@@ -1,7 +1,7 @@
 {
   "name": "proxmox-tools",
   "displayName": "Proxmox Tools",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Secure Proxmox VE inspection, deterministic maintenance preflight, same-cluster migration, controlled guest operations, governed provisioning, and provenance-gated retirement over administrator-configured profiles with pinned-CA TLS.",
   "author": "Sidekick",
   "type": "plugin",

@@ -266,6 +266,73 @@ async function versionStatus(client) {
   return { version: normalize.normalizeVersion(version) };
 }
 
+async function clusterHealth(client) {
+  const summary = await clusterSummary(client);
+  const failedTasks = await listTasks(client, { errors: true, limit: 20 });
+  const blockers = [];
+  if (summary.cluster.quorate === false) blockers.push({ code: "cluster_not_quorate", detail: "Proxmox reports the cluster is not quorate." });
+  if (summary.nodes.online < summary.nodes.total) blockers.push({ code: "nodes_offline", detail: `${summary.nodes.total - summary.nodes.online} node(s) are not online.` });
+  if (failedTasks.total > 0) blockers.push({ code: "failed_tasks", detail: `${failedTasks.total} failed task(s) were returned by the bounded task query.` });
+  return {
+    status: blockers.length ? "attention" : "healthy",
+    cluster: summary.cluster,
+    nodes: summary.nodes,
+    guests: summary.guests,
+    storage: summary.storage,
+    failed_tasks: failedTasks,
+    blockers,
+    bounded: true,
+    note: "Health is derived from current cluster, resource and bounded task evidence; it does not prove guest application health.",
+  };
+}
+
+async function storageCapacity(client) {
+  const inventory = await listStorage(client);
+  const totals = inventory.storage.reduce((acc, storage) => {
+    if (storage.total_bytes !== null) acc.total_bytes += storage.total_bytes;
+    if (storage.used_bytes !== null) acc.used_bytes += storage.used_bytes;
+    if (storage.avail_bytes !== null) acc.avail_bytes += storage.avail_bytes;
+    if (storage.total_bytes !== null) acc.capacity_sources++;
+    if (storage.active === false || storage.enabled === false) acc.inactive++;
+    return acc;
+  }, { total_bytes: 0, used_bytes: 0, avail_bytes: 0, capacity_sources: 0, inactive: 0 });
+  return {
+    scope: inventory.scope,
+    total: inventory.total,
+    totals: {
+      total_bytes: totals.capacity_sources ? totals.total_bytes : null,
+      used_bytes: totals.capacity_sources ? totals.used_bytes : null,
+      avail_bytes: totals.capacity_sources ? totals.avail_bytes : null,
+      used_fraction_pct: totals.capacity_sources && totals.total_bytes > 0 ? normalize.pct(totals.used_bytes, totals.total_bytes) : null,
+    },
+    inactive_storage_count: totals.inactive,
+    storage: inventory.storage,
+    bounded: true,
+    note: "Capacity is returned only when the Proxmox endpoint supplies total/used/available bytes; no filesystem or PBS datastore inference is performed.",
+  };
+}
+
+async function upgradeReadiness(client) {
+  const [version, health, backup] = await Promise.all([
+    versionStatus(client),
+    clusterHealth(client),
+    backupStatus(client),
+  ]);
+  const blockers = [...health.blockers];
+  if (backup.recent_backups.failures > 0) blockers.push({ code: "recent_backup_failures", detail: `${backup.recent_backups.failures} recent backup task(s) failed.` });
+  const backupEvidence = backup.jobs.total > 0 || backup.recent_backups.total > 0;
+  if (!backupEvidence) blockers.push({ code: "backup_evidence_missing", detail: "No Proxmox-side backup jobs or recent vzdump tasks were returned." });
+  return {
+    status: blockers.length ? "blocked_or_review" : "ready_for_review",
+    version: version.version,
+    cluster_health: health,
+    backup_status: backup,
+    blockers,
+    bounded: true,
+    note: "Readiness is an evidence-based preflight, not an approval or a claim that an upgrade is safe for every guest workload.",
+  };
+}
+
 module.exports = {
   findGuest,
   clusterSummary,
@@ -279,4 +346,7 @@ module.exports = {
   taskStatus,
   backupStatus,
   versionStatus,
+  clusterHealth,
+  storageCapacity,
+  upgradeReadiness,
 };

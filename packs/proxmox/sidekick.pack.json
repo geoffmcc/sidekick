@@ -3,7 +3,7 @@
   "pack_api": 1,
   "name": "proxmox",
   "display_name": "Proxmox VE",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Lets Sidekick securely discover and operate Proxmox VE infrastructure through administrator-configured named profiles, pinned-CA TLS, normalized state, deterministic maintenance preflight, same-cluster guest migration, governed provisioning/lifecycle, optional Ansible, and critically guarded retirement of proven disposable resources.",
   "publisher": "Sidekick",
   "compatibility": {
@@ -20,6 +20,9 @@
   "workflows": [
     { "path": "workflows/environment-recon.json" },
     { "path": "workflows/guest-health.json" },
+    { "path": "workflows/cluster-health.json" },
+    { "path": "workflows/storage-capacity.json" },
+    { "path": "workflows/upgrade-readiness.json" },
     { "path": "workflows/provision-guest.json" }
   ],
   "knowledge": [
@@ -46,6 +49,12 @@
       "title": "Proxmox pack: provisioning, provenance and controlled automation",
       "category": "operations",
       "tags": ["proxmox", "provisioning", "provenance", "ansible", "policy"]
+    },
+    {
+      "path": "knowledge/proxmox-readonly.md",
+      "title": "Proxmox pack: read-only health, capacity and upgrade readiness",
+      "category": "operations",
+      "tags": ["proxmox", "health", "capacity", "upgrade", "read-only"]
     }
   ],
   "requires": {
