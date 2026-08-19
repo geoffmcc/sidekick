@@ -1,8 +1,6 @@
 "use strict";
-const path = require("path");
-let resolveSecretRef;
-try { ({ resolveSecretRef } = require("/home/sidekick/sidekick/src/connectors/resolve.js")); }
-catch { ({ resolveSecretRef } = require(path.resolve(__dirname, "../../../../../../../src/connectors/resolve.js"))); }
+const { requireSidekickSrc } = require("./deps");
+const { resolveSecretRef } = requireSidekickSrc("src/connectors/resolve.js");
 const { NetworkFirewallError } = require("./errors");
 const v = require("./validate");
 function parse(name, raw, global = {}) {
