@@ -546,7 +546,7 @@ function buildSystemPrompt(goal = "") {
     "- " + t.name + ": " + boundedText(t.description, 240) + " [risk: " + t.risk + "]" +
     (t.approval_required ? " [requires human approval]" : "") +
     (Array.isArray(capabilityMetadata[t.name]?.terms) && capabilityMetadata[t.name].terms.length
-      ? " [registered actions: " + capabilityMetadata[t.name].terms.slice(0, 12).map(term => boundedText(term, 80)).join(", ") + "]"
+      ? " [registered actions: " + capabilityMetadata[t.name].terms.slice(0, 32).map(term => boundedText(term, 80)).join(", ") + "]"
       : "")
   ).join("\n");
   const taskCapabilityGuidance = goal

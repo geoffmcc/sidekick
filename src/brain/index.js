@@ -53,7 +53,7 @@ function formatToolCatalog(agentTools, metadata = {}) {
       ? extra.terms.map(term => String(term)
         .replace(/[\u0000-\u001f\u007f]/g, " ")
         .replace(/\b(?:system|assistant|user|developer)\s*:/gi, match => match.replace(":", " -"))
-        .replace(/\s+/g, " ").trim().slice(0, 160)).filter(Boolean).slice(0, 12)
+        .replace(/\s+/g, " ").trim().slice(0, 160)).filter(Boolean).slice(0, 32)
       : [];
     const semanticBlock = semantic.length ? "\n  registered capability semantics: " + semantic.join(" · ") : "";
     return "- " + t.name + gate + desc + args + semanticBlock;
