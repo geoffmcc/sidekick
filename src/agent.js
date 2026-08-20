@@ -1032,6 +1032,16 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
       cancel: cancelFlag,
     });
     for (const s of outcome.steps) steps.push(s);
+    // Brain accumulates bounded evidence internally, but its tool steps are
+    // otherwise indistinguishable from ordinary transcript steps. Publish the
+    // same safe provenance ledger shape used by the normal loop so Dashboard
+    // diagnostics and live tests observe one contract on both paths.
+    steps.push({
+      type: "evidence_ledger",
+      entries: outcome.steps
+        .filter(step => step && step.type === "tool" && step.ok === true && step.tool && step.tool.replace(/^sidekick_/, "") !== "respond")
+        .map(step => ({ tool: step.tool, timestamp: new Date().toISOString(), success: true })),
+    });
     // Durable, additive observability marker: records that Brain handled this
     // task and its terminal Brain state, without exposing plan internals or
     // chain-of-thought.
