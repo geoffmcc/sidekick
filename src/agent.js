@@ -524,11 +524,16 @@ function buildSystemPrompt(goal = "") {
   });
   // Approval state belongs in the catalog the model reads: a tool it cannot run
   // unattended should be chosen knowingly, not discovered at dispatch time.
-  const toolDescs = availableTools.map(t =>
-    "- " + t.name + "(" + Object.keys(t.args).join(", ") + "): " + t.description + " [risk: " + t.risk + "]" +
+  const toolDescs = availableTools.map(t => {
+    const argumentEntries = t.args && typeof t.args === "object"
+      ? Object.entries(t.args).slice(0, 12).map(([key, value]) =>
+        key + ": " + boundedText(value, 120)).join("; ")
+      : "";
+    const signature = argumentEntries || Object.keys(t.args || {}).join(", ");
+    return "- " + t.name + "(" + signature + "): " + t.description + " [risk: " + t.risk + "]" +
     (t.approval_required ? " [requires human approval]" : "") +
-    (Array.isArray(t.capabilities) && t.capabilities.length ? " [capabilities: " + t.capabilities.slice(0, 12).join(", ") + "]" : "")
-  ).join("\n");
+    (Array.isArray(t.capabilities) && t.capabilities.length ? " [capabilities: " + t.capabilities.slice(0, 12).join(", ") + "]" : "");
+  }).join("\n");
   // The worked examples must only name tools this source can actually reach.
   // Steering toward bash when policy hides it teaches the model to call a tool
   // that will come back "does not exist".
