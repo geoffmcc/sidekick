@@ -41,6 +41,8 @@ const workflowMetadata = buildAgentCapabilityMetadata({
   }],
 });
 assert.ok(workflowMetadata.example_tool.terms.includes("read_status"), "registered workflow action enriches generic capability metadata");
+assert.ok(workflowMetadata.example_tool.actions.includes("read_status"), "registered workflow actions remain explicitly indexed");
+assert.ok(workflowMetadata.example_tool.actionHints.some(hint => hint.startsWith("action=read_status")), "registered action keeps its workflow intent context");
 assert.ok(!JSON.stringify(workflowMetadata).includes("must-not-enter-metadata"), "workflow metadata excludes non-semantic argument values");
 
 assert.strictEqual(classifyEvidenceRequirement("Is anything currently playing?").requiresTools, true);

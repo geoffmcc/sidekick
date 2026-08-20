@@ -518,9 +518,10 @@ function getAgentCapabilityMetadata() {
 function buildSystemPrompt(goal = "") {
   const availableTools = getToolDefsForSource("agent").filter(t => t.enabled);
   const installedPackContext = buildInstalledPackContext();
+  const capabilityMetadata = getAgentCapabilityMetadata();
   const capabilityCandidates = discoverCapabilities(goal, availableTools, {
     limit: 12,
-    metadata: getAgentCapabilityMetadata(),
+    metadata: capabilityMetadata,
   });
   // Approval state belongs in the catalog the model reads: a tool it cannot run
   // unattended should be chosen knowingly, not discovered at dispatch time.
@@ -543,7 +544,11 @@ function buildSystemPrompt(goal = "") {
     : { tool: "status", args: "{}", answer: "All services are running; disk 23% used" };
   const candidateDescs = capabilityCandidates.map(t =>
     "- " + t.name + ": " + boundedText(t.description, 240) + " [risk: " + t.risk + "]" +
-    (t.approval_required ? " [requires human approval]" : "")
+    (t.approval_required ? " [requires human approval]" : "") +
+    (Array.isArray(capabilityMetadata[t.name]?.actions) && capabilityMetadata[t.name].actions.length
+      ? " [exact registered action tokens: " + capabilityMetadata[t.name].actions.slice(0, 32).map(term => boundedText(term, 100)).join(" | ") + "]"
+      + " [registered action intent: " + (capabilityMetadata[t.name].actionHints || []).slice(0, 32).map(term => boundedText(term, 160)).join(" | ") + "]"
+      : "")
   ).join("\n");
   const taskCapabilityGuidance = goal
     ? "\nTask-scoped capability shortlist (discovery only; Sidekick still authorizes every call):\n" +
@@ -1028,6 +1033,16 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
       cancel: cancelFlag,
     });
     for (const s of outcome.steps) steps.push(s);
+    // Brain accumulates bounded evidence internally, but its tool steps are
+    // otherwise indistinguishable from ordinary transcript steps. Publish the
+    // same safe provenance ledger shape used by the normal loop so Dashboard
+    // diagnostics and live tests observe one contract on both paths.
+    steps.push({
+      type: "evidence_ledger",
+      entries: outcome.steps
+        .filter(step => step && step.type === "tool" && step.ok === true && step.tool && step.tool.replace(/^sidekick_/, "") !== "respond")
+        .map(step => ({ tool: step.tool, timestamp: new Date().toISOString(), success: true })),
+    });
     // Durable, additive observability marker: records that Brain handled this
     // task and its terminal Brain state, without exposing plan internals or
     // chain-of-thought.
