@@ -46,7 +46,12 @@ function getToolDefsForSource(source = getCurrentSource()) {
     let liveNames = null;
     let liveDefinitions = null;
     try {
-      const liveDefs = require("./tools/index").getBuiltinRegistry().toolDefs();
+      // This file already lives in src/tools. Keep the lazy facade import so
+      // module activation has completed, but resolve the canonical registry
+      // from the correct sibling path. A wrong path here silently falls back
+      // to the database's legacy args and strips schema constraints from the
+      // Agent catalog.
+      const liveDefs = require("./index").getBuiltinRegistry().toolDefs();
       liveNames = new Set(liveDefs.map(def => stripSidekickPrefix(def.name)));
       liveDefinitions = new Map(liveDefs.map(def => [stripSidekickPrefix(def.name), def]));
       for (const generated of dbStore.listGeneratedCapabilities({ states: ["trial", "active"] })) {
