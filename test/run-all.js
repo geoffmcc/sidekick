@@ -50,6 +50,7 @@ const suites = [
   { file: 'test/metrics-surface.test.js', critical: false, description: 'Influx measurement and field result normalization' },
   { file: 'test/git-deploy.test.js', critical: false, description: 'Read-only Git deployment hardening' },
   { file: 'test/mcp-session.test.js', critical: false, description: 'MCP stale session recovery behavior' },
+  { file: 'test/local-stdio.test.js', critical: true, description: 'Local packaged-style stdio MCP startup, governance, persistence, and stdout purity' },
   { file: 'test/ops-workflows.test.js', critical: false, description: 'Packaged operations workflow metadata' },
   { file: 'test/platform-kernel.test.js', critical: false, description: 'Unified execution, event, and artifact primitives' },
   { file: 'test/platform-event-consumption.test.js', critical: false, description: 'Transactional event fan-out, backlog cap, delivery drainer, handler registry, and event vocabulary' },

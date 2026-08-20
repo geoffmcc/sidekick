@@ -18,8 +18,9 @@ const packageJson = require("../package.json");
 const APP_VERSION = packageJson.version || "0.0.0";
 const NODE_REQUIREMENT = packageJson.engines?.node || "unspecified";
 
-const API_KEY = readSecret("SIDEKICK_API_KEY", { required: true });
-if (!API_KEY || API_KEY === "sk-sidekick-local-dev" || API_KEY === "sk-your-key-here") {
+const IS_LOCAL = process.env.SIDEKICK_LOCAL === "1";
+const API_KEY = IS_LOCAL ? "" : readSecret("SIDEKICK_API_KEY", { required: true });
+if (!IS_LOCAL && (!API_KEY || API_KEY === "sk-sidekick-local-dev" || API_KEY === "sk-your-key-here")) {
   throw new Error("SIDEKICK_API_KEY must be set to a non-placeholder value");
 }
 const PORT = parseInt(process.env.SIDEKICK_PORT || "4097", 10);
@@ -45,6 +46,9 @@ function logDebug(context, data) {
     console.log(`${prefix} ${context}:`, JSON.stringify(data, null, 2));
   }
 }
+
+// Local stdio uses the same MCP registration below but never starts this
+// HTTP listener. The CLI redirects console.log to stderr before loading us.
 
 // --- Factory: create fresh McpServer + register tools ---
 
@@ -1159,8 +1163,12 @@ app.post("/compute/jobs/:jobId/fail", express.json({ limit: "64kb" }), requireWo
 app.post("/compute/recover", express.json({ limit: "8kb" }), requireAdmin, recoverJobsHandler);
 app.get("/compute/health", requireAdmin, computeHealthHandler);
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log("Sidekick MCP server listening on port " + PORT);
-  console.log("MCP endpoint: http://0.0.0.0:" + PORT + "/mcp");
-  console.log("Data dir: " + DATA_DIR);
-});
+if (require.main === module && !IS_LOCAL) {
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log("Sidekick MCP server listening on port " + PORT);
+    console.log("MCP endpoint: http://0.0.0.0:" + PORT + "/mcp");
+    console.log("Data dir: " + DATA_DIR);
+  });
+}
+
+module.exports = { app, createMcpServer };

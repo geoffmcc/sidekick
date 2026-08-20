@@ -17,6 +17,24 @@ Sidekick is a self-hosted platform that gives AI assistants and agents durable i
 
 **How?** Connect a compatible MCP client to Sidekick, then optionally adapt the included `AGENTS.md` template so the client knows how to use its persistent tools and knowledge.
 
+For a local installation, configure the client to launch the packaged runtime:
+
+```json
+{
+  "mcpServers": {
+    "sidekick": {
+      "command": "npx",
+      "args": ["-y", "github:geoffmcc/sidekick"]
+    }
+  }
+}
+```
+
+See [`docs/local-deployment.md`](docs/local-deployment.md) for persistent
+state locations, CLI commands, client notes, security, Compute, capability
+packs, and troubleshooting. Dedicated HTTP/SSE deployment remains documented
+in [`docs/installation.md`](docs/installation.md).
+
 > **Note:** This project was developed using its own remote execution tools — the AI assistant used Sidekick's infrastructure to help build and test the very system it runs on.
 
 ## Refactor Status and Compatibility Disclosure
@@ -91,7 +109,22 @@ Open `http://YOUR_REMOTE_IP:4098/` in a browser. That's it — Sidekick is live.
 
 ## How It Works
 
-Sidekick exposes its tool catalog through the Model Context Protocol. Any compatible MCP client can connect to the Streamable HTTP endpoint with a bearer token. The included `AGENTS.md` file is an optional, portable bootstrap template for clients that support persistent project or agent instructions.
+Sidekick exposes its tool catalog through the Model Context Protocol and supports two deployment topologies:
+
+```text
+Sidekick
+├── Local deployment
+└── Dedicated deployment
+```
+
+MCP clients can launch the full runtime locally through the packaged `sidekick`
+executable and stdio, without a dedicated Sidekick server. Dedicated server
+installations continue to expose Streamable
+HTTP and legacy SSE with their existing authentication and service layout.
+Both topologies use the same governed registry, dispatcher, persistence,
+memory, workflows, capability packs, and Compute paths. The included
+`AGENTS.md` file is an optional, portable bootstrap template for clients that
+support persistent project or agent instructions.
 
 1. **An MCP client connects** — it authenticates to the Sidekick MCP server on port 4097.
 2. **Sidekick publishes the available tool catalog** — policy, risk, and approval rules are applied for the request source.

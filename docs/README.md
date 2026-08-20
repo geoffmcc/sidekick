@@ -49,6 +49,7 @@ sqlite3 data/sidekick.db "SELECT COUNT(*) FROM knowledge WHERE version_added = '
 |---|---|
 | `overview.md` | What Sidekick is, how the pieces fit together, and common use cases. |
 | `installation.md` | Fresh install, deployment scripts, manual systemd setup, and MCP client configuration. |
+| `local-deployment.md` | Full local/npx topology, stdio configuration, persistence, CLI, security, Compute, and troubleshooting. |
 | `install.md` | Documentation conventions (server path, IP placeholder) and deploy-script quick reference. |
 | `configuration.md` | Environment variables, ports, LLM settings, data directory, and auth settings. |
 | `operations.md` | Day-to-day service commands, health checks, troubleshooting, backups, and maintenance. |

@@ -2,6 +2,12 @@
 
 This reference is generated from Express route declarations in `src/index.js`, `src/dashboard.js`, and `src/agent.js` (verified at `5e4dbfd`). Dashboard routes sit behind the dashboard protections described in `security.md`; MCP and compute routes use the authentication described below.
 
+For local clients, Sidekick also exposes the same MCP tool registry over the
+child-process stdio transport. That transport is started by the `sidekick`
+package executable and uses newline-framed JSON-RPC on stdin/stdout; it has no
+HTTP route or bearer-token requirement because the MCP client owns the child
+process boundary. See `local-deployment.md` for configuration and persistence.
+
 ## MCP server (`src/index.js`, port 4097)
 
 ### Core endpoints

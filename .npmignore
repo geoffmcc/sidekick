@@ -1,0 +1,10 @@
+node_modules/
+data/
+test/
+src/**/__pycache__/
+*.db
+*.db-shm
+*.db-wal
+.env
+.git/
+.github/

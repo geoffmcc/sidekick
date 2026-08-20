@@ -11,10 +11,15 @@ if (fs.existsSync(envPath)) {
       if (idx > 0) {
         const key = line.substring(0, idx).trim();
         const value = line.substring(idx + 1).trim();
-        if (FILE_SECRET_NAMES.has(key) && value && process.env.NODE_ENV !== "test") {
+        if (FILE_SECRET_NAMES.has(key) && value && process.env.NODE_ENV !== "test" && process.env.SIDEKICK_LOCAL !== "1") {
           throw new Error(`${key} must be supplied through a protected secret file, not .env`);
         }
-        if (!process.env[key]) process.env[key] = value;
+        // Local stdio must not ingest file-backed secrets from a repository
+        // .env. Optional credentials remain available only through the normal
+        // protected secret-file provider.
+        if (!FILE_SECRET_NAMES.has(key) || process.env.NODE_ENV === "test") {
+          if (!process.env[key]) process.env[key] = value;
+        }
       }
     }
   });

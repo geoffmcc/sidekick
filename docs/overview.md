@@ -1,18 +1,25 @@
 # Overview
 
-Sidekick is a self-hosted agent platform for compatible MCP clients and automation agents. It provides a remote MCP server, browser dashboard, autonomous Agent Bridge, persistent memory and knowledge, and an optional distributed Compute worker system. Current `main` exposes a dynamically discovered tool catalog across 20 categories; core, module, capability-pack, and separately approved generated tools share the same registry. Query the live `tools` manifest for the current count and enabled state.
+Sidekick is a self-hosted agent platform for compatible MCP clients and automation agents. It supports two ways to run the same product: a local stdio runtime launched directly by an MCP client without a dedicated server, and a dedicated server deployment with HTTP, dashboard, and Agent Bridge services. Both provide the same dynamically discovered tool catalog, persistent memory and knowledge, governed dispatcher, capability packs, workflows, and optional distributed Compute worker system. Query the live `tools` manifest for the current count and enabled state.
 
 ## Core idea
 
 Sidekick does not replace the connected assistant or agent. It provides a persistent remote machine, governed MCP tools, durable context, and operational services. The companion `AGENTS.md` file is an optional portable template that can teach compatible clients where Sidekick is and how to use its long-lived capabilities.
 
-A normal workflow looks like this:
+A dedicated-server workflow looks like this:
 
 1. A compatible client connects to the MCP server on port 4097.
 2. The client authenticates and discovers the allowed Sidekick tool catalog.
 3. Sidekick exposes its tool catalog.
 4. The assistant calls tools to execute commands, inspect files, store persistent context, or operate services.
 5. Data is written into the Sidekick data directory so the next session can continue from prior state.
+
+For the no-dedicated-server option, the MCP client launches
+`npx -y github:geoffmcc/sidekick` as a child process over stdio. The process
+uses a platform-aware per-user data
+home outside the npm cache, so the same durable state survives client restarts
+and package upgrades. See `local-deployment.md` for configuration and local
+troubleshooting.
 
 ## What Sidekick can do
 
