@@ -84,6 +84,8 @@ function buildPlannerSystemPrompt(agentTools, packContext = null) {
     "7. Output ONLY the schema fields shown above. No extra fields of any kind — no thoughts, status, notes, or explanations inside the JSON.\n" +
     "8. A tool step's arguments MUST use only the argument names shown for that tool in the catalog, with values matching the documented signature (respect enums like a|b|c).\n" +
     "9. When more than one tool can gather the same evidence, prefer one NOT marked [requires human approval].\n\n" +
+    "10. For observational, status, health, playback, session, guest, or inventory questions, use a read-only/low-risk inspection tool. Never use a playback-control, mutation, destructive, or approval-gated tool merely to inspect state.\n" +
+    "11. If a tool's documented action enum does not include the inspection action you need, choose the appropriate read-only tool instead of inventing an action or repurposing a control tool.\n\n" +
     "Allowed step types: " + ALLOWED_STEP_TYPES.join(", ") + "\n\n" +
     // Pack context sits between the rules and the catalog: it tells the
     // planner WHICH domains have first-class pack tools (#296 reached only the

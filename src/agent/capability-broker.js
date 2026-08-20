@@ -18,6 +18,13 @@ const GENERIC_EVIDENCE_TOOLS = new Set([
 ]);
 
 const MAX_TEXT = 600;
+const OBSERVATION_GOAL_PATTERN = /\b(?:is|are|does|do|has|have|what|which|who)\b[\s\S]{0,100}\b(?:playing|watching|viewing|streaming|running|online|offline|healthy|available|active|connected|working|down|up|idle|busy|open|closed|pending|loaded|mounted|reachable|status|state|sessions?|guests?|vms?|containers?)\b|\b(?:playing|watching|viewing|streaming|running|online|offline|healthy|available|active|connected|working|down|up|idle|busy|open|closed|pending|loaded|mounted|reachable|status|state|sessions?|guests?|vms?|containers?)\b[\s\S]{0,100}\b(?:is|are|does|do|has|have)\b/i;
+
+function observationRiskPenalty(definition, goal) {
+  if (!OBSERVATION_GOAL_PATTERN.test(String(goal || ""))) return 0;
+  const risk = String(definition.risk || "").toLowerCase();
+  return risk === "critical" ? 4 : risk === "high" ? 3 : risk === "medium" ? 1 : 0;
+}
 
 function boundedText(value, max = MAX_TEXT) {
   return String(value == null ? "" : value).replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
@@ -60,6 +67,7 @@ function discoverCapabilities(goal, definitions, { limit = 24, metadata = {} } =
     const haystack = tokens(capabilityText(def, metadata));
     let score = 0;
     for (const word of query) if ([...haystack].some(candidate => overlaps(word, candidate))) score += 1;
+    score -= observationRiskPenalty(def, goal);
     return { def, score };
   });
   // A registered capability often exposes a small family of sibling tools.
