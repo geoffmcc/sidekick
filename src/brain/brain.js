@@ -73,7 +73,17 @@ function accumulateToolResult(acc, step, toolRes, { onEvent = () => {} } = {}) {
     ? "(sensitive value withheld)"
     : text;
   const clipped = truncate(raw, BRAIN_LIMITS.MAX_TOOL_OUTPUT_CHARS);
-  acc.steps.push({ type: "tool", id: step.id, tool: step.tool, ok: !isError, result: clipped });
+  acc.steps.push({
+    type: "tool",
+    id: step.id,
+    tool: step.tool,
+    ok: !isError,
+    // Action is a bounded enum-like diagnostic value, not the raw argument
+    // object. Keep it visible for safe provenance tests without persisting
+    // secrets or arbitrary tool arguments in Brain transcripts.
+    ...(typeof step.arguments?.action === "string" ? { action: step.arguments.action.slice(0, 120) } : {}),
+    result: clipped,
+  });
   onEvent("brain.step_completed", { id: step.id, tool: step.tool, ok: !isError });
 
   if (!isError && acc.evidenceChars < BRAIN_LIMITS.MAX_EVIDENCE_CHARS) {

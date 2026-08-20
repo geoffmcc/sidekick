@@ -141,7 +141,7 @@ async function runLive() {
   const evidenceEntries = Array.isArray(evidence?.entries) ? evidence.entries.length : 0;
   if (options.expectTool) check(tools.includes(options.expectTool), `live Agent did not call expected tool '${options.expectTool}'`);
   if (options.expectAction) {
-    check(toolSteps.some(step => step.tool === options.expectTool && step.args?.action === options.expectAction),
+    check(toolSteps.some(step => step.tool === options.expectTool && (step.args?.action || step.action) === options.expectAction),
       `live Agent did not execute expected action '${options.expectAction}' on '${options.expectTool || "the expected tool"}'`);
     check(transcript.status === "completed", `live Agent task did not complete successfully (status: ${transcript.status})`);
     check(evidenceEntries > 0, "live Agent produced no successful evidence-ledger entry for the expected current-state request");
