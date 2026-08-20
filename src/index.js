@@ -1,5 +1,7 @@
 require("./env");
 const express = require("express");
+const fs = require("fs");
+const path = require("path");
 const cors = require("cors");
 const { timingSafeCompare } = require("./crypto-utils");
 const { readSecret } = require("./core/runtime-secrets");
@@ -25,6 +27,7 @@ if (!IS_LOCAL && (!API_KEY || API_KEY === "sk-sidekick-local-dev" || API_KEY ===
 }
 const PORT = parseInt(process.env.SIDEKICK_PORT || "4097", 10);
 const ALLOWED_IPS = (process.env.SIDEKICK_ALLOWED_IPS || "").split(",").map(s => s.trim()).filter(Boolean);
+const PRIVACY_POLICY_PATH = path.join(__dirname, "..", "docs", "privacy.md");
 
 function ipInRange(ip, cidr) {
   if (!cidr.includes("/")) return ip === cidr;
@@ -107,7 +110,8 @@ function createMcpServer(authIdentityProvider = () => null) {
     const mcpName = stripSidekickPrefix(descriptor.name);
     server.registerTool(mcpName, {
       description: descriptor.description,
-      inputSchema: descriptor.schema
+      inputSchema: descriptor.schema,
+      annotations: descriptor.annotations,
     }, async (args, extra) => {
       extra = extra || {};
       extra.authIdentity = authIdentityProvider();
@@ -124,7 +128,8 @@ function createMcpServer(authIdentityProvider = () => null) {
     const paramDesc = paramNames.length > 0 ? ` Parameters: ${paramNames.join(", ")}.` : "";
     server.registerTool(procName, {
       description: `[procedure] ${proc.description}${paramDesc}`,
-      inputSchema: paramSchema
+      inputSchema: paramSchema,
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     }, async (args, extra) => {
       extra = extra || {};
       extra.authIdentity = authIdentityProvider();
@@ -139,7 +144,8 @@ function createMcpServer(authIdentityProvider = () => null) {
     const mcpName = stripSidekickPrefix(def.name);
     server.registerTool(mcpName, {
       description: def.description,
-      inputSchema: dynamicSchemas[def.name]
+      inputSchema: dynamicSchemas[def.name],
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     }, async (args, extra) => {
       extra = extra || {};
       extra.authIdentity = authIdentityProvider();
@@ -360,6 +366,12 @@ app.get("/health", (req, res) => {
   }
 
   res.json(payload);
+});
+
+// Public policy URL for directory listings. It intentionally sits before the
+// authenticated API middleware and serves only the repository policy document.
+app.get("/privacy", (req, res) => {
+  res.type("text/markdown").send(fs.readFileSync(PRIVACY_POLICY_PATH, "utf8"));
 });
 
 app.use((req, res, next) => {
