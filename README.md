@@ -6,6 +6,8 @@
 
 Sidekick is a self-hosted platform that gives AI assistants and agents durable infrastructure: a remote machine they can operate, persistent project memory and knowledge that survive any single session, a governed and dynamically discoverable MCP tool catalog, an autonomous task runner, and distributed model compute. The connected assistant or agent is replaceable — you can switch clients, models, or vendors — while the projects, memory, tools, policy, and history stay on your machine, under your control.
 
+See the [privacy policy](docs/privacy.md). A running HTTP instance also exposes it at `/privacy` for directory and integration review.
+
 **Why use it?** Because most AI work loses everything between sessions. With Sidekick, one session's decisions, handoffs, and stored facts are retrievable by the next session — or by a completely different agent. Typical uses that the current implementation supports:
 
 - keeping project continuity across AI sessions and across different agents/models;

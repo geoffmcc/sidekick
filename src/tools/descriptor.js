@@ -1,5 +1,6 @@
 const { z } = require("zod");
 const { RISK_LEVELS } = require("./metadata");
+const { getToolAnnotations } = require("./annotations");
 
 const MAX_CAPABILITIES = 32;
 const MAX_CAPABILITY_LENGTH = 120;
@@ -96,6 +97,12 @@ function normalizeDescriptor(input) {
   if (!risk) throw new Error(`Tool descriptor ${name} is missing risk`);
   if (!RISK_LEVELS.includes(risk)) throw new Error(`Tool descriptor ${name} has invalid risk: ${risk}`);
   const category = String(input.category || "Uncategorized").trim() || "Uncategorized";
+  const annotations = { ...getToolAnnotations(name) };
+  for (const key of Object.keys(annotations)) {
+    if (input.annotations && typeof input.annotations[key] === "boolean") {
+      annotations[key] = input.annotations[key];
+    }
+  }
   return Object.freeze({
     name,
     description,
@@ -118,6 +125,7 @@ function normalizeDescriptor(input) {
     capabilities: normalizeCapabilities(input.capabilities),
     visibility: input.visibility || "public",
     result: input.result || null,
+    annotations: Object.freeze(annotations),
     handler: input.handler,
   });
 }
