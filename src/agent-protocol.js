@@ -232,7 +232,7 @@ function classifyEvidenceRequirement(goal) {
   // "turn the volume down"), so they only route when an inspection verb,
   // exactness signal, or state word appears alongside them.
   const statefulPhrasePattern = /\b(free\s+space|space\s+(?:left|free|available)|disk\s+(?:usage|space)|(?:cpu|processor|memory|ram|swap|storage|bandwidth|network)\s+(?:usage|utili[sz]ation|consumption)|cpu\s+load|load\s+average|free\s+memory|available\s+memory|running\s+process(?:es)?|process\s+list|open\s+ports?|listening\s+ports?|network\s+interfaces?)\b/;
-  const currentStateQuestionPattern = /\b(?:is|are|does|do|has|have|what|which|who)\b[\s\S]{0,100}\b(?:playing|running|online|offline|healthy|available|active|connected|working|down|up|idle|busy|open|closed|pending|loaded|mounted|reachable)\b|\b(?:playing|running|online|offline|healthy|available|active|connected|working|down|up|idle|busy|open|closed|pending|loaded|mounted|reachable)\b[\s\S]{0,100}\b(?:is|are|does|do|has|have)\b/;
+  const currentStateQuestionPattern = /\b(?:is|are|does|do|has|have|what|which|who)\b[\s\S]{0,100}\b(?:playing|watching|viewing|streaming|running|online|offline|healthy|available|active|connected|working|down|up|idle|busy|open|closed|pending|loaded|mounted|reachable)\b|\b(?:playing|watching|viewing|streaming|running|online|offline|healthy|available|active|connected|working|down|up|idle|busy|open|closed|pending|loaded|mounted|reachable)\b[\s\S]{0,100}\b(?:is|are|does|do|has|have)\b/;
   const inspectableNounPattern = /\b(disk|drives?|volumes?|mount(?:s|ed)?|storage|filesystem|file\s+system|cpu|cpus|processor|uptime|ram|swap|bandwidth)\b/;
   const inspectionContextPattern = new RegExp(
     localActionPattern.source + "|" + exactnessPattern.source +
