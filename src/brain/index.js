@@ -58,8 +58,14 @@ function formatToolCatalog(agentTools, metadata = {}) {
         .replace(/\b(?:system|assistant|user|developer)\s*:/gi, match => match.replace(":", " -"))
         .replace(/\s+/g, " ").trim().slice(0, 160)).filter(Boolean).slice(0, 32)
       : [];
-    const semanticBlock = semantic.length ? "\n  registered capability semantics: " + semantic.join(" · ") : "";
-    return "- " + t.name + gate + desc + args + semanticBlock;
+    const actionTokens = extra && Array.isArray(extra.actions)
+      ? extra.actions.map(action => String(action).slice(0, 100)).filter(Boolean).slice(0, 32)
+      : [];
+    const actionBlock = actionTokens.length
+      ? "\n  exact registered action tokens (use these values after action=): " + actionTokens.join(" | ")
+      : "";
+    const semanticBlock = semantic.length ? "\n  registered capability intent guidance: " + semantic.join(" · ") : "";
+    return "- " + t.name + gate + desc + args + actionBlock + semanticBlock;
   }).join("\n");
 }
 
@@ -97,7 +103,8 @@ function buildPlannerSystemPrompt(agentTools, packContext = null, metadata = {})
     "9. When more than one tool can gather the same evidence, prefer one NOT marked [requires human approval].\n\n" +
     "10. For observational, status, health, playback, session, guest, or inventory questions, use a read-only/low-risk inspection tool. Never use a playback-control, mutation, destructive, or approval-gated tool merely to inspect state.\n" +
     "11. If a tool's documented action enum does not include the inspection action you need, choose the appropriate read-only tool instead of inventing an action or repurposing a control tool.\n\n" +
-    "12. When a pack capability has registered action semantics matching the request, prefer that specific action over a generic status or health action.\n\n" +
+    "12. When a pack capability has registered action semantics matching the request, prefer that specific action over a generic status or health action.\n" +
+    "13. Action arguments must be exact enum tokens from the catalog; never convert an intent title, workflow name, or prose label into an action value.\n\n" +
     "Allowed step types: " + ALLOWED_STEP_TYPES.join(", ") + "\n\n" +
     // Pack context sits between the rules and the catalog: it tells the
     // planner WHICH domains have first-class pack tools (#296 reached only the

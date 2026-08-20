@@ -139,7 +139,7 @@ function buildAgentCapabilityMetadata({ packs = [], modules = [], workflows = []
       entry.actions = [...new Set([...(entry.actions || []), ...(action ? [action] : [])])].slice(0, 64);
       entry.actionHints = [...(entry.actionHints || [])];
       if (action) {
-        const hint = boundedText([action, step.title, step.name, ...shared].filter(Boolean).join(" — "), 240);
+        const hint = boundedText([`action=${action}`, `intent=${step.title || step.name || ""}`, ...shared].filter(Boolean).join("; "), 240);
         if (hint && !entry.actionHints.includes(hint)) entry.actionHints.push(hint);
         entry.actionHints = entry.actionHints.slice(0, 64);
       }
