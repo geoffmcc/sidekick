@@ -26,6 +26,23 @@ assert.strictEqual(metadata.future_read.domain, "Future Pack");
 assert.ok(metadata.future_read.terms.includes("future-observation"));
 assert.ok(!JSON.stringify(metadata).includes("SYSTEM:"), "metadata remains declarative data");
 
+const workflowMetadata = buildAgentCapabilityMetadata({
+  packs: [],
+  modules: [],
+  workflows: [{
+    state: "registered",
+    definition: {
+      name: "example/status",
+      title: "Example status",
+      description: "Collect current example status",
+      tags: ["status", "read-only"],
+      steps: [{ name: "inspect", title: "Inspect current state", tool: "example_tool", args: { action: "read_status", secret: "must-not-enter-metadata" } }],
+    },
+  }],
+});
+assert.ok(workflowMetadata.example_tool.terms.includes("read_status"), "registered workflow action enriches generic capability metadata");
+assert.ok(!JSON.stringify(workflowMetadata).includes("must-not-enter-metadata"), "workflow metadata excludes non-semantic argument values");
+
 assert.strictEqual(classifyEvidenceRequirement("Is anything currently playing?").requiresTools, true);
 assert.strictEqual(classifyEvidenceRequirement("Is anyone currently watching content?").requiresTools, true, "watching-state questions enter capability discovery");
 assert.strictEqual(classifyEvidenceRequirement("Is anyone viewing media right now?").requiresTools, true, "viewing-state questions enter capability discovery");

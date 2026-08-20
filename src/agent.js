@@ -39,6 +39,7 @@ const { runToolLoop } = require("./agent-loop");
 const packRepository = require("./packs/repository");
 const packLifecycle = require("./packs/lifecycle");
 const moduleRepository = require("./modules/repository");
+const workflowRepository = require("./workflows/repository");
 // Optional, feature-flagged. Guarded like inferenceService so a Brain import
 // error can never affect the default (Brain-disabled) Agent Bridge path.
 let brain = null;
@@ -507,6 +508,7 @@ function getAgentCapabilityMetadata() {
     return buildAgentCapabilityMetadata({
       packs: packRepository.listPacks(),
       modules: moduleRepository.listModules(),
+      workflows: workflowRepository.listWorkflowDefinitions({ ownerKind: "pack", state: "registered" }),
     });
   } catch {
     return {};
