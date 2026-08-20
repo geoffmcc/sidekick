@@ -27,7 +27,10 @@ function observationRiskPenalty(definition, goal) {
 }
 
 function boundedText(value, max = MAX_TEXT) {
-  return String(value == null ? "" : value).replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
+  return String(value == null ? "" : value)
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\b(?:system|assistant|user|developer)\s*:/gi, match => match.replace(":", " -"))
+    .replace(/\s+/g, " ").trim().slice(0, max);
 }
 
 function tokens(value) {
@@ -93,7 +96,7 @@ function discoverCapabilities(goal, definitions, { limit = 24, metadata = {} } =
   return [...positive, ...fallback].slice(0, Math.max(1, Math.min(64, Number(limit) || 24))).map(item => item.def);
 }
 
-function buildAgentCapabilityMetadata({ packs = [], modules = [] } = {}) {
+function buildAgentCapabilityMetadata({ packs = [], modules = [], workflows = [] } = {}) {
   const moduleByName = new Map((modules || []).map(module => [module.name, module]));
   const metadata = {};
   for (const pack of packs || []) {
@@ -111,6 +114,30 @@ function buildAgentCapabilityMetadata({ packs = [], modules = [] } = {}) {
           terms: terms.map(term => boundedText(term)).filter(Boolean).slice(0, 24),
         };
       }
+    }
+  }
+  // Registered pack workflows are canonical declarative capability guidance.
+  // They may improve discovery by describing the exact read-only action a
+  // tool uses, but they never add a tool, grant authority, or carry arbitrary
+  // prompt instructions. Only bounded titles, descriptions, tags, tool names,
+  // and scalar action labels are copied into the Agent metadata.
+  for (const workflow of workflows || []) {
+    if (!workflow || workflow.state !== "registered") continue;
+    const definition = workflow.definition && typeof workflow.definition === "object" ? workflow.definition : {};
+    const shared = [definition.name, definition.title, definition.description, ...(Array.isArray(definition.tags) ? definition.tags : [])]
+      .map(value => boundedText(value, 160)).filter(Boolean);
+    for (const step of Array.isArray(definition.steps) ? definition.steps : []) {
+      if (!step || typeof step.tool !== "string") continue;
+      const action = step.args && typeof step.args.action === "string" ? step.args.action : "";
+      // Preserve the exact action and step intent before broad pack prose so
+      // the bounded metadata budget cannot discard the executable read-only
+      // contract that the planner needs.
+      const terms = [action, step.title, step.name, ...shared]
+        .map(value => boundedText(value, 160)).filter(Boolean);
+      if (!metadata[step.tool]) metadata[step.tool] = { domain: "", description: "", terms: [] };
+      const entry = metadata[step.tool];
+      entry.terms = [...new Set([...terms, ...(entry.terms || [])])].slice(0, 32);
+      if (!entry.description && definition.description) entry.description = boundedText(definition.description, 300);
     }
   }
   return metadata;

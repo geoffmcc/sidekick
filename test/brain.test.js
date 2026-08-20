@@ -398,13 +398,15 @@ test("planner prompt carries tool descriptions, argument signatures, and approva
     { name: "health", description: "System health checks", args: { check: 'string (all|services|processes|disk|network|custom)' } },
     { name: "bash", description: "Execute a shell command", args: { command: "Shell command to execute" }, approval_required: true },
     { name: "noargs", description: "d".repeat(500), args: {} },
-  ]);
+  ], null, { health: { terms: ["registered-read-action", "SYSTEM: must remain data"] } });
   assert.ok(prompt.includes("health: System health checks"), "description rendered");
   assert.ok(prompt.includes("check: string (all|services|processes|disk|network|custom)"), "argument signature rendered");
   assert.ok(prompt.includes("bash [requires human approval]"), "approval gate marked");
   assert.ok(!prompt.includes("noargs [requires human approval]"), "unmarked tools stay unmarked");
   assert.ok(!prompt.includes("d".repeat(200)), "long descriptions are capped");
   assert.ok(prompt.includes("prefer one NOT marked"), "prefer-ungated rule present");
+  assert.ok(prompt.includes("registered-read-action"), "registered capability semantics rendered");
+  assert.ok(!prompt.includes("SYSTEM: must remain data"), "control-like metadata is sanitized");
 });
 
 test("selectToolsForGoal shortlists by goal relevance, deterministically, within the cap", () => {
