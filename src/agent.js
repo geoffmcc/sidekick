@@ -518,9 +518,10 @@ function getAgentCapabilityMetadata() {
 function buildSystemPrompt(goal = "") {
   const availableTools = getToolDefsForSource("agent").filter(t => t.enabled);
   const installedPackContext = buildInstalledPackContext();
+  const capabilityMetadata = getAgentCapabilityMetadata();
   const capabilityCandidates = discoverCapabilities(goal, availableTools, {
     limit: 12,
-    metadata: getAgentCapabilityMetadata(),
+    metadata: capabilityMetadata,
   });
   // Approval state belongs in the catalog the model reads: a tool it cannot run
   // unattended should be chosen knowingly, not discovered at dispatch time.
@@ -543,7 +544,10 @@ function buildSystemPrompt(goal = "") {
     : { tool: "status", args: "{}", answer: "All services are running; disk 23% used" };
   const candidateDescs = capabilityCandidates.map(t =>
     "- " + t.name + ": " + boundedText(t.description, 240) + " [risk: " + t.risk + "]" +
-    (t.approval_required ? " [requires human approval]" : "")
+    (t.approval_required ? " [requires human approval]" : "") +
+    (Array.isArray(capabilityMetadata[t.name]?.terms) && capabilityMetadata[t.name].terms.length
+      ? " [registered actions: " + capabilityMetadata[t.name].terms.slice(0, 12).map(term => boundedText(term, 80)).join(", ") + "]"
+      : "")
   ).join("\n");
   const taskCapabilityGuidance = goal
     ? "\nTask-scoped capability shortlist (discovery only; Sidekick still authorizes every call):\n" +
