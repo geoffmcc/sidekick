@@ -75,6 +75,7 @@ async function runToolLoop({
   let terminalError = "";
   let repeatState = { fingerprint: "", repeats: 0 };
   let evidenceCalls = 0;
+  const evidenceLedger = [];
   let evidenceNudged = false;
 
   const failWithoutEvidence = () => {
@@ -254,7 +255,10 @@ async function runToolLoop({
           }
         } else {
           result = toolRes.content?.[0]?.text || "(empty result)";
-          if (isEvidenceTool(toolName)) evidenceCalls++;
+          if (isEvidenceTool(toolName)) {
+            evidenceCalls++;
+            evidenceLedger.push({ tool: toolName, timestamp: new Date().toISOString(), success: true });
+          }
         }
       } catch (e) {
         result = redact("Call failed: " + e.message);
@@ -307,7 +311,7 @@ async function runToolLoop({
     steps.push({ type: "error", text: terminalError });
   }
 
-  return { status, finalResult, terminalError, steps, evidenceCalls };
+  return { status, finalResult, terminalError, steps, evidenceCalls, evidenceLedger };
 }
 
 module.exports = { runToolLoop, DEFAULT_MAX_ITERATIONS };

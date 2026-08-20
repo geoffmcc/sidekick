@@ -25,6 +25,24 @@ Each goal is classified by `classifyEvidenceRequirement` (in `src/agent-protocol
 
 Classification is deterministic and heuristic: a request that names a Sidekick tool, a Sidekick resource, or a live host resource (disk, CPU, memory/RAM, swap, uptime, processes, ports, network) routes to the tool loop; a purely conceptual or instructional prompt about those same resources ("explain how disk usage works", "how can someone check disk usage") stays conversational. It is routing, not authorization — every tool call is still independently validated by the dispatcher.
 
+### Capability discovery
+
+The Agent-visible catalog is derived from the canonical registry after source
+policy filtering. `src/agent/capability-broker.js` ranks a bounded shortlist
+using tool names, descriptions, categories, declarative capability labels and
+registered tool-family namespaces. It contains no pack-name routing table: a
+new enabled and healthy module or capability pack participates through the same
+registry metadata. The shortlist only shapes model context; it cannot add a
+tool or grant permission. The dispatcher re-resolves every proposed call and
+enforces lifecycle health, schema, source policy, approval, secrets, audit and
+redaction controls.
+
+Module-declared capability labels are copied into the canonical tool
+descriptors as bounded declarative metadata. They are never treated as system
+instructions. Disabled or unhealthy module registrations are removed by the
+existing lifecycle reconciliation and per-dispatch gates, so discovery cannot
+turn stale metadata into execution authority.
+
 The classifier returns a stable machine-readable reason, surfaced as a `Routing: …` step in the Agent tab stream, an `agent.evidence_classified` platform event, and an additive `routing` field in the transcript:
 
 | Reason | Routed to | Meaning |
@@ -65,8 +83,8 @@ Because `runToolLoop` takes its LLM and tool functions as injected dependencies,
 ### Observability fields
 
 - Stream (SSE): `step` (including `Routing: …`, rejection, nudge, and approval-pending notices), `provider`, `fallback`, `tool` (redacted args, then truncated result), `done`, `error`, `lineage`.
-- Platform events: `agent.task_started`, `agent.evidence_classified` (`requires_tools`, `reason`), `agent.tool_started` (canonical `tool`, `requested_as` when an alias was used, argument keys only), `agent.tool_completed` (redacted summary), `agent.tool_approval_pending`, `agent.decision_rejected` (`reason`), `agent.evidence_missing`.
-- Transcript: additive `routing: { requires_tools, reason }` field; steps record canonical tool names, plus `invalid` steps with rejection reasons.
+- Platform events: `agent.task_started`, `agent.evidence_classified` (`requires_tools`, `reason`), `agent.capability_discovery` (visible/candidate counts and canonical names only), `agent.tool_started` (canonical `tool`, `requested_as` when an alias was used, argument keys only), `agent.tool_completed` (redacted summary), `agent.tool_approval_pending`, `agent.decision_rejected` (`reason`), `agent.evidence_missing`.
+- Transcript: additive `routing: { requires_tools, reason }`, `capability_discovery`, and bounded `evidence_ledger` fields; steps record canonical tool names, plus `invalid` steps with rejection reasons. The ledger contains tool names, timestamps and success only — never raw arguments, secrets, or hidden reasoning.
 
 ## Manual acceptance test
 
@@ -235,6 +253,15 @@ authority (`src/compute/inference-service` → Placement). The bridge no longer
 maintains its own provider-selection/fallback tree. `callLLM` states
 requirements and lets Compute own provider, model, endpoint, credentials, health
 eligibility, and fallback across gate-passing providers.
+
+Agent requests use the Compute workload class `interactive_agent` and request
+tool-capable models for structured planning. The local Ollama provider is an
+ordinary Compute candidate, so a capable Sidekick host can win placement when
+its registered model/runtime and health satisfy the request; trusted remote
+workers remain available through the same placement gates. A provider's
+accelerator use is reported honestly by Compute (for example, unverified when
+the runtime has not independently attested it), never inferred merely from a
+GPU-shaped configuration value.
 
 Agent conversations are classified `private`, so under the secure-by-default
 provider policy they stay on local/trusted providers and **fail closed** rather

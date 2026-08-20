@@ -80,7 +80,18 @@ function createRegistry(descriptors) {
     get: resolve,
     has: name => Boolean(resolve(name)),
     toolsMap: () => Object.fromEntries(definitionOrder.map(d => [d.name, d.handler])),
-    toolDefs: () => definitionOrder.map(d => ({ name: d.name, description: d.description, args: d.args, category: d.category, risk: d.risk, source: d.source, family: d.family })),
+    toolDefs: () => definitionOrder.map(d => ({
+      name: d.name,
+      description: d.description,
+      args: d.args,
+      category: d.category,
+      risk: d.risk,
+      source: d.source,
+      family: d.family,
+      // Declarative semantic labels help Agent discovery. They do not grant
+      // authority; source policy and the dispatcher remain authoritative.
+      capabilities: d.capabilities,
+    })),
     schemas: () => Object.fromEntries(definitionOrder.map(d => [d.name, d.schema])),
   });
 }

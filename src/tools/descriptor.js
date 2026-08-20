@@ -1,6 +1,32 @@
 const { z } = require("zod");
 const { RISK_LEVELS } = require("./metadata");
 
+const MAX_CAPABILITIES = 32;
+const MAX_CAPABILITY_LENGTH = 120;
+
+function normalizeCapabilities(value) {
+  if (!Array.isArray(value)) return Object.freeze([]);
+  const labels = [];
+  const seen = new Set();
+  for (const raw of value.slice(0, MAX_CAPABILITIES * 2)) {
+    const label = String(raw == null ? "" : raw)
+      .replace(/[\u0000-\u001f\u007f]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, MAX_CAPABILITY_LENGTH);
+    // Capability labels are identifiers/short tags, not free-form prompt
+    // content. Drop instruction-shaped labels rather than rendering them in
+    // a system prompt where even bounded text could become misleading.
+    if (!label || !/^[A-Za-z0-9][A-Za-z0-9 _./-]*$/.test(label) ||
+        /\b(?:ignore|override|bypass|reveal|execute|call)\b/i.test(label) ||
+        /^(?:system|assistant|user)\s*$/i.test(label) || seen.has(label)) continue;
+    seen.add(label);
+    labels.push(label);
+    if (labels.length >= MAX_CAPABILITIES) break;
+  }
+  return Object.freeze(labels);
+}
+
 function isZodSchema(schema) {
   return !!schema && typeof schema === "object" && typeof schema.safeParse === "function";
 }
@@ -32,7 +58,11 @@ function normalizeDescriptor(input) {
     provenance: input.provenance || null,
     authorizationPermission: input.authorizationPermission || null,
     approval: input.approval || null,
-    capabilities: Object.freeze([...(input.capabilities || [])]),
+    // Capability labels are declarative prompt metadata. Bound and sanitize
+    // them at the canonical descriptor boundary so an untrusted module
+    // manifest cannot inject control characters, duplicate labels, or an
+    // unbounded prompt fragment into any consumer of the registry.
+    capabilities: normalizeCapabilities(input.capabilities),
     visibility: input.visibility || "public",
     result: input.result || null,
     handler: input.handler,

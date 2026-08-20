@@ -215,7 +215,11 @@ function classifyEvidenceRequirement(goal) {
   // request even when it does not mention a concrete tool. Routing it into
   // the governed tool loop lets the planner select the pack's structured
   // tools; the dispatcher still owns authorization, policy, and approval.
-  const namedCapabilityPattern = /\b(?:use|run|perform|execute|invoke|call|check|verify|capture|extract|navigate|browse|automate|download|upload|login)\b[\s\S]{0,80}\b(?:browser[ -]automation|security[ -]research|developer|jellyfin|proxmox|capability\s+pack|pack)\b|\b(?:browser[ -]automation|security[ -]research|developer|jellyfin|proxmox|capability\s+pack|pack)\b[\s\S]{0,80}\b(?:use|run|perform|execute|invoke|call|check|verify|capture|extract|navigate|browse|automate|download|upload|login)\b/;
+  const namedCapabilityPattern = /\b(?:use|run|perform|execute|invoke|call|check|verify|capture|extract|navigate|browse|automate|download|upload|login)\b[\s\S]{0,80}\b(?:capabilit(?:y|ies)|pack(?:age)?s?|module(?:s)?|workflow(?:s)?)\b|\b(?:capabilit(?:y|ies)|pack(?:age)?s?|module(?:s)?|workflow(?:s)?)\b[\s\S]{0,80}\b(?:use|run|perform|execute|invoke|call|check|verify|capture|extract|navigate|browse|automate|download|upload|login)\b/;
+  // A named integration/domain is data, not an Agent-specific pack rule. The
+  // casing signal lets a request naming any registered integration enter the
+  // same evidence path without maintaining a list of product names.
+  const namedDomainPattern = /\b(?:[Uu]se|[Rr]un|[Pp]erform|[Ee]xecute|[Ii]nvoke|[Cc]all|[Cc]heck|[Vv]erify|[Cc]apture|[Ee]xtract|[Nn]avigate|[Bb]rowse|[Aa]utomate|[Dd]ownload|[Uu]pload|[Ll]ogin)\b[\s\S]{0,80}\b[A-Z][A-Za-z0-9_-]{2,}\b/;
   // "How can I / how does someone ..." is a request for instructions, not for
   // Sidekick to inspect anything — unlike "how much disk space is free", which
   // asks about actual current state and stays on the tool path.
@@ -228,6 +232,7 @@ function classifyEvidenceRequirement(goal) {
   // "turn the volume down"), so they only route when an inspection verb,
   // exactness signal, or state word appears alongside them.
   const statefulPhrasePattern = /\b(free\s+space|space\s+(?:left|free|available)|disk\s+(?:usage|space)|(?:cpu|processor|memory|ram|swap|storage|bandwidth|network)\s+(?:usage|utili[sz]ation|consumption)|cpu\s+load|load\s+average|free\s+memory|available\s+memory|running\s+process(?:es)?|process\s+list|open\s+ports?|listening\s+ports?|network\s+interfaces?)\b/;
+  const currentStateQuestionPattern = /\b(?:is|are|does|do|has|have|what|which|who)\b[\s\S]{0,100}\b(?:playing|running|online|offline|healthy|available|active|connected|working|down|up|idle|busy|open|closed|pending|loaded|mounted|reachable)\b|\b(?:playing|running|online|offline|healthy|available|active|connected|working|down|up|idle|busy|open|closed|pending|loaded|mounted|reachable)\b[\s\S]{0,100}\b(?:is|are|does|do|has|have)\b/;
   const inspectableNounPattern = /\b(disk|drives?|volumes?|mount(?:s|ed)?|storage|filesystem|file\s+system|cpu|cpus|processor|uptime|ram|swap|bandwidth)\b/;
   const inspectionContextPattern = new RegExp(
     localActionPattern.source + "|" + exactnessPattern.source +
@@ -235,13 +240,23 @@ function classifyEvidenceRequirement(goal) {
 
   if (toolNamePattern.test(text)) return { requiresTools: true, reason: "explicit_tool_reference" };
 
-  if (namedCapabilityPattern.test(text)) return { requiresTools: true, reason: "named_capability_request" };
+  if (namedCapabilityPattern.test(text) || (namedDomainPattern.test(String(goal || "")) && exactnessPattern.test(text))) return { requiresTools: true, reason: "named_capability_request" };
 
   if (conceptualPromptPattern.test(text) && !exactnessPattern.test(text)) {
     return { requiresTools: false, reason: "conceptual_prompt" };
   }
 
-  if (statefulPhrasePattern.test(text) ||
+  // Generic capability actions (search, inventory, playback, lifecycle and
+  // diagnostics) often name an entity without using a product-specific word.
+  // Route those requests into the governed Agent context so the broker/model
+  // can discover the installed capability. The conceptual guard above keeps
+  // instructional and explanatory prompts conversational.
+  const capabilityActionPattern = /\b(?:find|search|list|show|get|start|stop|restart|play|launch|delete|remove|create|update|inspect|diagnose)\b(?:\s+\S+){1,12}/;
+  if (capabilityActionPattern.test(text) && !/\b(?:how|why|explain|describe|definition|meaning|whether)\b/.test(text)) {
+    return { requiresTools: true, reason: "capability_action_request" };
+  }
+
+  if (statefulPhrasePattern.test(text) || (currentStateQuestionPattern.test(text) && !localResourcePattern.test(text)) ||
       (inspectableNounPattern.test(text) && inspectionContextPattern.test(text))) {
     return { requiresTools: true, reason: "system_inspection" };
   }
