@@ -55,14 +55,14 @@ tag when available, for example:
   "mcpServers": {
     "sidekick": {
       "command": "npx",
-      "args": ["-y", "github:geoffmcc/sidekick#v1.1.0"]
+      "args": ["-y", "github:geoffmcc/sidekick#v1.2.0"]
     }
   }
 }
 
 ```
 
-For production use, prefer a pinned GitHub Release tag such as `v1.1.0` over
+For production use, prefer a pinned GitHub Release tag such as `v1.2.0` over
 the mutable branch form. The tag should point to the reviewed release commit
 and match the version in `package.json`. The unpinned GitHub form remains
 useful for development and for trying the latest branch state; it is not a
