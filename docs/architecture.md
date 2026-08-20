@@ -6,17 +6,22 @@ Verified date: 2026-08-12
 
 For Phase 0R classifications, target boundaries, and the migration roadmap, see `platform-convergence-audit.md`, `platform-target-architecture.md`, and `platform-roadmap.md`.
 
-Sidekick has three core Node.js services sharing a SQLite database and data directory, plus optional enrolled Compute worker processes.
+Sidekick has three dedicated Node.js services sharing a SQLite database and
+data directory, plus a no-dedicated-server local stdio option that launches
+the same MCP runtime as a child process. Optional enrolled Compute worker
+processes are shared by both ways of running Sidekick.
 
 ```text
-MCP client / agent
+MCP client / agent                         MCP client
+        |                                       |
+        | Bearer token                           | stdio JSON-RPC
+        v                                       v
+MCP Server :4097                         src/cli.js -> same MCP factory
+        |                                       |
+        +--------------------+------------------+
+                             v
+             src/tools/index.js -> descriptor registry -> centralized dispatcher
         |
-        | Bearer token
-        v
-MCP Server :4097
-        |
-        v
-src/tools/index.js -> descriptor registry -> centralized dispatcher
         |                                  |
         |                                  +-> policy / approvals / redaction / audit
         +-> descriptor-family handlers, module descriptors, or compute tools
@@ -40,6 +45,12 @@ The MCP server creates an `McpServer` from `@modelcontextprotocol/sdk`, register
 - authenticated `/compute/enrollment/*`, `/compute/worker/*`, and `/compute/admin/*` routes for Sidekick Compute.
 
 The server requires `Authorization: Bearer <SIDEKICK_API_KEY>` for MCP and administrative routes and can enforce `SIDEKICK_ALLOWED_IPS`. API keys are not accepted in query strings because URLs can leak through logs, history, and referrer metadata. Worker protocol routes use scoped worker credentials, while enrollment exchange uses one-time enrollment tokens.
+
+When `src/index.js` is loaded by `src/cli.js`, it does not bind the dedicated
+HTTP listener. The CLI connects the same `createMcpServer()` factory to the
+SDK’s stdio transport. Local calls still enter `callMcpTool()` and therefore
+retain the normal schemas, source context, policy, approval, audit, redaction,
+and execution boundaries.
 
 ### Tool runtime: `src/tools/`
 

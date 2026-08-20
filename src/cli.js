@@ -1,0 +1,55 @@
+#!/usr/bin/env node
+"use strict";
+
+const fs = require("fs");
+const { StdioServerTransport } = require("@modelcontextprotocol/sdk/server/stdio.js");
+const packageJson = require("../package.json");
+const { prepareLocalEnvironment, acquireBootstrapLock, getLocalPaths } = require("./local/paths");
+
+function usage() {
+  console.error("Usage: sidekick [setup|doctor|status|version]");
+  console.error("With no command, Sidekick starts its full governed MCP stdio runtime.");
+}
+
+function status() {
+  const paths = getLocalPaths();
+  const exists = fs.existsSync(paths.db);
+  console.log(JSON.stringify({ version: packageJson.version, home: paths.home, data: paths.data, database_initialized: exists }, null, 2));
+}
+
+async function run() {
+  const command = process.argv[2];
+  if (command === "version") return console.log(packageJson.version);
+  if (command === "status") return status();
+  if (command === "doctor" || command === "setup") {
+    const paths = prepareLocalEnvironment();
+    const release = acquireBootstrapLock(paths.lock);
+    try { console.error(`Sidekick local data: ${paths.data}`); }
+    finally { release(); }
+    if (command === "doctor") return status();
+    return;
+  }
+  if (command && command !== "start") { usage(); process.exitCode = 2; return; }
+
+  const paths = prepareLocalEnvironment();
+  const release = acquireBootstrapLock(paths.lock);
+  try {
+    // Every startup diagnostic from the existing runtime is redirected away
+    // from stdout. The MCP SDK owns stdout for framed protocol traffic.
+    console.log = (...args) => console.error(...args);
+    process.env.SIDEKICK_LOCAL = "1";
+    const { createMcpServer } = require("./index");
+    const server = createMcpServer(() => null);
+    const transport = new StdioServerTransport();
+    const close = async () => {
+      try { await server.close(); } catch (error) { console.error(`Sidekick shutdown failed: ${error.message}`); }
+    };
+    process.once("SIGINT", () => { close().finally(() => process.exit(0)); });
+    process.once("SIGTERM", () => { close().finally(() => process.exit(0)); });
+    await server.connect(transport);
+  } finally {
+    release();
+  }
+}
+
+run().catch(error => { console.error(`Sidekick startup failed: ${error.message}`); process.exitCode = 1; });

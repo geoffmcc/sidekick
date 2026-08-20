@@ -1,11 +1,21 @@
 {
   "name": "sidekick",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Sidekick — Autonomous Agent Platform",
   "main": "src/index.js",
   "bin": {
+    "sidekick": "src/cli.js",
     "sidekick-compute-worker": "src/compute/worker-agent.js"
   },
+  "files": [
+    "src",
+    "migrations",
+    "scripts",
+    "README.md",
+    "docs",
+    "package.json",
+    "LICENSE"
+  ],
   "scripts": {
     "start": "node src/index.js",
     "dashboard": "node src/dashboard.js",

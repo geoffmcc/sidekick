@@ -10,6 +10,69 @@
 - Optional: Ollama for local LLM calls.
 - Optional: Groq API key for cloud LLM calls.
 
+## Deployment topologies
+
+Sidekick is one product with two supported topologies:
+
+```text
+Sidekick
+├── Local MCP runtime (no dedicated server; MCP client launches stdio)
+└── Dedicated server (server/VM/LXC with HTTP, dashboard, and Agent Bridge)
+```
+
+The local runtime is an alternative to deploying Sidekick on a dedicated
+server. It uses the same tool registry, dispatcher, policy, approvals,
+audit, memory, workflow, capability-pack, and Compute code as the dedicated
+topology. A capability is unavailable only when its normal environment,
+provider, credential, target, or hardware requirement is unavailable.
+
+## Use Sidekick without a dedicated server: local `npx` runtime
+
+Any MCP client that supports child-process stdio servers can launch a full
+Sidekick runtime on the local workstation, without deploying a separate
+Sidekick server or cloning the repository:
+
+```json
+{
+  "mcpServers": {
+    "sidekick": {
+      "command": "npx",
+      "args": ["-y", "github:geoffmcc/sidekick"]
+    }
+  }
+}
+```
+
+For reproducible supply-chain behavior, prefer a published version or an
+immutable Git tag when one is available. A GitHub branch reference follows
+the branch as it changes; `npx` downloads the package and its declared
+dependencies, then launches the `sidekick` executable. No repository-local
+working directory is required.
+
+The child process speaks newline-framed MCP JSON-RPC on stdout. Diagnostics go
+to stderr. On first launch it creates a private per-user Sidekick home and
+applies the existing database migrations. The home is outside the npm cache,
+so memories, handoffs, projects, workflows, audit history, configuration, and
+other supported state survive client restarts, reboots, cache cleanup, and
+package upgrades. Set `SIDEKICK_HOME` to choose another absolute home; the
+database is stored below its `data` directory. Initialization is serialized by
+an atomic local lock and is repeatable without deleting existing state.
+
+Useful local commands are:
+
+```bash
+npx -y github:geoffmcc/sidekick version
+npx -y github:geoffmcc/sidekick status
+npx -y github:geoffmcc/sidekick doctor
+```
+
+`setup`/`doctor` prepare or inspect the local home; the bare executable starts
+the MCP runtime. No dedicated Sidekick server is required. The local runtime
+does not require a Cloudflare account or
+`CLOUDFLARE_API_TOKEN`, and it does not add telemetry or hidden network calls.
+Optional providers, reachable remote workers, and capability packs are
+detected and governed through the same normal Sidekick paths.
+
 ## Local development install
 
 ```bash
@@ -86,6 +149,13 @@ systemctl status sidekick-agent
 ```
 
 ## MCP client configuration
+
+### Local stdio clients
+
+Claude Desktop, Cursor, Windsurf, Cline/Roo-Code, Zed, and Continue all use an
+equivalent `command`/`args` shape when their MCP configuration supports stdio.
+Use the local example above; do not add unrelated environment secrets. If a
+client uses a different top-level key, keep the same `command` and `args`.
 
 Use Streamable HTTP with the MCP server URL and bearer token. A typical config shape is:
 
