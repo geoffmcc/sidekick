@@ -31,6 +31,58 @@ function isZodSchema(schema) {
   return !!schema && typeof schema === "object" && typeof schema.safeParse === "function";
 }
 
+const MAX_ARGUMENTS = 48;
+const MAX_ENUM_VALUES = 32;
+const MAX_ARGUMENT_DESCRIPTION_LENGTH = 240;
+
+function schemaShape(schema) {
+  if (!schema || typeof schema !== "object") return null;
+  if (schema.shape && typeof schema.shape === "object") return schema.shape;
+  const shape = schema._def && schema._def.shape;
+  return typeof shape === "function" ? shape() : (shape && typeof shape === "object" ? shape : null);
+}
+
+function schemaTypeDescription(schema) {
+  if (!schema || typeof schema !== "object") return null;
+  const def = schema.def || schema._def || {};
+  const type = String(def.type || def.typeName || schema.type || "").toLowerCase();
+  if (type === "optional" || type === "nullable" || type === "default") {
+    return schemaTypeDescription(def.innerType || schema.unwrap?.());
+  }
+  if (type === "enum") {
+    const values = Array.isArray(schema.options)
+      ? schema.options
+      : Object.values(def.entries || {});
+    const bounded = values.map(value => String(value).slice(0, 80)).slice(0, MAX_ENUM_VALUES);
+    return bounded.length ? `string (${bounded.join("|")})` : "string";
+  }
+  if (type === "string") return "string";
+  if (type === "number" || type === "bigint") return "number";
+  if (type === "boolean") return "boolean";
+  if (type === "array" || type === "set") return "array";
+  if (type === "object" || type === "record") return "object";
+  if (type === "date") return "string (date-time)";
+  return null;
+}
+
+/**
+ * Produce a bounded, model-facing argument signature from the same schema
+ * that the dispatcher validates. This is declarative data only: it contains
+ * no handlers, defaults, credentials, or authority. Legacy `args` remain the
+ * fallback for fields whose schema cannot be described safely.
+ */
+function describeSchemaArgs(schema, legacyArgs = {}) {
+  const shape = schemaShape(schema);
+  const output = { ...(legacyArgs && typeof legacyArgs === "object" ? legacyArgs : {}) };
+  if (!shape) return Object.freeze(output);
+  for (const [name, field] of Object.entries(shape).slice(0, MAX_ARGUMENTS)) {
+    const type = schemaTypeDescription(field);
+    if (!type) continue;
+    output[name] = type.slice(0, MAX_ARGUMENT_DESCRIPTION_LENGTH);
+  }
+  return Object.freeze(output);
+}
+
 function normalizeDescriptor(input) {
   if (!input || typeof input !== "object") throw new Error("Tool descriptor must be an object");
   const name = String(input.name || "").trim();
@@ -49,6 +101,7 @@ function normalizeDescriptor(input) {
     description,
     schema: input.schema,
     args: input.args || {},
+    argumentDescriptions: describeSchemaArgs(input.schema, input.args),
     risk,
     category,
     source: input.source || "builtin",
@@ -69,4 +122,4 @@ function normalizeDescriptor(input) {
   });
 }
 
-module.exports = { normalizeDescriptor, isZodSchema, z };
+module.exports = { normalizeDescriptor, isZodSchema, describeSchemaArgs, z };
