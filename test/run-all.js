@@ -35,6 +35,7 @@ const suites = [
   { file: 'test/ci-status.test.js', critical: true, description: 'Read-only GitHub CI status aggregation' },
   { file: 'test/health.test.js', critical: true, description: 'Composite health aggregation and stable failure shapes' },
   { file: 'test/agent-protocol.test.js', critical: true, description: 'Agent decision parsing, model selection, and chat roles' },
+  { file: 'test/agent-capability-broker.test.js', critical: true, description: 'Generic canonical Agent capability discovery and live-state routing' },
   { file: 'test/agent-loop.test.js', critical: true, description: 'Agent Bridge tool-execution loop (approved, denied, unavailable, failing, and no-tool paths)' },
   { file: 'test/agent-bridge-prompt.test.js', critical: true, description: 'Agent Bridge system prompt derives from the live canonical tool catalog' },
   { file: 'test/brain.test.js', critical: true, description: 'Brain v0.1 deterministic plan validator and orchestrator lifecycle/evidence/cancellation' },

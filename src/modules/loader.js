@@ -207,6 +207,7 @@ function buildModuleDescriptors(record, entry) {
       // inherently module code and stay by reference).
       args: freezeDeep(structuredClone(input.args || {})),
       aliases: [...(input.aliases || [])],
+      capabilities: [...new Set([...(input.capabilities || []), ...(record.manifest.capabilities || [])])],
       source: `module:${record.name}`,
       family: null,
       authorizationPermission: declaredTool?.permission || null,

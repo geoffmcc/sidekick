@@ -44,8 +44,11 @@ function getToolDefsForSource(source = getCurrentSource()) {
     // filter is skipped (mirror-only behavior, as before) rather than hiding
     // everything.
     let liveNames = null;
+    let liveDefinitions = null;
     try {
-      liveNames = new Set(require("./tools/index").getBuiltinRegistry().toolDefs().map(def => stripSidekickPrefix(def.name)));
+      const liveDefs = require("./tools/index").getBuiltinRegistry().toolDefs();
+      liveNames = new Set(liveDefs.map(def => stripSidekickPrefix(def.name)));
+      liveDefinitions = new Map(liveDefs.map(def => [stripSidekickPrefix(def.name), def]));
       for (const generated of dbStore.listGeneratedCapabilities({ states: ["trial", "active"] })) {
         liveNames.add(stripSidekickPrefix(generated.name));
       }
@@ -56,6 +59,7 @@ function getToolDefsForSource(source = getCurrentSource()) {
       const approval = getApprovalDecision(tool.name, source);
       const args = tool.args_json ? JSON.parse(tool.args_json) : {};
 
+      const liveDef = liveDefinitions && liveDefinitions.get(stripSidekickPrefix(tool.name));
       return {
         name: tool.name,
         description: tool.description,
@@ -63,6 +67,10 @@ function getToolDefsForSource(source = getCurrentSource()) {
         category: tool.category || TOOL_CATEGORIES[tool.name] || "Uncategorized",
         risk: policy.risk,
         enabled: policy.allowed,
+        // Preserve semantic metadata from the same live canonical registry
+        // that proved the tool exists. The database mirror has no authority
+        // to invent Agent-facing capability labels.
+        capabilities: liveDef?.capabilities || [],
         policy: policy.reason,
         approval_required: approval.required,
         approval: approval.reason

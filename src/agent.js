@@ -34,9 +34,11 @@ function brainAgentTools() {
 }
 const { recallMemoryForTextAsync, formatMemoryRecall, recordAgentTaskMemory, buildMemoryBrief, inferProjectFromText } = require("./memory");
 const { classifyEvidenceRequirement } = require("./agent-protocol");
+const { discoverCapabilities, buildAgentCapabilityMetadata } = require("./agent/capability-broker");
 const { runToolLoop } = require("./agent-loop");
 const packRepository = require("./packs/repository");
 const packLifecycle = require("./packs/lifecycle");
+const moduleRepository = require("./modules/repository");
 // Optional, feature-flagged. Guarded like inferenceService so a Brain import
 // error can never affect the default (Brain-disabled) Agent Bridge path.
 let brain = null;
@@ -500,6 +502,17 @@ function buildInstalledPackContext(overrides) {
   return value;
 }
 
+function getAgentCapabilityMetadata() {
+  try {
+    return buildAgentCapabilityMetadata({
+      packs: packRepository.listPacks(),
+      modules: moduleRepository.listModules(),
+    });
+  } catch {
+    return {};
+  }
+}
+
 function buildSystemPrompt() {
   const availableTools = getToolDefsForSource("agent").filter(t => t.enabled);
   const installedPackContext = buildInstalledPackContext();
@@ -507,7 +520,8 @@ function buildSystemPrompt() {
   // unattended should be chosen knowingly, not discovered at dispatch time.
   const toolDescs = availableTools.map(t =>
     "- " + t.name + "(" + Object.keys(t.args).join(", ") + "): " + t.description + " [risk: " + t.risk + "]" +
-    (t.approval_required ? " [requires human approval]" : "")
+    (t.approval_required ? " [requires human approval]" : "") +
+    (Array.isArray(t.capabilities) && t.capabilities.length ? " [capabilities: " + t.capabilities.slice(0, 12).join(", ") + "]" : "")
   ).join("\n");
   // The worked examples must only name tools this source can actually reach.
   // Steering toward bash when policy hides it teaches the model to call a tool
@@ -591,6 +605,12 @@ async function callLLM(messages, options = {}) {
     maxTokens: typeof options.maxTokens === "number" ? options.maxTokens : undefined,
     timeout: typeof options.timeoutMs === "number" ? options.timeoutMs : undefined,
     format: options.format,
+    workloadClass: options.workloadClass || "interactive_agent",
+    requiresTools: options.requiresTools === true || options.format === "json",
+    // JSON mode is requested when supported by the adapter, but it is not a
+    // placement hard gate: older trusted local models may still provide the
+    // bounded JSON contract through prompting and parser validation.
+    requiresStructuredOutput: options.requiresStructuredOutput === true,
     dataClassification: "private",
     preferences: { allowFallback: true },
   });
@@ -848,6 +868,13 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
   // run throws before reaching the loop.
   const classification = classifyEvidenceRequirement(goal);
   const useTools = classification.requiresTools;
+  const visibleAgentTools = getToolDefsForSource("agent").filter(t => t.enabled);
+  const capabilityCandidates = discoverCapabilities(goal, visibleAgentTools, { limit: 24 });
+  const capabilityDiscovery = {
+    visible_count: visibleAgentTools.length,
+    candidate_count: capabilityCandidates.length,
+    candidates: capabilityCandidates.slice(0, 24).map(tool => tool.name),
+  };
 
   let status = "iteration_limit";
   let brainInfo = null;
@@ -909,8 +936,10 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
 
   emit(taskId, { type: "step", text: "Analyzing task: " + goal });
   emit(taskId, { type: "step", text: "Routing: " + (useTools ? "tool loop" : "direct answer") + " (" + classification.reason + ")" });
+  emit(taskId, { type: "diagnostic", classification: classification.reason, capabilityDiscovery });
   appendAgentExecutionEvent(platformExecution, "agent.task_started", { task_id: taskId, project: inferredProject, use_tools: useTools });
   appendAgentExecutionEvent(platformExecution, "agent.evidence_classified", { task_id: taskId, requires_tools: useTools, reason: classification.reason });
+  appendAgentExecutionEvent(platformExecution, "agent.capability_discovery", capabilityDiscovery);
   if (combinedBrief) {
     emit(taskId, { type: "step", text: "Loaded memory brief with relevant context" });
     appendAgentExecutionEvent(platformExecution, "agent.memory_brief_loaded", { task_id: taskId, project: inferredProject });
@@ -937,6 +966,7 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
       // (#296): without it the planner is pack-blind and never plans a pack
       // tool for a domain the pack owns. Bounded again inside the planner.
       packContext: buildInstalledPackContext(),
+      capabilityMetadata: getAgentCapabilityMetadata(),
       callTool: (name, args) => callAgentTool(name, args, {
         taskId,
         project: inferredProject,
@@ -1072,6 +1102,10 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
     status = loop.status;
     finalResult = loop.finalResult;
     terminalError = loop.terminalError;
+    // The ledger is intentionally bounded and contains no raw arguments or
+    // tool output. Full evidence remains in the governed execution/transcript
+    // paths, redacted by their existing controls.
+    steps.push({ type: "evidence_ledger", entries: loop.evidenceLedger || [] });
   }
   } catch (e) {
     // Unexpected throw inside the run: record it as an honest terminal failure
@@ -1119,6 +1153,7 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
     acting_for_principal_id: parentContext ? (parentContext.actingForPrincipalId || null) : null,
     project: inferredProject || null,
     routing: { requires_tools: useTools, reason: classification.reason },
+    capability_discovery: capabilityDiscovery,
     brain: brainInfo,
     lineage: {
       platform_execution_id: platformExecution ? platformExecution.execution_id : null,
