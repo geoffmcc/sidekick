@@ -3,7 +3,7 @@
 const assert = require("assert");
 const { discoverCapabilities, buildAgentCapabilityMetadata } = require("../src/agent/capability-broker");
 const { classifyEvidenceRequirement } = require("../src/agent-protocol");
-const { normalizeDescriptor } = require("../src/tools/descriptor");
+const { normalizeDescriptor, describeSchemaArgs } = require("../src/tools/descriptor");
 const { z } = require("zod");
 
 const catalog = [
@@ -68,5 +68,14 @@ const safeDescriptor = normalizeDescriptor({
 assert.ok(safeDescriptor.capabilities.length <= 32, "canonical descriptors bound capability labels");
 assert.ok(safeDescriptor.capabilities.every(label => !/[\u0000-\u001f\u007f]/.test(label)), "capability labels contain no control characters");
 assert.ok(!safeDescriptor.capabilities.some(label => label.includes("SYSTEM:")), "capability labels cannot carry privileged prompt text");
+
+const genericSchemaArgs = describeSchemaArgs(z.object({
+  action: z.enum(["inspect_status", "list_items"]),
+  profile: z.string().optional(),
+  limit: z.number().optional(),
+}));
+assert.strictEqual(genericSchemaArgs.action, "string (inspect_status|list_items)", "Agent catalog preserves canonical enum constraints generically");
+assert.strictEqual(genericSchemaArgs.profile, "string", "Agent catalog preserves optional scalar types");
+assert.strictEqual(genericSchemaArgs.limit, "number", "Agent catalog preserves numeric scalar types");
 
 console.log("Agent capability broker tests passed");

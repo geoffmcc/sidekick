@@ -83,7 +83,8 @@ function createRegistry(descriptors) {
     toolDefs: () => definitionOrder.map(d => ({
       name: d.name,
       description: d.description,
-      args: d.args,
+      args: d.argumentDescriptions || d.args,
+      argumentDescriptions: d.argumentDescriptions || d.args,
       category: d.category,
       risk: d.risk,
       source: d.source,

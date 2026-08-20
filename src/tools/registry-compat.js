@@ -18,7 +18,7 @@ function getToolDefsForSource(source = getCurrentSource()) {
       return TOOL_DEFS.map(def => {
         const policy = getToolPolicyDecision(def.name, source);
         const approval = getApprovalDecision(def.name, source);
-        return { ...def, category: def.category || TOOL_CATEGORIES[def.name] || "Uncategorized", risk: policy.risk, enabled: policy.allowed, policy: policy.reason, approval_required: approval.required, approval: approval.reason };
+        return { ...def, args: def.argumentDescriptions || def.args || {}, category: def.category || TOOL_CATEGORIES[def.name] || "Uncategorized", risk: policy.risk, enabled: policy.allowed, policy: policy.reason, approval_required: approval.required, approval: approval.reason };
       });
     }
 
@@ -63,7 +63,8 @@ function getToolDefsForSource(source = getCurrentSource()) {
       return {
         name: tool.name,
         description: tool.description,
-        args: args,
+        args: liveDef?.argumentDescriptions || args,
+        argumentDescriptions: liveDef?.argumentDescriptions || args,
         category: tool.category || TOOL_CATEGORIES[tool.name] || "Uncategorized",
         risk: policy.risk,
         enabled: policy.allowed,
@@ -82,7 +83,7 @@ function getToolDefsForSource(source = getCurrentSource()) {
     return TOOL_DEFS.map(def => {
       const policy = getToolPolicyDecision(def.name, source);
       const approval = getApprovalDecision(def.name, source);
-      return { ...def, category: def.category || TOOL_CATEGORIES[def.name] || "Uncategorized", risk: policy.risk, enabled: policy.allowed, policy: policy.reason, approval_required: approval.required, approval: approval.reason };
+      return { ...def, args: def.argumentDescriptions || def.args || {}, category: def.category || TOOL_CATEGORIES[def.name] || "Uncategorized", risk: policy.risk, enabled: policy.allowed, policy: policy.reason, approval_required: approval.required, approval: approval.reason };
     });
   }
 }

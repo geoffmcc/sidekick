@@ -137,15 +137,19 @@ async function runLive() {
   const steps = Array.isArray(transcript.steps) ? transcript.steps : [];
   const tools = steps.filter(step => step && step.type === "tool").map(step => step.tool).filter(Boolean);
   const evidence = steps.find(step => step && step.type === "evidence_ledger");
+  const evidenceEntries = Array.isArray(evidence?.entries) ? evidence.entries.length : 0;
   if (options.expectTool) check(tools.includes(options.expectTool), `live Agent did not call expected tool '${options.expectTool}'`);
-  if (options.expectAction) check(tools.length > 0, "live Agent produced no tool step for the expected evidence request");
+  if (options.expectAction) {
+    check(transcript.status === "completed", `live Agent task did not complete successfully (status: ${transcript.status})`);
+    check(evidenceEntries > 0, "live Agent produced no successful evidence-ledger entry for the expected current-state request");
+  }
 
   return {
     task_id: task.taskId,
     status: transcript.status,
     result: String(transcript.result || transcript.error || "").slice(0, 1000),
     tools,
-    evidence_entries: Array.isArray(evidence?.entries) ? evidence.entries.length : 0,
+    evidence_entries: evidenceEntries,
   };
 }
 
