@@ -136,7 +136,15 @@ function buildAgentCapabilityMetadata({ packs = [], modules = [], workflows = []
         .map(value => boundedText(value, 160)).filter(Boolean);
       if (!metadata[step.tool]) metadata[step.tool] = { domain: "", description: "", terms: [] };
       const entry = metadata[step.tool];
-      entry.terms = [...new Set([...terms, ...(entry.terms || [])])].slice(0, 32);
+      entry.actions = [...new Set([...(entry.actions || []), ...(action ? [action] : [])])].slice(0, 64);
+      // Keep executable action labels ahead of broad pack prose. The prompt
+      // is intentionally bounded, but a relevant registered action must not
+      // disappear merely because an earlier workflow contributed descriptions
+      // and tags first.
+      entry.terms = [...new Set([
+        ...(entry.actions || []),
+        ...(entry.terms || []),
+      ])].slice(0, 32);
       if (!entry.description && definition.description) entry.description = boundedText(definition.description, 300);
     }
   }
