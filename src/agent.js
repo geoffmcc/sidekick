@@ -545,8 +545,8 @@ function buildSystemPrompt(goal = "") {
   const candidateDescs = capabilityCandidates.map(t =>
     "- " + t.name + ": " + boundedText(t.description, 240) + " [risk: " + t.risk + "]" +
     (t.approval_required ? " [requires human approval]" : "") +
-    (Array.isArray(capabilityMetadata[t.name]?.terms) && capabilityMetadata[t.name].terms.length
-      ? " [registered actions: " + capabilityMetadata[t.name].terms.slice(0, 32).map(term => boundedText(term, 80)).join(", ") + "]"
+    (Array.isArray(capabilityMetadata[t.name]?.actionHints) && capabilityMetadata[t.name].actionHints.length
+      ? " [registered action guidance: " + capabilityMetadata[t.name].actionHints.slice(0, 32).map(term => boundedText(term, 160)).join(" | ") + "]"
       : "")
   ).join("\n");
   const taskCapabilityGuidance = goal

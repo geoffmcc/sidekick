@@ -49,8 +49,11 @@ function formatToolCatalog(agentTools, metadata = {}) {
       if (entries.length) args = "\n  arguments: { " + entries.join(" · ") + " }";
     }
     const extra = metadata && metadata[t.name];
-    const semantic = extra && Array.isArray(extra.terms)
-      ? extra.terms.map(term => String(term)
+    const semanticTerms = extra && Array.isArray(extra.actionHints) && extra.actionHints.length
+      ? extra.actionHints
+      : (extra && Array.isArray(extra.terms) ? extra.terms : []);
+    const semantic = semanticTerms.length
+      ? semanticTerms.map(term => String(term)
         .replace(/[\u0000-\u001f\u007f]/g, " ")
         .replace(/\b(?:system|assistant|user|developer)\s*:/gi, match => match.replace(":", " -"))
         .replace(/\s+/g, " ").trim().slice(0, 160)).filter(Boolean).slice(0, 32)
