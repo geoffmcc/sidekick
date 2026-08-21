@@ -16,7 +16,7 @@ fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 
 const ROOT = path.join(__dirname, '..');
-const indexSource = fs.readFileSync(path.join(ROOT, 'src', 'index.js'), 'utf-8');
+const mcpServerSource = fs.readFileSync(path.join(ROOT, 'src', 'mcp', 'server.js'), 'utf-8');
 
 console.log('Running Tool Log Correlation Tests...\n');
 
@@ -37,8 +37,8 @@ function test(name, fn) {
 // Rebuild the helper in isolation from the real source so the assertions below
 // exercise the shipped logic rather than a copy.
 function loadToolCallContext() {
-  const match = indexSource.match(/function toolCallContext\(args, extra\) \{[\s\S]*?\n\}/);
-  assert.ok(match, 'toolCallContext is defined in src/index.js');
+  const match = mcpServerSource.match(/function toolCallContext\(args, extra\) \{[\s\S]*?\n\}/);
+  assert.ok(match, 'toolCallContext is defined in src/mcp/server.js');
   // eslint-disable-next-line no-new-func
   return new Function(`${match[0]}; return toolCallContext;`)();
 }
@@ -59,14 +59,14 @@ test('a missing session id is left absent rather than invented', () => {
 });
 
 test('every MCP registration site passes the shared context builder', () => {
-  const callSites = indexSource.match(/callMcpTool\([^)]*\)/g) || [];
+  const callSites = mcpServerSource.match(/callMcpTool\([^)]*\)/g) || [];
   assert.ok(callSites.length >= 3, `expected at least 3 callMcpTool sites, found ${callSites.length}`);
   for (const site of callSites) {
     assert.ok(/toolCallContext\(args, extra\)/.test(site),
       `call site does not use toolCallContext: ${site}`);
   }
   assert.ok(!/requestId: extra\?\.requestInfo\?\.requestId\s*\}/.test(
-    indexSource.replace(/function toolCallContext[\s\S]*?\n\}/, '')
+    mcpServerSource.replace(/function toolCallContext[\s\S]*?\n\}/, '')
   ), 'no registration site builds its context inline any more');
 });
 
@@ -75,10 +75,10 @@ test('the MCP path does not fall back to a fixed session id', () => {
   // A constant session id would place every call ever made into one sequence and
   // let Predict infer adjacency between unrelated calls — the defect that
   // produced reversed, cross-session predictions in the first place.
-  const helper = indexSource.match(/function toolCallContext[\s\S]*?\n\}/)[0];
+  const helper = mcpServerSource.match(/function toolCallContext[\s\S]*?\n\}/)[0];
   assert.ok(!/SIDEKICK_SESSION_ID/.test(helper),
     'toolCallContext must not read a constant session id from the environment');
-  assert.ok(/Never substitute a constant/.test(indexSource),
+  assert.ok(/Never substitute a constant/.test(mcpServerSource),
     'the reasoning is recorded next to the code');
 });
 
