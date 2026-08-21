@@ -23,6 +23,19 @@ function buildProcedureSchema(parameters) {
   return z.object(shape);
 }
 
+/**
+ * Builds the execution context for an MCP tool call.
+ *
+ * `extra.sessionId` is the transport's per-connection session identifier. Passing
+ * it through is what gives tool_logs a real execution boundary: without it every
+ * call is isolated, and correlation_id cannot substitute because it is unique per
+ * call. Never substitute a constant (e.g. a static SIDEKICK_SESSION_ID) here — a
+ * fixed value would group every call ever made into one sequence and let
+ * downstream analysis infer adjacency between unrelated calls.
+ *
+ * `project` is recorded only when the call itself names one, so scope is observed
+ * rather than guessed.
+ */
 function toolCallContext(args, extra) {
   const context = { requestId: extra?.requestInfo?.requestId };
   if (extra?.sessionId) context.sessionId = extra.sessionId;
