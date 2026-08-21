@@ -30,7 +30,6 @@ dbStore.runPendingMigrations();
 
   const create = await TOOLS.handoff({
     action: "create",
-    key: "sidekick-handoff-test",
     project: "sidekick",
     title: "Memory Intelligence Test Handoff",
     content: handoffContent,
@@ -44,6 +43,9 @@ dbStore.runPendingMigrations();
   assert.ok(createData.memories.some(memory => memory.type === "decision"), "decision memory should be extracted");
   assert.ok(createData.memories.some(memory => memory.type === "negative"), "negative memory should be extracted");
   assert.ok(createData.memories.some(memory => memory.type === "open_thread"), "open thread should be extracted");
+
+  const legacyResumeKey = await TOOLS.resume({ action: "set", project: "sidekick", summary: "legacy resume key", handoff_key: "sidekick-handoff-test" });
+  assert.ok(legacyResumeKey.isError, "legacy resume handoff keys must be rejected");
   const handoffEvent = dbStore.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_type = 'memory.handoff_processed' AND subject_id = ?").get(createData.handoff.id);
   assert.ok(handoffEvent, "handoff processing should emit a platform memory event");
 
@@ -124,19 +126,19 @@ dbStore.runPendingMigrations();
 
   const getByNoSelector = await TOOLS.handoff({ action: "get" });
   assert.ok(getByNoSelector.isError, "handoff get with no selector should be an error");
-  assert.ok(getByNoSelector.content[0].text.includes("requires id or key"), "error message should state id or key is required");
+  assert.ok(getByNoSelector.content[0].text.includes("requires id"), "error message should state id is required");
 
   const getByProjectOnly = await TOOLS.handoff({ action: "get", project: "sidekick" });
   assert.ok(getByProjectOnly.isError, "handoff get with only project should be an error");
-  assert.ok(getByProjectOnly.content[0].text.includes("requires id or key"), "error message should state id or key is required");
+  assert.ok(getByProjectOnly.content[0].text.includes("requires id"), "error message should state id is required");
 
   const inspectByNoSelector = await TOOLS.handoff({ action: "inspect" });
   assert.ok(inspectByNoSelector.isError, "handoff inspect with no selector should be an error");
-  assert.ok(inspectByNoSelector.content[0].text.includes("requires id or key"), "inspect error message should state id or key is required");
+  assert.ok(inspectByNoSelector.content[0].text.includes("requires id"), "inspect error message should state id is required");
 
   const inspectByProjectOnly = await TOOLS.handoff({ action: "inspect", project: "sidekick" });
   assert.ok(inspectByProjectOnly.isError, "handoff inspect with only project should be an error");
-  assert.ok(inspectByProjectOnly.content[0].text.includes("requires id or key"), "inspect error message should state id or key is required");
+  assert.ok(inspectByProjectOnly.content[0].text.includes("requires id"), "inspect error message should state id is required");
 
   const getById = await TOOLS.handoff({ action: "get", id: createData.handoff.id });
   assert.ok(!getById.isError, "handoff get by id should still work");

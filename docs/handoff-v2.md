@@ -31,8 +31,8 @@ structured state cannot silently overwrite the previous resume state.
 }
 ```
 
-The packet is intentionally optional for compatibility with existing handoffs. New handoffs
-should provide at least an `objective` or `summary`, a `status`, and a concrete `next_step`.
+The packet is optional when reading historical records. New handoffs should provide at least an
+`objective` or `summary`, a `status`, and a concrete `next_step`.
 Blocked packets should explain their blockers; completed packets should include acceptance
 criteria.
 
@@ -57,11 +57,11 @@ with their handoff version, while remaining mirrored in the packet for compatibi
 
 ## Validated resume
 
-The project `resume` record can link to a structured handoff with `handoff_id` or
-`handoff_key`. When `resume action="check"` sees a link, it validates the handoff packet
-before returning it. Missing or incomplete linked handoffs fail closed with `resume_blocked`
-and validation issues. Legacy resume records without a link continue to use the original
-behavior.
+The project `resume` record can link to a structured handoff with `handoff_id`. When
+`resume action="check"` sees a link, it validates the handoff packet before returning it.
+Missing or incomplete linked handoffs fail closed with `resume_blocked` and validation issues.
+New handoffs are stored only in the versioned structured handoff store; KV keys are not part of
+the handoff API.
 
 ## Continuation-quality finalization
 

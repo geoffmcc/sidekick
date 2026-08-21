@@ -1,7 +1,7 @@
 -- 039: Structured, versioned handoff resume packets.
 --
 -- The packet is deliberately stored with the handoff and its history. Existing
--- prose-only callers remain valid; new callers can attach structured resume
+-- Existing content-only records remain readable; new callers attach structured resume packets
 -- state without creating a second source of truth.
 
 ALTER TABLE memory_handoffs ADD COLUMN packet_json TEXT NOT NULL DEFAULT '{}';
