@@ -241,7 +241,7 @@ Sources include:
 
 ## 8. MCP Server
 
-`src/index.js` builds MCP server instances with `@modelcontextprotocol/sdk`. It supports:
+`src/index.js` builds MCP server instances with the stable `@modelcontextprotocol/server` SDK. It supports:
 
 - Streamable HTTP at `/mcp`;
 - legacy SSE at `/sse` and `/messages`;

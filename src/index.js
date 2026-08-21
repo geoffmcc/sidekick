@@ -5,9 +5,11 @@ const path = require("path");
 const cors = require("cors");
 const { timingSafeCompare } = require("./crypto-utils");
 const { readSecret } = require("./core/runtime-secrets");
-const { McpServer } = require("@modelcontextprotocol/sdk/server/mcp.js");
-const { WebStandardStreamableHTTPServerTransport } = require("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js");
-const { SSEServerTransport } = require("@modelcontextprotocol/sdk/server/sse.js");
+const { McpServer, WebStandardStreamableHTTPServerTransport, createMcpHandler, isLegacyRequest } = require("@modelcontextprotocol/server");
+// The v2 server package intentionally no longer serves the deprecated HTTP+SSE
+// transport. Keep Sidekick's established /sse compatibility endpoint on the
+// official frozen migration package until that endpoint is retired.
+const { SSEServerTransport } = require("@modelcontextprotocol/server-legacy/sse");
 const { z } = require("zod");
 const { DATA_DIR, callMcpTool, loadProcedures, syncToolRegistry } = require("./tools");
 const { getBuiltinRegistry } = require("./tools/index");
@@ -156,6 +158,16 @@ function createMcpServer(authIdentityProvider = () => null) {
 
   return server;
 }
+
+// v2 modern-era requests use the official per-request handler. Legacy
+// 2025-era Streamable HTTP requests continue through the sessionful transport
+// path below so existing clients retain their established session behavior.
+// Both paths use the same canonical registry and governed dispatcher via
+// createMcpServer; this handler never executes tools directly.
+const modernMcpHandler = createMcpHandler(
+  context => createMcpServer(() => context.authInfo || null),
+  { legacy: "reject" }
+);
 
 // --- Session management: one McpServer + Transport pair per session ---
 
@@ -476,6 +488,30 @@ app.post("/mcp", async (req, res) => {
       clientInfo: req.body?.params?.clientInfo || null,
       authIdentity: req.authIdentity || null
     };
+
+    const webReq = new Request("http://127.0.0.1:4097/mcp", {
+      method: "POST",
+      headers: wh,
+      body
+    });
+    if (!(await isLegacyRequest(webReq, req.body))) {
+      const webRes = await modernMcpHandler.fetch(webReq, {
+        authInfo: req.authIdentity || undefined,
+        parsedBody: req.body
+      });
+      res.status(webRes.status);
+      webRes.headers.forEach((v, k) => { if (k !== "content-encoding" && k !== "content-length") res.setHeader(k, v); });
+      if (webRes.body) {
+        const reader = webRes.body.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          res.write(Buffer.from(value));
+        }
+      }
+      return res.end();
+    }
+
     const { transport, isNew, newSessionId, staleRedirect, replacedStaleSession } = await getTransportForRequest(sessionId, metadata, {
       allowStalePost: true
     });
@@ -498,13 +534,13 @@ app.post("/mcp", async (req, res) => {
       });
     }
 
-    const webReq = new Request("http://127.0.0.1:4097/mcp", {
+    const legacyWebReq = new Request("http://127.0.0.1:4097/mcp", {
       method: "POST",
       headers: replacedStaleSession && newSessionId ? { ...wh, "mcp-session-id": newSessionId } : wh,
-      body: body
+      body
     });
 
-    const webRes = await transport.handleRequest(webReq, { parsedBody: req.body });
+    const webRes = await transport.handleRequest(legacyWebReq, { parsedBody: req.body });
 
     if (isNew && newSessionId) {
       logDebug("NEW_SESSION_HANDLED", { newSessionId });

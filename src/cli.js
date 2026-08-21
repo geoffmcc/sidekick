@@ -2,7 +2,7 @@
 "use strict";
 
 const fs = require("fs");
-const { StdioServerTransport } = require("@modelcontextprotocol/sdk/server/stdio.js");
+const { serveStdio } = require("@modelcontextprotocol/server/stdio");
 const packageJson = require("../package.json");
 const { prepareLocalEnvironment, acquireBootstrapLock, getLocalPaths } = require("./local/paths");
 
@@ -39,10 +39,11 @@ async function run() {
     console.log = (...args) => console.error(...args);
     process.env.SIDEKICK_LOCAL = "1";
     const { createMcpServer } = require("./index");
-    const server = createMcpServer(() => null);
-    const transport = new StdioServerTransport();
+    const handle = serveStdio(() => createMcpServer(() => null), {
+      onerror: error => console.error(`Sidekick MCP stdio error: ${error.message}`)
+    });
     const close = async () => {
-      try { await server.close(); } catch (error) { console.error(`Sidekick shutdown failed: ${error.message}`); }
+      try { await handle.close(); } catch (error) { console.error(`Sidekick shutdown failed: ${error.message}`); }
     };
     process.once("SIGINT", () => { close().finally(() => process.exit(0)); });
     process.once("SIGTERM", () => { close().finally(() => process.exit(0)); });

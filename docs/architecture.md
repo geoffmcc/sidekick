@@ -37,7 +37,7 @@ Enrolled Compute worker -> scoped /compute/worker/* protocol on :4097
 
 ### MCP server: `src/index.js`
 
-The MCP server creates an `McpServer` from `@modelcontextprotocol/sdk`, registers built-in and approved generated tool definitions, and serves them over:
+The MCP server creates an `McpServer` from the stable `@modelcontextprotocol/server` SDK, registers built-in and approved generated tool definitions, and serves them over:
 
 - `POST /mcp`, `GET /mcp`, and `DELETE /mcp` for Streamable HTTP;
 - `GET /sse` and `POST /messages` for legacy SSE clients;
@@ -47,7 +47,11 @@ The MCP server creates an `McpServer` from `@modelcontextprotocol/sdk`, register
 The server requires `Authorization: Bearer <SIDEKICK_API_KEY>` for MCP and administrative routes and can enforce `SIDEKICK_ALLOWED_IPS`. API keys are not accepted in query strings because URLs can leak through logs, history, and referrer metadata. Worker protocol routes use scoped worker credentials, while enrollment exchange uses one-time enrollment tokens.
 
 When `src/index.js` is loaded by `src/cli.js`, it does not bind the dedicated
-HTTP listener. The CLI connects the same `createMcpServer()` factory to the
+HTTP listener. Modern 2026-07-28 requests use the SDK's per-request handler;
+legacy 2025-era Streamable HTTP requests retain Sidekick's sessionful transport
+boundary. The deprecated `/sse` endpoint uses the SDK's official frozen
+`@modelcontextprotocol/server-legacy` migration transport for compatibility.
+The CLI connects the same `createMcpServer()` factory to the
 SDK’s stdio transport. Local calls still enter `callMcpTool()` and therefore
 retain the normal schemas, source context, policy, approval, audit, redaction,
 and execution boundaries.
