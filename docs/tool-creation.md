@@ -1,6 +1,12 @@
 # Tool Creation Guide
 
-Status: Superseded. New and migrated tools must follow `tool-architecture.md` and be descriptor-owned under `src/tools/families/`; the direct `src/tools.js` workflow below describes the pre-registry architecture.
+Status: Superseded. New and migrated tools must follow `tool-architecture.md` and be descriptor-owned under `src/tools/families/`; the direct `src/tools.js` workflow below describes the pre-registry architecture and is retained only for historical migration context.
+
+Current path: add a descriptor to the appropriate family (or a dedicated
+module/capability-pack descriptor set), use the canonical registry, and route
+execution through the dispatcher. Do not add canonical definitions to
+`src/tools-legacy.js`, `src/tools/legacy-catalog.js`, or
+`src/tools/legacy-tool-map.js`; those files are compatibility projections.
 
 ## Quick Reference
 

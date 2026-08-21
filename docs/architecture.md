@@ -1,8 +1,8 @@
 # Architecture
 
 Status: Current-state architecture
-Verified commit: 5e4dbfdb04c9878cbbd284bd950a6afbef78eec3
-Verified date: 2026-08-12
+Verified commit: e0cd743ba626c4b7845a09a758d3860c5a48acea
+Verified date: 2026-08-21
 
 For Phase 0R classifications, target boundaries, and the migration roadmap, see `platform-convergence-audit.md`, `platform-target-architecture.md`, and `platform-roadmap.md`.
 
@@ -35,9 +35,9 @@ Enrolled Compute worker -> scoped /compute/worker/* protocol on :4097
 
 ## Service boundaries
 
-### MCP server: `src/index.js`
+### MCP server and transports: `src/index.js` and `src/mcp/`
 
-The MCP server creates an `McpServer` from the stable `@modelcontextprotocol/server` SDK, registers built-in and approved generated tool definitions, and serves them over:
+`src/index.js` composes application startup with the MCP modules. `src/mcp/server.js` creates the canonical `McpServer`, registers built-in and approved generated tool definitions, and routes calls through the governed dispatcher. `src/mcp/session-manager.js` owns the shared session map and lifecycle. `src/mcp/streamable-http.js` owns Streamable HTTP, while `src/mcp/legacy-sse.js` isolates the supported legacy SSE compatibility routes. Both transports use the same server, descriptors, and execution path:
 
 - `POST /mcp`, `GET /mcp`, and `DELETE /mcp` for Streamable HTTP;
 - `GET /sse` and `POST /messages` for legacy SSE clients;
@@ -67,7 +67,7 @@ and execution boundaries.
 - `approvals.js`, `policy.js`, `logging.js`, `result.js`, and `registry-sync.js` for focused boundary responsibilities;
 - `schemas/`, `metadata.js`, and `families/` for schemas, explicit risk/category metadata, and extracted descriptor-owned tool families.
 
-The current built-in registry contains 112 tools across 20 categories (106 in the core registry plus 6 from the bundled `data-utilities` module). Handler extraction out of `src/tools-legacy.js` is complete: every handler is owned by a descriptor family under `src/tools/families/`, the `data-utilities` module, or `src/compute/tools.js`. What remains in `src/tools-legacy.js` is the tool policy/approval/audit machinery, the `TOOL_DEFS` ordering anchors, the compute pass-through wiring, and compatibility re-exports — see `tool-architecture.md`.
+The canonical built-in registry contains 108 descriptors across the built-in categories; active module, capability-pack, and approved generated tools join the same governed registry at runtime. Canonical descriptor metadata and ordering live under `src/tools/canonical-registry.js`, `src/tools/canonical-order.js`, and descriptor families. `src/tools-legacy.js` retains policy/approval/audit compatibility machinery and derived compatibility exports; it is not an owner of canonical descriptors or production handlers — see `tool-architecture.md`.
 
 Important compatibility exports from `src/tools/index.js` include `TOOLS`, `TOOL_DEFS`, `callTool`, source-specific call wrappers, policy/approval helpers, logging helpers, and registry synchronization. New production code should use the source-specific dispatcher wrappers rather than directly invoking handlers or relying on the legacy `setSource` compatibility setter.
 
@@ -236,9 +236,9 @@ Release maturity tracking:
 - `listReleases({ state, limit })` filters and lists releases.
 - Releases emit `release.created` and `release.published` events.
 
-### Dashboard: `src/dashboard.js`
+### Dashboard: `src/dashboard.js` and `src/dashboard/`
 
-The dashboard serves a browser UI and JSON API. The server code lives in `src/dashboard.js`, the authenticated HTML shell lives in `src/dashboard.html`, and public CSS/JS assets live under `static/`. It reads the Sidekick data directory, reports system state, allows KV editing and deletion, exposes tool metadata, accepts webhooks, and proxies agent requests to the Agent Bridge.
+The dashboard bootstrap/composition code lives in `src/dashboard.js`; coherent route families are registered from `src/dashboard/` (including `auth-routes.js`, `approval-routes.js`, `kv-routes.js`, `system-routes.js`, `logs-route.js`, `connectors-routes.js`, and quick-action/stat/summary routes). The authenticated HTML shell lives in `src/dashboard.html`, and public CSS/JS assets live under `static/`. Route modules receive shared dependencies through composition and preserve the existing authentication, authorization, audit, rate-limit, and policy boundaries.
 
 It includes dashboard-specific protections: optional Basic Auth, IP allowlist, rate limiting, exact-host CSRF origin checks, audit logging, error logging, and policy-aware tool metadata.
 

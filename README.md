@@ -41,7 +41,7 @@ in [`docs/installation.md`](docs/installation.md).
 
 ## Refactor Status and Compatibility Disclosure
 
-> **Full disclosure:** Sidekick's tool runtime finished its modular handler migration. The descriptor registry, centralized dispatcher, request-scoped context, schema validation, source-aware policy, approval enforcement, redaction, and audit logging are the authoritative production execution path, and every tool handler is now owned by a descriptor family under `src/tools/families/`, the `data-utilities` module, or the Compute subsystem — `src/tools-legacy.js` owns **zero** production tool handlers. What remains in `src/tools-legacy.js` (~1,500 lines) is the tool policy/approval/audit engine, the legacy `TOOL_DEFS` ordering anchors, compute pass-through wiring, and compatibility re-exports kept for existing consumers; relocating those is routine follow-up, not a risk boundary. The broader platform convergence campaign (canonical project identity, event consumption, artifact custody, connector integration, and related slices) is still in progress — see [`docs/platform-roadmap.md`](docs/platform-roadmap.md) for what remains and [`docs/tool-architecture.md`](docs/tool-architecture.md) for the tool-runtime boundary.
+> **Full disclosure:** Sidekick's tool runtime uses a canonical descriptor registry, centralized dispatcher, request-scoped context, schema validation, source-aware policy, approval enforcement, redaction, and audit logging as its authoritative production path. All built-in handlers are owned by descriptor families, the `data-utilities` module, or the Compute subsystem; `src/tools-legacy.js` owns zero production handlers and is retained for policy/approval/audit compatibility machinery and re-exports. `TOOL_DEFS` and `TOOLS` are derived compatibility projections, not competing sources of truth. The broader platform convergence campaign remains in progress — see [`docs/platform-roadmap.md`](docs/platform-roadmap.md) and [`docs/tool-architecture.md`](docs/tool-architecture.md).
 
 Canonical MCP tool names are unprefixed, such as `bash`, `knowledge`, and `compute_jobs`. The runtime still recognizes older `sidekick_`-prefixed names as compatibility aliases, but new documentation, policies, and integrations should use the bare names.
 
@@ -802,13 +802,14 @@ This follows the principle of least privilege: after initial setup, the sidekick
 │   ├── tools.js            Compatibility re-export for the modular tool runtime
 │   ├── tools/
 │   │   ├── index.js        Public tool facade and compatibility exports
-│   │   ├── registry.js     Descriptor registry for built-in tools
+│   │   ├── canonical-registry.js Canonical built-in descriptor registry
+│   │   ├── canonical-order.js Compatibility ordering for built-in descriptors
+│   │   ├── registry.js     Registry validation, materialization, and aliases
 │   │   ├── dispatcher.js   Authoritative validation, policy, approval, execution, and audit path
 │   │   ├── context.js      Request-scoped execution context
 │   │   ├── dispatch-seam.js Dependency-free nested tool dispatch seam
-│   │   └── families/       Descriptor-owned tool families (all built-in handlers)
-│   ├── tools-legacy.js     Tool policy/approval/audit engine, TOOL_DEFS ordering anchors,
-│   │                       and compatibility re-exports (owns zero tool handlers)
+│   │   └── families/       Descriptor-owned tool families (including Compute registration)
+│   ├── tools-legacy.js     Compatibility policy/approval/audit machinery and re-exports
 │   ├── modules/            Module lifecycle: manifest, discovery, packaging, managed store,
 │   │                       verified entry loading, install/configure/enable/upgrade/uninstall,
 │   │                       permissions, migrations, health (bundled: data-utilities)
@@ -822,11 +823,14 @@ This follows the principle of least privilege: after initial setup, the sidekick
 │   ├── platform/           Platform kernel: executions, events, artifacts, projects,
 │   │                       workspaces, connectors, and research record foundations
 │   ├── memory.js           Automatic memory capture and recall helpers
-│   ├── index.js            MCP server, sessions, tool registration, and Compute HTTP routes
-│   ├── dashboard.js        Dashboard web UI and management API
+│   ├── index.js            Application/bootstrap composition and Compute HTTP routes
+│   ├── mcp/                MCP server, sessions, Streamable HTTP, and legacy SSE adapters
+│   ├── dashboard.js        Dashboard bootstrap and route composition
+│   ├── dashboard/          Dashboard route families, including auth/identity and approvals
 │   ├── agent.js            Agent Bridge task loop, streaming, delays, and watches
 │   ├── redact.js           Sensitive data redaction
-│   ├── db.js               SQLite database layer
+│   ├── db.js               SQLite core database layer and transaction/migration ownership
+│   ├── db/                 Focused persistence stores such as handoff/task-session storage
 │   ├── pg.js               PostgreSQL support
 │   ├── redis.js            Redis client for caching
 │   ├── qdrant.js           Qdrant vector DB client for semantic search

@@ -26,8 +26,8 @@ Sidekick runs as three primary Node.js services:
 
 | Service | Entry point | Default bind | Role |
 |---|---|---|---|
-| MCP Server | `src/index.js` | `0.0.0.0:4097` | Public MCP endpoint for tool discovery and tool calls. |
-| Dashboard | `src/dashboard.js` | `0.0.0.0:4098` | Browser UI, management API, database browser, tool catalog, and agent proxy. |
+| MCP Server | `src/index.js` + `src/mcp/` | `0.0.0.0:4097` | Application composition plus canonical MCP server, session manager, Streamable HTTP, and legacy SSE compatibility transports. |
+| Dashboard | `src/dashboard.js` + `src/dashboard/` | `0.0.0.0:4098` | Browser UI, route composition, management API, database browser, tool catalog, and agent proxy. |
 | Agent Bridge | `src/agent.js` | `127.0.0.1:4099` | Autonomous task loop that plans tool calls and streams progress. |
 
 Node.js 22 or newer is required. The core runtime dependencies are Express, the MCP SDK, Zod, better-sqlite3, PostgreSQL and Redis clients, and parsers for structured formats.
@@ -224,7 +224,7 @@ The authoritative execution path is descriptor- and dispatcher-based:
 4. MCP, dashboard, Agent Bridge, scheduler, generated-tool, and legacy nested-call surfaces all use dispatcher entry points rather than invoking handlers directly.
 5. The registry is synchronized into SQLite for dashboard discovery, policy inspection, and deprecation history.
 
-`src/tools.js` is a compatibility re-export to `src/tools/index.js`. Handler decomposition is complete: every built-in handler is owned by a descriptor family under `src/tools/families/`, the `data-utilities` module, or `src/compute/tools.js`. `src/tools-legacy.js` retains only the tool policy/approval/audit machinery, the `TOOL_DEFS` ordering anchors, and compatibility re-exports.
+`src/tools.js` is a compatibility re-export to `src/tools/index.js`. The canonical registry in `src/tools/canonical-registry.js` owns all built-in descriptors and ordering, including the Compute family. Handler decomposition is complete: every built-in handler is owned by a descriptor family, the `data-utilities` module, or the Compute subsystem. `src/tools-legacy.js`, `legacy-catalog.js`, and `legacy-tool-map.js` retain only compatibility machinery and derived projections.
 
 Built-in categories are Core, Storage, Database, Git & GitHub, Services, Scheduling, Communication, Context & Learning, Data Pipeline, Monitoring, Workflow, Meta, Efficiency, Security, Networking, Development, Reliability, Archive, Media, and Compute.
 
@@ -241,7 +241,7 @@ Sources include:
 
 ## 8. MCP Server
 
-`src/index.js` builds MCP server instances with the stable `@modelcontextprotocol/server` SDK. It supports:
+`src/mcp/server.js` builds MCP server instances with the stable `@modelcontextprotocol/server` SDK; `src/index.js` composes that factory into application startup. It supports:
 
 - Streamable HTTP at `/mcp`;
 - legacy SSE at `/sse` and `/messages`;
@@ -252,7 +252,7 @@ The MCP routes require an `Authorization: Bearer` token. API keys are deliberate
 The server maintains in-memory sessions. Each session includes:
 
 - MCP server instance;
-- transport;
+- one shared session manager and one canonical descriptor/dispatcher execution path across transports;
 - creation timestamp;
 - last access timestamp;
 - initialization state;

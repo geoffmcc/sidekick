@@ -4,26 +4,28 @@
 
 | Path | Purpose |
 |---|---|
-| `src/index.js` | MCP server, auth, sessions, Streamable HTTP, legacy SSE, health endpoint. |
+| `src/index.js` | Application/bootstrap composition, authentication, health, and Compute HTTP routes. MCP transport/session ownership is under `src/mcp/`. |
 | `src/tools.js` | Compatibility re-export to `src/tools/index.js`. |
 | `src/tools/index.js` | Public tool facade, compatibility exports, built-in registry construction, and source-specific dispatcher wrappers. |
 | `src/tools/descriptor.js` | Tool descriptor normalization and validation. |
 | `src/tools/registry.js` | Built-in descriptor registry and alias resolution. |
+| `src/tools/canonical-registry.js` | Canonical built-in descriptor set and registry construction. |
+| `src/tools/canonical-order.js` | Explicit compatibility ordering for canonical built-in descriptors. |
 | `src/tools/dispatcher.js` | Authoritative schema, policy, approval, execution, cancellation, result, and audit boundary. |
 | `src/tools/context.js` | Request-scoped source, actor, session, task, project, trace, approval, and cancellation context. |
 | `src/tools/families/` | Descriptor-owned tool families (all built-in handlers). |
-| `src/tools-legacy.js` | Tool policy/approval/audit machinery, `TOOL_DEFS` ordering anchors, compute pass-through wiring, and compatibility re-exports. Owns zero tool handlers. |
+| `src/tools-legacy.js` | Tool policy/approval/audit machinery and compatibility re-exports. It owns no production handlers or canonical descriptor metadata. |
 | `src/modules/` | Module lifecycle: manifest, discovery, packaging, installation, configuration, activation, permissions, migrations, health. Bundled module: `data-utilities`. |
 | `src/approvals/` | Durable task-originated approval continuation (checkpoints, keys, sweeper, vocabulary). |
 | `src/brain/` | Feature-flagged bounded planner over the Agent Bridge (default off). |
 | `src/compute/` | Compute worker, provider, model, router, job, lease, cancellation, recovery, and artifact implementation. |
 | `src/platform/` | Platform kernel: executions, events, artifacts, projects, workspaces, connectors, workflows (foundation), and research record foundations. |
 | `src/memory.js` | Automatic memory capture, bounded retention, and recall helpers. |
-| `src/db.js` | SQLite database layer, migrations, backups, query helpers, FTS/search helpers, snapshots. |
+| `src/db.js` | SQLite connection/configuration, migrations, transactions, backups, query helpers, FTS/search helpers, and snapshots. Domain persistence includes focused stores such as `src/db/handoff-store.js`. |
 | `src/pg.js` | Optional PostgreSQL backend for database tools. |
 | `src/redis.js` | Optional Redis client for cache operations. |
 | `src/qdrant.js` | Optional Qdrant client for vector search. |
-| `src/dashboard.js` | Dashboard server, API routes, auth, and agent proxy. |
+| `src/dashboard.js` | Dashboard server/bootstrap and route composition. Coherent route families live under `src/dashboard/`, including authentication, approvals, KV, system, logs, connectors, and quick actions. |
 | `src/dashboard.html` | Authenticated dashboard HTML shell. |
 | `static/dashboard.css` | Dashboard styles. |
 | `static/dashboard.js` | Dashboard browser-side JavaScript. |
