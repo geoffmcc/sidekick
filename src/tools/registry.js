@@ -7,13 +7,28 @@ function canonicalName(name) {
   return String(name || "").replace(/^sidekick_/, "");
 }
 
-function buildBuiltinRegistry({ toolDefs, handlers, riskForTool, categoryForTool, schemas, extraDescriptors } = {}) {
+function buildBuiltinRegistry({ toolDefs, handlers, riskForTool, categoryForTool, schemas, extraDescriptors, descriptors, definitionOrder, includeActiveModules = true } = {}) {
+  if (descriptors) {
+    const normalized = descriptors.map(normalizeDescriptor);
+    let ordered = normalized;
+    if (definitionOrder) {
+      const byName = new Map(normalized.map(descriptor => [canonicalName(descriptor.name), descriptor]));
+      ordered = definitionOrder.map(name => byName.get(canonicalName(name))).filter(Boolean);
+      for (const descriptor of normalized) {
+        if (!ordered.includes(descriptor)) ordered.push(descriptor);
+      }
+    }
+    if (includeActiveModules) {
+      ordered = [...ordered, ...require("../modules/loader").getActiveDescriptors()];
+    }
+    return createRegistry(ordered);
+  }
   const defs = toolDefs || [];
   const toolHandlers = handlers || {};
   const schemaMap = schemas || TOOL_SCHEMAS;
   const extras = extraDescriptors || extractedFamilies.descriptors;
   const extraByName = new Map(extras.map(descriptor => [canonicalName(descriptor.name), descriptor]));
-  const descriptors = defs.map(def => {
+  const legacyDescriptors = defs.map(def => {
     const extracted = extraByName.get(canonicalName(def.name));
     if (extracted) return normalizeDescriptor(extracted);
     return normalizeDescriptor({
@@ -29,16 +44,18 @@ function buildBuiltinRegistry({ toolDefs, handlers, riskForTool, categoryForTool
   });
   for (const descriptor of extras) {
     if (!defs.some(def => canonicalName(def.name) === canonicalName(descriptor.name))) {
-      descriptors.push(normalizeDescriptor(descriptor));
+      legacyDescriptors.push(normalizeDescriptor(descriptor));
     }
   }
   // Active module tool descriptors join the same single registry, subject to
   // the same duplicate-name/alias rules below. Lazy require: the module
   // loader is activated at runtime and must not load with the registry.
-  for (const descriptor of require("../modules/loader").getActiveDescriptors()) {
-    descriptors.push(descriptor);
+  if (includeActiveModules) {
+    for (const descriptor of require("../modules/loader").getActiveDescriptors()) {
+      legacyDescriptors.push(descriptor);
+    }
   }
-  return createRegistry(descriptors);
+  return createRegistry(legacyDescriptors);
 }
 
 function createRegistry(descriptors) {
@@ -83,7 +100,10 @@ function createRegistry(descriptors) {
     toolDefs: () => definitionOrder.map(d => ({
       name: d.name,
       description: d.description,
-      args: d.argumentDescriptions || d.args,
+      // `args` remains the stable compatibility projection. The richer
+      // schema-derived descriptions are exposed separately for consumers that
+      // need them, so extraction does not rewrite public metadata.
+      args: d.args,
       argumentDescriptions: d.argumentDescriptions || d.args,
       category: d.category,
       risk: d.risk,

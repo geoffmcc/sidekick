@@ -4,6 +4,7 @@ const fs = require('fs');
 const legacyTools = require('../src/tools');
 const toolLayer = require('../src/tools/index');
 const extractedFamilies = require('../src/tools/families');
+const canonical = require('../src/tools/canonical-registry');
 
 // Names owned by extracted descriptor families rather than by legacy handlers.
 const extractedNames = extractedFamilies.descriptors.map(d => d.name);
@@ -21,6 +22,7 @@ const legacyDefNames = legacy.TOOL_DEFS.map(d => d.name);
 const legacyToolNames = Object.keys(legacy.TOOLS);
 
 assert.deepStrictEqual(descriptorNames, legacyDefNames, 'Registry definition order should match legacy TOOL_DEFS order');
+assert.deepStrictEqual(descriptorNames, canonical.getCanonicalRegistry().toolDefs().map(d => d.name), 'builtin registry must be canonical');
 assert.deepStrictEqual([...descriptorNames].sort(), [...new Set([...legacyToolNames, ...extractedNames])].sort(), 'Registry names should match legacy handlers plus extracted descriptors');
 // Baseline moves only when a tool is deliberately added or removed.
 // Capability Packs v1 added `capability` (pack lifecycle) and `workflow`
@@ -42,6 +44,11 @@ for (const descriptor of descriptors) {
   assert.deepStrictEqual(descriptor.args, legacy.TOOL_DEFS.find(d => d.name === descriptor.name).args || {}, `${descriptor.name} args metadata should match compatibility TOOL_DEFS`);
   assert.strictEqual(descriptor.risk, legacyTools.getToolRisk(descriptor.name), `${descriptor.name} risk should match compatibility lookup`);
   if (!descriptor.family) assert.strictEqual(descriptor.handler, legacy.TOOLS[descriptor.name], `${descriptor.name} handler should match legacy TOOLS until extracted`);
+}
+
+for (const name of ['compute', 'compute_nodes', 'compute_providers', 'compute_models', 'compute_jobs', 'compute_route']) {
+  assert.strictEqual(canonical.getCanonicalRegistry().get(name).family, 'compute', `${name} should be canonically descriptor-owned`);
+  assert.ok(!require('../src/tools/legacy-tool-map').TOOLS[name] || typeof require('../src/tools/legacy-tool-map').TOOLS[name] === 'function', `${name} compatibility projection should remain callable`);
 }
 
 assert.deepStrictEqual(Object.keys(registry.toolsMap()), legacyDefNames, 'Derived TOOLS map should preserve definition order');

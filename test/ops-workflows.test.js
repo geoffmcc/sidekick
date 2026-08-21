@@ -4,12 +4,11 @@ const path = require('path');
 const { getBuiltinRegistry } = require('../src/tools/index');
 
 const root = path.join(__dirname, '..');
-const catalogJs = fs.readFileSync(path.join(root, 'src', 'tools', 'legacy-catalog.js'), 'utf8');
-const schemasJs = fs.readFileSync(path.join(root, 'src', 'tools', 'schemas', 'index.js'), 'utf8');
 const opsFamilyJs = fs.readFileSync(path.join(root, 'src', 'tools', 'families', 'operations.js'), 'utf8');
 const registry = getBuiltinRegistry();
 const ops = registry.get('ops');
 const mission = registry.get('mission');
+const canonicalCatalog = JSON.stringify(registry.toolDefs());
 
 console.log('Running operations workflow tests...\n');
 
@@ -50,14 +49,14 @@ assert.match(
 );
 
 assert.match(
-  catalogJs,
-  /["']?name["']?\s*:\s*"ops"[\s\S]*verify_deployed_commit\|restart_and_smoke_test\|deploy_current_main\|incident_snapshot/,
+  canonicalCatalog,
+  /ops[\s\S]*verify_deployed_commit\|restart_and_smoke_test\|deploy_current_main\|incident_snapshot/,
   'ops metadata should list the packaged workflow actions'
 );
 
 assert.match(
-  catalogJs,
-  /["']?name["']?\s*:\s*"mission"[\s\S]*profiles\|route\|preflight\|execute/,
+  canonicalCatalog,
+  /mission[\s\S]*profiles\|route\|preflight\|execute/,
   'mission metadata should list Mission Control actions'
 );
 

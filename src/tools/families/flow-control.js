@@ -413,9 +413,9 @@ async function sidekick_batch({ calls }) {
   const results = [];
   for (let i = 0; i < calls.length; i++) {
     const call = calls[i];
-    // Resolve against TOOL_DEFS rather than the TOOLS handler map: descriptor-owned
-    // families (src/tools/families/) keep their TOOL_DEFS row as an ordering anchor
-    // but no longer have a legacy handler entry. Every TOOL_DEFS name is dispatchable,
+    // Resolve against the registry-derived TOOL_DEFS compatibility projection
+    // rather than the compatibility handler map: descriptor-owned families
+    // have no legacy handler entry. Every canonical built-in name is dispatchable,
     // so this stays equivalent to the old check for legacy-owned tools while keeping
     // extracted tools reachable. Active module tools are dispatchable too;
     // generated tools stay excluded as before. Execution still goes through
