@@ -1356,10 +1356,8 @@ function verifyHandoffProvenance(packet, { requireResume = true } = {}) {
  * save can destroy prior content.
  *
  * Rules:
- *  - `existing` is resolved by id first, then kv_key — so id-based handoffs
- *    version correctly (they previously overwrote in place at version 1) and
- *    kv_key-based handoffs update their one row (they previously violated the
- *    kv_key UNIQUE constraint by inserting a second row).
+ *  - `existing` is resolved by structured id only. There is no alternate
+ *    handoff identity or lookup path.
  *  - Omitted metadata (project/title/source/task_id) NEVER nulls existing
  *    values; supplied metadata replaces.
  *  - `expectedVersion`, when supplied, must equal the current version or the
@@ -1369,7 +1367,7 @@ function verifyHandoffProvenance(packet, { requireResume = true } = {}) {
  *  - content_hash remains the hash of the REDACTED content (memory extraction
  *    fingerprints embed it; changing its meaning would duplicate memories).
  */
-function saveHandoff({ id, kv_key, project, title, source, task_id, content, previous_id, extraction_state, extraction_version, expectedVersion, packet, owner_principal_id, created_by_principal_id }) {
+function saveHandoff({ id, project, title, source, task_id, content, previous_id, extraction_state, extraction_version, expectedVersion, packet, owner_principal_id, created_by_principal_id }) {
   if (!hasTable("memory_handoffs")) throw new Error("memory_handoffs table is not available; run migrations");
   const ts = nowIso();
   const redacted = require("./redact").redactSensitive(String(content || ""));
@@ -1377,9 +1375,7 @@ function saveHandoff({ id, kv_key, project, title, source, task_id, content, pre
   const packetValue = normalizeHandoffPacket(packet);
   const packetJson = packetValue === null ? null : JSON.stringify(packetValue);
 
-  const existing =
-    (id ? db.prepare("SELECT * FROM memory_handoffs WHERE id = ?").get(id) : null) ||
-    (kv_key ? db.prepare("SELECT * FROM memory_handoffs WHERE kv_key = ?").get(kv_key) : null);
+  const existing = id ? db.prepare("SELECT * FROM memory_handoffs WHERE id = ?").get(id) : null;
 
   if (existing && expectedVersion !== undefined && expectedVersion !== null && Number(expectedVersion) !== Number(existing.version)) {
     throw new Error(`Handoff "${existing.id}" changed concurrently: expected version ${expectedVersion}, found ${existing.version}`);
@@ -1394,13 +1390,12 @@ function saveHandoff({ id, kv_key, project, title, source, task_id, content, pre
         title = COALESCE(?, title),
         source = COALESCE(?, source),
         task_id = COALESCE(?, task_id),
-        kv_key = COALESCE(?, kv_key),
         extraction_state = COALESCE(?, extraction_state),
         extraction_version = COALESCE(?, extraction_version),
         owner_principal_id = COALESCE(?, owner_principal_id),
         created_by_principal_id = COALESCE(?, created_by_principal_id)
       WHERE id = ?
-    `).run(ts, project || null, title || null, source || null, task_id || null, kv_key || null, extraction_state || null, extraction_version || null, owner_principal_id || null, created_by_principal_id || null, existing.id);
+    `).run(ts, project || null, title || null, source || null, task_id || null, extraction_state || null, extraction_version || null, owner_principal_id || null, created_by_principal_id || null, existing.id);
     const touched = getHandoff(existing.id);
     persistHandoffLinks(touched);
     return touched;
@@ -1443,7 +1438,6 @@ function saveHandoff({ id, kv_key, project, title, source, task_id, content, pre
           title = COALESCE(?, title),
           source = COALESCE(?, source),
           task_id = COALESCE(?, task_id),
-          kv_key = COALESCE(?, kv_key),
           extraction_state = ?,
           extraction_version = COALESCE(?, extraction_version),
           owner_principal_id = COALESCE(?, owner_principal_id),
@@ -1460,7 +1454,6 @@ function saveHandoff({ id, kv_key, project, title, source, task_id, content, pre
         title || null,
         source || null,
         task_id || null,
-        kv_key || null,
         extraction_state || "pending",
         extraction_version || null,
         owner_principal_id || null,
@@ -1476,32 +1469,30 @@ function saveHandoff({ id, kv_key, project, title, source, task_id, content, pre
       if (!inTransaction) { try { db.exec("ROLLBACK"); } catch {} }
       throw error;
     }
-    auditMemoryEvent("handoff_updated", "handoff", existing.id, { kv_key: existing.kv_key, project: project || existing.project, version: nextVersion, content_hash: hash }, source || "system");
+    auditMemoryEvent("handoff_updated", "handoff", existing.id, { project: project || existing.project, version: nextVersion, content_hash: hash }, source || "system");
     const updated = getHandoff(existing.id);
     persistHandoffLinks(updated);
     return updated;
   }
 
   // New handoff. Creation-time dedupe applies only when the caller supplied no
-  // identity at all — re-ingesting identical content must not mint duplicates,
-  // but an explicit id or key is a request for that specific handoff.
-  if (!id && !kv_key) {
+  // identity at all — re-ingesting identical content must not mint duplicates.
+  if (!id) {
     const existingByHash = db.prepare("SELECT * FROM memory_handoffs WHERE content_hash = ? AND COALESCE(project, '') = COALESCE(?, '') ORDER BY version DESC LIMIT 1").get(hash, project || null);
     if (existingByHash) return normalizeHandoffRow(existingByHash);
   }
 
-  const handoffId = id || stableId("handoff", `${kv_key || project || "global"}|${hash}`);
+  const handoffId = id || stableId("handoff", `${project || "global"}|${hash}`);
   db.prepare(`
     INSERT INTO memory_handoffs (
-      id, kv_key, project, title, source, task_id, version, previous_id, content_hash,
+      id, project, title, source, task_id, version, previous_id, content_hash,
       content, redacted_content, extraction_state, extraction_version, created_at, updated_at, packet_json,
       owner_principal_id, created_by_principal_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     handoffId,
-    kv_key || null,
     project || null,
-    title || kv_key || "handoff",
+    title || "handoff",
     source || "handoff",
     task_id || null,
     1,
@@ -1517,7 +1508,7 @@ function saveHandoff({ id, kv_key, project, title, source, task_id, content, pre
     owner_principal_id || null,
     created_by_principal_id || null
   );
-  auditMemoryEvent("handoff_created", "handoff", handoffId, { kv_key, project, version: 1, content_hash: hash }, source || "system");
+  auditMemoryEvent("handoff_created", "handoff", handoffId, { project, version: 1, content_hash: hash }, source || "system");
   return getHandoff(handoffId);
 }
 
@@ -1544,7 +1535,6 @@ function getHandoffVersion(handoffId, version) {
   if (!row) return null;
   return {
     id: row.handoff_id,
-    kv_key: current.kv_key,
     project: row.project,
     title: row.title,
     source: row.source,
@@ -1587,8 +1577,8 @@ function restoreHandoffVersion(handoffId, version, { source } = {}) {
   return { handoff: saved, restored_from: Number(version), no_op: false };
 }
 
-function unarchiveHandoff(idOrKey) {
-  const handoff = getHandoff(idOrKey);
+function unarchiveHandoff(id) {
+  const handoff = getHandoff(id);
   if (!handoff) return false;
   db.prepare("UPDATE memory_handoffs SET archived_at = NULL, updated_at = ? WHERE id = ?").run(nowIso(), handoff.id);
   auditMemoryEvent("handoff_unarchived", "handoff", handoff.id, {}, "system");
@@ -1619,7 +1609,6 @@ function normalizeHandoffRow(row) {
   if (!row) return null;
   return {
     id: row.id,
-    kv_key: row.kv_key,
     project: row.project,
     title: row.title,
     source: row.source,
@@ -1641,13 +1630,9 @@ function normalizeHandoffRow(row) {
   };
 }
 
-function getHandoff(idOrKey) {
+function getHandoff(id) {
   if (!hasTable("memory_handoffs")) return null;
-  // id takes precedence over kv_key so a kv_key that collides with another
-  // row's id resolves deterministically (same order saveHandoff uses).
-  const row =
-    db.prepare("SELECT * FROM memory_handoffs WHERE id = ?").get(idOrKey) ||
-    db.prepare("SELECT * FROM memory_handoffs WHERE kv_key = ?").get(idOrKey);
+  const row = db.prepare("SELECT * FROM memory_handoffs WHERE id = ?").get(id);
   const created = normalizeHandoffRow(row);
   persistHandoffLinks(created);
   return created;
@@ -1673,7 +1658,7 @@ function updateHandoffExtraction(id, state, extractionVersion) {
 function archiveHandoff(id, reason = "archived") {
   if (!hasTable("memory_handoffs")) return false;
   const ts = nowIso();
-  const result = db.prepare("UPDATE memory_handoffs SET archived_at = ?, updated_at = ? WHERE id = ? OR kv_key = ?").run(ts, ts, id, id);
+  const result = db.prepare("UPDATE memory_handoffs SET archived_at = ?, updated_at = ? WHERE id = ?").run(ts, ts, id);
   if (result.changes > 0) auditMemoryEvent("handoff_archived", "handoff", id, { reason }, "user");
   return result.changes > 0;
 }

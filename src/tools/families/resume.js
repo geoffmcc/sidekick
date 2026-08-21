@@ -161,7 +161,7 @@ const SCHEMAS = {
     current_phase: z.number().int().positive().optional().describe("Current phase number within the named plan for action=set"),
     include_cleared: z.boolean().optional().describe("Include cleared/done items for action=list"),
     format: z.enum(["text", "json"]).optional().default("text").describe("Output format")
-  }),
+  }).strict(),
 };
 
 const descriptors = Object.freeze([
