@@ -53,7 +53,7 @@ try {
     "principal-disabled"
   );
 
-  const source = fs.readFileSync(path.join(__dirname, "..", "src", "dashboard.js"), "utf8");
+  const source = fs.readFileSync(path.join(__dirname, "..", "src", "dashboard", "auth-routes.js"), "utf8");
   assert.ok(source.includes('code: "bootstrap-required"'), "dashboard must fail closed before owner bootstrap");
   assert.ok(source.includes('requireIdentityPermission(req, res, "principals.manage")'), "principal mutations need authorization");
   assert.ok(source.includes('requireIdentityPermission(req, res, "roles.manage")'), "role mutations need authorization");
