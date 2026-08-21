@@ -51,6 +51,8 @@ const suites = [
   { file: 'test/metrics-surface.test.js', critical: false, description: 'Influx measurement and field result normalization' },
   { file: 'test/git-deploy.test.js', critical: false, description: 'Read-only Git deployment hardening' },
   { file: 'test/mcp-session.test.js', critical: false, description: 'MCP stale session recovery behavior' },
+  { file: 'test/mcp-v2-runtime.test.cjs', critical: true, description: 'MCP v2 protocol discovery, annotations, and governed invocation' },
+  { file: 'test/ini-v7-compat.test.cjs', critical: true, description: 'INI v7 parsing, security, and serialization compatibility' },
   { file: 'test/local-stdio.test.js', critical: true, description: 'Local packaged-style stdio MCP startup, governance, persistence, and stdout purity' },
   { file: 'test/ops-workflows.test.js', critical: false, description: 'Packaged operations workflow metadata' },
   { file: 'test/platform-kernel.test.js', critical: false, description: 'Unified execution, event, and artifact primitives' },

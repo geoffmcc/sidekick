@@ -33,18 +33,19 @@
   "author": "",
   "license": "GPL-3.0-only",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/server": "^2.0.0",
+    "@modelcontextprotocol/server-legacy": "^2.0.0",
     "ajv": "^8.17.1",
+    "better-sqlite3": "^13.0.3",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "fast-xml-parser": "^5.7.0",
     "handlebars": "^4.7.8",
-    "ini": "^5.0.0",
-    "yaml": "^2.6.0",
-    "zod": "^4.4.3",
-    "better-sqlite3": "^12.10.0",
+    "ini": "^7.0.0",
+    "ioredis": "^6.0.0",
     "pg": "^8.13.0",
-    "ioredis": "^5.4.0",
-    "playwright-core": "1.62.1"
+    "playwright-core": "1.62.1",
+    "yaml": "^2.6.0",
+    "zod": "^4.4.3"
   }
 }
