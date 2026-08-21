@@ -1,27 +1,81 @@
+# Dependencies
 node_modules/
+
+# Runtime data
 data/*
 !data/.gitkeep
 docker/data/*
+
+# Environment files and secrets
 .env
+.env.*
+!.env.example
+!.env.sample
+
+# Logs
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local AI and development-tool configuration
+.codex/
 .opencode/
 opencode.json
 opencode.jsonc
 .mcp.json
 .claude/settings.local.json
 CONTEXT.md
+
+# Local workplans and development notes
 docs/workplans/
+
+# Backups
 backups/
+
+# Local/generated version metadata
 version.json
+
+# Test data and temporary test environments
 test/test-data-*
 test/test-data/
 test/test-dispatcher-data/
 test/spike-openvino-node/
+
+# Test and coverage output
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+blob-report/
+
 # Python bytecode and caches
 __pycache__/
 *.py[cod]
+
+# Database temporary files
 *.db-shm
 *.db-wal
 
+# Node/tool caches
+.eslintcache
+.cache/
+
+# Editor and IDE files
+.idea/
+*.swp
+*.swo
+*~
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+
 # Build artifacts
 dist/
+
+# Temporary files
+*.tmp
+*.temp
