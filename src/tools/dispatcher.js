@@ -3,7 +3,7 @@ const dynamicTools = require("../dynamic-tools");
 const dbStore = require("../db");
 const { stripSidekickPrefix } = require("../core/tool-name");
 const { RISK_LEVELS } = require("./metadata");
-const { buildBuiltinRegistry } = require("./registry");
+const { getCanonicalRegistry } = require("./canonical-registry");
 const {
   createExecutionContext,
   createMcpExecutionContext,
@@ -66,11 +66,7 @@ function freezeDeep(value) {
 }
 
 function getBuiltinRegistry() {
-  return buildBuiltinRegistry({
-    toolDefs: legacy.TOOL_DEFS,
-    handlers: legacy.TOOLS,
-    schemas: require("./schemas").TOOL_SCHEMAS,
-  });
+  return getCanonicalRegistry({ includeActiveModules: true });
 }
 
 function getHandlerMap() {

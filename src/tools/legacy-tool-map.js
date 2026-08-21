@@ -1,17 +1,14 @@
 "use strict";
 
-// Compatibility-only direct tool implementations that have not yet moved to
-// descriptor-owned families. Keep this map separate from the legacy catalog so
-// the dispatcher facade does not also own implementation wiring.
-const computeTools = require("../compute/tools");
-
-const TOOLS = Object.freeze({
-  compute: computeTools.sidekick_compute,
-  compute_nodes: computeTools.sidekick_compute_nodes,
-  compute_providers: computeTools.sidekick_compute_providers,
-  compute_models: computeTools.sidekick_compute_models,
-  compute_jobs: computeTools.sidekick_compute_jobs,
-  compute_route: computeTools.sidekick_compute_route,
-});
+// Compatibility projection retained for old callers. It contains no handler
+// ownership; the canonical descriptor registry supplies the implementations.
+const { getCanonicalRegistry } = require("./canonical-registry");
+const registry = getCanonicalRegistry();
+const computeNames = new Set(registry.listInDefinitionOrder()
+  .filter(descriptor => descriptor.family === "compute")
+  .map(descriptor => descriptor.name));
+const TOOLS = Object.freeze(Object.fromEntries(
+  Object.entries(registry.toolsMap()).filter(([name]) => computeNames.has(name))
+));
 
 module.exports = { TOOLS };

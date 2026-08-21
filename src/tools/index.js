@@ -1,5 +1,6 @@
 const legacy = require("../tools-legacy");
 const { buildBuiltinRegistry, createRegistry } = require("./registry");
+const { getCanonicalRegistry } = require("./canonical-registry");
 const descriptor = require("./descriptor");
 const metadata = require("./metadata");
 const schemas = require("./schemas");
@@ -13,12 +14,7 @@ const registrySync = require("./registry-sync");
 const observability = require("./families/observability");
 
 function getBuiltinRegistry() {
-  return buildBuiltinRegistry({
-    toolDefs: legacy.TOOL_DEFS,
-    handlers: legacy.TOOLS,
-    categoryForTool: metadata.getStaticToolCategory,
-    schemas: schemas.TOOL_SCHEMAS,
-  });
+  return getCanonicalRegistry({ includeActiveModules: true });
 }
 
 function getCompatibilityToolMap() {
