@@ -42,9 +42,9 @@ For deployment work, inspect the live `ops` schema and use the packaged operatio
 
 At the start of a new Sidekick repo session, check for pending project work before starting a new task:
 
-1. Check the formal resume record with `resume action="check" project="<project>"`, and retrieve any legacy resume pointer key (such as `resume_active_sidekick`) with `get`.
-2. If pending work is found, retrieve the referenced handoff and summarize the pending work to the user.
-3. Ask whether to resume, defer, or clear the pending work.
+1. Check the formal structured resume record with `resume action="check" project="<project>"`.
+2. If pending work is found, retrieve the referenced structured handoff and summarize the pending work to the user.
+3. Ask whether to resume, defer, or clear the pending work. Do not create or consult ad hoc KV resume pointers.
 
 ### Memory Intelligence Workflow
 

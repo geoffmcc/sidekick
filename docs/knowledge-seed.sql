@@ -484,7 +484,7 @@ When guidance changes:
 'development,docs,knowledge,agents,source', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('best-practices', 'Agent autonomy for low-risk follow-through',
-'When an agent identifies a low-risk follow-up that is clearly part of the active task, the agent should do it immediately instead of only suggesting it or waiting for a separate go-ahead. This includes updating Sidekick resume keys, cleanup notes, documentation or handoff records, and running reasonable verification commands.
+'When an agent identifies a low-risk follow-up that is clearly part of the active task, the agent should do it immediately instead of only suggesting it or waiting for a separate go-ahead. This includes updating structured Sidekick resume or handoff records, cleanup notes, documentation, and running reasonable verification commands.
 
 Agents should still ask first before destructive actions, broad refactors, deploys, merges, credential or secret changes, production-impacting operations, or changes that could affect unrelated user work.
 
@@ -531,7 +531,7 @@ Use the core service checks for routine deploy verification, and inspect optiona
 'services,health,startup,docker,grafana', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('operations', 'Resume and Handoff Conventions',
-'Use resume_* keys for project-level handoffs and pending work. Keep the current thread''s remaining work together in one resume record unless a distinct project or phase needs its own handoff.
+'Use the structured resume document and versioned Handoff v2 records for project-level handoffs and pending work. Keep the current thread''s remaining work together in one resume record unless a distinct project or phase needs its own handoff. Do not create ad hoc KV resume or handoff keys.
 
 A resume entry should capture the current summary, the next concrete step, and any branch, URL, or notes needed to continue later. Append new context to the existing handoff instead of replacing unrelated pending work.
 

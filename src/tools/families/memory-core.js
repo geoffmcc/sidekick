@@ -7,7 +7,6 @@ const { redactSensitive } = require("../../redact");
 const { buildMemoryBrief } = require("../../memory");
 const toolContext = require("../context");
 const { sidekick_memory_manage } = require("./memory-lifecycle");
-const { extractHandoffMemories } = require("./memory-handoff");
 const { scopedProject, assertInScope } = require("./memory-scope");
 
 function jsonText(value) {
@@ -89,27 +88,14 @@ async function sidekick_memory({ action, id, project, type, memory_class, conten
   }
   if (action === "health") return jsonText({ ok: true, stats: dbStore.getMemoryIntelligenceStats() });
   if (action === "conflicts") return jsonText({ ok: true, memories: dbStore.searchMemories({ project: effectiveProject, includeDisabled: true, limit: limit || 100 }).filter(m => m.conflict_group || m.metadata?.conflicts_with) });
-  if (action === "backfill") {
-    const keys = Object.entries(dbStore.getAllKV()).map(([key, entry]) => ({ key, ...(entry || {}) })).filter(entry => (!effectiveProject || entry.project === effectiveProject) && /handoff|resume|plan|next[_ -]?step/i.test(`${entry.key} ${entry.category || ""}`)).slice(0, limit || 25);
-    const report = { scanned: keys.length, handoffs: 0, memories: 0, errors: [] };
-    for (const entry of keys) {
-      try {
-        const handoff = dbStore.saveHandoff({ kv_key: entry.key, project: entry.project || effectiveProject || null, title: entry.key, source: "backfill", content: entry.value, extraction_state: "pending" });
-        const memories = extractHandoffMemories(handoff, { project: entry.project || project || null });
-        recordMemoryEvent("memory.handoff_backfilled", { handoff_id: handoff.id, key: handoff.kv_key, project: handoff.project, memories_created: memories.length }, { subjectType: "memory_handoff", subjectId: handoff.id, project: handoff.project, taskId: handoff.task_id });
-        report.handoffs++; report.memories += memories.length;
-      } catch (e) { report.errors.push(`${entry.key}: ${e.message}`); }
-    }
-    return jsonText({ ok: true, report });
-  }
-  return { content: [{ type: "text", text: "Invalid action. Use remember, query, explain, list, get, confirm, correct, forget, pin, expire, conflicts, health, backfill" }], isError: true };
+  return { content: [{ type: "text", text: "Invalid action. Use remember, query, explain, list, get, confirm, correct, forget, pin, expire, conflicts, health" }], isError: true };
 }
 
 const descriptors = Object.freeze([Object.freeze({
   name: "memory",
-  description: "Typed memory operations: remember, query, explain, correct, forget, pin, expire, inspect conflicts/health, and backfill high-semantic sources such as handoffs.",
-  schema: z.object({ action: z.enum(["remember", "query", "explain", "list", "get", "confirm", "correct", "forget", "pin", "expire", "conflicts", "health", "backfill"]).describe("Memory action"), id: z.string().optional(), project: z.string().optional(), type: z.string().optional(), memory_class: z.string().optional(), content: z.string().optional(), summary: z.string().optional(), scope_type: z.string().optional(), scope_id: z.string().optional(), source: z.string().optional(), evidence: z.string().optional(), confidence: z.number().optional(), tags: z.union([z.string(), z.array(z.string())]).optional(), query: z.string().optional(), limit: z.number().optional(), reason: z.string().optional(), correct_to: z.string().optional(), fresh_eyes: z.boolean().optional(), historical: z.boolean().optional() }),
-  args: { action: "string (remember|query|explain|list|get|confirm|correct|forget|pin|expire|conflicts|health|backfill)", id: "string (optional memory id)", project: "string (optional)", type: "string (optional)", memory_class: "string (optional semantic|episodic|procedural|working|prospective|negative|relational|artifact|observational|capability)", content: "string (for remember)", summary: "string (optional)", scope_type: "string (optional)", scope_id: "string (optional)", source: "string (optional)", evidence: "string (optional)", confidence: "number (optional)", tags: "string|array (optional)", query: "string (for query)", limit: "number (optional)", correct_to: "string (for correct)", fresh_eyes: "boolean (optional)", historical: "boolean (optional)" },
+  description: "Typed memory operations: remember, query, explain, correct, forget, pin, expire, and inspect conflicts/health.",
+  schema: z.object({ action: z.enum(["remember", "query", "explain", "list", "get", "confirm", "correct", "forget", "pin", "expire", "conflicts", "health"]).describe("Memory action"), id: z.string().optional(), project: z.string().optional(), type: z.string().optional(), memory_class: z.string().optional(), content: z.string().optional(), summary: z.string().optional(), scope_type: z.string().optional(), scope_id: z.string().optional(), source: z.string().optional(), evidence: z.string().optional(), confidence: z.number().optional(), tags: z.union([z.string(), z.array(z.string())]).optional(), query: z.string().optional(), limit: z.number().optional(), reason: z.string().optional(), correct_to: z.string().optional(), fresh_eyes: z.boolean().optional(), historical: z.boolean().optional() }),
+  args: { action: "string (remember|query|explain|list|get|confirm|correct|forget|pin|expire|conflicts|health)", id: "string (optional memory id)", project: "string (optional)", type: "string (optional)", memory_class: "string (optional semantic|episodic|procedural|working|prospective|negative|relational|artifact|observational|capability)", content: "string (for remember)", summary: "string (optional)", scope_type: "string (optional)", scope_id: "string (optional)", source: "string (optional)", evidence: "string (optional)", confidence: "number (optional)", tags: "string|array (optional)", query: "string (for query)", limit: "number (optional)", correct_to: "string (for correct)", fresh_eyes: "boolean (optional)", historical: "boolean (optional)" },
   risk: "medium", category: "Context & Learning", source: "builtin", family: "memory-core", handler: sidekick_memory,
 })]);
 
