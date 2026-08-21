@@ -150,7 +150,7 @@ function transcriptionArgs(backend, device, audioPath, model, language, outputDi
   if (backend === "whisper.cpp") {
     const prefix = path.join(outputDir, "transcript");
     const modelPath = `/home/sidekick/.sidekick-tools/models/ggml-${model}.bin`;
-    return ["-m", modelPath, "-f", audioPath, "-otxt", "-of", prefix, "-ngl", device === "cpu" ? "0" : "99", ...(language ? ["-l", language] : [])];
+    return ["-m", modelPath, "-f", audioPath, "-otxt", "-of", prefix, ...(device === "cpu" ? ["-ng"] : []), ...(language ? ["-l", language] : [])];
   }
   return [audioPath, "--model", model, "--output_format", "txt", "--output_dir", outputDir, "--device", device, ...(backend === "faster-whisper" ? ["--compute_type", "auto"] : []), ...(language ? ["--language", language] : [])];
 }
