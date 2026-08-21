@@ -19,7 +19,7 @@ const fs = require("fs");
 const crypto = require("crypto");
 const os = require("os");
 const path = require("path");
-const { execFileSync } = require("child_process");
+const { execFileSync, spawn } = require("child_process");
 const { childProcessEnv } = require("../../security/child-process");
 const { z } = require("zod");
 const { enforcePathPolicy } = require("../path-policy");
@@ -33,6 +33,163 @@ const INI = require("ini");
 const { detectFormat } = require("../../core/format");
 const { DATA_DIR } = require("../../db");
 const platformKernel = require("../../platform/kernel");
+
+const TRANSCRIPTION_JOB_ROOT = path.join(DATA_DIR, "transcription-jobs");
+const transcriptionJobs = new Map();
+
+function transcriptionJobPath(jobId) {
+  return path.join(TRANSCRIPTION_JOB_ROOT, `${jobId}.json`);
+}
+
+function saveTranscriptionJob(job) {
+  fs.mkdirSync(TRANSCRIPTION_JOB_ROOT, { recursive: true, mode: 0o700 });
+  const safe = { ...job };
+  delete safe.child;
+  fs.writeFileSync(transcriptionJobPath(job.job_id), JSON.stringify(safe, null, 2), { mode: 0o600 });
+  transcriptionJobs.set(job.job_id, job);
+}
+
+function loadTranscriptionJob(jobId) {
+  if (transcriptionJobs.has(jobId)) return transcriptionJobs.get(jobId);
+  try {
+    const job = JSON.parse(fs.readFileSync(transcriptionJobPath(jobId), "utf8"));
+    // The child process is intentionally not detached. A restart cannot
+    // safely resume it, so expose that fact instead of reporting a job as
+    // running forever after the parent process has gone away.
+    if (job.status === "running" || job.status === "queued") {
+      job.status = "orphaned";
+      job.error = "Sidekick restarted before transcription completed";
+      job.updated_at = new Date().toISOString();
+      fs.writeFileSync(transcriptionJobPath(jobId), JSON.stringify(job, null, 2), { mode: 0o600 });
+    }
+    transcriptionJobs.set(jobId, job);
+    return job;
+  } catch (_) {
+    return null;
+  }
+}
+
+function commandAvailable(command) {
+  return path.isAbsolute(command) ? fs.existsSync(command) : false;
+}
+
+function localCudaAvailable() {
+  try {
+    execFileSync("nvidia-smi", ["--query-gpu=name", "--format=csv,noheader"], { timeout: 2000, stdio: ["ignore", "pipe", "ignore"] });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function localMetalAvailable() {
+  return process.platform === "darwin" && process.arch === "arm64";
+}
+
+function localVulkanAvailable() {
+  try {
+    execFileSync("vulkaninfo", ["--summary"], { timeout: 3000, stdio: ["ignore", "pipe", "ignore"] });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function selectTranscriptionDevice(backend, requested) {
+  const device = requested || process.env.SIDEKICK_TRANSCRIPTION_DEVICE || "auto";
+  if (!["auto", "cpu", "cuda", "metal", "vulkan"].includes(device)) {
+    throw new Error("Invalid transcription device. Use auto, cpu, cuda, metal, or vulkan");
+  }
+  if (device === "cpu") return "cpu";
+  if (device === "cuda") {
+    if (!localCudaAvailable()) throw new Error("CUDA requested but no local NVIDIA GPU was detected");
+    return backend === "whisper.cpp" || backend === "faster-whisper" ? "cuda" : "cpu";
+  }
+  if (device === "metal") {
+    if (!localMetalAvailable()) throw new Error("Metal requested but Apple Silicon was not detected");
+    return backend === "whisper.cpp" ? "metal" : "cpu";
+  }
+  if (device === "vulkan") {
+    if (!localVulkanAvailable()) throw new Error("Vulkan requested but no local Vulkan device was detected");
+    return backend === "whisper.cpp" ? "vulkan" : "cpu";
+  }
+  if (backend === "whisper.cpp" && localMetalAvailable()) return "metal";
+  if ((backend === "whisper.cpp" || backend === "faster-whisper") && localCudaAvailable()) return "cuda";
+  if (backend === "whisper.cpp" && localVulkanAvailable()) return "vulkan";
+  return "cpu";
+}
+
+function selectTranscriptionBackend(requested) {
+  const whisper = "/home/sidekick/.sidekick-tools/bin/whisper";
+  const fasterWhisper = "/home/sidekick/.sidekick-tools/bin/faster-whisper";
+  const whisperCpp = "/home/sidekick/.sidekick-tools/bin/whisper-cli";
+  const available = {
+    "faster-whisper": commandAvailable(fasterWhisper),
+    "whisper.cpp": commandAvailable(whisperCpp),
+    whisper: commandAvailable(whisper),
+  };
+  const backend = requested || "auto";
+  if (backend !== "auto" && !Object.prototype.hasOwnProperty.call(available, backend)) {
+    throw new Error("Invalid transcription backend. Use auto, faster-whisper, whisper.cpp, or whisper");
+  }
+  if (backend !== "auto" && !available[backend]) {
+    throw new Error(`Transcription backend not installed: ${backend}`);
+  }
+  if (backend === "auto") {
+    // Prefer the optimized implementations, but never claim GPU use: the
+    // selected executable remains responsible for its own device policy.
+    if (available["faster-whisper"]) return { name: "faster-whisper", command: fasterWhisper };
+    if (available["whisper.cpp"]) return { name: "whisper.cpp", command: whisperCpp };
+    if (available.whisper) return { name: "whisper", command: whisper };
+    return { name: "whisper", command: "whisper" };
+  }
+  return { name: backend, command: { "faster-whisper": fasterWhisper, "whisper.cpp": whisperCpp, whisper }[backend] };
+}
+
+function transcriptionArgs(backend, device, audioPath, model, language, outputDir) {
+  if (backend === "whisper.cpp") {
+    const prefix = path.join(outputDir, "transcript");
+    const modelPath = `/home/sidekick/.sidekick-tools/models/ggml-${model}.bin`;
+    return ["-m", modelPath, "-f", audioPath, "-otxt", "-of", prefix, "-ngl", device === "cpu" ? "0" : "99", ...(language ? ["-l", language] : [])];
+  }
+  return [audioPath, "--model", model, "--output_format", "txt", "--output_dir", outputDir, "--device", device, ...(backend === "faster-whisper" ? ["--compute_type", "auto"] : []), ...(language ? ["--language", language] : [])];
+}
+
+function finishTranscriptionJob(job, patch) {
+  Object.assign(job, patch, { updated_at: new Date().toISOString() });
+  saveTranscriptionJob(job);
+}
+
+function startTranscriptionJob({ audioPath, model, language, backend, device: requestedDevice }) {
+  const selected = selectTranscriptionBackend(backend);
+  const device = selectTranscriptionDevice(selected.name, requestedDevice);
+  const jobId = `tr_${crypto.randomUUID()}`;
+  const outputDir = path.join(TRANSCRIPTION_JOB_ROOT, jobId);
+  fs.mkdirSync(outputDir, { recursive: true, mode: 0o700 });
+  const job = { job_id: jobId, status: "queued", backend: selected.name, device, model, language: language || null, input: audioPath, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+  saveTranscriptionJob(job);
+
+  const child = spawn(selected.command, transcriptionArgs(selected.name, device, audioPath, model, language, outputDir), {
+    detached: false,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: childProcessEnv(),
+  });
+  job.child = child;
+  finishTranscriptionJob(job, { status: "running" });
+  child.stdout.on("data", () => {});
+  let stderr = "";
+  child.stderr.on("data", chunk => { stderr = (stderr + chunk.toString()).slice(-4096); });
+  child.on("error", error => finishTranscriptionJob(job, { status: "failed", error: error.message }));
+  child.on("close", code => {
+    if (job.status === "cancelled") return;
+    const txtPath = selected.name === "whisper.cpp"
+      ? path.join(outputDir, "transcript.txt")
+      : path.join(outputDir, `${path.basename(audioPath).replace(/\.[^.]+$/, "")}.txt`);
+    if (code === 0 && fs.existsSync(txtPath)) finishTranscriptionJob(job, { status: "completed", output: fs.readFileSync(txtPath, "utf8").slice(0, 2 * 1024 * 1024).trim() || "(no speech detected)" });
+    else finishTranscriptionJob(job, { status: "failed", error: stderr || `transcription exited with code ${code}` });
+  });
+  return job;
+}
 
 function safeExecFileSync(command, args, options = {}) {
   return execFileSync(command, args, {
@@ -137,8 +294,25 @@ async function sidekick_media({ action, input, output, options }) {
   }
 }
 
-async function sidekick_transcribe({ path: audioPath, model, language }) {
+async function sidekick_transcribe({ path: audioPath, model, language, async: runAsync, backend, device: requestedDevice, action = "submit", job_id: jobId }) {
   try {
+    if (action === "status") {
+      if (!jobId) return { content: [{ type: "text", text: "Error: job_id is required for status" }], isError: true };
+      const job = loadTranscriptionJob(jobId);
+      if (!job) return { content: [{ type: "text", text: `Error: transcription job not found: ${jobId}` }], isError: true };
+      const { child, ...publicJob } = job;
+      return { content: [{ type: "text", text: JSON.stringify(publicJob) }] };
+    }
+    if (action === "cancel") {
+      if (!jobId) return { content: [{ type: "text", text: "Error: job_id is required for cancel" }], isError: true };
+      const job = loadTranscriptionJob(jobId);
+      if (!job) return { content: [{ type: "text", text: `Error: transcription job not found: ${jobId}` }], isError: true };
+      if (job.child && !job.child.killed) job.child.kill("SIGTERM");
+      finishTranscriptionJob(job, { status: "cancelled" });
+      const { child, ...publicJob } = job;
+      return { content: [{ type: "text", text: JSON.stringify(publicJob) }] };
+    }
+    if (!audioPath) return { content: [{ type: "text", text: "Error: path is required" }], isError: true };
     const policyError = enforcePathPolicy(audioPath, "read");
     if (policyError) return policyError;
     if (!fs.existsSync(audioPath)) {
@@ -146,14 +320,20 @@ async function sidekick_transcribe({ path: audioPath, model, language }) {
     }
 
     const m = validWhisperModel(model);
-    const venvPath = "/home/sidekick/.sidekick-tools/bin/whisper";
-    const whisperCmd = fs.existsSync(venvPath) ? venvPath : "whisper";
-    const args = [audioPath, "--model", m, "--output_format", "txt", "--output_dir", "/tmp"];
-    if (language) args.push("--language", validLangCode(language, "eng"));
-    const result = safeExecFileSync(whisperCmd, args, { timeout: 600000, maxBuffer: 2 * 1024 * 1024 });
+    const lang = language ? validLangCode(language, "eng") : undefined;
+    const selected = selectTranscriptionBackend(backend);
+    const device = selectTranscriptionDevice(selected.name, requestedDevice);
+    if (runAsync) {
+      const job = startTranscriptionJob({ audioPath, model: m, language: lang, backend, device });
+      const { child, ...publicJob } = job;
+      return { content: [{ type: "text", text: JSON.stringify(publicJob) }] };
+    }
+    const args = transcriptionArgs(selected.name, device, audioPath, m, lang, "/tmp");
+    const result = safeExecFileSync(selected.command, args, { timeout: 600000, maxBuffer: 2 * 1024 * 1024 });
 
-    const txtPath = audioPath.replace(/\.[^.]+$/, ".txt");
-    const tmpTxtPath = `/tmp/${path.basename(audioPath).replace(/\.[^.]+$/, ".txt")}`;
+    const tmpTxtPath = selected.name === "whisper.cpp"
+      ? "/tmp/transcript.txt"
+      : `/tmp/${path.basename(audioPath).replace(/\.[^.]+$/, ".txt")}`;
     if (fs.existsSync(tmpTxtPath)) {
       const text = fs.readFileSync(tmpTxtPath, "utf-8").trim();
       fs.unlinkSync(tmpTxtPath);
@@ -620,9 +800,14 @@ const SCHEMAS = {
     options: z.string().optional().describe("Format-specific options")
   }),
   transcribe: z.object({
-    path: z.string().describe("Audio/video file path"),
+    path: z.string().optional().describe("Audio/video file path (required for submit)"),
     model: z.string().optional().default("base").describe("Whisper model (tiny|base|small|medium)"),
-    language: z.string().optional().describe("Language code")
+    language: z.string().optional().describe("Language code"),
+    async: z.boolean().optional().default(false).describe("Return a persistent job ID instead of waiting for completion"),
+    action: z.enum(["submit", "status", "cancel"]).optional().default("submit").describe("Transcription job action"),
+    job_id: z.string().optional().describe("Job ID for status or cancel"),
+    backend: z.enum(["auto", "faster-whisper", "whisper.cpp", "whisper"]).optional().default("auto").describe("Transcription backend; auto prefers optimized installed backends"),
+    device: z.enum(["auto", "cpu", "cuda", "metal", "vulkan"]).optional().default("auto").describe("Local inference device; Vulkan supports compatible AMD/Intel/NVIDIA backends")
   }),
   analytics: z.object({
     query: z.string().optional().describe("SQL query"),
@@ -666,9 +851,9 @@ const descriptors = Object.freeze([
   }),
   Object.freeze({
     name: "transcribe",
-    description: "Transcribe audio/video to text using Whisper",
+    description: "Transcribe audio/video using a bounded asynchronous job or synchronous Whisper-compatible backend",
     schema: SCHEMAS.transcribe,
-    args: { path: "string (audio/video file path)", model: "string (optional, tiny|base|small|medium - default base)", language: "string (optional, language code)" },
+    args: { path: "string (audio/video file path; required for submit)", model: "string (optional, tiny|base|small|medium - default base)", language: "string (optional, language code)", async: "boolean (optional; return job ID)", action: "string (submit|status|cancel)", job_id: "string (status/cancel)", backend: "string (auto|faster-whisper|whisper.cpp|whisper)", device: "string (auto|cpu|cuda|metal|vulkan)" },
     risk: "medium",
     category: "Media",
     source: "builtin",
