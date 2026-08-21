@@ -9,7 +9,7 @@ const extractedFamilies = require('../src/tools/families');
 const extractedNames = extractedFamilies.descriptors.map(d => d.name);
 
 const toolsFacadeSource = fs.readFileSync('src/tools.js', 'utf8');
-const indexSource = fs.readFileSync('src/index.js', 'utf8');
+const mcpServerSource = fs.readFileSync('src/mcp/server.js', 'utf8');
 
 console.log('Running Tool Registry Contract Tests...');
 
@@ -62,10 +62,10 @@ assert.deepStrictEqual(toolLayer.result.textResult('ok'), { content: [{ type: 't
 assert.strictEqual(toolLayer.context.getExecutionSource(), 'mcp', 'New execution context should default to mcp');
 assert.ok(toolsFacadeSource.includes('require("./tools/index")'), 'src/tools.js should facade to the new tool layer');
 assert.ok(toolsFacadeSource.split(/\r?\n/).length < 10, 'src/tools.js should remain a small compatibility facade');
-assert.ok(!indexSource.includes('const TOOL_SCHEMAS = {'), 'src/index.js should not own an independent TOOL_SCHEMAS catalog');
-assert.ok(indexSource.includes('getBuiltinRegistry'), 'src/index.js should register built-ins from the canonical registry');
-assert.ok(indexSource.includes('callMcpTool(descriptor.name'), 'MCP built-in execution should route through the MCP dispatcher wrapper');
-assert.ok(!indexSource.includes('descriptor.handler(args)'), 'MCP must not directly invoke built-in handlers');
+assert.ok(!mcpServerSource.includes('const TOOL_SCHEMAS = {'), 'MCP server should not own an independent TOOL_SCHEMAS catalog');
+assert.ok(mcpServerSource.includes('getBuiltinRegistry'), 'MCP server should register built-ins from the canonical registry');
+assert.ok(mcpServerSource.includes('callMcpTool(descriptor.name'), 'MCP built-in execution should route through the MCP dispatcher wrapper');
+assert.ok(!mcpServerSource.includes('descriptor.handler(args)'), 'MCP must not directly invoke built-in handlers');
 assert.strictEqual(registry.get('respond').family, 'utility', 'respond should be owned by extracted utility family');
 // data-utilities moved to the module system (src/modules/entries/data-utilities.js):
 // its tools are absent from the builtin registry until the module is
