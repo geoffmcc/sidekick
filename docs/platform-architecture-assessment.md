@@ -16,8 +16,8 @@ This assessment verifies the current repository architecture before platform con
 
 Sidekick is currently a three-process Node.js application:
 
-- MCP server: `src/index.js` creates the MCP server, registers built-in and generated tools, applies pending migrations at startup, and exposes Streamable HTTP/SSE MCP routes (`src/index.js:1-17`, `src/index.js:1314-1325`).
-- Dashboard: `src/dashboard.js` serves the HTML shell and JSON API on port 4098 with Basic/session auth, CSRF origin checks, rate limiting, audit logging, and direct database/file reads (`src/dashboard.js:1-31`, `src/dashboard.js:51-77`, `src/dashboard.js:189-230`).
+- MCP server: `src/index.js` composes application startup around the canonical server in `src/mcp/server.js`; `src/mcp/session-manager.js`, `streamable-http.js`, and `legacy-sse.js` own session and transport plumbing. All transports use the same registry and governed dispatcher (`src/index.js`, `src/mcp/`).
+- Dashboard: `src/dashboard.js` composes the HTML shell and JSON API on port 4098 with the shared authentication, CSRF, rate-limit, audit, and governed dispatch boundaries; coherent route families live under `src/dashboard/` (`src/dashboard.js`, `src/dashboard/`).
 - Agent Bridge: `src/agent.js` accepts task goals, runs a local planning loop, calls `callTool`, stores transcripts, and owns delay/watch timers (`src/agent.js:8-16`, `src/agent.js:26-96`, `src/agent.js:178-256`).
 
 The architecture document accurately describes the high-level boundary as MCP `:4097`, Dashboard `:4098`, Agent Bridge `:4099`, shared `src/tools.js`, shared SQLite database, and data directory (`docs/architecture.md:3-22`).

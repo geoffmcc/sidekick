@@ -3,22 +3,23 @@
 Status: Current-state architecture
 Verified date: 2026-08-14
 
-Sidekick's built-in registry contains 106 tools (`TOOL_DEFS` rows), or 112 when
-the `data-utilities` module is enabled — the default on every standard
-deployment, since all three services provision built-in modules at startup.
-Installed capability packs add their own module-owned tools to the same
-registry (the bundled Developer pack adds 3). Tools execute through one
-descriptor registry and one centralized dispatcher, whatever contributed them.
+Sidekick's canonical built-in registry contains 108 descriptors. Active module,
+capability-pack, and approved generated tools join that same registry at
+runtime, so the live catalog count is deployment-dependent. Query `tools
+action="overview"` for the current count. All contributions execute through
+one descriptor registry and one centralized dispatcher.
 
 The Track B legacy decomposition is **complete**: as of slice B-6,
 `src/tools-legacy.js` owns **zero production tool handlers**. Core handlers are
 owned by descriptor families, while the six `data-utilities` tools are
 registered through the module loader and the six compute tools have handlers in
 `src/compute/tools.js` behind pure pass-through wiring in `tools-legacy.js`.
-`src/tools-legacy.js` is now a ~1,500-line remnant holding the policy/approval
-machinery, the registry-sync and tool-logging layer, the `TOOL_DEFS` ordering
-anchors, and compatibility re-exports of helpers that moved to families or
-shared modules. It is required by no descriptor family at module load.
+`src/tools-legacy.js` is a small compatibility facade holding policy/approval,
+registry-sync and tool-logging compatibility machinery plus re-exports. It owns
+no canonical descriptor metadata or production handlers. `TOOL_DEFS` and the
+legacy `TOOLS` map are derived projections; descriptor ownership lives in the
+canonical registry and descriptor families. It is required by no descriptor
+family at module load.
 
 The path there: B-1 removed 1163 lines of proven-unreachable dead code; B-2
 through B-5 extracted the read-only, self-contained, and cluster handlers into
@@ -83,18 +84,12 @@ Extracted descriptor-owned families live under `src/tools/families/` and are agg
 - `capability-packs.js` — `capability` (aliases `capability_pack`, `pack`; `critical` risk). Capability-pack lifecycle: list/available/show/inspect/install/configure/enable/disable/health/upgrade/uninstall. `critical` because installing or enabling a pack activates executable module code in the Sidekick process. Owns no lifecycle logic itself; delegates to `src/packs/`.
 - `workflow-definitions.js` — `workflow` (alias `workflows`; `high` risk). List/show/run/resume registered workflow definitions. Each step is dispatched through the same dispatcher, so each individual tool's own policy and approval still apply on top.
 
-These families own 98 descriptors via `families/index.js` (96 plus `capability`
-and `workflow`, added by Capability Packs v1); the `data-utilities` module
-contributes 6 more through the module registry (`parse`, `extract`,
-`transform`, `diff`, `validate`, `template`), for **104 family/module-owned
-descriptors across 41 family files** (40 registered families plus the
-module-registered `data-utilities.js`). Capability-pack modules contribute
-further descriptors at runtime through the same module registry path. The remaining 6 built-in tools are the
-compute family (`compute`, `compute_nodes`, `compute_providers`,
-`compute_models`, `compute_jobs`, `compute_route`), implemented in
-`src/compute/tools.js` and wired through pass-through entries in
-`tools-legacy.js`; the registry synthesizes their descriptors with
-`source: "builtin-legacy"`. `module-management.js` — `module` (with the one
+Descriptor families plus `src/tools/families/compute.js` own all 108 built-in
+descriptors; the `data-utilities` module contributes its six tools at runtime
+through the same module registry path. Capability-pack modules contribute
+further descriptors through that same path. Compute handlers remain implemented
+in `src/compute/tools.js`, but their canonical registration is owned by
+`families/compute.js`, not by the compatibility layer. `module-management.js` — `module` (with the one
 declared alias in the codebase, `modules`) — exposes read/enable/disable/
 check/recover for platform modules. `process-mgmt.js`, `net-fetch.js`, and
 `observability.js` were added by Track B slice B-4; slice B-5 added `shell.js`,
@@ -107,15 +102,15 @@ check/recover for platform modules. `process-mgmt.js`, `net-fetch.js`, and
 `runbook.js`, `evolve.js`, and `tool-catalog.js`, extended `operations.js`
 (`mission`) and `context.js` (`project`), and reached zero legacy-owned
 handlers — verified by `test/tool-family-b6-extractions.test.cjs`. Each family
-owns its handlers, inline Zod schemas, risk, category, and compatibility metadata. Legacy `TOOL_DEFS` rows remain only as ordering anchors while MCP ordering compatibility is preserved. The five storage schemas (`store`, `get`, `delete`, `list_projects`, and `get_by_project`) have been removed from `src/tools/schemas/index.js`; storage has single ownership in `storage.js`, and a registry contract test asserts one schema owner per extracted descriptor.
+owns its handlers, inline Zod schemas, risk, category, and compatibility metadata. The explicit `canonical-order.js` list preserves the existing compatibility order; `legacy-catalog.js` and `legacy-tool-map.js` are projections rather than owners. The five storage schemas (`store`, `get`, `delete`, `list_projects`, and `get_by_project`) have been removed from `src/tools/schemas/index.js`; storage has single ownership in `storage.js`, and a registry contract test asserts one schema owner per extracted descriptor.
 
 The filesystem path policy now lives in `src/tools/path-policy.js`, the authoritative implementation of `enforcePathPolicy` and `getPathPolicyDecision`. It requires only `fs`, `path`, `src/core/policy-env.js`, and `src/tools/context.js`, so descriptor families can depend on it without requiring `src/tools-legacy.js` at module top level. `src/tools-legacy.js` consumes it and no longer defines its own copy.
 
-`hash` is descriptor-family owned by `hashing.js`. Its legacy `TOOL_DEFS` row remains as the temporary ordering and compatibility anchor; the live legacy handler and legacy schema entry have been removed.
+`hash` is descriptor-family owned by `hashing.js`; its compatibility metadata is projected from the canonical descriptor. The live legacy handler and legacy schema entry have been removed.
 
 ## Registry Lifecycle
 
-`src/tools/registry.js` builds the built-in registry from descriptor data. During migration it adapts legacy definitions into descriptors and substitutes extracted family descriptors at their legacy order position.
+`src/tools/canonical-registry.js` assembles the canonical descriptor set and explicit order, including the Compute family. `src/tools/registry.js` validates and materializes that set, adds active module descriptors to the same registry, and resolves aliases. Legacy catalog/map exports are derived compatibility projections and are not inputs to canonical registry construction.
 
 The registry rejects ambiguous names with order-independent validation. It collects canonical names first, rejects duplicate canonical names, then rejects aliases that collide with any other canonical name or alias. A descriptor may declare its own canonical name as an explicit self-alias. Built-in tools cannot be shadowed by generated tools; generated tools are resolved only when no built-in descriptor exists for the canonical name.
 
@@ -268,11 +263,10 @@ remains in `src/tools-legacy.js` is deliberate and bounded:
    `finalizeApprovalExecution`, recovery helpers), `logToolCall`, and the
    platform mirroring adapters. These are dispatcher dependencies, not tool
    handlers.
-2. **`TOOL_DEFS` ordering anchors** — the 106-row definition list that
-   preserves MCP catalog ordering compatibility.
-3. **Compute pass-through wiring** — the `TOOLS` map entries delegating the six
-   `compute*` tools to `src/compute/tools.js`.
-4. **Compatibility re-exports** — helpers whose implementations moved to
+2. **Compatibility projections** — `legacy-catalog.js` and
+   `legacy-tool-map.js` expose the old `TOOL_DEFS`/`TOOLS` shapes derived from
+   canonical descriptors for existing consumers.
+3. **Compatibility re-exports** — helpers whose implementations moved to
    families or shared modules but whose old import paths are kept for
    `src/agent.js`, `src/dashboard.js`, and existing tests.
 

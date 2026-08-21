@@ -1,6 +1,6 @@
 # Dashboard
 
-The dashboard is implemented in `src/dashboard.js` and defaults to port 4098. It serves a browser UI plus JSON endpoints for logs, KV data, system status, service status, tool metadata, webhook capture, and agent task proxying.
+The dashboard bootstrap/composition is implemented in `src/dashboard.js` and defaults to port 4098. Coherent route families are registered from `src/dashboard/`, including authentication/identity, approvals, KV, system, logs, connectors, quick actions, statistics/tools, and summary routes. It serves a browser UI plus JSON endpoints for logs, KV data, system status, service status, tool metadata, webhook capture, and agent task proxying.
 
 ## Main UI areas
 
