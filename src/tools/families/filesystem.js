@@ -36,6 +36,50 @@ async function sidekick_list({ path: dirPath }) {
   return { content: [{ type: "text", text: redactSensitive(lines.join("\n") || "(empty directory)") }] };
 }
 
+function nodeSearch(pattern, targetPath, include) {
+  let matcher;
+  try {
+    matcher = new RegExp(pattern);
+  } catch (error) {
+    return { content: [{ type: "text", text: "Search error: " + error.message }], isError: true };
+  }
+
+  const includeMatcher = include
+    ? new RegExp("^" + String(include).replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\\\*/g, ".*").replace(/\\\?/g, ".") + "$")
+    : null;
+  const results = [];
+  const maxResults = 100;
+
+  function visit(current, depth) {
+    if (results.length >= maxResults || depth > 20) return;
+    let stat;
+    try { stat = fs.lstatSync(current); } catch { return; }
+    if (stat.isSymbolicLink()) return;
+    if (stat.isFile()) {
+      if (includeMatcher && !includeMatcher.test(path.basename(current))) return;
+      let content;
+      try { content = fs.readFileSync(current, "utf-8"); } catch { return; }
+      for (const [index, line] of content.split(/\r?\n/).entries()) {
+        if (matcher.test(line)) {
+          results.push(`${current}:${index + 1}:${line}`);
+          if (results.length >= maxResults) return;
+        }
+      }
+      return;
+    }
+    if (!stat.isDirectory()) return;
+    let entries;
+    try { entries = fs.readdirSync(current, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (results.length >= maxResults) return;
+      visit(path.join(current, entry.name), depth + 1);
+    }
+  }
+
+  visit(targetPath, 0);
+  return { content: [{ type: "text", text: redactSensitive(results.join("\n") || "(no matches)") }] };
+}
+
 async function sidekick_search({ pattern, path: searchPath, include }) {
   const targetPath = searchPath || ".";
   const policyError = enforcePathPolicy(targetPath, "read");
@@ -44,15 +88,22 @@ async function sidekick_search({ pattern, path: searchPath, include }) {
     return { content: [{ type: "text", text: "Path not found: " + targetPath }], isError: true };
   }
 
-  let useRg = false;
+  let searchCommand = null;
   try {
-    execFileSync("which", ["rg"], { stdio: "ignore", env: childProcessEnv() });
-    useRg = true;
+    execFileSync(process.platform === "win32" ? "where.exe" : "which", ["rg"], { stdio: "ignore", env: childProcessEnv() });
+    searchCommand = "rg";
   } catch (e) {}
+  if (!searchCommand) {
+    try {
+      execFileSync(process.platform === "win32" ? "where.exe" : "which", ["grep"], { stdio: "ignore", env: childProcessEnv() });
+      searchCommand = "grep";
+    } catch (e) {}
+  }
+  if (!searchCommand) return nodeSearch(pattern, targetPath, include);
 
   try {
     let stdout;
-    if (useRg) {
+    if (searchCommand === "rg") {
       const args = ["--json", "--max-count", "100"];
       if (include) args.push("-g", include);
       args.push(pattern, targetPath);

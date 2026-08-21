@@ -243,7 +243,6 @@ console.log('Running Tools Tests...\n');
     dbStore.runPendingMigrations();
     const linkedHandoff = JSON.parse((await handoff({
       action: 'create',
-      key: 'resume-linked-handoff-test',
       project: 'resume_test',
       content: 'Fact: linked resume handoff.',
       packet: {
@@ -600,6 +599,7 @@ console.log('Running Tools Tests...\n');
     console.log('✓ Passed\n');
 
     // Clean up
+    dbStore.closeDatabase();
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
     
     console.log('All Tools Tests Passed! ✓');
