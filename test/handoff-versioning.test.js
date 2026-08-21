@@ -22,6 +22,9 @@ const { TOOLS } = require("../src/tools");
 
 dbStore.runPendingMigrations();
 
+const handoffColumns = dbStore.getDb().prepare("PRAGMA table_info(memory_handoffs)").all().map(column => column.name);
+assert.ok(!handoffColumns.includes("kv_key"), "Handoff v2 persistence must not retain the legacy KV identity column");
+
 function parse(result) {
   return JSON.parse(result.content[0].text);
 }

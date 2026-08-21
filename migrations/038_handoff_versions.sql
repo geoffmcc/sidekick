@@ -2,7 +2,7 @@
 --
 -- memory_handoffs always carried `version` and `previous_id` columns, but the
 -- save path never produced a working chain: id-based updates overwrote the row
--- in place at version 1, and key-based updates violated the kv_key UNIQUE
+-- in place at version 1. Structured IDs are the only supported identity.
 -- constraint. This migration adds the append-only history table that makes
 -- versioning real: the memory_handoffs row is always the LATEST version of a
 -- handoff, and every superseded version is preserved here verbatim.
