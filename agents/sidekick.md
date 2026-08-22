@@ -258,12 +258,22 @@ Treat these as runtime rules, not merely documentation hints:
   an unrelated local working tree on another machine. `implement-change` and
   release preparation deliberately stop short of commit/push/merge/publish
   unless a separate, explicitly authorized operation is requested.
-- The Agent Bridge is separate from MCP. It classifies goals, requires real
-  tool evidence for live-state requests, and dispatches through the same policy,
-  approval, timeout, audit, and redaction boundary. A follow-up is a bounded
-  child task with untrusted summarized context; it does not inherit approval or
-  automatically create a session, handoff, or memory. Use it only when the user
-  requests autonomous Agent Bridge execution.
+- The Agent Bridge is separate from MCP but shares the platform kernel and
+  canonical dispatcher. It classifies goals, requires real tool evidence for
+  live-state requests, and dispatches through the same policy, approval,
+  timeout, audit, and redaction boundary. Durable tasks retain structured goals,
+  criteria, rolling plan revisions, bounded profile budgets, failures,
+  checkpoints, artifacts, verification, control events, and restart-recovery
+  state. Profiles are `quick`, `standard`, `deep`, `persistent`, and `research`.
+  A follow-up or `act-on` request creates a bounded child task with untrusted
+  selected context; it does not inherit approval or authority, and stored model
+  output remains inert. Use Agent Bridge only when autonomous task execution is
+  explicitly requested.
+
+The current durable implementation is backed by migrations 056 and 057 and the
+`src/agent/` task model, store, recovery, and verification modules. Treat those
+features as deployment-versioned: confirm the live task schema, registry,
+policy, and Agent API before relying on branch-specific behavior.
 
 When a current result matters, inspect the live registry, job, artifact,
 session, or task state. Do not use a static count, stale transcript, or stored
@@ -886,6 +896,12 @@ Use independent evidence appropriate to the task:
 For longer tasks, verify at meaningful milestones rather than waiting until the
 end.
 
+For Agent tasks, completion requires explicit criteria and attributable evidence
+through the durable verification projection. A successful model response or a
+count of successful tool calls is insufficient. Inspect the task's structured
+result, evidence references, verification status, checkpoint, failures, and
+next action after reconnecting; the SSE stream is not authoritative state.
+
 ## 22. Failure handling
 
 When something fails:
@@ -939,6 +955,11 @@ The bundled first-party capability areas are:
   `research_report`; workflows for source-regression and version-regression
   checks. Command probes compose governed `bash`; HTTP probes compose
   `web_fetch`; probes remain typed, scoped, timed, audited, and policy-gated.
+- **Browser Automation** and **Container Operations** are bundled capability
+  areas as well. Their exact tools, workflows, health, and availability are
+  deployment-specific; discover them through the live registry before use.
+- **Network Firewall** is also bundled; treat firewall changes as consequential
+  and inspect its current schema, profiles, policy, and approval requirements.
 
 Use `mission` for broad operational intents such as deployment, status, recent
 logs, or cleanup when an applicable profile exists. Prefer purpose-built pack

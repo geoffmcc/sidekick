@@ -1826,7 +1826,7 @@ function runAgent(){
   authFetch('/api/agent/run', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ goal })
+    body: JSON.stringify({ goal, profile: (($('agentProfile') || {}).value || 'standard') })
   }).then(r=>r.json()).then(data => {
     if (data.error) {
       appendLog('<span class="agent-err">✖ Error: ' + esc(data.error) + '</span>');
@@ -1840,6 +1840,42 @@ function runAgent(){
     apiError('/api/agent/run', e, 0);
     finishAgentStream();
   });
+}
+
+function loadDurableAgentTask(taskId){
+  if (!taskId) return Promise.resolve();
+  return authFetch('/api/agent/tasks/' + encodeURIComponent(taskId)).then(r => r.json().then(data => ({ ok:r.ok, data }))).then(({ok,data}) => {
+    if (!ok || !data.task) return;
+    const task = data.task;
+    const state = $('agentDurableState');
+    const details = $('agentDurableDetails');
+    const verification = $('agentDurableVerification');
+    const plan = $('agentDurablePlan');
+    const failures = $('agentDurableFailures');
+    if (state) state.textContent = 'State: ' + (task.state || 'unknown') + ' · Phase: ' + (task.phase || 'unknown') + ' · Profile: ' + (task.profile || 'standard') + ' · Revision: ' + (task.current_plan_revision || 0);
+    if (details) details.textContent = 'Next: ' + (task.next_action || 'none') + ' · Requirements: ' + ((task.requirements || []).filter(r => r.state === 'satisfied').length) + '/' + ((task.requirements || []).length) + ' satisfied · Updated: ' + (task.updated_at || 'unknown');
+    if (verification) verification.textContent = 'Verification: ' + ((task.verification && task.verification.status) || (task.result && task.result.status) || 'pending') + ' · Checkpoint: ' + ((task.checkpoint && task.checkpoint.safe_boundary) || 'none') + ' · Workspace: ' + (task.workspace_ref || 'none');
+    if (plan) { const revisions = data.plans || []; plan.textContent = revisions.length ? 'Plan revisions: ' + revisions.map(p => '#' + p.revision + ' ' + (p.source || 'planner')).join(' · ') : 'No durable plan revisions yet'; }
+    if (failures) { const rows = data.failures || []; failures.textContent = rows.length ? 'Failures: ' + rows.slice(0, 5).map(f => (f.capability || 'operation') + ' [' + (f.error_class || 'unknown') + ']').join(' · ') : 'No recorded failures'; }
+  }).catch(() => {});
+}
+
+function pauseAgentTask(){
+  const id = currentAgentTaskId;
+  if (!id) return;
+  authFetch('/api/agent/tasks/' + encodeURIComponent(id) + '/pause', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })
+    .then(r => r.json().then(data => ({ok:r.ok,data}))).then(({ok,data}) => {
+      appendLog('<span class="agent-step">' + esc(ok ? 'Pause requested; the task will stop at a safe boundary.' : (data.error || 'Pause failed')) + '</span>');
+      loadDurableAgentTask(id);
+    }).catch(e => appendLog('<span class="agent-err">Pause failed: ' + esc(e.message) + '</span>'));
+}
+
+function sendAgentGuidance(){
+  const input = $('agentGuidance');
+  if (!input || !currentAgentTaskId || !input.value.trim()) return;
+  const text = input.value.trim();
+  authFetch('/api/agent/tasks/' + encodeURIComponent(currentAgentTaskId) + '/guidance', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ guidance:text }) })
+    .then(r => r.json().then(data => ({ok:r.ok,data}))).then(({ok,data}) => { if (ok) { input.value=''; appendLog('<span class="agent-step">Guidance saved for the durable task.</span>'); loadDurableAgentTask(currentAgentTaskId); } else appendLog('<span class="agent-err">' + esc(data.error || 'Guidance failed') + '</span>'); }).catch(e => appendLog('<span class="agent-err">' + esc(e.message) + '</span>'));
 }
 
 // Shared streaming used by a follow-up child (and available for reuse). The
@@ -2208,14 +2244,15 @@ function runAgent() {
 
 function streamAgentTask(taskId, opts) {
   opts = opts || {}; currentAgentTaskId = taskId; agentRunning = true; rememberAgentTask(taskId);
-  $('agentGo').disabled = true; $('agentClear').disabled = true; $('agentStop').disabled = false; $('agentFollowupArea').hidden = true;
+  $('agentGo').disabled = true; $('agentClear').disabled = true; $('agentStop').disabled = false; if ($('agentPause')) $('agentPause').disabled = false; $('agentFollowupArea').hidden = true;
   if (agentStream) agentStream.close();
+  loadDurableAgentTask(taskId);
   agentStream = new EventSource('/api/agent/stream/' + encodeURIComponent(taskId));
   agentStream.onmessage = e => { let msg; try { msg = JSON.parse(e.data); } catch (_) { return; }
     if (msg.type === 'step') appendLog('<span class="agent-step">' + esc(msg.text) + '</span>');
     else if (msg.type === 'tool') appendLog('<span class="agent-ok">' + esc(msg.tool || 'operation') + '</span> ' + esc(msg.summary || ''));
     else if (msg.type === 'error') { appendLog('<span class="agent-err">' + esc(msg.text || 'Agent failed') + '</span>'); finishAgentStream(); }
-    else if (msg.type === 'done') { appendLog('<span class="agent-done">' + esc(msg.text || 'Completed') + '</span>'); finishAgentStream(); }
+    else if (msg.type === 'done') { appendLog('<span class="agent-done">' + esc(msg.text || 'Completed') + '</span>'); loadDurableAgentTask(taskId); finishAgentStream(); }
   };
   agentStream.onerror = () => { appendLog('<span class="agent-err">Live stream disconnected. The backend task was not assumed to have failed.</span>'); finishAgentStream(); refreshAgentSession(activeAgentSession && activeAgentSession.rootTaskId).catch(() => {}); };
 }
@@ -2242,7 +2279,7 @@ function restoreAgentState() {
   load.catch(e => appendLog('<span class="agent-err">Could not restore Agent session: ' + esc(e.message) + '</span>')).finally(() => { agentRestoreInFlight = false; });
 }
 
-function finishAgentStream() { if (agentStream) { agentStream.close(); agentStream = null; } agentRunning = false; currentAgentTaskId = null; $('agentGo').disabled = false; $('agentClear').disabled = false; $('agentStop').disabled = true; if (activeAgentSession) refreshAgentSession(activeAgentSession.rootTaskId).catch(() => {}); }
+function finishAgentStream() { if (agentStream) { agentStream.close(); agentStream = null; } if (currentAgentTaskId) loadDurableAgentTask(currentAgentTaskId); agentRunning = false; currentAgentTaskId = null; $('agentGo').disabled = false; $('agentClear').disabled = false; $('agentStop').disabled = true; if ($('agentPause')) $('agentPause').disabled = true; if (activeAgentSession) refreshAgentSession(activeAgentSession.rootTaskId).catch(() => {}); }
 function clearAgent() { if (agentRunning) return; $('agentGoal').value = ''; }
 function newAgentTask() { if (agentRunning) return; activeAgentSession = null; currentAgentTaskId = null; try { localStorage.removeItem(AGENT_ROOT_KEY); localStorage.removeItem(AGENT_LAST_TASK_KEY); } catch (_) {} $('agentLog').innerHTML = '<span class="empty">Describe a new task below</span>'; $('agentSessionMeta').textContent = 'New root Agent task'; $('agentFollowupArea').hidden = true; $('agentGoal').focus(); }
 function stopAgent() { const id = currentAgentTaskId; if (!id || !agentRunning) return; authFetch('/api/agent/run/' + encodeURIComponent(id) + '/cancel', { method: 'POST' }).then(r => r.json()).then(d => appendLog('<span class="agent-step">' + esc(d.error || 'Cancellation requested') + '</span>')).catch(e => appendLog('<span class="agent-err">Cancel failed: ' + esc(e.message) + '</span>')); }

@@ -225,6 +225,7 @@ async function runBrainTask(opts) {
     workState = null,
     maxWorkRounds = 4,
     onCheckpoint = null,
+    onPlanRevision = null,
   } = opts;
 
   const startedAt = nowMs(clock);
@@ -309,6 +310,7 @@ async function runBrainTask(opts) {
     return terminal("failed", { error: redact("plan rejected: " + errs.slice(0, 4).join("; ")), extra: { plan_errors: errs } });
   }
   let validated = validation.plan;
+  if (typeof onPlanRevision === "function") onPlanRevision(validated, { revision: 1, source: "planner" });
   emit({ type: "brain_plan", goal: validated.goal, steps: validated.steps.map(s => ({ id: s.id, type: s.type, tool: s.tool || null, purpose: s.purpose || null })) });
 
   // ---- run ----------------------------------------------------------------
@@ -345,6 +347,7 @@ async function runBrainTask(opts) {
     const nextValidation = validatePlan(nextCandidate, { agentTools });
     if (!nextValidation.ok) return terminal("failed", { error: redact("replan rejected: " + nextValidation.errors.slice(0, 4).join("; ")) });
     validated = nextValidation.plan;
+    if (typeof onPlanRevision === "function") onPlanRevision(validated, { revision: workRound + 1, source: "replanner" });
     outcome = await executePlanSteps({ plan: validated, startIndex: 0, acc, callTool, emit, onEvent, redact, cancelled, outOfTime });
     if (typeof onCheckpoint === "function") onCheckpoint(taskState);
   }

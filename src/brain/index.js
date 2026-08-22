@@ -207,13 +207,14 @@ function makeBrainRunner(deps) {
 
   const synthesize = makeSynthesizer({ callLLM, redact });
 
-  return function run({ goal, classification, emit, onEvent, cancel, clock, deadlineMs, taskId = null, lineage = {}, persistence = undefined, workState = null, completionGate = null, onCheckpoint = null }) {
+  return function run({ goal, classification, emit, onEvent, cancel, clock, deadlineMs, taskId = null, lineage = {}, persistence = undefined, workState = null, completionGate = null, onCheckpoint = null, onPlanRevision = null }) {
     return runBrainTask({
       goal, classification, plan, synthesize,
       agentTools, callTool, recallMemory, redact,
       emit, onEvent, cancel, clock, deadlineMs,
       taskId, lineage,
       workState, completionGate, onCheckpoint,
+      onPlanRevision,
       persistence: persistence === undefined ? (taskId ? defaultPersistence() : null) : persistence,
     });
   };

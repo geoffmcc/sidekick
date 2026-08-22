@@ -1,5 +1,43 @@
 # Agent Bridge
 
+## Durable Agent tasks
+
+Agent submissions are projected into the versioned `agent_tasks` store by
+migrations 056 and 057. The task projection retains the bounded goal specification,
+profile budget, requirements, rolling Brain plan revisions, safe checkpoint,
+failures, verification decision, lineage, and structured result. The existing
+conversation transcript remains readable and is still published atomically;
+the durable task store is the control-room source of truth after refresh or
+reconnect.
+
+Profiles are `quick`, `standard`, `deep`, `persistent`, and `research`. Each
+has finite wall-clock, model, tool, plan, failure, retry, and idle limits.
+Tasks can be paused cooperatively at a dispatcher/loop safe boundary, resumed
+from their durable task identity, cancelled, or given bounded guidance through
+the dashboard proxy routes:
+
+- `GET /api/agent/tasks` and `GET /api/agent/tasks/:taskId`
+- `POST /api/agent/tasks/:taskId/pause`, `/resume`, and `/guidance`
+- `POST /api/agent/tasks/:taskId/act-on`
+
+`act-on` always creates a fresh governed child task. Stored result text,
+findings, proposed actions, and artifacts are references/data only; they never
+execute directly or transfer approval. Every tool call still resolves through
+the current canonical registry and `callAgentTool` dispatcher.
+
+Successful execution is followed by an independent bounded verification pass.
+The result status is `verified`, `partially_verified`, `incomplete`,
+`contradicted`, `unable_to_verify`, `waiting_for_approval`, or
+`budget_exhausted`; a successful model response alone is not verification.
+
+Migration 057 adds a bounded continuation ledger for completed operation
+fingerprints, receipts, and ambiguous mutations. Read-only work may be resumed
+after a restart; a possibly completed mutating operation is parked for fresh
+verification rather than blindly repeated. Model calls are budgeted alongside
+tool calls and all other profile resources. In normal runtime configuration the
+durable Brain path is enabled unless `SIDEKICK_BRAIN_ENABLED` is explicitly set;
+its tool calls still use the canonical dispatcher.
+
 The Agent Bridge is implemented in `src/agent.js` and defaults to port 4099. It runs autonomous tasks outside the main opencode session.
 
 ## Purpose

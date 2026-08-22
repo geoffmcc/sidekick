@@ -33,6 +33,20 @@ function getToolDefsForSource(source = getCurrentSource()) {
       ORDER BY t.name
     `).all();
 
+    // A fresh or isolated data directory can have the schema before the
+    // registry mirror has completed its first sync. An empty mirror must not
+    // make the canonical live registry appear to have no capabilities; use
+    // the same live descriptors and policy decision as the no-table fallback
+    // until the mirror is populated. This remains discovery-only: dispatch
+    // still resolves against the canonical registry immediately before use.
+    if (tools.length === 0) {
+      return TOOL_DEFS.map(def => {
+        const policy = getToolPolicyDecision(def.name, source);
+        const approval = getApprovalDecision(def.name, source);
+        return { ...def, args: def.argumentDescriptions || def.args || {}, category: def.category || TOOL_CATEGORIES[def.name] || "Uncategorized", risk: policy.risk, enabled: policy.allowed, policy: policy.reason, approval_required: approval.required, approval: approval.reason };
+      });
+    }
+
     // Intersect the DB catalog with the LIVE registry (builtin descriptors,
     // which include active module tools, plus trial/active generated
     // capabilities) the way src/agent.js's Brain allowlist does. The tools

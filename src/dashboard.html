@@ -413,6 +413,16 @@
 <div class="page" id="page-agent">
   <div class="section-title">Agent</div>
   <div id="agentSessionMeta" class="sub" aria-live="polite">Start a governed Agent task or resume a session from History.</div>
+  <div class="agent-control-room" aria-label="Durable Agent task state">
+    <label for="agentProfile" class="sub">Task profile</label>
+    <select id="agentProfile" aria-label="Agent task profile">
+      <option value="quick">Quick</option><option value="standard" selected>Standard</option><option value="deep">Deep</option><option value="persistent">Persistent</option><option value="research">Research</option>
+    </select>
+    <div id="agentDurableState" class="sub" aria-live="polite">Durable state will appear after submission.</div>
+    <div id="agentDurableDetails" class="agent-durable-details" aria-live="polite"></div>
+    <div id="agentDurableVerification" class="agent-durable-details" aria-live="polite"></div>
+    <details class="agent-durable-details"><summary>Plan and failure ledger</summary><div id="agentDurablePlan"></div><div id="agentDurableFailures"></div></details>
+  </div>
   <div id="agentLog" class="agent-log" aria-live="polite"><span class="empty">Submit a task above</span></div>
   <div id="agentFollowupArea" class="agent-followup-area" hidden>
     <label for="agentFollowupGoal">Ask a follow-up</label>
@@ -420,6 +430,7 @@
     <div id="agentFollowupHint" class="sub">Enter creates a new line. Ctrl+Enter or Cmd+Enter submits a governed child task.</div>
     <div style="display:flex;gap:8px;margin-top:8px">
       <button class="btn" id="agentFollowupGo" onclick="submitFollowup()">Send follow-up</button>
+      <button class="btn btn-outline" id="agentPause" onclick="pauseAgentTask()" disabled>Pause</button>
       <button class="btn btn-danger" id="agentStop" onclick="stopAgent()" disabled>Stop</button>
       <button class="btn btn-outline" id="agentNewTask" onclick="newAgentTask()">+ New Agent Task</button>
     </div>
@@ -431,6 +442,10 @@
       <button class="btn" id="agentGo" onclick="runAgent()">Start task</button>
       <button class="btn btn-outline" id="agentClear" onclick="clearAgent()">Clear</button>
     </div>
+    <label for="agentGuidance" class="sub" style="display:block;margin-top:10px">Live guidance</label>
+    <textarea class="agent-goal" id="agentGuidance" rows="2" placeholder="Add bounded guidance while the task runs..." aria-describedby="agentGuidanceHint"></textarea>
+    <div id="agentGuidanceHint" class="sub">Guidance is stored as an authenticated task event and cannot expand policy or authority.</div>
+    <button class="btn btn-outline" id="agentGuidanceGo" onclick="sendAgentGuidance()">Add guidance</button>
   </div>
   <div style="margin-top:16px">
     <button class="section-title agent-history-toggle" id="agentHistoryToggle" type="button" aria-expanded="false" aria-controls="agentHistory" onclick="toggleHistory()">

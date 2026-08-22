@@ -2655,6 +2655,30 @@ app.post("/api/agent/run", (req, res) => {
   proxyAgent(req, res, "POST", body);
 });
 
+app.get("/api/agent/tasks", (req, res) => {
+  proxyAgent(req, res, "GET");
+});
+
+app.get("/api/agent/tasks/:taskId", (req, res) => {
+  proxyAgent(req, res, "GET");
+});
+
+app.post("/api/agent/tasks/:taskId/guidance", (req, res) => {
+  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
+});
+
+app.post("/api/agent/tasks/:taskId/resume", (req, res) => {
+  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
+});
+
+app.post("/api/agent/tasks/:taskId/pause", (req, res) => {
+  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
+});
+
+app.post("/api/agent/tasks/:taskId/act-on", (req, res) => {
+  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
+});
+
 // Canonical follow-up: create a child task continuing a terminal parent.
 app.post("/api/agent/run/:taskId/follow-up", (req, res) => {
   const body = JSON.stringify(req.body);

@@ -89,7 +89,7 @@ Note: creating an event subscription starts delivery fan-out, but no production 
 
 ### Quick actions, Grafana proxy, and agent proxy
 
-`POST /api/quick-actions/:action` (allowlisted Mission Control actions), `/grafana/*` (authenticated proxy to the local Grafana instance for the Metrics tab), plus the agent proxy routes: `POST /api/agent/run`, `POST /api/agent/run/:taskId/follow-up`, `GET /api/agent/stream/:taskId`, `GET /api/agent/history`, `GET /api/agent/run/:id`.
+`POST /api/quick-actions/:action` (allowlisted Mission Control actions), `/grafana/*` (authenticated proxy to the local Grafana instance for the Metrics tab), plus the agent proxy routes: `POST /api/agent/run`, `POST /api/agent/run/:taskId/follow-up`, `GET /api/agent/tasks`, `GET /api/agent/tasks/:taskId`, `POST /api/agent/tasks/:taskId/pause|resume|guidance|act-on`, `GET /api/agent/stream/:taskId`, `GET /api/agent/history`, `GET /api/agent/run/:id`.
 
 ## Agent Bridge (`src/agent.js`, port 4099, loopback-only)
 
@@ -97,6 +97,12 @@ Note: creating an event subscription starts delivery fan-out, but no production 
 |---|---|---|
 | POST | `/api/agent/run` | Submit a task goal. |
 | POST | `/api/agent/run/:taskId/follow-up` | Create a child follow-up task continuing a terminal parent. |
+| GET | `/api/agent/tasks` | Durable task list projection with bounded pagination/filtering. |
+| GET | `/api/agent/tasks/:taskId` | Durable task, plan revisions, failures, and auditable events. |
+| POST | `/api/agent/tasks/:taskId/pause` | Cooperatively pause at a safe boundary. |
+| POST | `/api/agent/tasks/:taskId/resume` | Resume a paused/interrupted/blocked task when no approval is pending. |
+| POST | `/api/agent/tasks/:taskId/guidance` | Append bounded authenticated user guidance. |
+| POST | `/api/agent/tasks/:taskId/act-on` | Create a fresh governed child from selected result data. |
 | GET | `/api/agent/stream/:taskId` | SSE task progress. |
 | GET | `/api/agent/history` | Task history. |
 | GET | `/api/agent/run/:id` | Task detail/transcript. |

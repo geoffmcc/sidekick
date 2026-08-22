@@ -167,6 +167,17 @@ Automatic memory is enabled by default, can be disabled with `SIDEKICK_AUTO_MEMO
 
 ## Context compatibility
 
+## Durable Agent tasks
+
+Migrations 056 and 057 add the versioned `agent_tasks` projection and its
+bounded plan, failure, event, verification, control, artifact, and continuation
+state. The continuation ledger stores redacted operation fingerprints and
+receipts so recovery can distinguish safe read retries from ambiguous mutation
+recovery. Existing transcripts remain the compatibility history source and are
+not rewritten by these migrations. Migration 057 is additive and is applied by
+the normal migration runner; rollback is a database restore to the pre-migration
+backup rather than destructive down-migration.
+
 The `context` document in `json_documents` stores structured continuity data:
 
 - `projects`
