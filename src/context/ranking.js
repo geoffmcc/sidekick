@@ -22,6 +22,7 @@ const SOURCE_PRIORITY = Object.freeze({
   relationship: 0.68,
   entity: 0.64,
   legacy_context: 0.55,
+  repository_semantic: 0.82,
 });
 
 function tokens(value) {

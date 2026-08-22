@@ -99,7 +99,7 @@ async function devRepoProfile(services, { path: requestedPath, max_files, includ
   const containers = detect.presentFiles(root, detect.CONTAINER_FILES);
 
   const git = include_git ? await gitFacts.collectRepositoryFacts(services, root) : { available: false, skipped: true };
-  const semanticIndex = include_semantic !== false ? semantic.indexRepository(root, { limits: { maxFiles: Math.min(max_files || 4000, 4000) } }) : null;
+  const semanticIndex = include_semantic !== false ? await semantic.indexRepository(root, { limits: { maxFiles: Math.min(max_files || 4000, 4000) } }) : null;
   const semanticProfile = semanticIndex ? semantic.project(semanticIndex, { level: 0, max_chars: 9000, limit: 50 }) : null;
 
   const topLevelDirectories = fs
@@ -173,7 +173,7 @@ async function devRepoProfile(services, { path: requestedPath, max_files, includ
       index_root_hash: semanticIndex.index_root_hash, languages: semanticProfile.languages,
       modules: semanticProfile.modules, entry_points: semanticProfile.entry_points,
       security_signals: semanticProfile.signals, stats: semanticIndex.stats,
-      warnings: semanticIndex.warnings.slice(0, 20), trust: semanticProfile.trust,
+      changes: semanticIndex.changes.slice(0, 50), warnings: semanticIndex.warnings.slice(0, 20), trust: semanticProfile.trust,
     } : { available: false, skipped: true, reason: "caller_disabled_semantic_indexing" },
   });
 }
@@ -181,7 +181,7 @@ async function devRepoProfile(services, { path: requestedPath, max_files, includ
 async function semanticRepository(services, { path: requestedPath, action = "profile", query, level = 0, limit = 40, max_chars = 12000 }) {
   const resolved = resolveRepositoryRoot(services, requestedPath);
   if (!resolved.ok) return resolved.result;
-  const index = semantic.indexRepository(resolved.root);
+  const index = await semantic.indexRepository(resolved.root);
   if (action === "verify") return jsonResult({ ok: semantic.verify(index), index_root_hash: index.index_root_hash, schema: index.schema, repository: resolved.root, warnings: index.warnings, stats: index.stats });
   const projection = semantic.project(index, { query, level, limit, max_chars });
   return jsonResult({ ok: true, tool: "semantic_repo", action, repository: resolved.root, index_root_hash: index.index_root_hash, warnings: index.warnings.slice(0, 20), projection: projection.projection, projection_chars: projection.projection_chars, trust: projection.trust });
@@ -224,6 +224,7 @@ async function devChangeSummary(services, { path: requestedPath, base, staged = 
     deletions: diffStats.deletions,
     binaryFiles: diffStats.binary_files,
   });
+  const semanticIndex = await semantic.indexRepository(root);
 
   // `git diff` never shows untracked files, so a change set analyzed from the
   // diff alone silently omits every NEW file. Report them explicitly rather
@@ -249,6 +250,8 @@ async function devChangeSummary(services, { path: requestedPath, base, staged = 
       changed_file_count: gitState.changed_file_count,
     },
     ...analysis,
+    semantic_changes: semanticIndex.changes.slice(0, 500),
+    semantic_index_root_hash: semanticIndex.index_root_hash,
     untracked: {
       count: untracked.length,
       files: untracked.slice(0, 200),

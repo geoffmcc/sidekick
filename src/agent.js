@@ -874,6 +874,15 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
   // A follow-up child inherits the parent's project identity when the child's
   // own goal doesn't infer one, so a thread stays scoped consistently.
   const inferredProject = inferProjectFromText(goal) || (parentContext && parentContext.project) || null;
+  const semanticIntent = /\b(?:repo(?:sitory)?|codebase|architecture|module|symbol|function|class|interface|dependency|caller|callee|authentication|network|process execution|filesystem|which tests|implementation)\b/i.test(String(goal || ""));
+  const repositorySemanticSearch = semanticIntent ? async (query, bounds = {}) => {
+    const result = await callAgentTool("semantic_repo", { action: "query", query: String(query || goal).slice(0, 500), level: 1, limit: Math.min(20, Number(bounds.limit) || 6), max_chars: Math.min(6000, Number(bounds.maxChars) || 6000) }, { taskId, project: inferredProject, correlationId: taskId, timeoutMs: 30000, source: "agent" });
+    const text = result?.content?.[0]?.text;
+    if (!text) return [];
+    let payload; try { payload = JSON.parse(text); } catch { return []; }
+    if (!payload.ok || !payload.projection) return [];
+    return [{ source: "repository_semantic", sourceId: payload.index_root_hash || "semantic-index", type: "semantic_projection", project: null, summary: "Repository semantic projection (untrusted source-derived data)", content: String(payload.projection).slice(0, Math.min(6000, Number(bounds.maxChars) || 6000)), confidence: 0.82, authority: "derived", provenance: { index_root_hash: payload.index_root_hash || null, trust: payload.trust || "untrusted" }, searchText: String(payload.projection) }];
+  } : null;
   const executionLineage = parentContext
     ? {
         parentExecutionId: parentContext.parentExecutionId || null,
@@ -925,6 +934,7 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
         principalId: parentContext?.requestedByPrincipalId || parentContext?.actorPrincipalId || "agent",
         sessionId: parentContext?.sessionId || null,
         taskId,
+        repositorySemanticSearch,
         budget: { maxEntries: 24, maxChars: 18000, maxPerSource: 6, maxGraphNodes: 12, maxGraphEdges: 24 },
       }),
       new Promise((resolve) => {
@@ -1026,6 +1036,7 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
           principalId: parentContext?.requestedByPrincipalId || parentContext?.actorPrincipalId || "agent",
           sessionId: parentContext?.sessionId || null,
           taskId,
+          repositorySemanticSearch,
           budget: { maxEntries: 16, maxChars: 12000, maxPerSource: 5, maxGraphNodes: 8, maxGraphEdges: 16 },
         });
         return manifest.entries;

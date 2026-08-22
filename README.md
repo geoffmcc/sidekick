@@ -435,6 +435,18 @@ See
 > package is integrity-verified before it loads — but there is no sandbox.
 > Treat installing a third-party pack as equivalent to deploying code.
 
+### Semantic Repository Intelligence
+
+The Developer pack includes a deterministic, hash-verifiable semantic repository
+index. `semantic_repo` and the enriched `dev_repo_profile` statically parse
+TypeScript, JavaScript, Ruby, Java, Go, Perl and Rust into a normalized,
+provenance-linked representation with bounded queries, incremental caching and
+semantic change summaries. Agent and Brain/context requests can retrieve the
+smallest relevant repository projection before governed source reads are needed.
+Repository content remains untrusted data, and indexing never executes target
+repository code. See [`docs/semantic-repository-intelligence.md`](docs/semantic-repository-intelligence.md)
+for the IR, security model, limits and extension guidance.
+
 ### Black Box Incident Explorer
 
 `black_box` stores profiled incident captures as structured SQLite records with source-level artifacts, observations, timelines, evidence-cited analysis, search, comparison, retention controls, and dashboard inspection. See [`docs/blackbox.md`](docs/blackbox.md) for profiles, schema, dashboard behavior, retention, export, and security notes.

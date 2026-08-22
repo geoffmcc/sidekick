@@ -251,6 +251,8 @@ function buildFixtureRepository() {
     // The raw evidence the analysis was computed from stays available.
     assert.strictEqual(summary.evidence.files.length, 5);
     assert.ok(summary.evidence.diff_bytes_analyzed > 0);
+    assert.ok(Array.isArray(summary.semantic_changes));
+    assert.match(summary.semantic_index_root_hash, /^[0-9a-f]{64}$/);
   });
 
   await test('DP.4: dev_change_summary reports untracked files, which no diff can show', async () => {

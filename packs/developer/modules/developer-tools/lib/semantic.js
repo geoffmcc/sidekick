@@ -12,10 +12,12 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
+const ignore = require("ignore");
+const ast = require("./ast");
 
 const IR_VERSION = "sidekick.semantic-ir.v1";
-const ANALYZER_VERSION = "sidekick.semantic-analyzer.v1";
-const DEFAULT_LIMITS = Object.freeze({ maxFiles: 4000, maxBytes: 64 * 1024 * 1024, maxFileBytes: 512 * 1024, maxUnits: 30000, maxEntries: 20000, maxResultChars: 18000 });
+const ANALYZER_VERSION = "sidekick.semantic-analyzer.v2-ast";
+const DEFAULT_LIMITS = Object.freeze({ maxFiles: 4000, maxBytes: 64 * 1024 * 1024, maxFileBytes: 512 * 1024, maxUnits: 30000, maxEntries: 20000, maxAstNodes: 50000, maxResultChars: 18000 });
 const EXTENSIONS = Object.freeze({
   ".ts": "typescript", ".tsx": "typescript", ".mts": "typescript", ".cts": "typescript",
   ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript",
@@ -40,9 +42,25 @@ function loc(text, offset) {
 function evidence(file, sourceHash, text, offset) { return { path: file, source_hash: sourceHash, ...loc(text, offset) }; }
 function addUnique(list, item, key = stable) { if (!list.some(x => key(x) === key(item))) list.push(item); }
 function parameterNames(raw) { return clean(raw, 500).split(",").map(part => part.trim().replace(/^\.\.\./, "").split(/[=:]/, 1)[0].replace(/\s+/g, " ").trim()).filter(Boolean).slice(0, 64); }
+function semanticIdentity(unit) { return sha256("sidekick.semantic.unit.v1", stable({ language: unit.language, modules: unit.modules, imports: unit.imports.map(x => x.name || x.text), exports: unit.exports.map(x => x.name || x.text), symbols: unit.symbols.map(x => ({ name: x.name, kind: x.kind, parameters: x.parameters, parent: x.parent })), relationships: unit.relationships.map(x => ({ kind: x.kind, from: x.from, to: x.to, certainty: x.certainty })), signals: unit.signals.map(x => x.kind) })); }
+function semanticChanges(previousFiles = [], currentFiles = []) {
+  const oldByPath = new Map(previousFiles.map(x => [x.path, x.unit])); const newByPath = new Map(currentFiles.map(x => [x.path, x.unit])); const changes = [];
+  const names = unit => new Set((unit?.symbols || []).map(x => `${x.kind}:${x.name}`));
+  for (const file of [...new Set([...oldByPath.keys(), ...newByPath.keys()])].sort()) {
+    const before = oldByPath.get(file); const after = newByPath.get(file);
+    if (!before) { changes.push({ path: file, kind: "added", symbols_added: [...names(after)].sort() }); continue; }
+    if (!after) { changes.push({ path: file, kind: "removed", symbols_removed: [...names(before)].sort() }); continue; }
+    if (before.semantic_hash === after.semantic_hash) continue;
+    const oldNames = names(before); const newNames = names(after);
+    changes.push({ path: file, kind: "changed", semantic_identity_before: before.semantic_hash, semantic_identity_after: after.semantic_hash, symbols_added: [...newNames].filter(x => !oldNames.has(x)).sort(), symbols_removed: [...oldNames].filter(x => !newNames.has(x)).sort(), relationships_changed: stable(before.relationships || []) !== stable(after.relationships || []) });
+  }
+  return changes;
+}
+function ignoreMatcher(root) { const matcher = ignore(); try { matcher.add(fs.readFileSync(path.join(root, ".gitignore"), "utf8").split(/\r?\n/).filter(Boolean)); } catch {} return matcher; }
 
 function discover(root, limits) {
   const files = []; const skipped = []; let bytes = 0; let truncated = false;
+  const matcher = ignoreMatcher(root);
   function visit(dir, depth) {
     if (depth > 32 || truncated) return;
     let entries; try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
@@ -52,6 +70,8 @@ function discover(root, limits) {
       if (truncated) return;
       if (entry.name === "." || entry.name === ".." || SKIP.has(entry.name)) continue;
       const full = path.join(dir, entry.name);
+      const relativeEntry = path.relative(root, full).split(path.sep).join("/");
+      if (matcher.ignores(relativeEntry) || matcher.ignores(`${relativeEntry}/`)) continue;
       // lstat + no symlink following prevents escapes and loops.
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) { visit(full, depth + 1); continue; }
@@ -128,9 +148,33 @@ const memoryCache = new Map();
 const MAX_MEMORY_CACHE_ENTRIES = 8;
 function cacheFile(root) { return path.join(os.tmpdir(), "sidekick-semantic-cache", sha256("sidekick.semantic.cache.v1", path.resolve(root)) + ".json"); }
 function readCache(file) { try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; } }
-function writeCache(file, value) { try { fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 }); const tmp = `${file}.${process.pid}.tmp`; fs.writeFileSync(tmp, JSON.stringify(value), { mode: 0o600 }); fs.renameSync(tmp, file); } catch { /* cache failure is non-fatal */ } }
+function pruneDiskCache(directory, keepFile) {
+  try {
+    const entries = fs.readdirSync(directory, { withFileTypes: true })
+      .filter(entry => entry.isFile() && entry.name.endsWith(".json"))
+      .map(entry => {
+        const file = path.join(directory, entry.name);
+        try { return { file, mtime: fs.statSync(file).mtimeMs }; } catch { return null; }
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.mtime - a.mtime);
+    for (const entry of entries.slice(32)) {
+      if (entry.file !== keepFile) { try { fs.unlinkSync(entry.file); } catch { /* advisory cache */ } }
+    }
+  } catch { /* cache cleanup is non-fatal */ }
+}
+function writeCache(file, value) {
+  try {
+    const directory = path.dirname(file);
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(value), { mode: 0o600 });
+    fs.renameSync(tmp, file);
+    pruneDiskCache(directory, file);
+  } catch { /* cache failure is non-fatal */ }
+}
 
-function indexRepository(root, options = {}) {
+async function indexRepository(root, options = {}) {
   const limits = { ...DEFAULT_LIMITS, ...(options.limits || {}) };
   const found = discover(root, limits); let previous = memoryCache.get(root) || readCache(cacheFile(root));
   const warnings = [...found.skipped];
@@ -143,14 +187,39 @@ function indexRepository(root, options = {}) {
     const sourceHash = sha256("sidekick.semantic.source.v1", buf);
     const old = previous?.files?.find(x => x.path === item.path && x.source_hash === sourceHash && x.analyzer_version === ANALYZER_VERSION && x.ir_version === IR_VERSION);
     let unit;
-    if (old) { unit = old.unit; cacheHits++; } else { let text; try { text = buf.toString("utf8"); } catch { warnings.push({ code: "encoding_failed", path: item.path }); continue; } try { unit = parseSource(item.language, item.path, text, sourceHash); parsed++; } catch { warnings.push({ code: "parser_failed", path: item.path, language: item.language }); continue; } }
+    if (old) { unit = old.unit; cacheHits++; } else {
+      let text; try { text = buf.toString("utf8"); } catch { warnings.push({ code: "encoding_failed", path: item.path }); continue; }
+      try {
+        unit = parseSource(item.language, item.path, text, sourceHash);
+        try {
+          const tree = await ast.parse(item.language, text, { maxNodes: limits.maxAstNodes });
+          unit.parser = tree.parser; unit.parser_version = tree.parser_version; unit.parse_errors = tree.parse_errors; unit.ast_root = tree.root_type; unit.ast_nodes = tree.visited_nodes;
+          for (const symbol of tree.symbols) addUnique(unit.symbols, { name: clean(symbol.name, 200), kind: symbol.kind, parent: symbol.parent || null, certainty: "parsed", evidence: evidence(item.path, sourceHash, text, symbol.start_byte) }, x => `${x.name}:${x.kind}:${x.evidence.line}`);
+          for (const relation of tree.relationships) addUnique(unit.relationships, { kind: relation.kind, from: relation.from, to: relation.to, certainty: relation.certainty, evidence: evidence(item.path, sourceHash, text, relation.start_byte) }, x => `${x.kind}:${x.from}:${x.to}:${x.evidence.line}`);
+          for (const entry of tree.imports) addUnique(unit.imports, { name: clean(entry.text, 240), certainty: "parsed", evidence: evidence(item.path, sourceHash, text, entry.start_byte) }, x => x.name);
+          for (const entry of tree.exports) addUnique(unit.exports, { name: clean(entry.text, 240), certainty: "parsed", evidence: evidence(item.path, sourceHash, text, entry.start_byte) }, x => x.name);
+        } catch (error) { unit.parser = "lexical-fallback"; unit.parser_error = clean(error.message, 240); warnings.push({ code: "parser_unavailable", path: item.path, language: item.language }); }
+        unit.semantic_hash = semanticIdentity({ ...unit, language: item.language }); parsed++;
+      } catch { warnings.push({ code: "parser_failed", path: item.path, language: item.language }); continue; }
+    }
     unit.path = item.path; unit.language = item.language; unit.source_hash = sourceHash; unit.analyzer_version = ANALYZER_VERSION; unit.ir_version = IR_VERSION; files.push({ path: item.path, language: item.language, source_hash: sourceHash, analyzer_version: ANALYZER_VERSION, ir_version: IR_VERSION, unit }); units += unit.symbols.length;
     if (units >= limits.maxUnits) { warnings.push({ code: "semantic_units_limit", limit: limits.maxUnits }); break; }
+  }
+  const knownPaths = new Set(files.map(x => x.path));
+  for (const file of files) {
+    for (const imported of file.unit.imports || []) {
+      const name = String(imported.name || imported.text || "");
+      if (!name.startsWith(".")) continue;
+      const base = path.posix.normalize(path.posix.join(path.posix.dirname(file.path), name));
+      const target = [base, ...[".ts", ".tsx", ".js", ".jsx", ".rb", ".java", ".go", ".pl", ".pm", ".rs"].map(ext => `${base}${ext}`), `${base}/index.ts`, `${base}/index.js`].find(candidate => knownPaths.has(candidate));
+      if (target) addUnique(file.unit.relationships, { kind: "imports", from: file.path, to: target, certainty: "inferred", evidence: imported.evidence }, x => `${x.kind}:${x.from}:${x.to}`);
+    }
+    file.unit.semantic_hash = semanticIdentity({ ...file.unit, language: file.language });
   }
   const aggregate = { ir_version: IR_VERSION, analyzer_version: ANALYZER_VERSION, files: files.map(x => ({ path: x.path, language: x.language, source_hash: x.source_hash, analyzer_version: x.analyzer_version, ir_version: x.ir_version, unit: x.unit })) };
   const indexRootHash = sha256("sidekick.semantic.index.v1", stable(aggregate));
   if (found.truncated) warnings.push({ code: "discovery_truncated", limit: limits.maxFiles });
-  const result = { ok: true, schema: IR_VERSION, analyzer_version: ANALYZER_VERSION, repository: { name: path.basename(root), path: root }, files, stats: { discovered: found.files.length, parsed, cache_hits: cacheHits, skipped: found.files.length - files.length, bytes: found.bytes, symbols: units, truncated: found.truncated }, warnings, index_root_hash: indexRootHash, generated_from_source: true };
+  const result = { ok: true, schema: IR_VERSION, analyzer_version: ANALYZER_VERSION, repository: { name: path.basename(root), path: root }, files, changes: semanticChanges(previous?.files || [], files), stats: { discovered: found.files.length, parsed, cache_hits: cacheHits, skipped: found.files.length - files.length, bytes: found.bytes, symbols: units, truncated: found.truncated }, warnings, index_root_hash: indexRootHash, generated_from_source: true };
   memoryCache.delete(root); memoryCache.set(root, result); while (memoryCache.size > MAX_MEMORY_CACHE_ENTRIES) memoryCache.delete(memoryCache.keys().next().value); writeCache(cacheFile(root), result); return result;
 }
 
@@ -158,14 +227,14 @@ function project(index, { query = "", level = 0, max_chars = 12000, limit = 40 }
   const q = clean(query, 500).toLowerCase(); const tokens = q.split(/[^a-z0-9_:$.-]+/).filter(x => x.length > 1);
   const all = index.files.flatMap(f => f.unit.symbols.map(s => ({ ...s, path: f.path, language: f.language, source_hash: f.source_hash }))); const score = item => tokens.reduce((n, t) => n + (String(item.name).toLowerCase().includes(t) || String(item.kind).toLowerCase().includes(t) || item.path.toLowerCase().includes(t) ? 1 : 0), 0);
   const symbols = all.sort((a, b) => score(b) - score(a) || a.path.localeCompare(b.path) || a.name.localeCompare(b.name)).slice(0, Math.min(200, limit));
-  const overview = { schema: index.schema, index_root_hash: index.index_root_hash, repository: index.repository, stats: index.stats, warnings: index.warnings.slice(0, 20), languages: [...new Set(index.files.map(x => x.language))].sort(), modules: index.files.flatMap(f => f.unit.modules.map(m => ({ ...m, path: f.path }))).slice(0, limit), entry_points: index.files.flatMap(f => f.unit.entry_points).slice(0, limit), signals: index.files.flatMap(f => f.unit.signals.map(s => ({ ...s, path: f.path }))).slice(0, limit) };
+  const overview = { schema: index.schema, index_root_hash: index.index_root_hash, repository: index.repository, stats: index.stats, warnings: index.warnings.slice(0, 20), languages: [...new Set(index.files.map(x => x.language))].sort(), modules: index.files.flatMap(f => f.unit.modules.map(m => ({ ...m, path: f.path }))).slice(0, limit), entry_points: index.files.flatMap(f => f.unit.entry_points).slice(0, limit), signals: index.files.flatMap(f => f.unit.signals.map(s => ({ ...s, path: f.path }))).slice(0, limit), changes: (index.changes || []).slice(0, limit) };
   if (q || level > 0) {
     const projectedSymbols = symbols.map(s => level > 1 ? s : ({ name: s.name, kind: s.kind, path: s.path, language: s.language, evidence: s.evidence }));
     // Query relevance must survive the context bound. Put requested evidence
     // before broad repository decoration so truncation never returns a large
     // overview while silently dropping the answer to the query.
     Object.assign(overview, { symbols: projectedSymbols });
-    const ordered = { schema: overview.schema, index_root_hash: overview.index_root_hash, repository: overview.repository, symbols: overview.symbols, languages: overview.languages, modules: overview.modules, entry_points: overview.entry_points, signals: overview.signals, stats: overview.stats, warnings: overview.warnings };
+    const ordered = { schema: overview.schema, index_root_hash: overview.index_root_hash, repository: overview.repository, symbols: overview.symbols, languages: overview.languages, modules: overview.modules, entry_points: overview.entry_points, signals: overview.signals, changes: overview.changes, stats: overview.stats, warnings: overview.warnings };
     if (level > 1) ordered.relationships = index.files.flatMap(f => f.unit.relationships.map(r => ({ ...r, path: f.path }))).slice(0, limit);
     let orderedText = JSON.stringify(ordered, null, 2); if (orderedText.length > max_chars) orderedText = orderedText.slice(0, Math.max(0, max_chars - 40)) + "\n[semantic projection truncated]";
     return { ...ordered, projection: orderedText, projection_chars: orderedText.length, trust: "untrusted repository-derived data; evidence locations require governed source reads" };
