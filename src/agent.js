@@ -57,6 +57,7 @@ const { createResumedTaskFinalizer } = require("./agent/recovery");
 const { createContinuationJobStarter } = require("./agent/continuation-jobs");
 const { createDelayScheduler } = require("./agent/delay-scheduler");
 const { createWatchRuntime } = require("./agent/watch-runtime");
+const { assembleSessions, buildSession, buildTask } = require("./agent-history");
 const { redactSensitive, redactSensitiveKeysDeep } = require("./redact");
 const {
   CONTINUATION_LIMITS,
@@ -1495,53 +1496,26 @@ app.get("/api/agent/stream/:taskId", (req, res) => {
 });
 
 app.get("/api/agent/history", (req, res) => {
-  const files = fs.readdirSync(CONV_DIR).filter(f => f.endsWith(".json")).sort().reverse().slice(0, 20);
-  const runs = files.map(f => {
-    try {
-      const id = f.replace(".json", "");
-      const data = JSON.parse(fs.readFileSync(path.join(CONV_DIR, f), "utf-8"));
-      // normalizeTranscript never throws and supplies lineage defaults so old
-      // transcripts (no lineage fields) render as root tasks; one malformed
-      // entry is skipped without breaking the rest of the history response.
-      // (No path is built from `id` here — the file was already listed — so the
-      // filename is used directly as the self-root default.)
-      const norm = normalizeTranscript(data, id);
-      return {
-        id,
-        goal: norm.goal,
-        status: norm.status,
-        t: norm.t,
-        parentTaskId: norm.parent_task_id,
-        rootTaskId: norm.root_task_id,
-        continuationDepth: norm.continuation_depth,
-      };
-    } catch { return null; }
-  }).filter(Boolean);
-  res.json({ runs });
+  const pageSize = req.query && req.query.page_size;
+  const offset = req.query && req.query.offset;
+  const result = assembleSessions(CONV_DIR, { pageSize, offset });
+  // `runs` remains as a compatibility alias for older dashboard clients, but
+  // entries are now logical sessions, ordered by canonical temporal metadata.
+  res.json({ sessions: result.sessions, runs: result.runs, nextOffset: result.nextOffset, total: result.total, malformed: result.malformed });
+});
+
+app.get("/api/agent/session/:rootId", (req, res) => {
+  const session = buildSession(CONV_DIR, req.params.rootId);
+  if (!session) return res.status(404).json({ error: "session not found" });
+  res.json({ session });
 });
 
 app.get("/api/agent/run/:id", (req, res) => {
   const id = req.params.id;
   if (!validateTaskId(id)) return res.status(400).json({ error: "invalid task id" });
-  let file;
-  try { file = resolveTranscriptPath(CONV_DIR, id); } catch { return res.status(400).json({ error: "invalid task id" }); }
-  if (!fs.existsSync(file)) return res.status(404).json({ error: "not found" });
-  try {
-    const data = JSON.parse(fs.readFileSync(file, "utf-8"));
-    const norm = normalizeTranscript(data, id);
-    // Preserve the raw transcript shape for backward compatibility while
-    // surfacing normalized lineage so the UI can label parent/root threads.
-    res.json({
-      ...data,
-      // Resolved, not spread from `data`: a pre-v3 transcript has no top-level
-      // result, and callers should not have to re-derive it from `steps`.
-      result: norm.result,
-      error: norm.error,
-      parent_task_id: norm.parent_task_id,
-      root_task_id: norm.root_task_id,
-      continuation_depth: norm.continuation_depth,
-    });
-  } catch { res.status(500).json({ error: "parse error" }); }
+  const task = buildTask(CONV_DIR, id);
+  if (!task) return res.status(404).json({ error: "not found" });
+  res.json(task);
 });
 
 app.get("/api/agent/status", (req, res) => {

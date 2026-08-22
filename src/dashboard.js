@@ -2672,6 +2672,10 @@ app.get("/api/agent/history", (req, res) => {
   proxyAgent(req, res, "GET");
 });
 
+app.get("/api/agent/session/:rootId", (req, res) => {
+  proxyAgent(req, res, "GET");
+});
+
 app.get("/api/agent/run/:id", (req, res) => {
   proxyAgent(req, res, "GET");
 });

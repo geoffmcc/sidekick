@@ -58,6 +58,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,su
 .badge.info{color:#58a6ff;border-color:#1f6feb}
 .model-tier-list{display:flex;flex-direction:column;gap:4px;padding:6px 0;font-size:.82rem;color:#c9d1d9}.model-tier-list small{color:#8b949e}
 .agent-log{padding:12px;background:#0d1117;border:1px solid #21262d;border-radius:6px;font-family:var(--font);font-size:.8rem;max-height:500px;overflow-y:auto;margin-top:8px;white-space:pre-wrap;line-height:1.5}
+.agent-turn{border-bottom:1px solid #21262d;padding:14px 0}.agent-turn:last-child{border-bottom:0}.agent-goal-display{color:#c9d1d9;margin:6px 0 12px;white-space:pre-wrap}.agent-answer{color:#f0f6fc;white-space:pre-wrap;margin:8px 0;line-height:1.55}.agent-status{margin-top:8px;font-size:.78rem;text-transform:capitalize}.agent-followup-area{margin-top:16px;padding-top:14px;border-top:1px solid #30363d}.agent-followup-area>label{display:block;color:#c9d1d9;margin-bottom:6px}
 .agent-step{color:#58a6ff;font-weight:500}
 .agent-ok{color:#3fb950}
 .agent-err{color:#f85149}

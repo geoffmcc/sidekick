@@ -411,20 +411,32 @@
 
 <!-- Agent Page -->
 <div class="page" id="page-agent">
-  <div class="section-title">Run Agent Task</div>
-  <textarea class="agent-goal" id="agentGoal" rows="3" placeholder="Describe what you want the agent to do...&#10;Example: check disk usage, store the result, and tell me the summary"></textarea>
-  <div style="display:flex;gap:8px;margin-bottom:16px">
-    <button class="btn" id="agentGo" onclick="runAgent()">Go</button>
-    <button class="btn btn-danger" id="agentStop" onclick="stopAgent()" disabled>Stop</button>
-    <button class="btn btn-outline" id="agentClear" onclick="clearAgent()">Clear</button>
+  <div class="section-title">Agent</div>
+  <div id="agentSessionMeta" class="sub" aria-live="polite">Start a governed Agent task or resume a session from History.</div>
+  <div id="agentLog" class="agent-log" aria-live="polite"><span class="empty">Submit a task above</span></div>
+  <div id="agentFollowupArea" class="agent-followup-area" hidden>
+    <label for="agentFollowupGoal">Ask a follow-up</label>
+    <textarea class="agent-goal" id="agentFollowupGoal" rows="3" placeholder="Continue this Agent session..." aria-describedby="agentFollowupHint"></textarea>
+    <div id="agentFollowupHint" class="sub">Enter creates a new line. Ctrl+Enter or Cmd+Enter submits a governed child task.</div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="btn" id="agentFollowupGo" onclick="submitFollowup()">Send follow-up</button>
+      <button class="btn btn-danger" id="agentStop" onclick="stopAgent()" disabled>Stop</button>
+      <button class="btn btn-outline" id="agentNewTask" onclick="newAgentTask()">+ New Agent Task</button>
+    </div>
   </div>
-  <div class="section-title">Output</div>
-  <div class="agent-log" id="agentLog"><span class="empty">Submit a task above</span></div>
+  <div id="agentNewTaskArea" style="margin-top:12px">
+    <label for="agentGoal" class="sub">New Agent Task</label>
+    <textarea class="agent-goal" id="agentGoal" rows="3" placeholder="Describe what you want the agent to do...&#10;Example: check disk usage, store the result, and tell me the summary"></textarea>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="btn" id="agentGo" onclick="runAgent()">Start task</button>
+      <button class="btn btn-outline" id="agentClear" onclick="clearAgent()">Clear</button>
+    </div>
+  </div>
   <div style="margin-top:16px">
     <button class="section-title agent-history-toggle" id="agentHistoryToggle" type="button" aria-expanded="false" aria-controls="agentHistory" onclick="toggleHistory()">
       History <span id="agentHistoryChevron" aria-hidden="true">▼</span>
     </button>
-    <div id="agentHistory" style="display:none;margin-top:8px"></div>
+    <div id="agentHistory" style="display:none;margin-top:8px" aria-live="polite"></div>
   </div>
 </div>
 
