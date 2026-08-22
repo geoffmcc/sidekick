@@ -40,6 +40,7 @@ asyncTest("GPU collector uses fixed no-shell queries and strips process paths/PI
   assert.deepStrictEqual(result.processes[0], { name: "ollama", memoryBytes: 512 * 1024 * 1024, running: true });
   assert.strictEqual(calls.length, 2);
   assert.strictEqual(calls[0].options.shell, false);
+  assert.ok(calls[0].options.timeout >= 2000, "GPU probe timeout allows service-launched driver initialization");
   assert.ok(!Object.keys(calls[0].options.env).some(key => /SECRET|TOKEN|PASSWORD|KEY/i.test(key)));
   assert.ok(calls[0].args.every(arg => !String(arg).includes("prompt") && !String(arg).includes("secret")));
   assert.ok(!("pid" in result.processes[0]));
