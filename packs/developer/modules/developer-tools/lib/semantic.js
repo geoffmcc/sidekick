@@ -16,7 +16,7 @@ const ignore = require("ignore");
 const ast = require("./ast");
 
 const IR_VERSION = "sidekick.semantic-ir.v3";
-const ANALYZER_VERSION = "sidekick.semantic-analyzer.v4.0-scoped-symbols";
+const ANALYZER_VERSION = "sidekick.semantic-analyzer.v4.1-bound-cross-file-symbols";
 const DEFAULT_LIMITS = Object.freeze({ maxFiles: 4000, maxBytes: 64 * 1024 * 1024, maxFileBytes: 512 * 1024, maxUnits: 30000, maxEntries: 20000, maxAstNodes: 50000, maxResultChars: 18000 });
 const EXTENSIONS = Object.freeze({
   ".ts": "typescript", ".tsx": "typescript_tsx", ".mts": "typescript", ".cts": "typescript",
@@ -54,7 +54,7 @@ function loc(text, offset) {
 function evidence(file, sourceHash, text, offset) { return { path: file, ...loc(text, offset) }; }
 function addUnique(list, item, key = stable) { if (!list.some(x => key(x) === key(item))) list.push(item); }
 function parameterNames(raw) { return clean(raw, 500).split(",").map(part => part.trim().replace(/^\.\.\./, "").split(/[=:]/, 1)[0].replace(/\s+/g, " ").trim()).filter(Boolean).slice(0, 64); }
-function semanticIdentity(unit) { return sha256("sidekick.semantic.unit.v3", stable({ language: unit.language, modules: canonicalSet(unit.modules), imports: canonicalSet(unit.imports.map(x => x.name || x.text)), exports: canonicalSet(unit.exports.map(x => x.name || x.text)), symbols: unit.symbols.map(x => ({ id: x.id || null, name: x.name, kind: x.kind, parameters: x.parameters || [], parent: x.parent || null, execution_phase: x.execution_phase || "unknown", lifecycle_semantics: canonicalSet(x.lifecycle_semantics || []), security_boundaries: canonicalSet((x.security_boundaries || []).map(y => ({ kind: y.kind, confidence: y.confidence }))), side_effects: x.side_effects || [] })), relationships: canonicalSet(unit.relationships.map(x => ({ kind: x.kind, from: x.from, to: x.to, from_id: x.from_id || null, to_id: x.to_id || null, from_candidates: x.from_candidates || [], to_candidates: x.to_candidates || [], certainty: x.certainty, phase: x.phase || null, boundary: x.boundary || null }))), control_flow: canonicalSet((unit.control_flow || []).map(x => ({ kind: x.kind, from: x.from || null, ast_node: x.provenance?.ast_node || null }))), state_transitions: canonicalSet((unit.state_transitions || []).map(x => ({ state: x.state, to: x.to }))), continuation_edges: canonicalSet((unit.continuation_edges || []).map(x => ({ kind: x.kind, from: x.from || null, to: x.to || null }))), lifecycle_semantics: canonicalSet((unit.lifecycle_semantics || []).map(x => ({ kind: x.kind, symbol: x.symbol || null }))), security_boundaries: canonicalSet((unit.security_boundaries || []).map(x => ({ kind: x.kind, confidence: x.confidence }))), execution_phase: unit.execution_phase || "unknown", dynamic_capabilities: canonicalSet((unit.dynamic_capabilities || []).map(x => ({ kind: x.kind, symbol: x.symbol || null }))), signals: canonicalSet(unit.signals.map(x => x.kind)) })); }
+function semanticIdentity(unit) { return sha256("sidekick.semantic.unit.v3", stable({ language: unit.language, modules: canonicalSet(unit.modules), imports: canonicalSet(unit.imports.map(x => x.name || x.text)), import_bindings: canonicalSet((unit.import_bindings || []).map(x => ({ local: x.local, imported: x.imported || null, namespace: x.namespace || null, specifier: x.specifier, target_path: x.target_path || null }))), exports: canonicalSet(unit.exports.map(x => x.name || x.text)), symbols: unit.symbols.map(x => ({ id: x.id || null, name: x.name, kind: x.kind, parameters: x.parameters || [], parent: x.parent || null, execution_phase: x.execution_phase || "unknown", lifecycle_semantics: canonicalSet(x.lifecycle_semantics || []), security_boundaries: canonicalSet((x.security_boundaries || []).map(y => ({ kind: y.kind, confidence: y.confidence }))), side_effects: x.side_effects || [] })), relationships: canonicalSet(unit.relationships.map(x => ({ kind: x.kind, from: x.from, to: x.to, from_id: x.from_id || null, to_id: x.to_id || null, from_candidates: x.from_candidates || [], to_candidates: x.to_candidates || [], resolution: x.resolution || null, certainty: x.certainty, phase: x.phase || null, boundary: x.boundary || null }))), control_flow: canonicalSet((unit.control_flow || []).map(x => ({ kind: x.kind, from: x.from || null, ast_node: x.provenance?.ast_node || null }))), state_transitions: canonicalSet((unit.state_transitions || []).map(x => ({ state: x.state, to: x.to }))), continuation_edges: canonicalSet((unit.continuation_edges || []).map(x => ({ kind: x.kind, from: x.from || null, to: x.to || null }))), lifecycle_semantics: canonicalSet((unit.lifecycle_semantics || []).map(x => ({ kind: x.kind, symbol: x.symbol || null }))), security_boundaries: canonicalSet((unit.security_boundaries || []).map(x => ({ kind: x.kind, confidence: x.confidence }))), execution_phase: unit.execution_phase || "unknown", dynamic_capabilities: canonicalSet((unit.dynamic_capabilities || []).map(x => ({ kind: x.kind, symbol: x.symbol || null }))), signals: canonicalSet(unit.signals.map(x => x.kind)) })); }
 function semanticChanges(previousFiles = [], currentFiles = []) {
   const oldByPath = new Map(previousFiles.map(x => [x.path, x.unit])); const newByPath = new Map(currentFiles.map(x => [x.path, x.unit])); const changes = [];
   const names = unit => new Set((unit?.symbols || []).map(x => `${x.kind}:${x.name}`));
@@ -147,7 +147,7 @@ function semanticMetadata(text, tree, file, sourceHash) {
   return result;
 }
 function parseSource(language, file, text, sourceHash) {
-  const out = { modules: [], imports: [], exports: [], symbols: [], relationships: [], signals: [], tests: [], entry_points: [], warnings: [] };
+  const out = { modules: [], imports: [], import_bindings: [], exports: [], symbols: [], relationships: [], signals: [], tests: [], entry_points: [], warnings: [] };
   const addSymbol = (name, kind, m, extra = {}) => {
     if (!name || out.symbols.length >= 10000) return;
     const symbol = { name: clean(name, 200), kind, ...extra, evidence: evidence(file, sourceHash, text, m.index) };
@@ -156,6 +156,10 @@ function parseSource(language, file, text, sourceHash) {
     return symbol;
   };
   const addImport = (name, m, extra = {}) => addUnique(out.imports, { name: clean(name, 240), ...extra, evidence: evidence(file, sourceHash, text, m.index) }, x => x.name);
+  const addBinding = (local, specifier, m, extra = {}) => {
+    if (!local || !specifier) return;
+    addUnique(out.import_bindings, { local: clean(local, 200), specifier: clean(specifier, 240), ...extra, evidence: evidence(file, sourceHash, text, m.index) }, x => `${x.local}:${x.imported || ""}:${x.namespace || ""}:${x.specifier}`);
+  };
   const addModule = (name, m, kind = "module") => addUnique(out.modules, { name: clean(name, 240), kind, evidence: evidence(file, sourceHash, text, m.index) }, x => x.name);
 
   const importPatterns = {
@@ -168,6 +172,17 @@ function parseSource(language, file, text, sourceHash) {
     rust: [/\buse\s+([\w:]+)|\bextern\s+crate\s+([\w]+)/g],
   };
   for (const re of importPatterns[language] || []) regexMatches(text, re, m => addImport(m[1] || m[2], m));
+  if (language === "javascript" || language === "javascript_jsx" || language.startsWith("typescript")) {
+    regexMatches(text, /\bimport\s*\{([^}]+)\}\s*from\s*["']([^"']+)["']/g, m => m[1].split(",").forEach(part => {
+      const bits = part.trim().split(/\s+as\s+/i).map(value => clean(value, 200)).filter(Boolean); if (bits[0]) addBinding(bits[1] || bits[0], m[2], m, { imported: bits[0] });
+    }));
+    regexMatches(text, /\bimport\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s*["']([^"']+)["']/g, m => addBinding(m[1], m[2], m, { namespace: true }));
+    regexMatches(text, /\bimport\s+([A-Za-z_$][\w$]*)\s+from\s*["']([^"']+)["']/g, m => addBinding(m[1], m[2], m, { imported: "default" }));
+    regexMatches(text, /\b(?:const|let|var)\s*\{([^}]+)\}\s*=\s*require\s*\(\s*["']([^"']+)["']\s*\)/g, m => m[1].split(",").forEach(part => {
+      const bits = part.trim().split(/\s*:\s*/).map(value => clean(value, 200)).filter(Boolean); if (bits[0]) addBinding(bits[1] || bits[0], m[2], m, { imported: bits[0] });
+    }));
+    regexMatches(text, /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*["']([^"']+)["']\s*\)/g, m => addBinding(m[1], m[2], m, { namespace: true }));
+  }
 
   const modulePatterns = {
     javascript: [/\b(?:class|namespace)\s+([A-Za-z_$][\w$]*)/g], typescript: [/\b(?:class|namespace|module)\s+([A-Za-z_$][\w$]*)/g],
@@ -237,6 +252,7 @@ function writeCache(file, value) {
 // last symbol with a matching display name.
 function assignScopedSymbolIdentities(files) {
   const byName = new Map();
+  const byPath = new Map(files.map(file => [file.path, file]));
   for (const file of files) {
     const symbols = (file.unit.symbols || []).slice().sort((a, b) =>
       (a.evidence?.line || 0) - (b.evidence?.line || 0) ||
@@ -269,18 +285,43 @@ function assignScopedSymbolIdentities(files) {
     const ids = candidates.map(item => item.symbol.id).sort();
     return { id: ids.length === 1 ? ids[0] : null, candidates: ids };
   };
+  const resolveBound = (file, name) => {
+    const raw = String(name || "");
+    const direct = (file.unit.import_bindings || []).find(binding => binding.local === raw);
+    const qualified = raw.match(/^([^.$]+)\.([A-Za-z_$][\w$]*)$/);
+    const namespace = qualified && (file.unit.import_bindings || []).find(binding => binding.namespace && binding.local === qualified[1]);
+    const binding = direct || namespace;
+    if (!binding || !binding.target_path) return { id: null, candidates: [] };
+    const target = byPath.get(binding.target_path);
+    if (!target) return { id: null, candidates: [] };
+    const exported = binding.namespace ? (qualified ? qualified[2] : null) : (binding.imported === "default" ? "default" : binding.imported);
+    const exportNames = new Set((target.unit.exports || []).map(item => String(item.name || item.text || "")));
+    const candidates = (target.unit.symbols || []).filter(symbol => {
+      if (symbol.name !== exported && !(exported === "default" && symbol.visibility === "public")) return false;
+      // Explicit export data is authoritative for ES/TS imports. CommonJS
+      // namespace bindings may not expose a lexical export list, so they stay
+      // conservative by requiring a unique structurally bound symbol.
+      return binding.namespace || exportNames.size === 0 || exportNames.has(symbol.name) || exported === "default";
+    });
+    const ids = candidates.map(symbol => symbol.id).sort();
+    return { id: ids.length === 1 ? ids[0] : null, candidates: ids };
+  };
   for (const file of files) {
     for (const relation of file.unit.relationships || []) {
       if (!relation.from_id && relation.kind !== "imports") {
         const resolved = resolve(file, relation.from, true);
-        if (resolved.id) relation.from_id = resolved.id;
-        else if (resolved.candidates.length) relation.from_candidates = resolved.candidates;
+        if (resolved.id) { relation.from_id = resolved.id; relation.resolution = relation.resolution || "definite"; }
+        else if (resolved.candidates.length) { relation.from_candidates = resolved.candidates; relation.resolution = relation.resolution || "candidate"; }
       }
       if (!relation.to_id && relation.kind !== "imports") {
         const local = resolve(file, relation.to, true);
-        const resolved = local.id ? local : resolve(file, relation.to, false);
-        if (resolved.id) relation.to_id = resolved.id;
-        else if (resolved.candidates.length) relation.to_candidates = resolved.candidates;
+        const bound = local.id ? local : resolveBound(file, relation.to);
+        if (bound.id) { relation.to_id = bound.id; relation.resolution = "definite"; }
+        else {
+          const candidates = bound.candidates.length ? bound : resolve(file, relation.to, false);
+          if (candidates.candidates.length) relation.to_candidates = candidates.candidates;
+          relation.resolution = candidates.candidates.length ? "candidate" : "unresolved";
+        }
       }
     }
     file.unit.semantic_hash = semanticIdentity({ ...file.unit, language: file.language });
@@ -356,7 +397,6 @@ async function indexRepository(root, options = {}) {
     unit.path = item.path; unit.language = item.language; unit.source_hash = sourceHash; unit.analyzer_version = ANALYZER_VERSION; unit.ir_version = IR_VERSION; files.push({ path: item.path, language: item.language, source_hash: sourceHash, analyzer_version: ANALYZER_VERSION, ir_version: IR_VERSION, unit }); units += unit.symbols.length;
     if (units >= limits.maxUnits) { warnings.push({ code: "semantic_units_limit", limit: limits.maxUnits }); break; }
   }
-  assignScopedSymbolIdentities(files);
   const knownPaths = new Set(files.map(x => x.path));
   for (const file of files) {
     for (const imported of file.unit.imports || []) {
@@ -366,6 +406,13 @@ async function indexRepository(root, options = {}) {
       const target = [base, ...[".ts", ".tsx", ".js", ".jsx", ".rb", ".java", ".go", ".pl", ".pm", ".rs"].map(ext => `${base}${ext}`), `${base}/index.ts`, `${base}/index.js`].find(candidate => knownPaths.has(candidate));
       if (target) addUnique(file.unit.relationships, { kind: "imports", from: file.path, to: target, certainty: "inferred", evidence: imported.evidence }, x => `${x.kind}:${x.from}:${x.to}`);
     }
+    for (const binding of file.unit.import_bindings || []) {
+      const base = path.posix.normalize(path.posix.join(path.posix.dirname(file.path), binding.specifier));
+      binding.target_path = [base, ...[".ts", ".tsx", ".js", ".jsx", ".rb", ".java", ".go", ".pl", ".pm", ".rs"].map(ext => `${base}${ext}`), `${base}/index.ts`, `${base}/index.js`].find(candidate => knownPaths.has(candidate)) || null;
+    }
+  }
+  assignScopedSymbolIdentities(files);
+  for (const file of files) {
     file.unit.semantic_hash = semanticIdentity({ ...file.unit, language: file.language });
     const protectedSymbols = new Map((file.unit.symbols || []).filter(s => s.id && (s.security_boundaries || []).some(b => ["authorization", "approval", "policy"].includes(b.kind))).map(s => [s.id, new Set(s.security_boundaries.map(b => b.kind))]));
     for (const relation of [...(file.unit.relationships || [])]) if (relation.kind === "calls" && relation.from_id && protectedSymbols.has(relation.from_id) && /(?:dispatch|execute|invoke|handler|perform|call)/i.test(String(relation.to || ""))) {
@@ -410,13 +457,14 @@ const PROJECTION_PRIORITY = Object.freeze({
 });
 const RELATIONSHIP_WORDS = new Set(["what", "does", "do", "call", "calls", "caller", "callers", "callee", "callees", "who", "references", "depend", "depends", "dependency", "dependencies", "import", "imports", "module", "modules"]);
 
-function projectionCategories(relation, symbolsById, symbolsByName) {
+function projectionCategories(relation, symbolsById) {
   const categories = [];
   if (PROJECTION_PRIORITY[relation.kind]) categories.push(relation.kind);
   if (relation.boundary) categories.push(String(relation.boundary));
   for (const [endpoint, endpointId] of [[relation.from, relation.from_id], [relation.to, relation.to_id]]) {
-    const symbol = (endpointId && symbolsById.get(endpointId)) ||
-      (symbolsByName.get(endpoint)?.length === 1 ? symbolsByName.get(endpoint)[0] : null);
+    // Display names are for readability only. A unique repository-wide name
+    // is still not binding evidence for a relationship endpoint.
+    const symbol = endpointId ? symbolsById.get(endpointId) : null;
     for (const boundary of symbol?.security_boundaries || []) categories.push(boundary.kind);
     if (symbol?.execution_phase && symbol.execution_phase !== "unknown") categories.push(`phase:${symbol.execution_phase}`);
     if ((symbol?.side_effects || []).length) categories.push("side_effect");
@@ -434,7 +482,7 @@ function projectionScore(relation, categories, queryScore = 0) {
 }
 
 function compactRelation(relation, detailed) {
-  const base = { kind: relation.kind, from: relation.from || null, to: relation.to || null, from_id: relation.from_id || null, to_id: relation.to_id || null, evidence: relation.evidence || null };
+  const base = { kind: relation.kind, from: relation.from || null, to: relation.to || null, from_id: relation.from_id || null, to_id: relation.to_id || null, resolution: relation.resolution || (relation.to_id ? "definite" : relation.to_candidates?.length ? "candidate" : "unresolved"), evidence: relation.evidence || null };
   if (relation.from_candidates?.length) base.from_candidates = relation.from_candidates.slice(0, 8);
   if (relation.to_candidates?.length) base.to_candidates = relation.to_candidates.slice(0, 8);
   if (relation.boundary) base.boundary = relation.boundary;
@@ -448,8 +496,6 @@ function project(index, { query = "", level = 0, max_chars = 12000, limit = 40 }
   const relationMode = /\b(?:callee|callees|what does .* call|dependencies|imports?|depends?)\b/.test(q) ? "outgoing" : /\b(?:caller|callers|who calls|calls|references|dependents?)\b/.test(q) ? "incoming" : null;
   const all = index.files.flatMap(f => f.unit.symbols.map(s => ({ ...s, path: f.path, language: f.language, source_hash: f.source_hash })));
   const symbolsById = new Map(all.filter(symbol => symbol.id).map(symbol => [symbol.id, symbol]));
-  const symbolsByName = new Map();
-  for (const symbol of all) { const list = symbolsByName.get(symbol.name) || []; list.push(symbol); symbolsByName.set(symbol.name, list); }
   const score = item => tokens.reduce((n, t) => n + (String(item.name).toLowerCase().includes(t) || String(item.kind).toLowerCase().includes(t) || item.path.toLowerCase().includes(t) ? 1 : 0), 0);
   const targetTokens = tokens.filter(token => !RELATIONSHIP_WORDS.has(token));
   const targetIds = new Set(all.filter(item => targetTokens.some(t => String(item.name).toLowerCase().includes(t))).map(item => item.id).filter(Boolean));
@@ -469,7 +515,7 @@ function project(index, { query = "", level = 0, max_chars = 12000, limit = 40 }
   const relevantRelationshipSet = new Set(relevantRelationships);
   const relatedIds = new Set(relevantRelationships.flatMap(relation => [relation.from_id, relation.to_id]).filter(Boolean));
   const scoredRelationships = allRelationships.map(relation => {
-    const categories = projectionCategories(relation, symbolsById, symbolsByName);
+    const categories = projectionCategories(relation, symbolsById);
     const target = relation.to_id ? symbolsById.get(relation.to_id) : null;
     if (relation.kind === "convergence" || (relation.kind === "calls" && target && ((target.side_effects || []).length || (incomingCounts.get(relation.to_id || relation.to) || 0) > 1))) categories.push("execution_authority");
     categories.sort();

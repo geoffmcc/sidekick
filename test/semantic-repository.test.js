@@ -282,6 +282,33 @@ const semantic = require("../packs/developer/modules/developer-tools/lib/semanti
     if (ambiguous.to_candidates?.length) assert.ok(ambiguous.to_candidates.length >= 2);
   });
 
+  await test("does not promote a unique same-name cross-file symbol without binding evidence", async () => {
+    const index = await semantic.indexRepository(root, { sourceFiles: [
+      { path: "caller.ts", language: "typescript", content: "export function run() { return validate(); }" },
+      { path: "target.ts", language: "typescript", content: "export function validate() { authorize(); return true; }" },
+    ] });
+    const relation = index.files.find(file => file.path === "caller.ts").unit.relationships.find(item => item.kind === "calls" && item.to === "validate");
+    assert.ok(relation && !relation.to_id, "same-name symbol in another file is not authoritative without a binding");
+    assert.strictEqual(relation.resolution, "candidate");
+    assert.ok(relation.to_candidates?.length === 1);
+    const projection = JSON.parse(semantic.project(index, { query: "validate", level: 2, max_chars: 12000 }).projection);
+    const projectedRelation = projection.relationships.find(item => item.kind === "calls" && item.to === "validate");
+    assert.ok(projectedRelation && projectedRelation.resolution === "candidate");
+    assert.ok(!projectedRelation.significance?.includes("authorization"), "candidate endpoints cannot inherit target security metadata");
+  });
+
+  await test("resolves direct, aliased, and namespace bindings deterministically", async () => {
+    const index = await semantic.indexRepository(root, { sourceFiles: [
+      { path: "target.ts", language: "typescript", content: "export function validate() { authorize(); return true; } export function execute() { persist(); return true; }" },
+      { path: "caller.ts", language: "typescript", content: "import { validate as check } from './target'; import * as target from './target'; export function run() { check(); target.execute(); }" },
+    ] });
+    const unit = index.files.find(file => file.path === "caller.ts").unit;
+    const calls = unit.relationships.filter(item => item.kind === "calls");
+    assert.ok(calls.some(item => item.to === "check" && item.resolution === "definite" && item.to_id));
+    assert.ok(calls.some(item => item.to === "target.execute" && item.resolution === "definite" && item.to_id));
+    assert.ok(calls.every(item => !item.to_candidates || item.resolution !== "definite"));
+  });
+
   await test("does not attribute endpoint metadata through a duplicate display name", async () => {
     const index = {
       schema: semantic.IR_VERSION,

@@ -172,7 +172,7 @@ function formatEvidenceForPrompt(evidence, redact) {
  * @param {(text:string)=>string} [deps.redact]
  */
 function makeBrainRunner(deps) {
-  const { callLLM, agentTools, callTool, recallMemory = null, redact = (t) => t, packContext = null, capabilityMetadata = {} } = deps;
+  const { callLLM, agentTools, callTool, recallMemory = null, redact = (t) => t, packContext = null, capabilityMetadata = {}, onCheckpoint = null, workState = null, completionGate = null } = deps;
   // Built per plan() call, not once: the shortlist depends on the goal.
 
   const plan = async ({ goal, memoryContext, priorErrors }) => {
@@ -207,12 +207,13 @@ function makeBrainRunner(deps) {
 
   const synthesize = makeSynthesizer({ callLLM, redact });
 
-  return function run({ goal, classification, emit, onEvent, cancel, clock, deadlineMs, taskId = null, lineage = {}, persistence = undefined }) {
+  return function run({ goal, classification, emit, onEvent, cancel, clock, deadlineMs, taskId = null, lineage = {}, persistence = undefined, workState = null, completionGate = null, onCheckpoint = null }) {
     return runBrainTask({
       goal, classification, plan, synthesize,
       agentTools, callTool, recallMemory, redact,
       emit, onEvent, cancel, clock, deadlineMs,
       taskId, lineage,
+      workState, completionGate, onCheckpoint,
       persistence: persistence === undefined ? (taskId ? defaultPersistence() : null) : persistence,
     });
   };

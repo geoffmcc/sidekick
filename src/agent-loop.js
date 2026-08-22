@@ -2,6 +2,7 @@ const { parseAgentDecision, trackDecisionRepetition, resolveAgentToolName } = re
 const { stripSidekickPrefix } = require("./core/tool-name");
 const { redactSensitiveKeysDeep } = require("./redact");
 const { EVIDENCE_BUDGETS, projectEvidenceItems } = require("./evidence/projector");
+const { createWorkState, recordEvidence, recordFailure, evaluateCompletion } = require("./agent/completion-gate");
 
 const DEFAULT_MAX_ITERATIONS = 15;
 
@@ -69,6 +70,9 @@ async function runToolLoop({
   onEvent = () => {},
   redact = (text) => text,
   cancel = null,
+  completionGate = null,
+  workState = null,
+  onCheckpoint = null,
 } = {}) {
   const steps = [];
   let status = "iteration_limit";
@@ -79,6 +83,8 @@ async function runToolLoop({
   const evidenceLedger = [];
   const evidenceItems = [];
   let evidenceNudged = false;
+  const taskState = workState || createWorkState(history?.find(item => item.role === "user")?.content || "", { requiresEvidence: requireEvidence });
+  const checkpoint = () => { if (typeof onCheckpoint === "function") onCheckpoint(taskState); };
 
   const failWithoutEvidence = () => {
     status = "failed";
@@ -98,6 +104,8 @@ async function runToolLoop({
   };
 
   for (let i = 0; i < maxIterations; i++) {
+    taskState.iterations = i + 1;
+    checkpoint();
     // Cooperative cancellation, consumed between iterations: a cancelled task
     // must stop honestly rather than finishing the plan and reporting success
     // for work the user asked to abandon.
@@ -183,6 +191,14 @@ async function runToolLoop({
         break;
       }
       const result = decision.result || "Task completed";
+      const completion = await evaluateCompletion({ state: taskState, candidate: result, completionGate });
+      if (!completion.complete) {
+        emit({ type: "step", text: "Completion gate: continuing investigation" });
+        onEvent("agent.completion_incomplete", { missing: completion.missing, reason: completion.reason }, "info");
+        history.push({ role: "assistant", content: result.substring(0, 800) });
+        history.push({ role: "user", content: `The completion gate is not satisfied: ${completion.reason}. Continue with a governed tool call that can resolve the remaining objective requirements. Do not finalize yet.` });
+        continue;
+      }
       steps.push({ type: "done", text: result });
       status = "completed";
       finalResult = result;
@@ -260,10 +276,12 @@ async function runToolLoop({
           if (isEvidenceTool(toolName)) {
             evidenceCalls++;
             evidenceLedger.push({ tool: toolName, timestamp: new Date().toISOString(), success: true });
+            recordEvidence(taskState, { tool: toolName, success: true, reference: toolName });
           }
         }
       } catch (e) {
         result = redact("Call failed: " + e.message);
+        recordFailure(taskState, result);
       }
 
       // Keep the authoritative dispatcher result local and immutable. The
@@ -323,6 +341,13 @@ async function runToolLoop({
           failWithoutEvidence();
           break;
         }
+        const completion = await evaluateCompletion({ state: taskState, candidate: result, completionGate });
+        if (!completion.complete) {
+          emit({ type: "step", text: "Completion gate: continuing investigation" });
+          onEvent("agent.completion_incomplete", { missing: completion.missing, reason: completion.reason }, "info");
+          history.push({ role: "user", content: `The completion gate is not satisfied: ${completion.reason}. Continue with a governed tool call; do not finalize.` });
+          continue;
+        }
         steps.push({ type: "done", text: result });
         status = "completed";
         finalResult = result;
@@ -338,7 +363,8 @@ async function runToolLoop({
     steps.push({ type: "error", text: terminalError });
   }
 
-  return { status, finalResult, terminalError, steps, evidenceCalls, evidenceLedger };
+  checkpoint();
+  return { status, finalResult, terminalError, steps, evidenceCalls, evidenceLedger, workState: taskState };
 }
 
 module.exports = { runToolLoop, DEFAULT_MAX_ITERATIONS };

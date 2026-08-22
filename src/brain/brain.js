@@ -3,6 +3,7 @@
 const { BRAIN_LIMITS, ALLOWED_CAPABILITIES } = require("./config");
 const { validatePlan } = require("./plan-validator");
 const { EVIDENCE_BUDGETS, projectEvidenceItems, projectToolEvidence } = require("../evidence/projector");
+const { createWorkState, recordEvidence, evaluateCompletion } = require("../agent/completion-gate");
 
 /**
  * Brain v0.1 orchestrator.
@@ -29,7 +30,7 @@ const { EVIDENCE_BUDGETS, projectEvidenceItems, projectToolEvidence } = require(
  * mutate steps.
  */
 
-const TERMINAL = new Set(["completed", "failed", "cancelled", "timed_out"]);
+const TERMINAL = new Set(["completed", "failed", "cancelled", "timed_out", "insufficient_evidence"]);
 
 function nowMs(clock) { return clock ? clock() : Date.now(); }
 
@@ -220,12 +221,17 @@ async function runBrainTask(opts) {
     taskId = null,
     // Platform-execution correlation for the durable checkpoint.
     lineage = {},
+    completionGate = null,
+    workState = null,
+    maxWorkRounds = 4,
+    onCheckpoint = null,
   } = opts;
 
   const startedAt = nowMs(clock);
   const deadlineMs = opts.deadlineMs || (startedAt + BRAIN_LIMITS.MAX_TOTAL_TASK_MS);
 
   const steps = [];
+  const taskState = workState || createWorkState(goal, { requiresEvidence: !!(classification && classification.requiresTools) });
   let state = "queued";
   const setState = (next) => {
     if (TERMINAL.has(state)) return; // terminal is sticky — never re-enter or flip
@@ -302,7 +308,7 @@ async function runBrainTask(opts) {
     // too: this string lands in the persisted transcript.
     return terminal("failed", { error: redact("plan rejected: " + errs.slice(0, 4).join("; ")), extra: { plan_errors: errs } });
   }
-  const validated = validation.plan;
+  let validated = validation.plan;
   emit({ type: "brain_plan", goal: validated.goal, steps: validated.steps.map(s => ({ id: s.id, type: s.type, tool: s.tool || null, purpose: s.purpose || null })) });
 
   // ---- run ----------------------------------------------------------------
@@ -310,10 +316,43 @@ async function runBrainTask(opts) {
   const acc = newAccumulator({ steps });
   let awaitingApproval = null;
 
-  const outcome = await executePlanSteps({
+  let outcome = await executePlanSteps({
     plan: validated, startIndex: 0, acc,
     callTool, emit, onEvent, redact, cancelled, outOfTime,
   });
+  if (typeof onCheckpoint === "function") onCheckpoint(taskState);
+
+  // A completed finite plan is not automatically a completed objective. Use
+  // the shared gate, and if material requirements remain, obtain and validate
+  // another bounded plan from the model before synthesizing.
+  let workRound = 0;
+  let accountedEvidence = 0;
+  while (outcome.status === "completed" && workRound < Math.max(1, Math.min(8, Number(maxWorkRounds) || 4))) {
+    for (const item of (acc.evidence || []).slice(accountedEvidence)) recordEvidence(taskState, { tool: item.tool || "inspection", success: item.ok !== false, reference: item.tool || "evidence" });
+    accountedEvidence = (acc.evidence || []).length;
+    const completion = await evaluateCompletion({ state: taskState, candidate: "", completionGate });
+    if (completion.complete) break;
+    workRound++;
+    taskState.replans = Math.min(32, (taskState.replans || 0) + 1);
+    emit({ type: "brain_step", step: "replan", round: workRound });
+    onEvent("brain.replan", { round: workRound, missing: completion.missing, reason: completion.reason }, "info");
+    let nextCandidate;
+    try {
+      nextCandidate = await planFn({ goal, classification, memoryContext, priorErrors: [completion.reason], progress: { missing: completion.missing, evidence_count: acc.evidence.length, round: workRound } });
+    } catch (e) {
+      return terminal("failed", { error: "replanning error: " + redact(String(e && e.message || e)) });
+    }
+    const nextValidation = validatePlan(nextCandidate, { agentTools });
+    if (!nextValidation.ok) return terminal("failed", { error: redact("replan rejected: " + nextValidation.errors.slice(0, 4).join("; ")) });
+    validated = nextValidation.plan;
+    outcome = await executePlanSteps({ plan: validated, startIndex: 0, acc, callTool, emit, onEvent, redact, cancelled, outOfTime });
+    if (typeof onCheckpoint === "function") onCheckpoint(taskState);
+  }
+
+  if (outcome.status === "completed" && workRound >= Math.max(1, Math.min(8, Number(maxWorkRounds) || 4))) {
+    const completion = await evaluateCompletion({ state: taskState, candidate: "", completionGate });
+    if (!completion.complete) return terminal("insufficient_evidence", { error: "bounded work rounds exhausted before objective completion", extra: { missing: completion.missing, work_rounds: workRound } });
+  }
 
   if (outcome.status === "cancelled") return terminal("cancelled");
   if (outcome.status === "timed_out") return terminal("timed_out", { error: "task deadline exceeded" });
