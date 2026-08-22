@@ -284,7 +284,7 @@ async function resumeBrainTask(opts) {
           return finish({ state: "failed", taskId, error: `approved step ${parkedStep.id} failed`, code: "dispatch_threw" });
         }
 
-        const { clipped, isError } = accumulateToolResult(acc, parkedStep, toolRes, { onEvent });
+        const { clipped, isError } = accumulateToolResult(acc, parkedStep, toolRes, { onEvent, redact });
         const recorded = continuation.recordActionResult({
           taskId, claimEpoch, claimedBy,
           approvalId: claimed.approvalId,
@@ -513,7 +513,7 @@ function applyRecordedOutcome(acc, step, recorded, { onEvent = () => {}, result 
     acc,
     step || { id: recorded.step_id, tool: "unknown" },
     { isError: !ok, content: [{ type: "text", text }] },
-    { onEvent }
+    { onEvent, redact }
   );
 }
 

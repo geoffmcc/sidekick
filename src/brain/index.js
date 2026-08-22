@@ -3,6 +3,7 @@
 const { runBrainTask } = require("./brain");
 const { isEnabled, BRAIN_LIMITS, ALLOWED_STEP_TYPES } = require("./config");
 const { discoverCapabilities } = require("../agent/capability-broker");
+const { projectEvidenceItems } = require("../evidence/projector");
 
 /**
  * Brain v0.1 production wiring.
@@ -147,15 +148,19 @@ function normalizePlanShape(parsed) {
 function formatMemoryForPrompt(memoryContext, redact) {
   if (!memoryContext || memoryContext.length === 0) return null;
   const lines = memoryContext.map(m => {
-    const detail = m.summary || m.content || m.goal || m.description || "";
-    return "- " + redact(String(detail)).slice(0, 240);
+    const summary = redact(String(m.summary || "")).slice(0, 120);
+    const content = redact(String(m.content || m.goal || m.description || "")).slice(0, 360);
+    return "- " + (summary ? `Summary: ${summary}; ` : "") + `Content: ${content || "(none)"}`;
   });
   return UNTRUSTED_HEADER + "\n\n# Remembered context\n" + lines.join("\n");
 }
 
 function formatEvidenceForPrompt(evidence, redact) {
   if (!evidence || evidence.length === 0) return "(no tool evidence was collected)";
-  return evidence.map(e => `## ${e.tool} (${e.id})\n` + redact(String(e.text)).slice(0, BRAIN_LIMITS.MAX_TOOL_OUTPUT_CHARS)).join("\n\n");
+  return projectEvidenceItems(evidence.map(e => ({ ...e, text: redact(String(e.text)) })), {
+    totalChars: BRAIN_LIMITS.MAX_EVIDENCE_CHARS,
+    perToolChars: BRAIN_LIMITS.MAX_TOOL_OUTPUT_CHARS,
+  }).text;
 }
 
 /**

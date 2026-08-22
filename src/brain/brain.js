@@ -2,6 +2,7 @@
 
 const { BRAIN_LIMITS, ALLOWED_CAPABILITIES } = require("./config");
 const { validatePlan } = require("./plan-validator");
+const { EVIDENCE_BUDGETS, projectEvidenceItems, projectToolEvidence } = require("../evidence/projector");
 
 /**
  * Brain v0.1 orchestrator.
@@ -61,7 +62,7 @@ function newAccumulator(initial = {}) {
  * path and the resume path so evidence accumulation, truncation, and the
  * "respond is not evidence" rule have exactly ONE implementation (ADR §1).
  */
-function accumulateToolResult(acc, step, toolRes, { onEvent = () => {} } = {}) {
+function accumulateToolResult(acc, step, toolRes, { onEvent = () => {}, redact = (value) => value } = {}) {
   const isError = !!toolRes.isError;
   const text = toolRes.content && toolRes.content[0] && toolRes.content[0].text
     ? toolRes.content[0].text
@@ -69,10 +70,16 @@ function accumulateToolResult(acc, step, toolRes, { onEvent = () => {} } = {}) {
   // The secret tool's successful result IS the credential; keep it out of the
   // persisted step record, the evidence fed to synthesis prompts, and the
   // planner feedback (errors stay for diagnostics).
-  const raw = step.tool.replace(/^sidekick_/, "") === "secret" && !isError
+  const raw = redact(step.tool.replace(/^sidekick_/, "") === "secret" && !isError
     ? "(sensitive value withheld)"
-    : text;
-  const clipped = truncate(raw, BRAIN_LIMITS.MAX_TOOL_OUTPUT_CHARS);
+    : text);
+  const clipped = projectToolEvidence({
+    tool: step.tool,
+    id: step.id,
+    text: raw,
+    isError,
+    redact,
+  }, { budget: BRAIN_LIMITS.MAX_TOOL_OUTPUT_CHARS });
   acc.steps.push({
     type: "tool",
     id: step.id,
@@ -86,14 +93,18 @@ function accumulateToolResult(acc, step, toolRes, { onEvent = () => {} } = {}) {
   });
   onEvent("brain.step_completed", { id: step.id, tool: step.tool, ok: !isError });
 
-  if (!isError && acc.evidenceChars < BRAIN_LIMITS.MAX_EVIDENCE_CHARS) {
-    const room = BRAIN_LIMITS.MAX_EVIDENCE_CHARS - acc.evidenceChars;
-    const piece = clipped.slice(0, room);
-    acc.evidence.push({ id: step.id, tool: step.tool, text: piece });
-    acc.evidenceChars += piece.length;
-    // The respond echo tool is not evidence about live state.
-    if (step.tool.replace(/^sidekick_/, "") !== "respond") acc.successfulToolEvidence++;
-  }
+  const aggregate = projectEvidenceItems([
+    ...(Array.isArray(acc.evidence) ? acc.evidence : []),
+    { id: step.id, tool: step.tool, text: raw, isError },
+  ], {
+    totalChars: BRAIN_LIMITS.MAX_EVIDENCE_CHARS,
+    perToolChars: Math.min(BRAIN_LIMITS.MAX_TOOL_OUTPUT_CHARS, EVIDENCE_BUDGETS.MAX_TOOL_CHARS),
+  });
+  acc.evidence = aggregate.items.map(item => ({ id: item.id, tool: item.tool, text: item.text, isError: !!item.isError }));
+  acc.evidenceChars = aggregate.diagnostics.chars;
+  // The respond echo tool is not evidence about live state. Errors remain in
+  // synthesis evidence so their code/message/reason remain actionable.
+  if (!isError && step.tool.replace(/^sidekick_/, "") !== "respond") acc.successfulToolEvidence++;
   return { isError, clipped };
 }
 
@@ -167,7 +178,7 @@ async function executePlanSteps({
       return { status: "approval_required", index, step, approvalId: toolRes.approvalId || null };
     }
 
-    accumulateToolResult(acc, step, toolRes, { onEvent });
+    accumulateToolResult(acc, step, toolRes, { onEvent, redact });
   }
   return { status: "completed", index: steps.length };
 }
