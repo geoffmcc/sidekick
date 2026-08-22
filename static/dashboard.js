@@ -4,6 +4,9 @@ let agentStream = null;
 let currentAgentTaskId = null;
 let agentRestoreInFlight = false;
 const AGENT_LAST_TASK_KEY = 'sidekick_agent_last_task_id';
+const AGENT_ROOT_KEY = 'sidekick_agent_root_task_id';
+let activeAgentSession = null;
+let agentSubmissionPending = false;
 let expandedHistory = {};
 let allLogs = [];
 let allSessions = [];
@@ -2131,6 +2134,129 @@ function exportRun(id){
   }).catch(e => apiError('/api/agent/run/' + id, e, 0));
 }
 
+// Agent Tab v2 overrides the legacy task-detail renderer above.  The backend
+// remains authoritative for each immutable task; this state only selects and
+// presents a logical session.
+function agentTime(iso) {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return 'Date unavailable';
+  const now = new Date(), yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
+  const day = d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  const clock = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const same = d.toDateString() === now.toDateString();
+  const prev = d.toDateString() === yesterday.toDateString();
+  return (same ? 'Today' : prev ? 'Yesterday' : day) + ' · ' + clock;
+}
+
+function rememberAgentSession(rootId, leafId) {
+  try {
+    if (rootId) localStorage.setItem(AGENT_ROOT_KEY, rootId);
+    if (leafId) localStorage.setItem(AGENT_LAST_TASK_KEY, leafId);
+  } catch (e) {}
+}
+function readRememberedAgentRoot() { try { return localStorage.getItem(AGENT_ROOT_KEY); } catch (e) { return null; } }
+
+function statusLabel(status) {
+  const labels = { completed: 'Completed', failed: 'Failed', cancelled: 'Cancelled', iteration_limit: 'Resource limit reached', timed_out: 'Timed out', waiting_for_approval: 'Awaiting approval', interrupted: 'Interrupted' };
+  return labels[status] || (status ? String(status).replace(/_/g, ' ') : 'Working');
+}
+function canFollowAgent(status) { return ['completed','failed','cancelled','iteration_limit','timed_out','interrupted'].includes(status); }
+
+function renderAgentSession(session) {
+  activeAgentSession = session;
+  const turns = session && Array.isArray(session.turns) ? session.turns : [];
+  const meta = $('agentSessionMeta');
+  if (meta) meta.textContent = session ? (session.goal || 'Agent session') + ' · Started ' + agentTime(session.createdAt) : 'Start a governed Agent task or resume a session from History.';
+  const log = $('agentLog');
+  if (!log) return;
+  if (!turns.length) { log.innerHTML = '<span class="empty">Submit a task above</span>'; return; }
+  log.innerHTML = turns.map((turn, index) => {
+    const body = turn.result ? '<div class="agent-answer">' + esc(turn.result) + '</div>' : (turn.error ? '<div class="agent-err">' + esc(turn.error) + '</div>' : '<div class="agent-step">Working…</div>');
+    const work = turn.workState || {};
+    const details = (work.evidence_count || work.operation_count) ? '<div class="sub">' + esc(statusLabel(turn.status)) + ' · ' + esc(String(work.evidence_count || 0)) + ' evidence items' + (work.operation_count === null ? '' : ' · ' + esc(String(work.operation_count)) + ' operations') + '</div>' : '';
+    return '<article class="agent-turn"><div class="sub">Turn ' + (index + 1) + ' · You</div><div class="agent-goal-display">' + esc(turn.goal || '') + '</div><div class="sub">Agent · ' + esc(agentTime(turn.t)) + '</div>' + body + details + '<div class="agent-status ' + (turn.status === 'completed' ? 'log-ok' : turn.status === 'failed' ? 'log-fail' : '') + '">' + esc(statusLabel(turn.status)) + '</div></article>';
+  }).join('');
+  log.scrollTop = log.scrollHeight;
+  const leaf = turns[turns.length - 1];
+  currentAgentTaskId = leaf && leaf.id;
+  if (session.rootTaskId) rememberAgentSession(session.rootTaskId, currentAgentTaskId);
+  const follow = $('agentFollowupArea');
+  if (follow) follow.hidden = !leaf || !canFollowAgent(leaf.status) || agentRunning;
+}
+
+function refreshAgentSession(rootId) {
+  if (!rootId) return Promise.resolve(null);
+  return authFetch('/api/agent/session/' + encodeURIComponent(rootId)).then(r => {
+    if (r.status === 404) return null;
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  }).then(d => { if (d && d.session) renderAgentSession(d.session); return d && d.session; });
+}
+
+function runAgent() {
+  const goal = $('agentGoal').value.trim();
+  if (!goal || agentRunning || agentSubmissionPending) return;
+  agentSubmissionPending = true; agentRunning = true;
+  $('agentGo').disabled = true; $('agentClear').disabled = true;
+  $('agentFollowupArea').hidden = true; $('agentLog').innerHTML = '<span class="agent-step">Starting governed Agent task…</span>';
+  authFetch('/api/agent/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ goal }) })
+    .then(r => r.json().then(data => ({ status: r.status, data })))
+    .then(({ status, data }) => { if (status >= 400 || data.error) throw new Error(data.error || ('HTTP ' + status)); activeAgentSession = { rootTaskId: data.taskId, turns: [{ id: data.taskId, goal, status: 'running', t: new Date().toISOString() }] }; rememberAgentSession(data.taskId, data.taskId); streamAgentTask(data.taskId, { reset: false }); })
+    .catch(e => { appendLog('<span class="agent-err">' + esc(e.message) + '</span>'); finishAgentStream(); })
+    .finally(() => { agentSubmissionPending = false; });
+}
+
+function streamAgentTask(taskId, opts) {
+  opts = opts || {}; currentAgentTaskId = taskId; agentRunning = true; rememberAgentTask(taskId);
+  $('agentGo').disabled = true; $('agentClear').disabled = true; $('agentStop').disabled = false; $('agentFollowupArea').hidden = true;
+  if (agentStream) agentStream.close();
+  agentStream = new EventSource('/api/agent/stream/' + encodeURIComponent(taskId));
+  agentStream.onmessage = e => { let msg; try { msg = JSON.parse(e.data); } catch (_) { return; }
+    if (msg.type === 'step') appendLog('<span class="agent-step">' + esc(msg.text) + '</span>');
+    else if (msg.type === 'tool') appendLog('<span class="agent-ok">' + esc(msg.tool || 'operation') + '</span> ' + esc(msg.summary || ''));
+    else if (msg.type === 'error') { appendLog('<span class="agent-err">' + esc(msg.text || 'Agent failed') + '</span>'); finishAgentStream(); }
+    else if (msg.type === 'done') { appendLog('<span class="agent-done">' + esc(msg.text || 'Completed') + '</span>'); finishAgentStream(); }
+  };
+  agentStream.onerror = () => { appendLog('<span class="agent-err">Live stream disconnected. The backend task was not assumed to have failed.</span>'); finishAgentStream(); refreshAgentSession(activeAgentSession && activeAgentSession.rootTaskId).catch(() => {}); };
+}
+
+function submitFollowup(id) {
+  if (agentRunning || agentSubmissionPending || !activeAgentSession) return;
+  const leaf = activeAgentSession.turns && activeAgentSession.turns[activeAgentSession.turns.length - 1];
+  id = id || (leaf && leaf.id);
+  const input = $('agentFollowupGoal');
+  const goal = input && input.value.trim();
+  if (!id || !goal || !canFollowAgent(leaf && leaf.status)) return;
+  agentSubmissionPending = true; agentRunning = true; input.disabled = true; $('agentFollowupGo').disabled = true; $('agentStop').disabled = false;
+  authFetch('/api/agent/run/' + id + '/follow-up', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ goal }) })
+    .then(r => r.json().then(data => ({ status: r.status, data })))
+    .then(({ status, data }) => { if (status >= 400 || data.error) throw new Error(data.error || ('HTTP ' + status)); input.value = ''; activeAgentSession.turns.push({ id: data.taskId, goal, status: 'running', t: new Date().toISOString(), parentTaskId: id }); renderAgentSession(activeAgentSession); streamAgentTask(data.taskId, { reset: false, parentTaskId: id }); })
+    .catch(e => { appendLog('<span class="agent-err">Follow-up failed: ' + esc(e.message) + '</span>'); finishAgentStream(); })
+    .finally(() => { agentSubmissionPending = false; input.disabled = false; $('agentFollowupGo').disabled = false; });
+}
+
+function restoreAgentState() {
+  if (agentRestoreInFlight || agentRunning) return; const root = readRememberedAgentRoot(); const task = readRememberedAgentTask();
+  agentRestoreInFlight = true;
+  const load = root ? refreshAgentSession(root).then(session => { if (!session && task) streamAgentTask(task, { reset: false, reconnect: true }); return session; }) : (task ? authFetch('/api/agent/run/' + encodeURIComponent(task)).then(r => r.ok ? r.json() : null).then(run => run && refreshAgentSession(run.root_task_id || task)) : Promise.resolve(null));
+  load.catch(e => appendLog('<span class="agent-err">Could not restore Agent session: ' + esc(e.message) + '</span>')).finally(() => { agentRestoreInFlight = false; });
+}
+
+function finishAgentStream() { if (agentStream) { agentStream.close(); agentStream = null; } agentRunning = false; currentAgentTaskId = null; $('agentGo').disabled = false; $('agentClear').disabled = false; $('agentStop').disabled = true; if (activeAgentSession) refreshAgentSession(activeAgentSession.rootTaskId).catch(() => {}); }
+function clearAgent() { if (agentRunning) return; $('agentGoal').value = ''; }
+function newAgentTask() { if (agentRunning) return; activeAgentSession = null; currentAgentTaskId = null; try { localStorage.removeItem(AGENT_ROOT_KEY); localStorage.removeItem(AGENT_LAST_TASK_KEY); } catch (_) {} $('agentLog').innerHTML = '<span class="empty">Describe a new task below</span>'; $('agentSessionMeta').textContent = 'New root Agent task'; $('agentFollowupArea').hidden = true; $('agentGoal').focus(); }
+function stopAgent() { const id = currentAgentTaskId; if (!id || !agentRunning) return; authFetch('/api/agent/run/' + encodeURIComponent(id) + '/cancel', { method: 'POST' }).then(r => r.json()).then(d => appendLog('<span class="agent-step">' + esc(d.error || 'Cancellation requested') + '</span>')).catch(e => appendLog('<span class="agent-err">Cancel failed: ' + esc(e.message) + '</span>')); }
+
+function refreshAgentHistory() {
+  const el = $('agentHistory'); if (!el) return Promise.resolve();
+  return authFetch('/api/agent/history?page_size=20').then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }).then(d => {
+    const rows = d.sessions || d.runs || []; if (!rows.length) { el.innerHTML = '<div class="empty">No past Agent sessions</div>'; return; }
+    el.innerHTML = rows.map(r => '<div class="history-item" tabindex="0" role="button" data-session-id="' + esc(r.rootTaskId || r.id) + '"><div><strong>' + esc(r.goal || 'Untitled session') + '</strong><div class="sub">' + esc(agentTime(r.lastActivityAt || r.createdAt)) + ' · ' + esc(String(r.turnCount || 1)) + ' turns · ' + esc(statusLabel(r.status)) + '</div></div></div>').join('');
+    el.querySelectorAll('[data-session-id]').forEach(node => { const open = () => refreshAgentSession(node.dataset.sessionId).catch(e => apiError('/api/agent/session', e, 0)); node.addEventListener('click', open); node.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } }); });
+  });
+}
+function toggleHistory() { const el = $('agentHistory'), toggle = $('agentHistoryToggle'); const expanded = el.style.display === 'none'; el.style.display = expanded ? 'block' : 'none'; toggle.setAttribute('aria-expanded', String(expanded)); $('agentHistoryChevron').textContent = expanded ? '▲' : '▼'; if (expanded) refreshAgentHistory().catch(e => { el.innerHTML = '<div class="agent-err">History unavailable: ' + esc(e.message) + '</div>'; }); }
+
 // -- Evolve -- //
 function evolveAction(id, action, body){
   const url = id ? '/api/evolve/' + encodeURIComponent(id) + '/' + action : '/api/evolve/' + action;
@@ -4008,6 +4134,12 @@ function refresh(){
 }
 
 // Restore last viewed tab
+document.addEventListener('keydown', function (event) {
+  if (event.key !== 'Enter' || !(event.ctrlKey || event.metaKey)) return;
+  const target = event.target;
+  if (target && target.id === 'agentGoal') { event.preventDefault(); runAgent(); }
+  else if (target && target.id === 'agentFollowupGoal') { event.preventDefault(); submitFollowup(); }
+});
 const savedPage = localStorage.getItem('sidekick_currentPage');
 if (savedPage && savedPage !== 'mission') {
   showPage(savedPage);

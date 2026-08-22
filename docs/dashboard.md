@@ -23,6 +23,25 @@ Typical dashboard functions:
 - receive and inspect external webhook payloads;
 - clear logs, KV data, conversations, or all dashboard-managed data.
 
+### Agent sessions
+
+The Agent tab presents a logical session assembled from immutable Agent task
+transcripts. Each turn remains its own governed task with its own execution
+identity, lineage, checkpoint/work state, evidence, approvals, and completion
+outcome. **New Agent Task** creates a new root; **Send follow-up** creates a
+validated child of the latest terminal leaf through the canonical continuation
+endpoint.
+
+History is a bounded, newest-first session summary ordered by canonical
+transcript timestamps. Legacy records without valid timestamps use filesystem
+modification time as an explicit fallback; malformed records are isolated.
+Session details load on selection, while browser storage keeps only the active
+root/task identifiers. Progress is an allowlisted projection of per-task work
+state and never includes hidden reasoning, raw checkpoint state, or approval
+authority. Browser reload reattaches to a live stream where supported; process
+restart behavior follows durable recovery/checkpoint semantics and is not
+presented as a fabricated resume.
+
 ## Approvals and reconciliation
 
 The Approvals tab lists both standalone approvals and those raised by a Brain task. The two behave differently, and the difference is deliberate:
