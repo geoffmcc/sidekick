@@ -131,7 +131,7 @@ Deploy behavior:
 - Existing remote data/ is backed up and restored when replacing the working tree.
 - Remote data ownership is checked and fixed for the sidekick user.
 
-If you want to move data between machines, use sidekick_db_backup/restore or copy data/sidekick.db intentionally.',
+If you want to move data between machines, use db_backup/db_restore or copy data/sidekick.db intentionally.',
 'deploy,data,backup,env', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('operations', 'Service Commands',
@@ -161,12 +161,12 @@ For authenticated MCP health details, send Authorization: Bearer SIDEKICK_API_KE
 'Back up the entire SIDEKICK_DATA_DIR. The highest-value file is sidekick.db because it contains KV memory, structured memories, tool logs, knowledge entries, tool registry metadata, and named JSON documents.
 
 Also protect:
-- secrets.enc if sidekick_secret is used.
+- secrets.enc if secret is used.
 - procedures.json if learned procedures matter.
 - conversations/ if agent transcripts matter.
 - .env because it contains credentials and service settings.
 
-Use sidekick_db_backup for SQLite backup. Treat all backups as sensitive operational data.',
+Use db_backup for SQLite backup. Treat all backups as sensitive operational data.',
 'backup,restore,data,security', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('operations', 'Configuration Defaults',
@@ -179,8 +179,8 @@ SIDEKICK_MAX_ITERATIONS remains the legacy tool-loop ceiling. Durable Agent requ
 
 ('operations', 'Optional Infrastructure',
 'Core Sidekick only needs Node.js and SQLite through better-sqlite3. Optional infrastructure extends specific tools:
-- PostgreSQL for sidekick_db_* with database="postgres".
-- Redis for sidekick_redis and cache workflows.
+- PostgreSQL for db_* with database="postgres".
+- Redis for redis and cache workflows.
 - Qdrant for vector/semantic context search.
 - InfluxDB and Grafana for metrics dashboards.
 - Ollama for local LLM and embeddings.
@@ -206,7 +206,7 @@ Store:
 - credential or setup procedures.
 - decisions likely to matter in future sessions.
 
-Do not store trivial transient status. If unsure, briefly state what will be stored, then store it with a clear key, category, and project when applicable. Prefer sidekick_knowledge for global agent policy and project-scoped KV for project-specific details.',
+Do not store trivial transient status. Use the typed memory, session, handoff, and resume tools when available; use knowledge for global policy and project-scoped KV only for compatibility or exact lookup facts. Never store secrets or raw sensitive output.',
 'memory,policy,agents,workflow,durable-findings', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('best-practices', 'Tool Selection Policy',
@@ -231,14 +231,14 @@ Do not assume tool names, actions, argument schemas, risk levels, or approval mo
 'For token efficiency, avoid dumping large files or logs. Search first, then read the smallest relevant slice.
 
 Useful tools:
-- sidekick_search for content search.
-- sidekick_find for name/date/size/content discovery.
-- sidekick_summarize for large files.
-- sidekick_filter for filtered file or directory output.
-- sidekick_project for consolidated project context.
-- sidekick_batch for multiple small calls.
-- sidekick_extract for structured field extraction.
-- sidekick_tail for recent log slices.',
+- search for content search.
+- find for name/date/size/content discovery.
+- summarize for large files.
+- filter for filtered file or directory output.
+- project for consolidated project context.
+- batch for multiple small calls.
+- extract for structured field extraction.
+- tail for recent log slices.',
 'tokens,efficiency,search,summarize', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('best-practices', 'Debugging Workflow',
@@ -248,15 +248,15 @@ Useful tools:
 3. Query tool_logs for failed tool calls and source context.
 4. Inspect configuration through dashboard/API or .env only when necessary.
 5. Check migrations and schema if database behavior is involved.
-6. Store durable findings with sidekick_context or sidekick_knowledge if they should help future sessions.
+6. Store durable findings with memory, session, handoff, or knowledge as appropriate; use compatibility aliases only when the typed interface is unavailable.
 
-Use sidekick_black_box for incident snapshots and sidekick_fresheyes when a second LLM perspective is useful.',
+Use black_box for incident snapshots and fresheyes when a second LLM perspective is useful.',
 'debugging,workflow,logs,incidents', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('best-practices', 'Database Query Safety',
-'sidekick_db_query defaults to readonly mode. In readonly mode it allows single-statement row-returning SQL only, rejects mutating statements and multi-statement input, and applies row limits.
+'db_query defaults to readonly mode. In readonly mode it allows single-statement row-returning SQL only, rejects mutating statements and multi-statement input, and applies row limits.
 
-Use readonly=false only for deliberate maintenance. Prefer sidekick_knowledge, sidekick_store/get/delete, and dedicated feature tools for ordinary writes.
+Use readonly=false only for deliberate maintenance. Prefer knowledge, store/get/delete, and dedicated feature tools for ordinary writes.
 
 Safe examples:
 SELECT id, category, title FROM knowledge WHERE enabled = 1;
@@ -299,9 +299,9 @@ High or critical tools include operations that can change files, restore databas
 'tool-policy,risk,security', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('protocols', 'How To Query Current Tool Metadata',
-'Use sidekick_tools action="overview" for broad questions such as "what Sidekick tools are available?", "list available tools", "tool overview", or "tool manifest". Use sidekick_tools action="search" query="database schema" to search capabilities.
+'Use tools action="overview" for broad questions such as "what Sidekick tools are available?", "list available tools", "tool overview", or "tool manifest". Use tools action="search" query="database schema" to search capabilities.
 
-Use this SQL through sidekick_db_query database="sqlite" when you need exact current registry rows:
+Use this SQL through db_query database="sqlite" when you need exact current registry rows:
 
 SELECT t.name, t.description, t.risk, tc.name as category, t.args_json
 FROM tools t
@@ -314,28 +314,28 @@ Use this rather than assuming tool lists in markdown are current.',
 'tools,sql,protocol,registry', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('protocols', 'How To Query Knowledge',
-'Use sidekick_knowledge first for documentation and operational guidance:
-- sidekick_knowledge action="search" query="deployment"
-- sidekick_knowledge action="list" category="architecture"
-- sidekick_knowledge action="get" id=18
+'Use knowledge first for documentation and operational guidance:
+- knowledge action="search" query="deployment"
+- knowledge action="list" category="architecture"
+- knowledge action="get" id=18
 
-sidekick_knowledge action="delete" is a soft delete that disables an entry. Use action="purge" only to physically remove an already-disabled entry.
+knowledge action="delete" is a soft delete that disables an entry. Use action="purge" only to physically remove an already-disabled entry.
 
 Categories used by the default seed include architecture, operations, best-practices, and protocols. Additional categories may exist in a user deployment.',
 'knowledge,protocol,search', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('protocols', 'How To Store Durable Project Memory',
-'Use sidekick_store for simple durable facts. Use lowercase project names matching /^[a-z][a-z0-9_]*$/.
+'Use store for simple durable facts. Use lowercase project names matching /^[a-z][a-z0-9_]*$/.
 
 Examples:
-- sidekick_store key="deploy:host" value="YOUR_REMOTE_IP" project="sidekick" category="deployment"
-- sidekick_get key="deploy:host"
-- sidekick_delete key="deploy:host"
-- sidekick_get_by_project project="sidekick"
+- store key="deploy:host" value="YOUR_REMOTE_IP" project="sidekick" category="deployment"
+- get key="deploy:host"
+- delete key="deploy:host"
+- get_by_project project="sidekick"
 
-Use sidekick_context for richer decisions, problems, patterns, session summaries, automatic memories, and recall workflows. The Agent Bridge records bounded, redacted automatic memory summaries for completed tasks and useful tool calls when SIDEKICK_AUTO_MEMORY is enabled.
+Use memory, session, and handoff for richer decisions, problems, patterns, session summaries, automatic memories, and recall workflows. The Agent Bridge records bounded, redacted automatic memory summaries for completed tasks and useful tool calls when SIDEKICK_AUTO_MEMORY is enabled.
 
-Structured automatic memory is stored primarily in the memories table. The context document keeps compatibility copies for older context views. Use sidekick_memory_export and sidekick_memory_import for portable JSON backups, sidekick_memory_manage for confirmation/delete/expire/restore workflows, and sidekick_sync_* tools for cross-machine memory synchronization. Semantic recall can use Ollama embeddings and Qdrant when available.',
+Structured automatic memory is stored primarily in the memories table. The context document keeps compatibility copies for older context views. Use memory_export and memory_import for portable JSON backups, memory_manage for confirmation/delete/expire/restore workflows, and sync_* tools for cross-machine memory synchronization. Semantic recall can use Ollama embeddings and Qdrant when available.',
 'memory,kv,context,protocol', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('protocols', 'When To Recall And Store Project Context',
@@ -347,33 +347,33 @@ Structured automatic memory is stored primarily in the memories table. The conte
 - confusing state where previous decisions, failed attempts, or operational preferences may matter.
 
 Retrieval order for memory:
-1. Use sidekick_project name="<project>" include="kv,context" for a broad project brief.
-2. Use sidekick_context action="recall" project="<project>" query="<topic>" for focused decisions, problems, patterns, sessions, and automatic memories.
-3. Use sidekick_get or sidekick_get_by_project when an exact key or project KV listing is needed.
-4. Use sidekick_log_query for recent tool activity and sidekick_knowledge for global docs/protocols.
+1. Use session or handoff for scoped task continuity.
+2. Use memory for focused decisions, problems, patterns, sessions, and automatic memories.
+3. Use get or get_by_project when an exact key or project KV listing is needed.
+4. Use log_query for recent tool activity and knowledge for global docs/protocols.
 
 Store durable memory when future agents would make a better or safer decision from the information:
 - track_decision for policies, preferences, PR/merge rules, architecture choices, and rationale.
 - track_problem for incidents, root causes, failed approaches, and fixes.
 - track_pattern for reusable workflows and operating procedures.
 - track_session for meaningful end-of-task summaries.
-- sidekick_store for exact lookup keys such as hostnames, paths, feature flags, or named operational notes.
-- sidekick_knowledge for global Sidekick documentation, policies, and procedures that should apply beyond one project.
+- store for exact lookup keys such as hostnames, paths, feature flags, or named operational notes.
+- knowledge for global Sidekick documentation, policies, and procedures that should apply beyond one project.
 
-Do not store raw secrets, tokens, private keys, passwords, or full sensitive outputs in KV, context, knowledge, or memories. Use sidekick_secret for credentials. Do not store trivial transient status, command noise, or facts obvious from the current repository. If a note is sensitive but operationally useful, store only the minimum redacted instruction needed for future safety.',
+Do not store raw secrets, tokens, private keys, passwords, or full sensitive outputs in KV, context, knowledge, or memories. Use secret for credentials. Do not store trivial transient status, command noise, or facts obvious from the current repository. If a note is sensitive but operationally useful, store only the minimum redacted instruction needed for future safety.',
 'memory,context,recall,store,protocol,agents', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('protocols', 'How To Inspect Recent Tool Activity',
-'Use sidekick_log_query for recent tool activity:
-- sidekick_log_query limit=20
-- sidekick_log_query tool="sidekick_bash" limit=10
-- sidekick_log_query source="agent" success=false limit=20
+'Use log_query for recent tool activity:
+- log_query limit=20
+- log_query tool="bash" limit=10
+- log_query source="agent" success=false limit=20
 
 The backing table is tool_logs. It stores timestamp, tool_name, redacted args summary, duration_ms, success, source, summary, and entry_json.',
 'logs,tool-activity,protocol,audit', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('protocols', 'How To Add Knowledge Entries',
-'Use sidekick_knowledge action="add" for operational knowledge that future agents should retrieve.
+'Use knowledge action="add" for operational knowledge that future agents should retrieve.
 
 Required fields:
 - category
@@ -385,7 +385,7 @@ Optional:
 
 Good entries are concise, specific, and operational. Prefer one topic per entry. Add tags for likely search terms. Update existing entries instead of creating duplicates when the title and meaning match.
 
-Generated or taught material is not durable automatically. After review, use sidekick_knowledge action="promote" with source="evolve" for an active successfully trialed Evolve capability or source="procedure" for a named taught procedure, plus category and an explicit approver. Promotion redacts sensitive fields, records source/version/provenance metadata, and is idempotent for the same source version.',
+Generated or taught material is not durable automatically. After review, use knowledge action="promote" with source="evolve" for an active successfully trialed Evolve capability or source="procedure" for a named taught procedure, plus category and an explicit approver. Promotion redacts sensitive fields, records source/version/provenance metadata, and is idempotent for the same source version.',
 'knowledge,authoring,protocol', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('protocols', 'Manual SQL Import Pattern',
@@ -468,7 +468,7 @@ When guidance changes:
 'development,docs,knowledge,agents,source', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('best-practices', 'Agent autonomy for low-risk follow-through',
-'When an agent identifies a low-risk follow-up that is clearly part of the active task, the agent should do it immediately instead of only suggesting it or waiting for a separate go-ahead. This includes updating structured Sidekick resume or handoff records, cleanup notes, documentation, and running reasonable verification commands.
+'When an agent identifies a low-risk follow-up that is clearly part of the active task, the agent should do it immediately instead of only suggesting it or waiting for a separate go-ahead. This includes updating typed session checkpoints, handoff or resume records, cleanup notes, documentation, and running reasonable verification commands.
 
 Agents should still ask first before destructive actions, broad refactors, deploys, merges, credential or secret changes, production-impacting operations, or changes that could affect unrelated user work.
 
@@ -507,16 +507,16 @@ A resume entry should capture the current summary, the next concrete step, and a
 
 Handoff plans are independent named sequences. Phase numbers are scoped to the named plan, not the project. Never treat the highest phase number found in Git history as the starting point for unrelated work. When starting a new named handoff plan, begin at Phase 1. When continuing an existing plan, determine its last completed phase from stored state and continue its local sequence.
 
-Use sidekick_resume with plan_name and current_phase fields to record the plan identity and current phase. Mark a plan complete with status "complete" or "done" when all phases are finished.
+Use resume for pending work and handoff for versioned continuation packets. Use session checkpoints for active work. Mark a plan complete with status "complete" or "done" when all phases are finished. Compatibility resume_* keys are not the canonical path.
 
 Keep AGENTS.md compact and use it as a pointer to the database-first knowledge base and resume records.',
 'handoff,resume,kv,workflow,project-state,phases,plans', 1, 'seed-2026-06-16-current', datetime('now'));
 
 INSERT INTO knowledge (category, title, content, tags, enabled, version_added, updated_at) VALUES
 ('operations', 'Health Check Expectations and Probe Behavior',
-'Use sidekick_health check=services for a quick core-service verdict and check=all for a stable composite report covering services, processes, disk, and network. Subcheck command failures retain predictable empty result shapes and appear as issues instead of crashing report rendering.
+'Use health check=services for a quick core-service verdict and check=all for a stable composite report covering services, processes, disk, and network. Subcheck command failures retain predictable empty result shapes and appear as issues instead of crashing report rendering.
 
-Packaged restart smoke checks probe the MCP /health endpoint asynchronously. This is required because sidekick_ops executes inside the MCP process; a synchronous self-probe blocks the event loop and times out waiting for its own request.
+Packaged restart smoke checks probe the MCP /health endpoint asynchronously. This is required because ops executes inside the MCP process; a synchronous self-probe blocks the event loop and times out waiting for its own request.
 
 Treat an isolated probe warning as diagnostic evidence and verify service state and recent logs, but do not treat the old deterministic self-timeout as expected behavior.',
 'health,operations,mcp,probe,troubleshooting', 1, 'seed-2026-06-16-current', datetime('now')),
@@ -530,7 +530,7 @@ Before assigning a phase number:
 3. When starting a new plan, assign a descriptive plan name and begin at Phase 1.
 4. Never search Git history for the highest Phase N value and increment it for unrelated work.
 
-Use sidekick_resume with plan_name and current_phase fields to record plan identity and phase. Mark complete plans with status "complete".
+Use resume for pending work and handoff for versioned continuation packets; use session checkpoints for active work. Mark complete plans with status "complete". Compatibility resume_* keys are not the canonical path.
 
 Treat historical unnamed phase references as belonging to their established historical handoff only when repository context or existing Sidekick state supports that conclusion. Do not rewrite historical commits or records.
 
@@ -564,7 +564,7 @@ Pending approvals expire after SIDEKICK_APPROVAL_TTL_SECONDS, default 3600 secon
 
 INSERT INTO knowledge (category, title, content, tags, enabled, version_added, updated_at) VALUES
 ('best-practices', 'Configuration and Secret Exposure Scanning',
-'Use sidekick_security_scan for a read-only audit before deployments or after configuration changes. It checks for tracked sensitive files, private-key and high-confidence credential signatures, hardcoded sensitive configuration values or fallbacks, generated credential filenames, runtime .env security keys, and permissive sensitive-file modes.
+'Use security_scan for a read-only audit before deployments or after configuration changes. It checks for tracked sensitive files, private-key and high-confidence credential signatures, hardcoded sensitive configuration values or fallbacks, generated credential filenames, runtime .env security keys, and permissive sensitive-file modes.
 
 The scanner reports metadata only: paths, configuration key names, line numbers, categories, and severity. It never returns matched secret values. It obeys global and source-specific filesystem path policy, skips denied descendants, ignores runtime data/dependency/documentation/test content, and bounds work with max_files.
 
