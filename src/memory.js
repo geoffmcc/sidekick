@@ -747,6 +747,7 @@ module.exports = {
   extractTaskMemories,
   recallMemoryForText,
   recallMemoryForTextAsync,
+  searchMemoriesByEmbedding,
   formatMemoryRecall,
   buildMemoryBrief,
   generateEmbedding,

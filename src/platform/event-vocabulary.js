@@ -61,6 +61,7 @@ const EVENT_NAMESPACES = Object.freeze([
   "runbook",
   "schedule",
   "research",
+  "context",
   // Reserved for the delivery pipeline's own bookkeeping and for tests that
   // exercise the pipeline without impersonating a real subsystem.
   "delivery",

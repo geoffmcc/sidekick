@@ -4,6 +4,9 @@ const { z } = require("zod");
 const dbStore = require("../../db");
 const qdrantStore = require("../../qdrant");
 const { redactSensitive } = require("../../redact");
+const { assembleContext } = require("../../context");
+const { getExecutionContext } = require("../context");
+const { scopedProject: authorizeMemoryProject } = require("./memory-scope");
 
 const DEFAULT_CONTEXT = {
   projects: {},
@@ -191,11 +194,20 @@ async function searchContext(ctx, query, type, limit = 10) {
 }
 
 async function sidekick_context({ action, project, context, decision, reasoning, problem, solution, pattern, summary, topics, outcome, notes, query, type, limit }) {
-  const allowedActions = ["track_project", "track_decision", "track_problem", "track_pattern", "track_session", "recall", "suggest", "summarize", "list"];
+  const allowedActions = ["track_project", "track_decision", "track_problem", "track_pattern", "track_session", "assemble", "recall", "suggest", "summarize", "list"];
   if (!allowedActions.includes(action)) return { content: [{ type: "text", text: "Invalid action. Allowed: " + allowedActions.join(", ") }], isError: true };
 
   const ctx = loadContext();
   const now = new Date().toISOString();
+  const executionContext = getExecutionContext();
+  let scopedProject = null;
+  try {
+    // Reuse the memory family's execution-scope guard so an argument cannot
+    // override a dispatcher-bound project, including for non-human callers.
+    scopedProject = authorizeMemoryProject(project);
+  } catch (error) {
+    return { content: [{ type: "text", text: error.message }], isError: true };
+  }
   if (action === "track_project") {
     if (!project) return { content: [{ type: "text", text: "project required" }], isError: true };
     if (!ctx.projects[project]) ctx.projects[project] = { name: project, created: now, lastWorked: now, sessions: 0, active: true };
@@ -234,17 +246,24 @@ async function sidekick_context({ action, project, context, decision, reasoning,
     try { if (await qdrantStore.isAvailable()) { const embedding = await generateEmbedding(`${redactedSummary} ${topicList.join(" ")} ${redactedNotes || ""}`); if (embedding) await qdrantStore.upsert(sess.id, embedding, { type: "session", data: sess }); } } catch (e) {}
     return { content: [{ type: "text", text: `Tracked session: ${redactedSummary} (id: ${sess.id})` }] };
   }
-  if (action === "recall") {
+  if (action === "assemble" || action === "recall" || action === "suggest") {
     if (!query) return { content: [{ type: "text", text: "query required" }], isError: true };
-    const results = await searchContext(ctx, query, type || "all", limit || 10);
-    return { content: [{ type: "text", text: results.length ? results.map(r => formatContextRecallResult(r.type, r.item)).join("\n\n") : "No relevant context found" }] };
-  }
-  if (action === "suggest") {
-    if (!query) return { content: [{ type: "text", text: "query required" }], isError: true };
-    const results = await searchContext(ctx, query, "all", 5);
-    if (!results.length) return { content: [{ type: "text", text: "No suggestions based on past context" }] };
-    const suggestions = results.map(r => { const item = r.item; if (r.type === "decision") return `• You previously decided: "${item.decision}" because "${item.reasoning || "no reason recorded"}" (on ${item.date})`; if (r.type === "problem") return `• You encountered a similar problem: "${item.description}" - ${item.solution ? `solved with: "${item.solution}"` : "unresolved"}`; if (r.type === "pattern") return `• You have a pattern: "${item.description}"`; if (r.type === "session") return `• You had a session on ${item.date}: "${item.summary}" (${item.outcome || "no outcome recorded"})`; return `• Automatic memory from ${item.date}: "${item.summary || item.goal || item.tool}"`; }).join("\n");
-    return { content: [{ type: "text", text: `Based on your past context:\n\n${suggestions}` }] };
+    // Dispatcher calls inherit the authenticated project from AsyncLocalStorage.
+    // Keep the old unscoped exact-ID shape only for the isolated test harness;
+    // production retrieval must have an explicit authorized scope.
+    const testOnlyOpaqueCompatibility = process.env.NODE_ENV === "test" && !scopedProject;
+    const manifest = await assembleContext({ query, project: scopedProject, principalId: executionContext.authIdentity?.principal_id || "agent", requireProject: action !== "suggest" && !testOnlyOpaqueCompatibility, allowOpaqueId: action === "recall" && (Boolean(scopedProject) || testOnlyOpaqueCompatibility), budget: { maxEntries: Math.max(1, Math.min(Number(limit) || 10, 50)), maxChars: 12000, maxPerSource: 8 } });
+    if (action === "assemble") return { content: [{ type: "text", text: JSON.stringify(manifest) }] };
+    if (!manifest.entries.length) return { content: [{ type: "text", text: action === "suggest" ? "No suggestions based on past context" : "No relevant context found" }] };
+    const lines = manifest.entries.map(entry => `- [${entry.source}/${entry.type}] ${entry.summary || entry.content}`);
+    if (action === "recall") {
+      const exactCompatible = manifest.entries.map(entry => {
+        const label = entry.source === "memory" ? "Memory" : String(entry.type || "context").replace(/^./, c => c.toUpperCase());
+        return `[${label} ${entry.sourceId}] ${entry.summary || entry.content}`;
+      });
+      return { content: [{ type: "text", text: exactCompatible.join("\n\n") }] };
+    }
+    return { content: [{ type: "text", text: `Based on your past context:\n\n${lines.join("\n")}` }] };
   }
   if (action === "summarize") {
     const projectName = project || "all"; let summaryText = "# Context Summary";
@@ -338,7 +357,7 @@ const descriptors = Object.freeze([Object.freeze({
 }), Object.freeze({
   name: "context",
   description: "Persistent intelligent context management (track projects, decisions, problems, patterns, sessions, automatic memories; recall and suggest based on past context)",
-  schema: z.object({ action: z.enum(["track_project", "track_decision", "track_problem", "track_pattern", "track_session", "recall", "suggest", "summarize", "list"]).describe("Context action to perform"), project: z.string().optional().describe("Project name (for tracking and filtering)"), context: z.string().optional().describe("Context description (for decisions/patterns)"), decision: z.string().optional().describe("Decision made (for track_decision)"), reasoning: z.string().optional().describe("Reasoning behind decision (for track_decision)"), problem: z.string().optional().describe("Problem description (for track_problem)"), solution: z.string().optional().describe("Solution to problem (for track_problem)"), pattern: z.string().optional().describe("Pattern description (for track_pattern)"), summary: z.string().optional().describe("Session summary (for track_session)"), topics: z.string().optional().describe("Comma-separated session topics (for track_session)"), outcome: z.string().optional().describe("Session outcome: success, partial, or abandoned (for track_session)"), notes: z.string().optional().describe("Additional session notes (for track_session)"), query: z.string().optional().describe("Search query (for recall/suggest)"), type: z.string().optional().describe("Context type: decisions, problems, patterns, projects, sessions, memories, or all (default: all)"), limit: z.number().optional().describe("Maximum results to return (default: 10)") }),
+  schema: z.object({ action: z.enum(["track_project", "track_decision", "track_problem", "track_pattern", "track_session", "assemble", "recall", "suggest", "summarize", "list"]).describe("Context action to perform"), project: z.string().optional().describe("Project name (for tracking and filtering)"), context: z.string().optional().describe("Context description (for decisions/patterns)"), decision: z.string().optional().describe("Decision made (for track_decision)"), reasoning: z.string().optional().describe("Reasoning behind decision (for track_decision)"), problem: z.string().optional().describe("Problem description (for track_problem)"), solution: z.string().optional().describe("Solution to problem (for track_problem)"), pattern: z.string().optional().describe("Pattern description (for track_pattern)"), summary: z.string().optional().describe("Session summary (for track_session)"), topics: z.string().optional().describe("Comma-separated session topics (for track_session)"), outcome: z.string().optional().describe("Session outcome: success, partial, or abandoned (for track_session)"), notes: z.string().optional().describe("Additional session notes (for track_session)"), query: z.string().optional().describe("Search query (for assemble/recall/suggest)"), type: z.string().optional().describe("Context type compatibility filter"), limit: z.number().optional().describe("Maximum results to return (default: 10)") }),
   args: { action: "string", project: "string (optional)", context: "string (optional)", decision: "string (optional)", reasoning: "string (optional)", problem: "string (optional)", solution: "string (optional)", pattern: "string (optional)", query: "string (optional)", type: "string (optional: decisions|problems|patterns|projects|sessions|memories|all)", limit: "number (optional)" },
   risk: "medium", category: "Context & Learning", source: "builtin", family: "context", handler: sidekick_context,
 })]);
