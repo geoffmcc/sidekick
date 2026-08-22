@@ -124,6 +124,7 @@ function stepText(t) { return (t.steps || []).map(s => s.text || "").join("\n");
     });
     const t = await runGoal("Show the current git status of the repo");
     assert.ok(t.brain && t.brain.enabled === true, "Brain engaged (durable marker)");
+    assert.ok(t.context && typeof t.context.entry_count === "number", "Brain transcript records the canonical Context Engine receipt summary");
     assert.ok(["completed", "failed"].includes(t.status), "reached a terminal state honestly");
     // The git tool step is recorded with a Brain step id, proving execution went
     // through the plan (not the legacy loop). Must not fabricate on failure.

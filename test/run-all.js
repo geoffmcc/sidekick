@@ -14,6 +14,7 @@ const path = require('path');
 const root = path.join(__dirname, '..');
 
 const suites = [
+  { file: 'test/context-engine.test.js', critical: true, description: 'Context Engine scope isolation, bounded manifests, receipts, entity retrieval, and consolidation provenance' },
   { file: 'test/pack-services.test.js', critical: true, description: 'Capability Pack scoped services v2 and namespace isolation' },
   { file: 'test/identity-foundation.test.js', critical: true, description: 'Durable principals, users, password hashing, Owner bootstrap, and lifecycle foundation' },
   { file: 'test/identity-approval-governance.test.js', critical: true, description: 'Approval principal provenance, human approval, and self-approval enforcement' },
