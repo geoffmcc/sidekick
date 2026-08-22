@@ -35,8 +35,9 @@ function brainAgentTools() {
 const { recordAgentTaskMemory, inferProjectFromText } = require("./memory");
 const { assembleContext } = require("./context");
 const { classifyEvidenceRequirement } = require("./agent-protocol");
-const { discoverCapabilities, hasRelevantContextProvider, buildAgentCapabilityMetadata, boundedText, resolveContextProviderArgs } = require("./agent/capability-broker");
+const { discoverCapabilities, selectRelevantContextProvider, hasRelevantContextProvider, buildAgentCapabilityMetadata, boundedText, resolveContextProviderArgs } = require("./agent/capability-broker");
 const { runToolLoop } = require("./agent-loop");
+const { createWorkState, evaluateCompletion } = require("./agent/completion-gate");
 const { EVIDENCE_BUDGETS, projectToolEvidence, projectContextEntries } = require("./evidence/projector");
 const packRepository = require("./packs/repository");
 const packLifecycle = require("./packs/lifecycle");
@@ -48,7 +49,7 @@ let brain = null;
 try { brain = require("./brain"); } catch {}
 const platformKernel = require("./platform/kernel");
 const {
-  startAgentExecution, appendAgentExecutionEvent, finishAgentExecution, registerAgentTranscript,
+  startAgentExecution, checkpointAgentExecution, appendAgentExecutionEvent, finishAgentExecution, registerAgentTranscript,
 } = require("./agent/execution");
 const { buildChildLineage } = require("./agent/continuation");
 const { createTaskRunner } = require("./agent/task-run");
@@ -222,12 +223,11 @@ try {
 /**
  * Terminalise agent-task executions stranded `running` by a previous process.
  *
- * startAgentExecution transitions its row to `running` but never CLAIMS it, so
- * the kernel's lease-based recoverOrphanedExecutions can never see agent rows —
- * a SIGKILL mid-task left `platform_executions` rows `running` forever. At
- * boot, every `running` agent_task row older than boot is stranded by
- * definition: this service is the only agent-task runner and it has not
- * started any task yet.
+ * Active work now has a fenced claim and bounded checkpoint, but the current
+ * model-generation boundary cannot safely reconstruct an in-flight provider
+ * request after a process restart. Marking such work interrupted is truthful;
+ * it must never be presented as completed. Approval continuations remain
+ * restart-resumable through their existing task checkpoint path.
  *
  * Uses existing kernel APIs only. `findActiveExecution` returns at most 10
  * non-terminal rows per call (newest first), so the sweep loops until a pass
@@ -878,7 +878,7 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
   const agentCapabilityMetadata = getAgentCapabilityMetadata();
   const visibleAgentTools = getToolDefsForSource("agent").filter(t => t.enabled);
   const capabilityCandidates = discoverCapabilities(goal, visibleAgentTools, { limit: 24, metadata: agentCapabilityMetadata });
-  const contextProvider = capabilityCandidates.map(tool => tool.contextProvider).find(Boolean) || null;
+  const contextProvider = selectRelevantContextProvider(goal, visibleAgentTools, agentCapabilityMetadata);
   const repositorySemanticSearch = contextProvider ? async (query, bounds = {}) => {
     const providerArgs = resolveContextProviderArgs(contextProvider, goal, { repositoryPath: parentContext?.repositoryPath || parentContext?.repository || null });
     const result = await callAgentTool(contextProvider.tool, { ...providerArgs, query: String(query || goal).slice(0, 500), limit: Math.min(20, Number(bounds.limit) || 6), max_chars: Math.min(contextProvider.max_chars, Number(bounds.maxChars) || contextProvider.max_chars) }, { taskId, project: inferredProject, correlationId: taskId, timeoutMs: 30000, source: contextProvider.source });
@@ -927,6 +927,7 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
   let finalResult = "";
   let terminalError = "";
   let contextManifest = null;
+  const workState = createWorkState(goal, { requiresEvidence: useTools });
 
   // Everything from here to the terminal tail is guarded. An execution that has
   // been set `running` must always reach a terminal state: before this, a throw
@@ -1054,6 +1055,9 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
         return manifest.entries;
       },
       redact: redactSensitive,
+      workState,
+      completionGate: async ({ state, candidate }) => evaluateCompletion({ state, candidate }),
+      onCheckpoint: (state) => checkpointAgentExecution(platformExecution, state),
     });
     const outcome = await run({
       goal,
@@ -1171,6 +1175,14 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
       getToolDefs: () => getToolDefsForSource("agent").filter(t => t.enabled),
       maxIterations: MAX_ITERATIONS,
       requireEvidence: useTools,
+      workState,
+      completionGate: async ({ state, candidate }) => {
+        // The shared gate owns bounded objective/evidence semantics. A future
+        // evaluator may add structured requirement coverage here, but it must
+        // return the same validated decision contract and cannot execute tools.
+        return evaluateCompletion({ state, candidate });
+      },
+      onCheckpoint: (state) => checkpointAgentExecution(platformExecution, state),
       emit: (event) => emit(taskId, event),
       onEvent: (type, payload, severity) => appendAgentExecutionEvent(platformExecution, type, { task_id: taskId, ...payload }, severity),
       redact: redactSensitive,
@@ -1242,6 +1254,9 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
       excluded: contextManifest.receipt?.excluded || [],
     } : null,
     brain: brainInfo,
+    // Bounded resumable progress; raw tool outputs remain in governed evidence
+    // artifacts/transcripts rather than being duplicated in task state.
+    work_state: workState,
     lineage: {
       platform_execution_id: platformExecution ? platformExecution.execution_id : null,
       root_execution_id: platformExecution ? platformExecution.root_execution_id : null,
@@ -1431,7 +1446,16 @@ app.post("/api/agent/run/:taskId/cancel", (req, res) => {
   const taskId = req.params.taskId;
   if (!validateTaskId(taskId)) return res.status(400).json({ error: "invalid task id" });
   const controller = taskCancels[taskId];
-  if (!controller) return res.status(404).json({ error: "task is not running" });
+  if (!controller) {
+    // The in-memory controller disappears after a process restart, but the
+    // platform claim remains the authoritative cancellation surface.
+    try {
+      const execution = platformKernel.findActiveExecution({ operation_type: "agent_task" }).find(row => row.task_id === taskId);
+      if (!execution) return res.status(404).json({ error: "task is not running" });
+      platformKernel.requestExecutionCancel(execution.execution_id, { source: "agent", actor_id: "agent", reason: "Agent task cancellation requested" });
+      return res.json({ ok: true, taskId, cancelling: true, durable: true });
+    } catch { return res.status(404).json({ error: "task is not running" }); }
+  }
   const alreadyRequested = controller.signal.aborted;
   if (!alreadyRequested) {
     controller.abort();

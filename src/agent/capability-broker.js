@@ -106,7 +106,7 @@ function capabilityText(definition, metadata) {
  * catalog.  Metadata is declarative and bounded; it can improve relevance but
  * can never add a tool or grant authority.
  */
-function discoverCapabilities(goal, definitions, { limit = 24, metadata = {} } = {}) {
+function scoreCapabilities(goal, definitions, metadata = {}) {
   const query = tokens(goal);
   const scored = (definitions || []).filter(def => def && def.enabled !== false && typeof def.name === "string").map(def => {
     const haystack = tokens(capabilityText(def, metadata));
@@ -127,6 +127,11 @@ function discoverCapabilities(goal, definitions, { limit = 24, metadata = {} } =
     const match = item.def.name.match(/^([a-z][a-z0-9]*)_/);
     if (item.score === 0 && match && matchedNamespaces.has(match[1])) item.score = 0.5;
   }
+  return scored;
+}
+
+function discoverCapabilities(goal, definitions, { limit = 24, metadata = {} } = {}) {
+  const scored = scoreCapabilities(goal, definitions, metadata);
   scored.sort((a, b) => b.score - a.score || a.def.name.localeCompare(b.def.name));
   const positive = scored.filter(item => item.score > 0);
   const fallback = scored.filter(item => !positive.includes(item));
@@ -138,16 +143,17 @@ function discoverCapabilities(goal, definitions, { limit = 24, metadata = {} } =
   return [...positive, ...fallback].slice(0, Math.max(1, Math.min(64, Number(limit) || 24))).map(item => item.def);
 }
 
-// Routing may use a declarative context provider to decide that an otherwise
-// conceptual request needs live evidence.  This reports only a positive
-// metadata match; fallback catalog entries never force inspection.
+// Automatic context selection uses the same scored positive relevance result
+// as discovery. Fallback shortlist entries remain available to planning but
+// can never trigger an automatic provider invocation.
+function selectRelevantContextProvider(goal, definitions, metadata = {}) {
+  return scoreCapabilities(goal, definitions, metadata)
+    .filter(item => item.score > 0 && item.def.contextProvider && (!item.def.risk || item.def.risk === "low") && item.def.contextProvider.tool === item.def.name)
+    .sort((a, b) => b.score - a.score || a.def.name.localeCompare(b.def.name))[0]?.def.contextProvider || null;
+}
+
 function hasRelevantContextProvider(goal, definitions, metadata = {}) {
-  const query = tokens(goal);
-  return (definitions || []).some(definition => {
-    if (!definition || definition.enabled === false || !definition.contextProvider) return false;
-    const haystack = tokens(capabilityText(definition, metadata));
-    return [...query].some(word => [...haystack].some(candidate => overlaps(word, candidate)));
-  });
+  return Boolean(selectRelevantContextProvider(goal, definitions, metadata));
 }
 
 function buildAgentCapabilityMetadata({ packs = [], modules = [], workflows = [] } = {}) {
@@ -211,4 +217,4 @@ function buildAgentCapabilityMetadata({ packs = [], modules = [], workflows = []
   return metadata;
 }
 
-module.exports = { discoverCapabilities, hasRelevantContextProvider, buildAgentCapabilityMetadata, boundedText, extractRequestPath, resolveContextProviderArgs };
+module.exports = { discoverCapabilities, selectRelevantContextProvider, hasRelevantContextProvider, buildAgentCapabilityMetadata, boundedText, extractRequestPath, resolveContextProviderArgs };

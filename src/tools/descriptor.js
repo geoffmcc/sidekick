@@ -123,6 +123,7 @@ function normalizeDescriptor(input) {
       annotations[key] = input.annotations[key];
     }
   }
+  const normalizedProvider = input.risk === "low" ? normalizeContextProvider(input.contextProvider) : null;
   return Object.freeze({
     name,
     description,
@@ -148,7 +149,12 @@ function normalizeDescriptor(input) {
     // Context providers are automatically invoked during Agent/Brain
     // assembly, so only low-risk descriptors may advertise one. The actual
     // call still goes through the canonical dispatcher and policy path.
-    contextProvider: input.risk === "low" ? normalizeContextProvider(input.contextProvider) : null,
+    // Automatic providers are self-describing only.  This prevents a benign
+    // descriptor from nominating an unrelated tool whose real registry risk,
+    // lifecycle, or policy may be unsafe for automatic invocation.
+    contextProvider: normalizedProvider?.tool === name
+      ? normalizedProvider
+      : null,
     annotations: Object.freeze(annotations),
     handler: input.handler,
   });
