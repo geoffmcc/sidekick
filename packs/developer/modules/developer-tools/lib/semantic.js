@@ -4,7 +4,7 @@
  * Semantic Repository Intelligence
  *
  * This module is deliberately static.  It reads bounded source bytes, applies
- * language-specific lexical parsers, and normalizes their useful results into
+ * language-specific AST adapters plus conservative lexical signals, and normalizes their useful results into
  * a versioned IR.  It never loads, imports, builds, or executes repository
  * code.  Repository text is data and is never returned as instructions.
  */
@@ -19,21 +19,30 @@ const IR_VERSION = "sidekick.semantic-ir.v1";
 const ANALYZER_VERSION = "sidekick.semantic-analyzer.v2-ast";
 const DEFAULT_LIMITS = Object.freeze({ maxFiles: 4000, maxBytes: 64 * 1024 * 1024, maxFileBytes: 512 * 1024, maxUnits: 30000, maxEntries: 20000, maxAstNodes: 50000, maxResultChars: 18000 });
 const EXTENSIONS = Object.freeze({
-  ".ts": "typescript", ".tsx": "typescript", ".mts": "typescript", ".cts": "typescript",
-  ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript",
+  ".ts": "typescript", ".tsx": "typescript_tsx", ".mts": "typescript", ".cts": "typescript",
+  ".js": "javascript", ".jsx": "javascript_jsx", ".mjs": "javascript", ".cjs": "javascript",
   ".rb": "ruby", ".java": "java", ".go": "go", ".pl": "perl", ".pm": "perl", ".t": "perl",
   ".rs": "rust",
 });
 const SKIP = new Set([".git", "node_modules", "vendor", "target", "dist", "build", "out", "coverage", ".cache", ".next", ".gradle", ".venv", "venv", "__pycache__", "generated"]);
+function languageForPath(file) { return EXTENSIONS[path.extname(String(file || "")).toLowerCase()] || null; }
 
 function sha256(domain, value) { const h = crypto.createHash("sha256").update(domain + "\0"); return h.update(Buffer.isBuffer(value) ? value : String(value)).digest("hex"); }
+// Canonicalization preserves array order by default. Callers explicitly use
+// canonicalSet for IR fields whose semantics are set-like. This prevents
+// positional parameters and ordered argument structures from collapsing into
+// the same semantic identity.
 function stable(value) {
-  if (Array.isArray(value)) return `[${value.map(stable).sort().join(",")}]`;
+  if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
   if (value && typeof value === "object") return `{${Object.keys(value).sort().map(k => JSON.stringify(k) + ":" + stable(value[k])).join(",")}}`;
   return JSON.stringify(value === undefined ? null : value);
 }
+function canonicalSet(values) { return [...(values || [])].map(value => stable(value)).sort().map(value => JSON.parse(value)); }
 function clean(value, max = 160) {
   return String(value || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
+}
+function decodeUtf8(buffer) {
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(buffer); } catch { return null; }
 }
 function loc(text, offset) {
   const before = text.slice(0, Math.max(0, offset));
@@ -42,7 +51,7 @@ function loc(text, offset) {
 function evidence(file, sourceHash, text, offset) { return { path: file, source_hash: sourceHash, ...loc(text, offset) }; }
 function addUnique(list, item, key = stable) { if (!list.some(x => key(x) === key(item))) list.push(item); }
 function parameterNames(raw) { return clean(raw, 500).split(",").map(part => part.trim().replace(/^\.\.\./, "").split(/[=:]/, 1)[0].replace(/\s+/g, " ").trim()).filter(Boolean).slice(0, 64); }
-function semanticIdentity(unit) { return sha256("sidekick.semantic.unit.v1", stable({ language: unit.language, modules: unit.modules, imports: unit.imports.map(x => x.name || x.text), exports: unit.exports.map(x => x.name || x.text), symbols: unit.symbols.map(x => ({ name: x.name, kind: x.kind, parameters: x.parameters, parent: x.parent })), relationships: unit.relationships.map(x => ({ kind: x.kind, from: x.from, to: x.to, certainty: x.certainty })), signals: unit.signals.map(x => x.kind) })); }
+function semanticIdentity(unit) { return sha256("sidekick.semantic.unit.v1", stable({ language: unit.language, modules: canonicalSet(unit.modules), imports: canonicalSet(unit.imports.map(x => x.name || x.text)), exports: canonicalSet(unit.exports.map(x => x.name || x.text)), symbols: unit.symbols.map(x => ({ name: x.name, kind: x.kind, parameters: x.parameters || [], parent: x.parent || null })), relationships: canonicalSet(unit.relationships.map(x => ({ kind: x.kind, from: x.from, to: x.to, certainty: x.certainty }))), signals: canonicalSet(unit.signals.map(x => x.kind)) })); }
 function semanticChanges(previousFiles = [], currentFiles = []) {
   const oldByPath = new Map(previousFiles.map(x => [x.path, x.unit])); const newByPath = new Map(currentFiles.map(x => [x.path, x.unit])); const changes = [];
   const names = unit => new Set((unit?.symbols || []).map(x => `${x.kind}:${x.name}`));
@@ -57,6 +66,11 @@ function semanticChanges(previousFiles = [], currentFiles = []) {
   return changes;
 }
 function ignoreMatcher(root) { const matcher = ignore(); try { matcher.add(fs.readFileSync(path.join(root, ".gitignore"), "utf8").split(/\r?\n/).filter(Boolean)); } catch {} return matcher; }
+function configurationHash(root, limits, sourceFiles) {
+  let ignoreBytes = "";
+  if (!sourceFiles) { try { ignoreBytes = fs.readFileSync(path.join(root, ".gitignore")); } catch {} }
+  return sha256("sidekick.semantic.config.v1", stable({ limits, gitignore: ignoreBytes.toString("base64") }));
+}
 
 function discover(root, limits) {
   const files = []; const skipped = []; let bytes = 0; let truncated = false;
@@ -140,7 +154,7 @@ function parseSource(language, file, text, sourceHash) {
   ];
   for (const [kind, re] of signals) { const at = text.search(re); if (at >= 0) out.signals.push({ kind, certainty: "heuristic", evidence: evidence(file, sourceHash, text, at) }); }
   if (/\b(?:describe|it|test|RSpec|JUnit|Test::More|#\[test\])\b/.test(text) || /(^|\/)(test|tests|spec|__tests__)\//i.test(file)) out.tests.push({ name: path.basename(file), kind: "test_file", evidence: evidence(file, sourceHash, text, 0) });
-  out.semantic_hash = sha256("sidekick.semantic.unit.v1", stable({ language, modules: out.modules, imports: out.imports.map(x => x.name), exports: out.exports.map(x => x.name), symbols: out.symbols.map(x => ({ name: x.name, kind: x.kind, parameters: x.parameters })), relationships: out.relationships, signals: out.signals.map(x => x.kind) }));
+  out.semantic_hash = semanticIdentity({ ...out, language });
   return out;
 }
 
@@ -176,19 +190,28 @@ function writeCache(file, value) {
 
 async function indexRepository(root, options = {}) {
   const limits = { ...DEFAULT_LIMITS, ...(options.limits || {}) };
-  const found = discover(root, limits); let previous = memoryCache.get(root) || readCache(cacheFile(root));
+  const sourceFiles = Array.isArray(options.sourceFiles) ? options.sourceFiles : null;
+  const configHash = configurationHash(root, limits, sourceFiles);
+  const found = sourceFiles ? { files: sourceFiles.slice(0, limits.maxFiles).map(item => ({ path: item.path, language: item.language, size: Buffer.byteLength(String(item.content || "")), content: item.content })), bytes: sourceFiles.reduce((total, item) => total + Buffer.byteLength(String(item.content || "")), 0), truncated: sourceFiles.length > limits.maxFiles, skipped: [] } : discover(root, limits);
+  let previous = sourceFiles ? null : (memoryCache.get(root) || readCache(cacheFile(root)));
+  if (previous && previous.config_hash !== configHash) previous = null;
   const warnings = [...found.skipped];
   if (previous && !verify(previous)) { previous = null; warnings.push({ code: "cache_integrity_failed", message: "Cached semantic data was not reused; rebuilding." }); }
   const files = []; let cacheHits = 0; let parsed = 0; let units = 0;
   for (const item of found.files) {
     const full = path.join(root, item.path); let buf; let fd = null;
-    try { fd = fs.openSync(full, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0)); const opened = fs.fstatSync(fd); if (!opened.isFile() || opened.size > limits.maxFileBytes) { warnings.push({ code: "file_size_limit", path: item.path, limit: limits.maxFileBytes }); fs.closeSync(fd); continue; } buf = fs.readFileSync(fd); fs.closeSync(fd); } catch { if (fd !== null) try { fs.closeSync(fd); } catch {} warnings.push({ code: "unavailable", path: item.path }); continue; }
+    if (sourceFiles) {
+      buf = Buffer.isBuffer(item.content) ? item.content : Buffer.from(String(item.content || ""));
+      if (buf.length > limits.maxFileBytes) { warnings.push({ code: "file_size_limit", path: item.path, limit: limits.maxFileBytes }); continue; }
+    } else {
+      try { fd = fs.openSync(full, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0)); const opened = fs.fstatSync(fd); if (!opened.isFile() || opened.size > limits.maxFileBytes) { warnings.push({ code: "file_size_limit", path: item.path, limit: limits.maxFileBytes }); fs.closeSync(fd); continue; } buf = fs.readFileSync(fd); fs.closeSync(fd); } catch { if (fd !== null) try { fs.closeSync(fd); } catch {} warnings.push({ code: "unavailable", path: item.path }); continue; }
+    }
     if (buf.includes(0)) { warnings.push({ code: "binary_skipped", path: item.path }); continue; }
     const sourceHash = sha256("sidekick.semantic.source.v1", buf);
     const old = previous?.files?.find(x => x.path === item.path && x.source_hash === sourceHash && x.analyzer_version === ANALYZER_VERSION && x.ir_version === IR_VERSION);
     let unit;
     if (old) { unit = old.unit; cacheHits++; } else {
-      let text; try { text = buf.toString("utf8"); } catch { warnings.push({ code: "encoding_failed", path: item.path }); continue; }
+      const text = decodeUtf8(buf); if (text === null) { warnings.push({ code: "encoding_failed", path: item.path }); continue; }
       try {
         unit = parseSource(item.language, item.path, text, sourceHash);
         try {
@@ -216,17 +239,36 @@ async function indexRepository(root, options = {}) {
     }
     file.unit.semantic_hash = semanticIdentity({ ...file.unit, language: file.language });
   }
-  const aggregate = { ir_version: IR_VERSION, analyzer_version: ANALYZER_VERSION, files: files.map(x => ({ path: x.path, language: x.language, source_hash: x.source_hash, analyzer_version: x.analyzer_version, ir_version: x.ir_version, unit: x.unit })) };
+  const aggregate = { ir_version: IR_VERSION, analyzer_version: ANALYZER_VERSION, config_hash: configHash, files: files.map(x => ({ path: x.path, language: x.language, source_hash: x.source_hash, analyzer_version: x.analyzer_version, ir_version: x.ir_version, unit: x.unit })) };
   const indexRootHash = sha256("sidekick.semantic.index.v1", stable(aggregate));
   if (found.truncated) warnings.push({ code: "discovery_truncated", limit: limits.maxFiles });
-  const result = { ok: true, schema: IR_VERSION, analyzer_version: ANALYZER_VERSION, repository: { name: path.basename(root), path: root }, files, changes: semanticChanges(previous?.files || [], files), stats: { discovered: found.files.length, parsed, cache_hits: cacheHits, skipped: found.files.length - files.length, bytes: found.bytes, symbols: units, truncated: found.truncated }, warnings, index_root_hash: indexRootHash, generated_from_source: true };
-  memoryCache.delete(root); memoryCache.set(root, result); while (memoryCache.size > MAX_MEMORY_CACHE_ENTRIES) memoryCache.delete(memoryCache.keys().next().value); writeCache(cacheFile(root), result); return result;
+  const result = { ok: true, schema: IR_VERSION, analyzer_version: ANALYZER_VERSION, config_hash: configHash, repository: { name: path.basename(root), path: root, state: options.state || { kind: "working_tree" } }, files, changes: semanticChanges(previous?.files || [], files), stats: { discovered: found.files.length, parsed, cache_hits: cacheHits, skipped: found.files.length - files.length, bytes: found.bytes, symbols: units, truncated: found.truncated }, warnings, index_root_hash: indexRootHash, generated_from_source: true };
+  if (!sourceFiles) { memoryCache.delete(root); memoryCache.set(root, result); while (memoryCache.size > MAX_MEMORY_CACHE_ENTRIES) memoryCache.delete(memoryCache.keys().next().value); writeCache(cacheFile(root), result); }
+  return result;
+}
+
+function compareIndexes(before, after, states = {}) {
+  return { before: states.before || before?.repository?.state || null, after: states.after || after?.repository?.state || null, changes: semanticChanges(before?.files || [], after?.files || []) };
 }
 
 function project(index, { query = "", level = 0, max_chars = 12000, limit = 40 } = {}) {
   const q = clean(query, 500).toLowerCase(); const tokens = q.split(/[^a-z0-9_:$.-]+/).filter(x => x.length > 1);
-  const all = index.files.flatMap(f => f.unit.symbols.map(s => ({ ...s, path: f.path, language: f.language, source_hash: f.source_hash }))); const score = item => tokens.reduce((n, t) => n + (String(item.name).toLowerCase().includes(t) || String(item.kind).toLowerCase().includes(t) || item.path.toLowerCase().includes(t) ? 1 : 0), 0);
-  const symbols = all.sort((a, b) => score(b) - score(a) || a.path.localeCompare(b.path) || a.name.localeCompare(b.name)).slice(0, Math.min(200, limit));
+  const relationMode = /\b(?:callee|callees|what does .* call|dependencies|imports?|depends?)\b/.test(q) ? "outgoing" : /\b(?:caller|callers|who calls|calls|references|dependents?)\b/.test(q) ? "incoming" : null;
+  const all = index.files.flatMap(f => f.unit.symbols.map(s => ({ ...s, path: f.path, language: f.language, source_hash: f.source_hash })));
+  const score = item => tokens.reduce((n, t) => n + (String(item.name).toLowerCase().includes(t) || String(item.kind).toLowerCase().includes(t) || item.path.toLowerCase().includes(t) ? 1 : 0), 0);
+  const relationWords = new Set(["what", "does", "do", "call", "calls", "caller", "callers", "callee", "callees", "who", "references", "depend", "depends", "dependency", "dependencies", "import", "imports", "module", "modules"]);
+  const targetTokens = tokens.filter(token => !relationWords.has(token));
+  const targetNames = new Set(all.filter(item => targetTokens.some(t => String(item.name).toLowerCase().includes(t))).map(item => item.name));
+  const allRelationships = index.files.flatMap(f => f.unit.relationships.map(r => ({ ...r, path: f.path })));
+  const relevantRelationships = allRelationships.filter(relation => {
+    if (!relationMode) return false;
+    const endpoint = relationMode === "incoming" ? relation.to : relation.from;
+    return targetNames.has(endpoint) || targetTokens.some(token => String(endpoint || "").toLowerCase().includes(token));
+  });
+  const relatedNames = new Set(relevantRelationships.flatMap(relation => [relation.from, relation.to]));
+  const symbols = all
+    .sort((a, b) => (relatedNames.has(b.name) ? 1 : 0) - (relatedNames.has(a.name) ? 1 : 0) || score(b) - score(a) || a.path.localeCompare(b.path) || a.name.localeCompare(b.name))
+    .slice(0, Math.min(200, Math.max(limit, relevantRelationships.length + 1)));
   const overview = { schema: index.schema, index_root_hash: index.index_root_hash, repository: index.repository, stats: index.stats, warnings: index.warnings.slice(0, 20), languages: [...new Set(index.files.map(x => x.language))].sort(), modules: index.files.flatMap(f => f.unit.modules.map(m => ({ ...m, path: f.path }))).slice(0, limit), entry_points: index.files.flatMap(f => f.unit.entry_points).slice(0, limit), signals: index.files.flatMap(f => f.unit.signals.map(s => ({ ...s, path: f.path }))).slice(0, limit), changes: (index.changes || []).slice(0, limit) };
   if (q || level > 0) {
     const projectedSymbols = symbols.map(s => level > 1 ? s : ({ name: s.name, kind: s.kind, path: s.path, language: s.language, evidence: s.evidence }));
@@ -235,11 +277,11 @@ function project(index, { query = "", level = 0, max_chars = 12000, limit = 40 }
     // overview while silently dropping the answer to the query.
     Object.assign(overview, { symbols: projectedSymbols });
     const ordered = { schema: overview.schema, index_root_hash: overview.index_root_hash, repository: overview.repository, symbols: overview.symbols, languages: overview.languages, modules: overview.modules, entry_points: overview.entry_points, signals: overview.signals, changes: overview.changes, stats: overview.stats, warnings: overview.warnings };
-    if (level > 1) ordered.relationships = index.files.flatMap(f => f.unit.relationships.map(r => ({ ...r, path: f.path }))).slice(0, limit);
+    if (level > 1 || relationMode) ordered.relationships = (relationMode ? relevantRelationships : allRelationships).slice(0, limit);
     let orderedText = JSON.stringify(ordered, null, 2); if (orderedText.length > max_chars) orderedText = orderedText.slice(0, Math.max(0, max_chars - 40)) + "\n[semantic projection truncated]";
     return { ...ordered, projection: orderedText, projection_chars: orderedText.length, trust: "untrusted repository-derived data; evidence locations require governed source reads" };
   }
-  if (level > 1) overview.relationships = index.files.flatMap(f => f.unit.relationships.map(r => ({ ...r, path: f.path }))).slice(0, limit);
+  if (level > 1) overview.relationships = allRelationships.slice(0, limit);
   let text = JSON.stringify(overview, null, 2); if (text.length > max_chars) text = text.slice(0, Math.max(0, max_chars - 40)) + "\n[semantic projection truncated]";
   return { ...overview, projection: text, projection_chars: text.length, trust: "untrusted repository-derived data; evidence locations require governed source reads" };
 }
@@ -248,7 +290,7 @@ function verify(index) {
   if (!index || !Array.isArray(index.files)) return false;
   const wrappersValid = index.files.every(x => x && x.unit && x.path === x.unit.path && x.language === x.unit.language && x.source_hash === x.unit.source_hash && x.analyzer_version === x.unit.analyzer_version && x.ir_version === x.unit.ir_version);
   if (!wrappersValid) return false;
-  return sha256("sidekick.semantic.index.v1", stable({ ir_version: index.schema, analyzer_version: index.analyzer_version, files: index.files.map(x => ({ path: x.path, language: x.language, source_hash: x.source_hash, analyzer_version: x.analyzer_version, ir_version: x.ir_version, unit: x.unit })) })) === index.index_root_hash;
+  return sha256("sidekick.semantic.index.v1", stable({ ir_version: index.schema, analyzer_version: index.analyzer_version, config_hash: index.config_hash, files: index.files.map(x => ({ path: x.path, language: x.language, source_hash: x.source_hash, analyzer_version: x.analyzer_version, ir_version: x.ir_version, unit: x.unit })) })) === index.index_root_hash;
 }
 function clearMemory(root) { if (root) memoryCache.delete(root); else memoryCache.clear(); }
-module.exports = { IR_VERSION, ANALYZER_VERSION, DEFAULT_LIMITS, discover, indexRepository, project, verify, stable, sha256, cacheFile, clearMemory };
+module.exports = { IR_VERSION, ANALYZER_VERSION, DEFAULT_LIMITS, languageForPath, discover, indexRepository, compareIndexes, project, verify, stable, sha256, cacheFile, clearMemory };

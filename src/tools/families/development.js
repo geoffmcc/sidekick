@@ -26,7 +26,19 @@ function parseGitExtraArgs(extraArgs) {
   // Git pretty formats use ASCII unit separator (\x1f) as a field delimiter.
   // JavaScript classifies it as whitespace, so /\s+/ would silently split a
   // single --pretty argument and corrupt structured history parsing.
-  const parsed = String(extraArgs).split(/[ \t\r\n]+/).filter(Boolean);
+  const parsed = [];
+  let current = ""; let quote = null; let escaped = false;
+  for (const char of String(extraArgs)) {
+    if (escaped) { current += char; escaped = false; continue; }
+    if (char === "\\") { escaped = true; continue; }
+    if (quote) { if (char === quote) quote = null; else current += char; continue; }
+    if (char === "'" || char === '"') { quote = char; continue; }
+    if (/\s/.test(char)) { if (current) { parsed.push(current); current = ""; } continue; }
+    current += char;
+  }
+  if (escaped) current += "\\";
+  if (quote) throw new Error("Unterminated quote in Git arguments");
+  if (current) parsed.push(current);
   if (parsed.some(arg => GIT_EXTERNAL_EXECUTION_OPTIONS.test(arg))) {
     throw new Error("Git arguments that alter configuration, helpers, execution paths, or pagers are not permitted");
   }
@@ -42,7 +54,7 @@ function windowsPathToWslPath(value) {
 
 async function sidekick_git({ action, path: repoPath, args: extraArgs }) {
   const repo = repoPath || ".";
-  const allowedActions = ["status", "diff", "log", "add", "commit", "push", "pull", "branch", "checkout", "stash"];
+  const allowedActions = ["status", "diff", "log", "show", "ls-tree", "ls-files", "add", "commit", "push", "pull", "branch", "checkout", "stash"];
   if (!allowedActions.includes(action)) {
     return { content: [{ type: "text", text: "Invalid action. Allowed: " + allowedActions.join(", ") }], isError: true };
   }
@@ -547,7 +559,7 @@ async function sidekick_depend({ action, type, target, depth, format }) {
 
 const SCHEMAS = {
   git: z.object({
-    action: z.enum(["status", "diff", "log", "add", "commit", "push", "pull", "branch", "checkout", "stash"]).describe("Git action to perform"),
+    action: z.enum(["status", "diff", "log", "show", "ls-tree", "ls-files", "add", "commit", "push", "pull", "branch", "checkout", "stash"]).describe("Git action to perform"),
     path: z.string().optional().describe("Repository path (defaults to current directory)"),
     args: z.string().optional().describe("Additional arguments for the git command")
   }),
@@ -573,7 +585,7 @@ const SCHEMAS = {
 const descriptors = Object.freeze([
   Object.freeze({
     name: "git",
-    description: "Structured git operations (status, diff, log, add, commit, push, pull, branch, checkout, stash)",
+    description: "Structured git operations (status, diff, log, read-only show/ls-tree, add, commit, push, pull, branch, checkout, stash)",
     schema: SCHEMAS.git,
     args: { action: "string", path: "string (optional)", args: "string (optional)" },
     risk: "medium",

@@ -253,6 +253,7 @@ function buildFixtureRepository() {
     assert.ok(summary.evidence.diff_bytes_analyzed > 0);
     assert.ok(Array.isArray(summary.semantic_changes));
     assert.match(summary.semantic_index_root_hash, /^[0-9a-f]{64}$/);
+    assert.strictEqual(summary.semantic_comparison.after.kind, 'staged_index', 'staged semantic comparison must index the staged state, not unstaged bytes');
   });
 
   await test('DP.4: dev_change_summary reports untracked files, which no diff can show', async () => {
@@ -270,6 +271,8 @@ function buildFixtureRepository() {
     const summary = json(await callInternalTool('dev_change_summary', { path: FIXTURE_REPO, base: 'HEAD' }));
     assert.strictEqual(summary.scope.base, 'HEAD');
     assert.strictEqual(summary.scope.base_sha, git(['rev-parse', 'HEAD']).trim());
+    assert.deepStrictEqual(summary.semantic_comparison.before, { kind: 'git_revision', sha: summary.scope.base_sha });
+    assert.strictEqual(summary.semantic_comparison.after.kind, 'working_tree');
     const bogus = json(await callInternalTool('dev_change_summary', { path: FIXTURE_REPO, base: 'HEAD~0' }));
     assert.strictEqual(bogus.scope.base_sha, git(['rev-parse', 'HEAD']).trim(), 'any committish resolves');
   });

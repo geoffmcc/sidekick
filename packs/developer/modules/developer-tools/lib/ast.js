@@ -8,7 +8,9 @@ const Parser = require("tree-sitter");
 const grammarPromises = new Map();
 const grammarVersions = Object.freeze({
   javascript: "tree-sitter-javascript@0.25.0",
+  javascript_jsx: "tree-sitter-javascript@0.25.0",
   typescript: "tree-sitter-typescript@0.23.2",
+  typescript_tsx: "tree-sitter-typescript@0.23.2",
   ruby: "tree-sitter-ruby@0.23.1",
   java: "tree-sitter-java@0.23.5",
   go: "tree-sitter-go@0.25.0",
@@ -20,8 +22,10 @@ async function grammarFor(language) {
   if (!grammarPromises.has(language)) {
     grammarPromises.set(language, (async () => {
       if (language === "perl") return (await import("tree-sitter-perl")).default;
-      const loaded = require(`tree-sitter-${language}`);
-      return language === "typescript" ? loaded.typescript : loaded;
+      const base = language.startsWith("typescript") ? "typescript" : language.startsWith("javascript") ? "javascript" : language;
+      const loaded = require(`tree-sitter-${base}`);
+      if (language === "typescript_tsx") return loaded.tsx;
+      return base === "typescript" ? loaded.typescript : loaded;
     })());
   }
   return grammarPromises.get(language);

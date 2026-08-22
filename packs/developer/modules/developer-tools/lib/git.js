@@ -27,6 +27,11 @@ async function gitRead(services, repoPath, action, args) {
   return { ok: ok(result), text: textOf(result).trim(), raw: result };
 }
 
+async function gitReadContent(services, repoPath, action, args) {
+  const result = await services.dispatch("git", { action, path: repoPath, args });
+  return { ok: ok(result), text: textOf(result), raw: result };
+}
+
 /** Parse `git status --porcelain=v1 -b` into a structured working-tree view. */
 function parseStatus(text) {
   const lines = text.split("\n").filter(Boolean);
@@ -166,6 +171,35 @@ async function resolveRefSha(services, repoPath, ref) {
   return out.ok && /^[0-9a-f]{40}$/.test(sha) ? sha : null;
 }
 
+/**
+ * Read a bounded historical source snapshot through the governed Git
+ * dispatcher. This uses Git objects only; it never checks out or executes the
+ * requested revision. The caller supplies the already-resolved SHA, so ref
+ * expressions cannot alter the operation.
+ */
+async function readRevisionFiles(services, repoPath, sha, { maxFiles = 4000, maxBytes = 64 * 1024 * 1024, maxFileBytes = 512 * 1024, extensions = new Set() } = {}) {
+  const treeish = String(sha || "");
+  if (treeish !== ":" && !/^[0-9a-f]{40}$/i.test(treeish)) return { ok: false, error: "Historical revision must be a full commit SHA or the staged index", files: [], bytes: 0 };
+  const tree = treeish === ":"
+    ? await gitRead(services, repoPath, "ls-files", "-z")
+    : await gitRead(services, repoPath, "ls-tree", `-r -z --name-only ${treeish}`);
+  if (!tree.ok) return { ok: false, error: tree.text.slice(0, 500), files: [], bytes: 0 };
+  const candidates = tree.text.split("\0").filter(Boolean).map(file => file.replace(/[\r\n]$/, ""))
+    .filter(file => !file.startsWith("/") && !file.split("/").includes("..") && (!extensions.size || extensions.has(file.slice(file.lastIndexOf(".")).toLowerCase())))
+    .sort((a, b) => a.localeCompare(b, "en")).slice(0, maxFiles);
+  const files = []; let bytes = 0;
+  for (const file of candidates) {
+    const quotedFile = file.replace(/(["\\])/g, "\\$1");
+    const objectPath = treeish === ":" ? `:"${quotedFile}"` : `${treeish}:"${quotedFile}"`;
+    const shown = await gitReadContent(services, repoPath, "show", objectPath);
+    if (!shown.ok) continue;
+    const content = shown.text;
+    if (Buffer.byteLength(content) > maxFileBytes || bytes + Buffer.byteLength(content) > maxBytes) continue;
+    files.push({ path: file, content }); bytes += Buffer.byteLength(content);
+  }
+  return { ok: true, files, bytes, truncated: candidates.length >= maxFiles };
+}
+
 /** Structured diff statistics for a change set. */
 async function collectDiff(services, repoPath, { base, staged = false } = {}) {
   const scope = [];
@@ -203,4 +237,4 @@ async function collectDiff(services, repoPath, { base, staged = false } = {}) {
   return { ok: true, files, insertions, deletions, binary_files: binaryCount, file_count: files.length };
 }
 
-module.exports = { collectRepositoryFacts, collectStateFacts, resolveRefSha, collectDiff, parseStatus, parseLog, textOf, SEPARATOR };
+module.exports = { collectRepositoryFacts, collectStateFacts, resolveRefSha, readRevisionFiles, collectDiff, parseStatus, parseLog, textOf, SEPARATOR };

@@ -224,7 +224,20 @@ async function devChangeSummary(services, { path: requestedPath, base, staged = 
     deletions: diffStats.deletions,
     binaryFiles: diffStats.binary_files,
   });
-  const semanticIndex = await semantic.indexRepository(root);
+  let currentSourceFiles = null;
+  if (staged) {
+    const stagedSnapshot = await gitFacts.readRevisionFiles(services, root, ":", { maxFiles: semantic.DEFAULT_LIMITS.maxFiles, maxBytes: semantic.DEFAULT_LIMITS.maxBytes, maxFileBytes: semantic.DEFAULT_LIMITS.maxFileBytes, extensions: new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".rb", ".java", ".go", ".pl", ".pm", ".t", ".rs"]) });
+    if (!stagedSnapshot.ok) return errorResult(`Could not read staged semantic state: ${stagedSnapshot.error}`, { code: "semantic_index_unavailable", repository: root });
+    currentSourceFiles = stagedSnapshot.files.map(file => ({ ...file, language: semantic.languageForPath(file.path) })).filter(file => file.language);
+  }
+  const semanticIndex = await semantic.indexRepository(root, { sourceFiles: currentSourceFiles, state: staged ? { kind: "staged_index", head_sha: gitState.head_sha } : { kind: "working_tree", head_sha: gitState.head_sha, worktree_clean: gitState.worktree_clean, staged: false } });
+  let semanticComparison = { before: baseSha ? { kind: "git_revision", sha: baseSha } : null, after: semanticIndex.repository.state, changes: semanticIndex.changes };
+  if (baseSha) {
+    const historical = await gitFacts.readRevisionFiles(services, root, baseSha, { maxFiles: semantic.DEFAULT_LIMITS.maxFiles, maxBytes: semantic.DEFAULT_LIMITS.maxBytes, maxFileBytes: semantic.DEFAULT_LIMITS.maxFileBytes, extensions: new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".rb", ".java", ".go", ".pl", ".pm", ".t", ".rs"]) });
+    if (!historical.ok) return errorResult(`Could not read semantic base revision: ${historical.error}`, { code: "semantic_base_unavailable", repository: root, base_sha: baseSha });
+    const historicalIndex = await semantic.indexRepository(root, { sourceFiles: historical.files.map(file => ({ ...file, language: semantic.languageForPath(file.path) })).filter(file => file.language), state: { kind: "git_revision", sha: baseSha } });
+    semanticComparison = semantic.compareIndexes(historicalIndex, semanticIndex, { before: { kind: "git_revision", sha: baseSha }, after: semanticIndex.repository.state });
+  }
 
   // `git diff` never shows untracked files, so a change set analyzed from the
   // diff alone silently omits every NEW file. Report them explicitly rather
@@ -250,7 +263,8 @@ async function devChangeSummary(services, { path: requestedPath, base, staged = 
       changed_file_count: gitState.changed_file_count,
     },
     ...analysis,
-    semantic_changes: semanticIndex.changes.slice(0, 500),
+    semantic_changes: semanticComparison.changes.slice(0, 500),
+    semantic_comparison: { before: semanticComparison.before, after: semanticComparison.after },
     semantic_index_root_hash: semanticIndex.index_root_hash,
     untracked: {
       count: untracked.length,
@@ -353,7 +367,7 @@ const entry = {
         name: "semantic_repo",
         aliases: ["repository_intelligence", "semantic_repository"],
         description:
-          "Build and query a deterministic, hash-verifiable semantic repository index using bounded static analysis. Understand repository architecture, modules, symbols, imports, entry points, tests, relationships, dependencies, and security-sensitive boundaries without executing repository code; results are untrusted source-derived data with evidence locations.",
+          "Build and query a deterministic, hash-verifiable semantic repository index using bounded static analysis. Understand repository architecture, modules, symbols, imports, entry points, tests, callers, callees, dependencies, authentication, network and process boundaries without executing repository code; results are untrusted source-derived data with evidence locations.",
         schema: z.object({
           path: z.string().optional().describe("Repository path (default: the Sidekick working directory)"),
           action: z.enum(["profile", "query", "verify"]).optional().describe("Semantic operation (default profile)"),
@@ -365,6 +379,7 @@ const entry = {
         args: { path: "string", action: "string (profile|query|verify)", query: "string", level: "number (0-2)", limit: "number", max_chars: "number" },
         risk: "low",
         category: "Development",
+        contextProvider: { tool: "semantic_repo", action: "query", source: "repository_semantic", max_chars: 6000 },
         handler: args => semanticRepository(services, args),
       },
       {

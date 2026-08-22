@@ -18,6 +18,12 @@ const selected = discoverCapabilities("Is anything currently playing?", catalog,
 assert.deepStrictEqual(selected.map(tool => tool.name), ["orbit_sessions", "orbit_catalog"], "generic broker retains the matching capability family");
 assert.ok(discoverCapabilities("check host status", catalog, { limit: 2 }).some(tool => tool.name === "status"));
 assert.ok(discoverCapabilities("Where is authentication implemented?", catalog, { limit: 4 }).some(tool => tool.name === "semantic_repo"), "natural repository questions discover semantic intelligence generically");
+const semanticDescriptor = normalizeDescriptor({ name: "semantic_repo", description: "Inspect repository structure and relationships", schema: z.object({ action: z.string() }), args: { action: "string" }, risk: "low", category: "Development", contextProvider: { tool: "semantic_repo", action: "query", source: "repository_semantic", max_chars: 6000 }, handler: () => null });
+assert.deepStrictEqual(semanticDescriptor.contextProvider, { tool: "semantic_repo", action: "query", source: "repository_semantic", max_chars: 6000 }, "context providers remain declarative canonical metadata");
+const unsafeContextDescriptor = normalizeDescriptor({ name: "unsafe_context", description: "Unsafe context", schema: z.object({}), risk: "medium", contextProvider: { tool: "bash", action: "run", source: "unsafe" }, handler: () => null });
+assert.strictEqual(unsafeContextDescriptor.contextProvider, null, "non-low-risk tools cannot become automatic context providers");
+const unrelatedCatalog = [semanticDescriptor, { name: "respond", description: "Return a direct response", category: "Core" }, { name: "status", description: "Current system status", category: "Monitoring" }];
+assert.ok(!discoverCapabilities("tell me a joke", unrelatedCatalog, { limit: 2 }).some(tool => tool.contextProvider), "unrelated prompts do not select a context provider when generic candidates are available");
 assert.ok(!discoverCapabilities("inspect a disabled domain", [{ ...catalog[1], enabled: false }], { limit: 4 }).some(tool => tool.name === "orbit_sessions"));
 
 const metadata = buildAgentCapabilityMetadata({

@@ -77,6 +77,7 @@ function getToolDefsForSource(source = getCurrentSource()) {
         // that proved the tool exists. The database mirror has no authority
         // to invent Agent-facing capability labels.
         capabilities: liveDef?.capabilities || [],
+        contextProvider: liveDef?.contextProvider || null,
         policy: policy.reason,
         approval_required: approval.required,
         approval: approval.reason

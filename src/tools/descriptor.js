@@ -28,6 +28,16 @@ function normalizeCapabilities(value) {
   return Object.freeze(labels);
 }
 
+function normalizeContextProvider(value) {
+  if (!value || typeof value !== "object") return null;
+  const tool = String(value.tool || "").trim();
+  if (!/^[a-z][a-z0-9_]*$/.test(tool)) return null;
+  const action = String(value.action || "query").trim().slice(0, 64);
+  const source = String(value.source || "derived").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 80) || "derived";
+  const maxChars = Math.max(1000, Math.min(12000, Number(value.max_chars) || 6000));
+  return Object.freeze({ tool, action, source, max_chars: maxChars });
+}
+
 function isZodSchema(schema) {
   return !!schema && typeof schema === "object" && typeof schema.safeParse === "function";
 }
@@ -125,6 +135,10 @@ function normalizeDescriptor(input) {
     capabilities: normalizeCapabilities(input.capabilities),
     visibility: input.visibility || "public",
     result: input.result || null,
+    // Context providers are automatically invoked during Agent/Brain
+    // assembly, so only low-risk descriptors may advertise one. The actual
+    // call still goes through the canonical dispatcher and policy path.
+    contextProvider: input.risk === "low" ? normalizeContextProvider(input.contextProvider) : null,
     annotations: Object.freeze(annotations),
     handler: input.handler,
   });

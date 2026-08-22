@@ -16,6 +16,7 @@ process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_TOOL_POLICY = "open";
 process.env.SIDEKICK_APPROVAL_MODE = "off";
 process.env.SIDEKICK_ENVIRONMENT = "test";
+process.env.NODE_ENV = "test";
 // Set a fake Groq key so the module-load ollama warmup path is skipped.
 process.env.GROQ_API_KEY = "test-fake-key";
 
@@ -96,6 +97,21 @@ ok("prompt context describes installed capability packs and lifecycle state", ()
   });
   assert.ok(disabledContext.includes("state=disabled; not usable"), "disabled packs are not advertised as usable");
   assert.ok(!disabledContext.includes("consult the knowledge tool"), "disabled packs do not receive active-use guidance");
+});
+
+ok("generic capability descriptions select semantic context for repository questions", () => {
+  const catalog = agent.buildSystemPrompt("Profile this repo");
+  const semanticAvailable = catalog.includes("- semantic_repo(");
+  for (const goal of ["Profile this repo", "Where is authentication implemented?", "What calls authenticate?", "Which tests exercise this module?", "What part of this codebase opens network connections?"]) {
+    const shortlist = agent.buildSystemPrompt(goal).split("You have these tools:")[0];
+    if (semanticAvailable) {
+      assert.ok(shortlist.includes("- semantic_repo:"), "semantic_repo should be discoverable for: " + goal);
+    } else {
+      assert.ok(!shortlist.includes("- semantic_repo:"), "unavailable semantic_repo must not be advertised: " + goal);
+    }
+  }
+  const unrelatedShortlist = agent.buildSystemPrompt("Tell me a joke").split("You have these tools:")[0];
+  assert.ok(!unrelatedShortlist.includes("- semantic_repo:"), "unrelated prompts should not select semantic context");
 });
 
 console.log("\nAll " + passed + " prompt/routing tests passed.\n");
