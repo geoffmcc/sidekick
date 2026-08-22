@@ -35,7 +35,7 @@ function brainAgentTools() {
 const { recordAgentTaskMemory, inferProjectFromText } = require("./memory");
 const { assembleContext } = require("./context");
 const { classifyEvidenceRequirement } = require("./agent-protocol");
-const { discoverCapabilities, buildAgentCapabilityMetadata, boundedText, resolveContextProviderArgs } = require("./agent/capability-broker");
+const { discoverCapabilities, hasRelevantContextProvider, buildAgentCapabilityMetadata, boundedText, resolveContextProviderArgs } = require("./agent/capability-broker");
 const { runToolLoop } = require("./agent-loop");
 const { EVIDENCE_BUDGETS, projectToolEvidence, projectContextEntries } = require("./evidence/projector");
 const packRepository = require("./packs/repository");
@@ -912,7 +912,9 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
   // Routing is a pure classification of the goal text. Computing it before the
   // guarded body keeps the transcript's routing record truthful even when the
   // run throws before reaching the loop.
-  const classification = classifyEvidenceRequirement(goal);
+  const classification = classifyEvidenceRequirement(goal, {
+    repositoryCapabilityDiscovered: hasRelevantContextProvider(goal, visibleAgentTools, agentCapabilityMetadata),
+  });
   const useTools = classification.requiresTools;
   const capabilityDiscovery = {
     visible_count: visibleAgentTools.length,

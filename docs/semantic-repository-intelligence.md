@@ -4,7 +4,7 @@ Sidekick's Developer Pack includes a local, static Semantic Repository Intellige
 
 ## What exists
 
-`semantic_repo` builds, verifies, and queries a versioned `sidekick.semantic-ir.v2` index. `dev_repo_profile` adds a bounded `semantic` section containing languages, modules, entry-point candidates, typed execution relationships, lifecycle/phase evidence, state transitions, continuation evidence, dynamic-capability distinctions, structural security boundaries, limits/warnings, and the deterministic `index_root_hash`. Both tools are low-risk read-only capabilities and use the normal pack descriptor, dispatcher, path policy, redaction, audit, and request context paths.
+`semantic_repo` builds, verifies, and queries a versioned `sidekick.semantic-ir.v3` index. `dev_repo_profile` adds a bounded `semantic` section containing languages, modules, entry-point candidates, typed execution relationships, lifecycle/phase evidence, state transitions, continuation evidence, dynamic-capability distinctions, structural security boundaries, limits/warnings, and the deterministic `index_root_hash`. Both tools are low-risk read-only capabilities and use the normal pack descriptor, dispatcher, path policy, redaction, audit, and request context paths.
 
 The index currently parses TypeScript, TSX, JavaScript, JSX, Ruby, Java, Go, Perl, and Rust using pinned Tree-sitter grammar adapters plus conservative lexical signals. The normalized IR records files, source hashes, modules, imports, exports, symbols, signatures/parameters where visible, tests, entry points, and typed relationships. Relationships preserve ordinary calls, branches, fallbacks, error paths, and derived convergence. Units additionally retain evidence-linked lifecycle semantics (`provision`, `verify`, `load`, `register`, `resolve`, `execute`, `unload`), conservative execution phases (`startup`, `request`, `continuation`, `shutdown`, or `unknown`), explicit state assignments, persisted continuation markers, dynamic runtime descriptor versus module-load markers, side-effect classes, and security/governance boundaries. These are static structural facts with bounded provenance, not vulnerability findings or a dynamic call graph.
 
@@ -34,17 +34,21 @@ when surrounding adapters are pruned.
 Budget degradation is deterministic and progressive: large views retain
 detailed relationship provenance, moderate views retain grouped categories and
 ordered governance symbols, and tight views remove ordinary decoration first.
-Security/control-flow edges and their bounded evidence are retained before
-ordinary calls; serialization remains bounded JSON rather than a sliced,
-potentially malformed object. Stable semantic sorting and tie-breaking ensure
-identical IR plus configuration produces identical output. Projection options
-do not alter the IR or its content hash. These guarantees improve structural
-fidelity but do not constitute complete semantic reconstruction or prove
-runtime behavior that static analysis did not observe.
+Every projection carries a machine-readable `degradation` object describing
+whether it was truncated, the degradation level, omitted categories, and
+provenance/security detail. Security/control-flow edges receive preferential
+retention, but omission is never represented as absence. An `impossible`
+projection explicitly reports `minimum_semantics: "unrepresentable"` when the
+requested budget cannot carry the minimum metadata. Serialization remains
+valid JSON. Stable semantic sorting and tie-breaking ensure identical IR plus
+configuration produces identical output. Projection options do not alter the
+IR or its content hash. These guarantees improve structural fidelity but do
+not constitute complete semantic reconstruction or prove runtime behavior
+that static analysis did not observe.
 
 ## Integrity and lifecycle
 
-Each analyzed file has a domain-separated SHA-256 source identity and a normalized semantic unit identity. The canonical repository aggregate has an `index_root_hash` and a configuration identity covering limits and `.gitignore` inputs, so parser/configuration changes invalidate cached semantics. Schema v2 uses a new hash domain and includes the new semantic fields; v1 cache/index meanings are never silently reinterpreted. Evidence stores bounded file/line/column locations; the enclosing file's `source_hash` is the integrity anchor, avoiding repeated digest payloads on every edge. Canonicalization sorts object keys, preserves order-sensitive sequences such as parameters, and explicitly sorts only set-like collections such as independent imports, relationships, lifecycle kinds, and semantic classifications. Evidence locations and parser traversal incidental ordering do not alter normalized semantic identity. It excludes timestamps, process IDs, absolute paths from identities, and database row IDs. These hashes provide content integrity, not authorship or authentication.
+Each analyzed file has a domain-separated SHA-256 source identity and a normalized semantic unit identity. Symbols have deterministic scoped `id` values derived from repository-relative path, lexical parent, kind, name, and a canonical duplicate occurrence. Display names remain for readability; relationships use `from_id`/`to_id` when uniquely resolvable and bounded candidate ID arrays when a name is genuinely ambiguous. They never select a last-write-wins symbol by display name. The canonical repository aggregate has an `index_root_hash` and a configuration identity covering limits and `.gitignore` inputs, so parser/configuration changes invalidate cached semantics. Schema v3 uses a new hash domain and includes scoped identities and relationship endpoint metadata; v2 cache/index meanings are never silently reinterpreted. Evidence stores bounded file/line/column locations; the enclosing file's `source_hash` is the integrity anchor, avoiding repeated digest payloads on every edge. Canonicalization sorts object keys, preserves order-sensitive sequences such as parameters, and explicitly sorts only set-like collections such as independent imports, relationships, lifecycle kinds, and semantic classifications. Evidence locations and parser traversal incidental ordering do not alter normalized semantic identity. It excludes timestamps, process IDs, absolute paths from identities, and database row IDs. These hashes provide content integrity, not authorship or authentication.
 
 The cache is outside the repository in Sidekick's OS temporary data area, is keyed by the resolved repository path, is written with restrictive permissions, and is disposable. The process retains only a small bounded in-memory LRU and prunes the disk cache to a bounded set of recent entries; disk cache entries remain advisory and are integrity-checked before reuse. Every invocation rescans bounded file metadata/content identities. A cache unit is reused only when its source hash, IR version, and analyzer version match; changed, added, removed, unsupported, binary, oversized, and symlinked files cannot silently become stale. Cache failure causes a safe reparse, not a failed profile.
 
@@ -66,4 +70,4 @@ Add a supported extension to the bounded discovery map and a real parser branch 
 
 ## Troubleshooting
 
-`warnings` and `stats` distinguish truncation, unavailable files, binary files, encoding failures, and semantic-unit limits. `semantic_repo action=verify` recomputes the canonical aggregate hash from the returned index. A failed verification means the cached/indexed record was modified or is incompatible; rerun the profile to rebuild it. A partial index remains useful but must be treated as partial because `stats.truncated` or warnings are retained in the profile.
+`warnings` and `stats` distinguish truncation, unavailable files, binary files, encoding failures, and semantic-unit limits. `semantic_repo action=verify` recomputes the canonical aggregate hash from the returned index. A failed verification means the cached/indexed record was modified or is incompatible; rerun the profile to rebuild it. A partial index remains useful but must be treated as partial because `stats.truncated` or warnings are retained in the profile. Natural-language repository questions can use the registered repository context provider without naming `semantic_repo`: capability discovery selects the governed inspection tool, the semantic projection is used first, and targeted governed source reads remain available when ambiguity or exact source verification requires them. This is bounded static analysis, not complete code understanding; unsupported or weakly inferred semantics remain explicit as unknown or omitted.
