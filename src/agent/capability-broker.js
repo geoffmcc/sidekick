@@ -33,6 +33,48 @@ function boundedText(value, max = MAX_TEXT) {
     .replace(/\s+/g, " ").trim().slice(0, max);
 }
 
+function looksLikeFilesystemPath(value) {
+  const candidate = String(value || "").trim();
+  return candidate.length > 1 && (candidate.startsWith("/") || /^[A-Za-z]:[\\/]/.test(candidate));
+}
+
+function trimPathPunctuation(value) {
+  return String(value || "").trim().replace(/[.,;:!?]+$/, "").replace(/[)\]}]+$/, "");
+}
+
+/**
+ * Extract an explicit filesystem target from a request as generic scope data.
+ * This is deliberately capability-agnostic: the provider declares which
+ * argument receives the request path, while the broker only recognizes
+ * bounded absolute path syntax and never decides which capability to use.
+ */
+function extractRequestPath(value) {
+  const text = boundedText(value, 4000);
+  const quoted = /["']([^"']{2,2048})["']/g;
+  let match;
+  while ((match = quoted.exec(text))) {
+    const candidate = trimPathPunctuation(match[1]);
+    if (looksLikeFilesystemPath(candidate)) return candidate;
+  }
+  const bare = /(?:[A-Za-z]:[\\/][^\s"'<>|]+|\/(?:[^\s"'<>|]+\/)*[^\s"'<>|]+)/g;
+  while ((match = bare.exec(text))) {
+    const candidate = trimPathPunctuation(match[0]);
+    if (looksLikeFilesystemPath(candidate)) return candidate;
+  }
+  return null;
+}
+
+function resolveContextProviderArgs(provider, goal, { repositoryPath = null } = {}) {
+  const args = { action: provider?.action || "query" };
+  const scope = provider?.scope;
+  if (!scope || !scope.argument) return args;
+  const requestedPath = scope.source === "request_path_or_context"
+    ? (extractRequestPath(goal) || (looksLikeFilesystemPath(repositoryPath) ? repositoryPath : null))
+    : extractRequestPath(goal);
+  if (requestedPath) args[scope.argument] = requestedPath;
+  return args;
+}
+
 function tokens(value) {
   return new Set(
     boundedText(value, 2000).toLowerCase().replace(/([a-z])([A-Z])/g, "$1 $2")
@@ -157,4 +199,4 @@ function buildAgentCapabilityMetadata({ packs = [], modules = [], workflows = []
   return metadata;
 }
 
-module.exports = { discoverCapabilities, buildAgentCapabilityMetadata, boundedText };
+module.exports = { discoverCapabilities, buildAgentCapabilityMetadata, boundedText, extractRequestPath, resolveContextProviderArgs };

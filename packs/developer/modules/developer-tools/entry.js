@@ -379,7 +379,7 @@ const entry = {
         args: { path: "string", action: "string (profile|query|verify)", query: "string", level: "number (0-2)", limit: "number", max_chars: "number" },
         risk: "low",
         category: "Development",
-        contextProvider: { tool: "semantic_repo", action: "query", source: "repository_semantic", max_chars: 6000 },
+        contextProvider: { tool: "semantic_repo", action: "query", source: "repository_semantic", max_chars: 6000, scope: { argument: "path", source: "request_path_or_context" } },
         handler: args => semanticRepository(services, args),
       },
       {

@@ -12,6 +12,7 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
@@ -29,6 +30,8 @@ require('../src/db').runPendingMigrations();
 const bundled = require('../src/packs/bundled');
 const packLifecycle = require('../src/packs/lifecycle');
 const { callInternalTool } = require('../src/tools/dispatcher');
+const { callAgentTool, getBuiltinRegistry } = require('../src/tools');
+const { discoverCapabilities, resolveContextProviderArgs } = require('../src/agent/capability-broker');
 const platformKernel = require('../src/platform/kernel');
 
 const SIDEKICK_ROOT = path.resolve(__dirname, '..');
@@ -167,6 +170,35 @@ function buildFixtureRepository() {
     const testCandidate = profile.verification.candidates.find(c => c.command === 'npm run test');
     assert.strictEqual(testCandidate.source, 'package.json scripts');
     assert.match(testCandidate.evidence, /scripts\.test = node test\/run-all\.js/);
+  });
+
+  await test('DP.1b: generic Agent semantic context propagates the requested repository scope', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-agent-scope-'));
+    const repoA = path.join(root, 'repo-a');
+    const repoB = path.join(root, 'repo-b');
+    fs.mkdirSync(repoA); fs.mkdirSync(repoB);
+    try {
+      fs.writeFileSync(path.join(repoA, 'alpha.ts'), "export function AlphaOnlySymbol() { return 'a'; }\n");
+      fs.writeFileSync(path.join(repoB, 'beta.ts'), "export function BetaOnlySymbol() { return 'b'; }\n");
+      const request = `Profile this repository at "${repoB}"`;
+      const liveSemantic = getBuiltinRegistry().get('semantic_repo');
+      assert.ok(liveSemantic, 'semantic_repo must be present in the canonical live registry');
+      const selected = discoverCapabilities(request, [{ ...liveSemantic, enabled: true }], { limit: 1 }).find(tool => tool.contextProvider);
+      assert.ok(selected, 'generic capability discovery selects a context provider');
+      const providerArgs = resolveContextProviderArgs(selected.contextProvider, request);
+      assert.strictEqual(providerArgs.path, repoB, 'the explicit repository path is propagated by provider metadata');
+      const result = await callAgentTool(selected.contextProvider.tool, { ...providerArgs, query: 'Profile this repository', level: 1, limit: 20, max_chars: 6000 }, { source: selected.contextProvider.source, timeoutMs: 30000 });
+      assert.ok(!result.isError, result.content?.[0]?.text || 'semantic context dispatch failed');
+      const text = result.content?.[0]?.text || '';
+      assert.ok(text.includes('BetaOnlySymbol'), 'semantic context contains the requested repository symbol');
+      assert.ok(!text.includes('AlphaOnlySymbol'), 'semantic context excludes the other repository symbol');
+      const defaultArgs = resolveContextProviderArgs(selected.contextProvider, 'Profile this repository');
+      assert.strictEqual(Object.prototype.hasOwnProperty.call(defaultArgs, 'path'), false, 'no explicit path preserves current-repository default behavior');
+      const current = await callAgentTool(selected.contextProvider.tool, { ...defaultArgs, query: 'Profile this repository', limit: 2, max_chars: 2000 }, { source: selected.contextProvider.source, timeoutMs: 30000 });
+      assert.ok(!current.isError, current.content?.[0]?.text || 'default current-repository profiling failed');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   // --- DP.2 dev_repo_profile against the fixture repository ----------------

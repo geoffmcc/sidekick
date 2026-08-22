@@ -1,7 +1,7 @@
 "use strict";
 
 const assert = require("assert");
-const { discoverCapabilities, buildAgentCapabilityMetadata } = require("../src/agent/capability-broker");
+const { discoverCapabilities, buildAgentCapabilityMetadata, resolveContextProviderArgs } = require("../src/agent/capability-broker");
 const { classifyEvidenceRequirement } = require("../src/agent-protocol");
 const { normalizeDescriptor, describeSchemaArgs } = require("../src/tools/descriptor");
 const { z } = require("zod");
@@ -18,8 +18,8 @@ const selected = discoverCapabilities("Is anything currently playing?", catalog,
 assert.deepStrictEqual(selected.map(tool => tool.name), ["orbit_sessions", "orbit_catalog"], "generic broker retains the matching capability family");
 assert.ok(discoverCapabilities("check host status", catalog, { limit: 2 }).some(tool => tool.name === "status"));
 assert.ok(discoverCapabilities("Where is authentication implemented?", catalog, { limit: 4 }).some(tool => tool.name === "semantic_repo"), "natural repository questions discover semantic intelligence generically");
-const semanticDescriptor = normalizeDescriptor({ name: "semantic_repo", description: "Inspect repository structure and relationships", schema: z.object({ action: z.string() }), args: { action: "string" }, risk: "low", category: "Development", contextProvider: { tool: "semantic_repo", action: "query", source: "repository_semantic", max_chars: 6000 }, handler: () => null });
-assert.deepStrictEqual(semanticDescriptor.contextProvider, { tool: "semantic_repo", action: "query", source: "repository_semantic", max_chars: 6000 }, "context providers remain declarative canonical metadata");
+const semanticDescriptor = normalizeDescriptor({ name: "semantic_repo", description: "Inspect repository structure and relationships", schema: z.object({ action: z.string() }), args: { action: "string" }, risk: "low", category: "Development", contextProvider: { tool: "semantic_repo", action: "query", source: "repository_semantic", max_chars: 6000, scope: { argument: "path", source: "request_path_or_context" } }, handler: () => null });
+assert.deepStrictEqual(semanticDescriptor.contextProvider, { tool: "semantic_repo", action: "query", source: "repository_semantic", max_chars: 6000, scope: { argument: "path", source: "request_path_or_context" } }, "context providers remain declarative canonical metadata");
 const unsafeContextDescriptor = normalizeDescriptor({ name: "unsafe_context", description: "Unsafe context", schema: z.object({}), risk: "medium", contextProvider: { tool: "bash", action: "run", source: "unsafe" }, handler: () => null });
 assert.strictEqual(unsafeContextDescriptor.contextProvider, null, "non-low-risk tools cannot become automatic context providers");
 const unrelatedCatalog = [semanticDescriptor, { name: "respond", description: "Return a direct response", category: "Core" }, { name: "status", description: "Current system status", category: "Monitoring" }];

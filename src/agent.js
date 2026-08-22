@@ -35,7 +35,7 @@ function brainAgentTools() {
 const { recordAgentTaskMemory, inferProjectFromText } = require("./memory");
 const { assembleContext } = require("./context");
 const { classifyEvidenceRequirement } = require("./agent-protocol");
-const { discoverCapabilities, buildAgentCapabilityMetadata, boundedText } = require("./agent/capability-broker");
+const { discoverCapabilities, buildAgentCapabilityMetadata, boundedText, resolveContextProviderArgs } = require("./agent/capability-broker");
 const { runToolLoop } = require("./agent-loop");
 const packRepository = require("./packs/repository");
 const packLifecycle = require("./packs/lifecycle");
@@ -879,7 +879,8 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
   const capabilityCandidates = discoverCapabilities(goal, visibleAgentTools, { limit: 24, metadata: agentCapabilityMetadata });
   const contextProvider = capabilityCandidates.map(tool => tool.contextProvider).find(Boolean) || null;
   const repositorySemanticSearch = contextProvider ? async (query, bounds = {}) => {
-    const result = await callAgentTool(contextProvider.tool, { action: contextProvider.action, query: String(query || goal).slice(0, 500), limit: Math.min(20, Number(bounds.limit) || 6), max_chars: Math.min(contextProvider.max_chars, Number(bounds.maxChars) || contextProvider.max_chars) }, { taskId, project: inferredProject, correlationId: taskId, timeoutMs: 30000, source: contextProvider.source });
+    const providerArgs = resolveContextProviderArgs(contextProvider, goal, { repositoryPath: parentContext?.repositoryPath || parentContext?.repository || null });
+    const result = await callAgentTool(contextProvider.tool, { ...providerArgs, query: String(query || goal).slice(0, 500), limit: Math.min(20, Number(bounds.limit) || 6), max_chars: Math.min(contextProvider.max_chars, Number(bounds.maxChars) || contextProvider.max_chars) }, { taskId, project: inferredProject, correlationId: taskId, timeoutMs: 30000, source: contextProvider.source });
     const text = result?.content?.[0]?.text;
     if (!text) return [];
     let payload; try { payload = JSON.parse(text); } catch { return []; }

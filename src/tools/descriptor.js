@@ -35,7 +35,17 @@ function normalizeContextProvider(value) {
   const action = String(value.action || "query").trim().slice(0, 64);
   const source = String(value.source || "derived").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 80) || "derived";
   const maxChars = Math.max(1000, Math.min(12000, Number(value.max_chars) || 6000));
-  return Object.freeze({ tool, action, source, max_chars: maxChars });
+  const rawScope = value.scope && typeof value.scope === "object" ? value.scope : null;
+  const scopeArgument = rawScope && /^[a-z][a-z0-9_]*$/.test(String(rawScope.argument || ""))
+    ? String(rawScope.argument)
+    : null;
+  const scopeSource = rawScope && ["request_path", "request_path_or_context"].includes(String(rawScope.source))
+    ? String(rawScope.source)
+    : null;
+  const scope = scopeArgument && scopeSource
+    ? Object.freeze({ argument: scopeArgument, source: scopeSource })
+    : null;
+  return Object.freeze({ tool, action, source, max_chars: maxChars, ...(scope ? { scope } : {}) });
 }
 
 function isZodSchema(schema) {
