@@ -4,7 +4,7 @@ const { PROJECT_RE, canonicalizeProjectName } = require("../core/project-identit
 
 const SOURCE_TYPES = Object.freeze([
   "knowledge", "memory", "legacy_context", "handoff", "session",
-  "artifact", "entity", "relationship", "evidence",
+  "artifact", "entity", "relationship", "evidence", "repository_semantic",
 ]);
 
 function normalizeProject(project) {

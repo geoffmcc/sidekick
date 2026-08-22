@@ -35,7 +35,7 @@ function brainAgentTools() {
 const { recordAgentTaskMemory, inferProjectFromText } = require("./memory");
 const { assembleContext } = require("./context");
 const { classifyEvidenceRequirement } = require("./agent-protocol");
-const { discoverCapabilities, buildAgentCapabilityMetadata, boundedText } = require("./agent/capability-broker");
+const { discoverCapabilities, buildAgentCapabilityMetadata, boundedText, resolveContextProviderArgs } = require("./agent/capability-broker");
 const { runToolLoop } = require("./agent-loop");
 const packRepository = require("./packs/repository");
 const packLifecycle = require("./packs/lifecycle");
@@ -874,6 +874,19 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
   // A follow-up child inherits the parent's project identity when the child's
   // own goal doesn't infer one, so a thread stays scoped consistently.
   const inferredProject = inferProjectFromText(goal) || (parentContext && parentContext.project) || null;
+  const agentCapabilityMetadata = getAgentCapabilityMetadata();
+  const visibleAgentTools = getToolDefsForSource("agent").filter(t => t.enabled);
+  const capabilityCandidates = discoverCapabilities(goal, visibleAgentTools, { limit: 24, metadata: agentCapabilityMetadata });
+  const contextProvider = capabilityCandidates.map(tool => tool.contextProvider).find(Boolean) || null;
+  const repositorySemanticSearch = contextProvider ? async (query, bounds = {}) => {
+    const providerArgs = resolveContextProviderArgs(contextProvider, goal, { repositoryPath: parentContext?.repositoryPath || parentContext?.repository || null });
+    const result = await callAgentTool(contextProvider.tool, { ...providerArgs, query: String(query || goal).slice(0, 500), limit: Math.min(20, Number(bounds.limit) || 6), max_chars: Math.min(contextProvider.max_chars, Number(bounds.maxChars) || contextProvider.max_chars) }, { taskId, project: inferredProject, correlationId: taskId, timeoutMs: 30000, source: contextProvider.source });
+    const text = result?.content?.[0]?.text;
+    if (!text) return [];
+    let payload; try { payload = JSON.parse(text); } catch { return []; }
+    if (!payload.ok || !payload.projection) return [];
+    return [{ source: contextProvider.source, sourceId: payload.index_root_hash || "semantic-index", type: "semantic_projection", project: null, summary: "Repository semantic projection (untrusted source-derived data)", content: String(payload.projection).slice(0, Math.min(contextProvider.max_chars, Number(bounds.maxChars) || contextProvider.max_chars)), confidence: 0.82, authority: "derived", provenance: { index_root_hash: payload.index_root_hash || null, trust: payload.trust || "untrusted" }, searchText: String(payload.projection) }];
+  } : null;
   const executionLineage = parentContext
     ? {
         parentExecutionId: parentContext.parentExecutionId || null,
@@ -894,8 +907,6 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
   // run throws before reaching the loop.
   const classification = classifyEvidenceRequirement(goal);
   const useTools = classification.requiresTools;
-  const visibleAgentTools = getToolDefsForSource("agent").filter(t => t.enabled);
-  const capabilityCandidates = discoverCapabilities(goal, visibleAgentTools, { limit: 24 });
   const capabilityDiscovery = {
     visible_count: visibleAgentTools.length,
     candidate_count: capabilityCandidates.length,
@@ -925,6 +936,7 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
         principalId: parentContext?.requestedByPrincipalId || parentContext?.actorPrincipalId || "agent",
         sessionId: parentContext?.sessionId || null,
         taskId,
+        repositorySemanticSearch,
         budget: { maxEntries: 24, maxChars: 18000, maxPerSource: 6, maxGraphNodes: 12, maxGraphEdges: 24 },
       }),
       new Promise((resolve) => {
@@ -1026,6 +1038,7 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
           principalId: parentContext?.requestedByPrincipalId || parentContext?.actorPrincipalId || "agent",
           sessionId: parentContext?.sessionId || null,
           taskId,
+          repositorySemanticSearch,
           budget: { maxEntries: 16, maxChars: 12000, maxPerSource: 5, maxGraphNodes: 8, maxGraphEdges: 16 },
         });
         return manifest.entries;

@@ -112,7 +112,7 @@ function buildUpgradeCandidate() {
     assert.strictEqual(developer.version, '1.0.1');
     assert.deepStrictEqual(developer.modules, ['developer-tools']);
     assert.strictEqual(developer.workflows, 7);
-    assert.strictEqual(developer.knowledge, 8);
+    assert.strictEqual(developer.knowledge, 9);
   });
 
   // --- CP.2 inspection -----------------------------------------------------
@@ -124,9 +124,9 @@ function buildUpgradeCandidate() {
     assert.match(inspection.package_hash, /^[a-f0-9]{64}$/);
     assert.strictEqual(inspection.compatibility.compatible, true);
     assert.strictEqual(inspection.modules.length, 1);
-    assert.deepStrictEqual(inspection.modules[0].tools.sort(), ['dev_change_summary', 'dev_repo_profile', 'dev_verify']);
+    assert.deepStrictEqual(inspection.modules[0].tools.sort(), ['dev_change_summary', 'dev_repo_profile', 'dev_verify', 'semantic_repo']);
     assert.strictEqual(inspection.workflows.length, 7);
-    assert.strictEqual(inspection.knowledge.length, 8);
+    assert.strictEqual(inspection.knowledge.length, 9);
     assert.deepStrictEqual(inspection.requires.missing, [], 'all required tools exist');
     assert.strictEqual(packRepository.getPack(PACK), null, 'inspection installs nothing');
   });
@@ -175,7 +175,7 @@ function buildUpgradeCandidate() {
     const components = packRepository.listComponents(PACK);
     assert.strictEqual(components.filter(c => c.kind === 'module').length, 1);
     assert.strictEqual(components.filter(c => c.kind === 'workflow').length, 7);
-    assert.strictEqual(components.filter(c => c.kind === 'knowledge').length, 8);
+    assert.strictEqual(components.filter(c => c.kind === 'knowledge').length, 9);
 
     // Nothing is live yet.
     assert.strictEqual(registry().has('dev_repo_profile'), false, 'pack tools are not active before enable');
@@ -209,9 +209,9 @@ function buildUpgradeCandidate() {
     assert.strictEqual(result.health.ok, true);
     assert.deepStrictEqual(result.activated.modules.map(m => m.name), ['developer-tools']);
     assert.strictEqual(result.activated.workflows.length, 7);
-    assert.strictEqual(result.activated.knowledge.length, 8);
+    assert.strictEqual(result.activated.knowledge.length, 9);
 
-    for (const tool of ['dev_repo_profile', 'dev_change_summary', 'dev_verify']) {
+    for (const tool of ['dev_repo_profile', 'dev_change_summary', 'dev_verify', 'semantic_repo']) {
       assert.ok(registry().has(tool), `${tool} should be registered`);
       assert.strictEqual(registry().get(tool).source, 'module:developer-tools', `${tool} is owned by the pack module`);
     }
@@ -221,7 +221,7 @@ function buildUpgradeCandidate() {
     const knowledgeRows = dbStore.getDb()
       .prepare("SELECT COUNT(*) AS n FROM knowledge WHERE tags LIKE '%pack:developer%' AND enabled = 1")
       .get();
-    assert.strictEqual(knowledgeRows.n, 8, 'pack knowledge is searchable once enabled');
+    assert.strictEqual(knowledgeRows.n, 9, 'pack knowledge is searchable once enabled');
   });
 
   test('CP.8: pack health derives from components, not from a stored flag', () => {
@@ -296,7 +296,7 @@ function buildUpgradeCandidate() {
     const retainedKnowledge = dbStore.getDb()
       .prepare("SELECT COUNT(*) AS n FROM knowledge WHERE tags LIKE '%pack:developer%'")
       .get();
-    assert.strictEqual(retainedKnowledge.n, 8, 'knowledge content is retained, not deleted');
+    assert.strictEqual(retainedKnowledge.n, 9, 'knowledge content is retained, not deleted');
 
     // The definitions and the module registration survive.
     assert.ok(moduleRepository.getModule('developer-tools'));
@@ -314,7 +314,7 @@ function buildUpgradeCandidate() {
     const enabledKnowledge = dbStore.getDb()
       .prepare("SELECT COUNT(*) AS n FROM knowledge WHERE tags LIKE '%pack:developer%' AND enabled = 1")
       .get();
-    assert.strictEqual(enabledKnowledge.n, 8);
+    assert.strictEqual(enabledKnowledge.n, 9);
   });
 
   // --- CP.13 upgrade -------------------------------------------------------
@@ -371,7 +371,7 @@ function buildUpgradeCandidate() {
     const result = packLifecycle.uninstall(PACK);
     assert.deepStrictEqual(result.removed.modules, ['developer-tools']);
     assert.strictEqual(result.removed.workflows.length, 6);
-    assert.strictEqual(result.removed.knowledge.length, 8);
+    assert.strictEqual(result.removed.knowledge.length, 9);
     assert.strictEqual(result.package_removed, true);
     assert.strictEqual(result.audit_preserved, true);
 

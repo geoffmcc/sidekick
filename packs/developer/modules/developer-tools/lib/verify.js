@@ -45,6 +45,8 @@ function quote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
+function windowsQuote(value) { return `"${String(value).replace(/"/g, '""')}"`; }
+
 function boundOutput(text, maxChars) {
   const value = String(text || "");
   if (value.length <= maxChars) return { output: value, truncated: false };
@@ -126,7 +128,9 @@ async function runSelection(services, { root, selection, maxOutputChars, timeout
       results.push({ ...entry, status: "not_detected", executed: false });
       continue;
     }
-    const command = `cd ${quote(root)} && ${entry.command}`;
+    const command = process.platform === "win32"
+      ? `cd /d ${windowsQuote(root)} && ${entry.command}`
+      : `cd ${quote(root)} && ${entry.command}`;
     const started = Date.now();
     const dispatched = await services.dispatch("bash", { command }, { timeoutMs });
     const durationMs = Date.now() - started;
@@ -199,4 +203,4 @@ function summarize(results, intents) {
   };
 }
 
-module.exports = { INTENTS, MODE_INTENTS, selectCommands, runSelection, summarize, parseExecution, quote, boundOutput, textOf };
+module.exports = { INTENTS, MODE_INTENTS, selectCommands, runSelection, summarize, parseExecution, quote, windowsQuote, boundOutput, textOf };

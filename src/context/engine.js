@@ -66,7 +66,7 @@ function normalizeSession(row) {
   };
 }
 
-function createContextEngine({ dbStore = dbStoreDefault, db = dbStoreDefault.getDb(), now = () => Date.now() } = {}) {
+function createContextEngine({ dbStore = dbStoreDefault, db = dbStoreDefault.getDb(), now = () => Date.now(), repositorySemanticSearch = null } = {}) {
   let semanticSearch = null;
   try { semanticSearch = require("../memory").searchMemoriesByEmbedding; } catch {}
   function scopedRows(project, includeGlobal = false) {
@@ -191,6 +191,7 @@ function createContextEngine({ dbStore = dbStoreDefault, db = dbStoreDefault.get
     budget.maxGraphNodes = clamp(budget.maxGraphNodes, 0, 50, DEFAULT_BUDGET.maxGraphNodes);
     budget.maxGraphEdges = clamp(budget.maxGraphEdges, 0, 100, DEFAULT_BUDGET.maxGraphEdges);
     const excluded = [];
+    const semanticProvider = typeof input.repositorySemanticSearch === "function" ? input.repositorySemanticSearch : repositorySemanticSearch;
     if (!scope.ok) excluded.push({ source: "scope", sourceId: scope.project, reasonCodes: [scope.code] });
     const candidates = [];
     const add = (source, rows) => {
@@ -205,6 +206,10 @@ function createContextEngine({ dbStore = dbStoreDefault, db = dbStoreDefault.get
       }
     };
     add("knowledge", queryKnowledge(query, budget.maxPerSource * 3));
+    if (typeof semanticProvider === "function") {
+      try { add("repository_semantic", await semanticProvider(query, { limit: budget.maxPerSource, maxChars: Math.min(6000, budget.maxChars) })); }
+      catch (error) { excluded.push({ source: "repository_semantic", sourceId: null, reasonCodes: ["SEMANTIC_RETRIEVAL_FAILED"] }); }
+    }
     if (scope.ok) {
       const exact = queryExact(scope.project, query, input.allowOpaqueId === true);
       add("memory", exact.filter(item => item.source === "memory"));
