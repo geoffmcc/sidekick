@@ -1,5 +1,7 @@
 "use strict";
 
+const { EVIDENCE_BUDGETS } = require("../evidence/projector");
+
 /**
  * Brain v0.1 configuration and bounds.
  *
@@ -34,8 +36,10 @@ const BRAIN_LIMITS = Object.freeze({
   MAX_GENERATED_TOKENS: 2048,       // planner cap; keep plan correction bounded
   MAX_SYNTHESIS_TOKENS: 8192,       // reasoning models may spend tokens thinking before answering
   MAX_RETRIEVED_MEMORIES: 8,        // bounded recall count
-  MAX_TOOL_OUTPUT_CHARS: 4000,      // per tool-result retained as evidence
-  MAX_EVIDENCE_CHARS: 16000,        // total retained evidence budget
+  // Model-facing evidence uses the shared projector. These are character
+  // ceilings (a conservative ~4 chars/token approximation), not exact tokens.
+  MAX_TOOL_OUTPUT_CHARS: EVIDENCE_BUDGETS.MAX_TOOL_CHARS,
+  MAX_EVIDENCE_CHARS: EVIDENCE_BUDGETS.MAX_TOTAL_CHARS,
   MAX_GOAL_CHARS: 4000,             // reuse the follow-up goal ceiling
   MAX_PLAN_BYTES: 16384,            // reject oversized model plans before parsing depth
   MAX_STEP_ARG_KEYS: 32,            // per-step argument object key ceiling

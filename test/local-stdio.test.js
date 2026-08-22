@@ -106,7 +106,7 @@ let activeRuntime;
   assert.ok(denied.result?.isError || denied.error, "approval/policy-gated local call unexpectedly succeeded");
   await stop(runtime);
   assert.ok(fs.existsSync(path.join(home, "data", "sidekick.db")), "persistent database was not outside the package/cache");
-  await Promise.all([setupProcess(home), setupProcess(home)]);
+  await Promise.all(Array.from({ length: 8 }, () => setupProcess(home)));
   assert.ok(fs.existsSync(path.join(home, "data")), "concurrent bootstrap removed the local data directory");
   fs.rmSync(home, { recursive: true, force: true });
   console.log("local stdio tests passed");

@@ -79,6 +79,10 @@ function acquireBootstrapLock(lockPath, options = {}) {
           }
         }
       } catch (readError) {
+        // The owner may release the lock after lstatSync succeeds but before
+        // readFileSync runs. Treat that observation race like a released lock
+        // and retry acquisition instead of failing startup with ENOENT.
+        if (readError.code === "ENOENT") continue;
         if (readError instanceof SyntaxError) throw new Error("Sidekick bootstrap lock is invalid");
         throw readError;
       }

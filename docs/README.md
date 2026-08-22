@@ -68,6 +68,7 @@ sqlite3 data/sidekick.db "SELECT COUNT(*) FROM knowledge WHERE version_added = '
 | `agent-bridge.md` | Autonomous task runner behavior, follow-ups, streaming, delays, and watches. |
 | `brain.md` | Feature-flagged bounded planner (default off) and approval continuation for parked tasks. |
 | `context-engine.md` | Canonical scope-isolated Context Engine, Context Manifest/receipts, authority-aware retrieval, and memory consolidation. |
+| `agent-evidence.md` | Generic bounded model-facing evidence projection, fairness, provenance, and Context Engine handling. |
 | `compute.md` | Sidekick Compute architecture, worker protocol, placement, artifacts, cancellation, and non-goals. |
 | `compute-worker.md` | Compute worker lifecycle, CLI, credentials, packaging, and OS-service installation. |
 | `openvino-npu-worker.md` | OpenVINO NPU/CPU embedding worker architecture and security properties. |

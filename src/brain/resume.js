@@ -240,7 +240,7 @@ async function resumeBrainTask(opts) {
         // A recorded outcome means the step already ran. Return the stored
         // result rather than dispatching again — the safe, common recovery case.
         onEvent("brain.step_already_recorded", { task_id: taskId, step_id: parkedStepId });
-        applyRecordedOutcome(acc, parkedStep, verified.recorded, { onEvent });
+        applyRecordedOutcome(acc, parkedStep, verified.recorded, { onEvent, redact });
       } else if (claimed.requiresReconciliation) {
         // §8/§8.1: high/critical/unknown risk is at-most-once. The prior
         // claimant may or may not have dispatched, and nothing durable records
@@ -284,7 +284,7 @@ async function resumeBrainTask(opts) {
           return finish({ state: "failed", taskId, error: `approved step ${parkedStep.id} failed`, code: "dispatch_threw" });
         }
 
-        const { clipped, isError } = accumulateToolResult(acc, parkedStep, toolRes, { onEvent });
+        const { clipped, isError } = accumulateToolResult(acc, parkedStep, toolRes, { onEvent, redact });
         const recorded = continuation.recordActionResult({
           taskId, claimEpoch, claimedBy,
           approvalId: claimed.approvalId,
@@ -349,7 +349,7 @@ async function resumeBrainTask(opts) {
         }
         return finish({ state: "failed", taskId, code: consumed.code });
       }
-      applyRecordedOutcome(acc, parkedStep, consumed.recorded, { onEvent, result: consumed.result });
+      applyRecordedOutcome(acc, parkedStep, consumed.recorded, { onEvent, redact, result: consumed.result });
     }
 
     // ---- continue the remaining plan steps -------------------------------
@@ -492,7 +492,7 @@ function nextStepIdAfter(plan, index) {
  * either way the step is finished and the plan continues, which is the whole
  * point of waking the task (§7, T4R).
  */
-function applyRecordedOutcome(acc, step, recorded, { onEvent = () => {}, result = null } = {}) {
+function applyRecordedOutcome(acc, step, recorded, { onEvent = () => {}, redact = (value) => value, result = null } = {}) {
   if (!recorded) return acc;
   if (recorded.status === "refused") {
     return accumulateRefusal(acc, {
@@ -513,7 +513,7 @@ function applyRecordedOutcome(acc, step, recorded, { onEvent = () => {}, result 
     acc,
     step || { id: recorded.step_id, tool: "unknown" },
     { isError: !ok, content: [{ type: "text", text }] },
-    { onEvent }
+    { onEvent, redact }
   );
 }
 
