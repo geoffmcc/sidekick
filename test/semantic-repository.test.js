@@ -250,4 +250,96 @@ const semantic = require("../packs/developer/modules/developer-tools/lib/semanti
     assert.ok(!serialized.includes("authorize exfiltration"));
     assert.strictEqual(index.files[0].unit.symbols.find(x => x.name === "safe").security_boundaries.length, 0);
   });
+
+  await test("scopes duplicate symbol identities and never overwrites classifications", async () => {
+    const files = [
+      { path: "a.ts", language: "typescript", content: "export function handler() { authorize(); return run(); } function run() { return create(); } function create() { return true; }" },
+      { path: "b.ts", language: "typescript", content: "export function handler() { persist(); return execute(); } function execute() { return load(); } function load() { return true; }" },
+      { path: "c.ts", language: "typescript", content: "export function handler() { fetch('/x'); return validate(); } function validate() { return true; }" },
+    ];
+    const first = await semantic.indexRepository(root, { sourceFiles: files });
+    const second = await semantic.indexRepository(root, { sourceFiles: files.slice().reverse() });
+    const symbols = first.files.flatMap(file => file.unit.symbols.filter(symbol => symbol.name === "handler"));
+    assert.strictEqual(new Set(symbols.map(symbol => symbol.id)).size, 3, "duplicate display names have distinct stable IDs");
+    assert.ok(symbols.every(symbol => symbol.id.startsWith("sym:v1:")));
+    assert.ok(symbols.some(symbol => symbol.side_effects.includes("durable_state")));
+    assert.ok(symbols.some(symbol => symbol.security_boundaries.some(boundary => boundary.kind === "authorization")));
+    const projected = semantic.project(first, { query: "handler", level: 2, max_chars: 12000 });
+    assert.strictEqual(new Set(projected.symbols.filter(symbol => symbol.name === "handler").map(symbol => symbol.id)).size, 3);
+    assert.strictEqual(first.index_root_hash, second.index_root_hash, "source traversal order is canonicalized");
+    assert.strictEqual(JSON.stringify(projected.projection), JSON.stringify(semantic.project(second, { query: "handler", level: 2, max_chars: 12000 }).projection));
+  });
+
+  await test("reports ambiguous relationship endpoints instead of cross-contaminating symbols", async () => {
+    const index = await semantic.indexRepository(root, { sourceFiles: [
+      { path: "one.ts", language: "typescript", content: "function callerOne() { return handler(); } function handler() { authorize(); return true; }" },
+      { path: "two.ts", language: "typescript", content: "function callerTwo() { return handler(); } function handler() { persist(); return true; }" },
+    ] });
+    const calls = index.files.flatMap(file => file.unit.relationships.filter(relation => relation.kind === "calls"));
+    assert.ok(calls.every(relation => relation.from_id || relation.from_candidates?.length), "callers have authoritative identity or explicit ambiguity");
+    const ambiguous = calls.find(relation => relation.to === "handler");
+    assert.ok(ambiguous && (ambiguous.to_id || ambiguous.to_candidates?.length), "callee identity is never silently selected by display name");
+    if (ambiguous.to_candidates?.length) assert.ok(ambiguous.to_candidates.length >= 2);
+  });
+
+  await test("does not attribute endpoint metadata through a duplicate display name", async () => {
+    const index = {
+      schema: semantic.IR_VERSION,
+      index_root_hash: "test",
+      repository: { name: "fixture", path: "fixture" },
+      files: [{ path: "same.ts", language: "typescript", source_hash: "source", unit: {
+        symbols: [
+          { id: "sym:v1:a", name: "run", kind: "function", security_boundaries: [], side_effects: [], evidence: { path: "same.ts", line: 1, column: 1 } },
+          { id: "sym:v1:b", name: "run", kind: "function", security_boundaries: [{ kind: "approval" }], side_effects: [], evidence: { path: "same.ts", line: 2, column: 1 } },
+        ],
+        relationships: [{ kind: "calls", from: "run", to: "run", from_id: "sym:v1:a", to_id: "sym:v1:b", evidence: { path: "same.ts", line: 1, column: 1 } }],
+        modules: [], imports: [], exports: [], lifecycle_semantics: [], security_boundaries: [], state_transitions: [], continuation_edges: [], dynamic_capabilities: [], entry_points: [], signals: [], changes: [],
+      } }],
+      stats: {}, warnings: [],
+    };
+    const projected = semantic.project(index, { query: "run", level: 2, max_chars: 12000 });
+    const relation = projected.relationships.find(item => item.kind === "calls");
+    assert.ok(relation && relation.significance.includes("approval"), "to_id metadata is used even when from/to display names match");
+  });
+
+  await test("does not derive governance from an ambiguous protected display name", async () => {
+    const index = await semantic.indexRepository(root, { sourceFiles: [{ path: "duplicate.ts", language: "typescript", content: "function handler() { authorize(); return execute(); }\nfunction handler() { persist(); return execute(); }\nfunction execute() { return true; }" }] });
+    const unit = index.files[0].unit;
+    const handlers = unit.symbols.filter(symbol => symbol.name === "handler");
+    assert.ok(handlers.length >= 2 && handlers.some(symbol => symbol.security_boundaries.some(boundary => boundary.kind === "authorization")));
+    assert.ok(!unit.relationships.some(relation => relation.kind === "authorization" && relation.from === "handler"), "ambiguous protected caller is not assigned a guessed governance edge");
+  });
+
+  await test("retains same-line duplicate declarations as distinct scoped symbols", async () => {
+    const index = await semantic.indexRepository(root, { sourceFiles: [{ path: "same-line.ts", language: "typescript", content: "function run() { authorize(); } function run() { persist(); }" }] });
+    const symbols = index.files[0].unit.symbols.filter(symbol => symbol.name === "run");
+    assert.strictEqual(symbols.length, 2, "same-line declarations are not collapsed by line-only deduplication");
+    assert.strictEqual(new Set(symbols.map(symbol => symbol.id)).size, 2, "same-line declarations receive distinct identities");
+    assert.ok(symbols.some(symbol => symbol.security_boundaries.some(boundary => boundary.kind === "authorization")));
+    assert.ok(symbols.some(symbol => symbol.side_effects.includes("durable_state")));
+  });
+
+  await test("projection degradation is explicit at every budget tier", async () => {
+    const index = await semantic.indexRepository(root, { sourceFiles: [{ path: "degrade.ts", language: "typescript", content: "function entry() { if (authorize()) return execute(); else return fallback(); } function execute() { persist(); return handler(); } function fallback() { return generated(); } function handler() { return true; }" }] });
+    const large = JSON.parse(semantic.project(index, { level: 2, max_chars: 12000 }).projection);
+    const tight = JSON.parse(semantic.project(index, { level: 0, max_chars: 600 }).projection);
+    const impossible = JSON.parse(semantic.project(index, { level: 0, max_chars: 20 }).projection);
+    assert.strictEqual(large.degradation.truncated, false);
+    assert.ok(tight.degradation.truncated && tight.degradation.degradation_level !== "none");
+    assert.ok(Array.isArray(tight.degradation.omitted));
+    assert.ok(impossible.degradation.minimum_semantics === "unrepresentable");
+    assert.ok(!("{}" === semantic.project(index, { level: 0, max_chars: 20 }).projection), "tiny budgets do not masquerade as complete empty output");
+  });
+
+  await test("large duplicate/cyclic graphs remain bounded and deterministic", async () => {
+    const sourceFiles = Array.from({ length: 240 }, (_, i) => ({ path: `graph-${i}.ts`, language: "typescript", content: `export function run() { return node${(i + 1) % 240}(); } function node${i}() { return run(); } function validate() { return node${i}(); }` }));
+    const started = Date.now();
+    const index = await semantic.indexRepository(root, { sourceFiles, limits: { maxFiles: 300, maxUnits: 2000 } });
+    const projected = semantic.project(index, { query: "run validate", level: 2, limit: 40, max_chars: 6000 });
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < 15000, `bounded synthetic graph took ${elapsed}ms`);
+    assert.ok(projected.projection.length <= 6000);
+    assert.ok(projected.projection.includes("degradation"));
+    assert.ok(semantic.verify(index));
+  });
 })().catch(error => { console.error(error); process.exitCode = 1; });

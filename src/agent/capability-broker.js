@@ -138,6 +138,18 @@ function discoverCapabilities(goal, definitions, { limit = 24, metadata = {} } =
   return [...positive, ...fallback].slice(0, Math.max(1, Math.min(64, Number(limit) || 24))).map(item => item.def);
 }
 
+// Routing may use a declarative context provider to decide that an otherwise
+// conceptual request needs live evidence.  This reports only a positive
+// metadata match; fallback catalog entries never force inspection.
+function hasRelevantContextProvider(goal, definitions, metadata = {}) {
+  const query = tokens(goal);
+  return (definitions || []).some(definition => {
+    if (!definition || definition.enabled === false || !definition.contextProvider) return false;
+    const haystack = tokens(capabilityText(definition, metadata));
+    return [...query].some(word => [...haystack].some(candidate => overlaps(word, candidate)));
+  });
+}
+
 function buildAgentCapabilityMetadata({ packs = [], modules = [], workflows = [] } = {}) {
   const moduleByName = new Map((modules || []).map(module => [module.name, module]));
   const metadata = {};
@@ -199,4 +211,4 @@ function buildAgentCapabilityMetadata({ packs = [], modules = [], workflows = []
   return metadata;
 }
 
-module.exports = { discoverCapabilities, buildAgentCapabilityMetadata, boundedText, extractRequestPath, resolveContextProviderArgs };
+module.exports = { discoverCapabilities, hasRelevantContextProvider, buildAgentCapabilityMetadata, boundedText, extractRequestPath, resolveContextProviderArgs };

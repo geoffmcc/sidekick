@@ -203,7 +203,7 @@ function buildChatMessages(systemPrompt, messages) {
  * The returned reason is stable and is surfaced to tests, the SSE stream,
  * and platform observability events.
  */
-function classifyEvidenceRequirement(goal) {
+function classifyEvidenceRequirement(goal, { repositoryCapabilityDiscovered = false } = {}) {
   const text = String(goal || "").toLowerCase();
   if (!text.trim()) return { requiresTools: false, reason: "empty_goal" };
 
@@ -241,6 +241,12 @@ function classifyEvidenceRequirement(goal) {
   if (toolNamePattern.test(text)) return { requiresTools: true, reason: "explicit_tool_reference" };
 
   if (namedCapabilityPattern.test(text) || (namedDomainPattern.test(String(goal || "")) && exactnessPattern.test(text))) return { requiresTools: true, reason: "named_capability_request" };
+
+  // A declaratively discovered context provider is evidence that the installed
+  // registry can inspect the requested local domain. This keeps conceptual
+  // wording such as "analyze this repository" on the governed evidence path
+  // without hard-coding product names or user phrases into routing.
+  if (repositoryCapabilityDiscovered) return { requiresTools: true, reason: "capability_context_provider" };
 
   if (conceptualPromptPattern.test(text) && !exactnessPattern.test(text)) {
     return { requiresTools: false, reason: "conceptual_prompt" };

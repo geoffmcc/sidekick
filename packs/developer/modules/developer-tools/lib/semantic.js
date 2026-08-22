@@ -15,8 +15,8 @@ const crypto = require("crypto");
 const ignore = require("ignore");
 const ast = require("./ast");
 
-const IR_VERSION = "sidekick.semantic-ir.v2";
-const ANALYZER_VERSION = "sidekick.semantic-analyzer.v3.9-semantic-flow";
+const IR_VERSION = "sidekick.semantic-ir.v3";
+const ANALYZER_VERSION = "sidekick.semantic-analyzer.v4.0-scoped-symbols";
 const DEFAULT_LIMITS = Object.freeze({ maxFiles: 4000, maxBytes: 64 * 1024 * 1024, maxFileBytes: 512 * 1024, maxUnits: 30000, maxEntries: 20000, maxAstNodes: 50000, maxResultChars: 18000 });
 const EXTENSIONS = Object.freeze({
   ".ts": "typescript", ".tsx": "typescript_tsx", ".mts": "typescript", ".cts": "typescript",
@@ -54,7 +54,7 @@ function loc(text, offset) {
 function evidence(file, sourceHash, text, offset) { return { path: file, ...loc(text, offset) }; }
 function addUnique(list, item, key = stable) { if (!list.some(x => key(x) === key(item))) list.push(item); }
 function parameterNames(raw) { return clean(raw, 500).split(",").map(part => part.trim().replace(/^\.\.\./, "").split(/[=:]/, 1)[0].replace(/\s+/g, " ").trim()).filter(Boolean).slice(0, 64); }
-function semanticIdentity(unit) { return sha256("sidekick.semantic.unit.v2", stable({ language: unit.language, modules: canonicalSet(unit.modules), imports: canonicalSet(unit.imports.map(x => x.name || x.text)), exports: canonicalSet(unit.exports.map(x => x.name || x.text)), symbols: unit.symbols.map(x => ({ name: x.name, kind: x.kind, parameters: x.parameters || [], parent: x.parent || null, execution_phase: x.execution_phase || "unknown", lifecycle_semantics: canonicalSet(unit.lifecycle_semantics?.filter(y => y.symbol === x.name).map(y => y.kind) || x.lifecycle_semantics || []), security_boundaries: canonicalSet((x.security_boundaries || []).map(y => ({ kind: y.kind, confidence: y.confidence }))), side_effects: x.side_effects || [] })), relationships: canonicalSet(unit.relationships.map(x => ({ kind: x.kind, from: x.from, to: x.to, certainty: x.certainty, phase: x.phase || null, boundary: x.boundary || null }))), control_flow: canonicalSet((unit.control_flow || []).map(x => ({ kind: x.kind, from: x.from || null, ast_node: x.provenance?.ast_node || null }))), state_transitions: canonicalSet((unit.state_transitions || []).map(x => ({ state: x.state, to: x.to }))), continuation_edges: canonicalSet((unit.continuation_edges || []).map(x => ({ kind: x.kind, from: x.from || null, to: x.to || null }))), lifecycle_semantics: canonicalSet((unit.lifecycle_semantics || []).map(x => ({ kind: x.kind, symbol: x.symbol || null }))), security_boundaries: canonicalSet((unit.security_boundaries || []).map(x => ({ kind: x.kind, confidence: x.confidence }))), execution_phase: unit.execution_phase || "unknown", dynamic_capabilities: canonicalSet((unit.dynamic_capabilities || []).map(x => ({ kind: x.kind, symbol: x.symbol || null }))), signals: canonicalSet(unit.signals.map(x => x.kind)) })); }
+function semanticIdentity(unit) { return sha256("sidekick.semantic.unit.v3", stable({ language: unit.language, modules: canonicalSet(unit.modules), imports: canonicalSet(unit.imports.map(x => x.name || x.text)), exports: canonicalSet(unit.exports.map(x => x.name || x.text)), symbols: unit.symbols.map(x => ({ id: x.id || null, name: x.name, kind: x.kind, parameters: x.parameters || [], parent: x.parent || null, execution_phase: x.execution_phase || "unknown", lifecycle_semantics: canonicalSet(x.lifecycle_semantics || []), security_boundaries: canonicalSet((x.security_boundaries || []).map(y => ({ kind: y.kind, confidence: y.confidence }))), side_effects: x.side_effects || [] })), relationships: canonicalSet(unit.relationships.map(x => ({ kind: x.kind, from: x.from, to: x.to, from_id: x.from_id || null, to_id: x.to_id || null, from_candidates: x.from_candidates || [], to_candidates: x.to_candidates || [], certainty: x.certainty, phase: x.phase || null, boundary: x.boundary || null }))), control_flow: canonicalSet((unit.control_flow || []).map(x => ({ kind: x.kind, from: x.from || null, ast_node: x.provenance?.ast_node || null }))), state_transitions: canonicalSet((unit.state_transitions || []).map(x => ({ state: x.state, to: x.to }))), continuation_edges: canonicalSet((unit.continuation_edges || []).map(x => ({ kind: x.kind, from: x.from || null, to: x.to || null }))), lifecycle_semantics: canonicalSet((unit.lifecycle_semantics || []).map(x => ({ kind: x.kind, symbol: x.symbol || null }))), security_boundaries: canonicalSet((unit.security_boundaries || []).map(x => ({ kind: x.kind, confidence: x.confidence }))), execution_phase: unit.execution_phase || "unknown", dynamic_capabilities: canonicalSet((unit.dynamic_capabilities || []).map(x => ({ kind: x.kind, symbol: x.symbol || null }))), signals: canonicalSet(unit.signals.map(x => x.kind)) })); }
 function semanticChanges(previousFiles = [], currentFiles = []) {
   const oldByPath = new Map(previousFiles.map(x => [x.path, x.unit])); const newByPath = new Map(currentFiles.map(x => [x.path, x.unit])); const changes = [];
   const names = unit => new Set((unit?.symbols || []).map(x => `${x.kind}:${x.name}`));
@@ -151,7 +151,7 @@ function parseSource(language, file, text, sourceHash) {
   const addSymbol = (name, kind, m, extra = {}) => {
     if (!name || out.symbols.length >= 10000) return;
     const symbol = { name: clean(name, 200), kind, ...extra, evidence: evidence(file, sourceHash, text, m.index) };
-    addUnique(out.symbols, symbol, x => `${x.name}:${x.kind}:${x.evidence.line}`);
+    addUnique(out.symbols, symbol, x => `${x.name}:${x.kind}:${x.evidence.line}:${x.evidence.column}`);
     if (/test|spec/i.test(file) || /^(test|spec|describe|it|beforeEach)$/.test(name)) addUnique(out.tests, { name: symbol.name, kind: symbol.kind, evidence: symbol.evidence }, x => stable(x));
     return symbol;
   };
@@ -229,11 +229,73 @@ function writeCache(file, value) {
   } catch { /* cache failure is non-fatal */ }
 }
 
+// Symbols are scoped by repository-relative path, lexical parent, kind, name,
+// and a canonical source location.  The location is used only as a
+// deterministic disambiguator for legal same-scope duplicates; it is never an
+// absolute path or an incidental traversal index.  Ambiguous relationship
+// endpoints remain explicitly unresolved instead of being assigned to the
+// last symbol with a matching display name.
+function assignScopedSymbolIdentities(files) {
+  const byName = new Map();
+  for (const file of files) {
+    const symbols = (file.unit.symbols || []).slice().sort((a, b) =>
+      (a.evidence?.line || 0) - (b.evidence?.line || 0) ||
+      (a.evidence?.column || 0) - (b.evidence?.column || 0) ||
+      String(a.parent || "").localeCompare(String(b.parent || "")) ||
+      String(a.kind || "").localeCompare(String(b.kind || "")) ||
+      String(a.name || "").localeCompare(String(b.name || ""))
+    );
+    const local = new Map();
+    for (const symbol of symbols) {
+      const base = { path: file.path, parent: symbol.parent || null, kind: symbol.kind, name: symbol.name };
+      const key = stable(base);
+      const occurrence = (local.get(key) || 0) + 1;
+      local.set(key, occurrence);
+      // Occurrence is canonical: symbols are sorted by normalized source
+      // location and then structural fields before it is assigned.  Omitting
+      // the location from the digest keeps formatting-only edits from
+      // changing an otherwise identical symbol identity.
+      symbol.id = `sym:v1:${sha256("sidekick.semantic.symbol.v1", stable({ ...base, occurrence })).slice(0, 40)}`;
+      const names = byName.get(symbol.name) || [];
+      names.push({ file, symbol });
+      byName.set(symbol.name, names);
+    }
+  }
+  for (const entries of byName.values()) entries.sort((a, b) => a.file.path.localeCompare(b.file.path, "en") || (a.symbol.evidence?.line || 0) - (b.symbol.evidence?.line || 0) || a.symbol.id.localeCompare(b.symbol.id));
+
+  const resolve = (file, name, preferLocal) => {
+    if (!name) return { id: null, candidates: [] };
+    const candidates = (byName.get(String(name)) || []).filter(item => !preferLocal || item.file.path === file.path);
+    const ids = candidates.map(item => item.symbol.id).sort();
+    return { id: ids.length === 1 ? ids[0] : null, candidates: ids };
+  };
+  for (const file of files) {
+    for (const relation of file.unit.relationships || []) {
+      if (!relation.from_id && relation.kind !== "imports") {
+        const resolved = resolve(file, relation.from, true);
+        if (resolved.id) relation.from_id = resolved.id;
+        else if (resolved.candidates.length) relation.from_candidates = resolved.candidates;
+      }
+      if (!relation.to_id && relation.kind !== "imports") {
+        const local = resolve(file, relation.to, true);
+        const resolved = local.id ? local : resolve(file, relation.to, false);
+        if (resolved.id) relation.to_id = resolved.id;
+        else if (resolved.candidates.length) relation.to_candidates = resolved.candidates;
+      }
+    }
+    file.unit.semantic_hash = semanticIdentity({ ...file.unit, language: file.language });
+  }
+  return byName;
+}
+
 async function indexRepository(root, options = {}) {
   const limits = { ...DEFAULT_LIMITS, ...(options.limits || {}) };
   const sourceFiles = Array.isArray(options.sourceFiles) ? options.sourceFiles : null;
   const configHash = configurationHash(root, limits, sourceFiles);
   const found = sourceFiles ? { files: sourceFiles.slice(0, limits.maxFiles).map(item => ({ path: item.path, language: item.language, size: Buffer.byteLength(String(item.content || "")), content: item.content })), bytes: sourceFiles.reduce((total, item) => total + Buffer.byteLength(String(item.content || "")), 0), truncated: sourceFiles.length > limits.maxFiles, skipped: [] } : discover(root, limits);
+  // Source-provided fixtures and callers may enumerate files in any order;
+  // canonical path ordering is part of the IR contract.
+  found.files.sort((a, b) => String(a.path).localeCompare(String(b.path), "en"));
   let previous = sourceFiles ? null : (memoryCache.get(root) || readCache(cacheFile(root)));
   if (previous && previous.config_hash !== configHash) previous = null;
   const warnings = [...found.skipped];
@@ -258,7 +320,7 @@ async function indexRepository(root, options = {}) {
         try {
           const tree = await ast.parse(item.language, text, { maxNodes: limits.maxAstNodes });
           unit.parser = tree.parser; unit.parser_version = tree.parser_version; unit.parse_errors = tree.parse_errors; unit.ast_root = tree.root_type; unit.ast_nodes = tree.visited_nodes;
-          for (const symbol of tree.symbols) addUnique(unit.symbols, { name: clean(symbol.name, 200), kind: symbol.kind, parent: symbol.parent || null, certainty: "parsed", evidence: evidence(item.path, sourceHash, text, symbol.start_byte) }, x => `${x.name}:${x.kind}:${x.evidence.line}`);
+          for (const symbol of tree.symbols) addUnique(unit.symbols, { name: clean(symbol.name, 200), kind: symbol.kind, parent: symbol.parent || null, certainty: "parsed", evidence: evidence(item.path, sourceHash, text, symbol.start_byte) }, x => `${x.name}:${x.kind}:${x.evidence.line}:${x.evidence.column}`);
           for (const relation of tree.relationships) addUnique(unit.relationships, { kind: relation.kind, from: relation.from, to: relation.to, certainty: relation.certainty, evidence: evidence(item.path, sourceHash, text, relation.start_byte) }, x => x.kind === "calls" ? `${x.kind}:${x.from}:${x.to}` : `${x.kind}:${x.from}:${x.to}:${x.evidence.line}`);
           for (const flow of tree.control_flow || []) addUnique(unit.relationships, { kind: flow.kind, from: flow.from || null, to: null, certainty: "parsed", evidence: evidence(item.path, sourceHash, text, flow.start_byte), provenance: { ast_node: flow.ast_node, rule: "tree-sitter-control-node" } }, x => `${x.kind}:${x.from}:${x.provenance?.ast_node || ""}`);
           for (const entry of tree.imports) addUnique(unit.imports, { name: clean(entry.text, 240), certainty: "parsed", evidence: evidence(item.path, sourceHash, text, entry.start_byte) }, x => x.name);
@@ -266,7 +328,7 @@ async function indexRepository(root, options = {}) {
           const metadata = semanticMetadata(text, tree, item.path, sourceHash);
           Object.assign(unit, metadata);
           for (const symbol of tree.symbols || []) {
-            const target = unit.symbols.find(x => x.name === clean(symbol.name, 200) && x.evidence.line === symbol.start_line) || unit.symbols.find(x => x.name === clean(symbol.name, 200));
+            const target = unit.symbols.find(x => x.name === clean(symbol.name, 200) && x.evidence.line === symbol.start_line && x.evidence.column === symbol.start_column) || unit.symbols.find(x => x.name === clean(symbol.name, 200) && x.evidence.line === symbol.start_line);
             if (!target) continue;
             const body = text.slice(symbol.start_byte, Math.min(text.length, symbol.end_byte));
             const phase = Object.entries(PHASE_WORDS).find(([, re]) => re.test(symbol.name));
@@ -294,6 +356,7 @@ async function indexRepository(root, options = {}) {
     unit.path = item.path; unit.language = item.language; unit.source_hash = sourceHash; unit.analyzer_version = ANALYZER_VERSION; unit.ir_version = IR_VERSION; files.push({ path: item.path, language: item.language, source_hash: sourceHash, analyzer_version: ANALYZER_VERSION, ir_version: IR_VERSION, unit }); units += unit.symbols.length;
     if (units >= limits.maxUnits) { warnings.push({ code: "semantic_units_limit", limit: limits.maxUnits }); break; }
   }
+  assignScopedSymbolIdentities(files);
   const knownPaths = new Set(files.map(x => x.path));
   for (const file of files) {
     for (const imported of file.unit.imports || []) {
@@ -304,9 +367,9 @@ async function indexRepository(root, options = {}) {
       if (target) addUnique(file.unit.relationships, { kind: "imports", from: file.path, to: target, certainty: "inferred", evidence: imported.evidence }, x => `${x.kind}:${x.from}:${x.to}`);
     }
     file.unit.semantic_hash = semanticIdentity({ ...file.unit, language: file.language });
-    const protectedNames = new Map((file.unit.symbols || []).filter(s => (s.security_boundaries || []).some(b => ["authorization", "approval", "policy"].includes(b.kind))).map(s => [s.name, new Set(s.security_boundaries.map(b => b.kind))]));
-    for (const relation of [...(file.unit.relationships || [])]) if (relation.kind === "calls" && protectedNames.has(relation.from) && /(?:dispatch|execute|invoke|handler|perform|call)/i.test(String(relation.to || ""))) {
-      const boundary = [...protectedNames.get(relation.from)].sort()[0];
+    const protectedSymbols = new Map((file.unit.symbols || []).filter(s => s.id && (s.security_boundaries || []).some(b => ["authorization", "approval", "policy"].includes(b.kind))).map(s => [s.id, new Set(s.security_boundaries.map(b => b.kind))]));
+    for (const relation of [...(file.unit.relationships || [])]) if (relation.kind === "calls" && relation.from_id && protectedSymbols.has(relation.from_id) && /(?:dispatch|execute|invoke|handler|perform|call)/i.test(String(relation.to || ""))) {
+      const boundary = [...protectedSymbols.get(relation.from_id)].sort()[0];
       addUnique(file.unit.relationships, { kind: "authorization", from: relation.from, to: relation.to, boundary, certainty: "derived", evidence: relation.evidence, provenance: { rule: "governance-symbol-before-execution-call" } }, x => `${x.kind}:${x.from}:${x.to}:${x.boundary}`);
     }
     file.unit.semantic_hash = semanticIdentity({ ...file.unit, language: file.language });
@@ -314,16 +377,19 @@ async function indexRepository(root, options = {}) {
   // A convergence marker is emitted only when independently observed call
   // edges reach the same symbol. It is a relationship, not a guessed route.
   const incoming = new Map();
-  for (const file of files) for (const relation of file.unit.relationships || []) if (relation.kind === "calls" && relation.to) {
-    const key = String(relation.to); if (!incoming.has(key)) incoming.set(key, []); incoming.get(key).push({ file, relation });
+  for (const file of files) for (const relation of file.unit.relationships || []) if (relation.kind === "calls" && relation.from_id && relation.to_id) {
+    const key = String(relation.to_id); if (!incoming.has(key)) incoming.set(key, []); incoming.get(key).push({ file, relation });
   }
-  for (const [to, edges] of incoming) if (new Set(edges.map(x => x.relation.from)).size > 1) {
+  for (const [toId, edges] of incoming) if (new Set(edges.map(x => x.relation.from_id)).size > 1) {
     const evidenceItem = edges.slice().sort((a, b) => a.file.path.localeCompare(b.file.path) || a.relation.evidence.line - b.relation.evidence.line)[0];
-    addUnique(evidenceItem.file.unit.relationships, { kind: "convergence", from: null, to, certainty: "derived", evidence: evidenceItem.relation.evidence, provenance: { rule: "multiple-observed-callers" } }, x => `${x.kind}:${x.to}`);
+    addUnique(evidenceItem.file.unit.relationships, { kind: "convergence", from: null, to: evidenceItem.relation.to, to_id: toId, certainty: "derived", evidence: evidenceItem.relation.evidence, provenance: { rule: "multiple-observed-callers" } }, x => `${x.kind}:${x.to_id}`);
     evidenceItem.file.unit.semantic_hash = semanticIdentity({ ...evidenceItem.file.unit, language: evidenceItem.file.language });
   }
+  // Derived governance/convergence edges are assigned the same scoped
+  // identities as parser-produced edges before hashing and persistence.
+  assignScopedSymbolIdentities(files);
   const aggregate = { ir_version: IR_VERSION, analyzer_version: ANALYZER_VERSION, config_hash: configHash, files: files.map(x => ({ path: x.path, language: x.language, source_hash: x.source_hash, analyzer_version: x.analyzer_version, ir_version: x.ir_version, unit: x.unit })) };
-  const indexRootHash = sha256("sidekick.semantic.index.v2", stable(aggregate));
+  const indexRootHash = sha256("sidekick.semantic.index.v3", stable(aggregate));
   if (found.truncated) warnings.push({ code: "discovery_truncated", limit: limits.maxFiles });
   const result = { ok: true, schema: IR_VERSION, analyzer_version: ANALYZER_VERSION, config_hash: configHash, repository: { name: path.basename(root), path: root, state: options.state || { kind: "working_tree" } }, files, changes: semanticChanges(previous?.files || [], files), stats: { discovered: found.files.length, parsed, cache_hits: cacheHits, skipped: found.files.length - files.length, bytes: found.bytes, symbols: units, relationships: files.reduce((n, f) => n + (f.unit.relationships || []).length, 0), semantic_bytes: 0, truncated: found.truncated }, warnings, index_root_hash: indexRootHash, generated_from_source: true };
   result.stats.semantic_bytes = Buffer.byteLength(stable(result), "utf8");
@@ -344,12 +410,13 @@ const PROJECTION_PRIORITY = Object.freeze({
 });
 const RELATIONSHIP_WORDS = new Set(["what", "does", "do", "call", "calls", "caller", "callers", "callee", "callees", "who", "references", "depend", "depends", "dependency", "dependencies", "import", "imports", "module", "modules"]);
 
-function projectionCategories(relation, symbolsByName) {
+function projectionCategories(relation, symbolsById, symbolsByName) {
   const categories = [];
   if (PROJECTION_PRIORITY[relation.kind]) categories.push(relation.kind);
   if (relation.boundary) categories.push(String(relation.boundary));
-  for (const endpoint of [relation.from, relation.to]) {
-    const symbol = symbolsByName.get(endpoint);
+  for (const [endpoint, endpointId] of [[relation.from, relation.from_id], [relation.to, relation.to_id]]) {
+    const symbol = (endpointId && symbolsById.get(endpointId)) ||
+      (symbolsByName.get(endpoint)?.length === 1 ? symbolsByName.get(endpoint)[0] : null);
     for (const boundary of symbol?.security_boundaries || []) categories.push(boundary.kind);
     if (symbol?.execution_phase && symbol.execution_phase !== "unknown") categories.push(`phase:${symbol.execution_phase}`);
     if ((symbol?.side_effects || []).length) categories.push("side_effect");
@@ -367,7 +434,9 @@ function projectionScore(relation, categories, queryScore = 0) {
 }
 
 function compactRelation(relation, detailed) {
-  const base = { kind: relation.kind, from: relation.from || null, to: relation.to || null, evidence: relation.evidence || null };
+  const base = { kind: relation.kind, from: relation.from || null, to: relation.to || null, from_id: relation.from_id || null, to_id: relation.to_id || null, evidence: relation.evidence || null };
+  if (relation.from_candidates?.length) base.from_candidates = relation.from_candidates.slice(0, 8);
+  if (relation.to_candidates?.length) base.to_candidates = relation.to_candidates.slice(0, 8);
   if (relation.boundary) base.boundary = relation.boundary;
   if (relation.phase) base.phase = relation.phase;
   if (detailed && relation.provenance) base.provenance = relation.provenance;
@@ -378,35 +447,42 @@ function project(index, { query = "", level = 0, max_chars = 12000, limit = 40 }
   const q = clean(query, 500).toLowerCase(); const tokens = q.split(/[^a-z0-9_:$.-]+/).filter(x => x.length > 1);
   const relationMode = /\b(?:callee|callees|what does .* call|dependencies|imports?|depends?)\b/.test(q) ? "outgoing" : /\b(?:caller|callers|who calls|calls|references|dependents?)\b/.test(q) ? "incoming" : null;
   const all = index.files.flatMap(f => f.unit.symbols.map(s => ({ ...s, path: f.path, language: f.language, source_hash: f.source_hash })));
-  const symbolsByName = new Map(all.map(symbol => [symbol.name, symbol]));
+  const symbolsById = new Map(all.filter(symbol => symbol.id).map(symbol => [symbol.id, symbol]));
+  const symbolsByName = new Map();
+  for (const symbol of all) { const list = symbolsByName.get(symbol.name) || []; list.push(symbol); symbolsByName.set(symbol.name, list); }
   const score = item => tokens.reduce((n, t) => n + (String(item.name).toLowerCase().includes(t) || String(item.kind).toLowerCase().includes(t) || item.path.toLowerCase().includes(t) ? 1 : 0), 0);
   const targetTokens = tokens.filter(token => !RELATIONSHIP_WORDS.has(token));
-  const targetNames = new Set(all.filter(item => targetTokens.some(t => String(item.name).toLowerCase().includes(t))).map(item => item.name));
+  const targetIds = new Set(all.filter(item => targetTokens.some(t => String(item.name).toLowerCase().includes(t))).map(item => item.id).filter(Boolean));
   const allRelationships = index.files.flatMap(f => (f.unit.relationships || []).map(r => ({ ...r, path: f.path })));
   const incomingCounts = new Map();
-  for (const relation of allRelationships) if (relation.to) incomingCounts.set(relation.to, (incomingCounts.get(relation.to) || 0) + 1);
+  for (const relation of allRelationships) {
+    const endpoint = relation.to_id || relation.to;
+    if (endpoint) incomingCounts.set(endpoint, (incomingCounts.get(endpoint) || 0) + 1);
+  }
   const relevantRelationships = allRelationships.filter(relation => {
-    const endpointMatches = targetNames.has(relation.from) || targetNames.has(relation.to) || targetTokens.some(token => [relation.from, relation.to].some(endpoint => String(endpoint || "").toLowerCase().includes(token)));
+    const endpointMatches = targetIds.has(relation.from_id) || targetIds.has(relation.to_id) || targetTokens.some(token => [relation.from, relation.to].some(endpoint => String(endpoint || "").toLowerCase().includes(token)));
     if (!relationMode) return endpointMatches;
     const endpoint = relationMode === "incoming" ? relation.to : relation.from;
-    return targetNames.has(endpoint) || targetTokens.some(token => String(endpoint || "").toLowerCase().includes(token));
+    const endpointId = relationMode === "incoming" ? relation.to_id : relation.from_id;
+    return targetIds.has(endpointId) || targetTokens.some(token => String(endpoint || "").toLowerCase().includes(token));
   });
-  const relatedNames = new Set(relevantRelationships.flatMap(relation => [relation.from, relation.to]));
+  const relevantRelationshipSet = new Set(relevantRelationships);
+  const relatedIds = new Set(relevantRelationships.flatMap(relation => [relation.from_id, relation.to_id]).filter(Boolean));
   const scoredRelationships = allRelationships.map(relation => {
-    const categories = projectionCategories(relation, symbolsByName);
-    const target = symbolsByName.get(relation.to);
-    if (relation.kind === "convergence" || (relation.kind === "calls" && target && ((target.side_effects || []).length || (incomingCounts.get(relation.to) || 0) > 1))) categories.push("execution_authority");
+    const categories = projectionCategories(relation, symbolsById, symbolsByName);
+    const target = relation.to_id ? symbolsById.get(relation.to_id) : null;
+    if (relation.kind === "convergence" || (relation.kind === "calls" && target && ((target.side_effects || []).length || (incomingCounts.get(relation.to_id || relation.to) || 0) > 1))) categories.push("execution_authority");
     categories.sort();
     const endpointQueryMatch = targetTokens.some(token => [relation.from, relation.to].some(endpoint => String(endpoint || "").toLowerCase().includes(token)));
-    const queryMatch = relevantRelationships.includes(relation) || endpointQueryMatch || relatedNames.has(relation.from) || relatedNames.has(relation.to);
+    const queryMatch = relevantRelationshipSet.has(relation) || endpointQueryMatch || relatedIds.has(relation.from_id) || relatedIds.has(relation.to_id);
     return { relation, categories, score: projectionScore(relation, categories, queryMatch ? 2 : 0) };
   }).sort((a, b) => b.score - a.score || a.relation.path.localeCompare(b.relation.path) || (a.relation.evidence?.line || 0) - (b.relation.evidence?.line || 0) || String(a.relation.kind).localeCompare(String(b.relation.kind)) || String(a.relation.from || "").localeCompare(String(b.relation.from || "")) || String(a.relation.to || "").localeCompare(String(b.relation.to || "")));
   const selectedRelationshipCount = Math.min(200, Math.max(limit, relevantRelationships.length + 1));
-  const selectedRelationshipData = [...scoredRelationships.filter(item => relevantRelationships.includes(item.relation)), ...scoredRelationships.filter(item => !relevantRelationships.includes(item.relation))].slice(0, selectedRelationshipCount);
+  const selectedRelationshipData = [...scoredRelationships.filter(item => relevantRelationshipSet.has(item.relation)), ...scoredRelationships.filter(item => !relevantRelationshipSet.has(item.relation))].slice(0, selectedRelationshipCount);
   const selectedRelationships = selectedRelationshipData.map(item => ({ ...compactRelation(item.relation, level > 1), significance: item.categories }));
-  const symbols = all.sort((a, b) => (relatedNames.has(b.name) ? 1 : 0) - (relatedNames.has(a.name) ? 1 : 0) || (b.security_boundaries?.length || 0) - (a.security_boundaries?.length || 0) || score(b) - score(a) || a.path.localeCompare(b.path) || a.name.localeCompare(b.name)).slice(0, selectedRelationshipCount);
-  const projectedSymbols = symbols.map(s => ({ name: s.name, kind: s.kind, path: s.path, language: s.language, execution_phase: s.execution_phase || "unknown", lifecycle_semantics: [...(s.lifecycle_semantics || [])].sort(), security_boundaries: [...new Set((s.security_boundaries || []).map(x => x.kind))].sort(), side_effects: [...(s.side_effects || [])].sort(), evidence: s.evidence }));
-  const querySymbols = projectedSymbols.filter(symbol => targetNames.has(symbol.name) || targetTokens.some(token => symbol.name.toLowerCase().includes(token) || symbol.path.toLowerCase().includes(token)));
+  const symbols = all.slice().sort((a, b) => (relatedIds.has(b.id) ? 1 : 0) - (relatedIds.has(a.id) ? 1 : 0) || (b.security_boundaries?.length || 0) - (a.security_boundaries?.length || 0) || score(b) - score(a) || a.path.localeCompare(b.path) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id)).slice(0, selectedRelationshipCount);
+  const projectedSymbols = symbols.map(s => ({ id: s.id, name: s.name, kind: s.kind, parent: s.parent || null, path: s.path, language: s.language, execution_phase: s.execution_phase || "unknown", lifecycle_semantics: [...(s.lifecycle_semantics || [])].sort(), security_boundaries: [...new Set((s.security_boundaries || []).map(x => x.kind))].sort(), side_effects: [...(s.side_effects || [])].sort(), evidence: s.evidence }));
+  const querySymbols = projectedSymbols.filter(symbol => targetIds.has(symbol.id) || targetTokens.some(token => symbol.name.toLowerCase().includes(token) || symbol.path.toLowerCase().includes(token)));
   const rankMetadata = items => items.slice().sort((a, b) => {
     const aMatch = targetTokens.some(token => stable(a).toLowerCase().includes(token)) ? 1 : 0;
     const bMatch = targetTokens.some(token => stable(b).toLowerCase().includes(token)) ? 1 : 0;
@@ -416,23 +492,32 @@ function project(index, { query = "", level = 0, max_chars = 12000, limit = 40 }
   const overview = { schema: index.schema, index_root_hash: index.index_root_hash, repository: index.repository, symbols: (q || level > 0 || selectedRelationships.length ? projectedSymbols : projectedSymbols.filter(s => s.security_boundaries.length || s.side_effects.length).slice(0, limit)), languages: [...new Set(index.files.map(x => x.language))].sort(), modules: index.files.flatMap(f => f.unit.modules.map(m => ({ ...m, path: f.path }))).slice(0, limit), entry_points: index.files.flatMap(f => f.unit.entry_points).slice(0, limit), lifecycle: rankMetadata(index.files.flatMap(f => (f.unit.lifecycle_semantics || []).map(s => ({ ...s, path: f.path })))), governance, security_boundaries: rankMetadata(index.files.flatMap(f => (f.unit.security_boundaries || []).map(s => ({ ...s, path: f.path })))), state_transitions: rankMetadata(index.files.flatMap(f => (f.unit.state_transitions || []).map(s => ({ ...s, path: f.path })))), continuation_edges: rankMetadata(index.files.flatMap(f => (f.unit.continuation_edges || []).map(s => ({ ...s, path: f.path })))), dynamic_capabilities: rankMetadata(index.files.flatMap(f => (f.unit.dynamic_capabilities || []).map(s => ({ ...s, path: f.path })))), signals: index.files.flatMap(f => f.unit.signals.map(s => ({ ...s, path: f.path }))).slice(0, limit), changes: (index.changes || []).slice(0, limit), relationships: selectedRelationships.slice(0, limit) };
   if (level > 1 || relationMode) overview.relationships = (relationMode ? selectedRelationshipData : selectedRelationshipData).map(item => ({ ...compactRelation(item.relation, true), significance: item.categories }));
   const essential = overview.relationships.filter(r => ["branch", "fallback", "error_path", "convergence", "authorization", "approval", "persisted_continuation", "state_transition"].includes(r.kind) || (r.significance || []).some(x => ["authorization", "approval", "policy", "integrity_verification", "schema_validation", "execution_authority"].includes(x)));
-  const queryRelationships = selectedRelationshipData.filter(item => relevantRelationships.includes(item.relation)).map(item => ({ ...compactRelation(item.relation, level > 1), significance: item.categories }));
+  const queryRelationships = selectedRelationshipData.filter(item => relevantRelationshipSet.has(item.relation)).map(item => ({ ...compactRelation(item.relation, level > 1), significance: item.categories }));
+  const compactQueryRelationships = selectedRelationshipData.filter(item => relevantRelationshipSet.has(item.relation)).map(item => ({ ...compactRelation(item.relation, false), significance: item.categories }));
   overview.policy = { retained_first: ["execution_authority", "security", "authorization", "approval", "durable_continuation", "state_transition", "branch_fallback", "lifecycle", "provenance"], essential_edge_count: essential.length, detail_level: Math.max(0, Math.min(2, Number(level) || 0)) };
-  const ordered = { schema: overview.schema, index_root_hash: overview.index_root_hash, repository: overview.repository, symbols: overview.symbols, governance: overview.governance, relationships: overview.relationships, lifecycle: overview.lifecycle, state_transitions: overview.state_transitions, continuation_edges: overview.continuation_edges, security_boundaries: overview.security_boundaries, dynamic_capabilities: overview.dynamic_capabilities, entry_points: overview.entry_points, languages: overview.languages, modules: overview.modules, signals: overview.signals, changes: overview.changes, policy: overview.policy, stats: index.stats, warnings: (index.warnings || []).slice(0, 20) };
+  const makeDegradation = (level, omitted, provenance, security, minimum = "preserved") => ({ truncated: level !== "none", degradation_level: level, omitted: [...new Set(omitted)].sort(), provenance, security, minimum_semantics: minimum });
+  const ordered = { schema: overview.schema, index_root_hash: overview.index_root_hash, repository: overview.repository, symbols: overview.symbols, governance: overview.governance, relationships: overview.relationships, lifecycle: overview.lifecycle, state_transitions: overview.state_transitions, continuation_edges: overview.continuation_edges, security_boundaries: overview.security_boundaries, dynamic_capabilities: overview.dynamic_capabilities, entry_points: overview.entry_points, languages: overview.languages, modules: overview.modules, signals: overview.signals, changes: overview.changes, policy: overview.policy, stats: index.stats, warnings: (index.warnings || []).slice(0, 20), degradation: makeDegradation("none", [], "full", "full") };
   let text = JSON.stringify(ordered);
-  // Budget degradation removes ordinary decoration first, never semantic
-  // edges or their evidence. The final fallback is compact JSON rather than
-  // a sliced object, so consumers never receive malformed serialization.
+  // Budget degradation preferentially retains architecture/security semantics,
+  // but every omission is reported in-band. A compact JSON fallback is still
+  // valid and truthful when the requested budget cannot retain the full view.
   if (text.length > max_chars) {
-    const reduced = { schema: ordered.schema, index_root_hash: ordered.index_root_hash, symbols: querySymbols.slice(0, limit), relationships: [...queryRelationships, ...essential].slice(0, Math.max(limit, queryRelationships.length)), governance: ordered.governance, state_transitions: ordered.state_transitions, continuation_edges: ordered.continuation_edges, policy: ordered.policy, truncated: true };
+    ordered.degradation = makeDegradation("moderate", ["ordinary_symbols", "expanded_modules", "signals", "changes", "expanded_provenance"], "reduced", "full");
+    const reduced = { schema: ordered.schema, index_root_hash: ordered.index_root_hash, symbols: querySymbols.slice(0, limit), relationships: [...compactQueryRelationships, ...essential].slice(0, Math.min(24, Math.max(limit, 12))), governance: ordered.governance, state_transitions: ordered.state_transitions, continuation_edges: ordered.continuation_edges, policy: ordered.policy, degradation: ordered.degradation };
     text = JSON.stringify(reduced);
-    if (text.length > max_chars) text = JSON.stringify({ schema: ordered.schema, index_root_hash: ordered.index_root_hash, symbols: querySymbols.slice(0, limit).map(symbol => ({ name: symbol.name, path: symbol.path, execution_phase: symbol.execution_phase, security_boundaries: symbol.security_boundaries, evidence: symbol.evidence })), relationships: [...queryRelationships, ...essential].slice(0, Math.max(1, Math.min(Math.max(queryRelationships.length, essential.length), limit))), policy: ordered.policy, truncated: true });
+    if (text.length > max_chars) {
+      ordered.degradation = makeDegradation("tight", ["ordinary_symbols", "expanded_modules", "signals", "changes", "governance_detail", "expanded_provenance"], "reduced", "grouped");
+      text = JSON.stringify({ schema: ordered.schema, index_root_hash: ordered.index_root_hash, symbols: querySymbols.slice(0, Math.min(limit, 24)).map(symbol => ({ id: symbol.id, name: symbol.name, path: symbol.path, execution_phase: symbol.execution_phase, security_boundaries: symbol.security_boundaries, evidence: symbol.evidence })), relationships: [...compactQueryRelationships, ...essential].slice(0, Math.min(12, Math.max(1, limit))), policy: ordered.policy, degradation: ordered.degradation });
+    }
   }
   if (text.length > max_chars) {
-    const minimalEdges = [...queryRelationships, ...essential].slice(0, 2).map(edge => ({ kind: edge.kind, from: edge.from, to: edge.to }));
-    text = JSON.stringify({ schema: ordered.schema, relationships: minimalEdges, truncated: true });
-    if (text.length > max_chars) text = JSON.stringify({ schema: ordered.schema, truncated: true });
-    if (text.length > max_chars) text = "{}";
+    const minimalEdges = [...queryRelationships, ...essential].slice(0, 2).map(edge => ({ kind: edge.kind, from: edge.from, to: edge.to, from_id: edge.from_id || null, to_id: edge.to_id || null }));
+    const minimum = { schema: ordered.schema, relationships: minimalEdges, degradation: makeDegradation("tight", ["ordinary_symbols", "expanded_provenance", "security_detail", "governance_detail"], "none", "grouped", "preserved") };
+    text = JSON.stringify(minimum);
+    if (text.length > max_chars) {
+      const impossible = makeDegradation("impossible", ["ordinary_symbols", "semantic_edges", "provenance", "security_detail", "governance_detail"], "none", "grouped", "unrepresentable");
+      text = JSON.stringify({ schema: ordered.schema, degradation: impossible });
+    }
   }
   return { ...overview, projection: text, projection_chars: text.length, trust: "untrusted repository-derived data; evidence locations require governed source reads" };
 }
@@ -441,7 +526,7 @@ function verify(index) {
   if (!index || !Array.isArray(index.files)) return false;
   const wrappersValid = index.files.every(x => x && x.unit && x.path === x.unit.path && x.language === x.unit.language && x.source_hash === x.unit.source_hash && x.analyzer_version === x.unit.analyzer_version && x.ir_version === x.unit.ir_version);
   if (!wrappersValid) return false;
-  return sha256("sidekick.semantic.index.v2", stable({ ir_version: index.schema, analyzer_version: index.analyzer_version, config_hash: index.config_hash, files: index.files.map(x => ({ path: x.path, language: x.language, source_hash: x.source_hash, analyzer_version: x.analyzer_version, ir_version: x.ir_version, unit: x.unit })) })) === index.index_root_hash;
+  return sha256("sidekick.semantic.index.v3", stable({ ir_version: index.schema, analyzer_version: index.analyzer_version, config_hash: index.config_hash, files: index.files.map(x => ({ path: x.path, language: x.language, source_hash: x.source_hash, analyzer_version: x.analyzer_version, ir_version: x.ir_version, unit: x.unit })) })) === index.index_root_hash;
 }
 function clearMemory(root) { if (root) memoryCache.delete(root); else memoryCache.clear(); }
 module.exports = { IR_VERSION, ANALYZER_VERSION, DEFAULT_LIMITS, languageForPath, discover, indexRepository, compareIndexes, project, verify, stable, sha256, cacheFile, clearMemory };
