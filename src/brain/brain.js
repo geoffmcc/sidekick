@@ -4,6 +4,7 @@ const { BRAIN_LIMITS, ALLOWED_CAPABILITIES } = require("./config");
 const { validatePlan } = require("./plan-validator");
 const { EVIDENCE_BUDGETS, projectEvidenceItems, projectToolEvidence } = require("../evidence/projector");
 const { createWorkState, recordEvidence, evaluateCompletion } = require("../agent/completion-gate");
+const { classifyCapabilityFailure, preflightCapabilityCall, repairGuidance } = require("../agent/capability-repair");
 
 /**
  * Brain v0.1 orchestrator.
@@ -153,6 +154,8 @@ async function executePlanSteps({
   redact = (t) => t,
   cancelled = () => false,
   outOfTime = () => false,
+  toolContracts = [],
+  agentTools = [],
 }) {
   const steps = plan.steps || [];
   for (let index = startIndex; index < steps.length; index++) {
@@ -165,8 +168,12 @@ async function executePlanSteps({
     onEvent("brain.step_started", { id: step.id, tool: step.tool });
 
     let toolRes;
+    const proposedArgs = step.arguments || {};
     try {
-      toolRes = await callTool(step.tool, step.arguments || {});
+      const preflight = preflightCapabilityCall(step.tool, proposedArgs, toolContracts);
+      toolRes = preflight.ok
+        ? await callTool(step.tool, proposedArgs)
+        : { isError: true, code: "validation_failed", content: [{ type: "text", text: `Invalid arguments for ${step.tool}: ${preflight.error}` }] };
     } catch (e) {
       acc.steps.push({ type: "tool", id: step.id, tool: step.tool, error: redact(String(e && e.message || e)) });
       // A tool step failure is honest failure, never fabricated evidence.
@@ -180,6 +187,13 @@ async function executePlanSteps({
     }
 
     accumulateToolResult(acc, step, toolRes, { onEvent, redact });
+    if (toolRes.isError) {
+      const failure = classifyCapabilityFailure(toolRes, { tool: step.tool, args: proposedArgs });
+      const guidance = repairGuidance(failure, { tool: step.tool, args: proposedArgs, availableTools: agentTools });
+      onEvent("brain.step_repair_guidance", { id: step.id, tool: step.tool, failure_kind: failure.kind, retryable: failure.retryable }, failure.retryable ? "warning" : "error");
+      if (failure.retryable) return { status: "replan_required", index, stepId: step.id, tool: step.tool, failure, guidance };
+      return { status: "failed", index, stepId: step.id, tool: step.tool, failure };
+    }
   }
   return { status: "completed", index: steps.length };
 }
@@ -207,6 +221,7 @@ async function runBrainTask(opts) {
     classification,
     plan: planFn,
     agentTools = [],
+    toolContracts = [],
     callTool,
     recallMemory = null,
     synthesize,
@@ -320,7 +335,7 @@ async function runBrainTask(opts) {
 
   let outcome = await executePlanSteps({
     plan: validated, startIndex: 0, acc,
-    callTool, emit, onEvent, redact, cancelled, outOfTime,
+    callTool, emit, onEvent, redact, cancelled, outOfTime, toolContracts, agentTools,
   });
   if (typeof onCheckpoint === "function") onCheckpoint(taskState);
 
@@ -329,10 +344,12 @@ async function runBrainTask(opts) {
   // another bounded plan from the model before synthesizing.
   let workRound = 0;
   let accountedEvidence = 0;
-  while (outcome.status === "completed" && workRound < Math.max(1, Math.min(8, Number(maxWorkRounds) || 4))) {
+  while (["completed", "replan_required"].includes(outcome.status) && workRound < Math.max(1, Math.min(8, Number(maxWorkRounds) || 4))) {
     for (const item of (acc.evidence || []).slice(accountedEvidence)) recordEvidence(taskState, { tool: item.tool || "inspection", success: item.ok !== false, reference: item.tool || "evidence" });
     accountedEvidence = (acc.evidence || []).length;
-    const completion = await evaluateCompletion({ state: taskState, candidate: "", completionGate });
+    const completion = outcome.status === "replan_required"
+      ? { complete: false, missing: [outcome.stepId || outcome.tool || "failed step"], reason: outcome.guidance || "A governed capability call failed and requires a materially different plan." }
+      : await evaluateCompletion({ state: taskState, candidate: "", completionGate });
     if (completion.complete) break;
     workRound++;
     taskState.replans = Math.min(32, (taskState.replans || 0) + 1);
@@ -348,7 +365,7 @@ async function runBrainTask(opts) {
     if (!nextValidation.ok) return terminal("failed", { error: redact("replan rejected: " + nextValidation.errors.slice(0, 4).join("; ")) });
     validated = nextValidation.plan;
     if (typeof onPlanRevision === "function") onPlanRevision(validated, { revision: workRound + 1, source: "replanner" });
-    outcome = await executePlanSteps({ plan: validated, startIndex: 0, acc, callTool, emit, onEvent, redact, cancelled, outOfTime });
+    outcome = await executePlanSteps({ plan: validated, startIndex: 0, acc, callTool, emit, onEvent, redact, cancelled, outOfTime, toolContracts, agentTools });
     if (typeof onCheckpoint === "function") onCheckpoint(taskState);
   }
 

@@ -106,6 +106,9 @@ function buildPlannerSystemPrompt(agentTools, packContext = null, metadata = {})
     "11. If a tool's documented action enum does not include the inspection action you need, choose the appropriate read-only tool instead of inventing an action or repurposing a control tool.\n\n" +
     "12. When a pack capability has registered action semantics matching the request, prefer that specific action over a generic status or health action.\n" +
     "13. Action arguments must be exact enum tokens from the catalog; never convert an intent title, workflow name, or prose label into an action value.\n\n" +
+    "14. For an action targeting a configured service, resolve unknown profiles and target identities with a read-only capability first. A human device name is not automatically a profile identifier.\n" +
+    "15. Respect schema-declared mutually exclusive selectors and pass exactly one canonical selector.\n" +
+    "16. If execution returns validation, target-resolution, or truncation feedback, replan with a materially corrected read/discovery step; never repeat an ambiguous write or control effect.\n\n" +
     "Allowed step types: " + ALLOWED_STEP_TYPES.join(", ") + "\n\n" +
     // Pack context sits between the rules and the catalog: it tells the
     // planner WHICH domains have first-class pack tools (#296 reached only the
@@ -172,7 +175,7 @@ function formatEvidenceForPrompt(evidence, redact) {
  * @param {(text:string)=>string} [deps.redact]
  */
 function makeBrainRunner(deps) {
-  const { callLLM, agentTools, callTool, recallMemory = null, redact = (t) => t, packContext = null, capabilityMetadata = {}, onCheckpoint = null, workState = null, completionGate = null } = deps;
+  const { callLLM, agentTools, callTool, toolContracts = [], recallMemory = null, redact = (t) => t, packContext = null, capabilityMetadata = {}, onCheckpoint = null, workState = null, completionGate = null } = deps;
   // Built per plan() call, not once: the shortlist depends on the goal.
 
   const plan = async ({ goal, memoryContext, priorErrors }) => {
@@ -210,7 +213,7 @@ function makeBrainRunner(deps) {
   return function run({ goal, classification, emit, onEvent, cancel, clock, deadlineMs, taskId = null, lineage = {}, persistence = undefined, workState = null, completionGate = null, onCheckpoint = null, onPlanRevision = null }) {
     return runBrainTask({
       goal, classification, plan, synthesize,
-      agentTools, callTool, recallMemory, redact,
+      agentTools, toolContracts, callTool, recallMemory, redact,
       emit, onEvent, cancel, clock, deadlineMs,
       taskId, lineage,
       workState, completionGate, onCheckpoint,
