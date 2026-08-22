@@ -8,7 +8,10 @@ const MAX_DEVICES = 8;
 const MAX_PROCESSES = 32;
 const MAX_MODELS = 32;
 const MAX_TEXT = 160;
-const PROBE_TIMEOUT_MS = 750;
+// Windows NVIDIA driver queries can take longer when launched by a
+// LocalSystem service than from an interactive shell. Keep the probe bounded
+// while allowing normal driver initialization to complete.
+const PROBE_TIMEOUT_MS = 2000;
 
 function isLocalTelemetryEndpoint(value) {
   let url;
