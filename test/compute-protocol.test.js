@@ -260,7 +260,14 @@ async function main() {
     const legacyArtifactFinalize = await request('POST', `/compute/jobs/${jobId}/artifacts/${legacyArtifactUpload.data.artifact.artifactId}/finalize`, { leaseId, contentHash: legacyArtifactUpload.data.artifact.contentHash, sizeBytes: legacyArtifactUpload.data.artifact.sizeBytes }, workerAuth);
     assert.strictEqual(legacyArtifactFinalize.status, 200, 'legacy artifact finalize alias accepts worker auth');
 
-    const completeRes = await request('POST', `/compute/worker/jobs/${jobId}/complete`, { leaseId, result: { content: 'mock:hello protocol' }, artifactIds: [artifactUpload.data.artifact.artifactId] }, workerAuth);
+    const completionTelemetry = {
+      schemaVersion: 1,
+      privacy: 'local-only',
+      collectedAt: new Date().toISOString(),
+      gpu: { status: 'available', devices: [{ name: 'Completion GPU', utilizationPercent: 88, pid: 123 }] },
+      inference: { status: 'available', provider: 'ollama', model: 'completion-model', tokensPerSecond: 42, prompt: 'must not persist' },
+    };
+    const completeRes = await request('POST', `/compute/worker/jobs/${jobId}/complete`, { leaseId, result: { content: 'mock:hello protocol' }, artifactIds: [artifactUpload.data.artifact.artifactId], telemetry: completionTelemetry }, workerAuth);
     assert.strictEqual(completeRes.status, 200, 'completion accepted');
     assert.strictEqual(completeRes.data.job.status, 'completed', 'job completed');
 
@@ -283,6 +290,9 @@ async function main() {
 
     const workerDetail = await request('GET', `/compute/admin/workers/${workerId}`, null, admin);
     assert.strictEqual(workerDetail.status, 200, 'admin can inspect worker');
+    assert.strictEqual(workerDetail.data.worker.telemetry.gpu.devices[0].name, 'Completion GPU', 'completion persists fresh telemetry before terminal read');
+    assert.strictEqual(workerDetail.data.worker.telemetry.gpu.devices[0].utilizationPercent, 88, 'completion telemetry is current');
+    assert.ok(!JSON.stringify(workerDetail.data.worker.telemetry).includes('must not persist'), 'completion telemetry remains sanitized');
     assert.strictEqual(workerDetail.data.worker.hasCredential, true, 'worker detail does not expose credential but marks it present');
     assert.strictEqual(workerDetail.data.worker.credential, undefined, 'worker credential not exposed in detail');
     assert.strictEqual(workerDetail.data.worker.modelInventory[0].name, 'deterministic-test', 'admin can inspect model inventory');

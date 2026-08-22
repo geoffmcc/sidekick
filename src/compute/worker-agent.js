@@ -551,6 +551,7 @@ async function claimLoop() {
 async function handleJob(job, leaseId) {
   activeJobs.add(job.jobId);
   let renewTimer = null;
+  let completionTelemetry;
   try {
     await assertOk(requestWithRetry("POST", `/compute/worker/jobs/${job.jobId}/start`, { leaseId }, credentialHeaders()), "start");
     renewTimer = setInterval(() => requestWithRetry("POST", `/compute/worker/jobs/${job.jobId}/renew`, { leaseId, leaseDurationMs: LEASE_MS }, credentialHeaders(), { attempts: 2 }).catch(e => log(`Renew failed for ${job.jobId}: ${e.message}`)), Math.max(5000, Math.floor(LEASE_MS / 3)));
@@ -573,6 +574,11 @@ async function handleJob(job, leaseId) {
     let result = await executeJob(job, cancellationCheck);
     if (result && result.telemetry) {
       recordInferenceTelemetry(result.telemetry);
+      // Capture the post-inference snapshot before completion is published.
+      // The server persists this projection atomically with the terminal job
+      // transition, avoiding a heartbeat-sized stale-read window.
+      try { completionTelemetry = await collectRuntimeTelemetry(); }
+      catch (e) { log(`Completion telemetry refresh failed: ${e.message}`); }
       result = { ...result };
       delete result.telemetry;
     }
@@ -597,6 +603,7 @@ async function handleJob(job, leaseId) {
       leaseId,
       result,
       artifactIds: [resultArtifact.artifactId],
+      ...(completionTelemetry ? { telemetry: completionTelemetry } : {}),
     }, credentialHeaders());
     if (completed.status === 409) {
       log(`Job ${job.jobId} was no longer completable: ${completed.data.error || completed.status}`);
