@@ -81,7 +81,13 @@ function commandEnvironment(base = process.env) {
   // The collector receives only benign process-launch settings. In particular,
   // no secret-bearing environment variables are forwarded to the fixed probes.
   const env = {};
-  for (const key of ["PATH", "SystemRoot", "WINDIR", "PATHEXT", "HOME", "USERPROFILE"]) {
+  for (const key of [
+    "PATH", "SystemRoot", "WINDIR", "PATHEXT", "HOME", "USERPROFILE",
+    // These benign Windows runtime locations are required by NVML when the
+    // fixed nvidia-smi probe runs under the LocalSystem service account.
+    "TEMP", "TMP", "ProgramData", "ProgramFiles", "ProgramFiles(x86)",
+    "CommonProgramFiles", "CommonProgramFiles(x86)", "LOCALAPPDATA",
+  ]) {
     if (base[key]) env[key] = String(base[key]);
   }
   return env;

@@ -41,6 +41,9 @@ asyncTest("GPU collector uses fixed no-shell queries and strips process paths/PI
   assert.strictEqual(calls.length, 2);
   assert.strictEqual(calls[0].options.shell, false);
   assert.ok(calls[0].options.timeout >= 2000, "GPU probe timeout allows service-launched driver initialization");
+  for (const key of ["TEMP", "TMP", "ProgramData", "ProgramFiles", "ProgramFiles(x86)", "CommonProgramFiles", "CommonProgramFiles(x86)", "LOCALAPPDATA"]) {
+    if (process.env[key]) assert.ok(Object.prototype.hasOwnProperty.call(calls[0].options.env, key), `GPU probe preserves benign runtime variable ${key}`);
+  }
   assert.ok(!Object.keys(calls[0].options.env).some(key => /SECRET|TOKEN|PASSWORD|KEY/i.test(key)));
   assert.ok(calls[0].args.every(arg => !String(arg).includes("prompt") && !String(arg).includes("secret")));
   assert.ok(!("pid" in result.processes[0]));
