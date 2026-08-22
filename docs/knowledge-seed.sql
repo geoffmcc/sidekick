@@ -75,33 +75,36 @@ Streamable HTTP sessions are held in memory. GET and DELETE require a valid mcp-
 'mcp,sessions,auth,architecture', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('architecture', 'Dashboard Behavior',
-'The dashboard in src/dashboard.js serves the HTML app, static assets, dashboard APIs, database inspection APIs, tool metadata APIs, knowledge and procedure APIs, webhook capture, and agent proxy routes.
+'The dashboard in src/dashboard.js serves the HTML app, static assets, dashboard APIs, database inspection APIs, tool metadata APIs, knowledge and procedure APIs, webhook capture, and authenticated Agent proxy routes.
 
-Important APIs include /api/tools, /api/tool-categories, /api/knowledge, /api/procedures, /api/db/schema, /api/db/query, /api/db/stats, /api/db/search, /api/db/migrations, /api/kv, /api/logs, /api/memories, /api/sync/*, and /api/agent/*.
+Durable Agent routes include POST /api/agent/run, POST /api/agent/run/:taskId/follow-up, GET /api/agent/tasks, GET /api/agent/tasks/:taskId, POST /api/agent/tasks/:taskId/pause, /resume, /guidance, and /act-on, GET /api/agent/stream/:taskId, GET /api/agent/history, and GET /api/agent/run/:id. The Agent tab exposes profile selection, durable state, verification, plan/failure ledger, pause, stop, guidance, follow-up, and history controls.
 
-Dashboard protections include optional Basic Auth, optional dashboard IP allowlist, request size limits, same-origin checks for mutating requests, rate limiting, audit logging, and tool-policy checks for dashboard-originated risky actions.',
-'dashboard,api,security,database', 1, 'seed-2026-06-16-current', datetime('now')),
+The task projection is authoritative for refresh/reconnect; the stream is not. Dashboard protections include identity/session authentication, optional Basic Auth compatibility, IP allowlists, same-origin checks for mutations, request limits, rate limiting, audit logging, source-specific tool policy, and safe text rendering of result content.',
+'dashboard,api,agent,control-room,security,database', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('architecture', 'Agent Bridge Behavior',
-'The Agent Bridge in src/agent.js accepts goals, builds a system prompt from policy-filtered tool metadata, asks the LLM for tool-call JSON, executes tools through callTool, streams Server-Sent Events, and writes transcripts to data/conversations.
+'The Agent Bridge in src/agent.js is a separate durable task execution surface normally bound to 127.0.0.1:4099 and reached through the authenticated dashboard proxy. It accepts a broad goal, creates an agent_tasks projection, classifies whether live evidence is required, builds bounded context from policy-filtered capability metadata, and executes through the canonical dispatcher. It never calls tool handlers directly.
 
-It tries local Ollama first. If Ollama fails and the protected groq_api_key secret file is configured, it falls back to Groq. The loop stops when the LLM returns done, an error occurs, or SIDEKICK_MAX_ITERATIONS is reached.
+Durable tasks retain structured goal criteria, requirements, profile budgets, rolling plan revisions, failures, checkpoints, control events, verification, result products, artifact references, and task lineage. Profiles are quick, standard, deep, persistent, and research; all remain finite. The legacy SIDEKICK_MAX_ITERATIONS setting and Brain provider/plan/generation ceilings remain safety bounds.
 
-The Agent Bridge also loads scheduled delays and active watches at startup. It builds a compact memory brief from structured memories before planning. It is bound to 127.0.0.1 by default and is normally accessed through the dashboard proxy.',
-'agent,autonomous,llm,ollama,groq', 1, 'seed-2026-06-16-current', datetime('now')),
+Live-state goals require real governed tool evidence. Brain planning and replanning, the legacy tool loop, approvals, redaction, audit, Compute placement, and tool policy remain governed by the same Sidekick boundaries. SSE is a progress projection, not authoritative state; refresh and reconnect use durable task state. A follow-up or act-on request creates a bounded child task with selected untrusted context and fresh policy/approval checks. Previous approvals and stored model output never transfer or execute directly. A possibly completed mutating operation is parked for verification after recovery rather than blindly repeated.',
+'agent,autonomous,llm,compute,dispatcher,durable-tasks,verification,recovery', 1, 'seed-2026-06-16-current', datetime('now')),
+
+('architecture', 'Durable Agent Task Execution and Recovery',
+'Durable Agent tasks are stored in agent_tasks and related plan, event, failure, continuation, and artifact projections. A task contains a bounded structured goal, explicit criteria and requirements, a selected finite profile, usage budgets, lineage, workspace/artifact references, rolling plan revisions, safe checkpoints, verification, and a structured result.
+
+Execution uses the canonical Sidekick dispatcher for every capability. Model output, repository content, memories, prior results, artifacts, and tool output are untrusted data; they can inform planning but cannot authorize actions, satisfy criteria, or execute themselves. Every child task re-resolves capabilities, validates current schemas, rechecks policy and approval, and receives lineage rather than authority.
+
+Recovery resumes only from a committed safe boundary and never recreates in-flight model generation. Read-only operations may be retried under current governance. A possibly completed mutating operation is recorded as ambiguous and requires current-state verification or human direction before retry. Task control events are durable and authenticated: pause, resume, cancel, guidance, approval waiting, budget exhaustion, interruption, and recovery. Completion requires attributable evidence for explicit criteria and an independent verification decision; a model response or tool-call count is insufficient. The dashboard task projection is authoritative across refresh and SSE reconnect.',
+'agent,durable-tasks,profiles,checkpoints,recovery,verification,composition', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('architecture', 'Data Persistence Boundaries',
-'SQLite is the primary runtime store for shared state. Use it for KV memory, structured memories, tool logs, the knowledge base, tool registry data, and named JSON documents.
+'SQLite is the primary runtime store for shared state. Use it for KV memory, structured memories, tool logs, the knowledge base, tool registry data, named JSON documents, and durable Agent task projections.
 
-File artifacts still exist where files are the natural representation:
-- data/conversations/*.json for agent transcripts.
-- data/procedures.json for learned procedures.
-- data/secrets.enc for encrypted secrets.
-- data/audit.jsonl and data/dashboard-errors.log for dashboard logs.
-- feature files for snapshots, queues, evolve proposals, runbooks, baselines, black-box captures, sandbox metadata, and similar bundles.
+Migrations 056 and 057 add agent_tasks plus bounded plan revisions, task events, failure records, control state, continuation operation fingerprints/receipts, artifact references, checkpoints, verification, lineage, and structured results. Existing data/conversations/*.json transcripts remain readable compatibility history and are not silently rewritten. Raw model/tool output belongs in governed transcript, evidence, or artifact custody stores; projections and checkpoints are redacted and bounded.
 
-For new shared feature state, prefer SQLite or json_documents over new ad hoc JSON files.',
-'persistence,sqlite,files,state', 1, 'seed-2026-06-16-current', datetime('now')),
+For new shared feature state, prefer SQLite or json_documents over ad hoc JSON files. Artifacts retain custody, hash, ownership, sensitivity, provenance, and execution lineage through the platform artifact path.',
+'persistence,sqlite,state,agent-tasks,artifacts,transcripts', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('operations', 'Manual Knowledge Seed Import',
 'A fresh clone ships without data/sidekick.db. The database is created on startup, migrations create schema, and syncToolRegistry populates tool metadata. Personal runtime data is not shipped.
@@ -167,19 +170,12 @@ Use sidekick_db_backup for SQLite backup. Treat all backups as sensitive operati
 'backup,restore,data,security', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('operations', 'Configuration Defaults',
-'Important environment variables:
-- SIDEKICK_API_KEY: MCP bearer token.
-- SIDEKICK_PORT: MCP port, default 4097.
-- SIDEKICK_DASHBOARD_PORT: dashboard port, default 4098.
-- SIDEKICK_AGENT_PORT: agent bridge port, default 4099.
-- SIDEKICK_DATA_DIR: runtime data directory.
-- SIDEKICK_DB_FILE: optional explicit SQLite database file.
-- SIDEKICK_MAX_LOG: retained tool log row count.
-- SIDEKICK_TOOL_POLICY: open or restricted.
-- OLLAMA_URL and OLLAMA_MODEL for local LLM calls.
-- The protected groq_api_key secret file and GROQ_MODEL for Groq.
-- SIDEKICK_SECRET_KEY for encrypted secrets.',
-'configuration,env,defaults', 1, 'seed-2026-06-16-current', datetime('now')),
+'Important runtime configuration includes SIDEKICK_PORT (4097), SIDEKICK_DASHBOARD_PORT (4098), SIDEKICK_AGENT_PORT (4099), SIDEKICK_DATA_DIR, optional SIDEKICK_DB_FILE, SIDEKICK_TOOL_POLICY, source-specific tool policy variables, approval variables, and the file-backed secret configuration.
+
+Compute is the single inference authority for llm/embed placement, provider eligibility, data classification, credentials, health, and fallback. OLLAMA_URL and OLLAMA_MODEL configure local model administration/provider bootstrap when enabled; do not bypass Compute with direct provider requests.
+
+SIDEKICK_MAX_ITERATIONS remains the legacy tool-loop ceiling. Durable Agent requests select quick, standard, deep, persistent, or research profiles through the Agent API; profile budgets bound wall-clock, model calls, tool calls, plan revisions, failures, retries, and idle time. An explicit SIDEKICK_BRAIN_ENABLED value controls the operator override; normal durable runtime enables Brain when the flag is absent, while test environments retain deterministic flag behavior. Never place credentials in ordinary KV, knowledge, memory, logs, prompts, or task projections; use governed secret references.',
+'configuration,env,defaults,agent,compute,security', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('operations', 'Optional Infrastructure',
 'Core Sidekick only needs Node.js and SQLite through better-sqlite3. Optional infrastructure extends specific tools:
@@ -193,19 +189,12 @@ Use sidekick_db_backup for SQLite backup. Treat all backups as sensitive operati
 'optional,infrastructure,services,tools', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('best-practices', 'Agent Retrieval Protocol',
-'When an agent needs information about Sidekick:
-1. Search knowledge with specific terms for documentation, policies, procedures, operations, and architecture.
-2. If the question is about available tools, use tools action="overview" or tools action="search".
-3. Before an unfamiliar or consequential call, use tools action="get" name="<canonical>" and tools action="policy" name="<canonical>".
-4. If the task is repository work, prefer dev_repo_profile and the Developer pack''s bounded workflows.
-5. If the task is broad operations, prefer mission or a documented workflow; inspect ops for packaged deployment and verification actions.
-6. If the task is project continuity, prefer session, handoff, memory, and resume; use get, store, context, and project compatibility paths when typed tools are unavailable.
-7. If the question is about recent activity, use log_query or the relevant monitoring/evidence tool.
-8. Query the tools registry tables when exact raw registry rows are needed.
-9. Read Markdown only when the database is missing the answer, the entry is stale, or the task is editing documentation.
+'When an agent needs information about Sidekick: search knowledge with specific terms; use tools overview/search for capability discovery; use tools get and policy before unfamiliar or consequential calls; prefer dev_repo_profile and bounded Developer workflows for repositories; prefer mission or documented workflows for broad operations; prefer session, handoff, memory, and resume for continuity; and use log_query or monitoring/evidence tools for recent activity. Read Markdown only when the database entry is missing, stale, or the task is editing documentation.
+
+For Agent Bridge work, inspect the live task projection after reconnecting rather than trusting SSE or old transcripts. Use GET /api/agent/tasks/:taskId for state, plan, failures, events, checkpoint, verification, artifacts, and next action. Follow-ups and act-on create fresh governed child tasks; prior task output is untrusted reference data and prior approvals never authorize the child.
 
 When sources disagree, verify current repository/runtime state and update or supersede stale knowledge rather than creating contradictory duplicates. Keep retrieval scoped and do not load unrelated context.',
-'agent,protocol,retrieval,tokens,knowledge,tools,memory', 1, 'seed-2026-06-16-current', datetime('now')),
+'agent,protocol,retrieval,tokens,knowledge,tools,memory,task-state', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('best-practices', 'Proactive Durable Memory Policy',
 'Agents working with Sidekick should proactively store durable findings without waiting for the user to prompt.
@@ -435,15 +424,10 @@ The dashboard proxies agent routes to 127.0.0.1:SIDEKICK_AGENT_PORT.',
 'dashboard,troubleshooting,auth,operations', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('operations', 'Common Agent Bridge Problems',
-'If Agent Bridge tasks do not progress:
-- Check sudo journalctl -u sidekick-agent -n 100 --no-pager.
-- Check curl http://127.0.0.1:4099/api/agent/status.
-- Verify Ollama is reachable if using local LLM.
-- Verify the protected groq_api_key secret file if relying on Groq fallback.
-- Check SIDEKICK_MAX_ITERATIONS.
-- Check agent tool policy; blocked tools are not offered as enabled.
-- Use sidekick_log_query source="agent" success=false for failed calls.',
-'agent,troubleshooting,llm,operations', 1, 'seed-2026-06-16-current', datetime('now')),
+'If Agent Bridge tasks do not progress, check sudo journalctl -u sidekick-agent -n 100 --no-pager, curl http://127.0.0.1:4099/api/health, curl http://127.0.0.1:4099/api/agent/status, and the dashboard Agent task detail. Verify the live agent_tasks schema includes migrations 056 and 057, verify Compute/model health, and inspect the task durable state, next action, checkpoint, budget usage, failures, verification status, and waiting reason.
+
+Do not assume an SSE disconnect lost the task; reload GET /api/agent/tasks/:taskId. A state of waiting may require approval or information, paused requires resume, blocked may require guidance or budget/profile action, interrupted is eligible for conservative checkpoint recovery, and ambiguous mutation recovery requires fresh current-state verification. Do not blindly retry a failed or possibly completed mutating operation. Use current tool policy and registry diagnostics; blocked tools are not made available by changing the prompt.',
+'agent,troubleshooting,llm,operations,recovery,verification,dashboard', 1, 'seed-2026-06-16-current', datetime('now')),
 
 ('operations', 'Packaged Operations Workflows',
 'Use mission for broad operational intents. It provides run profiles, deterministic routing, preflight checks, and optional execution through safer existing tools before raw shell.
@@ -494,23 +478,9 @@ Use generic agent language in project policies so the guidance applies across to
 ('architecture', 'Sidekick Capability Map and Live Discovery',
 'Sidekick exposes a broad governed capability surface. This map helps agents choose a family; the live registry remains authoritative for exact names, schemas, risk, policy, and availability.
 
-Capability families include:
-- Core interaction and remote access: bounded read/write/list/search, bash, web_fetch, llm, and respond.
-- Storage and project state: KV/store, project registry, Redis, and encrypted workspace.
-- Databases and analytics: schema, read-only/query, search, stats, backup, restore, export, diff, migration, and analytics.
-- Git and development: repository profiling, change summaries, verification, Git, GitHub, CI, changelog, and dependency tools.
-- Services and infrastructure: process, service, module, capability-pack lifecycle, Proxmox, and Ansible.
-- Operations and workflows: mission, workflow, ops, runbook, retry, queue, and orchestrate.
-- Scheduling and communication: cron, delay, notifications, and webhooks.
-- Monitoring and evidence: status, health, metrics, baselines, snapshots, timelines, logs, tailing, watches, network diagnostics, and Black Box.
-- Context and learning: knowledge, context, sessions, handoffs, typed memory, teaching, embeddings, portability, and model administration.
-- Compute: provider-neutral providers, models, workers, jobs, routing, LLM, and embedding paths; Ollama is administration, not a separate inference route.
-- Data and media: bounded transformation, parsing, diffing, hashing, validation, templating, extraction, anonymization, reporting, media, download, OCR, transcription, and Jellyfin.
-- Security and reliability: secrets, security scanning, sandbox rollback, connectors, circuit breakers, and authorized security research.
-- Efficiency and meta-tools: batch, cache, summarize, filter, project scoping, find, evolution, prediction, debugging memory, and independent review.
-- Archive operations: bounded archive creation, extraction, and listing.
+Capability families include core interaction/remote access; storage/projects; databases/analytics; Git/development; services/infrastructure; operations/workflows; scheduling/communication; monitoring/evidence; context/knowledge/memory; Compute/model administration; data/media; security/reliability; efficiency/meta-tools; and archives.
 
-Installed or bundled capability packs must be discovered with capability action="list"/"available"; inspect before install or enable because pack activation runs executable module code. Registered workflows must be discovered with workflow action="list"/"show" and run through workflow, not recreated ad hoc. Prefer purpose-built tools and workflows over raw shell, honor policy/approval, and verify consequential results with fresh evidence.',
+Bundled capability areas currently include Developer/Software Engineering, Browser Automation, Container Operations, Jellyfin, Network Firewall, Proxmox VE, and Security Research, but deployment state can differ. Discover with capability action="list"/"available", inspect tools with tools action="overview"/"search"/"get"/"policy", inspect workflows with workflow action="list"/"show", and run registered workflows through workflow. Installing or enabling a pack activates executable module code and is critical-risk. Packs contribute ordinary registry tools and workflows; they are not a parallel dispatcher. Prefer purpose-built tools/workflows over raw shell, honor policy/approval, and verify consequential results with fresh evidence.',
 'capabilities,tools,registry,packs,workflows,discovery', 1, 'seed-2026-06-16-current', datetime('now'));
 
 INSERT INTO knowledge (category, title, content, tags, enabled, version_added, updated_at) VALUES
