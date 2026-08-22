@@ -57,6 +57,10 @@ const { createResumedTaskFinalizer } = require("./agent/recovery");
 const { createContinuationJobStarter } = require("./agent/continuation-jobs");
 const { createDelayScheduler } = require("./agent/delay-scheduler");
 const { createWatchRuntime } = require("./agent/watch-runtime");
+const durableTaskModel = require("./agent/task-model");
+const durableTaskStore = require("./agent/task-store");
+const { recoverDurableAgentTasks } = require("./agent/recovery-scan");
+const { verifyTaskResult } = require("./agent/verification");
 const { assembleSessions, buildSession, buildTask } = require("./agent-history");
 const { redactSensitive, redactSensitiveKeysDeep } = require("./redact");
 const {
@@ -246,6 +250,14 @@ function sweepStrandedAgentExecutions(bootIso = new Date().toISOString()) {
       if (stranded.length === 0) break;
       let progressed = false;
       for (const row of stranded) {
+        // A durable task with a committed safe checkpoint is left fenced until
+        // its kernel lease expires; the recovery scanner will then classify it
+        // as resumable. The legacy sweep must not turn a merely disconnected
+        // process into a false terminal failure.
+        try {
+          const durable = row.task_id && durableTaskStore.getTask(row.task_id);
+          if (durable && durable.checkpoint && durable.checkpoint.version === 1 && durable.checkpoint.safe_boundary && durable.checkpoint.next_action) continue;
+        } catch {}
         try {
           platformKernel.transitionExecution(row.execution_id, "failed", {
             source: "agent",
@@ -281,11 +293,25 @@ function sweepStrandedAgentExecutions(bootIso = new Date().toISOString()) {
 }
 
 try {
+  const durableRecovery = recoverDurableAgentTasks({ platformKernel, taskStore: durableTaskStore });
+  if (durableRecovery.recovered.length || durableRecovery.failed.length) console.log(`Recovered ${durableRecovery.recovered.length} Agent task(s); failed ${durableRecovery.failed.length} non-resumable task(s)`);
+} catch (e) {
+  console.error(`Durable Agent recovery failed: ${e.message}`);
+}
+try {
   const sweptExecutions = sweepStrandedAgentExecutions();
   if (sweptExecutions.length > 0) console.log(`Marked ${sweptExecutions.length} crash-stranded agent execution(s) failed after restart`);
 } catch (e) {
   console.error(`Agent execution sweep failed: ${e.message}`);
 }
+
+// Claims remain fenced until their lease expires. A bounded recovery tick then
+// converts expired claims into durable interrupted/non-resumable states; it
+// does not dispatch work or recreate an in-flight model generation.
+const durableRecoveryTimer = setInterval(() => {
+  try { recoverDurableAgentTasks({ platformKernel, taskStore: durableTaskStore }); } catch (error) { console.error(`Durable Agent recovery tick failed: ${error.message}`); }
+}, 60000);
+if (typeof durableRecoveryTimer.unref === "function") durableRecoveryTimer.unref();
 
 loadAndScheduleDelays();
 
@@ -655,18 +681,18 @@ async function callLLM(messages, options = {}) {
   };
 }
 
-async function callAgentLLM(messages, taskGoal = "") {
+async function callAgentLLM(messages, taskGoal = "", llmCall = callLLM) {
   // timeoutMs makes the generation budget binding: without it the inference
   // request is unbounded and a hung provider stalls the whole tool loop.
-  return callLLM(messages, { systemPrompt: buildSystemPrompt(taskGoal), format: "json", temperature: 0.3, timeoutMs: AGENT_GENERATION_TIMEOUT_MS });
+  return llmCall(messages, { systemPrompt: buildSystemPrompt(taskGoal), format: "json", temperature: 0.3, timeoutMs: AGENT_GENERATION_TIMEOUT_MS });
 }
 
-async function callDirectAnswerLLM(goal, combinedBrief, continuationBrief) {
+async function callDirectAnswerLLM(goal, combinedBrief, continuationBrief, llmCall = callLLM) {
   // Both routing paths seed context through the same builder so a follow-up
   // brief reaches the direct-answer path as well as the tool loop.
   const messages = buildSeedMessages({ goal, memoryBrief: combinedBrief, continuationBrief });
 
-  return callLLM(messages, {
+  return llmCall(messages, {
     systemPrompt: "You are a helpful assistant. Answer the user's question directly and succinctly in plain text. Do not use tools, JSON, or mention internal routing. If the answer is not known, say so briefly.",
     temperature: 0.2,
     timeoutMs: AGENT_GENERATION_TIMEOUT_MS
@@ -865,7 +891,7 @@ Return ONLY valid JSON.`;
   }
 }
 
-async function runAgent(goal, taskId, parentContext = null, cancelController = null) {
+async function runAgent(goal, taskId, parentContext = null, cancelController = null, resumeState = null) {
   const steps = [];
   // Cooperative cancellation. The controller is aborted by the cancel route;
   // the derived flag is consumed by the tool loop and Brain between steps, and
@@ -882,7 +908,7 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
   const contextProvider = selectRelevantContextProvider(goal, visibleAgentTools, agentCapabilityMetadata);
   const repositorySemanticSearch = contextProvider ? async (query, bounds = {}) => {
     const providerArgs = resolveContextProviderArgs(contextProvider, goal, { repositoryPath: parentContext?.repositoryPath || parentContext?.repository || null });
-    const result = await callAgentTool(contextProvider.tool, { ...providerArgs, query: String(query || goal).slice(0, 500), limit: Math.min(20, Number(bounds.limit) || 6), max_chars: Math.min(contextProvider.max_chars, Number(bounds.maxChars) || contextProvider.max_chars) }, { taskId, project: inferredProject, correlationId: taskId, timeoutMs: 30000, source: contextProvider.source });
+    const result = await durableDispatch(contextProvider.tool, { ...providerArgs, query: String(query || goal).slice(0, 500), limit: Math.min(20, Number(bounds.limit) || 6), max_chars: Math.min(contextProvider.max_chars, Number(bounds.maxChars) || contextProvider.max_chars) }, { taskId, project: inferredProject, correlationId: taskId, timeoutMs: 30000, source: contextProvider.source });
     const text = result?.content?.[0]?.text;
     if (!text) return [];
     let payload; try { payload = JSON.parse(text); } catch { return []; }
@@ -909,6 +935,64 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
       }
     : null;
   const platformExecution = startAgentExecution(goal, taskId, inferredProject, executionLineage);
+  try {
+    durableTaskStore.updateTask(taskId, {
+      execution_id: platformExecution && platformExecution.execution_id,
+      state: "planning",
+      phase: "execution",
+      next_action: "assemble_context",
+    }, "task.execution_started");
+  } catch (error) {
+    // Legacy callers may have transcripts created before migration 056. The
+    // platform execution remains authoritative; never fail an existing run
+    // solely because its compatibility projection is unavailable.
+  }
+  const resumeContinuation = resumeState && resumeState.continuation ? resumeState.continuation : null;
+  const durableDispatch = async (name, args, options = {}) => {
+    const durable = durableTaskStore.getTask(taskId);
+    if (durable && durableTaskModel.budgetExceeded(durable, "tool_calls")) {
+      durableTaskStore.updateTask(taskId, { state: "blocked", phase: "budget", next_action: "increase_profile_or_resume" }, "task.budget_exhausted");
+      throw new Error("agent tool-call budget exhausted");
+    }
+    const fingerprint = durableTaskModel.actionFingerprint(name, args);
+    const priorCompleted = resumeContinuation && (resumeContinuation.completed_operations || []).find(row => row.fingerprint === fingerprint);
+    const annotation = (() => { try { return require("./tools/annotations").getToolAnnotations(name); } catch { return { readOnlyHint: false, idempotentHint: false }; } })();
+    if (priorCompleted && !annotation.readOnlyHint) {
+      try { durableTaskStore.recordAmbiguousOperation(taskId, { fingerprint, capability: name, reason: "A mutating operation was completed before the restart boundary but has no verifiable receipt" }); } catch {}
+      throw new Error("mutating operation has ambiguous prior completion; verify current state before retry");
+    }
+    const priorFailure = durable ? durableTaskStore.listFailures(taskId).find(row => row.action_fingerprint === fingerprint && !row.changed_condition) : null;
+    if (priorFailure && !priorFailure.retryable) {
+      durableTaskStore.addFailure(taskId, { action_fingerprint: fingerprint, capability: name, error_class: "repeat_suppressed", retryable: false, attempt: Number(priorFailure.attempt || 1) + 1, detail: "Equivalent operation was already denied or failed without a changed condition" });
+      throw new Error("equivalent failed operation suppressed; replan or verify current state");
+    }
+    if (durable) durableTaskStore.updateTask(taskId, { usage: { ...durable.usage, tool_calls: Number(durable.usage.tool_calls || 0) + 1 } }, "task.tool_call_started");
+    try {
+      const result = await callAgentTool(name, args, { ...options, idempotencyKey: options.idempotencyKey || `agent:${taskId}:${fingerprint}` });
+      try {
+        const receipt = result && (result.operationId || result.operation_id || result.idempotencyKey || result.idempotency_key || result.receipt_ref);
+        durableTaskStore.recordCompletedOperation(taskId, { fingerprint, capability: name, read_only: annotation.readOnlyHint === true, receipt_ref: receipt || null, summary: result?.content?.[0]?.text || result?.summary || "operation completed" });
+      } catch {}
+      return result;
+    } catch (error) {
+      const message = redactSensitive(String(error && error.message || error)).slice(0, 2000);
+      const lower = message.toLowerCase();
+      const retryable = /timeout|timed out|temporar|unavailable|rate limit|busy|network|econn|503/.test(lower) && !/approval|policy|forbidden|validation|invalid|permission|security/.test(lower);
+      try {
+        durableTaskStore.addFailure(taskId, { action_fingerprint: fingerprint, capability: name, error_class: retryable ? "transient" : "permanent", retryable, attempt: (durableTaskStore.listFailures(taskId).filter(row => row.action_fingerprint === fingerprint).length || 0) + 1, detail: message });
+      } catch {}
+      throw error;
+    }
+  };
+  const durableCallLLM = async (messages, options = {}) => {
+    const durable = durableTaskStore.getTask(taskId);
+    if (durable && durableTaskModel.budgetExceeded(durable, "model_calls")) {
+      durableTaskStore.updateTask(taskId, { state: "blocked", phase: "budget", next_action: "increase_profile_or_resume" }, "task.model_budget_exhausted");
+      throw new Error("agent model-call budget exhausted");
+    }
+    if (durable) durableTaskStore.updateTask(taskId, { usage: { ...durable.usage, model_calls: Number(durable.usage.model_calls || 0) + 1 } }, "task.model_call_started");
+    return callLLM(messages, options);
+  };
   const continuationBrief = (parentContext && parentContext.continuationBrief) || null;
   // Routing is a pure classification of the goal text. Computing it before the
   // guarded body keeps the transcript's routing record truthful even when the
@@ -928,7 +1012,24 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
   let finalResult = "";
   let terminalError = "";
   let contextManifest = null;
+  let transcriptArtifact = null;
   const workState = createWorkState(goal, { requiresEvidence: useTools });
+  if (resumeState && resumeState.state && resumeState.state.work && typeof resumeState.state.work === "object") {
+    Object.assign(workState, JSON.parse(JSON.stringify(resumeState.state.work)));
+    emit(taskId, { type: "step", text: "Resumed from the last committed safe checkpoint" });
+  }
+  try { durableTaskStore.updateTask(taskId, { state: "ready", phase: "execution", next_action: "run_next_step" }, "task.ready"); durableTaskStore.updateTask(taskId, { state: "running", phase: "execution", next_action: "run_next_step" }, "task.running"); } catch {}
+  const checkpointDurable = (state) => {
+    try {
+      checkpointAgentExecution(platformExecution, state);
+      durableTaskStore.checkpointTask(taskId, {
+        version: 1,
+        safe_boundary: "agent_loop_boundary",
+        next_action: "continue_agent_loop",
+        state: { phase: "execution", work: state },
+      });
+    } catch {}
+  };
 
   // Everything from here to the terminal tail is guarded. An execution that has
   // been set `running` must always reach a terminal state: before this, a throw
@@ -1004,7 +1105,12 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
     });
   }
 
-  if (brain && brain.isEnabled()) {
+  // Durable tasks use the governed Brain path by default in supported runtime
+  // configuration. An explicit SIDEKICK_BRAIN_ENABLED value remains an
+  // operator override; test mode keeps the legacy flag contract deterministic.
+  const explicitBrainFlag = Object.prototype.hasOwnProperty.call(process.env, "SIDEKICK_BRAIN_ENABLED");
+  const durableBrainEnabled = brain && (brain.isEnabled() || (!explicitBrainFlag && process.env.NODE_ENV !== "test"));
+  if (durableBrainEnabled) {
     // Brain v0.1 (feature-flagged). When disabled — the default — this entire
     // block is skipped and the Agent Bridge behaves exactly as before. When
     // enabled, Brain plans/validates/executes/verifies/synthesizes; every tool
@@ -1016,7 +1122,7 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
       // The flexible callLLM (not callAgentLLM, which hardcodes the tool-loop
       // system prompt): Brain supplies its own planner/synthesis system prompts
       // per call. This still routes through inferenceService → Compute Placement.
-      callLLM: (messages, options) => callLLM(messages, options),
+      callLLM: (messages, options) => durableCallLLM(messages, options),
       // Pin Brain's planning allowlist to BUILT-IN agent-visible tools only.
       // Generated/dynamic capabilities remain dispatch-reachable but are
       // deny-by-default for Brain v0.1 (it must not plan or promote them).
@@ -1026,7 +1132,7 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
       // tool for a domain the pack owns. Bounded again inside the planner.
       packContext: buildInstalledPackContext(),
       capabilityMetadata: getAgentCapabilityMetadata(),
-      callTool: (name, args) => callAgentTool(name, args, {
+      callTool: (name, args) => durableDispatch(name, args, {
         taskId,
         project: inferredProject,
         // One correlation id per task, not one per call. The context builder
@@ -1058,7 +1164,10 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
       redact: redactSensitive,
       workState,
       completionGate: async ({ state, candidate }) => evaluateCompletion({ state, candidate }),
-      onCheckpoint: (state) => checkpointAgentExecution(platformExecution, state),
+      onCheckpoint: checkpointDurable,
+      onPlanRevision: (plan, metadata) => {
+        try { durableTaskStore.addPlanRevision(taskId, plan, metadata && metadata.source || "planner"); } catch {}
+      },
     });
     const outcome = await run({
       goal,
@@ -1124,15 +1233,15 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
     } else if (outcome.state === "cancelled") {
       // Honest terminal status: a cancelled task is not a failure, and the
       // kernel has a first-class `cancelled` state for exactly this exit.
-      status = "cancelled";
-      terminalError = outcome.error || "Task cancelled by user request";
+      status = cancelSignal && cancelSignal.reason === "pause" ? "paused" : "cancelled";
+      terminalError = outcome.error || (status === "paused" ? "Task paused at the next safe boundary" : "Task cancelled by user request");
     } else {
       status = "failed";
       terminalError = outcome.error || "Brain task failed";
     }
   } else if (!useTools) {
     try {
-      const response = await callDirectAnswerLLM(goal, combinedBrief, continuationBrief);
+      const response = await callDirectAnswerLLM(goal, combinedBrief, continuationBrief, durableCallLLM);
       emit(taskId, { type: "provider", name: response.provider, model: response.model || "unknown" });
       if (response.fallback) {
         emit(taskId, { type: "fallback", to: response.provider, via: "compute" });
@@ -1159,12 +1268,12 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
 
     const loop = await runToolLoop({
       history,
-      callLLM: (messages) => callAgentLLM(messages, goal),
+      callLLM: (messages) => callAgentLLM(messages, goal, durableCallLLM),
       // Every child tool request still flows through callAgentTool — the sole
       // sanctioned dispatcher seam that enforces the allowlist, source policy,
       // approval, path restrictions, timeout, audit, and redaction. No earlier
       // approval is carried in; policy/approval are re-evaluated per call.
-      callTool: (name, args) => callAgentTool(name, args, {
+      callTool: (name, args) => durableDispatch(name, args, {
         taskId,
         project: inferredProject,
         correlationId: taskId,
@@ -1183,7 +1292,7 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
         // return the same validated decision contract and cannot execute tools.
         return evaluateCompletion({ state, candidate });
       },
-      onCheckpoint: (state) => checkpointAgentExecution(platformExecution, state),
+      onCheckpoint: checkpointDurable,
       emit: (event) => emit(taskId, event),
       onEvent: (type, payload, severity) => appendAgentExecutionEvent(platformExecution, type, { task_id: taskId, ...payload }, severity),
       redact: redactSensitive,
@@ -1194,6 +1303,10 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
     status = loop.status;
     finalResult = loop.finalResult;
     terminalError = loop.terminalError;
+    if (status === "cancelled" && cancelSignal && cancelSignal.reason === "pause") {
+      status = "paused";
+      terminalError = "Task paused at the next safe boundary";
+    }
     // The ledger is intentionally bounded and contains no raw arguments or
     // tool output. Full evidence remains in the governed execution/transcript
     // paths, redacted by their existing controls.
@@ -1275,7 +1388,7 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
   try {
     fs.writeFileSync(temporaryTranscriptPath, buildTranscript(), { encoding: "utf-8", mode: 0o600 });
     fs.renameSync(temporaryTranscriptPath, transcriptPath);
-    registerAgentTranscript(platformExecution, transcriptPath, taskId, status);
+    transcriptArtifact = registerAgentTranscript(platformExecution, transcriptPath, taskId, status);
   } catch (e) {
     const message = redactSensitive("Transcript could not be published: " + (e && e.message ? e.message : String(e)));
     console.error("Agent task " + taskId + ": " + message);
@@ -1314,6 +1427,41 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
     console.error("Agent task " + taskId + " terminal emit failed: " + (e && e.message ? e.message : e));
   }
   } finally {
+    try {
+      const durableBeforeVerification = durableTaskStore.getTask(taskId);
+      const verification = verifyTaskResult({
+        criteria: durableBeforeVerification?.goal?.success_criteria || [],
+        evidence: steps.filter(step => step && step.type === "tool").map(step => ({ tool: step.tool, id: step.id, ok: step.ok !== false && !step.error, text: step.result || step.text || "" })),
+        result: finalResult,
+        requires_live_evidence: useTools,
+        terminal_state: status === "cancelled" ? "cancelled" : status === "iteration_limit" ? "timed_out" : status,
+      });
+      const terminalState = status === "completed"
+        ? (verification.status === "verified" ? "completed" : "partial")
+        : status === "cancelled" ? "cancelled"
+        : status === "iteration_limit" ? "timed_out"
+          : status === "waiting_for_approval" || status === "paused" ? "waiting"
+              : "failed";
+      const resultStatus = status === "completed"
+        ? verification.status
+        : status === "iteration_limit" ? "budget_exhausted"
+          : status === "waiting_for_approval" ? "waiting_for_approval"
+            : status === "paused" ? "incomplete"
+            : "incomplete";
+      // Verification is an intermediate state only for successful execution.
+      // Cancellation, waiting, timeout, and failure must remain directly
+      // observable and must not be forced through an invalid transition.
+      if (status === "completed") {
+        durableTaskStore.updateTask(taskId, { state: "verifying", phase: "verification", next_action: "verify_result" }, "task.verification_started");
+      }
+      durableTaskStore.updateTask(taskId, {
+        state: terminalState,
+        phase: terminalState === "waiting" ? "waiting" : "terminal",
+        next_action: terminalState === "waiting" ? (status === "paused" ? "resume_from_safe_checkpoint" : "await_approval") : null,
+        result: { version: 1, status: resultStatus, summary: status === "completed" ? finalResult : terminalError, evidence_refs: verification.evidence || [], artifacts: transcriptArtifact ? [{ artifact_id: transcriptArtifact.artifact_id, type: transcriptArtifact.type, name: transcriptArtifact.name, content_hash: transcriptArtifact.content_hash || null, provenance: "agent transcript" }] : [] },
+        verification,
+      }, status === "waiting_for_approval" ? "task.waiting_for_approval" : status === "paused" ? "task.paused" : "task.completed");
+    } catch {}
     finishAgentExecution(platformExecution, status, { result_summary: status === "completed" ? finalResult : terminalError, reason: terminalError || "agent task completed", error_category: status === "completed" ? null : status });
   }
 
@@ -1326,43 +1474,30 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
   }
 }
 
-// Shared task-start path used by both a normal task and a follow-up so the two
-// never develop separate execution routes. Creates the task id + emitter,
-// answers the client, and kicks the (async) run.
-function beginTaskRunLegacy(res, { goal, parentContext = null }) {
-  const taskId = crypto.randomUUID().slice(0, 8);
-  taskEmitters[taskId] = new EventEmitter();
-  // Registered alongside the emitter, removed as soon as the run settles:
-  // cancelling a terminal task is meaningless, so the cancel route 404s then.
-  taskCancels[taskId] = new AbortController();
-  const payload = { taskId };
-  if (parentContext) {
-    payload.parentTaskId = parentContext.parentTaskId;
-    payload.rootTaskId = parentContext.rootTaskId;
-    payload.continuationDepth = parentContext.continuationDepth;
-  }
-  res.json(payload);
-  runAgent(goal, taskId, parentContext, taskCancels[taskId])
-    .catch((e) => {
-      // The client has already received the taskId; surface an unexpected
-      // failure over the stream instead of letting it become an unhandled
-      // rejection. (Normal LLM/tool errors are handled inside runAgent.)
-      try { emit(taskId, { type: "error", text: redactSensitive("Task failed to run: " + (e && e.message ? e.message : "unknown error")) }); } catch {}
-      console.error("Agent task " + taskId + " failed: " + (e && e.message ? e.message : e));
-    })
-    .finally(() => {
-      delete taskCancels[taskId];
-      setTimeout(() => delete taskEmitters[taskId], 60000);
-    });
-  return taskId;
-}
-
 const beginTaskRun = createTaskRunner({
   taskEmitters,
   taskCancels,
   emit,
   runAgent,
   redactSensitive,
+  onTaskCreated: ({ taskId, goal, parentContext, profile, workspaceRef, resume }) => {
+    if (resume && durableTaskStore.getTask(taskId)) {
+      const existing = durableTaskStore.getTask(taskId);
+      durableTaskStore.updateTask(taskId, { state: "ready", phase: "recovery", next_action: "resume_from_safe_checkpoint" }, "task.resume_requested");
+      return { resumeState: { state: existing.checkpoint?.state || null, continuation: existing.continuation || null } };
+    }
+    const task = durableTaskModel.createTask({
+      task_id: taskId,
+      objective: goal,
+      profile,
+      parent_task_id: parentContext && parentContext.parentTaskId,
+      root_task_id: parentContext && parentContext.rootTaskId,
+      session_id: parentContext && parentContext.sessionId,
+      project_id: parentContext && parentContext.project,
+      workspace_ref: workspaceRef,
+    });
+    durableTaskStore.insertTask(task);
+  },
 });
 
 // Resolve the durable lineage + bounded, redacted continuation brief for a child
@@ -1398,7 +1533,67 @@ app.post("/api/agent/run", (req, res) => {
   const goal = req.body && req.body.goal;
   const goalCheck = validateFollowUpGoal(goal);
   if (!goalCheck.ok) return res.status(goalCheck.httpStatus).json({ error: goalCheck.clientMessage });
-  beginTaskRun(res, { goal: goalCheck.goal, parentContext: null });
+  beginTaskRun(res, { goal: goalCheck.goal, profile: req.body && req.body.profile || "standard", workspaceRef: req.body && req.body.workspace_ref || null, parentContext: null });
+});
+
+// Durable control-room projection. This is a read surface over the task store;
+// the transient SSE stream is never authoritative.
+app.get("/api/agent/tasks", (req, res) => {
+  try {
+    const tasks = durableTaskStore.listTasks({ project_id: req.query && req.query.project, state: req.query && req.query.state, limit: req.query && req.query.limit, offset: req.query && req.query.offset });
+    res.json({ tasks, count: tasks.length, source: "durable_task_store" });
+  } catch { res.status(503).json({ error: "durable task state unavailable" }); }
+});
+
+app.get("/api/agent/tasks/:taskId", (req, res) => {
+  if (!validateTaskId(req.params.taskId)) return res.status(400).json({ error: "invalid task id" });
+  try {
+    const task = durableTaskStore.getTask(req.params.taskId);
+    if (!task) return res.status(404).json({ error: "task not found" });
+    res.json({ task, plans: durableTaskStore.listPlans(task.task_id), failures: durableTaskStore.listFailures(task.task_id), events: durableTaskStore.listEvents(task.task_id) });
+  } catch { res.status(503).json({ error: "durable task state unavailable" }); }
+});
+
+app.post("/api/agent/tasks/:taskId/guidance", (req, res) => {
+  if (!validateTaskId(req.params.taskId)) return res.status(400).json({ error: "invalid task id" });
+  try {
+    const task = durableTaskStore.recordGuidance(req.params.taskId, req.body && req.body.guidance, req.body && req.body.actor_id || "user");
+    res.status(202).json({ ok: true, task });
+  } catch (error) { res.status(error.message === "task not found" ? 404 : 400).json({ error: redactSensitive(error.message) }); }
+});
+
+app.post("/api/agent/tasks/:taskId/resume", (req, res) => {
+  if (!validateTaskId(req.params.taskId)) return res.status(400).json({ error: "invalid task id" });
+  try {
+    const task = durableTaskStore.getTask(req.params.taskId);
+    if (!task) return res.status(404).json({ error: "task not found" });
+    if (!["paused", "interrupted", "blocked", "waiting"].includes(task.state)) return res.status(409).json({ error: "task is not resumable from its current state" });
+    const waitingForApproval = task.next_action === "await_approval";
+    if (waitingForApproval) return res.status(409).json({ error: "task is waiting for an approval decision" });
+    durableTaskStore.recordGuidance(task.task_id, "Resume requested from the last safe checkpoint", req.body && req.body.actor_id || "user");
+    durableTaskStore.updateTask(task.task_id, { control: { ...(task.control || {}), pause_requested: false, cancel_requested: false } }, "task.control_cleared");
+    beginTaskRun(res, { taskId: task.task_id, goal: task.objective, profile: task.profile, resume: true, parentContext: task.parent_task_id ? { parentTaskId: task.parent_task_id, rootTaskId: task.root_task_id, sessionId: task.session_id, project: task.project_id } : null });
+  } catch { res.status(503).json({ error: "durable task state unavailable" }); }
+});
+
+// Composition is always a new governed task. Stored results/artifacts are
+// references only; they are never interpreted as executable instructions.
+app.post("/api/agent/tasks/:taskId/act-on", (req, res) => {
+  if (!validateTaskId(req.params.taskId)) return res.status(400).json({ error: "invalid task id" });
+  try {
+    const parent = durableTaskStore.getTask(req.params.taskId);
+    if (!parent) return res.status(404).json({ error: "task not found" });
+    const requestedGoal = req.body && req.body.goal;
+    const kind = String(req.body && req.body.kind || "continue").toLowerCase();
+    const allowedKinds = new Set(["continue", "verify", "implement", "report", "recheck", "compare"]);
+    if (!allowedKinds.has(kind)) return res.status(400).json({ error: "unsupported composition kind" });
+    const goalCheck = validateFollowUpGoal(requestedGoal || `${kind} the result of task ${parent.task_id}`);
+    if (!goalCheck.ok) return res.status(goalCheck.httpStatus).json({ error: goalCheck.clientMessage });
+    const goal = goalCheck.goal;
+    const childContext = { parentTaskId: parent.task_id, rootTaskId: parent.root_task_id, sessionId: parent.session_id, project: parent.project_id };
+    const childId = beginTaskRun(res, { goal, profile: req.body && req.body.profile || parent.profile, parentContext: childContext });
+    if (childId) durableTaskStore.recordChildRequest(parent.task_id, childId, kind, req.body && req.body.actor_id || "user");
+  } catch (error) { res.status(error.message === "task not found" ? 404 : 400).json({ error: redactSensitive(error.message) }); }
 });
 
 // Canonical follow-up endpoint: create a NEW child task linked to a terminal
@@ -1459,10 +1654,29 @@ app.post("/api/agent/run/:taskId/cancel", (req, res) => {
   }
   const alreadyRequested = controller.signal.aborted;
   if (!alreadyRequested) {
+    try { const task = durableTaskStore.getTask(taskId); if (task) durableTaskStore.updateTask(taskId, { control: { ...(task.control || {}), cancel_requested: true } }, "task.cancel_requested"); } catch {}
     controller.abort();
     try { emit(taskId, { type: "step", text: "Cancellation requested; stopping between steps" }); } catch {}
   }
   res.json({ ok: true, taskId, cancelling: true, alreadyRequested });
+});
+
+// Pause is cooperative: it aborts only the current generation/dispatch and
+// lets the loop persist its safe-boundary checkpoint before becoming waiting.
+// It never rewrites completed history or invokes a tool directly.
+app.post("/api/agent/tasks/:taskId/pause", (req, res) => {
+  const taskId = req.params.taskId;
+  if (!validateTaskId(taskId)) return res.status(400).json({ error: "invalid task id" });
+  const task = durableTaskStore.getTask(taskId);
+  if (!task) return res.status(404).json({ error: "task not found" });
+  const controller = taskCancels[taskId];
+  if (!controller) return res.status(409).json({ error: "task is not actively running" });
+  if (controller.signal.aborted) return res.status(409).json({ error: "task already has a stop request" });
+  durableTaskStore.updateTask(taskId, { control: { ...(task.control || {}), pause_requested: true } }, "task.pause_requested");
+  durableTaskStore.recordGuidance(taskId, "Pause requested by the authenticated user", req.body && req.body.actor_id || "user");
+  controller.abort("pause");
+  try { emit(taskId, { type: "step", text: "Pause requested; stopping at the next safe boundary" }); } catch {}
+  res.status(202).json({ ok: true, taskId, pausing: true });
 });
 
 app.get("/api/agent/stream/:taskId", (req, res) => {

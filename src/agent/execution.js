@@ -32,7 +32,18 @@ function startAgentExecution(goal, taskId, project, lineage = null) {
     // existing approval continuation reclaims through its own binding.
     let claim = null;
     try { claim = platformKernel.claimExecution({ execution_id: running.execution_id, claimed_by: `sidekick-agent:${process.pid}:${taskId}`, lease_ms: 300000 }); } catch { /* Older deployments may not have claims yet; execution remains governed. */ }
-    return { ...running, agent_claim: claim && claim.ok ? claim.claim : null };
+    const agentClaim = claim && claim.ok ? claim.claim : null;
+    let leaseTimer = null;
+    if (agentClaim) {
+      leaseTimer = setInterval(() => {
+        try {
+          const renewed = platformKernel.renewExecutionLease({ execution_id: running.execution_id, claimed_by: agentClaim.claimed_by, claim_epoch: agentClaim.claim_epoch, lease_ms: 300000 });
+          if (!renewed.ok && leaseTimer) clearInterval(leaseTimer);
+        } catch { if (leaseTimer) clearInterval(leaseTimer); }
+      }, 60000);
+      if (typeof leaseTimer.unref === "function") leaseTimer.unref();
+    }
+    return { ...running, agent_claim: agentClaim, agent_lease_timer: leaseTimer };
   } catch { return null; }
 }
 
@@ -63,9 +74,11 @@ function appendAgentExecutionEvent(execution, eventType, payload = {}, severity 
 
 function finishAgentExecution(execution, status, details = {}) {
   if (!execution) return;
+  if (execution.agent_lease_timer) { try { clearInterval(execution.agent_lease_timer); } catch {} }
   const state = status === "completed" ? "completed"
     : status === "iteration_limit" ? "timed_out"
       : status === "waiting_for_approval" ? "awaiting_approval"
+        : status === "paused" ? "waiting"
         : status === "cancelled" ? "cancelled" : "failed";
   try {
     platformKernel.transitionExecution(execution.execution_id, state, {
@@ -80,10 +93,10 @@ function finishAgentExecution(execution, status, details = {}) {
 }
 
 function registerAgentTranscript(execution, transcriptPath, taskId, status) {
-  if (!execution || !transcriptPath) return;
+  if (!execution || !transcriptPath) return null;
   try {
     const stat = fs.statSync(transcriptPath);
-    platformKernel.registerArtifact({
+    return platformKernel.registerArtifact({
       execution_id: execution.execution_id, task_id: execution.task_id,
       project_id: execution.project_id, producer: "agent", type: "agent_transcript",
       name: `${taskId}.json`, storage_ref: path.relative(DATA_DIR, transcriptPath),
@@ -93,7 +106,7 @@ function registerAgentTranscript(execution, transcriptPath, taskId, status) {
       ownerPrincipalId: execution.actor_principal_id || execution.requested_by_principal_id || null,
       createdByPrincipalId: execution.actor_principal_id || execution.requested_by_principal_id || null,
     });
-  } catch { /* Existing conversation storage remains authoritative. */ }
+  } catch { /* Existing conversation storage remains authoritative. */ return null; }
 }
 
 module.exports = { startAgentExecution, checkpointAgentExecution, appendAgentExecutionEvent, finishAgentExecution, registerAgentTranscript };

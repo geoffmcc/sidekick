@@ -12,7 +12,7 @@ See the [privacy policy](docs/privacy.md). A running HTTP instance also exposes 
 
 - keeping project continuity across AI sessions and across different agents/models;
 - software development and project work on a persistent remote machine (shell, files, git, GitHub API, CI inspection, databases);
-- bounded autonomous tasks through the Agent Bridge (submit a goal, get evidence-backed execution);
+- durable autonomous tasks through the Agent Bridge (structured goals, bounded profiles, governed tools, checkpoints, verification, artifacts, follow-ups, and restart-aware recovery);
 - self-hosted AI infrastructure and homelab/system administration (services, processes, networking, monitoring, incident capture);
 - scheduled and event-driven automation (cron, one-shot delays, watches, runbooks);
 - routing local/distributed model workloads (chat, generation, embeddings) across enrolled compute workers.
@@ -220,8 +220,17 @@ Comprehensive metrics collection with Grafana dashboards:
 ### 🔄 Evidence-Driven Workflow Learning
 Sidekick can learn repeated successful workflows from redacted tool telemetry. `teach` stores reusable procedures composed from existing tools. `evolve` mines repeated bounded workflows, infers safe parameters, validates the procedure, and only after explicit approval exposes trial or active generated capabilities as namespaced MCP tools such as `generated_<name>`.
 
-### 🤖 True Autonomous Operation
-The Agent Bridge runs independently from your main AI session. Submit a complex task via the dashboard, and Sidekick will plan, execute, and iterate until it's done—without you babysitting each step.
+### 🤖 Durable Autonomous Operation
+The Agent Bridge is a separate task execution surface with its own durable task
+projection. Submit a broad goal through the Agent tab or API and it normalizes
+the objective, records success criteria, selects capabilities from the live
+registry, plans and executes through the canonical dispatcher, records evidence,
+verifies the result, and returns a structured reusable product. Tasks support
+`quick`, `standard`, `deep`, `persistent`, and `research` profiles, pause,
+resume, cancel, guidance, approvals, follow-ups, governed child tasks, safe
+checkpoints, and conservative restart recovery. The Agent is separate from an
+MCP conversation, but it shares Sidekick's policy, approval, audit, redaction,
+Compute, capability, and dispatcher boundaries.
 
 ### 🖥️ Distributed Compute
 Sidekick Compute enrolls authenticated worker agents and routes allowlisted `chat`, `generate`, and `embeddings` jobs (including certified OpenVINO NPU/CPU text-embedding jobs) across registered workers, providers, and models. It includes scoped worker credentials, job leases, progress, cancellation, retry/recovery, artifacts, health reporting, routing rules, and dashboard controls. It is intentionally not an arbitrary remote shell or a general-purpose GPU batch system.
@@ -479,14 +488,18 @@ To avoid confusion, it's important to understand what each component is:
 
 When a connected client calls Sidekick tools, the work executes through Sidekick on the remote machine. The assistant or agent chooses the operation; Sidekick supplies and governs the capability.
 
-The Agent Bridge is a separate system that can run tasks autonomously, but it's not integrated into the main AI's workflow. It's accessed via the Dashboard's Agent tab or direct API calls.
+The Agent Bridge is a separate task system rather than another MCP collaborator.
+It is integrated with the platform kernel and canonical dispatcher, and is
+accessed through the Dashboard Agent tab or its API. Follow-ups and “Act on
+this” create fresh governed child tasks; stored model output never executes
+directly and prior approvals never transfer.
 
 The Knowledge Base replaces the need for large markdown files. Instead of re-reading AGENTS.md or CONTEXT.md, the AI queries the database for specific information, saving tokens and improving accuracy.
 
 **Current boundaries:**
 - Sidekick Compute accepts only versioned, allowlisted model workloads; it is not arbitrary worker-side command execution.
 - Evolve does not silently activate free-form code. Generated capabilities must pass validation and approval before trial or active exposure.
-- The Agent Bridge acts only on submitted tasks, schedules, or watches and remains bounded by tool policy, approvals, iteration limits, and the same dispatcher used by other execution paths.
+- The Agent Bridge acts only on submitted tasks, schedules, or watches and remains bounded by task profiles, model/tool budgets, wall-clock and idle limits, tool policy, approvals, checkpoint/recovery rules, verification, and the same dispatcher used by other execution paths.
 - The module system's full lifecycle is implemented for first-party AND third-party modules: safe package inspection, a managed module store, verified entry-point loading with whole-package integrity, install/configure/enable/disable/upgrade/uninstall, and a derived health model. **Installed module code is trusted executable code running in-process with Sidekick's privileges — there is no sandbox and none is claimed.** The controls are integrity, provenance and lifecycle, not isolation. Treat installing a third-party pack as equivalent to deploying code.
 - Capability packs compose existing subsystems; they are not a second plugin runtime, dispatcher or workflow engine. There is no remote marketplace: packs are installed from the bundled release copy or from an approved server-local path.
 - Handler extraction out of `src/tools-legacy.js` is complete (zero production handlers remain there); the remaining platform convergence work is tracked in `docs/platform-roadmap.md`.
@@ -575,13 +588,31 @@ knowledge action="get" id=18
 
 ### Agent Bridge
 
-The agent at `:4099` takes a natural-language goal and runs an autonomous loop:
+The Agent at `:4099` accepts a natural-language goal and creates one durable
+task projection. Live-state goals use governed tools; conceptual prompts may
+receive a direct answer. A durable task can normalize the goal, retain explicit
+criteria and requirements, shortlist capabilities from the current registry,
+execute a bounded plan, revise after evidence, checkpoint at safe boundaries,
+and independently verify the result. It produces a structured result alongside
+the readable transcript.
 
-1. Sends goal + tool definitions to Compute for provider/model selection
-2. LLM responds with a tool call decision
-3. Bridge executes the tool via MCP
-4. Feeds result back to LLM
-5. Repeats until the task is complete
+Task profiles are finite and bounded: `quick`, `standard`, `deep`, `persistent`,
+and `research`. The durable envelope records model/tool usage, failures,
+retries, plan revisions, checkpoints, workspace references, artifacts,
+verification, control events, and continuation operation fingerprints. A
+possibly completed mutation is not blindly repeated after recovery; the task
+parks for verification. The current Brain implementation also retains its
+provider-generation, plan-step, and legacy loop safety ceilings, so profile
+budgets are an outer durable envelope rather than a claim of unbounded
+execution.
+
+On this branch, migrations `056_agent_tasks.sql` and
+`057_agent_continuation.sql` provide the durable task projection and the
+redacted control, artifact-reference, completed-operation, and ambiguous-
+operation recovery state. The implementation is split across
+`src/agent.js`, `src/agent/task-model.js`, `src/agent/task-store.js`,
+`src/agent/recovery-scan.js`, `src/agent/verification.js`, and the existing
+platform-kernel execution path rather than introducing a second dispatcher.
 
 #### Agent API
 
@@ -596,6 +627,19 @@ curl http://YOUR_REMOTE_IP:4099/api/agent/stream/{taskId}
 
 # View history
 curl http://YOUR_REMOTE_IP:4099/api/agent/history
+
+# Inspect durable state and control a running task
+curl http://YOUR_REMOTE_IP:4099/api/agent/tasks/{taskId}
+curl -X POST http://YOUR_REMOTE_IP:4099/api/agent/tasks/{taskId}/pause
+curl -X POST http://YOUR_REMOTE_IP:4099/api/agent/tasks/{taskId}/resume
+curl -X POST http://YOUR_REMOTE_IP:4099/api/agent/tasks/{taskId}/guidance \
+  -H "Content-Type: application/json" \
+  -d '{"guidance":"Verify the result against current state before completing."}'
+
+# Create a governed child from a selected result/finding/artifact
+curl -X POST http://YOUR_REMOTE_IP:4099/api/agent/tasks/{taskId}/act-on \
+  -H "Content-Type: application/json" \
+  -d '{"kind":"verify","goal":"Verify the selected finding"}'
 ```
 
 ## Optional Agent Bootstrap with AGENTS.md
@@ -788,12 +832,12 @@ This follows the principle of least privilege: after initial setup, the sidekick
 | `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | OpenAI-compatible embedding model |
 | `SIDEKICK_DISABLE_PROVIDER_BOOTSTRAP` | `0` | Disable environment provider registration |
 | `SIDEKICK_DISABLE_OLLAMA_BOOTSTRAP` | `0` | Disable only the default Ollama provider registration |
-| `SIDEKICK_MAX_ITERATIONS` | `15` | Max agent loop iterations (safety limit) |
+| `SIDEKICK_MAX_ITERATIONS` | `15` | Legacy tool-loop iteration ceiling; durable task profiles add bounded model/tool/wall-clock/resource budgets |
 | `SIDEKICK_AUTO_MEMORY` | `1` | Enable bounded automatic memory summaries |
 | `SIDEKICK_AUTO_MEMORY_MAX` | `500` | Max retained automatic memory entries |
 | `SIDEKICK_EMBEDDINGS` | `1` | Enable semantic memory embeddings when Ollama/Qdrant are available |
 | `SIDEKICK_EMBEDDING_MODEL` | `nomic-embed-text` | Ollama embedding model for semantic memory recall |
-| `SIDEKICK_AGENT_MODEL` | — | Optional Agent Bridge/Compute chat-model override; otherwise `OLLAMA_MODEL` is used |
+| `SIDEKICK_AGENT_MODEL` | — | Optional Agent Bridge/Compute chat-model override; otherwise Compute uses its configured eligible model route |
 | `SIDEKICK_HEALTHCHECK_URL` | `https://github.com` | HTTPS endpoint used to verify outbound DNS and TLS connectivity |
 | `SIDEKICK_POSTGRES_URL` | — | Optional PostgreSQL connection string; overrides the discrete connection fields |
 | `SIDEKICK_REDIS_URL` | `redis://127.0.0.1:6379` | Redis connection string |
@@ -832,7 +876,7 @@ This follows the principle of least privilege: after initial setup, the sidekick
 │   ├── workflows/          Workflow definition registry, reference contract, and the runner
 │   │                       over the kernel's execution primitives
 │   ├── approvals/          Durable task-originated approval continuation (ADR stack)
-│   ├── brain/              Feature-flagged bounded planner over the Agent Bridge (default off)
+│   ├── brain/              Bounded planner/verifier/synthesizer over governed Agent execution
 │   ├── compute/            Worker, provider, model, job, routing, lease, and artifact system
 │   ├── platform/           Platform kernel: executions, events, artifacts, projects,
 │   │                       workspaces, connectors, and research record foundations
@@ -876,7 +920,7 @@ This follows the principle of least privilege: after initial setup, the sidekick
 ├── grafana/
 │   ├── provisioning/       Grafana auto-provisioning configs
 │   └── dashboards/         Provisioned Grafana dashboards
-├── migrations/             53 ordered SQLite migrations: core schema, tool registry,
+├── migrations/             57 ordered SQLite migrations: core schema, tool registry,
 │                           structured memory, Black Box, platform kernel, Compute,
 │                           approvals, modules, projects, events, connectors, research records
 ├── packaging/              Compute worker OS-service installers (systemd, launchd, winsw)

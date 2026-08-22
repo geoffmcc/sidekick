@@ -6,9 +6,14 @@ const EventEmitter = require("events");
  * The mutable maps and runner callback stay owned by agent.js and are injected
  * so this module remains a small orchestration boundary.
  */
-function createTaskRunner({ taskEmitters, taskCancels, emit, runAgent, redactSensitive }) {
-  return function beginTaskRun(res, { goal, parentContext = null }) {
-    const taskId = crypto.randomUUID().slice(0, 8);
+function createTaskRunner({ taskEmitters, taskCancels, emit, runAgent, redactSensitive, onTaskCreated = null }) {
+  return function beginTaskRun(res, { goal, parentContext = null, profile = "standard", workspaceRef = null, taskId: requestedTaskId = null, resume = false }) {
+    const taskId = requestedTaskId || crypto.randomUUID().slice(0, 8);
+    let creation = null;
+    try { if (onTaskCreated) creation = onTaskCreated({ taskId, goal, parentContext, profile, workspaceRef, resume }); } catch (error) {
+      res.status(503).json({ error: "durable task storage unavailable" });
+      return null;
+    }
     taskEmitters[taskId] = new EventEmitter();
     taskCancels[taskId] = new AbortController();
     const payload = { taskId };
@@ -18,7 +23,7 @@ function createTaskRunner({ taskEmitters, taskCancels, emit, runAgent, redactSen
       payload.continuationDepth = parentContext.continuationDepth;
     }
     res.json(payload);
-    runAgent(goal, taskId, parentContext, taskCancels[taskId])
+    runAgent(goal, taskId, parentContext, taskCancels[taskId], creation && creation.resumeState)
       .catch((e) => {
         try {
           emit(taskId, { type: "error", text: redactSensitive("Task failed to run: " + (e && e.message ? e.message : "unknown error")) });

@@ -191,6 +191,32 @@ Approving a request executes it under the original source and reuses current too
 
 Approvals raised by a Brain task follow the durable path in `docs/adr-approval-continuation.md` rather than the standalone path above. The security-relevant differences:
 
+### Durable Agent trust boundaries
+
+Migrations 056 and 057 add bounded, redacted Agent task projections and
+immutable plan, event, failure, and continuation records. Task checkpoints
+contain only safe-boundary state; raw model/tool output remains in governed
+transcript, evidence, or artifact stores. Recovery fences platform execution
+claims and never recreates an in-flight model generation. A possibly completed
+mutating operation is blocked for fresh verification instead of being blindly
+repeated. Read-only operations remain subject to current dispatcher policy and
+schema checks when resumed.
+
+Plans, repository content, web content, memories, artifacts, prior results,
+and model output are untrusted data. They can inform a plan proposal but cannot
+add authority, weaken policy, satisfy approval, or execute themselves. The
+Agent, verifier, recovery scanner, and UI have no direct handler path: current
+schemas, policy, redaction, approval, identity, and audit checks are applied by
+the canonical dispatcher immediately before each operation. Child tasks inherit
+lineage and selected bounded references, never authority or approval.
+
+The control room reads durable task state rather than treating SSE as the
+authority. Browser projections use text-safe rendering for result content.
+Pause, resume, cancellation, waiting, stale claims, retry suppression, and
+verification outcomes are persisted as auditable state transitions. Workspace
+references are opaque governed references; task input cannot provide a raw host
+path, traversal target, or unrestricted inherited workspace.
+
 - **Approving does not execute.** For a task-originated approval, approval is a state transition; the task runner executes the step. This keeps one executor and one audit path rather than a second execution tree whose result nothing reads.
 - **What a human saw is what runs.** Before dispatch the runner recomputes the argument digest from the *persisted plan* and compares it to the approval, and re-checks expiry, plan version, and step membership. A mismatch refuses execution rather than proceeding. Tampering with the stored plan, the digest, or the plan version therefore fails closed rather than executing altered arguments under a human's authorization.
 - **A denied action cannot be re-requested.** The action identity is a derived key over `(task_id, step_id, plan_version, tool_name, args_digest)` under a unique index, so re-requesting the same unchanged action collides. A materially different route yields a different key and is permitted. This is a storage invariant, not a prompt instruction — the planner cannot talk its way past it.

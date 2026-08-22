@@ -180,12 +180,20 @@ executable module code inside the Sidekick process.
   custody failure is surfaced and reconciled, not silently treated as success.
   Do not claim provenance, project association, or redaction that the returned
   artifact metadata does not establish.
-- Agent Bridge is a separate task system, not another MCP collaborator. A
-  live-state goal must produce evidence through the policy-gated tool loop.
-  Follow-ups create bounded child tasks with untrusted prior context; they do
-  not inherit approvals and do not automatically create sessions, handoffs, or
-  memories. Use MCP tools directly unless the user explicitly requests Agent
-  Bridge execution.
+- Agent Bridge is a separate durable task system, not another MCP collaborator.
+  A live-state goal must produce evidence through the policy-gated tool loop.
+  Durable tasks normalize goals, retain explicit criteria, use bounded
+  `quick`, `standard`, `deep`, `persistent`, or `research` profiles, checkpoint
+  at safe boundaries, verify results, and expose structured products. They can
+  pause, resume, cancel, accept guidance, wait for approval, and recover
+  conservatively after restart. Follow-ups and `act-on` create bounded child
+  tasks with untrusted prior context; they do not inherit approvals or
+  authority and do not execute stored output directly. Use MCP tools directly
+  unless the user explicitly requests Agent Bridge execution.
+  The durable implementation is backed by migrations 056 and 057 and the
+  `src/agent/` task model/store/recovery/verification modules; inspect the
+  current source and schema rather than assuming this branch's limits are
+  deployed everywhere.
 - A repository path supplied to the Developer pack must be visible to the
   Sidekick server. It cannot inspect a working tree that exists only on the
   user's unrelated computer. Prefer `dev_repo_profile` and the pack's
@@ -292,6 +300,13 @@ The bundled first-party packs are:
   Command probes compose governed `bash`; HTTP probes compose `web_fetch`.
   Research remains authorized, scoped, typed, timed, audited, and evidence
   based, with target-specific content kept in the private research workspace.
+- **Browser Automation** and **Container Operations** are also bundled packs;
+  discover their exact tools, workflows, health, and policy through the live
+  `capability` and `tools` registries before use. Pack availability is
+  deployment-specific and must not be inferred from this file.
+- **Network Firewall** is another bundled capability pack; treat its network
+  changes as consequential and inspect current schemas, profiles, policy, and
+  approval requirements before use.
 
 Important built-in capability families include the following. These are a
 capability map, not a substitute for live discovery; names, schemas, risk, and
