@@ -54,7 +54,6 @@ sqlite3 data/sidekick.db "SELECT COUNT(*) FROM knowledge WHERE version_added = '
 | `install.md` | Documentation conventions (server path, IP placeholder) and deploy-script quick reference. |
 | `configuration.md` | Environment variables, ports, LLM settings, data directory, and auth settings. |
 | `operations.md` | Day-to-day service commands, health checks, troubleshooting, backups, and maintenance. |
-| `service.md` | systemd service commands quick reference. |
 | `ollama.md` | Local Ollama model setup. |
 | `dashboard.md` | Dashboard UI, API routes, approvals/reconciliation, webhooks, and agent proxy. |
 | `security.md` | Authentication, IP allowlists, redaction, command safety, tool policy, path policy, approvals. |
@@ -64,7 +63,7 @@ sqlite3 data/sidekick.db "SELECT COUNT(*) FROM knowledge WHERE version_added = '
 
 | File | Purpose |
 |---|---|
-| `tools-reference.md` | Complete tool inventory generated from the built-in tool registry. |
+| `tools-reference.md` | Tool reference and argument guide; the live registry is authoritative because modules, capability packs, and approved generated tools can change the inventory. |
 | `tool-usage-guide.md` | Practical usage patterns and examples for important tool groups. |
 | `agent-bridge.md` | Autonomous task runner behavior, follow-ups, streaming, delays, and watches. |
 | `brain.md` | Feature-flagged bounded planner (default off) and approval continuation for parked tasks. |
@@ -89,6 +88,34 @@ sqlite3 data/sidekick.db "SELECT COUNT(*) FROM knowledge WHERE version_added = '
 | `browser-automation.md` | Governed Browser Automation: the Core Chromium subsystem, the `browser` tool, egress policy, isolation, secrets, artifacts, and the runtime install step. |
 | `container-operations-pack.md` | Container Operations (Docker / Podman): engine profiles, bounded inspection, Compose validation, updates, lifecycle safety, and limitations. |
 | `workspace-secret-references.md` | Encrypted workspace secret storage at the kernel boundary. |
+
+### Additional references
+
+These documents are maintained references or historical/design records that are
+useful for focused work but are not part of the primary reading path above:
+
+| File | Purpose |
+|---|---|
+| `capability-packs.md` | Capability-pack lifecycle, trust boundaries, installation, configuration, and contributed content. |
+| `developer-pack.md` | Developer / Software Engineering pack tools and workflows. |
+| `jellyfin-pack.md` | Jellyfin integration and maintenance workflows. |
+| `network-firewall-operations-pack.md` | Governed network and firewall operations pack. |
+| `proxmox-pack.md` | Proxmox VE profiles, guest operations, provisioning, and retirement. |
+| `security-research-pack.md` | Security Research pack scope, evidence, workspace, and report boundaries. |
+| `third-party-capability-packs.md` | Authoring and review guidance for compatible third-party packs. |
+| `transcription.md` | Current transcription support and its Compute boundary. |
+| `privacy.md` | Runtime privacy policy and data-handling boundaries. |
+| `handoff-v2.md` | Handoff versioning and resume-packet design notes. |
+| `security-hardening-phase-20.md` | Security hardening status and remaining work. |
+| `archive/security-audits/security-phase-01-threat-model.md` | Historical threat model and trust-boundary review. |
+| `archive/security-audits/security-phase-02-dispatch-boundary.md` | Historical dispatcher and execution-boundary review. |
+| `archive/security-audits/security-phase-03-auth-authorization.md` | Historical authentication and authorization review. |
+| `archive/security-audits/security-phase-04-secure-defaults.md` | Historical secure-defaults review. |
+| `archive/security-audits/security-phase-05-subprocess-shell.md` | Historical subprocess and shell safety review. |
+| `archive/security-audits/security-phase-06-filesystem-data.md` | Historical filesystem and data-boundary review. |
+| `archive/security-audits/security-phase-07-secrets-redaction.md` | Historical secrets and redaction review. |
+| `archive/security-audits/security-phase-08-http-network.md` | Historical HTTP and network-boundary review. |
+| `archive/security-audits/security-phase-09-dashboard-web.md` | Historical dashboard and web-surface review. |
 | `adr-approval-continuation.md` | ADR: durable approval continuation for parked tasks (implemented). |
 | `adr-brain.md` | ADR: Brain v0.1 orchestration boundary (implemented, feature-flagged). |
 | `adr-compute-placement.md` | ADR: shared compute placement decision core (implemented). |
@@ -121,11 +148,7 @@ sqlite3 data/sidekick.db "SELECT COUNT(*) FROM knowledge WHERE version_added = '
 
 | File | Purpose |
 |---|---|
-| `platform-architecture-assessment.md` | Pre-consolidation assessment (2026-07-15 snapshot). |
-| `memory-intelligence-findings.md` | Pre-redesign memory findings (superseded). |
 | `dispatcher-identity-recovery-plan.md` | Dispatcher identity/approval-recovery plan (implemented). |
-| `project-review.md` | Early project safety review (its follow-ups have since shipped). |
-| `workplans/sidekick-compute-completion.md` | Compute completion work plan (completed). |
 
 ## Runtime services
 

@@ -3,7 +3,8 @@
 Status: Current-state architecture
 Verified date: 2026-08-14
 
-Sidekick's canonical built-in registry contains 108 descriptors. Active module,
+Sidekick's canonical built-in registry is assembled from descriptor families and
+may change as the project evolves. Active module,
 capability-pack, and approved generated tools join that same registry at
 runtime, so the live catalog count is deployment-dependent. Query `tools
 action="overview"` for the current count. All contributions execute through

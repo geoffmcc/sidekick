@@ -2,7 +2,8 @@
 
 Sidekick's automatic memory stores bounded, redacted summaries in the `memories` SQLite table, with compatibility copies in the `context` JSON document. The memory-intelligence pass adds explicit task sessions, first-class handoffs, evidence rows, scope metadata, temporal validity, source authority, and current-versus-historical fields while preserving KV, context, knowledge, and tool-log separation.
 
-See `docs/memory-intelligence-findings.md` for the verified findings that drove this redesign.
+The findings that drove this redesign are incorporated into this plan and the
+current-state assessment in `docs/platform-convergence-audit.md`.
 
 ## Remaining Logical Steps
 

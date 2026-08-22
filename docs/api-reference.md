@@ -1,6 +1,6 @@
 # HTTP API Reference
 
-This reference is generated from Express route declarations composed by `src/index.js`, `src/mcp/`, `src/dashboard.js`, `src/dashboard/`, and `src/agent.js` (verified at `e0cd743ba626c4b7845a09a758d3860c5a48acea`). Dashboard routes sit behind the dashboard protections described in `security.md`; MCP and Compute routes use the authentication described below.
+This reference is maintained against the Express route declarations composed by `src/index.js`, `src/mcp/`, `src/dashboard.js`, `src/dashboard/`, and `src/agent.js`. Verify exact current routes in those modules when integrating against the API. Dashboard routes sit behind the dashboard protections described in `security.md`; MCP and Compute routes use the authentication described below.
 
 For local clients, Sidekick also exposes the same MCP tool registry over the
 child-process stdio transport. That transport is started by the `sidekick`
@@ -22,6 +22,14 @@ process boundary. See `local-deployment.md` for configuration and persistence.
 | POST | `/messages` | Legacy SSE JSON-RPC message channel. |
 
 ### Sidekick Compute routes
+
+Compute exposes separate enrollment, worker, and administrator route families.
+The current implementation includes enrollment exchange (`/compute/enrollment/*`),
+worker credentials, heartbeat, capabilities, disconnect, job leases, progress,
+cancellation, artifact custody, completion and failure under `/compute/worker/*`,
+and administrator operations under `/compute/admin/*`. The compatibility routes
+listed below are also present in `src/index.js`; consult that module and the
+router files for the exact method, body, and authentication requirements.
 
 Three authenticated route groups are mounted as routers, plus explicitly authenticated flat compatibility aliases:
 

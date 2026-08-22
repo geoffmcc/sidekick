@@ -17,6 +17,25 @@ sudo journalctl -u sidekick-dashboard -n 100 --no-pager
 sudo journalctl -u sidekick-agent -n 100 --no-pager
 ```
 
+Start, stop, or enable the core services:
+
+```bash
+sudo systemctl start sidekick-mcp sidekick-dashboard sidekick-agent
+sudo systemctl stop sidekick-mcp sidekick-dashboard sidekick-agent
+sudo systemctl enable sidekick-mcp sidekick-dashboard sidekick-agent
+```
+
+The expected service working directory is `/home/sidekick/sidekick`. If a
+service fails to start, inspect the deployed files and protected configuration,
+then check the unit status and MCP logs:
+
+```bash
+cd /home/sidekick/sidekick
+ls -la
+sudo systemctl status sidekick-mcp sidekick-dashboard sidekick-agent
+sudo journalctl -u sidekick-mcp -n 100 --no-pager
+```
+
 Live logs:
 
 ```bash
