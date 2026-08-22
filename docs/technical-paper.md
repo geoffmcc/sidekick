@@ -111,7 +111,7 @@ Later migrations extend `memories` with lifecycle, sync, and deferred-review fie
 - `005_sync_support.sql`: origin machine/user identifiers, sync versioning, and last-sync timestamps.
 - `006_memory_deferred.sql`: state, confirmation requirements, confirmer identity, soft delete, and expiration timestamps.
 
-The `meta` table stores `schema_version`. Migration files live in `migrations/` and use numeric prefixes; the current tree has 35 ordered migrations, `001_initial_schema.sql` through `035_research_disclosure.sql`. Beyond the memory migrations described above, later migrations add memory intelligence (009), Black Box incident evidence (010), the platform kernel (011, 026–028, 030–031), Sidekick Compute (013–024), durable approval continuation (025), platform modules (029), project identity projection (027), and the security-research record foundations (032–035).
+The `meta` table stores `schema_version`. Migration files live in `migrations/` and use numeric prefixes; the current tree has 53 ordered migrations, `001_initial_schema.sql` through `053_handoff_v2_remove_legacy_key.sql`. Beyond the memory migrations described above, later migrations add memory intelligence (009), Black Box incident evidence (010), the platform kernel (011, 026–028, 030–032), Sidekick Compute (013–024), durable approval continuation (025), platform modules (029), project identity projection (027), security-research record foundations (033–035), capability packs and runtime convergence (036–037), handoff versioning and resume packets (038–040), identity and authorization foundations (041–048), knowledge provenance and infrastructure categories (049–052), and handoff v2 cleanup (053).
 
 On MCP startup, `src/index.js` calls:
 
@@ -366,7 +366,7 @@ It writes to InfluxDB using:
 - `SIDEKICK_INFLUX_ORG`
 - `SIDEKICK_INFLUX_BUCKET`
 
-Grafana provisioning lives under `grafana/` and includes dashboards for overview, tool analytics, system health, database performance, Docker containers, and Ollama metrics.
+Grafana provisioning lives under `grafana/` and includes dashboards for overview, tool analytics, system health, database performance, and Docker containers. Ollama metrics may still be collected when configured, but there is no dedicated Ollama dashboard in the current repository.
 
 ## 14. Deployment Model
 

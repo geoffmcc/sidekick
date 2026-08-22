@@ -119,9 +119,10 @@ Sidekick
 └── Dedicated deployment
 ```
 
-MCP clients can launch the full runtime locally through the packaged `sidekick`
-executable and stdio, without a dedicated Sidekick server. Dedicated server
-installations continue to expose Streamable
+The intended local mode launches the full runtime through the packaged `sidekick`
+executable and stdio, without a dedicated Sidekick server. The packaged stdio
+entry point is under active maintenance, so run the local handshake tests before
+depending on it. Dedicated server installations continue to expose Streamable
 HTTP and legacy SSE with their existing authentication and service layout.
 Both topologies use the same governed registry, dispatcher, persistence,
 memory, workflows, capability packs, and Compute paths. The included
@@ -228,7 +229,7 @@ Sidekick Compute enrolls authenticated worker agents and routes allowlisted `cha
 ### 🔒 Security-First Design
 Every tool output is automatically scanned and redacted for sensitive data (API keys, tokens, passwords). The dashboard has rate limiting, CSRF protection, and audit logging. The agent bridge is isolated and only accessible through the dashboard.
 
-### 🛠️ 112 Built-In Specialized Tools
+### 🛠️ Governed Tool Catalog
 Not just bash and file operations. Sidekick includes tools for:
 - GitHub integration and read-only CI/check-run inspection
 - Service and process management
@@ -288,33 +289,35 @@ Sidekick has used its own tools to test storage and recall behavior, investigate
 ## Architecture
 
 ```
-┌─ Local Machine (source of truth) ─────────────────────┐
-│  git push → github.com/geoffmcc/sidekick               │
-│  ./deploy.ps1 → SSH into remote, git pull, restart     │
-└────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  Local Machine (source of truth)                             │
+│  git push → github.com/geoffmcc/sidekick                     │
+│  ./deploy.ps1 → SSH into remote, git pull, restart           │
+└──────────────────────────────────────────────────────────────┘
                            │
                            ▼
-┌─ Remote Machine (YOUR_REMOTE_IP) ─────────────────────────┐
-│                                                        │
-│  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐  │
-│  │  MCP Server  │  │  Dashboard   │  │ Agent Bridge │  │
-│  │  :4097       │  │  :4098       │  │  :4099       │  │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  │
-│         │                  │                  │          │
-│         └──────────────────┼──────────────────┘          │
-│                            │                             │
-│  ┌─────────────────────────▼──────────────────────────┐ │
-│  │              Data & Services Layer                  │ │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐         │ │
-│  │  │ SQLite   │  │ Redis    │  │ Qdrant   │         │ │
-│  │  │ (main DB)│  │ (cache)  │  │ (vector) │         │ │
-│  │  └──────────┘  └──────────┘  └──────────┘         │ │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐         │ │
-│  │  │InfluxDB  │  │ Grafana  │  │ Ollama   │         │ │
-│  │  │ :8086    │  │ :3000    │  │ :11434   │         │ │
-│  │  └──────────┘  └──────────┘  └──────────┘         │ │
-│  └────────────────────────────────────────────────────┘ │
-└────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  Remote Machine (YOUR_REMOTE_IP)                             │
+│                                                              │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐        │
+│  │  MCP Server  │  │  Dashboard   │  │ Agent Bridge │        │
+│  │  :4097       │  │  :4098       │  │  :4099       │        │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘        │
+│         │                 │                 │                │
+│         └─────────────────┼─────────────────┘                │
+│                           │                                  │
+│  ┌──────────────────────────────────────────────────────┐    │
+│  │                    Data & Services Layer             │    │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐            │    │
+│  │  │  SQLite  │  │  Redis   │  │  Qdrant  │            │    │
+│  │  │ (main DB)│  │ (cache)  │  │ (vector) │            │    │
+│  │  └──────────┘  └──────────┘  └──────────┘            │    │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐            │    │
+│  │  │ InfluxDB │  │ Grafana  │  │  Ollama  │            │    │
+│  │  │  :8086   │  │  :3000   │  │ :11434   │            │    │
+│  │  └──────────┘  └──────────┘  └──────────┘            │    │
+│  └──────────────────────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 *The Agent Bridge sends inference through Compute. Provider bootstrap can register Ollama, Groq, and OpenAI-compatible providers, but private conversations remain on eligible local/trusted providers by default and fail closed rather than silently reaching the cloud. Sidekick Compute workers are separate enrolled processes that connect to scoped `/compute/worker/*` routes on the MCP service; they are not additional always-on services inside the three-process core.*
@@ -325,7 +328,7 @@ Sidekick has used its own tools to test storage and recall behavior, investigate
 - **Redis** — Session-scoped caching with TTL support
 - **Qdrant** — Vector database for semantic search and embeddings
 - **InfluxDB** — Time-series metrics collection (system health, tool usage, service status)
-- **Grafana** — Metrics visualization with 6 pre-built dashboards
+- **Grafana** — Metrics visualization with the dashboards provisioned in the repository
 
 ### LLM Support
 
@@ -346,7 +349,7 @@ Sidekick has used its own tools to test storage and recall behavior, investigate
 | **Redis** | 6379 | Session-scoped caching with TTL |
 | **Qdrant** | 6333 | Vector database for semantic search |
 | **InfluxDB** | 8086 | Time-series metrics (system health, tool usage, service status) |
-| **Grafana** | 3000 | Metrics visualization with 6 pre-built dashboards |
+| **Grafana** | 3000 | Metrics visualization with the provisioned repository dashboards |
 
 All tools are exposed via the MCP server at `http://YOUR_REMOTE_IP:4097/mcp`.
 
@@ -412,7 +415,7 @@ through the module lifecycle, pack workflows register in the workflow
 definition registry, and pack knowledge lands in the ordinary knowledge base.
 There is no second plugin runtime and no remote marketplace.
 
-Six first-party packs ship bundled: the **Developer / Software Engineering**
+Seven first-party packs ship bundled: the **Developer / Software Engineering**
 pack, the **Jellyfin** pack, the **Proxmox VE** pack, the **Container
 Operations (Docker / Podman)** pack, the **Security Research** pack, and the
 **Governed Browser Automation** pack. They provide structured repository work,
@@ -458,7 +461,7 @@ To avoid confusion, it's important to understand what each component is:
 - **Sidekick Compute** = The allowlisted worker/provider/model/job system for distributed inference workloads
 - **Module** = A runtime implementation contributed to Sidekick: code that builds tool descriptors and reports health, managed through a full install/configure/enable/upgrade/uninstall lifecycle
 - **Workflow** = A durable, reusable multi-step execution defined as data and run through the tool dispatcher, with checkpoints, project identity, cancellation and approval continuation
-- **Capability Pack** = An installable *area of competence* composed from modules, workflows, knowledge and configuration. Six first-party packs ship bundled; use live capability discovery for exact installed state. See `docs/capability-packs.md`.
+- **Capability Pack** = An installable *area of competence* composed from modules, workflows, knowledge and configuration. Seven first-party packs ship bundled; use live capability discovery for exact installed state. See `docs/capability-packs.md`.
 - **Connector** = A managed relationship with an external service or system. GitHub is the current governed provider; broader connector health, mutation, dashboard coverage, and additional providers remain future work.
 - **Metrics System** = InfluxDB + Grafana for system health, tool usage, and service monitoring
 
@@ -516,7 +519,7 @@ Open `http://YOUR_REMOTE_IP:4098/` in a browser.
 - **Tools** — browsable catalog of built-in tools plus module-, pack- and approved generated tools, with search, category filtering, policy status, risk labels, and detailed argument info
 - **Capabilities** — installed capability packs with version, publisher, provenance (first-party/third-party, bundled), state, health, integrity and configuration validity, plus contributed modules, tools, workflows and knowledge; available bundled packs; and inspection/installation from an approved server-local path. Actions: Details, Health Check, Enable, Disable, Upgrade, Uninstall. Every mutation dispatches the governed `capability` tool server-side.
 - **Compute** — enrolled workers, providers, models, routing, jobs, artifacts, cancellation, retry, and lease recovery
-- **Metrics** — embedded Grafana dashboards for system health, tool analytics, database performance, Docker containers, and Ollama metrics
+- **Metrics** — embedded Grafana dashboards for system health, tool analytics, database performance, and Docker containers
 
 ### Metrics & Monitoring
 
@@ -527,13 +530,12 @@ Sidekick includes comprehensive metrics collection and visualization:
 - Tool usage: call counts, success rates, duration stats per tool
 - Service status: MCP, Dashboard, Agent health
 
-**Grafana Dashboards** (6 pre-built):
+**Grafana Dashboards** (five provisioned from the repository):
 1. **Sidekick Overview** — High-level system metrics and tool usage
 2. **Tool Analytics** — Per-tool performance metrics with dynamic selectors
 3. **System Health** — CPU, memory, disk usage over time
 4. **Database Performance** — Query times, connection counts, cache hit ratios
 5. **Docker Containers** — Container resource usage and health
-6. **Ollama** — LLM request counts, response times, token usage
 
 Access Grafana directly at `http://YOUR_REMOTE_IP:3000/` using `sidekick` and the configured `SIDEKICK_GRAFANA_ADMIN_PASSWORD`.
 
@@ -680,7 +682,7 @@ sudo systemctl start sidekick-influxdb
 ```bash
 sudo systemctl start sidekick-grafana
 ```
-- 6 pre-built dashboards
+- Provisioned dashboards are defined under `grafana/provisioning/dashboards/`; discover the current set from those files rather than relying on a hard-coded count.
 - Accessible at `http://YOUR_REMOTE_IP:3000/` using `sidekick` and the configured `SIDEKICK_GRAFANA_ADMIN_PASSWORD`
 - Embedded in Dashboard's Metrics tab through the authenticated dashboard Grafana proxy
 
@@ -761,7 +763,7 @@ This follows the principle of least privilege: after initial setup, the sidekick
 | `SIDEKICK_MCP_TOOL_POLICY` | — | Source-specific tool policy override for MCP clients |
 | `SIDEKICK_DASHBOARD_TOOL_POLICY` | — | Source-specific tool policy override for dashboard-originated calls |
 | `SIDEKICK_APPROVAL_MODE` | `strict` | Dashboard approval mode: `off`, `risky`, or `strict` |
-| `SIDEKICK_APPROVAL_TTL_SECONDS` | `3600` | Maximum age of a pending approval; approval payloads require `SIDEKICK_SECRET_KEY` |
+| `SIDEKICK_APPROVAL_TTL_SECONDS` | `3600` | Maximum age of a pending approval; approval payloads require the configured file-backed secret key |
 | `SIDEKICK_APPROVAL_REQUIRED_TOOLS` | — | Comma-separated tools or risk selectors that always require approval |
 | `SIDEKICK_APPROVAL_EXEMPT_TOOLS` | — | Comma-separated tools or risk selectors exempt from approval |
 | `OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama API URL for the local Compute provider |
@@ -861,8 +863,8 @@ This follows the principle of least privilege: after initial setup, the sidekick
 │   └── docker-compose.yml  Docker services (Postgres, Redis, Qdrant, InfluxDB, Grafana)
 ├── grafana/
 │   ├── provisioning/       Grafana auto-provisioning configs
-│   └── dashboards/         6 pre-built Grafana dashboards
-├── migrations/             35 ordered SQLite migrations: core schema, tool registry,
+│   └── dashboards/         Provisioned Grafana dashboards
+├── migrations/             53 ordered SQLite migrations: core schema, tool registry,
 │                           structured memory, Black Box, platform kernel, Compute,
 │                           approvals, modules, projects, events, connectors, research records
 ├── packaging/              Compute worker OS-service installers (systemd, launchd, winsw)

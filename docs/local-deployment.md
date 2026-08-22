@@ -184,8 +184,12 @@ the relevant backup/export procedure for the version being moved.
 
 ## Validation boundary
 
-The repository tests the local stdio handshake, tool discovery and schemas,
+The repository tests the intended local stdio handshake, tool discovery and schemas,
 governed tool execution, negative policy/approval behavior, persistence across
 restart, concurrent setup, stdout purity, and clean npm package execution.
 The exact GitHub `npx` fetch cannot be tested for an unpublished feature branch;
 validate that final step after the branch or release is published.
+
+The packaged stdio entry point is currently under active maintenance. Run the
+local handshake tests against the installed package before relying on it from a
+client; dedicated Streamable HTTP remains the supported shared-server path.

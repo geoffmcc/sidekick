@@ -176,7 +176,7 @@ wait for dashboard approval. Existing installations that explicitly set
 `SIDEKICK_APPROVAL_MODE=off` continue to execute allowed tools immediately:
 
 ```env
-SIDEKICK_SECRET_KEY=replace-with-a-strong-random-secret
+SIDEKICK_SECRET_KEY_FILE=/path/to/sidekick-secret-key
 SIDEKICK_APPROVAL_MODE=risky
 SIDEKICK_APPROVAL_TTL_SECONDS=3600
 SIDEKICK_APPROVAL_REQUIRED_TOOLS=evolve,db_restore
@@ -185,7 +185,7 @@ SIDEKICK_AGENT_APPROVAL_MODE=strict
 ```
 
 Approval variables support the same source prefixes as tool policy: `SIDEKICK_MCP_APPROVAL_MODE`, `SIDEKICK_DASHBOARD_APPROVAL_REQUIRED_TOOLS`, `SIDEKICK_AGENT_APPROVAL_EXEMPT_TOOLS`, and related required/exempt lists.
-Queued arguments are encrypted with `SIDEKICK_SECRET_KEY`, removed after approval, rejection, failure, or expiry, and never returned by the approval-list API. Pending approvals expire after `SIDEKICK_APPROVAL_TTL_SECONDS` (default: `3600`). If the secret key is missing, Sidekick refuses to queue the action instead of storing its arguments in plaintext.
+Queued arguments are encrypted with the file-backed `SIDEKICK_SECRET_KEY_FILE` secret, removed after approval, rejection, failure, or expiry, and never returned by the approval-list API. Pending approvals expire after `SIDEKICK_APPROVAL_TTL_SECONDS` (default: `3600`). If the secret key file is missing or an unsupported raw environment value is supplied, Sidekick refuses to queue the action instead of storing its arguments in plaintext.
 
 ### Approval continuation (Brain tasks)
 
