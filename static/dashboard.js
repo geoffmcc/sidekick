@@ -2508,6 +2508,8 @@ function loadComputeWorkers(){
   el.innerHTML = '<div class="empty">Loading workers...</div>';
   authFetch('/api/compute/workers').then(r=>r.json()).then(d=>{
     const workers = d.workers || [];
+    const telemetryByWorker = Object.fromEntries((d.telemetry || []).map(t => [t.workerId, t]));
+    workers.forEach(w => { w.telemetry = telemetryByWorker[w.workerId] || null; });
     $('computeWorkerCount').textContent = workers.length;
     if (!workers.length) {
       el.innerHTML = '<div class="empty">No workers enrolled yet. Create an enrollment token to add one.</div>';
@@ -2541,6 +2543,14 @@ function renderComputeWorker(w){
     ? '<small class="compute-disconnect">offline since ' + esc(fmtDate(w.disconnectedAt)) + (w.lastDisconnectReason ? ' (' + esc(w.lastDisconnectReason) + ')' : '') + '</small>'
     : '';
   const lastHeartbeat = w.lastHeartbeat ? fmtDate(w.lastHeartbeat) : 'never';
+  const telemetry = w.telemetry && w.telemetry.telemetry;
+  const gpuDevices = telemetry && telemetry.gpu && telemetry.gpu.status === 'available' ? telemetry.gpu.devices || [] : [];
+  const gpuSummary = gpuDevices.length
+    ? gpuDevices.map(g => (g.name || 'GPU') + ' ' + (g.utilizationPercent ?? '?') + '% / ' + formatBytes(g.memoryUsedBytes) + ' VRAM').join(', ')
+    : (telemetry && telemetry.gpu && telemetry.gpu.status === 'unavailable' ? 'GPU telemetry unavailable' : 'No GPU telemetry');
+  const inferenceSummary = telemetry && telemetry.inference && telemetry.inference.status !== 'unavailable'
+    ? ((telemetry.inference.model || 'inference') + (telemetry.inference.tokensPerSecond != null ? ' · ' + Number(telemetry.inference.tokensPerSecond).toFixed(1) + ' tok/s' : ''))
+    : 'No recent inference sample';
   // Generous inline limits: the block is already scroll-capped by CSS, so most
   // payloads render whole and only genuinely large ones get an expand control.
   const utilization = w.utilization && Object.keys(w.utilization).length ? renderStructuredValue(w.utilization, { limit: 700 }) : '<div class="empty">No utilization reported</div>';
@@ -2567,6 +2577,8 @@ function renderComputeWorker(w){
         '<span>trust ' + esc(w.trustLevel || 'unknown') + '</span>' +
         '<span>models ' + esc(models) + '</span>' +
         (accelerators.length ? '<span>' + esc(accelerators.join(', ')) + '</span>' : '<span>cpu</span>') +
+        '<span title="Latest worker-local GPU snapshot">' + esc(gpuSummary) + '</span>' +
+        '<span title="Latest worker-local inference timing">' + esc(inferenceSummary) + '</span>' +
       '</div>' +
       (modelBadges ? '<details class="detail-block"><summary>Models (' + esc(models) + ')</summary><div class="model-tier-list">' + modelBadges + '</div></details>' : '') +
       '<details class="detail-block"><summary>Utilization and health</summary>' +

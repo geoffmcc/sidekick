@@ -144,6 +144,22 @@ async function sidekick_compute_nodes({ action, node_id, worker_id, ...args }) {
         const w = compute.workerManager.getWorkerByNodeId(node_id);
         return w ? ok(w) : err("Worker not found");
       }
+      case "telemetry": {
+        const telemetryWorker = worker_id
+          ? compute.workerManager.getWorker(worker_id)
+          : node_id
+            ? compute.workerManager.getWorkerByNodeId(node_id)
+            : null;
+        const telemetry = telemetryWorker
+          ? compute.workerManager.getWorkerTelemetry(telemetryWorker.workerId)
+          : compute.workerManager.listWorkerTelemetry({
+            state: args.state,
+            platform: args.platform,
+            trustLevel: args.trust_level,
+          });
+        if ((worker_id || node_id) && !telemetry) return err("Worker not found");
+        return ok(telemetry);
+      }
       case "heartbeat": {
         if (!node_id) return err("node_id required");
         const w = compute.workerManager.getWorkerByNodeId(node_id);
@@ -218,7 +234,7 @@ async function sidekick_compute_nodes({ action, node_id, worker_id, ...args }) {
         });
         return ok({ ...enrolled.worker, credential: enrolled.credential, credentialType: "worker-bearer-v1" });
       }
-      default: return err("Unknown action: " + action + ". Valid: list, get, heartbeat, revoke, maintenance, stats, create_token, list_tokens, enroll");
+      default: return err("Unknown action: " + action + ". Valid: list, get, telemetry, heartbeat, revoke, maintenance, stats, create_token, list_tokens, enroll");
     }
   } catch (e) { return err("compute_nodes error: " + e.message); }
 }

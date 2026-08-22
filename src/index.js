@@ -391,14 +391,14 @@ function enrollWorkerHandler(req, res) {
 
 function heartbeatHandler(req, res) {
   try {
-    const { utilization, currentJobs, providers, executors, accelerators, workerVersion } = req.body || {};
+    const { utilization, currentJobs, telemetry, providers, executors, accelerators, workerVersion } = req.body || {};
     const modelInventory = req.body?.modelInventory || req.body?.model_inventory;
     const limits = req.body?.limits;
     const health = req.body?.health || req.body?.backendHealth || req.body?.backend_health;
     if (providers || executors || accelerators || workerVersion || modelInventory || limits || health) {
       compute.workerManager.updateWorker(req.computeWorker.workerId, { providers, executors, accelerators, workerVersion, modelInventory, limits, health });
     }
-    const worker = compute.workerManager.heartbeat(req.computeWorker.workerId, { utilization, currentJobs });
+    const worker = compute.workerManager.heartbeat(req.computeWorker.workerId, { utilization, currentJobs, telemetry });
     if (!worker) return res.status(404).json({ error: "Worker not found" });
     res.json({ ok: true, worker });
   } catch (e) {

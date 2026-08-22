@@ -5,7 +5,7 @@ const TOOL_SCHEMAS = {
     action: z.enum(["overview", "init"]).describe("Compute action")
   }),
   compute_nodes: z.object({
-    action: z.enum(["list", "get", "heartbeat", "revoke", "maintenance", "stats", "create_token", "list_tokens", "enroll"]).describe("Worker node action"),
+    action: z.enum(["list", "get", "telemetry", "heartbeat", "revoke", "maintenance", "stats", "create_token", "list_tokens", "enroll"]).describe("Worker node action"),
     node_id: z.string().optional().describe("Worker node ID"),
     worker_id: z.string().optional().describe("Worker ID for dashboard lifecycle actions"),
     token: z.string().optional().describe("Enrollment token"),
