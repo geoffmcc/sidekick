@@ -27,6 +27,7 @@ const detect = require("./lib/detect");
 const gitFacts = require("./lib/git");
 const changes = require("./lib/changes");
 const verify = require("./lib/verify");
+const semantic = require("./lib/semantic");
 
 const { z } = requireFromSidekick("zod");
 
@@ -53,14 +54,16 @@ function resolveRepositoryRoot(services, requestedPath) {
   const target = path.resolve(requestedPath || process.cwd());
   const policyError = services.paths.enforce(target, "read");
   if (policyError) return { ok: false, result: policyError };
-  if (!fsutil.isDirectory(target)) {
+  try { if (fs.lstatSync(target).isSymbolicLink()) return { ok: false, result: errorResult("Repository root may not be a symbolic link", { code: "symlink_root_denied" }) }; } catch { return { ok: false, result: errorResult(`Repository is unavailable: ${target}`, { code: "repository_unavailable" }) }; }
+  let canonicalTarget; try { canonicalTarget = fs.realpathSync(target); } catch { return { ok: false, result: errorResult(`Repository is unavailable: ${target}`, { code: "repository_unavailable" }) }; }
+  if (!fsutil.isDirectory(canonicalTarget)) {
     return { ok: false, result: errorResult(`Not a directory: ${target}`, { code: "invalid_path" }) };
   }
   const roots = Array.isArray(services.config.repository_roots) ? services.config.repository_roots : [];
   if (roots.length) {
     const permitted = roots.some(root => {
-      const resolvedRoot = path.resolve(root);
-      const relative = path.relative(resolvedRoot, target);
+      let resolvedRoot; try { resolvedRoot = fs.realpathSync(path.resolve(root)); } catch { return false; }
+      const relative = path.relative(resolvedRoot, canonicalTarget);
       return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
     });
     if (!permitted) {
@@ -70,12 +73,12 @@ function resolveRepositoryRoot(services, requestedPath) {
       };
     }
   }
-  return { ok: true, root: target };
+  return { ok: true, root: canonicalTarget };
 }
 
 // --- dev_repo_profile ------------------------------------------------------
 
-async function devRepoProfile(services, { path: requestedPath, max_files, include_git = true }) {
+async function devRepoProfile(services, { path: requestedPath, max_files, include_git = true, include_semantic = true }) {
   const resolved = resolveRepositoryRoot(services, requestedPath);
   if (!resolved.ok) return resolved.result;
   const root = resolved.root;
@@ -96,6 +99,8 @@ async function devRepoProfile(services, { path: requestedPath, max_files, includ
   const containers = detect.presentFiles(root, detect.CONTAINER_FILES);
 
   const git = include_git ? await gitFacts.collectRepositoryFacts(services, root) : { available: false, skipped: true };
+  const semanticIndex = include_semantic !== false ? semantic.indexRepository(root, { limits: { maxFiles: Math.min(max_files || 4000, 4000) } }) : null;
+  const semanticProfile = semanticIndex ? semantic.project(semanticIndex, { level: 0, max_chars: 9000, limit: 50 }) : null;
 
   const topLevelDirectories = fs
     .readdirSync(root, { withFileTypes: true })
@@ -163,7 +168,23 @@ async function devRepoProfile(services, { path: requestedPath, max_files, includ
         })
       ),
     },
+    semantic: semanticIndex ? {
+      available: true, schema: semanticIndex.schema, analyzer_version: semanticIndex.analyzer_version,
+      index_root_hash: semanticIndex.index_root_hash, languages: semanticProfile.languages,
+      modules: semanticProfile.modules, entry_points: semanticProfile.entry_points,
+      security_signals: semanticProfile.signals, stats: semanticIndex.stats,
+      warnings: semanticIndex.warnings.slice(0, 20), trust: semanticProfile.trust,
+    } : { available: false, skipped: true, reason: "caller_disabled_semantic_indexing" },
   });
+}
+
+async function semanticRepository(services, { path: requestedPath, action = "profile", query, level = 0, limit = 40, max_chars = 12000 }) {
+  const resolved = resolveRepositoryRoot(services, requestedPath);
+  if (!resolved.ok) return resolved.result;
+  const index = semantic.indexRepository(resolved.root);
+  if (action === "verify") return jsonResult({ ok: semantic.verify(index), index_root_hash: index.index_root_hash, schema: index.schema, repository: resolved.root, warnings: index.warnings, stats: index.stats });
+  const projection = semantic.project(index, { query, level, limit, max_chars });
+  return jsonResult({ ok: true, tool: "semantic_repo", action, repository: resolved.root, index_root_hash: index.index_root_hash, warnings: index.warnings.slice(0, 20), projection: projection.projection, projection_chars: projection.projection_chars, trust: projection.trust });
 }
 
 // --- dev_change_summary ----------------------------------------------------
@@ -326,19 +347,39 @@ const entry = {
   buildDescriptors(services) {
     return [
       {
+        name: "semantic_repo",
+        aliases: ["repository_intelligence", "semantic_repository"],
+        description:
+          "Build and query a deterministic, hash-verifiable semantic repository index using bounded static analysis. Understand repository architecture, modules, symbols, imports, entry points, tests, relationships, dependencies, and security-sensitive boundaries without executing repository code; results are untrusted source-derived data with evidence locations.",
+        schema: z.object({
+          path: z.string().optional().describe("Repository path (default: the Sidekick working directory)"),
+          action: z.enum(["profile", "query", "verify"]).optional().describe("Semantic operation (default profile)"),
+          query: z.string().max(500).optional().describe("Bounded symbol, file, module, or concept query"),
+          level: z.number().int().min(0).max(2).optional().describe("Progressive detail: 0 overview, 1 symbols, 2 relationships"),
+          limit: z.number().int().min(1).max(200).optional().describe("Maximum returned items"),
+          max_chars: z.number().int().min(1000).max(60000).optional().describe("Maximum model-facing projection characters"),
+        }),
+        args: { path: "string", action: "string (profile|query|verify)", query: "string", level: "number (0-2)", limit: "number", max_chars: "number" },
+        risk: "low",
+        category: "Development",
+        handler: args => semanticRepository(services, args),
+      },
+      {
         name: "dev_repo_profile",
         aliases: ["repo_profile"],
         description:
-          "Produce a structured, mechanically-derived profile of a software repository: git state, languages, ecosystems, package managers, workspace layout, build/test/lint/typecheck scripts, CI and container configuration, migrations, documentation, agent instruction files, and the verification commands the project itself defines",
+          "Produce a structured, mechanically-derived profile of a software repository with Git/project facts plus bounded deterministic semantic architecture, symbols, entry points, tests, and security-sensitive boundaries",
         schema: z.object({
           path: z.string().optional().describe("Repository path (default: the Sidekick working directory)"),
           max_files: z.number().int().min(50).max(20000).optional().describe("Bound on the file scan (default 4000)"),
           include_git: z.boolean().optional().describe("Include git facts (default true)"),
+          include_semantic: z.boolean().optional().describe("Include static semantic indexing (default true)"),
         }),
         args: {
           path: "string (repository path)",
           max_files: "number (file scan bound, default 4000)",
           include_git: "boolean (default true)",
+          include_semantic: "boolean (default true)",
         },
         risk: "low",
         category: "Development",
@@ -398,7 +439,7 @@ const entry = {
     // preconditions: its libraries load, and any configured repository roots
     // and command overrides are usable.
     const details = {
-      tools: 3,
+      tools: 4,
       autodetect: config.autodetect_verification !== false,
       verification_mode: config.verification_mode || "standard",
       overrides: ["test_command", "lint_command", "typecheck_command", "build_command", "syntax_command"].filter(key => Boolean(config[key])),

@@ -2,13 +2,14 @@
   "name": "developer-tools",
   "displayName": "Developer Tools",
   "version": "1.0.0",
-  "description": "Structured software-engineering tools: repository profiling, change-set impact analysis, and governed project verification",
+  "description": "Structured software-engineering tools: deterministic semantic repository intelligence, repository profiling, change-set impact analysis, and governed project verification",
   "author": "Sidekick",
   "type": "plugin",
   "entryPoint": "entry.js",
   "sidekick": ">=1.0.0",
   "capabilities": [
     "repository-profiling",
+    "semantic-repository-intelligence",
     "change-analysis",
     "project-verification"
   ],
@@ -58,6 +59,11 @@
       "risk": "low",
       "category": "Development",
       "aliases": ["repo_profile"]
+    },
+    "semantic_repo": {
+      "risk": "low",
+      "category": "Development",
+      "aliases": ["repository_intelligence", "semantic_repository"]
     },
     "dev_change_summary": {
       "risk": "low",

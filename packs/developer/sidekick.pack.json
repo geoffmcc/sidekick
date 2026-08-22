@@ -34,6 +34,12 @@
       "tags": ["developer", "recon", "repository"]
     },
     {
+      "path": "knowledge/semantic-repository-intelligence.md",
+      "title": "Semantic Repository Intelligence",
+      "category": "development",
+      "tags": ["developer", "repository", "semantic", "index", "security"]
+    },
+    {
       "path": "knowledge/change-discipline.md",
       "title": "Developer pack: code change discipline",
       "category": "development",
