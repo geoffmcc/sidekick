@@ -10,6 +10,7 @@ let platformKernel = null;
 try { platformKernel = require("../platform/kernel"); } catch {}
 const artifactCustody = require("./artifact-custody");
 const { createJobQuery } = require("./job-query");
+const { sanitizeTelemetry } = require("./telemetry");
 
 const SOURCE_HANDOFF_MAX_BYTES = 256 * 1024;
 const DATA_CLASSIFICATION_RANK = Object.freeze({ public: 0, internal: 1, private: 2 });
@@ -1023,7 +1024,7 @@ function appendFallbackHistory(db, jobId, entry, existing) {
   db.prepare("UPDATE compute_jobs SET fallback_history_json = ? WHERE job_id = ?").run(JSON.stringify(history), jobId);
 }
 
-function completeJob(jobId, workerId, leaseId, { result = {}, artifacts = [], artifactIds = [], artifact_ids = [] } = {}) {
+function completeJob(jobId, workerId, leaseId, { result = {}, artifacts = [], artifactIds = [], artifact_ids = [], telemetry } = {}) {
   ensureSchema();
   const job = getJob(jobId);
   if (!job) throw new JobError("Job not found", "JOB_NOT_FOUND", { jobId });
@@ -1061,6 +1062,14 @@ function completeJob(jobId, workerId, leaseId, { result = {}, artifacts = [], ar
         verification: provenance.verification,
         at: now,
       }, job.fallbackHistory);
+    }
+    // A successful worker completion is the freshest authoritative point for
+    // the inference snapshot. Persist the explicitly allowlisted projection
+    // in this transaction so a client never observes a terminal job with the
+    // previous heartbeat's telemetry.
+    if (telemetry !== undefined) {
+      db.prepare("UPDATE compute_workers SET telemetry_json = ?, updated_at = ? WHERE worker_id = ?")
+        .run(json(sanitizeTelemetry(telemetry)), now, workerId);
     }
     db.prepare("UPDATE compute_workers SET current_jobs = MAX(current_jobs - 1, 0), updated_at = ? WHERE worker_id = ?").run(now, workerId);
     db.exec("COMMIT");

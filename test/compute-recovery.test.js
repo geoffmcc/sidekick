@@ -240,6 +240,31 @@ test("heartbeat reconciliation self-heals counter drift", () => {
   offlineAllWorkers();
 });
 
+test("job completion persists fresh telemetry before exposing terminal state", () => {
+  offlineAllWorkers();
+  db.prepare("DELETE FROM compute_jobs").run();
+  const worker = enrollWorker();
+  const job = makeJob();
+  const claim = jobManager.claimNextJob(worker, {});
+  assert.ok(claim, "job is claimable");
+
+  const completed = jobManager.completeJob(job.jobId, worker.workerId, claim.leaseId, {
+    result: { embedding: [0.1] },
+    telemetry: {
+      privacy: "external-ok",
+      gpu: { status: "available", devices: [{ name: "Fresh GPU", utilizationPercent: 77, pid: 9 }] },
+      inference: { status: "available", model: "fresh-model", prompt: "must not persist" },
+    },
+  });
+  assert.strictEqual(completed.status, "completed");
+  const observed = workerManager.getWorker(worker.workerId).telemetry;
+  assert.strictEqual(observed.gpu.devices[0].name, "Fresh GPU");
+  assert.strictEqual(observed.gpu.devices[0].utilizationPercent, 77);
+  assert.strictEqual(observed.privacy, "local-only");
+  assert.ok(!JSON.stringify(observed).includes("must not persist"));
+  offlineAllWorkers();
+});
+
 test("a heartbeat without a job report leaves the counter alone", () => {
   offlineAllWorkers();
   const worker = enrollWorker({});
