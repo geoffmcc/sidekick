@@ -10,6 +10,38 @@ The index currently parses TypeScript, TSX, JavaScript, JSX, Ruby, Java, Go, Per
 
 Query progressively with `level=0` for an overview, `level=1` for bounded symbol evidence, and `level=2` for relationships. `query`, `limit`, and `max_chars` bound model-facing projections. Results are explicitly labeled untrusted repository-derived data; source locations are evidence pointers for governed reads.
 
+## Compact projection policy
+
+The full IR is the canonical evidence model; the compact projection is a
+deterministic consumer/view for model context. It intentionally compresses
+ordinary adapters, pass-through calls, and formatting plumbing, but retains
+typed relationships and classified symbols that can change architectural
+interpretation. Retention priority is: execution-authority and side-effect
+seams; security, authorization, approval, integrity, schema, risk, timeout,
+and cancellation boundaries; durable continuation and state transitions;
+branch/fallback/error/convergence edges; lifecycle phases; and bounded
+provenance. The projection does not copy comments, docstrings, or source
+prose.
+
+Governance symbols are emitted in source-evidence order with their structured
+boundary categories, phase, side-effect classes, and evidence location. A
+fallback remains a typed fallback edge rather than becoming a sequential call.
+Persisted continuation and waiting/runnable state remain separate from later
+resume and dispatch edges, so approval is not represented as synchronous
+execution. Meaningful convergence and execution seams remain visible even
+when surrounding adapters are pruned.
+
+Budget degradation is deterministic and progressive: large views retain
+detailed relationship provenance, moderate views retain grouped categories and
+ordered governance symbols, and tight views remove ordinary decoration first.
+Security/control-flow edges and their bounded evidence are retained before
+ordinary calls; serialization remains bounded JSON rather than a sliced,
+potentially malformed object. Stable semantic sorting and tie-breaking ensure
+identical IR plus configuration produces identical output. Projection options
+do not alter the IR or its content hash. These guarantees improve structural
+fidelity but do not constitute complete semantic reconstruction or prove
+runtime behavior that static analysis did not observe.
+
 ## Integrity and lifecycle
 
 Each analyzed file has a domain-separated SHA-256 source identity and a normalized semantic unit identity. The canonical repository aggregate has an `index_root_hash` and a configuration identity covering limits and `.gitignore` inputs, so parser/configuration changes invalidate cached semantics. Schema v2 uses a new hash domain and includes the new semantic fields; v1 cache/index meanings are never silently reinterpreted. Evidence stores bounded file/line/column locations; the enclosing file's `source_hash` is the integrity anchor, avoiding repeated digest payloads on every edge. Canonicalization sorts object keys, preserves order-sensitive sequences such as parameters, and explicitly sorts only set-like collections such as independent imports, relationships, lifecycle kinds, and semantic classifications. Evidence locations and parser traversal incidental ordering do not alter normalized semantic identity. It excludes timestamps, process IDs, absolute paths from identities, and database row IDs. These hashes provide content integrity, not authorship or authentication.

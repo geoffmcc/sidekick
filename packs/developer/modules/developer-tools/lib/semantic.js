@@ -123,7 +123,7 @@ function semanticMetadata(text, tree, file, sourceHash) {
     const lifecycle = LIFECYCLE_WORDS.filter(word => new RegExp(`\\b${word}(?:\\b|[A-Z_])`, "i").test(lower));
     const security = Object.entries(SECURITY_WORDS).filter(([, re]) => re.test(lower)).map(([kind]) => ({ kind, confidence: /authorize|approval|policy|schema|integrity|timeout|cancel|audit|redact/i.test(lower) ? "structural_name_and_context" : "name_only", evidence: ev(offset), provenance: { rule: "bounded-identifier-and-body-pattern", source: "symbol" } }));
     const sideEffects = [];
-    if (/\b(?:write|insert|update|delete|save|persist|store|queue|park|claim|commit)\b/i.test(body)) sideEffects.push("durable_state");
+    if (/\b(?:write|insert|update|delete|save|persist|store|queue|park|claim|commit)(?:\b|[A-Z_])/i.test(body)) sideEffects.push("durable_state");
     if (/\b(?:fetch|http|socket|request|send|publish)\b/i.test(body)) sideEffects.push("network");
     if (/\b(?:writeFile|readFile|open|mkdir|unlink|rename)\b/i.test(body)) sideEffects.push("filesystem");
     if (/\b(?:load|require|import)/i.test(body) && /(?:module|plugin|package|entry)/i.test(`${name} ${body}`)) add(result.dynamic_capabilities, { kind: "module_load", symbol: name, evidence: ev(offset), provenance: { rule: "module-load-structural-pattern" } });
@@ -273,7 +273,7 @@ async function indexRepository(root, options = {}) {
             target.execution_phase = phase ? phase[0] : "unknown";
             target.lifecycle_semantics = LIFECYCLE_WORDS.filter(word => new RegExp(`\\b${word}(?:\\b|[A-Z_])`, "i").test(`${symbol.name} ${body}`));
             target.security_boundaries = Object.entries(SECURITY_WORDS).filter(([, re]) => re.test(`${symbol.name} ${body}`)).map(([kind]) => ({ kind, confidence: "structural_name_and_context", evidence: target.evidence, provenance: { rule: "bounded-identifier-and-body-pattern", source: "symbol" } }));
-            target.side_effects = /\b(?:write|insert|update|delete|save|persist|store|queue|park|claim|commit)\b/i.test(body) ? ["durable_state"] : [];
+            target.side_effects = /\b(?:write|insert|update|delete|save|persist|store|queue|park|claim|commit)(?:\b|[A-Z_])/i.test(body) ? ["durable_state"] : [];
           }
           // Keep the symbol contract total even when a grammar's byte range
           // differs from the lexical adapter's range. Unknown is explicit;
@@ -335,38 +335,105 @@ function compareIndexes(before, after, states = {}) {
   return { before: states.before || before?.repository?.state || null, after: states.after || after?.repository?.state || null, changes: semanticChanges(before?.files || [], after?.files || []) };
 }
 
+const PROJECTION_PRIORITY = Object.freeze({
+  branch: 100, fallback: 100, error_path: 98, convergence: 96,
+  authorization: 95, approval: 95, policy: 94, integrity_verification: 93,
+  schema_validation: 92, risk_validation: 91, timeout: 89, cancellation: 89,
+  persisted_continuation: 100, state_transition: 99, lifecycle_phase: 97,
+  execution_authority: 96, side_effect: 90, audit: 86,
+});
+const RELATIONSHIP_WORDS = new Set(["what", "does", "do", "call", "calls", "caller", "callers", "callee", "callees", "who", "references", "depend", "depends", "dependency", "dependencies", "import", "imports", "module", "modules"]);
+
+function projectionCategories(relation, symbolsByName) {
+  const categories = [];
+  if (PROJECTION_PRIORITY[relation.kind]) categories.push(relation.kind);
+  if (relation.boundary) categories.push(String(relation.boundary));
+  for (const endpoint of [relation.from, relation.to]) {
+    const symbol = symbolsByName.get(endpoint);
+    for (const boundary of symbol?.security_boundaries || []) categories.push(boundary.kind);
+    if (symbol?.execution_phase && symbol.execution_phase !== "unknown") categories.push(`phase:${symbol.execution_phase}`);
+    if ((symbol?.side_effects || []).length) categories.push("side_effect");
+  }
+  if (relation.kind === "calls" && categories.some(x => ["authorization", "approval", "policy", "integrity_verification", "schema_validation", "risk_validation"].includes(x))) categories.push("governance");
+  return [...new Set(categories)].sort();
+}
+
+function projectionScore(relation, categories, queryScore = 0) {
+  const semantic = categories.reduce((best, category) => Math.max(best, PROJECTION_PRIORITY[category] || (category.startsWith("phase:") ? 78 : 0)), 0);
+  // A direct query match is a bounded relevance boost, but semantic
+  // significance still breaks ties deterministically for equally relevant
+  // edges.
+  return semantic + queryScore * 120;
+}
+
+function compactRelation(relation, detailed) {
+  const base = { kind: relation.kind, from: relation.from || null, to: relation.to || null, evidence: relation.evidence || null };
+  if (relation.boundary) base.boundary = relation.boundary;
+  if (relation.phase) base.phase = relation.phase;
+  if (detailed && relation.provenance) base.provenance = relation.provenance;
+  return base;
+}
+
 function project(index, { query = "", level = 0, max_chars = 12000, limit = 40 } = {}) {
   const q = clean(query, 500).toLowerCase(); const tokens = q.split(/[^a-z0-9_:$.-]+/).filter(x => x.length > 1);
   const relationMode = /\b(?:callee|callees|what does .* call|dependencies|imports?|depends?)\b/.test(q) ? "outgoing" : /\b(?:caller|callers|who calls|calls|references|dependents?)\b/.test(q) ? "incoming" : null;
   const all = index.files.flatMap(f => f.unit.symbols.map(s => ({ ...s, path: f.path, language: f.language, source_hash: f.source_hash })));
+  const symbolsByName = new Map(all.map(symbol => [symbol.name, symbol]));
   const score = item => tokens.reduce((n, t) => n + (String(item.name).toLowerCase().includes(t) || String(item.kind).toLowerCase().includes(t) || item.path.toLowerCase().includes(t) ? 1 : 0), 0);
-  const relationWords = new Set(["what", "does", "do", "call", "calls", "caller", "callers", "callee", "callees", "who", "references", "depend", "depends", "dependency", "dependencies", "import", "imports", "module", "modules"]);
-  const targetTokens = tokens.filter(token => !relationWords.has(token));
+  const targetTokens = tokens.filter(token => !RELATIONSHIP_WORDS.has(token));
   const targetNames = new Set(all.filter(item => targetTokens.some(t => String(item.name).toLowerCase().includes(t))).map(item => item.name));
-  const allRelationships = index.files.flatMap(f => f.unit.relationships.map(r => ({ ...r, path: f.path })));
+  const allRelationships = index.files.flatMap(f => (f.unit.relationships || []).map(r => ({ ...r, path: f.path })));
+  const incomingCounts = new Map();
+  for (const relation of allRelationships) if (relation.to) incomingCounts.set(relation.to, (incomingCounts.get(relation.to) || 0) + 1);
   const relevantRelationships = allRelationships.filter(relation => {
-    if (!relationMode) return false;
+    const endpointMatches = targetNames.has(relation.from) || targetNames.has(relation.to) || targetTokens.some(token => [relation.from, relation.to].some(endpoint => String(endpoint || "").toLowerCase().includes(token)));
+    if (!relationMode) return endpointMatches;
     const endpoint = relationMode === "incoming" ? relation.to : relation.from;
     return targetNames.has(endpoint) || targetTokens.some(token => String(endpoint || "").toLowerCase().includes(token));
   });
   const relatedNames = new Set(relevantRelationships.flatMap(relation => [relation.from, relation.to]));
-  const symbols = all
-    .sort((a, b) => (relatedNames.has(b.name) ? 1 : 0) - (relatedNames.has(a.name) ? 1 : 0) || score(b) - score(a) || a.path.localeCompare(b.path) || a.name.localeCompare(b.name))
-    .slice(0, Math.min(200, Math.max(limit, relevantRelationships.length + 1)));
-  const overview = { schema: index.schema, index_root_hash: index.index_root_hash, repository: index.repository, stats: index.stats, warnings: index.warnings.slice(0, 20), languages: [...new Set(index.files.map(x => x.language))].sort(), modules: index.files.flatMap(f => f.unit.modules.map(m => ({ ...m, path: f.path }))).slice(0, limit), entry_points: index.files.flatMap(f => f.unit.entry_points).slice(0, limit), signals: index.files.flatMap(f => f.unit.signals.map(s => ({ ...s, path: f.path }))).slice(0, limit), lifecycle: index.files.flatMap(f => (f.unit.lifecycle_semantics || []).map(s => ({ ...s, path: f.path }))).slice(0, limit), security_boundaries: index.files.flatMap(f => (f.unit.security_boundaries || []).map(s => ({ ...s, path: f.path }))).slice(0, limit), state_transitions: index.files.flatMap(f => (f.unit.state_transitions || []).map(s => ({ ...s, path: f.path }))).slice(0, limit), continuation_edges: index.files.flatMap(f => (f.unit.continuation_edges || []).map(s => ({ ...s, path: f.path }))).slice(0, limit), dynamic_capabilities: index.files.flatMap(f => (f.unit.dynamic_capabilities || []).map(s => ({ ...s, path: f.path }))).slice(0, limit), changes: (index.changes || []).slice(0, limit) };
-  if (q || level > 0) {
-    const projectedSymbols = symbols.map(s => level > 1 ? s : ({ name: s.name, kind: s.kind, path: s.path, language: s.language, evidence: s.evidence }));
-    // Query relevance must survive the context bound. Put requested evidence
-    // before broad repository decoration so truncation never returns a large
-    // overview while silently dropping the answer to the query.
-    Object.assign(overview, { symbols: projectedSymbols });
-    const ordered = { schema: overview.schema, index_root_hash: overview.index_root_hash, repository: overview.repository, symbols: overview.symbols, languages: overview.languages, modules: overview.modules, entry_points: overview.entry_points, lifecycle: overview.lifecycle, security_boundaries: overview.security_boundaries, state_transitions: overview.state_transitions, continuation_edges: overview.continuation_edges, dynamic_capabilities: overview.dynamic_capabilities, signals: overview.signals, changes: overview.changes, stats: overview.stats, warnings: overview.warnings };
-    if (level > 1 || relationMode) ordered.relationships = (relationMode ? relevantRelationships : allRelationships).slice(0, limit);
-    let orderedText = JSON.stringify(ordered, null, 2); if (orderedText.length > max_chars) orderedText = orderedText.slice(0, Math.max(0, max_chars - 40)) + "\n[semantic projection truncated]";
-    return { ...ordered, projection: orderedText, projection_chars: orderedText.length, trust: "untrusted repository-derived data; evidence locations require governed source reads" };
+  const scoredRelationships = allRelationships.map(relation => {
+    const categories = projectionCategories(relation, symbolsByName);
+    const target = symbolsByName.get(relation.to);
+    if (relation.kind === "convergence" || (relation.kind === "calls" && target && ((target.side_effects || []).length || (incomingCounts.get(relation.to) || 0) > 1))) categories.push("execution_authority");
+    categories.sort();
+    const endpointQueryMatch = targetTokens.some(token => [relation.from, relation.to].some(endpoint => String(endpoint || "").toLowerCase().includes(token)));
+    const queryMatch = relevantRelationships.includes(relation) || endpointQueryMatch || relatedNames.has(relation.from) || relatedNames.has(relation.to);
+    return { relation, categories, score: projectionScore(relation, categories, queryMatch ? 2 : 0) };
+  }).sort((a, b) => b.score - a.score || a.relation.path.localeCompare(b.relation.path) || (a.relation.evidence?.line || 0) - (b.relation.evidence?.line || 0) || String(a.relation.kind).localeCompare(String(b.relation.kind)) || String(a.relation.from || "").localeCompare(String(b.relation.from || "")) || String(a.relation.to || "").localeCompare(String(b.relation.to || "")));
+  const selectedRelationshipCount = Math.min(200, Math.max(limit, relevantRelationships.length + 1));
+  const selectedRelationshipData = [...scoredRelationships.filter(item => relevantRelationships.includes(item.relation)), ...scoredRelationships.filter(item => !relevantRelationships.includes(item.relation))].slice(0, selectedRelationshipCount);
+  const selectedRelationships = selectedRelationshipData.map(item => ({ ...compactRelation(item.relation, level > 1), significance: item.categories }));
+  const symbols = all.sort((a, b) => (relatedNames.has(b.name) ? 1 : 0) - (relatedNames.has(a.name) ? 1 : 0) || (b.security_boundaries?.length || 0) - (a.security_boundaries?.length || 0) || score(b) - score(a) || a.path.localeCompare(b.path) || a.name.localeCompare(b.name)).slice(0, selectedRelationshipCount);
+  const projectedSymbols = symbols.map(s => ({ name: s.name, kind: s.kind, path: s.path, language: s.language, execution_phase: s.execution_phase || "unknown", lifecycle_semantics: [...(s.lifecycle_semantics || [])].sort(), security_boundaries: [...new Set((s.security_boundaries || []).map(x => x.kind))].sort(), side_effects: [...(s.side_effects || [])].sort(), evidence: s.evidence }));
+  const querySymbols = projectedSymbols.filter(symbol => targetNames.has(symbol.name) || targetTokens.some(token => symbol.name.toLowerCase().includes(token) || symbol.path.toLowerCase().includes(token)));
+  const rankMetadata = items => items.slice().sort((a, b) => {
+    const aMatch = targetTokens.some(token => stable(a).toLowerCase().includes(token)) ? 1 : 0;
+    const bMatch = targetTokens.some(token => stable(b).toLowerCase().includes(token)) ? 1 : 0;
+    return bMatch - aMatch || stable(a).localeCompare(stable(b));
+  }).slice(0, limit);
+  const governance = all.flatMap(s => (s.security_boundaries || []).length || (s.side_effects || []).length ? [{ symbol: s.name, path: s.path, phase: s.execution_phase || "unknown", boundaries: [...new Set((s.security_boundaries || []).map(x => x.kind))].sort(), side_effects: [...(s.side_effects || [])].sort(), evidence: s.evidence }] : []).sort((a, b) => a.path.localeCompare(b.path) || (a.evidence?.line || 0) - (b.evidence?.line || 0) || a.symbol.localeCompare(b.symbol)).slice(0, limit);
+  const overview = { schema: index.schema, index_root_hash: index.index_root_hash, repository: index.repository, symbols: (q || level > 0 || selectedRelationships.length ? projectedSymbols : projectedSymbols.filter(s => s.security_boundaries.length || s.side_effects.length).slice(0, limit)), languages: [...new Set(index.files.map(x => x.language))].sort(), modules: index.files.flatMap(f => f.unit.modules.map(m => ({ ...m, path: f.path }))).slice(0, limit), entry_points: index.files.flatMap(f => f.unit.entry_points).slice(0, limit), lifecycle: rankMetadata(index.files.flatMap(f => (f.unit.lifecycle_semantics || []).map(s => ({ ...s, path: f.path })))), governance, security_boundaries: rankMetadata(index.files.flatMap(f => (f.unit.security_boundaries || []).map(s => ({ ...s, path: f.path })))), state_transitions: rankMetadata(index.files.flatMap(f => (f.unit.state_transitions || []).map(s => ({ ...s, path: f.path })))), continuation_edges: rankMetadata(index.files.flatMap(f => (f.unit.continuation_edges || []).map(s => ({ ...s, path: f.path })))), dynamic_capabilities: rankMetadata(index.files.flatMap(f => (f.unit.dynamic_capabilities || []).map(s => ({ ...s, path: f.path })))), signals: index.files.flatMap(f => f.unit.signals.map(s => ({ ...s, path: f.path }))).slice(0, limit), changes: (index.changes || []).slice(0, limit), relationships: selectedRelationships.slice(0, limit) };
+  if (level > 1 || relationMode) overview.relationships = (relationMode ? selectedRelationshipData : selectedRelationshipData).map(item => ({ ...compactRelation(item.relation, true), significance: item.categories }));
+  const essential = overview.relationships.filter(r => ["branch", "fallback", "error_path", "convergence", "authorization", "approval", "persisted_continuation", "state_transition"].includes(r.kind) || (r.significance || []).some(x => ["authorization", "approval", "policy", "integrity_verification", "schema_validation", "execution_authority"].includes(x)));
+  const queryRelationships = selectedRelationshipData.filter(item => relevantRelationships.includes(item.relation)).map(item => ({ ...compactRelation(item.relation, level > 1), significance: item.categories }));
+  overview.policy = { retained_first: ["execution_authority", "security", "authorization", "approval", "durable_continuation", "state_transition", "branch_fallback", "lifecycle", "provenance"], essential_edge_count: essential.length, detail_level: Math.max(0, Math.min(2, Number(level) || 0)) };
+  const ordered = { schema: overview.schema, index_root_hash: overview.index_root_hash, repository: overview.repository, symbols: overview.symbols, governance: overview.governance, relationships: overview.relationships, lifecycle: overview.lifecycle, state_transitions: overview.state_transitions, continuation_edges: overview.continuation_edges, security_boundaries: overview.security_boundaries, dynamic_capabilities: overview.dynamic_capabilities, entry_points: overview.entry_points, languages: overview.languages, modules: overview.modules, signals: overview.signals, changes: overview.changes, policy: overview.policy, stats: index.stats, warnings: (index.warnings || []).slice(0, 20) };
+  let text = JSON.stringify(ordered);
+  // Budget degradation removes ordinary decoration first, never semantic
+  // edges or their evidence. The final fallback is compact JSON rather than
+  // a sliced object, so consumers never receive malformed serialization.
+  if (text.length > max_chars) {
+    const reduced = { schema: ordered.schema, index_root_hash: ordered.index_root_hash, symbols: querySymbols.slice(0, limit), relationships: [...queryRelationships, ...essential].slice(0, Math.max(limit, queryRelationships.length)), governance: ordered.governance, state_transitions: ordered.state_transitions, continuation_edges: ordered.continuation_edges, policy: ordered.policy, truncated: true };
+    text = JSON.stringify(reduced);
+    if (text.length > max_chars) text = JSON.stringify({ schema: ordered.schema, index_root_hash: ordered.index_root_hash, symbols: querySymbols.slice(0, limit).map(symbol => ({ name: symbol.name, path: symbol.path, execution_phase: symbol.execution_phase, security_boundaries: symbol.security_boundaries, evidence: symbol.evidence })), relationships: [...queryRelationships, ...essential].slice(0, Math.max(1, Math.min(Math.max(queryRelationships.length, essential.length), limit))), policy: ordered.policy, truncated: true });
   }
-  if (level > 1) overview.relationships = allRelationships.slice(0, limit);
-  let text = JSON.stringify(overview, null, 2); if (text.length > max_chars) text = text.slice(0, Math.max(0, max_chars - 40)) + "\n[semantic projection truncated]";
+  if (text.length > max_chars) {
+    const minimalEdges = [...queryRelationships, ...essential].slice(0, 2).map(edge => ({ kind: edge.kind, from: edge.from, to: edge.to }));
+    text = JSON.stringify({ schema: ordered.schema, relationships: minimalEdges, truncated: true });
+    if (text.length > max_chars) text = JSON.stringify({ schema: ordered.schema, truncated: true });
+    if (text.length > max_chars) text = "{}";
+  }
   return { ...overview, projection: text, projection_chars: text.length, trust: "untrusted repository-derived data; evidence locations require governed source reads" };
 }
 
