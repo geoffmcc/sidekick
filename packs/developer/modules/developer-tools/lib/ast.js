@@ -36,7 +36,8 @@ async function parse(language, source, limits = {}) {
   const parser = new Parser(); parser.setLanguage(grammar);
   const tree = parser.parse(source);
   const maxNodes = Math.min(Number(limits.maxNodes) || 50000, 100000);
-  const symbols = []; const imports = []; const exports = []; const relationships = []; let visited = 0;
+  const symbols = []; const imports = []; const exports = []; const relationships = [];
+  const controlFlow = []; const structuralMarkers = []; let visited = 0;
   const symbolKinds = new Map([
     ["function_declaration", "function"], ["function_item", "function"], ["method_definition", "method"], ["method_declaration", "method"],
     ["class_declaration", "class"], ["interface_declaration", "interface"], ["trait_item", "trait"], ["struct_item", "struct"],
@@ -61,13 +62,25 @@ async function parse(language, source, limits = {}) {
     if (/^(export_statement|export_declaration)$/.test(node.type)) add(exports, { text: String(node.text).slice(0, 240), ast_node: node.type, start_byte: node.startIndex }, x => `${x.ast_node}:${x.start_byte}`);
     if (/^(call_expression|call|method_invocation)$/.test(node.type)) {
       const fn = node.childForFieldName?.("function") || node.childForFieldName?.("name");
-      if (fn && scope) relationships.push({ kind: "calls", from: scope, to: String(fn.text).slice(0, 200), certainty: "parsed", start_byte: node.startIndex, end_byte: node.endIndex, ast_node: node.type });
+      const callee = fn && String(fn.text).match(/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?$/)?.[0];
+      if (callee && scope) relationships.push({ kind: "calls", from: scope, to: callee, certainty: "parsed", start_byte: node.startIndex, end_byte: node.endIndex, ast_node: node.type });
+    }
+    const branchKinds = /^(if_statement|if|unless|conditional_expression|switch_statement|match_expression|match_arm|case_statement|when)$/;
+    const fallbackKinds = /^(else_clause|else|default_case|default_clause|catch_clause|rescue|rescue_clause|finally_clause)$/;
+    const errorKinds = /^(catch_clause|rescue|rescue_clause|throw_statement|raise)$/;
+    const asyncKinds = /^(await_expression|yield|yield_expression|callback_query|promise_type)$/;
+    if (branchKinds.test(node.type)) controlFlow.push({ kind: "branch", from: scope, ast_node: node.type, start_byte: node.startIndex });
+    if (fallbackKinds.test(node.type)) controlFlow.push({ kind: /catch|rescue/.test(node.type) ? "error_path" : "fallback", from: scope, ast_node: node.type, start_byte: node.startIndex });
+    if (errorKinds.test(node.type)) controlFlow.push({ kind: "error_path", from: scope, ast_node: node.type, start_byte: node.startIndex });
+    if (asyncKinds.test(node.type)) structuralMarkers.push({ kind: "asynchronous", from: scope, ast_node: node.type, start_byte: node.startIndex });
+    if (/^(return_statement|expression_statement|assignment|variable_declarator)$/.test(node.type) && /(?:state|status|phase|lifecycle|approval|authorization|authorized|pending|running|waiting|runnable|parked|claimed)/i.test(String(node.text).slice(0, 240))) {
+      structuralMarkers.push({ kind: "state_signal", from: scope, ast_node: node.type, start_byte: node.startIndex });
     }
     for (const child of node.namedChildren || []) walk(child, scope);
   };
   walk(tree.rootNode);
   const parseErrors = Boolean(tree.rootNode.hasError);
-  return { parser: "tree-sitter", parser_version: grammarVersions[language], root_type: tree.rootNode.type, parse_errors: parseErrors, visited_nodes: visited, symbols, imports, exports, relationships };
+  return { parser: "tree-sitter", parser_version: grammarVersions[language], root_type: tree.rootNode.type, parse_errors: parseErrors, visited_nodes: visited, symbols, imports, exports, relationships, control_flow: controlFlow, structural_markers: structuralMarkers };
 }
 
 module.exports = { grammarFor, grammarVersions, parse };

@@ -158,7 +158,7 @@ function buildFixtureRepository() {
     assert.ok(profile.structure.top_level_directories.includes('packs'));
     assert.strictEqual(profile.structure.workspaces.monorepo, false);
     assert.strictEqual(profile.semantic.available, true);
-    assert.match(profile.semantic.schema, /^sidekick\.semantic-ir\.v1$/);
+    assert.match(profile.semantic.schema, /^sidekick\.semantic-ir\.v2$/);
     assert.match(profile.semantic.index_root_hash, /^[0-9a-f]{64}$/);
     assert.ok(profile.semantic.languages.includes('javascript'));
     assert.ok(profile.semantic.stats.symbols > 0);
