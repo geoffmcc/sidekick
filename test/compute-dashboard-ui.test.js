@@ -177,6 +177,17 @@ ok("the compute tab participates in the polled refresh", () => {
   assert.match(dashHtml, /id="computeLastUpdate"/, "the tab shows when it last updated");
 });
 
+ok("the compute dashboard renders only the safe worker telemetry projection", () => {
+  const body = fnBody(clientJs, "loadComputeWorkers");
+  assert.match(body, /d\.telemetry/);
+  assert.match(body, /telemetryByWorker/);
+  const renderer = fnBody(clientJs, "renderComputeWorker");
+  assert.match(renderer, /gpuDevices/);
+  assert.match(renderer, /tokensPerSecond/);
+  assert.match(renderer, /Latest worker-local GPU snapshot/);
+  assert.match(renderer, /Latest worker-local inference timing/);
+});
+
 // ── Enrollment ──
 
 ok("enrollment guards against double submission and offers a copy button", () => {

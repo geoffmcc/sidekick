@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const dbStore = require("../db");
 const { WORKER_STATES, EnrollmentError, WorkerRevokedError } = require("./errors");
+const { projectWorkerTelemetry, sanitizeTelemetry } = require("./telemetry");
 
 function nowIso() { return new Date().toISOString(); }
 function generateId(prefix) { return `${prefix}_${Date.now().toString(36)}_${crypto.randomBytes(6).toString("hex")}`; }
@@ -38,6 +39,7 @@ function ensureSchema() {
       current_jobs INTEGER NOT NULL DEFAULT 0,
       max_concurrent_jobs INTEGER NOT NULL DEFAULT 1,
       utilization_json TEXT NOT NULL DEFAULT '{}',
+      telemetry_json TEXT NOT NULL DEFAULT '{}',
       last_heartbeat TEXT,
       heartbeat_interval_ms INTEGER NOT NULL DEFAULT 30000,
       maintenance_mode INTEGER NOT NULL DEFAULT 0,
@@ -79,6 +81,7 @@ function ensureSchema() {
   ensureColumn("compute_workers", "model_inventory_json", "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn("compute_workers", "limits_json", "TEXT NOT NULL DEFAULT '{}'");
   ensureColumn("compute_workers", "health_json", "TEXT NOT NULL DEFAULT '{}'");
+  ensureColumn("compute_workers", "telemetry_json", "TEXT NOT NULL DEFAULT '{}'");
   ensureColumn("compute_workers", "last_health_check", "TEXT");
   // Multi-dimensional state columns (Phase 1)
   ensureColumn("compute_workers", "connection_state", "TEXT NOT NULL DEFAULT 'offline'");
@@ -169,6 +172,7 @@ function rowToWorker(row) {
     currentJobs: row.current_jobs,
     maxConcurrentJobs: row.max_concurrent_jobs,
     utilization: parseJson(row.utilization_json, {}),
+    telemetry: parseJson(row.telemetry_json, {}),
     lastHeartbeat: row.last_heartbeat,
     heartbeatIntervalMs: row.heartbeat_interval_ms,
     maintenanceMode: row.maintenance_mode === 1,
@@ -369,6 +373,7 @@ function updateWorker(workerId, updates) {
   if (updates.limits !== undefined) { fields.push("limits_json = ?"); params.push(json(updates.limits)); }
   if (updates.health !== undefined) { fields.push("health_json = ?"); params.push(json(updates.health)); fields.push("last_health_check = ?"); params.push(nowIso()); }
   if (updates.utilization !== undefined) { fields.push("utilization_json = ?"); params.push(json(updates.utilization)); }
+  if (updates.telemetry !== undefined) { fields.push("telemetry_json = ?"); params.push(json(sanitizeTelemetry(updates.telemetry))); }
   if (updates.workerVersion !== undefined) { fields.push("worker_version = ?"); params.push(updates.workerVersion); }
   if (fields.length === 0) return getWorker(workerId);
   fields.push("updated_at = ?");
@@ -378,12 +383,13 @@ function updateWorker(workerId, updates) {
   return getWorker(workerId);
 }
 
-function heartbeat(workerId, { utilization, currentJobs }) {
+function heartbeat(workerId, { utilization, currentJobs, telemetry }) {
   ensureSchema();
   const db = dbStore.getDb();
   const now = nowIso();
   const updates = { last_heartbeat: now, updated_at: now };
   if (utilization !== undefined) updates.utilization_json = json(utilization);
+  if (telemetry !== undefined) updates.telemetry_json = json(sanitizeTelemetry(telemetry));
   // current_jobs gates admission (placement and claimNextJob) and is
   // maintained transactionally by the claim/finish/recovery paths. A worker's
   // self-reported count must never overwrite it (issue #148) — the agent's
@@ -490,6 +496,15 @@ function getWorkerStats() {
   };
 }
 
+function getWorkerTelemetry(workerId) {
+  ensureSchema();
+  return projectWorkerTelemetry(getWorker(workerId));
+}
+
+function listWorkerTelemetry({ state, platform, trustLevel } = {}) {
+  return listWorkers({ state, platform, trustLevel }).map(projectWorkerTelemetry);
+}
+
 module.exports = {
   ensureSchema,
   createEnrollmentToken,
@@ -507,5 +522,7 @@ module.exports = {
   disconnectWorker,
   deriveLegacyState,
   getWorkerStats,
+  getWorkerTelemetry,
+  listWorkerTelemetry,
   rowToWorker,
 };

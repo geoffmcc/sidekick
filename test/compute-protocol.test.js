@@ -94,7 +94,7 @@ function deepPayload(depth) {
 
 async function main() {
   console.log('Running Compute Protocol Integration Tests...');
-  const env = { ...process.env, SIDEKICK_DATA_DIR: TEST_DIR, SIDEKICK_PORT: String(PORT), SIDEKICK_API_KEY: API_KEY };
+  const env = { ...process.env, NODE_ENV: 'test', SIDEKICK_DATA_DIR: TEST_DIR, SIDEKICK_PORT: String(PORT), SIDEKICK_API_KEY: API_KEY };
   const child = spawn(process.execPath, ['src/index.js'], { cwd: path.join(__dirname, '..'), env, stdio: ['ignore', 'pipe', 'pipe'] });
   let logs = '';
   child.stdout.on('data', c => logs += c.toString());
@@ -174,6 +174,13 @@ async function main() {
     assert.strictEqual((await request('POST', '/compute/worker/heartbeat', { currentJobs: 0 }, admin)).status, 401, 'admin key rejected on worker route');
     const heartbeatRes = await request('POST', '/compute/worker/heartbeat', {
       currentJobs: 0,
+      telemetry: {
+        schemaVersion: 1,
+        privacy: "external-ok",
+        system: { cpuLoad: 0.12, activeJobs: 0, prompt: "must not persist" },
+        gpu: { status: "available", devices: [{ name: "Test GPU", utilizationPercent: 12, pid: 123 }] },
+        inference: { provider: "ollama", model: "local-test", tokensPerSecond: 12, prompt: "must not persist" },
+      },
       executors: [{ type: 'mock.inference', capabilities: ['chat'] }],
       modelInventory: [{ name: 'deterministic-test', provider: 'mock', capabilities: ['chat', 'generate'] }],
       limits: { maxConcurrentJobs: 2, maxResultBytes: 524288 },
@@ -181,6 +188,9 @@ async function main() {
     }, workerAuth);
     assert.strictEqual(heartbeatRes.status, 200, 'heartbeat accepted');
     assert.strictEqual(heartbeatRes.data.worker.modelInventory[0].name, 'deterministic-test', 'model inventory persisted from heartbeat');
+    assert.strictEqual(heartbeatRes.data.worker.telemetry.privacy, 'local-only', 'telemetry is local-only');
+    assert.strictEqual(heartbeatRes.data.worker.telemetry.gpu.devices[0].utilizationPercent, 12, 'GPU telemetry persisted');
+    assert.ok(!JSON.stringify(heartbeatRes.data.worker.telemetry).includes('must not persist'), 'unexpected telemetry fields are removed');
     assert.strictEqual(heartbeatRes.data.worker.health.status, 'healthy', 'worker health persisted from heartbeat');
     assert.strictEqual((await request('POST', '/compute/admin/jobs', { jobType: 'chat' }, workerAuth)).status, 401, 'worker credential rejected on admin route');
 

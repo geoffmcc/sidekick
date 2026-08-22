@@ -10,6 +10,7 @@ const workerCli = require("./worker-cli");
 const workerReconnect = require("./worker-reconnect");
 const { readSecret } = require("./worker-secrets");
 const { resolveOutputTokenBudget } = require("./token-budget");
+const { collectGpuTelemetry, isLocalTelemetryEndpoint, sanitizeTelemetry } = require("./telemetry");
 
 // OpenVINO executor — optional; gracefully absent when disabled or on non-Windows.
 let _openVinoExecutor = null;
@@ -80,6 +81,8 @@ let reconnecting = false;
 let permanentStopReason = null;
 const activeJobs = new Set();
 const activeJobPromises = new Set();
+let activeInference = null;
+let lastInference = null;
 
 // Transition logging so an outage produces one "lost connection" line and one
 // "reconnected" line rather than a message per failed request.
@@ -212,6 +215,67 @@ function parseJsonEnv(name, fallback) {
 
 function safeString(value, max = 160) {
   return String(value || "").replace(/[\0\r\n]/g, " ").slice(0, max);
+}
+
+function inferenceTelemetryFromOllama(data, payload, jobType) {
+  const nsToMs = value => Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) / 1e6 : undefined;
+  const evalDurationMs = nsToMs(data?.eval_duration);
+  const evalCount = Number.isFinite(Number(data?.eval_count)) ? Number(data.eval_count) : undefined;
+  const tokensPerSecond = evalDurationMs > 0 && evalCount !== undefined
+    ? evalCount / (evalDurationMs / 1000)
+    : undefined;
+  return {
+    provider: "ollama",
+    model: safeString(data?.model || payload?.model, 160),
+    jobType,
+    totalDurationMs: nsToMs(data?.total_duration),
+    loadDurationMs: nsToMs(data?.load_duration),
+    promptEvalCount: Number.isFinite(Number(data?.prompt_eval_count)) ? Number(data.prompt_eval_count) : undefined,
+    evalCount,
+    evalDurationMs,
+    tokensPerSecond,
+    observedAt: new Date().toISOString(),
+  };
+}
+
+function recordInferenceTelemetry(telemetry) {
+  if (!telemetry || telemetry.provider !== "ollama") return;
+  activeInference = null;
+  lastInference = { ...telemetry, status: "available", observedAt: telemetry.observedAt || new Date().toISOString() };
+}
+
+async function loadedOllamaModels() {
+  if (!isLocalTelemetryEndpoint(process.env.OLLAMA_URL)) return [];
+  try {
+    const endpoint = new URL("/api/ps", process.env.OLLAMA_URL);
+    const result = await httpRequest("GET", endpoint.href, null, {}, { timeoutMs: 750 });
+    if (result.status !== 200 || !Array.isArray(result.data?.models)) return [];
+    return result.data.models.slice(0, 32).map(model => ({
+      name: safeString(model.name, 160),
+      sizeBytes: Number.isFinite(Number(model.size)) ? Number(model.size) : undefined,
+      vramBytes: Number.isFinite(Number(model.size_vram)) ? Number(model.size_vram) : undefined,
+      expiresAt: model.expires_at,
+    }));
+  } catch { return []; }
+}
+
+async function collectRuntimeTelemetry() {
+  const gpu = await collectGpuTelemetry();
+  const loadedModels = await loadedOllamaModels();
+  const mem = process.memoryUsage();
+  return sanitizeTelemetry({
+    collectedAt: new Date().toISOString(),
+    system: {
+      cpuLoad: os.loadavg()[0] / Math.max(1, os.cpus().length),
+      memoryUsedBytes: os.totalmem() - os.freemem(),
+      memoryTotalBytes: os.totalmem(),
+      activeJobs: activeJobs.size,
+      processMemoryBytes: mem.rss,
+    },
+    gpu,
+    loadedModels,
+    inference: activeInference || lastInference || { status: "unavailable" },
+  });
 }
 
 function sanitizeEndpoint(endpoint) {
@@ -434,10 +498,12 @@ async function enrollIfNeeded() {
 async function sendHeartbeat() {
   const sysInfo = collectSystemInfo();
   const memUsage = process.memoryUsage();
+  const telemetry = await collectRuntimeTelemetry();
   let result;
   try {
     result = await requestWithRetry("POST", "/compute/worker/heartbeat", {
       utilization: { cpuLoad: os.loadavg()[0] / os.cpus().length, memoryUsed: os.totalmem() - os.freemem(), memoryTotal: os.totalmem(), uptime: os.uptime(), processMemory: memUsage.rss },
+      telemetry,
       currentJobs: activeJobs.size,
       providers: sysInfo.providers,
       executors: sysInfo.executors,
@@ -490,7 +556,26 @@ async function handleJob(job, leaseId) {
     renewTimer = setInterval(() => requestWithRetry("POST", `/compute/worker/jobs/${job.jobId}/renew`, { leaseId, leaseDurationMs: LEASE_MS }, credentialHeaders(), { attempts: 2 }).catch(e => log(`Renew failed for ${job.jobId}: ${e.message}`)), Math.max(5000, Math.floor(LEASE_MS / 3)));
     await assertOk(requestWithRetry("POST", `/compute/worker/jobs/${job.jobId}/progress`, { leaseId, progressPercent: 25, progressMessage: "started" }, credentialHeaders()), "progress");
     const cancellationCheck = () => checkCancellation(job.jobId, leaseId);
-    const result = await executeJob(job, cancellationCheck);
+    const usesOllama = process.env.OLLAMA_URL && (
+      job.requestPayload?.provider === "ollama" ||
+      job.requestPayload?.backend === "ollama" ||
+      !isSyntheticRequest(job.requestPayload || {})
+    );
+    if (usesOllama) {
+      activeInference = {
+        status: "active",
+        provider: "ollama",
+        model: safeString(job.requestPayload?.model, 160),
+        jobType: safeString(job.jobType, 32),
+        observedAt: new Date().toISOString(),
+      };
+    }
+    let result = await executeJob(job, cancellationCheck);
+    if (result && result.telemetry) {
+      recordInferenceTelemetry(result.telemetry);
+      result = { ...result };
+      delete result.telemetry;
+    }
     if (await cancellationCheck()) {
       await acknowledgeCancellation(job.jobId, leaseId);
       log(`Acknowledged cancellation for job ${job.jobId}`);
@@ -520,6 +605,7 @@ async function handleJob(job, leaseId) {
     await assertOk(Promise.resolve(completed), "complete");
     log(`Completed job ${job.jobId}`);
   } catch (e) {
+    activeInference = null;
     if (/cancellation requested/i.test(e.message)) {
       await acknowledgeCancellation(job.jobId, leaseId);
       log(`Acknowledged cancellation for job ${job.jobId}`);
@@ -711,7 +797,12 @@ async function ollamaGenerate(payload, shouldCancel = null) {
   const result = await withCancellationAbort(shouldCancel, signal =>
     httpRequest("POST", endpoint.href, body, {}, { timeoutMs: OLLAMA_REQUEST_TIMEOUT_MS, signal }));
   if (result.status !== 200) throw new Error(`Ollama request failed: ${result.status}`);
-  return { content: result.data.response || "", model: payload.model, provider: "ollama" };
+  return {
+    content: result.data.response || "",
+    model: payload.model,
+    provider: "ollama",
+    telemetry: inferenceTelemetryFromOllama(result.data, payload, "generate"),
+  };
 }
 
 async function ollamaChat(payload, shouldCancel = null) {
@@ -740,6 +831,7 @@ async function ollamaChat(payload, shouldCancel = null) {
     model: payload.model,
     provider: "ollama",
     finishReason: result.data.done_reason || null,
+    telemetry: inferenceTelemetryFromOllama(result.data, payload, "chat"),
   };
 }
 
@@ -1017,4 +1109,4 @@ function __setWorkerIdentityForTest(id, cred) {
   credential = cred;
 }
 
-module.exports = { collectSystemInfo, configuredProviders, configuredExecutors, configuredModelInventory, configuredHealth, deterministicEmbedding, executeJob, validateJobResult, boundedInt, jitteredBackoff, redact, getOpenVinoExecutor, sendDisconnect, requestShutdown, rotateWorkerCredential, __setOpenVinoExecutorForTest, __setWorkerIdentityForTest };
+module.exports = { collectSystemInfo, configuredProviders, configuredExecutors, configuredModelInventory, configuredHealth, collectRuntimeTelemetry, inferenceTelemetryFromOllama, loadedOllamaModels, deterministicEmbedding, executeJob, validateJobResult, boundedInt, jitteredBackoff, redact, getOpenVinoExecutor, sendDisconnect, requestShutdown, rotateWorkerCredential, __setOpenVinoExecutorForTest, __setWorkerIdentityForTest };

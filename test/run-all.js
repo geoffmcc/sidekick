@@ -70,6 +70,7 @@ const suites = [
   { file: 'test/compute-cancellation.test.js', critical: false, description: 'Compute two-phase cancellation, legal transitions, lease recovery, and active admission accounting' },
   { file: 'test/compute-direct-runner.test.js', critical: false, description: 'Direct compute runner source failures, lease caps, interruption recovery, and cancellation' },
   { file: 'test/compute-migration-parity.test.js', critical: false, description: 'Compute migration table, column, and index parity across boot paths' },
+  { file: 'test/compute-telemetry.test.js', critical: true, description: 'Local-only Compute/GPU telemetry collection, sanitization, and safe projection' },
   { file: 'test/openvino-helper-contract.test.js', critical: false, description: 'OpenVINO helper requested-device and provenance contract' },
   { file: 'test/agent-cancel.test.js', critical: false, description: 'Agent Bridge cancellation, crash-stranded execution sweep, and honest stream errors' },
   { file: 'test/dashboard-honesty.test.js', critical: false, description: 'Dashboard honest status, governed mutations, and real error codes' },

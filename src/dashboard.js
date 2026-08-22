@@ -1353,7 +1353,12 @@ app.get("/api/compute", (req, res) => {
 app.get("/api/compute/workers", (req, res) => {
   try {
     compute.initialize();
-    res.json({ ok: true, workers: compute.workerManager.listWorkers(req.query || {}), stats: compute.workerManager.getWorkerStats() });
+    res.json({
+      ok: true,
+      workers: compute.workerManager.listWorkers(req.query || {}),
+      telemetry: compute.workerManager.listWorkerTelemetry(req.query || {}),
+      stats: compute.workerManager.getWorkerStats(),
+    });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 

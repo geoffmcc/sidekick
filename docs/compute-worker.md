@@ -247,3 +247,27 @@ installer:
 - [ ] Restart the Sidekick server → worker reconnects without re-enrollment.
 - [ ] Put the worker in maintenance → it claims no new jobs; heartbeat still visible.
 - [ ] Revoke → the worker exits and stays stopped; re-enroll with a scoped token → it works again.
+
+## Local-only worker telemetry
+
+Workers may include a bounded telemetry snapshot in their authenticated
+heartbeat. The snapshot is collected on the worker and is intended to remain
+inside the configured Sidekick/Compute setup. It can include CPU and memory
+usage, fixed-probe NVIDIA GPU utilization/memory/power/clocks/temperature,
+GPU process names with paths and PIDs removed, locally loaded Ollama model
+metadata, and timing counters from the last Ollama inference.
+
+The `compute_nodes` `telemetry` action exposes an explicit allowlisted
+projection for diagnostics. It does not expose prompts, model context,
+credentials, host paths, raw process arguments, or worker metadata. GPU and
+throughput data degrade to `unavailable` when the worker cannot measure them;
+absence is never treated as proof that inference is CPU-only.
+
+The authenticated dashboard worker endpoint receives the same safe projection
+alongside the existing worker list and renders only bounded GPU and recent
+inference summaries. The dashboard does not receive raw probe output.
+
+Telemetry is not a routing authority, is not automatically promoted into Agent
+memory, and must not be sent to external model providers, metrics services,
+webhooks, or remote logging. The server sanitizes the authenticated heartbeat
+payload again before persistence and projection.

@@ -103,6 +103,19 @@ job-creation request stays within its small control-plane payload limit.
 
 Worker heartbeat and admin inspect APIs expose platform, architecture, worker version, protocol version, providers, executors, model inventory, limits, health, and utilization metadata.
 
+Workers also support a bounded local-only telemetry snapshot through the
+authenticated heartbeat. The dedicated `compute_nodes` `telemetry` action
+returns an explicit safe projection containing available CPU/memory, GPU
+utilization and memory/process summaries, locally loaded model metadata, and
+Ollama inference timing/throughput when measured. It includes collection and
+heartbeat timestamps so stale data is visible. The projection removes paths,
+PIDs, prompts, credentials, raw process arguments, and unexpected fields.
+
+Telemetry remains inside the configured Sidekick/Compute setup. It is not
+forwarded to external inference providers, metrics services, webhooks, or
+remote logging, and it is not an execution or routing authority. Unsupported
+GPU tooling or missing timing data is reported honestly as unavailable.
+
 ## Inference authority
 
 Compute is the single inference authority. Production inference callers request
