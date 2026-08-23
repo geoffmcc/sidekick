@@ -20,6 +20,8 @@ const crypto = require("crypto");
 const { kernel, redact, evidenceVault } = require("./platform");
 const workspace = require("./workspace");
 const { ResearchError } = require("./errors");
+const { requireSidekickSrc } = require("./deps");
+const { normalizeEvidenceMetadata } = requireSidekickSrc("src/evidence/classes");
 
 const EXT_BY_TYPE = {
   "application/json": "json",
@@ -103,6 +105,7 @@ function capture(ctx, input) {
         campaign_id: campaignId,
         hypothesis_id: input.hypothesis_id || null,
         evidence_kind: type,
+        ...normalizeEvidenceMetadata(input.metadata || {}, { evidence_class: /^(?:observation|runtime|probe)$/.test(type) ? "runtime_evidence" : "exact_source_evidence", completeness: "complete" }),
         ...(input.metadata || {}),
       },
       source: "security-research",

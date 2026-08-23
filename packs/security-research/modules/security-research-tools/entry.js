@@ -25,8 +25,9 @@
  * and audit work with no model at all.
  */
 
-const { requireFromSidekick } = require("./lib/deps");
+const { requireFromSidekick, requireSidekickSrc } = require("./lib/deps");
 const { z } = requireFromSidekick("zod");
+const { normalizeEvidenceMetadata } = requireSidekickSrc("src/evidence/classes");
 
 const { jsonResult, ok, errorResult } = require("./lib/results");
 const { resolveActor } = require("./lib/identity");
@@ -204,7 +205,7 @@ function handleEvidence(services, args, runtime) {
         content_type: args.content_type,
         sensitivity: args.sensitivity,
         redaction_state: args.redaction_state || "none",
-        metadata: args.metadata,
+        metadata: { ...(args.metadata || {}), ...normalizeEvidenceMetadata(args.metadata || {}, { evidence_class: args.type === "runtime" || args.type === "observation" ? "runtime_evidence" : "exact_source_evidence", completeness: "complete" }) },
       });
       // Evidence is linked to the run's execution via artifact custody; no
       // separate attach step is needed.

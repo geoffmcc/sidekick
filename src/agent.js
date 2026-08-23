@@ -1116,18 +1116,23 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
   const contextProvider = selectRelevantContextProvider(goal, visibleAgentTools, agentCapabilityMetadata);
   const repositorySemanticSearch = contextProvider ? async (query, bounds = {}) => {
     const providerArgs = resolveContextProviderArgs(contextProvider, goal, { repositoryPath: parentContext?.repositoryPath || parentContext?.repository || null });
-    const result = await durableDispatch(contextProvider.tool, { ...providerArgs, query: String(query || goal).slice(0, 500), limit: Math.min(20, Number(bounds.limit) || 6), max_chars: Math.min(contextProvider.max_chars, Number(bounds.maxChars) || contextProvider.max_chars) }, { taskId, project: inferredProject, correlationId: taskId, timeoutMs: 30000, source: contextProvider.source });
-    const text = result?.content?.[0]?.text;
-    if (!text) return [];
-    let payload; try { payload = JSON.parse(text); } catch { return []; }
-    if (!payload.ok || !payload.projection) return [];
-    const content = projectToolEvidence({
-      tool: contextProvider.tool,
-      text: payload.projection,
-      isError: false,
-      redact: redactSensitive,
-    }, { budget: Math.min(contextProvider.max_chars, Number(bounds.maxChars) || contextProvider.max_chars, EVIDENCE_BUDGETS.MAX_CONTEXT_CHARS) });
-    return [{ source: contextProvider.source, sourceId: payload.index_root_hash || "semantic-index", type: "semantic_projection", project: null, summary: "Repository semantic projection (untrusted source-derived data)", content, confidence: 0.82, authority: "derived", provenance: { index_root_hash: payload.index_root_hash || null, trust: payload.trust || "untrusted" }, searchText: String(payload.projection) }];
+    const pageLimit = Math.min(20, Number.isSafeInteger(Number(bounds.limit)) && Number(bounds.limit) > 0 ? Number(bounds.limit) : 6);
+    const maxPages = Math.min(4, Number.isSafeInteger(Number(bounds.maxPages)) && Number(bounds.maxPages) > 0 ? Number(bounds.maxPages) : 2);
+    const pages = []; let cursor = null; let stale = false;
+    for (let page = 0; page < maxPages; page++) {
+      const result = await durableDispatch(contextProvider.tool, { ...providerArgs, action: "query", query: String(query || goal).slice(0, 500), limit: pageLimit, max_chars: Math.min(contextProvider.max_chars, Number(bounds.maxChars) || contextProvider.max_chars), ...(cursor ? { cursor } : {}) }, { taskId, project: inferredProject, correlationId: taskId, timeoutMs: 30000, source: contextProvider.source });
+      const text = result?.content?.[0]?.text; if (!text) break;
+      let payload; try { payload = JSON.parse(text); } catch { break; }
+      if (!payload.ok || !payload.projection) { stale = payload.code === "cursor_invalid" || payload.code === "cursor_expired"; break; }
+      pages.push(payload); cursor = payload.page?.cursor || null;
+      if (!payload.page?.has_more || !cursor) break;
+    }
+    if (!pages.length) return [];
+    const payload = pages[pages.length - 1]; const projections = pages.map(item => item.projection).join("\n\n");
+    const content = projectToolEvidence({ tool: contextProvider.tool, text: projections, isError: false, redact: redactSensitive }, { budget: Math.min(contextProvider.max_chars, Number(bounds.maxChars) || contextProvider.max_chars, EVIDENCE_BUDGETS.MAX_CONTEXT_CHARS) });
+    const incomplete = stale || pages.some(item => item.degradation?.truncated || item.provenance?.completeness !== "complete" || item.page?.has_more);
+    const evidenceRefs = pages.flatMap(item => { let projection; try { projection = JSON.parse(item.projection); } catch { return []; } return [...(projection.symbols || []), ...(projection.relationships || [])].map(value => value.evidence).filter(Boolean).slice(0, 64); });
+    return [{ source: contextProvider.source, sourceId: payload.index_root_hash || "semantic-index", type: "semantic_projection", project: null, summary: incomplete ? "Repository semantic discovery lead (bounded or degraded; exact source validation required)" : "Repository semantic discovery lead (untrusted source-derived data)", content, confidence: incomplete ? 0.45 : 0.65, authority: "derived", provenance: { evidence_class: "discovery_lead", index_root_hash: payload.index_root_hash || null, repository_identity: payload.provenance?.repository_identity || null, query_hash: payload.provenance?.query_hash || null, source_snapshot: payload.provenance?.source_snapshot || null, completeness: incomplete ? "partial" : "complete", continuation: { pages: pages.length, has_more: Boolean(cursor), cursor: cursor || null }, evidence_refs: evidenceRefs, trust: payload.trust || "untrusted", limitations: incomplete ? ["semantic result is incomplete or degraded; do not treat it as authoritative proof"] : [] }, searchText: projections }];
   } : null;
   const executionLineage = parentContext
     ? {
@@ -1380,6 +1385,19 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
     perEntryChars: EVIDENCE_BUDGETS.MAX_CONTEXT_ENTRY_CHARS,
     redact: redactSensitive,
   });
+  const repositoryEntries = (contextManifest?.entries || []).filter(entry => entry.source === "repository_semantic");
+  workState.research_context = repositoryEntries.slice(0, 8).map(entry => ({
+    source: "repository_semantic",
+    source_id: String(entry.sourceId || "").slice(0, 160),
+    evidence_class: String(entry.provenance?.evidence_class || "discovery_lead").slice(0, 64),
+    completeness: String(entry.provenance?.completeness || "unknown").slice(0, 32),
+    index_root_hash: entry.provenance?.index_root_hash || null,
+    repository_identity: entry.provenance?.repository_identity || null,
+    query_hash: entry.provenance?.query_hash || null,
+    continuation: entry.provenance?.continuation ? { pages: Number(entry.provenance.continuation.pages) || 0, has_more: entry.provenance.continuation.has_more === true, cursor: entry.provenance.continuation.cursor ? String(entry.provenance.continuation.cursor).slice(0, 2048) : null } : null,
+    unresolved: entry.provenance?.completeness !== "complete",
+  }));
+  if (workState.research_context.length) checkpointDurable(workState);
   // Context content is untrusted data. Keep the explicit boundary in the
   // prompt even though the engine has already redacted sensitive material.
   const combinedBrief = contextProjection.text

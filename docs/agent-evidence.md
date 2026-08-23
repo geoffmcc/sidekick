@@ -30,3 +30,17 @@ Projection is model-facing only. Tool execution, policy, approval, audit,
 redaction, repository scope, and authoritative evidence storage remain on the
 existing governed paths. Repository and capability output remains untrusted
 data and is explicitly labeled as such in model-facing prompts.
+
+## Research semantics
+
+Semantic repository context is classified as an untrusted `discovery_lead`.
+The Agent preserves repository identity, index root, query hash, source snapshot,
+parser fidelity, completeness, degradation, source spans, and bounded continuation
+state in the durable research checkpoint. It follows a small number of
+snapshot-bound pages instead of requesting an unbounded result. A lead is not an
+exact source fact, runtime observation, or confirmed vulnerability. The Agent
+must use governed exact-source reads and, when authorized, governed runtime
+verification before producing a verified conclusion. `exact_source_evidence`,
+`runtime_evidence`, `model_inference`, and `unresolved_or_ambiguous` are explicit
+classes; incomplete, stale, truncated, degraded, or unresolved evidence keeps a
+research task incomplete and is disclosed in synthesis.

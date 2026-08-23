@@ -1158,6 +1158,19 @@ app.get("/api/artifacts", (req, res) => {
   }
 });
 
+// Read-only, bounded semantic-repository projection. The request still goes
+// through the canonical dispatcher so path policy, schema validation, audit,
+// redaction, and tool authorization are not duplicated in the Dashboard.
+app.get("/api/repository/semantic", async (req, res) => {
+  if (req.authPrincipal && !requireIdentityAdministrator(req, res)) return;
+  const limit = Number(req.query.limit || 20); const maxChars = Number(req.query.max_chars || 12000);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200 || !Number.isSafeInteger(maxChars) || maxChars < 1000 || maxChars > 60000) return res.status(400).json({ ok: false, error: "invalid bounded semantic query limits", code: "invalid_limits" });
+  try {
+    const result = await callDashboardTool("semantic_repo", { action: "query", path: req.query.path, query: String(req.query.query || "").slice(0, 500), level: Math.min(2, Math.max(0, Number(req.query.level || 0))), limit, max_chars: maxChars, cursor: req.query.cursor || undefined }, dashboardExecutionMetadata(req, authenticatedUser(req) || "dashboard"));
+    return capabilityResult(res, result);
+  } catch (error) { return res.status(400).json({ ok: false, error: error.message, code: "semantic_query_failed" }); }
+});
+
 app.get("/api/event-deliveries", (req, res) => {
   try {
     const deliveries = platformKernel.listEventDeliveries({

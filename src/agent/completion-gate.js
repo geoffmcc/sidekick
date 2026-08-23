@@ -40,6 +40,9 @@ function recordEvidence(state, item) {
     tool: bounded(item.tool, 80),
     success: item.success !== false,
     reference: bounded(item.reference || item.tool, 160),
+    evidence_class: bounded(item.evidence_class || "exact_source_evidence", 64),
+    completeness: bounded(item.completeness || "complete", 32),
+    unresolved: item.unresolved === true,
   }].slice(-64);
   state.tool_calls = Math.min(10000, Number(state.tool_calls || 0) + 1);
 }
@@ -58,6 +61,8 @@ function normalizeDecision(decision) {
 async function evaluateCompletion({ state, candidate = "", completionGate = null } = {}) {
   const evidenceCount = (state?.evidence || []).filter(item => item.success !== false).length;
   if (state?.requires_evidence && evidenceCount === 0) return { complete: false, missing: ["current evidence"], reason: "required evidence is absent", next_action: "run a governed inspection tool" };
+  const incomplete = (state?.evidence || []).some(item => item.success !== false && (item.unresolved === true || ["partial", "unknown", "stale", "conflicted"].includes(item.completeness)));
+  if (state?.requires_evidence && incomplete) return { complete: false, missing: ["exact or runtime validation for incomplete evidence"], reason: "available evidence is unresolved, stale, degraded, or incomplete", next_action: "follow the continuation, retrieve exact source spans, or run governed runtime verification" };
   if (typeof completionGate === "function") {
     const decision = normalizeDecision(await completionGate({ state, candidate: bounded(candidate, 1200) }));
     if (decision) return decision;
