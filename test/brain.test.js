@@ -516,6 +516,27 @@ testAsync("a rejected plan gets one correction attempt with the validator errors
   assert.ok(Array.isArray(planCalls[1]) && planCalls[1].some(e => e.includes("unknown_or_invisible_tool")), "validator errors are fed back verbatim");
 });
 
+testAsync("a transient planner failure gets one bounded retry before any tool dispatch", async () => {
+  let planCalls = 0;
+  const calls = [];
+  const out = await runBrainTask({
+    goal: "check disk usage, store the result, and tell me the summary",
+    classification: { requiresTools: true, reason: "system_inspection" },
+    agentTools: TOOLS,
+    plan: async ({ priorErrors }) => {
+      planCalls++;
+      if (planCalls === 1) throw new Error("planner produced no parseable plan: provider response was temporarily unavailable");
+      assert.ok(Array.isArray(priorErrors) && /temporarily unavailable/.test(priorErrors[0]));
+      return goodPlan();
+    },
+    callTool: async (name) => { calls.push(name); return toolResult("Disk usage: 23% used"); },
+    synthesize: synth("Disk usage is 23% used."),
+  });
+  assert.strictEqual(out.state, "completed", out.error);
+  assert.strictEqual(planCalls, 2);
+  assert.deepStrictEqual(calls, ["health"]);
+});
+
 testAsync("planning attempts are bounded by MAX_PLANNING_ATTEMPTS", async () => {
   let planCount = 0;
   const calls = [];

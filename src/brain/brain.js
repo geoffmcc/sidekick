@@ -379,6 +379,17 @@ async function runBrainTask(opts) {
   // validator (never the model) decides acceptance on every attempt.
   let validation = null;
   let priorErrors = null;
+  let lastPlanningError = null;
+  const planningFailureIsRetryable = (error) => {
+    const message = String(error && error.message || error || "planner failed").slice(0, 800);
+    // Planning output is untrusted and never grants authority. A bounded
+    // retry is safe here because no capability has been dispatched yet. Keep
+    // policy, identity, credential, and scope failures fail-closed rather
+    // than allowing a model/provider retry to look like an authorization
+    // repair.
+    if (/approval|policy|permission|forbidden|unauthori[sz]ed|credential|secret|security|scope\s+(?:denied|required)/i.test(message)) return false;
+    return /parseable plan|truncated|timeout|timed out|temporar|unavailable|rate limit|busy|network|econn|provider|compute|empty response|invalid response/i.test(message);
+  };
   for (let attempt = 1; attempt <= BRAIN_LIMITS.MAX_PLANNING_ATTEMPTS; attempt++) {
     if (cancelled()) return terminal("cancelled");
     if (outOfTime()) return terminal("timed_out", { error: "planning deadline exceeded" });
@@ -386,7 +397,15 @@ async function runBrainTask(opts) {
     try {
       candidate = await planFn({ goal, classification, memoryContext, priorErrors });
     } catch (e) {
-      return terminal("failed", { error: "planning error: " + redact(String(e && e.message || e)) });
+      const message = redact(String(e && e.message || e || "planner failed")).slice(0, 800);
+      lastPlanningError = message;
+      if (attempt < BRAIN_LIMITS.MAX_PLANNING_ATTEMPTS && planningFailureIsRetryable(e)) {
+        priorErrors = [`planner attempt ${attempt} failed: ${message}`];
+        onEvent("brain.planner_retry", { attempt, reason: message }, "warning");
+        setState("planning");
+        continue;
+      }
+      return terminal("failed", { error: "planning error: " + message });
     }
 
     // ---- validate (deterministic; a model never validates its own plan) ----
@@ -401,7 +420,7 @@ async function runBrainTask(opts) {
     const errs = validation ? validation.errors : [];
     // Validator errors are sanitized at the source (frag()), but redact here
     // too: this string lands in the persisted transcript.
-    return terminal("failed", { error: redact("plan rejected: " + errs.slice(0, 4).join("; ")), extra: { plan_errors: errs } });
+    return terminal("failed", { error: redact(lastPlanningError || ("plan rejected: " + errs.slice(0, 4).join("; "))), extra: { plan_errors: errs } });
   }
   let validated = validation.plan;
   if (typeof onPlanRevision === "function") onPlanRevision(validated, { revision: 1, source: "planner" });
