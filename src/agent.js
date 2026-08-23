@@ -2520,11 +2520,26 @@ app.get("/api/agent/stream/:taskId", (req, res) => {
   }
 
   let ended = false;
+  let durablePoll = null;
+  const durableTerminalFrame = () => {
+    const durable = durableTaskStore.getTask(req.params.taskId);
+    if (!durable || !["completed", "partial", "failed", "cancelled", "timed_out"].includes(durable.state)) return null;
+    const durableStatus = durable.result && durable.result.status;
+    const summary = durable.result && (durable.result.summary || durable.result.result);
+    // A direct answer can be available while its optional verification gates
+    // remain incomplete. Deliver it as a terminal answer with the durable
+    // verification status; callers must use the task projection for truth.
+    const hasAnswer = durable.state === "completed"
+      || (durable.state === "partial" && ["verified", "partially_verified", "unable_to_verify"].includes(durableStatus) && summary);
+    if (hasAnswer) return { type: "done", text: String(summary || "Task completed"), ...(durableStatus ? { verification_status: durableStatus } : {}) };
+    return { type: "error", text: String(durable.stopping_reason || summary || "Task ended without verified completion") };
+  };
   const handler = (data) => {
     if (ended) return;
     res.write("data: " + JSON.stringify(data) + "\n\n");
     if (data.type === "done" || data.type === "error") {
       ended = true;
+      if (durablePoll) clearInterval(durablePoll);
       ee.off("data", handler);
       res.end();
     }
@@ -2536,15 +2551,26 @@ app.get("/api/agent/stream/:taskId", (req, res) => {
   // result. The guard above prevents a duplicate if the emitter wins the
   // race between listener registration and this projection check.
   try {
-    const durable = durableTaskStore.getTask(req.params.taskId);
-    if (durable && ["completed", "partial", "failed", "cancelled", "timed_out"].includes(durable.state)) {
-      const summary = durable.result && (durable.result.summary || durable.result.result);
-      handler(durable.state === "completed"
-        ? { type: "done", text: String(summary || "Task completed") }
-        : { type: "error", text: String(durable.stopping_reason || durable.result?.summary || "Task ended without verified completion") });
-    }
+    const frame = durableTerminalFrame();
+    if (frame) handler(frame);
   } catch {}
-  req.on("close", () => ee.off("data", handler));
+  if (!ended) {
+    // The emitter is process-local and intentionally non-authoritative. Poll
+    // the durable projection so a listener that attaches during finalization,
+    // or after an emitter delivery race, still receives the terminal frame.
+    durablePoll = setInterval(() => {
+      if (ended) return;
+      try {
+        const frame = durableTerminalFrame();
+        if (frame) handler(frame);
+      } catch {}
+    }, 100);
+    if (typeof durablePoll.unref === "function") durablePoll.unref();
+  }
+  req.on("close", () => {
+    if (durablePoll) clearInterval(durablePoll);
+    ee.off("data", handler);
+  });
 });
 
 app.get("/api/agent/history", (req, res) => {
