@@ -195,7 +195,7 @@ async function executePlanSteps({
       onEvent("brain.step_repair_guidance", { id: step.id, tool: step.tool, failure_kind: failure.kind, retryable: failure.retryable }, failure.retryable ? "warning" : "error");
       return failure.retryable
         ? { status: "replan_required", stepId: step.id, tool: step.tool, failure, guidance }
-        : { status: "failed", stepId: step.id, tool: step.tool, failure };
+        : { status: "failed", stepId: step.id, tool: step.tool, failure, guidance };
     }
     return { status: "completed" };
   };
@@ -251,8 +251,22 @@ async function executePlanSteps({
         : { isError: true, code: "validation_failed", content: [{ type: "text", text: `Invalid arguments for ${step.tool}: ${preflight.error}` }] };
     } catch (e) {
       acc.steps.push({ type: "tool", id: step.id, tool: step.tool, error: redact(String(e && e.message || e)) });
-      // A tool step failure is honest failure, never fabricated evidence.
-      return { status: "failed", index, stepId: step.id, tool: step.tool };
+      // A tool step failure is honest failure, never fabricated evidence. A
+      // classified transient/input/target failure still carries its safe
+      // repair decision so the bounded work loop can choose a materially
+      // different read-only plan when no evidence has been collected.
+      const failure = classifyCapabilityFailure({
+        isError: true,
+        content: [{ type: "text", text: String(e && e.message || "tool execution failed") }],
+      }, { tool: step.tool, args: proposedArgs, descriptor: (toolContracts || []).find(d => String(d?.name || "").replace(/^sidekick_/, "") === String(step.tool || "").replace(/^sidekick_/, "")) });
+      return {
+        status: "failed",
+        index,
+        stepId: step.id,
+        tool: step.tool,
+        failure,
+        guidance: repairGuidance(failure, { tool: step.tool, args: proposedArgs, availableTools: agentTools }),
+      };
     }
 
     const handled = handleResult(step, toolRes);
@@ -410,11 +424,17 @@ async function runBrainTask(opts) {
   // another bounded plan from the model before synthesizing.
   let workRound = 0;
   let accountedEvidence = 0;
-  while (["completed", "replan_required"].includes(outcome.status) && workRound < Math.max(1, Math.min(8, Number(maxWorkRounds) || 4))) {
+  const maxRounds = Math.max(1, Math.min(8, Number(maxWorkRounds) || 4));
+  const canReplanEvidenceFailure = () => outcome.status === "failed"
+    && requiresEvidence
+    && (acc.successfulToolEvidence || 0) === 0
+    && outcome.failure
+    && outcome.failure.retryable === true;
+  while ((["completed", "replan_required"].includes(outcome.status) || canReplanEvidenceFailure()) && workRound < maxRounds) {
     for (const item of (acc.evidence || []).slice(accountedEvidence)) recordEvidence(taskState, { tool: item.tool || "inspection", success: item.ok !== false, reference: item.tool || "evidence" });
     accountedEvidence = (acc.evidence || []).length;
-    const completion = outcome.status === "replan_required"
-      ? { complete: false, missing: [outcome.stepId || outcome.tool || "failed step"], reason: outcome.guidance || "A governed capability call failed and requires a materially different plan." }
+    const completion = ["replan_required", "failed"].includes(outcome.status)
+      ? { complete: false, missing: [outcome.stepId || outcome.tool || "failed step"], reason: outcome.guidance || "A governed capability call failed before producing evidence and requires a materially different read-only plan." }
       : await evaluateCompletion({ state: taskState, candidate: "", completionGate });
     if (completion.complete) break;
     workRound++;
@@ -435,7 +455,7 @@ async function runBrainTask(opts) {
     if (typeof onCheckpoint === "function") onCheckpoint(taskState);
   }
 
-  if (outcome.status === "completed" && workRound >= Math.max(1, Math.min(8, Number(maxWorkRounds) || 4))) {
+  if (outcome.status === "completed" && workRound >= maxRounds) {
     const completion = await evaluateCompletion({ state: taskState, candidate: "", completionGate });
     if (!completion.complete) return terminal("insufficient_evidence", { error: "bounded work rounds exhausted before objective completion", extra: { missing: completion.missing, work_rounds: workRound } });
   }

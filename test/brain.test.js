@@ -579,6 +579,35 @@ testAsync("evidence-required task fails closed when tools produce no evidence (T
   assert.ok(/could not inspect/.test(out.error), out.error);
 });
 
+testAsync("a retryable first inspection failure replans before failing closed", async () => {
+  let planCount = 0;
+  const calls = [];
+  const out = await runBrainTask({
+    goal: "inspect the current repository state",
+    classification: { requiresTools: true, reason: "repository_inspection" },
+    agentTools: TOOLS,
+    toolContracts: [
+      { name: "health", risk: "low", annotations: { readOnlyHint: true, destructiveHint: false } },
+      { name: "git", risk: "low", annotations: { readOnlyHint: true, destructiveHint: false } },
+    ],
+    plan: async () => {
+      planCount++;
+      return planCount === 1
+        ? goodPlan({ steps: [{ id: "a", type: "tool", tool: "health", arguments: {} }, { id: "b", type: "synthesis", depends_on: ["a"] }] })
+        : goodPlan({ steps: [{ id: "a", type: "tool", tool: "git", arguments: { action: "status" } }, { id: "b", type: "synthesis", depends_on: ["a"] }] });
+    },
+    callTool: async (name) => {
+      calls.push(name);
+      if (name === "health") return { isError: true, code: "temporary_unavailable", content: [{ type: "text", text: "temporary service unavailable" }] };
+      return toolResult("On branch main; working tree clean");
+    },
+    synthesize: synth("The repository is on main with a clean worktree."),
+  });
+  assert.strictEqual(out.state, "completed", out.error);
+  assert.deepStrictEqual(calls, ["health", "git"]);
+  assert.strictEqual(planCount, 2, "the failed first inspection receives one bounded replan");
+});
+
 testAsync("a tool step hard-failure is honest failure, not fabricated evidence", async () => {
   const out = await runBrainTask({
     goal: "check disk",
