@@ -126,6 +126,36 @@ ok("dashboard server proxies the follow-up endpoint to the agent bridge", () => 
   assert.match(dashServer, /app\.post\("\/api\/agent\/run\/:taskId\/follow-up"/, "proxy route exists");
 });
 
+ok("control room exposes typed governed continuation actions", () => {
+  assert.match(dashHtml, /id="agentDurableContinuationActions"/, "control-room action region exists");
+  const detail = fnBody(clientJs, "loadDurableAgentTask");
+  assert.match(detail, /agentDurableContinuationActions/, "durable projection renders the action region");
+  assert.match(detail, /investigate.*Investigate finding/, "investigation action is rendered");
+  assert.match(detail, /verify.*Verify claim/, "verification action is rendered");
+  assert.match(detail, /repair.*Repair failure/, "repair action is rendered");
+  assert.match(detail, /implement.*Implement recommendation/, "implementation action is rendered");
+  assert.match(detail, /apply.*Apply approved proposal/, "approved-proposal action is rendered");
+  assert.match(detail, /monitor.*Monitor condition/, "monitor action is rendered");
+  assert.match(detail, /recheck.*Recheck condition/, "recheck action is rendered");
+  const action = fnBody(clientJs, "startAgentContinuation");
+  assert.match(action, /\/api\/agent\/tasks\/.*\/act-on/, "typed continuation uses the governed act-on endpoint");
+  assert.match(action, /JSON\.stringify\(\{ kind \}\)/, "only the structured continuation kind is submitted");
+  assert.match(action, /streamAgentTask\(data\.taskId/, "returned child task is selected and streamed");
+  assert.match(dashServer, /app\.post\("\/api\/agent\/tasks\/:taskId\/act-on"/, "Dashboard proxies act-on");
+});
+
+ok("durable control room renders bounded resources, work, evidence, and plan gates", () => {
+  const detail = fnBody(clientJs, "loadDurableAgentTask");
+  assert.match(detail, /Resources used\/remaining/, "resource usage includes remaining allowance");
+  assert.match(detail, /verification_calls/, "resource usage includes verification calls");
+  assert.match(detail, /fresh independent/, "verification distinguishes fresh independent evidence");
+  assert.match(detail, /freshness_ms/, "Dashboard applies the durable recipe freshness window");
+  assert.match(detail, /failed=/, "evidence reports failed outcomes");
+  assert.match(detail, /milestones:/, "plan projection renders milestone state");
+  assert.match(detail, /verification gates:/, "plan projection renders verification gates");
+  assert.match(detail, /packages=.*active/, "work-package projection renders active work");
+});
+
 ok("existing Agent tab anchors are preserved (no dashboard redesign)", () => {
   assert.match(dashHtml, /id="agentGoal"/);
   assert.match(dashHtml, /id="agentLog"/);

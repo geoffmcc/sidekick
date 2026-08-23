@@ -331,6 +331,15 @@ test("unresolved dependency is rejected", () => {
   assert.ok(r.errors.some(e => e.includes("unresolved_dependency")));
 });
 
+test("dependency on a later step is rejected instead of executing out of order", () => {
+  const r = validatePlan({ version: 1, goal: "ordered", steps: [
+    { id: "consumer", type: "tool", tool: "status", arguments: {}, depends_on: ["producer"] },
+    { id: "producer", type: "tool", tool: "status", arguments: {}, depends_on: [] },
+  ] }, { agentTools: [{ name: "status", enabled: true }] });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some(error => error.includes("dependency_order")));
+});
+
 test("step count over the bound is rejected", () => {
   const steps = Array.from({ length: BRAIN_LIMITS.MAX_STEPS + 1 }, (_, i) => ({ id: "s" + i, type: "tool", tool: "health", arguments: {} }));
   assert.strictEqual(validatePlan({ version: 1, goal: "g", steps }, { agentTools: TOOLS }).ok, false);

@@ -35,6 +35,8 @@ const PORT = 4143;
 delete require.cache[require.resolve("../src/agent")];
 const agent = require("../src/agent");
 const platformKernel = require("../src/platform/kernel");
+const { createTask } = require("../src/agent/task-model");
+const durableTasks = require("../src/agent/task-store");
 
 console.log("Running Agent Bridge cancellation/sweep tests...\n");
 
@@ -187,10 +189,17 @@ let server;
     while (!gate && Date.now() - start < 5000) await new Promise((r) => setTimeout(r, 10));
     assert.ok(gate, "tool loop should be waiting on the LLM");
 
+    const child = createTask({ task_id: "childcancel1", root_task_id: taskId, parent_task_id: taskId, objective: "child cancellation", profile: "quick" });
+    durableTasks.insertTask(child);
+    for (const state of ["planning", "ready", "running"]) durableTasks.updateTask(child.task_id, { state, phase: "execution" }, "test.child_running");
+
     const cancel = await request("POST", "/api/agent/run/" + taskId + "/cancel", {});
     assert.strictEqual(cancel.status, 200);
     assert.strictEqual(cancel.data.ok, true);
     assert.strictEqual(cancel.data.cancelling, true);
+    assert.ok(cancel.data.affected_task_ids.includes(taskId));
+    assert.ok(cancel.data.affected_task_ids.includes(child.task_id));
+    assert.strictEqual(durableTasks.getTask(child.task_id).control.cancel_requested, true, "durable child cancellation is propagated");
 
     // Release the in-flight LLM call; the loop consumes the cancel flag at the
     // top of the next iteration.

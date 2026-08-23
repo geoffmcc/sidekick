@@ -5,6 +5,7 @@ const { validatePlan } = require("./plan-validator");
 const { EVIDENCE_BUDGETS, projectEvidenceItems, projectToolEvidence } = require("../evidence/projector");
 const { createWorkState, recordEvidence, evaluateCompletion } = require("../agent/completion-gate");
 const { classifyCapabilityFailure, preflightCapabilityCall, repairGuidance } = require("../agent/capability-repair");
+const { determineEffect } = require("../agent/authority");
 
 /**
  * Brain v0.1 orchestrator.
@@ -156,13 +157,81 @@ async function executePlanSteps({
   outOfTime = () => false,
   toolContracts = [],
   agentTools = [],
+  concurrencyLimit = 1,
+  workPackageHooks = null,
 }) {
   const steps = plan.steps || [];
+  const boundedConcurrency = Math.max(1, Math.min(16, Number(concurrencyLimit) || 1));
+  const authoritativeReadOnly = (step) => {
+    if (!step || step.type !== "tool" || (step.depends_on || []).length) return false;
+    const preflight = toolContracts && toolContracts.length
+      ? preflightCapabilityCall(step.tool, step.arguments || {}, toolContracts)
+      : null;
+    if (!preflight || !preflight.ok || !preflight.checked || !preflight.descriptor) return false;
+    const effect = determineEffect(preflight.descriptor, preflight.args || step.arguments || {});
+    return effect.effect === "read_only" && effect.authoritative === true;
+  };
+  const dispatchReadOnly = async (step) => {
+    let packageHandle = null;
+    const args = step.arguments || {};
+    try {
+      if (workPackageHooks && typeof workPackageHooks.start === "function") packageHandle = await workPackageHooks.start(step);
+      const preflight = preflightCapabilityCall(step.tool, args, toolContracts);
+      if (!preflight.ok) { if (packageHandle && workPackageHooks.finish) await workPackageHooks.finish(packageHandle, "failed", { code: "validation_failed" }); return { isError: true, code: "validation_failed", content: [{ type: "text", text: `Invalid arguments for ${step.tool}: ${preflight.error}` }] }; }
+      const result = await callTool(step.tool, preflight.args || args);
+      if (packageHandle && workPackageHooks.finish) await workPackageHooks.finish(packageHandle, result?.isError ? "failed" : "completed", { ok: !result?.isError });
+      return result;
+    } catch (e) {
+      if (packageHandle && workPackageHooks.finish) { try { await workPackageHooks.finish(packageHandle, "failed", { error: String(e && e.message || e).slice(0, 300) }); } catch {} }
+      return { isError: true, code: "tool_error", content: [{ type: "text", text: String(e && e.message || e) }] };
+    }
+  };
+  const handleResult = (step, toolRes) => {
+    if (isApprovalRequired(toolRes)) return { status: "approval_required", step, approvalId: toolRes.approvalId || null };
+    accumulateToolResult(acc, step, toolRes, { onEvent, redact });
+    if (toolRes.isError) {
+      const failure = classifyCapabilityFailure(toolRes, { tool: step.tool, args: step.arguments || {}, descriptor: (toolContracts || []).find(d => String(d?.name || "").replace(/^sidekick_/, "") === String(step.tool || "").replace(/^sidekick_/, "")) });
+      const guidance = repairGuidance(failure, { tool: step.tool, args: step.arguments || {}, availableTools: agentTools });
+      onEvent("brain.step_repair_guidance", { id: step.id, tool: step.tool, failure_kind: failure.kind, retryable: failure.retryable }, failure.retryable ? "warning" : "error");
+      return failure.retryable
+        ? { status: "replan_required", stepId: step.id, tool: step.tool, failure, guidance }
+        : { status: "failed", stepId: step.id, tool: step.tool, failure };
+    }
+    return { status: "completed" };
+  };
   for (let index = startIndex; index < steps.length; index++) {
     const step = steps[index];
     if (cancelled()) return { status: "cancelled", index };
     if (outOfTime()) return { status: "timed_out", index };
     if (step.type !== "tool") continue; // memory already retrieved; synthesis handled by the caller
+
+    // Only independent, authoritative read-only steps may overlap. The live
+    // descriptor and schema are required; missing metadata is never treated as
+    // permission to parallelize. Results are joined in plan order so evidence,
+    // events, and repair decisions remain deterministic.
+    if (boundedConcurrency > 1 && authoritativeReadOnly(step)) {
+      const batch = [step];
+      while (batch.length < boundedConcurrency && index + batch.length < steps.length) {
+        const candidate = steps[index + batch.length];
+        if (!authoritativeReadOnly(candidate)) break;
+        batch.push(candidate);
+      }
+      if (batch.length > 1) {
+        if (cancelled()) return { status: "cancelled", index };
+        if (outOfTime()) return { status: "timed_out", index };
+        batch.forEach(item => {
+          emit({ type: "brain_step", step: "tool", id: item.id, tool: item.tool, concurrent: true });
+          onEvent("brain.step_started", { id: item.id, tool: item.tool, concurrent: true });
+        });
+        const results = await Promise.all(batch.map(dispatchReadOnly));
+        for (let offset = 0; offset < batch.length; offset++) {
+          const handled = handleResult(batch[offset], results[offset]);
+          if (handled.status !== "completed") return { ...handled, index: index + offset };
+        }
+        index += batch.length - 1;
+        continue;
+      }
+    }
 
     emit({ type: "brain_step", step: "tool", id: step.id, tool: step.tool });
     onEvent("brain.step_started", { id: step.id, tool: step.tool });
@@ -170,7 +239,13 @@ async function executePlanSteps({
     let toolRes;
     const proposedArgs = step.arguments || {};
     try {
-      const preflight = preflightCapabilityCall(step.tool, proposedArgs, toolContracts);
+      // Direct Brain unit/in-process callers may omit contracts; production
+      // Agent execution supplies the live source-filtered canonical catalog.
+      // Keep that compatibility path advisory, while a supplied catalog still
+      // fails closed for missing mutation metadata.
+      const preflight = toolContracts && toolContracts.length
+        ? preflightCapabilityCall(step.tool, proposedArgs, toolContracts)
+        : { ok: true, descriptor: null };
       toolRes = preflight.ok
         ? await callTool(step.tool, proposedArgs)
         : { isError: true, code: "validation_failed", content: [{ type: "text", text: `Invalid arguments for ${step.tool}: ${preflight.error}` }] };
@@ -180,20 +255,8 @@ async function executePlanSteps({
       return { status: "failed", index, stepId: step.id, tool: step.tool };
     }
 
-    // Approval-required is a first-class waiting state, never retried or
-    // bypassed. The plan does not proceed; the task parks awaiting a human.
-    if (isApprovalRequired(toolRes)) {
-      return { status: "approval_required", index, step, approvalId: toolRes.approvalId || null };
-    }
-
-    accumulateToolResult(acc, step, toolRes, { onEvent, redact });
-    if (toolRes.isError) {
-      const failure = classifyCapabilityFailure(toolRes, { tool: step.tool, args: proposedArgs });
-      const guidance = repairGuidance(failure, { tool: step.tool, args: proposedArgs, availableTools: agentTools });
-      onEvent("brain.step_repair_guidance", { id: step.id, tool: step.tool, failure_kind: failure.kind, retryable: failure.retryable }, failure.retryable ? "warning" : "error");
-      if (failure.retryable) return { status: "replan_required", index, stepId: step.id, tool: step.tool, failure, guidance };
-      return { status: "failed", index, stepId: step.id, tool: step.tool, failure };
-    }
+    const handled = handleResult(step, toolRes);
+    if (handled.status !== "completed") return { ...handled, index };
   }
   return { status: "completed", index: steps.length };
 }
@@ -241,6 +304,8 @@ async function runBrainTask(opts) {
     maxWorkRounds = 4,
     onCheckpoint = null,
     onPlanRevision = null,
+    concurrencyLimit = 1,
+    workPackageHooks = null,
   } = opts;
 
   const startedAt = nowMs(clock);
@@ -336,6 +401,7 @@ async function runBrainTask(opts) {
   let outcome = await executePlanSteps({
     plan: validated, startIndex: 0, acc,
     callTool, emit, onEvent, redact, cancelled, outOfTime, toolContracts, agentTools,
+    concurrencyLimit, workPackageHooks,
   });
   if (typeof onCheckpoint === "function") onCheckpoint(taskState);
 
@@ -365,7 +431,7 @@ async function runBrainTask(opts) {
     if (!nextValidation.ok) return terminal("failed", { error: redact("replan rejected: " + nextValidation.errors.slice(0, 4).join("; ")) });
     validated = nextValidation.plan;
     if (typeof onPlanRevision === "function") onPlanRevision(validated, { revision: workRound + 1, source: "replanner" });
-    outcome = await executePlanSteps({ plan: validated, startIndex: 0, acc, callTool, emit, onEvent, redact, cancelled, outOfTime, toolContracts, agentTools });
+    outcome = await executePlanSteps({ plan: validated, startIndex: 0, acc, callTool, emit, onEvent, redact, cancelled, outOfTime, toolContracts, agentTools, concurrencyLimit, workPackageHooks });
     if (typeof onCheckpoint === "function") onCheckpoint(taskState);
   }
 
@@ -377,6 +443,9 @@ async function runBrainTask(opts) {
   if (outcome.status === "cancelled") return terminal("cancelled");
   if (outcome.status === "timed_out") return terminal("timed_out", { error: "task deadline exceeded" });
   if (outcome.status === "failed") {
+    if (requiresEvidence && (acc.successfulToolEvidence || 0) === 0) {
+      return terminal("failed", { error: "Sidekick could not inspect the requested state: the task required current evidence, but no inspection tool produced any. No answer was fabricated." });
+    }
     return terminal("failed", { error: `step ${outcome.stepId} (${outcome.tool}) failed`, extra: { failed_step: outcome.stepId } });
   }
 

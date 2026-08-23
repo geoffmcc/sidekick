@@ -263,6 +263,17 @@ function validatePlan(candidate, { agentTools = [] } = {}) {
     if (hasCycle(step.id)) return fail(`cycle_detected:${step.id}`);
   }
 
+  // The executor is deterministic and advances through the validated plan in
+  // order. Reject a dependency on a later step rather than silently executing
+  // a consumer before its prerequisite; model output cannot rely on an
+  // implicit scheduler or reorder itself after validation.
+  const stepPositions = new Map(normalizedSteps.map((step, index) => [step.id, index]));
+  for (let index = 0; index < normalizedSteps.length; index++) {
+    for (const dep of normalizedSteps[index].depends_on) {
+      if (stepPositions.get(dep) >= index) return fail(`step:${normalizedSteps[index].id}:dependency_order:${frag(dep)}`);
+    }
+  }
+
   return {
     ok: true,
     errors: [],

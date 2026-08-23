@@ -90,12 +90,32 @@ rolling plans, bounded model/tool budgets, checkpoints, artifacts, independent
 verification, structured results, pause/resume/cancel, guidance, approval
 waiting, follow-ups, and `act-on` child tasks.
 
+Tasks also persist a bounded authority envelope, resource ledger, operation
+receipts, verification recipes, and repair evidence. The envelope narrows
+authenticated authority; model output, stored guidance, plans, and results
+cannot expand it. Unknown effect metadata fails closed for mutation retries.
+Profile behavior is runtime-enforced: Brain revision rounds differ by profile,
+read-only batches are bounded by the envelope concurrency limit, and child
+fan-out is atomically reserved in the root ledger. Receipt and verification
+payloads are bounded before persistence. The root ledger also records
+root-relative wall time and active concurrent work-package leases.
+
 Use Agent Bridge only when autonomous execution is explicitly requested. A live
 state goal must produce real governed tool evidence. A child task receives only
 deliberately selected, bounded, untrusted context; it does not inherit approval,
-authority, project scope, workspace scope, or filesystem access. Stored model
-output is inert. A possibly completed mutation is verified before retry rather
-than blindly repeated.
+authority, or filesystem access. Parent project/workspace context is retained
+only as a governed lineage scope and is reauthorized for the new task; it is
+never broadened. Stored model output is inert. A possibly completed mutation is
+verified before retry rather than blindly repeated.
+
+The Agent API accepts bounded structured goal criteria and live-evidence
+requirements. Missing recipe evidence receives one canonical fresh recheck;
+unresolved gates remain unable to verify. Learning promotion requires an
+authenticated human with approval authority and cannot be self-approved by
+the source task requester. Structured `act-on` continuations cover
+investigation, implementation, verification, repair, comparison, deliverables,
+unresolved work, approved-proposal application, monitoring, and rechecking;
+every one is a fresh governed task and never transfers approval.
 
 After an SSE disconnect or page refresh, inspect the durable task projection
 through the Agent API/dashboard. The stream is a progress view, not authoritative

@@ -2,6 +2,7 @@
 
 const { stripSidekickPrefix } = require("../core/tool-name");
 const { redactSensitiveKeysDeep } = require("../redact");
+const { determineEffect } = require("./authority");
 
 const MAX_ERROR_CHARS = 900;
 const MAX_ISSUES = 8;
@@ -24,7 +25,7 @@ function resultText(result) {
   return safeText(result.content?.map(item => item?.text || "").filter(Boolean).join(" ") || result.error || result.message || result.code || "");
 }
 
-function classifyCapabilityFailure(result, { tool = "", args = {} } = {}) {
+function classifyCapabilityFailure(result, { tool = "", args = {}, descriptor = null, authority = null } = {}) {
   const code = safeText(result?.code || result?.error_code || "", 80).toLowerCase();
   const message = resultText(result).toLowerCase();
   const text = `${code} ${message}`;
@@ -38,9 +39,20 @@ function classifyCapabilityFailure(result, { tool = "", args = {} } = {}) {
   else if (/timeout|timed out|temporar|unavailable|rate limit|busy|network|econn|503/.test(text)) kind = "transient";
   else if (result?.isError || result?.error) kind = "tool_error";
 
-  const readOnly = !/(write|create|update|delete|remove|destroy|play|pause|resume|stop|seek|set_volume|provision|migrate|retire|execute|run)/i.test(`${tool} ${JSON.stringify(args)}`);
-  const retryable = ["invalid_arguments", "target_resolution", "bounded_result"].includes(kind) || (kind === "transient" && readOnly);
-  return Object.freeze({ kind, code: code || null, message: safeText(resultText(result)), readOnly, retryable });
+  const effect = determineEffect(descriptor || { name: canonicalToolName(tool), annotations: { readOnlyHint: false, destructiveHint: true }, risk: "critical" }, args);
+  const readOnly = effect.effect === "read_only" && effect.authoritative === true;
+  const authorized = !authority || (authority.allowed_effects || []).includes(effect.effect);
+  // Validation/target/bounded failures are diagnostic repair candidates even
+  // when a legacy caller did not provide a descriptor. They never authorize a
+  // dispatch or mutation retry; the loop must obtain a live contract first.
+  // Missing canonical metadata is a diagnostic condition only. It must never
+  // be interpreted as permission to retry: mutation classification fails
+  // closed until the live dispatcher catalog supplies an authoritative
+  // descriptor and policy decision.
+  const retryable = ["invalid_arguments", "target_resolution", "bounded_result"].includes(kind)
+    ? Boolean(descriptor && readOnly && authorized)
+    : kind === "transient" && readOnly && authorized;
+  return Object.freeze({ kind, code: code || null, message: safeText(resultText(result)), readOnly, effect: effect.effect, authoritative: effect.authoritative, retryable });
 }
 
 function resolveDescriptor(name, definitions = []) {
@@ -56,7 +68,8 @@ function resolveDescriptor(name, definitions = []) {
 function preflightCapabilityCall(name, args = {}, definitions = []) {
   const descriptor = resolveDescriptor(name, definitions);
   if (!descriptor?.schema || typeof descriptor.schema.safeParse !== "function") {
-    return { ok: true, descriptor: descriptor || null, args: redactSensitiveKeysDeep(args || {}), checked: false };
+    const effect = determineEffect(descriptor, args);
+    return { ok: effect.effect === "read_only", descriptor: descriptor || null, args: redactSensitiveKeysDeep(args || {}), checked: false, effect, error: effect.effect === "read_only" ? null : "canonical capability schema/effect metadata is unavailable" };
   }
   const parsed = descriptor.schema.safeParse(args || {});
   if (parsed.success) return { ok: true, descriptor, args: parsed.data, checked: true };

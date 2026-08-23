@@ -275,10 +275,10 @@ async function runToolLoop({
         if (toolRes.approvalRequired) {
           approvalPending = true;
           result = "Error: " + (toolRes.content?.[0]?.text || "approval required");
-          failure = classifyCapabilityFailure(toolRes, { tool: toolName, args: proposedArgs });
+          failure = classifyCapabilityFailure(toolRes, { tool: toolName, args: proposedArgs, descriptor: preflight.descriptor });
         } else if (toolRes.isError) {
           result = "Error: " + (toolRes.content?.[0]?.text || "unknown error");
-          failure = classifyCapabilityFailure(toolRes, { tool: toolName, args: proposedArgs });
+          failure = classifyCapabilityFailure(toolRes, { tool: toolName, args: proposedArgs, descriptor: preflight.descriptor });
           // If policy or lookup blocks a tool, provide corrective feedback.
           if (result.includes("Unknown tool") || result.includes("Tool blocked by policy")) {
             const availableTools = getToolDefs().map(t => t.name).join(", ");

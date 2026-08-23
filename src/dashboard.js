@@ -2631,6 +2631,9 @@ app.post('/api/webhook/:source', (req, res) => {
 
 function proxyAgent(req, res, method, body) {
   const headers = { "Content-Type": "application/json" };
+  if (req.authPrincipal?.principal_id) headers["X-Sidekick-Principal-ID"] = String(req.authPrincipal.principal_id).slice(0, 160);
+  if (Array.isArray(req.authPrincipal?.scopes)) headers["X-Sidekick-Principal-Scopes"] = JSON.stringify(req.authPrincipal.scopes.slice(0, 80)).slice(0, 4000);
+  if (req.authPrincipal?.delegation_id) headers["X-Sidekick-Delegation-ID"] = String(req.authPrincipal.delegation_id).slice(0, 160);
   if (body) headers["Content-Length"] = Buffer.byteLength(body);
   const opts = {
     hostname: "127.0.0.1",
@@ -2661,6 +2664,53 @@ app.get("/api/agent/tasks", (req, res) => {
 
 app.get("/api/agent/tasks/:taskId", (req, res) => {
   proxyAgent(req, res, "GET");
+});
+
+app.get("/api/agent/tasks/:taskId/control-room", (req, res) => {
+  proxyAgent(req, res, "GET");
+});
+
+app.post("/api/agent/tasks/:taskId/plans", (req, res) => {
+  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
+});
+
+app.post("/api/agent/tasks/:taskId/escalations", (req, res) => {
+  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
+});
+
+app.post("/api/agent/tasks/:taskId/work-packages", (req, res) => {
+  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
+});
+
+app.post("/api/agent/tasks/:taskId/work-packages/:packageId/claim", (req, res) => {
+  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
+});
+
+app.get("/api/agent/tasks/:taskId/workspace-transactions", (req, res) => {
+  proxyAgent(req, res, "GET");
+});
+
+app.post("/api/agent/tasks/:taskId/workspace-transactions/:transactionId/rollback", (req, res) => {
+  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
+});
+
+app.post("/api/agent/tasks/:taskId/verification-recipes", (req, res) => {
+  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
+});
+
+app.post("/api/agent/tasks/:taskId/verification-recipes/:recipeId/run", (req, res) => {
+  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
+});
+app.get("/api/agent/learning-candidates", (req, res) => { proxyAgent(req, res, "GET"); });
+app.post("/api/agent/learning-candidates", (req, res) => { proxyAgent(req, res, "POST", JSON.stringify(req.body || {})); });
+app.post("/api/agent/learning-candidates/:candidateId/review", (req, res) => {
+  const body = { ...(req.body || {}) };
+  if (body.state === "active") {
+    const principal = req.authPrincipal?.principal_id || null;
+    if (!principal) return res.status(403).json({ error: "authenticated operator approval is required" });
+    body.approved_by = principal;
+  }
+  proxyAgent(req, res, "POST", JSON.stringify(body));
 });
 
 app.post("/api/agent/tasks/:taskId/guidance", (req, res) => {

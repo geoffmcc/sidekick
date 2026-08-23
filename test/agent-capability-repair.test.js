@@ -25,10 +25,13 @@ async function main() {
   assert.strictEqual(invalid.ok, false);
   assert.match(invalid.error, /action/i);
 
-  const mutual = classifyCapabilityFailure({ isError: true, code: "invalid_input", content: [{ text: "session_id, device_id and device_name are mutually exclusive" }] }, { tool: "media_control", args: {} });
+  const mutual = classifyCapabilityFailure({ isError: true, code: "invalid_input", content: [{ text: "session_id, device_id and device_name are mutually exclusive" }] }, { tool: "media_control", args: {}, descriptor: { name: "media_control", risk: "low", annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false } } });
   assert.strictEqual(mutual.kind, "invalid_arguments");
   assert.strictEqual(mutual.retryable, true);
   assert.match(repairGuidance(mutual, { tool: "media_control" }), /exact live schema|mutually exclusive/i);
+
+  const missingDescriptor = classifyCapabilityFailure({ isError: true, code: "invalid_input", content: [{ text: "invalid action" }] }, { tool: "workspace", args: { action: "write" } });
+  assert.strictEqual(missingDescriptor.retryable, false, "missing canonical metadata must fail closed for retries");
 
   const policy = classifyCapabilityFailure({ isError: true, code: "forbidden", content: [{ text: "policy denied" }] }, { tool: "write", args: {} });
   assert.strictEqual(policy.kind, "policy_denied");
