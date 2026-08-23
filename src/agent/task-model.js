@@ -2,13 +2,13 @@
 
 const crypto = require("crypto");
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 4;
 const PROFILES = Object.freeze({
-  quick: Object.freeze({ wall_ms: 5 * 60_000, model_calls: 12, tool_calls: 24, plan_revisions: 6, failures: 4, retries: 2, idle_ms: 60_000 }),
-  standard: Object.freeze({ wall_ms: 30 * 60_000, model_calls: 60, tool_calls: 120, plan_revisions: 20, failures: 8, retries: 3, idle_ms: 5 * 60_000 }),
-  deep: Object.freeze({ wall_ms: 2 * 60 * 60_000, model_calls: 240, tool_calls: 500, plan_revisions: 60, failures: 16, retries: 5, idle_ms: 15 * 60_000 }),
-  persistent: Object.freeze({ wall_ms: 8 * 60 * 60_000, model_calls: 600, tool_calls: 1500, plan_revisions: 120, failures: 24, retries: 7, idle_ms: 30 * 60_000 }),
-  research: Object.freeze({ wall_ms: 4 * 60 * 60_000, model_calls: 400, tool_calls: 1000, plan_revisions: 100, failures: 20, retries: 6, idle_ms: 30 * 60_000 }),
+  quick: Object.freeze({ wall_ms: 5 * 60_000, model_calls: 12, tool_calls: 24, plan_revisions: 6, failures: 4, retries: 2, repair_cycles: 2, verification_calls: 8, child_tasks: 2, work_packages: 4, idle_ms: 60_000, waiting_ms: 60_000 }),
+  standard: Object.freeze({ wall_ms: 30 * 60_000, model_calls: 60, tool_calls: 120, plan_revisions: 20, failures: 8, retries: 3, repair_cycles: 6, verification_calls: 24, child_tasks: 8, work_packages: 16, idle_ms: 5 * 60_000, waiting_ms: 10 * 60_000 }),
+  deep: Object.freeze({ wall_ms: 2 * 60 * 60_000, model_calls: 240, tool_calls: 500, plan_revisions: 60, failures: 16, retries: 5, repair_cycles: 12, verification_calls: 80, child_tasks: 16, work_packages: 48, idle_ms: 15 * 60_000, waiting_ms: 30 * 60_000 }),
+  persistent: Object.freeze({ wall_ms: 8 * 60 * 60_000, model_calls: 600, tool_calls: 1500, plan_revisions: 120, failures: 24, retries: 7, repair_cycles: 20, verification_calls: 200, child_tasks: 32, work_packages: 96, idle_ms: 30 * 60_000, waiting_ms: 60 * 60_000 }),
+  research: Object.freeze({ wall_ms: 4 * 60 * 60_000, model_calls: 400, tool_calls: 1000, plan_revisions: 100, failures: 20, retries: 6, repair_cycles: 16, verification_calls: 160, child_tasks: 24, work_packages: 80, idle_ms: 30 * 60_000, waiting_ms: 60 * 60_000 }),
 });
 const STATES = Object.freeze(["created", "planning", "ready", "running", "waiting", "paused", "blocked", "verifying", "completed", "partial", "failed", "cancelled", "timed_out", "interrupted"]);
 const TERMINAL = new Set(["completed", "partial", "failed", "cancelled", "timed_out"]);
@@ -28,6 +28,14 @@ function boundedString(value, max, field) {
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
 function normalizeProfile(value) { const key = String(value || "standard").toLowerCase(); if (!PROFILES[key]) throw new Error("unsupported task profile"); return key; }
 function normalizeWorkspaceRef(value) { if (value == null || value === "") return null; const ref = String(value).trim(); if (!/^(?:workspace|artifact|repository):[A-Za-z0-9_.:-]{1,120}$/.test(ref)) throw new Error("workspace_ref must be a governed reference"); return ref; }
+function normalizeAuthorityEnvelope(value) { const { createAuthorityEnvelope } = require("./authority"); return createAuthorityEnvelope(value || {}); }
+function normalizePrincipalContext(value = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { version: 1, credential_scopes: [], delegation_id: null };
+  const scopes = Array.isArray(value.credential_scopes || value.scopes) ? [...new Set((value.credential_scopes || value.scopes).map(String).filter(scope => /^[A-Za-z][A-Za-z0-9_.:-]{0,120}$|^\*$/.test(scope)).slice(0, 80))] : [];
+  const delegation = value.delegation_id == null ? null : String(value.delegation_id);
+  if (delegation && !/^[A-Za-z0-9_.:-]{1,160}$/.test(delegation)) throw new Error("delegation_id must be a governed reference");
+  return { version: 1, credential_scopes: scopes, delegation_id: delegation };
+}
 function normalizeGoal(objective, input = {}) {
   const original = boundedString(objective, 20_000, "objective");
   const criteria = Array.isArray(input.success_criteria) ? input.success_criteria : [];
@@ -42,18 +50,21 @@ function createTask(input, now = new Date().toISOString()) {
   const goal = normalizeGoal(input.objective, input.goal || {});
   const profile = normalizeProfile(input.profile);
   const budget = { ...PROFILES[profile] };
-  return { schema_version: SCHEMA_VERSION, task_id: taskId, root_task_id: input.root_task_id || taskId, parent_task_id: input.parent_task_id || null, session_id: input.session_id || null, execution_id: input.execution_id || null, project_id: input.project_id || null, actor_id: input.actor_id || "agent", requested_by_principal_id: input.requested_by_principal_id || null, actor_principal_id: input.actor_principal_id || null, acting_for_principal_id: input.acting_for_principal_id || null, objective: goal.original_objective, normalized_objective: goal.normalized_objective, goal, profile, state: "created", phase: "intake", current_plan_revision: 0, requirements: goal.success_criteria.map((criterion, index) => ({ id: `req_${index + 1}`, text: criterion, state: "pending", evidence: [] })), budget, usage: { model_calls: 0, tool_calls: 0, plan_revisions: 0, failures: 0, retries: 0, evidence_items: 0 }, workspace_ref: normalizeWorkspaceRef(input.workspace_ref), model_version: input.model_version || null, prompt_version: input.prompt_version || null, policy_version: input.policy_version || null, capability_registry_version: input.capability_registry_version || null, checkpoint: { version: 1, safe_boundary: "created", next_action: "normalize_goal", updated_at: now }, control: { pause_requested: false, cancel_requested: false }, continuation: { version: 1, completed_operations: [], ambiguous_operations: [] }, artifact_refs: [], next_action: "normalize_goal", result: null, verification: null, last_error_code: null, created_at: now, updated_at: now, completed_at: null };
+  const continuationReference = input.continuation_reference && typeof input.continuation_reference === "object" && !Array.isArray(input.continuation_reference)
+    ? { kind: boundedString(input.continuation_reference.kind || "continue", 40, "continuation kind"), reference: input.continuation_reference.reference ? boundedString(input.continuation_reference.reference, 180, "continuation reference") : null }
+    : null;
+  return { schema_version: SCHEMA_VERSION, task_id: taskId, root_task_id: input.root_task_id || taskId, parent_task_id: input.parent_task_id || null, session_id: input.session_id || null, execution_id: input.execution_id || null, project_id: input.project_id || null, actor_id: input.actor_id || "agent", requested_by_principal_id: input.requested_by_principal_id || null, actor_principal_id: input.actor_principal_id || null, acting_for_principal_id: input.acting_for_principal_id || null, principal_context: normalizePrincipalContext(input.principal_context), objective: goal.original_objective, normalized_objective: goal.normalized_objective, goal, profile, state: "created", phase: "intake", current_plan_revision: 0, requirements: goal.success_criteria.map((criterion, index) => ({ id: `req_${index + 1}`, text: criterion, state: "pending", evidence: [] })), budget, usage: { model_calls: 0, tool_calls: 0, plan_revisions: 0, failures: 0, retries: 0, evidence_items: 0, idle_ms: 0, verification_calls: 0, repair_cycles: 0, child_tasks: 0, work_packages: 0, waiting_ms: 0, wall_ms: 0, concurrent_operations: 0 }, workspace_ref: normalizeWorkspaceRef(input.workspace_ref), authority_envelope: normalizeAuthorityEnvelope(input.authority_envelope), authority_envelope_version: 1, usage_ledger: { version: 1, root_task_id: input.root_task_id || taskId, root_created_at: input.root_created_at || (input.root_task_id ? null : now) }, current_milestone: null, active_work_package: null, stopping_reason: null, model_version: input.model_version || null, prompt_version: input.prompt_version || null, policy_version: input.policy_version || null, capability_registry_version: input.capability_registry_version || null, checkpoint: { version: 1, safe_boundary: "created", next_action: "normalize_goal", updated_at: now }, control: { pause_requested: false, cancel_requested: false }, continuation: { version: 1, parent_reference: continuationReference, completed_operations: [], ambiguous_operations: [] }, artifact_refs: [], next_action: "normalize_goal", result: null, verification: null, last_error_code: null, created_at: now, updated_at: now, completed_at: null };
 }
 function transition(task, next, now = new Date().toISOString()) { if (!STATES.includes(next)) throw new Error("unknown task state"); if (task.state !== next && !(TRANSITIONS[task.state] || []).includes(next)) throw new Error(`invalid task transition: ${task.state} -> ${next}`); const copy = clone(task); copy.state = next; copy.updated_at = now; if (TERMINAL.has(next)) copy.completed_at = now; return copy; }
-function stableValue(value, depth = 0) {
-  if (depth > 12) return "[depth-limit]";
-  if (Array.isArray(value)) return value.map(item => stableValue(item, depth + 1));
-  if (value && typeof value === "object") return Object.keys(value).sort().reduce((out, key) => { out[key] = stableValue(value[key], depth + 1); return out; }, {});
-  if (typeof value === "string") return value.length > 5000 ? value.slice(0, 5000) : value;
+function canonicalDigestValue(value, depth = 0) {
+  if (depth > 32) throw new Error("operation arguments are too deeply nested");
+  if (Array.isArray(value)) return value.map(item => canonicalDigestValue(item, depth + 1));
+  if (value && typeof value === "object") return Object.keys(value).sort().reduce((out, key) => { out[key] = canonicalDigestValue(value[key], depth + 1); return out; }, {});
   return value;
 }
-function actionFingerprint(capability, args) { return crypto.createHash("sha256").update(`${String(capability)}\0${JSON.stringify(stableValue(args || {}))}`).digest("hex"); }
-function budgetExceeded(task, resource) { const limit = task.budget && task.budget[resource]; return Number.isFinite(limit) && Number(task.usage?.[resource] || 0) >= limit; }
+function actionFingerprint(capability, args) { return crypto.createHash("sha256").update(`${String(capability)}\0${JSON.stringify(canonicalDigestValue(args || {}))}`).digest("hex"); }
+function budgetExceeded(task, resource) { const limit = task.budget && task.budget[resource]; if (!Number.isFinite(limit)) return false; if (resource === "wall_ms") { const isRoot = !task.root_task_id || task.root_task_id === task.task_id; const rootStart = !isRoot && task.usage_ledger?.root_created_at ? Date.parse(task.usage_ledger.root_created_at) : (task.created_at ? Date.parse(task.created_at) : NaN); return Number.isFinite(rootStart) && Date.now() - rootStart >= limit; } const ledgerUsage = task.usage_ledger && task.usage_ledger.root_task_id ? Number(task.usage_ledger[resource] || 0) : 0; const taskUsage = Number(task.usage?.[resource] || 0); return Math.max(ledgerUsage, taskUsage) >= limit; }
+function shouldSuppressEquivalentFailure(failure) { return Boolean(failure && !failure.changed_condition); }
 function assertCheckpoint(task, checkpoint) { if (!checkpoint || checkpoint.version !== 1 || !checkpoint.safe_boundary || !checkpoint.next_action) throw new Error("invalid safe checkpoint"); if (TERMINAL.has(task.state)) throw new Error("terminal task cannot checkpoint"); return { ...clone(checkpoint), updated_at: new Date().toISOString() }; }
 function validateResult(result) { if (!result || typeof result !== "object" || Array.isArray(result)) throw new Error("structured result must be an object"); const allowed = ["summary", "status", "claims", "findings", "recommendations", "deliverables", "artifacts", "evidence_refs", "verification", "proposed_actions", "unresolved_questions", "limitations", "follow_up_suggestions", "resource_usage", "provenance"]; const out = {}; for (const key of allowed) if (result[key] !== undefined) out[key] = clone(result[key]); if (out.summary !== undefined) out.summary = boundedString(out.summary, 20_000, "result summary"); if (out.status !== undefined && !["verified", "partially_verified", "incomplete", "contradicted", "unable_to_verify", "waiting_for_approval", "waiting_for_information", "budget_exhausted"].includes(out.status)) throw new Error("invalid result status"); return { version: 1, ...out }; }
-module.exports = { SCHEMA_VERSION, PROFILES, STATES, TERMINAL, normalizeGoal, normalizeProfile, normalizeWorkspaceRef, createTask, transition, actionFingerprint, budgetExceeded, assertCheckpoint, validateResult };
+module.exports = { SCHEMA_VERSION, PROFILES, STATES, TERMINAL, normalizeGoal, normalizeProfile, normalizeWorkspaceRef, normalizeAuthorityEnvelope, createTask, transition, actionFingerprint, budgetExceeded, shouldSuppressEquivalentFailure, assertCheckpoint, validateResult };
