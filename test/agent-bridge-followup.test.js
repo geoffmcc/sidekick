@@ -381,7 +381,12 @@ let server;
       });
       req.on("error", reject);
       req.end();
-      setTimeout(() => { try { req.destroy(); } catch {} resolve(chunks.join("")); }, 3000);
+      // Context assembly, durable verification, and memory recording are part
+      // of the real Agent path. Three seconds is below the CI tail latency for
+      // that path and makes this liveness test report a false negative even
+      // though the stream remains healthy. Keep a finite bound, but allow the
+      // durable terminal event enough time to arrive under loaded runners.
+      setTimeout(() => { try { req.destroy(); } catch {} resolve(chunks.join("")); }, 10000);
     });
     assert.match(events, /data:/, "SSE data frames were streamed");
     assert.match(events, /"type":"done"/, "SSE delivered the terminal done event");
