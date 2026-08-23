@@ -7,10 +7,10 @@ const EventEmitter = require("events");
  * so this module remains a small orchestration boundary.
  */
 function createTaskRunner({ taskEmitters, taskCancels, emit, runAgent, redactSensitive, onTaskCreated = null }) {
-  return function beginTaskRun(res, { goal, parentContext = null, profile = "standard", workspaceRef = null, taskId: requestedTaskId = null, resume = false }) {
+  return function beginTaskRun(res, { goal, goalSpec = null, parentContext = null, profile = "standard", workspaceRef = null, authorityEnvelope = null, taskId: requestedTaskId = null, resume = false }) {
     const taskId = requestedTaskId || crypto.randomUUID().slice(0, 8);
     let creation = null;
-    try { if (onTaskCreated) creation = onTaskCreated({ taskId, goal, parentContext, profile, workspaceRef, resume }); } catch (error) {
+    try { if (onTaskCreated) creation = onTaskCreated({ taskId, goal, goalSpec, parentContext, profile, workspaceRef, authorityEnvelope, resume }); } catch (error) {
       res.status(503).json({ error: "durable task storage unavailable" });
       return null;
     }
@@ -21,6 +21,7 @@ function createTaskRunner({ taskEmitters, taskCancels, emit, runAgent, redactSen
       payload.parentTaskId = parentContext.parentTaskId;
       payload.rootTaskId = parentContext.rootTaskId;
       payload.continuationDepth = parentContext.continuationDepth;
+      if (parentContext.continuationReference) payload.continuationReference = parentContext.continuationReference;
     }
     res.json(payload);
     runAgent(goal, taskId, parentContext, taskCancels[taskId], creation && creation.resumeState)

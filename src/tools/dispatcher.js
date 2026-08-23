@@ -249,10 +249,11 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
     } catch (e) {
       return errorResult("Approval evaluation failed", "approval_evaluation_failed");
     }
-    if (approval.required) {
+    if (context.authorityApprovalRequired || approval.required) {
       let item;
       try {
-        item = legacy.queueApproval(requestedName, executionArgs, approval, context);
+        const authorityApproval = context.authorityApprovalRequired ? { required: true, risk: context.authorityRisk || approval.risk, mode: "agent-authority-envelope", reason: context.authorityReason || "task authority requires explicit approval" } : approval;
+        item = legacy.queueApproval(requestedName, executionArgs, authorityApproval, context);
       } catch (e) {
         return errorResult("Approval queue unavailable: " + e.message, "approval_queue_unavailable");
       }
@@ -554,4 +555,4 @@ async function callInternalTool(name, args, options = {}) {
   return dispatchTool({ name, args, context: createInternalExecutionContext(options), options });
 }
 
-module.exports = { dispatchTool, dispatchTestTool, callTool, callMcpTool, callAgentTool, callDashboardTool, callInternalTool, executeApprovedTool, executeAuthorizedTaskStep, getHandlerMap, getBuiltinRegistry };
+module.exports = { dispatchTool, dispatchTestTool, callTool, callMcpTool, callAgentTool, callDashboardTool, callInternalTool, executeApprovedTool, executeAuthorizedTaskStep, getHandlerMap, getBuiltinRegistry, requiredToolPermission };

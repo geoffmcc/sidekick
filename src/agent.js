@@ -5,10 +5,157 @@ const path = require("path");
 const crypto = require("crypto");
 const EventEmitter = require("events");
 const { callAgentTool, getBuiltinRegistry, DATA_DIR, loadDelays, saveDelays, loadWatches, saveWatches, getToolDefsForSource, transitionScheduledPlatformExecution, appendScheduledPlatformEvent, createScheduledPlatformExecution, releaseScheduledClaim, startScheduledLeaseRenewal, recoverStrandedDelays, recoverStrandedRunbooks, claimScheduledDefinition, pauseWatchForCancel } = require("./tools");
-const { stripSidekickPrefix } = require("./core/tool-name");
+const { requiredToolPermission } = require("./tools/dispatcher");
+const authorization = require("./core/authorization");
+const identity = require("./core/identity");
+
+// Every Agent preflight must inspect the same live, source-filtered catalog
+// that is exposed to planning.  The canonical registry remains the execution
+// authority, but a broad registry lookup here could expose a disabled,
+// dashboard-only, or otherwise unauthorized capability to recovery or early
+// classification.  Keep this adapter deliberately narrow: it cannot execute
+// anything and callAgentTool still performs the authoritative dispatch check.
+function getLiveAgentToolDefs() {
+  return getToolDefsForSource("agent").filter(tool => tool && tool.enabled !== false);
+}
+function getLiveAgentDescriptor(name) {
+  const requested = String(name || "").replace(/^sidekick_/i, "");
+  const visible = getLiveAgentToolDefs().find(tool => String(tool.name || "").replace(/^sidekick_/i, "") === requested);
+  if (!visible) return null;
+  try { return getBuiltinRegistry().get(name) || visible; } catch { return visible; }
+}
+function getLiveAgentRegistry() {
+  const canonical = getBuiltinRegistry();
+  const visible = new Set(getLiveAgentToolDefs().map(tool => String(tool.name || "").replace(/^sidekick_/i, "")));
+  return {
+    // This is a live source-filtered catalog identity, not the built-in
+    // registry's static version. Pack/module/generated capability changes
+    // therefore invalidate persisted plans and rollback/recovery lookups.
+    version: liveAgentCatalogFingerprint(),
+    get(name) { return visible.has(String(name || "").replace(/^sidekick_/i, "")) ? getLiveAgentDescriptor(name) : null; },
+    toolDefs() { return getLiveAgentToolDefs(); },
+  };
+}
+function liveAgentCatalogFingerprint() {
+  const entries = getLiveAgentToolDefs().map(tool => {
+    const descriptor = getLiveAgentDescriptor(tool.name);
+    return {
+      name: String(tool.name || ""),
+      risk: tool.risk || descriptor?.risk || null,
+      source: tool.source || descriptor?.source || null,
+      version: descriptor?.version || null,
+      args: tool.argumentDescriptions || tool.args || {},
+      annotations: descriptor?.annotations || {},
+    };
+  });
+  return crypto.createHash("sha256").update(JSON.stringify(entries)).digest("hex");
+}
+function persistedTaskAuthIdentity(task) {
+  const principalId = task && (task.actor_principal_id || task.requested_by_principal_id);
+  if (!principalId || !task.principal_context || task.principal_context.version !== 1) return null;
+  return { principal_id: principalId, scopes: task.principal_context.credential_scopes || [], delegation_id: task.principal_context.delegation_id || null, authentication_method: "durable-task-context" };
+}
+function profileFitsParent(parentProfile, requestedProfile) {
+  const parent = durableTaskModel.PROFILES[parentProfile] || durableTaskModel.PROFILES.standard;
+  const requested = durableTaskModel.PROFILES[requestedProfile] || null;
+  if (!requested) return false;
+  return Object.keys(parent).every(key => !Number.isFinite(parent[key]) || !Number.isFinite(requested[key]) || requested[key] <= parent[key]);
+}
 
 // Restore persisted platform modules in this process so module tools resolve
 // through the registry here as well (each process holds its own loader state).
+async function inspectDurableReceipt({ receipt, task }) {
+  if (!receipt?.verification_recipe_ref || !task) return null;
+  const recipe = durableReceiptStore.getRecipe(receipt.verification_recipe_ref);
+  const descriptor = recipe && getLiveAgentDescriptor(recipe.capability);
+  const effect = determineEffect(descriptor, recipe && recipe.arguments);
+  if (!recipe || !descriptor || effect.effect !== "read_only" || effect.authoritative !== true) return null;
+      const result = await callAgentTool(recipe.capability, recipe.arguments, { taskId: task.task_id, project: task.project_id, source: "agent", authIdentity: persistedTaskAuthIdentity(task), correlationId: task.task_id, timeoutMs: recipe.timeout_ms });
+  const text = String(result?.content?.[0]?.text || result?.summary || "").slice(0, 2000);
+  // Recovery uses the same bounded structured expectation evaluator as the
+  // live verification endpoint; a restart must not weaken a recipe to a
+  // text-only check.
+  const satisfied = !result?.isError && verificationExpectationSatisfied(result, text, recipe.expected || {});
+  const transaction = durableWorkspaceTransactions.listTransactions(task.task_id)
+    .find(candidate => candidate.receipt_id === receipt.receipt_id && candidate.rollback_state === "eligible");
+  const partial = !satisfied && !result?.isError && recipe.expected && recipe.expected.postcondition === "partial" && !!transaction;
+  const evidenceRef = `recovery:${task.task_id}:${receipt.receipt_id}`;
+  durableReceiptStore.recordOutcome({ recipe_id: recipe.recipe_id, task_id: task.task_id, evidence_ref: evidenceRef, freshness_state: "fresh", independence_state: "independent", observation_state: satisfied ? "successful" : (partial ? "contradictory" : "failed"), summary: text || "recovery verification unavailable" });
+  return { postcondition: satisfied ? "satisfied" : (partial ? "partial" : "unknown"), targetState: "observed", authorityAllowsRetry: false, policyAllowsRetry: partial, evidence_ref: evidenceRef };
+}
+
+// A restart retry is a fresh governed dispatch, never a replay of historical
+// model prose. It is permitted only when the receipt points at a safe,
+// schema-validated retry recipe, the live descriptor still classifies the
+// effect as authoritative and idempotent, and the current task envelope does
+// not require approval for the retry.
+async function retryDurableReceipt({ receipt, task }) {
+  if (!receipt?.retry_recipe_ref || !task) return null;
+  const recipe = durableReceiptStore.getRetryRecipe(receipt.retry_recipe_ref);
+  const recipeTarget = recipe && governedTargetRef(recipe.arguments, recipe.target_ref);
+  if (!recipe || !receipt.target_ref || !recipe.target_ref || recipeTarget !== receipt.target_ref || recipeTarget !== recipe.target_ref) return null;
+  const descriptor = recipe && getLiveAgentDescriptor(recipe.capability);
+  const effect = determineEffect(descriptor, recipe && recipe.arguments);
+  if (!recipe || !descriptor || !effect.authoritative || effect.idempotent !== true || effect.effect === "read_only") return null;
+  const decision = decideAutonomy({ descriptor, args: recipe.arguments, envelope: task.authority_envelope, projectRef: task.project_id, workspaceRef: task.workspace_ref, capabilityRef: recipe.capability, principalRef: task.actor_principal_id || task.requested_by_principal_id, descriptorVersion: descriptor.version });
+  if (decision.decision !== "proceed") return null;
+  const permission = requiredToolPermission(descriptor, recipe.arguments || {});
+  const principal = task.actor_principal_id || task.requested_by_principal_id;
+  if (principal && (!task.principal_context || task.principal_context.version !== 1)) return null;
+  if (principal && !authorization.authorize({ principalId: principal, permission, credentialScopes: task.principal_context.credential_scopes, delegationId: task.principal_context.delegation_id || null, resource: { tool: descriptor.name, source: "agent-recovery" } }).ok) return null;
+  const result = await callAgentTool(recipe.capability, recipe.arguments, { taskId: task.task_id, project: task.project_id, source: "agent", authIdentity: persistedTaskAuthIdentity(task), correlationId: task.task_id, idempotencyKey: `agent-recovery:${receipt.receipt_id}`, timeoutMs: 30000 });
+  if (!result || result.isError) return null;
+  return { ok: true, provider_receipt_ref: result.operationId || result.operation_id || result.idempotencyKey || result.idempotency_key || result.receipt_ref || null };
+}
+
+// Partial workspace effects may be rolled back only through the durable
+// transaction record. The transaction module revalidates the live descriptor,
+// current authority envelope, policy, target scope, and rollback recipe before
+// calling the canonical dispatcher; recovery never reconstructs rollback from
+// model prose or receipt text.
+async function rollbackDurableReceipt({ receipt, task }) {
+  if (!receipt?.receipt_id || !task) return null;
+  const transaction = durableWorkspaceTransactions.listTransactions(task.task_id)
+    .find(candidate => candidate.receipt_id === receipt.receipt_id && candidate.rollback_state === "eligible");
+  if (!transaction) return null;
+  const rolledBack = await durableWorkspaceTransactions.executeRollback({
+    transactionId: transaction.transaction_id,
+    task,
+    callAgentTool,
+    registry: getLiveAgentRegistry(),
+    authIdentity: persistedTaskAuthIdentity(task),
+  });
+  return { ok: rolledBack && rolledBack.state === "rolled_back", provider_receipt_ref: null };
+}
+
+async function prepareTaskBranch({ task, repoPath, statusEvidence, options = {}, authIdentity, dispatch = callAgentTool, receiptStore = durableReceiptStore, taskStore = durableTaskStore, descriptorResolver = getLiveAgentDescriptor }) {
+  if (!task || !repoPath) throw new Error("task-owned branch preparation requires a governed repository path");
+  if (!/nothing to commit, working tree clean|working tree clean/i.test(statusEvidence)) throw new Error("pre-existing worktree changes must be preserved before task-owned branch creation");
+  const descriptor = descriptorResolver("git");
+  const branch = `sidekick/agent/${task.task_id}`;
+  const branchArgs = { action: "branch", path: repoPath, args: `--list ${branch}` };
+  taskStore.incrementUsage(task.task_id, { tool_calls: 1 }, "task.task_branch_inspected");
+  const branchList = await dispatch("git", branchArgs, { ...options, taskId: task.task_id, source: "agent", authIdentity, correlationId: task.task_id, timeoutMs: 30000 });
+  if (!branchList || branchList.isError) throw new Error("could not inspect the task-owned branch");
+  const exists = String(branchList.content?.[0]?.text || "").split(/\r?\n/).some(line => line.replace(/^\*\s*/, "").trim() === branch);
+  const checkoutArgs = { action: "checkout", path: repoPath, args: exists ? branch : `-b ${branch}` };
+  const decision = decideAutonomy({ descriptor, args: checkoutArgs, envelope: task.authority_envelope, projectRef: task.project_id, workspaceRef: task.workspace_ref, capabilityRef: "git", principalRef: task.actor_principal_id || task.requested_by_principal_id, descriptorVersion: descriptor?.version });
+  if (decision.decision !== "proceed") throw new Error(`task-owned branch preparation requires ${decision.decision}`);
+  const receipt = receiptStore.createReceipt({ task_id: task.task_id, action_fingerprint: durableTaskModel.actionFingerprint("git", checkoutArgs), capability: "git", capability_version: descriptor?.version, args: checkoutArgs, target_ref: task.workspace_ref, project_ref: task.project_id, workspace_ref: task.workspace_ref, risk_class: decision.risk_class, effect_class: decision.effect_class, idempotency_class: "not_idempotent", reversibility_class: "reversible", expected_postconditions: [{ type: "branch_checked_out", branch }], policy_ref: decision.policy_version, principal_ref: task.actor_principal_id || task.requested_by_principal_id });
+  try {
+    receiptStore.transitionReceipt(receipt.receipt_id, "dispatched", { preconditions: { status: statusEvidence, branch, existing: exists } });
+    taskStore.incrementUsage(task.task_id, { tool_calls: 1 }, "task.task_branch_created");
+    const result = await dispatch("git", checkoutArgs, { ...options, taskId: task.task_id, source: "agent", authIdentity, authorityApprovalRequired: decision.approval_required, authorityRisk: decision.risk_class, authorityReason: decision.reason, correlationId: task.task_id, timeoutMs: 30000 });
+    if (!result || result.isError) throw new Error("task-owned branch creation failed");
+    const providerReceipt = result.operationId || result.operation_id || result.receipt_ref || null;
+    receiptStore.transitionReceipt(receipt.receipt_id, "finalized", { provider_receipt_ref: providerReceipt });
+    return { branch, existing: exists, provider_receipt_ref: providerReceipt };
+  } catch (error) {
+    try { receiptStore.transitionReceipt(receipt.receipt_id, "failed"); } catch {}
+    throw error;
+  }
+}
+
 try {
   const builtinModules = require("./modules/builtin-modules");
   builtinModules.provisionBuiltinModules();
@@ -18,19 +165,13 @@ try {
   console.error("[Modules] Builtin module provisioning failed:", error.message);
 }
 
-// Brain v0.1's planning allowlist: agent-visible, enabled, AND present in the
-// built-in tool registry. This deliberately excludes generated/dynamic
-// capabilities so a Brain plan can never name a generated tool, even though
-// the dispatcher would otherwise resolve one (the dispatcher still re-enforces
-// policy/approval for whatever is dispatched — this is defense in depth).
+// Brain planning receives the complete live, source-filtered Agent catalog:
+// built-ins, enabled modules/packs, and authorized trial/active generated
+// capabilities. The plan validator and canonical dispatcher still revalidate
+// the descriptor, schema, policy, risk, and approval immediately before use.
 function brainAgentTools() {
-  let builtinNames = null;
-  try {
-    builtinNames = new Set(getBuiltinRegistry().toolDefs().map(d => stripSidekickPrefix(d.name)));
-  } catch { builtinNames = null; }
   return getToolDefsForSource("agent")
-    .filter(t => t.enabled)
-    .filter(t => !builtinNames || builtinNames.has(stripSidekickPrefix(t.name)));
+    .filter(t => t.enabled);
 }
 const { recordAgentTaskMemory, inferProjectFromText } = require("./memory");
 const { assembleContext } = require("./context");
@@ -59,8 +200,12 @@ const { createDelayScheduler } = require("./agent/delay-scheduler");
 const { createWatchRuntime } = require("./agent/watch-runtime");
 const durableTaskModel = require("./agent/task-model");
 const durableTaskStore = require("./agent/task-store");
+const durableReceiptStore = require("./agent/receipt-store");
+const durableWorkspaceTransactions = require("./agent/workspace-transactions");
+const durableOperations = require("./agent/durable-operations");
+const { determineEffect, decideAutonomy, intersectEnvelope, governedTargetRef } = require("./agent/authority");
 const { recoverDurableAgentTasks } = require("./agent/recovery-scan");
-const { verifyTaskResult } = require("./agent/verification");
+const { verifyTaskResult, successfulFreshOutcome, applyRecipeGates, applyReceiptGates, applyPlanGates, runVerificationRepair } = require("./agent/verification");
 const { assembleSessions, buildSession, buildTask } = require("./agent-history");
 const { redactSensitive, redactSensitiveKeysDeep } = require("./redact");
 const {
@@ -81,7 +226,63 @@ try { inferenceService = require("./compute/inference-service"); } catch {}
 
 const PORT = parseInt(process.env.SIDEKICK_AGENT_PORT || "4099", 10);
 
-const MAX_ITERATIONS = parseInt(process.env.SIDEKICK_MAX_ITERATIONS || "15", 10);
+function requestAuthIdentity(req) {
+  const principalId = String(req.get("X-Sidekick-Principal-ID") || "").trim();
+  if (!principalId || !/^[A-Za-z0-9_.:-]{1,160}$/.test(principalId)) return null;
+  let scopes = [];
+  try { const parsed = JSON.parse(String(req.get("X-Sidekick-Principal-Scopes") || "[]")); scopes = Array.isArray(parsed) ? parsed.map(String).slice(0, 80) : []; } catch { scopes = []; }
+  const delegationId = String(req.get("X-Sidekick-Delegation-ID") || "").trim();
+  return { principal_id: principalId, scopes, delegation_id: delegationId && /^[A-Za-z0-9_.:-]{1,160}$/.test(delegationId) ? delegationId : null, authentication_method: "dashboard-proxy" };
+}
+
+function principalAuthorityEnvelope(authIdentity) {
+  if (!authIdentity?.principal_id) return null;
+  const effective = authorization.effectivePermissions(authIdentity.principal_id, { credentialScopes: authIdentity.scopes, delegationId: authIdentity.delegation_id || null });
+  if (!effective.ok) return { allowed_effects: [], changes_allowed: false, external_effects_allowed: false, production_allowed: false };
+  const permissions = effective.permissions;
+  const canOrdinary = permissions.has("tools.execute") || permissions.has("tools.execute_high") || permissions.has("tools.execute_critical");
+  const canCritical = permissions.has("tools.execute_critical");
+  return {
+    allowed_effects: ["read_only", ...(canOrdinary ? ["workspace_reversible", "build_test", "local_process"] : []), ...(canCritical ? ["external", "production", "destructive", "credential", "identity", "policy"] : [])],
+    changes_allowed: canOrdinary,
+    external_effects_allowed: canCritical,
+    production_allowed: canCritical,
+    // Ordinary execution permission covers routine read-only and reversible
+    // workspace work. Critical-risk descriptors and protected effect classes
+    // still require approval in decideAutonomy; a low threshold here would
+    // unnecessarily gate every reversible operation.
+    approval_threshold: "high",
+  };
+}
+
+// An omitted task envelope is a bounded request for ordinary work, not an
+// authority grant.  It is always intersected with the authenticated
+// principal's effective permissions below.  Keep boundary-changing effects
+// out of this default so a caller must request them explicitly and still
+// satisfy the canonical policy/approval path.
+function defaultTaskAuthorityEnvelope() {
+  return {
+    allowed_effects: ["read_only", "workspace_reversible", "build_test", "local_process"],
+    changes_allowed: true,
+    external_effects_allowed: false,
+    production_allowed: false,
+    approval_threshold: "high",
+    rollback_expectation: "attempt_if_safe",
+    child_task_depth: 4,
+    child_task_count: 8,
+    concurrency_limit: 1,
+  };
+}
+
+const configuredMaxIterations = Number.parseInt(process.env.SIDEKICK_MAX_ITERATIONS || "60", 10);
+const MAX_ITERATIONS = Number.isFinite(configuredMaxIterations) && configuredMaxIterations > 0 ? Math.min(120, configuredMaxIterations) : 60;
+const PROFILE_RUNTIME = Object.freeze({
+  quick: { iterations: 6, brainRounds: 1, instruction: "Stay focused on one answer or small operation; use minimal planning and concise verification." },
+  standard: { iterations: 15, brainRounds: 4, instruction: "Inspect, plan, act, test, repair ordinary recoverable failures, and verify within the authorized workspace." },
+  deep: { iterations: 30, brainRounds: 8, instruction: "Compare bounded alternatives, preserve milestone evidence, revise after failures, and perform broader verification." },
+  persistent: { iterations: 60, brainRounds: 8, instruction: "Continue through recoverable failures using durable checkpoints, alternatives, and bounded repair cycles; do not stop after the first failed plan." },
+  research: { iterations: 45, brainRounds: 6, instruction: "Maintain bounded competing hypotheses, distinguish evidence from inference, and preserve provenance for unresolved questions." },
+});
 // Per-tool-call deadline for agent dispatches. Brain declares this budget; the
 // Agent Bridge is what makes it binding, since the dispatcher only enforces a
 // timeout when the caller supplies one. Falls back to Brain's own constant so
@@ -292,9 +493,10 @@ function sweepStrandedAgentExecutions(bootIso = new Date().toISOString()) {
   return swept;
 }
 
+let durableRecoveryPromise = Promise.resolve({ recovered: [], failed: [], work_packages: { queued: [], parked: [] } });
 try {
-  const durableRecovery = recoverDurableAgentTasks({ platformKernel, taskStore: durableTaskStore });
-  if (durableRecovery.recovered.length || durableRecovery.failed.length) console.log(`Recovered ${durableRecovery.recovered.length} Agent task(s); failed ${durableRecovery.failed.length} non-resumable task(s)`);
+  durableRecoveryPromise = recoverDurableAgentTasks({ platformKernel, taskStore: durableTaskStore, receiptStore: durableReceiptStore, workPackageStore: durableOperations, inspectReceipt: inspectDurableReceipt, retryReceipt: retryDurableReceipt, rollbackReceipt: rollbackDurableReceipt });
+  durableRecoveryPromise.then(durableRecovery => { if (durableRecovery.recovered.length || durableRecovery.failed.length || durableRecovery.work_packages.queued.length || durableRecovery.work_packages.parked.length) console.log(`Recovered ${durableRecovery.recovered.length} Agent task(s); failed ${durableRecovery.failed.length} non-resumable task(s); requeued ${durableRecovery.work_packages.queued.length} read package(s); parked ${durableRecovery.work_packages.parked.length} mutation package(s)`); }).catch(e => console.error(`Durable Agent recovery failed: ${e.message}`));
 } catch (e) {
   console.error(`Durable Agent recovery failed: ${e.message}`);
 }
@@ -309,7 +511,7 @@ try {
 // converts expired claims into durable interrupted/non-resumable states; it
 // does not dispatch work or recreate an in-flight model generation.
 const durableRecoveryTimer = setInterval(() => {
-  try { recoverDurableAgentTasks({ platformKernel, taskStore: durableTaskStore }); } catch (error) { console.error(`Durable Agent recovery tick failed: ${error.message}`); }
+  recoverDurableAgentTasks({ platformKernel, taskStore: durableTaskStore, receiptStore: durableReceiptStore, workPackageStore: durableOperations, inspectReceipt: inspectDurableReceipt, retryReceipt: retryDurableReceipt, rollbackReceipt: rollbackDurableReceipt }).catch(error => console.error(`Durable Agent recovery tick failed: ${error.message}`));
 }, 60000);
 if (typeof durableRecoveryTimer.unref === "function") durableRecoveryTimer.unref();
 
@@ -905,6 +1107,9 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
   // A follow-up child inherits the parent's project identity when the child's
   // own goal doesn't infer one, so a thread stays scoped consistently.
   const inferredProject = inferProjectFromText(goal) || (parentContext && parentContext.project) || null;
+  const durableProfile = durableTaskStore.getTask(taskId)?.profile || "standard";
+  const profileRuntime = PROFILE_RUNTIME[durableProfile] || PROFILE_RUNTIME.standard;
+  const profiledGoal = `${goal}\n\nGoverned execution profile (${durableProfile}): ${profileRuntime.instruction}`;
   const agentCapabilityMetadata = getAgentCapabilityMetadata();
   const visibleAgentTools = getToolDefsForSource("agent").filter(t => t.enabled);
   const capabilityCandidates = discoverCapabilities(goal, visibleAgentTools, { limit: 24, metadata: agentCapabilityMetadata });
@@ -952,12 +1157,85 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
   }
   const resumeContinuation = resumeState && resumeState.continuation ? resumeState.continuation : null;
   const durableDispatch = async (name, args, options = {}) => {
-    const durable = durableTaskStore.getTask(taskId);
-    if (durable && durableTaskModel.budgetExceeded(durable, "tool_calls")) {
-      durableTaskStore.updateTask(taskId, { state: "blocked", phase: "budget", next_action: "increase_profile_or_resume" }, "task.budget_exhausted");
-      throw new Error("agent tool-call budget exhausted");
+    let durable = durableTaskStore.getTask(taskId);
+    // Plans are advisory snapshots. Before every dispatch, compare the
+    // snapshot captured at task creation with the live, source-filtered
+    // catalog. A drift does not grant or preserve authority: refresh the
+    // durable version, record revalidation, and continue only through the
+    // fresh descriptor/policy/dispatcher checks below.
+    if (durable) {
+      const liveCatalogVersion = liveAgentCatalogFingerprint();
+      if (durable.capability_registry_version !== liveCatalogVersion) {
+        durableTaskStore.updateTask(taskId, { capability_registry_version: liveCatalogVersion, next_action: "revalidated_live_capability_catalog" }, "task.capability_catalog_revalidated");
+        durable = durableTaskStore.getTask(taskId);
+      }
+    }
+    const budgetResource = durable && ["tool_calls", "wall_ms", "failures", "retries", "repair_cycles", "verification_calls", "child_tasks", "work_packages"].find(resource => durableTaskModel.budgetExceeded(durable, resource));
+    if (budgetResource) {
+      durableTaskStore.updateTask(taskId, { state: "blocked", phase: "budget", next_action: "increase_profile_or_resume", stopping_reason: `${budgetResource} budget exhausted` }, "task.budget_exhausted");
+      throw new Error(`agent ${budgetResource} budget exhausted`);
     }
     const fingerprint = durableTaskModel.actionFingerprint(name, args);
+    let receipt = null;
+    let workspaceTransaction = null;
+    let authorityDecision = null;
+    try {
+      const descriptor = getLiveAgentDescriptor(name);
+      const effect = determineEffect(descriptor, args);
+      const repositoryRef = [args && args.repository_ref, args && args.target_ref, durable && durable.workspace_ref].map(value => String(value || "")).find(value => /^repository:[A-Za-z0-9_.:/-]{1,240}$/.test(value)) || null;
+      authorityDecision = durable ? decideAutonomy({ descriptor, args, envelope: durable.authority_envelope, projectRef: durable.project_id, workspaceRef: durable.workspace_ref, repositoryRef, capabilityRef: name, principalRef: durable.actor_principal_id || durable.requested_by_principal_id, descriptorVersion: descriptor && descriptor.version }) : null;
+      if (authorityDecision && durable) durableTaskStore.recordAuthorityDecision(taskId, authorityDecision);
+      if (authorityDecision && authorityDecision.decision === "deny") throw new Error("operation denied by the effective Agent authority envelope");
+      const authIdentity = parentContext?.authIdentity || null;
+      if (descriptor && authIdentity?.principal_id) {
+        const permission = requiredToolPermission(descriptor, args || {});
+        const principalDecision = authorization.authorize({ principalId: authIdentity.principal_id, permission, credentialScopes: authIdentity.scopes, delegationId: authIdentity.delegation_id || null, resource: { tool: descriptor.name, source: "agent" } });
+        if (!principalDecision.ok) {
+          if (durable) durableTaskStore.recordAuthorityDecision(taskId, { ...(authorityDecision || {}), decision: "deny", reason: "current principal authorization denied", principal_provenance: authIdentity.principal_id });
+          throw new Error("operation denied by current principal authorization");
+        }
+      }
+      if (durable && effect.effect !== "read_only") {
+        const target_ref = governedTargetRef(args, durable.workspace_ref);
+        let retry_recipe_ref = null;
+        let verification_recipe_ref = null;
+        if (effect.idempotent === true) { try { retry_recipe_ref = durableReceiptStore.createRetryRecipe({ task_id: taskId, capability: String(name).replace(/^sidekick_/, ""), arguments: args, target_ref }).recipe_id; } catch { retry_recipe_ref = null; } }
+        if (String(name).replace(/^sidekick_/, "") === "git") {
+          try {
+            verification_recipe_ref = durableReceiptStore.createRecipe({ task_id: taskId, requirement_id: `operation:${taskId}:${fingerprint.slice(0, 48)}`, check_type: "worktree", capability: "git", arguments: { action: "status", path: args && args.path }, expected: { result_ok: true }, freshness_ms: 300000, independent: true, timeout_ms: 30000, retry_policy: { max_attempts: 1 }, failure_classification: "workspace_verification_failed" });
+          } catch { verification_recipe_ref = null; }
+        }
+        receipt = durableReceiptStore.createReceipt({ task_id: taskId, action_fingerprint: fingerprint, capability: String(name).replace(/^sidekick_/, ""), capability_version: descriptor && descriptor.version, args, retry_recipe_ref, target_ref, project_ref: durable.project_id, workspace_ref: durable.workspace_ref, risk_class: effect.risk, effect_class: effect.effect, idempotency_class: effect.idempotent ? "idempotent" : "not_idempotent", reversibility_class: effect.reversible ? "reversible" : "irreversible", expected_postconditions: [{ type: "canonical_dispatch_completed", target_ref: target_ref || null }], verification_recipe_ref, policy_ref: authorityDecision?.policy_version || "agent-authority-v1", principal_ref: durable.actor_principal_id || durable.requested_by_principal_id });
+        if (effect.effect === "workspace_reversible" && durable.workspace_ref && /^workspace:[A-Za-z0-9_.:/-]{1,240}$/.test(String(durable.workspace_ref))) {
+          workspaceTransaction = durableWorkspaceTransactions.createTransaction({ task_id: taskId, receipt_id: receipt.receipt_id, workspace_ref: durable.workspace_ref, target_ref: durable.workspace_ref, affected_resources: [durable.workspace_ref], mutation_capability: String(name).replace(/^sidekick_/, ""), mutation_args_digest: receipt.argument_digest });
+        }
+        let preconditions = null;
+        if (String(name).replace(/^sidekick_/, "") === "git" && ["add", "commit", "push", "pull", "branch", "checkout", "stash"].includes(args && args.action)) {
+          if (durable) durableTaskStore.incrementUsage(taskId, { tool_calls: 1 }, "task.workspace_prestate_inspection");
+          const inspection = await callAgentTool("git", { action: "status", path: args && args.path }, { ...options, authIdentity: parentContext?.authIdentity || null, taskId, source: "agent", correlationId: taskId, timeoutMs: Math.min(Number(options.timeoutMs) || 30000, 30000) });
+          if (!inspection || inspection.isError) throw new Error("workspace pre-state inspection failed; mutation was not dispatched");
+          const statusEvidence = String(inspection.content?.[0]?.text || "").slice(0, 4000);
+          if (durable) durableTaskStore.incrementUsage(taskId, { tool_calls: 1 }, "task.workspace_identity_inspection");
+          const identityInspection = await callAgentTool("git", { action: "show", path: args && args.path, args: "-s --format=%H HEAD" }, { ...options, authIdentity: parentContext?.authIdentity || null, taskId, source: "agent", correlationId: taskId, timeoutMs: Math.min(Number(options.timeoutMs) || 30000, 30000) });
+          if (!identityInspection || identityInspection.isError) throw new Error("repository identity inspection failed; mutation was not dispatched");
+          const headCommit = String(identityInspection.content?.[0]?.text || "").trim().match(/\b[0-9a-f]{40}\b/i)?.[0] || null;
+          if (!headCommit) throw new Error("repository identity inspection returned no commit; mutation was not dispatched");
+          if (/^On branch (?:main|master)\s*$/im.test(statusEvidence)) {
+            const prepared = await prepareTaskBranch({ task: durable, repoPath: args && args.path, statusEvidence, options, authIdentity: parentContext?.authIdentity || null });
+            preconditions = { repository_ref: durable.workspace_ref || null, capability: "git", action: "status", evidence: statusEvidence, starting_commit: headCommit, captured_at: new Date().toISOString(), task_owned_branch: prepared.branch, branch_created: !prepared.existing };
+          } else {
+            preconditions = { repository_ref: durable.workspace_ref || null, capability: "git", action: "status", evidence: statusEvidence, starting_commit: headCommit, captured_at: new Date().toISOString() };
+          }
+        }
+        durableReceiptStore.transitionReceipt(receipt.receipt_id, "dispatched", { preconditions });
+        if (workspaceTransaction) { durableWorkspaceTransactions.capturePreState(workspaceTransaction.transaction_id, preconditions || { captured_at: new Date().toISOString(), state: "not_available" }); durableWorkspaceTransactions.markDispatched(workspaceTransaction.transaction_id); }
+      }
+    } catch (error) {
+      try { if (receipt) durableReceiptStore.transitionReceipt(receipt.receipt_id, "failed"); } catch {}
+      try { if (workspaceTransaction) durableWorkspaceTransactions.markPostState(workspaceTransaction.transaction_id, { observed_at: new Date().toISOString(), error: redactSensitive(String(error.message || error)).slice(0, 1000) }, "failed"); } catch {}
+      try { durableTaskStore.addFailure(taskId, { action_fingerprint: fingerprint, capability: name, error_class: "receipt_failed_closed", retryable: false, detail: "operation receipt could not be prepared" }); } catch {}
+      throw error;
+    }
     const priorCompleted = resumeContinuation && (resumeContinuation.completed_operations || []).find(row => row.fingerprint === fingerprint);
     const annotation = (() => { try { return require("./tools/annotations").getToolAnnotations(name); } catch { return { readOnlyHint: false, idempotentHint: false }; } })();
     if (priorCompleted && !annotation.readOnlyHint) {
@@ -965,16 +1243,43 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
       throw new Error("mutating operation has ambiguous prior completion; verify current state before retry");
     }
     const priorFailure = durable ? durableTaskStore.listFailures(taskId).find(row => row.action_fingerprint === fingerprint && !row.changed_condition) : null;
-    if (priorFailure && !priorFailure.retryable) {
+    // A retryable error is not, by itself, evidence that the condition changed.
+    // An identical fingerprint must therefore be replanned or explicitly
+    // accompanied by durable changed-condition evidence before it can run
+    // again. This prevents transient-message classification from becoming an
+    // authorization to repeat an unknown mutation.
+    if (durableTaskModel.shouldSuppressEquivalentFailure(priorFailure)) {
       durableTaskStore.addFailure(taskId, { action_fingerprint: fingerprint, capability: name, error_class: "repeat_suppressed", retryable: false, attempt: Number(priorFailure.attempt || 1) + 1, detail: "Equivalent operation was already denied or failed without a changed condition" });
       throw new Error("equivalent failed operation suppressed; replan or verify current state");
     }
-    if (durable) durableTaskStore.updateTask(taskId, { usage: { ...durable.usage, tool_calls: Number(durable.usage.tool_calls || 0) + 1 } }, "task.tool_call_started");
+    if (durable) durableTaskStore.incrementUsage(taskId, { tool_calls: 1 }, "task.tool_call_started");
     try {
-      const result = await callAgentTool(name, args, { ...options, idempotencyKey: options.idempotencyKey || `agent:${taskId}:${fingerprint}` });
+      const result = await callAgentTool(name, args, { ...options, authIdentity: parentContext?.authIdentity || null, authorityApprovalRequired: authorityDecision?.approval_required === true, authorityRisk: authorityDecision?.risk_class || null, authorityReason: authorityDecision?.reason || null, idempotencyKey: options.idempotencyKey || `agent:${taskId}:${fingerprint}` });
+      if (result && result.isError) {
+        // The canonical dispatcher reports schema, policy, approval, and
+        // handler failures as structured results rather than rejected
+        // promises. Persist those failures too; otherwise ordinary tool
+        // errors would reach repair guidance without entering the durable
+        // failure/repetition ledger.
+        if (result.approvalRequired || result.code === "approval_required") { if (receipt) { try { durableReceiptStore.transitionReceipt(receipt.receipt_id, "awaiting_approval", { approval_ref: result.approvalId || null }); } catch {} } return result; }
+        const message = redactSensitive(String(result.content?.[0]?.text || result.code || "tool execution failed")).slice(0, 2000);
+        const lower = message.toLowerCase();
+        const retryable = /timeout|timed out|temporar|unavailable|rate limit|busy|network|econn|503/.test(lower) && !/approval|policy|forbidden|validation|invalid|permission|security/.test(lower);
+        try {
+          durableTaskStore.addFailure(taskId, { action_fingerprint: fingerprint, capability: name, error_class: retryable ? "transient" : "permanent", retryable, attempt: (durableTaskStore.listFailures(taskId).filter(row => row.action_fingerprint === fingerprint).length || 0) + 1, detail: message });
+          if (durable) { durableOperations.recordRepair({ task_id: taskId, plan_revision: durable.current_plan_revision, failure_class: retryable ? "transient" : "non_repairable", capability: String(name).replace(/^sidekick_/, ""), argument_digest: fingerprint, retry_decision: retryable ? "bounded_replan_or_retry" : "stop", policy_basis: retryable ? "canonical dispatcher failure; changed condition required" : "canonical dispatcher failure or authority boundary", strategy: retryable ? "diagnose changed condition and revalidate" : "escalate or report honestly" }); try { durableTaskStore.incrementUsage(taskId, { failures: 1, repair_cycles: retryable ? 1 : 0, retries: retryable ? 1 : 0 }, "task.repair_recorded"); } catch {} }
+          if (receipt && retryable) durableReceiptStore.transitionReceipt(receipt.receipt_id, "ambiguous");
+          else if (receipt) durableReceiptStore.transitionReceipt(receipt.receipt_id, "failed");
+          if (receipt && retryable && durable) durableOperations.createEscalation({ task_id: taskId, operation_ref: receipt.receipt_id, requested_operation: `Inspect ambiguous ${name} operation`, reason: "Mutating operation may have completed before the failure was observed", target_ref: receipt.target_ref || durable.workspace_ref || `task:${taskId}`, expected_effect: "Determine whether the recorded operation completed", risk_class: receipt.risk_class, effect_class: receipt.effect_class, pre_state: { receipt_id: receipt.receipt_id }, attempts: [{ capability: name, argument_digest: receipt.argument_digest }], verification_plan: { receipt_ref: receipt.receipt_id }, rollback_plan: { available: false }, requested_scope: "single_operation", approval_mode: "single_operation" });
+          if (workspaceTransaction) durableWorkspaceTransactions.markPostState(workspaceTransaction.transaction_id, { observed_at: new Date().toISOString(), error: message }, retryable ? "ambiguous" : "failed");
+        } catch {}
+        return result;
+      }
       try {
-        const receipt = result && (result.operationId || result.operation_id || result.idempotencyKey || result.idempotency_key || result.receipt_ref);
-        durableTaskStore.recordCompletedOperation(taskId, { fingerprint, capability: name, read_only: annotation.readOnlyHint === true, receipt_ref: receipt || null, summary: result?.content?.[0]?.text || result?.summary || "operation completed" });
+        const operationReceipt = result && (result.operationId || result.operation_id || result.idempotencyKey || result.idempotency_key || result.receipt_ref);
+        durableTaskStore.recordCompletedOperation(taskId, { fingerprint, capability: name, read_only: annotation.readOnlyHint === true, receipt_ref: operationReceipt || null, summary: result?.content?.[0]?.text || result?.summary || "operation completed" });
+        if (receipt) durableReceiptStore.transitionReceipt(receipt.receipt_id, "finalized", { provider_receipt_ref: operationReceipt || null });
+        if (workspaceTransaction) durableWorkspaceTransactions.markPostState(workspaceTransaction.transaction_id, { observed_at: new Date().toISOString(), provider_receipt_ref: operationReceipt || null, result: "completed" }, "completed");
       } catch {}
       return result;
     } catch (error) {
@@ -983,27 +1288,33 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
       const retryable = /timeout|timed out|temporar|unavailable|rate limit|busy|network|econn|503/.test(lower) && !/approval|policy|forbidden|validation|invalid|permission|security/.test(lower);
       try {
         durableTaskStore.addFailure(taskId, { action_fingerprint: fingerprint, capability: name, error_class: retryable ? "transient" : "permanent", retryable, attempt: (durableTaskStore.listFailures(taskId).filter(row => row.action_fingerprint === fingerprint).length || 0) + 1, detail: message });
+        if (durable) { durableOperations.recordRepair({ task_id: taskId, plan_revision: durable.current_plan_revision, failure_class: retryable ? "transient" : "non_repairable", capability: String(name).replace(/^sidekick_/, ""), argument_digest: fingerprint, retry_decision: retryable ? "bounded_replan_or_retry" : "stop", policy_basis: retryable ? "canonical read-only/idempotent effect and remaining budget" : "dispatcher failure or authority boundary", strategy: retryable ? "diagnose changed condition and revalidate" : "escalate or report honestly" }); try { durableTaskStore.incrementUsage(taskId, { failures: 1, repair_cycles: retryable ? 1 : 0, retries: retryable ? 1 : 0 }, "task.repair_recorded"); } catch {} }
+        if (receipt && retryable) durableReceiptStore.transitionReceipt(receipt.receipt_id, "ambiguous");
+        else if (receipt) durableReceiptStore.transitionReceipt(receipt.receipt_id, "failed");
+        if (receipt && retryable && durable) durableOperations.createEscalation({ task_id: taskId, operation_ref: receipt.receipt_id, requested_operation: `Inspect ambiguous ${name} operation`, reason: "Mutating operation may have completed before the failure was observed", target_ref: durable.workspace_ref || `task:${taskId}`, expected_effect: "Determine whether the recorded operation completed", risk_class: receipt.risk_class, effect_class: receipt.effect_class, pre_state: { receipt_id: receipt.receipt_id }, attempts: [{ capability: name, argument_digest: receipt.argument_digest }], verification_plan: { receipt_ref: receipt.receipt_id }, rollback_plan: { available: false }, requested_scope: "single_operation", approval_mode: "single_operation" });
+        if (workspaceTransaction) durableWorkspaceTransactions.markPostState(workspaceTransaction.transaction_id, { observed_at: new Date().toISOString(), error: message }, retryable ? "ambiguous" : "failed");
       } catch {}
       throw error;
     }
   };
   const durableCallLLM = async (messages, options = {}) => {
     const durable = durableTaskStore.getTask(taskId);
-    if (durable && durableTaskModel.budgetExceeded(durable, "model_calls")) {
+    if (durable && (durableTaskModel.budgetExceeded(durable, "model_calls") || durableTaskModel.budgetExceeded(durable, "wall_ms"))) {
       durableTaskStore.updateTask(taskId, { state: "blocked", phase: "budget", next_action: "increase_profile_or_resume" }, "task.model_budget_exhausted");
       throw new Error("agent model-call budget exhausted");
     }
-    if (durable) durableTaskStore.updateTask(taskId, { usage: { ...durable.usage, model_calls: Number(durable.usage.model_calls || 0) + 1 } }, "task.model_call_started");
+    if (durable) durableTaskStore.incrementUsage(taskId, { model_calls: 1 }, "task.model_call_started");
     return callLLM(messages, options);
   };
   const continuationBrief = (parentContext && parentContext.continuationBrief) || null;
   // Routing is a pure classification of the goal text. Computing it before the
   // guarded body keeps the transcript's routing record truthful even when the
   // run throws before reaching the loop.
+  const durableGoal = durableTaskStore.getTask(taskId)?.goal || null;
   const classification = classifyEvidenceRequirement(goal, {
     repositoryCapabilityDiscovered: hasRelevantContextProvider(goal, visibleAgentTools, agentCapabilityMetadata),
   });
-  const useTools = classification.requiresTools;
+  const useTools = classification.requiresTools || durableGoal?.requires_live_evidence === true || (durableGoal?.verification_requirements || []).length > 0;
   const capabilityDiscovery = {
     visible_count: visibleAgentTools.length,
     candidate_count: capabilityCandidates.length,
@@ -1126,19 +1437,35 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
       // system prompt): Brain supplies its own planner/synthesis system prompts
       // per call. This still routes through inferenceService → Compute Placement.
       callLLM: (messages, options) => durableCallLLM(messages, options),
-      // Pin Brain's planning allowlist to BUILT-IN agent-visible tools only.
-      // Generated/dynamic capabilities remain dispatch-reachable but are
-      // deny-by-default for Brain v0.1 (it must not plan or promote them).
+      // Brain receives the complete live source-filtered Agent catalog,
+      // including enabled module/pack and governed generated capabilities.
+      // Validation and dispatch re-check the current descriptor, schema,
+      // policy, risk, and approval immediately before every execution.
       agentTools: brainAgentTools(),
       // Internal live descriptors provide the same schemas the dispatcher
       // validates. They are used only for an early bounded preflight; every
       // actual call still goes through durableDispatch/callAgentTool.
-      toolContracts: getBuiltinRegistry().toolDefs(),
+      toolContracts: getLiveAgentToolDefs(),
       // The same bounded pack context the non-Brain loop's system prompt gets
       // (#296): without it the planner is pack-blind and never plans a pack
       // tool for a domain the pack owns. Bounded again inside the planner.
       packContext: buildInstalledPackContext(),
       capabilityMetadata: getAgentCapabilityMetadata(),
+      maxWorkRounds: profileRuntime.brainRounds,
+      profileName: durableProfile,
+      profileInstruction: profileRuntime.instruction,
+      // Parallelism is an authenticated, durable-envelope limit. It never
+      // comes from the plan or model output; the Brain still admits only
+      // independent authoritative read-only steps.
+      concurrencyLimit: Math.max(1, Math.min(16, Number(durableTaskStore.getTask(taskId)?.authority_envelope?.concurrency_limit) || 1)),
+      workPackageHooks: {
+        start: async (step) => {
+          durableTaskStore.incrementUsage(taskId, { work_packages: 1 }, "task.brain_work_package_reserved");
+          const packageRecord = durableOperations.createWorkPackage({ task_id: taskId, package_key: `brain:${String(step.id || step.tool || "step").slice(0, 80)}` });
+          return durableOperations.claimWorkPackage(packageRecord.package_id, `agent:${taskId}`);
+        },
+        finish: async (packageRecord, state, result) => durableOperations.finishWorkPackage(packageRecord.package_id, state, result, `agent:${taskId}`),
+      },
       callTool: (name, args) => durableDispatch(name, args, {
         taskId,
         project: inferredProject,
@@ -1173,7 +1500,30 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
       completionGate: async ({ state, candidate }) => evaluateCompletion({ state, candidate }),
       onCheckpoint: checkpointDurable,
       onPlanRevision: (plan, metadata) => {
-        try { durableTaskStore.addPlanRevision(taskId, plan, metadata && metadata.source || "planner"); } catch {}
+        const current = durableTaskStore.getTask(taskId);
+        if (current && durableTaskModel.budgetExceeded(current, "plan_revisions")) throw new Error("agent plan-revision budget exhausted");
+        durableTaskStore.addPlanRevision(taskId, plan, metadata && metadata.source || "planner");
+        try {
+          const hierarchical = {
+            objective: goal,
+            milestones: Array.isArray(plan && plan.milestones) ? plan.milestones : [],
+            work_packages: Array.isArray(plan && plan.work_packages) ? plan.work_packages : [],
+            steps: (Array.isArray(plan && plan.steps) ? plan.steps : []).map((step, index) => ({
+              id: step.id || `step_${index + 1}`,
+              capability: step.tool || step.capability,
+              dependencies: Array.isArray(step.dependencies) ? step.dependencies : (Array.isArray(step.depends_on) ? step.depends_on : []),
+              verification_gate: step.verification_gate || null,
+            })),
+            verification_gates: Array.isArray(plan && plan.verification_gates) ? plan.verification_gates : [],
+            stopping_conditions: Array.isArray(plan && plan.stopping_conditions) ? plan.stopping_conditions : [],
+            active_work_package: plan && plan.active_work_package || null,
+          };
+          if (hierarchical.steps.some(step => !getLiveAgentDescriptor(step.capability))) throw new Error("hierarchical plan references a capability outside the live Agent catalog");
+          durableOperations.savePlan(taskId, hierarchical, { source: metadata && metadata.source || "planner", evidence: metadata && metadata.evidence || null, registry_version: current && current.capability_registry_version || null });
+        } catch (error) {
+          durableTaskStore.addFailure(taskId, { error_class: "plan_persistence", retryable: false, detail: "hierarchical plan could not be persisted safely" });
+        }
+        durableTaskStore.incrementUsage(taskId, { plan_revisions: 1 }, "task.plan_revision");
       },
     });
     const outcome = await run({
@@ -1275,7 +1625,7 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
 
     const loop = await runToolLoop({
       history,
-      callLLM: (messages) => callAgentLLM(messages, goal, durableCallLLM),
+      callLLM: (messages) => callAgentLLM(messages, profiledGoal, durableCallLLM),
       // Every child tool request still flows through callAgentTool — the sole
       // sanctioned dispatcher seam that enforces the allowlist, source policy,
       // approval, path restrictions, timeout, audit, and redaction. No earlier
@@ -1290,8 +1640,8 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
         signal: cancelSignal || undefined,
       }),
       getToolDefs: () => getToolDefsForSource("agent").filter(t => t.enabled),
-      getToolContracts: () => getBuiltinRegistry().toolDefs(),
-      maxIterations: MAX_ITERATIONS,
+      getToolContracts: () => getLiveAgentToolDefs(),
+      maxIterations: Math.min(MAX_ITERATIONS, profileRuntime.iterations),
       requireEvidence: useTools,
       workState,
       completionGate: async ({ state, candidate }) => {
@@ -1437,13 +1787,39 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
   } finally {
     try {
       const durableBeforeVerification = durableTaskStore.getTask(taskId);
-      const verification = verifyTaskResult({
+      let recipeOutcomes = durableReceiptStore.listOutcomes(taskId);
+      const recipes = durableReceiptStore.listRecipes(taskId);
+      // Verification is an active recovery gate. A failed or partial first
+      // execution still gets one bounded fresh read-only recheck when a
+      // governed recipe exists; returning a partial result immediately would
+      // make the durable repair contract depend on the model's terminal label.
+      if (["completed", "partial", "failed"].includes(status) && recipes.length && durableBeforeVerification && !durableTaskModel.budgetExceeded(durableBeforeVerification, "repair_cycles")) {
+        const missingBeforeRepair = recipes.filter(recipe => !recipeOutcomes.some(outcome => String(outcome.recipe_id) === String(recipe.recipe_id) && successfulFreshOutcome(recipe, outcome)));
+        if (missingBeforeRepair.length) {
+          durableOperations.recordRepair({ task_id: taskId, plan_revision: durableBeforeVerification.current_plan_revision, failure_class: "verification_failed", capability: "verification", argument_digest: `recipes:${missingBeforeRepair.map(recipe => recipe.recipe_id).join(",")}`.slice(0, 256), retry_decision: "bounded_reverification", policy_basis: "recorded recipe remains governed read-only and requires fresh independent evidence", changed_condition_evidence: "fresh recheck requested after failed or missing verification evidence", strategy: "re-run missing verification recipes once within task budget" });
+          try { durableTaskStore.incrementUsage(taskId, { repair_cycles: 1 }, "task.verification_repair_started"); } catch {}
+          const repair = await runVerificationRepair({
+            task: durableBeforeVerification,
+            recipes,
+            outcomes: recipeOutcomes,
+            dispatch: durableDispatch,
+            recordOutcome: outcome => {
+              const id = durableReceiptStore.recordOutcome(outcome);
+              return durableReceiptStore.getOutcomes ? durableReceiptStore.getOutcomes(taskId).find(item => item.outcome_id === id) || { ...outcome, outcome_id: id } : { ...outcome, outcome_id: id };
+            },
+          });
+          recipeOutcomes = [...recipeOutcomes, ...repair.outcomes];
+          durableOperations.recordRepair({ task_id: taskId, plan_revision: durableBeforeVerification.current_plan_revision, failure_class: repair.remaining.length ? "verification_failed" : "verification_repaired", capability: "verification", argument_digest: `recipes:${missingBeforeRepair.map(recipe => recipe.recipe_id).join(",")}`.slice(0, 256), retry_decision: repair.remaining.length ? "stop_unverified" : "continue", policy_basis: "fresh canonical verification outcome", changed_condition_evidence: `${repair.attempted} bounded recipe recheck(s) completed`, strategy: repair.remaining.length ? "escalate with missing evidence" : "verification gate satisfied after fresh recheck" });
+        }
+      }
+      const verificationBase = verifyTaskResult({
         criteria: durableBeforeVerification?.goal?.success_criteria || [],
         evidence: steps.filter(step => step && step.type === "tool").map(step => ({ tool: step.tool, id: step.id, ok: step.ok !== false && !step.error, text: step.result || step.text || "" })),
         result: finalResult,
         requires_live_evidence: useTools,
         terminal_state: status === "cancelled" ? "cancelled" : status === "iteration_limit" ? "timed_out" : status,
       });
+      const verification = applyPlanGates(applyReceiptGates(applyRecipeGates(verificationBase, recipes, recipeOutcomes), durableReceiptStore.listReceipts(taskId)), durableOperations.listPlans(taskId), recipeOutcomes, recipes);
       const terminalState = status === "completed"
         ? (verification.status === "verified" ? "completed" : "partial")
         : status === "cancelled" ? "cancelled"
@@ -1469,6 +1845,7 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
         result: { version: 1, status: resultStatus, summary: status === "completed" ? finalResult : terminalError, evidence_refs: verification.evidence || [], artifacts: transcriptArtifact ? [{ artifact_id: transcriptArtifact.artifact_id, type: transcriptArtifact.type, name: transcriptArtifact.name, content_hash: transcriptArtifact.content_hash || null, provenance: "agent transcript" }] : [] },
         verification,
       }, status === "waiting_for_approval" ? "task.waiting_for_approval" : status === "paused" ? "task.paused" : "task.completed");
+      try { durableOperations.deriveLearningCandidates(taskId); } catch (error) { console.error(`Agent learning derivation failed for ${taskId}: ${redactSensitive(String(error.message || error)).slice(0, 200)}`); }
     } catch {}
     finishAgentExecution(platformExecution, status, { result_summary: status === "completed" ? finalResult : terminalError, reason: terminalError || "agent task completed", error_category: status === "completed" ? null : status });
   }
@@ -1488,25 +1865,130 @@ const beginTaskRun = createTaskRunner({
   emit,
   runAgent,
   redactSensitive,
-  onTaskCreated: ({ taskId, goal, parentContext, profile, workspaceRef, resume }) => {
+  onTaskCreated: ({ taskId, goal, goalSpec, parentContext, profile, workspaceRef, authorityEnvelope, resume }) => {
     if (resume && durableTaskStore.getTask(taskId)) {
       const existing = durableTaskStore.getTask(taskId);
       durableTaskStore.updateTask(taskId, { state: "ready", phase: "recovery", next_action: "resume_from_safe_checkpoint" }, "task.resume_requested");
       return { resumeState: { state: existing.checkpoint?.state || null, continuation: existing.continuation || null } };
     }
+    const suppliedEnvelope = authorityEnvelope || (parentContext && parentContext.authorityEnvelope) || null;
+    const principalEnvelope = parentContext && principalAuthorityEnvelope(parentContext.authIdentity);
+    const requestedEnvelope = suppliedEnvelope && Object.keys(suppliedEnvelope).length > 0
+      ? suppliedEnvelope
+      : (principalEnvelope || defaultTaskAuthorityEnvelope());
+    const effectiveEnvelope = principalEnvelope ? intersectEnvelope(requestedEnvelope, principalEnvelope) : requestedEnvelope;
     const task = durableTaskModel.createTask({
       task_id: taskId,
       objective: goal,
+      goal: goalSpec || undefined,
       profile,
       parent_task_id: parentContext && parentContext.parentTaskId,
       root_task_id: parentContext && parentContext.rootTaskId,
       session_id: parentContext && parentContext.sessionId,
       project_id: parentContext && parentContext.project,
+      requested_by_principal_id: parentContext && parentContext.requestedByPrincipalId,
+      actor_principal_id: parentContext && parentContext.actorPrincipalId,
+      acting_for_principal_id: parentContext && parentContext.actingForPrincipalId,
+      principal_context: parentContext && parentContext.authIdentity ? { credential_scopes: parentContext.authIdentity.scopes, delegation_id: parentContext.authIdentity.delegation_id } : null,
+      continuation_reference: parentContext && parentContext.continuationReference,
       workspace_ref: workspaceRef,
+      authority_envelope: effectiveEnvelope,
+      capability_registry_version: liveAgentCatalogFingerprint(),
     });
     durableTaskStore.insertTask(task);
   },
 });
+
+// A fenced execution with a valid safe checkpoint is restart-resumable.  Once
+// the recovery scanner has classified it, relaunch the normal Agent loop in
+// this process.  This is intentionally a launch of the governed task runner,
+// not a replay of model prose or a direct tool call: runAgent reloads the
+// current live catalog, budget, authority envelope, policy, and checkpoint,
+// and every operation still goes through durableDispatch/callAgentTool.
+function launchRecoveredDurableTask(taskId) {
+  const task = durableTaskStore.getTask(taskId);
+  if (!task || task.state !== "interrupted" || task.control?.cancel_requested) return false;
+  if (taskEmitters[taskId] || taskCancels[taskId]) return false;
+  const controller = new AbortController();
+  taskEmitters[taskId] = new EventEmitter();
+  taskCancels[taskId] = controller;
+  durableTaskStore.updateTask(taskId, { state: "ready", phase: "recovery", next_action: "resume_from_safe_checkpoint" }, "task.restart_resume_started");
+  const parentContext = {
+    project: task.project_id || null,
+    ...(task.parent_task_id ? { parentTaskId: task.parent_task_id, rootTaskId: task.root_task_id, sessionId: task.session_id } : {}),
+    ...(persistedTaskAuthIdentity(task) ? { authIdentity: persistedTaskAuthIdentity(task), requestedByPrincipalId: task.requested_by_principal_id || null, actorPrincipalId: task.actor_principal_id || null } : {}),
+  };
+  runAgent(task.objective, taskId, parentContext, controller, { state: task.checkpoint?.state || null, continuation: task.continuation || null })
+    .catch(error => { try { emit(taskId, { type: "error", text: redactSensitive("Recovered task failed to run: " + (error?.message || "unknown error")) }); } catch {} })
+    .finally(() => { delete taskCancels[taskId]; setTimeout(() => delete taskEmitters[taskId], 60000); });
+  try { emit(taskId, { type: "step", text: "Process restart recovered the task from its last safe checkpoint" }); } catch {}
+  return true;
+}
+
+durableRecoveryPromise.then(recovery => {
+  for (const taskId of recovery.recovered || []) {
+    // Defer until module initialization has completed and all live registries
+    // and route-owned task structures are available.
+    setImmediate(() => { try { launchRecoveredDurableTask(taskId); } catch (error) { console.error(`Durable Agent restart resume failed: ${redactSensitive(String(error?.message || error)).slice(0, 200)}`); } });
+  }
+}).catch(error => console.error(`Durable Agent restart resume scan failed: ${redactSensitive(String(error?.message || error)).slice(0, 200)}`));
+
+// Dashboard requests carry the authenticated principal through the protected
+// bridge. Keep compatibility for trusted loopback callers without headers,
+// but never let an identified caller read or mutate another principal's task.
+function taskBelongsToRequest(req, task) {
+  const auth = requestAuthIdentity(req);
+  if (!auth) return true;
+  const owner = task && (task.actor_principal_id || task.requested_by_principal_id);
+  return Boolean(owner && owner === auth.principal_id);
+}
+function requireTaskAccess(req, res, task) {
+  if (taskBelongsToRequest(req, task)) return true;
+  res.status(404).json({ error: "task not found" });
+  return false;
+}
+function legacyTaskAccessible(req, taskId) {
+  const auth = requestAuthIdentity(req);
+  if (!auth) return true;
+  const task = durableTaskStore.getTask(taskId);
+  return Boolean(task && taskBelongsToRequest(req, task));
+}
+
+// Learning records are project-scoped derivatives of task traces.  They are
+// not a public project index: an authenticated principal may see or mutate a
+// candidate only when its source task belongs to that principal.  Requiring a
+// source task also prevents an arbitrary caller from manufacturing a learning
+// record for a project it cannot establish authority over.
+function learningSourceTask(req, candidateOrBody, { operator = false } = {}) {
+  const auth = requestAuthIdentity(req);
+  const sourceTaskId = String(candidateOrBody && candidateOrBody.source_task_id || "");
+  if (!auth || !sourceTaskId) return null;
+  const task = durableTaskStore.getTask(sourceTaskId);
+  if (!task) return null;
+  if (taskBelongsToRequest(req, task)) return task;
+  if (!operator || task.project_id !== candidateOrBody.project_ref) return null;
+  const principal = identity.getPrincipal(auth.principal_id);
+  const grant = authorization.authorize({ principalId: auth.principal_id, permission: "approvals.grant", credentialScopes: auth.scopes, delegationId: auth.delegation_id || null, resource: { kind: "agent_learning_candidate", project: task.project_id } });
+  return principal?.principal_type === "human" && grant.ok ? task : null;
+}
+
+// Apply the ownership boundary once for every durable task route, including
+// routes added later. Legacy loopback callers without a principal header keep
+// the existing behavior; authenticated Dashboard callers receive a uniform
+// not-found response for another principal's task.
+function enforceTaskRouteAccess(req, res, next) {
+  if (!validateTaskId(req.params.taskId)) return res.status(400).json({ error: "invalid task id" });
+  const task = durableTaskStore.getTask(req.params.taskId);
+  // Legacy transcript-only parents and streams are resolved by their route;
+  // do not turn their existing 422/stream-specific errors into an IDOR-shaped
+  // 404 before the route can inspect the authoritative source.
+  if (!task) return next();
+  if (!requireTaskAccess(req, res, task)) return;
+  next();
+}
+app.use("/api/agent/tasks/:taskId", enforceTaskRouteAccess);
+app.use("/api/agent/run/:taskId", enforceTaskRouteAccess);
+app.use("/api/agent/stream/:taskId", enforceTaskRouteAccess);
 
 // Resolve the durable lineage + bounded, redacted continuation brief for a child
 // task from a terminal parent. Throws ContinuationError (with a safe status +
@@ -1541,14 +2023,32 @@ app.post("/api/agent/run", (req, res) => {
   const goal = req.body && req.body.goal;
   const goalCheck = validateFollowUpGoal(goal);
   if (!goalCheck.ok) return res.status(goalCheck.httpStatus).json({ error: goalCheck.clientMessage });
-  beginTaskRun(res, { goal: goalCheck.goal, profile: req.body && req.body.profile || "standard", workspaceRef: req.body && req.body.workspace_ref || null, parentContext: null });
+  const body = req.body || {};
+  const allowed = new Set(["goal","goal_spec","profile","workspace_ref","authority_envelope"]);
+  if (Object.keys(body).some(key => !allowed.has(key))) return res.status(400).json({ error: "unknown task field" });
+      const goalSpec = body.goal_spec == null ? null : body.goal_spec;
+      if (goalSpec !== null && (!goalSpec || typeof goalSpec !== "object" || Array.isArray(goalSpec))) return res.status(400).json({ error: "goal_spec must be an object" });
+      if (goalSpec) {
+        const allowedGoalFields = new Set(["normalized_objective","constraints","required_deliverables","success_criteria","prohibited_actions","assumptions","verification_requirements","requires_live_evidence","read_only","changes_allowed","authority_boundary","stopping_conditions"]);
+        if (Object.keys(goalSpec).some(key => !allowedGoalFields.has(key))) return res.status(400).json({ error: "unknown goal_spec field" });
+        for (const field of ["constraints","required_deliverables","success_criteria","prohibited_actions","assumptions","verification_requirements","stopping_conditions"]) {
+          if (goalSpec[field] !== undefined && (!Array.isArray(goalSpec[field]) || goalSpec[field].length > 50 || goalSpec[field].some(item => typeof item !== "string" || item.length > 500))) return res.status(400).json({ error: `goal_spec.${field} must be a bounded string list` });
+        }
+        if (goalSpec.normalized_objective !== undefined && (typeof goalSpec.normalized_objective !== "string" || goalSpec.normalized_objective.length > 20000)) return res.status(400).json({ error: "goal_spec.normalized_objective is invalid" });
+        if (goalSpec.authority_boundary !== undefined && (typeof goalSpec.authority_boundary !== "string" || goalSpec.authority_boundary.length > 1000)) return res.status(400).json({ error: "goal_spec.authority_boundary is invalid" });
+      }
+      const authIdentity = requestAuthIdentity(req);
+      const requestedEnvelope = body.authority_envelope || {};
+      const requestedEffects = Array.isArray(requestedEnvelope.allowed_effects) ? requestedEnvelope.allowed_effects : [];
+      if (!authIdentity && (requestedEnvelope.changes_allowed === true || requestedEnvelope.external_effects_allowed === true || requestedEnvelope.production_allowed === true || requestedEffects.some(effect => effect !== "read_only"))) return res.status(403).json({ error: "authenticated principal is required for an expanded authority envelope" });
+      beginTaskRun(res, { goal: goalCheck.goal, goalSpec, profile: body.profile || "standard", workspaceRef: body.workspace_ref || null, authorityEnvelope: body.authority_envelope || {}, parentContext: authIdentity ? { requestedByPrincipalId: authIdentity.principal_id, actorPrincipalId: authIdentity.principal_id, authIdentity } : null });
 });
 
 // Durable control-room projection. This is a read surface over the task store;
 // the transient SSE stream is never authoritative.
 app.get("/api/agent/tasks", (req, res) => {
   try {
-    const tasks = durableTaskStore.listTasks({ project_id: req.query && req.query.project, state: req.query && req.query.state, limit: req.query && req.query.limit, offset: req.query && req.query.offset });
+    const tasks = durableTaskStore.listTasks({ project_id: req.query && req.query.project, state: req.query && req.query.state, limit: req.query && req.query.limit, offset: req.query && req.query.offset }).filter(task => taskBelongsToRequest(req, task));
     res.json({ tasks, count: tasks.length, source: "durable_task_store" });
   } catch { res.status(503).json({ error: "durable task state unavailable" }); }
 });
@@ -1558,14 +2058,252 @@ app.get("/api/agent/tasks/:taskId", (req, res) => {
   try {
     const task = durableTaskStore.getTask(req.params.taskId);
     if (!task) return res.status(404).json({ error: "task not found" });
-    res.json({ task, plans: durableTaskStore.listPlans(task.task_id), failures: durableTaskStore.listFailures(task.task_id), events: durableTaskStore.listEvents(task.task_id) });
+    if (!requireTaskAccess(req, res, task)) return;
+    res.json({ task, plans: durableTaskStore.listPlans(task.task_id), hierarchical_plans: durableOperations.listPlans(task.task_id), failures: durableTaskStore.listFailures(task.task_id), repairs: durableOperations.listRepairs(task.task_id), work_packages: durableOperations.listWorkPackages(task.task_id), workspace_transactions: durableWorkspaceTransactions.listTransactions(task.task_id), events: durableTaskStore.listEvents(task.task_id), receipts: durableReceiptStore.listReceipts(task.task_id), verification_recipes: durableReceiptStore.listRecipes(task.task_id), verification_outcomes: durableReceiptStore.listOutcomes(task.task_id), escalations: durableOperations.listEscalations(task.task_id) });
   } catch { res.status(503).json({ error: "durable task state unavailable" }); }
+});
+
+// Durable control-room projection. These records are redacted metadata and
+// evidence references; no route treats stored model/tool text as authority.
+app.get("/api/agent/tasks/:taskId/control-room", (req, res) => {
+  if (!validateTaskId(req.params.taskId)) return res.status(400).json({ error: "invalid task id" });
+  try {
+    const task = durableTaskStore.getTask(req.params.taskId);
+    if (!task) return res.status(404).json({ error: "task not found" });
+    if (!requireTaskAccess(req, res, task)) return;
+    res.json({ ok: true, source: "durable_task_store", task, plan: durableTaskStore.listPlans(task.task_id), hierarchical_plans: durableOperations.listPlans(task.task_id), failures: durableTaskStore.listFailures(task.task_id), repairs: durableOperations.listRepairs(task.task_id), work_packages: durableOperations.listWorkPackages(task.task_id), workspace_transactions: durableWorkspaceTransactions.listTransactions(task.task_id), receipts: durableReceiptStore.listReceipts(task.task_id), verification: durableReceiptStore.listRecipes(task.task_id), verification_outcomes: durableReceiptStore.listOutcomes(task.task_id), escalations: durableOperations.listEscalations(task.task_id), events: durableTaskStore.listEvents(task.task_id) });
+  } catch { res.status(503).json({ error: "durable task state unavailable" }); }
+});
+
+app.post("/api/agent/tasks/:taskId/plans", (req, res) => {
+  if (!validateTaskId(req.params.taskId)) return res.status(400).json({ error: "invalid task id" });
+  try {
+    const task = durableTaskStore.getTask(req.params.taskId);
+    if (!task) return res.status(404).json({ error: "task not found" });
+    if (!requireTaskAccess(req, res, task)) return;
+    const body = req.body || {};
+    const allowed = new Set(["objective", "milestones", "work_packages", "steps", "verification_gates", "active_work_package", "stopping_conditions"]);
+    if (Object.keys(body).some(key => !allowed.has(key))) return res.status(400).json({ error: "unknown plan field" });
+    const steps = Array.isArray(body.steps) ? body.steps : [];
+    const registry = getLiveAgentRegistry();
+    if (steps.some(step => !step || typeof step.capability !== "string" || !registry.get(step.capability))) return res.status(400).json({ error: "plan steps must reference live canonical capabilities" });
+    const plan = durableOperations.savePlan(req.params.taskId, body, { source: "agent_api", actor: "authenticated_task_context", registry_version: registry.version || null });
+    res.status(201).json({ ok: true, plan });
+  }
+  catch (error) { res.status(400).json({ error: redactSensitive(error.message) }); }
+});
+
+app.post("/api/agent/tasks/:taskId/escalations", (req, res) => {
+  if (!validateTaskId(req.params.taskId)) return res.status(400).json({ error: "invalid task id" });
+  try { const task = durableTaskStore.getTask(req.params.taskId); if (!task) return res.status(404).json({ error: "task not found" }); if (!requireTaskAccess(req, res, task)) return; const allowed = new Set(["operation_ref","requested_operation","reason","target_ref","expected_effect","risk_class","effect_class","pre_state","attempts","verification_plan","rollback_plan","alternatives","consequences","requested_scope","approval_mode"]); if (Object.keys(req.body || {}).some(key => !allowed.has(key))) return res.status(400).json({ error: "unknown escalation field" }); const escalation = durableOperations.createEscalation({ ...(req.body || {}), task_id: req.params.taskId }); res.status(201).json({ ok: true, escalation }); }
+  catch (error) { res.status(400).json({ error: redactSensitive(error.message) }); }
+});
+
+app.post("/api/agent/tasks/:taskId/escalations/:escalationId/decision", (req, res) => {
+  if (!validateTaskId(req.params.taskId)) return res.status(400).json({ error: "invalid task id" });
+  try {
+    const task = durableTaskStore.getTask(req.params.taskId);
+    const escalation = durableOperations.getEscalation(req.params.escalationId);
+    if (!task || !escalation || escalation.task_id !== task.task_id) return res.status(404).json({ error: "escalation not found" });
+    if (!requireTaskAccess(req, res, task)) return;
+    const body = req.body || {};
+    if (Object.keys(body).some(key => !new Set(["decision", "reason", "approval_ref"]).has(key)) || !["approved", "denied", "resolved"].includes(body.decision)) return res.status(400).json({ error: "decision must be approved, denied, or resolved" });
+    const auth = requestAuthIdentity(req); const principal = auth && identity.getPrincipal(auth.principal_id);
+    const grant = auth && authorization.authorize({ principalId: auth.principal_id, permission: "approvals.grant", credentialScopes: auth.scopes, delegationId: auth.delegation_id || null, resource: { kind: "agent_escalation", escalation_id: escalation.escalation_id, project: task.project_id } });
+    if (!auth?.principal_id || !principal || principal.principal_type !== "human" || !grant?.ok) return res.status(403).json({ error: "human approvals.grant authorization is required" });
+    const requester = task.actor_principal_id || task.requested_by_principal_id;
+    if (requester && requester === auth.principal_id) return res.status(403).json({ error: "task requester cannot self-approve escalation" });
+    const approvalRef = body.approval_ref == null ? null : String(body.approval_ref);
+    if (approvalRef && !/^approval:[A-Za-z0-9_.:-]{1,180}$/.test(approvalRef)) return res.status(400).json({ error: "approval_ref must be a governed approval reference" });
+    if (body.decision === "approved" && !approvalRef) return res.status(400).json({ error: "approved escalation dispositions require an existing approval_ref" });
+    if (approvalRef) {
+      const approvalStore = require("./approvals/store");
+      approvalStore.ensureApprovalContinuationSchema();
+      const approval = approvalStore.getApproval(approvalRef);
+      if (!approval || (approval.task_id && approval.task_id !== task.task_id)) return res.status(400).json({ error: "approval_ref is not an existing approval for this task" });
+    }
+    const updated = durableOperations.updateEscalation(escalation.escalation_id, body.decision, { decided_by_principal_id: auth.principal_id, approval_ref: approvalRef });
+    durableTaskStore.recordGuidance(task.task_id, `Escalation ${escalation.escalation_id} ${body.decision}: ${redactSensitive(String(body.reason || "operator decision")).slice(0, 500)}`, auth.principal_id);
+    res.json({ ok: true, escalation: updated, approval: { decision: body.decision, principal_id: auth.principal_id, inherited: false } });
+  } catch (error) { res.status(409).json({ error: redactSensitive(error.message) }); }
+});
+
+app.post("/api/agent/tasks/:taskId/work-packages", (req, res) => {
+  if (!validateTaskId(req.params.taskId)) return res.status(400).json({ error: "invalid task id" });
+  try {
+    const task = durableTaskStore.getTask(req.params.taskId);
+    if (!task) return res.status(404).json({ error: "task not found" });
+    if (!requireTaskAccess(req, res, task)) return;
+    const body = req.body || {};
+    const allowed = new Set(["package_key", "parent_package_id", "mutation_target", "result"]);
+    if (Object.keys(body).some(key => !allowed.has(key))) return res.status(400).json({ error: "unknown work-package field" });
+    if (body.result !== undefined && JSON.stringify(body.result).length > 12000) return res.status(400).json({ error: "work-package result is too large" });
+    // Reserve the root budget before inserting the package. The reservation is
+    // intentionally conservative if insertion fails; an uncounted queued
+    // package could otherwise amplify fan-out under concurrent requests.
+    durableTaskStore.incrementUsage(req.params.taskId, { work_packages: 1 }, "task.work_package_reserved");
+    const packageRecord = durableOperations.createWorkPackage({ ...body, task_id: req.params.taskId });
+    res.status(201).json({ ok: true, package: packageRecord });
+  } catch (error) { res.status(400).json({ error: redactSensitive(error.message) }); }
+});
+
+app.post("/api/agent/tasks/:taskId/work-packages/:packageId/claim", (req, res) => {
+  if (!validateTaskId(req.params.taskId)) return res.status(400).json({ error: "invalid task id" });
+  try {
+    const task = durableTaskStore.getTask(req.params.taskId);
+    const pkg = durableOperations.getWorkPackage(req.params.packageId);
+    if (!task || !pkg || pkg.task_id !== task.task_id) return res.status(404).json({ error: "work package not found" });
+    if (!requireTaskAccess(req, res, task)) return;
+    const body = req.body || {};
+    if (Object.keys(body).some(key => !new Set(["owner", "lease_ms"]).has(key))) return res.status(400).json({ error: "unknown work-package claim field" });
+    const auth = requestAuthIdentity(req);
+    const owner = auth?.principal_id || `agent:${task.task_id}`;
+    res.json({ ok: true, package: durableOperations.claimWorkPackage(pkg.package_id, owner, body.lease_ms) });
+  } catch (error) { res.status(409).json({ error: redactSensitive(error.message) }); }
+});
+
+app.get("/api/agent/tasks/:taskId/workspace-transactions", (req, res) => {
+  if (!validateTaskId(req.params.taskId)) return res.status(400).json({ error: "invalid task id" });
+  try { const task=durableTaskStore.getTask(req.params.taskId); if(!task)return res.status(404).json({error:"task not found"}); if(!requireTaskAccess(req,res,task))return; res.json({ transactions: durableWorkspaceTransactions.listTransactions(task.task_id) }); }
+  catch(error){ res.status(503).json({error:redactSensitive(error.message)}); }
+});
+
+app.post("/api/agent/tasks/:taskId/workspace-transactions/:transactionId/rollback", async (req, res) => {
+  if (!validateTaskId(req.params.taskId)) return res.status(400).json({ error: "invalid task id" });
+  try {
+    const task=durableTaskStore.getTask(req.params.taskId); const tx=durableWorkspaceTransactions.getTransaction(req.params.transactionId);
+    if(!task||!tx||tx.task_id!==task.task_id)return res.status(404).json({error:"workspace transaction not found"});
+    if(!requireTaskAccess(req,res,task))return;
+    if(Object.keys(req.body||{}).length)return res.status(400).json({error:"rollback accepts no model-authored arguments"});
+    const result=await durableWorkspaceTransactions.executeRollback({transactionId:tx.transaction_id,task,callAgentTool,registry:getLiveAgentRegistry(),authIdentity:requestAuthIdentity(req)});
+    res.json({ok:true,transaction:result});
+  } catch(error){ res.status(409).json({error:redactSensitive(error.message)}); }
+});
+
+app.post("/api/agent/tasks/:taskId/verification-recipes", (req, res) => {
+  if (!validateTaskId(req.params.taskId)) return res.status(400).json({ error: "invalid task id" });
+  try {
+    const task = durableTaskStore.getTask(req.params.taskId);
+    if (!task) return res.status(404).json({ error: "task not found" });
+    if (!requireTaskAccess(req, res, task)) return;
+    const body = req.body || {};
+    const allowed = new Set(["requirement_id","check_type","capability","arguments","expected","freshness_ms","independent","timeout_ms","retry_policy","failure_classification"]);
+    if (Object.keys(body).some(key => !allowed.has(key))) return res.status(400).json({ error: "unknown verification recipe field" });
+    const checkTypes = new Set(["file", "repository_diff", "worktree", "structured_file", "build", "targeted_tests", "relevant_tests", "lint", "process", "health", "logs", "deployment", "github", "workflow", "artifact", "infrastructure", "read"]);
+    if (!body.requirement_id || !body.check_type || !body.capability || !checkTypes.has(String(body.check_type))) return res.status(400).json({ error: "bounded supported check_type, requirement_id, and capability are required" });
+    const descriptor = getLiveAgentDescriptor(body.capability); const effect = determineEffect(descriptor, body.arguments || {});
+    if (!descriptor || effect.effect !== "read_only" || effect.authoritative !== true) return res.status(400).json({ error: "verification capability must be authoritative read-only" });
+    const recipeId = durableReceiptStore.createRecipe({ ...body, task_id: task.task_id });
+    res.status(201).json({ ok: true, recipe_id: recipeId, recipes: durableReceiptStore.listRecipes(task.task_id) });
+  } catch (error) { res.status(400).json({ error: redactSensitive(error.message) }); }
+});
+
+function verificationExpectationSatisfied(result, text, expected = {}) {
+  if (expected.text_includes != null && !text.includes(String(expected.text_includes))) return false;
+  if (expected.text_excludes != null && text.includes(String(expected.text_excludes))) return false;
+  if (expected.result_ok != null && Boolean(!result?.isError) !== Boolean(expected.result_ok)) return false;
+  if (expected.json_path != null) {
+    let value;
+    try {
+      const parsed = JSON.parse(text);
+      const path = String(expected.json_path).split(".").filter(part => /^[A-Za-z0-9_-]{1,80}$/.test(part));
+      if (!path.length || path.join(".") !== String(expected.json_path)) return false;
+      value = path.reduce((current, key) => current == null ? undefined : current[key], parsed);
+    } catch { return false; }
+    if (Object.prototype.hasOwnProperty.call(expected, "equals") && JSON.stringify(value) !== JSON.stringify(expected.equals)) return false;
+    if (Object.prototype.hasOwnProperty.call(expected, "contains") && !(Array.isArray(value) ? value.includes(expected.contains) : String(value || "").includes(String(expected.contains)))) return false;
+  }
+  return true;
+}
+
+app.get("/api/agent/learning-candidates", (req, res) => {
+  try {
+    if (!requestAuthIdentity(req) || !/^project:[A-Za-z0-9_.:-]{1,120}$/.test(String(req.query.project || ""))) return res.status(400).json({ error: "authenticated governed project is required" });
+    const candidates = durableOperations.listLearningCandidates(req.query.project).filter(candidate => learningSourceTask(req, candidate, { operator: true }));
+    res.json({ candidates });
+  }
+  catch (error) { res.status(400).json({ error: redactSensitive(error.message) }); }
+});
+app.post("/api/agent/learning-candidates", (req, res) => {
+  try { const body=req.body||{}; const allowed=new Set(["project_ref","kind","source_task_id","provenance","proposal"]); if(Object.keys(body).some(key=>!allowed.has(key)))return res.status(400).json({error:"unknown learning candidate field"}); const source=learningSourceTask(req, body); if(!source || source.project_id!==body.project_ref)return res.status(403).json({error:"an owned source task in the governed project is required"}); res.status(201).json({ok:true,candidate:durableOperations.createLearningCandidate(body)}); }
+  catch (error) { res.status(400).json({ error: redactSensitive(error.message) }); }
+});
+app.post("/api/agent/learning-candidates/:candidateId/review", (req, res) => {
+  try {
+    const body=req.body||{};
+    const allowed=new Set(["project_ref","state","evaluation","reason"]);
+    if(Object.keys(body).some(key=>!allowed.has(key))||!body.state||!/^project:[A-Za-z0-9_.:-]{1,120}$/.test(String(body.project_ref||"")))return res.status(400).json({error:"governed project_ref, state, and known fields are required"});
+    const candidate=durableOperations.getLearningCandidate(req.params.candidateId);
+    if(!candidate||candidate.project_ref!==body.project_ref)return res.status(404).json({error:"learning candidate not found"});
+    const auth=requestAuthIdentity(req);
+    const source=learningSourceTask(req, candidate, { operator: true });
+    if(!auth?.principal_id || !source)return res.status(403).json({error:"the candidate source task is outside the authenticated project scope"});
+    if(body.state === "active") {
+      const approver=identity.getPrincipal(auth.principal_id);
+      const grant=authorization.authorize({principalId:auth.principal_id, permission:"approvals.grant", credentialScopes:auth.scopes, delegationId:auth.delegation_id || null, resource:{kind:"agent_learning_candidate",candidate_id:candidate.candidate_id}});
+      if(!approver || approver.principal_type !== "human" || !grant.ok) return res.status(403).json({error:"human approvals.grant authorization is required to promote a learning candidate"});
+      const sourceOwner=source.actor_principal_id || source.requested_by_principal_id;
+      if(sourceOwner && sourceOwner === auth.principal_id) return res.status(403).json({error:"the task requester cannot self-approve learning promotion"});
+    }
+    const evaluation={...(body.evaluation||{}),approved_by:body.state==="active"?auth.principal_id:null,reason:redactSensitive(String(body.reason||""))};
+    if (JSON.stringify(evaluation).length > 12000) return res.status(400).json({ error: "learning evaluation is too large" });
+    res.json({ok:true,candidate:durableOperations.updateLearningCandidate(req.params.candidateId,body.state,evaluation)});
+  }
+  catch (error) { res.status(400).json({ error: redactSensitive(error.message) }); }
+});
+app.post("/api/agent/learning-candidates/:candidateId/evaluate", (req, res) => {
+  try {
+    if (Object.keys(req.body || {}).length) return res.status(400).json({ error: "historical evaluation accepts no model-authored fields" });
+    const candidate=durableOperations.getLearningCandidate(req.params.candidateId); if(!candidate) return res.status(404).json({error:"learning candidate not found"});
+    const source=learningSourceTask(req,candidate,{operator:true}); if(!source) return res.status(403).json({error:"candidate is outside the authenticated project scope"});
+    const evaluation=durableOperations.evaluateLearningCandidate(candidate.candidate_id,{evaluator_principal_id:requestAuthIdentity(req)?.principal_id||null});
+    res.json({ok:true,candidate:evaluation});
+  } catch(error) { res.status(400).json({error:redactSensitive(error.message)}); }
+});
+
+app.post("/api/agent/tasks/:taskId/verification-recipes/:recipeId/run", async (req, res) => {
+  if (!validateTaskId(req.params.taskId)) return res.status(400).json({ error: "invalid task id" });
+  try {
+    if (Object.keys(req.body || {}).length) return res.status(400).json({ error: "verification execution accepts no model-authored fields" });
+    const task = durableTaskStore.getTask(req.params.taskId); const recipe = durableReceiptStore.getRecipe(req.params.recipeId);
+    if (!task || !recipe || recipe.task_id !== task.task_id) return res.status(404).json({ error: "verification recipe not found" });
+    if (!requireTaskAccess(req, res, task)) return;
+    if (durableTaskModel.budgetExceeded(task, "verification_calls")) return res.status(409).json({ error: "verification budget exhausted" });
+    const descriptor = getLiveAgentDescriptor(recipe.capability);
+    const effect = determineEffect(descriptor, recipe.arguments);
+    if (!descriptor || effect.effect !== "read_only" || effect.authoritative !== true) return res.status(403).json({ error: "verification capability must be authoritative read-only" });
+    const expected = recipe.expected || {};
+    const retryPolicy = recipe.retry_policy && typeof recipe.retry_policy === "object" ? recipe.retry_policy : {};
+    const maxAttempts = Math.max(1, Math.min(3, Number(retryPolicy.max_attempts) || 1));
+    let result = null;
+    let text = "";
+    let attempt = 0;
+    do {
+      attempt++;
+      result = await callAgentTool(recipe.capability, recipe.arguments, { taskId: task.task_id, project: task.project_id, source: "agent", authIdentity: requestAuthIdentity(req), correlationId: task.task_id, timeoutMs: recipe.timeout_ms });
+      text = String(result?.content?.[0]?.text || "");
+      if (!result?.isError || attempt >= maxAttempts) break;
+      const retryable = /timeout|temporar|unavailable|busy|network|econn|503/i.test(text) && !/approval|policy|forbidden|invalid|permission|security/i.test(text);
+      if (!retryable) break;
+      const backoff = Math.min(250, Math.max(0, Number(retryPolicy.backoff_ms) || 0));
+      if (backoff) await new Promise(resolve => setTimeout(resolve, backoff));
+    } while (attempt < maxAttempts);
+    const expectedSatisfied = verificationExpectationSatisfied(result, text, expected);
+    const ok = !result?.isError && expectedSatisfied;
+    const observationState = ok ? "successful" : (result?.isError ? "failed" : "contradictory");
+    const outcomeId = durableReceiptStore.recordOutcome({ recipe_id: recipe.recipe_id, task_id: task.task_id, evidence_ref: result?.receipt_ref || result?.operation_id || null, freshness_state: "fresh", independence_state: recipe.independent ? "independent" : "self_reported", observation_state: observationState, summary: text || (ok ? "verification completed" : "verification failed") });
+    try { durableTaskStore.incrementUsage(task.task_id, { verification_calls: 1 }, "task.verification_called"); } catch {}
+    res.status(ok ? 200 : 422).json({ ok, outcome_id: outcomeId, observation_state: observationState });
+  } catch (error) { res.status(400).json({ error: redactSensitive(error.message) }); }
 });
 
 app.post("/api/agent/tasks/:taskId/guidance", (req, res) => {
   if (!validateTaskId(req.params.taskId)) return res.status(400).json({ error: "invalid task id" });
   try {
-    const task = durableTaskStore.recordGuidance(req.params.taskId, req.body && req.body.guidance, req.body && req.body.actor_id || "user");
+    const body = req.body || {};
+    if (Object.keys(body).some(key => !["guidance", "actor_id"].includes(key))) return res.status(400).json({ error: "unknown guidance field" });
+    const auth = requestAuthIdentity(req);
+    const task = durableTaskStore.recordGuidance(req.params.taskId, body.guidance, auth?.principal_id || "user");
     res.status(202).json({ ok: true, task });
   } catch (error) { res.status(error.message === "task not found" ? 404 : 400).json({ error: redactSensitive(error.message) }); }
 });
@@ -1573,14 +2311,17 @@ app.post("/api/agent/tasks/:taskId/guidance", (req, res) => {
 app.post("/api/agent/tasks/:taskId/resume", (req, res) => {
   if (!validateTaskId(req.params.taskId)) return res.status(400).json({ error: "invalid task id" });
   try {
+    if (Object.keys(req.body || {}).some(key => key !== "actor_id")) return res.status(400).json({ error: "resume does not accept request fields" });
     const task = durableTaskStore.getTask(req.params.taskId);
     if (!task) return res.status(404).json({ error: "task not found" });
     if (!["paused", "interrupted", "blocked", "waiting"].includes(task.state)) return res.status(409).json({ error: "task is not resumable from its current state" });
     const waitingForApproval = task.next_action === "await_approval";
     if (waitingForApproval) return res.status(409).json({ error: "task is waiting for an approval decision" });
-    durableTaskStore.recordGuidance(task.task_id, "Resume requested from the last safe checkpoint", req.body && req.body.actor_id || "user");
+    const authIdentity = requestAuthIdentity(req);
+    const effectiveAuthIdentity = authIdentity || persistedTaskAuthIdentity(task);
+    durableTaskStore.recordGuidance(task.task_id, "Resume requested from the last safe checkpoint", authIdentity?.principal_id || "user");
     durableTaskStore.updateTask(task.task_id, { control: { ...(task.control || {}), pause_requested: false, cancel_requested: false } }, "task.control_cleared");
-    beginTaskRun(res, { taskId: task.task_id, goal: task.objective, profile: task.profile, resume: true, parentContext: task.parent_task_id ? { parentTaskId: task.parent_task_id, rootTaskId: task.root_task_id, sessionId: task.session_id, project: task.project_id } : null });
+    beginTaskRun(res, { taskId: task.task_id, goal: task.objective, profile: task.profile, resume: true, parentContext: { ...(task.parent_task_id ? { parentTaskId: task.parent_task_id, rootTaskId: task.root_task_id, sessionId: task.session_id, project: task.project_id } : { project: task.project_id }), ...(effectiveAuthIdentity ? { requestedByPrincipalId: task.requested_by_principal_id || effectiveAuthIdentity.principal_id, actorPrincipalId: task.actor_principal_id || effectiveAuthIdentity.principal_id, authIdentity: effectiveAuthIdentity } : {}) } });
   } catch { res.status(503).json({ error: "durable task state unavailable" }); }
 });
 
@@ -1589,18 +2330,31 @@ app.post("/api/agent/tasks/:taskId/resume", (req, res) => {
 app.post("/api/agent/tasks/:taskId/act-on", (req, res) => {
   if (!validateTaskId(req.params.taskId)) return res.status(400).json({ error: "invalid task id" });
   try {
+    const body = req.body || {};
+    const allowed = new Set(["kind", "goal", "reference", "profile"]);
+    if (Object.keys(body).some(key => !allowed.has(key) && key !== "actor_id")) return res.status(400).json({ error: "unknown continuation field" });
     const parent = durableTaskStore.getTask(req.params.taskId);
     if (!parent) return res.status(404).json({ error: "task not found" });
-    const requestedGoal = req.body && req.body.goal;
-    const kind = String(req.body && req.body.kind || "continue").toLowerCase();
-    const allowedKinds = new Set(["continue", "verify", "implement", "report", "recheck", "compare"]);
+    if (durableTaskModel.budgetExceeded(parent, "child_tasks")) return res.status(409).json({ error: "child-task budget exhausted" });
+    const requestedGoal = body.goal;
+    const kind = String(body.kind || "continue").toLowerCase();
+    const allowedKinds = new Set(["continue", "investigate", "implement", "verify", "repair", "compare", "deliverable", "report", "recheck", "apply", "monitor"]);
     if (!allowedKinds.has(kind)) return res.status(400).json({ error: "unsupported composition kind" });
-    const goalCheck = validateFollowUpGoal(requestedGoal || `${kind} the result of task ${parent.task_id}`);
+    const envelope = parent.authority_envelope || {};
+    if (Number(envelope.child_task_depth || 0) <= 0 || Number(envelope.child_task_count || 0) <= 0) return res.status(403).json({ error: "child-task envelope limit reached" });
+    const reference = body.reference;
+    if (reference != null && !/^(?:finding|artifact|evidence|requirement|receipt|recipe):[A-Za-z0-9_.:-]{1,140}$/.test(String(reference))) return res.status(400).json({ error: "reference must be a governed structured reference" });
+    const goalCheck = validateFollowUpGoal(requestedGoal || `${kind} governed reference ${reference || `task:${parent.task_id}`}`);
     if (!goalCheck.ok) return res.status(goalCheck.httpStatus).json({ error: goalCheck.clientMessage });
     const goal = goalCheck.goal;
-    const childContext = { parentTaskId: parent.task_id, rootTaskId: parent.root_task_id, sessionId: parent.session_id, project: parent.project_id };
-    const childId = beginTaskRun(res, { goal, profile: req.body && req.body.profile || parent.profile, parentContext: childContext });
-    if (childId) durableTaskStore.recordChildRequest(parent.task_id, childId, kind, req.body && req.body.actor_id || "user");
+    const requestedProfile = body.profile || parent.profile;
+    if (!profileFitsParent(parent.profile, requestedProfile)) return res.status(403).json({ error: "child profile cannot broaden the parent resource envelope" });
+    const authIdentity = requestAuthIdentity(req);
+    const effectiveAuthIdentity = authIdentity || persistedTaskAuthIdentity(parent);
+    const reservation = durableTaskStore.reserveChildTask(parent.task_id);
+    const childContext = { parentTaskId: parent.task_id, rootTaskId: parent.root_task_id, sessionId: parent.session_id, project: parent.project_id, continuationReference: { kind, reference: reference || null }, authorityEnvelope: { ...envelope, child_task_depth: Math.max(0, Number(envelope.child_task_depth || 0) - 1), child_task_count: reservation.remaining }, ...(effectiveAuthIdentity ? { requestedByPrincipalId: parent.requested_by_principal_id || effectiveAuthIdentity.principal_id, actorPrincipalId: parent.actor_principal_id || effectiveAuthIdentity.principal_id, authIdentity: effectiveAuthIdentity } : {}) };
+    const childId = beginTaskRun(res, { goal, profile: requestedProfile, parentContext: childContext });
+    if (childId) durableTaskStore.recordChildRequest(parent.task_id, childId, kind, effectiveAuthIdentity?.principal_id || "user");
   } catch (error) { res.status(error.message === "task not found" ? 404 : 400).json({ error: redactSensitive(error.message) }); }
 });
 
@@ -1612,8 +2366,22 @@ app.post("/api/agent/run/:taskId/follow-up", (req, res) => {
   if (!validateTaskId(parentTaskId)) {
     return res.status(400).json({ error: "invalid task id" });
   }
+  const followUpCompatibilityFields = new Set(["goal", "approve", "approval", "approvalId", "approval_id", "approved", "approved_by", "actor_id"]);
+  if (Object.keys(req.body || {}).some(key => !followUpCompatibilityFields.has(key))) return res.status(400).json({ error: "unknown follow-up field" });
   const goalCheck = validateFollowUpGoal(req.body && req.body.goal);
   if (!goalCheck.ok) return res.status(goalCheck.httpStatus).json({ error: goalCheck.clientMessage });
+  const durableParent = durableTaskStore.getTask(parentTaskId);
+  if (durableParent && !requireTaskAccess(req, res, durableParent)) return;
+  let followUpAuthorityEnvelope = null;
+  if (durableParent) {
+    if (durableTaskModel.budgetExceeded(durableParent, "child_tasks")) return res.status(409).json({ error: "child-task budget exhausted" });
+    const envelope = durableParent.authority_envelope || {};
+    if (Number(envelope.child_task_depth || 0) <= 0 || Number(envelope.child_task_count || 0) <= 0) return res.status(403).json({ error: "child-task envelope limit reached" });
+    // The reservation is performed after lineage validation below; retain the
+    // parent envelope here so the child receives the same narrowed authority
+    // envelope rather than the default read-only envelope.
+    followUpAuthorityEnvelope = envelope;
+  }
 
   // Refuse to race an actively-running parent: while running it has a live
   // emitter but no persisted transcript yet (transcript is written only at the
@@ -1637,7 +2405,13 @@ app.post("/api/agent/run/:taskId/follow-up", (req, res) => {
     }
     return res.status(500).json({ error: "could not start follow-up" });
   }
-  beginTaskRun(res, { goal: goalCheck.goal, parentContext });
+  if (durableParent) {
+    const reservation = durableTaskStore.reserveChildTask(parentTaskId);
+    followUpAuthorityEnvelope = { ...followUpAuthorityEnvelope, child_task_depth: Math.max(0, Number(followUpAuthorityEnvelope.child_task_depth || 0) - 1), child_task_count: reservation.remaining };
+  }
+  const authIdentity = requestAuthIdentity(req);
+  const effectiveAuthIdentity = authIdentity || persistedTaskAuthIdentity(durableParent);
+  beginTaskRun(res, { goal: goalCheck.goal, profile: durableParent?.profile || "standard", authorityEnvelope: followUpAuthorityEnvelope, parentContext: effectiveAuthIdentity ? { ...parentContext, authorityEnvelope: followUpAuthorityEnvelope, requestedByPrincipalId: durableParent?.requested_by_principal_id || effectiveAuthIdentity.principal_id, actorPrincipalId: durableParent?.actor_principal_id || effectiveAuthIdentity.principal_id, authIdentity: effectiveAuthIdentity } : { ...parentContext, authorityEnvelope: followUpAuthorityEnvelope } });
 });
 
 // Cancel a live task. Aborts the per-task controller: the AbortSignal cancels
@@ -1646,25 +2420,42 @@ app.post("/api/agent/run/:taskId/follow-up", (req, res) => {
 // the kernel's `cancelled` state). A task without a registered controller is
 // not running — either unknown or already terminal — and that is a 404, never
 // a fake success.
+function propagateAgentCancellation(taskId) {
+  const affected = [];
+  for (const task of durableTaskStore.listDescendants(taskId)) {
+    if (durableTaskModel.TERMINAL.has(task.state)) continue;
+    try { durableTaskStore.updateTask(task.task_id, { control: { ...(task.control || {}), cancel_requested: true } }, "task.cancel_requested"); } catch {}
+    const childController = taskCancels[task.task_id];
+    if (childController && !childController.signal.aborted) {
+      try { childController.abort(); } catch {}
+    }
+    affected.push(task.task_id);
+  }
+  return affected;
+}
 app.post("/api/agent/run/:taskId/cancel", (req, res) => {
   const taskId = req.params.taskId;
   if (!validateTaskId(taskId)) return res.status(400).json({ error: "invalid task id" });
+  if (Object.keys(req.body || {}).some(key => key !== "actor_id")) return res.status(400).json({ error: "cancel does not accept request fields" });
   const controller = taskCancels[taskId];
   if (!controller) {
     // The in-memory controller disappears after a process restart, but the
     // platform claim remains the authoritative cancellation surface.
     try {
+      const affected = propagateAgentCancellation(taskId);
       const execution = platformKernel.findActiveExecution({ operation_type: "agent_task" }).find(row => row.task_id === taskId);
       if (!execution) return res.status(404).json({ error: "task is not running" });
-      platformKernel.requestExecutionCancel(execution.execution_id, { source: "agent", actor_id: "agent", reason: "Agent task cancellation requested" });
-      return res.json({ ok: true, taskId, cancelling: true, durable: true });
+      const auth = requestAuthIdentity(req);
+      platformKernel.requestExecutionCancel(execution.execution_id, { source: "agent", actor_id: auth?.principal_id || "agent", reason: "Agent task cancellation requested" });
+      return res.json({ ok: true, taskId, cancelling: true, durable: true, affected_task_ids: affected });
     } catch { return res.status(404).json({ error: "task is not running" }); }
   }
   const alreadyRequested = controller.signal.aborted;
   if (!alreadyRequested) {
-    try { const task = durableTaskStore.getTask(taskId); if (task) durableTaskStore.updateTask(taskId, { control: { ...(task.control || {}), cancel_requested: true } }, "task.cancel_requested"); } catch {}
-    controller.abort();
+    const affected = propagateAgentCancellation(taskId);
+    try { controller.abort(); } catch {}
     try { emit(taskId, { type: "step", text: "Cancellation requested; stopping between steps" }); } catch {}
+    return res.json({ ok: true, taskId, cancelling: true, alreadyRequested, affected_task_ids: affected });
   }
   res.json({ ok: true, taskId, cancelling: true, alreadyRequested });
 });
@@ -1675,19 +2466,23 @@ app.post("/api/agent/run/:taskId/cancel", (req, res) => {
 app.post("/api/agent/tasks/:taskId/pause", (req, res) => {
   const taskId = req.params.taskId;
   if (!validateTaskId(taskId)) return res.status(400).json({ error: "invalid task id" });
+  if (Object.keys(req.body || {}).some(key => key !== "actor_id")) return res.status(400).json({ error: "pause does not accept request fields" });
   const task = durableTaskStore.getTask(taskId);
   if (!task) return res.status(404).json({ error: "task not found" });
   const controller = taskCancels[taskId];
   if (!controller) return res.status(409).json({ error: "task is not actively running" });
   if (controller.signal.aborted) return res.status(409).json({ error: "task already has a stop request" });
   durableTaskStore.updateTask(taskId, { control: { ...(task.control || {}), pause_requested: true } }, "task.pause_requested");
-  durableTaskStore.recordGuidance(taskId, "Pause requested by the authenticated user", req.body && req.body.actor_id || "user");
+  const auth = requestAuthIdentity(req);
+  durableTaskStore.recordGuidance(taskId, "Pause requested by the authenticated user", auth?.principal_id || "user");
   controller.abort("pause");
   try { emit(taskId, { type: "step", text: "Pause requested; stopping at the next safe boundary" }); } catch {}
   res.status(202).json({ ok: true, taskId, pausing: true });
 });
 
 app.get("/api/agent/stream/:taskId", (req, res) => {
+  if (!validateTaskId(req.params.taskId)) return res.status(400).json({ error: "invalid task id" });
+  if (!legacyTaskAccessible(req, req.params.taskId)) return res.status(404).json({ error: "task not found" });
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -1697,7 +2492,7 @@ app.get("/api/agent/stream/:taskId", (req, res) => {
 
   // Validate before indexing so prototype-chain names ("constructor") can
   // never resolve to a non-emitter value and crash the stream mid-response.
-  const ee = validateTaskId(req.params.taskId) ? taskEmitters[req.params.taskId] : null;
+  const ee = taskEmitters[req.params.taskId] || null;
   if (!ee) {
     // An error event, not a "done": clients render `done` as a successful
     // answer, and "Task not found" is not an answer.
@@ -1706,27 +2501,53 @@ app.get("/api/agent/stream/:taskId", (req, res) => {
     return;
   }
 
+  let ended = false;
   const handler = (data) => {
+    if (ended) return;
     res.write("data: " + JSON.stringify(data) + "\n\n");
     if (data.type === "done" || data.type === "error") {
+      ended = true;
       ee.off("data", handler);
       res.end();
     }
   };
   ee.on("data", handler);
+  // SSE is a delivery convenience, not the task authority. If the child
+  // reaches a terminal durable state before the HTTP listener attaches, emit
+  // the reconstructed terminal frame so reconnects cannot silently lose the
+  // result. The guard above prevents a duplicate if the emitter wins the
+  // race between listener registration and this projection check.
+  try {
+    const durable = durableTaskStore.getTask(req.params.taskId);
+    if (durable && ["completed", "partial", "failed", "cancelled", "timed_out"].includes(durable.state)) {
+      const summary = durable.result && (durable.result.summary || durable.result.result);
+      handler(durable.state === "completed"
+        ? { type: "done", text: String(summary || "Task completed") }
+        : { type: "error", text: String(durable.stopping_reason || durable.result?.summary || "Task ended without verified completion") });
+    }
+  } catch {}
   req.on("close", () => ee.off("data", handler));
 });
 
 app.get("/api/agent/history", (req, res) => {
   const pageSize = req.query && req.query.page_size;
   const offset = req.query && req.query.offset;
-  const result = assembleSessions(CONV_DIR, { pageSize, offset });
+  let result = assembleSessions(CONV_DIR, { pageSize, offset });
+  if (requestAuthIdentity(req)) {
+    const owned = new Set(durableTaskStore.listTasks().filter(task => taskBelongsToRequest(req, task)).map(task => task.task_id));
+    const sessions = result.sessions.filter(session => owned.has(session.rootTaskId || session.root_task_id || session.id));
+    const runs = result.runs.filter(run => owned.has(run.rootTaskId || run.root_task_id || run.id));
+    // Do not expose the unfiltered total or pagination cursor as an ownership
+    // side channel to an authenticated principal.
+    result = { ...result, sessions, runs, total: sessions.length, nextOffset: null };
+  }
   // `runs` remains as a compatibility alias for older dashboard clients, but
   // entries are now logical sessions, ordered by canonical temporal metadata.
   res.json({ sessions: result.sessions, runs: result.runs, nextOffset: result.nextOffset, total: result.total, malformed: result.malformed });
 });
 
 app.get("/api/agent/session/:rootId", (req, res) => {
+  if (!legacyTaskAccessible(req, req.params.rootId)) return res.status(404).json({ error: "session not found" });
   const session = buildSession(CONV_DIR, req.params.rootId);
   if (!session) return res.status(404).json({ error: "session not found" });
   res.json({ session });
@@ -1735,6 +2556,7 @@ app.get("/api/agent/session/:rootId", (req, res) => {
 app.get("/api/agent/run/:id", (req, res) => {
   const id = req.params.id;
   if (!validateTaskId(id)) return res.status(400).json({ error: "invalid task id" });
+  if (!legacyTaskAccessible(req, id)) return res.status(404).json({ error: "not found" });
   const task = buildTask(CONV_DIR, id);
   if (!task) return res.status(404).json({ error: "not found" });
   res.json(task);
@@ -1811,6 +2633,8 @@ const startApprovalContinuationJobs = createContinuationJobStarter({
   inferProjectFromText,
   finalizeResumedTask,
   stepTimeoutMs: BRAIN_STEP_TIMEOUT_MS,
+  getLiveAgentToolDefs,
+  getTask: durableTaskStore.getTask,
 });
 
 // Only bind the port when run as the entrypoint. When required by a test the
@@ -1834,5 +2658,6 @@ module.exports = {
   finalizeResumedTask,
   finishAgentExecution,
   sweepStrandedAgentExecutions,
+  prepareTaskBranch,
   __setLLMOverrideForTests,
 };

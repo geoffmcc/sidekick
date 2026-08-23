@@ -175,7 +175,7 @@ function formatEvidenceForPrompt(evidence, redact) {
  * @param {(text:string)=>string} [deps.redact]
  */
 function makeBrainRunner(deps) {
-  const { callLLM, agentTools, callTool, toolContracts = [], recallMemory = null, redact = (t) => t, packContext = null, capabilityMetadata = {}, onCheckpoint = null, workState = null, completionGate = null } = deps;
+  const { callLLM, agentTools, callTool, toolContracts = [], recallMemory = null, redact = (t) => t, packContext = null, capabilityMetadata = {}, onCheckpoint = null, workState = null, completionGate = null, concurrencyLimit = 1, maxWorkRounds = 4, profileName = "standard", profileInstruction = "", workPackageHooks = null } = deps;
   // Built per plan() call, not once: the shortlist depends on the goal.
 
   const plan = async ({ goal, memoryContext, priorErrors }) => {
@@ -191,7 +191,8 @@ function makeBrainRunner(deps) {
       // validator regardless.
       messages.push({ role: "user", content: "Your previous plan was REJECTED by the validator with these errors:\n" + priorErrors.slice(0, 8).map(e => "- " + e).join("\n") + "\nEmit the corrected plan as raw JSON in EXACTLY the schema from the instructions. Fix every error. No other changes, no extra fields." });
     }
-    const plannerSystem = buildPlannerSystemPrompt(selectToolsForGoal(agentTools, goal, 24, capabilityMetadata), packContext, capabilityMetadata);
+    const plannerSystem = buildPlannerSystemPrompt(selectToolsForGoal(agentTools, goal, 24, capabilityMetadata), packContext, capabilityMetadata) +
+      `\n\nExecution profile: ${String(profileName || "standard").slice(0, 32)}. Runtime behavior is durably bounded by policy; this is planning guidance only and grants no authority: ${String(profileInstruction || "").slice(0, 400)}`;
     // timeoutMs bounds the request itself — synthesis already declared this
     // budget, but the planner call was unbounded, so a hung provider stalled
     // the task before its first step.
@@ -218,6 +219,8 @@ function makeBrainRunner(deps) {
       taskId, lineage,
       workState, completionGate, onCheckpoint,
       onPlanRevision,
+      concurrencyLimit,
+      maxWorkRounds, workPackageHooks,
       persistence: persistence === undefined ? (taskId ? defaultPersistence() : null) : persistence,
     });
   };
@@ -256,10 +259,14 @@ function makeSynthesizer({ callLLM, redact = (t) => t }) {
  * `makeBrainRunner` — same dispatcher, same synthesis, same redaction — so a
  * resumed step behaves identically to one that never parked (ADR §1).
  */
-function makeResumeDeps({ callLLM, callTool, redact = (t) => t }) {
+function makeResumeDeps({ callLLM, callTool, redact = (t) => t, toolContracts = [], agentTools = [], concurrencyLimit = 1, workPackageHooks = null }) {
   const { executeAuthorizedTaskStep } = require("../tools/dispatcher");
   return {
     callTool,
+    toolContracts,
+    agentTools,
+    concurrencyLimit,
+    workPackageHooks,
     dispatchApproved: (tool, args, meta) => executeAuthorizedTaskStep(tool, args, meta),
     synthesize: makeSynthesizer({ callLLM, redact }),
     redact,

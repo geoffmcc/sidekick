@@ -41,6 +41,9 @@ function createExecutionContext(input = {}) {
     // inherited by children so fan-out stays attributable to the module.
     module: input.module || parent?.module || null,
     approvalId: input.approvalId || input.approval_id || parent?.approvalId || null,
+    authorityApprovalRequired: input.authorityApprovalRequired === true || parent?.authorityApprovalRequired === true,
+    authorityRisk: input.authorityRisk || parent?.authorityRisk || null,
+    authorityReason: input.authorityReason || parent?.authorityReason || null,
     approvedExecution: input.approvedExecution === true || parent?.approvedExecution === true,
     generatedProcedure: input.generatedProcedure || input.generated_procedure || parent?.generatedProcedure || null,
     executionId: input.executionId || input.execution_id || parent?.executionId || null,

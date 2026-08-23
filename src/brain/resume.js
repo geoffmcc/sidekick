@@ -138,6 +138,10 @@ async function resumeBrainTask(opts) {
     redact = (t) => t,
     cancel = { aborted: false },
     clock = null,
+    toolContracts = [],
+    agentTools = [],
+    concurrencyLimit = 1,
+    workPackageHooks = null,
   } = opts;
 
   const now = () => (clock ? clock() : Date.now());
@@ -359,6 +363,8 @@ async function resumeBrainTask(opts) {
       plan, startIndex: parkedIndex + 1, acc,
       callTool, emit, onEvent, redact,
       cancelled, outOfTime,
+      toolContracts, agentTools, concurrencyLimit,
+      workPackageHooks,
     });
 
     if (outcome.status === "cancelled") {

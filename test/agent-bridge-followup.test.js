@@ -40,12 +40,12 @@ async function ok(name, fn) {
   }
 }
 
-function request(method, urlPath, body) {
+function request(method, urlPath, body, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
     const data = body != null ? JSON.stringify(body) : null;
     const req = http.request({
       hostname: "127.0.0.1", port: PORT, path: urlPath, method,
-      headers: { "Content-Type": "application/json", ...(data ? { "Content-Length": Buffer.byteLength(data) } : {}) },
+      headers: { "Content-Type": "application/json", ...(data ? { "Content-Length": Buffer.byteLength(data) } : {}), ...extraHeaders },
     }, (res) => {
       let out = "";
       res.on("data", (c) => (out += c));
@@ -130,6 +130,36 @@ let server;
     assert.strictEqual(a.status, 400);
     const b = await request("POST", "/api/agent/run", { goal: "   " });
     assert.strictEqual(b.status, 400);
+    const expanded = await request("POST", "/api/agent/run", { goal: "unauthenticated mutation", authority_envelope: { allowed_effects: ["workspace_reversible"], changes_allowed: true } });
+    assert.strictEqual(expanded.status, 403);
+  });
+
+  await ok("1b-goal-spec) structured criteria persist through the real Agent submission route", async () => {
+    fake = fakeDirect("criteria answer");
+    const created = await request("POST", "/api/agent/run", { goal: "Answer with a bounded criterion", goal_spec: { normalized_objective: "Answer with one criterion", success_criteria: ["criteria answer"], stopping_conditions: ["budget exhausted"] } });
+    assert.strictEqual(created.status, 200);
+    await waitForTranscript(created.data.taskId);
+    const detail = await request("GET", "/api/agent/tasks/" + created.data.taskId);
+    assert.strictEqual(detail.status, 200);
+    assert.deepStrictEqual(detail.data.task.goal.success_criteria, ["criteria answer"]);
+    assert.strictEqual(detail.data.task.goal.normalized_objective, "Answer with one criterion");
+  });
+
+  await ok("1c) authenticated task projections cannot cross principal ownership", async () => {
+    fake = fakeDirect("owned task");
+    const created = await request("POST", "/api/agent/run", { goal: "Principal-owned task" }, { "X-Sidekick-Principal-ID": "principal_alpha" });
+    assert.strictEqual(created.status, 200);
+    await waitForTranscript(created.data.taskId);
+    const allowed = await request("GET", "/api/agent/tasks/" + created.data.taskId, null, { "X-Sidekick-Principal-ID": "principal_alpha" });
+    assert.strictEqual(allowed.status, 200);
+    const denied = await request("GET", "/api/agent/tasks/" + created.data.taskId, null, { "X-Sidekick-Principal-ID": "principal_beta" });
+    assert.strictEqual(denied.status, 404);
+    const legacyDenied = await request("GET", "/api/agent/run/" + created.data.taskId, null, { "X-Sidekick-Principal-ID": "principal_beta" });
+    assert.strictEqual(legacyDenied.status, 404, "legacy task detail must retain principal scoping");
+    const streamDenied = await request("GET", "/api/agent/stream/" + created.data.taskId, null, { "X-Sidekick-Principal-ID": "principal_beta" });
+    assert.strictEqual(streamDenied.status, 404, "SSE must retain principal scoping");
+    const followupDenied = await request("POST", "/api/agent/run/" + created.data.taskId + "/follow-up", { goal: "read another principal's result" }, { "X-Sidekick-Principal-ID": "principal_beta" });
+    assert.strictEqual(followupDenied.status, 404, "follow-up must retain principal scoping");
   });
 
   // 2/3) A valid follow-up creates a distinct child with correct parent/root ids.
@@ -146,6 +176,17 @@ let server;
     assert.strictEqual(res.data.parentTaskId, rootId);
     assert.strictEqual(res.data.rootTaskId, rootId);
     await waitForTranscript(childId);
+    const parentDetail = await request("GET", "/api/agent/tasks/" + rootId);
+    const childDetail = await request("GET", "/api/agent/tasks/" + childId);
+    assert.strictEqual(childDetail.status, 200);
+    assert.strictEqual(childDetail.data.task.authority_envelope.child_task_count, Math.max(0, Number(parentDetail.data.task.authority_envelope.child_task_count) - 1), "follow-up receives a narrowed fan-out envelope");
+  });
+
+  await ok("2b) act-on cannot amplify the parent resource profile", async () => {
+    fake = fakeDirect("should not run");
+    const res = await request("POST", "/api/agent/tasks/" + rootId + "/act-on", { kind: "continue", goal: "broaden budget", profile: "persistent" });
+    assert.strictEqual(res.status, 403);
+    assert.match(JSON.stringify(res.data), /broaden|profile/i);
   });
 
   // 4) The parent transcript remains byte-for-byte unchanged.
