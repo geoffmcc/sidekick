@@ -1848,16 +1848,72 @@ function loadDurableAgentTask(taskId){
     if (!ok || !data.task) return;
     const task = data.task;
     const state = $('agentDurableState');
+    const objective = $('agentDurableObjective');
+    const authority = $('agentDurableAuthority');
     const details = $('agentDurableDetails');
     const verification = $('agentDurableVerification');
+    const work = $('agentDurableWork');
+    const evidence = $('agentDurableEvidence');
+    const escalation = $('agentDurableEscalation');
+    const result = $('agentDurableResult');
+    const continuationActions = $('agentDurableContinuationActions');
     const plan = $('agentDurablePlan');
     const failures = $('agentDurableFailures');
     if (state) state.textContent = 'State: ' + (task.state || 'unknown') + ' · Phase: ' + (task.phase || 'unknown') + ' · Profile: ' + (task.profile || 'standard') + ' · Revision: ' + (task.current_plan_revision || 0);
-    if (details) details.textContent = 'Next: ' + (task.next_action || 'none') + ' · Requirements: ' + ((task.requirements || []).filter(r => r.state === 'satisfied').length) + '/' + ((task.requirements || []).length) + ' satisfied · Updated: ' + (task.updated_at || 'unknown');
-    if (verification) verification.textContent = 'Verification: ' + ((task.verification && task.verification.status) || (task.result && task.result.status) || 'pending') + ' · Checkpoint: ' + ((task.checkpoint && task.checkpoint.safe_boundary) || 'none') + ' · Workspace: ' + (task.workspace_ref || 'none');
-    if (plan) { const revisions = data.plans || []; plan.textContent = revisions.length ? 'Plan revisions: ' + revisions.map(p => '#' + p.revision + ' ' + (p.source || 'planner')).join(' · ') : 'No durable plan revisions yet'; }
-    if (failures) { const rows = data.failures || []; failures.textContent = rows.length ? 'Failures: ' + rows.slice(0, 5).map(f => (f.capability || 'operation') + ' [' + (f.error_class || 'unknown') + ']').join(' · ') : 'No recorded failures'; }
+    if (objective) objective.textContent = 'Objective: ' + (task.objective || task.normalized_objective || 'not recorded') + ' · Normalized: ' + (task.normalized_objective || 'not recorded');
+    if (authority) { const a = task.authority_envelope || {}; authority.textContent = 'Effective authority: effects=' + ((a.allowed_effects || []).join(', ') || 'read_only') + ' · prohibited=' + ((a.prohibited_effects || []).join(', ') || 'none') + ' · projects=' + ((a.permitted_projects || []).join(', ') || 'task scope') + ' · workspaces=' + ((a.permitted_workspaces || []).join(', ') || 'task scope') + ' · repositories=' + ((a.permitted_repositories || []).join(', ') || 'task scope') + ' · approval=' + (a.approval_threshold || 'high') + ' · expires=' + (a.expires_at || 'none'); }
+    if (details) { const a = task.authority_envelope || {}; const u = task.usage || {}; const b = task.budget || {}; const remaining = key => Number.isFinite(Number(b[key])) ? Math.max(0, Number(b[key]) - Number(u[key] || 0)) : '?'; details.textContent = 'Next: ' + (task.next_action || 'none') + ' · Requirements: ' + ((task.requirements || []).filter(r => r.state === 'satisfied').length) + '/' + ((task.requirements || []).length) + ' satisfied · Effects: ' + ((a.allowed_effects || []).join(', ') || 'read_only') + ' · Scope: ' + (a.permitted_projects || []).join(', ') + ' · Milestone: ' + (task.current_milestone || 'none') + ' · Updated: ' + (task.updated_at || 'unknown'); const usage = $('agentDurableUsage'); if (usage) usage.textContent = 'Resources used/remaining: model ' + (u.model_calls || 0) + '/' + remaining('model_calls') + ' · tools ' + (u.tool_calls || 0) + '/' + remaining('tool_calls') + ' · plan revisions ' + (u.plan_revisions || 0) + '/' + remaining('plan_revisions') + ' · retries ' + (u.retries || 0) + '/' + remaining('retries') + ' · repairs ' + (u.repair_cycles || 0) + '/' + remaining('repair_cycles') + ' · verification ' + (u.verification_calls || 0) + '/' + remaining('verification_calls') + ' · waiting ms ' + (u.waiting_ms || 0) + '/' + remaining('waiting_ms') + ' · idle ms ' + (u.idle_ms || 0) + '/' + remaining('idle_ms'); }
+    if (verification) { const outcomes = data.verification_outcomes || []; const recipes = data.verification_recipes || data.verification || []; const recipeById = Object.fromEntries(recipes.map(recipe => [String(recipe.recipe_id), recipe])); const outcomeFresh = outcome => { if (outcome.freshness_state !== 'fresh' || !outcome.observed_at) return outcome.freshness_state === 'fresh'; const recipe = recipeById[String(outcome.recipe_id)]; const age = Date.now() - Date.parse(outcome.observed_at); const windowMs = Number(recipe && recipe.freshness_ms); return Number.isFinite(age) && age >= 0 && (!Number.isFinite(windowMs) || age <= windowMs); }; const successful = outcomes.filter(o => o.observation_state === 'successful').length; const fresh = outcomes.filter(o => outcomeFresh(o) && o.independence_state === 'independent').length; verification.textContent = 'Verification: ' + ((task.verification && task.verification.status) || (task.result && task.result.status) || 'pending') + ' · Gates: ' + recipes.length + ' · Evidence outcomes: ' + outcomes.length + ' (' + successful + ' successful, ' + fresh + ' fresh independent) · Checkpoint: ' + ((task.checkpoint && task.checkpoint.safe_boundary) || 'none') + ' · Workspace: ' + (task.workspace_ref || 'none') + ' · Lineage: ' + (task.parent_task_id ? 'child of ' + task.parent_task_id + ' · root ' + (task.root_task_id || 'unknown') : 'root'); }
+    if (work) { const packages = data.work_packages || []; const receipts = data.receipts || []; const active = packages.filter(p => p.state === 'running').length; const completed = packages.filter(p => p.state === 'completed').length; const current = receipts.find(r => r.outcome_state === 'dispatched'); work.textContent = 'Work: milestone=' + (task.current_milestone || 'none') + ' · package=' + (task.active_work_package || 'none') + ' · packages=' + packages.length + ' (' + active + ' active, ' + completed + ' completed) · concurrency=' + (((task.authority_envelope || {}).concurrency_limit) || 1) + ' · current operation=' + (current ? (current.capability || 'operation') + ' [' + current.receipt_id + ']' : 'none'); }
+    if (evidence) { const outcomes = data.verification_outcomes || []; const artifacts = task.artifact_refs || []; evidence.textContent = 'Evidence and custody: outcomes=' + outcomes.length + ' · successful=' + outcomes.filter(o => o.observation_state === 'successful').length + ' · failed=' + outcomes.filter(o => o.observation_state === 'failed').length + ' · contradictory=' + outcomes.filter(o => o.observation_state === 'contradictory').length + ' · artifacts=' + artifacts.length + ' · fresh evidence is required for verified status.'; }
+    if (escalation) { const rows = data.escalations || []; escalation.textContent = rows.length ? 'Needs attention: ' + rows.slice(0, 4).map(row => (row.requested_operation || 'operation') + ' — ' + (row.reason || 'review required')).join(' · ') : 'Approval, information, and escalation needs: none recorded.'; }
+    if (result) { let structured = task.result; try { structured = structured == null ? null : JSON.stringify(structured); } catch (_) { structured = '[unavailable]'; } result.textContent = 'Structured result: ' + (structured || 'not available') + ' · stopping reason: ' + (task.stopping_reason || 'none'); }
+    if (continuationActions) {
+      const terminal = ['completed', 'partial', 'failed', 'blocked', 'interrupted', 'waiting'].includes(task.state);
+      const actionKinds = [['investigate', 'Investigate finding'], ['implement', 'Implement recommendation'], ['verify', 'Verify claim'], ['repair', 'Repair failure'], ['compare', 'Compare alternatives'], ['deliverable', 'Produce deliverable'], ['continue', 'Continue unresolved work'], ['apply', 'Apply approved proposal'], ['monitor', 'Monitor condition'], ['recheck', 'Recheck condition']];
+      continuationActions.innerHTML = terminal && !agentRunning
+        ? '<span class="sub">Continuation creates a new governed task; it receives fresh authorization and no inherited approval.</span><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">' + actionKinds.map(item => '<button class="btn btn-sm btn-outline" type="button" onclick="startAgentContinuation(\'' + item[0] + '\')">' + item[1] + '</button>').join('') + '</div>'
+        : '';
+    }
+    if ($('agentResume')) $('agentResume').disabled = !['paused', 'interrupted', 'blocked'].includes(task.state) || agentRunning;
+    if (plan) { const revisions = data.hierarchical_plans || data.plans || []; const latest = revisions[0] || {}; const milestones = (latest.milestones || []).map(m => m.id + ':' + (m.state || 'pending')).join(', ') || 'none'; const gates = (latest.verification_gates || []).map(g => g.id || g.recipe_id || g.requirement_id).join(', ') || 'none'; plan.textContent = revisions.length ? 'Plan revisions: ' + revisions.map(p => '#' + p.revision + ' ' + (p.source || 'planner') + (p.active_work_package ? ' · active ' + p.active_work_package : '')).join(' · ') + ' · milestones: ' + milestones + ' · verification gates: ' + gates : 'No durable plan revisions yet'; }
+    if (failures) { const rows = data.failures || []; const receipts = data.receipts || []; const repairs = data.repairs || []; const packages = data.work_packages || []; const transactions = data.workspace_transactions || []; const escalations = data.escalations || []; failures.textContent = (rows.length ? 'Failures: ' + rows.slice(0, 5).map(f => (f.capability || 'operation') + ' [' + (f.error_class || 'unknown') + ']').join(' · ') : 'No recorded failures') + (receipts.length ? ' · Receipts: ' + receipts.slice(-5).map(r => (r.capability || 'operation') + ' [' + (r.outcome_state || 'pending') + ']').join(' · ') : ' · No operation receipts') + ' · Repairs: ' + repairs.length + ' · Work packages: ' + packages.length + ' · Transactions: ' + transactions.length + (escalations.length ? ' · Escalations: ' + escalations.length : ''); }
+    loadAgentLearningCandidates(task.project_id || task.project || null);
   }).catch(() => {});
+}
+
+function startAgentContinuation(kind) {
+  const id = currentAgentTaskId;
+  const allowed = new Set(['investigate', 'implement', 'verify', 'repair', 'compare', 'deliverable', 'continue', 'apply', 'monitor', 'recheck']);
+  if (!id || !allowed.has(kind) || agentRunning) return;
+  authFetch('/api/agent/tasks/' + encodeURIComponent(id) + '/act-on', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind })
+  }).then(r => r.json().then(data => ({ ok: r.ok, data }))).then(({ ok, data }) => {
+    if (!ok || !data.taskId) throw new Error(data.error || 'Continuation failed');
+    streamAgentTask(data.taskId, { reset: false, parentTaskId: id, announce: true });
+  }).catch(error => appendLog('<span class="agent-err">Continuation failed: ' + esc(error.message) + '</span>'));
+}
+
+function loadAgentLearningCandidates(projectRef) {
+  const target = $('agentLearningCandidates');
+  if (!target || !projectRef) { if (target) target.textContent = 'No governed project scope is attached to this task.'; return; }
+  const project = String(projectRef).startsWith('project:') ? String(projectRef) : 'project:' + String(projectRef);
+  authFetch('/api/agent/learning-candidates?project=' + encodeURIComponent(project)).then(r => r.json()).then(data => {
+    const candidates = data.candidates || [];
+    target.innerHTML = candidates.length ? candidates.slice(0, 20).map(candidate => {
+      const label = esc(candidate.kind || 'candidate') + ' · ' + esc(candidate.state || 'proposal');
+      const id = jsArg(candidate.candidate_id); const ref = jsArg(project);
+      return '<div class="agent-learning-candidate"><span>' + label + '</span> <button class="btn btn-sm btn-outline" onclick="reviewAgentLearningCandidate(' + id + ',' + ref + ',\'trial\')">Trial</button> <button class="btn btn-sm btn-outline" onclick="reviewAgentLearningCandidate(' + id + ',' + ref + ',\'rejected\')">Reject</button> <button class="btn btn-sm btn-outline" onclick="reviewAgentLearningCandidate(' + id + ',' + ref + ',\'active\')">Promote</button></div>';
+    }).join('') : 'No project-scoped learning candidates.';
+  }).catch(() => { target.textContent = 'Learning candidates unavailable.'; });
+}
+
+function reviewAgentLearningCandidate(candidateId, projectRef, state) {
+  if (state === 'active' && !confirm('Promote this reviewed candidate? Promotion does not grant authority or activate executable behavior.')) return;
+  const body = { project_ref: projectRef, state, evaluation: { reviewed_at: new Date().toISOString() } };
+  authFetch('/api/agent/learning-candidates/' + encodeURIComponent(candidateId) + '/review', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) }).then(r => r.json()).then(() => loadAgentLearningCandidates(projectRef)).catch(() => {});
 }
 
 function pauseAgentTask(){
@@ -1868,6 +1924,17 @@ function pauseAgentTask(){
       appendLog('<span class="agent-step">' + esc(ok ? 'Pause requested; the task will stop at a safe boundary.' : (data.error || 'Pause failed')) + '</span>');
       loadDurableAgentTask(id);
     }).catch(e => appendLog('<span class="agent-err">Pause failed: ' + esc(e.message) + '</span>'));
+}
+
+function resumeAgentTask(){
+  const id = currentAgentTaskId;
+  if (!id || agentRunning) return;
+  if ($('agentResume')) $('agentResume').disabled = true;
+  authFetch('/api/agent/tasks/' + encodeURIComponent(id) + '/resume', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' })
+    .then(r => r.json().then(data => ({ok:r.ok,data}))).then(({ok,data}) => {
+      if (!ok || data.error) throw new Error(data.error || 'Resume failed');
+      streamAgentTask(data.taskId || id, { reset:false, reconnect:true });
+    }).catch(e => { appendLog('<span class="agent-err">Resume failed: ' + esc(e.message) + '</span>'); loadDurableAgentTask(id); });
 }
 
 function sendAgentGuidance(){
@@ -2235,7 +2302,8 @@ function runAgent() {
   agentSubmissionPending = true; agentRunning = true;
   $('agentGo').disabled = true; $('agentClear').disabled = true;
   $('agentFollowupArea').hidden = true; $('agentLog').innerHTML = '<span class="agent-step">Starting governed Agent task…</span>';
-  authFetch('/api/agent/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ goal }) })
+  const profile = ($('agentProfile') && $('agentProfile').value) || 'standard';
+  authFetch('/api/agent/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ goal, profile }) })
     .then(r => r.json().then(data => ({ status: r.status, data })))
     .then(({ status, data }) => { if (status >= 400 || data.error) throw new Error(data.error || ('HTTP ' + status)); activeAgentSession = { rootTaskId: data.taskId, turns: [{ id: data.taskId, goal, status: 'running', t: new Date().toISOString() }] }; rememberAgentSession(data.taskId, data.taskId); streamAgentTask(data.taskId, { reset: false }); })
     .catch(e => { appendLog('<span class="agent-err">' + esc(e.message) + '</span>'); finishAgentStream(); })
