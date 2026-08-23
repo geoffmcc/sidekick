@@ -1769,21 +1769,14 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
     }
   }
 
-  // Terminal state first. Procedure suggestion is an optional post-task nicety
-  // that calls a model with no deadline of its own; running it before this
-  // point delayed the user-visible completion by however long that call took.
-  // A throwing SSE listener must not strand the execution row in `running`:
-  // the ledger transition in the finally below is the terminal state of
-  // record, so the emit is best-effort.
-  try {
-    if (status === "completed") {
-      emit(taskId, { type: "done", text: finalResult });
-    } else {
-      emit(taskId, { type: "error", text: terminalError });
-    }
-  } catch (e) {
-    console.error("Agent task " + taskId + " terminal emit failed: " + (e && e.message ? e.message : e));
-  }
+  // Publish the terminal SSE frame only after the durable task projection has
+  // reached its terminal state below. Emitting first creates a race for a
+  // reconnecting stream: it can miss the in-memory event while the durable
+  // fallback still sees `running`, leaving the client connected indefinitely.
+  // The event follows durable verification bookkeeping and carries its
+  // verification status explicitly; the durable projection remains the
+  // authority for whether the task is verified.
+  let terminalEvent = null;
   } finally {
     try {
       const durableBeforeVerification = durableTaskStore.getTask(taskId);
@@ -1845,8 +1838,33 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
         result: { version: 1, status: resultStatus, summary: status === "completed" ? finalResult : terminalError, evidence_refs: verification.evidence || [], artifacts: transcriptArtifact ? [{ artifact_id: transcriptArtifact.artifact_id, type: transcriptArtifact.type, name: transcriptArtifact.name, content_hash: transcriptArtifact.content_hash || null, provenance: "agent transcript" }] : [] },
         verification,
       }, status === "waiting_for_approval" ? "task.waiting_for_approval" : status === "paused" ? "task.paused" : "task.completed");
+      // `done` describes a completed Agent response, while the durable task
+      // projection remains authoritative for whether its verification gates
+      // were satisfied. A direct answer can therefore be delivered as `done`
+      // with an explicit non-verified status without claiming verification.
+      terminalEvent = status === "completed"
+        ? { type: "done", text: finalResult, verification_status: verification.status }
+        : { type: "error", text: terminalError || "Task ended without verified completion" };
       try { durableOperations.deriveLearningCandidates(taskId); } catch (error) { console.error(`Agent learning derivation failed for ${taskId}: ${redactSensitive(String(error.message || error)).slice(0, 200)}`); }
     } catch {}
+    if (!terminalEvent) {
+      try {
+        const durable = durableTaskStore.getTask(taskId);
+        if (durable && ["completed", "partial", "failed", "cancelled", "timed_out"].includes(durable.state)) {
+          const durableStatus = durable.result?.status || null;
+          const hasAnswer = durable.state === "completed"
+            || (durable.state === "partial" && ["verified", "partially_verified", "unable_to_verify"].includes(durableStatus) && durable.result?.summary);
+          terminalEvent = hasAnswer
+            ? { type: "done", text: String(durable.result?.summary || finalResult || "Task completed"), ...(durableStatus ? { verification_status: durableStatus } : {}) }
+            : { type: "error", text: String(durable.stopping_reason || durable.result?.summary || terminalError || "Task ended without verified completion") };
+        }
+      } catch {}
+    }
+    try {
+      emit(taskId, terminalEvent || { type: "error", text: terminalError || "Task ended without a durable terminal state" });
+    } catch (error) {
+      console.error("Agent task " + taskId + " terminal emit failed: " + (error && error.message ? error.message : error));
+    }
     finishAgentExecution(platformExecution, status, { result_summary: status === "completed" ? finalResult : terminalError, reason: terminalError || "agent task completed", error_category: status === "completed" ? null : status });
   }
 
