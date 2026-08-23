@@ -606,10 +606,15 @@ provider-generation, plan-step, and legacy loop safety ceilings, so profile
 budgets are an outer durable envelope rather than a claim of unbounded
 execution.
 
-On this branch, migrations `056_agent_tasks.sql` and
-`057_agent_continuation.sql` provide the durable task projection and the
-redacted control, artifact-reference, completed-operation, and ambiguous-
-operation recovery state. The implementation is split across
+Migrations `056_agent_tasks.sql` and `057_agent_continuation.sql` provide the
+durable task projection and the redacted control, artifact-reference,
+completed-operation, and ambiguous-operation recovery state. Migrations
+`058_agent_adaptive_durability.sql` through
+`063_agent_escalation_decision_provenance.sql` and
+`064_agent_learning_candidate_version.sql` add bounded authority envelopes,
+profiles and root accounting, receipts, verification recipes, repair and
+hierarchical plans, workspace transactions, leases, continuations, learning
+review, and escalation provenance. The implementation is split across
 `src/agent.js`, `src/agent/task-model.js`, `src/agent/task-store.js`,
 `src/agent/recovery-scan.js`, `src/agent/verification.js`, and the existing
 platform-kernel execution path rather than introducing a second dispatcher.
