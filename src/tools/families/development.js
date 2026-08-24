@@ -10,16 +10,135 @@
 // and gated by the dispatcher.
 
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const { z } = require("zod");
 const { redactSensitive } = require("../../redact");
 const { enforcePathPolicy } = require("../path-policy");
+const { resolveOutboundUrl } = require("../../security/outbound-url");
 const { validIdentifier } = require("../../core/command-validation");
 const { sidekick_llm } = require("./inference");
 const { childProcessEnv } = require("../../security/child-process");
 
 const GIT_EXTERNAL_EXECUTION_OPTIONS = /^(?:-c(?:$|=)|--config(?:=|-env(?:=|$))|--(?:exec-path|upload-pack|receive-pack|git-dir|work-tree)(?:=|$)|--(?:ext-diff|paginate)(?:=|$))/;
+const GIT_CLONE_TIMEOUT_MS = 120000;
+const GIT_CLONE_MAX_OUTPUT = 2 * 1024 * 1024;
+
+function cloneError(message) {
+  return { content: [{ type: "text", text: message }], isError: true };
+}
+
+function hostAllowed(host, allowedHosts) {
+  if (!allowedHosts) return true;
+  const normalized = String(host).toLowerCase();
+  return allowedHosts.some(entry => {
+    const value = String(entry).toLowerCase();
+    return value === normalized || value.startsWith("*.") && normalized.endsWith(value.slice(1));
+  });
+}
+
+function sanitizedRemoteIdentity(sourceUrl) {
+  const parsed = new URL(sourceUrl);
+  parsed.username = "";
+  parsed.password = "";
+  parsed.hash = "";
+  return { scheme: parsed.protocol.slice(0, -1), host: parsed.hostname.toLowerCase(), path: parsed.pathname };
+}
+
+async function cloneGit({ source_url: sourceUrl, destination, ref, allowed_hosts: allowedHosts }) {
+  const value = String(sourceUrl || "");
+  if (/[\x00-\x1f\x7f]/.test(value)) return cloneError("source_url contains control characters");
+  const destinationText = String(destination || "");
+  if (!path.isAbsolute(destinationText)) return cloneError("destination must be an absolute path");
+  const pathPolicyError = enforcePathPolicy(destinationText, "write");
+  if (pathPolicyError) return pathPolicyError;
+  if (allowedHosts && (!Array.isArray(allowedHosts) || allowedHosts.length > 32 || allowedHosts.some(host => typeof host !== "string" || !/^[A-Za-z0-9.*:-]{1,253}$/.test(host)))) {
+    return cloneError("allowed_hosts must be a bounded list of host patterns");
+  }
+
+  let destinationExists = false;
+  try {
+    const stat = fs.lstatSync(destinationText);
+    destinationExists = true;
+    if (stat.isSymbolicLink() || !stat.isDirectory()) return cloneError("destination must be a real directory");
+    if (fs.readdirSync(destinationText).length) return cloneError("destination must be non-existing or empty");
+  } catch (error) {
+    if (error.code !== "ENOENT") return cloneError("destination could not be inspected safely");
+  }
+  const destinationParent = path.dirname(destinationText);
+  try {
+    const parentStat = fs.lstatSync(destinationParent);
+    if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) return cloneError("destination parent must be a real directory");
+  } catch { return cloneError("destination parent does not exist"); }
+  if (ref != null && (typeof ref !== "string" || !ref || ref.length > 1024 || /[\x00-\x1f\x7f]/.test(ref))) return cloneError("ref is invalid");
+
+  let resolved;
+  try { resolved = await resolveOutboundUrl(value, "source_url", { allowPrivate: false }); }
+  catch { return cloneError("source_url could not be validated safely"); }
+  if (resolved.refusal) return cloneError(resolved.refusal);
+  if (resolved.url.protocol !== "https:") return cloneError("source_url must use https");
+  if (!hostAllowed(resolved.url.hostname, allowedHosts)) return cloneError("source_url host is not in allowed_hosts");
+
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-git-home-"));
+  const hooks = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-git-hooks-"));
+  const env = {
+    PATH: "/usr/local/bin:/usr/bin:/bin",
+    HOME: home,
+    LANG: "C",
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: path.join(home, "empty.gitconfig"),
+    GIT_LFS_SKIP_SMUDGE: "1",
+  };
+  let createdDestination = false;
+  const gitConfig = [
+    "-c", "credential.helper=",
+    "-c", `core.hooksPath=${hooks}`,
+    "-c", "core.fsmonitor=false",
+    "-c", "diff.external=",
+    "-c", "merge.external=",
+    "-c", "filter.lfs.clean=",
+    "-c", "filter.lfs.smudge=",
+    "-c", "filter.lfs.process=",
+    "-c", "filter.lfs.required=false",
+    "-c", "protocol.file.allow=never",
+    "-c", "protocol.ext.allow=never",
+    "-c", "protocol.ssh.allow=never",
+    "-c", "http.followRedirects=false",
+  ];
+  const resolvedPort = resolved.url.port || "443";
+  const resolvedAddress = String(resolved.address || "").includes(":") ? `[${resolved.address}]` : resolved.address;
+  if (!resolvedAddress) return cloneError("source_url did not resolve to a pin-able address");
+  gitConfig.push("-c", `http.curloptResolve=${resolved.url.hostname}:${resolvedPort}:${resolvedAddress}`);
+  const runGit = (args) => execFileSync("git", args, {
+    env,
+    timeout: GIT_CLONE_TIMEOUT_MS,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: GIT_CLONE_MAX_OUTPUT,
+  });
+  try {
+    fs.writeFileSync(path.join(home, "empty.gitconfig"), "", { flag: "wx", mode: 0o600 });
+    if (!destinationExists) { fs.mkdirSync(destinationText, { mode: 0o700 }); createdDestination = true; }
+    const cloneArgs = [...gitConfig, "clone", "--no-recurse-submodules", "--no-checkout", value, destinationText];
+    runGit(cloneArgs);
+    const requestedRef = ref || "HEAD";
+    const resolvedRef = runGit(["-C", destinationText, ...gitConfig, "rev-parse", "--verify", "--end-of-options", `${requestedRef}^{commit}`]).trim();
+    runGit(["-C", destinationText, ...gitConfig, "checkout", "--detach", "--force", resolvedRef]);
+    const origin = runGit(["-C", destinationText, ...gitConfig, "config", "--get", "remote.origin.url"]).trim();
+    return { content: [{ type: "text", text: JSON.stringify({ ok: true, action: "clone", destination: destinationText, requested_ref: ref || null, resolved_ref: resolvedRef, remote_identity: sanitizedRemoteIdentity(origin || value) }) }] };
+  } catch (error) {
+    const detail = String(error && (error.stderr || error.stdout || error.message) || "git clone failed").replace(/https?:\/\/[^\s]+/gi, "[redacted-url]").slice(0, 2000);
+    if (createdDestination) {
+      try { const stat = fs.lstatSync(destinationText); if (!stat.isSymbolicLink()) fs.rmSync(destinationText, { recursive: true, force: true }); } catch {}
+    }
+    return cloneError(`Git clone failed: ${redactSensitive(detail)}`);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(hooks, { recursive: true, force: true });
+  }
+}
 
 function parseGitExtraArgs(extraArgs) {
   if (!extraArgs) return [];
@@ -52,7 +171,8 @@ function windowsPathToWslPath(value) {
   return "/mnt/" + match[1].toLowerCase() + "/" + match[2].replace(/\\/g, "/");
 }
 
-async function sidekick_git({ action, path: repoPath, args: extraArgs }) {
+async function sidekick_git({ action, path: repoPath, args: extraArgs, source_url: sourceUrl, destination, ref, allowed_hosts: allowedHosts }) {
+  if (action === "clone") return cloneGit({ source_url: sourceUrl, destination, ref, allowed_hosts: allowedHosts });
   const repo = repoPath || ".";
   const allowedActions = ["status", "diff", "log", "show", "ls-tree", "ls-files", "add", "commit", "push", "pull", "branch", "checkout", "stash"];
   if (!allowedActions.includes(action)) {
@@ -562,7 +682,13 @@ const SCHEMAS = {
     action: z.enum(["status", "diff", "log", "show", "ls-tree", "ls-files", "add", "commit", "push", "pull", "branch", "checkout", "stash"]).describe("Git action to perform"),
     path: z.string().optional().describe("Repository path (defaults to current directory)"),
     args: z.string().optional().describe("Additional arguments for the git command")
-  }),
+  }).or(z.object({
+    action: z.literal("clone").describe("Clone a remote repository safely"),
+    source_url: z.string().describe("HTTPS repository URL"),
+    destination: z.string().describe("Absolute empty or new destination directory"),
+    ref: z.string().optional().describe("Optional branch, tag, or commit ref"),
+    allowed_hosts: z.array(z.string()).max(32).optional().describe("Optional allowed source host patterns")
+  }).strict()),
   changelog: z.object({
     action: z.enum(["generate", "preview", "save"]),
     from: z.string().describe("Starting ref (tag, commit, branch)"),
@@ -585,13 +711,14 @@ const SCHEMAS = {
 const descriptors = Object.freeze([
   Object.freeze({
     name: "git",
-    description: "Structured git operations (status, diff, log, read-only show/ls-tree, add, commit, push, pull, branch, checkout, stash)",
+    description: "Structured git operations (status, diff, log, read-only show/ls-tree, add, commit, push, pull, branch, checkout, stash, and safe HTTPS clone)",
     schema: SCHEMAS.git,
-    args: { action: "string", path: "string (optional)", args: "string (optional)" },
+    args: { action: "string", path: "string (optional)", args: "string (optional)", source_url: "string (clone HTTPS URL)", destination: "string (clone absolute destination)", ref: "string (optional clone ref)", allowed_hosts: "array (optional clone host patterns)" },
     risk: "medium",
     category: "Git & GitHub",
     source: "builtin",
     family: "development",
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     handler: sidekick_git,
   }),
   Object.freeze({

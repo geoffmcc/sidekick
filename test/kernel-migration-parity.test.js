@@ -109,8 +109,8 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
     console.log(`Test KMP.1: migrations-only boot applies ${migrationApplied} migrations`);
     assert.strictEqual(
       migrationStore.getDb().prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
-      String(64),
-      'schema_version should be 64'
+       String(65),
+       'schema_version should be 65'
     );
     console.log('Passed\n');
 
@@ -163,8 +163,8 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
     // platform_capability_pack_components and platform_workflow_definitions
     // (31 -> 34 tables) with 11 more explicit indexes (66 -> 77), including
     // the identity owner/actor indexes added by migration 048.
-    const expectedTables = 34;
-    const expectedIndexes = 77;
+    const expectedTables = 37;
+    const expectedIndexes = 85;
     const migratedTables = migratedSchema.filter(o => o.type === 'table').length;
     const migratedIndexes = migratedSchema.filter(o => o.type === 'index' && o.sql).length;
     const migratedAutoindexes = migratedSchema.filter(o => o.type === 'index' && !o.sql).length;
@@ -187,11 +187,11 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
     assert.match(runtimeExecutions.sql, /FOREIGN KEY\(parent_execution_id\)/);
     assert.strictEqual(
       migrationStore.getDb().prepare("SELECT value FROM meta WHERE key = 'platform_kernel_schema_version'").get().value,
-      '10'
+      '11'
     );
     assert.strictEqual(
       runtimeStore.getDb().prepare("SELECT value FROM meta WHERE key = 'platform_kernel_schema_version'").get().value,
-      '6'
+      '11'
     );
     console.log('Passed\n');
 

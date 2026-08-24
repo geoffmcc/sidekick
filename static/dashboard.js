@@ -330,7 +330,7 @@ function showPage(name){
   if (name === 'capabilities') loadCapabilities();
   if (name === 'identity') loadIdentityAdmin();
   if (name === 'agent') restoreAgentState();
-  if (name === 'research') loadRepositoryResearch();
+  if (name === 'research') { loadResearchSources(); loadRepositoryResearch(); }
   if (name === 'evolve') loadEvolve();
   if (name === 'compute') loadCompute();
   if (name === 'predict') { loadPredictStatus(); loadPredict(); }
@@ -338,6 +338,71 @@ function showPage(name){
 }
 
 let repositoryResearchCursor = null;
+let selectedResearchRepository = null;
+let selectedResearchCampaign = null;
+let selectedResearchSnapshot = null;
+
+async function researchJson(url, options) {
+  const response = await authFetch(url, options);
+  const data = await response.json();
+  if (!response.ok || data.ok === false) throw new Error(data.error || 'Research source request failed');
+  return data;
+}
+
+async function loadResearchSources() {
+  const readiness = $('researchReadiness'); const repositories = $('researchRepositories');
+  try {
+    const [status, repoData] = await Promise.all([
+      researchJson('/api/research/source/readiness'),
+      researchJson('/api/research/source/repositories?limit=25')
+    ]);
+    const details = status.readiness || {};
+    if (readiness) readiness.textContent = 'Workspace: ' + ((details.workspace || {}).state || 'unknown') + ' · Local probes: ' + ((details.policy || {}).local_probes_enabled ? 'enabled' : 'disabled') + ' · Environments: ' + (details.environment_count ?? 0);
+    if (repositories) repositories.innerHTML = (repoData.repositories || []).map(repo =>
+      '<div class="card" style="padding:10px;margin:8px 0"><strong>' + esc(repo.name || repo.repository_id) + '</strong> <span class="sub">' + esc(repo.state) + ' · ' + esc(repo.repository_id) + '</span>' +
+      '<div style="margin-top:8px"><button class="btn btn-sm btn-outline" onclick="selectResearchRepository(' + jsArg(repo.repository_id) + ', ' + jsArg(repo.campaign_id) + ')">Show snapshots</button></div></div>'
+    ).join('') || '<div class="empty">No campaign repositories found.</div>';
+  } catch (error) { if (readiness) readiness.textContent = error.message; if (repositories) repositories.textContent = 'Unable to load repositories.'; }
+}
+
+async function selectResearchRepository(repositoryId, campaignId) {
+  selectedResearchRepository = repositoryId; selectedResearchCampaign = campaignId || null; selectedResearchSnapshot = null;
+  const output = $('researchSnapshots'); if (output) output.textContent = 'Loading snapshots...';
+  try {
+    const data = await researchJson('/api/research/source/snapshots?repository_id=' + encodeURIComponent(repositoryId) + '&limit=25');
+    if (output) output.innerHTML = (data.snapshots || []).map(snapshot =>
+      '<div class="card" style="padding:10px;margin:8px 0"><strong>' + esc(snapshot.snapshot_id) + '</strong> <span class="sub">' + esc(snapshot.state) + ' · integrity: ' + esc(snapshot.integrity_status) + ' · authority: ' + esc(snapshot.authority) + '</span>' +
+      '<div style="margin-top:8px"><button class="btn btn-sm btn-outline" onclick="showResearchSnapshot(' + jsArg(snapshot.snapshot_id) + ')">Details</button> <button class="btn btn-sm" onclick="researchSelect(' + jsArg(snapshot.snapshot_id) + ')">Select</button> <button class="btn btn-sm btn-outline" onclick="researchVerify(' + jsArg(snapshot.snapshot_id) + ')">Verify</button> <button class="btn btn-sm btn-outline" onclick="researchIndex(' + jsArg(snapshot.snapshot_id) + ')">Index</button> <button class="btn btn-sm btn-outline" onclick="researchArchive(' + jsArg(snapshot.snapshot_id) + ')">Archive</button> <button class="btn btn-sm btn-danger" onclick="researchRemove(' + jsArg(snapshot.snapshot_id) + ')">Remove</button></div></div>'
+    ).join('') || '<div class="empty">No snapshots found.</div>';
+  } catch (error) { if (output) output.textContent = error.message; }
+}
+
+async function showResearchSnapshot(snapshotId) {
+  selectedResearchSnapshot = snapshotId;
+  try {
+    const data = await researchJson('/api/research/source/snapshots/' + encodeURIComponent(snapshotId) + '?repository_id=' + encodeURIComponent(selectedResearchRepository));
+    const snapshot = data.snapshot || {}; const verification = snapshot.verification || {};
+    $('researchSnapshotDetail').innerHTML = '<div class="sub">State: ' + esc(snapshot.state) + ' · Integrity: ' + esc(snapshot.integrity_status) + ' · Stale: ' + esc(String(verification.stale)) + ' · Files: ' + esc(String(snapshot.file_count ?? 'unknown')) + ' · Ref: ' + esc(snapshot.workspace_ref || 'unavailable') + '</div>';
+  } catch (error) { $('researchSnapshotDetail').textContent = error.message; }
+}
+
+async function researchAction(action, body) {
+  const data = await researchJson('/api/research/source/actions/' + encodeURIComponent(action), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  $('researchActionStatus').textContent = action + ' completed.';
+  return data;
+}
+
+async function researchVerify(snapshotId) { try { await researchAction('verify', { repository_id: selectedResearchRepository, snapshot_id: snapshotId }); await selectResearchRepository(selectedResearchRepository); } catch (error) { $('researchActionStatus').textContent = error.message; } }
+async function researchSelect(snapshotId) { try { await researchAction('select', { repository_id: selectedResearchRepository, snapshot_id: snapshotId }); await loadResearchSources(); } catch (error) { $('researchActionStatus').textContent = error.message; } }
+async function researchIndex(snapshotId) { try { await researchAction('index', { repository_id: selectedResearchRepository, snapshot_id: snapshotId, index_action: 'profile', max_chars: 12000 }); await selectResearchRepository(selectedResearchRepository, selectedResearchCampaign); } catch (error) { $('researchActionStatus').textContent = error.message; } }
+async function researchArchive(snapshotId) { if (!confirm('Archive this snapshot? It will no longer be selectable.')) return; try { await researchAction('archive', { repository_id: selectedResearchRepository, snapshot_id: snapshotId, confirm: true }); await selectResearchRepository(selectedResearchRepository, selectedResearchCampaign); } catch (error) { $('researchActionStatus').textContent = error.message; } }
+async function researchRemove(snapshotId) { if (!confirm('Remove this snapshot and its governed workspace copy? This cannot be undone.')) return; try { await researchAction('remove', { repository_id: selectedResearchRepository, snapshot_id: snapshotId, confirm: true }); await selectResearchRepository(selectedResearchRepository, selectedResearchCampaign); } catch (error) { $('researchActionStatus').textContent = error.message; } }
+async function researchImport() {
+  const sourcePath = ($('researchImportPath').value || '').trim(); if (!sourcePath || !selectedResearchRepository) { $('researchActionStatus').textContent = 'Select a repository and enter a server directory.'; return; }
+  if (!confirm('Import this directory into the selected campaign repository? The source will be copied into the governed research workspace.')) return;
+  try { await researchAction('import', { repository_id: selectedResearchRepository, campaign_id: selectedResearchCampaign, source_path: sourcePath, name: selectedResearchRepository }); await loadResearchSources(); } catch (error) { $('researchActionStatus').textContent = error.message; }
+}
+async function researchRecover() { if (!selectedResearchCampaign) { $('researchActionStatus').textContent = 'Select a campaign before recovery.'; return; } if (!confirm('Recover and remove abandoned staging directories for this campaign?')) return; try { await researchAction('recover', { campaign_id: selectedResearchCampaign, confirm: true }); } catch (error) { $('researchActionStatus').textContent = error.message; } }
 async function loadRepositoryResearch(next) {
   const query = (($('researchQuery') || {}).value || '').trim();
   if (!next) repositoryResearchCursor = null;

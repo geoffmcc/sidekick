@@ -41,6 +41,7 @@ const { registerApprovalRoutes } = require("./dashboard/approval-routes");
 const { registerQuickActionsRoute } = require("./dashboard/quick-actions-route");
 const { registerStatsToolsRoutes } = require("./dashboard/stats-tools-routes");
 const { registerSummaryRoute } = require("./dashboard/summary-route");
+const { registerResearchSourceRoutes } = require("./dashboard/research-source-routes");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const PORT = parseInt(process.env.SIDEKICK_DASHBOARD_PORT || "4098", 10);
@@ -1130,6 +1131,15 @@ async function dashboardSummaryHandler(req, res) {
 }
 
 registerSummaryRoute({ app, handler: dashboardSummaryHandler });
+
+registerResearchSourceRoutes({
+  app,
+  callDashboardTool,
+  dashboardExecutionMetadata,
+  authenticatedUser,
+  auditLog,
+  logError,
+});
 
 app.get("/api/artifacts", (req, res) => {
   // The normal dashboard middleware rejects unauthenticated production
