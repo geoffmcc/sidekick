@@ -178,13 +178,16 @@ async function devRepoProfile(services, { path: requestedPath, max_files, includ
   });
 }
 
-async function semanticRepository(services, { path: requestedPath, action = "profile", query, level = 0, limit = 40, max_chars = 12000 }) {
+async function semanticRepository(services, { path: requestedPath, action = "profile", query, level = 0, limit = 40, max_chars = 12000, cursor }) {
   const resolved = resolveRepositoryRoot(services, requestedPath);
   if (!resolved.ok) return resolved.result;
-  const index = await semantic.indexRepository(resolved.root);
-  if (action === "verify") return jsonResult({ ok: semantic.verify(index), index_root_hash: index.index_root_hash, schema: index.schema, repository: resolved.root, warnings: index.warnings, stats: index.stats });
-  const projection = semantic.project(index, { query, level, limit, max_chars });
-  return jsonResult({ ok: true, tool: "semantic_repo", action, repository: resolved.root, index_root_hash: index.index_root_hash, warnings: index.warnings.slice(0, 20), projection: projection.projection, projection_chars: projection.projection_chars, trust: projection.trust });
+  let state = null; try { state = await gitFacts.collectStateFacts(services, resolved.root); } catch { state = { available: false, head_sha: null, branch: null, worktree_clean: null, changed_file_count: null }; }
+  const index = await semantic.indexRepository(resolved.root, { state: state && state.available ? { kind: state.worktree_clean ? "working_tree_clean" : "working_tree", head_sha: state.head_sha, branch: state.branch, worktree_clean: state.worktree_clean } : { kind: "working_tree", state: "unknown" } });
+  const publicRepository = { name: index.repository.name, identity: index.provenance?.repository_identity || null, state: index.repository.state };
+  if (action === "verify") return jsonResult({ ok: semantic.verify(index), index_root_hash: index.index_root_hash, schema: index.schema, repository: publicRepository, provenance: index.provenance, warnings: index.warnings, stats: index.stats });
+  const projection = semantic.project(index, { query, level, limit, max_chars, cursor });
+  if (projection.ok === false) return errorResult(projection.error, { code: projection.code, tool: "semantic_repo", repository: publicRepository, index_root_hash: index.index_root_hash, provenance: projection.provenance, page: projection.page });
+  return jsonResult({ ok: true, tool: "semantic_repo", action, repository: publicRepository, index_root_hash: index.index_root_hash, provenance: projection.provenance, page: projection.page, degradation: projection.degradation, warnings: projection.warnings.slice(0, semantic.DEFAULT_LIMITS.maxSnippets), projection: projection.projection, projection_chars: projection.projection_chars, trust: projection.trust });
 }
 
 // --- dev_change_summary ----------------------------------------------------
@@ -375,8 +378,9 @@ const entry = {
           level: z.number().int().min(0).max(2).optional().describe("Progressive detail: 0 overview, 1 symbols, 2 relationships"),
           limit: z.number().int().min(1).max(200).optional().describe("Maximum returned items"),
           max_chars: z.number().int().min(1000).max(60000).optional().describe("Maximum model-facing projection characters"),
+          cursor: z.string().max(2048).optional().describe("Opaque snapshot-bound continuation cursor returned by a prior query"),
         }),
-        args: { path: "string", action: "string (profile|query|verify)", query: "string", level: "number (0-2)", limit: "number", max_chars: "number" },
+        args: { path: "string", action: "string (profile|query|verify)", query: "string", level: "number (0-2)", limit: "number", max_chars: "number", cursor: "string (opaque continuation cursor)" },
         risk: "low",
         category: "Development",
         contextProvider: { tool: "semantic_repo", action: "query", source: "repository_semantic", max_chars: 6000, scope: { argument: "path", source: "request_path_or_context" } },

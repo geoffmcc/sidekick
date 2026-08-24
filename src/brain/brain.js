@@ -6,6 +6,7 @@ const { EVIDENCE_BUDGETS, projectEvidenceItems, projectToolEvidence } = require(
 const { createWorkState, recordEvidence, evaluateCompletion } = require("../agent/completion-gate");
 const { classifyCapabilityFailure, preflightCapabilityCall, repairGuidance } = require("../agent/capability-repair");
 const { determineEffect } = require("../agent/authority");
+const { normalizeEvidenceMetadata } = require("../evidence/classes");
 
 /**
  * Brain v0.1 orchestrator.
@@ -83,6 +84,8 @@ function accumulateToolResult(acc, step, toolRes, { onEvent = () => {}, redact =
     isError,
     redact,
   }, { budget: BRAIN_LIMITS.MAX_TOOL_OUTPUT_CHARS });
+  let structured = null; try { structured = JSON.parse(String(text)); } catch {}
+  const evidenceMetadata = normalizeEvidenceMetadata(structured?.provenance || structured?.evidence || {}, { evidence_class: structured?.tool === "semantic_repo" ? "discovery_lead" : (isError ? "unresolved_or_ambiguous" : "exact_source_evidence"), completeness: structured?.degradation?.truncated || structured?.page?.has_more ? "partial" : "complete" });
   acc.steps.push({
     type: "tool",
     id: step.id,
@@ -93,17 +96,21 @@ function accumulateToolResult(acc, step, toolRes, { onEvent = () => {}, redact =
     // secrets or arbitrary tool arguments in Brain transcripts.
     ...(typeof step.arguments?.action === "string" ? { action: step.arguments.action.slice(0, 120) } : {}),
     result: clipped,
+    evidence_class: evidenceMetadata.evidence_class,
+    completeness: evidenceMetadata.completeness,
+    unresolved: evidenceMetadata.unresolved,
+    provenance: evidenceMetadata.provenance,
   });
   onEvent("brain.step_completed", { id: step.id, tool: step.tool, ok: !isError });
 
   const aggregate = projectEvidenceItems([
     ...(Array.isArray(acc.evidence) ? acc.evidence : []),
-    { id: step.id, tool: step.tool, text: raw, isError },
+    { id: step.id, tool: step.tool, text: raw, isError, evidence_class: evidenceMetadata.evidence_class, completeness: evidenceMetadata.completeness, unresolved: evidenceMetadata.unresolved, provenance: evidenceMetadata.provenance },
   ], {
     totalChars: BRAIN_LIMITS.MAX_EVIDENCE_CHARS,
     perToolChars: Math.min(BRAIN_LIMITS.MAX_TOOL_OUTPUT_CHARS, EVIDENCE_BUDGETS.MAX_TOOL_CHARS),
   });
-  acc.evidence = aggregate.items.map(item => ({ id: item.id, tool: item.tool, text: item.text, isError: !!item.isError }));
+   acc.evidence = aggregate.items.map(item => ({ id: item.id, tool: item.tool, text: item.text, isError: !!item.isError, evidence_class: item.evidence_class || "unresolved_or_ambiguous", completeness: item.completeness || "unknown", unresolved: item.unresolved === true, provenance: item.provenance || {} }));
   acc.evidenceChars = aggregate.diagnostics.chars;
   // The respond echo tool is not evidence about live state. Errors remain in
   // synthesis evidence so their code/message/reason remain actionable.

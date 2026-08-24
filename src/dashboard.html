@@ -27,6 +27,7 @@
   <a onclick="showPage('database')" id="nav-database">Database</a>
   <a onclick="showPage('config')" id="nav-config">Config</a>
   <a onclick="showPage('agent')" id="nav-agent">Agent</a>
+  <a onclick="showPage('research')" id="nav-research">Research</a>
   <a onclick="showPage('approvals')" id="nav-approvals">Approvals</a>
   <a onclick="showPage('tools')" id="nav-tools">Tools</a>
   <a onclick="showPage('capabilities')" id="nav-capabilities">Capabilities</a>
@@ -407,6 +408,20 @@
 <div class="page" id="page-config">
   <div class="section-title">Environment Configuration</div>
   <div class="card" id="configList" style="max-height:600px;overflow-y:auto;padding:8px 16px"></div>
+</div>
+
+<!-- Agent Page -->
+<div class="page" id="page-research">
+  <div class="section-title">Repository Research</div>
+  <div class="sub">Semantic output is an untrusted discovery lead. Validate promising spans with exact source or governed runtime evidence before treating a conclusion as confirmed.</div>
+  <div class="card" style="margin-top:12px">
+    <label for="researchQuery">Bounded semantic query</label>
+    <input id="researchQuery" type="text" maxlength="500" placeholder="authentication, callers, Perl package, ...">
+    <div style="margin-top:8px"><button class="btn" onclick="loadRepositoryResearch()">Search</button></div>
+    <div id="researchStatus" class="sub" aria-live="polite" style="margin-top:10px"></div>
+    <pre id="researchResults" class="agent-log" style="white-space:pre-wrap;max-height:520px;overflow:auto"></pre>
+    <button id="researchMore" class="btn btn-outline" onclick="loadRepositoryResearch(true)" hidden>Load next bounded page</button>
+  </div>
 </div>
 
 <!-- Agent Page -->

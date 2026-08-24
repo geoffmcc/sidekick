@@ -330,10 +330,29 @@ function showPage(name){
   if (name === 'capabilities') loadCapabilities();
   if (name === 'identity') loadIdentityAdmin();
   if (name === 'agent') restoreAgentState();
+  if (name === 'research') loadRepositoryResearch();
   if (name === 'evolve') loadEvolve();
   if (name === 'compute') loadCompute();
   if (name === 'predict') { loadPredictStatus(); loadPredict(); }
   if (name === 'metrics') loadGrafanaDashboard();
+}
+
+let repositoryResearchCursor = null;
+async function loadRepositoryResearch(next) {
+  const query = (($('researchQuery') || {}).value || '').trim();
+  if (!next) repositoryResearchCursor = null;
+  const params = new URLSearchParams({ query, limit: '12', max_chars: '12000' });
+  if (repositoryResearchCursor) params.set('cursor', repositoryResearchCursor);
+  const status = $('researchStatus'); const output = $('researchResults'); const more = $('researchMore');
+  if (status) status.textContent = 'Loading a bounded snapshot-bound page...';
+  try {
+    const response = await authFetch('/api/repository/semantic?' + params.toString()); const data = await response.json();
+    if (!response.ok || data.ok === false) throw new Error(data.error || 'semantic query failed');
+    repositoryResearchCursor = data.page && data.page.cursor || null;
+    if (status) status.textContent = (data.page && data.page.has_more ? 'More results are available.' : 'End of this snapshot.') + ' Evidence class: ' + ((data.provenance || {}).evidence_class || 'discovery_lead') + '. Completeness: ' + ((data.provenance || {}).completeness || 'unknown') + '.';
+    if (output) output.textContent = data.projection || JSON.stringify(data, null, 2);
+    if (more) more.hidden = !repositoryResearchCursor;
+  } catch (error) { if (status) status.textContent = 'Unable to load repository evidence: ' + error.message; if (more) more.hidden = true; }
 }
 
 function identityError(message) {

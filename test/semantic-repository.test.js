@@ -369,4 +369,39 @@ const semantic = require("../packs/developer/modules/developer-tools/lib/semanti
     assert.ok(projected.projection.includes("degradation"));
     assert.ok(semantic.verify(index));
   });
+
+  await test("Perl extraction preserves package scope and truthful dynamic degradation", async () => {
+    const index = await semantic.indexRepository(root, { sourceFiles: [{ path: "lib/Example.pm", language: "perl", content: `use strict; use Helper qw(validate); require Other::Module; package Alpha; use parent 'Base::Thing'; my $lexical = 1; sub forward; sub run ($value) { validate($value); $obj->method(); Base::Thing->new(); my $callback = sub { run(); }; } package Beta; sub run { AUTOLOAD(); eval 'dynamic()'; $name->($value); }` }] });
+    const unit = index.files[0].unit;
+    assert.deepStrictEqual(unit.packages.map(item => item.name), ["Alpha", "Beta"]);
+    assert.ok(unit.symbols.some(symbol => symbol.name === "run" && symbol.package === "Alpha" && symbol.parameters.includes("$value")));
+    assert.ok(unit.symbols.some(symbol => symbol.name === "run" && symbol.package === "Beta"));
+    assert.ok(unit.lexical_declarations.some(item => item.name === "$lexical"));
+    assert.ok(unit.imports.some(item => item.name === "Helper") && unit.imports.some(item => item.name === "Other::Module"));
+    assert.ok(unit.relationships.some(item => item.kind === "inherits" && item.to === "Base::Thing"));
+    assert.ok(unit.relationships.some(item => item.kind === "calls" && item.resolution === "dynamic" && item.to === "method"));
+    assert.ok(unit.relationships.some(item => item.kind === "calls" && item.resolution === "candidate" && /::new$/.test(item.to)));
+    assert.ok(unit.relationships.some(item => item.resolution === "dynamic"));
+    assert.ok(unit.anonymous_subroutines.length >= 1);
+    assert.ok(unit.warnings.some(warning => warning.code === "perl_dynamic_autoload" || warning.code === "perl_dynamic_resolution"));
+    assert.ok(unit.symbols.every(symbol => symbol.evidence.source_hash && Number.isSafeInteger(symbol.evidence.byte_start) && Number.isSafeInteger(symbol.evidence.byte_end)));
+    assert.ok(["partial_structural_fallback", "partial_parse", "ast", "ast+bounded_structural"].includes(unit.fidelity));
+    assert.ok(semantic.verify(index));
+  });
+
+  await test("semantic pages are bounded, deterministic, and cursor-bound to the snapshot", async () => {
+    const sourceFiles = Array.from({ length: 18 }, (_, i) => ({ path: `perl-${i}.pl`, language: "perl", content: `package P${i}; sub target${i} { target${(i + 1) % 18}(); }` }));
+    const index = await semantic.indexRepository(root, { sourceFiles, limits: { maxFiles: 20 } });
+    const first = semantic.project(index, { query: "target", level: 2, limit: 3, max_chars: 8000 });
+    assert.strictEqual(first.page.limit, 3); assert.ok(first.page.returned_count <= 6); assert.ok(first.page.has_more); assert.ok(first.page.cursor);
+    const second = semantic.project(index, { query: "target", level: 2, limit: 3, max_chars: 8000, cursor: first.page.cursor });
+    assert.notStrictEqual(second.page.offset, first.page.offset); assert.ok(second.page.returned_count <= 6);
+    assert.strictEqual(second.symbols.filter(symbol => first.symbols.some(previous => previous.id === symbol.id)).length, 0);
+    const repeat = semantic.project(index, { query: "target", level: 2, limit: 3, max_chars: 8000 });
+    assert.strictEqual(first.projection, repeat.projection);
+    const tampered = `${first.page.cursor.slice(0, -1)}${first.page.cursor.endsWith("A") ? "B" : "A"}`;
+    assert.strictEqual(semantic.project(index, { query: "target", limit: 3, cursor: tampered }).code, "cursor_invalid");
+    assert.strictEqual(semantic.project(index, { query: "other", limit: 3, cursor: first.page.cursor }).code, "cursor_invalid");
+    assert.ok(JSON.parse(first.projection).provenance.evidence_class === "discovery_lead");
+  });
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -51,6 +51,18 @@ environment variable). It never writes into the Sidekick repository.
 
 ## Tools
 
+### Evidence classes and repository leads
+
+Repository semantic results are bounded, snapshot-bound discovery leads. They
+carry an index root hash, repository identity, query hash, source-relative spans,
+parser fidelity, completeness and degradation metadata, and an expiring opaque
+continuation cursor. A lead must be followed by an exact governed source read or
+an authorized runtime probe before it supports a confirmed conclusion. Captured
+research evidence uses explicit metadata classes: `discovery_lead`,
+`exact_source_evidence`, `runtime_evidence`, `model_inference`, and
+`unresolved_or_ambiguous`. Partial, stale, truncated, degraded, or conflicting
+evidence remains unresolved and cannot satisfy the run completion invariant.
+
 ### research_status (risk `low`, alias `research_health`)
 
 Reports readiness without exposing secrets: workspace state

@@ -116,7 +116,8 @@ function projectToolEvidence({ tool, id = null, text, isError = false, redact = 
     }, { seen: new WeakSet() }));
   const label = `## ${String(tool || "tool")}${id ? ` (${String(id)})` : ""}`;
   const status = isError ? "\nStatus: error\n" : "\nStatus: success\n";
-  return projectText(label + status + projected, budgets.budget || budgets.MAX_TOOL_CHARS);
+  const output = projectText(label + status + projected, budgets.budget || budgets.MAX_TOOL_CHARS);
+  return output;
 }
 
 function projectEvidenceItems(items, { totalChars = EVIDENCE_BUDGETS.MAX_TOTAL_CHARS, perToolChars = EVIDENCE_BUDGETS.MAX_TOOL_CHARS } = {}) {
@@ -127,7 +128,9 @@ function projectEvidenceItems(items, { totalChars = EVIDENCE_BUDGETS.MAX_TOTAL_C
   const perItem = Math.max(64, Math.min(Math.floor(Number(perToolChars) || EVIDENCE_BUDGETS.MAX_TOOL_CHARS), slot));
   const parts = list.map(item => projectToolEvidence({ ...item }, { budget: perItem }));
   let text = parts.join("\n\n");
-  return { text, items: parts.map((part, index) => ({ ...list[index], text: part })), diagnostics: { itemCount: list.length, represented: list.length, omitted: 0, chars: text.length, perItem } };
+  const projectedItems = parts.map((part, index) => ({ ...list[index], text: part, projection_truncated: /\[\d+ characters omitted\]/.test(part) || /additional (?:array items|object keys) omitted/.test(part) }));
+  const omitted = projectedItems.filter(item => item.projection_truncated).length;
+  return { text, items: projectedItems, diagnostics: { itemCount: list.length, represented: projectedItems.length, omitted, chars: text.length, perItem, complete: omitted === 0 } };
 }
 
 function projectContextEntries(entries, { totalChars = EVIDENCE_BUDGETS.MAX_CONTEXT_CHARS, perEntryChars = 1800, redact = value => value } = {}) {
@@ -144,7 +147,8 @@ function projectContextEntries(entries, { totalChars = EVIDENCE_BUDGETS.MAX_CONT
     return `${source}${entry.sourceId != null ? ` (${String(entry.sourceId)})` : ""}${provenance}\nSummary: ${summary || "(none)"}\nContent: ${content || "(none)"}`;
   });
   const text = parts.map(part => projectText(part, perItem)).join("\n\n");
-  return { text, diagnostics: { itemCount: list.length, represented: list.length, omitted: 0, chars: text.length, perItem } };
+  const omitted = parts.filter(part => /characters omitted|additional .* omitted|maximum depth reached/.test(part)).length;
+  return { text, diagnostics: { itemCount: list.length, represented: list.length, omitted, chars: text.length, perItem, complete: omitted === 0 } };
 }
 
 function estimateTokens(text) { return Math.ceil(asText(text).length / 4); }
