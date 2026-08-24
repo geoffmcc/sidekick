@@ -328,6 +328,7 @@ function showPage(name){
   if (name === 'approvals') { loadApprovals(); loadReconciliations(); }
   if (name === 'tools') loadTools();
   if (name === 'capabilities') loadCapabilities();
+  if (name === 'network-scopes') loadNetworkScopes();
   if (name === 'identity') loadIdentityAdmin();
   if (name === 'agent') restoreAgentState();
   if (name === 'research') { loadResearchSources(); loadRepositoryResearch(); }
@@ -4408,6 +4409,69 @@ async function loadCapabilities() {
   } catch (error) {
     capError(error.message);
   }
+}
+
+function networkScopeError(message) {
+  const el = $('networkScopeError');
+  if (el) el.innerHTML = message ? '<div class="card" style="padding:10px;border-color:#f85149;color:#f85149">' + esc(message) + '</div>' : '';
+}
+
+async function loadNetworkScopes() {
+  networkScopeError('');
+  try {
+    const res = await authFetch('/api/network-scopes');
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Failed to load network scopes');
+    const scopes = data.scopes || [];
+    $('networkScopeCount').textContent = scopes.length;
+    $('networkScopeList').innerHTML = scopes.length ? scopes.map(renderNetworkScope).join('') : '<div class="sub">No named network scopes have been created.</div>';
+  } catch (error) { networkScopeError(error.message); }
+}
+
+function renderNetworkScope(scope) {
+  const enabled = scope.state === 'active';
+  const action = enabled ? 'disabled' : 'active';
+  return '<div class="card" style="padding:12px;margin-bottom:10px">'
+    + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">'
+    + '<div><div style="font-weight:600">' + esc(scope.name) + ' <span class="sub">r' + esc(scope.revision) + '</span></div>'
+    + '<div class="sub">' + esc(scope.scope_id) + ' &middot; ' + esc(scope.state) + ' &middot; digest ' + esc((scope.digest || '').slice(0, 16)) + '...</div></div>'
+    + '<div style="display:flex;gap:6px"><button class="btn btn-sm btn-outline" onclick="setNetworkScopeState(' + jsArg(scope.scope_id) + ',' + jsArg(action) + ')">' + (enabled ? 'Disable' : 'Enable') + '</button>'
+    + '<button class="btn btn-sm" onclick="updateNetworkScope(' + jsArg(scope.scope_id) + ')">New Revision</button></div></div>'
+    + '<pre style="margin-top:10px;max-height:240px;overflow:auto">' + esc(JSON.stringify(scope, null, 2)) + '</pre></div>';
+}
+
+async function createNetworkScope() {
+  try {
+    const policy = JSON.parse($('networkScopePolicy').value || '{}');
+    policy.name = $('networkScopeName').value.trim();
+    const res = await authFetch('/api/network-scopes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(policy) });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Failed to create network scope');
+    $('networkScopeName').value = ''; $('networkScopePolicy').value = '';
+    await loadNetworkScopes();
+  } catch (error) { networkScopeError(error.message); }
+}
+
+async function setNetworkScopeState(scopeId, state) {
+  if (!confirm((state === 'disabled' ? 'Disable' : 'Enable') + ' this network scope?')) return;
+  try {
+    const res = await authFetch('/api/network-scopes/' + encodeURIComponent(scopeId) + '/state', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ state }) });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Failed to update network scope state');
+    await loadNetworkScopes();
+  } catch (error) { networkScopeError(error.message); }
+}
+
+async function updateNetworkScope(scopeId) {
+  const raw = prompt('Enter the complete policy JSON for the new immutable revision:');
+  if (raw === null) return;
+  try {
+    const policy = JSON.parse(raw);
+    const res = await authFetch('/api/network-scopes/' + encodeURIComponent(scopeId), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(policy) });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Failed to revise network scope');
+    await loadNetworkScopes();
+  } catch (error) { networkScopeError(error.message); }
 }
 
 function renderInstalledCapabilities(packs) {

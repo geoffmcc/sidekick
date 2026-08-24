@@ -47,8 +47,9 @@ const workflowDefinitions = require("./workflow-definitions");
 const connectors = require("./connectors");
 const workspace = require("./workspace");
 const browser = require("./browser");
+const networkScopes = require("./network-scopes");
 
-const families = Object.freeze([utility, hashing, databaseInspection, databaseAdmin, inference, networking, comms, processMgmt, netFetch, observability, shell, development, media, security, meta, knowledge, operations, blackBox, github, secret, resume, teach, flowControl, scheduling, runbook, evolve, toolCatalog, storage, memorySync, memoryPortability, memoryLifecycle, memorySession, memoryHandoff, memoryCore, context, filesystem, monitoring, moduleManagement, projectRegistry, capabilityPacks, workflowDefinitions, connectors, workspace, browser]);
+const families = Object.freeze([utility, hashing, databaseInspection, databaseAdmin, inference, networking, comms, processMgmt, netFetch, observability, shell, development, media, security, meta, knowledge, operations, blackBox, github, secret, resume, teach, flowControl, scheduling, runbook, evolve, toolCatalog, storage, memorySync, memoryPortability, memoryLifecycle, memorySession, memoryHandoff, memoryCore, context, filesystem, monitoring, moduleManagement, projectRegistry, capabilityPacks, workflowDefinitions, connectors, workspace, browser, networkScopes]);
 
 // Descriptors owned by extracted families. The canonical registry places them
 // according to canonical-order.js; family declaration order is not a public
