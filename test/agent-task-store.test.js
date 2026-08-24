@@ -11,10 +11,12 @@ const { createTask } = require("../src/agent/task-model");
 const store = require("../src/agent/task-store");
 try {
   const task = createTask({ task_id: "agt_store01", objective: "Inspect the service", profile: "quick" });
+  task.handoff_id = "handoff_test01";
   const db = require("../src/db").getDb();
   assert.strictEqual(require("../src/agent/task-model").budgetExceeded({ ...task, created_at: new Date(Date.now() - task.budget.wall_ms - 1).toISOString() }, "wall_ms"), true);
   assert.strictEqual(store.insertTask(task).task_id, "agt_store01");
   assert.strictEqual(store.getTask("agt_store01").state, "created");
+  assert.strictEqual(store.getTask("agt_store01").handoff_id, "handoff_test01");
   const counted = store.incrementUsage("agt_store01", { tool_calls: 2, retries: 1 }, "test.usage");
   assert.strictEqual(counted.usage.tool_calls, 2);
   assert.strictEqual(counted.usage_ledger.retries, 1);

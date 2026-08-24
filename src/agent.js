@@ -194,15 +194,18 @@ const {
 } = require("./agent/execution");
 const { buildChildLineage } = require("./agent/continuation");
 const { createTaskRunner } = require("./agent/task-run");
+const { createHandoffContinuity } = require("./agent/handoff-continuity");
 const { createResumedTaskFinalizer } = require("./agent/recovery");
 const { createContinuationJobStarter } = require("./agent/continuation-jobs");
 const { createDelayScheduler } = require("./agent/delay-scheduler");
 const { createWatchRuntime } = require("./agent/watch-runtime");
 const durableTaskModel = require("./agent/task-model");
 const durableTaskStore = require("./agent/task-store");
+const dbStore = require("./db");
 const durableReceiptStore = require("./agent/receipt-store");
 const durableWorkspaceTransactions = require("./agent/workspace-transactions");
 const durableOperations = require("./agent/durable-operations");
+const handoffContinuity = createHandoffContinuity({ getTask: durableTaskStore.getTask, getHandoff: dbStore.getHandoff, captureHandoffCheckpoint: dbStore.captureHandoffCheckpoint });
 const { determineEffect, decideAutonomy, intersectEnvelope, governedTargetRef } = require("./agent/authority");
 const { recoverDurableAgentTasks } = require("./agent/recovery-scan");
 const { verifyTaskResult, successfulFreshOutcome, applyRecipeGates, applyReceiptGates, applyPlanGates, runVerificationRepair } = require("./agent/verification");
@@ -1347,6 +1350,7 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
         next_action: "continue_agent_loop",
         state: { phase: "execution", work: state },
       });
+      handoffContinuity.checkpointTask(taskId);
     } catch {}
   };
 
@@ -1538,6 +1542,7 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
           };
           if (hierarchical.steps.some(step => !getLiveAgentDescriptor(step.capability))) throw new Error("hierarchical plan references a capability outside the live Agent catalog");
           durableOperations.savePlan(taskId, hierarchical, { source: metadata && metadata.source || "planner", evidence: metadata && metadata.evidence || null, registry_version: current && current.capability_registry_version || null });
+          try { handoffContinuity.checkpointTask(taskId, { reason: "task.plan_revision", safeBoundary: "plan_revision" }); } catch {}
         } catch (error) {
           durableTaskStore.addFailure(taskId, { error_class: "plan_persistence", retryable: false, detail: "hierarchical plan could not be persisted safely" });
         }
@@ -1856,6 +1861,10 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
         result: { version: 1, status: resultStatus, summary: status === "completed" ? finalResult : terminalError, evidence_refs: verification.evidence || [], artifacts: transcriptArtifact ? [{ artifact_id: transcriptArtifact.artifact_id, type: transcriptArtifact.type, name: transcriptArtifact.name, content_hash: transcriptArtifact.content_hash || null, provenance: "agent transcript" }] : [] },
         verification,
       }, status === "waiting_for_approval" ? "task.waiting_for_approval" : status === "paused" ? "task.paused" : "task.completed");
+      try {
+        const boundaryReason = status === "waiting_for_approval" ? "task.waiting_for_approval" : status === "paused" ? "task.paused" : status === "completed" ? "task.completed" : "task.terminal";
+        handoffContinuity.checkpointTask(taskId, { reason: boundaryReason, safeBoundary: "task_lifecycle_boundary" });
+      } catch {}
       // `done` describes a completed Agent response, while the durable task
       // projection remains authoritative for whether its verification gates
       // were satisfied. A direct answer can therefore be delivered as `done`
@@ -1901,7 +1910,7 @@ const beginTaskRun = createTaskRunner({
   emit,
   runAgent,
   redactSensitive,
-  onTaskCreated: ({ taskId, goal, goalSpec, parentContext, profile, workspaceRef, authorityEnvelope, resume }) => {
+  onTaskCreated: ({ taskId, goal, goalSpec, parentContext, profile, workspaceRef, authorityEnvelope, handoffId, resume }) => {
     if (resume && durableTaskStore.getTask(taskId)) {
       const existing = durableTaskStore.getTask(taskId);
       durableTaskStore.updateTask(taskId, { state: "ready", phase: "recovery", next_action: "resume_from_safe_checkpoint" }, "task.resume_requested");
@@ -1913,6 +1922,13 @@ const beginTaskRun = createTaskRunner({
       ? suppliedEnvelope
       : (principalEnvelope || defaultTaskAuthorityEnvelope());
     const effectiveEnvelope = principalEnvelope ? intersectEnvelope(requestedEnvelope, principalEnvelope) : requestedEnvelope;
+    if (handoffId) {
+      const handoff = dbStore.getHandoff(handoffId);
+      if (!handoff) throw new Error("handoff not found");
+      if (handoff.project && parentContext?.project && handoff.project !== parentContext.project) throw new Error("handoff project does not match task project");
+      const principalId = parentContext?.requestedByPrincipalId || parentContext?.actorPrincipalId || null;
+      if (handoff.owner_principal_id && handoff.owner_principal_id !== principalId) throw new Error("handoff principal scope does not match task principal");
+    }
     const task = durableTaskModel.createTask({
       task_id: taskId,
       objective: goal,
@@ -1922,6 +1938,7 @@ const beginTaskRun = createTaskRunner({
       root_task_id: parentContext && parentContext.rootTaskId,
       session_id: parentContext && parentContext.sessionId,
       project_id: parentContext && parentContext.project,
+      handoff_id: handoffId,
       requested_by_principal_id: parentContext && parentContext.requestedByPrincipalId,
       actor_principal_id: parentContext && parentContext.actorPrincipalId,
       acting_for_principal_id: parentContext && parentContext.actingForPrincipalId,
@@ -1931,6 +1948,7 @@ const beginTaskRun = createTaskRunner({
       authority_envelope: effectiveEnvelope,
       capability_registry_version: liveAgentCatalogFingerprint(),
     });
+    task.handoff_id = handoffId || null;
     durableTaskStore.insertTask(task);
   },
 });
@@ -1944,6 +1962,13 @@ const beginTaskRun = createTaskRunner({
 function launchRecoveredDurableTask(taskId) {
   const task = durableTaskStore.getTask(taskId);
   if (!task || task.state !== "interrupted" || task.control?.cancel_requested) return false;
+  if (task.handoff_id) {
+    const preflight = dbStore.getHandoffResumePreflight(task.handoff_id, { working_directory: process.cwd(), recipient: task.actor_principal_id || task.requested_by_principal_id || null, simulate: true });
+    if (!preflight.safe_to_resume) {
+      try { durableTaskStore.updateTask(taskId, { state: "blocked", phase: "recovery", next_action: "reconcile_handoff", stopping_reason: "linked Handoff is not ready for recovery" }, "task.handoff_resume_blocked"); } catch {}
+      return false;
+    }
+  }
   if (taskEmitters[taskId] || taskCancels[taskId]) return false;
   const controller = new AbortController();
   taskEmitters[taskId] = new EventEmitter();
@@ -2060,7 +2085,7 @@ app.post("/api/agent/run", (req, res) => {
   const goalCheck = validateFollowUpGoal(goal);
   if (!goalCheck.ok) return res.status(goalCheck.httpStatus).json({ error: goalCheck.clientMessage });
   const body = req.body || {};
-  const allowed = new Set(["goal","goal_spec","profile","workspace_ref","authority_envelope"]);
+  const allowed = new Set(["goal","goal_spec","profile","workspace_ref","authority_envelope","handoff_id"]);
   if (Object.keys(body).some(key => !allowed.has(key))) return res.status(400).json({ error: "unknown task field" });
       const goalSpec = body.goal_spec == null ? null : body.goal_spec;
       if (goalSpec !== null && (!goalSpec || typeof goalSpec !== "object" || Array.isArray(goalSpec))) return res.status(400).json({ error: "goal_spec must be an object" });
@@ -2077,7 +2102,8 @@ app.post("/api/agent/run", (req, res) => {
       const requestedEnvelope = body.authority_envelope || {};
       const requestedEffects = Array.isArray(requestedEnvelope.allowed_effects) ? requestedEnvelope.allowed_effects : [];
       if (!authIdentity && (requestedEnvelope.changes_allowed === true || requestedEnvelope.external_effects_allowed === true || requestedEnvelope.production_allowed === true || requestedEffects.some(effect => effect !== "read_only"))) return res.status(403).json({ error: "authenticated principal is required for an expanded authority envelope" });
-      beginTaskRun(res, { goal: goalCheck.goal, goalSpec, profile: body.profile || "standard", workspaceRef: body.workspace_ref || null, authorityEnvelope: body.authority_envelope || {}, parentContext: authIdentity ? { requestedByPrincipalId: authIdentity.principal_id, actorPrincipalId: authIdentity.principal_id, authIdentity } : null });
+      if (body.handoff_id !== undefined && (typeof body.handoff_id !== "string" || body.handoff_id.length < 1 || body.handoff_id.length > 180)) return res.status(400).json({ error: "handoff_id is invalid" });
+      beginTaskRun(res, { goal: goalCheck.goal, goalSpec, profile: body.profile || "standard", workspaceRef: body.workspace_ref || null, authorityEnvelope: body.authority_envelope || {}, handoffId: body.handoff_id || null, parentContext: authIdentity ? { requestedByPrincipalId: authIdentity.principal_id, actorPrincipalId: authIdentity.principal_id, authIdentity } : null });
 });
 
 // Durable control-room projection. This is a read surface over the task store;
@@ -2351,6 +2377,10 @@ app.post("/api/agent/tasks/:taskId/resume", (req, res) => {
     const task = durableTaskStore.getTask(req.params.taskId);
     if (!task) return res.status(404).json({ error: "task not found" });
     if (!["paused", "interrupted", "blocked", "waiting"].includes(task.state)) return res.status(409).json({ error: "task is not resumable from its current state" });
+    if (task.handoff_id) {
+      const preflight = dbStore.getHandoffResumePreflight(task.handoff_id, { working_directory: process.cwd(), recipient: task.actor_principal_id || task.requested_by_principal_id || null, simulate: true });
+      if (!preflight.safe_to_resume) return res.status(409).json({ error: "linked Handoff is not ready for resume", preflight });
+    }
     const waitingForApproval = task.next_action === "await_approval";
     if (waitingForApproval) return res.status(409).json({ error: "task is waiting for an approval decision" });
     const authIdentity = requestAuthIdentity(req);

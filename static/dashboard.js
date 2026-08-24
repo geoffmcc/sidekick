@@ -331,6 +331,7 @@ function showPage(name){
   if (name === 'network-scopes') loadNetworkScopes();
   if (name === 'identity') loadIdentityAdmin();
   if (name === 'agent') restoreAgentState();
+  if (name === 'handoffs') loadHandoffs();
   if (name === 'research') { loadResearchSources(); loadRepositoryResearch(); }
   if (name === 'evolve') loadEvolve();
   if (name === 'compute') loadCompute();
@@ -4639,5 +4640,43 @@ async function showCapabilityInspection(body) {
   } catch (error) {
     capError(error.message);
     el.style.display = 'none';
+  }
+}
+
+async function loadHandoffs() {
+  const status = $('handoffStatus');
+  const list = $('handoffList');
+  if (!status || !list) return;
+  status.textContent = 'Loading handoffs...';
+  list.innerHTML = '';
+  try {
+    const response = await authFetch('/api/handoffs?limit=50');
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || 'handoff request failed');
+    const projections = await Promise.all((data.handoffs || []).map(async handoff => {
+      const result = await authFetch('/api/handoffs/' + encodeURIComponent(handoff.id) + '/start-here');
+      const body = await result.json();
+      return body.projection || { handoff_id: handoff.id, title: handoff.title, lifecycle_state: handoff.lifecycle_state, start_here: {} };
+    }));
+    status.textContent = projections.length + ' handoff' + (projections.length === 1 ? '' : 's');
+    if (!projections.length) { list.innerHTML = '<div class="card"><div class="empty">No handoffs found.</div></div>'; return; }
+    list.innerHTML = projections.map(projection => {
+      const start = projection.start_here || {};
+      const evidence = projection.evidence || {};
+      const quality = projection.quality || {};
+      const readiness = projection.readiness || {};
+      const blockers = Array.isArray(start.blockers) ? start.blockers : [];
+      const questions = Array.isArray(start.open_questions) ? start.open_questions : [];
+      return '<div class="card mission-panel mission-panel-wide">' +
+        '<div class="mission-panel-head"><div><div class="section-title">' + esc(start.objective || projection.title || projection.handoff_id) + '</div><div class="sub">' + esc(projection.handoff_id || '') + ' · v' + esc(String(projection.version || '')) + ' · ' + esc(projection.lifecycle_state || '') + '</div></div>' +
+        '<span class="metrics-status-pill ' + (readiness.status === 'ready' ? 'ok' : 'warn') + '">' + esc(readiness.status || 'unknown') + '</span></div>' +
+        '<div class="mission-muted">Next: ' + esc(start.next_step || 'No next step recorded') + '</div>' +
+        '<div class="mission-metrics"><div><span>Quality</span><strong>' + (quality.valid ? 'Ready' : 'Needs work') + '</strong></div><div><span>Evidence</span><strong>' + esc(String(evidence.fresh || 0)) + ' fresh / ' + esc(String(evidence.stale || 0)) + ' stale</strong></div><div><span>Blockers</span><strong>' + esc(String(blockers.length)) + '</strong></div><div><span>Questions</span><strong>' + esc(String(questions.length)) + '</strong></div></div>' +
+        '<details><summary>Receiver details</summary><pre class="agent-log" style="white-space:pre-wrap;max-height:320px;overflow:auto">' + esc(JSON.stringify({ completed_steps: projection.completed_steps || [], decisions: start.decisions || [], blockers, open_questions: questions, risks: start.risks || [], acceptance_criteria: projection.acceptance_criteria || [], artifacts: projection.artifacts || [], relationships: projection.relationships || [], reasons: readiness.reasons || quality.issues || [] }, null, 2)) + '</pre></details>' +
+        '</div>';
+    }).join('');
+  } catch (error) {
+    status.textContent = 'Unable to load handoffs: ' + error.message;
+    list.innerHTML = '<div class="card"><div class="empty">Handoff receiver data unavailable.</div></div>';
   }
 }

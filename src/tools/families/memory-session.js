@@ -17,6 +17,20 @@ function normalizeTags(tags) {
   return [];
 }
 
+function mergePacketEntries(...groups) {
+  const seen = new Set();
+  const merged = [];
+  for (const group of groups) {
+    for (const entry of Array.isArray(group) ? group : []) {
+      const key = JSON.stringify(entry);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(entry);
+    }
+  }
+  return merged;
+}
+
 function recordPlatformMemoryEvent(eventType, payload = {}, options = {}) {
   try {
     platformKernel.appendEvent({
@@ -57,6 +71,7 @@ function buildScopedMemoryBrief(goal, project, options = {}) {
 
 function buildContinuationPacket(existing, input = {}) {
   const reports = Array.isArray(input.reports) ? input.reports : [];
+  const priorPacket = input.handoff?.packet || {};
   const reportArtifacts = reports.map((report, index) => ({
     type: "subagent_report",
     id: report.id || `${existing.id}-report-${index + 1}`,
@@ -68,7 +83,12 @@ function buildContinuationPacket(existing, input = {}) {
   const contextArtifacts = [];
   if (existing.supplied_context) contextArtifacts.push({ type: "session_context", content: redactSensitive(existing.supplied_context), source_task_id: existing.id });
   if (existing.current_plan) contextArtifacts.push({ type: "session_plan", content: redactSensitive(existing.current_plan), source_task_id: existing.id });
-  const allArtifacts = [...(Array.isArray(input.artifacts) ? input.artifacts : existing.artifacts || []), ...contextArtifacts, ...reportArtifacts];
+  const allArtifacts = mergePacketEntries(
+    priorPacket.artifacts,
+    Array.isArray(input.artifacts) ? input.artifacts : existing.artifacts || [],
+    contextArtifacts,
+    reportArtifacts
+  );
   const evidenceItems = (Array.isArray(input.evidence) ? input.evidence : input.evidence ? [input.evidence] : []).map((item, index) => ({
     type: "session",
     label: `Session evidence ${index + 1}`,
@@ -76,18 +96,23 @@ function buildContinuationPacket(existing, input = {}) {
     content: redactSensitive(String(item)),
     source_task_id: existing.id,
   }));
+  const evidence = mergePacketEntries(priorPacket.evidence, evidenceItems);
   const acceptance = input.acceptance_state || existing.acceptance_state;
-  const priorProvenance = input.handoff?.packet?.provenance || {};
+  const priorProvenance = priorPacket.provenance || {};
+  const acceptanceCriteria = mergePacketEntries(
+    priorPacket.acceptance_criteria,
+    acceptance ? [`Session acceptance: ${acceptance}`] : []
+  );
   return {
     objective: existing.goal,
     summary: redactSensitive(input.final_summary || input.user_visible_result || input.outcome || existing.outcome || ""),
     status: input.state || "completed",
     completed_steps: input.completed_steps || existing.completed_steps || [],
-    decisions: input.decisions || [],
-    blockers: input.blockers || existing.blockers || [],
-    next_step: input.next_step || existing.next_step || null,
-    acceptance_criteria: acceptance ? [`Session acceptance: ${acceptance}`] : [],
-    risks: input.risks || [],
+    decisions: input.decisions || priorPacket.decisions || [],
+    blockers: input.blockers || existing.blockers || priorPacket.blockers || [],
+    next_step: input.next_step || existing.next_step || priorPacket.next_step || null,
+    acceptance_criteria: acceptanceCriteria,
+    risks: input.risks || priorPacket.risks || [],
     provenance: {
       ...priorProvenance,
       repository: existing.repository || priorProvenance.repository || null,
@@ -95,12 +120,14 @@ function buildContinuationPacket(existing, input = {}) {
       working_directory: existing.working_directory || priorProvenance.working_directory || null,
       environment: existing.environment || priorProvenance.environment || null,
       task_id: existing.id,
+      handoff_id: input.handoff?.id || priorProvenance.handoff_id || null,
+      handoff_version: input.handoff?.version || priorProvenance.handoff_version || null,
     },
-    evidence: evidenceItems,
+    evidence,
     artifacts: allArtifacts,
-    relationships: input.relationships || [],
-    failed_approaches: input.failed_approaches || [],
-    do_not_repeat: input.do_not_repeat || [],
+    relationships: input.relationships || priorPacket.relationships || [],
+    failed_approaches: input.failed_approaches || priorPacket.failed_approaches || [],
+    do_not_repeat: input.do_not_repeat || priorPacket.do_not_repeat || [],
   };
 }
 
@@ -140,6 +167,8 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     const state = action === "abandon" ? "abandoned" : "completed";
     const linkedHandoff = handoff_id ? dbStore.getHandoff(handoff_id) : null;
     const continuationPacket = handoff_id ? buildContinuationPacket(existing, { handoff: linkedHandoff, state, evidence, artifacts, reports, risks, relationships, do_not_repeat, outcome, final_summary, user_visible_result, acceptance_state, decisions, failed_approaches, next_step, completed_steps, blockers }) : null;
+    let finalizedHandoff = null;
+    let session;
     if (handoff_id) {
       const qualityIssues = continuationQualityIssues(continuationPacket);
       const validation = dbStore.validateHandoffPacket(continuationPacket, { requireResume: true });
@@ -147,9 +176,18 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
         return { content: [{ type: "text", text: `handoff quality gate failed: ${[...qualityIssues, ...validation.issues].join("; ")}` }], isError: true };
       }
       if (!linkedHandoff) return { content: [{ type: "text", text: `handoff quality gate failed: handoff "${handoff_id}" was not found` }], isError: true };
-      dbStore.saveHandoff({ id: linkedHandoff.id, project: linkedHandoff.project, title: linkedHandoff.title, source: linkedHandoff.source, task_id: id, content: continuationPacket.summary, packet: continuationPacket, extraction_state: "pending", owner_principal_id: linkedHandoff.owner_principal_id || ownerPrincipalId, created_by_principal_id: linkedHandoff.created_by_principal_id || actorPrincipalId });
+      try {
+        const finalize = dbStore.getDb().transaction(() => {
+          finalizedHandoff = dbStore.saveHandoff({ id: linkedHandoff.id, project: linkedHandoff.project, title: linkedHandoff.title, source: linkedHandoff.source, task_id: id, content: continuationPacket.summary, packet: continuationPacket, extraction_state: "pending", expectedVersion: linkedHandoff.version, owner_principal_id: linkedHandoff.owner_principal_id || ownerPrincipalId, created_by_principal_id: linkedHandoff.created_by_principal_id || actorPrincipalId });
+          return dbStore.saveTaskSession({ ...existing, artifacts: continuationPacket.artifacts, outcome, final_summary: redactSensitive(final_summary || user_visible_result || outcome || ""), acceptance_state, state, ended_at: new Date().toISOString(), owner_principal_id: existing.owner_principal_id || ownerPrincipalId, created_by_principal_id: existing.created_by_principal_id || actorPrincipalId });
+        });
+        session = finalize();
+      } catch (error) {
+        return { content: [{ type: "text", text: `session finalization failed: ${String(error && error.message ? error.message : error)}` }], isError: true };
+      }
+    } else {
+      session = dbStore.saveTaskSession({ ...existing, artifacts: artifacts || existing.artifacts, outcome, final_summary: redactSensitive(final_summary || user_visible_result || outcome || ""), acceptance_state, state, ended_at: new Date().toISOString(), owner_principal_id: existing.owner_principal_id || ownerPrincipalId, created_by_principal_id: existing.created_by_principal_id || actorPrincipalId });
     }
-    const session = dbStore.saveTaskSession({ ...existing, artifacts: continuationPacket ? continuationPacket.artifacts : (artifacts || existing.artifacts), outcome, final_summary: redactSensitive(final_summary || user_visible_result || outcome || ""), acceptance_state, state, ended_at: new Date().toISOString(), owner_principal_id: existing.owner_principal_id || ownerPrincipalId, created_by_principal_id: existing.created_by_principal_id || actorPrincipalId });
     const created = [];
     const projectName = project || existing.project;
     const add = (type, values, memoryClass, confidence) => {
@@ -165,7 +203,7 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     }
     add("negative", failed_approaches, "negative", 0.76); add("open_thread", [...(unresolved_issues || []), ...(follow_ups || [])], "prospective", 0.78); add("observation", evidence, "observational", 0.62);
     recordPlatformMemoryEvent(action === "abandon" ? "memory.session_abandoned" : "memory.session_completed", { session_id: session.id, project: session.project, memories_created: created.length, state: session.state, outcome }, { subjectType: "memory_task_session", subjectId: session.id, project: session.project, taskId: session.id, severity: action === "abandon" ? "warning" : "info" });
-    return jsonText({ ok: true, session, handoff_id: handoff_id || null, continuation_packet: continuationPacket, memories_created: created.length, memories: created });
+    return jsonText({ ok: true, session, handoff_id: handoff_id || null, handoff_version: finalizedHandoff ? finalizedHandoff.version : null, continuation_packet: continuationPacket, memories_created: created.length, memories: created });
   }
   if (action === "resume" || action === "status") {
     if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
