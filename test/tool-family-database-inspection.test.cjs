@@ -42,8 +42,8 @@ const names = ['db_schema', 'db_query', 'db_stats', 'log_query', 'db_search', 'd
     // Capability Packs v1 added `capability` and `workflow`: 103 -> 105.
     // B7 added `connector` (read-only connector inspection): 105 -> 106.
     // The workspace surface added `workspace` (workspaces + encrypted secrets): 106 -> 107.
-    // Governed Browser Automation added `browser` (Core browser subsystem): 107 -> 108.
-    assert.strictEqual(registry.listInDefinitionOrder().length, 108);
+    // Governed Browser Automation added `browser`: 107 -> 108; network scopes: 108 -> 109.
+    assert.strictEqual(registry.listInDefinitionOrder().length, 109);
     assert.deepStrictEqual(registry.listInDefinitionOrder().map(d => d.name), legacy.TOOL_DEFS.map(d => d.name));
 
     let result = await family.sidekick_db_schema({});

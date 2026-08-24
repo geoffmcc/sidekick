@@ -109,8 +109,8 @@ fs.writeFileSync(filePath, 'file contents\n', 'utf8');
     // Capability Packs v1 added `capability` and `workflow`: 103 -> 105.
     // B7 added `connector` (read-only connector inspection): 105 -> 106.
     // The workspace surface added `workspace` (workspaces + encrypted secrets): 106 -> 107.
-    // Governed Browser Automation added `browser` (Core browser subsystem): 107 -> 108.
-    assert.strictEqual(registry.listInDefinitionOrder().length, 108);
+    // Governed Browser Automation added `browser`: 107 -> 108; network scopes: 108 -> 109.
+    assert.strictEqual(registry.listInDefinitionOrder().length, 109);
     assert.deepStrictEqual(
       registry.listInDefinitionOrder().map(tool => tool.name),
       legacy.TOOL_DEFS.map(def => def.name),
