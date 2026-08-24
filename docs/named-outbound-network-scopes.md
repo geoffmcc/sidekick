@@ -27,7 +27,7 @@ traffic remain inside the Browser session proxy.
 
 ## Operator Control
 
-Manage scopes through the authenticated Dashboard API:
+Manage scopes through the authenticated Dashboard Network Scopes page or API:
 
 - `GET /api/network-scopes`
 - `GET /api/network-scopes/:scopeId?revision=N`
@@ -36,6 +36,11 @@ Manage scopes through the authenticated Dashboard API:
 - `PUT /api/network-scopes/:scopeId`
 - `POST /api/network-scopes/:scopeId/state` with `{"state":"active|disabled|deleted"}`
 - `POST /api/network-scopes/diagnose`
+
+The MCP catalog also exposes the `network_scopes` tool (alias
+`network_scope`) for listing, validating, creating, revising, disabling, and
+diagnosing scopes. Mutating MCP actions require an authenticated operator and
+the normal critical-tool approval path.
 
 Mutations require the authenticated Dashboard administrator authority and use
 the existing CSRF middleware. Scope changes create a new revision; old

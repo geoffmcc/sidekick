@@ -31,6 +31,7 @@
   <a onclick="showPage('approvals')" id="nav-approvals">Approvals</a>
   <a onclick="showPage('tools')" id="nav-tools">Tools</a>
   <a onclick="showPage('capabilities')" id="nav-capabilities">Capabilities</a>
+  <a onclick="showPage('network-scopes')" id="nav-network-scopes">Network Scopes</a>
   <a onclick="showPage('identity')" id="nav-identity">Identity</a>
   <a onclick="showPage('evolve')" id="nav-evolve">Evolve</a>
   <a onclick="showPage('compute')" id="nav-compute">Compute</a>
@@ -700,6 +701,27 @@
     </div>
     <pre id="capInspect" style="margin-top:10px;display:none;max-height:400px;overflow:auto"></pre>
   </div>
+</div>
+
+<!-- Network Scopes Page -->
+<div class="page" id="page-network-scopes">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div>
+      <div class="section-title" style="margin:0">Outbound Network Scopes (<span id="networkScopeCount">0</span>)</div>
+      <div style="color:#8b949e;font-size:.82rem;margin-top:4px">Named, operator-managed allowlists for private browser and HTTP access. Mutations require an administrator.</div>
+    </div>
+    <button class="btn btn-sm" onclick="loadNetworkScopes()"><i class="fas fa-sync"></i> Refresh</button>
+  </div>
+  <div id="networkScopeError"></div>
+  <div class="card" style="padding:12px;margin-bottom:14px">
+    <div class="section-title">Create scope</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+      <input id="networkScopeName" placeholder="name (for example lab-browser)" style="min-width:240px">
+      <textarea id="networkScopePolicy" rows="5" style="flex:1;min-width:360px;font-family:inherit" placeholder='{"allowed_hosts":["lab.example.test"],"allowed_protocols":["https"],"allowed_ports":[443]}'></textarea>
+      <button class="btn btn-sm" onclick="createNetworkScope()">Create</button>
+    </div>
+  </div>
+  <div id="networkScopeList"><div class="empty">Loading network scopes...</div></div>
 </div>
 
 <!-- Identity Page -->
