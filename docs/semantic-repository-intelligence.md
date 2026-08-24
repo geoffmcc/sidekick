@@ -46,6 +46,39 @@ IR or its content hash. These guarantees improve structural fidelity but do
 not constitute complete semantic reconstruction or prove runtime behavior
 that static analysis did not observe.
 
+## Snapshot-Bound Source Analysis
+
+Security Research can invoke SRI through a registered source repository and
+snapshot rather than accepting an arbitrary analysis path. The source manager
+resolves the campaign/project-owned IDs, verifies the immutable snapshot, and
+passes only its registered external directory to `semantic_repo`. The result
+must carry the same snapshot-bound repository identity and matching
+`index_root_hash`; otherwise the operation fails closed. Index provenance
+includes the source snapshot ID and content hash.
+
+The storage model is campaign-centered:
+
+```text
+<external-workspace>/projects/<campaign_id>/repositories/<repository_id>/<snapshot_id>/
+```
+
+The logical repository record is not an authority boundary and the directory
+is not a second source-of-truth repository. Snapshot content is always
+`derived_analysis_input`. Selection chooses the current analysis input for a
+campaign-owned source repository but does not promote it. `refresh` creates a
+new immutable snapshot. Verification detects modified, missing, or incomplete
+storage; stale snapshots cannot be indexed or selected. Source `acquire` uses
+the canonical structured HTTPS-only Git clone operation, while authenticated
+acquisition remains disabled until secret-reference injection can be kept out
+of arguments, URLs, logs, and model context.
+
+The shared evidence classes from PR #554 apply to SRI results: semantic
+matches are `discovery_lead`; exact governed reads can provide
+`exact_source_evidence`; probe results provide `runtime_evidence`; model
+interpretations are `model_inference`; and incomplete, stale, degraded, or
+conflicting results are `unresolved_or_ambiguous`. SRI cannot turn a discovery
+lead into proof, grant authorization, or replace exact source/runtime evidence.
+
 ## Integrity and lifecycle
 
 Each analyzed file has a domain-separated SHA-256 source identity and a normalized semantic unit identity. Symbols have deterministic scoped `id` values derived from repository-relative path, package/lexical parent, kind, name, and a canonical duplicate occurrence. Display names remain for readability; relationships use `from_id`/`to_id` when uniquely resolvable and bounded candidate ID arrays when a name is genuinely ambiguous. Every source span carries its relative path, source hash, line/column, and byte start/end. Result provenance records repository identity, index root, source snapshot, parser versions, query hash, execution time, completeness, degradation, and evidence class. Schema v4 uses a new hash domain; older cache/index meanings are never silently reinterpreted. These hashes provide content integrity, not authorship or authentication.
@@ -56,11 +89,24 @@ Parsing uses pinned Tree-sitter grammars for TypeScript/TSX, JavaScript/JSX, Rub
 
 Each file has both a raw `source_hash` and a normalized `semantic_hash`. The source identity changes for any byte change; the semantic identity is computed from normalized structure and relationships without locations or raw literal values, so formatting-only changes can remain semantically stable when the parser establishes the same structure. Repository `index_root_hash` covers the canonical persisted representation and is an integrity/content identity, not an authorship signature.
 
+For a registered Security Research snapshot, the snapshot manifest/content hash
+and the SRI index root are separate integrity identities. A matching hash does
+not prove authorship, safety, authorization, or runtime behavior. SRI's
+snapshot binding prevents analyzing an unregistered path under a registered
+ID; it does not make repository text trusted or permit the text to issue
+instructions.
+
 `dev_change_summary base=<ref>` reads the requested Git revision through the governed read-only Git object path and compares that snapshot with the actual requested current state: the working tree by default or the staged index when `staged=true`. It never checks out or executes historical source. Semantic queries expose bounded added, removed, and changed file/symbol information plus relationship-aware caller/callee/import neighborhoods. Relevant Agent requests can contribute a small `repository_semantic` context source through declarative canonical capability metadata, the existing governed tool dispatcher, and Brain/context ranking pipeline. A provider may declaratively identify a request-scope argument; the generic broker extracts an explicit absolute repository path and passes it to the provider, while omitting it preserves the tool's documented current-repository default. Repository-derived content is explicitly untrusted data and is never treated as Sidekick instructions.
 
 ## Safety limits and trust model
 
 Defaults bound the walk to 4,000 files, 64 MiB, 512 KiB per file, and directory entries, with a semantic-unit cap. Traversal does not follow symlinks, special files, skipped dependency/generated directories, or paths outside the canonicalized, already-authorized Developer Pack repository root. Malformed/unreadable files are isolated as warnings. Source comments, strings, filenames, and documentation are untrusted data and cannot grant Sidekick authority or alter policy. Function signatures retain bounded parameter names, not default values or raw parameter literals; sensitive literal contents are not retained in the IR.
+
+These SRI analysis limits are distinct from Security Research source import
+limits. Source import/refresh rejects a tree above 10,000 files, 100 MiB,
+depth 32, or 4,096-byte relative paths before it becomes a registered
+snapshot. Both layers fail closed on their own limit violations; neither
+silently truncates a registered source snapshot into an authoritative record.
 
 This is static structural analysis. A semantic match is a `discovery_lead`, not authoritative proof. Shared evidence classes distinguish discovery leads, exact source evidence, runtime evidence, model inference, and unresolved/ambiguous evidence. Partial, stale, truncated, degraded, or conflicting evidence cannot satisfy authoritative completion. A continuation marker requires both durable-operation vocabulary and asynchronous/event structure; it does not assert a particular scheduler or runtime protocol. Security classifications require bounded identifier/body patterns and carry confidence plus rule provenance; ambiguous code remains unknown. Exact source inspection remains available through governed filesystem tools.
 
@@ -71,3 +117,9 @@ Add a supported extension to the bounded discovery map and a real parser branch 
 ## Troubleshooting
 
 `warnings` and `stats` distinguish truncation, unavailable files, binary files, encoding failures, and semantic-unit limits. `semantic_repo action=verify` recomputes the canonical aggregate hash from the returned index. A failed verification means the cached/indexed record was modified or is incompatible; rerun the profile to rebuild it. A partial index remains useful but must be treated as partial because `stats.truncated` or warnings are retained in the profile. Natural-language repository questions can use the registered repository context provider without naming `semantic_repo`: capability discovery selects the governed inspection tool, the semantic projection is used first, and targeted governed source reads remain available when ambiguity or exact source verification requires them. This is bounded static analysis, not complete code understanding; unsupported or weakly inferred semantics remain explicit as unknown or omitted.
+
+When SRI is used through Security Research, `verify` must pass immediately
+before indexing. A later filesystem change makes the registered snapshot stale;
+the safe response is to import/refresh a new snapshot and analyze that new
+identity. The external workspace and kernel records are separate recovery
+assets, so backup and rollback must preserve both when reproducibility matters.

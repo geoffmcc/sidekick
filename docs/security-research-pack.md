@@ -37,6 +37,82 @@ provisioning** — a run whose environment is kind `proxmox` composes
 environment providers, a dedicated HTTP hardening tool, and disclosure
 connectors. These are extension points, not present features.
 
+## Governed Source Repository Model
+
+The pack gives each campaign a durable logical **source repository** and one or
+more immutable source snapshots. The word `repository` names the database/API
+record; the private workspace directory is named `repositories`.
+A source repository is campaign-owned and project-bound. It is not a second
+Git authority and it does not make source content trusted.
+
+The intended deployment example is the absolute external workspace
+`/home/sidekick/sidekick-workspaces/security-research`. The actual root is
+configuration-dependent (`workspace` or `SIDEKICK_RESEARCH_WORKSPACE`) and
+must be outside the Sidekick repository, data directory, and managed pack
+store. The campaign-centered layout is:
+
+```text
+/home/sidekick/sidekick-workspaces/security-research/
+  projects/<campaign_id>/
+    repositories/<repository_id>/
+      <snapshot_id>/
+        manifest.json
+        ...copied source files...
+```
+
+The snapshot record stores a workspace-relative `storage_ref`, content hash,
+file/byte/depth counts, verification metadata, lifecycle state, and the fixed
+authority `derived_analysis_input`. Real targets, credentials, URLs, and
+active research data must not be committed to this repository.
+
+### Import and acquisition
+
+`research_source action=import` accepts an absolute server-local directory and
+copies it into a newly staged snapshot. The importer sorts entries, hashes
+every regular file, writes a manifest, and atomically renames the completed
+staging directory. It refuses path traversal, symlinks, special files,
+hard-linked aliases, reserved `manifest.json` input, unsafe filenames, source
+and destination overlap, and changes observed while copying.
+
+`acquire` uses the canonical structured Git `clone` action. It accepts HTTPS
+remotes only, rejects embedded credentials and unsafe/private destinations,
+isolates Git configuration and credentials, disables hooks, helpers, filters,
+submodules, and LFS smudge, resolves an optional ref to a full commit, and
+copies only the verified checkout into an immutable snapshot. Remote hosts may
+be constrained with `allowed_hosts`; authenticated acquisition is not exposed
+until a secret-reference injection path can guarantee that secret values never
+enter arguments, URLs, logs, or model context.
+
+Configured source limits are clamped to no more than 10,000 files, 100 MiB,
+depth 32, and 4,096-byte relative paths (`source_limits`). A limit violation
+fails closed rather than producing a partial snapshot.
+
+### Refresh, selection, and comparison
+
+`refresh` verifies an existing finalized snapshot and imports its registered
+directory as a **new** snapshot. It never rewrites the old snapshot or reuses
+its ID. `compare` requires two distinct, currently verified snapshots in the
+same campaign-owned source repository and compares their deterministic file
+manifests. A stale snapshot cannot be compared, selected, or indexed.
+
+`verify` re-reads the registered directory and compares its manifest, content
+hash, file count, and byte count. Any out-of-band edit, missing manifest, or
+missing directory makes the result stale. `select` only selects a finalized,
+verified snapshot belonging to an active source repository. Selection is a
+pointer for operator choice, not a promotion of authority: snapshots remain
+`derived_analysis_input` forever.
+
+### Semantic analysis boundary
+
+`index` resolves the repository and snapshot IDs server-side, verifies the
+snapshot, and dispatches `semantic_repo` only against that registered
+snapshot directory. The returned semantic provenance must match both the
+snapshot path identity and the semantic `index_root_hash`; the result is
+bound back to the snapshot ID and content hash. A stale or mismatched result
+fails closed. Semantic output is bounded analysis input and a discovery lead,
+not the source of truth, an authorization grant, or a finding. Exact source
+evidence and runtime evidence remain separate.
+
 ## Install
 
 ```text
@@ -131,6 +207,14 @@ a real issue remains a human/model judgement.
 Produce evidence-linked report material (into the workspace + a custody record),
 or `get`/`list` report records. Never publishes, emails, or submits anything.
 
+### research_source (risk `high`)
+
+Manage campaign-owned source repositories and immutable snapshots. Actions are
+`list`, `get`, `import`, `acquire`, `refresh`, `index`, `compare`, `verify`,
+`select`, `archive`, `remove`, and `recover`. `recover` removes abandoned staging
+directories matching the governed staging pattern; it does not infer or
+recreate database records.
+
 ## Workflows
 
 - `security-research/source-regression` (read-only) — resolve two revisions,
@@ -164,6 +248,7 @@ Find them with `knowledge action="search" query="security research"`.
 | `http.allow_private_addresses` | Permit private/loopback HTTP targets (SSRF guard, default `false`). |
 | `http.max_response_bytes` | Maximum captured HTTP response body (default 2 MiB). |
 | `environments` | Named environments (`local`/`disposable`/`proxmox`/`remote`) a run may target. |
+| `source_limits` | Optional import/refresh bounds: `max_files`, `max_bytes`, `max_depth`, and `max_path_bytes`; each is clamped to the safe maximums above. |
 
 Real workspace paths, target scope and provider settings belong in ignored local
 configuration, environment variables, or secret references — never in a
@@ -227,6 +312,68 @@ credentials are never stored in research manifests. Review staged files before
 committing — the repo's static checks scan the pack surface for developer paths
 and secrets, but they supplement architecture and review, they do not replace
 them.
+
+## Dashboard and API
+
+Authenticated Dashboard views expose readiness, campaign source repositories,
+snapshot details, bounded metadata, verification state, and the selected
+snapshot. The current UI supports directory import, verify, select, semantic
+index, archive, and remove. It does not expose arbitrary source bytes or
+semantic projection content through these metadata routes.
+
+The Dashboard API provides:
+
+```text
+GET  /api/research/source/readiness
+GET  /api/research/source/repositories
+GET  /api/research/source/snapshots?repository_id=<id>
+GET  /api/research/source/snapshots/<snapshot_id>
+GET  /api/research/source/snapshots/<snapshot_id>/verification
+POST /api/research/source/actions/<action>
+```
+
+The action endpoint accepts `verify`, `select`, `index`, `compare`, `archive`,
+`remove`, `recover`, and `import` (the shorter `/api/research/source/<action>`
+form is also registered). Archive, remove, and recover require an
+authenticated Dashboard user and explicit `confirm: true`; all calls remain
+subject to normal dispatcher policy, approval, audit, project, and actor
+binding. API responses redact absolute workspace paths, credentials, target
+environment names, and raw semantic output.
+
+## Archive, Removal, and Recovery Safeguards
+
+Archiving a snapshot is allowed only from `finalized`; archiving a repository
+is a separate lifecycle action. Removed snapshots are terminal. A selected
+snapshot cannot be removed, so an operator must select another verified
+snapshot before removal. Storage removal is verified after the database
+transition and fails closed if the directory remains. The source lifecycle
+does not provide an unarchive action or undelete path.
+
+Recovery is bounded to the configured workspace's campaign `repositories` trees,
+refuses symlinked roots, and deletes only abandoned directories named with the
+pack's temporary staging pattern. It is cleanup of interrupted imports, not a
+repair mechanism for missing manifests, database rows, or deleted snapshots.
+
+## Synthetic Example
+
+For a campaign `campaign_demo`, an operator may import a local synthetic
+checkout:
+
+```text
+research_source action=import
+  campaign_id=campaign_demo
+  name=demo-service
+  source_path=/tmp/demo-service
+```
+
+Sidekick creates a source repository record and finalized snapshot under
+`projects/campaign_demo/repositories/<repository_id>/<snapshot_id>/`, records
+`authority=derived_analysis_input`, verifies the manifest, and permits a
+snapshot-bound semantic index. Editing the stored copy makes verification
+return `stale`; the old snapshot cannot be selected or indexed. Refreshing
+creates a second immutable snapshot, which can be compared with the first.
+This example is synthetic and does not authorize a real remote, target, or
+production source.
 
 ## Live-lab integration testing
 
