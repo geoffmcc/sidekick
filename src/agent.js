@@ -194,15 +194,18 @@ const {
 } = require("./agent/execution");
 const { buildChildLineage } = require("./agent/continuation");
 const { createTaskRunner } = require("./agent/task-run");
+const { createHandoffContinuity } = require("./agent/handoff-continuity");
 const { createResumedTaskFinalizer } = require("./agent/recovery");
 const { createContinuationJobStarter } = require("./agent/continuation-jobs");
 const { createDelayScheduler } = require("./agent/delay-scheduler");
 const { createWatchRuntime } = require("./agent/watch-runtime");
 const durableTaskModel = require("./agent/task-model");
 const durableTaskStore = require("./agent/task-store");
+const dbStore = require("./db");
 const durableReceiptStore = require("./agent/receipt-store");
 const durableWorkspaceTransactions = require("./agent/workspace-transactions");
 const durableOperations = require("./agent/durable-operations");
+const handoffContinuity = createHandoffContinuity({ getTask: durableTaskStore.getTask, getHandoff: dbStore.getHandoff, captureHandoffCheckpoint: dbStore.captureHandoffCheckpoint });
 const { determineEffect, decideAutonomy, intersectEnvelope, governedTargetRef } = require("./agent/authority");
 const { recoverDurableAgentTasks } = require("./agent/recovery-scan");
 const { verifyTaskResult, successfulFreshOutcome, applyRecipeGates, applyReceiptGates, applyPlanGates, runVerificationRepair } = require("./agent/verification");
@@ -1347,6 +1350,7 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
         next_action: "continue_agent_loop",
         state: { phase: "execution", work: state },
       });
+      handoffContinuity.checkpointTask(taskId);
     } catch {}
   };
 
@@ -1901,7 +1905,7 @@ const beginTaskRun = createTaskRunner({
   emit,
   runAgent,
   redactSensitive,
-  onTaskCreated: ({ taskId, goal, goalSpec, parentContext, profile, workspaceRef, authorityEnvelope, resume }) => {
+  onTaskCreated: ({ taskId, goal, goalSpec, parentContext, profile, workspaceRef, authorityEnvelope, handoffId, resume }) => {
     if (resume && durableTaskStore.getTask(taskId)) {
       const existing = durableTaskStore.getTask(taskId);
       durableTaskStore.updateTask(taskId, { state: "ready", phase: "recovery", next_action: "resume_from_safe_checkpoint" }, "task.resume_requested");
@@ -1913,6 +1917,13 @@ const beginTaskRun = createTaskRunner({
       ? suppliedEnvelope
       : (principalEnvelope || defaultTaskAuthorityEnvelope());
     const effectiveEnvelope = principalEnvelope ? intersectEnvelope(requestedEnvelope, principalEnvelope) : requestedEnvelope;
+    if (handoffId) {
+      const handoff = dbStore.getHandoff(handoffId);
+      if (!handoff) throw new Error("handoff not found");
+      if (handoff.project && parentContext?.project && handoff.project !== parentContext.project) throw new Error("handoff project does not match task project");
+      const principalId = parentContext?.requestedByPrincipalId || parentContext?.actorPrincipalId || null;
+      if (handoff.owner_principal_id && handoff.owner_principal_id !== principalId) throw new Error("handoff principal scope does not match task principal");
+    }
     const task = durableTaskModel.createTask({
       task_id: taskId,
       objective: goal,
@@ -1922,6 +1933,7 @@ const beginTaskRun = createTaskRunner({
       root_task_id: parentContext && parentContext.rootTaskId,
       session_id: parentContext && parentContext.sessionId,
       project_id: parentContext && parentContext.project,
+      handoff_id: handoffId,
       requested_by_principal_id: parentContext && parentContext.requestedByPrincipalId,
       actor_principal_id: parentContext && parentContext.actorPrincipalId,
       acting_for_principal_id: parentContext && parentContext.actingForPrincipalId,
@@ -1931,6 +1943,7 @@ const beginTaskRun = createTaskRunner({
       authority_envelope: effectiveEnvelope,
       capability_registry_version: liveAgentCatalogFingerprint(),
     });
+    task.handoff_id = handoffId || null;
     durableTaskStore.insertTask(task);
   },
 });
@@ -2060,7 +2073,7 @@ app.post("/api/agent/run", (req, res) => {
   const goalCheck = validateFollowUpGoal(goal);
   if (!goalCheck.ok) return res.status(goalCheck.httpStatus).json({ error: goalCheck.clientMessage });
   const body = req.body || {};
-  const allowed = new Set(["goal","goal_spec","profile","workspace_ref","authority_envelope"]);
+  const allowed = new Set(["goal","goal_spec","profile","workspace_ref","authority_envelope","handoff_id"]);
   if (Object.keys(body).some(key => !allowed.has(key))) return res.status(400).json({ error: "unknown task field" });
       const goalSpec = body.goal_spec == null ? null : body.goal_spec;
       if (goalSpec !== null && (!goalSpec || typeof goalSpec !== "object" || Array.isArray(goalSpec))) return res.status(400).json({ error: "goal_spec must be an object" });
@@ -2077,7 +2090,8 @@ app.post("/api/agent/run", (req, res) => {
       const requestedEnvelope = body.authority_envelope || {};
       const requestedEffects = Array.isArray(requestedEnvelope.allowed_effects) ? requestedEnvelope.allowed_effects : [];
       if (!authIdentity && (requestedEnvelope.changes_allowed === true || requestedEnvelope.external_effects_allowed === true || requestedEnvelope.production_allowed === true || requestedEffects.some(effect => effect !== "read_only"))) return res.status(403).json({ error: "authenticated principal is required for an expanded authority envelope" });
-      beginTaskRun(res, { goal: goalCheck.goal, goalSpec, profile: body.profile || "standard", workspaceRef: body.workspace_ref || null, authorityEnvelope: body.authority_envelope || {}, parentContext: authIdentity ? { requestedByPrincipalId: authIdentity.principal_id, actorPrincipalId: authIdentity.principal_id, authIdentity } : null });
+      if (body.handoff_id !== undefined && (typeof body.handoff_id !== "string" || body.handoff_id.length < 1 || body.handoff_id.length > 180)) return res.status(400).json({ error: "handoff_id is invalid" });
+      beginTaskRun(res, { goal: goalCheck.goal, goalSpec, profile: body.profile || "standard", workspaceRef: body.workspace_ref || null, authorityEnvelope: body.authority_envelope || {}, handoffId: body.handoff_id || null, parentContext: authIdentity ? { requestedByPrincipalId: authIdentity.principal_id, actorPrincipalId: authIdentity.principal_id, authIdentity } : null });
 });
 
 // Durable control-room projection. This is a read surface over the task store;

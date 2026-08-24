@@ -478,7 +478,7 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     return db.prepare("SELECT * FROM memory_handoff_events WHERE handoff_id = ? ORDER BY event_seq DESC LIMIT ?").all(handoffId, Math.max(1, Math.min(Number(limit) || 100, 500))).map(row => ({ id: row.id, handoff_id: row.handoff_id, event_seq: row.event_seq, version: row.version, event_type: row.event_type, actor: row.actor, source: row.source, payload: parseJson(row.payload_json, {}), previous_hash: row.previous_hash, event_hash: row.event_hash, created_at: row.created_at }));
   }
 
-  function captureHandoffCheckpoint(id, { working_directory, expectedVersion, actor = "system", source = "handoff" } = {}) {
+  function captureHandoffCheckpoint(id, { working_directory, expectedVersion, actor = "system", source = "handoff", metadata = null } = {}) {
     const handoff = getHandoff(id);
     if (!handoff) throw new Error(`Handoff not found: ${id}`);
     if (expectedVersion !== undefined && Number(expectedVersion) !== Number(handoff.version)) throw new Error(`Handoff "${id}" changed concurrently: expected version ${expectedVersion}, found ${handoff.version}`);
@@ -486,7 +486,7 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     const hash = continuityHash(checkpoint);
     const result = db.prepare("UPDATE memory_handoffs SET checkpoint_json = ?, checkpoint_hash = ?, updated_at = ? WHERE id = ? AND version = ?").run(JSON.stringify(checkpoint), hash, nowIso(), id, handoff.version);
     if (!result.changes) throw new Error(`Handoff "${id}" changed concurrently during checkpoint capture`);
-    appendHandoffEvent(id, handoff.version, "checkpoint_captured", { checkpoint_hash: hash, repository: checkpoint.repository || null }, { actor, source });
+    appendHandoffEvent(id, handoff.version, "checkpoint_captured", { checkpoint_hash: hash, repository: checkpoint.repository || null, ...(metadata && typeof metadata === "object" ? { metadata: parseJson(JSON.stringify(metadata), {}) } : {}) }, { actor, source });
     return getHandoff(id);
   }
 
