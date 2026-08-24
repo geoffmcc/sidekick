@@ -714,7 +714,7 @@ const descriptors = Object.freeze([
     description: "Structured git operations (status, diff, log, read-only show/ls-tree, add, commit, push, pull, branch, checkout, stash, and safe HTTPS clone)",
     schema: SCHEMAS.git,
     args: { action: "string", path: "string (optional)", args: "string (optional)", source_url: "string (clone HTTPS URL)", destination: "string (clone absolute destination)", ref: "string (optional clone ref)", allowed_hosts: "array (optional clone host patterns)" },
-    risk: "high",
+    risk: "medium",
     category: "Git & GitHub",
     source: "builtin",
     family: "development",

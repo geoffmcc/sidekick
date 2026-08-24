@@ -52,7 +52,7 @@
     { "tool": "proxmox_guest", "risk": "high" },
     { "tool": "proxmox_retire", "risk": "critical" },
     { "tool": "semantic_repo", "risk": "low" },
-    { "tool": "git", "risk": "high" }
+    { "tool": "git", "risk": "medium" }
   ],
   "depends": {
     "packs": [

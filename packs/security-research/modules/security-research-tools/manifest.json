@@ -92,7 +92,7 @@
     { "tool": "proxmox_provision", "risk": "high" },
     { "tool": "proxmox_guest", "risk": "high" },
     { "tool": "proxmox_retire", "risk": "critical" },
-    { "tool": "git", "risk": "high" }
+    { "tool": "git", "risk": "medium" }
   ],
   "lifecycle": {
     "disable": "stop_new_work",
