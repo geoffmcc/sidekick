@@ -41,6 +41,7 @@ const labLib = require("./lib/lab");
 const compareLib = require("./lib/compare");
 const reportLib = require("./lib/report");
 const discovery = require("./lib/discovery");
+const sourceLib = require("./lib/source");
 
 // Resolve the workspace once for a handler that needs filesystem access.
 function requireWorkspace(services) {
@@ -324,6 +325,16 @@ function handleReport(services, args, runtime) {
   }
 }
 
+function handleSource(services, args, runtime) {
+  // Source provenance must come from the authenticated execution context, not
+  // a caller-controlled actor field that could spoof audit attribution.
+  const runtimeActor = runtime && runtime.context && runtime.context.actor;
+  if (args.action === "authority" && (!runtimeActor || !String(runtimeActor).trim())) {
+    throw new ResearchError("authorization_failed", "an authenticated runtime actor is required for source authority");
+  }
+  return sourceLib.execute(services, { ...args, _runtime_project: runtime && runtime.context && runtime.context.project || null }, args.action === "authority" ? String(runtimeActor).trim() : resolveActor({}, runtime));
+}
+
 // Wrap a handler so any thrown ResearchError/Error becomes a structured result.
 function guard(fn) {
   return async (args, runtime) => {
@@ -565,6 +576,43 @@ const entry = {
         category: "Security",
         handler: guard((args, runtime) => handleReport(services, args, runtime)),
       },
+      {
+        name: "research_source",
+         description: "Manage campaign-owned Security Research source repositories and immutable snapshots. Import and acquire validate bounded regular-file trees, reject traversal, symlinks, special files and hard-linked aliases, stage atomically in the external workspace, and record deterministic manifests. Index dispatches semantic_repo only against a finalized registered snapshot and binds its provenance; compare is a bounded manifest comparison.",
+        schema: z.object({
+          action: z.enum(["list", "get", "import", "acquire", "refresh", "index", "compare", "verify", "select", "archive", "remove", "recover", "authority"]),
+           authority_action: z.enum(["declare", "get", "list", "revoke"]).optional(),
+          campaign_id: z.string().optional(),
+          project_id: z.string().optional(),
+          repository_id: z.string().optional(),
+          snapshot_id: z.string().optional(),
+          claim_id: z.string().optional(),
+          baseline_snapshot_id: z.string().optional(),
+          candidate_snapshot_id: z.string().optional(),
+          snapshot_state: z.string().optional(),
+          name: z.string().optional(),
+           source_path: z.string().optional(),
+           source_url: z.string().optional(),
+           ref: z.string().max(1024).optional(),
+           allowed_hosts: z.array(z.string()).max(32).optional(),
+          index_action: z.enum(["profile", "query", "verify"]).optional(),
+          authority_class: z.enum(["derived_analysis_input", "declared_source_authority"]).optional(),
+          scope: z.record(z.any()).optional(),
+          evidence_refs: z.array(z.string()).max(100).optional(),
+          authority_state: z.string().optional(),
+          metadata: z.any().optional(),
+          query: z.string().max(500).optional(),
+          level: z.number().int().min(0).max(2).optional(),
+          max_chars: z.number().int().min(1000).max(60000).optional(),
+          state: z.string().optional(),
+          limit: z.number().int().min(1).max(100).optional(),
+          actor: z.string().optional(),
+        }),
+         args: { action: "string (list|get|import|acquire|refresh|index|compare|verify|select|archive|remove|recover|authority)", authority_action: "string (declare|get|list|revoke)", authority_class: "string", scope: "object", evidence_refs: "array of artifact:<id>", claim_id: "string", campaign_id: "string", project_id: "string", repository_id: "string", snapshot_id: "string", baseline_snapshot_id: "string", candidate_snapshot_id: "string", source_path: "absolute directory path", source_url: "HTTPS repository URL", ref: "string (optional ref)", allowed_hosts: "array (optional host patterns)", name: "string", index_action: "string", query: "string", level: "number", max_chars: "number", state: "string", limit: "number" },
+        risk: "high",
+        category: "Security",
+        handler: guard((args, runtime) => handleSource(services, args, runtime)),
+      },
     ];
   },
 
@@ -580,7 +628,7 @@ const entry = {
       ws = { state: error instanceof ResearchError ? (error.code === "workspace_missing" ? "missing" : "unsafe") : "error" };
     }
     const details = {
-      tools: 10,
+       tools: 11,
       workspace: ws.state,
       local_probes_enabled: cfg.allow_local_probes === true,
       environments: Object.keys(cfg.environments || {}).length,

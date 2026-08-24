@@ -85,13 +85,12 @@ function makeGitRepo() {
   await test("SR.2 research_status reports configured workspace and available capabilities", async () => {
     const s = await okCall("research_status", {});
     assert.strictEqual(s.workspace.state, "configured");
-    // Server presence and pack dispatchability are DIFFERENT facts and must be
-    // reported separately: git is composed only through the workflow engine and
-    // must not be advertised as something the module facade would dispatch.
+    // Server presence and pack dispatchability are DIFFERENT facts. Git is now
+    // dispatchable only through the structured, safe clone operation.
     assert.strictEqual(s.capabilities.present_on_server.bash, true);
     assert.strictEqual(s.capabilities.present_on_server.git, true);
     assert.strictEqual(s.capabilities.dispatchable_by_pack.bash, true);
-    assert.strictEqual(s.capabilities.dispatchable_by_pack.git, undefined, "git is not in the module's permission allowlist");
+    assert.strictEqual(s.capabilities.dispatchable_by_pack.git, true, "git clone is in the module's permission allowlist");
     assert.strictEqual(s.capabilities.dispatchable_by_pack.ansible_run, undefined, "ansible_run is not in the module's permission allowlist");
     assert.strictEqual(s.capabilities.present_on_server.hash, undefined, "hash is never composed and is no longer advertised");
     assert.ok(Object.prototype.hasOwnProperty.call(s.capabilities.dispatchable_by_pack, "proxmox_retire"), "guarded retirement dispatchability is reported");
