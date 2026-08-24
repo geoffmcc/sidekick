@@ -1174,7 +1174,7 @@ function normalizeResearchReport(row) { return row ? { ...row, finding_refs: par
 function confirmedEvidenceRefs(refs, projectId) {
   const artifacts = (refs || []).map(ref => String(ref || "").replace(/^artifact:/, "")).filter(Boolean).map(ref => getArtifact(ref)).filter(artifact => artifact && (!projectId || String(artifact.project_id || "") === String(projectId)));
   if (!artifacts.length || artifacts.length !== (refs || []).length) return false;
-  return artifacts.some(artifact => canSupportAuthoritativeCompletion(normalizeEvidenceMetadata(parseJson(artifact.metadata_json, artifact.metadata || {}))));
+  return artifacts.some(artifact => canSupportAuthoritativeCompletion(normalizeEvidenceMetadata(parseJson(artifact.metadata_json, artifact.metadata || {}), { evidence_class: "exact_source_evidence", completeness: "complete" })));
 }
 function createResearchFinding(input = {}) {
   ensurePlatformKernelSchema(); const campaign = getResearchCampaign(input.campaign_id); if (!campaign) throw new Error("campaign_id must reference an existing campaign");
@@ -1183,7 +1183,7 @@ function createResearchFinding(input = {}) {
   let hypothesis = null, testRun = null;
   if (input.hypothesis_id) { hypothesis = getResearchHypothesis(input.hypothesis_id); if (!hypothesis || hypothesis.campaign_id !== campaign.campaign_id) throw new Error("hypothesis_id must belong to campaign"); }
   if (input.test_run_id) { testRun = getResearchTestRun(input.test_run_id); if (!testRun || testRun.campaign_id !== campaign.campaign_id) throw new Error("test_run_id must belong to campaign"); }
-   if (status === "confirmed" && (!testRun || testRun.state !== "completed" || refs.length === 0 || !confirmedEvidenceRefs(refs, campaign.project_id))) throw new Error("confirmed findings require a completed test run and exact/runtime evidence references");
+  if (status === "confirmed" && (!testRun || testRun.state !== "completed" || refs.length === 0 || !confirmedEvidenceRefs(refs, campaign.project_id))) throw new Error("confirmed findings require a completed test run and evidence references (exact/runtime evidence required)");
   const findingId = input.finding_id || newId("finding"), ts = input.created_at || nowIso();
   dbStore.getDb().prepare("INSERT INTO platform_research_findings (finding_id, project_id, campaign_id, hypothesis_id, test_run_id, title, claim, status, impact, evidence_refs_json, created_by, created_at, updated_at, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(findingId, campaign.project_id, campaign.campaign_id, hypothesis ? hypothesis.hypothesis_id : null, testRun ? testRun.test_run_id : null, title, claim, status, input.impact || null, JSON.stringify(refs), createdBy, ts, ts, json(input.metadata || {}));
   appendEvent({ event_type: "research.finding.created", source: input.source || "platform", actor_id: createdBy, subject_type: "research_finding", subject_id: findingId, project_id: campaign.project_id, payload: { campaign_id: campaign.campaign_id, status, evidence_count: refs.length }, correlation_id: campaign.campaign_id }); return getResearchFinding(findingId);

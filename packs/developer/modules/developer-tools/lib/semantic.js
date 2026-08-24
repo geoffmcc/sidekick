@@ -701,8 +701,12 @@ function project(index, options = {}) {
     if (workTruncated) break;
   }
   const symbolsById = new Map(all.filter(symbol => symbol.id).map(symbol => [symbol.id, symbol]));
-  const matches = item => !targetTokens.length || targetTokens.some(token => `${item.name || ""} ${item.kind || ""} ${item.path || ""} ${item.from || ""} ${item.to || ""}`.toLowerCase().includes(token));
-  const score = item => targetTokens.reduce((total, token) => total + (matches({ ...item, name: item.name || item.from || "", kind: item.kind, path: item.path }) && `${item.name || item.from || ""} ${item.path || ""}`.toLowerCase().includes(token) ? 2 : 0), 0);
+  // Agent context requests are often prose such as "Profile this repository";
+  // when no repository symbol matches, treat that as a bounded overview rather
+  // than returning an empty context result.
+  const effectiveTargetTokens = targetTokens.length && all.some(item => targetTokens.some(token => `${item.name || ""} ${item.kind || ""} ${item.path || ""}`.toLowerCase().includes(token))) ? targetTokens : [];
+  const matches = item => !effectiveTargetTokens.length || effectiveTargetTokens.some(token => `${item.name || ""} ${item.kind || ""} ${item.path || ""} ${item.from || ""} ${item.to || ""}`.toLowerCase().includes(token));
+  const score = item => effectiveTargetTokens.reduce((total, token) => total + (matches({ ...item, name: item.name || item.from || "", kind: item.kind, path: item.path }) && `${item.name || item.from || ""} ${item.path || ""}`.toLowerCase().includes(token) ? 2 : 0), 0);
   const allRelations = relationships.slice(0, DEFAULT_LIMITS.maxRelationships).map(relation => ({ relation, score: score(relation) + (PROJECTION_PRIORITY[relation.kind] || 0) / 100 })).sort((a, b) => b.score - a.score || a.relation.path.localeCompare(b.relation.path, "en") || (a.relation.evidence?.byte_start || 0) - (b.relation.evidence?.byte_start || 0) || String(a.relation.kind).localeCompare(String(b.relation.kind)) || String(a.relation.from || "").localeCompare(String(b.relation.from || "")) || String(a.relation.to || "").localeCompare(String(b.relation.to || "")));
   const relatedIds = new Set(allRelations.filter(item => matches(item.relation)).flatMap(item => [item.relation.from_id, item.relation.to_id]).filter(Boolean));
   const allSymbols = all.slice(0, DEFAULT_LIMITS.maxWorkItems).filter(symbol => matches(symbol) || relatedIds.has(symbol.id)).map(symbol => ({ symbol, score: score(symbol) + (relatedIds.has(symbol.id) ? 1 : 0) })).sort((a, b) => b.score - a.score || a.symbol.path.localeCompare(b.symbol.path, "en") || (a.symbol.evidence?.byte_start || 0) - (b.symbol.evidence?.byte_start || 0) || String(a.symbol.name).localeCompare(String(b.symbol.name)) || String(a.symbol.id).localeCompare(String(b.symbol.id)));
