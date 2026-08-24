@@ -103,6 +103,47 @@ dbStore.runPendingMigrations();
   const endEvent = dbStore.getDb().prepare("SELECT * FROM platform_execution_events WHERE event_type = 'memory.session_completed' AND subject_id = ?").get(beginData.session.id);
   assert.ok(endEvent, "session end should emit a platform memory event");
 
+  const preservedPacket = {
+    objective: "Preserve linked handoff state during session finalization",
+    status: "active",
+    next_step: "Review the preserved continuation",
+    decisions: ["Keep the original decision"],
+    blockers: [],
+    acceptance_criteria: ["Original acceptance criterion remains present"],
+    risks: ["Original risk remains visible"],
+    evidence: [{ type: "source", label: "original evidence" }],
+    artifacts: [{ type: "file", path: "original-artifact.txt" }],
+    relationships: [{ type: "related", target: "original-work" }]
+  };
+  const preserved = JSON.parse((await TOOLS.handoff({ action: "create", project: "sidekick", content: "Original continuation state", packet: preservedPacket })).content[0].text);
+  const preservedSession = JSON.parse((await TOOLS.session({ action: "begin", goal: "Finalize without losing linked packet state", project: "sidekick", source: "test" })).content[0].text);
+  const preservedEnd = JSON.parse((await TOOLS.session({
+    action: "end",
+    id: preservedSession.session.id,
+    handoff_id: preserved.handoff.id,
+    final_summary: "Finalized while preserving linked state",
+    acceptance_state: "accepted"
+  })).content[0].text);
+  assert.strictEqual(preservedEnd.handoff_version, 2, "session finalization should return the new handoff version");
+  const preservedResult = JSON.parse((await TOOLS.handoff({ action: "get", id: preserved.handoff.id })).content[0].text).handoff.packet;
+  assert.deepStrictEqual(preservedResult.decisions, preservedPacket.decisions, "finalization should preserve prior decisions");
+  assert.deepStrictEqual(preservedResult.risks, preservedPacket.risks, "finalization should preserve prior risks");
+  assert.ok(preservedResult.artifacts.some(artifact => artifact.path === "original-artifact.txt"), "finalization should preserve prior artifacts");
+  assert.ok(preservedResult.evidence.some(item => item.label === "original evidence"), "finalization should preserve prior evidence");
+  assert.ok(preservedResult.relationships.some(item => item.target === "original-work"), "finalization should preserve prior relationships");
+  assert.ok(preservedResult.acceptance_criteria.includes("Original acceptance criterion remains present"), "finalization should preserve prior acceptance criteria");
+
+  const atomicHandoff = JSON.parse((await TOOLS.handoff({ action: "create", project: "sidekick", content: "Atomic finalization guard", packet: { objective: "Atomic finalization guard", status: "active", next_step: "Try finalization", acceptance_criteria: ["Remain resumable"] } })).content[0].text);
+  const atomicSession = JSON.parse((await TOOLS.session({ action: "begin", goal: "Verify failed handoff finalization does not end the session", project: "sidekick", source: "test" })).content[0].text);
+  dbStore.getDb().prepare(`
+    INSERT INTO memory_handoff_versions (handoff_id, version, content, redacted_content, content_hash, created_at, superseded_at)
+    VALUES (?, ?, 'WRONG-PLANTED', 'WRONG-PLANTED', 'nothash', datetime('now'), datetime('now'))
+  `).run(atomicHandoff.handoff.id, atomicHandoff.handoff.version);
+  const atomicEnd = await TOOLS.session({ action: "end", id: atomicSession.session.id, handoff_id: atomicHandoff.handoff.id, final_summary: "Should not complete", acceptance_state: "accepted" });
+  assert.ok(atomicEnd.isError, "failed handoff finalization should return an error");
+  assert.ok(atomicEnd.content[0].text.includes("session finalization failed"), atomicEnd.content[0].text);
+  assert.strictEqual(dbStore.getTaskSession(atomicSession.session.id).state, "active", "failed handoff finalization must leave the session active");
+
   const wrong = await TOOLS.memory({ action: "remember", project: "sidekick", type: "fact", content: "Sidekick dashboard runs on port 9999", evidence: "test wrong fact" });
   const wrongId = JSON.parse(wrong.content[0].text).memory.id;
   const correction = await TOOLS.memory({ action: "correct", id: wrongId, correct_to: "Sidekick dashboard runs on port 4098", reason: "test correction" });

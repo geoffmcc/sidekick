@@ -71,3 +71,38 @@ and `do_not_repeat` guidance. Subagent reports are retained as handoff artifacts
 generated packet carries the goal, summary, state, next step, acceptance state, provenance,
 and source task ID. The finalization quality gate fails closed when continuation-critical
 fields are missing, so a session cannot be marked complete with an unusable linked handoff.
+
+Finalization reads the linked handoff version and updates it with an optimistic concurrency
+guard. If another writer changes the handoff during finalization, the session remains active
+and the operation fails without overwriting the newer handoff. The handoff update and session
+completion are committed together. Existing packet decisions, risks, acceptance criteria,
+evidence, artifacts, and relationships are retained unless the finalization explicitly adds
+or replaces them. A successful session-end response includes the resulting `handoff_version`.
+
+## Handoff v3: Verifiable Continuity
+
+Migration 067 extends the v2 record with a lifecycle state, bounded claim lease,
+checkpoint JSON and hash, and completion/revocation/supersession metadata. It
+also adds `memory_handoff_events`, an append-only hash-linked journal. Existing
+records migrate as schema version 2, remain readable, and are not given invented
+checkpoints or evidence.
+
+The governed `handoff` tool adds these bounded operations:
+
+- `checkpoint`: capture repository root, branch, HEAD, upstream, and a bounded
+  porcelain status manifest. Only the canonical checkpoint and hash are stored;
+  command output and secrets are not persisted.
+- `readiness`: validate the packet, lifecycle, checkpoint availability, and
+  current repository drift. Results are `ready`, `reconciliation_required`,
+  `blocked`, or `invalid` with machine-readable reasons.
+- `transition`: enforce the lifecycle transition matrix with optimistic
+  concurrency.
+- `claim` and `release`: atomically manage a bounded lease. The returned claim
+  token is stored only as a hash and is required for release.
+- `events`: retrieve the bounded continuity journal for audit and recovery.
+
+Checkpoint drift is informational only when clean; branch, HEAD, upstream, or
+working-tree changes are material and must be reconciled before automatic
+continuation. Handoff text, packet fields, journal payloads, and checkpoint
+metadata do not grant authority or approvals. Current policy and capability
+checks remain authoritative.

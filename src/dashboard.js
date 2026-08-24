@@ -2318,6 +2318,25 @@ app.get("/api/handoffs", (req, res) => {
   }
 });
 
+app.get("/api/handoffs/:id/readiness", (req, res) => {
+  try {
+    const readiness = dbStore.getHandoffReadiness(req.params.id, { recipient: req.query.recipient });
+    if (readiness.status === "invalid" && readiness.reasons?.includes("handoff not found")) return res.status(404).json({ ok: false, readiness });
+    res.json({ ok: true, readiness });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+app.get("/api/handoffs/:id/events", (req, res) => {
+  try {
+    if (!dbStore.getHandoff(req.params.id)) return res.status(404).json({ ok: false, error: "Handoff not found" });
+    res.json({ ok: true, handoff_id: req.params.id, events: dbStore.listHandoffEvents(req.params.id, req.query.limit || 100) });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
 app.get("/api/handoffs/:id", (req, res) => {
   try {
     const handoff = dbStore.getHandoff(req.params.id);

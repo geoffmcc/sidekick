@@ -239,6 +239,33 @@ function parse(result) {
   assert.ok(JSON.parse(audit.details_json).reason.includes("credential remediation drill"));
   console.log("HV.18 passed: purge_version is deliberate, bounded, audited");
 
+  // --- HV.19 verifiable continuity checkpoint and lifecycle -----------------
+  const continuity = parse(await TOOLS.handoff({ action: "create", project: "hv-continuity", content: "Fact: continuity fixture.", packet: {
+    objective: "Resume continuity fixture",
+    status: "active",
+    next_step: "Verify the checkpoint",
+    acceptance_criteria: ["Checkpoint is captured"]
+  } }));
+  assert.strictEqual(continuity.handoff.schema_version, 3, "new handoffs should use the v3 schema marker");
+  const checkpoint = parse(await TOOLS.handoff({ action: "checkpoint", id: continuity.handoff.id, working_directory: process.cwd(), expected_version: 1 }));
+  assert.ok(checkpoint.handoff.checkpoint_hash, "checkpoint should have a deterministic integrity hash");
+  assert.strictEqual(checkpoint.handoff.checkpoint.repository.head, execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim());
+  const ready = parse(await TOOLS.handoff({ action: "transition", id: continuity.handoff.id, lifecycle_state: "ready", expected_version: 1 }));
+  assert.strictEqual(ready.handoff.lifecycle_state, "ready");
+  const claimed = parse(await TOOLS.handoff({ action: "claim", id: continuity.handoff.id, owner: "hv-agent", expected_version: 1, lease_seconds: 60 }));
+  assert.ok(claimed.claim_token && claimed.handoff.lifecycle_state === "claimed", "claim should be atomic and return a one-time token");
+  const readiness = parse(await TOOLS.handoff({ action: "readiness", id: continuity.handoff.id, working_directory: process.cwd() }));
+  assert.strictEqual(readiness.readiness.status, "ready", "clean claimed checkpoint should be resumable");
+  const releasedRaw = await TOOLS.handoff({ action: "release", id: continuity.handoff.id, claim_token: claimed.claim_token });
+  assert.ok(!releasedRaw.isError, releasedRaw.content?.[0]?.text);
+  const released = parse(releasedRaw);
+  assert.strictEqual(released.handoff.lifecycle_state, "released");
+  const events = parse(await TOOLS.handoff({ action: "events", id: continuity.handoff.id }));
+  assert.ok(events.events.some(event => event.event_type === "checkpoint_captured"), "journal should record checkpoint capture");
+  assert.deepStrictEqual(events.events.map(event => event.event_seq), [5, 4, 3, 2, 1], "journal should expose a stable per-handoff sequence");
+  assert.ok(events.events.every((event, index, rows) => index === rows.length - 1 || event.previous_hash === rows[index + 1].event_hash), JSON.stringify(events.events));
+  console.log("HV.19 passed: checkpoint, lifecycle, claim lease, readiness, and journal");
+
   console.log("\nAll handoff versioning tests passed");
   process.exit(0);
 })().catch(error => {
