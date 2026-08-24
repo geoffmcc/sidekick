@@ -154,13 +154,60 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     });
   }
 
+  function evidenceKey(item, index) {
+    return stableHash(`sidekick:handoff:evidence:${index}:${JSON.stringify(canonicalize(item || {}))}`).slice(0, 64);
+  }
+
+  function getHandoffEvidenceState(id, version = null) {
+    if (!hasTable("memory_handoff_evidence_state")) return [];
+    const handoff = getHandoff(id);
+    const selectedVersion = version === null ? handoff?.version : Number(version);
+    if (!selectedVersion) return [];
+    return db.prepare("SELECT * FROM memory_handoff_evidence_state WHERE handoff_id = ? AND version = ? ORDER BY evidence_index ASC").all(id, selectedVersion).map(row => ({ evidence_key: row.evidence_key, evidence_index: row.evidence_index, state: row.state, reason: row.reason, source_hash: row.source_hash, observed_at: row.observed_at, checked_at: row.checked_at }));
+  }
+
+  function refreshHandoffEvidence(id, { working_directory, maxAgeMs = 7 * 24 * 60 * 60 * 1000, actor = "system" } = {}) {
+    const handoff = getHandoff(id);
+    if (!handoff) return { status: "invalid", reasons: ["handoff not found"] };
+    if (!hasTable("memory_handoff_evidence_state")) return { status: "unavailable", reasons: ["evidence state table is not available; run migrations"] };
+    const now = Date.now();
+    const items = Array.isArray(handoff.packet?.evidence) ? handoff.packet.evidence : [];
+    const states = items.map((item, index) => {
+      const stamp = item.observed_at || item.verified_at || item.created_at || null;
+      const ageMs = stamp ? Math.max(0, now - Date.parse(stamp)) : null;
+      let state = item.status === "failed" || item.status === "invalid" ? "invalid" : stamp && Number.isFinite(ageMs) && ageMs <= maxAgeMs ? "fresh" : stamp ? "stale" : "unknown";
+      let reason = state === "fresh" ? "within freshness window" : state === "stale" ? "outside freshness window" : state === "unknown" ? "no evidence timestamp" : "evidence reports failure or invalidity";
+      let sourceHash = item.content_hash || item.sha256 || null;
+      if (item.artifact_id && hasTable("platform_artifacts")) {
+        const artifact = db.prepare("SELECT artifact_id, content_hash, deleted_at FROM platform_artifacts WHERE artifact_id = ?").get(String(item.artifact_id));
+        if (!artifact) { state = "invalid"; reason = "referenced artifact does not exist"; }
+        else if (artifact.deleted_at) { state = "invalid"; reason = "referenced artifact is deleted"; }
+        else if (sourceHash && artifact.content_hash && sourceHash !== artifact.content_hash) { state = "invalid"; reason = "referenced artifact hash changed"; }
+        else { sourceHash = artifact.content_hash || sourceHash; }
+      }
+      if (item.commit_sha && working_directory) {
+        try { execFileSync("git", ["-C", working_directory, "cat-file", "-e", `${String(item.commit_sha)}^{commit}`], { stdio: "ignore", env: childProcessEnv() }); }
+        catch { state = "invalid"; reason = "referenced commit is unavailable"; }
+      }
+      return { evidence_key: evidenceKey(item, index), evidence_index: index, state, reason, source_hash: sourceHash, observed_at: stamp, checked_at: new Date(now).toISOString() };
+    });
+    const tx = db.transaction(() => {
+      db.prepare("DELETE FROM memory_handoff_evidence_state WHERE handoff_id = ? AND version = ?").run(id, handoff.version);
+      for (const state of states) db.prepare("INSERT INTO memory_handoff_evidence_state (handoff_id, version, evidence_key, evidence_index, state, reason, source_hash, observed_at, checked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(id, handoff.version, state.evidence_key, state.evidence_index, state.state, state.reason, state.source_hash, state.observed_at, state.checked_at);
+    });
+    tx();
+    appendHandoffEvent(id, handoff.version, "evidence_refreshed", { actor, counts: states.reduce((out, item) => { out[item.state] = (out[item.state] || 0) + 1; return out; }, {}) }, { actor, source: "handoff" });
+    return { status: "refreshed", handoff_id: id, version: handoff.version, states };
+  }
+
   function getHandoffReceiverProjection(id, { working_directory, recipient = null } = {}) {
     const handoff = getHandoff(id);
     if (!handoff) return null;
     const packet = handoff.packet || {};
     const quality = evaluateHandoffQuality(packet);
     const readiness = getHandoffReadiness(id, { working_directory, recipient });
-    const freshness = evidenceFreshness(packet);
+    const persistedFreshness = getHandoffEvidenceState(id);
+    const freshness = persistedFreshness.length ? persistedFreshness.map(item => ({ ...item, type: packet.evidence?.[item.evidence_index]?.type || null, label: packet.evidence?.[item.evidence_index]?.label || null, freshness: item.state, valid: item.state === "fresh" })) : evidenceFreshness(packet);
     return {
       handoff_id: handoff.id,
       version: handoff.version,
@@ -181,7 +228,7 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
       provenance: packet.provenance || null,
       artifacts: packet.artifacts || [],
       relationships: packet.relationships || [],
-      evidence: { items: freshness, fresh: freshness.filter(item => item.freshness === "fresh").length, stale: freshness.filter(item => item.freshness === "stale").length, unknown: freshness.filter(item => item.freshness === "unknown").length },
+      evidence: { items: freshness, fresh: freshness.filter(item => item.freshness === "fresh").length, stale: freshness.filter(item => item.freshness === "stale").length, unknown: freshness.filter(item => item.freshness === "unknown").length, invalid: freshness.filter(item => item.freshness === "invalid").length },
       quality,
       readiness,
       claim: handoff.claim,
@@ -203,14 +250,46 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
   function getHandoffResumePreflight(id, { working_directory, recipient = null, simulate = false } = {}) {
     const projection = getHandoffReceiverProjection(id, { working_directory, recipient });
     if (!projection) return { status: "invalid", reasons: ["handoff not found"] };
-    const provenance = verifyHandoffProvenance(getHandoff(id).packet, { requireResume: true });
+    const handoff = getHandoff(id);
+    const persistedEvidence = getHandoffEvidenceState(id);
+    const provenance = verifyHandoffProvenance(handoff.packet, { requireResume: true });
     const reasons = [];
     if (projection.readiness.status !== "ready") reasons.push(...projection.readiness.reasons);
     if (!projection.quality.valid) reasons.push(...projection.quality.issues);
     if (projection.evidence.stale > 0) reasons.push("one or more evidence items are stale");
+    if (projection.evidence.unknown > 0) reasons.push("one or more evidence items have unknown freshness");
+    if (projection.evidence.invalid > 0) reasons.push("one or more evidence items are invalid");
+    if (Array.isArray(handoff.packet?.evidence) && handoff.packet.evidence.length > 0 && persistedEvidence.length === 0) reasons.push("evidence freshness has not been explicitly refreshed");
     if (provenance.status === "invalid") reasons.push(...provenance.issues);
     const authority = ["current_principal", "current_policy", "current_capability_catalog", "current_workspace_scope", "current_approval_state"];
     return { status: reasons.length ? "blocked" : "ready", safe_to_resume: reasons.length === 0, simulated: simulate, reasons: [...new Set(reasons)], authority_recheck_required: authority, projection, provenance };
+  }
+
+  function renewHandoffClaim(id, { claim_token, leaseSeconds = 900, actor = "system", source = "handoff" } = {}) {
+    if (!claim_token) throw new Error("handoff claim renewal requires claim_token");
+    const current = getHandoff(id);
+    if (!current || !current.claim) throw new Error("handoff has no active claim");
+    const tokenHash = continuityHash({ domain: "claim", token: claim_token });
+    const expires = new Date(Date.now() + Math.max(30, Math.min(Number(leaseSeconds) || 900, 86400)) * 1000).toISOString();
+    const result = db.prepare("UPDATE memory_handoffs SET claim_expires_at = ?, updated_at = ? WHERE id = ? AND claim_token = ? AND lifecycle_state = 'claimed' AND claim_expires_at > ?").run(expires, nowIso(), id, tokenHash, nowIso());
+    if (!result.changes) throw new Error("handoff claim is invalid or expired");
+    appendHandoffEvent(id, current.version, "claim_renewed", { expires_at: expires }, { actor, source });
+    return { handoff: getHandoff(id), expires_at: expires };
+  }
+
+  function beginHandoffResume(id, { claim_token, working_directory, recipient = null, actor = "system", source = "handoff" } = {}) {
+    if (!claim_token) throw new Error("handoff resume requires claim_token");
+    const current = getHandoff(id);
+    const tokenHash = continuityHash({ domain: "claim", token: claim_token });
+    if (!current || !current.claim || current.lifecycle_state !== "claimed") throw new Error("handoff is not actively claimed");
+    const claimRow = db.prepare("SELECT claim_token, claim_expires_at FROM memory_handoffs WHERE id = ?").get(id);
+    if (!claimRow || claimRow.claim_token !== tokenHash || new Date(claimRow.claim_expires_at).getTime() <= Date.now()) throw new Error("handoff claim is invalid or expired");
+    const preflight = getHandoffResumePreflight(id, { working_directory, recipient, simulate: true });
+    if (!preflight.safe_to_resume) throw new Error(`handoff resume preflight blocked: ${preflight.reasons.join("; ")}`);
+    const result = db.prepare("UPDATE memory_handoffs SET lifecycle_state = 'verifying', updated_at = ? WHERE id = ? AND claim_token = ? AND lifecycle_state = 'claimed'").run(nowIso(), id, tokenHash);
+    if (!result.changes) throw new Error("handoff changed before resume began");
+    appendHandoffEvent(id, current.version, "resume_started", { recipient }, { actor, source });
+    return { handoff: getHandoff(id), preflight };
   }
 
   function verifyHandoffProvenance(packet, { requireResume = true } = {}) {
@@ -773,7 +852,7 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
   }
 
 
-  return { normalizeHandoffPacket, validateHandoffPacket, evaluateHandoffQuality, evidenceFreshness, getHandoffReceiverProjection, compareHandoffVersions, getHandoffResumePreflight, verifyHandoffProvenance, getHandoffLinks, saveHandoff, getHandoff, listHandoffs, listHandoffVersions, getHandoffVersion, restoreHandoffVersion, updateHandoffExtraction, archiveHandoff, unarchiveHandoff, purgeHandoffVersion, saveTaskSession, getTaskSession, listTaskSessions, captureHandoffCheckpoint, checkpointDrift, getHandoffReadiness, listHandoffEvents, transitionHandoff, claimHandoff, releaseHandoff };
+  return { normalizeHandoffPacket, validateHandoffPacket, evaluateHandoffQuality, evidenceFreshness, getHandoffReceiverProjection, compareHandoffVersions, getHandoffResumePreflight, getHandoffEvidenceState, refreshHandoffEvidence, renewHandoffClaim, beginHandoffResume, verifyHandoffProvenance, getHandoffLinks, saveHandoff, getHandoff, listHandoffs, listHandoffVersions, getHandoffVersion, restoreHandoffVersion, updateHandoffExtraction, archiveHandoff, unarchiveHandoff, purgeHandoffVersion, saveTaskSession, getTaskSession, listTaskSessions, captureHandoffCheckpoint, checkpointDrift, getHandoffReadiness, listHandoffEvents, transitionHandoff, claimHandoff, releaseHandoff };
 }
 
 module.exports = { createHandoffStore };

@@ -254,6 +254,27 @@ function parse(result) {
   assert.strictEqual(ready.handoff.lifecycle_state, "ready");
   const claimed = parse(await TOOLS.handoff({ action: "claim", id: continuity.handoff.id, owner: "hv-agent", expected_version: 1, lease_seconds: 60 }));
   assert.ok(claimed.claim_token && claimed.handoff.lifecycle_state === "claimed", "claim should be atomic and return a one-time token");
+  const refreshed = parse(await TOOLS.handoff({ action: "refresh_evidence", id: continuity.handoff.id, working_directory: process.cwd() }));
+  assert.strictEqual(refreshed.evidence.status, "refreshed", "evidence refresh should persist a bounded state report");
+  const renewed = parse(await TOOLS.handoff({ action: "renew_claim", id: continuity.handoff.id, claim_token: claimed.claim_token, lease_seconds: 120 }));
+  assert.ok(renewed.expires_at && renewed.handoff.claim.active, "claim renewal should extend the active lease");
+  const receiverReady = parse(await TOOLS.handoff({ action: "create", project: "hv-receiver", content: "Receiver lifecycle fixture.", packet: {
+    objective: "Exercise receiver lifecycle",
+    status: "active",
+    current_state: "Ready for a receiving agent",
+    completed_steps: ["Created the fixture"],
+    next_step: "Begin the claimed resume",
+    acceptance_criteria: ["Receiver can begin safely"],
+    provenance: { working_directory: process.cwd(), commit_sha: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(), branch: execFileSync("git", ["branch", "--show-current"], { encoding: "utf8" }).trim() },
+    evidence: [{ type: "test", label: "receiver fixture", status: "passed", observed_at: new Date().toISOString() }]
+  } }));
+  parse(await TOOLS.handoff({ action: "checkpoint", id: receiverReady.handoff.id, working_directory: process.cwd() }));
+  parse(await TOOLS.handoff({ action: "refresh_evidence", id: receiverReady.handoff.id, working_directory: process.cwd() }));
+  parse(await TOOLS.handoff({ action: "transition", id: receiverReady.handoff.id, lifecycle_state: "ready", expected_version: 1 }));
+  const receiverClaim = parse(await TOOLS.handoff({ action: "claim", id: receiverReady.handoff.id, owner: "hv-receiver", expected_version: 1, lease_seconds: 60 }));
+  const began = parse(await TOOLS.handoff({ action: "begin_resume", id: receiverReady.handoff.id, owner: "hv-receiver", claim_token: receiverClaim.claim_token, working_directory: process.cwd() }));
+  assert.strictEqual(began.handoff.lifecycle_state, "verifying", "receiver begin_resume should enter verifying state");
+  parse(await TOOLS.handoff({ action: "release", id: receiverReady.handoff.id, claim_token: receiverClaim.claim_token }));
   const readiness = parse(await TOOLS.handoff({ action: "readiness", id: continuity.handoff.id, working_directory: process.cwd() }));
   assert.strictEqual(readiness.readiness.status, "ready", "clean claimed checkpoint should be resumable");
   const receiver = parse(await TOOLS.handoff({ action: "start_here", id: continuity.handoff.id, working_directory: process.cwd() }));
@@ -271,7 +292,7 @@ function parse(result) {
   assert.strictEqual(released.handoff.lifecycle_state, "released");
   const events = parse(await TOOLS.handoff({ action: "events", id: continuity.handoff.id }));
   assert.ok(events.events.some(event => event.event_type === "checkpoint_captured"), "journal should record checkpoint capture");
-  assert.deepStrictEqual(events.events.map(event => event.event_seq), [5, 4, 3, 2, 1], "journal should expose a stable per-handoff sequence");
+  assert.deepStrictEqual(events.events.map(event => event.event_seq), events.events.map((_, index) => events.events.length - index), "journal should expose a stable per-handoff sequence");
   assert.ok(events.events.every((event, index, rows) => index === rows.length - 1 || event.previous_hash === rows[index + 1].event_hash), JSON.stringify(events.events));
   console.log("HV.19 passed: checkpoint, lifecycle, claim lease, readiness, and journal");
 

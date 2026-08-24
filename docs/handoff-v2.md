@@ -123,6 +123,14 @@ Handoff v3 also exposes receiver-oriented, read-only projections:
   be recalculated by the receiving Agent.
 - `simulate_resume` performs the same checks without claiming, mutating, or
   resuming anything. `safe_to_resume` is never an approval decision.
+- `refresh_evidence` explicitly rechecks packet evidence timestamps, referenced
+  platform artifacts, and referenced Git commits, persisting only bounded state
+  such as fresh, stale, unknown, or invalid. A receiver preflight requires this
+  refresh when evidence is present.
+- `renew_claim` extends an active claim only with the original claim token.
+  `begin_resume` requires that token and a passing preflight, then moves the
+  handoff to `verifying`; it does not start Agent execution. `release` remains
+  the explicit ownership-ending operation.
 - `compare` retains the historical summary response and accepts `version` and
   `expected_version` to return deterministic content and packet field changes.
 

@@ -27,6 +27,7 @@
   <a onclick="showPage('database')" id="nav-database">Database</a>
   <a onclick="showPage('config')" id="nav-config">Config</a>
   <a onclick="showPage('agent')" id="nav-agent">Agent</a>
+  <a onclick="showPage('handoffs')" id="nav-handoffs">Handoffs</a>
   <a onclick="showPage('research')" id="nav-research">Research</a>
   <a onclick="showPage('approvals')" id="nav-approvals">Approvals</a>
   <a onclick="showPage('tools')" id="nav-tools">Tools</a>
@@ -509,6 +510,19 @@
     </button>
     <div id="agentHistory" style="display:none;margin-top:8px" aria-live="polite"></div>
   </div>
+</div>
+
+<!-- Handoffs Page -->
+<div class="page" id="page-handoffs">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div>
+      <div class="section-title" style="margin:0">Handoff Receiver View</div>
+      <div class="sub">Continuity state, evidence freshness, blockers, decisions, and the next safe action.</div>
+    </div>
+    <button class="btn btn-sm btn-outline" onclick="loadHandoffs()"><i class="fas fa-sync"></i> Refresh</button>
+  </div>
+  <div id="handoffStatus" class="sub" aria-live="polite">Loading handoffs...</div>
+  <div id="handoffList" class="mission-grid" aria-live="polite"></div>
 </div>
 
 <!-- Approvals Page -->
