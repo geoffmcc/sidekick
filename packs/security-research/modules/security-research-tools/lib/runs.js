@@ -19,6 +19,13 @@ const records = require("./records");
 
 const ENVIRONMENT_KINDS = ["local", "disposable", "proxmox", "remote"];
 
+function assertBoundNetworkScope(run) {
+  const bound = run && run.metadata && run.metadata.network_scope;
+  if (!bound) return;
+  const current = require("../../../../../src/security/network-scopes").get(bound.scope_id, bound.revision);
+  if (!current || !current.enabled || !current.is_current || current.digest !== bound.digest) throw new ResearchError("scope_stale", "the bound named network scope is disabled, expired, or has changed; rebind the run explicitly");
+}
+
 // Resolve an environment reference (a name into pack config, or an inline spec)
 // into a normalized descriptor. Never contacts a provider — it only describes
 // where a probe will run so probe-time gating can reason about it.
@@ -67,7 +74,13 @@ function normalizeEnvironment(env) {
  */
 function plan(input, actor, config) {
   const hypothesis = records.getHypothesis(requireText(input.hypothesis_id, "hypothesis_id"));
+  const campaign = records.getCampaign(hypothesis.campaign_id);
   const environment = resolveEnvironment(config, input.environment);
+  const requestedScope = input.network_scope ? require("../../../../../src/security/network-scopes").get(input.network_scope) : null;
+  const campaignScope = campaign.metadata?.network_scope || null;
+  if (requestedScope && campaignScope && (requestedScope.scope_id !== campaignScope.scope_id || requestedScope.revision !== campaignScope.revision || requestedScope.digest !== campaignScope.digest)) throw new ResearchError("authorization_failed", "run network_scope must match the campaign binding; create a new campaign binding to rebind authority");
+  const networkScope = requestedScope || campaignScope;
+  if (input.network_scope && (!networkScope || !networkScope.enabled)) throw new ResearchError("policy_denied", "network scope is missing, disabled, or expired");
   const k = kernel();
 
   const execution = k.createExecution({
@@ -97,6 +110,7 @@ function plan(input, actor, config) {
         name: input.name || null,
         manifest: input.manifest || null,
         environment_name: environment.name,
+        network_scope: networkScope ? { scope_id: networkScope.scope_id, name: networkScope.name, revision: networkScope.revision, digest: networkScope.digest, policy: networkScope.policy || networkScope } : null,
       },
       source: "security-research",
     });
@@ -132,6 +146,7 @@ function gatherEvidence(run) {
 
 function start(runId, actor) {
   const current = get(runId);
+  assertBoundNetworkScope(current);
   if (current.state === "running") return current; // idempotent
   let testRun;
   try {
@@ -150,6 +165,7 @@ function start(runId, actor) {
  */
 function resume(runId) {
   const run = get(runId);
+  assertBoundNetworkScope(run);
   const resumable = ["not_run", "running"].includes(run.state);
   return {
     ...run,

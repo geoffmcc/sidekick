@@ -54,6 +54,14 @@ function runContext(services, runId, runtime) {
   const root = requireWorkspace(services);
   const config = services.config || {};
   const run = runsLib.get(runId);
+  const boundNetworkScope = run.metadata && run.metadata.network_scope;
+  if (boundNetworkScope) {
+    const currentScope = require("../../../../../src/security/network-scopes").get(boundNetworkScope.scope_id, boundNetworkScope.revision);
+    if (!currentScope || !currentScope.enabled || !currentScope.is_current || currentScope.digest !== boundNetworkScope.digest) {
+      throw new ResearchError("scope_stale", "the bound named network scope is disabled, expired, or has changed; rebind the run explicitly");
+    }
+    boundNetworkScope.policy = currentScope;
+  }
   return {
     root,
     config,
@@ -63,6 +71,7 @@ function runContext(services, runId, runtime) {
     projectId: run.project_id,
     executionId: run.execution_id,
     scopeSnapshotId: run.scope_snapshot_id || null,
+    networkScope: boundNetworkScope || null,
     environment: run.environment || null,
     actor: resolveActor({}, runtime),
     timeoutMs: config.probe_timeout_ms || 60000,
@@ -370,12 +379,13 @@ const entry = {
           name: z.string().optional(),
           state: z.string().optional(),
           scope_snapshot_id: z.string().optional(),
+          network_scope: z.string().max(80).optional(),
           reason: z.string().optional(),
           limit: z.number().int().min(1).max(100).optional(),
           actor: z.string().optional(),
           metadata: z.any().optional(),
         }),
-        args: { action: "string (create|get|list|transition)", campaign_id: "string", project_id: "string", name: "string", state: "string", scope_snapshot_id: "string", reason: "string", limit: "number", metadata: "object" },
+        args: { action: "string (create|get|list|transition)", campaign_id: "string", project_id: "string", name: "string", state: "string", scope_snapshot_id: "string", network_scope: "string (operator-created named scope)", reason: "string", limit: "number", metadata: "object" },
         risk: "medium",
         category: "Security",
         handler: guard((args, runtime) => handleProject(services, args, runtime)),
@@ -439,6 +449,7 @@ const entry = {
           campaign_id: z.string().optional(),
           project_id: z.string().optional(),
           scope_snapshot_id: z.string().optional(),
+          network_scope: z.string().max(80).optional(),
           name: z.string().optional(),
           environment: z.any().optional(),
           manifest: z.any().optional(),
@@ -449,7 +460,7 @@ const entry = {
           limit: z.number().int().min(1).max(100).optional(),
           actor: z.string().optional(),
         }),
-        args: { action: "string (plan|start|status|resume|cancel|complete|provision|cleanup|list)", run_id: "string", hypothesis_id: "string", environment: "string|object", outcome: "string", evidence: "array of evidence references" },
+        args: { action: "string (plan|start|status|resume|cancel|complete|provision|cleanup|list)", run_id: "string", hypothesis_id: "string", environment: "string|object", network_scope: "string (operator-created named scope)", outcome: "string", evidence: "array of evidence references" },
         risk: "high",
         category: "Security",
         handler: guard((args, runtime) => handleRun(services, args, runtime)),

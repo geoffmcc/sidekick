@@ -245,7 +245,7 @@ Find them with `knowledge action="search" query="security research"`.
 | `probe_timeout_ms` | Default bound for a probe (default 60000). |
 | `max_evidence_bytes` | Maximum size of a captured evidence artifact (default 5 MiB). |
 | `http.allowed_hosts` | Host globs an HTTP probe may target when no scope snapshot is bound. |
-| `http.allow_private_addresses` | Permit private/loopback HTTP targets (SSRF guard, default `false`). |
+| `http.allow_private_addresses` | Deprecated compatibility field; named outbound network scope binding is required for private HTTP targets. |
 | `http.max_response_bytes` | Maximum captured HTTP response body (default 2 MiB). |
 | `environments` | Named environments (`local`/`disposable`/`proxmox`/`remote`) a run may target. |
 | `source_limits` | Optional import/refresh bounds: `max_files`, `max_bytes`, `max_depth`, and `max_path_bytes`; each is clamped to the safe maximums above. |
