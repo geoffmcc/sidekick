@@ -154,6 +154,16 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
     const verification = dbStore.verifyHandoffProvenance(handoff.packet, { requireResume: true });
     return jsonText({ ok: true, handoff_id: handoff.id, version: handoff.version, ...verification });
   }
+  if (["start_here", "quality", "preflight", "simulate_resume"].includes(action)) {
+    if (!id) return { content: [{ type: "text", text: `handoff ${action} requires id` }], isError: true };
+    if (action === "start_here") return jsonText({ ok: true, projection: dbStore.getHandoffReceiverProjection(id, { working_directory, recipient: owner || null }) });
+    if (action === "quality") {
+      const handoff = dbStore.getHandoff(id);
+      if (!handoff) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
+      return jsonText({ ok: true, handoff_id: id, version: handoff.version, quality: dbStore.evaluateHandoffQuality(handoff.packet, { requireResume: true }), evidence: dbStore.evidenceFreshness(handoff.packet) });
+    }
+    return jsonText({ ok: true, preflight: dbStore.getHandoffResumePreflight(id, { working_directory, recipient: owner || null, simulate: action === "simulate_resume" }) });
+  }
   if (["checkpoint", "readiness", "events", "transition", "claim", "release"].includes(action)) {
     if (!id) return { content: [{ type: "text", text: `handoff ${action} requires id` }], isError: true };
     try {
@@ -191,19 +201,22 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
     if (id) {
       const versions = dbStore.listHandoffVersions(id);
       if (!versions.length) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
-      return jsonText({ ok: true, comparison: versions.map(v => ({ id: v.handoff_id, version: v.version, hash: v.content_hash, bytes: v.content_bytes, created_at: v.created_at, current: v.current })) });
+      if (version === undefined && expected_version === undefined) return jsonText({ ok: true, comparison: versions.map(v => ({ id: v.handoff_id, version: v.version, hash: v.content_hash, bytes: v.content_bytes, created_at: v.created_at, current: v.current })) });
+      const requestedFrom = version === undefined || version === null ? (versions[1]?.version || versions[0].version) : version;
+      const requestedTo = expected_version === undefined || expected_version === null ? versions[0].version : expected_version;
+      return jsonText({ ok: true, comparison: dbStore.compareHandoffVersions(id, requestedFrom, requestedTo), versions: versions.map(v => ({ id: v.handoff_id, version: v.version, hash: v.content_hash, bytes: v.content_bytes, created_at: v.created_at, current: v.current })) });
     }
     const handoffs = dbStore.listHandoffs({ project, includeArchived: true, limit: 2 });
     return jsonText({ ok: true, comparison: handoffs.map(h => ({ id: h.id, version: h.version, hash: h.content_hash, updated_at: h.updated_at })) });
   }
-  return { content: [{ type: "text", text: "Invalid action. Use create, update, get, list, versions, restore, compare, inspect, validate, verify, checkpoint, readiness, events, transition, claim, release, reprocess, archive, unarchive, purge_version" }], isError: true };
+  return { content: [{ type: "text", text: "Invalid action. Use create, update, get, list, versions, restore, compare, inspect, validate, verify, start_here, quality, preflight, simulate_resume, checkpoint, readiness, events, transition, claim, release, reprocess, archive, unarchive, purge_version" }], isError: true };
 }
 
 const descriptors = Object.freeze([Object.freeze({
   name: "handoff",
    description: "First-class versioned Handoff v3 continuity storage with structured resume packets, deterministic checkpoints, lifecycle claims, readiness/drift evaluation, and a bounded tamper-evident journal. Packets preserve objective, state, next steps, decisions, blockers, acceptance criteria, provenance, evidence, artifacts, risks, and relationships alongside every content version.",
-   schema: z.object({ action: z.enum(["create", "update", "get", "list", "versions", "restore", "compare", "inspect", "validate", "verify", "checkpoint", "readiness", "events", "transition", "claim", "release", "reprocess", "archive", "unarchive", "purge_version"]).describe("Handoff action"), id: z.string().optional(), project: z.string().optional(), title: z.string().optional(), content: z.string().optional(), source: z.string().optional(), task_id: z.string().optional(), reprocess: z.boolean().optional(), include_archived: z.boolean().optional(), limit: z.number().optional(), version: z.number().optional().describe("Version selector for get/restore/purge_version"), expected_version: z.number().optional().describe("Optimistic concurrency guard"), reason: z.string().optional().describe("Reason recorded in the audit trail"), packet: z.record(z.any()).optional().describe("Structured resume packet"), working_directory: z.string().optional(), owner: z.string().optional(), lease_seconds: z.number().optional(), claim_token: z.string().optional(), lifecycle_state: z.string().optional() }).strict(),
-   args: { action: "string (create|update|get|list|versions|restore|compare|inspect|validate|verify|checkpoint|readiness|events|transition|claim|release|reprocess|archive|unarchive|purge_version)", id: "string (required for id-scoped actions)", project: "string (optional, for create/update/list/compare)", title: "string (optional)", content: "string (for create/update)", source: "string (optional)", task_id: "string (optional)", packet: "object (structured resume packet, optional)", include_archived: "boolean (optional)", limit: "number (optional)", version: "number (get: fetch a historical version; restore/purge_version: target version)", expected_version: "number (optimistic concurrency guard)", reason: "string (audit reason)", working_directory: "string (checkpoint/readiness)", owner: "string (claim/readiness recipient)", lease_seconds: "number (claim lease)", claim_token: "string (release token)", lifecycle_state: "string (transition target)" },
+    schema: z.object({ action: z.enum(["create", "update", "get", "list", "versions", "restore", "compare", "inspect", "validate", "verify", "start_here", "quality", "preflight", "simulate_resume", "checkpoint", "readiness", "events", "transition", "claim", "release", "reprocess", "archive", "unarchive", "purge_version"]).describe("Handoff action"), id: z.string().optional(), project: z.string().optional(), title: z.string().optional(), content: z.string().optional(), source: z.string().optional(), task_id: z.string().optional(), reprocess: z.boolean().optional(), include_archived: z.boolean().optional(), limit: z.number().optional(), version: z.number().optional().describe("Version selector for get/restore/purge/compare source version"), expected_version: z.number().optional().describe("Optimistic concurrency guard or compare target version"), reason: z.string().optional().describe("Reason recorded in the audit trail"), packet: z.record(z.any()).optional().describe("Structured resume packet"), working_directory: z.string().optional(), owner: z.string().optional(), lease_seconds: z.number().optional(), claim_token: z.string().optional(), lifecycle_state: z.string().optional() }).strict(),
+    args: { action: "string (create|update|get|list|versions|restore|compare|inspect|validate|verify|start_here|quality|preflight|simulate_resume|checkpoint|readiness|events|transition|claim|release|reprocess|archive|unarchive|purge_version)", id: "string (required for id-scoped actions)", project: "string (optional, for create/update/list/compare)", title: "string (optional)", content: "string (for create/update)", source: "string (optional)", task_id: "string (optional)", packet: "object (structured resume packet, optional)", include_archived: "boolean (optional)", limit: "number (optional)", version: "number (get/restore/purge/compare source version)", expected_version: "number (optimistic concurrency guard or compare target version)", reason: "string (audit reason)", working_directory: "string (checkpoint/readiness/preflight)", owner: "string (claim/readiness recipient)", lease_seconds: "number (claim lease)", claim_token: "string (release token)", lifecycle_state: "string (transition target)" },
   risk: "medium",
   category: "Context & Learning",
   source: "builtin",

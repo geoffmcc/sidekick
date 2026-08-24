@@ -1542,6 +1542,7 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
           };
           if (hierarchical.steps.some(step => !getLiveAgentDescriptor(step.capability))) throw new Error("hierarchical plan references a capability outside the live Agent catalog");
           durableOperations.savePlan(taskId, hierarchical, { source: metadata && metadata.source || "planner", evidence: metadata && metadata.evidence || null, registry_version: current && current.capability_registry_version || null });
+          try { handoffContinuity.checkpointTask(taskId, { reason: "task.plan_revision", safeBoundary: "plan_revision" }); } catch {}
         } catch (error) {
           durableTaskStore.addFailure(taskId, { error_class: "plan_persistence", retryable: false, detail: "hierarchical plan could not be persisted safely" });
         }
@@ -1860,6 +1861,10 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
         result: { version: 1, status: resultStatus, summary: status === "completed" ? finalResult : terminalError, evidence_refs: verification.evidence || [], artifacts: transcriptArtifact ? [{ artifact_id: transcriptArtifact.artifact_id, type: transcriptArtifact.type, name: transcriptArtifact.name, content_hash: transcriptArtifact.content_hash || null, provenance: "agent transcript" }] : [] },
         verification,
       }, status === "waiting_for_approval" ? "task.waiting_for_approval" : status === "paused" ? "task.paused" : "task.completed");
+      try {
+        const boundaryReason = status === "waiting_for_approval" ? "task.waiting_for_approval" : status === "paused" ? "task.paused" : status === "completed" ? "task.completed" : "task.terminal";
+        handoffContinuity.checkpointTask(taskId, { reason: boundaryReason, safeBoundary: "task_lifecycle_boundary" });
+      } catch {}
       // `done` describes a completed Agent response, while the durable task
       // projection remains authoritative for whether its verification gates
       // were satisfied. A direct answer can therefore be delivered as `done`
@@ -1957,6 +1962,13 @@ const beginTaskRun = createTaskRunner({
 function launchRecoveredDurableTask(taskId) {
   const task = durableTaskStore.getTask(taskId);
   if (!task || task.state !== "interrupted" || task.control?.cancel_requested) return false;
+  if (task.handoff_id) {
+    const preflight = dbStore.getHandoffResumePreflight(task.handoff_id, { working_directory: process.cwd(), recipient: task.actor_principal_id || task.requested_by_principal_id || null, simulate: true });
+    if (!preflight.safe_to_resume) {
+      try { durableTaskStore.updateTask(taskId, { state: "blocked", phase: "recovery", next_action: "reconcile_handoff", stopping_reason: "linked Handoff is not ready for recovery" }, "task.handoff_resume_blocked"); } catch {}
+      return false;
+    }
+  }
   if (taskEmitters[taskId] || taskCancels[taskId]) return false;
   const controller = new AbortController();
   taskEmitters[taskId] = new EventEmitter();
@@ -2365,6 +2377,10 @@ app.post("/api/agent/tasks/:taskId/resume", (req, res) => {
     const task = durableTaskStore.getTask(req.params.taskId);
     if (!task) return res.status(404).json({ error: "task not found" });
     if (!["paused", "interrupted", "blocked", "waiting"].includes(task.state)) return res.status(409).json({ error: "task is not resumable from its current state" });
+    if (task.handoff_id) {
+      const preflight = dbStore.getHandoffResumePreflight(task.handoff_id, { working_directory: process.cwd(), recipient: task.actor_principal_id || task.requested_by_principal_id || null, simulate: true });
+      if (!preflight.safe_to_resume) return res.status(409).json({ error: "linked Handoff is not ready for resume", preflight });
+    }
     const waitingForApproval = task.next_action === "await_approval";
     if (waitingForApproval) return res.status(409).json({ error: "task is waiting for an approval decision" });
     const authIdentity = requestAuthIdentity(req);

@@ -128,6 +128,91 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
     return { valid: issues.length === 0, issues, packet: value };
   }
 
+  function evaluateHandoffQuality(packet, { requireResume = true } = {}) {
+    const validation = validateHandoffPacket(packet, { requireResume });
+    const value = validation.packet;
+    const checks = [
+      ["objective", Boolean(value.objective || value.summary)],
+      ["status", Boolean(value.status)],
+      ["next_step", !requireResume || value.status === "completed" || value.status === "abandoned" || Boolean(value.next_step)],
+      ["completed_steps", Array.isArray(value.completed_steps)],
+      ["acceptance_criteria", Array.isArray(value.acceptance_criteria) && value.acceptance_criteria.length > 0],
+      ["provenance", Boolean(value.provenance && typeof value.provenance === "object")],
+      ["verification", Array.isArray(value.evidence) && value.evidence.length > 0],
+    ];
+    const issues = [...validation.issues, ...checks.filter(([, ok]) => !ok).map(([name]) => `quality requires ${name}`)];
+    return { valid: issues.length === 0, issues: [...new Set(issues)], checks: checks.map(([name, ok]) => ({ name, valid: ok })), packet: value };
+  }
+
+  function evidenceFreshness(packet, { now = Date.now(), maxAgeMs = 7 * 24 * 60 * 60 * 1000 } = {}) {
+    const evidence = Array.isArray(packet?.evidence) ? packet.evidence : [];
+    return evidence.map((item, index) => {
+      const stamp = item.observed_at || item.verified_at || item.created_at || null;
+      const ageMs = stamp ? Math.max(0, now - Date.parse(stamp)) : null;
+      const valid = item.status === "failed" || item.status === "invalid" ? false : ageMs !== null && Number.isFinite(ageMs) && ageMs <= maxAgeMs;
+      return { index, type: item.type || null, label: item.label || null, status: item.status || "unknown", observed_at: stamp, age_ms: ageMs, freshness: valid ? "fresh" : stamp ? "stale" : "unknown", valid };
+    });
+  }
+
+  function getHandoffReceiverProjection(id, { working_directory, recipient = null } = {}) {
+    const handoff = getHandoff(id);
+    if (!handoff) return null;
+    const packet = handoff.packet || {};
+    const quality = evaluateHandoffQuality(packet);
+    const readiness = getHandoffReadiness(id, { working_directory, recipient });
+    const freshness = evidenceFreshness(packet);
+    return {
+      handoff_id: handoff.id,
+      version: handoff.version,
+      title: handoff.title,
+      project: handoff.project,
+      lifecycle_state: handoff.lifecycle_state,
+      start_here: {
+        objective: packet.objective || packet.summary || handoff.title,
+        current_state: packet.current_state || packet.state || packet.summary || null,
+        next_step: packet.next_step || null,
+        blockers: packet.blockers || [],
+        open_questions: packet.open_questions || packet.questions || [],
+        decisions: packet.decisions || [],
+        risks: packet.risks || [],
+      },
+      completed_steps: packet.completed_steps || [],
+      acceptance_criteria: packet.acceptance_criteria || [],
+      provenance: packet.provenance || null,
+      artifacts: packet.artifacts || [],
+      relationships: packet.relationships || [],
+      evidence: { items: freshness, fresh: freshness.filter(item => item.freshness === "fresh").length, stale: freshness.filter(item => item.freshness === "stale").length, unknown: freshness.filter(item => item.freshness === "unknown").length },
+      quality,
+      readiness,
+      claim: handoff.claim,
+    };
+  }
+
+  function compareHandoffVersions(id, fromVersion, toVersion) {
+    const current = getHandoff(id);
+    if (!current) return null;
+    const versions = listHandoffVersions(id);
+    const from = versions.find(item => Number(item.version) === Number(fromVersion));
+    const to = versions.find(item => Number(item.version) === Number(toVersion)) || versions.find(item => item.current);
+    if (!from || !to) return { handoff_id: id, from: fromVersion, to: toVersion, issues: ["requested version not found"] };
+    const keys = new Set([...Object.keys(from.packet || {}), ...Object.keys(to.packet || {})]);
+    const packetChanges = [...keys].sort().filter(key => JSON.stringify(from.packet?.[key]) !== JSON.stringify(to.packet?.[key])).map(key => ({ field: key, from: from.packet?.[key] === undefined ? null : from.packet[key], to: to.packet?.[key] === undefined ? null : to.packet[key] }));
+    return { handoff_id: id, from: { version: from.version, hash: from.content_hash }, to: { version: to.version, hash: to.content_hash }, content_changed: from.content_hash !== to.content_hash, packet_changes: packetChanges };
+  }
+
+  function getHandoffResumePreflight(id, { working_directory, recipient = null, simulate = false } = {}) {
+    const projection = getHandoffReceiverProjection(id, { working_directory, recipient });
+    if (!projection) return { status: "invalid", reasons: ["handoff not found"] };
+    const provenance = verifyHandoffProvenance(getHandoff(id).packet, { requireResume: true });
+    const reasons = [];
+    if (projection.readiness.status !== "ready") reasons.push(...projection.readiness.reasons);
+    if (!projection.quality.valid) reasons.push(...projection.quality.issues);
+    if (projection.evidence.stale > 0) reasons.push("one or more evidence items are stale");
+    if (provenance.status === "invalid") reasons.push(...provenance.issues);
+    const authority = ["current_principal", "current_policy", "current_capability_catalog", "current_workspace_scope", "current_approval_state"];
+    return { status: reasons.length ? "blocked" : "ready", safe_to_resume: reasons.length === 0, simulated: simulate, reasons: [...new Set(reasons)], authority_recheck_required: authority, projection, provenance };
+  }
+
   function verifyHandoffProvenance(packet, { requireResume = true } = {}) {
     const validation = validateHandoffPacket(packet, { requireResume });
     const provenance = validation.packet.provenance;
@@ -688,7 +773,7 @@ function createHandoffStore({ db, execFileSync, childProcessEnv, hasTable, nowIs
   }
 
 
-  return { normalizeHandoffPacket, validateHandoffPacket, verifyHandoffProvenance, getHandoffLinks, saveHandoff, getHandoff, listHandoffs, listHandoffVersions, getHandoffVersion, restoreHandoffVersion, updateHandoffExtraction, archiveHandoff, unarchiveHandoff, purgeHandoffVersion, saveTaskSession, getTaskSession, listTaskSessions, captureHandoffCheckpoint, checkpointDrift, getHandoffReadiness, listHandoffEvents, transitionHandoff, claimHandoff, releaseHandoff };
+  return { normalizeHandoffPacket, validateHandoffPacket, evaluateHandoffQuality, evidenceFreshness, getHandoffReceiverProjection, compareHandoffVersions, getHandoffResumePreflight, verifyHandoffProvenance, getHandoffLinks, saveHandoff, getHandoff, listHandoffs, listHandoffVersions, getHandoffVersion, restoreHandoffVersion, updateHandoffExtraction, archiveHandoff, unarchiveHandoff, purgeHandoffVersion, saveTaskSession, getTaskSession, listTaskSessions, captureHandoffCheckpoint, checkpointDrift, getHandoffReadiness, listHandoffEvents, transitionHandoff, claimHandoff, releaseHandoff };
 }
 
 module.exports = { createHandoffStore };

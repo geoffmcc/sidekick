@@ -2328,6 +2328,26 @@ app.get("/api/handoffs/:id/readiness", (req, res) => {
   }
 });
 
+app.get("/api/handoffs/:id/start-here", (req, res) => {
+  try {
+    const projection = dbStore.getHandoffReceiverProjection(req.params.id, { recipient: req.query.recipient });
+    if (!projection) return res.status(404).json({ ok: false, error: "Handoff not found" });
+    res.json({ ok: true, projection });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+app.get("/api/handoffs/:id/preflight", (req, res) => {
+  try {
+    const preflight = dbStore.getHandoffResumePreflight(req.params.id, { recipient: req.query.recipient, simulate: req.query.simulate === "true" });
+    if (preflight.status === "invalid") return res.status(404).json({ ok: false, preflight });
+    res.json({ ok: true, preflight });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
 app.get("/api/handoffs/:id/events", (req, res) => {
   try {
     if (!dbStore.getHandoff(req.params.id)) return res.status(404).json({ ok: false, error: "Handoff not found" });
