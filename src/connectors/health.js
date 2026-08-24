@@ -13,7 +13,7 @@ async function probeGithub(connector, { timeoutMs = 10000 } = {}) {
   let base;
   try { base = new URL(String(connector.endpoint || "")); } catch { return Promise.resolve({ ok: false, error: "invalid_endpoint" }); }
   if (base.protocol !== "https:") return Promise.resolve({ ok: false, error: "endpoint_requires_https" });
-  const resolved = await resolveOutboundUrl(base.href, "connector endpoint", { allowPrivate: true });
+  const resolved = await resolveOutboundUrl(base.href, "connector endpoint");
   if (resolved.refusal) return { ok: false, error: "endpoint_refused" };
   const path = `${base.pathname.replace(/\/$/, "")}/rate_limit`;
   return new Promise(resolve => {

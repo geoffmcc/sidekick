@@ -175,14 +175,16 @@ async function webCheck(services, args) {
 
 const GOVERNANCE_ARGS = {
   allowed_hosts: z.array(z.string()).optional().describe("Restrict the ephemeral session to these hosts (*.example.com patterns supported); narrows policy, never widens it"),
-  allow_private_network: z.boolean().optional().describe("Request private/loopback egress; requires the operator ceiling SIDEKICK_BROWSER_ALLOW_PRIVATE_NETWORK=true"),
+  network_scope: z.string().max(80).optional().describe("Exact operator-created named outbound network scope; private access requires this binding"),
+  allow_private_network: z.boolean().optional().describe("Deprecated compatibility flag; cannot grant private access without network_scope"),
   project: z.string().optional().describe("Project association for isolation and artifact custody linkage"),
   wait_until: z.enum(["load", "domcontentloaded", "networkidle", "commit"]).optional().describe("Navigation wait condition (default load)"),
 };
 
 const GOVERNANCE_ARGS_DOC = {
   allowed_hosts: "string[] (restrict the session to these hosts; *.example.com supported)",
-  allow_private_network: "boolean (request private/loopback egress; needs the operator ceiling)",
+  network_scope: "string (exact operator-created named outbound network scope)",
+  allow_private_network: "boolean (deprecated; cannot grant private access without network_scope)",
   project: "string (project association for isolation/custody)",
   wait_until: "string (load|domcontentloaded|networkidle|commit - default load)",
 };

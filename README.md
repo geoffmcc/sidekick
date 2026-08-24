@@ -854,7 +854,7 @@ This follows the principle of least privilege: after initial setup, the sidekick
 | `sidekick_grafana_admin_password` | — | Protected Grafana password file for bundled Compose service |
 | `SIDEKICK_GRAFANA_PORT` | `3000` | Local Grafana port used by dashboard health checks and proxying |
 | `SIDEKICK_GRAFANA_ROOT_URL` | `http://localhost:4098/grafana/` | Compose-only Grafana public root URL |
-| `SIDEKICK_ALLOW_PRIVATE_FETCH` | `false` | Allow web fetches to loopback/private destinations; metadata and link-local remain blocked |
+| `SIDEKICK_ALLOW_PRIVATE_FETCH` | `false` | Deprecated compatibility setting; named network scopes are required for private web fetches |
 | `SIDEKICK_INFLUX_ORG` | `sidekick` | InfluxDB organization |
 | `SIDEKICK_INFLUX_BUCKET` | `sidekick` | InfluxDB bucket for metrics |
 

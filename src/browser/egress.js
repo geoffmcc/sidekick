@@ -24,9 +24,8 @@
 // Policy rules (all fail closed):
 //   * schemes: http/https (ws/wss ride the same proxy paths);
 //   * cloud metadata hosts and link-local addresses are ALWAYS refused;
-//   * private/loopback/CGNAT/unique-local addresses require BOTH the operator
-//     ceiling (SIDEKICK_BROWSER_ALLOW_PRIVATE_NETWORK=true) and the session's
-//     explicit allow_private_network opt-in;
+//   * private/loopback/CGNAT/unique-local addresses require an operator-created
+//     named network scope plus the operator ceiling;
 //   * an allowed_hosts allowlist NARROWS the policy — it never widens it; a
 //     private address stays refused without the private-network opt-in even
 //     when listed;
@@ -37,6 +36,7 @@ const http = require("http");
 const dns = require("dns");
 const { METADATA_HOSTS } = require("../compute/endpoint-guard");
 const { isPrivateAddress, isLinkLocal } = require("../security/outbound-url");
+const networkScope = require("../security/network-scope");
 
 const DNS_CACHE_TTL_MS = 30 * 1000;
 const DNS_CACHE_MAX = 256;
@@ -61,14 +61,23 @@ function isLocalhostName(host) {
  * configuration. The config value is a ceiling: a session cannot opt into
  * anything the operator has not enabled.
  */
-function buildSessionPolicy({ allowPrivateNetwork = false, allowedHosts = null } = {}, config) {
+function buildSessionPolicy({ allowPrivateNetwork = false, allowedHosts = null, networkScope: requestedScope = null } = {}, config) {
   const patterns = Array.isArray(allowedHosts) && allowedHosts.length
     ? allowedHosts.map((entry) => String(entry).trim().toLowerCase()).filter(Boolean)
     : null;
+  let scope = null;
+  let scopeError = null;
+  if (requestedScope) {
+    try { scope = require("../security/network-scopes").get(requestedScope); if (!scope) scopeError = "named network scope was not found"; }
+    catch (error) { scopeError = error.message; }
+  }
   return Object.freeze({
-    allowPrivate: allowPrivateNetwork === true && config.allowPrivateNetwork === true,
+    allowPrivate: scope ? scope.allow_private_addresses === true && config.allowPrivateNetwork === true : allowPrivateNetwork === true && config.allowPrivateNetwork === true,
     requestedPrivate: allowPrivateNetwork === true,
     allowedHosts: patterns ? Object.freeze(patterns) : null,
+    scope: scope ? Object.freeze(scope) : null,
+    scopeError,
+    networkScope: scope ? { scope_id: scope.scope_id, name: scope.name, revision: scope.revision, digest: scope.digest } : null,
   });
 }
 
@@ -84,6 +93,13 @@ function hostAllowedByList(host, policy) {
   if (!policy.allowedHosts) return true;
   return policy.allowedHosts.some((pattern) => matchHostPattern(host, pattern));
 }
+function currentScope(policy) {
+  if (!policy.scope) return true;
+  try {
+    const current = require("../security/network-scopes").get(policy.scope.scope_id, policy.scope.revision);
+    return Boolean(current && current.enabled && current.is_current && current.digest === policy.scope.digest);
+  } catch { return false; }
+}
 
 /**
  * Host-level policy: the rule both layers share. Returns a refusal string or
@@ -92,8 +108,17 @@ function hostAllowedByList(host, policy) {
 function evaluateHost(host, policy) {
   const h = String(host || "").toLowerCase();
   if (!h) return "no host";
+  if (policy.scope && !currentScope(policy)) return "named network scope is stale or disabled";
   if (METADATA_HOSTS.has(h)) return `host "${h}" is a cloud metadata endpoint and is never reachable from a browser session`;
   if (isLinkLocal(h)) return `host "${h}" is link-local and is never reachable from a browser session`;
+  if (policy.scopeError) return policy.scopeError;
+  if (policy.scope) {
+    const decision = networkScope.decision(policy.scope, { host: h, allowedHosts: policy.allowedHosts });
+    if (decision.reason === "destination_not_in_scope" && !net.isIP(h)) return null;
+    if (!decision.ok && decision.reason !== "destination_not_in_scope") return `network scope denied destination (${decision.reason})`;
+    if (decision.reason === "destination_not_in_scope") return `host "${h}" is outside the named network scope`;
+    return null;
+  }
   if (!hostAllowedByList(h, policy)) return `host "${h}" is not in this session's allowed_hosts`;
   if ((isPrivateAddress(h) || isLocalhostName(h)) && !policy.allowPrivate) {
     return `host "${h}" is private/loopback; this session does not permit private-network targets`;
@@ -117,6 +142,15 @@ function evaluateBrowserUrl(value, policy, { schemes = ["http:", "https:"] } = {
   }
   if (url.username || url.password) return "credentials embedded in the URL are not allowed";
   const host = stripBrackets(url.hostname).toLowerCase();
+  if (policy.scope) {
+    const result = networkScope.decision(policy.scope, { host, protocol: url.protocol.slice(0, -1), port: Number(url.port || (url.protocol === "https:" ? 443 : 80)), allowedHosts: policy.allowedHosts });
+    // A hostname may be authorized by an address CIDR only after the proxy's
+    // pinned DNS lookup. The URL-text layer must defer that one decision to the
+    // authoritative proxy rather than rejecting a hostname prematurely.
+    if (result.reason === "destination_not_in_scope" && !net.isIP(host)) return null;
+    if (!result.ok) return `network scope denied destination (${result.reason})`;
+    return null;
+  }
   return evaluateHost(host, policy);
 }
 
@@ -126,10 +160,11 @@ function evaluateBrowserUrl(value, policy, { schemes = ["http:", "https:"] } = {
  * denied address among allowed ones. Returns { address } (the pinned address
  * the caller must connect to) or { refusal }.
  */
-async function resolveAndValidate(host, policy) {
+async function resolveAndValidate(host, policy, { protocol = "https", port = 443 } = {}) {
+  if (policy.scope && !currentScope(policy)) return { refusal: "named network scope is stale or disabled" };
   const h = String(host || "").toLowerCase();
   if (net.isIP(h)) {
-    const refusal = evaluateHost(h, policy);
+    const refusal = policy.scope ? networkScope.decision(policy.scope, { host: h, address: h, protocol, port, allowedHosts: policy.allowedHosts }).ok ? null : `network scope denied destination` : evaluateHost(h, policy);
     return refusal ? { refusal } : { address: h, family: net.isIP(h) };
   }
   const nameRefusal = evaluateHost(h, policy);
@@ -151,6 +186,11 @@ async function resolveAndValidate(host, policy) {
   if (!records || !records.length) return { refusal: `DNS resolution returned no addresses for "${h}"` };
 
   for (const record of records) {
+    if (policy.scope) {
+      const scoped = networkScope.decision(policy.scope, { host: h, address: record.address, protocol, port, allowedHosts: policy.allowedHosts });
+      if (!scoped.ok) return { refusal: `network scope denied resolved destination (${scoped.reason})` };
+      continue;
+    }
     if (isLinkLocal(record.address)) return { refusal: `"${h}" resolves to link-local address ${record.address}` };
     if (isPrivateAddress(record.address) && !policy.allowPrivate) {
       return { refusal: `"${h}" resolves to private address ${record.address}; this session does not permit private-network targets` };
@@ -227,7 +267,7 @@ async function createSessionProxy(policy, { onBlocked = () => {}, onRequest = ()
       res.end(`Sidekick browser egress policy: ${reason}`);
       return;
     }
-    const pinned = await resolveAndValidate(stripBrackets(url.hostname), policy);
+    const pinned = await resolveAndValidate(stripBrackets(url.hostname), policy, { protocol: url.protocol.slice(0, -1), port });
     if (pinned.refusal) {
       blocked("http", url.href, pinned.refusal);
       res.writeHead(403, { "Content-Type": "text/plain" });
@@ -309,7 +349,7 @@ async function createSessionProxy(policy, { onBlocked = () => {}, onRequest = ()
       clientSocket.end("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");
       return;
     }
-    const pinned = await resolveAndValidate(host, policy);
+    const pinned = await resolveAndValidate(host, policy, { protocol: "https", port });
     if (pinned.refusal) {
       blocked("connect", `${host}:${port}`, pinned.refusal);
       clientSocket.end("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");

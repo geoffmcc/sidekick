@@ -1,7 +1,7 @@
 {
   "name": "security-research-tools",
   "displayName": "Security Research Tools",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Governed security-research orchestration: campaigns, hypotheses, durable runs, bounded probes, evidence with integrity and redaction, deterministic comparison, validation and report material. Command probes dispatch bash and http probes dispatch web_fetch; a proxmox environment composes proxmox_provision/proxmox_guest/proxmox_retire to provision, shut down and retire a disposable lab under the provider's own guards; workflows compose git. All through the Sidekick policy/approval/audit path. Enforces a hard boundary between the public repository and an external private research workspace.",
   "author": "Sidekick",
   "type": "plugin",
@@ -47,6 +47,7 @@
         "properties": {
           "allowed_hosts": { "type": "array", "items": { "type": "string" } },
           "allow_private_addresses": { "type": "boolean" },
+          "network_scope": { "type": "string", "maxLength": 80 },
           "max_response_bytes": { "type": "integer", "minimum": 1024, "maximum": 52428800 }
         },
         "additionalProperties": false

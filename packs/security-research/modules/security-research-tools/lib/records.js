@@ -38,15 +38,26 @@ function callKernel(fn) {
 
 function createCampaign(input, actor) {
   const k = kernel();
+  const metadata = { ...(input.metadata || {}) };
+  if (metadata.network_scope) throw new ResearchError("invalid_input", "network scope must be supplied as the validated network_scope field");
+  if (input.network_scope) {
+    const scope = requireCoreScope(input.network_scope);
+    metadata.network_scope = { scope_id: scope.scope_id, name: scope.name, revision: scope.revision, digest: scope.digest, policy: scope };
+  }
   return callKernel(() => k.createResearchCampaign({
     project_id: requireText(input.project_id, "project_id"),
     name: requireText(input.name, "name"),
     created_by: actor,
     state: input.state,
     scope_snapshot_id: input.scope_snapshot_id || undefined,
-    metadata: input.metadata || {},
+    metadata,
     source: "security-research",
   }));
+}
+function requireCoreScope(ref) {
+  const scope = require("../../../../../src/security/network-scopes").get(ref);
+  if (!scope || !scope.enabled) throw new ResearchError("policy_denied", "network scope is missing, disabled, or expired");
+  return scope;
 }
 function getCampaign(campaignId) {
   const campaign = kernel().getResearchCampaign(requireText(campaignId, "campaign_id"));

@@ -310,6 +310,7 @@ const KNOWN_EVENT_SOURCES = Object.freeze([
   "delay",
   "mcp",
   "memory",
+  "network-scope",
   "modules",
   "ops-backfill",
   "platform",

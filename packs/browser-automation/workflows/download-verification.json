@@ -12,6 +12,7 @@
     "timeout_ms": { "type": "number", "required": false, "default": 15000, "description": "How long to wait for the download to complete" },
     "allowed_hosts": { "type": "array", "required": false, "description": "Optional host allowlist for the session" },
     "allow_private_network": { "type": "boolean", "required": false, "default": false, "description": "Allow private/loopback targets (needs the operator ceiling too)" },
+    "network_scope": { "type": "string", "required": false, "description": "Exact operator-created named outbound network scope" },
     "project": { "type": "string", "required": false, "description": "Project association for isolation and custody" }
   },
   "steps": [
@@ -19,7 +20,7 @@
       "name": "open",
       "title": "Open an isolated browser session",
       "tool": "browser",
-      "args": { "action": "open", "label": "download-verification", "allowed_hosts": "${inputs.allowed_hosts}", "allow_private_network": "${inputs.allow_private_network}", "project": "${inputs.project}" },
+      "args": { "action": "open", "label": "download-verification", "allowed_hosts": "${inputs.allowed_hosts}", "network_scope": "${inputs.network_scope}", "allow_private_network": "${inputs.allow_private_network}", "project": "${inputs.project}" },
       "expect": "json",
       "on_error": "fail"
     },

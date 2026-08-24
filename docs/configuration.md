@@ -238,7 +238,7 @@ Set `SIDEKICK_AUTO_MEMORY=0` to disable automatic memory. Increase or decrease `
 
 `SIDEKICK_QDRANT_URL` selects the Qdrant endpoint for semantic memory embeddings. The embedding service uses `OLLAMA_URL` and `OLLAMA_MODEL`.
 
-`SIDEKICK_ALLOW_PRIVATE_FETCH=true` permits `web_fetch` to reach loopback and private-network destinations. Metadata and link-local destinations remain blocked.
+`SIDEKICK_ALLOW_PRIVATE_FETCH` is deprecated and does not grant private access. `web_fetch` requires an operator-created named network scope for private destinations. Metadata and link-local destinations remain blocked.
 
 Memory storage has three lifecycle surfaces:
 

@@ -165,8 +165,8 @@ function gate(ctx, probe) {
     }
   } else if (probe.type === "http") {
     const host = new URL(probe.url).hostname;
-    if (isPrivateHost(host) && httpCfg.allow_private_addresses !== true) {
-      throw new ResearchError("policy_denied", `http probe target ${host} is a private/loopback address; enable http.allow_private_addresses only for an intentionally provisioned private lab.`);
+    if (isPrivateHost(host) && !ctx.networkScope) {
+      throw new ResearchError("policy_denied", "private HTTP probes require a named outbound network scope bound to the campaign or run");
     }
   }
 
@@ -213,6 +213,10 @@ async function runCommand(services, ctx, probe, runtime) {
 
 async function runHttp(services, ctx, probe, runtime) {
   const args = { url: probe.url, method: probe.method || "GET" };
+  if (ctx.networkScope) {
+    args.network_scope = ctx.networkScope.scope_id || ctx.networkScope.name;
+    args.network_scope_revision = ctx.networkScope.revision;
+  }
   // web_fetch takes headers as a JSON STRING. Passing the object straight
   // through failed schema validation, and pre-stringifying by the caller was
   // dropped by the old `typeof === "object"` test — so headers never actually

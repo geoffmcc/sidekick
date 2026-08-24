@@ -1,7 +1,7 @@
 {
   "name": "browser-tools",
   "displayName": "Browser Automation Tools",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Task-level browser tools that compose the governed Core browser tool: evidence capture, structured extraction, and deterministic UI checks",
   "author": "Sidekick",
   "type": "plugin",
@@ -20,10 +20,15 @@
         "items": { "type": "string" },
         "description": "Host ceiling applied to sessions opened by this pack's tools (*.example.com patterns supported). A per-call allowed_hosts may narrow it but never widen it. Narrows egress policy; never widens it."
       },
-      "allow_private_network": {
+        "allow_private_network": {
         "type": "boolean",
-        "description": "Default for whether this pack's tools may request private/loopback egress. Still requires the Core operator ceiling SIDEKICK_BROWSER_ALLOW_PRIVATE_NETWORK=true. Off by default."
-      },
+          "description": "Default for whether this pack's tools may request private/loopback egress. Still requires the Core operator ceiling SIDEKICK_BROWSER_ALLOW_PRIVATE_NETWORK=true. Off by default."
+        },
+        "network_scope": {
+          "type": "string",
+          "maxLength": 80,
+          "description": "Optional exact operator-created named outbound network scope. Calls may narrow it but never select an unconfigured scope."
+        },
       "full_page": {
         "type": "boolean",
         "description": "Default for full-page screenshots in web_capture."

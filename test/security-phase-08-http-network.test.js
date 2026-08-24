@@ -7,9 +7,9 @@ const githubSource = fs.readFileSync(require.resolve("../src/tools/families/gith
 const healthSource = fs.readFileSync(require.resolve("../src/connectors/health"), "utf8");
 const endpointGuard = require("../src/compute/endpoint-guard");
 
-assert.match(githubSource, /resolveOutboundUrl\(url\.href, "GitHub API endpoint", \{ allowPrivate: true \}\)/, "GitHub API calls must use DNS-pinned outbound resolution");
+assert.match(githubSource, /resolveOutboundUrl\(url\.href, "GitHub API endpoint"\)/, "GitHub API calls must use DNS-pinned outbound resolution");
 assert.match(githubSource, /servername: url\.hostname/, "GitHub HTTPS calls must retain TLS hostname verification");
-assert.match(healthSource, /resolveOutboundUrl\(base\.href, "connector endpoint", \{ allowPrivate: true \}\)/, "GitHub health probes must use DNS-pinned outbound resolution");
+assert.match(healthSource, /resolveOutboundUrl\(base\.href, "connector endpoint"\)/, "GitHub health probes must use DNS-pinned outbound resolution");
 assert.match(healthSource, /servername: base\.hostname/, "GitHub health probes must retain TLS hostname verification");
 assert.match(githubSource, /url\.protocol !== "https:"/, "GitHub API calls must reject non-HTTPS connector endpoints");
 

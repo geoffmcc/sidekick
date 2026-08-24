@@ -3,7 +3,7 @@
   "pack_api": 1,
   "name": "security-research",
   "display_name": "Security Research",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "A governed, reproducible framework for authorized security research. Organizes work into campaigns, hypotheses, durable research runs, bounded probes, evidence with integrity and redaction, deterministic comparison, validation and report material. It composes existing Sidekick capabilities through the normal policy/approval/audit path rather than reimplementing them: command probes dispatch the governed bash tool and HTTP probes dispatch web_fetch, a proxmox environment composes proxmox_provision/proxmox_guest to provision and tear down a disposable lab, its workflows compose the Git tool, and it enforces a hard boundary between the public Sidekick repository and an external, private research workspace. Which lab (endpoint, profile, clone spec) is supplied entirely by runtime configuration, never committed.",
   "publisher": "Sidekick",
   "compatibility": {
@@ -105,6 +105,11 @@
             "allow_private_addresses": {
               "type": "boolean",
               "description": "When true, HTTP probes may target private/loopback/link-local addresses. Defaults to false as an SSRF guard; enable only for intentionally provisioned private labs."
+            },
+            "network_scope": {
+              "type": "string",
+              "maxLength": 80,
+              "description": "Deprecated compatibility setting. Private HTTP probes require the exact operator-created named scope bound to the campaign or run."
             },
             "max_response_bytes": {
               "type": "integer",

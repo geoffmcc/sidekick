@@ -9,10 +9,9 @@ const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 
 /**
  * Make a provider request against a DNS-pinned destination. Provider
- * endpoints may intentionally be private (local Ollama or a LAN accelerator),
- * so private addresses are allowed here only after provider registration has
- * already passed endpoint policy; metadata and link-local destinations remain
- * forbidden. Redirects are not followed.
+ * endpoints are administrator-configured provider destinations. Private
+ * addresses are allowed for local providers, while metadata and link-local
+ * destinations remain forbidden. Redirects are not followed.
  */
 async function requestJson({ endpoint, path, method = "POST", headers = {}, body = null, timeout = 60000, label = "provider endpoint", errorPrefix = "Provider", rateLimitError = null }) {
   const endpointError = validateEndpoint(endpoint);

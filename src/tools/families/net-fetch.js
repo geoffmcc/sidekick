@@ -19,13 +19,13 @@ function errorText(text) {
   return { content: [{ type: "text", text }], isError: true };
 }
 
-async function sidekick_web_fetch({ url: targetUrl, method, headers, body }, runtime = {}) {
+async function sidekick_web_fetch({ url: targetUrl, method, headers, body, network_scope, network_scope_revision }, runtime = {}) {
   const https = require("https");
   const http = require("http");
 
   // Destination policy first: this tool makes requests with the server's own
   // network identity, so an unvalidated target reaches anything the host can.
-  const destination = await resolveOutboundUrl(targetUrl);
+  const destination = await resolveOutboundUrl(targetUrl, "url", network_scope ? { networkScope: network_scope, networkScopeRevision: network_scope_revision } : {});
   if (destination.refusal) return errorText("Error: " + destination.refusal);
 
   // The dispatcher's deadline governs the socket too, not just the wrapper
@@ -107,8 +107,10 @@ const descriptors = Object.freeze([
       method: z.enum(["GET", "POST"]).optional().default("GET").describe("HTTP method"),
       headers: z.string().optional().describe("JSON object of extra headers"),
       body: z.string().optional().describe("Request body (for POST)"),
+      network_scope: z.string().max(80).optional().describe("Exact operator-created named outbound network scope"),
+      network_scope_revision: z.number().int().positive().optional().describe("Immutable named scope revision"),
     }),
-    args: { url: "string", method: "string (optional)", headers: "string (optional)", body: "string (optional)" },
+    args: { url: "string", method: "string (optional)", headers: "string (optional)", body: "string (optional)", network_scope: "string (optional; required for private destinations)", network_scope_revision: "number (optional; immutable revision)" },
     risk: "medium",
     category: "Core",
     source: "builtin",

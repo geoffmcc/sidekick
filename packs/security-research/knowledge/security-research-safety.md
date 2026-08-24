@@ -24,10 +24,10 @@ A probe is typed, bounded, and auditable — never an arbitrary shell.
   set, and a non-local environment kind (`remote`/`disposable`/`proxmox`) is
   refused rather than silently running on the host. An explicit `workdir` is
   confined to the workspace.
-- **`http` probes** compose `web_fetch`. Without a scope snapshot they require a
-  host in `http.allowed_hosts`, and private/loopback/link-local targets are
-  refused unless `http.allow_private_addresses: true` (an SSRF guard, enabled
-  only for intentionally provisioned private labs).
+ - **`http` probes** compose `web_fetch`. Without a scope snapshot they require a
+   host in `http.allowed_hosts`, and private targets require an operator-created
+   named network scope bound to the campaign or run. The legacy
+   `http.allow_private_addresses` field cannot grant private access.
 
 There is no mass scanning, no autonomous target discovery, and no uncontrolled
 traffic generation.
