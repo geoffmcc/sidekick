@@ -540,10 +540,10 @@ console.log('Test 3.4: Tool definitions include policy metadata');
     assert.strictEqual(validateOutboundUrl(url), null, `must allow ${url}`);
   }
 
-  // The escape hatch reopens private networks but never credential endpoints.
+  // The legacy flag is a deprecated compatibility setting, not an authority grant.
   process.env.SIDEKICK_ALLOW_PRIVATE_FETCH = 'true';
-  assert.strictEqual(validateOutboundUrl('http://10.0.0.5/'), null,
-    'SIDEKICK_ALLOW_PRIVATE_FETCH must allow LAN destinations');
+  assert.ok(validateOutboundUrl('http://10.0.0.5/'),
+    'SIDEKICK_ALLOW_PRIVATE_FETCH must not allow LAN destinations');
   assert.ok(validateOutboundUrl('http://169.254.169.254/'),
     'metadata endpoints stay refused even with private fetch enabled');
   assert.ok(validateOutboundUrl('http://[fe80::1]/'),

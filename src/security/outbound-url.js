@@ -17,10 +17,9 @@
 //   * loopback and private/CGNAT/unique-local addresses are refused by default,
 //     because reaching them is the SSRF case rather than a normal fetch.
 //
-// SIDEKICK_ALLOW_PRIVATE_FETCH=true restores private and loopback destinations
-// for deployments that legitimately fetch from their own LAN. Metadata and
-// link-local hosts stay refused even then: that escape hatch exists for
-// homelab reachability, not for credential endpoints.
+// Private destinations require an operator-created named network scope. The
+// historical environment flag is retained as a parsed compatibility setting,
+// but is intentionally not an authority grant.
 //
 // Direct HTTP callers use resolveOutboundUrl below, which pins DNS results to
 // the socket and rejects denied answers. Redirects are not followed by current
@@ -85,7 +84,7 @@ function isLocalhostName(host) {
 }
 
 function privateFetchAllowed() {
-  return String(process.env.SIDEKICK_ALLOW_PRIVATE_FETCH || "").toLowerCase() === "true";
+  return false;
 }
 
 /**
@@ -117,10 +116,10 @@ function validateOutboundUrl(value, label = "url", options = {}) {
   if (isLinkLocal(host)) {
     return `Refused ${label} host "${host}": link-local addresses are never a valid fetch target`;
   }
-  const allowPrivate = options.allowPrivate === true || (options.allowPrivate !== false && privateFetchAllowed());
+  const allowPrivate = options.networkScope ? false : false;
   if (isPrivateAddress(host) && !allowPrivate) {
     return `Refused ${label} host "${host}": private and loopback addresses are not fetchable. ` +
-      "Set SIDEKICK_ALLOW_PRIVATE_FETCH=true to allow requests to your own network.";
+      "Bind the request to an operator-created named network scope.";
   }
   return null;
 }
@@ -136,6 +135,14 @@ function validateOutboundUrl(value, label = "url", options = {}) {
  * denied address.
  */
 async function resolveOutboundUrl(value, label = "url", options = {}) {
+  if (options.networkScope) {
+    const scopes = require("./network-scopes");
+    const scope = typeof options.networkScope === "object" ? options.networkScope : scopes.get(options.networkScope, options.networkScopeRevision);
+    if (!scope) return { refusal: "named network scope is missing or invalid" };
+    const scoped = await require("./network-scope").resolveDestination(scope, value, { allowedHosts: options.allowedHosts });
+    if (!scoped.ok) return { refusal: `network scope denied destination (${scoped.reason})` };
+    return scoped;
+  }
   const refusal = validateOutboundUrl(value, label, options);
   if (refusal) return { refusal };
 
@@ -157,7 +164,7 @@ async function resolveOutboundUrl(value, label = "url", options = {}) {
     if (METADATA_HOSTS.has(address) || isLinkLocal(address)) {
       return { refusal: `Refused ${label}: resolved address is a protected link-local or metadata endpoint` };
     }
-    const allowPrivate = options.allowPrivate === true || (options.allowPrivate !== false && privateFetchAllowed());
+    const allowPrivate = options.networkScope ? false : false;
     if (isPrivateAddress(address) && !allowPrivate) {
       return { refusal: `Refused ${label}: hostname resolves to a private or loopback address` };
     }

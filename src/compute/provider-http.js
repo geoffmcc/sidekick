@@ -9,9 +9,8 @@ const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 
 /**
  * Make a provider request against a DNS-pinned destination. Provider
- * endpoints may intentionally be private (local Ollama or a LAN accelerator),
- * so private addresses are allowed here only after provider registration has
- * already passed endpoint policy; metadata and link-local destinations remain
+ * endpoints are subject to the same named-scope boundary as every other
+ * outbound request; metadata, link-local and unbound private destinations are
  * forbidden. Redirects are not followed.
  */
 async function requestJson({ endpoint, path, method = "POST", headers = {}, body = null, timeout = 60000, label = "provider endpoint", errorPrefix = "Provider", rateLimitError = null }) {
@@ -19,7 +18,7 @@ async function requestJson({ endpoint, path, method = "POST", headers = {}, body
   if (endpointError) throw new Error(endpointError);
 
   const target = new URL(path, endpoint);
-  const resolved = await resolveOutboundUrl(target.href, label, { allowPrivate: true });
+  const resolved = await resolveOutboundUrl(target.href, label);
   if (resolved.refusal) throw new Error(resolved.refusal);
 
   const bodyStr = body === null || body === undefined ? null : JSON.stringify(body);

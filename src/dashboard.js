@@ -42,6 +42,7 @@ const { registerQuickActionsRoute } = require("./dashboard/quick-actions-route")
 const { registerStatsToolsRoutes } = require("./dashboard/stats-tools-routes");
 const { registerSummaryRoute } = require("./dashboard/summary-route");
 const { registerResearchSourceRoutes } = require("./dashboard/research-source-routes");
+const { registerNetworkScopeRoutes } = require("./dashboard/network-scope-routes");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const PORT = parseInt(process.env.SIDEKICK_DASHBOARD_PORT || "4098", 10);
@@ -361,13 +362,13 @@ function clearIdentityCookie(res) {
 
 // Audit logging
 const AUDIT_LOG = path.join(DATA_DIR, 'audit.jsonl');
-function auditLog(req, action, details) {
+function auditLog(req, action, details, actor = null) {
   const entry = {
     timestamp: new Date().toISOString(),
     action,
     key: req.params.key || null,
     ip: req.ip,
-    user: (() => {
+    user: actor || (() => {
       const auth = req.headers.authorization;
       if (auth && auth.startsWith('Basic ')) {
         return Buffer.from(auth.slice(6), 'base64').toString().split(':')[0];
@@ -1137,6 +1138,14 @@ registerResearchSourceRoutes({
   callDashboardTool,
   dashboardExecutionMetadata,
   authenticatedUser,
+  auditLog,
+  logError,
+});
+
+registerNetworkScopeRoutes({
+  app,
+  authenticatedUser,
+  requireIdentityAdministrator,
   auditLog,
   logError,
 });

@@ -40,8 +40,7 @@ async function main() {
     const port = server.address().port;
     dns.promises.lookup = async () => [{ address: "127.0.0.1", family: 4 }];
     const fetched = await sidekick_web_fetch({ url: `http://public.example:${port}/` });
-    assert.ok(!fetched.isError, "DNS-pinned web_fetch should retain legitimate functionality");
-    assert.match(fetched.content[0].text, /Status: 200[\s\S]*pinned/);
+    assert.ok(fetched.isError, "legacy private-fetch flag must not grant private access");
   } finally {
     if (server) await new Promise(resolve => server.close(resolve));
     dns.promises.lookup = previous;

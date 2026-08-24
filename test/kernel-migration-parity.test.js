@@ -109,7 +109,7 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
     console.log(`Test KMP.1: migrations-only boot applies ${migrationApplied} migrations`);
     assert.strictEqual(
       migrationStore.getDb().prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
-       String(65),
+       String(66),
        'schema_version should be 65'
     );
     console.log('Passed\n');
@@ -163,14 +163,14 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
     // platform_capability_pack_components and platform_workflow_definitions
     // (31 -> 34 tables) with 11 more explicit indexes (66 -> 77), including
     // the identity owner/actor indexes added by migration 048.
-    const expectedTables = 37;
-    const expectedIndexes = 85;
+    const expectedTables = 39;
+    const expectedIndexes = 87;
     const migratedTables = migratedSchema.filter(o => o.type === 'table').length;
     const migratedIndexes = migratedSchema.filter(o => o.type === 'index' && o.sql).length;
     const migratedAutoindexes = migratedSchema.filter(o => o.type === 'index' && !o.sql).length;
     assert.strictEqual(migratedTables, expectedTables, `Expected ${expectedTables} platform tables`);
     assert.strictEqual(migratedIndexes, expectedIndexes, `Expected ${expectedIndexes} platform indexes`);
-    assert.strictEqual(migratedAutoindexes, expectedTables - 1, 'Each TEXT PRIMARY KEY creates one autoindex');
+    assert.strictEqual(migratedAutoindexes, expectedTables, 'Network scope tables add primary-key autoindexes');
     for (let i = 0; i < migratedSchema.length; i++) {
       const a = migratedSchema[i];
       const b = runtimeSchema[i];
@@ -187,11 +187,11 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
     assert.match(runtimeExecutions.sql, /FOREIGN KEY\(parent_execution_id\)/);
     assert.strictEqual(
       migrationStore.getDb().prepare("SELECT value FROM meta WHERE key = 'platform_kernel_schema_version'").get().value,
-      '11'
+      '12'
     );
     assert.strictEqual(
       runtimeStore.getDb().prepare("SELECT value FROM meta WHERE key = 'platform_kernel_schema_version'").get().value,
-      '11'
+      '12'
     );
     console.log('Passed\n');
 

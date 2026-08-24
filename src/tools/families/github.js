@@ -166,7 +166,7 @@ async function githubRequest(token, method, endpoint, body) {
   const apiBase = resolveGithubApiBase();
   const url = new URL(apiBase + endpoint);
   if (url.protocol !== "https:") return { status: 0, headers: {}, data: "GitHub API endpoint must use HTTPS" };
-  const resolved = await resolveOutboundUrl(url.href, "GitHub API endpoint", { allowPrivate: true });
+  const resolved = await resolveOutboundUrl(url.href, "GitHub API endpoint");
   if (resolved.refusal) return { status: 0, headers: {}, data: resolved.refusal };
   return new Promise((resolve) => {
     const options = {
@@ -427,7 +427,7 @@ async function sidekick_github({ action, repo, args: extraArgs }) {
     return new Promise((resolve) => {
       const url = new URL(apiBase + endpoint);
       if (url.protocol !== "https:") return resolve({ status: 0, data: "GitHub API endpoint must use HTTPS" });
-      resolveOutboundUrl(url.href, "GitHub API endpoint", { allowPrivate: true }).then(resolved => {
+      resolveOutboundUrl(url.href, "GitHub API endpoint").then(resolved => {
         if (resolved.refusal) return resolve({ status: 0, data: resolved.refusal });
       const options = {
         hostname: resolved.address,
