@@ -116,7 +116,7 @@ function validateOutboundUrl(value, label = "url", options = {}) {
   if (isLinkLocal(host)) {
     return `Refused ${label} host "${host}": link-local addresses are never a valid fetch target`;
   }
-  const allowPrivate = options.networkScope ? false : false;
+   const allowPrivate = options.allowPrivate === true;
   if (isPrivateAddress(host) && !allowPrivate) {
     return `Refused ${label} host "${host}": private and loopback addresses are not fetchable. ` +
       "Bind the request to an operator-created named network scope.";
@@ -164,7 +164,7 @@ async function resolveOutboundUrl(value, label = "url", options = {}) {
     if (METADATA_HOSTS.has(address) || isLinkLocal(address)) {
       return { refusal: `Refused ${label}: resolved address is a protected link-local or metadata endpoint` };
     }
-    const allowPrivate = options.networkScope ? false : false;
+    const allowPrivate = options.allowPrivate === true;
     if (isPrivateAddress(address) && !allowPrivate) {
       return { refusal: `Refused ${label}: hostname resolves to a private or loopback address` };
     }
