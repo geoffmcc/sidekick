@@ -30,6 +30,9 @@ process.env.SIDEKICK_BROWSER_ALLOW_PRIVATE_NETWORK = "true";
 process.env.SIDEKICK_BROWSER_ENABLED = "true";
 // Allow path uploads from the temp data dir for the upload test.
 process.env.SIDEKICK_BROWSER_UPLOAD_ROOTS = DATA_DIR;
+require("../src/db").runPendingMigrations();
+const networkScopes = require("../src/security/network-scopes");
+networkScopes.create({ name: "browser-fixture", allowed_cidrs: ["127.0.0.0/8"], allowed_protocols: ["http", "https"], allowed_ports: ["1-65535"], allow_private_addresses: true }, "test-operator");
 
 const { createFixtureSite } = require("./helpers/browser-fixture-site");
 const driver = require("../src/browser/driver");
@@ -125,7 +128,7 @@ function countChromeProcesses() {
   });
 
   await test("open creates an isolated session (through the dispatcher)", async () => {
-    const result = parse(await dispatch({ action: "open", label: "e2e", allow_private_network: true, project: "browser-e2e" }));
+    const result = parse(await dispatch({ action: "open", label: "e2e", network_scope: "browser-fixture", project: "browser-e2e" }));
     assert.strictEqual(result.ok, true, JSON.stringify(result));
     sessionId = result.session.id;
     assert.ok(sessionId.startsWith("bsn_"));
@@ -281,7 +284,7 @@ function countChromeProcesses() {
 
   await test("artifact upload is denied across project boundaries", async () => {
     const otherProjectDispatch = (args) => dispatch(args, { project: "browser-e2e-other" });
-    const opened = parse(await otherProjectDispatch({ action: "open", label: "other-project", allow_private_network: true }));
+    const opened = parse(await otherProjectDispatch({ action: "open", label: "other-project", network_scope: "browser-fixture" }));
     const otherSessionId = opened.session.id;
     try {
       await otherProjectDispatch({ action: "navigate", session: otherSessionId, url: `${base}/form` });
@@ -326,7 +329,7 @@ function countChromeProcesses() {
   });
 
   await test("allowed_hosts scoping blocks off-list navigation", async () => {
-    const scoped = parse(await dispatch({ action: "open", allow_private_network: true, allowed_hosts: ["127.0.0.1"], label: "scoped" }));
+    const scoped = parse(await dispatch({ action: "open", network_scope: "browser-fixture", allowed_hosts: ["127.0.0.1"], label: "scoped" }));
     const scopedId = scoped.session.id;
     const ok = parse(await dispatch({ action: "navigate", session: scopedId, url: `${base}/` }));
     assert.strictEqual(ok.status, 200, "allowed host should navigate");
@@ -344,7 +347,7 @@ function countChromeProcesses() {
   });
 
   await test("cross-session isolation: a fresh session shares no auth cookie", async () => {
-    const fresh = parse(await dispatch({ action: "open", allow_private_network: true, project: "other-project", label: "fresh" }));
+    const fresh = parse(await dispatch({ action: "open", network_scope: "browser-fixture", project: "other-project", label: "fresh" }));
     const freshId = fresh.session.id;
     const dash = parse(await dispatch({ action: "navigate", session: freshId, url: `${base}/dashboard` }));
     const check = parse(await dispatch({ action: "assert", session: freshId, assertions: [{ kind: "text_visible", value: "Not logged in" }] }));

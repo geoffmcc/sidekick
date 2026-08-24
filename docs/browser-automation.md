@@ -78,9 +78,10 @@ list. Key settings:
 
 - `SIDEKICK_BROWSER_ENABLED` (default `true`) — master switch.
 - `SIDEKICK_BROWSER_HEADLESS` (default `true`).
-- `SIDEKICK_BROWSER_ALLOW_PRIVATE_NETWORK` (default `false`) — the operator
-  ceiling for loopback/private/LAN egress. A session must *also* pass
-  `allow_private_network=true`; this env var alone grants nothing.
+- `SIDEKICK_BROWSER_ALLOW_PRIVATE_NETWORK` (default `false`) — an operator
+  kill switch/ceiling only. Private egress requires an operator-created named
+  `network_scope`; this env var alone and the deprecated
+  `allow_private_network=true` flag grant nothing.
 - Session/resource bounds: `MAX_SESSIONS`, `MAX_PAGES`, `SESSION_TTL_MS`,
   `IDLE_TIMEOUT_MS`, `NAV_TIMEOUT_MS`, `ACTION_TIMEOUT_MS`,
   `MAX_DOWNLOAD_BYTES`, `MAX_UPLOAD_BYTES`, `MAX_OUTPUT_CHARS`,
@@ -128,8 +129,8 @@ Rules (all fail closed):
 - schemes limited to http/https (and ws/wss on the same proxy paths); no
   `file:`, `data:`, `chrome:` navigation;
 - cloud metadata hosts and link-local addresses are **always** refused;
-- private/loopback/CGNAT/unique-local targets require **both** the operator
-  ceiling and the session's `allow_private_network=true`;
+- private/loopback/CGNAT/unique-local targets require a named `network_scope`
+  whose explicit policy allows the destination, plus the operator ceiling;
 - `allowed_hosts` (with `*.example.com` wildcards) **narrows** policy — it never
   widens it; a private or metadata host stays refused even when listed;
 - embedded URL credentials are refused;

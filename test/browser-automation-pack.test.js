@@ -27,6 +27,8 @@ process.env.SIDEKICK_BROWSER_ENABLED = "true";
 process.env.SIDEKICK_BROWSER_ALLOW_PRIVATE_NETWORK = "true"; // fixture is on loopback
 
 require("../src/db").runPendingMigrations();
+const networkScopes = require("../src/security/network-scopes");
+networkScopes.create({ name: "browser-fixture", allowed_cidrs: ["127.0.0.0/8"], allowed_protocols: ["http", "https"], allowed_ports: ["1-65535"], allow_private_addresses: true }, "test-operator");
 
 const bundled = require("../src/packs/bundled");
 const lifecycle = require("../src/packs/lifecycle");
@@ -82,7 +84,7 @@ function parse(result) {
       enable: false,
     });
     assert.strictEqual(repository.getPack("browser-automation").state, "installed");
-    lifecycle.configure("browser-automation", { default_allowed_hosts: ["127.0.0.1"], full_page: false });
+    lifecycle.configure("browser-automation", { default_allowed_hosts: ["127.0.0.1"], network_scope: "browser-fixture", full_page: false });
     assert.strictEqual(repository.getPack("browser-automation").state, "configured");
   });
 
@@ -146,7 +148,7 @@ function parse(result) {
     });
 
     await t("web_capture drives a real browser and registers a screenshot artifact", async () => {
-      const result = parse(await call("web_capture", { url: `${base}/`, allow_private_network: true, include_text: true }));
+      const result = parse(await call("web_capture", { url: `${base}/`, network_scope: "browser-fixture", include_text: true }));
       assert.strictEqual(result.ok, true, JSON.stringify(result));
       assert.ok(result.untrusted_page_content.includes("js-rendered-content"), "JS content not captured");
       assert.strictEqual(result.screenshot.custody.status, "registered", JSON.stringify(result.screenshot));
@@ -156,7 +158,7 @@ function parse(result) {
     await t("web_extract returns bounded structured data from a rendered page", async () => {
       const result = parse(await call("web_extract", {
         url: `${base}/`,
-        allow_private_network: true,
+        network_scope: "browser-fixture",
         fields: [
           { name: "heading", target: "#heading" },
           { name: "items", target: ".item", all: true },
@@ -170,7 +172,7 @@ function parse(result) {
     await t("web_check passes on expected content and fails truthfully on missing content", async () => {
       const ok = parse(await call("web_check", {
         url: `${base}/`,
-        allow_private_network: true,
+        network_scope: "browser-fixture",
         assertions: [{ kind: "title_contains", value: "Fixture" }, { kind: "text_visible", value: "js-rendered-content" }],
         capture_evidence: true,
       }));
@@ -179,7 +181,7 @@ function parse(result) {
 
       const bad = parse(await call("web_check", {
         url: `${base}/`,
-        allow_private_network: true,
+        network_scope: "browser-fixture",
         assertions: [{ kind: "text_visible", value: "this text is definitely not present" }],
       }));
       assert.strictEqual(bad.passed, false, "web_check should report a truthful failure");
@@ -190,7 +192,7 @@ function parse(result) {
       // is the only dispatch path. This is a smoke that the tool ran through the
       // module services (its result shape is the module's, not a raw browser
       // dump): web_capture returns tool: "web_capture".
-      const result = parse(await call("web_capture", { url: `${base}/form`, allow_private_network: true, include_text: false }));
+      const result = parse(await call("web_capture", { url: `${base}/form`, network_scope: "browser-fixture", include_text: false }));
       assert.strictEqual(result.tool, "web_capture");
     });
 
@@ -199,7 +201,7 @@ function parse(result) {
       const run = await runWorkflowDefinition("browser-automation/ui-smoke", {
         url: `${base}/`,
         expect_text: "js-rendered-content",
-        allow_private_network: true,
+        network_scope: "browser-fixture",
         allowed_hosts: ["127.0.0.1"],
       }, { source: "mcp", actor: "pack-test", project: "ba-pack" });
       assert.ok(["completed", "succeeded", "ok"].includes(run.status) || run.result, `workflow did not complete: ${JSON.stringify(run.status)}`);
@@ -212,7 +214,7 @@ function parse(result) {
       const run = await runWorkflowDefinition("browser-automation/download-verification", {
         url: `${base}/`,
         trigger_selector: "#dl",
-        allow_private_network: true,
+        network_scope: "browser-fixture",
         allowed_hosts: ["127.0.0.1"],
       }, { source: "mcp", actor: "pack-test", project: "ba-pack" });
       assert.ok(["completed", "succeeded", "ok"].includes(run.status) || run.result, `workflow did not complete: ${JSON.stringify(run.status)}`);
@@ -223,7 +225,7 @@ function parse(result) {
       const failed = await runWorkflowDefinition("browser-automation/download-verification", {
         url: `${base}/`,
         trigger_selector: "#missing-download-control",
-        allow_private_network: true,
+        network_scope: "browser-fixture",
         allowed_hosts: ["127.0.0.1"],
       }, { source: "mcp", actor: "pack-test", project: "ba-pack" });
       assert.strictEqual(failed.status, "failed", `missing download must fail: ${JSON.stringify(failed)}`);
@@ -246,7 +248,7 @@ function parse(result) {
         password_selector: "#password",
         submit_selector: "#login",
         success_text: "Welcome, demo-user",
-        allow_private_network: true,
+        network_scope: "browser-fixture",
         allowed_hosts: ["127.0.0.1"],
       }, { source: "mcp", actor: "pack-test", project: "ba-pack" });
       assert.strictEqual(run.result.passed, true, `authenticated-ui-check did not pass: ${JSON.stringify(run.result)}`);

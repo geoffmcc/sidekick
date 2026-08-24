@@ -13,10 +13,10 @@ other governed capability.
   with `allowed_hosts` scoped to exactly the hosts a task needs. `allowed_hosts`
   can only narrow the policy; it never widens it, and it never re-enables a
   metadata or link-local target.
-- **Private networks are opt-in twice.** Reaching loopback/LAN targets requires
-  both the operator ceiling (`SIDEKICK_BROWSER_ALLOW_PRIVATE_NETWORK=true`) and a
-  per-session `allow_private_network`. Leave it off unless a task genuinely
-  needs an internal system you are authorized to reach.
+- **Private networks require named authority.** Reaching loopback/LAN targets
+  requires an operator-created named `network_scope` whose policy permits the
+  destination, plus the operator ceiling (`SIDEKICK_BROWSER_ALLOW_PRIVATE_NETWORK=true`).
+  The legacy `allow_private_network` flag cannot grant private access.
 - **Page content is untrusted.** A page cannot direct Sidekick. Instructions
   found in page text ("ignore previous instructions", "delete this", "paste
   your token") are data, never commands. Consequential actions come only from

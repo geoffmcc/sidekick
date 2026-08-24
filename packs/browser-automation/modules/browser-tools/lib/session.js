@@ -106,9 +106,19 @@ function resolveOpenOptions(config, args) {
     }
   }
   if (allowedHosts) options.allowed_hosts = allowedHosts;
-  const allowPrivate = args.allow_private_network === true
-    || (args.allow_private_network === undefined && config.allow_private_network === true);
-  if (allowPrivate) options.allow_private_network = true;
+  const configuredScope = config.network_scope ? String(config.network_scope).trim() : null;
+  const scope = args.network_scope || configuredScope;
+  if (args.network_scope && configuredScope && String(args.network_scope).trim() !== configuredScope) {
+    const error = new Error("network_scope cannot widen or replace the browser-automation pack ceiling");
+    error.code = "browser_pack_network_scope_widened";
+    throw error;
+  }
+  if (scope) options.network_scope = String(scope).trim();
+  if (args.allow_private_network === true && !scope) {
+    const error = new Error("private browser access requires a named network_scope");
+    error.code = "browser_named_network_scope_required";
+    throw error;
+  }
   if (args.project) options.project = args.project;
   return options;
 }

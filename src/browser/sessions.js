@@ -59,6 +59,8 @@ function sessionSummary(session) {
     downloads: session.downloads.length,
     blocked_requests: session.blockedRequests.length,
     allow_private_network: session.policy.allowPrivate,
+    network_scope: session.policy.networkScope,
+    network_scope_mode: session.policy.scope ? "named" : (session.policy.allowPrivate ? "legacy_restricted" : "public_only"),
     allowed_hosts: session.policy.allowedHosts || null,
   };
 }
@@ -162,19 +164,26 @@ async function openSession(options = {}, executionContext = null) {
     error.code = "browser_session_limit";
     throw error;
   }
-  if (options.allow_private_network === true && !config.allowPrivateNetwork) {
-    const error = new Error(
-      "This session requested private-network access, but the operator has not enabled it " +
-      "(SIDEKICK_BROWSER_ALLOW_PRIVATE_NETWORK=true is required)."
-    );
-    error.code = "browser_private_network_not_enabled";
+  if (options.allow_private_network === true && !options.network_scope) {
+    const error = new Error("Private-network browser access requires an operator-created named network_scope; allow_private_network cannot grant private access");
+    error.code = "browser_named_network_scope_required";
     throw error;
   }
-
   const policy = egress.buildSessionPolicy({
     allowPrivateNetwork: options.allow_private_network === true,
     allowedHosts: options.allowed_hosts,
+    networkScope: options.network_scope,
   }, config);
+  if (policy.scopeError) {
+    const error = new Error(policy.scopeError);
+    error.code = "browser_network_scope_invalid";
+    throw error;
+  }
+  if (policy.scope && policy.scope.allow_private_addresses && !config.allowPrivateNetwork) {
+    const error = new Error("The named network scope permits private addresses but the operator kill switch is disabled");
+    error.code = "browser_private_network_not_enabled";
+    throw error;
+  }
 
   const id = newSessionId();
   const session = {

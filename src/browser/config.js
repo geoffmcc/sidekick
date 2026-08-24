@@ -36,8 +36,8 @@ function browserConfig() {
     browsersPath: process.env.SIDEKICK_BROWSER_BROWSERS_PATH || path.join(root, "browser", "ms-playwright"),
     executableOverride: process.env.SIDEKICK_BROWSER_EXECUTABLE || null,
     headless: bool("SIDEKICK_BROWSER_HEADLESS", true),
-    // Private/loopback egress for browser sessions. Off by default; a session
-    // must ALSO opt in per-open, so this is a ceiling, not a grant.
+    // Kill switch/ceiling for named scopes that explicitly permit private
+    // addresses. This setting never grants private access by itself.
     allowPrivateNetwork: bool("SIDEKICK_BROWSER_ALLOW_PRIVATE_NETWORK", false),
     maxSessions: int("SIDEKICK_BROWSER_MAX_SESSIONS", 3, { min: 1, max: 16 }),
     maxPagesPerSession: int("SIDEKICK_BROWSER_MAX_PAGES", 5, { min: 1, max: 25 }),
