@@ -45,11 +45,15 @@ function registry() {
   const descriptors = [...builtin.list()];
   if (Array.isArray(nodeConfig.packs) && nodeConfig.packs.includes("developer")) {
     const entry = require("../../packs/developer/modules/developer-tools/entry");
-    const services = { dispatch: async (name, args) => {
-      const descriptor = builtin.get(name);
-      if (!descriptor) return { content: [{ type: "text", text: `Unknown local dependency: ${name}` }], isError: true };
-      return descriptor.handler(args || {}, { context: { source: "node" } });
-    } };
+    const services = {
+      config: { repository_roots: [workspace.root] },
+      paths: { enforce: localPathPolicy },
+      dispatch: async (name, args) => {
+        const descriptor = builtin.get(name);
+        if (!descriptor) return { content: [{ type: "text", text: `Unknown local dependency: ${name}` }], isError: true };
+        return descriptor.handler(args || {}, { context: { source: "node" } });
+      },
+    };
     for (const descriptor of entry.buildDescriptors(services)) descriptors.push(normalizeDescriptor({ ...descriptor, source: "module:developer-tools", family: null }));
   }
   nodeRegistry = createRegistry(descriptors);
@@ -71,6 +75,14 @@ function pathFields(args) { return Object.entries(args || {}).filter(([key, valu
 function workspaceForPath(value, operation) {
   if (!workspace) throw new Error("workspace is not configured");
   return resolveWorkspacePath(workspace, value, { operation, allowMissing: operation === "write" });
+}
+function localPathPolicy(target, operation = "read") {
+  try {
+    workspaceForPath(target, operation);
+    return null;
+  } catch (error) {
+    return { content: [{ type: "text", text: `Path policy denied: ${redact(error.message)}` }], isError: true, code: "path_policy_denied" };
+  }
 }
 function validateLocalArguments(descriptor, args) {
   const parsed = descriptor.schema.safeParse(args || {}); if (!parsed.success) throw new Error("local argument validation failed");
