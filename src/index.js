@@ -16,6 +16,13 @@ const { createMcpServer } = require("./mcp/server");
 const { createSessionManager } = require("./mcp/session-manager");
 const { registerStreamableHttpRoutes } = require("./mcp/streamable-http");
 const { registerLegacySseRoutes } = require("./mcp/legacy-sse");
+const executionNode = require("./node/manager");
+const executionNodeWorkspace = require("./node/workspace");
+executionNode.ensureSchema();
+const executionNodeRecoveryTimer = setInterval(() => {
+  try { executionNode.recoverExpired(); } catch {}
+}, 30000);
+if (executionNodeRecoveryTimer.unref) executionNodeRecoveryTimer.unref();
 
 const APP_VERSION = packageJson.version || "0.0.0";
 const NODE_REQUIREMENT = packageJson.engines?.node || "unspecified";
@@ -336,6 +343,7 @@ function requireWorker(req, res, next) {
 }
 
 function isComputeAuthBypassPath(pathname) {
+  if (pathname.startsWith("/execution-node/")) return true;
   if (pathname === "/compute/enrollment/exchange" || pathname === "/compute/enroll") return true;
   if (pathname.startsWith("/compute/worker/")) return true;
   const legacyWorkerPaths = [
@@ -665,6 +673,97 @@ computeAdminRouter.post("/jobs/:jobId/retry", express.json({ limit: "8kb" }), re
 computeAdminRouter.post("/recover", express.json({ limit: "8kb" }), recoverJobsHandler);
 computeAdminRouter.get("/health", computeHealthHandler);
 app.use("/compute/admin", computeAdminRouter);
+
+// General execution-node protocol. It deliberately has its own job table and
+// poll surface: compute inference jobs and canonical tool calls have different
+// contracts, receipts, and ambiguity rules, while enrollment/authentication and
+// heartbeat identity remain the existing worker authority.
+function requireExecutionNode(req, res, next) {
+  requireWorker(req, res, () => {
+    const node = executionNode.get(req.computeWorker.workerId);
+    if (!node) return res.status(403).json({ ok: false, error: "execution node is not registered" });
+    req.executionNode = node;
+    next();
+  });
+}
+
+function enrollExecutionNodeHandler(req, res) {
+  try {
+    const body = req.body || {};
+    if (!body.token || !body.nodeId || !body.displayName || !body.platform) return res.status(400).json({ ok: false, error: "token, nodeId, displayName, and platform are required" });
+    if (String(body.protocolVersion || "1") !== "1") return res.status(426).json({ ok: false, error: "unsupported execution-node protocol", supported: ["1"] });
+    const enrolled = compute.workerManager.enrollWorker({
+      nodeId: body.nodeId, displayName: body.displayName, platform: body.platform, architecture: body.architecture,
+      cpuInfo: body.cpuInfo, memoryBytes: body.memoryBytes, accelerators: [], providers: [], executors: [],
+      modelInventory: [], limits: body.limits || {}, health: body.health || {}, workerVersion: body.nodeVersion,
+      publicKey: body.publicKey, enrollmentToken: body.token, protocolVersion: "1",
+    });
+    const node = executionNode.register(enrolled.worker.workerId, {
+      protocolVersion: "1", descriptorSetHash: body.descriptorSetHash,
+      capabilities: body.capabilities || {}, workspaces: [], networkScopes: [], limits: body.limits || {},
+    });
+    res.json({ ok: true, node, worker: enrolled.worker, credential: enrolled.credential, credentialType: "worker-bearer-v1" });
+  } catch (e) { sendComputeError(res, e, 400); }
+}
+
+function nodeHeartbeatHandler(req, res) {
+  try {
+    const body = req.body || {};
+    const node = executionNode.register(req.computeWorker.workerId, {
+      protocolVersion: body.protocolVersion || "1", descriptorSetHash: body.descriptorSetHash || "",
+      capabilities: body.capabilities || {}, workspaces: executionNode.get(req.computeWorker.workerId)?.authorizedWorkspaces || [],
+      networkScopes: executionNode.get(req.computeWorker.workerId)?.authorizedNetworkScopes || [], limits: body.limits || {},
+    });
+    const worker = compute.workerManager.heartbeat(req.computeWorker.workerId, { utilization: body.utilization, currentJobs: body.currentJobs, telemetry: body.telemetry });
+    res.json({ ok: true, node, worker, workspaces: executionNode.listWorkspaces(req.computeWorker.workerId) });
+  } catch (e) { sendComputeError(res, e, 400); }
+}
+
+function nodeClaimHandler(req, res) {
+  try { const job = executionNode.claim(req.computeWorker.workerId, req.body?.leaseMs || 120000); res.json({ ok: true, claimed: !!job, job }); }
+  catch (e) { sendComputeError(res, e, 409); }
+}
+function nodeCompleteHandler(req, res) {
+  try { res.json({ ok: true, job: executionNode.finish(req.params.jobId, req.computeWorker.workerId, req.body?.leaseId, req.body?.result, req.body?.receipt) }); }
+  catch (e) { sendComputeError(res, e, 409); }
+}
+function nodeFailHandler(req, res) {
+  try { res.json({ ok: true, job: executionNode.fail(req.params.jobId, req.computeWorker.workerId, req.body?.leaseId, req.body?.code || "node_error", req.body?.message || "node execution failed") }); }
+  catch (e) { sendComputeError(res, e, 409); }
+}
+
+const executionNodeEnrollmentRouter = express.Router();
+executionNodeEnrollmentRouter.post("/exchange", express.json({ limit: "128kb" }), enforceEnrollmentRateLimit, enrollExecutionNodeHandler);
+app.use("/execution-node/enrollment", executionNodeEnrollmentRouter);
+const executionNodeRouter = express.Router();
+executionNodeRouter.use(requireExecutionNode);
+executionNodeRouter.post("/heartbeat", express.json({ limit: "128kb" }), nodeHeartbeatHandler);
+executionNodeRouter.post("/jobs/claim", express.json({ limit: "16kb" }), nodeClaimHandler);
+executionNodeRouter.post("/jobs/:jobId/complete", express.json({ limit: "1mb" }), nodeCompleteHandler);
+executionNodeRouter.post("/jobs/:jobId/fail", express.json({ limit: "16kb" }), nodeFailHandler);
+app.use("/execution-node/node", executionNodeRouter);
+
+const executionNodeAdminRouter = express.Router();
+executionNodeAdminRouter.use(requireAdmin);
+executionNodeAdminRouter.get("/nodes", (req, res) => res.json({ ok: true, nodes: executionNode.list() }));
+executionNodeAdminRouter.post("/nodes/:workerId/workspaces", express.json({ limit: "16kb" }), (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.name || !body.rootIdentity) return res.status(400).json({ ok: false, error: "name and rootIdentity are required" });
+    const workspaceId = executionNodeWorkspace.stableId("ws", `${body.name}:${body.rootIdentity}`);
+    const workspace = executionNode.authorizeWorkspace(req.params.workerId, {
+      workspaceId, name: String(body.name).slice(0, 64), rootIdentity: String(body.rootIdentity).slice(0, 128),
+      permissions: body.permissions || { read: true, write: false, execute: false }, limits: body.limits || {},
+    });
+    res.json({ ok: true, workspace });
+  } catch (e) { sendComputeError(res, e, 400); }
+});
+executionNodeAdminRouter.post("/nodes/:workerId/revoke", express.json({ limit: "8kb" }), (req, res) => {
+  const worker = compute.workerManager.revokeWorker(req.params.workerId, req.body?.reason || "execution_node_revoked");
+  if (!worker) return res.status(404).json({ ok: false, error: "node not found" });
+  res.json({ ok: true, worker });
+});
+app.use("/execution-node/admin", executionNodeAdminRouter);
 
 // Compatibility aliases for the initial compute HTTP protocol. These remain explicitly authenticated
 // and are covered by the narrow global-auth bypass above only where worker/enrollment credentials differ.

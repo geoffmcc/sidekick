@@ -53,6 +53,9 @@ function createExecutionContext(input = {}) {
     parentId: input.parentId || input.parent_id || parent?.parentId || null,
     stepNumber: input.stepNumber || input.step_number || null,
     timeoutMs: Number(input.timeoutMs || input.timeout_ms || 0) || null,
+    executionLocation: input.executionLocation || input.execution_location || parent?.executionLocation || null,
+    allowNodeExecution: input.allowNodeExecution !== false && parent?.allowNodeExecution !== false,
+    descriptorSetHash: input.descriptorSetHash || input.descriptor_set_hash || parent?.descriptorSetHash || null,
     signal: input.signal || parent?.signal || null,
     // Internal dispatcher telemetry. It is intentionally not included in
     // persisted provenance and each dispatch supplies its own tracker.

@@ -264,6 +264,12 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
 
   context.latencyTracker?.mark("handler");
   try {
+    // Placement is an additive execution location. Governance has already
+    // validated, authorized, and approved the canonical call above; the node
+    // dispatcher receives only the frozen parsed arguments and must validate
+    // the descriptor and workspace again locally before invoking its handler.
+    const nodeResult = await require("../node/dispatch").maybeExecute(descriptor, executionArgs, context);
+    if (nodeResult) return normalizeResult(nodeResult);
     return normalizeResult(await withTimeoutAndCancellation(
       descriptor.handler,
       executionArgs,

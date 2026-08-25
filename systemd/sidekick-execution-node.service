@@ -1,0 +1,22 @@
+[Unit]
+Description=Sidekick governed execution node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/lib/sidekick-execution-node/node_modules/.bin/sidekick-execution-node run
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.config/sidekick %h/.local/state/sidekick %h/.cache/sidekick
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=default.target

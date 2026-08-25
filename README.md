@@ -456,6 +456,15 @@ Repository content remains untrusted data, and indexing never executes target
 repository code. See [`docs/semantic-repository-intelligence.md`](docs/semantic-repository-intelligence.md)
 for the IR, security model, limits and extension guidance.
 
+### Governed WSL Execution Node
+
+Sidekick can run eligible canonical filesystem, Git, development, and semantic
+tools beside WSL-local repositories through an authenticated outbound execution
+node. The server retains canonical governance, approval, placement, audit, and
+recovery authority; the node independently validates descriptors, packs,
+workspaces, paths, and local limits. See
+[`docs/execution-node.md`](docs/execution-node.md).
+
 ### Black Box Incident Explorer
 
 `black_box` stores profiled incident captures as structured SQLite records with source-level artifacts, observations, timelines, evidence-cited analysis, search, comparison, retention controls, and dashboard inspection. See [`docs/blackbox.md`](docs/blackbox.md) for profiles, schema, dashboard behavior, retention, export, and security notes.

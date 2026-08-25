@@ -4,6 +4,16 @@ All notable changes to Sidekick.
 
 ## Unreleased
 
+### Governed WSL execution node
+
+- Added a general authenticated outbound execution-node protocol that reuses
+  compute-worker identity and heartbeat authority while routing eligible
+  canonical tools through durable leases, descriptor identity checks, bounded
+  receipts, and independent local validation.
+- Added additive execution-node/workspace/repository/job persistence (migration
+  070), deterministic placement metadata, bounded nested repository discovery,
+  WSL path containment, user-level installation, and security documentation.
+
 ### Security Research pack: disposable Proxmox lab provisioning
 
 Turns the previously-documented "environment seam" into a working composition: a research run whose environment is kind `proxmox` can provision and tear down a disposable lab.
