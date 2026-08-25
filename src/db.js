@@ -551,7 +551,8 @@ function supersedeMemoryRow(row, replacementId, reason, similarity, ts) {
 
   db.prepare(`
     UPDATE memories
-    SET enabled = 0,
+     SET enabled = 0,
+         current = 0,
         metadata_json = ?,
         updated_at = ?,
         last_seen_at = ?
@@ -744,10 +745,9 @@ function upsertMemory(memory) {
     WHERE enabled = 1
       AND type = ?
       AND COALESCE(project, '') = COALESCE(?, '')
-      AND COALESCE(source_tool, '') = COALESCE(?, '')
     ORDER BY updated_at DESC
     LIMIT 50
-  `).all(type, project, sourceTool);
+  `).all(type, project);
 
   for (const row of existingRows) {
     const rowKey = makeMemoryDedupKey({
@@ -1721,7 +1721,7 @@ function restoreBackup(backupPath, verify = true) {
 }
 
 function queryToolLogs(filters = {}) {
-  const { tool, source, success, since, until, limit = 100 } = filters;
+  const { tool, source, success, since, until, project, session_id, task_id, correlation_id, limit = 100 } = filters;
   
   let where = [];
   let params = [];
@@ -1738,13 +1738,16 @@ function queryToolLogs(filters = {}) {
     where.push("success = ?");
     params.push(success ? 1 : 0);
   }
+  for (const [field, value] of [["project", project], ["session_id", session_id], ["task_id", task_id], ["correlation_id", correlation_id]]) {
+    if (value) { where.push(`json_extract(entry_json, '$.${field}') = ?`); params.push(value); }
+  }
   if (since) {
     where.push("timestamp >= ?");
-    params.push(since);
+    params.push(normalizeLogTime(since, false));
   }
   if (until) {
     where.push("timestamp <= ?");
-    params.push(until);
+    params.push(normalizeLogTime(until, true));
   }
   
   const whereClause = where.length > 0 ? "WHERE " + where.join(" AND ") : "";
@@ -1753,6 +1756,17 @@ function queryToolLogs(filters = {}) {
   
   const rows = db.prepare(sql).all(...params);
   return rows.map(row => parseJson(row.entry_json, null)).filter(Boolean);
+}
+
+function normalizeLogTime(value, endOfRange) {
+  const text = String(value || "").trim();
+  const relative = text.match(/^(\d+)([smhdw])$/i);
+  if (relative) {
+    const units = { s: 1000, m: 60000, h: 3600000, d: 86400000, w: 604800000 };
+    return new Date(Date.now() + (endOfRange ? Number(relative[1]) : -Number(relative[1])) * units[relative[2].toLowerCase()]).toISOString();
+  }
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? text : parsed.toISOString();
 }
 
 function exportTable(tableName, format = "json") {

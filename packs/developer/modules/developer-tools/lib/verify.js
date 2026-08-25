@@ -47,6 +47,58 @@ function quote(value) {
 
 function windowsQuote(value) { return `"${String(value).replace(/"/g, '""')}"`; }
 
+function commandRequiresWrite(intent, command) {
+  if (["build", "test"].includes(intent)) return true;
+  return /(?:--fix(?:\b|=)|\b(?:rm|rmdir|mkdir|touch|mv|cp|install|write|unlink)\b|(?:^|[\s/])(?:build|dist|coverage|out)(?:[/\s]|$)|\bemit\b)/i.test(String(command || ""));
+}
+
+function workspacePermissions(root) {
+  const access = mode => { try { require("fs").accessSync(root, mode); return true; } catch { return false; } };
+  return { read: access(require("fs").constants.R_OK), write: access(require("fs").constants.W_OK), execute: access(require("fs").constants.X_OK) };
+}
+
+function mountMode(root) {
+  if (process.platform !== "linux") return { available: false, mode: "unknown" };
+  try {
+    const mounts = require("fs").readFileSync("/proc/mounts", "utf8").split(/\r?\n/).filter(Boolean);
+    const target = require("path").resolve(root);
+    let best = null;
+    for (const line of mounts) {
+      const fields = line.split(" ");
+      if (fields.length < 4) continue;
+      const mountPoint = fields[1].replace(/\\040/g, " ");
+      if (target === mountPoint || target.startsWith(`${mountPoint}/`)) {
+        if (!best || mountPoint.length > best.mount_point.length) best = { mount_point: mountPoint, options: fields[3].split(",") };
+      }
+    }
+    return best ? { available: true, mode: best.options.includes("ro") ? "read_only" : "read_write", mount_point: best.mount_point } : { available: false, mode: "unknown" };
+  } catch { return { available: false, mode: "unknown" }; }
+}
+
+function workspacePreflight(root, selection) {
+  const permissions = workspacePermissions(root);
+  const mount = mountMode(root);
+  const commands = selection.map(entry => ({
+    intent: entry.intent,
+    command: entry.command,
+    command_requires_write: Boolean(entry.command && commandRequiresWrite(entry.intent, entry.command)),
+    would_modify_files: Boolean(entry.command && commandRequiresWrite(entry.intent, entry.command)),
+  }));
+  const requiresWrite = commands.some(entry => entry.command_requires_write);
+  const readOnly = permissions.write !== true || mount.mode === "read_only";
+  const allowed = !requiresWrite || !readOnly;
+  return {
+    execution_host: require("os").hostname(),
+    workspace: root,
+    workspace_permissions: permissions,
+    mount,
+    commands,
+    command_requires_write: requiresWrite,
+    allowed,
+    reason: allowed ? null : "selected verification commands may modify files but the workspace is read-only",
+  };
+}
+
 function boundOutput(text, maxChars) {
   const value = String(text || "");
   if (value.length <= maxChars) return { output: value, truncated: false };
@@ -203,4 +255,4 @@ function summarize(results, intents) {
   };
 }
 
-module.exports = { INTENTS, MODE_INTENTS, selectCommands, runSelection, summarize, parseExecution, quote, windowsQuote, boundOutput, textOf };
+module.exports = { INTENTS, MODE_INTENTS, selectCommands, runSelection, summarize, parseExecution, quote, windowsQuote, boundOutput, textOf, commandRequiresWrite, workspacePermissions, mountMode, workspacePreflight };

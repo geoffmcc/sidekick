@@ -120,6 +120,11 @@ function buildFixtureRepository() {
   bundled.installBundledPack('developer', { enable: true });
   const health = packLifecycle.health('developer');
   assert.strictEqual(health.status, 'healthy', 'Developer pack must be healthy before its tools are exercised');
+  await test('DP.0: the public Developer verifier schema preserves dry_run', async () => {
+    const descriptor = getBuiltinRegistry().get('dev_verify');
+    assert.ok(descriptor, 'dev_verify must be registered');
+    assert.strictEqual(descriptor.schema.safeParse({ intents: ['test'], dry_run: true }).success, true);
+  });
   buildFixtureRepository();
 
   // --- DP.1 dev_repo_profile against the real Sidekick repository ----------
@@ -334,6 +339,16 @@ function buildFixtureRepository() {
     fs.rmSync(path.join(FIXTURE_REPO, 'src', 'other.js'));
   });
 
+  await test('DP.4e: dev_change_summary reports ignored files separately when requested', async () => {
+    fs.writeFileSync(path.join(FIXTURE_REPO, '.gitignore'), 'research/\n');
+    fs.mkdirSync(path.join(FIXTURE_REPO, 'research'), { recursive: true });
+    fs.writeFileSync(path.join(FIXTURE_REPO, 'research', 'campaign.json'), '{}\n');
+    const summary = json(await callInternalTool('dev_change_summary', { path: FIXTURE_REPO, include_ignored: true }));
+    assert.ok(summary.ignored.files.includes('research/'));
+    fs.rmSync(path.join(FIXTURE_REPO, 'research'), { recursive: true, force: true });
+    fs.rmSync(path.join(FIXTURE_REPO, '.gitignore'));
+  });
+
   // --- DP.5 dev_verify executes real commands ------------------------------
   await test('DP.5a: dev_verify dry-run selects commands without executing them', async () => {
     const report = json(await callInternalTool('dev_verify', { path: FIXTURE_REPO, intents: ['test'], dry_run: true }));
@@ -341,6 +356,9 @@ function buildFixtureRepository() {
     assert.strictEqual(report.verdict, 'dry_run');
     assert.strictEqual(report.commands[0].status, 'dry_run');
     assert.strictEqual(report.commands[0].executed, false);
+    assert.strictEqual(report.summary.executed_count, 0);
+    assert.strictEqual(report.preflight.execution_host.length > 0, true);
+    assert.strictEqual(report.preflight.commands[0].would_modify_files, true, 'test commands are conservatively treated as potentially mutating');
   });
 
   await test('DP.5: dev_verify selects and executes real commands, reporting the evidence', async () => {

@@ -393,7 +393,7 @@ function findRecentFiles(root, startTime, limit = 50) {
   return results;
 }
 
-async function sidekick_timeline({ action, since, until, sources, pattern, severity, format, max_events }) {
+async function sidekick_timeline({ action, since, until, sources, pattern, severity, format, max_events, project, session_id, task_id, correlation_id }) {
   const maxEvents = max_events || MAX_TIMELINE_EVENTS;
   const startTime = parseRelativeTime(since);
   const endTime = parseRelativeTime(until || "now");
@@ -408,13 +408,14 @@ async function sidekick_timeline({ action, since, until, sources, pattern, sever
 
   if (useSources.includes("log.jsonl")) {
     try {
-      const toolLogs = dbStore.readToolLogs(1000);
+      const toolLogs = dbStore.queryToolLogs({ since: startTime.toISOString(), until: endTime.toISOString(), project, session_id, task_id, correlation_id, limit: Math.max(1000, maxEvents * 4) });
       for (const log of toolLogs) {
         const event = {
           timestamp: log.t,
           source: "log.jsonl",
           tool: log.n,
           status: log.ok ? "success" : "error",
+          severity: log.ok ? "info" : "error",
           summary: log.s,
           args: log.a
         };
@@ -453,7 +454,7 @@ async function sidekick_timeline({ action, since, until, sources, pattern, sever
       const result = safeExecFileSync("git", ["log", `--since=${sinceDate}`, "--pretty=format:%H%x09%ad%x09%s", "--date=iso", "-n", "100"], {
         encoding: "utf8",
         timeout: 10000,
-        cwd: "/home/sidekick/sidekick",
+        cwd: process.env.SIDEKICK_REPOSITORY_ROOT || "/home/sidekick/sidekick",
         stdio: ["pipe", "pipe", "pipe"]
       });
       const lines = result.trim().split("\n");
@@ -466,7 +467,7 @@ async function sidekick_timeline({ action, since, until, sources, pattern, sever
 
   if (useSources.includes("files")) {
     try {
-      for (const { file, stat } of findRecentFiles("/home/sidekick/sidekick", startTime, 50)) {
+      for (const { file, stat } of findRecentFiles(process.env.SIDEKICK_REPOSITORY_ROOT || "/home/sidekick/sidekick", startTime, 50)) {
         events.push({
           timestamp: stat.mtime.toISOString(),
           source: "files",
@@ -727,7 +728,11 @@ const EXTRA_SCHEMAS = {
     pattern: z.string().optional().describe("Regex filter for event content"),
     severity: z.enum(["error", "warn", "info", "all"]).optional().default("all"),
     format: z.enum(["compact", "detailed", "json"]).optional().default("compact"),
-    max_events: z.number().optional().default(200)
+     max_events: z.number().optional().default(200),
+     project: z.string().max(120).optional().describe("Filter tool-log events by project"),
+     session_id: z.string().max(160).optional().describe("Filter tool-log events by session"),
+     task_id: z.string().max(160).optional().describe("Filter tool-log events by task"),
+     correlation_id: z.string().max(160).optional().describe("Filter tool-log events by correlation")
   }),
   baseline: z.object({
     action: z.enum(["record", "learn", "check", "status", "reset"]),
@@ -771,7 +776,7 @@ const descriptors = Object.freeze([
     name: "timeline",
     description: "Build chronological timeline from multiple log sources. Correlates events across log.jsonl, journalctl, git, and file modifications.",
     schema: EXTRA_SCHEMAS.timeline,
-    args: { action: "string (build|filter|export)", since: "string (start time: ISO or relative like 1h, 1d)", until: "string (optional, end time - default now)", sources: "array (optional, log.jsonl|journalctl|git|files|all - default all)", pattern: "string (optional, regex filter)", severity: "string (optional, error|warn|info|all - default all)", format: "string (optional, compact|detailed|json - default compact)", max_events: "number (optional, default 200)" },
+    args: { action: "string (build|filter|export)", since: "string (start time: ISO or relative like 1h, 1d)", until: "string (optional, end time - default now)", sources: "array (optional, log.jsonl|journalctl|git|files|all - default all)", pattern: "string (optional, regex filter)", severity: "string (optional, error|warn|info|all - default all)", format: "string (optional, compact|detailed|json - default compact)", max_events: "number (optional, default 200)", project: "string (optional, project scope)", session_id: "string (optional, session scope)", task_id: "string (optional, task scope)", correlation_id: "string (optional, correlation scope)" },
     risk: "medium",
     category: "Monitoring",
     source: "builtin",

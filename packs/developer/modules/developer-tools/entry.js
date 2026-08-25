@@ -180,7 +180,7 @@ async function devRepoProfile(services, { path: requestedPath, max_files, includ
   });
 }
 
-async function semanticRepository(services, { path: requestedPath, action = "profile", query, level = 0, limit = 40, max_chars = 12000, cursor, include, exclude }) {
+async function semanticRepository(services, { path: requestedPath, action = "profile", query, level = 0, limit = 40, max_chars = 12000, cursor, include, exclude, relevant_files = false }) {
   const resolved = resolveRepositoryRoot(services, requestedPath);
   if (!resolved.ok) return resolved.result;
   let state = null; try { state = await gitFacts.collectStateFacts(services, resolved.root); } catch { state = { available: false, head_sha: null, branch: null, worktree_clean: null, changed_file_count: null }; }
@@ -188,6 +188,7 @@ async function semanticRepository(services, { path: requestedPath, action = "pro
   const index = await semantic.indexRepository(resolved.root, { filters, state: state && state.available ? { kind: state.worktree_clean ? "working_tree_clean" : "working_tree", head_sha: state.head_sha, branch: state.branch, worktree_clean: state.worktree_clean } : { kind: "working_tree", state: "unknown" } });
   const publicRepository = { name: index.repository.name, identity: index.provenance?.repository_identity || null, state: index.repository.state };
   if (action === "verify") return jsonResult({ ok: semantic.verify(index), index_root_hash: index.index_root_hash, schema: index.schema, repository: publicRepository, provenance: index.provenance, warnings: index.warnings, stats: index.stats });
+  if (relevant_files) return jsonResult({ ok: true, tool: "semantic_repo", action, repository: publicRepository, index_root_hash: index.index_root_hash, ...semantic.relevantFiles(index, { query, limit, cursor }), warnings: index.warnings.slice(0, semantic.DEFAULT_LIMITS.maxSnippets), trust: "untrusted repository-derived data; file matches are discovery leads and require governed source validation" });
   const projection = semantic.project(index, { query, level, limit, max_chars, cursor });
   if (projection.ok === false) return errorResult(projection.error, { code: projection.code, tool: "semantic_repo", repository: publicRepository, index_root_hash: index.index_root_hash, provenance: projection.provenance, page: projection.page });
   return jsonResult({ ok: true, tool: "semantic_repo", action, repository: publicRepository, index_root_hash: index.index_root_hash, provenance: projection.provenance, page: projection.page, degradation: projection.degradation, warnings: projection.warnings.slice(0, semantic.DEFAULT_LIMITS.maxSnippets), projection: projection.projection, projection_chars: projection.projection_chars, trust: projection.trust });
@@ -195,7 +196,11 @@ async function semanticRepository(services, { path: requestedPath, action = "pro
 
 // --- dev_change_summary ----------------------------------------------------
 
-async function devChangeSummary(services, { path: requestedPath, base, staged = false, max_diff_chars }) {
+function statusPaths(text, marker) {
+  return verify.textOf(text).split("\n").filter(line => line.startsWith(marker)).map(line => line.slice(3)).filter(Boolean).sort();
+}
+
+async function devChangeSummary(services, { path: requestedPath, base, staged = false, max_diff_chars, include_ignored = false }) {
   const resolved = resolveRepositoryRoot(services, requestedPath);
   if (!resolved.ok) return resolved.result;
   const root = resolved.root;
@@ -207,8 +212,9 @@ async function devChangeSummary(services, { path: requestedPath, base, staged = 
 
   if (!base && !staged && diffStats.file_count === 0) {
     const gitState = await gitFacts.collectStateFacts(services, root);
-    const status = await services.dispatch("git", { action: "status", path: root, args: "--porcelain=v1" });
-    const untracked = verify.textOf(status).split("\n").filter(line => line.startsWith("?? ")).map(line => line.slice(3)).sort();
+    const status = await services.dispatch("git", { action: "status", path: root, args: include_ignored ? "--porcelain=v1 --ignored" : "--porcelain=v1" });
+    const untracked = statusPaths(status, "?? ");
+    const ignored = include_ignored ? statusPaths(status, "!! ") : [];
     if (!untracked.length) {
       return jsonResult({
         ok: true,
@@ -222,6 +228,7 @@ async function devChangeSummary(services, { path: requestedPath, base, staged = 
         semantic_comparison: { before: null, after: gitState },
         semantic_index_root_hash: null,
         untracked: { count: 0, files: [], truncated: false, note: "No untracked files." },
+        ignored: { count: ignored.length, files: ignored.slice(0, 200), truncated: ignored.length > 200, note: ignored.length ? "Ignored files are outside the Git diff and were not analyzed." : "No ignored files." },
         evidence: { files: [], diff_bytes_analyzed: 0, diff_truncated: false, fast_path: "clean_working_tree" },
       });
     }
@@ -270,13 +277,9 @@ async function devChangeSummary(services, { path: requestedPath, base, staged = 
   // `git diff` never shows untracked files, so a change set analyzed from the
   // diff alone silently omits every NEW file. Report them explicitly rather
   // than letting a reviewer believe the summary is complete.
-  const status = await services.dispatch("git", { action: "status", path: root, args: "--porcelain=v1" });
-  const untracked = verify
-    .textOf(status)
-    .split("\n")
-    .filter(line => line.startsWith("?? "))
-    .map(line => line.slice(3))
-    .sort();
+  const status = await services.dispatch("git", { action: "status", path: root, args: include_ignored ? "--porcelain=v1 --ignored" : "--porcelain=v1" });
+  const untracked = statusPaths(status, "?? ");
+  const ignored = include_ignored ? statusPaths(status, "!! ") : [];
 
   return jsonResult({
     ok: true,
@@ -301,6 +304,12 @@ async function devChangeSummary(services, { path: requestedPath, base, staged = 
       note: untracked.length
         ? "These files are NOT part of the analyzed diff: git does not include untracked files. Stage them to include them in the impact analysis."
         : "No untracked files.",
+    },
+    ignored: {
+      count: ignored.length,
+      files: ignored.slice(0, 200),
+      truncated: ignored.length > 200,
+      note: ignored.length ? "These files are ignored by Git and are NOT part of the analyzed diff." : "Ignored-file reporting was not requested or no ignored files were found.",
     },
     evidence: {
       // The raw per-file numbers the analysis was computed from stay available,
@@ -340,6 +349,7 @@ async function devVerify(services, { path: requestedPath, mode, intents: request
     syntax_command: config.syntax_command,
   };
   const selection = verify.selectCommands({ intents, candidates, overrides, ecosystems });
+  const preflight = verify.workspacePreflight(root, selection);
 
   const maxOutput = Math.min(max_output_chars || config.max_output_chars || DEFAULT_MAX_OUTPUT_CHARS, MAX_ALLOWED_OUTPUT_CHARS);
   if (dry_run) {
@@ -352,16 +362,36 @@ async function devVerify(services, { path: requestedPath, mode, intents: request
         generated_at: new Date().toISOString(),
         repository: root,
         git_state: gitState,
+        execution_host: preflight.execution_host,
+        workspace_permissions: preflight.workspace_permissions,
+        preflight,
         mode: effectiveMode,
         requested_intents: intents,
         autodetect,
         overrides_applied: Object.entries(overrides).filter(([, value]) => Boolean(value)).map(([key]) => key),
         dry_run: true,
         verdict: "dry_run",
-        summary: { verdict: "dry_run", selected: commands.filter(entry => entry.command).length, not_detected: commands.filter(entry => !entry.command).length },
+        summary: { verdict: "dry_run", selected: commands.filter(entry => entry.command).length, executed_count: 0, not_detected: commands.filter(entry => !entry.command).length },
         commands,
       }, null, 2) }],
     };
+  }
+  if (!preflight.allowed) {
+    const commands = selection.map(entry => ({ ...entry, status: entry.command ? "blocked" : "not_detected", executed: false, command_executed: null }));
+    return jsonResult({
+      ok: false,
+      tool: "dev_verify",
+      generated_at: new Date().toISOString(),
+      repository: root,
+      execution_host: preflight.execution_host,
+      workspace_permissions: preflight.workspace_permissions,
+      preflight,
+      mode: effectiveMode,
+      requested_intents: intents,
+      verdict: "blocked",
+      summary: { verdict: "blocked", executed_count: 0, selected: commands.filter(entry => entry.command).length, not_detected: commands.filter(entry => !entry.command).length },
+      commands,
+    });
   }
   const results = await verify.runSelection(services, {
     root,
@@ -426,9 +456,10 @@ const entry = {
            max_chars: z.number().int().min(1000).max(60000).optional().describe("Maximum model-facing projection characters"),
            cursor: z.string().max(2048).optional().describe("Opaque snapshot-bound continuation cursor returned by a prior query"),
            include: z.array(z.string().max(200)).max(64).optional().describe("Optional relative glob filters for files to index"),
-           exclude: z.array(z.string().max(200)).max(64).optional().describe("Optional relative glob filters for files to exclude"),
-         }),
-         args: { path: "string", action: "string (profile|query|verify)", query: "string", level: "number (0-2)", limit: "number", max_chars: "number", cursor: "string (opaque continuation cursor)", include: "array (relative glob filters)", exclude: "array (relative glob filters)" },
+            exclude: z.array(z.string().max(200)).max(64).optional().describe("Optional relative glob filters for files to exclude"),
+            relevant_files: z.boolean().optional().describe("Return bounded file-level relevance results instead of semantic symbols and relationships"),
+          }),
+          args: { path: "string", action: "string (profile|query|verify)", query: "string", level: "number (0-2)", limit: "number", max_chars: "number", cursor: "string (opaque continuation cursor)", include: "array (relative glob filters)", exclude: "array (relative glob filters)", relevant_files: "boolean (return bounded relevant files)" },
         risk: "low",
         category: "Development",
         contextProvider: { tool: "semantic_repo", action: "query", source: "repository_semantic", max_chars: 6000, scope: { argument: "path", source: "request_path_or_context" } },
@@ -469,12 +500,14 @@ const entry = {
           base: z.string().optional().describe("Compare against this ref (e.g. origin/main); omit for working-tree changes"),
           staged: z.boolean().optional().describe("Analyze staged changes instead of unstaged (default false)"),
           max_diff_chars: z.number().int().min(1000).max(2000000).optional().describe("Bound on diff text analyzed (default 400000)"),
+          include_ignored: z.boolean().optional().describe("Report ignored files separately; ignored files are never included in the Git diff analysis"),
         }),
         args: {
           path: "string (repository path)",
           base: "string (base ref to diff against)",
           staged: "boolean (analyze staged changes)",
           max_diff_chars: "number (diff analysis bound)",
+          include_ignored: "boolean (report ignored files separately)",
         },
         risk: "low",
         category: "Development",
@@ -492,8 +525,8 @@ const entry = {
           continue_on_failure: z.boolean().optional().describe("Keep running later commands after a failure (default false)"),
            max_output_chars: z.number().int().min(500).max(60000).optional().describe("Bound on retained command output"),
            timeout_ms: z.number().int().min(1000).max(600000).optional().describe("Per-command timeout"),
-           dry_run: z.boolean().optional().describe("Select commands without executing them"),
-        }),
+          dry_run: z.boolean().optional().describe("Select commands without executing them"),
+        }).strict(),
         args: {
           path: "string (repository path)",
           mode: "string (quick|standard|full)",
