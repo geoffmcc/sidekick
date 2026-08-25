@@ -184,7 +184,23 @@ async function runSelection(services, { root, selection, maxOutputChars, timeout
       ? `cd /d ${windowsQuote(root)} && ${entry.command}`
       : `cd ${quote(root)} && ${entry.command}`;
     const started = Date.now();
-    const dispatched = await services.dispatch("bash", { command }, { timeoutMs });
+    let dispatched;
+    try {
+      dispatched = await services.dispatch("bash", { command }, { timeoutMs });
+    } catch (error) {
+      const detail = String(error && error.message ? error.message : error);
+      results.push({
+        ...entry,
+        status: /timeout|timed out|mcp|session/i.test(detail) ? "timed_out" : "failed",
+        executed: false,
+        command_executed: command,
+        duration_ms: Date.now() - started,
+        error_code: "verification_dispatch_failed",
+        detail: detail.slice(0, 1000),
+        execution_state: "unknown",
+      });
+      break;
+    }
     const durationMs = Date.now() - started;
 
     if (dispatched && dispatched.approvalRequired) {
@@ -204,9 +220,13 @@ async function runSelection(services, { root, selection, maxOutputChars, timeout
       break;
     }
 
+    if (!dispatched || typeof dispatched !== "object") {
+      results.push({ ...entry, status: "failed", executed: false, command_executed: command, duration_ms: durationMs, error_code: "empty_verification_dispatch", detail: "The governed command dispatcher returned no result.", execution_state: "unknown" });
+      break;
+    }
     const execution = parseExecution(dispatched);
     const bounded = boundOutput(execution.output, maxOutputChars);
-    const passed = !dispatched.isError;
+    const passed = dispatched.isError !== true;
     results.push({
       ...entry,
       status: passed ? "passed" : execution.timed_out ? "timed_out" : "failed",

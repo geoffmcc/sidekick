@@ -36,9 +36,16 @@ function buildProcedureSchema(parameters) {
  * `project` is recorded only when the call itself names one, so scope is observed
  * rather than guessed.
  */
-function toolCallContext(args, extra) {
+function toolCallContext(args, extra, toolName) {
   const context = { requestId: extra?.requestInfo?.requestId };
   if (extra?.sessionId) context.sessionId = extra.sessionId;
+  // Session envelopes carry an explicit durable task/session id. Preserve it
+  // as task metadata so log_query and timeline can correlate the same call
+  // without confusing it with the transport's MCP session id.
+  if (toolName === "session" && typeof args?.id === "string" && args.id.trim()) {
+    context.taskId = args.id.trim();
+    context.correlationId = args.id.trim();
+  }
   if (args && typeof args.project === "string" && args.project.trim()) {
     context.project = args.project.trim();
   }
@@ -64,7 +71,7 @@ function createMcpServer(authIdentityProvider = () => null, options = {}) {
     }, async (args, extra) => {
       extra = extra || {};
       extra.authIdentity = authIdentityProvider();
-      return callMcpTool(descriptor.name, args, toolCallContext(args, extra));
+      return callMcpTool(descriptor.name, args, toolCallContext(args, extra, descriptor.name));
     });
   }
 

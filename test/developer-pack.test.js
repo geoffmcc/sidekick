@@ -15,6 +15,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const verify = require('../packs/developer/modules/developer-tools/lib/verify');
 
 const TEST_DATA_DIR = path.join(__dirname, 'test-data-developer-pack');
 fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
@@ -365,6 +366,20 @@ function buildFixtureRepository() {
     const result = await callInternalTool('dev_verify', { path: FIXTURE_REPO, intents: ['test'], dry_run: true, unexpected_safety_argument: true });
     assert.strictEqual(result.isError, true);
     assert.match(result.content[0].text, /unrecognized key|unexpected_safety_argument/i);
+  });
+
+  await test('DP.5c: verification dispatch failures return bounded fail-closed results', async () => {
+    const results = await verify.runSelection({ dispatch: async () => { throw new Error('MCP session timeout'); } }, {
+      root: FIXTURE_REPO,
+      selection: [{ intent: 'build', command: 'npm run build' }],
+      maxOutputChars: 1000,
+      continueOnFailure: false,
+    });
+    assert.strictEqual(results.length, 1);
+    assert.strictEqual(results[0].status, 'timed_out');
+    assert.strictEqual(results[0].executed, false);
+    assert.strictEqual(results[0].execution_state, 'unknown');
+    assert.strictEqual(verify.summarize(results, ['build']).executed_count, 0);
   });
 
   await test('DP.5: dev_verify selects and executes real commands, reporting the evidence', async () => {
