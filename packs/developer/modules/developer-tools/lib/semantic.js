@@ -36,6 +36,35 @@ const EXTENSIONS = Object.freeze({
 const SKIP = new Set([".git", "node_modules", "vendor", "target", "dist", "build", "out", "coverage", ".cache", ".next", ".gradle", ".venv", "venv", "__pycache__", "generated"]);
 function languageForPath(file) { return EXTENSIONS[path.extname(String(file || "")).toLowerCase()] || null; }
 
+function normalizeFilters(filters = {}) {
+  const normalize = values => (Array.isArray(values) ? values : [])
+    .slice(0, 64)
+    .map(value => String(value || "").replace(/\\/g, "/").trim())
+    .filter(value => value && value.length <= 200 && !value.startsWith("/") && !value.split("/").includes("..") && !/[\u0000-\u001f\u007f]/.test(value));
+  return { include: [...new Set(normalize(filters.include))].sort(), exclude: [...new Set(normalize(filters.exclude))].sort() };
+}
+
+function globRegex(pattern) {
+  let output = "^";
+  for (let index = 0; index < pattern.length; index++) {
+    const char = pattern[index];
+    if (char === "*" && pattern[index + 1] === "*") {
+      index++;
+      if (pattern[index + 1] === "/") { index++; output += "(?:.*/)?"; }
+      else output += ".*";
+    } else if (char === "*") output += "[^/]*";
+    else if (char === "?") output += "[^/]";
+    else output += char.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+  }
+  return new RegExp(`${output}$`);
+}
+
+function matchesFilters(relativePath, filters = {}) {
+  const normalized = normalizeFilters(filters);
+  if (normalized.exclude.some(pattern => globRegex(pattern).test(relativePath))) return false;
+  return !normalized.include.length || normalized.include.some(pattern => globRegex(pattern).test(relativePath));
+}
+
 function sha256(domain, value) { const h = crypto.createHash("sha256").update(domain + "\0"); return h.update(Buffer.isBuffer(value) ? value : String(value)).digest("hex"); }
 // Canonicalization preserves array order by default. Callers explicitly use
 // canonicalSet for IR fields whose semantics are set-like. This prevents
@@ -156,13 +185,13 @@ function semanticChanges(previousFiles = [], currentFiles = []) {
   return changes;
 }
 function ignoreMatcher(root) { const matcher = ignore(); try { matcher.add(fs.readFileSync(path.join(root, ".gitignore"), "utf8").split(/\r?\n/).filter(Boolean)); } catch {} return matcher; }
-function configurationHash(root, limits, sourceFiles) {
+function configurationHash(root, limits, sourceFiles, filters = {}) {
   let ignoreBytes = "";
   if (!sourceFiles) { try { ignoreBytes = fs.readFileSync(path.join(root, ".gitignore")); } catch {} }
-  return sha256("sidekick.semantic.config.v1", stable({ limits, gitignore: ignoreBytes.toString("base64") }));
+  return sha256("sidekick.semantic.config.v2", stable({ limits, filters: normalizeFilters(filters), gitignore: ignoreBytes.toString("base64") }));
 }
 
-function discover(root, limits) {
+function discover(root, limits, filters = {}) {
   const files = []; const skipped = []; let bytes = 0; let truncated = false;
   const matcher = ignoreMatcher(root);
   function visit(dir, depth) {
@@ -180,7 +209,8 @@ function discover(root, limits) {
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) { visit(full, depth + 1); continue; }
       if (!entry.isFile()) continue;
-       const language = EXTENSIONS[path.extname(entry.name).toLowerCase()];
+      if (!matchesFilters(relativeEntry, filters)) continue;
+      const language = EXTENSIONS[path.extname(entry.name).toLowerCase()];
        if (!language) continue;
        if (files.length >= limits.maxFiles) { truncated = true; return; }
       let stat; try { stat = fs.statSync(full); } catch { continue; }
@@ -424,13 +454,15 @@ function assignScopedSymbolIdentities(files) {
 async function indexRepository(root, options = {}) {
   const limits = normalizeLimits(options.limits || {});
   const sourceFiles = Array.isArray(options.sourceFiles) ? options.sourceFiles : null;
-  const configHash = configurationHash(root, limits, sourceFiles);
+  const filters = normalizeFilters(options.filters);
+  const configHash = configurationHash(root, limits, sourceFiles, filters);
   const found = sourceFiles ? (() => {
     const files = []; const skipped = []; let bytes = 0; let truncated = false;
     for (const item of sourceFiles.slice().sort((a, b) => String(a.path).localeCompare(String(b.path), "en"))) {
       if (files.length >= limits.maxFiles) { truncated = true; break; }
       const relativePath = String(item.path || "").replace(/\\/g, "/");
       if (!relativePath || relativePath.startsWith("/") || relativePath.split("/").includes("..") || path.posix.normalize(relativePath) !== relativePath) { skipped.push({ code: "invalid_source_path", path: clean(relativePath, 240) }); continue; }
+      if (!matchesFilters(relativePath, filters)) continue;
       if (!EXTENSIONS[path.posix.extname(relativePath).toLowerCase()]) { skipped.push({ code: "unsupported_source_language", path: relativePath }); continue; }
       const size = Buffer.byteLength(String(item.content || ""));
       if (size > limits.maxFileBytes) { skipped.push({ code: "file_size_limit", path: item.path, limit: limits.maxFileBytes }); continue; }
@@ -438,7 +470,7 @@ async function indexRepository(root, options = {}) {
       files.push({ path: relativePath, language: EXTENSIONS[path.posix.extname(relativePath).toLowerCase()] || item.language, size, content: item.content }); bytes += size;
     }
     return { files, bytes, truncated, skipped };
-  })() : discover(root, limits);
+  })() : discover(root, limits, filters);
   // Source-provided fixtures and callers may enumerate files in any order;
   // canonical path ordering is part of the IR contract.
   found.files.sort((a, b) => String(a.path).localeCompare(String(b.path), "en"));
@@ -446,6 +478,7 @@ async function indexRepository(root, options = {}) {
   if (previous && previous.config_hash !== configHash) previous = null;
   const warnings = [...found.skipped];
   if (previous && !verify(previous)) { previous = null; warnings.push({ code: "cache_integrity_failed", message: "Cached semantic data was not reused; rebuilding." }); }
+  const previousByPath = new Map((previous?.files || []).map(file => [file.path, file]));
   const files = []; let cacheHits = 0; let parsed = 0; let units = 0;
   for (const item of found.files) {
     const full = path.join(root, item.path); let buf; let fd = null;
@@ -457,7 +490,8 @@ async function indexRepository(root, options = {}) {
     }
     if (buf.includes(0)) { warnings.push({ code: "binary_skipped", path: item.path }); continue; }
     const sourceHash = sha256("sidekick.semantic.source.v1", buf);
-    const old = previous?.files?.find(x => x.path === item.path && x.source_hash === sourceHash && x.analyzer_version === ANALYZER_VERSION && x.ir_version === IR_VERSION);
+    const oldCandidate = previousByPath.get(item.path);
+    const old = oldCandidate && oldCandidate.source_hash === sourceHash && oldCandidate.analyzer_version === ANALYZER_VERSION && oldCandidate.ir_version === IR_VERSION ? oldCandidate : null;
     let unit;
     if (old) { unit = old.unit; cacheHits++; } else {
       const text = decodeUtf8(buf); if (text === null) { warnings.push({ code: "encoding_failed", path: item.path }); continue; }
@@ -738,4 +772,4 @@ function verify(index) {
   return sha256("sidekick.semantic.index.v4", stable({ ir_version: index.schema, analyzer_version: index.analyzer_version, config_hash: index.config_hash, files: index.files.map(x => ({ path: x.path, language: x.language, source_hash: x.source_hash, analyzer_version: x.analyzer_version, ir_version: x.ir_version, unit: x.unit })) })) === index.index_root_hash;
 }
 function clearMemory(root) { if (root) memoryCache.delete(root); else memoryCache.clear(); }
-module.exports = { IR_VERSION, ANALYZER_VERSION, DEFAULT_LIMITS, languageForPath, discover, indexRepository, compareIndexes, project, verify, stable, sha256, cacheFile, clearMemory, normalizeLimits, cursorEncode, cursorDecode, queryHash, extractPerl };
+module.exports = { IR_VERSION, ANALYZER_VERSION, DEFAULT_LIMITS, languageForPath, discover, indexRepository, compareIndexes, project, verify, stable, sha256, cacheFile, clearMemory, normalizeLimits, normalizeFilters, matchesFilters, cursorEncode, cursorDecode, queryHash, extractPerl };
