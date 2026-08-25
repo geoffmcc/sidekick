@@ -361,6 +361,12 @@ function buildFixtureRepository() {
     assert.strictEqual(report.preflight.commands[0].would_modify_files, true, 'test commands are conservatively treated as potentially mutating');
   });
 
+  await test('DP.5b: developer safety schemas reject silently stripped arguments', async () => {
+    const result = await callInternalTool('dev_verify', { path: FIXTURE_REPO, intents: ['test'], dry_run: true, unexpected_safety_argument: true });
+    assert.strictEqual(result.isError, true);
+    assert.match(result.content[0].text, /unrecognized key|unexpected_safety_argument/i);
+  });
+
   await test('DP.5: dev_verify selects and executes real commands, reporting the evidence', async () => {
     const result = await callInternalTool('dev_verify', { path: FIXTURE_REPO, intents: ['test'] });
     const report = json(result);

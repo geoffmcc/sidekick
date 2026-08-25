@@ -190,10 +190,22 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
   if (!descriptor.schema || typeof descriptor.schema.safeParse !== "function") {
     return errorResult(`Tool ${descriptor.name} has no executable schema`, "dispatcher_internal_error");
   }
-  const parsed = descriptor.schema.safeParse(clonePlain(args || {}));
+  const rawArgs = clonePlain(args || {});
+  const parsed = descriptor.schema.safeParse(rawArgs);
   if (!parsed.success) {
     context.latencyTracker?.mark("validation");
     return validationError(descriptor.name, parsed);
+  }
+  // Refuse stale descriptors that silently strip newly introduced safety
+  // arguments before a handler or execution node can run a different plan.
+  const safetyArguments = {
+    dev_verify: ["dry_run"],
+    dev_change_summary: ["include_ignored"],
+    semantic_repo: ["include", "exclude", "relevant_files"],
+    dev_repo_profile: ["include", "exclude"],
+  }[descriptor.name];
+  if (safetyArguments && safetyArguments.some(key => Object.prototype.hasOwnProperty.call(rawArgs, key) && parsed.data[key] === undefined)) {
+    return errorResult(`Tool ${descriptor.name} is using a stale schema; refresh the executing capability before retrying`, "stale_tool_schema");
   }
   const executionArgs = freezeDeep(clonePlain(parsed.data));
   context.latencyTracker?.mark("validation");

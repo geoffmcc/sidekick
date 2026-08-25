@@ -201,7 +201,7 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     if (action !== "abandon" && !["rejected", "failed"].includes(String(acceptance_state || "").toLowerCase())) {
       add("fact", verified_facts, "semantic", 0.82); add("decision", decisions, "semantic", 0.84); add("procedure", procedures_learned, "procedural", 0.78); add("session", final_summary || user_visible_result, "episodic", 0.74);
     }
-    add("negative", failed_approaches, "negative", 0.76); add("open_thread", [...(unresolved_issues || []), ...(follow_ups || [])], "prospective", 0.78); add("observation", evidence, "observational", 0.62);
+    add("negative", failed_approaches, "negative", 0.76); add("open_thread", [...(unresolved_issues || []), ...(follow_ups || [])].slice(0, 3), "prospective", 0.78); add("observation", evidence, "observational", 0.62);
     recordPlatformMemoryEvent(action === "abandon" ? "memory.session_abandoned" : "memory.session_completed", { session_id: session.id, project: session.project, memories_created: created.length, state: session.state, outcome }, { subjectType: "memory_task_session", subjectId: session.id, project: session.project, taskId: session.id, severity: action === "abandon" ? "warning" : "info" });
     return jsonText({ ok: true, session, handoff_id: handoff_id || null, handoff_version: finalizedHandoff ? finalizedHandoff.version : null, continuation_packet: continuationPacket, memories_created: created.length, memories: created });
   }

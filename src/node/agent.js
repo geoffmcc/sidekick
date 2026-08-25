@@ -85,7 +85,17 @@ function localPathPolicy(target, operation = "read") {
   }
 }
 function validateLocalArguments(descriptor, args) {
-  const parsed = descriptor.schema.safeParse(args || {}); if (!parsed.success) throw new Error("local argument validation failed");
+  const rawArgs = args || {};
+  const parsed = descriptor.schema.safeParse(rawArgs); if (!parsed.success) throw new Error("local argument validation failed");
+  const safetyArguments = {
+    dev_verify: ["dry_run"],
+    dev_change_summary: ["include_ignored"],
+    semantic_repo: ["include", "exclude", "relevant_files"],
+    dev_repo_profile: ["include", "exclude"],
+  }[descriptor.name];
+  if (safetyArguments && safetyArguments.some(key => Object.prototype.hasOwnProperty.call(rawArgs, key) && parsed.data[key] === undefined)) {
+    throw new Error("stale tool schema: safety argument was stripped before local execution");
+  }
   if (descriptor.name === "git" && ["clone", "pull", "push"].includes(parsed.data.action) && !process.env.SIDEKICK_NODE_NETWORK_SCOPE) throw new Error("network scope is required for this Git operation");
   for (const [key, value] of pathFields(parsed.data)) {
     const operation = ["destination", "output", "path_a", "path_b"].includes(key) ? "write" : "read";
