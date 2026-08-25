@@ -33,6 +33,7 @@ const { callInternalTool } = require('../src/tools/dispatcher');
 const { callAgentTool, getBuiltinRegistry } = require('../src/tools');
 const { discoverCapabilities, resolveContextProviderArgs } = require('../src/agent/capability-broker');
 const platformKernel = require('../src/platform/kernel');
+const semantic = require('../packs/developer/modules/developer-tools/lib/semantic');
 
 const SIDEKICK_ROOT = path.resolve(__dirname, '..');
 const FIXTURE_REPO = path.join(TEST_DATA_DIR, 'fixture-repo');
@@ -309,7 +310,39 @@ function buildFixtureRepository() {
     assert.strictEqual(bogus.scope.base_sha, git(['rev-parse', 'HEAD']).trim(), 'any committish resolves');
   });
 
+  await test('DP.4c: clean change summaries use the zero-change fast path', async () => {
+    const cleanRepo = path.join(TEST_DATA_DIR, 'clean-repo');
+    fs.mkdirSync(cleanRepo, { recursive: true });
+    fs.writeFileSync(path.join(cleanRepo, 'package.json'), JSON.stringify({ name: 'clean-repo', version: '1.0.0' }));
+    execFileSync('git', ['init', '-q'], { cwd: cleanRepo });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: cleanRepo });
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: cleanRepo });
+    execFileSync('git', ['add', 'package.json'], { cwd: cleanRepo });
+    execFileSync('git', ['-c', 'commit.gpgsign=false', 'commit', '-qm', 'initial'], { cwd: cleanRepo });
+    const summary = json(await callInternalTool('dev_change_summary', { path: cleanRepo }));
+    assert.strictEqual(summary.evidence.fast_path, 'clean_working_tree');
+    assert.strictEqual(summary.totals.files, 0);
+    assert.strictEqual(summary.semantic_index_root_hash, null);
+  });
+
+  await test('DP.4d: semantic include/exclude filters narrow indexed source files', async () => {
+    fs.writeFileSync(path.join(FIXTURE_REPO, 'src', 'other.js'), 'export function other() { return true; }\n');
+    const index = await semantic.indexRepository(FIXTURE_REPO, { filters: { include: ['src/**'], exclude: ['src/auth.js'] } });
+    assert.ok(index.files.length > 0);
+    assert.ok(index.files.every(file => file.path.startsWith('src/')));
+    assert.ok(index.files.every(file => file.path !== 'src/auth.js'));
+    fs.rmSync(path.join(FIXTURE_REPO, 'src', 'other.js'));
+  });
+
   // --- DP.5 dev_verify executes real commands ------------------------------
+  await test('DP.5a: dev_verify dry-run selects commands without executing them', async () => {
+    const report = json(await callInternalTool('dev_verify', { path: FIXTURE_REPO, intents: ['test'], dry_run: true }));
+    assert.strictEqual(report.dry_run, true);
+    assert.strictEqual(report.verdict, 'dry_run');
+    assert.strictEqual(report.commands[0].status, 'dry_run');
+    assert.strictEqual(report.commands[0].executed, false);
+  });
+
   await test('DP.5: dev_verify selects and executes real commands, reporting the evidence', async () => {
     const result = await callInternalTool('dev_verify', { path: FIXTURE_REPO, intents: ['test'] });
     const report = json(result);

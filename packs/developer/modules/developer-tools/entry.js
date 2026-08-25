@@ -78,7 +78,7 @@ function resolveRepositoryRoot(services, requestedPath) {
 
 // --- dev_repo_profile ------------------------------------------------------
 
-async function devRepoProfile(services, { path: requestedPath, max_files, include_git = true, include_semantic = true }) {
+async function devRepoProfile(services, { path: requestedPath, max_files, include_git = true, include_semantic = true, include, exclude }) {
   const resolved = resolveRepositoryRoot(services, requestedPath);
   if (!resolved.ok) return resolved.result;
   const root = resolved.root;
@@ -99,7 +99,8 @@ async function devRepoProfile(services, { path: requestedPath, max_files, includ
   const containers = detect.presentFiles(root, detect.CONTAINER_FILES);
 
   const git = include_git ? await gitFacts.collectRepositoryFacts(services, root) : { available: false, skipped: true };
-  const semanticIndex = include_semantic !== false ? await semantic.indexRepository(root, { limits: { maxFiles: Math.min(max_files || 4000, 4000) } }) : null;
+  const filters = { include, exclude };
+  const semanticIndex = include_semantic !== false ? await semantic.indexRepository(root, { limits: { maxFiles: Math.min(max_files || 4000, 4000) }, filters }) : null;
   const semanticProfile = semanticIndex ? semantic.project(semanticIndex, { level: 0, max_chars: 9000, limit: 50 }) : null;
 
   const topLevelDirectories = fs
@@ -174,15 +175,17 @@ async function devRepoProfile(services, { path: requestedPath, max_files, includ
       modules: semanticProfile.modules, entry_points: semanticProfile.entry_points,
       security_signals: semanticProfile.signals, stats: semanticIndex.stats,
       changes: semanticIndex.changes.slice(0, 50), warnings: semanticIndex.warnings.slice(0, 20), trust: semanticProfile.trust,
+      filters: semantic.normalizeFilters(filters),
     } : { available: false, skipped: true, reason: "caller_disabled_semantic_indexing" },
   });
 }
 
-async function semanticRepository(services, { path: requestedPath, action = "profile", query, level = 0, limit = 40, max_chars = 12000, cursor }) {
+async function semanticRepository(services, { path: requestedPath, action = "profile", query, level = 0, limit = 40, max_chars = 12000, cursor, include, exclude }) {
   const resolved = resolveRepositoryRoot(services, requestedPath);
   if (!resolved.ok) return resolved.result;
   let state = null; try { state = await gitFacts.collectStateFacts(services, resolved.root); } catch { state = { available: false, head_sha: null, branch: null, worktree_clean: null, changed_file_count: null }; }
-  const index = await semantic.indexRepository(resolved.root, { state: state && state.available ? { kind: state.worktree_clean ? "working_tree_clean" : "working_tree", head_sha: state.head_sha, branch: state.branch, worktree_clean: state.worktree_clean } : { kind: "working_tree", state: "unknown" } });
+  const filters = { include, exclude };
+  const index = await semantic.indexRepository(resolved.root, { filters, state: state && state.available ? { kind: state.worktree_clean ? "working_tree_clean" : "working_tree", head_sha: state.head_sha, branch: state.branch, worktree_clean: state.worktree_clean } : { kind: "working_tree", state: "unknown" } });
   const publicRepository = { name: index.repository.name, identity: index.provenance?.repository_identity || null, state: index.repository.state };
   if (action === "verify") return jsonResult({ ok: semantic.verify(index), index_root_hash: index.index_root_hash, schema: index.schema, repository: publicRepository, provenance: index.provenance, warnings: index.warnings, stats: index.stats });
   const projection = semantic.project(index, { query, level, limit, max_chars, cursor });
@@ -200,6 +203,28 @@ async function devChangeSummary(services, { path: requestedPath, base, staged = 
   const diffStats = await gitFacts.collectDiff(services, root, { base, staged });
   if (!diffStats.ok) {
     return errorResult(`Could not read the change set: ${diffStats.error}`, { code: "diff_unavailable", repository: root });
+  }
+
+  if (!base && !staged && diffStats.file_count === 0) {
+    const gitState = await gitFacts.collectStateFacts(services, root);
+    const status = await services.dispatch("git", { action: "status", path: root, args: "--porcelain=v1" });
+    const untracked = verify.textOf(status).split("\n").filter(line => line.startsWith("?? ")).map(line => line.slice(3)).sort();
+    if (!untracked.length) {
+      return jsonResult({
+        ok: true,
+        tool: "dev_change_summary",
+        generated_at: new Date().toISOString(),
+        repository: root,
+        scope: { base: null, base_sha: null, staged: false, description: "clean working tree" },
+        git_state: gitState,
+        ...changes.analyzeChangeSet({ files: [], diffText: "", insertions: 0, deletions: 0, binaryFiles: 0 }),
+        semantic_changes: [],
+        semantic_comparison: { before: null, after: gitState },
+        semantic_index_root_hash: null,
+        untracked: { count: 0, files: [], truncated: false, note: "No untracked files." },
+        evidence: { files: [], diff_bytes_analyzed: 0, diff_truncated: false, fast_path: "clean_working_tree" },
+      });
+    }
   }
 
   const diffScope = [];
@@ -289,7 +314,7 @@ async function devChangeSummary(services, { path: requestedPath, base, staged = 
 
 // --- dev_verify ------------------------------------------------------------
 
-async function devVerify(services, { path: requestedPath, mode, intents: requestedIntents, continue_on_failure, max_output_chars, timeout_ms }) {
+async function devVerify(services, { path: requestedPath, mode, intents: requestedIntents, continue_on_failure, max_output_chars, timeout_ms, dry_run = false }) {
   const resolved = resolveRepositoryRoot(services, requestedPath);
   if (!resolved.ok) return resolved.result;
   const root = resolved.root;
@@ -317,6 +342,27 @@ async function devVerify(services, { path: requestedPath, mode, intents: request
   const selection = verify.selectCommands({ intents, candidates, overrides, ecosystems });
 
   const maxOutput = Math.min(max_output_chars || config.max_output_chars || DEFAULT_MAX_OUTPUT_CHARS, MAX_ALLOWED_OUTPUT_CHARS);
+  if (dry_run) {
+    const gitState = await gitFacts.collectStateFacts(services, root);
+    const commands = selection.map(entry => ({ ...entry, status: entry.command ? "dry_run" : "not_detected", executed: false, command_executed: null }));
+    return {
+      content: [{ type: "text", text: JSON.stringify({
+        ok: true,
+        tool: "dev_verify",
+        generated_at: new Date().toISOString(),
+        repository: root,
+        git_state: gitState,
+        mode: effectiveMode,
+        requested_intents: intents,
+        autodetect,
+        overrides_applied: Object.entries(overrides).filter(([, value]) => Boolean(value)).map(([key]) => key),
+        dry_run: true,
+        verdict: "dry_run",
+        summary: { verdict: "dry_run", selected: commands.filter(entry => entry.command).length, not_detected: commands.filter(entry => !entry.command).length },
+        commands,
+      }, null, 2) }],
+    };
+  }
   const results = await verify.runSelection(services, {
     root,
     selection,
@@ -376,11 +422,13 @@ const entry = {
           action: z.enum(["profile", "query", "verify"]).optional().describe("Semantic operation (default profile)"),
           query: z.string().max(500).optional().describe("Bounded symbol, file, module, or concept query"),
           level: z.number().int().min(0).max(2).optional().describe("Progressive detail: 0 overview, 1 symbols, 2 relationships"),
-          limit: z.number().int().min(1).max(200).optional().describe("Maximum returned items"),
-          max_chars: z.number().int().min(1000).max(60000).optional().describe("Maximum model-facing projection characters"),
-          cursor: z.string().max(2048).optional().describe("Opaque snapshot-bound continuation cursor returned by a prior query"),
-        }),
-        args: { path: "string", action: "string (profile|query|verify)", query: "string", level: "number (0-2)", limit: "number", max_chars: "number", cursor: "string (opaque continuation cursor)" },
+           limit: z.number().int().min(1).max(200).optional().describe("Maximum returned items"),
+           max_chars: z.number().int().min(1000).max(60000).optional().describe("Maximum model-facing projection characters"),
+           cursor: z.string().max(2048).optional().describe("Opaque snapshot-bound continuation cursor returned by a prior query"),
+           include: z.array(z.string().max(200)).max(64).optional().describe("Optional relative glob filters for files to index"),
+           exclude: z.array(z.string().max(200)).max(64).optional().describe("Optional relative glob filters for files to exclude"),
+         }),
+         args: { path: "string", action: "string (profile|query|verify)", query: "string", level: "number (0-2)", limit: "number", max_chars: "number", cursor: "string (opaque continuation cursor)", include: "array (relative glob filters)", exclude: "array (relative glob filters)" },
         risk: "low",
         category: "Development",
         contextProvider: { tool: "semantic_repo", action: "query", source: "repository_semantic", max_chars: 6000, scope: { argument: "path", source: "request_path_or_context" } },
@@ -394,14 +442,18 @@ const entry = {
         schema: z.object({
           path: z.string().optional().describe("Repository path (default: the Sidekick working directory)"),
           max_files: z.number().int().min(50).max(20000).optional().describe("Bound on the file scan (default 4000)"),
-          include_git: z.boolean().optional().describe("Include git facts (default true)"),
-          include_semantic: z.boolean().optional().describe("Include static semantic indexing (default true)"),
+           include_git: z.boolean().optional().describe("Include git facts (default true)"),
+           include_semantic: z.boolean().optional().describe("Include static semantic indexing (default true)"),
+           include: z.array(z.string().max(200)).max(64).optional().describe("Optional relative glob filters for files to index"),
+           exclude: z.array(z.string().max(200)).max(64).optional().describe("Optional relative glob filters for files to exclude"),
         }),
         args: {
           path: "string (repository path)",
           max_files: "number (file scan bound, default 4000)",
-          include_git: "boolean (default true)",
-          include_semantic: "boolean (default true)",
+           include_git: "boolean (default true)",
+           include_semantic: "boolean (default true)",
+           include: "array (relative glob filters)",
+           exclude: "array (relative glob filters)",
         },
         risk: "low",
         category: "Development",
@@ -438,16 +490,18 @@ const entry = {
           mode: z.enum(["quick", "standard", "full"]).optional().describe("Verification breadth (default from pack configuration, else standard)"),
           intents: z.array(z.enum(["syntax", "lint", "typecheck", "test", "build"])).optional().describe("Explicit intents, overriding mode"),
           continue_on_failure: z.boolean().optional().describe("Keep running later commands after a failure (default false)"),
-          max_output_chars: z.number().int().min(500).max(60000).optional().describe("Bound on retained command output"),
-          timeout_ms: z.number().int().min(1000).max(600000).optional().describe("Per-command timeout"),
+           max_output_chars: z.number().int().min(500).max(60000).optional().describe("Bound on retained command output"),
+           timeout_ms: z.number().int().min(1000).max(600000).optional().describe("Per-command timeout"),
+           dry_run: z.boolean().optional().describe("Select commands without executing them"),
         }),
         args: {
           path: "string (repository path)",
           mode: "string (quick|standard|full)",
           intents: "array (syntax|lint|typecheck|test|build)",
           continue_on_failure: "boolean",
-          max_output_chars: "number",
-          timeout_ms: "number",
+           max_output_chars: "number",
+           timeout_ms: "number",
+           dry_run: "boolean (select commands without executing)",
         },
         risk: "high",
         category: "Development",
