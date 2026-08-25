@@ -136,6 +136,7 @@ const suites = [
   { file: 'test/pack-contract.test.js', critical: true, description: 'Pack contract: pack_api versioning, permission declarations, dependency resolution/cycles/ordering, transition legality, structured validation' },
   { file: 'test/developer-pack.test.js', critical: true, description: 'Developer pack behaviour against real git repositories: repo profile, change summary, governed verification, and runnable workflows' },
   { file: 'test/semantic-repository.test.js', critical: true, description: 'Semantic Repository Intelligence: static multi-language parsing, determinism, cache invalidation, safety and integrity' },
+  { file: 'test/execution-node.test.js', critical: true, description: 'Governed execution node workspace containment, placement, leases, idempotency, and receipts' },
   { file: 'test/proxmox-unit.test.js', critical: true, description: 'Proxmox pack unit/security: endpoint/identifier/UPID validation, credential redaction, response normalization, error taxonomy, provider detection, profile resolution' },
   { file: 'test/proxmox-pack.test.js', critical: true, description: 'Proxmox pack integration: install/configure/health, pinned-CA TLS (and fail-closed without it), normalized discovery, guest lifecycle task monitoring, idempotency, and token-leak defense against a mock Proxmox API' },
   { file: 'test/jellyfin-pack.test.js', critical: true, description: 'Jellyfin pack profile security, deterministic playback diagnosis, capability normalization, and graceful degradation' },

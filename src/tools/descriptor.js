@@ -124,6 +124,7 @@ function normalizeDescriptor(input) {
     }
   }
   const normalizedProvider = input.risk === "low" ? normalizeContextProvider(input.contextProvider) : null;
+  const placement = normalizePlacement(input.placement || inferredPlacement(input));
   return Object.freeze({
     name,
     description,
@@ -146,6 +147,7 @@ function normalizeDescriptor(input) {
     capabilities: normalizeCapabilities(input.capabilities),
     visibility: input.visibility || "public",
     result: input.result || null,
+    placement,
     // Context providers are automatically invoked during Agent/Brain
     // assembly, so only low-risk descriptors may advertise one. The actual
     // call still goes through the canonical dispatcher and policy path.
@@ -158,6 +160,67 @@ function normalizeDescriptor(input) {
     annotations: Object.freeze(annotations),
     handler: input.handler,
   });
+}
+
+const EXECUTION_LOCATIONS = Object.freeze(["server", "node"]);
+const NODE_OPERATING_SYSTEMS = Object.freeze(["linux", "windows", "darwin"]);
+
+function normalizePlacement(value) {
+  const input = value && typeof value === "object" ? value : {};
+  const locations = Array.isArray(input.locations)
+    ? input.locations.filter(item => EXECUTION_LOCATIONS.includes(item)).slice(0, 2)
+    : ["server"];
+  const requirements = input.requirements && typeof input.requirements === "object" ? input.requirements : {};
+  const os = Array.isArray(requirements.os)
+    ? requirements.os.filter(item => NODE_OPERATING_SYSTEMS.includes(item)).slice(0, 3)
+    : [];
+  const binaries = Array.isArray(requirements.binaries)
+    ? requirements.binaries.filter(item => typeof item === "string" && /^[A-Za-z0-9_.+-]{1,64}$/.test(item)).slice(0, 32)
+    : [];
+  const packs = Array.isArray(requirements.packs)
+    ? requirements.packs.filter(item => typeof item === "string" && /^[a-z][a-z0-9-]{0,63}$/.test(item)).slice(0, 16)
+    : [];
+  const workspaces = Array.isArray(requirements.workspaces)
+    ? requirements.workspaces.filter(item => typeof item === "string" && /^[a-z][a-z0-9_-]{0,63}$/.test(item)).slice(0, 16)
+    : [];
+  return Object.freeze({
+    locations: Object.freeze(locations.length ? locations : ["server"]),
+    serverBound: input.serverBound === true || locations.includes("server") && input.nodeSafe !== true,
+    nodeSafe: input.nodeSafe === true && locations.includes("node"),
+    requirements: Object.freeze({
+      os: Object.freeze(os),
+      binaries: Object.freeze(binaries),
+      packs: Object.freeze(packs),
+      workspaces: Object.freeze(workspaces),
+      networkScopes: Object.freeze(Array.isArray(requirements.networkScopes) ? requirements.networkScopes.slice(0, 16) : []),
+      browser: requirements.browser === true,
+      privilege: requirements.privilege === true,
+    }),
+    version: typeof input.version === "string" ? input.version.slice(0, 64) : "1",
+  });
+}
+
+function inferredPlacement(input) {
+  const name = String(input.name || "");
+  const family = String(input.family || "");
+  const nodeFamilies = new Set(["filesystem"]);
+  const nodeNames = new Set([
+    "semantic_repo", "dev_repo_profile", "dev_change_summary", "dev_verify",
+    "git", "changelog",
+    "security_scan", "hash", "diff_files", "parse", "validate", "transform",
+    "extract", "summarize", "filter", "find", "anonymize",
+  ]);
+  if (!nodeFamilies.has(family) && !nodeNames.has(name)) return null;
+  return {
+    locations: ["node"],
+    nodeSafe: true,
+    serverBound: false,
+    requirements: {
+      os: ["linux", "windows", "darwin"],
+      workspaces: ["security-research"],
+      ...(name === "semantic_repo" || name.startsWith("dev_") ? { packs: ["developer"] } : {}),
+    },
+  };
 }
 
 module.exports = { normalizeDescriptor, isZodSchema, describeSchemaArgs, z };

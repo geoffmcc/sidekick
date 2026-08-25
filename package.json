@@ -5,10 +5,12 @@
   "main": "src/index.js",
   "bin": {
     "sidekick": "src/cli.js",
-    "sidekick-compute-worker": "src/compute/worker-agent.js"
+    "sidekick-compute-worker": "src/compute/worker-agent.js",
+    "sidekick-execution-node": "src/node/agent.js"
   },
   "files": [
     "src",
+    "packs",
     "migrations",
     "scripts",
     "README.md",

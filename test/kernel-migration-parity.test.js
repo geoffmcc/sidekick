@@ -121,8 +121,8 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
     console.log(`Test KMP.1: migrations-only boot applies ${migrationApplied} migrations`);
     assert.strictEqual(
       migrationStore.getDb().prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
-       String(69),
-       'schema_version should be 69'
+       String(70),
+       'schema_version should be 70'
     );
     console.log('Passed\n');
 
