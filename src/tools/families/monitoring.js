@@ -404,9 +404,13 @@ async function sidekick_timeline({ action, since, until, sources, pattern, sever
   }
 
   const useSources = sources && sources[0] !== "all" ? sources : ["log.jsonl", "journalctl", "git", "files"];
+  const scoped = Boolean(project || session_id || task_id || correlation_id);
+  // Non-log sources do not carry tool-log scope identifiers. Do not mix them
+  // into a scoped query and present unrelated events as matches.
+  const effectiveSources = scoped ? useSources.filter(source => source === "log.jsonl") : useSources;
   const events = [];
 
-  if (useSources.includes("log.jsonl")) {
+  if (effectiveSources.includes("log.jsonl")) {
     try {
       const toolLogs = dbStore.queryToolLogs({ since: startTime.toISOString(), until: endTime.toISOString(), project, session_id, task_id, correlation_id, limit: Math.max(1000, maxEvents * 4) });
       for (const log of toolLogs) {
@@ -427,7 +431,7 @@ async function sidekick_timeline({ action, since, until, sources, pattern, sever
     } catch {}
   }
 
-  if (useSources.includes("journalctl")) {
+  if (effectiveSources.includes("journalctl")) {
     try {
       const sinceStr = startTime.toISOString();
       const result = safeExecFileSync("journalctl", ["--since", sinceStr, "--no-pager", "-n", "500"], {
@@ -448,7 +452,7 @@ async function sidekick_timeline({ action, since, until, sources, pattern, sever
     } catch {}
   }
 
-  if (useSources.includes("git")) {
+  if (effectiveSources.includes("git")) {
     try {
       const sinceDate = startTime.toISOString();
       const result = safeExecFileSync("git", ["log", `--since=${sinceDate}`, "--pretty=format:%H%x09%ad%x09%s", "--date=iso", "-n", "100"], {
@@ -465,7 +469,7 @@ async function sidekick_timeline({ action, since, until, sources, pattern, sever
     } catch {}
   }
 
-  if (useSources.includes("files")) {
+  if (effectiveSources.includes("files")) {
     try {
       for (const { file, stat } of findRecentFiles(process.env.SIDEKICK_REPOSITORY_ROOT || "/home/sidekick/sidekick", startTime, 50)) {
         events.push({
@@ -489,20 +493,21 @@ async function sidekick_timeline({ action, since, until, sources, pattern, sever
     filtered = filtered.filter(e => regex.test(e.summary));
   }
 
-  if (filtered.length > maxEvents) {
+  const truncated = filtered.length > maxEvents;
+  if (truncated) {
     filtered = filtered.slice(0, maxEvents);
   }
 
   if (action === "filter") {
-    return { content: [{ type: "text", text: `Found ${filtered.length} events matching filters` }] };
+    return { content: [{ type: "text", text: `Found ${filtered.length} events matching filters (truncated: ${truncated ? "yes" : "no"}; scoped: ${scoped ? "yes" : "no"})` }] };
   }
 
   if (action === "export" && format === "json") {
-    return { content: [{ type: "text", text: JSON.stringify(filtered, null, 2) }] };
+    return { content: [{ type: "text", text: JSON.stringify({ events: filtered, metadata: { truncated, scoped, requested_sources: useSources, effective_sources: effectiveSources, max_events: maxEvents } }, null, 2) }] };
   }
 
   if (filtered.length === 0) {
-    return { content: [{ type: "text", text: `No events found between ${since} and ${until || "now"}` }] };
+    return { content: [{ type: "text", text: `No events found between ${since} and ${until || "now"}\nTruncated: ${truncated ? "yes" : "no"}\nScoped: ${scoped ? "yes" : "no"}\nSources: ${effectiveSources.join(", ") || "none"}` }] };
   }
 
   let output = `Timeline: ${startTime.toISOString()} to ${endTime.toISOString()}\n`;
@@ -519,6 +524,9 @@ async function sidekick_timeline({ action, since, until, sources, pattern, sever
     }
   }
 
+  output += `Truncated: ${truncated ? "yes" : "no"}\n`;
+  output += `Scoped: ${scoped ? "yes" : "no"}\n`;
+  output += `Sources: ${effectiveSources.join(", ") || "none"}\n`;
   return { content: [{ type: "text", text: output }] };
 }
 

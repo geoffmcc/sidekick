@@ -458,7 +458,7 @@ const entry = {
            include: z.array(z.string().max(200)).max(64).optional().describe("Optional relative glob filters for files to index"),
             exclude: z.array(z.string().max(200)).max(64).optional().describe("Optional relative glob filters for files to exclude"),
             relevant_files: z.boolean().optional().describe("Return bounded file-level relevance results instead of semantic symbols and relationships"),
-          }),
+          }).strict(),
           args: { path: "string", action: "string (profile|query|verify)", query: "string", level: "number (0-2)", limit: "number", max_chars: "number", cursor: "string (opaque continuation cursor)", include: "array (relative glob filters)", exclude: "array (relative glob filters)", relevant_files: "boolean (return bounded relevant files)" },
         risk: "low",
         category: "Development",
@@ -477,7 +477,7 @@ const entry = {
            include_semantic: z.boolean().optional().describe("Include static semantic indexing (default true)"),
            include: z.array(z.string().max(200)).max(64).optional().describe("Optional relative glob filters for files to index"),
            exclude: z.array(z.string().max(200)).max(64).optional().describe("Optional relative glob filters for files to exclude"),
-        }),
+         }).strict(),
         args: {
           path: "string (repository path)",
           max_files: "number (file scan bound, default 4000)",
@@ -501,7 +501,7 @@ const entry = {
           staged: z.boolean().optional().describe("Analyze staged changes instead of unstaged (default false)"),
           max_diff_chars: z.number().int().min(1000).max(2000000).optional().describe("Bound on diff text analyzed (default 400000)"),
           include_ignored: z.boolean().optional().describe("Report ignored files separately; ignored files are never included in the Git diff analysis"),
-        }),
+        }).strict(),
         args: {
           path: "string (repository path)",
           base: "string (base ref to diff against)",

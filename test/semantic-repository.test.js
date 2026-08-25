@@ -52,6 +52,8 @@ const semantic = require("../packs/developer/modules/developer-tools/lib/semanti
     fs.writeFileSync(path.join(root, "ignored-dir", "kept.ts"), "export const kept = true;"); fs.appendFileSync(path.join(root, ".gitignore"), "!ignored-dir/\n!ignored-dir/kept.ts\n");
     const index = await semantic.indexRepository(root);
     assert.ok(index.files.some(file => file.path === "ignored-dir/kept.ts")); assert.ok(!index.files.some(file => file.path.includes("node_modules")));
+    assert.deepStrictEqual(index.stats.filters, { include: [], exclude: [] });
+    assert.strictEqual(index.stats.parse_accounting.total_emitted, index.stats.files_emitted);
   });
 
   await test("canonical output and root hash are deterministic", async () => {
