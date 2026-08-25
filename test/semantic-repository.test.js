@@ -404,4 +404,12 @@ const semantic = require("../packs/developer/modules/developer-tools/lib/semanti
     assert.strictEqual(semantic.project(index, { query: "other", limit: 3, cursor: first.page.cursor }).code, "cursor_invalid");
     assert.ok(JSON.parse(first.projection).provenance.evidence_class === "discovery_lead");
   });
+
+  await test("relevant-files mode returns bounded file-level matches with completeness", async () => {
+    const index = await semantic.indexRepository(root, { filters: { include: ["*.ts", "*.js"] } });
+    const page = semantic.relevantFiles(index, { query: "web.ts", limit: 2 });
+    assert.ok(page.files.some(file => file.path === "web.ts"));
+    assert.strictEqual(page.page.returned_count, page.files.length);
+    assert.ok(["complete", "partial"].includes(page.completeness));
+  });
 })().catch(error => { console.error(error); process.exitCode = 1; });
