@@ -95,6 +95,9 @@ function makeGitRepo() {
     assert.strictEqual(s.capabilities.present_on_server.hash, undefined, "hash is never composed and is no longer advertised");
     assert.ok(Object.prototype.hasOwnProperty.call(s.capabilities.dispatchable_by_pack, "proxmox_retire"), "guarded retirement dispatchability is reported");
     assert.strictEqual(s.policy.local_probes_enabled, true);
+    assert.ok(s.workspace_capabilities.execution_host);
+    assert.ok(s.workspace_capabilities.permissions);
+    assert.ok(s.workspace_capabilities.mount);
     assert.ok(s.ready);
   });
 
