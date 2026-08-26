@@ -417,6 +417,7 @@ async function sidekick_timeline({ action, since, until, sources, pattern, sever
         const event = {
           timestamp: log.t,
           source: "log.jsonl",
+          id: log.id || null,
           tool: log.n,
           status: log.ok ? "success" : "error",
           severity: log.ok ? "info" : "error",
@@ -503,7 +504,7 @@ async function sidekick_timeline({ action, since, until, sources, pattern, sever
   }
 
   if (action === "export" && format === "json") {
-    return { content: [{ type: "text", text: JSON.stringify({ events: filtered, metadata: { truncated, scoped, requested_sources: useSources, effective_sources: effectiveSources, max_events: maxEvents } }, null, 2) }] };
+    return { content: [{ type: "text", text: JSON.stringify({ events: filtered, metadata: { truncated, scoped, requested_sources: useSources, effective_sources: effectiveSources, max_events: maxEvents, correlation_id: correlation_id || null, newest_log_id: filtered.reduce((max, event) => Math.max(max, event.id || 0), 0) || null } }, null, 2) }] };
   }
 
   if (filtered.length === 0) {

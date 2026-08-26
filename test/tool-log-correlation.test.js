@@ -17,6 +17,7 @@ process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 
 const ROOT = path.join(__dirname, '..');
 const mcpServerSource = fs.readFileSync(path.join(ROOT, 'src', 'mcp', 'server.js'), 'utf-8');
+const executionContext = require('../src/tools/context');
 
 console.log('Running Tool Log Correlation Tests...\n');
 
@@ -93,6 +94,18 @@ test('project is recorded only when the call names one', () => {
   assert.ok(!('project' in toolCallContext(null, {})), 'null args handled');
 });
 
+console.log('TLC.3b: caller correlation ids are validated and propagated');
+test('accepts bounded safe correlation identifiers and preserves their source', () => {
+  const ctx = executionContext.createMcpExecutionContext({ correlation_id: 'client.case-42' });
+  assert.equal(ctx.correlationId, 'client.case-42');
+  assert.equal(ctx.correlationSource, 'caller');
+});
+
+test('rejects malformed or oversized correlation identifiers', () => {
+  assert.throws(() => executionContext.createMcpExecutionContext({ correlation_id: 'contains whitespace' }), /correlation_id/);
+  assert.throws(() => executionContext.createMcpExecutionContext({ correlation_id: 'x'.repeat(129) }), /correlation_id/);
+});
+
 console.log('TLC.4: the context reaches tool_logs as a usable boundary');
 test('logged calls sharing a session form one sequence, distinct sessions do not', () => {
   delete require.cache[require.resolve('../src/db')];
@@ -130,6 +143,19 @@ test('without a session id the same calls yield no sequence at all', () => {
   // own segment, so no adjacency is inferred.
   assert.equal(segments.length, 2, 'each per-call correlation id is its own segment');
   assert.ok(segments.every(s => s.logs.length === 1), 'no adjacent pair is manufactured');
+});
+
+test('log polling supports a bounded id cursor', () => {
+  const dbStore = require('../src/db');
+  const first = dbStore.appendToolLog({ t: new Date().toISOString(), n: 'cursor-alpha', ok: true, src: 'mcp', correlation_id: 'client.case-42', s: 'a' });
+  assert.equal(first, undefined, 'appendToolLog retains its existing void contract');
+  const rows = dbStore.queryToolLogs({ correlation_id: 'client.case-42', limit: 10 });
+  assert.ok(rows.length >= 1);
+  const cursor = rows[0].id;
+  dbStore.appendToolLog({ t: new Date(Date.now() + 1).toISOString(), n: 'cursor-beta', ok: true, src: 'mcp', correlation_id: 'client.case-42', s: 'b' });
+  const next = dbStore.queryToolLogs({ correlation_id: 'client.case-42', after_id: cursor, limit: 10 });
+  assert.ok(next.some(row => row.n === 'cursor-beta'));
+  assert.ok(next.every(row => row.id > cursor));
 });
 
 console.log('\nTool Log Correlation tests: ' + passed + ' passed, ' + failed + ' failed\n');
