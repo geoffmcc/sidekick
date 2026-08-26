@@ -62,7 +62,9 @@ function createExecutionContext(input = {}) {
     approvedExecution: input.approvedExecution === true || parent?.approvedExecution === true,
     generatedProcedure: input.generatedProcedure || input.generated_procedure || parent?.generatedProcedure || null,
     executionId: input.executionId || input.execution_id || parent?.executionId || null,
-    operationId: input.operationId || input.operation_id || parent?.operationId || null,
+    // Every dispatch gets an attributable operation id, including direct MCP
+    // calls that do not create a durable platform execution.
+    operationId: input.operationId || input.operation_id || parent?.operationId || invocationId("op"),
     idempotencyKey: input.idempotencyKey || input.idempotency_key || parent?.idempotencyKey || null,
     rootExecutionId: input.rootExecutionId || input.root_execution_id || parent?.rootExecutionId || input.executionId || input.execution_id || null,
     parentId: input.parentId || input.parent_id || parent?.parentId || null,

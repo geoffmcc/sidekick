@@ -15,6 +15,7 @@
 const { kernel } = require("./platform");
 const { ResearchError } = require("./errors");
 const { requireText } = require("./identity");
+const { requireSidekickSrc } = require("./deps");
 const records = require("./records");
 
 const ENVIRONMENT_KINDS = ["local", "disposable", "proxmox", "remote"];
@@ -30,7 +31,7 @@ function mergeLabProfile(config, env) {
 function assertBoundNetworkScope(run) {
   const bound = run && run.metadata && run.metadata.network_scope;
   if (!bound) return;
-  const current = require("../../../../../src/security/network-scopes").get(bound.scope_id, bound.revision);
+  const current = requireSidekickSrc("src/security/network-scopes").get(bound.scope_id, bound.revision);
   if (!current || !current.enabled || !current.is_current || current.digest !== bound.digest) throw new ResearchError("scope_stale", "the bound named network scope is disabled, expired, or has changed; rebind the run explicitly");
 }
 
@@ -90,7 +91,7 @@ function plan(input, actor, config) {
   const hypothesis = records.getHypothesis(requireText(input.hypothesis_id, "hypothesis_id"));
   const campaign = records.getCampaign(hypothesis.campaign_id);
   const environment = resolveEnvironment(config, input.environment);
-  const requestedScope = input.network_scope ? require("../../../../../src/security/network-scopes").get(input.network_scope) : null;
+  const requestedScope = input.network_scope ? requireSidekickSrc("src/security/network-scopes").get(input.network_scope) : null;
   const campaignScope = campaign.metadata?.network_scope || null;
   if (requestedScope && campaignScope && (requestedScope.scope_id !== campaignScope.scope_id || requestedScope.revision !== campaignScope.revision || requestedScope.digest !== campaignScope.digest)) throw new ResearchError("authorization_failed", "run network_scope must match the campaign binding; create a new campaign binding to rebind authority");
   const networkScope = requestedScope || campaignScope;

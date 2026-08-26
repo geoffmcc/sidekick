@@ -296,6 +296,14 @@ function parse(result) {
   assert.ok(events.events.every((event, index, rows) => index === rows.length - 1 || event.previous_hash === rows[index + 1].event_hash), JSON.stringify(events.events));
   console.log("HV.19 passed: checkpoint, lifecycle, claim lease, readiness, and journal");
 
+  const startedSession = parse(await TOOLS.session({ action: "begin", goal: "resume a partial task", project: "hv-session-resume" }));
+  const endedSession = parse(await TOOLS.session({ action: "end", id: startedSession.session.id, outcome: "partial", acceptance_state: "blocked", final_summary: "blocked by environment" }));
+  assert.strictEqual(endedSession.session.state, "completed", "ending a session records the terminal segment");
+  const resumedSession = parse(await TOOLS.session({ action: "resume", id: startedSession.session.id, project: "hv-session-resume" }));
+  assert.strictEqual(resumedSession.session.state, "active", "partial session resumes as active");
+  assert.strictEqual(resumedSession.session.ended_at, null, "resumed session clears terminal timestamp");
+  console.log("HV.20 passed: partial session resume reopens active work");
+
   console.log("\nAll handoff versioning tests passed");
   process.exit(0);
 })().catch(error => {
