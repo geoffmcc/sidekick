@@ -59,6 +59,13 @@ test('a missing session id is left absent rather than invented', () => {
   assert.equal(ctx.requestId, 'req-2', 'request id still recorded');
 });
 
+test('long repository tools receive a bounded MCP timeout budget', () => {
+  const toolCallContext = loadToolCallContext();
+  assert.equal(toolCallContext({}, {}, 'dev_repo_profile').timeoutMs, 7500);
+  assert.equal(toolCallContext({}, {}, 'git').timeoutMs, 7500);
+  assert.ok(!toolCallContext({}, {}, 'memory').timeoutMs, 'unrelated tools keep their existing timeout behavior');
+});
+
 test('every MCP registration site passes the shared context builder', () => {
   const callSites = mcpServerSource.match(/callMcpTool\([^)]*\)/g) || [];
   assert.ok(callSites.length >= 3, `expected at least 3 callMcpTool sites, found ${callSites.length}`);
