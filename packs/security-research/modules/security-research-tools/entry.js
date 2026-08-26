@@ -57,7 +57,7 @@ function runContext(services, runId, runtime) {
   const run = runsLib.get(runId);
   const boundNetworkScope = run.metadata && run.metadata.network_scope;
   if (boundNetworkScope) {
-    const currentScope = require("../../../../../src/security/network-scopes").get(boundNetworkScope.scope_id, boundNetworkScope.revision);
+    const currentScope = requireSidekickSrc("src/security/network-scopes").get(boundNetworkScope.scope_id, boundNetworkScope.revision);
     if (!currentScope || !currentScope.enabled || !currentScope.is_current || currentScope.digest !== boundNetworkScope.digest) {
       throw new ResearchError("scope_stale", "the bound named network scope is disabled, expired, or has changed; rebind the run explicitly");
     }

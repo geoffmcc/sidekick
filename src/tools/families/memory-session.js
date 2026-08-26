@@ -216,6 +216,12 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     if (!id) return { content: [{ type: "text", text: "id or project is required for session status" }], isError: true };
     const session = dbStore.getTaskSession(id);
     if (!session) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
+    if (action === "resume" && session.state === "completed" && (session.outcome === "partial" || ["partial", "blocked"].includes(String(session.acceptance_state || "").toLowerCase()))) {
+      dbStore.getDb().prepare("UPDATE memory_task_sessions SET state = 'active', ended_at = NULL, updated_at = ? WHERE id = ?").run(new Date().toISOString(), id);
+      session.state = "active";
+      session.ended_at = null;
+      session.reopened_from = "completed";
+    }
     return jsonText({ ok: true, session, memory_brief: buildScopedMemoryBrief(session.goal, session.project, { limit: 12 }) });
   }
   if (action === "list") return jsonText({ ok: true, sessions: dbStore.listTaskSessions({ project, state: source, limit: limit || 50 }) });

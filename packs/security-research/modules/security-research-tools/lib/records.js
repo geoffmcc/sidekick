@@ -12,6 +12,7 @@
 const { kernel } = require("./platform");
 const { ResearchError } = require("./errors");
 const { requireText } = require("./identity");
+const { requireSidekickSrc } = require("./deps");
 
 // Translate a kernel invariant Error into a ResearchError with a stable code.
 function mapKernelError(error) {
@@ -55,7 +56,7 @@ function createCampaign(input, actor) {
   }));
 }
 function requireCoreScope(ref) {
-  const scope = require("../../../../../src/security/network-scopes").get(ref);
+  const scope = requireSidekickSrc("src/security/network-scopes").get(ref);
   if (!scope || !scope.enabled) throw new ResearchError("policy_denied", "network scope is missing, disabled, or expired");
   return scope;
 }
