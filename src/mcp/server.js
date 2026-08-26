@@ -49,6 +49,9 @@ function buildProcedureSchema(parameters) {
 function toolCallContext(args, extra, toolName) {
   const context = { requestId: extra?.requestInfo?.requestId };
   const correlationIsFilter = ["log_query", "timeline", "sidekick_log_query", "sidekick_timeline"].includes(toolName || "");
+  const boundedTools = new Set(["dev_repo_profile", "semantic_repo", "dev_change_summary", "dev_verify", "search", "git"]);
+  const canonicalToolName = String(toolName || "").replace(/^sidekick_/, "");
+  if (boundedTools.has(canonicalToolName)) context.timeoutMs = 7500;
   if (extra?.sessionId) context.sessionId = extra.sessionId;
   // Session envelopes carry an explicit durable task/session id. Preserve it
   // as task metadata so log_query and timeline can correlate the same call
