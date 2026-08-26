@@ -8,6 +8,8 @@ const { kernel } = require("./platform");
 const workspace = require("./workspace");
 const { ResearchError } = require("./errors");
 const { requireText } = require("./identity");
+const { requireSidekickSrc } = require("./deps");
+const { canonicalizeProjectName } = requireSidekickSrc("src/core/project-identity.js");
 
 const DEFAULT_LIMITS = Object.freeze({ max_files: 10000, max_bytes: 100 * 1024 * 1024, max_depth: 32, max_path_bytes: 4096 });
 
@@ -31,6 +33,9 @@ function kernelCall(fn) {
   }
 }
 function safeId(value, name) { return workspace.safeSegment(requireText(value, name), name); }
+function sameProject(left, right) {
+  return canonicalizeProjectName(left) === canonicalizeProjectName(right);
+}
 function hashBuffer(buffer) { return crypto.createHash("sha256").update(buffer).digest("hex"); }
 function manifestHash(entries) { return `sha256:${hashBuffer(Buffer.from(JSON.stringify(entries)))}`; }
 
@@ -174,7 +179,7 @@ function importDirectory(services, args, actor, sourceRootOverride = null, metad
   const revision = sourceRevision(sourceRoot, metadata);
   let repository = args.repository_id ? kernel().getResearchSourceRepository(safeId(args.repository_id, "repository_id")) : null;
   if (repository && repository.campaign_id !== campaignId) fail("not_found", "source repository not found");
-  if (repository && args.project_id && repository.project_id !== String(args.project_id)) fail("not_found", "source repository not found");
+  if (repository && args.project_id && !sameProject(repository.project_id, args.project_id)) fail("not_found", "source repository not found");
   if (!repository) repository = kernelCall(() => kernel().createResearchSourceRepository({ campaign_id: campaignId, project_id: args.project_id, name: requireText(args.name || path.basename(sourceRoot), "name"), created_by: actor, metadata: { authority: "derived_analysis_input" }, source: "security-research" }));
   const operationId = metadata.operation_id || `source_op_${Date.now().toString(36)}_${crypto.randomBytes(6).toString("hex")}`;
   metadata = { ...metadata, operation_id: operationId };
@@ -204,7 +209,7 @@ function importDirectory(services, args, actor, sourceRootOverride = null, metad
 
 function getOwned(repositoryId, snapshotId, campaignId, projectId) {
   const repository = kernel().getResearchSourceRepository(safeId(repositoryId, "repository_id"));
-  if (!repository || (campaignId && repository.campaign_id !== String(campaignId)) || (projectId && repository.project_id !== String(projectId))) fail("not_found", "source repository not found");
+  if (!repository || (campaignId && repository.campaign_id !== String(campaignId)) || (projectId && !sameProject(repository.project_id, projectId))) fail("not_found", "source repository not found");
   if (!snapshotId) return { repository };
   const snapshot = kernel().getResearchSourceSnapshot(safeId(snapshotId, "snapshot_id"));
   if (!snapshot || snapshot.repository_id !== repository.repository_id || snapshot.campaign_id !== repository.campaign_id || snapshot.project_id !== repository.project_id) fail("not_found", "source snapshot not found");
@@ -248,7 +253,7 @@ async function acquireSource(services, args, actor) {
     return unsupported("acquire", "the canonical git clone action is unavailable; acquisition was not attempted");
   }
   let repository = args.repository_id ? kernel().getResearchSourceRepository(safeId(args.repository_id, "repository_id")) : null;
-  if (repository && (repository.campaign_id !== campaignId || args.project_id && repository.project_id !== String(args.project_id))) fail("not_found", "source repository not found");
+  if (repository && (repository.campaign_id !== campaignId || args.project_id && !sameProject(repository.project_id, args.project_id))) fail("not_found", "source repository not found");
   if (!repository) repository = kernelCall(() => kernel().createResearchSourceRepository({ campaign_id: campaignId, project_id: args.project_id, name: requireText(args.name || new URL(sourceUrl).hostname, "name"), created_by: actor, metadata: { authority: "derived_analysis_input" }, source: "security-research" }));
   if (repository.state !== "active") fail("state_conflict", "cannot acquire into an inactive source repository");
 
@@ -340,12 +345,12 @@ function authority(services, args, actor) {
   }
   if (args.authority_action === "get") {
     const claim = kernel().getResearchSourceAuthorityClaim(safeId(args.claim_id, "claim_id"));
-    if (!claim || (args.project_id && claim.project_id !== String(args.project_id)) || (args.campaign_id && claim.campaign_id !== String(args.campaign_id)) || (args.snapshot_id && claim.snapshot_id !== String(args.snapshot_id)) || (args.repository_id && claim.repository_id !== String(args.repository_id))) fail("not_found", "source authority claim not found");
+    if (!claim || (args.project_id && !sameProject(claim.project_id, args.project_id)) || (args.campaign_id && claim.campaign_id !== String(args.campaign_id)) || (args.snapshot_id && claim.snapshot_id !== String(args.snapshot_id)) || (args.repository_id && claim.repository_id !== String(args.repository_id))) fail("not_found", "source authority claim not found");
     return { claim };
   }
   if (args.authority_action === "revoke") {
     const claim = kernel().getResearchSourceAuthorityClaim(safeId(args.claim_id, "claim_id"));
-    if (!claim || args.project_id && claim.project_id !== String(args.project_id) || args.campaign_id && claim.campaign_id !== String(args.campaign_id)) fail("not_found", "source authority claim not found");
+    if (!claim || args.project_id && !sameProject(claim.project_id, args.project_id) || args.campaign_id && claim.campaign_id !== String(args.campaign_id)) fail("not_found", "source authority claim not found");
     return { claim: kernelCall(() => kernel().transitionResearchSourceAuthorityClaim(claim.claim_id, "revoked", { actor_id: actor, source: "security-research" })) };
   }
   if (args.authority_action === "list") return { claims: kernel().listResearchSourceAuthorityClaims({ snapshot_id: args.snapshot_id, repository_id: args.repository_id, campaign_id: args.campaign_id, project_id: args.project_id, authority_class: args.authority_class, state: args.authority_state, limit: args.limit }) };
@@ -355,7 +360,7 @@ function authority(services, args, actor) {
 function execute(services, args, actor) {
   const root = workspace.resolveWorkspace(services.config || {}, { requireExists: false }).root;
   if (args.action === "recover" && !args.campaign_id) fail("invalid_input", "recover requires an explicit campaign_id scope");
-  if (args._runtime_project && args.project_id && String(args._runtime_project) !== String(args.project_id)) fail("not_found", "source repository not found");
+  if (args._runtime_project && args.project_id && !sameProject(args._runtime_project, args.project_id)) fail("not_found", "source repository not found");
   if (args._runtime_project) args = { ...args, project_id: String(args._runtime_project) };
   switch (args.action) {
     case "list": return { repositories: kernel().listResearchSourceRepositories({ campaign_id: args.campaign_id, project_id: args.project_id, state: args.state, limit: args.limit }), snapshots: args.repository_id ? kernel().listResearchSourceSnapshots({ repository_id: safeId(args.repository_id, "repository_id"), state: args.snapshot_state, limit: args.limit }) : undefined };

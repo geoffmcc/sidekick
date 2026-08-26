@@ -34,6 +34,9 @@ function isBuiltinToolName(name) {
 
 const QUEUE_FILE = path.join(DATA_DIR, "queue.json");
 
+const RETRY_MAX_ATTEMPTS = 10;
+const RETRY_MAX_DELAY_MS = 60000;
+
 function loadQueue() {
   if (!fs.existsSync(QUEUE_FILE)) return { tasks: [], nextId: 1 };
   try {
@@ -208,9 +211,16 @@ async function sidekick_retry({ tool, args, max_attempts, backoff, initial_delay
     return { content: [{ type: "text", text: "tool required" }], isError: true };
   }
 
-  const maxAttempts = max_attempts || 3;
+  if (max_attempts !== undefined && (!Number.isSafeInteger(max_attempts) || max_attempts < 1 || max_attempts > RETRY_MAX_ATTEMPTS)) {
+    return { content: [{ type: "text", text: `max_attempts must be an integer from 1 to ${RETRY_MAX_ATTEMPTS}` }], isError: true };
+  }
+  if (initial_delay !== undefined && (!Number.isSafeInteger(initial_delay) || initial_delay < 0 || initial_delay > RETRY_MAX_DELAY_MS)) {
+    return { content: [{ type: "text", text: `initial_delay must be an integer from 0 to ${RETRY_MAX_DELAY_MS} milliseconds` }], isError: true };
+  }
+
+  const maxAttempts = max_attempts === undefined ? 3 : max_attempts;
   const backoffType = backoff || "exponential";
-  const initialDelay = initial_delay || 1000;
+  const initialDelay = initial_delay === undefined ? 1000 : initial_delay;
 
   let lastError;
 
@@ -223,8 +233,10 @@ async function sidekick_retry({ tool, args, max_attempts, backoff, initial_delay
       }
 
       lastError = result.content?.[0]?.text || "Unknown error";
+      if (isRetryDenied(result, lastError)) break;
     } catch (e) {
       lastError = e.message;
+      if (isRetryDenied(e, lastError)) break;
     }
 
     if (attempt < maxAttempts) {
@@ -237,11 +249,17 @@ async function sidekick_retry({ tool, args, max_attempts, backoff, initial_delay
         delay = initialDelay;
       }
 
-      await new Promise(resolve => setTimeout(resolve, delay));
+      await new Promise(resolve => setTimeout(resolve, Math.min(RETRY_MAX_DELAY_MS, delay)));
     }
   }
 
   return { content: [{ type: "text", text: `✗ Failed after ${maxAttempts} attempts\nLast error: ${lastError}` }], isError: true };
+}
+
+function isRetryDenied(result, message) {
+  const code = String(result?.code || result?.status || "").toLowerCase();
+  if (["approval_required", "policy_denied", "authorization_denied", "permission_denied", "validation_failed", "validation_error"].includes(code)) return true;
+  return /\b(?:approval|policy|permission|authorization|validation)\s+(?:required|denied|failed)|\b(?:not permitted|forbidden)\b/i.test(String(message || ""));
 }
 
 
@@ -606,9 +624,9 @@ const SCHEMAS = {
   retry: z.object({
     tool: z.string().describe("Tool name to retry"),
     args: z.record(z.any()).optional().describe("Tool arguments"),
-    max_attempts: z.number().optional().describe("Maximum retry attempts (default: 3)"),
+    max_attempts: z.number().int().min(1).max(RETRY_MAX_ATTEMPTS).optional().describe("Maximum retry attempts (default: 3)"),
     backoff: z.enum(["exponential", "linear", "fixed"]).optional().describe("Backoff strategy (default: exponential)"),
-    initial_delay: z.number().optional().describe("Initial delay in milliseconds (default: 1000)")
+    initial_delay: z.number().int().min(0).max(RETRY_MAX_DELAY_MS).optional().describe("Initial delay in milliseconds (default: 1000)")
   }),
   orchestrate: z.object({
     action: z.enum(["create", "execute", "list", "status", "cancel"]).describe("Orchestrate action"),

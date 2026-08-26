@@ -1120,6 +1120,11 @@ function normalizeResearchCampaign(row) { return row ? { ...row, metadata: parse
 function normalizeResearchHypothesis(row) { return row ? { ...row, prerequisites: parseJson(row.prerequisites_json, []), criteria: parseJson(row.criteria_json, {}), metadata: parseJson(row.metadata_json, {}) } : null; }
 function normalizeResearchTestRun(row) { return row ? { ...row, environment: parseJson(row.environment_json, {}), evidence: parseJson(row.evidence_json, []), metadata: parseJson(row.metadata_json, {}) } : null; }
 function requiredText(value, name) { const text = String(value || "").trim(); if (!text) throw new Error(`${name} must be a non-empty string`); return text; }
+function normalizeResearchCampaignId(value) {
+  const id = requiredText(value, "campaign_id");
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(id) || id === "." || id === "..") throw new Error("campaign_id must be a safe path segment");
+  return id;
+}
 function boundedList(value, name) { if (value === undefined) return []; if (!Array.isArray(value)) throw new Error(`${name} must be an array`); return value; }
 
 function createResearchCampaign(input = {}) {
@@ -1128,7 +1133,7 @@ function createResearchCampaign(input = {}) {
   const state = input.state || "draft";
   if (!RESEARCH_CAMPAIGN_STATES.includes(state)) throw new Error(`Invalid campaign state: ${state}`);
   if (input.scope_snapshot_id) { const snapshot = getScopeSnapshot(input.scope_snapshot_id); if (!snapshot || snapshot.project_id !== projectId) throw new Error("scope_snapshot_id must belong to project"); }
-  const campaignId = input.campaign_id || newId("campaign"), ts = input.created_at || nowIso();
+  const campaignId = input.campaign_id === undefined ? newId("campaign") : normalizeResearchCampaignId(input.campaign_id), ts = input.created_at || nowIso();
   dbStore.getDb().prepare("INSERT INTO platform_research_campaigns (campaign_id, project_id, name, state, scope_snapshot_id, created_by, created_at, updated_at, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(campaignId, projectId, name, state, input.scope_snapshot_id || null, createdBy, ts, ts, json(input.metadata || {}));
   appendEvent({ event_type: "research.campaign.created", source: input.source || "platform", actor_id: createdBy, subject_type: "research_campaign", subject_id: campaignId, project_id: projectId, payload: { name, state, scope_snapshot_id: input.scope_snapshot_id || null }, correlation_id: campaignId });
   return getResearchCampaign(campaignId);
@@ -2059,15 +2064,16 @@ function backfillProjectSources(details = {}) {
       errors[scan.source] = { table: scan.table, error: String(error.message || error).slice(0, 300) };
       continue;
     }
-    perSource[scan.source] = rows.length;
+    const aggregated = new Map();
     for (const row of rows) {
-      // Canonicalize before both register and upsert so the source row's FK
-      // matches the (canonical) project row, and casing variants converge.
       const pid = canonicalizeProjectName(String(row.project_id));
-      if (!pid) continue;
+      if (pid) aggregated.set(pid, (aggregated.get(pid) || 0) + Number(row.cnt || 0));
+    }
+    perSource[scan.source] = aggregated.size;
+    for (const [pid, count] of aggregated) {
       if (!dryRun) {
         registerProject({ project_id: pid });
-        upsert.run(pid, scan.source, ts, ts, row.cnt, json({ backfilled_at: ts }));
+        upsert.run(pid, scan.source, ts, ts, count, json({ backfilled_at: ts }));
       }
       written++;
     }
