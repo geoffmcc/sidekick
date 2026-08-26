@@ -8,7 +8,8 @@ const { kernel } = require("./platform");
 const workspace = require("./workspace");
 const { ResearchError } = require("./errors");
 const { requireText } = require("./identity");
-const { canonicalizeProjectName } = require("../../../../../src/core/project-identity");
+const { requireSidekickSrc } = require("./deps");
+const { canonicalizeProjectName } = requireSidekickSrc("src/core/project-identity.js");
 
 const DEFAULT_LIMITS = Object.freeze({ max_files: 10000, max_bytes: 100 * 1024 * 1024, max_depth: 32, max_path_bytes: 4096 });
 
