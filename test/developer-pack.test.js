@@ -360,6 +360,7 @@ function buildFixtureRepository() {
     assert.strictEqual(report.summary.executed_count, 0);
     assert.strictEqual(report.preflight.execution_host.length > 0, true);
     assert.strictEqual(report.preflight.commands[0].would_modify_files, true, 'test commands are conservatively treated as potentially mutating');
+    assert.strictEqual(report.git_state.skipped, true, 'dry-run must not perform repository state collection');
   });
 
   await test('DP.5b: developer safety schemas reject silently stripped arguments', async () => {
