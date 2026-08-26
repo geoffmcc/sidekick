@@ -1,8 +1,9 @@
 const assert = require("assert");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
-const dataDir = path.join(__dirname, `test-data-pack-services-${Date.now()}-${process.pid}`);
+const dataDir = path.join(os.tmpdir(), `sidekick-test-data-pack-services-${Date.now()}-${process.pid}`);
 fs.mkdirSync(dataDir, { recursive: true });
 process.env.SIDEKICK_DATA_DIR = dataDir;
 const secretDir = path.join(dataDir, "secrets");

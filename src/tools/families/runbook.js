@@ -12,9 +12,8 @@
 
 const fs = require("fs");
 const path = require("path");
-const { execSync } = require("child_process");
+const { runBoundedShell } = require("../../security/command-execution");
 const { z } = require("zod");
-const { childProcessEnv } = require("../../security/child-process");
 const evolveCommon = require("../../evolve/common");
 const platformKernel = require("../../platform/kernel");
 const toolContext = require("../context");
@@ -329,12 +328,12 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
         output += `Step ${i + 1}/${rb.steps.length}: ${step.name}\n`;
         appendScheduledPlatformEvent("runbook", data.instances[instanceId], "runbook.step_started", { step: i, name: step.name });
         try {
-          const result = execSync(step.command, { encoding: "utf8", timeout: STEP_TIMEOUT_MS, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 10 * 1024 * 1024, env: childProcessEnv() });
+          const result = runBoundedShell(step.command, { encoding: "utf8", timeout: STEP_TIMEOUT_MS, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 10 * 1024 * 1024 });
           output += `  ✓ Success\n`;
           appendScheduledPlatformEvent("runbook", data.instances[instanceId], "runbook.step_completed", { step: i, name: step.name });
           if (step.verify_command) {
             try {
-              const verifyResult = execSync(step.verify_command, { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 2 * 1024 * 1024, env: childProcessEnv() });
+              const verifyResult = runBoundedShell(step.verify_command, { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 2 * 1024 * 1024 });
               output += `  ✓ Verified\n`;
               appendScheduledPlatformEvent("runbook", data.instances[instanceId], "runbook.step_verified", { step: i, name: step.name });
             } catch (e) {
@@ -342,7 +341,7 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
               if (step.rollback) {
                 output += `  Rolling back...\n`;
                 try {
-                  execSync(step.rollback, { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 2 * 1024 * 1024, env: childProcessEnv() });
+                  runBoundedShell(step.rollback, { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 2 * 1024 * 1024 });
                   output += `  ✓ Rollback successful\n`;
                 } catch (re) {
                   output += `  ✗ Rollback failed: ${re.message}\n`;
@@ -371,7 +370,7 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
           if (step.rollback) {
             output += `  Rolling back...\n`;
             try {
-                  execSync(step.rollback, { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 2 * 1024 * 1024, env: childProcessEnv() });
+                runBoundedShell(step.rollback, { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 2 * 1024 * 1024 });
               output += `  ✓ Rollback successful\n`;
             } catch (re) {
               output += `  ✗ Rollback failed: ${re.message}\n`;
@@ -406,7 +405,7 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
       output += `Step 1/${rb.steps.length}: ${step.name}\n`;
       output += `Command: ${step.command}\n`;
       try {
-        const result = execSync(step.command, { encoding: "utf8", timeout: STEP_TIMEOUT_MS, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 10 * 1024 * 1024, env: childProcessEnv() });
+        const result = runBoundedShell(step.command, { encoding: "utf8", timeout: STEP_TIMEOUT_MS, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 10 * 1024 * 1024 });
         output += `Result: ${result.substring(0, 500)}\n`;
         data.instances[instanceId].results.push({ step: 0, success: true, output: result });
         const checkpoint = checkpointRunbookCursor(startedInstance, startClaim, 0, rb.steps.length);
@@ -508,7 +507,7 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
     output += `Command: ${step.command}\n`;
     appendScheduledPlatformEvent("runbook", instance, "runbook.step_started", { step: instance.currentStep, name: step.name });
     try {
-      const result = execSync(step.command, { encoding: "utf8", timeout: STEP_TIMEOUT_MS, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 10 * 1024 * 1024, env: childProcessEnv() });
+      const result = runBoundedShell(step.command, { encoding: "utf8", timeout: STEP_TIMEOUT_MS, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 10 * 1024 * 1024 });
       output += `Result: ${result.substring(0, 500)}\n`;
       instance.results.push({ step: instance.currentStep, success: true, output: result });
       const checkpoint = checkpointRunbookCursor(instance, nextClaim, instance.currentStep, rb.steps.length);
@@ -570,7 +569,7 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
       return { content: [{ type: "text", text: "No verification command for this step" }] };
     }
     try {
-      const result = execSync(step.verify_command, { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 2 * 1024 * 1024, env: childProcessEnv() });
+      const result = runBoundedShell(step.verify_command, { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 2 * 1024 * 1024 });
       return { content: [{ type: "text", text: `✓ Verification passed\n\n${result}` }] };
     } catch (e) {
       return { content: [{ type: "text", text: `✗ Verification failed\n\n${e.message}` }], isError: true };
@@ -598,7 +597,7 @@ async function sidekick_runbook({ action, name, mode, steps, runbook_id, step_in
       if (step.rollback) {
         output += `Step ${i + 1}: ${step.name}\n`;
         try {
-          execSync(step.rollback, { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 2 * 1024 * 1024, env: childProcessEnv() });
+          runBoundedShell(step.rollback, { encoding: "utf8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 2 * 1024 * 1024 });
           output += `  ✓ Rollback successful\n`;
         } catch (e) {
           output += `  ✗ Rollback failed: ${e.message}\n`;

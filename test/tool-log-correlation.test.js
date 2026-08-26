@@ -35,13 +35,10 @@ function test(name, fn) {
   }
 }
 
-// Rebuild the helper in isolation from the real source so the assertions below
-// exercise the shipped logic rather than a copy.
 function loadToolCallContext() {
-  const match = mcpServerSource.match(/function toolCallContext\(args, extra(?:, toolName)?\) \{[\s\S]*?\n\}/);
-  assert.ok(match, 'toolCallContext is defined in src/mcp/server.js');
-  // eslint-disable-next-line no-new-func
-  return new Function(`${match[0]}; return toolCallContext;`)();
+  const helper = require('../src/mcp/server').toolCallContext;
+  assert.equal(typeof helper, 'function', 'toolCallContext is exported by src/mcp/server.js');
+  return helper;
 }
 
 console.log('TLC.1: the MCP session id reaches the execution context');
