@@ -45,6 +45,8 @@ async function maybeExecute(descriptor, args, context = {}) {
       operationId: context.operationId,
       approvalId: context.approvalId,
       idempotencyKey: context.idempotencyKey,
+      timeoutMs: Number(context.timeoutMs) > 0 ? Number(context.timeoutMs) : null,
+      deadlineAt: Number(context.timeoutMs) > 0 ? new Date(Date.now() + Number(context.timeoutMs)).toISOString() : null,
     },
     workspaceId: workspaceIdFromArgs(args),
     repositoryId: repositoryIdFromArgs(args),
@@ -67,7 +69,7 @@ async function maybeExecute(descriptor, args, context = {}) {
     if (current?.state === "failed") return { content: [{ type: "text", text: `Node execution failed: ${current.errorMessage || current.errorCode}` }], isError: true, code: current.errorCode || "node_execution_failed", nodeExecution: { location: "node", jobId: current.jobId, nodeId: selected.nodeId } };
     await new Promise(resolve => setTimeout(resolve, POLL_MS));
   }
-  return { content: [{ type: "text", text: "Node execution timed out; the operation was not automatically repeated" }], isError: true, code: "node_execution_timeout", operationMayContinue: true, nodeExecution: { location: "node", jobId: job.jobId, nodeId: selected.nodeId } };
+  return { content: [{ type: "text", text: "Node execution timed out; the operation may still be running. Use the reported job ID to inspect it; it was not automatically repeated" }], isError: true, code: "node_execution_timeout", operationMayContinue: true, nodeExecution: { location: "node", jobId: job.jobId, nodeId: selected.nodeId, timeoutMs: Number(context.timeoutMs) || null, timedOutAt: new Date().toISOString() } };
 }
 
 module.exports = { maybeExecute };

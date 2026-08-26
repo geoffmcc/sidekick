@@ -40,6 +40,11 @@ const { loadSecrets, saveSecrets } = require("../core/secrets-store");
 const LOCAL_CLASSIFICATIONS = Object.freeze(["public", "internal", "private"]);
 const CLOUD_CLASSIFICATIONS = Object.freeze(["public", "internal"]);
 
+function configuredModel(value) {
+  const model = String(value || "").trim();
+  return model && model !== "." && model.toLowerCase() !== "inherit" ? model : null;
+}
+
 function findManaged(bootstrapKey) {
   return providerRegistry.listProviders().find(
     p => p.metadata && p.metadata.managed === "env-bootstrap" && p.metadata.bootstrapKey === bootstrapKey
@@ -85,7 +90,7 @@ function seedOllama() {
     mode: "direct",
     metadata: { managed: "env-bootstrap", bootstrapKey: "ollama", source: "OLLAMA_URL" },
   });
-  const chatModel = process.env.OLLAMA_MODEL || process.env.SIDEKICK_AGENT_MODEL || "qwen3.5:latest";
+  const chatModel = configuredModel(process.env.OLLAMA_MODEL) || configuredModel(process.env.SIDEKICK_AGENT_MODEL) || "qwen3.5:latest";
   modelRegistry.createModel({
     providerId: provider.providerId,
     providerModelName: chatModel,
@@ -94,7 +99,7 @@ function seedOllama() {
     supportsTools: true,
     metadata: { managed: "env-bootstrap" },
   });
-  const embedModel = process.env.SIDEKICK_EMBEDDING_MODEL || "nomic-embed-text";
+  const embedModel = configuredModel(process.env.SIDEKICK_EMBEDDING_MODEL) || "nomic-embed-text";
   if (embedModel !== chatModel) {
     modelRegistry.createModel({
       providerId: provider.providerId,
@@ -187,7 +192,7 @@ function bootstrapProviders() {
         endpoint: "https://api.groq.com/openai/v1",
         apiKey: groqApiKey,
         secretName: "compute_provider_groq_api_key",
-        chatModel: process.env.GROQ_MODEL || "llama-3.1-8b-instant",
+        chatModel: configuredModel(process.env.GROQ_MODEL) || "llama-3.1-8b-instant",
         supportsEmbedding: false,
       });
       if (p) seeded.push(p.providerId);
@@ -201,8 +206,8 @@ function bootstrapProviders() {
         endpoint: process.env.OPENAI_BASE_URL || process.env.OPENAI_API_BASE || "https://api.openai.com/v1",
         apiKey: openaiApiKey,
         secretName: "compute_provider_openai_api_key",
-        chatModel: process.env.OPENAI_MODEL || "gpt-4o-mini",
-        embedModel: process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small",
+        chatModel: configuredModel(process.env.OPENAI_MODEL) || "gpt-4o-mini",
+        embedModel: configuredModel(process.env.OPENAI_EMBEDDING_MODEL) || "text-embedding-3-small",
         supportsEmbedding: true,
       });
       if (p) seeded.push(p.providerId);

@@ -58,8 +58,8 @@ test('a missing session id is left absent rather than invented', () => {
 
 test('long repository tools receive a bounded MCP timeout budget', () => {
   const toolCallContext = loadToolCallContext();
-  assert.equal(toolCallContext({}, {}, 'dev_repo_profile').timeoutMs, 7500);
-  assert.equal(toolCallContext({}, {}, 'git').timeoutMs, 7500);
+  assert.equal(toolCallContext({}, {}, 'dev_repo_profile').timeoutMs, 60000);
+  assert.equal(toolCallContext({}, {}, 'git').timeoutMs, 30000);
   assert.ok(!toolCallContext({}, {}, 'memory').timeoutMs, 'unrelated tools keep their existing timeout behavior');
 });
 

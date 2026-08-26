@@ -115,6 +115,22 @@ test("SIDEKICK_DISABLE_PROVIDER_BOOTSTRAP=1 seeds nothing", () => {
   delete process.env.SIDEKICK_DISABLE_PROVIDER_BOOTSTRAP;
 });
 
+test("inherit and dot model sentinels use the configured default", () => {
+  resetRegistry();
+  process.env.OLLAMA_MODEL = "inherit";
+  process.env.SIDEKICK_AGENT_MODEL = ".";
+  try {
+    bootstrapProviders();
+    const ollama = managed("ollama");
+    const models = modelRegistry.listModels({ providerId: ollama.providerId, enabled: true });
+    assert.ok(models.some(model => model.providerModelName === "qwen3.5:latest"));
+    assert.ok(!models.some(model => ["inherit", "."].includes(model.providerModelName)));
+  } finally {
+    delete process.env.OLLAMA_MODEL;
+    delete process.env.SIDEKICK_AGENT_MODEL;
+  }
+});
+
 // ---- Cloud (secure by default) with secret store ---------------------------
 
 test("cloud provider is seeded public/internal only, lower priority than local", () => {

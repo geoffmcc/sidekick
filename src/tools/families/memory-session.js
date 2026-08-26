@@ -212,7 +212,8 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     return jsonText({ ok: true, session, handoff_id: handoff_id || null, handoff_version: finalizedHandoff ? finalizedHandoff.version : null, continuation_packet: continuationPacket, memories_created: created.length, memories: created });
   }
   if (action === "resume" || action === "status") {
-    if (!id) return { content: [{ type: "text", text: "id required" }], isError: true };
+    if (!id && project) return jsonText({ ok: true, sessions: dbStore.listTaskSessions({ project, state: source, limit: limit || 50 }) });
+    if (!id) return { content: [{ type: "text", text: "id or project is required for session status" }], isError: true };
     const session = dbStore.getTaskSession(id);
     if (!session) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     return jsonText({ ok: true, session, memory_brief: buildScopedMemoryBrief(session.goal, session.project, { limit: 12 }) });

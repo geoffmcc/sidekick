@@ -13,6 +13,11 @@
 // legacy handlers that call it (teach, fresheyes, changelog, black_box).
 
 const { z } = require("zod");
+
+function configuredModel(value) {
+  const model = String(value || "").trim();
+  return model && model !== "." && model.toLowerCase() !== "inherit" ? model : null;
+}
 const compute = require("../../compute");
 const toolContext = require("../context");
 const { resolveOutputTokenBudget } = require("../../compute/token-budget");
@@ -185,7 +190,7 @@ async function sidekick_llm({ prompt, system, temperature, async: asyncMode, tim
       // Same fallback chain as provider-bootstrap.js seedOllama: with only
       // SIDEKICK_AGENT_MODEL set, the async job must not demand a model that
       // no bootstrapped provider or enrolled worker advertises.
-      const workerModel = process.env.OLLAMA_MODEL || process.env.SIDEKICK_AGENT_MODEL || "qwen3.5:latest";
+      const workerModel = configuredModel(process.env.OLLAMA_MODEL) || configuredModel(process.env.SIDEKICK_AGENT_MODEL) || "qwen3.5:latest";
       const job = compute.jobManager.createJob({
         jobType: "chat",
         capability: "chat",

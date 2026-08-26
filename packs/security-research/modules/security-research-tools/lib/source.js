@@ -364,7 +364,7 @@ function execute(services, args, actor) {
   if (args._runtime_project) args = { ...args, project_id: String(args._runtime_project) };
   switch (args.action) {
     case "list": return { repositories: kernel().listResearchSourceRepositories({ campaign_id: args.campaign_id, project_id: args.project_id, state: args.state, limit: args.limit }), snapshots: args.repository_id ? kernel().listResearchSourceSnapshots({ repository_id: safeId(args.repository_id, "repository_id"), state: args.snapshot_state, limit: args.limit }) : undefined };
-    case "get": { const owned = getOwned(args.repository_id, args.snapshot_id, args.campaign_id); return owned.snapshot ? { repository: owned.repository, snapshot: owned.snapshot } : { repository: owned.repository, snapshots: kernel().listResearchSourceSnapshots({ repository_id: owned.repository.repository_id, limit: args.limit }) }; }
+    case "get": { const owned = getOwned(args.repository_id, args.snapshot_id, args.campaign_id, args.project_id); return owned.snapshot ? { repository: owned.repository, snapshot: owned.snapshot } : { repository: owned.repository, snapshots: kernel().listResearchSourceSnapshots({ repository_id: owned.repository.repository_id, limit: args.limit }) }; }
     case "import": return importDirectory(services, args, actor);
     case "acquire": return acquireSource(services, args, actor);
     case "refresh": return refreshSnapshot(services, args, actor);

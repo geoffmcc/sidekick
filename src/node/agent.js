@@ -123,11 +123,24 @@ async function execute(job) {
   if (descriptor.version && descriptor.version !== job.descriptorVersion) throw new Error("descriptor version mismatch");
   if (descriptorIdentity(descriptor) !== job.descriptorIdentity) throw new Error("descriptor identity mismatch");
   const args = validateLocalArguments(descriptor, job.args);
-  const started = Date.now(); const result = boundedResult(await descriptor.handler(args, { signal: null, context: job.context }));
+  const started = Date.now();
+  const timeoutMs = Number(job.context?.timeoutMs) > 0 ? Number(job.context.timeoutMs) : null;
+  const deadlineAt = job.context?.deadlineAt || null;
+  if (deadlineAt && Date.parse(deadlineAt) <= Date.now()) {
+    const error = new Error("node execution deadline expired before the worker started");
+    error.code = "node_execution_timeout";
+    throw error;
+  }
+  const result = boundedResult(await descriptor.handler(args, { signal: null, context: job.context, timeoutMs, deadlineAt }));
+  if (timeoutMs && Date.now() - started > timeoutMs) {
+    const error = new Error(`node execution exceeded its ${timeoutMs}ms deadline`);
+    error.code = "node_execution_timeout";
+    throw error;
+  }
   const receipt = { receiptId: stableId("receipt", `${job.jobId}:${started}`), jobId: job.jobId, tool: descriptor.name, descriptorVersion: job.descriptorVersion, descriptorIdentity: job.descriptorIdentity, nodeId: nodeId(), workspace: WORKSPACE_NAME, startedAt: new Date(started).toISOString(), completedAt: new Date().toISOString(), sideEffect: descriptor.risk === "low" ? "read" : "governed", outputBytes: Buffer.byteLength(JSON.stringify(result)), evidence: { untrusted: true, truncated: JSON.stringify(result).length > MAX_OUTPUT } };
   return { result, receipt };
 }
-async function claimLoop() { const active = new Set(); while (running) { if (active.size < CONCURRENCY) { try { const response = await request("POST", "/execution-node/node/jobs/claim", { leaseMs: 120000 }); if (response.status === 200 && response.body.job) { const job = response.body.job; const promise = execute(job).then(output => request("POST", `/execution-node/node/jobs/${job.jobId}/complete`, { leaseId: job.leaseId, result: output.result, receipt: output.receipt })).catch(error => request("POST", `/execution-node/node/jobs/${job.jobId}/fail`, { leaseId: job.leaseId, code: "local_execution_failed", message: redact(error.message) })).catch(() => {}); active.add(promise); promise.finally(() => active.delete(promise)); } else await sleep(POLL_MS); } catch (e) { log(e.message); await sleep(Math.min(30000, POLL_MS * 2)); } } else await sleep(POLL_MS); } }
+async function claimLoop() { const active = new Set(); while (running) { if (active.size < CONCURRENCY) { try { const response = await request("POST", "/execution-node/node/jobs/claim", { leaseMs: 120000 }); if (response.status === 200 && response.body.job) { const job = response.body.job; const promise = execute(job).then(output => request("POST", `/execution-node/node/jobs/${job.jobId}/complete`, { leaseId: job.leaseId, result: output.result, receipt: output.receipt })).catch(error => request("POST", `/execution-node/node/jobs/${job.jobId}/fail`, { leaseId: job.leaseId, code: error.code || "local_execution_failed", message: redact(error.message) })).catch(() => {}); active.add(promise); promise.finally(() => active.delete(promise)); } else await sleep(POLL_MS); } catch (e) { log(e.message); await sleep(Math.min(30000, POLL_MS * 2)); } } else await sleep(POLL_MS); } }
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 function prepare() { nodeConfig = loadConfig(); nodeRegistry = null; workspaceRoot = nodeConfig.workspaceRoot || nodeConfig.workspace || workspaceRoot; if (workspaceRoot !== "/home/geoffrey/Projects/security-research" && process.env.SIDEKICK_NODE_ALLOW_CUSTOM_WORKSPACE !== "1") throw new Error("this installation is restricted to /home/geoffrey/Projects/security-research"); workspace = createWorkspace({ name: WORKSPACE_NAME, root: workspaceRoot, permissions: { read: true, write: process.env.SIDEKICK_NODE_ALLOW_WRITES === "1", execute: process.env.SIDEKICK_NODE_ALLOW_EXECUTE === "1" }, limits: { maxConcurrent: CONCURRENCY } }); }
 async function main() { prepare(); log(`workspace ${workspace.name} configured with ${discoverRepositories(workspace).length} repository(s)`); await enroll(); await heartbeat(); const timer = setInterval(() => heartbeat().catch(e => { log(e.message); running = false; }), HEARTBEAT_MS); process.on("SIGTERM", () => { running = false; clearInterval(timer); }); process.on("SIGINT", () => { running = false; clearInterval(timer); }); await claimLoop(); }
