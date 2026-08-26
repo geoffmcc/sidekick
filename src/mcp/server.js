@@ -5,6 +5,16 @@ const { callMcpTool, loadProcedures } = require("../tools");
 const { getBuiltinRegistry } = require("../tools/index");
 const dynamicTools = require("../dynamic-tools");
 const { stripSidekickPrefix } = require("../core/tool-name");
+const { CORRELATION_ID_PATTERN } = require("../tools/context");
+
+const correlationInput = z.string().regex(CORRELATION_ID_PATTERN, "correlation_id must be 1-128 safe identifier characters").optional()
+  .describe("Client-neutral correlation identifier propagated across related work");
+
+function withCorrelationSchema(schema) {
+  return schema && typeof schema.extend === "function"
+    ? schema.extend({ correlation_id: correlationInput })
+    : schema;
+}
 
 function buildProcedureSchema(parameters) {
   const shape = {};
@@ -45,8 +55,9 @@ function toolCallContext(args, extra, toolName) {
   if (toolName === "session" && typeof args?.id === "string" && args.id.trim()) {
     context.taskId = args.id.trim();
     context.taskSessionId = args.id.trim();
-    context.correlationId = args.id.trim();
+    if (!args.correlation_id) context.correlationId = args.id.trim();
   }
+  if (typeof args?.correlation_id === "string") context.correlationId = args.correlation_id;
   if (toolName === "session" && typeof args?.client_session_id === "string" && args.client_session_id.trim()) context.clientSessionId = args.client_session_id.trim();
   if (args && typeof args.project === "string" && args.project.trim()) {
     context.project = args.project.trim();
@@ -68,7 +79,7 @@ function createMcpServer(authIdentityProvider = () => null, options = {}) {
     const mcpName = stripSidekickPrefix(descriptor.name);
     server.registerTool(mcpName, {
       description: descriptor.description,
-      inputSchema: descriptor.schema,
+      inputSchema: withCorrelationSchema(descriptor.schema),
       annotations: descriptor.annotations,
     }, async (args, extra) => {
       extra = extra || {};
@@ -86,7 +97,7 @@ function createMcpServer(authIdentityProvider = () => null, options = {}) {
     const paramDesc = paramNames.length > 0 ? ` Parameters: ${paramNames.join(", ")}.` : "";
     server.registerTool(procName, {
       description: `[procedure] ${proc.description}${paramDesc}`,
-      inputSchema: paramSchema,
+      inputSchema: withCorrelationSchema(paramSchema),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     }, async (args, extra) => {
       extra = extra || {};

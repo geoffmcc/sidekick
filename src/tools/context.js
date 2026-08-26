@@ -5,6 +5,7 @@ const { buildProvenance } = require("../core/provenance");
 const storage = new AsyncLocalStorage();
 const SOURCE_CAPABILITY = Symbol("sidekick.trustedSourceContext");
 let compatibilitySource = "mcp";
+const CORRELATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 function invocationId(prefix = "tool") {
   return `${prefix}_${Date.now().toString(36)}_${crypto.randomBytes(6).toString("hex")}`;
@@ -18,17 +19,29 @@ function trustedInput(source, input = {}) {
   return { ...input, source, [SOURCE_CAPABILITY]: true };
 }
 
+function normalizeCorrelationId(value) {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value !== "string" || !CORRELATION_ID_PATTERN.test(value)) {
+    throw new TypeError("correlation_id must be 1-128 characters using letters, numbers, '.', '_', ':', or '-'");
+  }
+  return value;
+}
+
 function createExecutionContext(input = {}) {
   const parent = input.parentContext || storage.getStore() || null;
   const source = safeSource(input[SOURCE_CAPABILITY] ? input.source : (parent?.source || compatibilitySource || "mcp"));
   const traceId = input.traceId || input.trace_id || parent?.traceId || invocationId("trace");
   const parentInvocationId = input.parentInvocationId || input.parent_invocation_id || parent?.invocationId || input.parentId || input.parent_id || null;
+  const requestedCorrelationId = normalizeCorrelationId(input.correlationId || input.correlation_id);
+  const inheritedCorrelationId = normalizeCorrelationId(parent?.correlationId);
+  const correlationId = requestedCorrelationId || inheritedCorrelationId || traceId;
   return Object.freeze({
     [SOURCE_CAPABILITY]: Boolean(input[SOURCE_CAPABILITY] || parent?.[SOURCE_CAPABILITY]),
     source,
     requestId: input.requestId || input.request_id || parent?.requestId || invocationId("req"),
     traceId,
-    correlationId: input.correlationId || input.correlation_id || parent?.correlationId || traceId,
+    correlationId,
+    correlationSource: requestedCorrelationId ? "caller" : inheritedCorrelationId ? "parent" : "server",
     invocationId: input.invocationId || input.invocation_id || invocationId("invoke"),
     parentInvocationId,
     actor: input.actor || input.actor_id || parent?.actor || source,
@@ -121,6 +134,7 @@ function dispatcherMetadata(context = getExecutionContext(), extra = {}) {
     clientSessionId: context.clientSessionId,
     project: context.project,
     correlationId: context.correlationId,
+    correlationSource: context.correlationSource,
     parentId: context.parentId || context.parentInvocationId,
     rootExecutionId: context.rootExecutionId,
     executionId: context.executionId,
@@ -150,10 +164,12 @@ module.exports = {
   createApprovalExecutionContext,
   createInternalExecutionContext,
   createTestExecutionContext,
+  normalizeCorrelationId,
   childContext,
   runWithContext,
   getExecutionContext,
   setExecutionSource,
   getExecutionSource,
   dispatcherMetadata,
+  CORRELATION_ID_PATTERN,
 };

@@ -1721,7 +1721,7 @@ function restoreBackup(backupPath, verify = true) {
 }
 
 function queryToolLogs(filters = {}) {
-  const { tool, source, success, since, until, project, session_id, task_id, correlation_id, limit = 100 } = filters;
+  const { tool, source, success, since, until, project, session_id, task_id, correlation_id, after_id, limit = 100 } = filters;
   
   let where = [];
   let params = [];
@@ -1741,6 +1741,12 @@ function queryToolLogs(filters = {}) {
   for (const [field, value] of [["project", project], ["session_id", session_id], ["task_id", task_id], ["correlation_id", correlation_id]]) {
     if (value) { where.push(`json_extract(entry_json, '$.${field}') = ?`); params.push(value); }
   }
+  if (after_id !== undefined && after_id !== null) {
+    const cursor = Number(after_id);
+    if (!Number.isSafeInteger(cursor) || cursor < 0) throw new Error("after_id must be a non-negative integer");
+    where.push("id > ?");
+    params.push(cursor);
+  }
   if (since) {
     where.push("timestamp >= ?");
     params.push(normalizeLogTime(since, false));
@@ -1751,11 +1757,12 @@ function queryToolLogs(filters = {}) {
   }
   
   const whereClause = where.length > 0 ? "WHERE " + where.join(" AND ") : "";
-  const sql = `SELECT entry_json FROM tool_logs ${whereClause} ORDER BY timestamp DESC LIMIT ?`;
-  params.push(limit);
+  const boundedLimit = Math.min(Math.max(Number(limit) || 100, 1), 1000);
+  const sql = `SELECT id, entry_json FROM tool_logs ${whereClause} ORDER BY timestamp DESC, id DESC LIMIT ?`;
+  params.push(boundedLimit + 1);
   
   const rows = db.prepare(sql).all(...params);
-  return rows.map(row => parseJson(row.entry_json, null)).filter(Boolean);
+  return rows.map(row => ({ id: row.id, ...parseJson(row.entry_json, null) })).filter(Boolean).slice(0, boundedLimit);
 }
 
 function normalizeLogTime(value, endOfRange) {

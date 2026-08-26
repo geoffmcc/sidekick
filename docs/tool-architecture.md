@@ -154,6 +154,15 @@ Production transports must not directly invoke `descriptor.handler`, legacy hand
 
 Context fields include source, request ID, trace/correlation ID, invocation ID, parent invocation, actor, auth identity, session ID, task ID, project, tool name, approval ID, generated procedure name, execution IDs, operation ID, idempotency key, timeout, cancellation signal, and security metadata.
 
+`correlation_id` is a client-neutral, optional 1-128 character identifier using
+letters, numbers, `.`, `_`, `:`, or `-`. MCP exposes it on every tool schema.
+It is validated before dispatch, inherited by child work, and persisted
+separately from transport session, client session, request, task, execution,
+and workflow identifiers. When omitted, the existing server-generated trace
+identifier remains the operation correlation. `sidekick_log_query` can filter
+by it and supports bounded incremental polling with `after_id`; JSON polling
+responses include the returned count and next cursor.
+
 Nested calls inherit the intended context fields and receive dispatcher-created invocation metadata. Concurrent calls do not share source or request identity. The legacy `setSource` compatibility setter must not be used around asynchronous execution; live request identity is passed into the dispatcher and carried by `AsyncLocalStorage`.
 
 Generic `createExecutionContext` and compatibility `callTool` calls do not trust caller-supplied `source`. Only private source-specific factories can establish transport identity:

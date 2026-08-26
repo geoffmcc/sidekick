@@ -541,7 +541,8 @@ async function dispatchTool(input, maybeArgs, maybeContext) {
   const canonical = stripSidekickPrefix(name || "");
   const trusted = isApprovedInternal(request);
   const latencyTracker = createLatencyTracker();
-  const context = childContext({ ...publicContextInput(request), ...(trusted ? { approvedExecution: true, approvalId: request.context?.approvalId } : {}), toolName: canonical, latencyTracker });
+  const requestCorrelationId = request.args && typeof request.args === "object" ? request.args.correlation_id : null;
+  const context = childContext({ ...publicContextInput(request), ...(requestCorrelationId ? { correlationId: requestCorrelationId } : {}), ...(trusted ? { approvedExecution: true, approvalId: request.context?.approvalId } : {}), toolName: canonical, latencyTracker });
   return runWithContext(context, async () => {
     const started = Date.now();
     try {
