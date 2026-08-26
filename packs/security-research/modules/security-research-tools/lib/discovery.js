@@ -7,6 +7,7 @@
  */
 
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const { requireSidekickSrc } = require("./deps");
 const workspace = require("./workspace");
@@ -64,6 +65,26 @@ function workspaceStatus(config) {
   }
 }
 
+function workspaceCapabilities(root) {
+  const access = mode => { try { fs.accessSync(root, mode); return true; } catch { return false; } };
+  let mount = { available: false, mode: "unknown", mount_point: null };
+  if (process.platform === "linux") {
+    try {
+      const target = path.resolve(root);
+      const best = fs.readFileSync("/proc/mounts", "utf8").split(/\r?\n/).filter(Boolean).map(line => {
+        const fields = line.split(" ");
+        return fields.length >= 4 ? { mount_point: fields[1].replace(/\\040/g, " "), options: fields[3].split(",") } : null;
+      }).filter(Boolean).filter(item => target === item.mount_point || target.startsWith(`${item.mount_point}/`)).sort((a, b) => b.mount_point.length - a.mount_point.length)[0];
+      if (best) mount = { available: true, mode: best.options.includes("ro") ? "read_only" : "read_write", mount_point: best.mount_point };
+    } catch {}
+  }
+  return {
+    execution_host: os.hostname(),
+    permissions: { read: access(fs.constants.R_OK), write: access(fs.constants.W_OK), execute: access(fs.constants.X_OK) },
+    mount,
+  };
+}
+
 function status(config) {
   const cfg = config || {};
   const ws = workspaceStatus(cfg);
@@ -87,6 +108,7 @@ function status(config) {
     pack: "security-research",
     ready,
     workspace: ws,
+    workspace_capabilities: ws.state === "configured" ? workspaceCapabilities(ws.root) : null,
     capabilities,
     policy: {
       local_probes_enabled: cfg.allow_local_probes === true,

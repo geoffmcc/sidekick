@@ -374,10 +374,11 @@ async function devVerifyInternal(services, { path: requestedPath, mode, intents:
         requested_intents: intents,
         autodetect,
         overrides_applied: Object.entries(overrides).filter(([, value]) => Boolean(value)).map(([key]) => key),
-        dry_run: true,
-        verdict: "dry_run",
-        summary: { verdict: "dry_run", selected: commands.filter(entry => entry.command).length, executed_count: 0, not_detected: commands.filter(entry => !entry.command).length },
-        commands,
+         dry_run: true,
+         verdict: "dry_run",
+         summary: { verdict: "dry_run", selected: commands.filter(entry => entry.command).length, executed_count: 0, not_detected: commands.filter(entry => !entry.command).length },
+         execution_ledger: { execution_started: false, commands_dispatched: 0, execution_state: "not_started", proof: "dry-run planning path does not call the governed command dispatcher" },
+         commands,
       }, null, 2) }],
     };
   }

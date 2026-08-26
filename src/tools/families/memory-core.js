@@ -57,7 +57,8 @@ async function sidekick_memory({ action, id, project, type, memory_class, conten
   }
   if (action === "query" || action === "list") {
     const memories = fresh_eyes ? [] : dbStore.searchMemories({ query, project: effectiveProject, type: type || "all", limit: limit || 20, includeDisabled: historical === true }).filter(m => historical === true || (m.current !== false && m.state !== "expired" && m.state !== "deleted"));
-    return jsonText({ ok: true, count: memories.length, memories, brief: query ? buildScopedMemoryBrief(query, effectiveProject, { type: type || "all", limit: limit || 10 }) : null, fresh_eyes: fresh_eyes === true });
+    const contextBrief = query ? buildScopedMemoryBrief(query, effectiveProject, { type: type || "all", limit: limit || 10 }) : null;
+    return jsonText({ ok: true, count: memories.length, memories, context_brief: contextBrief, brief: contextBrief, fresh_eyes: fresh_eyes === true });
   }
   if (action === "get" || action === "explain") {
     const memory = dbStore.getMemoryById(id, { includeDisabled: true });

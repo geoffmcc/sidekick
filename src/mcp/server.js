@@ -44,8 +44,10 @@ function toolCallContext(args, extra, toolName) {
   // without confusing it with the transport's MCP session id.
   if (toolName === "session" && typeof args?.id === "string" && args.id.trim()) {
     context.taskId = args.id.trim();
+    context.taskSessionId = args.id.trim();
     context.correlationId = args.id.trim();
   }
+  if (toolName === "session" && typeof args?.client_session_id === "string" && args.client_session_id.trim()) context.clientSessionId = args.client_session_id.trim();
   if (args && typeof args.project === "string" && args.project.trim()) {
     context.project = args.project.trim();
   }

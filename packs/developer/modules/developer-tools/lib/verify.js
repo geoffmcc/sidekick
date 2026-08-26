@@ -93,8 +93,10 @@ function workspacePreflight(root, selection) {
     workspace_permissions: permissions,
     mount,
     commands,
+    write_requirements: commands.filter(entry => entry.command_requires_write).map(entry => ({ intent: entry.intent, command: entry.command })),
     command_requires_write: requiresWrite,
     allowed,
+    refusal: allowed ? null : { code: "workspace_write_not_allowed", reason: "a selected command may modify files in the current workspace" },
     reason: allowed ? null : "selected verification commands may modify files but the workspace is read-only",
   };
 }

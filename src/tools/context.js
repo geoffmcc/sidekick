@@ -35,6 +35,8 @@ function createExecutionContext(input = {}) {
     authIdentity: input.authIdentity || input.auth_identity || parent?.authIdentity || null,
     sessionId: input.sessionId || input.session_id || parent?.sessionId || process.env.SIDEKICK_SESSION_ID || null,
     taskId: input.taskId || input.task_id || input.requestId || input.request_id || parent?.taskId || null,
+    taskSessionId: input.taskSessionId || input.task_session_id || parent?.taskSessionId || null,
+    clientSessionId: input.clientSessionId || input.client_session_id || parent?.clientSessionId || null,
     project: input.project || parent?.project || process.env.SIDEKICK_PROJECT || null,
     toolName: input.toolName || input.tool_name || null,
     // Module attribution: set by the module service facade on dispatch and
@@ -115,6 +117,8 @@ function dispatcherMetadata(context = getExecutionContext(), extra = {}) {
     requestId: context.requestId,
     taskId: context.taskId,
     sessionId: context.sessionId,
+    taskSessionId: context.taskSessionId,
+    clientSessionId: context.clientSessionId,
     project: context.project,
     correlationId: context.correlationId,
     parentId: context.parentId || context.parentInvocationId,
