@@ -24,6 +24,7 @@
 const { ResearchError, classifyDispatchFailure } = require("./errors");
 const evidence = require("./evidence");
 const records = require("./records");
+const { kernel } = require("./platform");
 
 const MAX_OUTPUT_CHARS = 200000;
 
@@ -252,6 +253,7 @@ async function execute(services, ctx, probe, runtime) {
   if (!["command", "http"].includes(probe.type)) throw new ResearchError("invalid_input", `unsupported probe type: ${probe.type}`);
 
   const gated = gate(ctx, probe);
+  if (gated.scope) kernel().bindExecutionScope(ctx.run.execution_id, gated.scope);
 
   let outcome;
   if (probe.type === "command") outcome = await runCommand(services, ctx, probe, runtime);

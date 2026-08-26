@@ -109,6 +109,11 @@ function makeGitRepo() {
     campaignId = created.campaign.campaign_id;
     const got = await okCall("research_project", { action: "get", campaign_id: campaignId });
     assert.strictEqual(got.campaign.campaign_id, campaignId);
+    const equivalent = await okCall("research_project", { action: "get", campaign_id: campaignId, project_id: "DEMO-PROJECT" });
+    assert.strictEqual(equivalent.campaign.campaign_id, campaignId);
+    const foreign = await call("research_project", { action: "get", campaign_id: campaignId, project_id: "other-project" });
+    assert.strictEqual(foreign.isError, true);
+    assert.strictEqual(foreign.code, "not_found");
     const listed = await okCall("research_project", { action: "list", project_id: PROJECT });
     assert.ok(listed.campaigns.some((c) => c.campaign_id === campaignId));
     const activated = await okCall("research_project", { action: "transition", campaign_id: campaignId, state: "active" });
@@ -127,6 +132,8 @@ function makeGitRepo() {
     const snap = await okCall("research_scope", { action: "create", project_id: PROJECT, targets: [{ kind: "host", value: "lab" }], rules: { allowed_operations: ["execute", "http.request"] } });
     const inScope = await okCall("research_scope", { action: "evaluate", snapshot_id: snap.snapshot.snapshot_id, project_id: PROJECT, target: "lab", target_kind: "host", operation: "execute" });
     assert.strictEqual(inScope.decision.ok, true);
+    const structured = await okCall("research_scope", { action: "evaluate", snapshot_id: snap.snapshot.snapshot_id, project_id: PROJECT, target: { kind: "host", value: "lab" }, operation: "execute" });
+    assert.strictEqual(structured.decision.ok, true);
     const outScope = await okCall("research_scope", { action: "evaluate", snapshot_id: snap.snapshot.snapshot_id, project_id: PROJECT, target: "prod", target_kind: "host", operation: "execute" });
     assert.strictEqual(outScope.decision.ok, false);
     assert.strictEqual(outScope.decision.reason, "target_not_in_scope");
@@ -228,9 +235,15 @@ function makeGitRepo() {
     await okCall("research_run", { action: "start", run_id: run.run.run_id });
     const inScope = await call("research_probe", { run_id: run.run.run_id, probe: { type: "command", target: "lab", command: "printf ok" } });
     assert.strictEqual(inScope.isError, false, `in-scope probe should pass: ${JSON.stringify(inScope.j)}`);
+    const bound = platformKernel.getExecution(run.run.execution_id);
+    assert.strictEqual(bound.metadata.scope_snapshot_id, snap.snapshot.snapshot_id);
+    assert.strictEqual(bound.metadata.scope_snapshot_digest, snap.snapshot.digest);
+    assert.strictEqual(bound.metadata.scope_decision_digest, inScope.j.scope.decision_digest);
     const outScope = await call("research_probe", { run_id: run.run.run_id, probe: { type: "command", target: "prod", command: "printf nope" } });
     assert.strictEqual(outScope.isError, true);
     assert.strictEqual(outScope.code, "scope_denied");
+    const afterDenied = platformKernel.getExecution(run.run.execution_id);
+    assert.deepStrictEqual(afterDenied.metadata, bound.metadata, "denied probes must not alter execution scope binding");
   });
 
   await test("SR.12b an http probe is scoped by the url it will request, not by a caller-supplied label", async () => {

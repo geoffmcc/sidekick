@@ -28,6 +28,7 @@
 const { requireFromSidekick, requireSidekickSrc } = require("./lib/deps");
 const { z } = requireFromSidekick("zod");
 const { normalizeEvidenceMetadata } = requireSidekickSrc("src/evidence/classes");
+const { canonicalizeProjectName } = requireSidekickSrc("src/core/project-identity.js");
 
 const { jsonResult, ok, errorResult } = require("./lib/results");
 const { resolveActor } = require("./lib/identity");
@@ -105,6 +106,7 @@ function handleProject(services, args, runtime) {
       return ok({ campaign: records.createCampaign(args, actor) });
     case "get": {
       const campaign = records.getCampaign(args.campaign_id);
+      if (args.project_id && canonicalizeProjectName(args.project_id) !== canonicalizeProjectName(campaign.project_id)) throw new ResearchError("not_found", "campaign not found");
       const hypotheses = records.listHypotheses({ campaign_id: campaign.campaign_id, limit: 100 });
       const runs = runsLib.list({ campaign_id: campaign.campaign_id, limit: 100 });
       return ok({ campaign, hypotheses_count: hypotheses.length, runs_count: runs.length, hypotheses, runs });
@@ -147,8 +149,11 @@ function handleScope(services, args, runtime) {
       return ok({ snapshot: records.getScopeSnapshot(args.snapshot_id) });
     case "list":
       return ok({ snapshots: records.listScopeSnapshots({ project_id: args.project_id, state: args.state, limit: args.limit }) });
-    case "evaluate":
-      return ok({ decision: records.evaluateScope(args.snapshot_id, { project_id: args.project_id, target: args.target, target_kind: args.target_kind, operation: args.operation }) });
+    case "evaluate": {
+      const structured = args.target && typeof args.target === "object" ? args.target : null;
+      if (structured && args.target_kind && args.target_kind !== structured.kind) throw new ResearchError("invalid_input", "target_kind must match target.kind");
+      return ok({ decision: records.evaluateScope(args.snapshot_id, { project_id: args.project_id, target: structured ? structured.value : args.target, target_kind: structured ? structured.kind : args.target_kind, operation: args.operation }) });
+    }
     default:
       return errorResult(new ResearchError("invalid_input", `unknown action: ${args.action}`));
   }
@@ -426,7 +431,7 @@ const entry = {
           rules: z.any().optional(),
           expires_at: z.string().optional(),
           supersedes_snapshot_id: z.string().optional(),
-          target: z.string().optional(),
+          target: z.union([z.string(), z.object({ kind: z.string().min(1), value: z.string().min(1) })]).optional(),
           target_kind: z.string().optional(),
           operation: z.string().optional(),
           state: z.string().optional(),
@@ -434,7 +439,7 @@ const entry = {
           actor: z.string().optional(),
           metadata: z.any().optional(),
         }),
-        args: { action: "string (create|get|list|evaluate)", snapshot_id: "string", project_id: "string", targets: "array", rules: "object", target: "string", operation: "string" },
+        args: { action: "string (create|get|list|evaluate)", snapshot_id: "string", project_id: "string", targets: "array of {kind,value}", rules: "object", target: "string or {kind,value}", target_kind: "string", operation: "string" },
         risk: "medium",
         category: "Security",
         handler: guard((args, runtime) => handleScope(services, args, runtime)),
