@@ -12,6 +12,14 @@ runs, and a `proxmox` environment composes the Proxmox pack (`proxmox_provision`
 / `proxmox_guest`) to provision and tear down a disposable lab — with *which*
 lab supplied entirely by runtime configuration, never committed.
 
+Disposable labs can be made explicit with `lab_profiles`. A profile is resolved
+into a run environment with an operator-facing `environment_label`,
+`target_allowlist`, explicit `egress` (`none` or `restricted`), `topology`
+(`single_node` by default), and opaque `rollback` metadata. Starting a run first
+performs harmless evidence, scope, and provider dry-runs; a failed preflight
+leaves the run `not_run`. Provider profile selection remains authoritative and
+all provisioning and retirement still pass through the Proxmox pack guards.
+
 Two properties are non-negotiable and are enforced, not merely documented:
 
 - **A hard public/private boundary.** All target-specific research lives in an
@@ -64,6 +72,10 @@ The snapshot record stores a workspace-relative `storage_ref`, content hash,
 file/byte/depth counts, verification metadata, lifecycle state, and the fixed
 authority `derived_analysis_input`. Real targets, credentials, URLs, and
 active research data must not be committed to this repository.
+Every indexed result also states its source authority (`local_wsl`,
+`sidekick_mirror`, or `unverified`) and source revision. These labels describe
+where the lead came from; they do not promote semantic output into source
+authority or a confirmed finding.
 
 ### Import and acquisition
 

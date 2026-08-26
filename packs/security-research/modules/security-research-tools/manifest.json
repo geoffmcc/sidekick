@@ -2,7 +2,7 @@
   "name": "security-research-tools",
   "displayName": "Security Research Tools",
   "version": "1.2.0",
-  "description": "Governed security-research orchestration: campaigns, hypotheses, durable runs, bounded probes, evidence with integrity and redaction, deterministic comparison, validation and report material. Command probes dispatch bash and http probes dispatch web_fetch; a proxmox environment composes proxmox_provision/proxmox_guest/proxmox_retire to provision, shut down and retire a disposable lab under the provider's own guards; workflows compose git. All through the Sidekick policy/approval/audit path. Enforces a hard boundary between the public repository and an external private research workspace.",
+  "description": "Governed security-research orchestration: campaigns, hypotheses, durable runs, bounded probes, evidence with integrity and redaction, deterministic comparison, validation and report material. Command probes dispatch bash and http probes dispatch web_fetch; labelled disposable lab profiles expose target, egress, topology and rollback metadata while provider actions remain guarded; workflows compose git. All through the Sidekick policy/approval/audit path. Enforces a hard boundary between the public repository and an external private research workspace.",
   "author": "Sidekick",
   "type": "plugin",
   "entryPoint": "entry.js",
@@ -62,6 +62,12 @@
             "network_mode": { "type": "string", "enum": ["none", "fixture", "lab"] },
             "production_access": { "type": "boolean" },
             "provider_profile": { "type": "string" },
+            "lab_profile": { "type": "string" },
+            "environment_label": { "type": "string" },
+            "target_allowlist": { "type": "array", "items": { "type": "string" } },
+            "egress": { "type": "string", "enum": ["none", "restricted"] },
+            "rollback": { "type": "object" },
+            "topology": { "type": "object" },
             "provision": { "type": "object" },
             "workdir": { "type": "string" },
             "description": { "type": "string" }
@@ -69,7 +75,8 @@
           "required": ["kind"],
           "additionalProperties": false
         }
-      }
+      },
+      "lab_profiles": { "type": "object", "additionalProperties": { "type": "object" } }
     },
     "additionalProperties": false
   },

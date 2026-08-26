@@ -10,6 +10,8 @@ function evaluateLabPolicy(environment = {}, operation = {}) {
   if (environment.isolation !== "isolated") reasons.push("environment_not_isolated");
   if (!ALLOWED_NETWORK_MODES.has(environment.network_mode)) reasons.push("network_mode_not_allowed");
   if (environment.production_access !== false) reasons.push("production_access_not_explicitly_disabled");
+  if (environment.egress && !["none", "restricted"].includes(environment.egress)) reasons.push("egress_policy_not_explicit");
+  if (environment.topology && environment.topology.mode === "multi_node" && (!Number.isInteger(environment.topology.expected_nodes) || environment.topology.expected_nodes < 2)) reasons.push("multi_node_topology_missing_expected_nodes");
   if (operation.destructive === true && operation.approved !== true) reasons.push("destructive_action_not_approved");
   if (operation.requires_snapshot === true && operation.snapshot_present !== true) reasons.push("snapshot_required");
   return Object.freeze({ ok: reasons.length === 0, reasons, policy: "lab-fixture-v1" });
