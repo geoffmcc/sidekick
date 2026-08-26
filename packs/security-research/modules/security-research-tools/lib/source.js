@@ -3,6 +3,7 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const { execFileSync } = require("child_process");
 const { kernel } = require("./platform");
 const workspace = require("./workspace");
 const { ResearchError } = require("./errors");
@@ -32,6 +33,19 @@ function kernelCall(fn) {
 function safeId(value, name) { return workspace.safeSegment(requireText(value, name), name); }
 function hashBuffer(buffer) { return crypto.createHash("sha256").update(buffer).digest("hex"); }
 function manifestHash(entries) { return `sha256:${hashBuffer(Buffer.from(JSON.stringify(entries)))}`; }
+
+function sourceAuthority(sourceRoot, workspaceRoot, metadata = {}) {
+  if (metadata.source_authority) return metadata.source_authority;
+  if (metadata.import_kind === "git_clone") return "sidekick_mirror";
+  if (String(sourceRoot).startsWith("/mnt/") || String(sourceRoot).startsWith("/home/")) return "local_wsl";
+  if (workspaceRoot && workspace.contains(workspaceRoot, sourceRoot)) return "sidekick_mirror";
+  return "unverified";
+}
+
+function sourceRevision(sourceRoot, metadata = {}) {
+  if (metadata.resolved_ref) return metadata.resolved_ref;
+  try { return execFileSync("git", ["-C", sourceRoot, "rev-parse", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || null; } catch { return null; }
+}
 
 function canonicalSource(sourcePath, workspaceRoot) {
   if (!path.isAbsolute(String(sourcePath || ""))) fail("invalid_input", "source_path must be absolute");
@@ -156,6 +170,8 @@ function importDirectory(services, args, actor, sourceRootOverride = null, metad
   const sourceRoot = sourceRootOverride || canonicalSource(requestedSource, root);
   const campaignId = requireText(args.campaign_id, "campaign_id");
   const manifest = inspectTree(sourceRoot, services.config || {}, sourceRootOverride ? sourceRoot : null);
+  const authority = sourceAuthority(sourceRoot, root, metadata);
+  const revision = sourceRevision(sourceRoot, metadata);
   let repository = args.repository_id ? kernel().getResearchSourceRepository(safeId(args.repository_id, "repository_id")) : null;
   if (repository && repository.campaign_id !== campaignId) fail("not_found", "source repository not found");
   if (repository && args.project_id && repository.project_id !== String(args.project_id)) fail("not_found", "source repository not found");
@@ -173,7 +189,7 @@ function importDirectory(services, args, actor, sourceRootOverride = null, metad
     fs.mkdirSync(staging, { recursive: true });
     copyTree(sourceRoot, staging, manifest, services.config || {});
     fs.renameSync(staging, final);
-    snapshot = kernelCall(() => kernel().createResearchSourceSnapshot({ repository_id: repository.repository_id, campaign_id: repository.campaign_id, storage_ref: workspace.relToWorkspace(root, final), content_hash: manifest.content_hash, source_root_hash: manifest.content_hash, file_count: manifest.file_count, byte_count: manifest.byte_count, max_depth: manifest.max_depth, authority: "derived_analysis_input", created_by: actor, state: "finalized", verification: { verified: true, manifest_version: 1 }, metadata: { import_kind: "directory", ...metadata }, source: "security-research" }));
+    snapshot = kernelCall(() => kernel().createResearchSourceSnapshot({ repository_id: repository.repository_id, campaign_id: repository.campaign_id, storage_ref: workspace.relToWorkspace(root, final), content_hash: manifest.content_hash, source_root_hash: manifest.content_hash, file_count: manifest.file_count, byte_count: manifest.byte_count, max_depth: manifest.max_depth, authority: "derived_analysis_input", created_by: actor, state: "finalized", verification: { verified: true, manifest_version: 1 }, metadata: { import_kind: "directory", source_authority: authority, source_revision: revision, ...metadata }, source: "security-research" }));
     if (metadata && Object.keys(metadata).length) snapshot = kernelCall(() => kernel().updateResearchSourceSnapshotProvenance(snapshot.snapshot_id, { acquisition_operation_id: operationId, source_type: metadata.import_kind === "git_clone" ? "git" : "directory", requested_ref: metadata.requested_ref, resolved_commit_sha: metadata.resolved_ref, remote_identity: metadata.remote_identity ? JSON.stringify(metadata.remote_identity) : null, source_root_hash: manifest.content_hash, metadata, actor_id: actor, source: "security-research" }));
     return { repository, snapshot, verification: verifySnapshot(root, snapshot, services.config || {}) };
   } catch (error) {
@@ -285,11 +301,15 @@ async function indexSnapshot(services, args, actor) {
   if (!verification.verified) fail("state_conflict", "cannot index a stale snapshot");
   const directory = registeredDirectory(root, owned.snapshot);
   const result = parseDispatchJson(await services.dispatch("semantic_repo", { action: args.index_action || "profile", path: directory, query: args.query, level: args.level, limit: args.limit, max_chars: args.max_chars }), "semantic_repo");
+  const sourceAuthorityLabel = owned.snapshot.metadata?.source_authority || "unverified";
+  const sourceCommit = owned.snapshot.metadata?.source_revision || owned.snapshot.resolved_commit_sha || null;
   const provenance = result.provenance || {};
   if (result.ok !== true || provenance.repository_identity !== semanticRepositoryIdentity(directory) || !result.index_root_hash || result.index_root_hash !== provenance.index_root_hash) fail("state_conflict", "semantic result provenance does not match the registered snapshot");
   const partial = result.degradation?.truncated === true || result.page?.has_more === true || provenance.completeness === "partial";
   kernel().updateResearchSourceSnapshotProvenance(owned.snapshot.snapshot_id, { semantic_index: { index_root_hash: result.index_root_hash, schema: result.schema || null, analyzer_version: result.analyzer_version || null, indexed_at: new Date().toISOString(), snapshot_content_hash: owned.snapshot.content_hash, completeness: partial ? "partial" : "complete" }, metadata: { index_status: partial ? "partial" : "indexed" }, source: "security-research" });
-  return { repository: owned.repository, snapshot: owned.snapshot, verification, index: result, provenance: { ...provenance, snapshot_id: owned.snapshot.snapshot_id, snapshot_content_hash: owned.snapshot.content_hash, storage_ref: owned.snapshot.storage_ref, actor } };
+  const indexedProvenance = { ...provenance, source_authority: sourceAuthorityLabel, source_revision: sourceCommit };
+  result.provenance = indexedProvenance;
+  return { repository: owned.repository, snapshot: owned.snapshot, verification, index: result, provenance: { ...indexedProvenance, snapshot_id: owned.snapshot.snapshot_id, snapshot_content_hash: owned.snapshot.content_hash, storage_ref: owned.snapshot.storage_ref, actor } };
 }
 
 function compareSnapshots(services, args) {

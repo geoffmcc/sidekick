@@ -163,7 +163,7 @@ async function handleRun(services, args, runtime) {
     case "plan":
       return ok({ run: runsLib.plan(args, actor, config) });
     case "start":
-      return ok({ run: runsLib.start(args.run_id, actor) });
+      return ok({ run: await runsLib.start(args.run_id, actor, services) });
     case "status":
       return ok({ run: runsLib.get(args.run_id) });
     case "resume":
@@ -451,7 +451,11 @@ const entry = {
           scope_snapshot_id: z.string().optional(),
           network_scope: z.string().max(80).optional(),
           name: z.string().optional(),
-          environment: z.any().optional(),
+           environment: z.any().optional(),
+           sink: z.string().max(500).optional(),
+           caller_chain: z.array(z.string().max(500)).max(50).optional(),
+           boundary: z.string().max(500).optional(),
+           disposition: z.string().max(100).optional(),
           manifest: z.any().optional(),
           outcome: z.string().optional(),
           evidence: z.array(z.string()).optional(),
@@ -460,7 +464,7 @@ const entry = {
           limit: z.number().int().min(1).max(100).optional(),
           actor: z.string().optional(),
         }),
-        args: { action: "string (plan|start|status|resume|cancel|complete|provision|cleanup|list)", run_id: "string", hypothesis_id: "string", environment: "string|object", network_scope: "string (operator-created named scope)", outcome: "string", evidence: "array of evidence references" },
+         args: { action: "string (plan|start|status|resume|cancel|complete|provision|cleanup|list)", run_id: "string", hypothesis_id: "string", environment: "string|object", sink: "string (research sink for duplicate detection)", caller_chain: "array of caller symbols", boundary: "string (authorization or trust boundary)", disposition: "string (known-null, candidate, or confirmed disposition)", network_scope: "string (operator-created named scope)", outcome: "string", evidence: "array of evidence references" },
         risk: "high",
         category: "Security",
         handler: guard((args, runtime) => handleRun(services, args, runtime)),

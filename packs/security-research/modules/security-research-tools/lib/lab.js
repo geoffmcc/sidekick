@@ -48,6 +48,23 @@ function requireDispatchOk(result, whatFailed) {
   return payload;
 }
 
+function assertLabDescriptor(env) {
+  const requested = env.provision && (env.provision.clone || env.provision.vm || env.provision.lxc) || {};
+  if (Array.isArray(env.target_allowlist) && env.target_allowlist.length && requested.node && !env.target_allowlist.includes(requested.node)) throw new ResearchError("policy_denied", "lab target is outside the configured target_allowlist");
+  if (env.egress && !["none", "restricted"].includes(env.egress)) throw new ResearchError("policy_denied", "lab egress must be explicitly none or restricted");
+}
+
+async function preflight(services, ctx) {
+  const env = ctx.environment || {};
+  if (!env.provider_profile) throw new ResearchError("environment_failed", "disposable lab profile has no provider_profile");
+  if (!env.provision || typeof env.provision !== "object" || !env.provision.action) throw new ResearchError("environment_failed", "disposable lab profile has no provision spec");
+  assertLabDescriptor(env);
+  const args = { ...env.provision, profile: env.provider_profile, dry_run: true };
+  const payload = requireDispatchOk(await services.dispatch("proxmox_provision", args, { timeoutMs: ctx.timeoutMs }), "lab preflight failed");
+  if (payload.vmid) throw new ResearchError("ambiguous_state", "lab provider returned a vmid during dry-run; refusing to activate run");
+  return { profile: env.lab_profile || env.provider_profile, environment_label: env.environment_label, egress: env.egress, target_allowlist: env.target_allowlist, rollback: env.rollback, provider_plan: payload.explain || payload.plan || null };
+}
+
 // Record the identity of a provisioned lab resource as a custody artifact linked
 // to the run's execution, so cleanup can find exactly the workflow-owned
 // resources and the provisioning is auditable. The resource identity, not any
@@ -101,6 +118,7 @@ async function provision(services, ctx, runtime) {
       throw new ResearchError("policy_denied", `disposable lab policy denied: ${decision.reasons.join(", ")}`, { policy: decision.policy, reasons: decision.reasons });
     }
   }
+  assertLabDescriptor(env);
   if (!env.provider_profile) {
     throw new ResearchError("environment_failed", "a proxmox environment requires provider_profile (the Proxmox pack profile name, configured at runtime)");
   }
@@ -141,6 +159,9 @@ async function provision(services, ctx, runtime) {
     marker: payload.marker || null,
     outcome: payload.outcome || null,
     provisioned_at: new Date().toISOString(),
+    environment_label: env.environment_label || env.name || null,
+    egress: env.egress || null,
+    rollback: env.rollback || null,
   };
   const artifact = recordResource(ctx, identity);
   return {
@@ -219,4 +240,4 @@ async function cleanup(services, ctx, runtime) {
   };
 }
 
-module.exports = { provision, cleanup, ownedResources, LAB_RESOURCE_TYPE };
+module.exports = { provision, preflight, cleanup, ownedResources, LAB_RESOURCE_TYPE };

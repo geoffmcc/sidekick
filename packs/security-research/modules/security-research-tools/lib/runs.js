@@ -19,6 +19,14 @@ const records = require("./records");
 
 const ENVIRONMENT_KINDS = ["local", "disposable", "proxmox", "remote"];
 
+function mergeLabProfile(config, env) {
+  if (!env || !env.lab_profile) return env;
+  const profiles = config && config.lab_profiles || {};
+  const profile = profiles[env.lab_profile];
+  if (!profile) throw new ResearchError("environment_failed", `unknown lab profile '${env.lab_profile}'`);
+  return { ...profile, ...env, name: env.name || profile.name || env.lab_profile, lab_profile: env.lab_profile };
+}
+
 function assertBoundNetworkScope(run) {
   const bound = run && run.metadata && run.metadata.network_scope;
   if (!bound) return;
@@ -45,9 +53,9 @@ function resolveEnvironment(config, envInput) {
     const environments = (config && config.environments) || {};
     const found = environments[envInput];
     if (!found) throw new ResearchError("environment_failed", `unknown environment '${envInput}' — configure it under the pack's 'environments'`);
-    return normalizeEnvironment({ ...found, name: envInput });
+    return normalizeEnvironment(mergeLabProfile(config, { ...found, name: envInput }));
   }
-  if (typeof envInput === "object") return normalizeEnvironment(envInput);
+  if (typeof envInput === "object") return normalizeEnvironment(mergeLabProfile(config, envInput));
   throw new ResearchError("invalid_input", "environment must be a name or an object");
 }
 
@@ -61,6 +69,12 @@ function normalizeEnvironment(env) {
     network_mode: env.network_mode || (kind === "local" ? "none" : "lab"),
     production_access: env.production_access === true,
     provider_profile: env.provider_profile || null,
+    lab_profile: env.lab_profile || null,
+    environment_label: env.environment_label || env.label || env.name || kind,
+    target_allowlist: Array.isArray(env.target_allowlist) ? [...env.target_allowlist] : [],
+    egress: env.egress || (env.network_mode === "none" ? "none" : "restricted"),
+    rollback: env.rollback && typeof env.rollback === "object" ? env.rollback : null,
+    topology: env.topology && typeof env.topology === "object" ? { ...env.topology } : { mode: "single_node", expected_nodes: 1 },
     // The proxmox_provision spec (action + params) for a disposable lab. Carried
     // through verbatim so the run can provision later; operator-supplied.
     provision: env.provision && typeof env.provision === "object" ? env.provision : null,
@@ -82,6 +96,14 @@ function plan(input, actor, config) {
   const networkScope = requestedScope || campaignScope;
   if (input.network_scope && (!networkScope || !networkScope.enabled)) throw new ResearchError("policy_denied", "network scope is missing, disabled, or expired");
   const k = kernel();
+  const researchProvenance = input.sink || input.caller_chain || input.boundary || input.disposition
+    ? { sink: input.sink || null, caller_chain: Array.isArray(input.caller_chain) ? input.caller_chain : [], boundary: input.boundary || null, disposition: input.disposition || "unclassified" }
+    : null;
+  const duplicateCandidates = researchProvenance ? records.listFindings({ campaign_id: campaign.campaign_id, limit: 100 }).filter(finding => {
+    const prior = finding.metadata?.research_provenance || {};
+    return researchProvenance.sink && prior.sink === researchProvenance.sink
+      && (!researchProvenance.boundary || prior.boundary === researchProvenance.boundary);
+  }).map(finding => ({ finding_id: finding.finding_id, title: finding.title, status: finding.status, disposition: finding.metadata?.research_provenance?.disposition || null })) : [];
 
   const execution = k.createExecution({
     project_id: hypothesis.project_id,
@@ -111,13 +133,15 @@ function plan(input, actor, config) {
         manifest: input.manifest || null,
         environment_name: environment.name,
         network_scope: networkScope ? { scope_id: networkScope.scope_id, name: networkScope.name, revision: networkScope.revision, digest: networkScope.digest, policy: networkScope.policy || networkScope } : null,
+        research_provenance: researchProvenance,
+        duplicate_candidates: duplicateCandidates,
       },
       source: "security-research",
     });
   } catch (error) {
     throw records.mapKernelError(error);
   }
-  return decorate(testRun, execution, environment);
+  return { ...decorate(testRun, execution, environment), duplicate_candidates: duplicateCandidates };
 }
 
 function get(runId) {
@@ -144,10 +168,42 @@ function gatherEvidence(run) {
   }
 }
 
-function start(runId, actor) {
+async function preflight(run, services) {
+  const checks = [];
+  try {
+    const root = require("./workspace").resolveWorkspace(services?.config || {}, { requireExists: false }).root;
+    checks.push({ name: "evidence_backend", ok: true, workspace: root });
+    kernel().listArtifacts({ execution_id: run.execution_id, limit: 1 });
+  } catch (error) {
+    checks.push({ name: "evidence_backend", ok: false, reason: error.message });
+  }
+  if (run.scope_snapshot_id) {
+    const snapshot = kernel().getScopeSnapshot(run.scope_snapshot_id);
+    let decision = null;
+    if (snapshot) {
+      try { decision = kernel().evaluateScope(run.scope_snapshot_id, { project_id: run.project_id, target: "", target_kind: "host", operation: "execute" }); } catch (error) { decision = { ok: false, reason: error.message }; }
+    }
+    // This validates that the evaluator and snapshot are available without
+    // inventing an in-scope target. Probe-time gating performs the real check.
+    checks.push({ name: "scope_evaluator", ok: Boolean(snapshot) && Boolean(decision), snapshot_id: run.scope_snapshot_id, decision });
+  } else checks.push({ name: "scope_evaluator", ok: true, mode: "unbound" });
+  if (["proxmox", "disposable"].includes(run.environment?.kind)) {
+    const lab = require("./lab");
+    try {
+      const result = await lab.preflight(services, { environment: run.environment, timeoutMs: services?.config?.probe_timeout_ms || 60000 }, {});
+      checks.push({ name: "lab_environment", ok: true, ...result });
+    } catch (error) { checks.push({ name: "lab_environment", ok: false, reason: error.message }); }
+  } else checks.push({ name: "lab_environment", ok: true, mode: "not_required" });
+  const failed = checks.filter(check => !check.ok);
+  return { ok: failed.length === 0, checks, topology: run.environment?.topology || { mode: "single_node", expected_nodes: 1 } };
+}
+
+async function start(runId, actor, services) {
   const current = get(runId);
   assertBoundNetworkScope(current);
   if (current.state === "running") return current; // idempotent
+  const readiness = await preflight(current, services || {});
+  if (!readiness.ok) throw new ResearchError("preflight_failed", "research run preflight failed; run remains not_run", { preflight: readiness });
   let testRun;
   try {
     testRun = kernel().transitionResearchTestRun(current.test_run_id, "running", { actor_id: actor, source: "security-research" });
@@ -155,7 +211,7 @@ function start(runId, actor) {
     throw records.mapKernelError(error);
   }
   bestEffortExecution(current.execution_id, "running");
-  return get(testRun.test_run_id);
+  return { ...get(testRun.test_run_id), preflight: readiness };
 }
 
 /**
@@ -245,4 +301,4 @@ function decorate(testRun, execution, environment) {
   };
 }
 
-module.exports = { plan, get, start, resume, cancel, complete, list, resolveEnvironment, gatherEvidence };
+module.exports = { plan, get, start, resume, cancel, complete, list, resolveEnvironment, gatherEvidence, preflight };

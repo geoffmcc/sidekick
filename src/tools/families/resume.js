@@ -53,6 +53,21 @@ function formatResumeItem(item) {
   ].filter(Boolean).join("\n");
 }
 
+function validateResumeItem(item) {
+  if (!item || !item.handoff_id) return { ...item };
+  const handoff = dbStore.getHandoff(item.handoff_id);
+  const validation = handoff
+    ? dbStore.validateHandoffPacket(handoff.packet, { requireResume: true })
+    : { valid: false, issues: ["linked handoff not found"] };
+  return {
+    ...item,
+    handoff_id: handoff?.id || item.handoff_id,
+    handoff_version: handoff?.version || null,
+    handoff_validation: { valid: validation.valid, issues: validation.issues },
+    resume_blocked: !validation.valid,
+  };
+}
+
 async function sidekick_resume({ action, project, summary, next_step, status, branch, url, notes, plan_name, current_phase, handoff_id, handoff_key, include_cleared, format }) {
   if (handoff_key !== undefined) return { content: [{ type: "text", text: "handoff keys are no longer supported; link the structured handoff by id" }], isError: true };
   const selectedAction = action || "check";
@@ -60,13 +75,13 @@ async function sidekick_resume({ action, project, summary, next_step, status, br
   const doc = loadResumeDocument();
 
   if (selectedAction === "list") {
-    const items = activeResumeItems(doc, include_cleared === true)
+    const items = activeResumeItems(doc, include_cleared === true).map(validateResumeItem)
       .sort((a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")));
     const payload = { count: items.length, items };
     const text = selectedFormat === "json"
       ? JSON.stringify(payload, null, 2)
-      : (items.length ? items.map(formatResumeItem).join("\n\n---\n\n") : "No pending resume items");
-    return { content: [{ type: "text", text }] };
+      : (items.length ? items.map(item => `${formatResumeItem(item)}${item.resume_blocked ? `\nResume blocked: ${item.handoff_validation.issues.join("; ")}` : ""}`).join("\n\n---\n\n") : "No pending resume items");
+    return { content: [{ type: "text", text }], isError: items.some(item => item.resume_blocked) || undefined };
   }
 
   if (!project || !PROJECT_RE.test(project)) {
@@ -78,19 +93,12 @@ async function sidekick_resume({ action, project, summary, next_step, status, br
     if (!item || ["cleared", "done", "complete"].includes(item.status)) {
       return { content: [{ type: "text", text: `No pending resume item for project: ${project}` }] };
     }
-    let enriched = { ...item };
-    if (item.handoff_id) {
-      const handoff = dbStore.getHandoff(item.handoff_id);
-      const validation = handoff
-        ? dbStore.validateHandoffPacket(handoff.packet, { requireResume: true })
-        : { valid: false, issues: ["linked handoff not found"], packet: {} };
-      enriched = { ...enriched, handoff_id: handoff?.id || item.handoff_id || null, handoff_version: handoff?.version || null, handoff_validation: { valid: validation.valid, issues: validation.issues } };
-      if (!validation.valid) {
+    let enriched = validateResumeItem(item);
+    if (enriched.resume_blocked) {
         const text = selectedFormat === "json"
           ? JSON.stringify({ ...enriched, resume_blocked: true }, null, 2)
-          : `${formatResumeItem(enriched)}\nResume blocked: ${validation.issues.join("; ")}`;
+          : `${formatResumeItem(enriched)}\nResume blocked: ${enriched.handoff_validation.issues.join("; ")}`;
         return { content: [{ type: "text", text }], isError: true };
-      }
     }
     const text = selectedFormat === "json" ? JSON.stringify(enriched, null, 2) : formatResumeItem(enriched);
     return { content: [{ type: "text", text }] };
@@ -118,9 +126,12 @@ async function sidekick_resume({ action, project, summary, next_step, status, br
       updated_at: now
     };
     if (item.handoff_id) {
-      if (!dbStore.getHandoff(item.handoff_id)) {
+      const handoff = dbStore.getHandoff(item.handoff_id);
+      if (!handoff) {
         return { content: [{ type: "text", text: "linked handoff_id was not found" }], isError: true };
       }
+      const validation = dbStore.validateHandoffPacket(handoff.packet, { requireResume: true });
+      if (!validation.valid) return { content: [{ type: "text", text: `linked handoff is not resumable: ${validation.issues.join("; ")}` }], isError: true };
     }
     doc.items[project] = item;
     saveResumeDocument(doc);

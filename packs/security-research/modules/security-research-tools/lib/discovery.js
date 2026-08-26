@@ -118,6 +118,8 @@ function status(config) {
       max_evidence_bytes: cfg.max_evidence_bytes || 5242880,
     },
     environments: Object.keys(cfg.environments || {}),
+    environment_details: Object.entries(cfg.environments || {}).map(([name, env]) => ({ name, kind: env.kind || null, label: env.environment_label || env.label || name, egress: env.egress || null, topology: env.topology?.mode || "single_node" })),
+    lab_profiles: Object.entries(cfg.lab_profiles || {}).map(([name, profile]) => ({ name, label: profile.environment_label || profile.label || name, egress: profile.egress || null, target_allowlist: Array.isArray(profile.target_allowlist) ? profile.target_allowlist : [], topology: profile.topology?.mode || "single_node" })),
     notes: ready ? [] : ["Configure a research workspace outside the Sidekick repository to enable runs and evidence capture."],
   };
 }
