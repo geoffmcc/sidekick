@@ -33,6 +33,8 @@ const { z } = requireFromSidekick("zod");
 
 const DEFAULT_MAX_OUTPUT_CHARS = 12000;
 const MAX_ALLOWED_OUTPUT_CHARS = 60000;
+const DEFAULT_PROFILE_MAX_FILES = 1000;
+const DEFAULT_SEMANTIC_MAX_FILES = 1000;
 
 function jsonResult(payload) {
   return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
@@ -83,7 +85,8 @@ async function devRepoProfile(services, { path: requestedPath, max_files, includ
   if (!resolved.ok) return resolved.result;
   const root = resolved.root;
 
-  const walk = fsutil.walk(root, { maxFiles: max_files || 4000, maxDepth: 6 });
+  const profileMaxFiles = max_files || DEFAULT_PROFILE_MAX_FILES;
+  const walk = fsutil.walk(root, { maxFiles: profileMaxFiles, maxDepth: 6 });
   const packageJson = fsutil.readJsonFile(path.join(root, "package.json"));
   const scripts = detect.classifyScripts(packageJson && packageJson.scripts ? packageJson.scripts : {});
   const ecosystems = detect.detectEcosystems(root);
@@ -100,7 +103,7 @@ async function devRepoProfile(services, { path: requestedPath, max_files, includ
 
   const git = include_git ? await gitFacts.collectRepositoryFacts(services, root) : { available: false, skipped: true };
   const filters = { include, exclude };
-  const semanticIndex = include_semantic !== false ? await semantic.indexRepository(root, { limits: { maxFiles: Math.min(max_files || 4000, 4000) }, filters }) : null;
+  const semanticIndex = include_semantic !== false ? await semantic.indexRepository(root, { limits: { maxFiles: Math.min(profileMaxFiles, DEFAULT_SEMANTIC_MAX_FILES) }, filters }) : null;
   const semanticProfile = semanticIndex ? semantic.project(semanticIndex, { level: 0, max_chars: 9000, limit: 50 }) : null;
 
   const topLevelDirectories = fs
@@ -140,6 +143,8 @@ async function devRepoProfile(services, { path: requestedPath, max_files, includ
       top_level_directories: topLevelDirectories,
       file_count: walk.files.length,
       file_scan_truncated: walk.truncated,
+      limits: { max_files: profileMaxFiles, max_depth: 6 },
+      excluded_directories: [...fsutil.SKIP_DIRECTORIES].sort(),
       workspaces,
     },
     languages,
@@ -185,7 +190,7 @@ async function semanticRepository(services, { path: requestedPath, action = "pro
   if (!resolved.ok) return resolved.result;
   let state = null; try { state = await gitFacts.collectStateFacts(services, resolved.root); } catch { state = { available: false, head_sha: null, branch: null, worktree_clean: null, changed_file_count: null }; }
   const filters = { include, exclude };
-  const index = await semantic.indexRepository(resolved.root, { filters, state: state && state.available ? { kind: state.worktree_clean ? "working_tree_clean" : "working_tree", head_sha: state.head_sha, branch: state.branch, worktree_clean: state.worktree_clean } : { kind: "working_tree", state: "unknown" } });
+  const index = await semantic.indexRepository(resolved.root, { filters, limits: { maxFiles: DEFAULT_SEMANTIC_MAX_FILES }, state: state && state.available ? { kind: state.worktree_clean ? "working_tree_clean" : "working_tree", head_sha: state.head_sha, branch: state.branch, worktree_clean: state.worktree_clean } : { kind: "working_tree", state: "unknown" } });
   const publicRepository = { name: index.repository.name, identity: index.provenance?.repository_identity || null, state: index.repository.state };
   if (action === "verify") return jsonResult({ ok: semantic.verify(index), index_root_hash: index.index_root_hash, schema: index.schema, repository: publicRepository, provenance: index.provenance, warnings: index.warnings, stats: index.stats });
   if (relevant_files) return jsonResult({ ok: true, tool: "semantic_repo", action, repository: publicRepository, index_root_hash: index.index_root_hash, ...semantic.relevantFiles(index, { query, limit, cursor }), warnings: index.warnings.slice(0, semantic.DEFAULT_LIMITS.maxSnippets), trust: "untrusted repository-derived data; file matches are discovery leads and require governed source validation" });
@@ -353,7 +358,7 @@ async function devVerifyInternal(services, { path: requestedPath, mode, intents:
 
   const maxOutput = Math.min(max_output_chars || config.max_output_chars || DEFAULT_MAX_OUTPUT_CHARS, MAX_ALLOWED_OUTPUT_CHARS);
   if (dry_run) {
-    const gitState = await gitFacts.collectStateFacts(services, root);
+    const gitState = { available: false, skipped: true, reason: "dry_run does not collect repository state" };
     const commands = selection.map(entry => ({ ...entry, status: entry.command ? "dry_run" : "not_detected", executed: false, command_executed: null }));
     return {
       content: [{ type: "text", text: JSON.stringify({

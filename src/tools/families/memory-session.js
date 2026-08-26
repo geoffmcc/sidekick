@@ -192,12 +192,13 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     const createdText = new Set();
     const MAX_AUTOMATIC_MEMORIES = 8;
     const projectName = project || existing.project;
+    const existingText = new Set((dbStore.searchMemories({ project: projectName, type: "all", limit: 200 }) || []).map(memory => `${memory.type}:${String(memory.content || "").toLowerCase().replace(/\s+/g, " ")}`));
     const add = (type, values, memoryClass, confidence) => {
       for (const value of Array.isArray(values) ? values : values ? [values] : []) {
         const text = redactSensitive(String(value || "").trim());
         if (!text) continue;
         const fingerprint = `${type}:${text.toLowerCase().replace(/\s+/g, " ")}`;
-        if (createdText.has(fingerprint) || created.length >= MAX_AUTOMATIC_MEMORIES) continue;
+        if (createdText.has(fingerprint) || existingText.has(fingerprint) || created.length >= MAX_AUTOMATIC_MEMORIES) continue;
         createdText.add(fingerprint);
         const mem = dbStore.upsertMemory({ type, project: projectName, content: text, summary: text, confidence, source: "task_session", source_tool: "sidekick_session", source_task_id: id, source_ref: id, memory_class: memoryClass, evidence_excerpt: text, directness: "direct", source_authority: action === "abandon" ? 4 : 5, metadata: { task_session_id: id, outcome, acceptance_state, usefulness_feedback } });
         if (mem) created.push(mem);
