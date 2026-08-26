@@ -2,7 +2,6 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { encryptSecret, decryptSecret } = require("./core/secret-cipher");
-const { execSync, execFileSync } = require("child_process");
 const { redactSensitive, isSensitiveKey, redactSensitiveKeysDeep } = require("./redact");
 const evolveCommon = require("./evolve/common");
 const dbStore = require("./db");

@@ -15,7 +15,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { execSync, execFileSync } = require("child_process");
+const { execFileSync } = require("child_process");
 const { z } = require("zod");
 const dbStore = require("../../db");
 const { redactSensitive } = require("../../redact");
@@ -24,6 +24,7 @@ const platformKernel = require("../../platform/kernel");
 const toolContext = require("../context");
 const { enforcePathPolicy } = require("../path-policy");
 const { childProcessEnv } = require("../../security/child-process");
+const { runBoundedShell } = require("../../security/command-execution");
 const { generateId } = require("../../core/ids");
 const { callTool } = require("../dispatch-seam");
 const {
@@ -67,7 +68,7 @@ async function sidekick_cron({ action, name, schedule, command, id }) {
     if (!name || !schedule || !command) {
       return { content: [{ type: "text", text: "name, schedule, and command required" }], isError: true };
     }
-    if (name.length > 200 || schedule.length > 100 || command.length > 8192 || /[\u0000\r\n]/.test(schedule) || /[\u0000\r\n]/.test(command)) {
+    if (name.length > 200 || schedule.length > 100 || command.length > 8192 || /[\u0000\r\n]/.test(schedule) || /[\u0000\r\n]/.test(command) || !isSafeCronSchedule(schedule)) {
       return { content: [{ type: "text", text: "cron name, schedule, or command exceeds its safe size or contains a control character" }], isError: true };
     }
     const newJob = {
@@ -181,7 +182,7 @@ async function sidekick_cron({ action, name, schedule, command, id }) {
       metadata: { cron_job_id: job.id, schedule: job.schedule },
     });
     try {
-      const stdout = execSync(job.command, { timeout: 300000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, env: childProcessEnv() });
+      const stdout = runBoundedShell(job.command, { timeout: 300000, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
       job.lastRun = new Date().toISOString();
       job.lastResult = "success";
       saveCronJobs(jobs);
@@ -223,15 +224,22 @@ function syncCrontab(jobs) {
       try { execFileSync("crontab", ["-r"], { encoding: "utf-8", env: childProcessEnv() }); } catch {}
       return;
     }
-    const lines = enabledJobs.map(j => {
-      const script = `cd /home/sidekick/sidekick && ${j.command} >> ${DATA_DIR}/cron-${j.id}.log 2>&1`;
-      return `${j.schedule} ${script} # sidekick:${j.id}`;
-    });
+    const runner = path.resolve(__dirname, "../../../scripts/run-cron-job.js");
+    const lines = enabledJobs.map(j => `${j.schedule} ${shellQuote(process.execPath)} ${shellQuote(runner)} ${shellQuote(j.id)} >> ${shellQuote(path.join(DATA_DIR, `cron-${j.id}.log`))} 2>&1 # sidekick:${j.id}`);
     const crontabContent = lines.join("\n") + "\n";
     execFileSync("crontab", ["-"], { input: crontabContent, encoding: "utf-8", env: childProcessEnv() });
   } catch (e) {
     // Silently fail if crontab not available
   }
+}
+
+function isSafeCronSchedule(schedule) {
+  const fields = String(schedule).trim().split(/\s+/);
+  return fields.length === 5 && fields.every(field => /^[0-9*/?,\-]+$/.test(field));
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
 }
 
 

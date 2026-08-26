@@ -16,11 +16,12 @@ const fs = require("fs");
 const path = require("path");
 const dns = require("dns");
 const https = require("https");
-const { execFileSync, execSync } = require("child_process");
+const { execFileSync } = require("child_process");
 const { z } = require("zod");
 const { validateInfluxUrl } = require("../../influx-endpoint-policy");
 const { readSecret } = require("../../core/runtime-secrets");
 const { childProcessEnv } = require("../../security/child-process");
+const { runBoundedShell } = require("../../security/command-execution");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "..", "..", "data");
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -261,7 +262,7 @@ function checkCustom(commands) {
   let allPassed = true;
   for (const cmd of cmdList) {
     try {
-      const output = execSync(cmd, { encoding: "utf-8", timeout: 10000, maxBuffer: 2 * 1024 * 1024, env: childProcessEnv() }).trim();
+      const output = runBoundedShell(cmd, { encoding: "utf-8", timeout: 10000, maxBuffer: 2 * 1024 * 1024 }).trim();
       results.push({ command: cmd, output, success: true });
     } catch (e) {
       results.push({ command: cmd, error: e.message, success: false });

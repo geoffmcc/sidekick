@@ -1,7 +1,8 @@
 "use strict";
 
 const fs = require("fs");
-const { execFileSync, execSync } = require("child_process");
+const { execFileSync } = require("child_process");
+const { runBoundedShell } = require("../../security/command-execution");
 const { z } = require("zod");
 const dbStore = require("../../db");
 const { redactSensitive } = require("../../redact");
@@ -647,7 +648,7 @@ async function sidekick_baseline({ action, metric_name, value, source, command, 
     let currentValue = value;
     if (currentValue === undefined && source === "command" && command) {
       try {
-        const result = execSync(command, { encoding: "utf8", timeout: 5000, maxBuffer: 2 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"], env: childProcessEnv() });
+        const result = runBoundedShell(command, { encoding: "utf8", timeout: 5000, maxBuffer: 2 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"] });
         currentValue = parseFloat(result.trim());
       } catch (e) {
         return { content: [{ type: "text", text: `Command failed: ${e.message}` }], isError: true };

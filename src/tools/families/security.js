@@ -13,7 +13,7 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const { execSync } = require("child_process");
+const { runBoundedShell } = require("../../security/command-execution");
 const { z } = require("zod");
 const { redactSensitive } = require("../../redact");
 const { enforcePathPolicy, getPathPolicyDecision } = require("../path-policy");
@@ -392,7 +392,7 @@ async function sidekick_sandbox({ action, sandbox_name, command, files, auto_bac
     let output = "";
     let exitCode = 0;
     try {
-      output = execSync(command, { timeout: 30000, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], maxBuffer: 10 * 1024 * 1024, env: childProcessEnv() });
+      output = runBoundedShell(command, { timeout: 30000, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], maxBuffer: 10 * 1024 * 1024 });
     } catch (e) {
       output = (e.stdout || "") + (e.stderr || "");
       exitCode = e.status || 1;

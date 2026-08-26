@@ -25,6 +25,8 @@ const suites = [
   { file: 'test/github-setup.test.js', critical: true, description: 'GitHub workflow and package script checks' },
   { file: 'test/static-code-quality.test.js', critical: true, description: 'Static safety checks' },
   { file: 'test/security.test.js', critical: true, description: 'Redaction and dangerous command checks' },
+  { file: 'test/command-execution.test.js', critical: true, description: 'Bounded command execution and shell safety checks' },
+  { file: 'test/cron-safety.test.js', critical: true, description: 'Cron dispatch and crontab injection safety checks' },
   { file: 'test/outbound-url-security.test.js', critical: true, description: 'DNS-pinned outbound URL and SSRF regression checks' },
   { file: 'test/provider-outbound-security.test.js', critical: true, description: 'DNS-pinned provider endpoint regression checks' },
   { file: 'test/storage-isolation-security.test.js', critical: true, description: 'Principal/project KV isolation regression checks' },
