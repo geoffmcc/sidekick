@@ -6,6 +6,7 @@ const platformKernel = require("../../platform/kernel");
 const { redactSensitive } = require("../../redact");
 const { buildMemoryBrief } = require("../../memory");
 const toolContext = require("../context");
+const { canonicalizeProjectName } = require("../../core/project-identity");
 
 function jsonText(value) {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
@@ -166,6 +167,9 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
     if (!existing) return { content: [{ type: "text", text: "Task session not found: " + id }], isError: true };
     const state = action === "abandon" ? "abandoned" : "completed";
     const linkedHandoff = handoff_id ? dbStore.getHandoff(handoff_id) : null;
+    if (handoff_id && (!linkedHandoff || (existing.project && canonicalizeProjectName(linkedHandoff.project) !== canonicalizeProjectName(existing.project)))) {
+      return { content: [{ type: "text", text: `handoff quality gate failed: handoff "${handoff_id}" was not found in the session project` }], isError: true };
+    }
     const continuationPacket = handoff_id ? buildContinuationPacket(existing, { handoff: linkedHandoff, state, evidence, artifacts, reports, risks, relationships, do_not_repeat, outcome, final_summary, user_visible_result, acceptance_state, decisions, failed_approaches, next_step, completed_steps, blockers }) : null;
     let finalizedHandoff = null;
     let session;
@@ -175,7 +179,6 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
       if (qualityIssues.length || !validation.valid) {
         return { content: [{ type: "text", text: `handoff quality gate failed: ${[...qualityIssues, ...validation.issues].join("; ")}` }], isError: true };
       }
-      if (!linkedHandoff) return { content: [{ type: "text", text: `handoff quality gate failed: handoff "${handoff_id}" was not found` }], isError: true };
       try {
         const finalize = dbStore.getDb().transaction(() => {
           finalizedHandoff = dbStore.saveHandoff({ id: linkedHandoff.id, project: linkedHandoff.project, title: linkedHandoff.title, source: linkedHandoff.source, task_id: id, content: continuationPacket.summary, packet: continuationPacket, extraction_state: "pending", expectedVersion: linkedHandoff.version, owner_principal_id: linkedHandoff.owner_principal_id || ownerPrincipalId, created_by_principal_id: linkedHandoff.created_by_principal_id || actorPrincipalId });

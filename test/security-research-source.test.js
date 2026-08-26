@@ -106,6 +106,14 @@ assert.strictEqual(acquired.snapshot.metadata.resolved_ref, "a".repeat(40));
 assert.strictEqual(acquired.verification.verified, true);
 assert.ok(!fs.readdirSync(path.join(workspaceRoot, "projects", campaign.campaign_id, "repositories", acquired.repository.repository_id)).some(name => name.includes("staging")));
 
+const failedAcquireServices = {
+  config: { workspace: workspaceRoot },
+  dispatch: async () => { throw new Error("synthetic clone failure"); },
+};
+await assert.rejects(() => source.execute(failedAcquireServices, { action: "acquire", campaign_id: campaign.campaign_id, name: "failed-acquire", source_url: "https://example.test/failure.git" }, "test"), /synthetic clone failure/);
+const failedRepositories = kernel.listResearchSourceRepositories({ campaign_id: campaign.campaign_id, state: "archived" });
+assert.ok(failedRepositories.some(repository => repository.name === "failed-acquire"), "failed acquisition should archive its newly created repository");
+
 const workspaceSource = path.join(workspaceRoot, "input");
 fs.mkdirSync(workspaceSource);
 expectCode("workspace_unsafe", () => source.execute(services, { action: "import", campaign_id: campaign.campaign_id, name: "workspace-input", source_path: workspaceSource }, "test"));

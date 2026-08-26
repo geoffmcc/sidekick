@@ -236,7 +236,8 @@ function handleEvidence(services, args, runtime) {
     }
     case "inspect": {
       const run = args.run_id ? runsLib.get(args.run_id) : null;
-      return ok({ evidence: evidenceLib.inspect(args.references, { projectId: projectScope(args, runtime, run) }) });
+      const references = args.references || (args.evidence_id ? [`artifact:${args.evidence_id.replace(/^artifact:/, "")}`] : null);
+      return ok({ evidence: evidenceLib.inspect(references, { projectId: projectScope(args, runtime, run) }) });
     }
     case "redact": {
       const root = requireWorkspace(services);

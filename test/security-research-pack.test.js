@@ -196,6 +196,8 @@ function makeGitRepo() {
     assert.strictEqual(inspect.evidence[0].reference, baselineRef);
     assert.strictEqual(inspect.evidence[0].output, undefined, "inspect must not return raw evidence content");
     const evidenceId = baselineRef.replace("artifact:", "");
+    const inspectById = await okCall("research_evidence", { action: "inspect", run_id: runId, evidence_id: evidenceId });
+    assert.strictEqual(inspectById.evidence[0].reference, baselineRef, "inspect should accept the documented evidence_id form");
     const red = await okCall("research_evidence", { action: "redact", run_id: runId, evidence_id: evidenceId });
     assert.strictEqual(red.evidence.redaction_state, "redacted");
     assert.strictEqual(red.evidence.supersedes, evidenceId);
