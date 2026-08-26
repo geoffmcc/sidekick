@@ -191,7 +191,12 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
     return errorResult(`Tool ${descriptor.name} has no executable schema`, "dispatcher_internal_error");
   }
   const rawArgs = clonePlain(args || {});
-  const parsed = descriptor.schema.safeParse(rawArgs);
+  // correlation_id is invocation metadata, not a handler argument. Remove it
+  // only for validation so strict tool schemas cannot reject the universal
+  // field; query tools retain it because they use it as a filter.
+  const validationArgs = clonePlain(rawArgs);
+  if (!['log_query', 'timeline'].includes(descriptor.name)) delete validationArgs.correlation_id;
+  const parsed = descriptor.schema.safeParse(validationArgs);
   if (!parsed.success) {
     context.latencyTracker?.mark("validation");
     return validationError(descriptor.name, parsed);
@@ -541,7 +546,9 @@ async function dispatchTool(input, maybeArgs, maybeContext) {
   const canonical = stripSidekickPrefix(name || "");
   const trusted = isApprovedInternal(request);
   const latencyTracker = createLatencyTracker();
-  const requestCorrelationId = request.args && typeof request.args === "object" ? request.args.correlation_id : null;
+  const requestCorrelationId = request.args && typeof request.args === "object" && !["log_query", "timeline"].includes(canonical)
+    ? request.args.correlation_id
+    : null;
   const context = childContext({ ...publicContextInput(request), ...(requestCorrelationId ? { correlationId: requestCorrelationId } : {}), ...(trusted ? { approvedExecution: true, approvalId: request.context?.approvalId } : {}), toolName: canonical, latencyTracker });
   return runWithContext(context, async () => {
     const started = Date.now();

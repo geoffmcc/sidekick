@@ -48,6 +48,7 @@ function buildProcedureSchema(parameters) {
  */
 function toolCallContext(args, extra, toolName) {
   const context = { requestId: extra?.requestInfo?.requestId };
+  const correlationIsFilter = ["log_query", "timeline", "sidekick_log_query", "sidekick_timeline"].includes(toolName || "");
   if (extra?.sessionId) context.sessionId = extra.sessionId;
   // Session envelopes carry an explicit durable task/session id. Preserve it
   // as task metadata so log_query and timeline can correlate the same call
@@ -57,7 +58,7 @@ function toolCallContext(args, extra, toolName) {
     context.taskSessionId = args.id.trim();
     if (!args.correlation_id) context.correlationId = args.id.trim();
   }
-  if (typeof args?.correlation_id === "string") context.correlationId = args.correlation_id;
+  if (!correlationIsFilter && typeof args?.correlation_id === "string") context.correlationId = args.correlation_id;
   if (toolName === "session" && typeof args?.client_session_id === "string" && args.client_session_id.trim()) context.clientSessionId = args.client_session_id.trim();
   if (args && typeof args.project === "string" && args.project.trim()) {
     context.project = args.project.trim();

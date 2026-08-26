@@ -393,7 +393,7 @@ function findRecentFiles(root, startTime, limit = 50) {
   return results;
 }
 
-async function sidekick_timeline({ action, since, until, sources, pattern, severity, format, max_events, project, session_id, task_id, correlation_id }) {
+async function sidekick_timeline({ action, since, until, sources, pattern, severity, format, max_events, project, session_id, task_id, correlation_id, after_id }) {
   const maxEvents = max_events || MAX_TIMELINE_EVENTS;
   const startTime = parseRelativeTime(since);
   const endTime = parseRelativeTime(until || "now");
@@ -412,7 +412,7 @@ async function sidekick_timeline({ action, since, until, sources, pattern, sever
 
   if (effectiveSources.includes("log.jsonl")) {
     try {
-      const toolLogs = dbStore.queryToolLogs({ since: startTime.toISOString(), until: endTime.toISOString(), project, session_id, task_id, correlation_id, limit: Math.max(1000, maxEvents * 4) });
+      const toolLogs = dbStore.queryToolLogs({ since: startTime.toISOString(), until: endTime.toISOString(), project, session_id, task_id, correlation_id, after_id, limit: Math.max(1000, maxEvents * 4) });
       for (const log of toolLogs) {
         const event = {
           timestamp: log.t,
@@ -500,7 +500,7 @@ async function sidekick_timeline({ action, since, until, sources, pattern, sever
   }
 
   if (action === "filter") {
-    return { content: [{ type: "text", text: `Found ${filtered.length} events matching filters (truncated: ${truncated ? "yes" : "no"}; scoped: ${scoped ? "yes" : "no"})` }] };
+    return { content: [{ type: "text", text: JSON.stringify({ events: filtered, metadata: { truncated, scoped, correlation_id: correlation_id || null, after_id: after_id === undefined ? null : after_id, next_after_id: filtered.reduce((max, event) => Math.max(max, event.id || 0), 0) || after_id || null, returned: filtered.length, bounded: true } }, null, 2) }] };
   }
 
   if (action === "export" && format === "json") {
@@ -741,7 +741,8 @@ const EXTRA_SCHEMAS = {
      project: z.string().max(120).optional().describe("Filter tool-log events by project"),
      session_id: z.string().max(160).optional().describe("Filter tool-log events by session"),
      task_id: z.string().max(160).optional().describe("Filter tool-log events by task"),
-     correlation_id: z.string().max(160).optional().describe("Filter tool-log events by correlation")
+      correlation_id: z.string().max(160).optional().describe("Filter tool-log events by correlation"),
+      after_id: z.number().int().min(0).optional().describe("Return only log events newer than this id")
   }),
   baseline: z.object({
     action: z.enum(["record", "learn", "check", "status", "reset"]),
@@ -785,7 +786,7 @@ const descriptors = Object.freeze([
     name: "timeline",
     description: "Build chronological timeline from multiple log sources. Correlates events across log.jsonl, journalctl, git, and file modifications.",
     schema: EXTRA_SCHEMAS.timeline,
-    args: { action: "string (build|filter|export)", since: "string (start time: ISO or relative like 1h, 1d)", until: "string (optional, end time - default now)", sources: "array (optional, log.jsonl|journalctl|git|files|all - default all)", pattern: "string (optional, regex filter)", severity: "string (optional, error|warn|info|all - default all)", format: "string (optional, compact|detailed|json - default compact)", max_events: "number (optional, default 200)", project: "string (optional, project scope)", session_id: "string (optional, session scope)", task_id: "string (optional, task scope)", correlation_id: "string (optional, correlation scope)" },
+     args: { action: "string (build|filter|export)", since: "string (start time: ISO or relative like 1h, 1d)", until: "string (optional, end time - default now)", sources: "array (optional, log.jsonl|journalctl|git|files|all - default all)", pattern: "string (optional, regex filter)", severity: "string (optional, error|warn|info|all - default all)", format: "string (optional, compact|detailed|json - default compact)", max_events: "number (optional, default 200)", project: "string (optional, project scope)", session_id: "string (optional, session scope)", task_id: "string (optional, task scope)", correlation_id: "string (optional, correlation scope)", after_id: "number (optional, incremental log cursor)" },
     risk: "medium",
     category: "Monitoring",
     source: "builtin",

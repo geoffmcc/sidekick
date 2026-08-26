@@ -162,6 +162,9 @@ and workflow identifiers. When omitted, the existing server-generated trace
 identifier remains the operation correlation. `sidekick_log_query` can filter
 by it and supports bounded incremental polling with `after_id`; JSON polling
 responses include the returned count and next cursor.
+For `log_query` and `timeline`, `correlation_id` is a stream filter rather than
+the query operation's own correlation identifier, preventing an observer from
+recording its polling calls into the stream it is observing.
 
 Nested calls inherit the intended context fields and receive dispatcher-created invocation metadata. Concurrent calls do not share source or request identity. The legacy `setSource` compatibility setter must not be used around asynchronous execution; live request identity is passed into the dispatcher and carried by `AsyncLocalStorage`.
 
