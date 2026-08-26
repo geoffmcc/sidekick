@@ -162,7 +162,7 @@ function trackDecisionRepetition(state, decision) {
 }
 
 function selectBestModelName(modelNames, configuredModel = "") {
-  if (configuredModel) return configuredModel;
+  if (configuredModel && !(typeof configuredModel === "string" && configuredModel.trim().toLowerCase() === "inherit")) return configuredModel;
   const names = modelNames.map(name => name.toLowerCase());
   const priorities = [
     "llama3.1",

@@ -59,6 +59,7 @@ function validateResumeItem(item) {
   const validation = handoff
     ? dbStore.validateHandoffPacket(handoff.packet, { requireResume: true })
     : { valid: false, issues: ["linked handoff not found"] };
+  if (handoff && handoff.project !== item.project) validation.issues.push("linked handoff belongs to a different project");
   return {
     ...item,
     handoff_id: handoff?.id || item.handoff_id,
@@ -129,6 +130,9 @@ async function sidekick_resume({ action, project, summary, next_step, status, br
       const handoff = dbStore.getHandoff(item.handoff_id);
       if (!handoff) {
         return { content: [{ type: "text", text: "linked handoff_id was not found" }], isError: true };
+      }
+      if (handoff.project !== project) {
+        return { content: [{ type: "text", text: "linked handoff belongs to a different project" }], isError: true };
       }
       const validation = dbStore.validateHandoffPacket(handoff.packet, { requireResume: true });
       if (!validation.valid) return { content: [{ type: "text", text: `linked handoff is not resumable: ${validation.issues.join("; ")}` }], isError: true };

@@ -163,7 +163,10 @@ async function sidekick_tools({ action, query, name, category, format, include_d
   const selectedAction = action || "overview";
   const selectedFormat = format || "text";
   const maxResults = Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 200) : 100;
-  let records = getToolRecordsForSource(getCurrentSource());
+  const policySources = selectedAction === "policy" ? normalizePolicySources(source) : null;
+  let records = policySources
+    ? [...new Map(policySources.flatMap(policySource => getToolRecordsForSource(policySource)).map(tool => [tool.name, tool])).values()]
+    : getToolRecordsForSource(getCurrentSource());
 
   // Metadata lookup remains available for blocked tools so operators can
   // inspect risk and policy without first enabling the tool. Overview/search
@@ -187,7 +190,7 @@ async function sidekick_tools({ action, query, name, category, format, include_d
       records = records.filter(tool => tool.enabled);
     }
     records = records.slice(0, maxResults);
-    const sources = normalizePolicySources(source);
+    const sources = policySources;
     const inspections = buildPolicyInspection(records, sources);
     const summary = summarizePolicyInspection(inspections);
     const payload = { total: inspections.length, sources, summary, decisions: inspections };

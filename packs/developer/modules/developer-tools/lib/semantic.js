@@ -234,7 +234,7 @@ function semanticMetadata(text, tree, file, sourceHash) {
   const ev = offset => evidenceBytes(file, sourceHash, text, offset);
   const add = (list, item, key = stable) => addUnique(list, item, key);
   for (const marker of tree.control_flow || []) add(result.control_flow, { kind: marker.kind, from: marker.from || null, evidence: ev(marker.start_byte), provenance: { ast_node: marker.ast_node, rule: "tree-sitter-control-node" } }, x => `${x.kind}:${x.from}:${x.provenance.ast_node}`);
-  const ranges = (tree.symbols || []).map(s => ({ ...s, body: text.slice(s.start_byte, Math.min(text.length, s.end_byte)) }));
+  const ranges = (tree.symbols || []).map(s => ({ ...s, body: text.slice(charOffsetAtByte(text, s.start_byte), charOffsetAtByte(text, s.end_byte)) }));
   const classify = (name, body, offset) => {
     const lower = `${name} ${body}`;
     const phase = Object.entries(PHASE_WORDS).find(([, re]) => re.test(name));
@@ -514,7 +514,7 @@ async function indexRepository(root, options = {}) {
           for (const symbol of tree.symbols || []) {
             const target = unit.symbols.find(x => x.name === clean(symbol.name, 200) && x.evidence.line === symbol.start_line && x.evidence.column === symbol.start_column) || unit.symbols.find(x => x.name === clean(symbol.name, 200) && x.evidence.line === symbol.start_line);
             if (!target) continue;
-            const body = text.slice(symbol.start_byte, Math.min(text.length, symbol.end_byte));
+            const body = text.slice(charOffsetAtByte(text, symbol.start_byte), charOffsetAtByte(text, symbol.end_byte));
             const phase = Object.entries(PHASE_WORDS).find(([, re]) => re.test(symbol.name));
             target.execution_phase = phase ? phase[0] : "unknown";
             target.lifecycle_semantics = LIFECYCLE_WORDS.filter(word => new RegExp(`\\b${word}(?:\\b|[A-Z_])`, "i").test(`${symbol.name} ${body}`));

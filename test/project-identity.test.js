@@ -1,11 +1,16 @@
 const assert = require("assert");
+const os = require("os");
 const path = require("path");
 const fs = require("fs");
 
 const DATA_DIR = path.join(__dirname, "test-data-project-identity-" + Date.now());
+const SECRET_DIR = path.join(os.tmpdir(), "sidekick-test-secrets-project-identity-" + Date.now());
 fs.mkdirSync(DATA_DIR, { recursive: true });
+fs.mkdirSync(SECRET_DIR, { recursive: true, mode: 0o700 });
+fs.writeFileSync(path.join(SECRET_DIR, "sidekick_secret_key"), "project-identity-test-secret-key\n", { mode: 0o600 });
 process.env.SIDEKICK_DATA_DIR = DATA_DIR;
-process.env.SIDEKICK_SECRET_KEY = "project-identity-test-secret-key";
+process.env.SIDEKICK_SECRET_DIR = SECRET_DIR;
+delete process.env.SIDEKICK_SECRET_KEY;
 
 delete require.cache[require.resolve("../src/db")];
 delete require.cache[require.resolve("../src/platform/kernel")];
@@ -33,6 +38,7 @@ function test(name, fn) {
 
 function cleanup() {
   try { fs.rmSync(DATA_DIR, { recursive: true, force: true }); } catch {}
+  try { fs.rmSync(SECRET_DIR, { recursive: true, force: true }); } catch {}
 }
 
 // createProjectWorkspace no longer writes plaintext, so legacy rows that
@@ -135,6 +141,13 @@ test("PI.9: backfillProjectSources aggregates across stores", () => {
   const execRow = platformKernel.getProjectSources("backfill_p").find(r => r.source === "execution" && r.source_id === "*");
   assert.strictEqual(execRow.count, 1);
   assert.strictEqual(platformKernel.getProjectSources("backfill_q").find(r => r.source === "kv").count, 1);
+
+  // Canonical project variants must be aggregated before the upsert, rather
+  // than overwriting one variant's count with the other.
+  kv.run("b_k4", "Backfill-P");
+  const merged = platformKernel.backfillProjectSources({ dry_run: false });
+  assert.ok(merged.written >= 4);
+  assert.strictEqual(platformKernel.getProjectSources("backfill_p").find(r => r.source === "kv" && r.source_id === "*").count, 3);
 });
 
 // PI.10: project sources are isolated across projects
@@ -180,7 +193,9 @@ test("PI.13: deleteWorkspaceSecret removes", () => {
 test("PI.14: secret methods fail closed without key", () => {
   const ws = platformKernel.getWorkspaceByProject("sec_p");
   const prev = process.env.SIDEKICK_SECRET_KEY;
+  const prevDir = process.env.SIDEKICK_SECRET_DIR;
   delete process.env.SIDEKICK_SECRET_KEY;
+  delete process.env.SIDEKICK_SECRET_DIR;
   try {
     assert.throws(() => platformKernel.setWorkspaceSecret(ws.workspace_id, "nope", "v"), /SIDEKICK_SECRET_KEY/);
     assert.throws(() => platformKernel.getWorkspaceSecret(ws.workspace_id, "api_key"), /SIDEKICK_SECRET_KEY/);
@@ -188,6 +203,7 @@ test("PI.14: secret methods fail closed without key", () => {
     assert.deepStrictEqual(names, ["api_key"]);
   } finally {
     process.env.SIDEKICK_SECRET_KEY = prev;
+    process.env.SIDEKICK_SECRET_DIR = prevDir;
   }
 });
 
@@ -236,11 +252,14 @@ test("PI.18: backfillWorkspaceSecrets fails closed without key", () => {
   const ws = platformKernel.createProjectWorkspace({ name: "closed", project_id: "closed_p" });
   seedLegacySecrets(ws.workspace_id, { held: "still-plaintext" });
   const prev = process.env.SIDEKICK_SECRET_KEY;
+  const prevDir = process.env.SIDEKICK_SECRET_DIR;
   delete process.env.SIDEKICK_SECRET_KEY;
+  delete process.env.SIDEKICK_SECRET_DIR;
   try {
     assert.throws(() => platformKernel.backfillWorkspaceSecrets(), /SIDEKICK_SECRET_KEY/);
   } finally {
     process.env.SIDEKICK_SECRET_KEY = prev;
+    process.env.SIDEKICK_SECRET_DIR = prevDir;
   }
   const row = dbStore.getDb().prepare("SELECT secrets_json FROM platform_project_workspaces WHERE workspace_id = ?").get(ws.workspace_id);
   assert.ok(row.secrets_json.includes("still-plaintext"));

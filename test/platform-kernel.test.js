@@ -138,6 +138,7 @@ console.log('Running Platform Kernel Tests...\n');
     console.log('Passed\n');
 
     console.log('Test PK.7: research records preserve project, scope, execution, and evidence lineage');
+    assert.throws(() => kernel.createResearchCampaign({ campaign_id: '../unsafe', project_id: 'sidekick', name: 'Unsafe campaign', created_by: 'test-operator' }), /safe path segment/, 'Supplied campaign IDs must be safe path segments');
     const campaign = kernel.createResearchCampaign({ project_id: 'sidekick', name: 'Synthetic scope review', scope_snapshot_id: snapshot.snapshot_id, created_by: 'test-operator' });
     assert.strictEqual(campaign.state, 'draft', 'Campaigns should start in draft');
     kernel.transitionResearchCampaign(campaign.campaign_id, 'active', { actor_id: 'test-operator' });

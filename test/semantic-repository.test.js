@@ -48,6 +48,18 @@ const semantic = require("../packs/developer/modules/developer-tools/lib/semanti
     assert.ok(names.includes("semantic_repo")); assert.ok(names.includes("dev_repo_profile"));
   });
 
+  await test("uses UTF-8 byte ranges when classifying Unicode-prefixed symbols", async () => {
+    const index = await semantic.indexRepository(root, { sourceFiles: [{
+      path: "unicode.ts",
+      language: "typescript",
+      content: "😀 function worker() { authorize(); persist(); return true; }",
+    }] });
+    const worker = index.files[0].unit.symbols.find(symbol => symbol.name === "worker");
+    assert.ok(worker.security_boundaries.some(boundary => boundary.kind === "authorization"));
+    assert.ok(worker.side_effects.includes("durable_state"));
+    assert.ok(index.files[0].unit.security_boundaries.some(boundary => boundary.kind === "authorization"));
+  });
+
   await test("honors a bounded negated gitignore rule without weakening safety exclusions", async () => {
     fs.writeFileSync(path.join(root, "ignored-dir", "kept.ts"), "export const kept = true;"); fs.appendFileSync(path.join(root, ".gitignore"), "!ignored-dir/\n!ignored-dir/kept.ts\n");
     const index = await semantic.indexRepository(root);

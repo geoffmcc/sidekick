@@ -107,6 +107,12 @@ console.log('Running Tools Tests...\n');
       const approvalPolicy = JSON.parse(approvalPolicyResult.content[0].text);
       assert.strictEqual(approvalPolicy.decisions[0].approval_required, true, 'Strict approval mode should require high-risk approval');
       assert.strictEqual(approvalPolicy.decisions[0].approval.reason, 'strict mode requires approval for high and critical risk tools');
+
+      const multiSourcePolicyResult = await toolsFn({ action: 'policy', name: 'bash', source: 'mcp,dashboard,agent', format: 'json' });
+      const multiSourcePolicy = JSON.parse(multiSourcePolicyResult.content[0].text);
+      assert.deepStrictEqual(multiSourcePolicy.sources, ['mcp', 'dashboard', 'agent'], 'Policy inspection should preserve requested source order');
+      assert.strictEqual(multiSourcePolicy.total, 3, 'Policy inspection should inspect every requested source independently');
+      assert.deepStrictEqual(multiSourcePolicy.decisions.map(decision => decision.source), ['mcp', 'dashboard', 'agent'], 'Policy decisions should include every requested source');
     } finally {
       for (const [key, value] of Object.entries(savedPolicyEnv)) {
         if (value === undefined) delete process.env[key];
@@ -243,7 +249,7 @@ console.log('Running Tools Tests...\n');
     dbStore.runPendingMigrations();
     const linkedHandoff = JSON.parse((await handoff({
       action: 'create',
-      project: 'resume_test',
+      project: 'resume_linked_test',
       content: 'Fact: linked resume handoff.',
       packet: {
         objective: 'Validate a linked resume handoff',
@@ -272,6 +278,10 @@ console.log('Running Tools Tests...\n');
     assert.strictEqual(blockedData.resume_blocked, true, 'Blocked resume should identify the safety gate');
     await resume({ action: 'clear', project: 'resume_linked_test' });
     await handoff({ action: 'archive', id: linkedHandoff.handoff.id });
+
+    const foreignResume = await resume({ action: 'set', project: 'resume_test', summary: 'Should be rejected', next_step: 'Never resume', handoff_id: linkedHandoff.handoff.id });
+    assert.ok(foreignResume.isError, 'Resume should reject a handoff owned by another project');
+    assert.ok(foreignResume.content[0].text.includes('different project'));
     console.log('✓ Passed\n');
 
     // Test 2.0aba: plan-scoped resume fields and phase numbering

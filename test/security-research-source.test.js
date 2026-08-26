@@ -36,6 +36,7 @@ assert.strictEqual(imported.snapshot.authority, "derived_analysis_input");
 assert.strictEqual(imported.verification.verified, true);
 assert.strictEqual(imported.snapshot.file_count, 2);
 assert.ok(imported.snapshot.storage_ref.startsWith(`projects/${campaign.campaign_id}/repositories/`));
+assert.strictEqual(source.execute(services, { action: "verify", campaign_id: campaign.campaign_id, project_id: "SOURCE-FIXTURE", repository_id: imported.repository.repository_id, snapshot_id: imported.snapshot.snapshot_id }, "test").verification.verified, true, "Project ownership checks should use canonical identity");
 assert.ok(!path.isAbsolute(imported.snapshot.storage_ref));
 
 const repositoryId = imported.repository.repository_id;

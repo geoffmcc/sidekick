@@ -156,6 +156,9 @@ assert.strictEqual(
   selectBestModelName(["qwen2.5-coder:7b", "llama3.1:8b"], "custom:latest"),
   "custom:latest"
 );
+for (const inherited of ["inherit", "INHERIT", " InHeRiT "]) {
+  assert.strictEqual(selectBestModelName(["qwen2.5-coder:7b", "llama3.1:8b"], inherited), "llama3.1:8b");
+}
 
 assert.deepStrictEqual(
   buildChatMessages("system rules", [
