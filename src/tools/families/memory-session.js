@@ -189,11 +189,16 @@ async function sidekick_session({ action, id, goal, project, source, working_dir
       session = dbStore.saveTaskSession({ ...existing, artifacts: artifacts || existing.artifacts, outcome, final_summary: redactSensitive(final_summary || user_visible_result || outcome || ""), acceptance_state, state, ended_at: new Date().toISOString(), owner_principal_id: existing.owner_principal_id || ownerPrincipalId, created_by_principal_id: existing.created_by_principal_id || actorPrincipalId });
     }
     const created = [];
+    const createdText = new Set();
+    const MAX_AUTOMATIC_MEMORIES = 8;
     const projectName = project || existing.project;
     const add = (type, values, memoryClass, confidence) => {
       for (const value of Array.isArray(values) ? values : values ? [values] : []) {
         const text = redactSensitive(String(value || "").trim());
         if (!text) continue;
+        const fingerprint = `${type}:${text.toLowerCase().replace(/\s+/g, " ")}`;
+        if (createdText.has(fingerprint) || created.length >= MAX_AUTOMATIC_MEMORIES) continue;
+        createdText.add(fingerprint);
         const mem = dbStore.upsertMemory({ type, project: projectName, content: text, summary: text, confidence, source: "task_session", source_tool: "sidekick_session", source_task_id: id, source_ref: id, memory_class: memoryClass, evidence_excerpt: text, directness: "direct", source_authority: action === "abandon" ? 4 : 5, metadata: { task_session_id: id, outcome, acceptance_state, usefulness_feedback } });
         if (mem) created.push(mem);
       }

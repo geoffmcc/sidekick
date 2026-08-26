@@ -323,7 +323,7 @@ async function devChangeSummary(services, { path: requestedPath, base, staged = 
 
 // --- dev_verify ------------------------------------------------------------
 
-async function devVerify(services, { path: requestedPath, mode, intents: requestedIntents, continue_on_failure, max_output_chars, timeout_ms, dry_run = false }) {
+async function devVerifyInternal(services, { path: requestedPath, mode, intents: requestedIntents, continue_on_failure, max_output_chars, timeout_ms, dry_run = false }) {
   const resolved = resolveRepositoryRoot(services, requestedPath);
   if (!resolved.ok) return resolved.result;
   const root = resolved.root;
@@ -435,6 +435,30 @@ async function devVerify(services, { path: requestedPath, mode, intents: request
     }],
     isError: summary.verdict === "failed",
   };
+}
+
+async function devVerify(services, args = {}) {
+  const dryRun = args.dry_run === true;
+  try {
+    return await devVerifyInternal(services, args);
+  } catch (error) {
+    const repository = args.path ? path.resolve(args.path) : null;
+    const message = String(error && error.message ? error.message : error).slice(0, 1000);
+    return { ...jsonResult({
+      ok: false,
+      tool: "dev_verify",
+      generated_at: new Date().toISOString(),
+      repository,
+      dry_run: dryRun,
+      verdict: "error",
+      execution_host: require("os").hostname(),
+      workspace_permissions: { available: false, read: null, write: null, execute: null },
+      preflight: { available: false, allowed: false, reason: "verification failed before a complete workspace preflight was available", commands: [] },
+      summary: { verdict: "error", selected: 0, executed_count: 0, not_detected: 0, error_code: "verification_internal_error" },
+      commands: [],
+      error: { code: "verification_internal_error", message },
+    }), isError: true, code: "verification_internal_error" };
+  }
 }
 
 // --- module contract -------------------------------------------------------

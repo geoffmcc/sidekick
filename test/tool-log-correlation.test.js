@@ -37,7 +37,7 @@ function test(name, fn) {
 // Rebuild the helper in isolation from the real source so the assertions below
 // exercise the shipped logic rather than a copy.
 function loadToolCallContext() {
-  const match = mcpServerSource.match(/function toolCallContext\(args, extra\) \{[\s\S]*?\n\}/);
+  const match = mcpServerSource.match(/function toolCallContext\(args, extra(?:, toolName)?\) \{[\s\S]*?\n\}/);
   assert.ok(match, 'toolCallContext is defined in src/mcp/server.js');
   // eslint-disable-next-line no-new-func
   return new Function(`${match[0]}; return toolCallContext;`)();
@@ -62,7 +62,7 @@ test('every MCP registration site passes the shared context builder', () => {
   const callSites = mcpServerSource.match(/callMcpTool\([^)]*\)/g) || [];
   assert.ok(callSites.length >= 3, `expected at least 3 callMcpTool sites, found ${callSites.length}`);
   for (const site of callSites) {
-    assert.ok(/toolCallContext\(args, extra\)/.test(site),
+    assert.ok(/toolCallContext\(args, extra(?:, [^)]+)?\)/.test(site),
       `call site does not use toolCallContext: ${site}`);
   }
   assert.ok(!/requestId: extra\?\.requestInfo\?\.requestId\s*\}/.test(
