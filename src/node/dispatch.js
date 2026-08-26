@@ -1,8 +1,11 @@
 "use strict";
 
 const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
 const manager = require("./manager");
 const { selectNode } = require("./placement");
+const { stableId } = require("./workspace");
 
 const POLL_MS = 100;
 const MAX_WAIT_MS = 30 * 60 * 1000;
@@ -11,22 +14,47 @@ function requestId(context = {}) { return context.requestId || `node_req_${Date.
 function workspaceIdFromArgs(args = {}) { return args.workspace_id || args.workspaceId || null; }
 function repositoryIdFromArgs(args = {}) { return args.repository_id || args.repositoryId || null; }
 function isNodeDispatchEnabled(context = {}) { return context.executionLocation !== "server" && context.allowNodeExecution !== false; }
+function pathArguments(args = {}) {
+  return Object.entries(args).filter(([key, value]) => typeof value === "string" && /(?:^path$|_path$|^path_[ab]$|^destination$|^output$|^cwd$)/i.test(key)).map(([, value]) => value);
+}
+function visibleOnServer(target) {
+  return fs.existsSync(path.resolve(String(target)));
+}
+function authorizedWorkspaceCapabilities(node) {
+  const authorized = new Map(manager.listWorkspaces(node.workerId).map(item => [item.name, item]));
+  const advertised = Array.isArray(node.capabilities.workspaces) ? node.capabilities.workspaces : [];
+  const roots = advertised.filter(item => item && typeof item === "object" && item.root).filter(item => {
+    const workspace = authorized.get(String(item.name || ""));
+    return workspace && workspace.rootIdentity === stableId("root", item.root);
+  });
+  return roots.length ? roots : node.authorizedWorkspaces;
+}
 
 async function maybeExecute(descriptor, args, context = {}) {
   if (!isNodeDispatchEnabled(context) || !descriptor?.placement?.nodeSafe) return null;
   manager.ensureSchema();
+  const requestedPaths = pathArguments(args);
   const nodes = manager.list().filter(node => node.worker && node.worker.connectionState === "online");
   const placement = selectNode(nodes.map(node => ({ nodeId: node.nodeId, capabilities: {
     ...node.capabilities,
     nodeId: node.nodeId,
     protocolVersion: node.protocolVersion,
     descriptorSetHash: node.descriptorSetHash,
-    workspaces: node.authorizedWorkspaces,
+    workspaces: authorizedWorkspaceCapabilities(node),
     networkScopes: node.authorizedNetworkScopes,
     healthy: node.capabilityState === "healthy",
     authorized: node.worker.adminState === "enabled" && node.worker.credentialState === "active",
-  }, node })), descriptor, { descriptorSetHash: context.descriptorSetHash, protocolVersion: "1" });
-  if (!placement.selected) return null;
+  }, node })), descriptor, { descriptorSetHash: context.descriptorSetHash, protocolVersion: "1", requestedPaths });
+  if (!placement.selected) {
+    const pathIsRemoteOnly = requestedPaths.length > 0 && requestedPaths.some(target => !visibleOnServer(target));
+    if (pathIsRemoteOnly) return {
+      content: [{ type: "text", text: "Repository path is not visible on the server and no authorized execution node proved that it can access the requested path; execution was not queued" }],
+      isError: true,
+      code: "node_path_visibility_unverified",
+      nodeExecution: { location: "node", requestedPaths, candidates: placement.candidates.map(item => ({ nodeId: item.nodeId, reasons: item.reasons })) },
+    };
+    return null;
+  }
   const selected = placement.selected.candidate.node;
   const job = manager.enqueue({
     workerId: selected.workerId,
