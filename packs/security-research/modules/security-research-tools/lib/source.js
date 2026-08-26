@@ -253,6 +253,7 @@ async function acquireSource(services, args, actor) {
     return unsupported("acquire", "the canonical git clone action is unavailable; acquisition was not attempted");
   }
   let repository = args.repository_id ? kernel().getResearchSourceRepository(safeId(args.repository_id, "repository_id")) : null;
+  const repositoryCreatedForAcquisition = !repository;
   if (repository && (repository.campaign_id !== campaignId || args.project_id && !sameProject(repository.project_id, args.project_id))) fail("not_found", "source repository not found");
   if (!repository) repository = kernelCall(() => kernel().createResearchSourceRepository({ campaign_id: campaignId, project_id: args.project_id, name: requireText(args.name || new URL(sourceUrl).hostname, "name"), created_by: actor, metadata: { authority: "derived_analysis_input" }, source: "security-research" }));
   if (repository.state !== "active") fail("state_conflict", "cannot acquire into an inactive source repository");
@@ -285,6 +286,9 @@ async function acquireSource(services, args, actor) {
     });
     return result;
   } catch (error) {
+    if (repositoryCreatedForAcquisition) {
+      try { kernelCall(() => kernel().transitionResearchSourceRepository(repository.repository_id, "archived", { actor_id: actor, source: "security-research" })); } catch {}
+    }
     throw error;
   } finally {
     try {

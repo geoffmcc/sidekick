@@ -186,6 +186,15 @@ dbStore.runPendingMigrations();
   const getByIdData = JSON.parse(getById.content[0].text);
   assert.strictEqual(getByIdData.handoff.id, createData.handoff.id, "get by id should return the correct handoff");
 
+  const getByWrongProject = await TOOLS.handoff({ action: "get", id: createData.handoff.id, project: "other_project" });
+  assert.ok(getByWrongProject.isError, "handoff get should enforce the requested project scope");
+  assert.ok(getByWrongProject.content[0].text.includes("not found"), "wrong-project handoff access should be indistinguishable from a missing handoff");
+
+  const foreignSession = JSON.parse((await TOOLS.session({ action: "begin", goal: "Reject a cross-project handoff link", project: "other_project", source: "test" })).content[0].text);
+  const foreignEnd = await TOOLS.session({ action: "end", id: foreignSession.session.id, handoff_id: createData.handoff.id, final_summary: "Should not link across projects", acceptance_state: "accepted" });
+  assert.ok(foreignEnd.isError, "session finalization should reject a cross-project handoff link");
+  assert.strictEqual(dbStore.getTaskSession(foreignSession.session.id).state, "active", "cross-project handoff rejection must leave the session active");
+
   const getByUnknownId = await TOOLS.handoff({ action: "get", id: "nonexistent_id" });
   assert.ok(getByUnknownId.isError, "handoff get by unknown id should be an error");
   assert.ok(getByUnknownId.content[0].text.includes("Handoff not found"), "unknown id should return Handoff not found");
