@@ -461,6 +461,9 @@
   <div class="section-title">Agent</div>
   <div id="agentSessionMeta" class="sub" aria-live="polite">Start a governed Agent task or resume a session from History.</div>
   <div class="agent-control-room" aria-label="Durable Agent task state">
+    <label for="agentProject" class="sub">Project scope</label>
+    <input id="agentProject" type="text" value="sidekick" maxlength="120" pattern="[a-z][a-z0-9_]*" aria-label="Agent project scope" placeholder="sidekick">
+    <div class="sub">Used to retrieve relevant project context and history. Leave blank for an intentionally unscoped task.</div>
     <label for="agentProfile" class="sub">Task profile</label>
     <select id="agentProfile" aria-label="Agent task profile">
       <option value="quick">Quick</option><option value="standard" selected>Standard</option><option value="deep">Deep</option><option value="persistent">Persistent</option><option value="research">Research</option>

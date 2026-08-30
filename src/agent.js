@@ -211,6 +211,7 @@ const { recoverDurableAgentTasks } = require("./agent/recovery-scan");
 const { verifyTaskResult, successfulFreshOutcome, applyRecipeGates, applyReceiptGates, applyPlanGates, runVerificationRepair } = require("./agent/verification");
 const { assembleSessions, buildSession, buildTask } = require("./agent-history");
 const { redactSensitive, redactSensitiveKeysDeep } = require("./redact");
+const { PROJECT_RE, canonicalizeProjectName } = require("./core/project-identity");
 const {
   CONTINUATION_LIMITS,
   ContinuationError,
@@ -2090,8 +2091,10 @@ app.post("/api/agent/run", (req, res) => {
   const goalCheck = validateFollowUpGoal(goal);
   if (!goalCheck.ok) return res.status(goalCheck.httpStatus).json({ error: goalCheck.clientMessage });
   const body = req.body || {};
-  const allowed = new Set(["goal","goal_spec","profile","workspace_ref","authority_envelope","handoff_id"]);
+  const allowed = new Set(["goal","goal_spec","profile","project","workspace_ref","authority_envelope","handoff_id"]);
   if (Object.keys(body).some(key => !allowed.has(key))) return res.status(400).json({ error: "unknown task field" });
+  const requestedProject = body.project == null || body.project === "" ? null : canonicalizeProjectName(body.project);
+  if (requestedProject && !PROJECT_RE.test(requestedProject)) return res.status(400).json({ error: "project must be a canonical project identifier" });
       const goalSpec = body.goal_spec == null ? null : body.goal_spec;
       if (goalSpec !== null && (!goalSpec || typeof goalSpec !== "object" || Array.isArray(goalSpec))) return res.status(400).json({ error: "goal_spec must be an object" });
       if (goalSpec) {
@@ -2108,7 +2111,7 @@ app.post("/api/agent/run", (req, res) => {
       const requestedEffects = Array.isArray(requestedEnvelope.allowed_effects) ? requestedEnvelope.allowed_effects : [];
       if (!authIdentity && (requestedEnvelope.changes_allowed === true || requestedEnvelope.external_effects_allowed === true || requestedEnvelope.production_allowed === true || requestedEffects.some(effect => effect !== "read_only"))) return res.status(403).json({ error: "authenticated principal is required for an expanded authority envelope" });
       if (body.handoff_id !== undefined && (typeof body.handoff_id !== "string" || body.handoff_id.length < 1 || body.handoff_id.length > 180)) return res.status(400).json({ error: "handoff_id is invalid" });
-      beginTaskRun(res, { goal: goalCheck.goal, goalSpec, profile: body.profile || "standard", workspaceRef: body.workspace_ref || null, authorityEnvelope: body.authority_envelope || {}, handoffId: body.handoff_id || null, parentContext: authIdentity ? { requestedByPrincipalId: authIdentity.principal_id, actorPrincipalId: authIdentity.principal_id, authIdentity } : null });
+  beginTaskRun(res, { goal: goalCheck.goal, goalSpec, profile: body.profile || "standard", workspaceRef: body.workspace_ref || null, authorityEnvelope: body.authority_envelope || {}, handoffId: body.handoff_id || null, parentContext: (authIdentity || requestedProject) ? { ...(requestedProject ? { project: requestedProject } : {}), ...(authIdentity ? { requestedByPrincipalId: authIdentity.principal_id, actorPrincipalId: authIdentity.principal_id, authIdentity } : {}) } : null });
 });
 
 // Durable control-room projection. This is a read surface over the task store;

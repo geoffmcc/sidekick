@@ -22,6 +22,9 @@ async function main() {
   const write = { name: "write", risk: "critical", annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false } };
   assert.strictEqual(determineEffect(read, {}).effect, "read_only");
   assert.strictEqual(determineEffect(write, {}).effect, "destructive");
+  assert.strictEqual(determineEffect({ name: "project_registry", risk: "high" }, { action: "list" }).effect, "read_only", "allowlisted metadata actions on mixed tools are read-only");
+  assert.strictEqual(determineEffect({ name: "project_registry", risk: "high" }, { action: "register" }).effect, "destructive", "unlisted mixed-tool actions retain their destructive classification");
+  assert.strictEqual(preflightCapabilityCall("project_registry", { action: "list" }, [{ name: "project_registry", risk: "high", schema: schema() }]).ok, true, "allowlisted project metadata reads pass capability preflight");
   assert.strictEqual(decideAutonomy({ descriptor: read, args: {}, envelope: parent, projectRef: "sidekick" }).decision, "proceed");
   assert.strictEqual(decideAutonomy({ descriptor: write, args: {}, envelope: parent }).decision, "deny");
   assert.strictEqual(decideAutonomy({ descriptor: read, args: {}, envelope: createAuthorityEnvelope({ permitted_projects: ["project:allowed"] }), projectRef: "project:other" }).decision, "deny");
