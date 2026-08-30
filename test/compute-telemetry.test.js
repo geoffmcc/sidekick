@@ -8,6 +8,7 @@ const {
 } = require("../src/compute/telemetry");
 
 let passed = 0;
+const pendingAsyncTests = [];
 function test(name, fn) {
   try { fn(); passed++; console.log(`ok - ${name}`); }
   catch (error) { console.error(`not ok - ${name}: ${error.message}`); process.exitCode = 1; }
@@ -22,7 +23,7 @@ test("CSV parser preserves quoted commas", () => {
   assert.deepStrictEqual(parseCsvLine('0, "GPU, Test", 535.1'), ["0", "GPU, Test", "535.1"]);
 });
 
-asyncTest("GPU collector uses fixed no-shell queries and strips process paths/PIDs", async () => {
+pendingAsyncTests.push(asyncTest("GPU collector uses fixed no-shell queries and strips process paths/PIDs", async () => {
   const calls = [];
   const result = await collectGpuTelemetry({
     platform: "linux",
@@ -47,14 +48,14 @@ asyncTest("GPU collector uses fixed no-shell queries and strips process paths/PI
   assert.ok(!Object.keys(calls[0].options.env).some(key => /SECRET|TOKEN|PASSWORD|KEY/i.test(key)));
   assert.ok(calls[0].args.every(arg => !String(arg).includes("prompt") && !String(arg).includes("secret")));
   assert.ok(!("pid" in result.processes[0]));
-});
+}));
 
-asyncTest("GPU collector degrades honestly when nvidia-smi is unavailable", async () => {
+pendingAsyncTests.push(asyncTest("GPU collector degrades honestly when nvidia-smi is unavailable", async () => {
   const result = await collectGpuTelemetry({
     execFileImpl: (program, args, options, callback) => callback(new Error("missing")),
   });
   assert.deepStrictEqual(result, { status: "unavailable", reason: "nvidia_smi_unavailable" });
-});
+}));
 
 test("telemetry sanitizer is explicit, bounded, and local-only", () => {
   const result = sanitizeTelemetry({
@@ -120,7 +121,7 @@ test("worker projection allowlists identity and safe telemetry only", () => {
   assert.ok(!JSON.stringify(result).includes("must-not-appear"));
 });
 
-setTimeout(() => {
+Promise.all(pendingAsyncTests).then(() => {
   console.log(`\nCompute telemetry tests: ${passed} passed`);
   if (process.exitCode) process.exit(1);
-}, 0);
+});

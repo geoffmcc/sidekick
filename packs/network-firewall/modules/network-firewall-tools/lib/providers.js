@@ -6,6 +6,8 @@ const { authHeaders } = require("./client");
 const READ_CAPS = ["system_information","interfaces","networks","routes","gateways","dhcp","clients","dns","firewall","nat","vpn","health","connectivity_analysis"];
 const CHANGE_CAPS = ["firewall_rule_mutation","nat_mutation","network_mutation","route_mutation","dhcp_reservation_mutation","safe_apply","rollback"];
 function unsupported(provider, capability, reason = "Provider interface does not expose this capability") { return { state:"unsupported", provider, capability, reason }; }
+function unwrap(data) { return data && typeof data === "object" && Object.prototype.hasOwnProperty.call(data, "data") ? data.data : data; }
+function collection(data, keys) { const value=unwrap(data); if (Array.isArray(value)) return value; for (const key of keys) if (Array.isArray(value?.[key])) return value[key]; return []; }
 async function open(profile, client) { if (profile.provider !== "openwrt") return { session:null }; const session = await ow.login(client, profile); return { session }; }
 async function openwrt(profile, client, session, action) {
   const u = (object, method, args) => ow.invoke(client, profile, session, object, method, args);
@@ -31,14 +33,15 @@ async function generic(profile, client, action) {
     return {provider:profile.provider,capabilities};
   }
   const path=REST_PATHS[profile.provider]?.[action]; if (!path) return unsupported(profile.provider, action, "No supported official endpoint is configured for this provider/version");
-  const data=await client.get(path, authHeaders(profile));
+  const raw=await client.get(path, authHeaders(profile));
+  const data=unwrap(raw);
   if (action === "system") return n.device(profile.provider, {version:data?.version || data?.release,hostname:data?.hostname,provider_data:data}, {});
-  if (action === "interfaces") return (Array.isArray(data)?data:(data?.rows||data?.items||data?.interfaces||[])).map(x=>n.interfaceView(profile.provider,{id:x.id||x.uuid||x.name,name:x.name||x.ifname,state:x.status||x.state,addresses:x.addresses||[],provider_data:x},"runtime"));
-  if (action === "networks") return (Array.isArray(data)?data:(data?.data||data?.items||[])).map(x=>n.networkView(profile.provider,{id:x.id||x.uuid||x.name,name:x.name,subnet:x.subnet||x.ip_subnet,vlan_id:x.vlan_id||x.vlan,interfaces:x.interfaces,provider_data:x}));
-  if (action === "routes") return (Array.isArray(data)?data:(data?.rows||data?.items||data?.routes||[])).map(x=>n.routeView(profile.provider,{id:x.id,destination:x.destination||x.network,gateway:x.gateway||x.next_hop,interface:x.interface,metric:x.metric,active:x.active,provider_data:x},"runtime"));
-  if (action === "firewall") return {rules:(Array.isArray(data)?data:(data?.rows||data?.items||data?.rules||[])).map(x=>n.ruleView(profile.provider,{id:x.id||x.uuid,name:x.name,enabled:x.enabled,action:x.action,interface:x.interface,protocol:x.protocol,source:x.source,destination:x.destination,destination_port:x.destination_port,order:x.sequence,description:x.description,provider_data:x},"configured")), limitation:profile.provider === "opnsense" ? "OPNsense automation API only reports automation-managed rules; effective rules outside that component remain unknown":"Provider API response"};
-  if (action === "dhcp") return {leases:(Array.isArray(data)?data:(data?.rows||data?.items||data?.leases||[])).map(x=>({mac:x.mac||x.mac_address,ip:x.ip||x.address,hostname:x.hostname||x.name,expires:x.expire||x.expires,source:n.source(profile.provider,"runtime")}))};
-  if (action === "clients") return {clients:(Array.isArray(data)?data:(data?.data||data?.items||data?.clients||[])).map(x=>({id:x.id||x.uuid,mac:x.mac||x.macAddress,ip:x.ip||x.ipAddress,hostname:x.name||x.hostname,network:x.network||x.site,source:n.source(profile.provider,"runtime")}))};
+  if (action === "interfaces") return collection(data,["rows","items","interfaces"]).map(x=>n.interfaceView(profile.provider,{id:x.id||x.uuid||x.name,name:x.name||x.ifname,state:x.status||x.state,addresses:x.addresses||[],provider_data:x},"runtime"));
+  if (action === "networks") return collection(data,["items","networks","sites"]).map(x=>n.networkView(profile.provider,{id:x.id||x.uuid||x.name,name:x.name,subnet:x.subnet||x.ip_subnet,vlan_id:x.vlan_id||x.vlan,interfaces:x.interfaces,provider_data:x}));
+  if (action === "routes") return collection(data,["rows","items","routes"]).map(x=>n.routeView(profile.provider,{id:x.id,destination:x.destination||x.network,gateway:x.gateway||x.next_hop,interface:x.interface,metric:x.metric,active:x.active,provider_data:x},"runtime"));
+  if (action === "firewall") return {rules:collection(data,["rows","items","rules"]).map(x=>n.ruleView(profile.provider,{id:x.id||x.uuid,name:x.name,enabled:x.enabled,action:x.action,interface:x.interface,protocol:x.protocol,source:x.source,destination:x.destination,destination_port:x.destination_port,order:x.sequence,description:x.description,provider_data:x},"configured")), limitation:profile.provider === "opnsense" ? "OPNsense automation API only reports automation-managed rules; effective rules outside that component remain unknown":"Provider API response"};
+  if (action === "dhcp") return {leases:collection(data,["rows","items","leases"]).map(x=>({mac:x.mac||x.mac_address,ip:x.ip||x.address,hostname:x.hostname||x.name,expires:x.expire||x.expires,source:n.source(profile.provider,"runtime")}))};
+  if (action === "clients") return {clients:collection(data,["items","clients"]).map(x=>({id:x.id||x.uuid,mac:x.mac||x.macAddress,ip:x.ip||x.ipAddress,hostname:x.name||x.hostname,network:x.network||x.site,source:n.source(profile.provider,"runtime")}))};
   return data;
 }
 async function read(profile, client, action) { const opened=await open(profile,client); if(profile.provider === "openwrt") return openwrt(profile,client,opened.session,action); return generic(profile,client,action); }

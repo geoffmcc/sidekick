@@ -58,6 +58,15 @@ function request(runtime, id, method, params) {
   return waitForMessage(runtime, id);
 }
 
+async function assertRunning(runtime) {
+  const deadline = Date.now() + 1000;
+  while (runtime.child.exitCode === null && !runtime.getDiagnostics() && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  assert.strictEqual(runtime.child.exitCode, null, `Sidekick exited during stdio service: ${runtime.getDiagnostics()}`);
+  assert.doesNotMatch(runtime.getDiagnostics(), /Sidekick startup failed:/, `Sidekick reported a startup failure during stdio service: ${runtime.getDiagnostics()}`);
+}
+
 async function stop(runtime) {
   if (runtime.child.exitCode === null) runtime.child.kill("SIGTERM");
   await new Promise(resolve => runtime.child.once("close", resolve));
@@ -85,10 +94,12 @@ let activeRuntime;
   });
   assert.strictEqual(init.result.serverInfo.name, "sidekick-mcp-server");
   assert.ok(init.result.capabilities.tools, "MCP tools capability missing");
+  await assertRunning(runtime);
   const listed = await request(runtime, 2, "tools/list", {});
   const names = listed.result.tools.map(tool => tool.name);
   assert.ok(names.includes("store"), "canonical store tool is not exposed over stdio");
   assert.ok(names.includes("handoff"), "canonical handoff tool is not exposed over stdio");
+  assert.ok(names.includes("parse"), `builtin data-utilities tool is not exposed when launched outside the repository root: ${runtime.getDiagnostics()}`);
   const storeSchema = listed.result.tools.find(tool => tool.name === "store").inputSchema;
   assert.ok(storeSchema.properties.key && storeSchema.properties.value, "tool schema was not exposed");
   const stored = await request(runtime, 3, "tools/call", { name: "store", arguments: { key: "stdio-persistence", value: "survives-restart", project: "local_test" } });

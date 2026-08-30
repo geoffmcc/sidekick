@@ -104,7 +104,7 @@ console.log('Test 4.1: Full workflow - store, list projects, get by project');
 
       // Retrieve it
       const result = await tools4.TOOLS.get({ key: 'large_key' });
-      assert.strictEqual(result.content[0].text.length, largeValue.length, 'Large value should be preserved');
+      assert.strictEqual(result.content[0].text, largeValue, 'Large value should be preserved exactly');
       
       console.log('✓ Large values handled correctly');
       console.log('✓ Test 4.3 Passed\n');
@@ -123,8 +123,7 @@ console.log('Test 4.1: Full workflow - store, list projects, get by project');
       });
 
       const result = await tools5.TOOLS.get({ key: 'special-key_with.dots:and@chars' });
-      assert.ok(result.content[0].text.includes('quotes'), 'Should preserve quotes');
-      assert.ok(result.content[0].text.includes('newlines'), 'Should preserve newlines');
+      assert.strictEqual(result.content[0].text, 'value with "quotes" and \'apostrophes\' and\nnewlines', 'Should preserve special characters exactly');
       
       console.log('✓ Special characters handled correctly');
       console.log('✓ Test 4.4 Passed\n');

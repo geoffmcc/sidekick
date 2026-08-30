@@ -16,6 +16,7 @@
 //    cleanly, and acknowledges (no LeaseExpiredError→failDirectJob noise).
 
 const assert = require("assert");
+const { spawnSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
@@ -74,6 +75,22 @@ function makeAsyncChatJob(extraPayload = {}, extra = {}) {
 }
 
 (async () => {
+  await test("invalid direct-job concurrency values are safely bounded", async () => {
+    for (const value of ["abc", "0", "-2", "Infinity"]) {
+      assert.strictEqual(directJobRunner.configuredConcurrency(value), 1, `${value} falls back to one`);
+    }
+    assert.strictEqual(directJobRunner.configuredConcurrency("2.9"), 2, "fractional values are floored");
+    assert.strictEqual(directJobRunner.configuredConcurrency("99"), 16, "large values are capped");
+
+    const child = spawnSync(process.execPath, ["-e", "process.stdout.write(String(require('./src/compute/direct-job-runner').MAX_CONCURRENCY))"], {
+      cwd: path.join(__dirname, ".."),
+      env: { ...process.env, SIDEKICK_DIRECT_JOB_CONCURRENCY: "Infinity" },
+      encoding: "utf8",
+    });
+    assert.strictEqual(child.status, 0, child.stderr);
+    assert.strictEqual(child.stdout, "1", "invalid environment configuration cannot disable the cap");
+  });
+
   await test("claim-time source error fails the job terminally instead of crashing the poll tick", async () => {
     // A completed source job with NO textual content makes materializeSourceJob
     // throw SOURCE_RESULT_MISSING at claim time.

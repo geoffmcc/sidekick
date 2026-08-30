@@ -46,6 +46,7 @@ function write(relative, content, mode) {
       "SIDEKICK_DASHBOARD_PASS=fixture-dashboard-pass"
     ].join("\n"), 0o600);
     write("generated-admin-password.txt", "do-not-return-this-value", 0o644);
+    write("workflow.json", '{"password_secret_ref":"secret:fixture-password"}');
     const privateKeyHeader = ["-----BEGIN", "PRIVATE KEY-----"].join(" ");
     const privateKeyFooter = ["-----END", "PRIVATE KEY-----"].join(" ");
     write("private.pem", [
@@ -81,6 +82,10 @@ function write(relative, content, mode) {
     assert.ok(!report.findings.some(item =>
       item.type === "hardcoded_sensitive_config" &&
       item.message.includes("SAFE_TOKEN")
+    ));
+    assert.ok(!report.findings.some(item =>
+      item.type === "hardcoded_sensitive_config" &&
+      item.path === "workflow.json"
     ));
 
     write("denied/credentials.yml", "PASSWORD: must-not-appear");

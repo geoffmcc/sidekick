@@ -26,6 +26,7 @@ const provenance = require(path.join(LIB, "provenance.js"));
 const policy = require(path.join(LIB, "policy.js"));
 const ansible = require(path.join(LIB, "ansible.js"));
 const retirement = require(path.join(LIB, "retirement.js"));
+const proxmoxEntry = require(path.join(LIB, "..", "entry.js"));
 
 let failures = 0;
 function test(label, fn) {
@@ -229,6 +230,14 @@ test("U.20: detectProvider reports a missing binary as not_installed and never c
   assert.strictEqual(r.installed, false);
   assert.strictEqual(r.state, "not_installed");
   assert.strictEqual(r.execution, "not_implemented");
+});
+
+test("U.20b: provisioning dry-run schema retains supplied VM target fields", () => {
+  const descriptor = proxmoxEntry.entry.buildDescriptors().find(d => d.name === "proxmox_provision");
+  const parsed = descriptor.schema.safeParse({ action: "create_vm", dry_run: true, vm: { node: "pve1", vmid: 123, name: "audit", cores: 4, memory: 2048 } });
+  assert.strictEqual(parsed.success, true);
+  assert.deepStrictEqual(parsed.data.vm, { node: "pve1", vmid: 123, name: "audit", cores: 4, memory: 2048 });
+  assert.deepStrictEqual(proxmoxEntry.requestedTarget("create_vm", parsed.data), { node: "pve1", vmid: 123, name: "audit", type: "qemu" });
 });
 
 // --- profile resolution (config as the trust boundary) ---------------------

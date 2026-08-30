@@ -40,6 +40,19 @@ const durableTasks = require("../src/agent/task-store");
 
 console.log("Running Agent Bridge cancellation/sweep tests...\n");
 
+{
+  const watch = { id: "retained-watch", interval: "1h", status: "active" };
+  agent.scheduleWatch(watch);
+  const first = agent.watchIntervals[watch.id];
+  agent.scheduleWatch(watch);
+  const second = agent.watchIntervals[watch.id];
+  assert.notStrictEqual(first, second, "duplicate watch scheduling should replace its interval");
+  assert.strictEqual(first._destroyed, true, "replaced watch interval should be cleared");
+  clearInterval(second);
+  delete agent.watchIntervals[watch.id];
+  console.log("  ok - duplicate watch scheduling clears the replaced interval");
+}
+
 let passed = 0;
 async function ok(name, fn) {
   try {

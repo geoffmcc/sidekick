@@ -64,9 +64,9 @@ async function waitFor(getLogs, needle, timeoutMs) {
 }
 function waitExit(child, timeoutMs) {
   return new Promise(resolve => {
-    if (child.exitCode !== null) return resolve(child.exitCode);
+    if (child.exitCode !== null || child.signalCode !== null) return resolve(child.exitCode);
     const t = setTimeout(() => resolve(null), timeoutMs);
-    child.once('exit', code => { clearTimeout(t); resolve(code === null ? 0 : code); });
+    child.once('exit', code => { clearTimeout(t); resolve(code); });
   });
 }
 
@@ -74,42 +74,51 @@ async function main() {
   console.log('Running Compute Worker Resilience Tests...\n');
   const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'wres-'));
   const credPath = path.join(TMP, 'worker-credential.json');
-  cred.save({ workerId: 'wk_resil_test', nodeId: 'node_resil_test', credential: 'wksec_resiliencetest' }, credPath);
-  await new Promise(r => server.listen(0, '127.0.0.1', r));
-  const port = server.address().port;
+  const workers = [];
 
-  // --- Transient outage: worker must survive and reconnect ---
-  mode = 'ok';
-  let w = spawnWorker(credPath, port);
-  const started = await waitFor(w.getLogs, 'Starting worker agent', 4000);
-  check('worker started', started);
-  await sleep(1500); // let it heartbeat successfully at least once
-  mode = 'down';
-  const lost = await waitFor(w.getLogs, 'Lost connection to server', 5000);
-  check('logs "Lost connection" during transient outage', lost);
-  check('worker still running during outage (did not exit)', w.child.exitCode === null);
-  mode = 'ok';
-  const reconnected = await waitFor(w.getLogs, 'Reconnected to server', 5000);
-  check('logs "Reconnected" once the server returns', reconnected);
-  w.child.kill('SIGTERM');
-  await waitExit(w.child, 5000);
+  try {
+    cred.save({ workerId: 'wk_resil_test', nodeId: 'node_resil_test', credential: 'wksec_resiliencetest' }, credPath);
+    await new Promise(r => server.listen(0, '127.0.0.1', r));
+    const port = server.address().port;
 
-  // --- Permanent revocation: worker must stop cleanly ---
-  mode = 'ok';
-  w = spawnWorker(credPath, port);
-  await waitFor(w.getLogs, 'Starting worker agent', 4000);
-  await sleep(1200);
-  mode = 'revoked';
-  const exitCode = await waitExit(w.child, 6000);
-  check('worker exits on permanent revocation', exitCode !== null);
-  check('exits cleanly (code 0) to avoid restart hot-loop', exitCode === 0);
-  check('logs a FATAL revocation message', w.getLogs().includes('FATAL') && /revoked or invalid/.test(w.getLogs()));
-  if (w.child.exitCode === null) w.child.kill('SIGKILL');
+    // --- Transient outage: worker must survive and reconnect ---
+    mode = 'ok';
+    let w = spawnWorker(credPath, port);
+    workers.push(w.child);
+    const started = await waitFor(w.getLogs, 'Starting worker agent', 4000);
+    check('worker started', started);
+    await sleep(1500); // let it heartbeat successfully at least once
+    mode = 'down';
+    const lost = await waitFor(w.getLogs, 'Lost connection to server', 5000);
+    check('logs "Lost connection" during transient outage', lost);
+    check('worker still running during outage (did not exit)', w.child.exitCode === null);
+    mode = 'ok';
+    const reconnected = await waitFor(w.getLogs, 'Reconnected to server', 5000);
+    check('logs "Reconnected" once the server returns', reconnected);
+    w.child.kill('SIGTERM');
+    await waitExit(w.child, 5000);
 
-  server.close();
-  fs.rmSync(TMP, { recursive: true, force: true });
+    // --- Permanent revocation: worker must stop cleanly ---
+    mode = 'ok';
+    w = spawnWorker(credPath, port);
+    workers.push(w.child);
+    await waitFor(w.getLogs, 'Starting worker agent', 4000);
+    await sleep(1200);
+    mode = 'revoked';
+    const exitCode = await waitExit(w.child, 6000);
+    check('worker exits on permanent revocation', exitCode !== null);
+    check('exits cleanly (code 0) to avoid restart hot-loop', exitCode === 0);
+    check('logs a FATAL revocation message', w.getLogs().includes('FATAL') && /revoked or invalid/.test(w.getLogs()));
+  } finally {
+    for (const worker of workers) {
+      if (worker.exitCode === null) worker.kill('SIGKILL');
+    }
+    await Promise.all(workers.map(worker => waitExit(worker, 5000)));
+    if (server.listening) await new Promise(resolve => server.close(resolve));
+    fs.rmSync(TMP, { recursive: true, force: true });
+  }
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 }
 
-main().catch(e => { console.error(e); server.close(); process.exit(1); });
+main().catch(e => { console.error(e); process.exit(1); });

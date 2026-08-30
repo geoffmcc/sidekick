@@ -30,6 +30,7 @@ const path = require("path");
 const store = require("./store");
 const { hashInstalledPackage, resolveEntryPoint, sidekickVersion } = require("./packaging");
 const { satisfiesVersion, validateModuleConfig, normalizeManifest } = require("./manifest");
+const REPOSITORY_ROOT = path.resolve(__dirname, "..", "..");
 
 /** Failure codes surfaced to operators and to the pack/module health model. */
 const LOAD_FAILURES = Object.freeze({
@@ -63,7 +64,7 @@ function isManagedRecord(record) {
 function resolveEntryPath(record) {
   const declared = String(record.entry_point || "");
   if (!declared) throw new ModuleLoadError(LOAD_FAILURES.INVALID_ENTRY_POINT, `Module "${record.name}" has no entry point`);
-  const root = isManagedRecord(record) ? path.resolve(record.install_path) : path.resolve(process.cwd());
+  const root = isManagedRecord(record) ? path.resolve(record.install_path) : REPOSITORY_ROOT;
   const absolute = path.resolve(root, declared);
   if (absolute !== root && !absolute.startsWith(`${root}${path.sep}`)) {
     throw new ModuleLoadError(LOAD_FAILURES.INVALID_ENTRY_POINT, `Module "${record.name}" entry point escapes its installation root`);

@@ -41,7 +41,8 @@ function errorResult(error, code = "handler_error", metadata = {}) {
 function normalizeResult(result) {
   if (result && Array.isArray(result.content)) return { ...result, content: sanitizeContent(result.content) };
   if (result && result.isError) return { ...result, content: sanitizeContent(result.content) };
-  return textResult(typeof result === "string" ? result : JSON.stringify(result));
+  const serialized = typeof result === "string" ? result : JSON.stringify(result);
+  return textResult(serialized === undefined ? "null" : serialized);
 }
 
 module.exports = { textResult, errorResult, normalizeResult, sanitizeText, sanitizeContent };

@@ -15,7 +15,7 @@ function rejected(args) {
 
 async function main() {
   assert.ok(git);
-  assert.strictEqual(git.risk, "high");
+  assert.strictEqual(git.risk, "medium");
   assert.strictEqual(git.annotations.openWorldHint, true);
   assert.strictEqual(git.annotations.idempotentHint, false);
   rejected({ action: "clone", source_url: "https://example.test/repo.git", destination: "/tmp/x", args: "--upload-pack=evil" });

@@ -54,18 +54,8 @@ function createSessionManager({ createMcpServer, logDebug, now = () => Date.now(
         return { transport: null, isNew: false, newSessionId: replacementId, staleRedirect: true };
       }
 
-      logDebug("STALE_SESSION_CREATING_REPLACEMENT", { staleSessionId: sessionId, sessionCount: sessions.size });
-      const newSessionId = generateSessionId();
-      const authState = { current: metadata.authIdentity || null };
-      const server = createMcpServer(() => authState.current);
-      const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: () => newSessionId, enableJsonResponse: true });
-      registerSession(newSessionId, server, transport, { ...metadata, authState });
-      await server.connect(transport);
-      staleSessionMap.set(sessionId, { replacementId: newSessionId, createdAt: now() });
-      if (staleSessionMap.size > 100) staleSessionMap.delete(staleSessionMap.keys().next().value);
-      logDebug("CREATED_REPLACEMENT_SESSION", { staleSessionId: sessionId, newSessionId });
-      if (options.allowStalePost) return { transport, isNew: true, newSessionId, staleRedirect: false, replacedStaleSession: true };
-      return { transport: null, isNew: true, newSessionId, staleRedirect: true };
+      logDebug("UNKNOWN_SESSION", { sessionId, sessionCount: sessions.size });
+      return { transport: null, isNew: false, newSessionId: null, staleRedirect: true };
     }
 
     const newSessionId = generateSessionId();
@@ -80,7 +70,20 @@ function createSessionManager({ createMcpServer, logDebug, now = () => Date.now(
 
   function getSession(sessionId) { return sessions.get(sessionId); }
   function hasSession(sessionId) { return sessions.has(sessionId); }
-  function deleteSession(sessionId) { return sessions.delete(sessionId); }
+  async function closeSessionEntry(sessionId, entry) {
+    sessions.delete(sessionId);
+    for (const resource of [entry.transport, entry.server]) {
+      if (!resource || typeof resource.close !== "function") continue;
+      try { await resource.close(); } catch (error) { logDebug("SESSION_CLOSE_ERROR", { sessionId, error: error.message }); }
+    }
+  }
+
+  function deleteSession(sessionId) {
+    const entry = sessions.get(sessionId);
+    if (!entry) return false;
+    void closeSessionEntry(sessionId, entry);
+    return true;
+  }
   function getHealthSnapshot() {
     return {
       sessions: sessions.size,
@@ -92,17 +95,20 @@ function createSessionManager({ createMcpServer, logDebug, now = () => Date.now(
     };
   }
 
-  const sessionCleanup = setInterval(() => {
+  async function cleanupIdleSessions() {
     const cutoff = now() - 3600000;
     const evicted = [];
+    const closing = [];
     for (const [id, entry] of sessions) {
       if (entry.lastAccess < cutoff) {
         evicted.push({ sessionId: id, age_ms: now() - entry.createdAt, idle_ms: now() - entry.lastAccess, userAgent: entry.userAgent });
-        sessions.delete(id);
+        closing.push(closeSessionEntry(id, entry));
       }
     }
     if (evicted.length > 0) logDebug("SESSION_CLEANUP", { evicted, remaining: sessions.size });
-  }, 600000);
+    await Promise.all(closing);
+  }
+  const sessionCleanup = setInterval(() => { cleanupIdleSessions().catch(() => {}); }, 600000);
   const staleCleanup = setInterval(() => {
     const cutoff = now() - 1800000;
     const evicted = [];
@@ -115,8 +121,13 @@ function createSessionManager({ createMcpServer, logDebug, now = () => Date.now(
     if (evicted.length > 0) logDebug("STALE_SESSION_CLEANUP", { evicted, remaining: staleSessionMap.size });
   }, 300000);
 
-  function dispose() { clearInterval(sessionCleanup); clearInterval(staleCleanup); }
-  return { deleteSession, dispose, getHealthSnapshot, getSession, getTransportForRequest, hasSession, markSessionInitialized, registerSession };
+  async function dispose() {
+    clearInterval(sessionCleanup);
+    clearInterval(staleCleanup);
+    await Promise.all(Array.from(sessions.entries()).map(([id, entry]) => closeSessionEntry(id, entry)));
+    staleSessionMap.clear();
+  }
+  return { cleanupIdleSessions, deleteSession, dispose, getHealthSnapshot, getSession, getTransportForRequest, hasSession, markSessionInitialized, registerSession };
 }
 
 module.exports = { createSessionManager };

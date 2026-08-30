@@ -8,7 +8,7 @@ const root = path.join(__dirname, "..");
 const envExample = fs.readFileSync(path.join(root, ".env.example"), "utf8");
 const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
 const security = fs.readFileSync(path.join(root, "docs", "security.md"), "utf8");
-const artifact = fs.readFileSync(path.join(root, "docs", "security-phase-04-secure-defaults.md"), "utf8");
+const artifact = fs.readFileSync(path.join(root, "docs", "archive", "security-audits", "security-phase-04-secure-defaults.md"), "utf8");
 
 assert.match(envExample, /SIDEKICK_ALLOWED_IPS=127\.0\.0\.1,::1/);
 assert.match(envExample, /SIDEKICK_DASHBOARD_ALLOWED_IPS=127\.0\.0\.1,::1/);

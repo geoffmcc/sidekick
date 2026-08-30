@@ -12,6 +12,8 @@ const fs = require('fs');
 const path = require('path');
 
 const root = path.join(__dirname, '..');
+// Suites opt into an explicit, machine-readable skip result with this exit code.
+const SKIP_EXIT_CODE = 77;
 
 const suites = [
   { file: 'test/context-engine.test.js', critical: true, description: 'Context Engine scope isolation, bounded manifests, receipts, entity retrieval, and consolidation provenance' },
@@ -82,6 +84,7 @@ const suites = [
   { file: 'test/compute-model-dedup.test.js', critical: false, description: 'Single model authority, shared trust ordering between router and placement, and maintained worker health_state' },
   { file: 'test/kernel-migration-parity.test.js', critical: false, description: 'Fresh migration boot vs runtime kernel boot schema parity' },
   { file: 'test/migration-self-containment.test.js', critical: true, description: 'Migrations build a complete schema standalone (C1) and tolerate runtime-created columns (C2)' },
+  { file: 'test/reliability-fixes.test.js', critical: true, description: 'Bounded reliability regressions for suite selection, custom database paths, and migration locking' },
   { file: 'test/project-identity.test.js', critical: false, description: 'Canonical project projection, cross-source identity, backfill, and encrypted workspace secrets' },
   { file: 'test/project-registry-tool.test.js', critical: false, description: 'Project registry invocation surface and gated backfill' },
   { file: 'test/compute-audit-fixes.test.js', critical: false, description: 'Compute placement explain arguments, device allowlists, model fallback, and requested-device placement' },
@@ -197,70 +200,123 @@ const suites = [
   { file: 'test/compute-live-worker.test.js', critical: false, description: 'Opt-in live compute worker smoke test' },
 ];
 
-const requested = process.argv.slice(2);
-const selected = requested.length
-  ? suites.filter((suite) => requested.includes(path.basename(suite.file)) || requested.includes(suite.file))
-  : suites;
+function discoverSuites(testDir = __dirname) {
+  const discovered = fs.readdirSync(testDir)
+    .filter((file) => /\.test\.(?:js|cjs)$/.test(file))
+    .sort();
+  const metadata = new Map(suites.map((suite) => [suite.file, suite]));
+  const explicit = suites.filter((suite) => {
+    const expectedPath = path.resolve(root, suite.file);
+    return path.dirname(expectedPath) === path.resolve(testDir) && fs.existsSync(expectedPath);
+  });
+  const explicitFiles = new Set(explicit.map((suite) => path.basename(suite.file)));
+  const discoveredSuites = discovered
+    .filter((file) => !explicitFiles.has(file))
+    .map((file) => metadata.get(`test/${file}`) || { file: `test/${file}`, critical: false, description: 'Discovered test suite' });
+  return [...explicit, ...discoveredSuites];
+}
 
-let passed = 0;
-let failed = 0;
-let skipped = 0;
-const failures = [];
+function matchesSelection(suite, name) {
+  return name === suite.file || name === path.basename(suite.file);
+}
 
-console.log('╔═══════════════════════════════════════════════════════════╗');
-console.log('║                    Sidekick Tests                         ║');
-console.log('╚═══════════════════════════════════════════════════════════╝');
+function selectSuites(allSuites, requested) {
+  if (allSuites.length === 0) {
+    return { selected: [], unknown: [], error: 'No test suites were discovered.' };
+  }
+  if (requested.length === 0) return { selected: allSuites, unknown: [] };
+  const unknown = requested.filter((name) => !allSuites.some((suite) => matchesSelection(suite, name)));
+  const selected = allSuites.filter((suite) => requested.some((name) => matchesSelection(suite, name)));
+  return { selected, unknown, error: unknown.length ? `Invalid test suite selection: ${unknown.join(', ')}` : null };
+}
 
-for (const suite of selected) {
-  const suitePath = path.join(root, suite.file);
-  if (!fs.existsSync(suitePath)) {
-    if (suite.optional) {
-      skipped++;
-      console.log(`\n↷ Skipping optional missing suite: ${suite.file}`);
+function runSuites({ allSuites = discoverSuites(), requested = [], cwd = root, spawnSyncImpl = spawnSync, output = console } = {}) {
+  const selection = selectSuites(allSuites, requested);
+  if (selection.error || selection.selected.length === 0) {
+    output.error(selection.error || 'No test suites selected.');
+    return { passed: 0, failed: 1, skipped: 0, failures: [], notRun: [], exitCode: 1 };
+  }
+
+  let passed = 0;
+  let failed = 0;
+  let skipped = 0;
+  const failures = [];
+  const notRun = [];
+
+  output.log('╔═══════════════════════════════════════════════════════════╗');
+  output.log('║                    Sidekick Tests                         ║');
+  output.log('╚═══════════════════════════════════════════════════════════╝');
+
+  for (let index = 0; index < selection.selected.length; index++) {
+    const suite = selection.selected[index];
+    const suitePath = path.join(cwd, suite.file);
+    if (!fs.existsSync(suitePath)) {
+      if (suite.optional) {
+        skipped++;
+        output.log(`\n↷ Skipping optional missing suite: ${suite.file}`);
+        continue;
+      }
+      failed++;
+      failures.push(`${suite.file} (missing)`);
+      if (suite.critical) {
+        notRun.push(...selection.selected.slice(index + 1).map((remaining) => remaining.file));
+        break;
+      }
       continue;
     }
-    failed++;
-    failures.push(`${suite.file} (missing)`);
-    if (suite.critical) break;
-    continue;
-  }
 
-  console.log('\n' + '═'.repeat(60));
-  console.log(`Running: ${suite.file}`);
-  console.log(`Purpose: ${suite.description}`);
-  if (suite.critical) console.log('Critical: yes');
-  console.log('═'.repeat(60) + '\n');
+    output.log('\n' + '═'.repeat(60));
+    output.log(`Running: ${suite.file}`);
+    output.log(`Purpose: ${suite.description}`);
+    if (suite.critical) output.log('Critical: yes');
+    output.log('═'.repeat(60) + '\n');
 
-  const result = spawnSync(process.execPath, [suite.file], {
-    cwd: root,
-    stdio: 'inherit',
-    env: { ...process.env, NODE_ENV: 'test' },
-  });
+    const result = spawnSyncImpl(process.execPath, [suitePath], {
+      cwd,
+      stdio: 'inherit',
+      env: { ...process.env, NODE_ENV: 'test' },
+    });
 
-  if (result.status === 0) {
-    passed++;
-    console.log(`\n✅ ${suite.file} passed`);
-  } else {
-    failed++;
-    failures.push(suite.file);
-    console.log(`\n❌ ${suite.file} failed`);
-    if (suite.critical) {
-      console.log('\nStopping because a critical suite failed.');
-      break;
+    if (result.status === SKIP_EXIT_CODE) {
+      skipped++;
+      output.log(`\n↷ ${suite.file} skipped`);
+    } else if (result.status === 0) {
+      passed++;
+      output.log(`\n✅ ${suite.file} passed`);
+    } else {
+      failed++;
+      failures.push(suite.file);
+      output.log(`\n❌ ${suite.file} failed`);
+      if (suite.critical) {
+        notRun.push(...selection.selected.slice(index + 1).map((remaining) => remaining.file));
+        output.log('\nStopping because a critical suite failed.');
+        break;
+      }
     }
   }
+
+  output.log('\n╔═══════════════════════════════════════════════════════════╗');
+  output.log('║                       Summary                             ║');
+  output.log('╚═══════════════════════════════════════════════════════════╝');
+  output.log(`Passed:  ${passed}`);
+  output.log(`Failed:  ${failed}`);
+  output.log(`Skipped: ${skipped}`);
+
+  if (failures.length) {
+    output.log('\nFailed suites:');
+    for (const failure of failures) output.log(`  - ${failure}`);
+  }
+  if (notRun.length) {
+    output.log('\nNot run:');
+    for (const suite of notRun) output.log(`  - ${suite}`);
+  }
+
+  return { passed, failed, skipped, failures, notRun, exitCode: failed > 0 ? 1 : 0 };
 }
 
-console.log('\n╔═══════════════════════════════════════════════════════════╗');
-console.log('║                       Summary                             ║');
-console.log('╚═══════════════════════════════════════════════════════════╝');
-console.log(`Passed:  ${passed}`);
-console.log(`Failed:  ${failed}`);
-console.log(`Skipped: ${skipped}`);
-
-if (failures.length) {
-  console.log('\nFailed suites:');
-  for (const failure of failures) console.log(`  - ${failure}`);
+if (require.main === module) {
+  const result = runSuites({ requested: process.argv.slice(2) });
+  process.exit(result.exitCode);
 }
 
-process.exit(failed > 0 ? 1 : 0);
+module.exports = { SKIP_EXIT_CODE, discoverSuites, selectSuites, runSuites };

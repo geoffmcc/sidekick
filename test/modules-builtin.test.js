@@ -54,6 +54,18 @@ console.log('Running Builtin Module Provisioning Tests...\n');
     }
     console.log('Passed\n');
 
+    console.log('Test MB.1a: recurring module timers are process-local and idempotent');
+    const healthTimer = builtinModules.startModuleHealthChecks(60 * 60 * 1000);
+    assert.strictEqual(builtinModules.startModuleHealthChecks(1), healthTimer, 'repeated health startup should reuse its timer');
+    const reconciliationTimer = builtinModules.startModuleReconciliation(60 * 60 * 1000);
+    assert.strictEqual(builtinModules.startModuleReconciliation(1), reconciliationTimer, 'repeated reconciliation startup should reuse its timer');
+    builtinModules.stopModuleLifecycleTimers();
+    assert.notStrictEqual(builtinModules.startModuleHealthChecks(60 * 60 * 1000), healthTimer, 'health timer should be replaceable after cleanup');
+    assert.notStrictEqual(builtinModules.startModuleReconciliation(60 * 60 * 1000), reconciliationTimer, 'reconciliation timer should be replaceable after cleanup');
+    builtinModules.stopModuleLifecycleTimers();
+    builtinModules.stopModuleLifecycleTimers();
+    console.log('Passed\n');
+
     console.log('Test MB.2: module tools dispatch through the single dispatcher');
     const parsed = await tools.callInternalTool('parse', { input: '{"a":1}' });
     assert.ok(!parsed.isError, `parse should dispatch: ${JSON.stringify(parsed.content)}`);

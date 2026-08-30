@@ -10,9 +10,10 @@ const providers = require(path.join(lib, "providers"));
 const client = require(path.join(lib, "client"));
 const { NetworkFirewallError } = require(path.join(lib, "errors"));
 const entry = require(path.join(pack, "modules/network-firewall-tools/entry.js"));
+const { normalizeResult } = require("../src/tools/result");
 
 function expectCode(fn, code) { assert.throws(fn, e => e instanceof NetworkFirewallError && e.code === code); }
-function test(label, fn) { try { fn(); console.log(`Passed: ${label}`); } catch (e) { console.error(`FAILED: ${label}\n${e.stack}`); process.exitCode = 1; } }
+function test(label, fn) { Promise.resolve().then(fn).then(() => console.log(`Passed: ${label}`)).catch(e => { console.error(`FAILED: ${label}\n${e.stack}`); process.exitCode = 1; }); }
 
 test("pack manifest and module manifest are present", () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(pack, "sidekick.pack.json"), "utf8"));
@@ -41,6 +42,23 @@ test("input validation covers IPv4, IPv6, CIDR, ports and MAC", () => {
 test("provider capability results distinguish unsupported from success", () => {
   const x = providers.unsupported("pfsense", "safe_apply", "no supported API");
   assert.deepStrictEqual(x, {state:"unsupported",provider:"pfsense",capability:"safe_apply",reason:"no supported API"});
+});
+test("generic provider projection unwraps API envelopes for firewall and network data", async () => {
+  const profile = {provider:"opnsense", endpoint:"https://router.test", credential:"key\nsecret"};
+  const responses = {
+    "/api/firewall/filter/searchRule": {data:{rows:[{id:"r1", action:"pass", enabled:true}]}},
+    "/api/interfaces/overview/export": {data:{items:[{id:"wan", name:"WAN", status:"up"}]}},
+  };
+  const fakeClient = {get: async path => responses[path]};
+  const firewall = await providers.read(profile, fakeClient, "firewall");
+  const interfaces = await providers.read(profile, fakeClient, "interfaces");
+  assert.strictEqual(firewall.rules.length, 1);
+  assert.strictEqual(firewall.rules[0].id, "r1");
+  assert.strictEqual(interfaces.length, 1);
+  assert.strictEqual(interfaces[0].id, "wan");
+});
+test("dispatcher result projection never emits blank text for an undefined handler result", () => {
+  assert.strictEqual(normalizeResult(undefined).content[0].text, "null");
 });
 test("client never follows redirects and always enables TLS verification", () => {
   const p = profiles.parse("lab", {provider:"openwrt",endpoint:"https://router.test/",credential_ref:"secret:router",ca_pem:"-----BEGIN CERTIFICATE-----\nX\n-----END CERTIFICATE-----"});

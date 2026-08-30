@@ -5,7 +5,7 @@ const fs = require("fs");
 const path = require("path");
 
 const artifact = fs.readFileSync(
-  path.join(__dirname, "..", "docs", "security-phase-01-threat-model.md"),
+  path.join(__dirname, "..", "docs", "archive", "security-audits", "security-phase-01-threat-model.md"),
   "utf8"
 );
 

@@ -10,7 +10,13 @@ const workerManager = require("./worker-manager");
 const { redactSensitive } = require("../redact");
 
 const POLL_INTERVAL_MS = 250;
-const MAX_CONCURRENCY = Math.max(1, Number(process.env.SIDEKICK_DIRECT_JOB_CONCURRENCY || 1));
+const MAX_DIRECT_CONCURRENCY = 16;
+function configuredConcurrency(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 1;
+  return Math.max(1, Math.min(MAX_DIRECT_CONCURRENCY, Math.floor(parsed)));
+}
+const MAX_CONCURRENCY = configuredConcurrency(process.env.SIDEKICK_DIRECT_JOB_CONCURRENCY || 1);
 const MAX_CONTINUATIONS = 3;
 // Short lease, renewed while the generation actually runs. The old lease was
 // max(timeoutMs + 60s, 15m) — with the async tool's default 24h timeout, a
@@ -212,4 +218,4 @@ function stop() {
   }
 }
 
-module.exports = { start, stop, runOnce, DIRECT_LEASE_MS };
+module.exports = { start, stop, runOnce, DIRECT_LEASE_MS, MAX_CONCURRENCY, configuredConcurrency };

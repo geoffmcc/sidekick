@@ -242,57 +242,59 @@ async function openSession(options = {}, executionContext = null) {
       serviceWorkers: "block",
       viewport: { width: 1280, height: 720 },
     });
-  } catch (error) {
-    await session.proxy.close().catch(() => {});
-    throw error;
-  }
+    session.context.setDefaultTimeout(config.actionTimeoutMs);
+    session.context.setDefaultNavigationTimeout(config.navTimeoutMs);
 
-  session.context.setDefaultTimeout(config.actionTimeoutMs);
-  session.context.setDefaultNavigationTimeout(config.navTimeoutMs);
-
-  // Layer 1: URL-text policy at route interception. The proxy (layer 2) is the
-  // authority — this layer refuses early with a precise reason and records
-  // evidence, including for requests route interception can see but the agent
-  // never explicitly made.
-  await session.context.route("**/*", (route) => {
-    const url = route.request().url();
-    const refusal = egress.evaluateBrowserUrl(url, policy);
-    if (refusal) {
-      record(session.blockedRequests, {
-        kind: "route",
-        target: String(url).slice(0, 500),
-        reason: refusal,
-        at: new Date().toISOString(),
-      });
-      return route.abort("blockedbyclient");
-    }
-    return route.continue();
-  });
-  // WebSockets do not traverse route(); enforce the same host policy on them.
-  if (typeof session.context.routeWebSocket === "function") {
-    await session.context.routeWebSocket("**/*", (ws) => {
-      const refusal = egress.evaluateBrowserUrl(ws.url(), policy, { schemes: ["ws:", "wss:", "http:", "https:"] });
+    // Layer 1: URL-text policy at route interception. The proxy (layer 2) is the
+    // authority — this layer refuses early with a precise reason and records
+    // evidence, including for requests route interception can see but the agent
+    // never explicitly made.
+    await session.context.route("**/*", (route) => {
+      const url = route.request().url();
+      const refusal = egress.evaluateBrowserUrl(url, policy);
       if (refusal) {
         record(session.blockedRequests, {
-          kind: "websocket",
-          target: String(ws.url()).slice(0, 500),
+          kind: "route",
+          target: String(url).slice(0, 500),
           reason: refusal,
           at: new Date().toISOString(),
         });
-        ws.close({ code: 1008, reason: "blocked by egress policy" });
-        return;
+        return route.abort("blockedbyclient");
       }
-      ws.connectToServer();
+      return route.continue();
     });
+    // WebSockets do not traverse route(); enforce the same host policy on them.
+    if (typeof session.context.routeWebSocket === "function") {
+      await session.context.routeWebSocket("**/*", (ws) => {
+        const refusal = egress.evaluateBrowserUrl(ws.url(), policy, { schemes: ["ws:", "wss:", "http:", "https:"] });
+        if (refusal) {
+          record(session.blockedRequests, {
+            kind: "websocket",
+            target: String(ws.url()).slice(0, 500),
+            reason: refusal,
+            at: new Date().toISOString(),
+          });
+          ws.close({ code: 1008, reason: "blocked by egress policy" });
+          return;
+        }
+        ws.connectToServer();
+      });
+    }
+
+    session.context.on("page", (page) => adoptPage(session, page, { origin: "popup" }));
+
+    const page = await session.context.newPage();
+    adoptPage(session, page, { origin: "created" });
+
+    sessions.set(id, session);
+    return session;
+  } catch (error) {
+    // Once the proxy exists, every later setup failure must release both sides
+    // of the session. Do not close the shared browser: other sessions may use it.
+    if (session.context) await session.context.close().catch(() => {});
+    await session.proxy.close().catch(() => {});
+    throw error;
   }
-
-  session.context.on("page", (page) => adoptPage(session, page, { origin: "popup" }));
-
-  const page = await session.context.newPage();
-  adoptPage(session, page, { origin: "created" });
-
-  sessions.set(id, session);
-  return session;
 }
 
 function getSession(id, { project = null } = {}) {

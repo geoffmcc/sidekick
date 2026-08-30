@@ -22,10 +22,14 @@ fs.mkdirSync(SECRET_DIR, { recursive: true });
 const CRED = path.join(WORK_DIR, 'worker-credential.json');
 const NODE_ID = 'node_e2e_worker_01';
 
-let passed = 0, failed = 0;
+let passed = 0, failed = 0, skipped = 0;
 function check(name, cond) {
   if (cond) { passed++; console.log(`  \x1b[32m✓\x1b[0m ${name}`); }
   else { failed++; console.log(`  \x1b[31m✗\x1b[0m ${name}`); }
+}
+function skip(name) {
+  skipped++;
+  console.log(`  - ${name} (skipped)`);
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 function req(method, p, body) {
@@ -50,9 +54,11 @@ function cli(args, expectFail = false) {
 async function main() {
   console.log('Running Compute Worker E2E Acceptance Tests...\n');
   const server = spawn(process.execPath, ['src/index.js'], { cwd: ROOT, stdio: ['ignore', 'ignore', 'ignore'],
-    env: { ...process.env, SIDEKICK_DATA_DIR: DATA_DIR, SIDEKICK_PORT: String(PORT), SIDEKICK_API_KEY: API_KEY } });
+    env: { ...process.env, NODE_ENV: 'test', SIDEKICK_DATA_DIR: DATA_DIR, SIDEKICK_PORT: String(PORT), SIDEKICK_API_KEY: API_KEY } });
   try {
-    for (let i = 0; i < 80; i++) { try { if ((await req('GET', '/health')).status === 200) break; } catch {} await sleep(250); }
+    let healthy = false;
+    for (let i = 0; i < 80; i++) { try { if ((await req('GET', '/health')).status === 200) { healthy = true; break; } } catch {} await sleep(250); }
+    assert.ok(healthy, 'worker E2E server did not become healthy');
 
     // status before enrollment
     check('status reports not enrolled before enroll', /Enrolled:\s+no/.test(cli(['status'])));
@@ -63,7 +69,7 @@ async function main() {
     cli(['enroll', '--service', '--token', tok.data.token]);
     check('credential file written', fs.existsSync(CRED));
     if (process.platform !== 'win32') check('credential file is 0600', (fs.statSync(CRED).mode & 0o777) === 0o600);
-    else check('credential file is 0600 (skipped on win32)', true);
+    else skip('credential file mode check (skipped on win32)');
 
     // status + doctor after enrollment
     check('status reports enrolled with a worker id', /Enrolled:\s+yes/.test(cli(['status'])) && /Worker ID:\s+wk_/.test(cli(['status'])));
@@ -95,7 +101,7 @@ async function main() {
     fs.rmSync(WORK_DIR, { recursive: true, force: true });
   }
 
-  console.log(`\n${passed} passed, ${failed} failed`);
+  console.log(`\n${passed} passed, ${failed} failed, ${skipped} skipped`);
   process.exit(failed ? 1 : 0);
 }
 main().catch(e => { console.error(e); process.exit(1); });

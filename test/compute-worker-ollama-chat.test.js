@@ -49,11 +49,12 @@ async function test(name, fn) {
 
 server.listen(0, "127.0.0.1", async () => {
   process.env.OLLAMA_URL = `http://127.0.0.1:${server.address().port}`;
-  const { executeJob } = require("../src/compute/worker-agent");
 
-  console.log("Worker Ollama transport:");
+  try {
+    const { executeJob } = require("../src/compute/worker-agent");
+    console.log("Worker Ollama transport:");
 
-  await test("chat request carries messages, format, think:false, num_predict and num_ctx", async () => {
+    await test("chat request carries messages, format, think:false, num_predict and num_ctx", async () => {
     const result = await executeJob({
       jobType: "chat",
       capability: "chat",
@@ -83,17 +84,17 @@ server.listen(0, "127.0.0.1", async () => {
     // contextLimit was silently dropped on the worker path; parity with
     // ollama-provider.js means num_ctx reaches the model here too.
     assert.strictEqual(received.body.options.num_ctx, 32768);
-  });
+    });
 
-  await test("chat request without contextLimit omits num_ctx (never null)", async () => {
+    await test("chat request without contextLimit omits num_ctx (never null)", async () => {
     await executeJob({
       jobType: "chat", capability: "chat",
       requestPayload: { model: "m", prompt: "hi", maxTokens: 256 },
     });
     assert.ok(!("num_ctx" in received.body.options), "num_ctx omitted when unset");
-  });
+    });
 
-  await test("generate request forwards format, think:false and num_ctx like chat", async () => {
+    await test("generate request forwards format, think:false and num_ctx like chat", async () => {
     const result = await executeJob({
       jobType: "generate", capability: "generate",
       requestPayload: { model: "m", prompt: "make json", format: "json", maxTokens: 256, contextLimit: 8192 },
@@ -104,9 +105,9 @@ server.listen(0, "127.0.0.1", async () => {
     assert.strictEqual(received.body.think, false);
     assert.strictEqual(received.body.options.num_ctx, 8192);
     assert.strictEqual(received.body.options.num_predict, 256);
-  });
+    });
 
-  await test("cancellation observed DURING generation aborts the in-flight request", async () => {
+    await test("cancellation observed DURING generation aborts the in-flight request", async () => {
     hangUntilAbort = true;
     received = null;
     let polls = 0;
@@ -130,9 +131,9 @@ server.listen(0, "127.0.0.1", async () => {
     // Give the socket teardown a beat, then confirm the server saw the abort.
     await new Promise(r => setTimeout(r, 200));
     assert.ok(sawAbort, "server observed the aborted request");
-  });
+    });
 
-  await test("provider adapter generate() sends think:false like chat()", async () => {
+    await test("provider adapter generate() sends think:false like chat()", async () => {
     const OllamaProvider = require("../src/providers/ollama-provider");
     const provider = new OllamaProvider({ endpoint: process.env.OLLAMA_URL });
     const result = await provider.generate("hello", { model: "m", contextLimit: 4096, maxTokens: 128 });
@@ -140,9 +141,11 @@ server.listen(0, "127.0.0.1", async () => {
     assert.strictEqual(received.url, "/api/generate");
     assert.strictEqual(received.body.think, false, "generate no longer lets thinking consume the budget by default");
     assert.strictEqual(received.body.options.num_ctx, 4096);
-  });
+    });
 
-  server.close();
-  console.log(`\nWorker Ollama transport tests: ${passed} passed, ${failed} failed`);
-  process.exit(failed > 0 ? 1 : 0);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    console.log(`\nWorker Ollama transport tests: ${passed} passed, ${failed} failed`);
+    process.exit(failed > 0 ? 1 : 0);
+  }
 });
