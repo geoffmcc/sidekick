@@ -313,6 +313,13 @@ const TOOL_ACTION_RISK = Object.freeze({
     show: "low",
     health: "low",
   }),
+  // Mixed project metadata surface. These actions only enumerate or inspect
+  // registry rows; registration, archival, and backfill remain high risk.
+  project_registry: Object.freeze({
+    list: "low",
+    get: "low",
+    sources: "low",
+  }),
   // `GET /api/capabilities/:name/workflows` dispatches `workflow action="list"`,
   // so viewing a pack's workflows is a read through a high-risk tool. It does
   // not prompt under the current risky mode (which gates on critical only), but
@@ -322,6 +329,10 @@ const TOOL_ACTION_RISK = Object.freeze({
   workflow: Object.freeze({
     list: "low",
     show: "low",
+  }),
+  workspace: Object.freeze({
+    list: "low",
+    get: "low",
   }),
   // Browser observation of an ALREADY-OPEN session. `list` and `status` touch
   // no page at all. snapshot/extract/assert/pages/downloads read the rendered

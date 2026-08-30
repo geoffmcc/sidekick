@@ -2389,7 +2389,8 @@ function runAgent() {
   $('agentGo').disabled = true; $('agentClear').disabled = true;
   $('agentFollowupArea').hidden = true; $('agentLog').innerHTML = '<span class="agent-step">Starting governed Agent task…</span>';
   const profile = ($('agentProfile') && $('agentProfile').value) || 'standard';
-  authFetch('/api/agent/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ goal, profile }) })
+  const project = (($('agentProject') && $('agentProject').value) || '').trim();
+  authFetch('/api/agent/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ goal, profile, ...(project ? { project } : {}) }) })
     .then(r => r.json().then(data => ({ status: r.status, data })))
     .then(({ status, data }) => { if (status >= 400 || data.error) throw new Error(data.error || ('HTTP ' + status)); activeAgentSession = { rootTaskId: data.taskId, turns: [{ id: data.taskId, goal, status: 'running', t: new Date().toISOString() }] }; rememberAgentSession(data.taskId, data.taskId); streamAgentTask(data.taskId, { reset: false }); })
     .catch(e => { appendLog('<span class="agent-err">' + esc(e.message) + '</span>'); finishAgentStream(); })
@@ -4665,11 +4666,15 @@ async function loadHandoffs() {
       const evidence = projection.evidence || {};
       const quality = projection.quality || {};
       const readiness = projection.readiness || {};
+      const lifecycle = String(projection.lifecycle_state || 'unknown');
+      const lifecycleHealthy = ['ready', 'claimed', 'verifying', 'active', 'released', 'completed'].includes(lifecycle);
+      const readinessStatus = String(readiness.status || 'unknown');
       const blockers = Array.isArray(start.blockers) ? start.blockers : [];
       const questions = Array.isArray(start.open_questions) ? start.open_questions : [];
       return '<div class="card mission-panel mission-panel-wide">' +
-        '<div class="mission-panel-head"><div><div class="section-title">' + esc(start.objective || projection.title || projection.handoff_id) + '</div><div class="sub">' + esc(projection.handoff_id || '') + ' · v' + esc(String(projection.version || '')) + ' · ' + esc(projection.lifecycle_state || '') + '</div></div>' +
-        '<span class="metrics-status-pill ' + (readiness.status === 'ready' ? 'ok' : 'warn') + '">' + esc(readiness.status || 'unknown') + '</span></div>' +
+        '<div class="mission-panel-head"><div><div class="section-title">' + esc(start.objective || projection.title || projection.handoff_id) + '</div><div class="sub">' + esc(projection.handoff_id || '') + ' · v' + esc(String(projection.version || '')) + '</div></div>' +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><span class="metrics-status-pill ' + (lifecycleHealthy ? 'ok' : 'warn') + '" title="Authoritative handoff lifecycle">' + esc(lifecycle) + '</span>' +
+        '<span class="metrics-status-pill ' + (readinessStatus === 'ready' ? 'ok' : 'warn') + '" title="Receiver resume readiness">Readiness: ' + esc(readinessStatus) + '</span></div></div>' +
         '<div class="mission-muted">Next: ' + esc(start.next_step || 'No next step recorded') + '</div>' +
         '<div class="mission-metrics"><div><span>Quality</span><strong>' + (quality.valid ? 'Ready' : 'Needs work') + '</strong></div><div><span>Evidence</span><strong>' + esc(String(evidence.fresh || 0)) + ' fresh / ' + esc(String(evidence.stale || 0)) + ' stale</strong></div><div><span>Blockers</span><strong>' + esc(String(blockers.length)) + '</strong></div><div><span>Questions</span><strong>' + esc(String(questions.length)) + '</strong></div></div>' +
         '<details><summary>Receiver details</summary><pre class="agent-log" style="white-space:pre-wrap;max-height:320px;overflow:auto">' + esc(JSON.stringify({ completed_steps: projection.completed_steps || [], decisions: start.decisions || [], blockers, open_questions: questions, risks: start.risks || [], acceptance_criteria: projection.acceptance_criteria || [], artifacts: projection.artifacts || [], relationships: projection.relationships || [], reasons: readiness.reasons || quality.issues || [] }, null, 2)) + '</pre></details>' +

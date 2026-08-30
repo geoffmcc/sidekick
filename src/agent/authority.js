@@ -34,13 +34,22 @@ function determineEffect(descriptor, args = {}) {
     if ((ann.destructiveHint === true || ann.openWorldHint === true) && ["read_only", "workspace_reversible", "build_test", "local_process"].includes(effectName)) return { effect: "unknown", risk: "critical", authoritative: false, idempotent: false, reversible: false };
     return { effect: effectName, risk: String(explicitRisk || descriptor.risk || getStaticToolRisk(name)), authoritative: true, idempotent: explicitIdempotent === undefined ? Boolean(ann.idempotentHint) : explicitIdempotent, reversible: explicitReversible === undefined ? !["external", "production", "destructive", "credential", "identity", "policy"].includes(effectName) : explicitReversible };
   }
-  const actionRisk = action && TOOL_ACTION_RISK[name] && Object.prototype.hasOwnProperty.call(TOOL_ACTION_RISK[name], action) ? TOOL_ACTION_RISK[name][action] : descriptor.risk || getStaticToolRisk(name);
+  const actionRiskOverride = action && TOOL_ACTION_RISK[name] && Object.prototype.hasOwnProperty.call(TOOL_ACTION_RISK[name], action)
+    ? TOOL_ACTION_RISK[name][action]
+    : null;
+  const actionRisk = actionRiskOverride || descriptor.risk || getStaticToolRisk(name);
   // Creating or selecting a local task branch is a reversible workspace
   // operation. Keep its structured risk distinct from the generic Git
   // descriptor risk so routine authorized workspace setup does not inherit a
   // critical approval threshold. Commit/push/pull retain their own stronger
   // policy paths.
   const branchPreparationRisk = name === "git" && ["branch", "checkout"].includes(action) ? "medium" : actionRisk;
+  // Mixed-surface tools may be destructive at the tool level while exposing
+  // explicitly allowlisted metadata-only actions (for example
+  // project_registry(action=list)). TOOL_ACTION_RISK is maintained as a
+  // fail-closed action allowlist, so a low-risk action can be classified as a
+  // read without weakening any unlisted action.
+  if (actionRiskOverride === "low" && ann.openWorldHint !== true) return { effect: "read_only", risk: actionRisk, authoritative: true, idempotent: true, reversible: true };
   if (ann.readOnlyHint === true && ann.destructiveHint !== true && ann.openWorldHint !== true) return { effect: "read_only", risk: actionRisk, authoritative: true, idempotent: true, reversible: true };
   if (name === "git" && ["commit", "merge", "checkout", "stash"].includes(action)) return { effect: "workspace_reversible", risk: action === "checkout" ? branchPreparationRisk : "critical", authoritative: true, idempotent: false, reversible: true };
   if (name === "git" && ["push", "pull"].includes(action)) return { effect: "external", risk: "critical", authoritative: true, idempotent: false, reversible: false };

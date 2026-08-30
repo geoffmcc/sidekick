@@ -13,6 +13,7 @@ const path = require("path");
 const clientJs = fs.readFileSync(path.join(__dirname, "..", "static", "dashboard.js"), "utf-8");
 const dashHtml = fs.readFileSync(path.join(__dirname, "..", "src", "dashboard.html"), "utf-8");
 const dashServer = fs.readFileSync(path.join(__dirname, "..", "src", "dashboard.js"), "utf-8");
+const agentServer = fs.readFileSync(path.join(__dirname, "..", "src", "agent.js"), "utf-8");
 
 console.log("Running Agent tab follow-up UI tests...\n");
 
@@ -164,6 +165,19 @@ ok("existing Agent tab anchors are preserved (no dashboard redesign)", () => {
   assert.match(dashHtml, /aria-expanded="false"/);
   assert.match(dashHtml, /aria-controls="agentHistory"/);
   assert.match(clientJs, /function runAgent\(/, "the normal new-task flow is preserved");
+});
+
+ok("new Agent tasks submit an explicit project scope", () => {
+  assert.match(dashHtml, /id="agentProject"/, "project scope input exists");
+  assert.ok(clientJs.includes("const project = (($('agentProject')"), "run reads project scope");
+  assert.ok(clientJs.includes("project ? { project }"), "run sends project scope when provided");
+  assert.match(agentServer, /"project"/, "agent server accepts project scope");
+});
+
+ok("Handoff cards distinguish lifecycle from receiver readiness", () => {
+  assert.match(clientJs, /Authoritative handoff lifecycle/, "lifecycle status is explicitly identified");
+  assert.match(clientJs, /Receiver resume readiness/, "readiness status is explicitly identified");
+  assert.ok(clientJs.includes("Readiness: ' + esc(readinessStatus)"), "readiness is rendered separately from lifecycle");
 });
 
 ok("history control exposes and updates real expanded state", () => {

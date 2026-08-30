@@ -109,6 +109,7 @@ function buildPlannerSystemPrompt(agentTools, packContext = null, metadata = {})
     "14. For an action targeting a configured service, resolve unknown profiles and target identities with a read-only capability first. A human device name is not automatically a profile identifier.\n" +
     "15. Respect schema-declared mutually exclusive selectors and pass exactly one canonical selector.\n" +
     "16. If execution returns validation, target-resolution, or truncation feedback, replan with a materially corrected read/discovery step; never repeat an ambiguous write or control effect.\n\n" +
+    "17. For project progress, history, decisions, or what-we-did questions, prefer project/context/session/memory/knowledge retrieval using the supplied project scope. Do not use project_registry unless the user specifically asks about registered projects or project data sources.\n" +
     "Allowed step types: " + ALLOWED_STEP_TYPES.join(", ") + "\n\n" +
     // Pack context sits between the rules and the catalog: it tells the
     // planner WHICH domains have first-class pack tools (#296 reached only the
