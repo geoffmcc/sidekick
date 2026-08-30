@@ -41,11 +41,22 @@ function ok(name, fn) {
 
 const prompt = agent.buildSystemPrompt();
 const visibleDefs = getToolDefsForSource("agent").filter(t => t.enabled);
+const liveContracts = agent.getLiveAgentToolContracts();
 
 ok("prompt catalog is derived from the live agent-visible registry", () => {
   assert.ok(visibleDefs.length > 0, "agent-visible catalog must not be empty");
   for (const def of visibleDefs.slice(0, 10)) {
     assert.ok(prompt.includes("- " + def.name + "("), "catalog must list " + def.name);
+  }
+});
+
+ok("Agent preflight receives canonical schemas for visible tools", () => {
+  assert.ok(liveContracts.length > 0, "canonical Agent contracts must not be empty");
+  const contracts = new Map(liveContracts.map(contract => [contract.name, contract]));
+  for (const def of visibleDefs) {
+    const contract = contracts.get(def.name);
+    assert.ok(contract, "canonical contract must exist for " + def.name);
+    assert.strictEqual(typeof contract.schema.safeParse, "function", "canonical schema must be available for " + def.name);
   }
 });
 

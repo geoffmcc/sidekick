@@ -36,6 +36,12 @@ function getLiveAgentRegistry() {
     toolDefs() { return getLiveAgentToolDefs(); },
   };
 }
+function getLiveAgentToolContracts() {
+  const visible = getLiveAgentToolDefs();
+  let registry;
+  try { registry = getBuiltinRegistry(); } catch { return []; }
+  return visible.map(tool => registry.get(tool.name)).filter(descriptor => descriptor && descriptor.schema && typeof descriptor.schema.safeParse === "function");
+}
 function liveAgentCatalogFingerprint() {
   const entries = getLiveAgentToolDefs().map(tool => {
     const descriptor = getLiveAgentDescriptor(tool.name);
@@ -1473,7 +1479,7 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
       // Internal live descriptors provide the same schemas the dispatcher
       // validates. They are used only for an early bounded preflight; every
       // actual call still goes through durableDispatch/callAgentTool.
-      toolContracts: getLiveAgentToolDefs(),
+      toolContracts: getLiveAgentToolContracts(),
       // The same bounded pack context the non-Brain loop's system prompt gets
       // (#296): without it the planner is pack-blind and never plans a pack
       // tool for a domain the pack owns. Bounded again inside the planner.
@@ -2754,6 +2760,7 @@ module.exports = {
   buildChildLineage,
   buildSystemPrompt,
   buildInstalledPackContext,
+  getLiveAgentToolContracts,
   CONV_DIR,
   startApprovalContinuationJobs,
   finalizeResumedTask,

@@ -389,6 +389,7 @@ const entry = {
         },
         risk: "low",
         category: "Infrastructure",
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
         handler: (args, runtime) => handleRead(services, args, runtime),
       },
       {
