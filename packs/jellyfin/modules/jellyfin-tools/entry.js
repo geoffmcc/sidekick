@@ -2360,6 +2360,7 @@ const entry = {
         },
         risk: "low",
         category: "Media",
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
         handler: guard(read)(services),
       },
       {
