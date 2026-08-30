@@ -1,18 +1,18 @@
 const assert = require('assert');
 const fs = require('fs');
 const http = require('http');
+const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const packageJson = require('../package.json');
 
 const TEST_DIR = path.join(__dirname, 'test-data-compute-protocol');
-const SECRET_DIR = path.join(TEST_DIR, 'secrets');
+const SECRET_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-compute-protocol-secrets-'));
 const API_KEY = 'sk-test-compute-protocol-key';
 const PORT = 49197;
 
 fs.rmSync(TEST_DIR, { recursive: true, force: true });
 fs.mkdirSync(TEST_DIR, { recursive: true });
-fs.mkdirSync(SECRET_DIR, { recursive: true });
 
 function request(method, route, body, headers = {}) {
   return new Promise((resolve, reject) => {
@@ -26,7 +26,7 @@ function request(method, route, body, headers = {}) {
         resolve({ status: res.statusCode, data: parsed });
       });
     });
-    req.setTimeout(5000, () => req.destroy(new Error('timeout')));
+    req.setTimeout(5000, () => req.destroy(new Error(`timeout: ${method} ${route}`)));
     req.on('error', reject);
     if (data) req.write(data);
     req.end();
@@ -108,6 +108,11 @@ async function main() {
     assert.strictEqual(healthRes.data.version, packageJson.version, 'health version matches package version');
     assert.strictEqual(healthRes.data.runtime.node, process.version, 'health runtime reports Node version');
     assert.strictEqual(healthRes.data.runtime.requiredNode, packageJson.engines.node, 'health runtime reports package Node requirement');
+    assert.strictEqual(healthRes.data.status, 'healthy', 'healthy startup reports healthy liveness');
+    assert.strictEqual(healthRes.data.readiness.ready, true, 'healthy startup reports ready');
+    const readinessRes = await request('GET', '/readiness');
+    assert.strictEqual(readinessRes.status, 200, 'readiness endpoint is available');
+    assert.strictEqual(readinessRes.data.ready, true, 'healthy startup is ready');
 
     assert.strictEqual((await request('GET', '/compute/unprotected-test')).status, 401, 'unknown compute route fails closed without auth');
     assert.strictEqual((await request('POST', '/compute/enrollment/exchange', { token: 'x' }, { 'Content-Type': 'text/plain' })).status, 415, 'compute protocol rejects non-json content type');
@@ -434,7 +439,6 @@ async function main() {
       ...process.env,
       SIDEKICK_URL: `http://127.0.0.1:${PORT}`,
       SIDEKICK_SECRET_DIR: SECRET_DIR,
-      SIDEKICK_ENROLL_TOKEN: '',
       SIDEKICK_NODE_ID: 'proto-agent-node',
       SIDEKICK_NODE_NAME: 'Protocol Agent Worker',
       SIDEKICK_WORKER_CONFIG: agentConfig,

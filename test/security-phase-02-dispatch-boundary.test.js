@@ -51,7 +51,7 @@ const publicTools = require("../src/tools");
   );
 
   const artifact = fs.readFileSync(
-    path.join(__dirname, "..", "docs", "security-phase-02-dispatch-boundary.md"),
+    path.join(__dirname, "..", "docs", "archive", "security-audits", "security-phase-02-dispatch-boundary.md"),
     "utf8"
   );
   for (const marker of [

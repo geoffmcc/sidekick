@@ -20,6 +20,7 @@ const os = require("os");
 const path = require("path");
 
 const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "sk-browser-e2e-"));
+process.env.NODE_ENV = "test";
 process.env.SIDEKICK_DATA_DIR = DATA_DIR;
 process.env.SIDEKICK_DB_FILE = path.join(DATA_DIR, "sidekick.db");
 process.env.SIDEKICK_SECRET_KEY = "browser-e2e-secret-key-abcdef";

@@ -16,6 +16,7 @@ delete require.cache[require.resolve('../src/db')];
 const tools = require('../src/tools');
 const db = require('../src/db');
 const scheduledExecution = require('../src/tools/scheduled-execution');
+const { createDelayScheduler } = require('../src/agent/delay-scheduler');
 
 const { TOOLS } = tools;
 
@@ -29,6 +30,45 @@ function latestExecution(whereSql, params = []) {
 }
 
 console.log('Running Scheduler Platform Tests...\n');
+
+console.log('Test SP.0a: delay reloads replace and release timeout handles');
+{
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  const timers = new Map();
+  const cleared = [];
+  let nextTimer = 0;
+  global.setTimeout = (callback) => {
+    const handle = { id: ++nextTimer };
+    timers.set(handle, callback);
+    return handle;
+  };
+  global.clearTimeout = (handle) => {
+    cleared.push(handle);
+    timers.delete(handle);
+  };
+  try {
+    const delay = { id: 'retained-delay', status: 'pending', when: new Date(Date.now() + 60000).toISOString() };
+    const scheduler = createDelayScheduler({
+      loadDelays: () => [delay],
+      executeDelay: async () => {},
+    });
+    scheduler.loadAndScheduleDelays();
+    const first = scheduler.delayTimers[delay.id];
+    scheduler.loadAndScheduleDelays();
+    const second = scheduler.delayTimers[delay.id];
+    assert.notStrictEqual(first, second);
+    assert.strictEqual(cleared.includes(first), true);
+    assert.strictEqual(Object.keys(scheduler.delayTimers).length, 1);
+    timers.get(second)();
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(scheduler.delayTimers, delay.id), false);
+    assert.strictEqual(Object.keys(scheduler.delayTimers).length, 0);
+  } finally {
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
+  }
+}
+console.log('Passed\n');
 
 (async () => {
   try {

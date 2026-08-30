@@ -53,14 +53,15 @@ try {
     "principal-disabled"
   );
 
-  const source = fs.readFileSync(path.join(__dirname, "..", "src", "dashboard", "auth-routes.js"), "utf8");
-  assert.ok(source.includes('code: "bootstrap-required"'), "dashboard must fail closed before owner bootstrap");
-  assert.ok(source.includes('requireIdentityPermission(req, res, "principals.manage")'), "principal mutations need authorization");
-  assert.ok(source.includes('requireIdentityPermission(req, res, "roles.manage")'), "role mutations need authorization");
-  assert.ok(source.includes("authRateLimiter"), "dashboard authentication must use brute-force throttling");
-  assert.ok(source.includes('code: "auth_rate_limited"'), "throttled authentication must fail with an explicit safe code");
+  const authRoutes = fs.readFileSync(path.join(__dirname, "..", "src", "dashboard", "auth-routes.js"), "utf8");
+  const dashboard = fs.readFileSync(path.join(__dirname, "..", "src", "dashboard.js"), "utf8");
+  assert.ok(authRoutes.includes('code: "bootstrap-required"'), "dashboard must fail closed before owner bootstrap");
+  assert.ok(authRoutes.includes('requireIdentityPermission(req, res, "principals.manage")'), "principal mutations need authorization");
+  assert.ok(authRoutes.includes('requireIdentityPermission(req, res, "roles.manage")'), "role mutations need authorization");
+  assert.ok(dashboard.includes("authRateLimiter"), "dashboard authentication must use brute-force throttling");
+  assert.ok(dashboard.includes('code: "auth_rate_limited"'), "throttled authentication must fail with an explicit safe code");
 
-  const artifact = fs.readFileSync(path.join(__dirname, "..", "docs", "security-phase-03-auth-authorization.md"), "utf8");
+  const artifact = fs.readFileSync(path.join(__dirname, "..", "docs", "archive", "security-audits", "security-phase-03-auth-authorization.md"), "utf8");
   for (const marker of ["Authentication mechanisms are intentionally separate from authorization", "Route matrix", "F3-01", "Residual risk"]) {
     assert.ok(artifact.includes(marker), `Phase 3 artifact is missing ${marker}`);
   }

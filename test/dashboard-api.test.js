@@ -3,13 +3,14 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 
-// Set up test data directory
+// Set up an isolated test data directory so repeated runs never reuse a
+// partially migrated database from an earlier failed process.
 const TEST_DATA_DIR = path.join(__dirname, 'test-data-dashboard');
-if (!fs.existsSync(TEST_DATA_DIR)) {
-  fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
-}
+fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
 
 // Set environment variables before requiring dashboard
+process.env.NODE_ENV = 'test';
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_DASHBOARD_PORT = '4100';
 process.env.SIDEKICK_DASHBOARD_USER = 'test-user';
