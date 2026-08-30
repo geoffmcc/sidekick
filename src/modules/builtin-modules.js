@@ -24,6 +24,7 @@ const path = require("path");
 
 const repository = require("./repository");
 const loader = require("./loader");
+const REPOSITORY_ROOT = path.resolve(__dirname, "..", "..");
 
 const BUILTIN_MODULES = Object.freeze([require("./entries/data-utilities")]);
 
@@ -48,7 +49,7 @@ function entryPointFor(name) {
 }
 
 function entryHashFor(entryPoint) {
-  return crypto.createHash("sha256").update(fs.readFileSync(path.resolve(process.cwd(), entryPoint))).digest("hex");
+  return crypto.createHash("sha256").update(fs.readFileSync(path.resolve(REPOSITORY_ROOT, entryPoint))).digest("hex");
 }
 
 function builtinEntriesByName() {

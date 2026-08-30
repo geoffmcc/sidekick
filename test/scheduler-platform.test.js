@@ -396,7 +396,9 @@ console.log('Running Scheduler Platform Tests...\n');
     console.log('Passed\n');
 
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+    db.getDb().close();
     console.log('All Scheduler Platform Tests Passed!');
+    process.exit(0);
   } catch (e) {
     console.error('Scheduler platform test failed:', e);
     process.exit(1);

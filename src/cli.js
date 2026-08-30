@@ -47,7 +47,6 @@ async function run() {
     };
     process.once("SIGINT", () => { close().finally(() => process.exit(0)); });
     process.once("SIGTERM", () => { close().finally(() => process.exit(0)); });
-    await server.connect(transport);
   } finally {
     release();
   }

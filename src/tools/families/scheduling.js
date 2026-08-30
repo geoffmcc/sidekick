@@ -370,8 +370,16 @@ async function sidekick_delay({ action, id, when, name, tool, args }) {
         hostname: "127.0.0.1",
         port: 4099,
         path: "/api/delays/reload",
-        method: "POST"
+        method: "POST",
+        headers: { Connection: "close" },
+        agent: false
       });
+      req.on("socket", socket => {
+        socket.unref();
+        socket.setTimeout(1000, () => req.destroy());
+      });
+      req.on("response", response => response.resume());
+      req.setTimeout(1000, () => req.destroy());
       req.on("error", () => {});
       req.end();
     } catch {}
