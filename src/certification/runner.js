@@ -28,7 +28,8 @@ async function assertScenario(scenario, registry) {
     }
     case "metadata_bounds": return null;
     case "expected_tools": {
-      const available = scenario.expected_tools.filter(tool => registry.get(tool)).slice(0, 16);
+      const missing = scenario.expected_tools.filter(tool => !registry.get(tool)).slice(0, 16);
+      if (missing.length) return `expected tools unavailable: ${missing.join(", ")}`;
       return null;
     }
     case "forbidden_tools": return registry.get("executeAuthorizedTaskStep") ? "privileged runner seam is exposed in registry" : null;
@@ -61,7 +62,10 @@ async function runCertification({ scenarioIds, mode, theme, availability = false
     }
     try {
       const reason = await assertScenario(scenario, registry);
-      results.push(reason ? result(scenario, "failed", reason) : result(scenario, "passed", null, { dispatcher: "canonical", registry: "canonical" }));
+      const blocked = reason && reason.startsWith("expected tools unavailable:");
+      results.push(reason
+        ? result(scenario, blocked ? "blocked" : "failed", reason)
+        : result(scenario, "passed", null, { dispatcher: "canonical", registry: "canonical" }));
     } catch (error) {
       results.push(result(scenario, "blocked", "certification assertion could not run", { error: error.message }));
     }
