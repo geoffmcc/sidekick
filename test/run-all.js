@@ -16,6 +16,8 @@ const root = path.join(__dirname, '..');
 const SKIP_EXIT_CODE = 77;
 
 const suites = [
+  { file: 'test/invariants-doctor.test.js', critical: true, description: 'Read-only durable invariants, redacted Doctor diagnostics, and support-bundle safety' },
+  { file: 'test/certification.test.js', critical: true, description: 'Versioned Agent certification scenarios, canonical tool assertions, and bounded reports' },
   { file: 'test/context-engine.test.js', critical: true, description: 'Context Engine scope isolation, bounded manifests, receipts, entity retrieval, and consolidation provenance' },
   { file: 'test/pack-services.test.js', critical: true, description: 'Capability Pack scoped services v2 and namespace isolation' },
   { file: 'test/identity-foundation.test.js', critical: true, description: 'Durable principals, users, password hashing, Owner bootstrap, and lifecycle foundation' },

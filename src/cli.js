@@ -7,7 +7,7 @@ const packageJson = require("../package.json");
 const { prepareLocalEnvironment, acquireBootstrapLock, getLocalPaths } = require("./local/paths");
 
 function usage() {
-  console.error("Usage: sidekick [setup|doctor|status|version]");
+  console.error("Usage: sidekick [setup|doctor|certify|status|version]");
   console.error("With no command, Sidekick starts its full governed MCP stdio runtime.");
 }
 
@@ -21,12 +21,26 @@ async function run() {
   const command = process.argv[2];
   if (command === "version") return console.log(packageJson.version);
   if (command === "status") return status();
-  if (command === "doctor" || command === "setup") {
+  if (command === "doctor" || command === "setup" || command === "certify") {
     const paths = prepareLocalEnvironment();
     const release = acquireBootstrapLock(paths.lock);
     try { console.error(`Sidekick local data: ${paths.data}`); }
     finally { release(); }
-    if (command === "doctor") return status();
+    if (command === "doctor") {
+      const { runDoctor, formatDoctorText, createSupportBundle } = require("./doctor");
+      const report = runDoctor();
+      if (process.argv.includes("--bundle")) return console.log(JSON.stringify(createSupportBundle({ report }), null, 2));
+      if (process.argv.includes("--json")) return console.log(JSON.stringify(report, null, 2));
+      return console.log(formatDoctorText(report));
+    }
+    if (command === "certify") {
+      const { runCertification, formatCertificationText } = require("./certification");
+      const report = await runCertification({ mode: process.argv.includes("--live") ? "live" : "hermetic", availability: false });
+      if (process.argv.includes("--json")) console.log(JSON.stringify(report, null, 2));
+      else console.log(formatCertificationText(report));
+      if (report.verdict === "failed") process.exitCode = 1;
+      return;
+    }
     return;
   }
   if (command && command !== "start") { usage(); process.exitCode = 2; return; }

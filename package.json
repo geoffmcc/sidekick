@@ -22,6 +22,7 @@
     "start": "node src/index.js",
     "dashboard": "node src/dashboard.js",
     "agent": "node src/agent.js",
+    "certify": "node src/cli.js certify",
     "package:worker": "node scripts/build-worker-package.js",
     "seed:knowledge": "node scripts/seed-knowledge.js",
     "test": "node test/run-all.js",
