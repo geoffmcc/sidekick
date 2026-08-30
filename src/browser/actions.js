@@ -145,7 +145,7 @@ async function navigate(session, args, runtime) {
   const config = browserConfig();
   const entry = sessionsStore.activePage(session, args.page);
   const refusal = egress.evaluateBrowserUrl(args.url, session.policy);
-  if (refusal) throw new BrowserActionError(`Navigation refused: ${refusal}`, "blocked_by_policy");
+  if (refusal) throw new BrowserActionError(`Navigation refused by browser policy: ${refusal}`, "blocked_by_policy");
   const timeout = boundTimeout(args.timeout_ms, config.navTimeoutMs, config.navTimeoutMs * 2);
   const response = await withCancellation(
     entry.page.goto(args.url, { waitUntil: args.wait_until || "load", timeout }),

@@ -28,6 +28,12 @@ const REPOSITORY_ROOT = path.resolve(__dirname, "..", "..");
 
 const BUILTIN_MODULES = Object.freeze([require("./entries/data-utilities")]);
 
+// These timers are process-local. Keep one handle for each recurring module
+// task so startup paths that are evaluated more than once do not multiply
+// background work in the same process.
+let moduleHealthTimer = null;
+let moduleReconciliationTimer = null;
+
 // Committed, signed attestation of each builtin's expected entry-code hash.
 //
 // This is the independent anchor that lets a builtin's entry hash be re-bound
@@ -206,12 +212,14 @@ function runModuleHealthChecks() {
 }
 
 function startModuleHealthChecks(intervalMs = 60000) {
+  if (moduleHealthTimer) return moduleHealthTimer;
   const timer = setInterval(() => {
     const result = runModuleHealthChecks();
     if (result.errors.length) console.error(`[Modules] Health sweep failed: ${JSON.stringify(result.errors)}`);
     if (result.alerts.length) console.error(`[Modules] Health alerts: ${JSON.stringify(result.alerts)}`);
   }, intervalMs);
   timer.unref?.();
+  moduleHealthTimer = timer;
   return timer;
 }
 
@@ -245,6 +253,7 @@ function recordProvisioningEvent(outcome) {
  * disabled modules immediately; this timer also picks up re-enables).
  */
 function startModuleReconciliation(intervalMs = 60000) {
+  if (moduleReconciliationTimer) return moduleReconciliationTimer;
   const timer = setInterval(() => {
     try {
       const result = loader.reconcilePersistedModules(require("./entries").moduleEntriesByName().entries);
@@ -259,7 +268,18 @@ function startModuleReconciliation(intervalMs = 60000) {
     }
   }, intervalMs);
   timer.unref();
+  moduleReconciliationTimer = timer;
   return timer;
+}
+
+/**
+ * Stop recurring module work owned by this process. Safe for repeated calls.
+ */
+function stopModuleLifecycleTimers() {
+  if (moduleHealthTimer) clearInterval(moduleHealthTimer);
+  if (moduleReconciliationTimer) clearInterval(moduleReconciliationTimer);
+  moduleHealthTimer = null;
+  moduleReconciliationTimer = null;
 }
 
 module.exports = {
@@ -274,4 +294,5 @@ module.exports = {
   runBuiltinModuleHealthChecks: runModuleHealthChecks,
   startModuleHealthChecks,
   startModuleReconciliation,
+  stopModuleLifecycleTimers,
 };

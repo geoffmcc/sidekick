@@ -94,6 +94,7 @@ function initialize() {
 async function shutdown() {
   if (reaperTimer) { clearInterval(reaperTimer); reaperTimer = null; }
   const closed = await sessions.closeAllSessions({ reason: "shutdown" });
+  await driver.closeBrowser().catch(() => {});
   return { closed_sessions: closed };
 }
 

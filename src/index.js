@@ -61,6 +61,12 @@ function logDebug(context, data) {
 // HTTP listener. The CLI redirects console.log to stderr before loading us.
 
 const sessionManager = createSessionManager({ createMcpServer, logDebug });
+let browserSubsystem = null;
+let eventDrainer = null;
+let httpServer = null;
+let builtinModules = null;
+let shuttingDown = null;
+const startupFailures = {};
 const serverStartTime = Date.now();
 
 // --- Express app ---
@@ -97,7 +103,9 @@ app.get("/health", (req, res) => {
   const includeDetails = timingSafeCompare(getBearerToken(req), API_KEY);
 
   const payload = {
-    status: "healthy",
+    // Keep this endpoint live even when a critical startup dependency failed;
+    // readiness below carries the traffic-serving decision.
+    status: Object.keys(startupFailures).length ? "degraded" : "healthy",
     uptime: uptimeSeconds,
     uptimeHuman: uptimeStr,
     ...sessionManager.getHealthSnapshot(),
@@ -107,6 +115,10 @@ app.get("/health", (req, res) => {
       requiredNode: NODE_REQUIREMENT
     },
     timestamp: new Date().toISOString()
+  };
+  payload.readiness = {
+    ready: Object.keys(startupFailures).length === 0,
+    failures: { ...startupFailures },
   };
 
   if (includeDetails) {
@@ -120,6 +132,15 @@ app.get("/health", (req, res) => {
 // authenticated API middleware and serves only the repository policy document.
 app.get("/privacy", (req, res) => {
   res.type("text/markdown").send(fs.readFileSync(PRIVACY_POLICY_PATH, "utf8"));
+});
+
+app.get("/readiness", (req, res) => {
+  const ready = Object.keys(startupFailures).length === 0;
+  res.status(ready ? 200 : 503).json({
+    status: ready ? "ready" : "not_ready",
+    ready,
+    failures: { ...startupFailures },
+  });
 });
 
 app.use((req, res, next) => {
@@ -196,7 +217,7 @@ try {
 // persisted enabled modules) BEFORE the registry sync and MCP server
 // creation so module tools are live for the catalog and tool listing.
 try {
-  const builtinModules = require("./modules/builtin-modules");
+  builtinModules = require("./modules/builtin-modules");
   const provision = builtinModules.provisionBuiltinModules();
   if (provision.provisioned.length || provision.skipped.length || provision.errors.length) {
     console.log(`[Modules] Provisioned: ${JSON.stringify(provision.provisioned)}; skipped: ${JSON.stringify(provision.skipped)}; errors: ${provision.errors.length}`);
@@ -217,13 +238,14 @@ try {
   console.log("[Compute] Subsystem initialized");
 } catch (e) {
   console.error("[Compute] Init failed (non-fatal):", e.message);
+  startupFailures.compute = String(e.message || e).slice(0, 300);
 }
 
 // Initialize the browser subsystem: directories, orphaned-Chromium reaping,
 // and the idle-session reaper. Launches nothing; the browser starts on first
 // use and a missing runtime is a health state, not a startup failure.
 try {
-  const browserSubsystem = require("./browser");
+  browserSubsystem = require("./browser");
   const browserInit = browserSubsystem.initialize();
   if (browserInit.initialized) {
     console.log(`[Browser] Subsystem initialized (orphans reaped: ${browserInit.orphans_reaped})`);
@@ -232,6 +254,7 @@ try {
   }
 } catch (e) {
   console.error("[Browser] Init failed (non-fatal):", e.message);
+  startupFailures.browser = String(e.message || e).slice(0, 300);
 }
 
 // Register managed connectors (GitHub) in the platform connector authority so
@@ -252,7 +275,7 @@ if (process.env.SIDEKICK_DISABLE_EVENT_DRAINER === "1") {
   console.log("[Events] Drainer disabled by SIDEKICK_DISABLE_EVENT_DRAINER");
 } else {
   try {
-    const eventDrainer = require("./platform/event-drainer");
+    eventDrainer = require("./platform/event-drainer");
     const consumers = eventDrainer.registerBuiltinConsumers();
     const started = eventDrainer.startDrainer();
     console.log(`[Events] Drainer started (interval ${started.intervalMs}ms); consumers: ${JSON.stringify(consumers.registered)}`);
@@ -790,11 +813,34 @@ app.post("/compute/recover", express.json({ limit: "8kb" }), requireAdmin, recov
 app.get("/compute/health", requireAdmin, computeHealthHandler);
 
 if (require.main === module && !IS_LOCAL) {
-  app.listen(PORT, "0.0.0.0", () => {
+  httpServer = app.listen(PORT, "0.0.0.0", () => {
     console.log("Sidekick MCP server listening on port " + PORT);
     console.log("MCP endpoint: http://0.0.0.0:" + PORT + "/mcp");
     console.log("Data dir: " + DATA_DIR);
   });
+
+  async function gracefulShutdown(signal) {
+    if (shuttingDown) return shuttingDown;
+    shuttingDown = (async () => {
+      console.log(`[Shutdown] Received ${signal}; closing resources`);
+      if (httpServer) await new Promise(resolve => httpServer.close(() => resolve()));
+      await sessionManager.dispose();
+      if (browserSubsystem) await browserSubsystem.shutdown().catch(() => {});
+      if (builtinModules) { try { builtinModules.stopModuleLifecycleTimers(); } catch {} }
+      try { compute.stopReconciliation(); } catch {}
+      if (eventDrainer) { try { eventDrainer.stopDrainer(); } catch {} }
+      clearInterval(executionNodeRecoveryTimer);
+      try { dbStore.closeDatabase(); } catch {}
+    })();
+    return shuttingDown;
+  }
+
+  for (const signal of ["SIGTERM", "SIGINT"]) {
+    process.once(signal, () => gracefulShutdown(signal).then(() => process.exit(0)).catch(error => {
+      console.error("[Shutdown] Failed:", error.message);
+      process.exit(1);
+    }));
+  }
 }
 
 module.exports = { app, createMcpServer };

@@ -71,7 +71,7 @@ function isReferenceValue(value) {
 }
 
 function isSensitiveConfigKey(key) {
-  if (/(?:_PATH|_FILE|_FILENAME)$/i.test(key)) return false;
+  if (/(?:_PATH|_FILE|_FILENAME|_REF)$/i.test(key)) return false;
   return /(?:^|[_.-])(?:password|passwd|passphrase|secret|token|api[_-]?key|private[_-]?key)(?:$|[_.-])/i.test(key);
 }
 

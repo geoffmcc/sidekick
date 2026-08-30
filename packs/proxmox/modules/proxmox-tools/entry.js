@@ -193,6 +193,22 @@ function protectedMatchers(services) {
   return Array.isArray(cfg.protected_resources) ? cfg.protected_resources : [];
 }
 
+function requestedTarget(action, args) {
+  if (action === "create_vm") {
+    const vm = args.vm || {};
+    return { node: vm.node, vmid: vm.vmid, name: vm.name || null, type: "qemu" };
+  }
+  if (action === "create_lxc") {
+    const lxc = args.lxc || {};
+    return { node: lxc.node, vmid: lxc.vmid, name: lxc.hostname || null, type: "lxc" };
+  }
+  if (action === "clone") {
+    const clone = args.clone || {};
+    return { node: clone.node, vmid: clone.newid, name: clone.name || null, type: null };
+  }
+  return { node: args.node, vmid: args.vmid, name: args.name || null };
+}
+
 // Resolve the facts (provenance + protection) for an existing target guest.
 async function resolveTargetFacts(client, vmid) {
   const located = await provision.findGuestKind(client, vmid);
@@ -246,7 +262,7 @@ async function handleProvision(services, args, runtime) {
     const plan = policy.explain({
       operation: action,
       profile: profile.name,
-      target: facts || { node: args.node, vmid: args.vmid, name: args.name || null },
+      target: facts || requestedTarget(action, args),
       decision,
       expected_effect: expected,
       provenance: facts ? facts.provenanceEvidence : null,
@@ -545,4 +561,4 @@ const entry = {
   },
 };
 
-module.exports = { entry, buildDescriptors: entry.buildDescriptors, healthCheck: entry.healthCheck };
+module.exports = { entry, buildDescriptors: entry.buildDescriptors, healthCheck: entry.healthCheck, requestedTarget };

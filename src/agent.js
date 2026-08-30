@@ -635,6 +635,11 @@ async function checkWatch(watch) {
 function scheduleWatch(watch) {
   const intervalMs = parseWatchInterval(watch.interval);
 
+  if (watchIntervals[watch.id]) {
+    clearInterval(watchIntervals[watch.id]);
+    delete watchIntervals[watch.id];
+  }
+
   watchIntervals[watch.id] = setInterval(() => {
     checkWatch(watch).catch(e => console.error(`Watch ${watch.id} check failed: ${e.message}`));
   }, intervalMs);
@@ -2669,6 +2674,7 @@ app.post("/api/delays/reload", (req, res) => {
 app.post("/api/watches/reload", (req, res) => {
   for (const id in watchIntervals) {
     clearInterval(watchIntervals[id]);
+    delete watchIntervals[id];
   }
   loadAndScheduleWatches();
   res.json({ ok: true });
@@ -2751,5 +2757,7 @@ module.exports = {
   finishAgentExecution,
   sweepStrandedAgentExecutions,
   prepareTaskBranch,
+  scheduleWatch,
+  watchIntervals,
   __setLLMOverrideForTests,
 };

@@ -20,6 +20,7 @@ const MAX_LOG = Number(process.env.SIDEKICK_MAX_LOG || 1000);
 
 fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o750 });
 fs.mkdirSync(BACKUP_DIR, { recursive: true, mode: 0o750 });
+fs.mkdirSync(path.dirname(DB_FILE), { recursive: true, mode: 0o750 });
 
 let Database;
 try {
@@ -167,7 +168,14 @@ db.exec(`
 
 function ensureColumn(table, column, definition) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
-  if (!columns.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  if (columns.includes(column)) return;
+  try {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  } catch (error) {
+    // Another process may have added the column after the PRAGMA read.
+    // Treat that narrow race as converged; surface every other DDL failure.
+    if (!/duplicate column name/i.test(String(error.message || ""))) throw error;
+  }
 }
 
 for (const [column, definition] of Object.entries({
@@ -2046,35 +2054,29 @@ function listMigrations() {
 }
 
 function runPendingMigrations() {
-  const migrations = listMigrations();
-  const pending = migrations.filter(m => !m.applied);
-  
-  if (pending.length === 0) {
-    return { applied: 0, migrations: [] };
-  }
-  
   const applied = [];
-  for (const migration of pending) {
-    const migrationPath = path.join(MIGRATIONS_DIR, migration.file);
-    const sql = fs.readFileSync(migrationPath, "utf-8");
-    
-    try {
-      db.exec("BEGIN IMMEDIATE");
-      try {
-        execMigrationSql(sql);
-        db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(String(migration.version));
-        db.exec("COMMIT");
-      } catch (error) {
-        try { db.exec("ROLLBACK"); } catch {}
-        throw error;
-      }
+  let currentMigration = null;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    // Calculate pending work only after acquiring SQLite's write lock. A
+    // second process therefore re-reads schema_version after the first one
+    // commits instead of replaying the same migration.
+    const pending = listMigrations().filter(m => !m.applied);
+    for (const migration of pending) {
+      currentMigration = migration;
+      const migrationPath = path.join(MIGRATIONS_DIR, migration.file);
+      const sql = fs.readFileSync(migrationPath, "utf-8");
+      execMigrationSql(sql);
+      db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(String(migration.version));
       applied.push({ file: migration.file, version: migration.version });
-    } catch (error) {
-      console.error(`[Migration] Failed to apply ${migration.file}:`, error.message);
-      throw error;
     }
+    db.exec("COMMIT");
+  } catch (error) {
+    try { db.exec("ROLLBACK"); } catch {}
+    if (currentMigration) console.error(`[Migration] Failed to apply ${currentMigration.file}:`, error.message);
+    throw error;
   }
-  
+
   return { applied: applied.length, migrations: applied };
 }
 
