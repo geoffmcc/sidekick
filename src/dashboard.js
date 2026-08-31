@@ -47,6 +47,12 @@ const { runDoctor, formatDoctorText, createSupportBundle } = require("./doctor")
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const PORT = parseInt(process.env.SIDEKICK_DASHBOARD_PORT || "4098", 10);
+const BIND_HOST = process.env.SIDEKICK_DASHBOARD_BIND_HOST || "127.0.0.1";
+if (["0.0.0.0", "::"].includes(BIND_HOST) && process.env.SIDEKICK_ALLOW_PUBLIC_BIND !== "1") {
+  throw new Error("wildcard Dashboard bind requires SIDEKICK_ALLOW_PUBLIC_BIND=1");
+}
+const BOOTSTRAP_TOKEN = readSecret("SIDEKICK_BOOTSTRAP_TOKEN");
+const REMOTE_BOOTSTRAP_REQUIRED = !["127.0.0.1", "::1", "localhost"].includes(BIND_HOST);
 const MCP_PORT = parseInt(process.env.SIDEKICK_PORT || "4097", 10);
 const GRAFANA_PORT = parseInt(process.env.SIDEKICK_GRAFANA_PORT || "3000", 10);
 const MCP_API_KEY = readSecret("SIDEKICK_API_KEY", { required: true });
@@ -577,6 +583,8 @@ const { requireIdentityPermission, requireIdentityAdministrator } = registerAuth
   requestCookie,
   verifySessionToken,
   makeSessionToken,
+  bootstrapToken: BOOTSTRAP_TOKEN,
+  remoteBootstrapAllowed: REMOTE_BOOTSTRAP_REQUIRED,
 });
 
 // Grafana auth-proxy mode does not create a Grafana session token. Do not
@@ -1371,6 +1379,7 @@ registerKvRoutes({
   valueSize,
   valueType,
   auditLog,
+  requireIdentityAdministrator,
 });
 
 registerStatsToolsRoutes({ app, dbStore, getToolDefsForSource });
@@ -2211,6 +2220,7 @@ app.get("/api/memories/types", (req, res) => {
  */
 async function dispatchMemoryManage(req, res, args, auditAction) {
   try {
+    if (req.authPrincipal && !requireIdentityAdministrator(req, res)) return;
     auditLog(req, auditAction, { id: args.id });
     const result = await callDashboardTool("memory_manage", args,
       dashboardExecutionMetadata(req, authenticatedUser(req) || "dashboard"));
@@ -2235,6 +2245,7 @@ app.post("/api/memories/:id/enable", (req, res) => {
   // expired records, a different semantic), so this stays on dbStore directly
   // — with audit and honest status codes.
   try {
+    if (req.authPrincipal && !requireIdentityAdministrator(req, res)) return;
     const success = dbStore.enableMemory(req.params.id);
     auditLog(req, "memory_enable", { id: req.params.id, ok: success });
     if (!success) {
@@ -2317,6 +2328,7 @@ app.post("/api/memories/expire", (req, res) => {
   // single id; `process_auto_expirations` is a different sweep), so this stays
   // on dbStore directly — with audit and honest status codes.
   try {
+    if (req.authPrincipal && !requireIdentityAdministrator(req, res)) return;
     const { stale_days } = req.body || {};
     if (stale_days !== undefined && (!Number.isFinite(Number(stale_days)) || Number(stale_days) < 0)) {
       return res.status(400).json({ ok: false, error: "stale_days must be a non-negative number" });
@@ -2329,9 +2341,27 @@ app.post("/api/memories/expire", (req, res) => {
   }
 });
 
+function canReadDashboardHandoff(req, handoff) {
+  const principal = req.authPrincipal;
+  if (!principal?.principal_id || !handoff) return false;
+  if (handoff.owner_principal_id === principal.principal_id || handoff.created_by_principal_id === principal.principal_id) return true;
+  const roles = Array.isArray(principal.roles) ? principal.roles : [];
+  return roles.some(role => ["owner", "administrator"].includes(String(role).toLowerCase()));
+}
+
+function requireDashboardHandoff(req, res) {
+  const handoff = dbStore.getHandoff(req.params.id);
+  if (!handoff || !canReadDashboardHandoff(req, handoff)) {
+    res.status(404).json({ ok: false, error: "Handoff not found" });
+    return null;
+  }
+  return handoff;
+}
+
 app.get("/api/handoffs", (req, res) => {
   try {
-    res.json({ ok: true, handoffs: dbStore.listHandoffs({ project: req.query.project, includeArchived: req.query.include_archived === "true", limit: req.query.limit || 50 }) });
+    const handoffs = dbStore.listHandoffs({ project: req.query.project, includeArchived: req.query.include_archived === "true", limit: Math.min(Number(req.query.limit) || 50, 500) });
+    res.json({ ok: true, handoffs: handoffs.filter(handoff => canReadDashboardHandoff(req, handoff)) });
   } catch (error) {
     res.json({ ok: false, error: error.message, handoffs: [] });
   }
@@ -2339,6 +2369,7 @@ app.get("/api/handoffs", (req, res) => {
 
 app.get("/api/handoffs/:id/readiness", (req, res) => {
   try {
+    if (!requireDashboardHandoff(req, res)) return;
     const readiness = dbStore.getHandoffReadiness(req.params.id, { recipient: req.query.recipient });
     if (readiness.status === "invalid" && readiness.reasons?.includes("handoff not found")) return res.status(404).json({ ok: false, readiness });
     res.json({ ok: true, readiness });
@@ -2349,6 +2380,7 @@ app.get("/api/handoffs/:id/readiness", (req, res) => {
 
 app.get("/api/handoffs/:id/start-here", (req, res) => {
   try {
+    if (!requireDashboardHandoff(req, res)) return;
     const projection = dbStore.getHandoffReceiverProjection(req.params.id, { recipient: req.query.recipient });
     if (!projection) return res.status(404).json({ ok: false, error: "Handoff not found" });
     res.json({ ok: true, projection });
@@ -2359,6 +2391,7 @@ app.get("/api/handoffs/:id/start-here", (req, res) => {
 
 app.get("/api/handoffs/:id/preflight", (req, res) => {
   try {
+    if (!requireDashboardHandoff(req, res)) return;
     const preflight = dbStore.getHandoffResumePreflight(req.params.id, { recipient: req.query.recipient, simulate: req.query.simulate === "true" });
     if (preflight.status === "invalid") return res.status(404).json({ ok: false, preflight });
     res.json({ ok: true, preflight });
@@ -2369,7 +2402,7 @@ app.get("/api/handoffs/:id/preflight", (req, res) => {
 
 app.get("/api/handoffs/:id/events", (req, res) => {
   try {
-    if (!dbStore.getHandoff(req.params.id)) return res.status(404).json({ ok: false, error: "Handoff not found" });
+    if (!requireDashboardHandoff(req, res)) return;
     res.json({ ok: true, handoff_id: req.params.id, events: dbStore.listHandoffEvents(req.params.id, req.query.limit || 100) });
   } catch (error) {
     res.status(400).json({ ok: false, error: error.message });
@@ -2378,8 +2411,8 @@ app.get("/api/handoffs/:id/events", (req, res) => {
 
 app.get("/api/handoffs/:id", (req, res) => {
   try {
-    const handoff = dbStore.getHandoff(req.params.id);
-    if (!handoff) return res.status(404).json({ ok: false, error: "Handoff not found" });
+    const handoff = requireDashboardHandoff(req, res);
+    if (!handoff) return;
     const memories = dbStore.searchMemories({ project: handoff.project, includeDisabled: true, limit: 200 }).filter(memory => memory.source_ref === handoff.id || memory.metadata?.handoff_id === handoff.id);
     res.json({ ok: true, handoff, memories });
   } catch (error) {
@@ -2661,17 +2694,22 @@ function respondToClear(req, res, auditEvent, run) {
   }
 }
 
+function requireDashboardAdministrator(req, res) {
+  if (!req.authPrincipal || !requireIdentityAdministrator) return true;
+  return requireIdentityAdministrator(req, res);
+}
+
 app.delete("/api/logs", (req, res) =>
-  respondToClear(req, res, "logs.clear", () => { dbStore.clearToolLogs(); return {}; }));
+  requireDashboardAdministrator(req, res) && respondToClear(req, res, "logs.clear", () => { dbStore.clearToolLogs(); return {}; }));
 
 app.delete("/api/kv", (req, res) =>
-  respondToClear(req, res, "kv.clear", () => { dbStore.clearKV(); return {}; }));
+  requireDashboardAdministrator(req, res) && respondToClear(req, res, "kv.clear", () => { dbStore.clearKV(); return {}; }));
 
 app.delete("/api/conversations", (req, res) =>
-  respondToClear(req, res, "conversations.clear", () => ({ removed: clearConversationFiles() })));
+  requireDashboardAdministrator(req, res) && respondToClear(req, res, "conversations.clear", () => ({ removed: clearConversationFiles() })));
 
 app.delete("/api/data", (req, res) =>
-  respondToClear(req, res, "data.clear", () => {
+  requireDashboardAdministrator(req, res) && respondToClear(req, res, "data.clear", () => {
     // Ordered so a failure reports which stage stopped the wipe rather than
     // claiming the whole clear succeeded.
     dbStore.clearToolLogs();
@@ -2857,7 +2895,23 @@ app.get("/", (req, res) => {
   res.set("Content-Type", "text/html; charset=utf-8").send(html);
 });
 
-app.listen(PORT, "0.0.0.0", () => {
+let dashboardServer = null;
+let dashboardShutdown = null;
+
+dashboardServer = app.listen(PORT, BIND_HOST, () => {
   seedKV();
-  console.log("Sidekick dashboard listening on http://0.0.0.0:" + PORT);
+  console.log("Sidekick dashboard listening on http://" + BIND_HOST + ":" + PORT);
 });
+
+async function gracefulDashboardShutdown(signal) {
+  if (dashboardShutdown) return dashboardShutdown;
+  dashboardShutdown = (async () => {
+    console.error(`[Dashboard] Received ${signal}; draining HTTP requests`);
+    if (dashboardServer) await new Promise(resolve => dashboardServer.close(() => resolve()));
+    try { dbStore.closeDatabase(); } catch {}
+  })();
+  return dashboardShutdown;
+}
+
+process.once("SIGTERM", () => gracefulDashboardShutdown("SIGTERM").then(() => process.exit(0)));
+process.once("SIGINT", () => gracefulDashboardShutdown("SIGINT").then(() => process.exit(0)));

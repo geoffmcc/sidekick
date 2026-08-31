@@ -152,24 +152,24 @@ console.log("  ✓ Confirmation tracking works");
   const sessionId = sessionText.match(/id: (sess_[^)]+)/)[1];
   assert.ok(sessionId, "track_session should return a session id");
 
-  const exactRecall = await context({ action: "recall", query: sessionId, type: "sessions" });
+   const exactRecall = await context({ action: "recall", query: sessionId, type: "sessions", project: "lifecycle_test" });
   assert.ok(exactRecall.content[0].text.includes(`[Session ${sessionId}]`), "Exact session id recall should find the session");
 
   const disableSession = await memory_manage({ action: "disable", id: sessionId, reason: "test_disable" });
   assert.ok(!disableSession.isError, "Legacy session disable should succeed");
   assert.ok(disableSession.content[0].text.includes("disabled"), "Disable should report success");
 
-  const disabledRecall = await context({ action: "recall", query: sessionId, type: "sessions" });
+   const disabledRecall = await context({ action: "recall", query: sessionId, type: "sessions", project: "lifecycle_test" });
   assert.strictEqual(disabledRecall.content[0].text, "No relevant context found", "Disabled session should not be recalled");
 
   const restoreSession = await memory_manage({ action: "restore", id: sessionId });
   assert.ok(!restoreSession.isError, "Legacy session restore should succeed");
-  const restoredRecall = await context({ action: "recall", query: sessionId, type: "sessions" });
+   const restoredRecall = await context({ action: "recall", query: sessionId, type: "sessions", project: "lifecycle_test" });
   assert.ok(restoredRecall.content[0].text.includes(`[Session ${sessionId}]`), "Restored session should be recalled");
 
   const deleteSession = await memory_manage({ action: "delete", id: sessionId, reason: "test_delete" });
   assert.ok(!deleteSession.isError, "Legacy session delete should succeed");
-  const deletedRecall = await context({ action: "recall", query: sessionId, type: "sessions" });
+   const deletedRecall = await context({ action: "recall", query: sessionId, type: "sessions", project: "lifecycle_test" });
   assert.strictEqual(deletedRecall.content[0].text, "No relevant context found", "Deleted session should not be recalled");
 
   const unsupportedConfirm = await memory_manage({ action: "confirm", id: sessionId });
@@ -185,11 +185,11 @@ console.log("  ✓ Confirmation tracking works");
     source: "test",
     source_tool: "test"
   });
-  const structuredRecall = await context({ action: "recall", query: structured.id, type: "memories" });
+   const structuredRecall = await context({ action: "recall", query: structured.id, type: "memories", project: "lifecycle_test" });
   assert.ok(structuredRecall.content[0].text.includes(`[Memory ${structured.id}]`), "Exact structured memory id recall should work");
   const disableStructured = await memory_manage({ action: "disable", id: structured.id });
   assert.ok(!disableStructured.isError, "Structured memory disable should succeed");
-  const disabledStructuredRecall = await context({ action: "recall", query: structured.id, type: "memories" });
+   const disabledStructuredRecall = await context({ action: "recall", query: structured.id, type: "memories", project: "lifecycle_test" });
   assert.strictEqual(disabledStructuredRecall.content[0].text, "No relevant context found", "Disabled structured memory should not be recalled by id");
   console.log("  ✓ Exact id recall and cross-store lifecycle work");
 
