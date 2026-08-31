@@ -60,6 +60,9 @@ jobs:
     - name: Run certification
       run: npm run certify -- --json
 
+    - name: Run Agent lifecycle certification
+      run: node test/certification-lifecycle.test.js
+
     - name: Run invariant and Doctor checks
       run: node test/invariants-doctor.test.js
 

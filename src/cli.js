@@ -17,6 +17,28 @@ function status() {
   console.log(JSON.stringify({ version: packageJson.version, home: paths.home, data: paths.data, database_initialized: exists }, null, 2));
 }
 
+function provisionCertificationPacks() {
+  if (process.env.SIDEKICK_CERTIFY_PROVISION_PACKS === "0") return;
+  const path = require("path");
+  const bundled = require("./packs/bundled");
+  const repository = require("./packs/repository");
+  const lifecycle = require("./packs/lifecycle");
+  for (const name of ["developer", "security-research"]) {
+    const installed = repository.getPack(name);
+    if (!installed) {
+      const config = name === "security-research"
+        ? { workspace: path.join(require("os").tmpdir(), "sidekick-certification-research") }
+        : undefined;
+      bundled.installBundledPack(name, { config, enable: true });
+      continue;
+    }
+    // Respect an operator-disabled pack; certification should report the
+    // missing descriptor rather than silently re-enabling it.
+    if (installed.state === "disabled") continue;
+    if (installed.state !== "enabled" && installed.state !== "healthy") lifecycle.enable(name);
+  }
+}
+
 async function run() {
   const command = process.argv[2];
   if (command === "version") return console.log(packageJson.version);
@@ -32,12 +54,27 @@ async function run() {
       if (process.argv.includes("--bundle")) return console.log(JSON.stringify(createSupportBundle({ report }), null, 2));
       if (process.argv.includes("--json")) return console.log(JSON.stringify(report, null, 2));
       return console.log(formatDoctorText(report));
-    }
-    if (command === "certify") {
-       const { runCertification, formatCertificationText, createLifecycleExecutorFromEnv } = require("./certification");
-       const live = process.argv.includes("--live");
-       const liveExecutor = live ? createLifecycleExecutorFromEnv() : null;
-       const report = await runCertification({ mode: live ? "live" : "hermetic", availability: liveExecutor ? () => liveExecutor.available() : false, liveExecutor });
+     }
+     if (command === "certify") {
+        const db = require("./db");
+        db.runPendingMigrations();
+        provisionCertificationPacks();
+        const { runCertification, formatCertificationText, createLifecycleExecutorFromEnv } = require("./certification");
+        const live = process.argv.includes("--live");
+        const liveExecutor = live ? createLifecycleExecutorFromEnv() : null;
+        const previousTestPolicy = process.env.SIDEKICK_TEST_TOOL_POLICY;
+        const previousTestApproval = process.env.SIDEKICK_TEST_APPROVAL_MODE;
+        process.env.SIDEKICK_TEST_TOOL_POLICY = "open";
+        process.env.SIDEKICK_TEST_APPROVAL_MODE = "off";
+        let report;
+        try {
+          report = await runCertification({ mode: live ? "live" : "hermetic", availability: liveExecutor ? () => liveExecutor.available() : false, liveExecutor });
+        } finally {
+          if (previousTestPolicy === undefined) delete process.env.SIDEKICK_TEST_TOOL_POLICY;
+          else process.env.SIDEKICK_TEST_TOOL_POLICY = previousTestPolicy;
+          if (previousTestApproval === undefined) delete process.env.SIDEKICK_TEST_APPROVAL_MODE;
+          else process.env.SIDEKICK_TEST_APPROVAL_MODE = previousTestApproval;
+        }
       if (process.argv.includes("--json")) console.log(JSON.stringify(report, null, 2));
       else console.log(formatCertificationText(report));
         // Unavailability is diagnostic information, never release evidence.

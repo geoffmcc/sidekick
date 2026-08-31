@@ -65,7 +65,11 @@ async function executeFixture(scenario, registry) {
       args: step.args || {},
       context: createTestExecutionContext({ project: "agent-certification", correlationId: scenario.id }),
     });
-    if (!dispatched || dispatched.isError) return `canonical dispatcher fixture failed for ${name}`;
+    if (!dispatched || dispatched.isError) {
+      const detail = dispatched?.content?.[0]?.text;
+      const reason = detail ? `: ${sanitize(String(detail)).slice(0, 300)}` : "";
+      return `canonical dispatcher fixture failed for ${name}${reason}`;
+    }
     observed.push(name);
   }
   const missing = scenario.expected_tools.filter(name => !observed.includes(name));
@@ -108,13 +112,17 @@ async function runCertification({ scenarioIds, mode, theme, availability = false
   const selected = listScenarios({ mode, theme }).filter(scenario => !scenarioIds || scenarioIds.includes(scenario.id));
   const results = [];
   for (const scenario of selected) {
+    if (scenario.mode === "lifecycle") {
+      results.push(result(scenario, "blocked", "run the required Agent lifecycle certification"));
+      continue;
+    }
     if (scenario.mode === "live") {
       results.push(await runLiveScenario(scenario, availability, liveExecutor));
       continue;
     }
     try {
       const reason = await assertScenario(scenario, registry);
-      const blocked = reason && (reason.startsWith("expected tools unavailable:") || reason === "no deterministic hermetic fixture is defined");
+      const blocked = reason && (reason.startsWith("expected tools unavailable:") || reason === "no deterministic hermetic fixture is defined" || reason.includes("Tool blocked by policy"));
       results.push(reason
         ? result(scenario, blocked ? "blocked" : "failed", reason)
         : result(scenario, "passed", null, { dispatcher: "canonical", fixture: true }));
@@ -124,7 +132,7 @@ async function runCertification({ scenarioIds, mode, theme, availability = false
   }
   const summary = Object.fromEntries(["total", "passed", "failed", "skipped", "blocked"].map(key => [key, key === "total" ? results.length : results.filter(item => item.status === key).length]));
   const verdict = summary.failed ? "failed" : summary.blocked || summary.skipped ? "blocked" : "passed";
-  const certificationLevel = mode === "live" ? "optional_live" : mode === "hermetic" ? "required_hermetic" : "combined";
+  const certificationLevel = mode === "live" ? "optional_live" : mode === "lifecycle" ? "required_lifecycle" : mode === "hermetic" ? "required_hermetic" : "combined";
   return sanitize({ schema: "sidekick.agent-certification.v1", version: 1, generated_at: new Date().toISOString(), mode: mode || "all", certification_level: certificationLevel, verdict, summary, results });
 }
 

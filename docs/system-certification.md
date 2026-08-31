@@ -14,9 +14,13 @@ node src/cli.js certify
 node src/cli.js certify --json
 node src/cli.js certify --json --allow-unavailable
 npm run certify
+node test/certification-lifecycle.test.js
 ```
 
 `certify` runs the hermetic scenarios from `src/certification/scenarios.js`.
+The Agent Bridge lifecycle scenarios are required separately because they need
+the durable loopback task runtime rather than direct MCP tool descriptors; run
+`node test/certification-lifecycle.test.js` for that surface.
 Provider and lab-dependent scenarios are separate live scenarios and are
 reported as `skipped` when their prerequisites are unavailable. A skipped or
 blocked scenario is not a pass, and a report containing either status has an

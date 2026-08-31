@@ -8,7 +8,8 @@ const { listScenarios, runCertification, formatCertificationText, collectReliabi
   assert.strictEqual(all.length, 20);
   assert.strictEqual(new Set(all.map(scenario => scenario.id)).size, 20);
   assert.ok(all.every(scenario => scenario.version === 1 && scenario.bounded && scenario.approval && scenario.evidence && scenario.outcome && scenario.cleanup));
-  assert.strictEqual(listScenarios({ mode: "live" }).length, 2);
+   assert.strictEqual(listScenarios({ mode: "live" }).length, 2);
+   assert.strictEqual(listScenarios({ mode: "lifecycle" }).length, 6);
 
   const report = await runCertification();
   assert.strictEqual(report.schema, "sidekick.agent-certification.v1");
@@ -22,7 +23,7 @@ const { listScenarios, runCertification, formatCertificationText, collectReliabi
   assert.match(formatCertificationText(report), /Agent certification 1: blocked/);
 
   const hermetic = await runCertification({ mode: "hermetic" });
-  assert.strictEqual(hermetic.summary.total, 18);
+   assert.strictEqual(hermetic.summary.total, 12);
   assert.strictEqual(hermetic.summary.skipped, 0);
   assert.strictEqual(hermetic.summary.failed, 0);
   assert.ok(hermetic.summary.blocked > 0);

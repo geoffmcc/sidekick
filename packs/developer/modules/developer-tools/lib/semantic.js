@@ -12,7 +12,8 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
-const ignore = require("ignore");
+const { requireFromSidekick } = require("./deps");
+const ignore = requireFromSidekick("ignore");
 const ast = require("./ast");
 
 const IR_VERSION = "sidekick.semantic-ir.v4";
