@@ -58,7 +58,7 @@ jobs:
       run: node scripts/install-browser.js
 
     - name: Run certification
-       run: npm run certify -- --json --allow-unavailable
+      run: npm run certify -- --json --allow-unavailable
 
     - name: Run invariant and Doctor checks
       run: node test/invariants-doctor.test.js
