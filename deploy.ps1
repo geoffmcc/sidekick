@@ -590,7 +590,15 @@ try {
   Write-Host "Files synced: $($changed -join ', ')"
   Write-Host ""
 
-  foreach ($svc in @("sidekick-mcp", "sidekick-dashboard", "sidekick-agent")) {
+  foreach ($svc in @("sidekick-mcp", "sidekick-dashboard", "sidekick-agent", "sidekick-execution-node", "sidekick-compute-worker")) {
+    $unit = Run-Remote "test -f /etc/systemd/system/$svc.service && echo YES || echo NO"
+    if ($unit -notmatch "YES") {
+      if ($svc -in @("sidekick-execution-node", "sidekick-compute-worker")) {
+        Write-Host "  $svc : not installed (optional)" -ForegroundColor Yellow
+        continue
+      }
+      throw "$svc service unit missing"
+    }
     $status = Run-Remote "sudo systemctl status $svc 2>&1 | grep 'Active:' | awk '{print `$2}'"
     $color = if ($status -match "active") { "Green" } else { "Red" }
     Write-Host ("  $svc : ".PadRight(30)) -NoNewline

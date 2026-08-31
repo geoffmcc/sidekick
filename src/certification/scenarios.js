@@ -52,7 +52,7 @@ function freeze(value) {
 
 const scenarios = freeze(THEMES.map(([id, title, expectedTools, mode], index) => {
   const forbiddenTools = ["executeAuthorizedTaskStep", "tools-legacy"];
-  const bounded = { max_output_chars: 2000, max_steps: 1, max_evidence: 4 };
+  const bounded = { max_output_chars: 2000, max_steps: id === "repository-path" ? 2 : 1, max_evidence: 4 };
   const approval = {
     required: ["approval-required", "approval-no-bypass", "mutation-approval", "approval-resume"].includes(id),
     bypass_allowed: false,
@@ -67,6 +67,14 @@ const scenarios = freeze(THEMES.map(([id, title, expectedTools, mode], index) =>
     terminal: true,
   };
   const cleanup = { required: !["hermetic-registry", "bounded-metadata", "redaction"].includes(id), idempotent: true, external_mutation: false };
+  const fixture = id === "repository-path"
+    ? [
+      { name: "read", args: { path: require("path").join(__dirname, "../../docs/system-certification.md") } },
+      { name: "respond", args: { text: "certification fixture verified" } },
+    ]
+    : id === "result-vocabulary"
+      ? [{ name: "respond", args: { text: "certification fixture verified" } }]
+      : null;
   return {
   id: `agent-cert.v1.${id}`,
   version: 1,
@@ -95,8 +103,9 @@ const scenarios = freeze(THEMES.map(([id, title, expectedTools, mode], index) =>
   outcomeContract: outcome,
    fault_point: ["fault-dispatch", "fault-policy", "ambiguous-effect"].includes(id) ? id : null,
    faultPoint: ["fault-dispatch", "fault-policy", "ambiguous-effect"].includes(id) ? id : null,
-  cleanup,
-  cleanupContract: cleanup,
+   cleanup,
+   cleanupContract: cleanup,
+    fixture,
     assertion: ASSERTIONS[id] || (mode === "live" ? "live_provider" : "metadata_bounds"),
   };
 }));

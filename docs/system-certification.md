@@ -22,10 +22,14 @@ reported as `skipped` when their prerequisites are unavailable. A skipped or
 blocked scenario is not a pass, and a report containing either status has an
 overall `blocked` verdict.
 
-`--allow-unavailable` is intended for hermetic CI where optional capability
-packs are not installed. It preserves the `blocked` report and only permits a
-zero process exit when no scenario actually failed; it must not be used for
-live acceptance.
+Hermetic scenarios pass only after a declared local fixture runs through the
+canonical dispatcher by canonical tool name. Scenarios without a safe,
+deterministic fixture are reported as `blocked`; descriptor metadata alone
+cannot certify execution.
+
+`--allow-unavailable` remains accepted for compatibility with older CI
+commands, but it cannot change a `blocked` or `skipped` result into a pass.
+Blocked certification is never live or release acceptance evidence.
 
 The certification report includes a versioned scenario identifier, objective,
 initial project/workspace identity, authority envelope label, expected tools,

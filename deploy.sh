@@ -524,7 +524,16 @@ echo -e "\033[36m=== Deploy complete ===\033[0m"
 echo "Files synced: ${changed[*]}"
 echo ""
 
-for svc in sidekick-mcp sidekick-dashboard sidekick-agent; do
+for svc in sidekick-mcp sidekick-dashboard sidekick-agent sidekick-execution-node sidekick-compute-worker; do
+  exists=$(run_remote "test -f /etc/systemd/system/$svc.service && echo YES || echo NO") || true
+  if [[ "$exists" != *"YES"* ]]; then
+    if [[ "$svc" == "sidekick-execution-node" || "$svc" == "sidekick-compute-worker" ]]; then
+      echo -e "  \033[33m$svc : not installed (optional)\033[0m"
+      continue
+    fi
+    echo -e "  \033[31m$svc : service unit missing\033[0m"
+    exit 1
+  fi
   status=$(run_remote "sudo systemctl status $svc 2>&1 | grep 'Active:' | awk '{print \$2}'") || true
   if [[ "$status" == *"active"* ]]; then
     echo -e "  \033[32m$svc : $status\033[0m"
