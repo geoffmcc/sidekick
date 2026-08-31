@@ -40,8 +40,10 @@ async function run() {
        const report = await runCertification({ mode: live ? "live" : "hermetic", availability: liveExecutor ? () => liveExecutor.available() : false, liveExecutor });
       if (process.argv.includes("--json")) console.log(JSON.stringify(report, null, 2));
       else console.log(formatCertificationText(report));
-       const allowUnavailable = process.argv.includes("--allow-unavailable");
-       if (report.verdict !== "passed" && !(allowUnavailable && report.summary.failed === 0)) process.exitCode = 1;
+        // Unavailability is diagnostic information, never release evidence.
+        // Keep the legacy flag accepted, but it cannot turn blocked or skipped
+        // required certification into a pass.
+        if (report.verdict !== "passed") process.exitCode = 1;
       return;
     }
     return;

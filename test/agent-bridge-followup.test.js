@@ -14,6 +14,7 @@ const http = require("http");
 
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "sk-followup-"));
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
+process.env.NODE_ENV = "test";
 process.env.SIDEKICK_TOOL_POLICY = "open";
 process.env.SIDEKICK_APPROVAL_MODE = "off";
 process.env.SIDEKICK_ENVIRONMENT = "test";

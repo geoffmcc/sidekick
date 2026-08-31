@@ -20,8 +20,8 @@ const PROTOCOL_VERSION = "1";
 const SERVER_URL = process.env.SIDEKICK_URL || process.env.SIDEKICK_SERVER_URL || "http://127.0.0.1:4097";
 const CONFIG_PATH = process.env.SIDEKICK_NODE_CONFIG || path.join(os.homedir(), ".config", "sidekick", "node.json");
 const CREDENTIAL_PATH = process.env.SIDEKICK_NODE_CREDENTIAL || path.join(os.homedir(), ".config", "sidekick", "node-credential.json");
-let workspaceRoot = process.env.SIDEKICK_NODE_WORKSPACE_ROOT || "/home/geoffrey/Projects/security-research";
-const WORKSPACE_NAME = "security-research";
+let workspaceRoot = process.env.SIDEKICK_NODE_WORKSPACE_ROOT || null;
+let workspaceName = process.env.SIDEKICK_NODE_WORKSPACE_NAME || null;
 const HEARTBEAT_MS = boundedInt(process.env.SIDEKICK_NODE_HEARTBEAT_MS, 30000, 5000, 300000);
 const POLL_MS = boundedInt(process.env.SIDEKICK_NODE_POLL_MS, 1000, 250, 60000);
 const CONCURRENCY = boundedInt(process.env.SIDEKICK_NODE_CONCURRENCY, 2, 1, 8);
@@ -32,6 +32,7 @@ let workspace = null;
 let running = true;
 let nodeConfig = {};
 let nodeRegistry = null;
+const activeControllers = new Set();
 
 function boundedInt(value, fallback, min, max) { const n = Number(value || fallback); return Number.isInteger(n) ? Math.min(max, Math.max(min, n)) : fallback; }
 function log(message) { process.stderr.write(`[sidekick-node] ${new Date().toISOString()} ${redact(message)}\n`); }
@@ -61,7 +62,7 @@ function registry() {
 }
 function descriptorSetHash() { const names = registry().list().map(d => `${d.name}:${descriptorIdentity(d)}`).join("\n"); return crypto.createHash("sha256").update(names).digest("hex"); }
 function binaries() { const names = ["git", "rg", "grep", "node", "npm", "python3", "go", "cargo", "ruby", "java"]; return names.filter(name => { try { require("child_process").execFileSync("which", [name], { stdio: "ignore", timeout: 1000 }); return true; } catch { return false; } }); }
-function capabilities() { return { nodeId: nodeId(), executionHost: os.hostname(), nodeVersion: process.version, osType: os.type(), osRelease: os.release(), architecture: os.arch(), platform: process.platform, descriptorSetHash: descriptorSetHash(), binaries: binaries(), packs: Array.isArray(nodeConfig.packs) ? nodeConfig.packs.slice(0, 16) : [], workspaces: workspace ? [{ name: workspace.name, root: workspace.root, permissions: workspace.permissions, limits: workspace.limits }] : [{ name: WORKSPACE_NAME }], networkScopes: Array.isArray(nodeConfig.networkScopes) ? nodeConfig.networkScopes.slice(0, 16) : [], browser: false, privilege: false, healthy: true }; }
+function capabilities() { return { nodeId: nodeId(), executionHost: os.hostname(), nodeVersion: process.version, osType: os.type(), osRelease: os.release(), architecture: os.arch(), platform: process.platform, descriptorSetHash: descriptorSetHash(), binaries: binaries(), packs: Array.isArray(nodeConfig.packs) ? nodeConfig.packs.slice(0, 16) : [], workspaces: workspace ? [{ name: workspace.name, root: workspace.root, permissions: workspace.permissions, limits: workspace.limits }] : [], networkScopes: Array.isArray(nodeConfig.networkScopes) ? nodeConfig.networkScopes.slice(0, 16) : [], browser: false, privilege: false, healthy: true }; }
 function request(method, endpoint, body, timeoutMs = 15000) {
   return new Promise((resolve, reject) => {
     const url = new URL(endpoint, SERVER_URL); const transport = url.protocol === "https:" ? https : http; const data = body == null ? null : JSON.stringify(body);
@@ -104,9 +105,28 @@ function validateLocalArguments(descriptor, args) {
   return parsed.data;
 }
 function boundedResult(result) {
-  const normalized = result && typeof result === "object" ? { ...result } : { content: [{ type: "text", text: String(result || "") }] };
-  if (Array.isArray(normalized.content)) normalized.content = normalized.content.map(item => ({ ...item, text: typeof item.text === "string" ? redact(item.text).slice(0, MAX_OUTPUT) : item.text }));
-  return JSON.parse(JSON.stringify(normalized, (_key, value) => typeof value === "string" ? value.slice(0, MAX_OUTPUT) : value));
+  const normalized = result && typeof result === "object" ? result : { content: [{ type: "text", text: String(result || "") }] };
+  let truncated = false;
+  function trim(value, depth = 0) {
+    if (typeof value === "string") {
+      const next = redact(value).slice(0, Math.min(MAX_OUTPUT, 8192));
+      truncated ||= next.length !== value.length;
+      return next;
+    }
+    if (value === null || typeof value !== "object") return value;
+    if (depth >= 8) { truncated = true; return "[TRUNCATED]"; }
+    if (Array.isArray(value)) return value.slice(0, 256).map(item => trim(item, depth + 1));
+    return Object.fromEntries(Object.entries(value).slice(0, 256).map(([key, item]) => [key, trim(item, depth + 1)]));
+  }
+  let bounded = trim(normalized);
+  while (Buffer.byteLength(JSON.stringify(bounded), "utf8") > MAX_OUTPUT) {
+    truncated = true;
+    const text = JSON.stringify(bounded);
+    bounded = { content: [{ type: "text", text: text.slice(0, MAX_OUTPUT - 128) }], truncated: true };
+    break;
+  }
+  if (truncated && bounded && typeof bounded === "object" && !Array.isArray(bounded)) bounded.truncated = true;
+  return bounded;
 }
 async function enroll() {
   const existing = credentialStore.load(CREDENTIAL_PATH);
@@ -117,7 +137,8 @@ async function enroll() {
   workerId = result.body.worker.workerId; credential = result.body.credential; saveCredential({ workerId, nodeId: nodeId(), credential });
 }
 async function heartbeat() { const result = await request("POST", "/execution-node/node/heartbeat", { capabilities: capabilities(), descriptorSetHash: descriptorSetHash(), protocolVersion: PROTOCOL_VERSION, limits: { maxConcurrent: CONCURRENCY, maxOutputBytes: MAX_OUTPUT } }); if (result.status === 401 || result.status === 403) throw new Error("node credential rejected or node revoked"); if (result.status !== 200) throw new Error(`heartbeat failed (${result.status})`); }
-async function execute(job) {
+async function disconnect() { if (!workerId) return; try { await request("POST", "/execution-node/node/disconnect", { reason: "node_shutdown" }, 5000); } catch {} }
+async function execute(job, controller = new AbortController()) {
   const descriptor = registry().get(job.toolName);
   if (!descriptor) throw new Error("unknown tool");
   if (descriptor.version && descriptor.version !== job.descriptorVersion) throw new Error("descriptor version mismatch");
@@ -131,20 +152,20 @@ async function execute(job) {
     error.code = "node_execution_timeout";
     throw error;
   }
-  const result = boundedResult(await descriptor.handler(args, { signal: null, context: job.context, timeoutMs, deadlineAt }));
-  if (timeoutMs && Date.now() - started > timeoutMs) {
-    const error = new Error(`node execution exceeded its ${timeoutMs}ms deadline`);
-    error.code = "node_execution_timeout";
-    throw error;
-  }
-  const receipt = { receiptId: stableId("receipt", `${job.jobId}:${started}`), jobId: job.jobId, tool: descriptor.name, descriptorVersion: job.descriptorVersion, descriptorIdentity: job.descriptorIdentity, nodeId: nodeId(), workspace: WORKSPACE_NAME, startedAt: new Date(started).toISOString(), completedAt: new Date().toISOString(), sideEffect: descriptor.risk === "low" ? "read" : "governed", outputBytes: Buffer.byteLength(JSON.stringify(result)), evidence: { untrusted: true, truncated: JSON.stringify(result).length > MAX_OUTPUT } };
-  return { result, receipt };
+  const deadlineTimer = deadlineAt ? setTimeout(() => controller.abort(Object.assign(new Error("node execution deadline expired"), { code: "node_execution_timeout" })), Math.max(0, Date.parse(deadlineAt) - Date.now())) : null;
+  try {
+    const result = boundedResult(await descriptor.handler(args, { signal: controller.signal, context: job.context, timeoutMs, deadlineAt }));
+    if (controller.signal.aborted) throw controller.signal.reason || Object.assign(new Error("node execution cancelled"), { code: "node_execution_cancelled" });
+    if (timeoutMs && Date.now() - started > timeoutMs) throw Object.assign(new Error(`node execution exceeded its ${timeoutMs}ms deadline`), { code: "node_execution_timeout" });
+    const receipt = { receiptId: stableId("receipt", `${job.jobId}:${started}`), jobId: job.jobId, tool: descriptor.name, descriptorVersion: job.descriptorVersion, descriptorIdentity: job.descriptorIdentity, nodeId: nodeId(), workspace: workspaceName, startedAt: new Date(started).toISOString(), completedAt: new Date().toISOString(), sideEffect: descriptor.risk === "low" ? "read" : "governed", outputBytes: Buffer.byteLength(JSON.stringify(result)), evidence: { untrusted: true, truncated: result.truncated === true } };
+    return { result, receipt };
+  } finally { if (deadlineTimer) clearTimeout(deadlineTimer); }
 }
-async function claimLoop() { const active = new Set(); while (running) { if (active.size < CONCURRENCY) { try { const response = await request("POST", "/execution-node/node/jobs/claim", { leaseMs: 120000 }); if (response.status === 200 && response.body.job) { const job = response.body.job; const promise = execute(job).then(output => request("POST", `/execution-node/node/jobs/${job.jobId}/complete`, { leaseId: job.leaseId, result: output.result, receipt: output.receipt })).catch(error => request("POST", `/execution-node/node/jobs/${job.jobId}/fail`, { leaseId: job.leaseId, code: error.code || "local_execution_failed", message: redact(error.message) })).catch(() => {}); active.add(promise); promise.finally(() => active.delete(promise)); } else await sleep(POLL_MS); } catch (e) { log(e.message); await sleep(Math.min(30000, POLL_MS * 2)); } } else await sleep(POLL_MS); } }
+async function claimLoop() { const active = new Set(); while (running) { if (active.size < CONCURRENCY) { try { const response = await request("POST", "/execution-node/node/jobs/claim", { leaseMs: 120000 }); if (response.status === 200 && response.body.job) { const job = response.body.job; const controller = new AbortController(); activeControllers.add(controller); const cancelPoll = setInterval(async () => { try { const status = await request("POST", `/execution-node/node/jobs/${job.jobId}/cancellation`, { leaseId: job.leaseId }); if (status.body.cancellation?.requested) controller.abort(Object.assign(new Error("node execution cancelled"), { code: "node_execution_cancelled" })); } catch {} }, Math.max(1000, Math.min(10000, POLL_MS * 10))); const renewPoll = setInterval(() => request("POST", `/execution-node/node/jobs/${job.jobId}/renew`, { leaseId: job.leaseId, leaseMs: 120000 }).catch(() => {}), 30000); const promise = execute(job, controller).then(output => request("POST", `/execution-node/node/jobs/${job.jobId}/complete`, { leaseId: job.leaseId, result: output.result, receipt: output.receipt })).catch(error => request("POST", `/execution-node/node/jobs/${job.jobId}/fail`, { leaseId: job.leaseId, code: error.code || "local_execution_failed", message: redact(error.message) })).catch(error => { log(`job ${job.jobId} outcome delivery failed: ${error.message}`); }).finally(() => { clearInterval(cancelPoll); clearInterval(renewPoll); activeControllers.delete(controller); active.delete(promise); }); active.add(promise); } else await sleep(POLL_MS); } catch (e) { log(e.message); await sleep(Math.min(30000, POLL_MS * 2)); } } else await sleep(POLL_MS); } await Promise.allSettled([...active]); }
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
-function prepare() { nodeConfig = loadConfig(); nodeRegistry = null; workspaceRoot = nodeConfig.workspaceRoot || nodeConfig.workspace || workspaceRoot; if (workspaceRoot !== "/home/geoffrey/Projects/security-research" && process.env.SIDEKICK_NODE_ALLOW_CUSTOM_WORKSPACE !== "1") throw new Error("this installation is restricted to /home/geoffrey/Projects/security-research"); workspace = createWorkspace({ name: WORKSPACE_NAME, root: workspaceRoot, permissions: { read: true, write: process.env.SIDEKICK_NODE_ALLOW_WRITES === "1", execute: process.env.SIDEKICK_NODE_ALLOW_EXECUTE === "1" }, limits: { maxConcurrent: CONCURRENCY } }); }
-async function main() { prepare(); log(`workspace ${workspace.name} configured with ${discoverRepositories(workspace).length} repository(s)`); await enroll(); await heartbeat(); const timer = setInterval(() => heartbeat().catch(e => { log(e.message); running = false; }), HEARTBEAT_MS); process.on("SIGTERM", () => { running = false; clearInterval(timer); }); process.on("SIGINT", () => { running = false; clearInterval(timer); }); await claimLoop(); }
-function status() { const record = credentialStore.load(CREDENTIAL_PATH); console.log(JSON.stringify({ version: VERSION, protocolVersion: PROTOCOL_VERSION, serverUrl: SERVER_URL, nodeId: nodeId(), workspace: WORKSPACE_NAME, workspaceRoot, configPath: CONFIG_PATH, credentialPath: CREDENTIAL_PATH, enrolled: Boolean(record), workerId: record?.workerId || null, packs: Array.isArray(nodeConfig.packs) ? nodeConfig.packs : [] }, null, 2)); }
+function prepare() { nodeConfig = loadConfig(); nodeRegistry = null; workspaceRoot = nodeConfig.workspaceRoot || nodeConfig.workspace || workspaceRoot; workspaceName = nodeConfig.workspaceName || nodeConfig.name || workspaceName; if (!workspaceRoot || !workspaceName) throw new Error("workspaceRoot and workspaceName must be explicitly configured"); workspace = createWorkspace({ name: workspaceName, root: workspaceRoot, permissions: nodeConfig.permissions || { read: true, write: process.env.SIDEKICK_NODE_ALLOW_WRITES === "1", execute: process.env.SIDEKICK_NODE_ALLOW_EXECUTE === "1" }, limits: nodeConfig.limits || { maxConcurrent: CONCURRENCY } }); }
+async function main() { prepare(); log(`workspace ${workspace.name} configured with ${discoverRepositories(workspace).length} repository(s)`); await enroll(); await heartbeat(); let timer = null; const stop = () => { running = false; if (timer) clearInterval(timer); for (const controller of activeControllers) controller.abort(new Error("node shutting down")); }; timer = setInterval(() => heartbeat().catch(e => { log(e.message); stop(); }), HEARTBEAT_MS); process.on("SIGTERM", stop); process.on("SIGINT", stop); await claimLoop(); await disconnect(); }
+function status() { const record = credentialStore.load(CREDENTIAL_PATH); console.log(JSON.stringify({ version: VERSION, protocolVersion: PROTOCOL_VERSION, serverUrl: SERVER_URL, nodeId: nodeId(), workspace: workspaceName, workspaceRoot, configPath: CONFIG_PATH, credentialPath: CREDENTIAL_PATH, enrolled: Boolean(record), workerId: record?.workerId || null, packs: Array.isArray(nodeConfig.packs) ? nodeConfig.packs : [] }, null, 2)); }
 async function doctor() { const checks = []; try { prepare(); checks.push({ name: "workspace", ok: true, repositories: discoverRepositories(workspace).length }); } catch (error) { checks.push({ name: "workspace", ok: false, error: error.message }); } const record = credentialStore.load(CREDENTIAL_PATH); checks.push({ name: "credential", ok: Boolean(record), state: record ? "present" : "not_enrolled" }); checks.push({ name: "enrollment_token", ok: Boolean(token()), state: token() ? "configured" : "not_configured" }); checks.push({ name: "descriptor_set", ok: (() => { try { descriptorSetHash(); return true; } catch { return false; } })() }); console.log(JSON.stringify({ ok: checks.every(check => check.ok), checks }, null, 2)); if (checks.some(check => !check.ok)) process.exitCode = 1; }
 async function runCommand(command) { if (command === "version") return console.log(VERSION); if (command === "status") { nodeConfig = loadConfig(); return status(); } if (command === "doctor") return doctor(); if (command === "enroll") { prepare(); await enroll(); return; } return main(); }
 if (require.main === module) runCommand(process.argv[2] || "run").catch(error => { log(error.message); process.exitCode = 1; });

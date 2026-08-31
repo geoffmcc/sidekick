@@ -97,7 +97,8 @@ async function maybeExecute(descriptor, args, context = {}) {
     if (current?.state === "failed") return { content: [{ type: "text", text: `Node execution failed: ${current.errorMessage || current.errorCode}` }], isError: true, code: current.errorCode || "node_execution_failed", nodeExecution: { location: "node", jobId: current.jobId, nodeId: selected.nodeId } };
     await new Promise(resolve => setTimeout(resolve, POLL_MS));
   }
-  return { content: [{ type: "text", text: "Node execution timed out; the operation may still be running. Use the reported job ID to inspect it; it was not automatically repeated" }], isError: true, code: "node_execution_timeout", operationMayContinue: true, nodeExecution: { location: "node", jobId: job.jobId, nodeId: selected.nodeId, timeoutMs: Number(context.timeoutMs) || null, timedOutAt: new Date().toISOString() } };
+  const cancellation = manager.requestCancel(job.jobId);
+  return { content: [{ type: "text", text: "Node execution timed out; cancellation was requested and the operation will not be automatically repeated" }], isError: true, code: "node_execution_timeout", operationMayContinue: cancellation?.state === "leased", nodeExecution: { location: "node", jobId: job.jobId, nodeId: selected.nodeId, timeoutMs: Number(context.timeoutMs) || null, timedOutAt: new Date().toISOString(), cancellation_requested: Boolean(cancellation) } };
 }
 
 module.exports = { maybeExecute };
