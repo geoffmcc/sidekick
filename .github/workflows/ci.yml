@@ -57,6 +57,27 @@ jobs:
     - name: Install browser runtime for Governed Browser Automation tests
       run: node scripts/install-browser.js
 
+    - name: Run certification
+      run: npm run certify -- --json --allow-unavailable
+
+    - name: Run invariant and Doctor checks
+      run: node test/invariants-doctor.test.js
+
+    - name: Build worker package
+      run: npm run package:worker
+
+    - name: Verify worker package checksums
+      run: |
+        package_dir="dist/sidekick-compute-worker-$(node -p "require('./package.json').version")"
+        cd "$package_dir"
+        sha256sum -c SHA256SUMS
+
+    - name: Generate release certification manifest
+      run: npm run manifest:release
+
+    - name: Generate CycloneDX SBOM
+      run: npm run sbom:release > dist/sidekick-sbom.cdx.json
+
     - name: Run tests
       run: npm run test:ci
 
