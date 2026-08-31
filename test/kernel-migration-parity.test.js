@@ -115,14 +115,26 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
       migrationResult.migrations.some(m => m.file === '069_handoff_evidence_receiver_state.sql'),
       'Migration 069 should be applied'
     );
+    assert.ok(
+      migrationResult.migrations.some(m => m.file === '071_execution_node_cancellation_and_approval_runtime.sql'),
+      'Migration 071 should be applied'
+    );
+    assert.ok(
+      migrationResult.migrations.some(m => m.file === '072_migration_integrity_ledger.sql'),
+      'Migration 072 should be applied'
+    );
+    assert.ok(
+      migrationResult.migrations.some(m => m.file === '073_approval_read_permission.sql'),
+      'Migration 073 should be applied'
+    );
     const migratedSchema = capturePlatformSchema(migrationStore.getDb());
     const migratedCompute = captureComputeSchema(migrationStore.getDb());
 
     console.log(`Test KMP.1: migrations-only boot applies ${migrationApplied} migrations`);
     assert.strictEqual(
       migrationStore.getDb().prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
-       String(70),
-       'schema_version should be 70'
+       String(73),
+       'schema_version should be 73'
     );
     console.log('Passed\n');
 
