@@ -46,18 +46,42 @@ async function assertScenario(scenario, registry) {
   }
 }
 
-async function runLiveScenario(scenario, availability) {
+async function runLiveScenario(scenario, availability, liveExecutor) {
   const available = typeof availability === "function" ? await availability(scenario) : Boolean(availability);
   if (!available) return result(scenario, "skipped", "live provider unavailable");
-  return result(scenario, "blocked", "live execution requires an explicit live executor");
+  if (!liveExecutor || typeof liveExecutor.run !== "function") return result(scenario, "blocked", "live execution requires an explicit live executor");
+  try {
+    const observed = await liveExecutor.run(scenario);
+    const terminal = observed && observed.timeout !== true && observed.state && ["completed", "partial", "failed", "cancelled", "timed_out", "blocked"].includes(observed.state);
+    if (!terminal) return result(scenario, "blocked", "live executor did not return a terminal durable task", { observed });
+    if (observed.source !== "durable_task_store") return result(scenario, "failed", "live executor did not provide the authoritative durable projection", { observed });
+    if (!Array.isArray(observed.events)) return result(scenario, "failed", "live executor did not provide durable task events", { observed });
+    const dispatchTotal = Number(observed.dispatch_counts?.total || 0);
+    if (!Number.isInteger(dispatchTotal) || dispatchTotal < 0 || dispatchTotal > scenario.bounded.max_steps) {
+      return result(scenario, "failed", "live dispatch count exceeded the scenario bound", { observed });
+    }
+    const observedTools = new Set([
+      ...(Array.isArray(observed.receipts) ? observed.receipts.map(item => String(item.capability || "")) : []),
+      ...(Array.isArray(observed.events) ? observed.events.map(item => String(item.tool_name || item.capability || "")) : []),
+    ].filter(Boolean));
+    const forbidden = scenario.forbidden_tools.filter(tool => observedTools.has(tool) || observedTools.has(`sidekick_${tool}`));
+    if (forbidden.length) return result(scenario, "failed", `forbidden tools were selected: ${forbidden.join(", ")}`, { observed });
+    const expectedFailure = scenario.outcome.expected === "failed";
+    const passed = expectedFailure
+      ? ["failed", "blocked"].includes(observed.state)
+      : observed.state === "completed" && observed.result?.status === "verified";
+    return result(scenario, passed ? "passed" : "failed", passed ? null : `unexpected live task state: ${observed.state}`, { observed });
+  } catch (error) {
+    return result(scenario, "failed", "live certification execution failed", { error: error.message });
+  }
 }
 
-async function runCertification({ scenarioIds, mode, theme, availability = false, registry = getBuiltinRegistry() } = {}) {
+async function runCertification({ scenarioIds, mode, theme, availability = false, liveExecutor = null, registry = getBuiltinRegistry() } = {}) {
   const selected = listScenarios({ mode, theme }).filter(scenario => !scenarioIds || scenarioIds.includes(scenario.id));
   const results = [];
   for (const scenario of selected) {
     if (scenario.mode === "live") {
-      results.push(await runLiveScenario(scenario, availability));
+      results.push(await runLiveScenario(scenario, availability, liveExecutor));
       continue;
     }
     try {
@@ -71,7 +95,7 @@ async function runCertification({ scenarioIds, mode, theme, availability = false
     }
   }
   const summary = Object.fromEntries(["total", "passed", "failed", "skipped", "blocked"].map(key => [key, key === "total" ? results.length : results.filter(item => item.status === key).length]));
-  const verdict = summary.failed ? "failed" : summary.blocked ? "blocked" : "passed";
+  const verdict = summary.failed ? "failed" : summary.blocked || summary.skipped ? "blocked" : "passed";
   return sanitize({ schema: "sidekick.agent-certification.v1", version: 1, generated_at: new Date().toISOString(), mode: mode || "all", verdict, summary, results });
 }
 

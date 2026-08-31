@@ -28,6 +28,22 @@ function safeCall(fn, fallback) {
   }
 }
 
+function skippedCheck(id, missing) {
+  return check(id, true, "warning", "Optional invariant skipped: schema table is unavailable", {
+    available: false,
+    skipped: true,
+    missing,
+  });
+}
+
+function countCheck(db, id, sql, message, failureMessage) {
+  const result = safeCall(() => Number(db.prepare(sql).get().count), null);
+  const error = result && result.error;
+  return check(id, !error && result === 0, "error",
+    error ? `${failureMessage}: query failed` : (result === 0 ? message : failureMessage),
+    { violation_count: error ? null : result });
+}
+
 function tableNames(dbStore) {
   const tables = dbStore.getTableList();
   return new Set((tables || []).map(table => table.name));
@@ -86,6 +102,21 @@ function evaluateInvariants(options = {}) {
     checks.push(check("registry.integrity", violations.length === 0, "critical",
       violations.length ? "Canonical registry contract is invalid" : "Canonical registry is coherent",
       { descriptors: Math.min(descriptors.length, limit), violations: violations.slice(0, limit) }));
+    if (typeof tools.getToolDefsForSource === "function") {
+      const publicNames = new Set(tools.getToolDefsForSource("agent").map(definition => String(definition.name || "").replace(/^sidekick_/, "")));
+      const executableNames = new Set(descriptors.map(descriptor => String(descriptor.name || "").replace(/^sidekick_/, "")));
+      const missingPublic = [...executableNames].filter(name => !publicNames.has(name)).slice(0, limit);
+      const missingExecutable = [...publicNames].filter(name => !executableNames.has(name)).slice(0, limit);
+      // Source policy may intentionally hide executable descriptors. The
+      // unsafe direction is a public Agent definition without an executable
+      // canonical binding; that would create a preflight/dispatch mismatch.
+      const aligned = missingExecutable.length === 0;
+      checks.push(check("registry.public_alignment", aligned, "critical",
+        aligned ? "Public and executable tool catalogs agree" : "Public and executable tool catalogs diverge",
+        { missing_public: missingPublic, missing_executable: missingExecutable }));
+    } else {
+      checks.push(skippedCheck("registry.public_alignment", ["compatibility tool catalog"]));
+    }
   } catch (error) {
     // A registry that cannot be assembled must never be reported as healthy.
     checks.push(check("registry.integrity", false, "critical", "Canonical registry failed closed", { error: redactSensitive(String(error.message || error)).slice(0, 300) }));
@@ -97,7 +128,7 @@ function evaluateInvariants(options = {}) {
 
   if (names.has("platform_executions") && names.has("platform_execution_events")) {
     const db = dbStore.getDb();
-    const orphanEvents = safeCall(() => db.prepare("SELECT COUNT(*) AS count FROM platform_execution_events e LEFT JOIN platform_executions x ON x.execution_id = e.execution_id WHERE x.execution_id IS NULL").get().count, null);
+    const orphanEvents = safeCall(() => db.prepare("SELECT COUNT(*) AS count FROM platform_execution_events e LEFT JOIN platform_executions x ON x.execution_id = e.execution_id WHERE e.execution_id IS NOT NULL AND x.execution_id IS NULL").get().count, null);
     checks.push(check("platform.event_ownership", !orphanEvents.error && Number(orphanEvents) === 0, "error",
       Number(orphanEvents) === 0 ? "Platform events have execution owners" : "Platform events have missing execution owners",
       { orphan_count: orphanEvents.error ? null : Number(orphanEvents) }));
@@ -119,7 +150,7 @@ function evaluateInvariants(options = {}) {
       try { continuation = JSON.parse(task.continuation_json || "{}"); } catch { taskViolations.push(`${task.task_id}: corrupt continuation`); }
       try { verification = task.verification_json ? JSON.parse(task.verification_json) : null; } catch { taskViolations.push(`${task.task_id}: corrupt verification`); }
       try { result = task.result_json ? JSON.parse(task.result_json) : null; } catch { taskViolations.push(`${task.task_id}: corrupt result`); }
-      if (TERMINAL_TASK_STATES.has(task.state) && (control.pause_requested || control.cancel_requested) === false && continuation.ambiguous_operations?.length) taskViolations.push(`${task.task_id}: terminal task retains ambiguous operation`);
+      if (TERMINAL_TASK_STATES.has(task.state) && continuation.ambiguous_operations?.length) taskViolations.push(`${task.task_id}: terminal task retains ambiguous operation`);
       if (task.state === "completed" && result && result.status !== "verified") taskViolations.push(`${task.task_id}: completed without verified result`);
       if (task.state === "cancelled" && result?.status === "verified") taskViolations.push(`${task.task_id}: cancelled task has verified result`);
       if (task.parent_task_id && task.root_task_id === task.task_id) taskViolations.push(`${task.task_id}: child is its own root`);
@@ -128,9 +159,50 @@ function evaluateInvariants(options = {}) {
     checks.push(check("agent.task_lifecycle", taskViolations.length === 0, "error", taskViolations.length ? "Agent task lifecycle invariant failed" : "Agent task lifecycle is consistent", { violations: taskViolations.slice(0, limit), inspected: taskState.length }));
   }
 
+  if (names.has("agent_tasks") && names.has("platform_executions")) {
+    checks.push(countCheck(dbStore.getDb(), "agent.execution_linkage",
+      "SELECT COUNT(*) AS count FROM agent_tasks t LEFT JOIN platform_executions x ON x.execution_id = t.execution_id WHERE t.execution_id IS NOT NULL AND (x.execution_id IS NULL OR x.task_id IS NULL OR x.task_id <> t.task_id)",
+      "Agent tasks have matching platform executions", "Agent task/platform execution linkage is inconsistent"));
+  } else {
+    checks.push(skippedCheck("agent.execution_linkage", ["agent_tasks", "platform_executions"].filter(name => !names.has(name))));
+  }
+
+  if (names.has("platform_execution_claims") && names.has("platform_executions")) {
+    checks.push(countCheck(dbStore.getDb(), "platform.execution_claims",
+      "SELECT COUNT(*) AS count FROM platform_execution_claims c LEFT JOIN platform_executions x ON x.execution_id = c.execution_id WHERE (c.claimed_by IS NOT NULL OR c.lease_expires_at IS NOT NULL) AND ((c.claimed_by IS NOT NULL AND c.lease_expires_at IS NULL) OR (c.claimed_by IS NULL AND c.lease_expires_at IS NOT NULL) OR x.execution_id IS NULL OR x.state IN ('completed','failed','cancelled','timed_out','orphaned'))",
+      "Active platform execution claims are coherent", "Platform execution claims are inconsistent"));
+  } else {
+    checks.push(skippedCheck("platform.execution_claims", ["platform_execution_claims", "platform_executions"].filter(name => !names.has(name))));
+  }
+
+  if (names.has("agent_tasks")) {
+    checks.push(countCheck(dbStore.getDb(), "agent.terminal_active_step",
+      "SELECT COUNT(*) AS count FROM agent_tasks WHERE state IN ('completed','partial','failed','cancelled','timed_out') AND (phase <> 'terminal' OR next_action IS NOT NULL)",
+      "Terminal agent tasks have no active step", "Terminal agent tasks retain an active step"));
+  } else {
+    checks.push(skippedCheck("agent.terminal_active_step", ["agent_tasks"]));
+  }
+
+  if (names.has("task_checkpoints") && names.has("approvals")) {
+    checks.push(countCheck(dbStore.getDb(), "approval.checkpoint_consistency",
+      "SELECT COUNT(*) AS count FROM (SELECT c.task_id FROM task_checkpoints c LEFT JOIN approvals a ON a.approval_id = c.current_approval_id AND a.task_id = c.task_id WHERE c.state IN ('waiting_for_approval','reconciling') AND (c.current_approval_id IS NULL OR a.approval_id IS NULL OR a.status NOT IN ('pending','approved','executing','reconciliation_required','retry_authorized')) UNION ALL SELECT a.task_id FROM approvals a LEFT JOIN task_checkpoints c ON c.task_id = a.task_id AND c.current_approval_id = a.approval_id WHERE a.task_id IS NOT NULL AND a.status IN ('pending','approved','executing','reconciliation_required','retry_authorized') AND (c.task_id IS NULL OR c.state NOT IN ('waiting_for_approval','reconciling'))) violations",
+      "Approval and checkpoint state is consistent", "Approval/checkpoint state is inconsistent"));
+  } else {
+    checks.push(skippedCheck("approval.checkpoint_consistency", ["task_checkpoints", "approvals"].filter(name => !names.has(name))));
+  }
+
   if (names.has("agent_operation_receipts") && names.has("agent_tasks")) {
     const receiptViolations = safeCall(() => dbStore.getDb().prepare("SELECT r.receipt_id,r.task_id,r.effect_class,r.dispatch_state,t.task_id AS owner FROM agent_operation_receipts r LEFT JOIN agent_tasks t ON t.task_id=r.task_id WHERE t.task_id IS NULL OR (r.effect_class <> 'read_only' AND r.dispatch_state IN ('finalized','verified') AND r.verification_recipe_ref IS NULL) LIMIT ?").all(limit), []);
     checks.push(check("agent.receipts", !receiptViolations.error && receiptViolations.length === 0, "error", receiptViolations.length ? "Receipt ownership or verification invariant failed" : "Operation receipts are owned and gated", { violations: receiptViolations.error ? [receiptViolations.error] : receiptViolations }));
+    checks.push(countCheck(dbStore.getDb(), "agent.receipt_terminal_disposition",
+      "SELECT COUNT(*) AS count FROM agent_operation_receipts WHERE (dispatch_state IN ('finalized','verified','rolled_back','failed') OR outcome_state IN ('finalized','verified','rolled_back','failed')) AND dispatch_state <> outcome_state",
+      "Receipt terminal dispositions are coherent", "Receipt terminal disposition is inconsistent"));
+    checks.push(countCheck(dbStore.getDb(), "agent.receipt_success_fingerprints",
+      "SELECT COUNT(*) AS count FROM (SELECT task_id, action_fingerprint FROM agent_operation_receipts WHERE dispatch_state IN ('finalized','verified') AND outcome_state IN ('finalized','verified') GROUP BY task_id, action_fingerprint HAVING COUNT(*) > 1) duplicates",
+      "Successful receipt fingerprints are unique per task", "Duplicate successful receipt fingerprints detected"));
+  } else {
+    checks.push(skippedCheck("agent.receipt_terminal_disposition", ["agent_operation_receipts", "agent_tasks"].filter(name => !names.has(name))));
+    checks.push(skippedCheck("agent.receipt_success_fingerprints", ["agent_operation_receipts", "agent_tasks"].filter(name => !names.has(name))));
   }
 
   const moduleState = safeCall(() => {

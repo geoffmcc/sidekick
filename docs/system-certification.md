@@ -12,13 +12,20 @@ node src/cli.js doctor --json
 node src/cli.js doctor --bundle
 node src/cli.js certify
 node src/cli.js certify --json
+node src/cli.js certify --json --allow-unavailable
 npm run certify
 ```
 
 `certify` runs the hermetic scenarios from `src/certification/scenarios.js`.
 Provider and lab-dependent scenarios are separate live scenarios and are
 reported as `skipped` when their prerequisites are unavailable. A skipped or
-blocked scenario is not a pass.
+blocked scenario is not a pass, and a report containing either status has an
+overall `blocked` verdict.
+
+`--allow-unavailable` is intended for hermetic CI where optional capability
+packs are not installed. It preserves the `blocked` report and only permits a
+zero process exit when no scenario actually failed; it must not be used for
+live acceptance.
 
 The certification report includes a versioned scenario identifier, objective,
 initial project/workspace identity, authority envelope label, expected tools,

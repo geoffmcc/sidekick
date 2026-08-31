@@ -7,7 +7,7 @@ const packageJson = require("../package.json");
 const { prepareLocalEnvironment, acquireBootstrapLock, getLocalPaths } = require("./local/paths");
 
 function usage() {
-  console.error("Usage: sidekick [setup|doctor|certify|status|version]");
+   console.error("Usage: sidekick [setup|doctor|certify|status|version]");
   console.error("With no command, Sidekick starts its full governed MCP stdio runtime.");
 }
 
@@ -34,11 +34,14 @@ async function run() {
       return console.log(formatDoctorText(report));
     }
     if (command === "certify") {
-      const { runCertification, formatCertificationText } = require("./certification");
-      const report = await runCertification({ mode: process.argv.includes("--live") ? "live" : "hermetic", availability: false });
+       const { runCertification, formatCertificationText, createLifecycleExecutorFromEnv } = require("./certification");
+       const live = process.argv.includes("--live");
+       const liveExecutor = live ? createLifecycleExecutorFromEnv() : null;
+       const report = await runCertification({ mode: live ? "live" : "hermetic", availability: liveExecutor ? () => liveExecutor.available() : false, liveExecutor });
       if (process.argv.includes("--json")) console.log(JSON.stringify(report, null, 2));
       else console.log(formatCertificationText(report));
-      if (report.verdict === "failed") process.exitCode = 1;
+       const allowUnavailable = process.argv.includes("--allow-unavailable");
+       if (report.verdict !== "passed" && !(allowUnavailable && report.summary.failed === 0)) process.exitCode = 1;
       return;
     }
     return;

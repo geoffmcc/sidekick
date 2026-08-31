@@ -23,6 +23,27 @@ const THEMES = Object.freeze([
   ["provider-malformed", "handle provider failure or malformed model output", ["llm"], "live"],
 ]);
 
+const ASSERTIONS = Object.freeze({
+  "repository-path": "registry_tool",
+  "repository-profile": "expected_tools",
+  "semantic-search": "expected_tools",
+  "change-summary": "expected_tools",
+  "repository-verify": "expected_tools",
+  "handoff-resume": "context_scope",
+  "research-session": "expected_tools",
+  "research-isolation": "expected_tools",
+  "network-scope": "expected_tools",
+  "mutation-approval": "approval_contract",
+  "approval-resume": "approval_contract",
+  "cancel-terminal": "outcome_contract",
+  "restart-recovery": "cleanup_contract",
+  "ambiguous-effect": "fault_contract",
+  "multi-pack": "expected_tools",
+  "result-vocabulary": "outcome_contract",
+  "verification-gate": "evidence_contract",
+  "child-authority": "expected_tools",
+});
+
 function freeze(value) {
   if (!value || typeof value !== "object" || Object.isFrozen(value)) return Object.freeze(value);
   for (const child of Object.values(value)) freeze(child);
@@ -33,16 +54,16 @@ const scenarios = freeze(THEMES.map(([id, title, expectedTools, mode], index) =>
   const forbiddenTools = ["executeAuthorizedTaskStep", "tools-legacy"];
   const bounded = { max_output_chars: 2000, max_steps: 1, max_evidence: 4 };
   const approval = {
-    required: ["approval-required", "approval-no-bypass"].includes(id),
+    required: ["approval-required", "approval-no-bypass", "mutation-approval", "approval-resume"].includes(id),
     bypass_allowed: false,
   };
   const evidence = {
-    required: ["evidence-required", "evidence-attribution", "live-outcome"].includes(id),
+    required: ["evidence-required", "evidence-attribution", "live-outcome", "verification-gate"].includes(id),
     attributable: true,
     max_items: 4,
   };
   const outcome = {
-    expected: id === "outcome-failure" || id === "fault-dispatch" || id === "fault-policy" ? "failed" : "passed",
+    expected: id === "outcome-failure" || id === "fault-dispatch" || id === "fault-policy" || id === "provider-malformed" || id === "ambiguous-effect" ? "failed" : "passed",
     terminal: true,
   };
   const cleanup = { required: !["hermetic-registry", "bounded-metadata", "redaction"].includes(id), idempotent: true, external_mutation: false };
@@ -72,11 +93,11 @@ const scenarios = freeze(THEMES.map(([id, title, expectedTools, mode], index) =>
   evidenceContract: evidence,
   outcome,
   outcomeContract: outcome,
-  fault_point: ["fault-dispatch", "fault-policy"].includes(id) ? id : null,
-  faultPoint: ["fault-dispatch", "fault-policy"].includes(id) ? id : null,
+   fault_point: ["fault-dispatch", "fault-policy", "ambiguous-effect"].includes(id) ? id : null,
+   faultPoint: ["fault-dispatch", "fault-policy", "ambiguous-effect"].includes(id) ? id : null,
   cleanup,
   cleanupContract: cleanup,
-   assertion: ["repository-path", "repository-profile", "semantic-search", "change-summary", "repository-verify", "handoff-resume", "research-session", "research-isolation", "network-scope", "mutation-approval", "approval-resume", "cancel-terminal", "restart-recovery", "ambiguous-effect", "multi-pack", "result-vocabulary", "verification-gate", "child-authority"].includes(id) ? "expected_tools" : mode === "live" ? "live_provider" : "metadata_bounds",
+    assertion: ASSERTIONS[id] || (mode === "live" ? "live_provider" : "metadata_bounds"),
   };
 }));
 

@@ -43,6 +43,7 @@ const { registerStatsToolsRoutes } = require("./dashboard/stats-tools-routes");
 const { registerSummaryRoute } = require("./dashboard/summary-route");
 const { registerResearchSourceRoutes } = require("./dashboard/research-source-routes");
 const { registerNetworkScopeRoutes } = require("./dashboard/network-scope-routes");
+const { runDoctor, formatDoctorText, createSupportBundle } = require("./doctor");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const PORT = parseInt(process.env.SIDEKICK_DASHBOARD_PORT || "4098", 10);
@@ -643,6 +644,24 @@ app.use('/grafana', (req, res) => {
 });
 
 // --- API ---
+
+// Read-only, bounded Doctor diagnostics. Authentication is provided by the
+// dashboard middleware registered above; this route deliberately accepts no
+// targets, probes, or mutation options.
+app.get("/api/doctor", (req, res) => {
+  const format = String(req.query.format || "json").toLowerCase();
+  if (!new Set(["json", "text"]).has(format)) {
+    return res.status(400).json({ ok: false, error: "format must be json or text", code: "invalid_format" });
+  }
+  try {
+    const report = runDoctor();
+    res.set("Cache-Control", "no-store");
+    if (format === "text") return res.type("text/plain").send(formatDoctorText(report));
+    return res.json(createSupportBundle({ report }));
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: "Doctor diagnostics unavailable", code: "doctor_failed" });
+  }
+});
 
 function readKV() {
   return dbStore.loadKV({});

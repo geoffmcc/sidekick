@@ -208,6 +208,9 @@ const { createWatchRuntime } = require("./agent/watch-runtime");
 const durableTaskModel = require("./agent/task-model");
 const durableTaskStore = require("./agent/task-store");
 const dbStore = require("./db");
+// The Agent owns a separate process in deployments. Migrate before exposing
+// health or accepting tasks so readiness never depends on lazy store access.
+dbStore.runPendingMigrations();
 const durableReceiptStore = require("./agent/receipt-store");
 const durableWorkspaceTransactions = require("./agent/workspace-transactions");
 const durableOperations = require("./agent/durable-operations");
@@ -215,6 +218,7 @@ const handoffContinuity = createHandoffContinuity({ getTask: durableTaskStore.ge
 const { determineEffect, decideAutonomy, intersectEnvelope, governedTargetRef } = require("./agent/authority");
 const { recoverDurableAgentTasks } = require("./agent/recovery-scan");
 const { verifyTaskResult, successfulFreshOutcome, applyRecipeGates, applyReceiptGates, applyPlanGates, runVerificationRepair } = require("./agent/verification");
+const { evaluateInvariants } = require("./invariants");
 const { assembleSessions, buildSession, buildTask } = require("./agent-history");
 const { redactSensitive, redactSensitiveKeysDeep } = require("./redact");
 const { PROJECT_RE, canonicalizeProjectName } = require("./core/project-identity");
@@ -2673,7 +2677,15 @@ app.get("/api/agent/status", (req, res) => {
   res.json({ activeTasks });
 });
 
-app.get("/api/health", (req, res) => res.json({ ok: true }));
+app.get("/api/health", (req, res) => {
+  try {
+    const invariants = evaluateInvariants();
+    const status = invariants.ok ? "healthy" : (invariants.severity === "critical" ? "failed" : "degraded");
+    res.status(invariants.ok ? 200 : 503).json({ ok: invariants.ok, status, invariants: { severity: invariants.severity, summary: invariants.summary } });
+  } catch (error) {
+    res.status(503).json({ ok: false, status: "failed", error: "health invariants unavailable" });
+  }
+});
 
 app.post("/api/delays/reload", (req, res) => {
   loadAndScheduleDelays();
