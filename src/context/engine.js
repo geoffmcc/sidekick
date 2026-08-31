@@ -191,6 +191,7 @@ function createContextEngine({ dbStore = dbStoreDefault, db = dbStoreDefault.get
     budget.maxGraphNodes = clamp(budget.maxGraphNodes, 0, 50, DEFAULT_BUDGET.maxGraphNodes);
     budget.maxGraphEdges = clamp(budget.maxGraphEdges, 0, 100, DEFAULT_BUDGET.maxGraphEdges);
     const excluded = [];
+    const exactIdQuery = /^[a-z][a-z0-9-]*_[a-z0-9]+$/i.test(query);
     const semanticProvider = typeof input.repositorySemanticSearch === "function" ? input.repositorySemanticSearch : repositorySemanticSearch;
     if (!scope.ok) excluded.push({ source: "scope", sourceId: scope.project, reasonCodes: [scope.code] });
     const candidates = [];
@@ -214,15 +215,17 @@ function createContextEngine({ dbStore = dbStoreDefault, db = dbStoreDefault.get
       const exact = queryExact(scope.project, query, input.allowOpaqueId === true);
       add("memory", exact.filter(item => item.source === "memory"));
       add("legacy_context", exact.filter(item => item.source === "legacy_context"));
-      add("memory", queryMemories(scope.project, query, budget.maxPerSource));
-      add("memory", await querySemanticMemories(scope.project, query, budget.maxPerSource));
-      add("legacy_context", queryLegacyContext(scope.project, query, budget.maxPerSource));
-      add("handoff", queryHandoffs(scope.project, budget.maxPerSource));
-      add("session", querySessions(scope.project, budget.maxPerSource));
-      add("artifact", queryArtifacts(scope.project, budget.maxPerSource));
-      const graph = queryEntities(scope.project, query, budget);
-      add("entity", graph.entries.filter(item => item.source === "entity"));
-      add("relationship", graph.entries.filter(item => item.source === "relationship"));
+      if (!exactIdQuery) {
+        add("memory", queryMemories(scope.project, query, budget.maxPerSource));
+        add("memory", await querySemanticMemories(scope.project, query, budget.maxPerSource));
+        add("legacy_context", queryLegacyContext(scope.project, query, budget.maxPerSource));
+        add("handoff", queryHandoffs(scope.project, budget.maxPerSource));
+        add("session", querySessions(scope.project, budget.maxPerSource));
+        add("artifact", queryArtifacts(scope.project, budget.maxPerSource));
+        const graph = queryEntities(scope.project, query, budget);
+        add("entity", graph.entries.filter(item => item.source === "entity"));
+        add("relationship", graph.entries.filter(item => item.source === "relationship"));
+      }
     } else {
       for (const source of ["memory", "legacy_context", "handoff", "session", "artifact", "entity", "relationship"]) if (sourceAllowed(source, input.permittedSources)) excluded.push({ source, sourceId: null, reasonCodes: ["PROJECT_SCOPE_REQUIRED"] });
     }

@@ -29,6 +29,7 @@
 
 const platformKernel = require("../platform/kernel");
 const toolContext = require("../tools/context");
+const authorization = require("../core/authorization");
 const definitionRepository = require("./repository");
 const { validateInputs, resolveValue, isTruthy } = require("./definition");
 const {
@@ -134,6 +135,23 @@ async function runWorkflowDefinition(name, inputs = {}, options = {}) {
     }
     if (!["paused", "running", "defined"].includes(workflow.state)) {
       return { ok: false, code: "run_not_resumable", error: `Workflow run ${workflow.workflow_id} is ${workflow.state}` };
+    }
+    if (workflow.actor_principal_id && !actorPrincipalId) {
+      return { ok: false, code: "unauthenticated", error: "Resuming a workflow requires the current actor identity" };
+    }
+    if (workflow.actor_principal_id && workflow.actor_principal_id !== actorPrincipalId) {
+      const administrator = authorization.authorize({
+        principalId: actorPrincipalId,
+        permission: "workflows.manage",
+        credentialScopes: executionContext.authIdentity?.scopes,
+        delegationId: executionContext.authIdentity?.delegation_id || null,
+        resource: { kind: "workflow", workflow_id: workflow.workflow_id },
+      });
+      if (!administrator.ok) return { ok: false, code: "forbidden", error: "Workflow resume belongs to another principal" };
+    }
+    const requestedProject = options.project || executionContext.project || null;
+    if (workflow.project_id && requestedProject && workflow.project_id !== requestedProject) {
+      return { ok: false, code: "project_scope_denied", error: "Workflow resume belongs to another project" };
     }
     // Resume carries the recorded identity only as an input to the current
     // Core authorization check. It is not trusted as a bypass: the current

@@ -5,6 +5,7 @@ const path = require("path");
 const dataDir = path.join(__dirname, `test-data-identity-approval-${Date.now()}-${process.pid}`);
 fs.mkdirSync(dataDir, { recursive: true });
 process.env.SIDEKICK_DATA_DIR = dataDir;
+process.env.NODE_ENV = "test";
 process.env.SIDEKICK_SECRET_KEY = "identity-approval-test-key";
 delete require.cache[require.resolve("../src/db")];
 const db = require("../src/db");

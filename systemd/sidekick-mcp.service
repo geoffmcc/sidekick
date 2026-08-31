@@ -8,6 +8,9 @@ WorkingDirectory=/home/sidekick/sidekick
 ExecStart=/usr/bin/node src/index.js
 Restart=always
 RestartSec=10
+TimeoutStopSec=30
+KillMode=mixed
+NoNewPrivileges=true
 User=sidekick
 Group=sidekick
 Environment=NODE_ENV=production

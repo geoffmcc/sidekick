@@ -12,6 +12,7 @@ fs.writeFileSync(path.join(root, "buried", "repo", ".git", "config"), "[core]\n"
 
 const workspace = require("../src/node/workspace");
 const placement = require("../src/node/placement");
+const { descriptorIdentity } = placement;
 
 const configured = workspace.createWorkspace({ name: "security-research", root, permissions: { read: true, write: false, execute: false } });
 assert.strictEqual(configured.name, "security-research");
@@ -52,8 +53,17 @@ const job = manager.enqueue({ workerId: "wk_test_node", requestId: "req_test", t
 assert.strictEqual(manager.enqueue({ workerId: "wk_test_node", requestId: "req_other", toolName: "read", descriptor: { name: "read", version: "1", placement: { nodeSafe: true, locations: ["node"] } }, args: {}, idempotencyKey: "idem_test" }).jobId, job.jobId);
 const claimed = manager.claim("wk_test_node", 10000);
 assert.strictEqual(claimed.jobId, job.jobId);
-assert.strictEqual(manager.finish(job.jobId, "wk_test_node", claimed.leaseId, { content: [{ type: "text", text: "ok" }] }, { receiptId: "receipt_test" }).state, "completed");
+assert.strictEqual(manager.finish(job.jobId, "wk_test_node", claimed.leaseId, { content: [{ type: "text", text: "ok" }] }, { receiptId: "receipt_test", jobId: job.jobId, tool: "read", descriptorVersion: "1", descriptorIdentity: descriptorIdentity({ name: "read", version: "1", placement: { nodeSafe: true, locations: ["node"] } }) }).state, "completed");
 assert.throws(() => manager.finish(job.jobId, "wk_test_node", claimed.leaseId, {}, {}), /lease/);
+
+const cancellable = manager.enqueue({ workerId: "wk_test_node", requestId: "req_cancel", toolName: "read", descriptor: { name: "read", version: "1", placement: { nodeSafe: true, locations: ["node"] } }, args: {} });
+const cancellableClaim = manager.claim("wk_test_node", 10000);
+assert.strictEqual(cancellableClaim.jobId, cancellable.jobId);
+assert.strictEqual(manager.renew(cancellable.jobId, "wk_test_node", cancellableClaim.leaseId, 10000).jobId, cancellable.jobId);
+assert.strictEqual(manager.requestCancel(cancellable.jobId).cancellationRequested, true);
+assert.strictEqual(manager.cancellation(cancellable.jobId, "wk_test_node", cancellableClaim.leaseId).requested, true);
+assert.throws(() => manager.finish(cancellable.jobId, "wk_test_node", cancellableClaim.leaseId, {}, {}), /lease/);
+assert.strictEqual(manager.fail(cancellable.jobId, "wk_test_node", cancellableClaim.leaseId, "node_execution_cancelled", "cancelled").state, "cancelled");
 
 const beforeRemoteOnly = db.prepare("SELECT COUNT(*) AS count FROM execution_node_jobs").get().count;
 maybeExecute(descriptor, { path: path.join(outside, "remote-only-repository") }, { timeoutMs: 50 }).then(remoteOnly => {

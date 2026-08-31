@@ -33,6 +33,10 @@ if (!IS_LOCAL && (!API_KEY || API_KEY === "sk-sidekick-local-dev" || API_KEY ===
   throw new Error("SIDEKICK_API_KEY must be set to a non-placeholder value");
 }
 const PORT = parseInt(process.env.SIDEKICK_PORT || "4097", 10);
+const BIND_HOST = process.env.SIDEKICK_BIND_HOST || "127.0.0.1";
+if (!IS_LOCAL && ["0.0.0.0", "::"].includes(BIND_HOST) && process.env.SIDEKICK_ALLOW_PUBLIC_BIND !== "1") {
+  throw new Error("wildcard MCP bind requires SIDEKICK_ALLOW_PUBLIC_BIND=1");
+}
 const ALLOWED_IPS = (process.env.SIDEKICK_ALLOWED_IPS || "").split(",").map(s => s.trim()).filter(Boolean);
 const PRIVACY_POLICY_PATH = path.join(__dirname, "..", "docs", "privacy.md");
 
@@ -746,6 +750,18 @@ function nodeClaimHandler(req, res) {
   try { const job = executionNode.claim(req.computeWorker.workerId, req.body?.leaseMs || 120000); res.json({ ok: true, claimed: !!job, job }); }
   catch (e) { sendComputeError(res, e, 409); }
 }
+function nodeRenewHandler(req, res) {
+  try { res.json({ ok: true, job: executionNode.renew(req.params.jobId, req.computeWorker.workerId, req.body?.leaseId, req.body?.leaseMs || 120000) }); }
+  catch (e) { sendComputeError(res, e, 409); }
+}
+function nodeCancellationHandler(req, res) {
+  try { res.json({ ok: true, cancellation: executionNode.cancellation(req.params.jobId, req.computeWorker.workerId, req.body?.leaseId) }); }
+  catch (e) { sendComputeError(res, e, 409); }
+}
+function nodeDisconnectHandler(req, res) {
+  try { res.json({ ok: true, worker: executionNode.disconnect(req.computeWorker.workerId, req.body?.reason || "node_disconnect") }); }
+  catch (e) { sendComputeError(res, e, 409); }
+}
 function nodeCompleteHandler(req, res) {
   try { res.json({ ok: true, job: executionNode.finish(req.params.jobId, req.computeWorker.workerId, req.body?.leaseId, req.body?.result, req.body?.receipt) }); }
   catch (e) { sendComputeError(res, e, 409); }
@@ -762,6 +778,9 @@ const executionNodeRouter = express.Router();
 executionNodeRouter.use(requireExecutionNode);
 executionNodeRouter.post("/heartbeat", express.json({ limit: "128kb" }), nodeHeartbeatHandler);
 executionNodeRouter.post("/jobs/claim", express.json({ limit: "16kb" }), nodeClaimHandler);
+executionNodeRouter.post("/jobs/:jobId/renew", express.json({ limit: "16kb" }), nodeRenewHandler);
+executionNodeRouter.post("/jobs/:jobId/cancellation", express.json({ limit: "16kb" }), nodeCancellationHandler);
+executionNodeRouter.post("/disconnect", express.json({ limit: "8kb" }), nodeDisconnectHandler);
 executionNodeRouter.post("/jobs/:jobId/complete", express.json({ limit: "1mb" }), nodeCompleteHandler);
 executionNodeRouter.post("/jobs/:jobId/fail", express.json({ limit: "16kb" }), nodeFailHandler);
 app.use("/execution-node/node", executionNodeRouter);
@@ -785,6 +804,11 @@ executionNodeAdminRouter.post("/nodes/:workerId/revoke", express.json({ limit: "
   const worker = compute.workerManager.revokeWorker(req.params.workerId, req.body?.reason || "execution_node_revoked");
   if (!worker) return res.status(404).json({ ok: false, error: "node not found" });
   res.json({ ok: true, worker });
+});
+executionNodeAdminRouter.post("/jobs/:jobId/cancel", express.json({ limit: "8kb" }), (req, res) => {
+  const job = executionNode.requestCancel(req.params.jobId);
+  if (!job) return res.status(404).json({ ok: false, error: "job not found" });
+  res.json({ ok: true, job });
 });
 app.use("/execution-node/admin", executionNodeAdminRouter);
 
@@ -813,9 +837,9 @@ app.post("/compute/recover", express.json({ limit: "8kb" }), requireAdmin, recov
 app.get("/compute/health", requireAdmin, computeHealthHandler);
 
 if (require.main === module && !IS_LOCAL) {
-  httpServer = app.listen(PORT, "0.0.0.0", () => {
+  httpServer = app.listen(PORT, BIND_HOST, () => {
     console.log("Sidekick MCP server listening on port " + PORT);
-    console.log("MCP endpoint: http://0.0.0.0:" + PORT + "/mcp");
+    console.log("MCP endpoint: http://" + BIND_HOST + ":" + PORT + "/mcp");
     console.log("Data dir: " + DATA_DIR);
   });
 

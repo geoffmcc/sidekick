@@ -30,5 +30,14 @@ const fetchImpl = async (url, options) => {
   assert.strictEqual(calls.filter(call => call.url.endsWith("/api/agent/run")).length, 1);
   assert.strictEqual(calls.filter(call => call.url.includes("/control-room")).length, 2);
   assert.match(calls.find(call => call.url.endsWith("/api/agent/run")).body, /agent-certification/);
+
+  const { runCertification } = require("../src/certification");
+  const missingEvidence = await runCertification({
+    mode: "live",
+    availability: true,
+    liveExecutor: { run: async () => ({ state: "completed", source: "durable_task_store", receipts: [], events: [], dispatch_counts: { total: 1 }, result: { status: "verified" } }) },
+  });
+  assert.strictEqual(missingEvidence.summary.failed, 2, "live certification must reject fabricated completion evidence");
+  assert.ok(missingEvidence.results.every(result => /expected tools were not observed/.test(result.reason)));
   console.log("Passed: live Agent certification executor");
 })().catch(error => { console.error(error); process.exitCode = 1; });

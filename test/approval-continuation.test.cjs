@@ -19,14 +19,18 @@ const path = require('path');
 
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sk-approval-continuation-'));
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
+const TEST_SECRET_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sk-approval-secrets-'));
+fs.writeFileSync(path.join(TEST_SECRET_DIR, 'sidekick_secret_key'), 'approval-continuation-test-key\n', { mode: 0o600 });
+process.env.SIDEKICK_SECRET_DIR = TEST_SECRET_DIR;
+process.env.NODE_ENV = 'test';
 
 // Crash-safe cleanup. The tidy-up at the end of the final .then() chain is
 // skipped by anything that throws outside a test wrapper, which leaks a temp
 // database plus its WAL every time — observed in practice during mutation runs.
 process.on('exit', () => {
   try { fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true }); } catch {}
+  try { fs.rmSync(TEST_SECRET_DIR, { recursive: true, force: true }); } catch {}
 });
-process.env.SIDEKICK_SECRET_KEY = 'approval-continuation-test-key';
 process.env.SIDEKICK_TOOL_POLICY = 'open';
 process.env.SIDEKICK_APPROVAL_MODE = 'off';
 
@@ -292,8 +296,9 @@ test('park REFUSES to clobber a running or terminal checkpoint', () => {
 });
 
 test('park fails closed when the encryption key is unavailable (§4.4)', () => {
-  const saved = process.env.SIDEKICK_SECRET_KEY;
-  delete process.env.SIDEKICK_SECRET_KEY;
+  const secretPath = path.join(TEST_SECRET_DIR, 'sidekick_secret_key');
+  const secret = fs.readFileSync(secretPath);
+  fs.unlinkSync(secretPath);
   try {
     const outcome = continuation.park({
       taskId: newTaskId(), goal: 'g', classification: {}, plan: samplePlan(),
@@ -302,7 +307,7 @@ test('park fails closed when the encryption key is unavailable (§4.4)', () => {
     assert.strictEqual(outcome.ok, false);
     assert.strictEqual(outcome.code, 'secret_key_unavailable');
   } finally {
-    process.env.SIDEKICK_SECRET_KEY = saved;
+    fs.writeFileSync(secretPath, secret, { mode: 0o600 });
   }
 });
 

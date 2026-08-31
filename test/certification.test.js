@@ -8,7 +8,8 @@ const { listScenarios, runCertification, formatCertificationText, collectReliabi
   assert.strictEqual(all.length, 20);
   assert.strictEqual(new Set(all.map(scenario => scenario.id)).size, 20);
   assert.ok(all.every(scenario => scenario.version === 1 && scenario.bounded && scenario.approval && scenario.evidence && scenario.outcome && scenario.cleanup));
-  assert.strictEqual(listScenarios({ mode: "live" }).length, 2);
+   assert.strictEqual(listScenarios({ mode: "live" }).length, 2);
+   assert.strictEqual(listScenarios({ mode: "lifecycle" }).length, 6);
 
   const report = await runCertification();
   assert.strictEqual(report.schema, "sidekick.agent-certification.v1");
@@ -22,17 +23,17 @@ const { listScenarios, runCertification, formatCertificationText, collectReliabi
   assert.match(formatCertificationText(report), /Agent certification 1: blocked/);
 
   const hermetic = await runCertification({ mode: "hermetic" });
-  assert.strictEqual(hermetic.summary.total, 18);
+   assert.strictEqual(hermetic.summary.total, 12);
   assert.strictEqual(hermetic.summary.skipped, 0);
   assert.strictEqual(hermetic.summary.failed, 0);
   assert.ok(hermetic.summary.blocked > 0);
+  assert.strictEqual(hermetic.results.find(item => item.id === "agent-cert.v1.repository-path").status, "passed");
+  assert.strictEqual(hermetic.results.find(item => item.id === "agent-cert.v1.result-vocabulary").status, "passed");
 
   const builtin = require("../src/tools").getBuiltinRegistry();
-  const completeRegistry = { get: name => name === "respond" ? builtin.get("respond") : {} };
-  const complete = await runCertification({ mode: "hermetic", registry: completeRegistry });
-  assert.strictEqual(complete.summary.failed, 0);
-  assert.strictEqual(complete.summary.blocked, 0);
-  assert.strictEqual(complete.summary.passed, 18);
+  const fabricatedRegistry = { get: name => name === "respond" ? builtin.get("respond") : {} };
+  const fabricated = await runCertification({ mode: "hermetic", registry: fabricatedRegistry });
+  assert.ok(fabricated.summary.blocked > 0, "fabricated descriptors must not certify required tools");
 
   const incomplete = await runCertification({
     scenarioIds: ["agent-cert.v1.repository-profile"],
@@ -42,11 +43,15 @@ const { listScenarios, runCertification, formatCertificationText, collectReliabi
   assert.strictEqual(incomplete.summary.blocked, 1);
   assert.match(incomplete.results[0].reason, /expected tools unavailable/);
 
+  const noFixture = await runCertification({ scenarioIds: ["agent-cert.v1.repository-profile"] });
+  assert.strictEqual(noFixture.summary.blocked, 1);
+  assert.match(noFixture.results[0].reason, /expected tools unavailable|deterministic hermetic fixture/);
+
   assert.throws(() => createLiveAgentExecutor({ baseUrl: "https://example.test" }), /loopback/);
   const live = await runCertification({
     mode: "live",
     availability: true,
-    liveExecutor: { run: async scenario => ({ task_id: scenario.id, state: "failed", source: "durable_task_store", receipts: [], events: [], dispatch_counts: { total: 0 } }) },
+    liveExecutor: { run: async scenario => ({ task_id: scenario.id, state: "failed", source: "durable_task_store", receipts: [{ capability: scenario.expected_tools[0] }], events: [{ tool_name: scenario.expected_tools[0] }], dispatch_counts: { total: 1 } }) },
   });
   assert.strictEqual(live.summary.total, 2);
   assert.strictEqual(live.summary.passed, 1);

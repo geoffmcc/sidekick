@@ -14,18 +14,26 @@ node src/cli.js certify
 node src/cli.js certify --json
 node src/cli.js certify --json --allow-unavailable
 npm run certify
+node test/certification-lifecycle.test.js
 ```
 
 `certify` runs the hermetic scenarios from `src/certification/scenarios.js`.
+The Agent Bridge lifecycle scenarios are required separately because they need
+the durable loopback task runtime rather than direct MCP tool descriptors; run
+`node test/certification-lifecycle.test.js` for that surface.
 Provider and lab-dependent scenarios are separate live scenarios and are
 reported as `skipped` when their prerequisites are unavailable. A skipped or
 blocked scenario is not a pass, and a report containing either status has an
 overall `blocked` verdict.
 
-`--allow-unavailable` is intended for hermetic CI where optional capability
-packs are not installed. It preserves the `blocked` report and only permits a
-zero process exit when no scenario actually failed; it must not be used for
-live acceptance.
+Hermetic scenarios pass only after a declared local fixture runs through the
+canonical dispatcher by canonical tool name. Scenarios without a safe,
+deterministic fixture are reported as `blocked`; descriptor metadata alone
+cannot certify execution.
+
+`--allow-unavailable` remains accepted for compatibility with older CI
+commands, but it cannot change a `blocked` or `skipped` result into a pass.
+Blocked certification is never live or release acceptance evidence.
 
 The certification report includes a versioned scenario identifier, objective,
 initial project/workspace identity, authority envelope label, expected tools,

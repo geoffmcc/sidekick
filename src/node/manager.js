@@ -5,6 +5,8 @@ const dbStore = require("../db");
 const computeWorkers = require("../compute/worker-manager");
 const { descriptorIdentity } = require("./placement");
 
+const MAX_RESULT_BYTES = 1024 * 1024;
+
 function now() { return new Date().toISOString(); }
 function id(prefix) { return `${prefix}_${Date.now().toString(36)}_${crypto.randomBytes(8).toString("hex")}`; }
 function json(value, fallback = {}) { try { return JSON.stringify(value == null ? fallback : value); } catch { return JSON.stringify(fallback); } }
@@ -66,8 +68,9 @@ function ensureSchema() {
       repository_id TEXT,
       idempotency_key TEXT UNIQUE,
       state TEXT NOT NULL DEFAULT 'queued',
-      lease_id TEXT,
-      lease_expires_at TEXT,
+       lease_id TEXT,
+       lease_expires_at TEXT,
+       cancellation_requested INTEGER NOT NULL DEFAULT 0,
       result_json TEXT,
       receipt_json TEXT,
       error_code TEXT,
@@ -81,6 +84,9 @@ function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_execution_node_jobs_worker_state ON execution_node_jobs(worker_id, state);
     CREATE INDEX IF NOT EXISTS idx_execution_node_jobs_lease ON execution_node_jobs(lease_expires_at);
   `);
+  try { db.exec("ALTER TABLE execution_node_jobs ADD COLUMN cancellation_requested INTEGER NOT NULL DEFAULT 0"); } catch (error) {
+    if (!/duplicate column name/i.test(String(error.message || ""))) throw error;
+  }
 }
 
 function nodeRow(row) {
@@ -149,6 +155,14 @@ function replaceRepositories(workspaceId, repositories) {
 function enqueue({ workerId, requestId, taskId, toolName, descriptor, args, context = {}, workspaceId = null, repositoryId = null, idempotencyKey = null }) {
   ensureSchema();
   const db = dbStore.getDb();
+  if (workspaceId) {
+    const workspace = db.prepare("SELECT workspace_id FROM execution_node_workspaces WHERE workspace_id = ? AND worker_id = ? AND state = 'active'").get(workspaceId, workerId);
+    if (!workspace) throw new Error("execution workspace is not authorized for this worker");
+  }
+  if (repositoryId) {
+    const repository = db.prepare("SELECT r.repository_id FROM execution_node_repositories r JOIN execution_node_workspaces w ON w.workspace_id = r.workspace_id WHERE r.repository_id = ? AND r.state = 'registered' AND w.worker_id = ? AND w.state = 'active' AND (? IS NULL OR r.workspace_id = ?)").get(repositoryId, workerId, workspaceId, workspaceId);
+    if (!repository) throw new Error("execution repository is not authorized for this worker workspace");
+  }
   if (idempotencyKey) {
     const existing = db.prepare("SELECT * FROM execution_node_jobs WHERE idempotency_key = ?").get(idempotencyKey);
     if (existing) return jobRow(existing);
@@ -160,11 +174,15 @@ function enqueue({ workerId, requestId, taskId, toolName, descriptor, args, cont
   return getJob(jobId);
 }
 
-function jobRow(row) { return row ? { jobId: row.job_id, workerId: row.worker_id, taskId: row.task_id, requestId: row.request_id, toolName: row.tool_name, descriptorVersion: row.descriptor_version, descriptorIdentity: row.descriptor_identity, args: parse(row.args_json, {}), context: parse(row.context_json, {}), workspaceId: row.workspace_id, repositoryId: row.repository_id, state: row.state, leaseId: row.lease_id, leaseExpiresAt: row.lease_expires_at, result: parse(row.result_json, null), receipt: parse(row.receipt_json, null), errorCode: row.error_code, errorMessage: row.error_message, attempts: row.attempts, createdAt: row.created_at, startedAt: row.started_at, completedAt: row.completed_at } : null; }
+function jobRow(row) { return row ? { jobId: row.job_id, workerId: row.worker_id, taskId: row.task_id, requestId: row.request_id, toolName: row.tool_name, descriptorVersion: row.descriptor_version, descriptorIdentity: row.descriptor_identity, args: parse(row.args_json, {}), context: parse(row.context_json, {}), workspaceId: row.workspace_id, repositoryId: row.repository_id, state: row.state, leaseId: row.lease_id, leaseExpiresAt: row.lease_expires_at, cancellationRequested: row.cancellation_requested === 1, result: parse(row.result_json, null), receipt: parse(row.receipt_json, null), errorCode: row.error_code, errorMessage: row.error_message, attempts: row.attempts, createdAt: row.created_at, startedAt: row.started_at, completedAt: row.completed_at } : null; }
 function getJob(jobId) { ensureSchema(); return jobRow(dbStore.getDb().prepare("SELECT * FROM execution_node_jobs WHERE job_id = ?").get(jobId)); }
-function claim(workerId, leaseMs = 120000) { ensureSchema(); const db = dbStore.getDb(); const leaseId = id("lease"); const expires = new Date(Date.now() + Math.min(30 * 60 * 1000, Math.max(1000, leaseMs))).toISOString(); const tx = db.transaction(() => { const row = db.prepare("SELECT * FROM execution_node_jobs WHERE worker_id = ? AND state = 'queued' ORDER BY created_at LIMIT 1").get(workerId); if (!row) return null; db.prepare("UPDATE execution_node_jobs SET state='leased', lease_id=?, lease_expires_at=?, attempts=attempts+1, started_at=?, updated_at=? WHERE job_id=? AND state='queued'").run(leaseId, expires, now(), now(), row.job_id); return db.prepare("SELECT * FROM execution_node_jobs WHERE job_id=?").get(row.job_id); }); return jobRow(tx()); }
-function finish(jobId, workerId, leaseId, result, receipt) { ensureSchema(); const db = dbStore.getDb(); const changed = db.prepare("UPDATE execution_node_jobs SET state='completed', result_json=?, receipt_json=?, completed_at=?, updated_at=? WHERE job_id=? AND worker_id=? AND lease_id=? AND state='leased'").run(json(result, null), json(receipt, null), now(), now(), jobId, workerId, leaseId); if (changed.changes !== 1) throw new Error("job lease is no longer valid"); return getJob(jobId); }
-function fail(jobId, workerId, leaseId, code, message) { ensureSchema(); const db = dbStore.getDb(); const changed = db.prepare("UPDATE execution_node_jobs SET state='failed', error_code=?, error_message=?, completed_at=?, updated_at=? WHERE job_id=? AND worker_id=? AND lease_id=? AND state='leased'").run(String(code).slice(0, 120), String(message).slice(0, 1000), now(), now(), jobId, workerId, leaseId); if (changed.changes !== 1) throw new Error("job lease is no longer valid"); return getJob(jobId); }
-function recoverExpired() { ensureSchema(); const db = dbStore.getDb(); return db.prepare("UPDATE execution_node_jobs SET state='queued', lease_id=NULL, lease_expires_at=NULL, updated_at=? WHERE state='leased' AND lease_expires_at < ?").run(now(), now()).changes; }
+function claim(workerId, leaseMs = 120000) { ensureSchema(); const db = dbStore.getDb(); const leaseId = id("lease"); const expires = new Date(Date.now() + Math.min(30 * 60 * 1000, Math.max(1000, leaseMs))).toISOString(); const tx = db.transaction(() => { const row = db.prepare("SELECT * FROM execution_node_jobs WHERE worker_id = ? AND state = 'queued' AND cancellation_requested = 0 ORDER BY created_at LIMIT 1").get(workerId); if (!row) return null; db.prepare("UPDATE execution_node_jobs SET state='leased', lease_id=?, lease_expires_at=?, attempts=attempts+1, started_at=?, updated_at=? WHERE job_id=? AND state='queued' AND cancellation_requested=0").run(leaseId, expires, now(), now(), row.job_id); return db.prepare("SELECT * FROM execution_node_jobs WHERE job_id=?").get(row.job_id); }); return jobRow(tx()); }
+function renew(jobId, workerId, leaseId, leaseMs = 120000) { ensureSchema(); const expires = new Date(Date.now() + Math.min(30 * 60 * 1000, Math.max(1000, leaseMs))).toISOString(); const changed = dbStore.getDb().prepare("UPDATE execution_node_jobs SET lease_expires_at=?, updated_at=? WHERE job_id=? AND worker_id=? AND lease_id=? AND state='leased' AND cancellation_requested=0").run(expires, now(), jobId, workerId, leaseId); if (changed.changes !== 1) throw new Error("job lease is no longer valid"); return getJob(jobId); }
+function requestCancel(jobId) { ensureSchema(); const db = dbStore.getDb(); const row = db.prepare("SELECT state FROM execution_node_jobs WHERE job_id=?").get(jobId); if (!row) return null; const state = row.state === "queued" ? "cancelled" : row.state; const ts = now(); db.prepare("UPDATE execution_node_jobs SET cancellation_requested=1, state=?, completed_at=CASE WHEN ?='cancelled' THEN COALESCE(completed_at, ?) ELSE completed_at END, updated_at=? WHERE job_id=? AND state IN ('queued','leased')").run(state, state, ts, ts, jobId); return getJob(jobId); }
+function cancellation(jobId, workerId, leaseId) { ensureSchema(); const row = dbStore.getDb().prepare("SELECT cancellation_requested, state FROM execution_node_jobs WHERE job_id=? AND worker_id=? AND lease_id=?").get(jobId, workerId, leaseId); return row ? { requested: row.cancellation_requested === 1, state: row.state } : null; }
+function disconnect(workerId, reason = "node_disconnect") { ensureSchema(); const db = dbStore.getDb(); const ts = now(); db.prepare("UPDATE execution_node_jobs SET state='cancelled', cancellation_requested=1, error_code='node_disconnected', error_message=?, completed_at=COALESCE(completed_at, ?), updated_at=? WHERE worker_id=? AND state='leased'").run(String(reason).slice(0, 200), ts, ts, workerId); return computeWorkers.disconnectWorker(workerId, reason); }
+function finish(jobId, workerId, leaseId, result, receipt) { ensureSchema(); const db = dbStore.getDb(); const job = db.prepare("SELECT * FROM execution_node_jobs WHERE job_id=? AND worker_id=? AND lease_id=? AND state='leased'").get(jobId, workerId, leaseId); if (!job || job.cancellation_requested) throw new Error("job lease is no longer valid"); const resultJson = json(result, null); const receiptJson = json(receipt, null); if (Buffer.byteLength(resultJson) > MAX_RESULT_BYTES || Buffer.byteLength(receiptJson) > 64 * 1024) throw new Error("node result exceeds the size bound"); const parsedReceipt = parse(receiptJson, null); if (!parsedReceipt || parsedReceipt.jobId !== jobId || parsedReceipt.tool !== job.tool_name || parsedReceipt.descriptorVersion !== job.descriptor_version || parsedReceipt.descriptorIdentity !== job.descriptor_identity) throw new Error("node receipt does not match the leased job"); const changed = db.prepare("UPDATE execution_node_jobs SET state='completed', result_json=?, receipt_json=?, completed_at=?, updated_at=? WHERE job_id=? AND worker_id=? AND lease_id=? AND state='leased' AND cancellation_requested=0").run(resultJson, receiptJson, now(), now(), jobId, workerId, leaseId); if (changed.changes !== 1) throw new Error("job lease is no longer valid"); return getJob(jobId); }
+function fail(jobId, workerId, leaseId, code, message) { ensureSchema(); const db = dbStore.getDb(); const normalizedCode = String(code); const state = normalizedCode.includes("cancel") || normalizedCode === "node_execution_timeout" ? "cancelled" : "failed"; const changed = db.prepare("UPDATE execution_node_jobs SET state=?, error_code=?, error_message=?, completed_at=?, updated_at=? WHERE job_id=? AND worker_id=? AND lease_id=? AND state='leased'").run(state, normalizedCode.slice(0, 120), String(message).slice(0, 1000), now(), now(), jobId, workerId, leaseId); if (changed.changes !== 1) throw new Error("job lease is no longer valid"); return getJob(jobId); }
+function recoverExpired() { ensureSchema(); const db = dbStore.getDb(); const ts = now(); const cancelled = db.prepare("UPDATE execution_node_jobs SET state='cancelled', completed_at=COALESCE(completed_at, ?), updated_at=? WHERE state='leased' AND cancellation_requested=1 AND lease_expires_at < ?").run(ts, ts, ts).changes; const queued = db.prepare("UPDATE execution_node_jobs SET state='queued', lease_id=NULL, lease_expires_at=NULL, updated_at=? WHERE state='leased' AND cancellation_requested=0 AND lease_expires_at < ?").run(ts, ts, ts).changes; return cancelled + queued; }
 
-module.exports = { ensureSchema, register, get, list, setWorkspace, authorizeWorkspace, getWorkspace, listWorkspaces, replaceRepositories, enqueue, getJob, claim, finish, fail, recoverExpired };
+module.exports = { ensureSchema, register, get, list, setWorkspace, authorizeWorkspace, getWorkspace, listWorkspaces, replaceRepositories, enqueue, getJob, claim, renew, requestCancel, cancellation, disconnect, finish, fail, recoverExpired };

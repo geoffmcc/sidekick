@@ -532,6 +532,9 @@ if (typeof durableRecoveryTimer.unref === "function") durableRecoveryTimer.unref
 loadAndScheduleDelays();
 
 const watchIntervals = {};
+let agentServer = null;
+let continuationJobs = null;
+let agentShutdown = null;
 
 function parseWatchInterval(interval) {
   if (!interval) return 60000;
@@ -2456,6 +2459,10 @@ app.post("/api/agent/run/:taskId/follow-up", (req, res) => {
   if (!goalCheck.ok) return res.status(goalCheck.httpStatus).json({ error: goalCheck.clientMessage });
   const durableParent = durableTaskStore.getTask(parentTaskId);
   if (durableParent && !requireTaskAccess(req, res, durableParent)) return;
+  // Transcript-only legacy parents have no durable owner record. An
+  // authenticated request cannot prove ownership of such a transcript, so do
+  // not let the compatibility path manufacture a child task for it.
+  if (!durableParent && requestAuthIdentity(req)) return res.status(404).json({ error: "parent task not found" });
   let followUpAuthorityEnvelope = null;
   if (durableParent) {
     if (durableTaskModel.budgetExceeded(durableParent, "child_tasks")) return res.status(409).json({ error: "child-task budget exhausted" });
@@ -2759,10 +2766,27 @@ const startApprovalContinuationJobs = createContinuationJobStarter({
 // Only bind the port when run as the entrypoint. When required by a test the
 // module exports `app` so the suite can listen on its own port.
 if (require.main === module) {
-  app.listen(PORT, "127.0.0.1", () => {
+  agentServer = app.listen(PORT, "127.0.0.1", () => {
     console.log("Sidekick agent bridge listening on http://127.0.0.1:" + PORT);
-    startApprovalContinuationJobs();
+    continuationJobs = startApprovalContinuationJobs();
   });
+
+  async function gracefulShutdown(signal) {
+    if (agentShutdown) return agentShutdown;
+    agentShutdown = (async () => {
+      console.error(`[Agent] Received ${signal}; stopping new work`);
+      clearInterval(durableRecoveryTimer);
+      for (const id of Object.keys(watchIntervals)) { clearInterval(watchIntervals[id]); delete watchIntervals[id]; }
+      for (const controller of Object.values(taskCancels)) { try { controller.abort(new Error("agent shutting down")); } catch {} }
+      try { require("./approvals/sweeper").stopSweeper(); } catch {}
+      try { require("./brain/scheduler").stopResumeScheduler(); } catch {}
+      if (agentServer) await new Promise(resolve => agentServer.close(() => resolve()));
+      try { dbStore.closeDatabase(); } catch {}
+    })();
+    return agentShutdown;
+  }
+  process.once("SIGTERM", () => gracefulShutdown("SIGTERM").then(() => process.exit(0)));
+  process.once("SIGINT", () => gracefulShutdown("SIGINT").then(() => process.exit(0)));
 }
 
 module.exports = {
@@ -2781,5 +2805,9 @@ module.exports = {
   prepareTaskBranch,
   scheduleWatch,
   watchIntervals,
+  gracefulShutdown: async signal => {
+    if (!agentShutdown) return { stopped: false, reason: "agent_not_running" };
+    return agentShutdown;
+  },
   __setLLMOverrideForTests,
 };

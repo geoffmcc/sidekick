@@ -14,7 +14,12 @@ function registerKvRoutes({
   valueSize,
   valueType,
   auditLog,
+  requireIdentityAdministrator,
 }) {
+  function requireAdmin(req, res) {
+    if (!req.authPrincipal || !requireIdentityAdministrator) return true;
+    return requireIdentityAdministrator(req, res);
+  }
   const shapeKvEntry = (key, entry) => {
     const isEnvelope = entry && typeof entry === "object" && !Array.isArray(entry) && Object.prototype.hasOwnProperty.call(entry, "value");
     const value = isEnvelope ? entry.value : entry;
@@ -59,6 +64,7 @@ function registerKvRoutes({
   });
 
   app.put("/api/kv/:key", (req, res) => {
+    if (!requireAdmin(req, res)) return;
     try {
       const { value, project } = req.body || {};
       const kv = readKV();
@@ -90,6 +96,7 @@ function registerKvRoutes({
   });
 
   app.delete("/api/kv/:key", (req, res) => {
+    if (!requireAdmin(req, res)) return;
     const kv = readKV();
     const existed = Object.prototype.hasOwnProperty.call(kv, req.params.key);
     if (!existed) {

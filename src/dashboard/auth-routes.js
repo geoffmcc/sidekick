@@ -26,6 +26,8 @@ function registerAuthRoutes({
   requestCookie,
   verifySessionToken,
   makeSessionToken,
+  bootstrapToken,
+  remoteBootstrapAllowed = false,
 }) {
   app.get("/api/auth/bootstrap-status", (req, res) => {
     res.set("Cache-Control", "no-store");
@@ -35,6 +37,9 @@ function registerAuthRoutes({
   app.post("/api/auth/bootstrap", (req, res) => {
     try {
       if (bootstrapCompleted()) return res.status(409).json({ error: "Owner bootstrap has already been completed" });
+      if (remoteBootstrapAllowed && (!bootstrapToken || !timingSafeCompare(req.body?.bootstrap_token, bootstrapToken))) {
+        return res.status(403).json({ error: "remote owner bootstrap requires the protected bootstrap token" });
+      }
       const principal = identity.bootstrapOwner(req.body || {});
       const session = authentication.createSession(principal.principal_id, {
         userAgent: req.headers["user-agent"] || null,

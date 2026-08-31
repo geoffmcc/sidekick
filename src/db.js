@@ -32,9 +32,10 @@ try {
   );
 }
 
-const db = new Database(DB_FILE);
+let db = new Database(DB_FILE);
 
-db.exec(`
+function configureDatabase(connection) {
+  connection.exec(`
   PRAGMA journal_mode = WAL;
   PRAGMA synchronous = NORMAL;
   PRAGMA foreign_keys = ON;
@@ -164,7 +165,14 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_generated_tool_execution_steps_execution ON generated_tool_execution_steps(execution_id, step_number);
-`);
+  `);
+}
+
+configureDatabase(db);
+const dbHandle = new Proxy({}, { get: (_target, property) => {
+  const value = db[property];
+  return typeof value === "function" ? value.bind(db) : value;
+} });
 
 function ensureColumn(table, column, definition) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
@@ -260,11 +268,11 @@ function loadDocument(name, fallback) {
   return existing !== undefined ? existing : fallback;
 }
 
-const { loadKV, clearKV, replaceKV, setKV, getKV, deleteKV, listKVProjects, getAllKV } = createKvStore({ db, parseJson, nowIso });
+const { loadKV, clearKV, replaceKV, setKV, getKV, deleteKV, listKVProjects, getAllKV } = createKvStore({ db: dbHandle, parseJson, nowIso });
 
-const { appendToolLog, readToolLogs, clearToolLogs } = createToolLogStore({ db, parseJson, nowIso, maxLog: MAX_LOG });
+const { appendToolLog, readToolLogs, clearToolLogs } = createToolLogStore({ db: dbHandle, parseJson, nowIso, maxLog: MAX_LOG });
 
-const { saveGeneratedCapability, getGeneratedCapability, getGeneratedCapabilityByName, listGeneratedCapabilities, appendGeneratedToolAudit, listGeneratedToolAudit } = createGeneratedCapabilityStore({ db, parseJson, nowIso });
+const { saveGeneratedCapability, getGeneratedCapability, getGeneratedCapabilityByName, listGeneratedCapabilities, appendGeneratedToolAudit, listGeneratedToolAudit } = createGeneratedCapabilityStore({ db: dbHandle, parseJson, nowIso });
 
 const { executionFromRow, executionStepFromRow } = createGeneratedExecutionRowMappers(parseJson);
 
@@ -1004,7 +1012,7 @@ function calculateMemoryDecayLegacy(memory) {
   return Math.max(0, Math.min(1, decayedConfidence));
 }
 
-const memoryDomain = createMemoryDomain({ db, hasMemoriesTable, normalizeMemoryRow, nowIso });
+const memoryDomain = createMemoryDomain({ db: dbHandle, hasMemoriesTable, normalizeMemoryRow, nowIso });
 const {
   searchMemories,
   listMemories,
@@ -1252,7 +1260,7 @@ function auditMemoryEvent(eventType, targetType, targetId, details = {}, actor =
 }
 
 const handoffStore = createHandoffStore({
-  db,
+  db: dbHandle,
   execFileSync,
   childProcessEnv,
   hasTable,
@@ -1657,15 +1665,19 @@ function createBackup(destPath = null, compress = true) {
   const backupName = `sidekick-backup-${timestamp}.db`;
   const backupPath = destPath || path.join(BACKUP_DIR, backupName);
   
-  // Close main db to ensure clean state, then copy
-  const backupDb = new Database(backupPath);
+  const temporaryPath = `${backupPath}.tmp`;
   try {
-    // Use synchronous backup via file copy
-    // First checkpoint WAL to main db file
-    db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").run();
-    // Copy the database file
-    fs.copyFileSync(DB_FILE, backupPath);
-    backupDb.close();
+    // Checkpoint before copying and validate the resulting artifact. Never
+    // open the destination before replacing it: an open SQLite handle can keep
+    // writing to the old inode and make the backup appear valid while it is
+    // being overwritten.
+    db.pragma("wal_checkpoint(TRUNCATE)");
+    fs.copyFileSync(DB_FILE, temporaryPath);
+    const backupDb = new Database(temporaryPath, { readonly: true });
+    try {
+      if (backupDb.pragma("integrity_check", { simple: true }) !== "ok") throw new Error("backup integrity check failed");
+    } finally { backupDb.close(); }
+    fs.renameSync(temporaryPath, backupPath);
     
     if (compress) {
       const input = fs.readFileSync(backupPath);
@@ -1677,7 +1689,7 @@ function createBackup(destPath = null, compress = true) {
     
     return { path: backupPath, size: fs.statSync(backupPath).size, compressed: false };
   } catch (err) {
-    try { backupDb.close(); } catch (e) {}
+    try { if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath); } catch {}
     throw err;
   }
 }
@@ -1698,7 +1710,7 @@ function restoreBackup(backupPath, verify = true) {
   if (verify) {
     const testDb = new Database(tempPath);
     try {
-      testDb.prepare("PRAGMA integrity_check").get();
+      if (testDb.pragma("integrity_check", { simple: true }) !== "ok") throw new Error("integrity check did not return ok");
     } catch (e) {
       testDb.close();
       if (tempPath !== backupPath) fs.unlinkSync(tempPath);
@@ -1707,19 +1719,26 @@ function restoreBackup(backupPath, verify = true) {
     testDb.close();
   }
   
-  // Create pre-restore backup using synchronous file copy
+  // Create a verified pre-restore backup before replacing the live database.
   const preBackupPath = path.join(BACKUP_DIR, `pre-restore-${Date.now()}.db`);
   try {
-    db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").run();
-    fs.copyFileSync(DB_FILE, preBackupPath);
+    createBackup(preBackupPath, false);
   } catch (err) {
     if (tempPath !== backupPath) fs.unlinkSync(tempPath);
     throw err;
   }
   
-  // Restore by copying backup file over main db
+  // Replace the live file only while the process-owned SQLite handle is closed,
+  // then reopen and reapply connection pragmas. Existing callers use the
+  // shared `db` binding, so they see the restored connection immediately.
   try {
-    fs.copyFileSync(tempPath, DB_FILE);
+    db.close();
+    for (const sidecar of [`${DB_FILE}-wal`, `${DB_FILE}-shm`]) { try { fs.unlinkSync(sidecar); } catch {} }
+    fs.renameSync(tempPath, DB_FILE);
+    db = new Database(DB_FILE);
+    configureDatabase(db);
+    module.exports.db = db;
+    runPendingMigrations();
     if (tempPath !== backupPath) fs.unlinkSync(tempPath);
     return { success: true, preBackupPath };
   } catch (err) {
@@ -2068,7 +2087,26 @@ function runPendingMigrations() {
       const sql = fs.readFileSync(migrationPath, "utf-8");
       execMigrationSql(sql);
       db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(String(migration.version));
+      if (migration.version >= 72) db.prepare("INSERT OR REPLACE INTO schema_migrations (version, filename, sha256, applied_at) VALUES (?, ?, ?, ?)").run(migration.version, migration.file, crypto.createHash("sha256").update(sql).digest("hex"), nowIso());
       applied.push({ file: migration.file, version: migration.version });
+    }
+    if (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get()) {
+      const files = getValidatedMigrationFiles();
+      const current = getMigrationVersion();
+      const ledger = db.prepare("SELECT version, filename, sha256 FROM schema_migrations ORDER BY version").all();
+      if (ledger.length === 0 && current > 0) {
+        for (const file of files.filter(item => Number(item.slice(0, 3)) <= current)) {
+          const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), "utf-8");
+          db.prepare("INSERT INTO schema_migrations (version, filename, sha256, applied_at) VALUES (?, ?, ?, ?)").run(Number(file.slice(0, 3)), file, crypto.createHash("sha256").update(sql).digest("hex"), nowIso());
+        }
+      } else {
+        for (const row of ledger) {
+          const file = files.find(item => Number(item.slice(0, 3)) === row.version);
+          if (!file || file !== row.filename) throw new Error(`Migration ledger mismatch at version ${row.version}`);
+          const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), "utf-8");
+          if (crypto.createHash("sha256").update(sql).digest("hex") !== row.sha256) throw new Error(`Migration checksum mismatch at version ${row.version}`);
+        }
+      }
     }
     db.exec("COMMIT");
   } catch (error) {

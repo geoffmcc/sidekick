@@ -4,6 +4,10 @@ const { FILE_SECRET_NAMES } = require("./core/runtime-secrets");
 
 const envPath = path.join(__dirname, "..", ".env");
 if (fs.existsSync(envPath)) {
+  if (process.env.NODE_ENV !== "test" && process.env.SIDEKICK_LOCAL !== "1") {
+    const mode = fs.statSync(envPath).mode;
+    if ((mode & 0o077) !== 0) throw new Error(".env must not be group/world accessible; use protected secret files");
+  }
   fs.readFileSync(envPath, "utf8").split("\n").forEach(line => {
     line = line.trim();
     if (line && !line.startsWith("#")) {

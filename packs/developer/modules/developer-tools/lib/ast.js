@@ -3,7 +3,8 @@
 /* Tree-sitter adapter boundary. Parser loading is isolated here so grammar
  * packaging differences (including Perl's ESM binding) cannot leak into the
  * normalized Semantic IR or the Developer Pack dispatcher. */
-const Parser = require("tree-sitter");
+const { requireFromSidekick } = require("./deps");
+const Parser = requireFromSidekick("tree-sitter");
 
 const grammarPromises = new Map();
 const grammarVersions = Object.freeze({
@@ -23,7 +24,7 @@ async function grammarFor(language) {
     grammarPromises.set(language, (async () => {
       if (language === "perl") return (await import("tree-sitter-perl")).default;
       const base = language.startsWith("typescript") ? "typescript" : language.startsWith("javascript") ? "javascript" : language;
-      const loaded = require(`tree-sitter-${base}`);
+       const loaded = requireFromSidekick(`tree-sitter-${base}`);
       if (language === "typescript_tsx") return loaded.tsx;
       return base === "typescript" ? loaded.typescript : loaded;
     })());

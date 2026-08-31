@@ -7,6 +7,7 @@ fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
 fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
 
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
+process.env.NODE_ENV = 'test';
 process.env.SIDEKICK_TOOL_POLICY = 'open';
 process.env.SIDEKICK_APPROVAL_MODE = 'off';
 process.env.SIDEKICK_APPROVAL_REQUIRED_TOOLS = '';

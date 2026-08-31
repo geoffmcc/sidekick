@@ -5,6 +5,7 @@ const dbStore = require("../../db");
 const { redactSensitive } = require("../../redact");
 const toolContext = require("../context");
 const { canonicalizeProjectName } = require("../../core/project-identity");
+const authorization = require("../../core/authorization");
 
 const HANDOFF_EXTRACTION_VERSION = "handoff-rules-v1";
 
@@ -52,20 +53,39 @@ function recordHandoffEvent(eventType, payload, options = {}) {
   } catch (e) {}
 }
 
-function scopedHandoff(id, project) {
+function canManageAnyHandoff(authIdentity) {
+  return Boolean(authIdentity?.principal_id && authorization.authorize({
+    principalId: authIdentity.principal_id,
+    permission: "principals.manage",
+    credentialScopes: authIdentity.scopes,
+    delegationId: authIdentity.delegation_id || null,
+  }).ok);
+}
+
+function scopedHandoff(id, project, authIdentity = null) {
   const handoff = dbStore.getHandoff(id);
   if (!handoff) return null;
   if (project && canonicalizeProjectName(handoff.project) !== canonicalizeProjectName(project)) return null;
+  if (authIdentity?.principal_id && !canManageAnyHandoff(authIdentity)
+    && handoff.owner_principal_id !== (authIdentity.acting_for_principal_id || authIdentity.principal_id)
+    && handoff.created_by_principal_id !== authIdentity.principal_id) return null;
   return handoff;
 }
 
 async function sidekick_handoff({ action, id, key, project, title, content, source, task_id, reprocess, include_archived, limit, version, expected_version, reason, packet, working_directory, owner, lease_seconds, claim_token, lifecycle_state }) {
   if (key !== undefined) return { content: [{ type: "text", text: "handoff key storage is no longer supported; create or address a structured handoff by id" }], isError: true };
   const authIdentity = toolContext.getExecutionContext().authIdentity || null;
+  const boundProject = toolContext.getExecutionContext().project || null;
   const ownerPrincipalId = authIdentity?.acting_for_principal_id || authIdentity?.principal_id || null;
   const actorPrincipalId = authIdentity?.principal_id || null;
+  if (authIdentity?.principal_id && !project && !boundProject) {
+    return { content: [{ type: "text", text: "authenticated handoff access requires a project scope" }], isError: true };
+  }
+  if (authIdentity?.principal_id && id && action !== "create" && !scopedHandoff(id, project, authIdentity)) {
+    return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
+  }
   if (action === "create" || action === "update") {
-    const existing = id ? scopedHandoff(id, project) : null;
+    const existing = id ? scopedHandoff(id, project, authIdentity) : null;
     const handoffContent = content !== undefined && content !== null
       ? content
       : existing?.content;
@@ -99,7 +119,7 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
   }
   if (action === "get") {
     if (!id) return { content: [{ type: "text", text: "handoff get requires id. To retrieve by project, use handoff list or resume check." }], isError: true };
-    const current = scopedHandoff(id, project);
+    const current = scopedHandoff(id, project, authIdentity);
     const handoff = current && (version === undefined || version === null
       ? current
       : dbStore.getHandoffVersion(id, version));
@@ -108,7 +128,7 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
   }
   if (action === "versions") {
     if (!id) return { content: [{ type: "text", text: "handoff versions requires id" }], isError: true };
-    if (!scopedHandoff(id, project)) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
+    if (!scopedHandoff(id, project, authIdentity)) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
     const versions = dbStore.listHandoffVersions(id);
     if (!versions.length) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
     return jsonText({ ok: true, handoff_id: versions[0].handoff_id, latest_version: versions[0].version, versions });
@@ -116,7 +136,7 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
   if (action === "restore") {
     if (!id || version === undefined || version === null) return { content: [{ type: "text", text: "handoff restore requires id and version" }], isError: true };
     try {
-      if (!scopedHandoff(id, project)) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
+       if (!scopedHandoff(id, project, authIdentity)) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
       const result = dbStore.restoreHandoffVersion(id, version, { source: source || toolContext.getExecutionSource() });
       if (!result.no_op) {
         const memories = extractHandoffMemories(result.handoff, { project: project || result.handoff.project });
@@ -143,34 +163,40 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
       return { content: [{ type: "text", text: String(error && error.message ? error.message : error) }], isError: true };
     }
   }
-  if (action === "list") return jsonText({ ok: true, handoffs: dbStore.listHandoffs({ project, includeArchived: include_archived === true, limit: limit || 50 }) });
+  if (action === "list") {
+    const handoffs = dbStore.listHandoffs({ project, includeArchived: include_archived === true, limit: limit || 50 });
+    const visible = authIdentity?.principal_id && !canManageAnyHandoff(authIdentity)
+      ? handoffs.filter(item => item.owner_principal_id === (authIdentity.acting_for_principal_id || authIdentity.principal_id) || item.created_by_principal_id === authIdentity.principal_id)
+      : handoffs;
+    return jsonText({ ok: true, handoffs: visible });
+  }
   if (action === "inspect") {
     if (!id) return { content: [{ type: "text", text: "handoff inspect requires id. To retrieve by project, use handoff list or resume check." }], isError: true };
-    const handoff = scopedHandoff(id, project);
+    const handoff = scopedHandoff(id, project, authIdentity);
     if (!handoff) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
     const memories = dbStore.searchMemories({ project: handoff.project, includeDisabled: true, limit: 200 }).filter(m => m.source_ref === handoff.id || m.metadata?.handoff_id === handoff.id);
     return jsonText({ ok: true, handoff, packet_validation: dbStore.validateHandoffPacket(handoff.packet, { requireResume: true }), extracted_memories: memories, extraction_version: HANDOFF_EXTRACTION_VERSION });
   }
   if (action === "validate") {
     if (!id) return { content: [{ type: "text", text: "handoff validate requires id" }], isError: true };
-    const handoff = scopedHandoff(id, project);
+    const handoff = scopedHandoff(id, project, authIdentity);
     if (!handoff) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
     const validation = dbStore.validateHandoffPacket(handoff.packet, { requireResume: true });
     return jsonText({ ok: true, handoff_id: handoff.id, version: handoff.version, valid: validation.valid, issues: validation.issues, packet: validation.packet });
   }
   if (action === "verify") {
     if (!id) return { content: [{ type: "text", text: "handoff verify requires id" }], isError: true };
-    const handoff = scopedHandoff(id, project);
+    const handoff = scopedHandoff(id, project, authIdentity);
     if (!handoff) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
     const verification = dbStore.verifyHandoffProvenance(handoff.packet, { requireResume: true });
     return jsonText({ ok: true, handoff_id: handoff.id, version: handoff.version, ...verification });
   }
   if (["start_here", "quality", "preflight", "simulate_resume"].includes(action)) {
     if (!id) return { content: [{ type: "text", text: `handoff ${action} requires id` }], isError: true };
-    if (!scopedHandoff(id, project)) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
+    if (!scopedHandoff(id, project, authIdentity)) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
     if (action === "start_here") return jsonText({ ok: true, projection: dbStore.getHandoffReceiverProjection(id, { working_directory, recipient: owner || null }) });
     if (action === "quality") {
-      const handoff = scopedHandoff(id, project);
+      const handoff = scopedHandoff(id, project, authIdentity);
       if (!handoff) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
       return jsonText({ ok: true, handoff_id: id, version: handoff.version, quality: dbStore.evaluateHandoffQuality(handoff.packet, { requireResume: true }), evidence: dbStore.evidenceFreshness(handoff.packet) });
     }
@@ -183,7 +209,7 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
   if (["checkpoint", "readiness", "events", "transition", "claim", "renew_claim", "begin_resume", "release"].includes(action)) {
     if (!id) return { content: [{ type: "text", text: `handoff ${action} requires id` }], isError: true };
     try {
-      if (!scopedHandoff(id, project)) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
+       if (!scopedHandoff(id, project, authIdentity)) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
       if (action === "checkpoint") return jsonText({ ok: true, handoff: dbStore.captureHandoffCheckpoint(id, { working_directory, expectedVersion: expected_version, actor: actorPrincipalId || ownerPrincipalId || "system", source: source || toolContext.getExecutionSource() }) });
       if (action === "readiness") return jsonText({ ok: true, readiness: dbStore.getHandoffReadiness(id, { working_directory, recipient: owner || null }) });
       if (action === "events") return jsonText({ ok: true, handoff_id: id, events: dbStore.listHandoffEvents(id, limit || 100) });
@@ -203,7 +229,7 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
     }
   }
   if (action === "reprocess") {
-    const handoff = scopedHandoff(id, project);
+    const handoff = scopedHandoff(id, project, authIdentity);
     if (!handoff) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
     const memories = extractHandoffMemories(handoff, { project: project || handoff.project });
     recordHandoffEvent("memory.handoff_reprocessed", { handoff_id: handoff.id, project: handoff.project, version: handoff.version, memories_created_or_confirmed: memories.length }, { subjectType: "memory_handoff", subjectId: handoff.id, project: handoff.project, taskId: handoff.task_id });
@@ -218,7 +244,7 @@ async function sidekick_handoff({ action, id, key, project, title, content, sour
     // With an id: summarize that handoff's own version history. Without an id,
     // summarize the two most recent handoffs for the project.
     if (id) {
-      if (!scopedHandoff(id, project)) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
+      if (!scopedHandoff(id, project, authIdentity)) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
       const versions = dbStore.listHandoffVersions(id);
       if (!versions.length) return { content: [{ type: "text", text: "Handoff not found" }], isError: true };
       if (version === undefined && expected_version === undefined) return jsonText({ ok: true, comparison: versions.map(v => ({ id: v.handoff_id, version: v.version, hash: v.content_hash, bytes: v.content_bytes, created_at: v.created_at, current: v.current })) });

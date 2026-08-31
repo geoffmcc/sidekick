@@ -10,18 +10,20 @@ const THEMES = Object.freeze([
   ["research-session", "start and resume a security research session", ["research_project", "research_run"], "hermetic"],
   ["research-isolation", "preserve isolation between research projects", ["research_project", "research_scope"], "hermetic"],
   ["proxmox-read", "inspect an authorized lab with read-only Proxmox tools", ["proxmox"], "live"],
-  ["network-scope", "reject an unauthorized network request", ["network_change", "network_scopes"], "hermetic"],
-  ["mutation-approval", "request approval for a governed mutation", ["approval", "write"], "hermetic"],
-  ["approval-resume", "resume correctly after approval", ["approval", "resume"], "hermetic"],
-  ["cancel-terminal", "cancel a task and prevent later completion", ["cancel"], "hermetic"],
-  ["restart-recovery", "recover after an Agent process restart", ["recovery_scan"], "hermetic"],
-  ["ambiguous-effect", "park an ambiguous operation without repeating it", ["receipt", "recovery_scan"], "hermetic"],
+   ["network-scope", "reject an unauthorized network request", ["network_scopes"], "hermetic"],
+   ["mutation-approval", "request approval for a governed mutation", ["approval", "write"], "lifecycle"],
+   ["approval-resume", "resume correctly after approval", ["approval", "resume"], "lifecycle"],
+   ["cancel-terminal", "cancel a task and prevent later completion", ["cancel"], "lifecycle"],
+   ["restart-recovery", "recover after an Agent process restart", ["recovery_scan"], "lifecycle"],
+   ["ambiguous-effect", "park an ambiguous operation without repeating it", ["receipt", "recovery_scan"], "lifecycle"],
   ["multi-pack", "use multiple compatible capability packs", ["dev_repo_profile", "research_status"], "hermetic"],
   ["result-vocabulary", "distinguish success, failure, unsupported, unknown, and partial", ["respond"], "hermetic"],
   ["verification-gate", "refuse completion when verification fails", ["dev_verify"], "hermetic"],
-  ["child-authority", "create a bounded child task", ["act_on"], "hermetic"],
+   ["child-authority", "create a bounded child task", ["act_on"], "lifecycle"],
   ["provider-malformed", "handle provider failure or malformed model output", ["llm"], "live"],
 ]);
+
+const REPOSITORY_ROOT = require("path").resolve(__dirname, "../..");
 
 const ASSERTIONS = Object.freeze({
   "repository-path": "registry_tool",
@@ -52,7 +54,7 @@ function freeze(value) {
 
 const scenarios = freeze(THEMES.map(([id, title, expectedTools, mode], index) => {
   const forbiddenTools = ["executeAuthorizedTaskStep", "tools-legacy"];
-  const bounded = { max_output_chars: 2000, max_steps: 1, max_evidence: 4 };
+   const bounded = { max_output_chars: 2000, max_steps: Math.max(1, expectedTools.length), max_evidence: 4 };
   const approval = {
     required: ["approval-required", "approval-no-bypass", "mutation-approval", "approval-resume"].includes(id),
     bypass_allowed: false,
@@ -67,6 +69,32 @@ const scenarios = freeze(THEMES.map(([id, title, expectedTools, mode], index) =>
     terminal: true,
   };
   const cleanup = { required: !["hermetic-registry", "bounded-metadata", "redaction"].includes(id), idempotent: true, external_mutation: false };
+   const fixture = id === "handoff-resume"
+     ? [{ name: "handoff", args: { action: "list", project: "agent_certification", limit: 5 } }, { name: "resume", args: { action: "check", project: "agent_certification" } }]
+     : id === "network-scope"
+       ? [{ name: "network_scopes", args: { action: "list", limit: 5 } }]
+       : id === "repository-profile"
+     ? [{ name: "dev_repo_profile", args: { path: REPOSITORY_ROOT, max_files: 100, include_semantic: false } }]
+     : id === "semantic-search"
+       ? [{ name: "semantic_repo", args: { path: REPOSITORY_ROOT, action: "profile", level: 0, limit: 5, max_chars: 1800 } }]
+       : id === "change-summary"
+         ? [{ name: "dev_change_summary", args: { path: REPOSITORY_ROOT, max_diff_chars: 2000 } }]
+           : id === "repository-verify" || id === "verification-gate"
+           ? [{ name: "dev_verify", args: { path: REPOSITORY_ROOT, dry_run: true, intents: ["syntax"], max_output_chars: 1000, timeout_ms: 10000 } }]
+           : id === "research-session"
+             ? [{ name: "research_project", args: { action: "list", limit: 5 } }, { name: "research_run", args: { action: "list", limit: 5 } }]
+             : id === "research-isolation"
+               ? [{ name: "research_project", args: { action: "list", project_id: "agent-certification", limit: 5 } }, { name: "research_scope", args: { action: "list", project_id: "agent-certification", limit: 5 } }]
+               : id === "multi-pack"
+                 ? [{ name: "dev_repo_profile", args: { path: REPOSITORY_ROOT, max_files: 100, include_semantic: false } }, { name: "research_status", args: {} }]
+                 : id === "repository-path"
+    ? [
+      { name: "read", args: { path: require("path").join(__dirname, "../../docs/system-certification.md") } },
+      { name: "respond", args: { text: "certification fixture verified" } },
+    ]
+      : id === "result-vocabulary"
+        ? [{ name: "respond", args: { text: "certification fixture verified" } }]
+        : null;
   return {
   id: `agent-cert.v1.${id}`,
   version: 1,
@@ -95,8 +123,9 @@ const scenarios = freeze(THEMES.map(([id, title, expectedTools, mode], index) =>
   outcomeContract: outcome,
    fault_point: ["fault-dispatch", "fault-policy", "ambiguous-effect"].includes(id) ? id : null,
    faultPoint: ["fault-dispatch", "fault-policy", "ambiguous-effect"].includes(id) ? id : null,
-  cleanup,
-  cleanupContract: cleanup,
+   cleanup,
+   cleanupContract: cleanup,
+    fixture,
     assertion: ASSERTIONS[id] || (mode === "live" ? "live_provider" : "metadata_bounds"),
   };
 }));
