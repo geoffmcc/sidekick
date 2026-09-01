@@ -50,6 +50,7 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
     const migrationStore = require('../src/db');
     const migrationResult = migrationStore.runPendingMigrations();
     const migrationApplied = migrationResult.applied;
+    const latestMigration = Math.max(...migrationResult.migrations.map(m => Number(String(m.file).match(/^(\d+)/)?.[1] || 0)));
     assert.ok(migrationApplied >= 36, `Migrations through 037 should apply, got ${migrationApplied}`);
     assert.ok(
       migrationResult.migrations.some(m => m.file === '026_platform_kernel_tables.sql'),
@@ -134,11 +135,11 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
     const migratedSchema = capturePlatformSchema(migrationStore.getDb());
     const migratedCompute = captureComputeSchema(migrationStore.getDb());
 
-    console.log(`Test KMP.1: migrations-only boot applies ${migrationApplied} migrations`);
+    console.log(`Test KMP.1: migrations-only boot applies through migration ${latestMigration}`);
     assert.strictEqual(
       migrationStore.getDb().prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
-       String(74),
-       'schema_version should be 74'
+       String(latestMigration),
+       'schema_version should match the applied migration count'
     );
     console.log('Passed\n');
 

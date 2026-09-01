@@ -285,8 +285,10 @@ async function executePlanSteps({
 /**
  * @param {object} opts
  * @param {string} opts.goal
+ * @param {object} opts.taskSpec Versioned, validated objective representation.
  * @param {object} opts.classification  { requiresTools, reason } from classifyEvidenceRequirement
  * @param {(candidatePlanContext:object)=>Promise<object>} opts.plan  Produces a candidate plan object (LLM-backed in production).
+ * @param {(taskSpec:object, plan:object)=>object} [opts.critic] Deterministic independent plan critic.
  * @param {Array<{name:string,enabled?:boolean}>} opts.agentTools  Agent-visible tool catalog.
  * @param {(name:string,args:object)=>Promise<object>} opts.callTool  Dispatcher seam (callAgentTool).
  * @param {(query:string)=>Promise<Array>} [opts.recallMemory]  Bounded, scoped, redacted recall.
@@ -302,8 +304,10 @@ async function executePlanSteps({
 async function runBrainTask(opts) {
   const {
     goal,
+    taskSpec = null,
     classification,
     plan: planFn,
+    critic: criticFn = null,
     agentTools = [],
     toolContracts = [],
     callTool,
@@ -402,7 +406,7 @@ async function runBrainTask(opts) {
     if (outOfTime()) return terminal("timed_out", { error: "planning deadline exceeded" });
     let candidate;
     try {
-      candidate = await planFn({ goal, classification, memoryContext, priorErrors });
+      candidate = await planFn({ goal, taskSpec, classification, memoryContext, priorErrors });
     } catch (e) {
       const message = redact(String(e && e.message || e || "planner failed")).slice(0, 800);
       lastPlanningError = message;
@@ -419,6 +423,16 @@ async function runBrainTask(opts) {
     setState("validating");
     validation = validatePlan(candidate, { agentTools });
     onEvent("brain.plan_validated", { attempt, ok: validation.ok, errors: validation.errors.slice(0, 8), stripped: (validation.stripped || []).slice(0, 8), step_count: validation.plan ? validation.plan.steps.length : 0 });
+    if (validation.ok && typeof criticFn === "function") {
+      const critique = criticFn(taskSpec || { goal }, validation.plan);
+      onEvent("brain.plan_critiqued", { disposition: critique.disposition, findings: (critique.findings || []).slice(0, 8) });
+      if (critique.disposition === "revise") {
+        validation = { ok: false, plan: null, errors: (critique.findings || []).map(item => `critic:${String(item.code || "finding").replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 64)}`) };
+        priorErrors = validation.errors;
+        setState("planning");
+        continue;
+      }
+    }
     if (validation.ok) break;
     priorErrors = validation.errors;
     setState("planning");
@@ -469,7 +483,7 @@ async function runBrainTask(opts) {
     onEvent("brain.replan", { round: workRound, missing: completion.missing, reason: completion.reason }, "info");
     let nextCandidate;
     try {
-      nextCandidate = await planFn({ goal, classification, memoryContext, priorErrors: [completion.reason], progress: { missing: completion.missing, evidence_count: acc.evidence.length, round: workRound } });
+       nextCandidate = await planFn({ goal, taskSpec, classification, memoryContext, priorErrors: [completion.reason], progress: { missing: completion.missing, evidence_count: acc.evidence.length, round: workRound } });
     } catch (e) {
       return terminal("failed", { error: "replanning error: " + redact(String(e && e.message || e)) });
     }
