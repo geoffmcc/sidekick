@@ -66,7 +66,7 @@ async function testRealLoopbackAgentProcess() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-certification-agent-"));
   const childScript = [
     "const agent = require('./src/agent');",
-    "agent.__setLLMOverrideForTests(async () => ({ response: JSON.stringify({ think: 'waiting for cancellation' }), provider: 'test', model: 'test-model' }));",
+    "agent.__setLLMOverrideForTests(async () => { await new Promise(resolve => setTimeout(resolve, 500)); return { response: JSON.stringify({ think: 'waiting for cancellation' }), provider: 'test', model: 'test-model' }; });",
     "const server = agent.app.listen(0, '127.0.0.1', () => console.log('CERT_PORT=' + server.address().port));",
   ].join("\n");
   const child = spawn(process.execPath, ["-e", childScript], {
