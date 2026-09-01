@@ -336,7 +336,56 @@ function showPage(name){
   if (name === 'evolve') loadEvolve();
   if (name === 'compute') loadCompute();
   if (name === 'predict') { loadPredictStatus(); loadPredict(); }
+  if (name === 'brain') loadBrainControlRoom();
   if (name === 'metrics') loadGrafanaDashboard();
+}
+
+function brainProjectionEmpty(message) { return '<div class="empty">' + esc(message) + '</div>'; }
+function brainRoutingDecisions(data) {
+  const brain = data.brain_v3 || {};
+  const task = data.task || {};
+  const direct = brain.role_routing || task.role_routing || task.routing?.role_routing || task.routing?.roles;
+  if (direct && typeof direct === 'object' && !Array.isArray(direct)) return Object.entries(direct).map(([role, decision]) => ({ role, ...(decision || {}) }));
+  const traces = Array.isArray(brain.traces) ? brain.traces : [];
+  const decisions = [];
+  traces.forEach(row => (row.trace?.events || []).forEach(event => {
+    if (!['role.routing', 'role_routing', 'brain.role_routing'].includes(event.type)) return;
+    const value = event.data || {};
+    decisions.push({ role: value.role || 'unknown', ...value });
+  }));
+  return decisions;
+}
+function loadBrainControlRoom() {
+  const input = $('brainTaskId');
+  const taskId = String((input && input.value) || currentAgentTaskId || localStorage.getItem(AGENT_LAST_TASK_KEY) || '').trim();
+  if (!taskId) { $('brainStatus').textContent = 'Select a task to inspect Brain v3 metadata.'; return; }
+  if (input) input.value = taskId;
+  $('brainStatus').textContent = 'Loading durable task metadata...';
+  authFetch('/api/agent/tasks/' + encodeURIComponent(taskId) + '/control-room').then(r => r.json().then(data => ({ ok: r.ok, data }))).then(({ ok, data }) => {
+    if (!ok || data.error) throw new Error(data.error || 'Brain control-room request failed');
+    const task = data.task || {}; const brain = data.brain_v3 || {}; const graph = brain.graph || {};
+    const coverage = Array.isArray(graph.coverage) ? graph.coverage : [];
+    const recipes = data.verification_recipes || data.verification || [];
+    const outcomes = data.verification_outcomes || [];
+    $('brainStatus').textContent = 'Task ' + taskId + ' · state: ' + (task.state || 'unknown') + ' · source: ' + (data.source || 'durable_task_store');
+    $('brainSummary').innerHTML = [['Requirements', coverage.length], ['Supported', coverage.filter(item => item.state === 'supported').length], ['Graph nodes', (graph.nodes || []).length], ['Graph edges', (graph.edges || []).length], ['Verification gates', recipes.length], ['Gate outcomes', outcomes.length]].map(item => '<div class="metric-card"><span>' + esc(item[0]) + '</span><strong>' + esc(String(item[1])) + '</strong></div>').join('');
+    $('brainGraphCoverage').innerHTML = coverage.length ? coverage.map(item => '<div class="brain-row"><strong>' + esc(item.id) + '</strong><span class="status-badge ' + (item.state === 'supported' ? 'ok' : item.state === 'contradicted' ? 'danger' : 'warn') + '">' + esc(item.state) + '</span><small>evidence: ' + esc((item.evidence_refs || []).join(', ') || 'none') + (item.contradictions?.length ? ' · contradictions: ' + esc(item.contradictions.join(', ')) : '') + '</small></div>').join('') : brainProjectionEmpty('No graph coverage recorded.');
+    $('brainVerificationGates').innerHTML = recipes.length ? recipes.slice(0, 64).map(recipe => { const related = outcomes.filter(outcome => String(outcome.recipe_id) === String(recipe.recipe_id)); const successful = related.filter(outcome => outcome.observation_state === 'successful').length; return '<div class="brain-row"><strong>' + esc(recipe.recipe_id || recipe.requirement_id || 'gate') + '</strong><small>' + esc(recipe.check_type || recipe.capability || 'governed check') + ' · ' + successful + '/' + related.length + ' successful outcomes · ' + esc(recipe.independent === false ? 'self-reported' : 'independent') + '</small></div>'; }).join('') : brainProjectionEmpty('No verification recipes recorded.');
+    const routing = brainRoutingDecisions(data);
+    $('brainRoleRouting').innerHTML = routing.length ? routing.slice(0, 32).map(item => '<div class="brain-row"><strong>' + esc(item.role || 'role') + '</strong><span>' + esc(item.selected || item.model || 'not recorded') + '</span><small>' + esc(item.reason || (item.degraded ? 'degraded' : 'recorded decision')) + (item.data_classification ? ' · classification: ' + esc(item.data_classification) : '') + '</small></div>').join('') : brainProjectionEmpty('No role-routing decisions recorded for this task.');
+    const project = task.project_id || task.project || null;
+    loadBrainLearningCandidates(project);
+  }).catch(error => { $('brainStatus').textContent = 'Brain metadata unavailable: ' + (error.message || String(error)); $('brainSummary').innerHTML = ''; ['brainGraphCoverage','brainVerificationGates','brainRoleRouting','brainLearningCandidates'].forEach(id => { if ($(id)) $(id).innerHTML = brainProjectionEmpty('Unavailable.'); }); });
+}
+function loadBrainLearningCandidates(projectRef) {
+  const target = $('brainLearningCandidates'); if (!target) return;
+  if (!projectRef) { target.innerHTML = brainProjectionEmpty('No governed project scope attached to this task.'); return; }
+  const project = String(projectRef).startsWith('project:') ? String(projectRef) : 'project:' + projectRef;
+  authFetch('/api/agent/learning-candidates?project=' + encodeURIComponent(project)).then(r => r.json().then(data => ({ ok: r.ok, data }))).then(({ ok, data }) => {
+    if (!ok) throw new Error(data.error || 'candidate request failed');
+    const candidates = data.candidates || [];
+    target.innerHTML = candidates.length ? candidates.slice(0, 20).map(candidate => '<div class="brain-row"><strong>' + esc(candidate.kind || 'candidate') + '</strong><span>' + esc(candidate.state || 'proposal') + '</span><small>' + esc(candidate.candidate_id || 'unknown') + ' · source: ' + esc(candidate.source_task_id || 'not attached') + '</small></div>').join('') : brainProjectionEmpty('No project-scoped learning candidates.');
+  }).catch(error => { target.innerHTML = brainProjectionEmpty('Learning candidates unavailable: ' + (error.message || String(error))); });
 }
 
 let repositoryResearchCursor = null;

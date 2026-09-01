@@ -178,6 +178,7 @@ const { verifyTaskResult, successfulFreshOutcome, applyRecipeGates, applyReceipt
 const { evaluateInvariants } = require("./invariants");
 const { assembleSessions, buildSession, buildTask } = require("./agent-history");
 const { redactSensitive, redactSensitiveKeysDeep } = require("./redact");
+const brainRuntime = require("./brain/runtime");
 const { PROJECT_RE, canonicalizeProjectName } = require("./core/project-identity");
 const {
   CONTINUATION_LIMITS,
@@ -760,9 +761,31 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
   const inferredProject = inferProjectFromText(goal) || (parentContext && parentContext.project) || null;
   const durableProfile = durableTaskStore.getTask(taskId)?.profile || "standard";
   const profileRuntime = PROFILE_RUNTIME[durableProfile] || PROFILE_RUNTIME.standard;
+  const durableGoal = durableTaskStore.getTask(taskId)?.goal || {};
+  let cognitiveRuntime = null;
+  let taskSpec = null;
+  try {
+    const compiled = brainRuntime.compileRuntime(taskId, goal, durableGoal);
+    taskSpec = compiled.spec || compiled.fallback;
+    cognitiveRuntime = compiled.runtime;
+    brainRuntime.persistSpec(taskId, taskSpec, compiled.ok ? "compiled" : "deterministic_fallback");
+    cognitiveRuntime.record("intake.task_spec_compiled", { revision: 1, fallback: !compiled.ok, requirements: taskSpec.requirements.length, deliverables: taskSpec.deliverables.length });
+  } catch (error) {
+    // Existing transcript-only callers remain compatible, but a durable task
+    // never receives a model-generated or partially validated specification.
+    taskSpec = { version: 3, task_id: taskId, original_objective: String(goal).slice(0, 4000), normalized_objective: String(goal).slice(0, 4000), goal: String(goal).slice(0, 4000), requirements: [], deliverables: [], success_criteria: [], constraints: [], preferences: [], prohibited_actions: [], assumptions: [], ambiguities: [], clarifications: [], evidence_requirements: [], required_evidence: [], verification_requirements: [], dependencies: [], stopping_conditions: ["task specification compilation failed"], authority_boundary: "Use only the authenticated project and workspace scope", requires_live_evidence: false, read_only: true, changes_allowed: false, preferred_profile: durableProfile };
+    try { cognitiveRuntime = brainRuntime.createRuntime(taskId, taskSpec); cognitiveRuntime.record("intake.task_spec_rejected", { reason: "validation_failed" }); } catch {}
+  }
   const profiledGoal = `${goal}\n\nGoverned execution profile (${durableProfile}): ${profileRuntime.instruction}`;
   const agentCapabilityMetadata = getAgentCapabilityMetadata();
   const visibleAgentTools = getToolDefsForSource("agent").filter(t => t.enabled);
+  const verificationPlan = brain?.compileVerification ? brain.compileVerification(taskSpec || {}, { descriptors: visibleAgentTools }) : { gates: [] };
+  if (cognitiveRuntime) {
+    for (const gate of verificationPlan.gates) {
+      const verificationRef = `recipe:${taskId}:${gate.recipe_id.split(":").pop()}`;
+      cognitiveRuntime.graph.nodes.push({ id: verificationRef, type: "verification", summary: gate.description, freshness: gate.evidence_standard === "fresh_authoritative" ? "required" : "bounded", completeness: "compiled", provenance: "verification-compiler" });
+    }
+  }
   const capabilityCandidates = discoverCapabilities(goal, visibleAgentTools, { limit: 24, metadata: agentCapabilityMetadata });
   const contextProvider = selectRelevantContextProvider(goal, visibleAgentTools, agentCapabilityMetadata);
   const repositorySemanticSearch = contextProvider ? async (query, bounds = {}) => {
@@ -966,7 +989,6 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
   // Routing is a pure classification of the goal text. Computing it before the
   // guarded body keeps the transcript's routing record truthful even when the
   // run throws before reaching the loop.
-  const durableGoal = durableTaskStore.getTask(taskId)?.goal || null;
   const classification = classifyEvidenceRequirement(goal, {
     repositoryCapabilityDiscovered: hasRelevantContextProvider(goal, visibleAgentTools, agentCapabilityMetadata),
   });
@@ -999,6 +1021,7 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
         state: { phase: "execution", work: state },
       });
       handoffContinuity.checkpointTask(taskId);
+      if (cognitiveRuntime) { cognitiveRuntime.belief = { ...cognitiveRuntime.belief, remaining_work: taskSpec.requirements.filter(requirement => !cognitiveRuntime.belief.coverage.supported.includes(requirement.id)).slice(0, 32).map(requirement => requirement.id) }; cognitiveRuntime.checkpoint(); }
     } catch {}
   };
 
@@ -1075,7 +1098,8 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
   emit(taskId, { type: "step", text: "Analyzing task: " + goal });
   emit(taskId, { type: "step", text: "Routing: " + (useTools ? "tool loop" : "direct answer") + " (" + classification.reason + ")" });
   emit(taskId, { type: "diagnostic", classification: classification.reason, capabilityDiscovery });
-  appendAgentExecutionEvent(platformExecution, "agent.task_started", { task_id: taskId, project: inferredProject, use_tools: useTools });
+   appendAgentExecutionEvent(platformExecution, "agent.task_started", { task_id: taskId, project: inferredProject, use_tools: useTools });
+   if (cognitiveRuntime) cognitiveRuntime.record("intake.routing", { requires_tools: useTools, reason: classification.reason, profile: durableProfile });
   appendAgentExecutionEvent(platformExecution, "agent.evidence_classified", { task_id: taskId, requires_tools: useTools, reason: classification.reason });
   appendAgentExecutionEvent(platformExecution, "agent.capability_discovery", capabilityDiscovery);
   if (combinedBrief) {
@@ -1213,9 +1237,20 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
       onEvent: (type, payload, severity) => appendAgentExecutionEvent(platformExecution, type, { task_id: taskId, ...payload }, severity),
       // Brain's cooperative cancel seam: checked between plan steps and around
       // planning/synthesis, so a cancel lands as a terminal `cancelled` state.
-      cancel: cancelFlag,
+       cancel: cancelFlag,
+       taskSpec,
     });
-    for (const s of outcome.steps) steps.push(s);
+     for (const s of outcome.steps) steps.push(s);
+     if (cognitiveRuntime) {
+       cognitiveRuntime.record("completion.decision", { state: outcome.state, evidence_count: outcome.evidenceCount || 0 });
+        for (const item of outcome.steps.filter(step => step.type === "tool" && step.ok === true)) {
+          const evidenceRef = `evidence:${taskId}:${item.id}`;
+          cognitiveRuntime.evidence({ ref: evidenceRef, relation: "supports", observed_at: new Date().toISOString() });
+          cognitiveRuntime.graph.nodes.push({ id: evidenceRef, type: "evidence", summary: `Successful tool step ${item.id}`, freshness: "current", completeness: "bounded", provenance: "brain-tool-step" });
+          for (const requirement of taskSpec.requirements || []) cognitiveRuntime.graph.edges.push({ from: evidenceRef, to: `requirement:${taskId}:${requirement.id}`, relation: "supports" });
+        }
+       cognitiveRuntime.checkpoint();
+     }
     // Brain accumulates bounded evidence internally, but its tool steps are
     // otherwise indistinguishable from ordinary transcript steps. Publish the
     // same safe provenance ledger shape used by the normal loop so Dashboard
@@ -1242,6 +1277,11 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
       // error paths; redact again here so this transcript field never depends
       // on that invariant holding.
       error: outcome.state === "completed" ? null : (outcome.error ? redactSensitive(String(outcome.error)) : null),
+      version: 3,
+      task_spec_revision: 1,
+      belief_status: cognitiveRuntime?.belief.status || null,
+      requirement_coverage: cognitiveRuntime ? { required: cognitiveRuntime.belief.coverage.required.length, supported: cognitiveRuntime.belief.coverage.supported.length, missing: cognitiveRuntime.belief.coverage.missing.slice(0, 32) } : null,
+      verification_gates: verificationPlan.gates,
     };
     if (outcome.state === "completed") {
       status = "completed";
@@ -1397,6 +1437,8 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
       excluded: contextManifest.receipt?.excluded || [],
     } : null,
     brain: brainInfo,
+     task_spec: taskSpec,
+     belief_state: cognitiveRuntime?.belief || null,
     // Bounded resumable progress; raw tool outputs remain in governed evidence
     // artifacts/transcripts rather than being duplicated in task state.
     work_state: workState,
@@ -1771,7 +1813,7 @@ app.get("/api/agent/tasks/:taskId", (req, res) => {
     const task = durableTaskStore.getTask(req.params.taskId);
     if (!task) return res.status(404).json({ error: "task not found" });
     if (!requireTaskAccess(req, res, task)) return;
-    res.json({ task, plans: durableTaskStore.listPlans(task.task_id), hierarchical_plans: durableOperations.listPlans(task.task_id), failures: durableTaskStore.listFailures(task.task_id), repairs: durableOperations.listRepairs(task.task_id), work_packages: durableOperations.listWorkPackages(task.task_id), workspace_transactions: durableWorkspaceTransactions.listTransactions(task.task_id), events: durableTaskStore.listEvents(task.task_id), receipts: durableReceiptStore.listReceipts(task.task_id), verification_recipes: durableReceiptStore.listRecipes(task.task_id), verification_outcomes: durableReceiptStore.listOutcomes(task.task_id), escalations: durableOperations.listEscalations(task.task_id) });
+      res.json({ task, plans: durableTaskStore.listPlans(task.task_id), hierarchical_plans: durableOperations.listPlans(task.task_id), failures: durableTaskStore.listFailures(task.task_id), repairs: durableOperations.listRepairs(task.task_id), work_packages: durableOperations.listWorkPackages(task.task_id), workspace_transactions: durableWorkspaceTransactions.listTransactions(task.task_id), events: durableTaskStore.listEvents(task.task_id), receipts: durableReceiptStore.listReceipts(task.task_id), verification_recipes: durableReceiptStore.listRecipes(task.task_id), verification_outcomes: durableReceiptStore.listOutcomes(task.task_id), escalations: durableOperations.listEscalations(task.task_id), brain_v3: { task_specs: brainRuntime.listSpecs(task.task_id), belief: brainRuntime.latestBelief(task.task_id), traces: brainRuntime.listTraces(task.task_id, 4), graph: brainRuntime.listGraph(task.task_id) } });
   } catch { res.status(503).json({ error: "durable task state unavailable" }); }
 });
 
@@ -1783,7 +1825,7 @@ app.get("/api/agent/tasks/:taskId/control-room", (req, res) => {
     const task = durableTaskStore.getTask(req.params.taskId);
     if (!task) return res.status(404).json({ error: "task not found" });
     if (!requireTaskAccess(req, res, task)) return;
-    res.json({ ok: true, source: "durable_task_store", task, plan: durableTaskStore.listPlans(task.task_id), hierarchical_plans: durableOperations.listPlans(task.task_id), failures: durableTaskStore.listFailures(task.task_id), repairs: durableOperations.listRepairs(task.task_id), work_packages: durableOperations.listWorkPackages(task.task_id), workspace_transactions: durableWorkspaceTransactions.listTransactions(task.task_id), receipts: durableReceiptStore.listReceipts(task.task_id), verification: durableReceiptStore.listRecipes(task.task_id), verification_outcomes: durableReceiptStore.listOutcomes(task.task_id), escalations: durableOperations.listEscalations(task.task_id), events: durableTaskStore.listEvents(task.task_id) });
+      res.json({ ok: true, source: "durable_task_store", task, plan: durableTaskStore.listPlans(task.task_id), hierarchical_plans: durableOperations.listPlans(task.task_id), failures: durableTaskStore.listFailures(task.task_id), repairs: durableOperations.listRepairs(task.task_id), work_packages: durableOperations.listWorkPackages(task.task_id), workspace_transactions: durableWorkspaceTransactions.listTransactions(task.task_id), receipts: durableReceiptStore.listReceipts(task.task_id), verification: durableReceiptStore.listRecipes(task.task_id), verification_outcomes: durableReceiptStore.listOutcomes(task.task_id), escalations: durableOperations.listEscalations(task.task_id), events: durableTaskStore.listEvents(task.task_id), brain_v3: { task_specs: brainRuntime.listSpecs(task.task_id), belief: brainRuntime.latestBelief(task.task_id), traces: brainRuntime.listTraces(task.task_id, 4), graph: brainRuntime.listGraph(task.task_id) } });
   } catch { res.status(503).json({ error: "durable task state unavailable" }); }
 });
 
