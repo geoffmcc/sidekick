@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "name": "storage-filesystems/storage-audit",
+  "version": "1.0.0",
+  "title": "Storage audit",
+  "description": "Read-only host and provider storage capacity audit.",
+  "mode": "read_only",
+  "inputs": { "profile": { "type": "string", "required": false, "default": "" }, "node": { "type": "string", "required": false, "default": "" } },
+  "steps": [{ "name": "audit", "tool": "storage_capacity_audit", "args": { "profile": "${inputs.profile}", "node": "${inputs.node}" }, "expect": "json" }],
+  "result": { "audit": "${steps.audit.json}" }, "tags": ["storage", "capacity", "read-only"]
+}

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "pack_api": 1,
+  "name": "database-administration",
+  "display_name": "Database Administration",
+  "version": "1.0.0",
+  "description": "Bounded database health, schema, migration and parameterized read-only query workflows.",
+  "publisher": "Sidekick",
+  "compatibility": { "sidekick": ">=1.0.0" },
+  "modules": [{ "name": "database-administration-tools", "path": "modules/database-administration-tools", "entry_point": "entry.js", "config_from_pack": true }],
+  "workflows": [{ "path": "workflows/database-audit.json" }, { "path": "workflows/migration-readiness.json" }],
+  "knowledge": [{ "path": "knowledge/database-administration.md", "title": "Database Administration pack", "category": "database", "tags": ["database", "administration", "read-only", "migrations"] }],
+  "requires": { "tools": ["db_schema", "db_stats", "db_query", "db_migrate"], "optional_tools": ["db_diff", "db_backup"] },
+  "permissions": [],
+  "configuration": { "schema": { "type": "object", "properties": { "default_database": { "type": "string", "enum": ["sqlite", "postgres"] }, "max_rows": { "type": "integer", "minimum": 1, "maximum": 1000 } }, "additionalProperties": false }, "defaults": { "default_database": "sqlite", "max_rows": 100 } }
+}

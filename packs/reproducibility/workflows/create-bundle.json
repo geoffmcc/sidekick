@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "reproducibility/create-bundle",
+  "version": "1.0.0",
+  "title": "Create reproducibility bundle",
+  "description": "Profile a repository, verify its semantic index, and capture a bounded redacted evidence bundle.",
+  "mode": "read_only",
+  "tags": ["reproducibility", "evidence", "artifact"],
+  "inputs": { "path": { "type": "string", "required": true }, "project": { "type": "string", "required": true }, "label": { "type": "string", "required": false } },
+  "steps": [{ "name": "bundle", "title": "Capture safe reproducibility evidence", "tool": "reproducibility", "args": { "path": "${inputs.path}", "project": "${inputs.project}", "label": "${inputs.label}" }, "expect": "json", "on_error": "fail" }],
+  "result": { "bundle": "${steps.bundle.json}" }
+}

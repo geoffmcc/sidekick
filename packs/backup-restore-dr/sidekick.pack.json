@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "pack_api": 1,
+  "name": "backup-restore-dr",
+  "display_name": "Backup, Restore & Disaster Recovery",
+  "version": "1.0.0",
+  "description": "Bounded database backup, restore, snapshot comparison, and Proxmox backup-readiness adapters.",
+  "publisher": "Sidekick",
+  "compatibility": { "sidekick": ">=1.0.0" },
+  "modules": [{ "name": "backup-restore-tools", "path": "modules/backup-restore-tools", "entry_point": "entry.js", "config_from_pack": true }],
+  "workflows": [
+    { "path": "workflows/backup-restore-dr/backup-readiness.json" },
+    { "path": "workflows/backup-restore-dr/database-backup.json" }
+  ],
+  "knowledge": [{ "path": "knowledge/operating.md", "title": "Backup, Restore and DR: operating model", "category": "operations", "tags": ["backup", "restore", "disaster-recovery", "proxmox"] }],
+  "requires": { "tools": ["db_backup", "db_restore", "db_diff"], "optional_tools": ["proxmox"] },
+  "permissions": [
+    { "tool": "db_backup", "risk": "medium" },
+    { "tool": "db_restore", "risk": "critical" },
+    { "tool": "db_diff", "risk": "low" },
+    { "tool": "proxmox", "risk": "low" }
+  ],
+  "configuration": { "schema": { "type": "object", "properties": { "default_database": { "type": "string", "enum": ["sqlite", "postgres"] } }, "additionalProperties": false }, "defaults": { "default_database": "sqlite" } }
+}

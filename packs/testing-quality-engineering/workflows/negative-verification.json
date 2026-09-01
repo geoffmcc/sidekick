@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "testing-quality-engineering/negative-verification",
+  "version": "1.0.0",
+  "title": "Verification Plan",
+  "description": "Select commands without executing them, useful for safe CI review and deterministic negative cases.",
+  "mode": "read_only",
+  "tags": ["testing", "dry-run", "negative-test"],
+  "inputs": { "path": { "type": "string", "required": true } },
+  "steps": [{ "name": "plan", "title": "Plan syntax and test verification", "tool": "quality_gate", "args": { "path": "${inputs.path}", "intents": ["syntax", "test"], "dry_run": true }, "expect": "json", "on_error": "fail" }],
+  "result": { "plan": "${steps.plan.json.verification}", "executed": false }
+}

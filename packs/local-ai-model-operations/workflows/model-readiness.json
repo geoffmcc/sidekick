@@ -1,0 +1,4 @@
+{
+  "schema_version": 1, "name": "local-ai-model-operations/model-readiness", "version": "1.0.0", "title": "Local model readiness", "description": "Read-only Compute readiness and model inventory.", "mode": "read_only",
+  "inputs": { "capability": { "type": "string", "required": false } }, "steps": [{ "name": "readiness", "tool": "model_readiness", "args": { "capability": "${inputs.capability}" }, "expect": "json", "on_error": "fail" }], "result": { "readiness": "${steps.readiness.json}" }
+}

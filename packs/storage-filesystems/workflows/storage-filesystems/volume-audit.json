@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "name": "storage-filesystems/volume-audit",
+  "version": "1.0.0",
+  "title": "Container volume audit",
+  "description": "Read-only bounded inventory of configured container volumes.",
+  "mode": "read_only",
+  "inputs": { "profile": { "type": "string", "required": false, "default": "" } },
+  "steps": [{ "name": "volumes", "tool": "storage_volume_inventory", "args": { "profile": "${inputs.profile}" }, "expect": "json" }],
+  "result": { "volumes": "${steps.volumes.json}" }, "tags": ["storage", "volumes", "read-only"]
+}

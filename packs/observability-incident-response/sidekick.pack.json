@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "pack_api": 1,
+  "name": "observability-incident-response",
+  "display_name": "Observability & Incident Response",
+  "version": "1.0.0",
+  "description": "Bounded health, incident evidence, logs, and metrics adapters using existing governed observability tools.",
+  "publisher": "Sidekick",
+  "compatibility": { "sidekick": ">=1.0.0" },
+  "modules": [{ "name": "observability-incident-tools", "path": "modules/observability-incident-tools", "entry_point": "entry.js", "config_from_pack": true }],
+  "workflows": [
+    { "path": "workflows/observability-incident-response/incident-snapshot.json" },
+    { "path": "workflows/observability-incident-response/health-review.json" }
+  ],
+  "knowledge": [{ "path": "knowledge/operating.md", "title": "Observability and Incident Response: operating model", "category": "operations", "tags": ["observability", "incidents", "metrics", "evidence"] }],
+  "requires": { "tools": ["black_box", "health", "status", "metrics"], "optional_tools": [] },
+  "permissions": [
+    { "tool": "black_box", "risk": "medium" },
+    { "tool": "health", "risk": "high" },
+    { "tool": "status", "risk": "medium" },
+    { "tool": "metrics", "risk": "high" }
+  ],
+  "configuration": { "schema": { "type": "object", "properties": { "default_profile": { "type": "string", "enum": ["quick", "standard", "deep", "network", "service", "sidekick", "repository", "custom"] } }, "additionalProperties": false }, "defaults": { "default_profile": "standard" } }
+}

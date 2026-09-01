@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "infrastructure-as-code/iac-preflight",
+  "version": "1.0.0",
+  "title": "Infrastructure Preflight",
+  "description": "Check whether the configured infrastructure inspection dependency is available.",
+  "mode": "read_only",
+  "tags": ["iac", "preflight", "read-only"],
+  "inputs": {},
+  "steps": [{ "name": "health", "title": "Probe IaC dependency", "tool": "iac_health", "args": {}, "expect": "json", "on_error": "fail" }],
+  "result": { "health": "${steps.health.json}", "not_performed": "apply, update, lifecycle and destroy" }
+}

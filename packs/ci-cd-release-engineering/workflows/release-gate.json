@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "ci-cd-release-engineering/release-gate",
+  "version": "1.0.0",
+  "title": "Release Gate",
+  "description": "Prepare a release gate packet with a dry-run verification plan and notes preview.",
+  "mode": "mutating",
+  "tags": ["release", "gate", "no-publish"],
+  "inputs": { "path": { "type": "string", "required": true }, "since": { "type": "string", "required": true }, "verification_mode": { "type": "string", "required": false, "default": "standard" } },
+  "steps": [{ "name": "readiness", "title": "Build release readiness packet", "tool": "release_readiness", "args": { "path": "${inputs.path}", "since": "${inputs.since}", "verification_mode": "${inputs.verification_mode}" }, "expect": "json", "on_error": "fail" }],
+  "result": { "packet": "${steps.readiness.json}", "release_policy": "This workflow does not tag, push, publish, deploy or create a release." }
+}

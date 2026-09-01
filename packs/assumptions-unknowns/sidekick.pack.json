@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "pack_api": 1,
+  "name": "assumptions-unknowns",
+  "display_name": "Assumptions & Unknowns",
+  "version": "1.0.0",
+  "description": "Surfaces explicit assumptions, unresolved questions and evidence gaps from existing context, memory, handoff and repository evidence without creating a competing memory store.",
+  "publisher": "Sidekick",
+  "compatibility": { "sidekick": ">=1.0.0" },
+  "modules": [{ "name": "assumptions-unknowns-tools", "path": "modules/assumptions-unknowns-tools", "entry_point": "entry.js", "config_from_pack": true }],
+  "workflows": [{ "path": "workflows/identify-gaps.json" }],
+  "knowledge": [{ "path": "knowledge/gaps.md", "title": "Assumptions and unknowns", "category": "reasoning", "tags": ["assumptions", "unknowns", "evidence"] }],
+  "requires": { "tools": ["context", "memory", "handoff"], "optional_tools": ["dev_repo_profile", "research_evidence"] },
+  "permissions": [{ "tool": "context", "risk": "low" }, { "tool": "memory", "risk": "low" }, { "tool": "handoff", "risk": "low" }],
+  "configuration": { "schema": { "type": "object", "additionalProperties": false }, "defaults": {} }
+}

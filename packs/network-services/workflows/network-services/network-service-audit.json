@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "name": "network-services/network-service-audit",
+  "version": "1.0.0",
+  "title": "Network service audit",
+  "description": "Read-only bounded audit of configured network service providers.",
+  "mode": "read_only",
+  "inputs": { "profile": { "type": "string", "required": false, "default": "" } },
+  "steps": [{ "name": "audit", "tool": "network_service_audit", "args": { "profile": "${inputs.profile}" }, "expect": "json" }],
+  "result": { "audit": "${steps.audit.json}" }, "tags": ["network", "dhcp", "vpn", "nginx", "read-only"]
+}

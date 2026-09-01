@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "testing-quality-engineering/quality-gate",
+  "version": "1.0.0",
+  "title": "Quality Gate",
+  "description": "Run the project's own bounded verification and verify index integrity.",
+  "mode": "mutating",
+  "tags": ["testing", "quality", "gate"],
+  "inputs": { "path": { "type": "string", "required": true }, "mode": { "type": "string", "required": false, "default": "standard" } },
+  "steps": [{ "name": "gate", "title": "Run quality gate", "tool": "quality_gate", "args": { "path": "${inputs.path}", "mode": "${inputs.mode}", "continue_on_failure": true }, "expect": "json", "on_error": "fail" }],
+  "result": { "gate": "${steps.gate.json}", "interpretation": "A failing project command is distinct from semantic index verification failure." }
+}

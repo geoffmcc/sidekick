@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "pack_api": 1,
+  "name": "network-services",
+  "display_name": "Network Services",
+  "version": "1.0.0",
+  "description": "Bounded network, DHCP, VPN, and Nginx service inspection with provider-governed changes.",
+  "publisher": "Sidekick",
+  "compatibility": { "sidekick": ">=1.0.0" },
+  "modules": [{ "name": "network-services-tools", "path": "modules/network-services-tools", "entry_point": "entry.js", "config_from_pack": true }],
+  "workflows": [
+    { "path": "workflows/network-services/network-service-audit.json" },
+    { "path": "workflows/network-services/connectivity-review.json" }
+  ],
+  "knowledge": [{ "path": "knowledge/operating.md", "title": "Network Services: operating model", "category": "operations", "tags": ["network", "dhcp", "vpn", "nginx", "services"] }],
+  "requires": { "tools": [], "optional_tools": ["network", "dhcp", "vpn", "nginx"] },
+  "permissions": [{ "tool": "network", "risk": "low" }, { "tool": "dhcp", "risk": "low" }, { "tool": "vpn", "risk": "low" }, { "tool": "nginx", "risk": "high" }],
+  "configuration": { "schema": { "type": "object", "properties": { "default_profile": { "type": "string", "maxLength": 63 } }, "additionalProperties": false }, "defaults": {} }
+}

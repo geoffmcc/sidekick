@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "pack_api": 1,
+  "name": "api-engineering",
+  "display_name": "API Engineering & Contract Testing",
+  "version": "1.0.0",
+  "description": "Bounded API smoke and contract checks using named outbound network scopes.",
+  "publisher": "Sidekick",
+  "compatibility": { "sidekick": ">=1.0.0" },
+  "modules": [{ "name": "api-engineering-tools", "path": "modules/api-engineering-tools", "entry_point": "entry.js", "config_from_pack": true }],
+  "workflows": [{ "path": "workflows/api-contract-check.json" }, { "path": "workflows/api-health.json" }],
+  "knowledge": [{ "path": "knowledge/api-engineering.md", "title": "API Engineering and Contract Testing pack", "category": "development", "tags": ["api", "contracts", "http", "network-scope"] }],
+  "requires": { "tools": [], "optional_tools": ["web_check", "web_extract", "parse", "validate"] },
+  "permissions": [],
+  "configuration": { "schema": { "type": "object", "properties": { "max_assertions": { "type": "integer", "minimum": 1, "maximum": 50 } }, "additionalProperties": false }, "defaults": { "max_assertions": 20 } }
+}

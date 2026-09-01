@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "api-engineering/api-health",
+  "version": "1.0.0",
+  "title": "Scoped API Health",
+  "description": "Perform one deterministic, scoped health assertion.",
+  "mode": "read_only",
+  "tags": ["api", "health", "read-only"],
+  "inputs": { "url": { "type": "string", "required": true }, "network_scope": { "type": "string", "required": true } },
+  "steps": [{ "name": "health", "title": "Check API health", "tool": "api_engineering_health", "args": { "url": "${inputs.url}", "network_scope": "${inputs.network_scope}" }, "expect": "json", "on_error": "fail" }],
+  "result": { "health": "${steps.health.json}", "network_scope": "${inputs.network_scope}" }
+}

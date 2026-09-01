@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "name": "linux-systems-administration/host-health",
+  "version": "1.0.0",
+  "title": "Linux host health",
+  "description": "Read-only bounded host status and health evidence.",
+  "mode": "read_only",
+  "inputs": { "services": { "type": "string", "required": false, "default": "" } },
+  "steps": [
+    { "name": "status", "tool": "linux_system_status", "args": { "services": "${inputs.services}" }, "expect": "json" },
+    { "name": "health", "tool": "linux_system_health", "args": { "services": "${inputs.services}" }, "expect": "json", "on_error": "continue" }
+  ],
+  "result": { "status": "${steps.status.json}", "health": "${steps.health.json}" },
+  "tags": ["linux", "health", "read-only"]
+}

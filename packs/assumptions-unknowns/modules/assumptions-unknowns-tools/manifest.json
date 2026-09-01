@@ -1,0 +1,15 @@
+{
+  "name": "assumptions-unknowns-tools",
+  "displayName": "Assumptions and Unknowns Tools",
+  "version": "1.0.0",
+  "description": "Read-only evidence-gap projection over canonical Sidekick continuity stores.",
+  "author": "Sidekick",
+  "type": "plugin",
+  "entryPoint": "entry.js",
+  "sidekick": ">=1.0.0",
+  "capabilities": ["assumption-tracking", "unknown-identification", "evidence-gap-analysis"],
+  "configSchema": { "type": "object", "additionalProperties": false },
+  "tools": { "assumptions": { "risk": "low", "category": "Reasoning", "aliases": ["assumptions_unknowns"] } },
+  "permissions": [{ "tool": "context", "risk": "low" }, { "tool": "memory", "risk": "low" }, { "tool": "handoff", "risk": "low" }],
+  "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
+}

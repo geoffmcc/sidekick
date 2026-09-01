@@ -1,0 +1,10 @@
+{
+  "schema_version": 1, "pack_api": 1, "name": "software-supply-chain", "display_name": "Software Supply Chain", "version": "1.0.0",
+  "description": "Read-only, reproducible software supply-chain checks over manifests, hashes, Git state and semantic boundaries.", "publisher": "Sidekick", "compatibility": { "sidekick": ">=1.0.0" },
+  "modules": [{ "name": "software-supply-chain-tools", "path": "modules/software-supply-chain-tools", "entry_point": "entry.js", "config_from_pack": true }],
+  "workflows": [{ "path": "workflows/supply-chain-audit.json" }],
+  "knowledge": [{ "path": "knowledge/operating.md", "title": "Software Supply Chain operating model", "category": "security", "tags": ["supply-chain", "integrity", "dependencies"] }],
+  "requires": { "tools": [], "optional_tools": ["parse", "hash", "git", "semantic_repo"] },
+  "permissions": [{ "tool": "parse", "risk": "low" }, { "tool": "hash", "risk": "low" }, { "tool": "git", "risk": "medium" }, { "tool": "semantic_repo", "risk": "low" }],
+  "configuration": { "schema": { "type": "object", "properties": { "max_manifest_chars": { "type": "integer", "minimum": 1000, "maximum": 200000 } }, "additionalProperties": false }, "defaults": { "max_manifest_chars": 50000 } }
+}

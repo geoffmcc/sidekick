@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "pack_api": 1,
+  "name": "skeptical-verifier",
+  "display_name": "Skeptical Verifier",
+  "version": "1.0.0",
+  "description": "Independent, read-only verification that checks repository evidence, semantic integrity, health and optional snapshots without executing project commands or changing state.",
+  "publisher": "Sidekick",
+  "compatibility": { "sidekick": ">=1.0.0" },
+  "modules": [{ "name": "skeptical-verifier-tools", "path": "modules/skeptical-verifier-tools", "entry_point": "entry.js", "config_from_pack": true }],
+  "workflows": [{ "path": "workflows/independent-check.json" }],
+  "knowledge": [{ "path": "knowledge/independent-checks.md", "title": "Skeptical Verifier: independent checks", "category": "verification", "tags": ["skeptical-verifier", "read-only", "verification"] }],
+  "requires": { "tools": ["dev_repo_profile", "semantic_repo", "health"], "optional_tools": ["snapshot"] },
+  "permissions": [{ "tool": "dev_repo_profile", "risk": "low" }, { "tool": "semantic_repo", "risk": "low" }, { "tool": "health", "risk": "low" }, { "tool": "snapshot", "risk": "low" }],
+  "depends": { "packs": [{ "name": "developer", "version": ">=1.0.0" }] },
+  "configuration": { "schema": { "type": "object", "additionalProperties": false }, "defaults": {} }
+}
