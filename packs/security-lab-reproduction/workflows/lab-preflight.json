@@ -1,0 +1,5 @@
+{
+  "schema_version": 1, "name": "security-lab-reproduction/lab-preflight", "version": "1.0.0", "title": "Security lab preflight", "description": "Read-only authorization preflight for an explicitly scoped reproduction lab.", "mode": "read_only",
+  "inputs": { "snapshot_id": { "type": "string", "required": true }, "network_scope": { "type": "string", "required": true }, "target": { "type": "string", "required": true }, "target_kind": { "type": "string", "required": true }, "operation": { "type": "string", "required": true } },
+  "steps": [{ "name": "preflight", "tool": "lab_preflight", "args": { "snapshot_id": "${inputs.snapshot_id}", "network_scope": "${inputs.network_scope}", "target": "${inputs.target}", "target_kind": "${inputs.target_kind}", "operation": "${inputs.operation}", "isolated": true }, "expect": "json", "on_error": "fail" }], "result": { "preflight": "${steps.preflight.json}" }
+}

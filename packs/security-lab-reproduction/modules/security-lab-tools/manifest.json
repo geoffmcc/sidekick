@@ -1,0 +1,5 @@
+{
+  "name": "security-lab-tools", "displayName": "Security Lab Tools", "version": "1.0.0", "description": "Explicit scope and named-network-scope reproduction preflight.", "author": "Sidekick", "type": "plugin", "entryPoint": "entry.js", "sidekick": ">=1.0.0",
+  "capabilities": ["lab-preflight", "reproduction-boundary"], "tools": { "lab_preflight": { "risk": "high", "category": "Security" } },
+  "permissions": [{ "tool": "research_scope", "risk": "medium" }, { "tool": "network_scopes", "risk": "medium" }, { "tool": "research_evidence", "risk": "medium" }], "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
+}

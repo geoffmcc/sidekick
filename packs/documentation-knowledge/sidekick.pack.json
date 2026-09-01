@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "pack_api": 1,
+  "name": "documentation-knowledge",
+  "display_name": "Documentation & Knowledge Engineering",
+  "version": "1.0.0",
+  "description": "Bounded documentation inventory and knowledge retrieval grounded in repository semantics.",
+  "publisher": "Sidekick",
+  "compatibility": { "sidekick": ">=1.0.0" },
+  "modules": [{ "name": "documentation-knowledge-tools", "path": "modules/documentation-knowledge-tools", "entry_point": "entry.js", "config_from_pack": true }],
+  "workflows": [{ "path": "workflows/documentation-audit.json" }],
+  "knowledge": [{ "path": "knowledge/operating.md", "title": "Documentation and Knowledge Engineering operating model", "category": "documentation", "tags": ["documentation", "knowledge", "provenance"] }],
+  "requires": { "tools": ["knowledge"], "optional_tools": ["semantic_repo", "parse"] },
+  "permissions": [{ "tool": "semantic_repo", "risk": "low" }, { "tool": "knowledge", "risk": "low" }, { "tool": "parse", "risk": "low" }],
+  "configuration": { "schema": { "type": "object", "properties": { "max_chars": { "type": "integer", "minimum": 1000, "maximum": 60000 } }, "additionalProperties": false }, "defaults": { "max_chars": 12000 } }
+}
