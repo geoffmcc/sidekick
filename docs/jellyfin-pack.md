@@ -1,6 +1,6 @@
 # Jellyfin Capability Pack
 
-Status: in development (v1.4.0, next bundled first-party release)
+Status: in development (v1.4.4, next bundled first-party release)
 Depends on: Capability Packs v1
 
 The Jellyfin pack lets Sidekick securely inspect, diagnose and maintain
@@ -38,6 +38,11 @@ use the read surface.
   reported as *not verified*), `recent_media`, bounded `library_analytics`,
   `metadata_completeness`, `metadata_issues` and
   `duplicate_candidates` samples that label themselves as samples.
+- **Complete catalog browsing**: `list_media` with `all: true` includes every
+  Jellyfin item type across every library, including music and collections.
+  `recently_added` lists server-wide additions; `continue_watching` and
+  `next_up` use explicit user-scoped Jellyfin views without changing watch
+  state.
 - **Deterministic playback diagnosis** from active-session `TranscodingInfo`,
   naming the chosen session and refusing to guess between several.
 - **Bounded log intelligence**: `logs_summary` and `incident_diagnose`
@@ -209,7 +214,7 @@ configuration implying a capability that does not exist.
 `library_audit`, `content_health`, `server_audit`, `live_tv_status`,
 `tuner_status`, `recording_status`, `live_tv_channels`, `live_tv_guide`,
 `live_tv_timers`, `list_collections`, `list_playlists`, `user_media_state`,
-`user_unwatched`.
+`user_unwatched`, `recently_added`, `continue_watching`, `next_up`.
 
 Per-action honesty notes:
 
@@ -219,6 +224,12 @@ Per-action honesty notes:
 - `recent_media` uses `GET /Items?SortBy=DateCreated&SortOrder=Descending&
   Recursive=true`, which works server-wide with an admin API key; no user
   context is required or resolved.
+- `list_media` keeps the focused Movie/Series default, but `all: true` omits
+  `IncludeItemTypes` so Jellyfin returns all item types across all libraries;
+  pagination remains capped by `max_items`.
+- `continue_watching` uses `/Users/{id}/Items/Resume` and `next_up` uses
+  `/Shows/NextUp` with an explicitly resolved user. Neither endpoint writes
+  watch state.
 - `metadata_issues` / `duplicate_candidates` are bounded samples and return
   the exact filters used; duplicate groups are labelled *candidates*, never
   confirmed duplicates.
@@ -274,7 +285,10 @@ Per-action honesty notes:
   can route pause, stop, and seek through the session play-state endpoints.
   The pack permits those controls only for an explicitly identified DLNA
   session with `SupportsMediaControl: true`; seek additionally requires
-  `PlayState.CanSeek: true`.
+  `PlayState.CanSeek: true`. DLNA `SetVolume` compatibility for issue #506 is
+   likewise limited to sessions with explicit `SupportsMediaControl: true`;
+   volume remains a high-risk, profile-opt-in mutation and is never part of the
+   read tool.
 - The pack's ten manifest-registered knowledge documents cover operating
   model, catalog, Live TV, server audit, user media, analytics, safety,
   playback diagnosis, targeted playback control, and maintenance. New users

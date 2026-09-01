@@ -30,7 +30,7 @@ test("all Jellyfin JSON assets parse", () => {
     .filter((x) => x.endsWith(".json")))
     JSON.parse(fs.readFileSync(path.join(pack, f), "utf8"));
 });
-test("pack and module versions agree at 1.4.3", () => {
+test("pack and module versions agree at 1.4.4", () => {
   const packManifest = JSON.parse(
     fs.readFileSync(path.join(pack, "sidekick.pack.json"), "utf8"),
   );
@@ -40,8 +40,8 @@ test("pack and module versions agree at 1.4.3", () => {
       "utf8",
     ),
   );
-  assert.strictEqual(packManifest.version, "1.4.3");
-  assert.strictEqual(moduleManifest.version, "1.4.3");
+  assert.strictEqual(packManifest.version, "1.4.4");
+  assert.strictEqual(moduleManifest.version, "1.4.4");
   // Every services.dispatch target used by the module must be declared.
   const declared = moduleManifest.permissions.map((x) => x.tool).sort();
   assert.deepStrictEqual(declared, ["proxmox", "status", "web_fetch"]);
@@ -519,6 +519,14 @@ function baseFixtures() {
       Items: [{ Id: "i1", Name: "Film", Type: "Movie", ProductionYear: 2020, RunTimeTicks: 120 * 60 * 10000000, UserData: { IsFavorite: true, Played: false, PlaybackPositionTicks: 10000000 } }],
       TotalRecordCount: 1,
     },
+    "/Users/u1/Items/Resume": {
+      Items: [{ Id: "i1", Name: "Film", Type: "Movie", ProductionYear: 2020 }],
+      TotalRecordCount: 1,
+    },
+    "/Shows/NextUp": {
+      Items: [{ Id: "ep1", Name: "Next Episode", Type: "Episode", SeriesId: "series1" }],
+      TotalRecordCount: 1,
+    },
     "/Shows/series1/Seasons": {
       Items: [
         { Id: "season1", Name: "Season 1", Type: "Season", SeriesId: "series1", IndexNumber: 1 },
@@ -624,6 +632,9 @@ async function asyncTest(name, fn) {
         media_info: { item_id: "series1" },
         user_media_state: { user_id: "u1", item_id: "i1" },
         user_unwatched: { user_id: "u1" },
+        recently_added: {},
+        continue_watching: { user_id: "u1" },
+        next_up: { user_id: "u1" },
         task_status: { task_id: "t1" },
         user_status: { user_id: "u1" },
         plugin_status: { plugin_id: "p1" },
@@ -693,6 +704,18 @@ async function asyncTest(name, fn) {
       assert.deepStrictEqual(delLog, []);
     },
   );
+  await asyncTest("continue watching and next up are explicit user-scoped reads", async () => {
+    setFixtures(baseFixtures());
+    const { read } = tools(servicesFor());
+    let result = await call(read, { action: "continue_watching", username: "ADMIN" });
+    assert.strictEqual(result.parsed.view, "continue_watching");
+    assert.strictEqual(result.parsed.user.id, "u1");
+    result = await call(read, { action: "next_up", user_id: "u1", limit: 10 });
+    assert.strictEqual(result.parsed.view, "next_up");
+    assert.strictEqual(result.parsed.items[0].type, "Episode");
+    assert.deepStrictEqual(postLog, []);
+    assert.deepStrictEqual(delLog, []);
+  });
   await asyncTest(
     "list_media forwards structured genre/library filters and enumerates the whole library",
     async () => {
@@ -732,6 +755,7 @@ async function asyncTest(name, fn) {
       assert.strictEqual(result.parsed.truncated, false);
       assert.strictEqual(requested[1].StartIndex, 0);
       assert.strictEqual(requested[2].StartIndex, 2);
+      assert.strictEqual(requested[1].IncludeItemTypes, undefined);
       assert.deepStrictEqual(postLog, []);
       assert.deepStrictEqual(delLog, []);
     },
@@ -1332,6 +1356,7 @@ async function asyncTest(name, fn) {
       { action: "seek", position_seconds: 120 },
       { action: "fast_forward", offset_seconds: 30 },
       { action: "rewind", offset_seconds: 30 },
+      { action: "set_volume", volume: 35 },
     ]) {
       const result = await call(playback, { ...args, device_id: "tv-device-1", dry_run: true });
       assert.ok(!result.out.isError, result.out.content[0].text);
