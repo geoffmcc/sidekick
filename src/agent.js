@@ -159,6 +159,7 @@ const { createHandoffContinuity } = require("./agent/handoff-continuity");
 const { createResumedTaskFinalizer } = require("./agent/recovery");
 const { createContinuationJobStarter } = require("./agent/continuation-jobs");
 const { createDelayScheduler } = require("./agent/delay-scheduler");
+const { createDelayExecution } = require("./agent/delay-execution");
 const { createWatchRuntime } = require("./agent/watch-runtime");
 const { createWatchScheduler } = require("./agent/watch-scheduler");
 const durableTaskModel = require("./agent/task-model");
@@ -278,110 +279,17 @@ try {
   });
 } catch (e) {}
 
-async function executeDelay(delay) {
-  const delays = loadDelays();
-  const current = delays.find(d => d.id === delay.id);
-
-  if (!current || current.status !== "pending") {
-    delete delayTimers[delay.id];
-    return;
-  }
-
-  // Fenced claim (Phase 4/B): the agent timer and an MCP-side `delay run` can
-  // race on the same delay; only the claim winner dispatches. Any claim
-  // failure (held, terminal, missing) refuses dispatch rather than running
-  // unfenced.
-  let runClaim = null;
-  if (current.platform_execution_id) {
-    const claimRes = platformKernel.claimExecution({ execution_id: current.platform_execution_id, claimed_by: `sidekick-agent:${process.pid}` });
-    if (!claimRes.ok) {
-      console.log(`Delay ${delay.id} not dispatchable (${claimRes.code}${claimRes.claimed_by ? `, held by ${claimRes.claimed_by}` : ""}), skipping`);
-      delete delayTimers[delay.id];
-      return;
-    }
-    runClaim = claimRes.claim;
-    if (runClaim.cancel_requested) {
-      current.status = "cancelled";
-      current.cancelledAt = new Date().toISOString();
-      transitionScheduledPlatformExecution("delay", current, "cancelled", { source: "agent", actor: "agent", reason: "cancel requested before dispatch", result_status: "cancelled" });
-      appendScheduledPlatformEvent("delay", current, "schedule.delay.cancelled", { cancelled_at: current.cancelledAt }, { source: "agent", actor: "agent" });
-      saveDelays(delays);
-      releaseScheduledClaim(current.platform_execution_id, runClaim);
-      delete delayTimers[delay.id];
-      console.log(`Delay ${delay.id} cancelled before dispatch`);
-      return;
-    }
-  }
-
-  current.status = "running";
-  current.startedAt = new Date().toISOString();
-  transitionScheduledPlatformExecution("delay", current, "running", { source: "agent", actor: "agent", reason: "scheduled delay execution started" });
-  saveDelays(delays);
-  const renewTimer = startScheduledLeaseRenewal(current.platform_execution_id, runClaim);
-  
-  console.log(`Executing delay ${delay.id}: ${delay.tool}`);
-  
-  try {
-    const result = await callAgentTool(delay.tool, delay.args || {}, {
-      parentId: current.platform_execution_id || null,
-      rootExecutionId: current.platform_execution_id || null,
-      correlationId: delay.id,
-    });
-    if (renewTimer) clearInterval(renewTimer);
-    const release = releaseScheduledClaim(current.platform_execution_id, runClaim);
-    if (runClaim && !release.ok && release.code === "release_rejected") {
-      console.error(`Delay ${delay.id} completed but its claim was superseded; leaving state to the current claimant`);
-      delete delayTimers[delay.id];
-      return;
-    }
-    const delaysAfter = loadDelays();
-    const updated = delaysAfter.find(d => d.id === delay.id);
-    if (updated) {
-      updated.status = result.isError ? "failed" : "completed";
-      updated.completedAt = new Date().toISOString();
-      updated.result = result.content?.[0]?.text?.substring(0, 200) || "ok";
-      transitionScheduledPlatformExecution("delay", updated, result.isError ? "failed" : "completed", {
-        source: "agent",
-        actor: "agent",
-        reason: result.isError ? "scheduled delay execution failed" : "scheduled delay execution completed",
-        result_status: result.isError ? "failure" : "success",
-        result_summary: updated.result,
-      });
-      appendScheduledPlatformEvent("delay", updated, result.isError ? "schedule.delay.failed" : "schedule.delay.completed", { completed_at: updated.completedAt }, { source: "agent", actor: "agent", severity: result.isError ? "error" : "info" });
-      saveDelays(delaysAfter);
-    }
-    console.log(`Delay ${delay.id} completed`);
-  } catch (e) {
-    if (renewTimer) clearInterval(renewTimer);
-    const release = releaseScheduledClaim(current.platform_execution_id, runClaim);
-    if (runClaim && !release.ok && release.code === "release_rejected") {
-      console.error(`Delay ${delay.id} threw (${e.message}) but its claim was superseded; leaving state to the current claimant`);
-      delete delayTimers[delay.id];
-      return;
-    }
-    const delaysAfter = loadDelays();
-    const updated = delaysAfter.find(d => d.id === delay.id);
-    if (updated) {
-      updated.status = "failed";
-      updated.completedAt = new Date().toISOString();
-      updated.error = e.message;
-      transitionScheduledPlatformExecution("delay", updated, "failed", {
-        source: "agent",
-        actor: "agent",
-        reason: "scheduled delay execution threw",
-        result_status: "failure",
-        result_summary: e.message,
-      });
-      appendScheduledPlatformEvent("delay", updated, "schedule.delay.failed", { error: e.message }, { source: "agent", actor: "agent", severity: "error" });
-      saveDelays(delaysAfter);
-    }
-    console.error(`Delay ${delay.id} failed: ${e.message}`);
-  }
-
-  delete delayTimers[delay.id];
-}
-
-const { delayTimers, scheduleDelay, loadAndScheduleDelays } = createDelayScheduler({ loadDelays, executeDelay });
+let delayTimers;
+let scheduleDelay;
+let loadAndScheduleDelays;
+const executeDelay = createDelayExecution({
+  loadDelays, saveDelays, callAgentTool,
+  claimExecution: platformKernel.claimExecution,
+  releaseScheduledClaim, startScheduledLeaseRenewal,
+  transitionScheduledPlatformExecution, appendScheduledPlatformEvent,
+  getDelayTimers: () => delayTimers, processId: process.pid,
+});
+({ delayTimers, scheduleDelay, loadAndScheduleDelays } = createDelayScheduler({ loadDelays, executeDelay }));
 
 try {
   const recovered = recoverStrandedDelays({ source: "agent", actor: "agent" });
