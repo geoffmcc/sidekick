@@ -9,7 +9,7 @@
   "compatibility": { "sidekick": ">=1.0.0" },
   "modules": [{ "name": "operational-readiness-tools", "path": "modules/operational-readiness-tools", "entry_point": "entry.js", "config_from_pack": true }],
   "workflows": [{ "path": "workflows/readiness-check.json" }],
-  "knowledge": [{ "path": "knowledge/readiness.md", "title": "Operational readiness gates", "category": "operations", "tags": ["readiness", "health", "evidence"] }],
+  "knowledge": [{ "path": "knowledge/readiness.md", "title": "Operational readiness gates", "category": "operations", "tags": ["readiness", "health", "evidence"] }, { "path": "knowledge/usage-reference.md", "title": "Operational Readiness: evidence and acceptance guide", "category": "operations", "tags": ["readiness", "evidence", "acceptance", "handoff"] }],
   "requires": { "tools": ["dev_repo_profile", "health", "handoff", "research_evidence"], "optional_tools": ["snapshot"] },
   "permissions": [{ "tool": "research_evidence", "risk": "medium" }, { "tool": "health", "risk": "low" }, { "tool": "dev_repo_profile", "risk": "low" }, { "tool": "handoff", "risk": "low" }],
   "depends": { "packs": [{ "name": "developer", "version": ">=1.0.0" }, { "name": "security-research", "version": ">=1.2.0" }] },

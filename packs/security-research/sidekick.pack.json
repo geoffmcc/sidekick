@@ -39,6 +39,12 @@
       "title": "Security Research pack: scope, policy and probe safety",
       "category": "operations",
       "tags": ["security-research", "safety", "scope", "policy", "probes"]
+    },
+    {
+      "path": "knowledge/usage-reference.md",
+      "title": "Security Research pack: lifecycle and evidence reference",
+      "category": "operations",
+      "tags": ["security-research", "campaigns", "evidence", "cleanup"]
     }
   ],
   "requires": {

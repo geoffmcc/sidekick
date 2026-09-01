@@ -9,7 +9,7 @@
   "compatibility": { "sidekick": ">=1.0.0" },
   "modules": [{ "name": "testing-quality-tools", "path": "modules/testing-quality-tools", "entry_point": "entry.js", "config_from_pack": true }],
   "workflows": [{ "path": "workflows/quality-gate.json" }, { "path": "workflows/negative-verification.json" }],
-  "knowledge": [{ "path": "knowledge/testing-quality-engineering.md", "title": "Testing and Quality Engineering pack", "category": "development", "tags": ["testing", "quality", "verification", "evidence"] }],
+  "knowledge": [{ "path": "knowledge/testing-quality-engineering.md", "title": "Testing and Quality Engineering pack", "category": "development", "tags": ["testing", "quality", "verification", "evidence"] }, { "path": "knowledge/usage-reference.md", "title": "Testing and Quality Engineering: gate and negative-check reference", "category": "development", "tags": ["testing", "quality", "verification", "negative-testing"] }],
   "requires": { "tools": [], "optional_tools": ["dev_repo_profile", "dev_verify", "semantic_repo", "diff", "validate"] },
   "permissions": [],
   "configuration": { "schema": { "type": "object", "properties": { "default_mode": { "type": "string", "enum": ["quick", "standard", "full"] }, "max_output_chars": { "type": "integer", "minimum": 500, "maximum": 60000 } }, "additionalProperties": false }, "defaults": { "default_mode": "standard", "max_output_chars": 12000 } }

@@ -80,6 +80,12 @@
       "title": "Developer pack: handoff expectations for developer work",
       "category": "development",
       "tags": ["developer", "handoff", "continuity"]
+    },
+    {
+      "path": "knowledge/usage-reference.md",
+      "title": "Developer pack: workflow and tool reference",
+      "category": "development",
+      "tags": ["developer", "workflows", "verification", "git"]
     }
   ],
   "requires": {

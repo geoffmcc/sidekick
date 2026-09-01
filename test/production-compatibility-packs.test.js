@@ -35,7 +35,7 @@ test("PCA.1: all five manifests inspect without placeholders or missing referenc
     assert.deepEqual(result.problems, []);
     assert.equal(result.modules.length, 1);
     assert.equal(result.workflows.length, 2);
-    assert.equal(result.knowledge.length, 1);
+    assert.equal(result.knowledge.length, 2);
     assert.deepEqual(result.requires.missing, []);
   }
 });

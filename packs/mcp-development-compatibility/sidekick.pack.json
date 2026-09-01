@@ -3,7 +3,7 @@
   "description": "Static MCP compatibility checks grounded in repository semantics and the live governed tool catalog.", "publisher": "Sidekick", "compatibility": { "sidekick": ">=1.0.0" },
   "modules": [{ "name": "mcp-development-tools", "path": "modules/mcp-development-tools", "entry_point": "entry.js", "config_from_pack": true }],
   "workflows": [{ "path": "workflows/mcp-compatibility.json" }],
-  "knowledge": [{ "path": "knowledge/operating.md", "title": "MCP Development and Compatibility operating model", "category": "development", "tags": ["mcp", "compatibility", "protocol", "security"] }],
+  "knowledge": [{ "path": "knowledge/operating.md", "title": "MCP Development and Compatibility operating model", "category": "development", "tags": ["mcp", "compatibility", "protocol", "security"] }, { "path": "knowledge/usage-reference.md", "title": "MCP Development and Compatibility: static check guide", "category": "development", "tags": ["mcp", "compatibility", "semantic", "catalog"] }],
   "requires": { "tools": [], "optional_tools": ["tools", "parse", "semantic_repo"] },
   "permissions": [{ "tool": "semantic_repo", "risk": "low" }, { "tool": "tools", "risk": "low" }, { "tool": "parse", "risk": "low" }],
   "configuration": { "schema": { "type": "object", "properties": { "max_chars": { "type": "integer", "minimum": 1000, "maximum": 60000 } }, "additionalProperties": false }, "defaults": { "max_chars": 12000 } }

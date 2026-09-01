@@ -12,7 +12,7 @@
     { "path": "workflows/network-services/network-service-audit.json" },
     { "path": "workflows/network-services/connectivity-review.json" }
   ],
-  "knowledge": [{ "path": "knowledge/operating.md", "title": "Network Services: operating model", "category": "operations", "tags": ["network", "dhcp", "vpn", "nginx", "services"] }],
+  "knowledge": [{ "path": "knowledge/operating.md", "title": "Network Services: operating model", "category": "operations", "tags": ["network", "dhcp", "vpn", "nginx", "services"] }, { "path": "knowledge/usage-reference.md", "title": "Network Services: provider and Nginx action reference", "category": "operations", "tags": ["network", "dhcp", "vpn", "nginx", "configuration"] }],
   "requires": { "tools": [], "optional_tools": ["network", "dhcp", "vpn", "nginx"] },
   "permissions": [{ "tool": "network", "risk": "low" }, { "tool": "dhcp", "risk": "low" }, { "tool": "vpn", "risk": "low" }, { "tool": "nginx", "risk": "high" }],
   "configuration": { "schema": { "type": "object", "properties": { "default_profile": { "type": "string", "maxLength": 63 } }, "additionalProperties": false }, "defaults": {} }

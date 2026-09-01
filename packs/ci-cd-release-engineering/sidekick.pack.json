@@ -9,7 +9,7 @@
   "compatibility": { "sidekick": ">=1.0.0" },
   "modules": [{ "name": "ci-cd-release-tools", "path": "modules/ci-cd-release-tools", "entry_point": "entry.js", "config_from_pack": true }],
   "workflows": [{ "path": "workflows/ci-readiness.json" }, { "path": "workflows/release-gate.json" }],
-  "knowledge": [{ "path": "knowledge/ci-cd-release-engineering.md", "title": "CI/CD and Release Engineering pack", "category": "development", "tags": ["ci", "release", "readiness", "deployment"] }],
+  "knowledge": [{ "path": "knowledge/ci-cd-release-engineering.md", "title": "CI/CD and Release Engineering pack", "category": "development", "tags": ["ci", "release", "readiness", "deployment"] }, { "path": "knowledge/usage-reference.md", "title": "CI/CD and Release Engineering: workflow guide", "category": "development", "tags": ["ci", "release", "verification", "readiness"] }],
   "requires": { "tools": [], "optional_tools": ["dev_repo_profile", "dev_verify", "changelog", "ci_status", "git", "dev_change_summary"] },
   "permissions": [],
   "configuration": { "schema": { "type": "object", "properties": { "verification_mode": { "type": "string", "enum": ["quick", "standard", "full"] } }, "additionalProperties": false }, "defaults": { "verification_mode": "standard" } }

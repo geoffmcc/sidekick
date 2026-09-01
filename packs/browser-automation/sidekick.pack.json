@@ -40,6 +40,12 @@
       "title": "Browser automation: evidence and artifact expectations",
       "category": "development",
       "tags": ["browser", "evidence", "artifacts"]
+    },
+    {
+      "path": "knowledge/usage-reference.md",
+      "title": "Browser automation: workflow and action reference",
+      "category": "development",
+      "tags": ["browser", "workflows", "sessions", "verification"]
     }
   ],
   "requires": {

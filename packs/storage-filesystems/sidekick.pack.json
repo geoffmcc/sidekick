@@ -12,7 +12,7 @@
     { "path": "workflows/storage-filesystems/storage-audit.json" },
     { "path": "workflows/storage-filesystems/volume-audit.json" }
   ],
-  "knowledge": [{ "path": "knowledge/operating.md", "title": "Storage and Filesystems: operating model", "category": "operations", "tags": ["storage", "filesystems", "capacity", "volumes"] }],
+  "knowledge": [{ "path": "knowledge/operating.md", "title": "Storage and Filesystems: operating model", "category": "operations", "tags": ["storage", "filesystems", "capacity", "volumes"] }, { "path": "knowledge/usage-reference.md", "title": "Storage and Filesystems: source and capacity reference", "category": "operations", "tags": ["storage", "filesystems", "capacity", "volumes", "safety"] }],
   "requires": { "tools": ["status"], "optional_tools": ["proxmox", "containers"] },
   "permissions": [{ "tool": "status", "risk": "medium" }, { "tool": "proxmox", "risk": "low" }, { "tool": "containers", "risk": "low" }],
   "configuration": { "schema": { "type": "object", "properties": { "default_node": { "type": "string", "maxLength": 255 } }, "additionalProperties": false }, "defaults": {} }

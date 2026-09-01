@@ -12,7 +12,7 @@
     { "path": "workflows/linux-systems-administration/host-health.json" },
     { "path": "workflows/linux-systems-administration/service-status.json" }
   ],
-  "knowledge": [{ "path": "knowledge/operating.md", "title": "Linux Systems Administration: operating model", "category": "operations", "tags": ["linux", "systemd", "health", "operations"] }],
+  "knowledge": [{ "path": "knowledge/operating.md", "title": "Linux Systems Administration: operating model", "category": "operations", "tags": ["linux", "systemd", "health", "operations"] }, { "path": "knowledge/usage-reference.md", "title": "Linux Systems Administration: status, health and service actions", "category": "operations", "tags": ["linux", "systemd", "services", "health"] }],
   "requires": { "tools": ["status", "health", "service"], "optional_tools": [] },
   "permissions": [
     { "tool": "status", "risk": "medium" },

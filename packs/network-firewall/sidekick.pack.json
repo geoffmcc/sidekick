@@ -18,7 +18,8 @@
   "knowledge": [
     { "path": "knowledge/network-firewall-operating.md", "title": "Network & Firewall pack: operating model and provider limits", "category": "infrastructure", "tags": ["network", "firewall", "openwrt", "opnsense", "pfsense", "unifi"] },
     { "path": "knowledge/network-firewall-safety.md", "title": "Network & Firewall pack: safe changes and management-path protection", "category": "infrastructure", "tags": ["network", "firewall", "lockout", "rollback", "safety"] },
-    { "path": "knowledge/network-firewall-diagnosis.md", "title": "Network & Firewall pack: connectivity and DHCP diagnosis", "category": "infrastructure", "tags": ["network", "firewall", "diagnosis", "dhcp", "routing"] }
+    { "path": "knowledge/network-firewall-diagnosis.md", "title": "Network & Firewall pack: connectivity and DHCP diagnosis", "category": "infrastructure", "tags": ["network", "firewall", "diagnosis", "dhcp", "routing"] },
+    { "path": "knowledge/usage-reference.md", "title": "Network & Firewall pack: action and workflow reference", "category": "infrastructure", "tags": ["network", "firewall", "workflows", "rollback"] }
   ],
   "requires": { "tools": [], "optional_tools": ["netdiag", "secret"] },
   "permissions": [],

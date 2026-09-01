@@ -94,6 +94,12 @@
       "title": "Proxmox pack: storage, PBS and backup verification readiness",
       "category": "operations",
       "tags": ["proxmox", "storage", "pbs", "backups", "readiness", "read-only"]
+    },
+    {
+      "path": "knowledge/usage-reference.md",
+      "title": "Proxmox pack: workflow and action reference",
+      "category": "operations",
+      "tags": ["proxmox", "workflows", "tasks", "provisioning"]
     }
   ],
   "requires": {

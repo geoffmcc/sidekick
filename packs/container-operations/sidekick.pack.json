@@ -31,7 +31,8 @@
     { "path": "knowledge/preflight.md", "title": "Container Operations: update preflight", "category": "operations", "tags": ["containers", "updates", "preflight"] },
     { "path": "knowledge/drift.md", "title": "Container Operations: Compose drift and validation", "category": "operations", "tags": ["compose", "drift", "configuration"] },
     { "path": "knowledge/dangerous-config.md", "title": "Container Operations: dangerous container configuration", "category": "operations", "tags": ["containers", "security", "privileged"] },
-    { "path": "knowledge/orphans.md", "title": "Container Operations: orphan candidates and cleanup", "category": "operations", "tags": ["containers", "orphans", "cleanup"] }
+    { "path": "knowledge/orphans.md", "title": "Container Operations: orphan candidates and cleanup", "category": "operations", "tags": ["containers", "orphans", "cleanup"] },
+    { "path": "knowledge/usage-reference.md", "title": "Container Operations: tool and workflow reference", "category": "operations", "tags": ["containers", "docker", "podman", "workflows"] }
   ],
   "requires": { "tools": [], "optional_tools": ["secret", "netdiag", "watch"] },
   "permissions": [],
