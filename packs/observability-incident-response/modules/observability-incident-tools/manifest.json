@@ -1,0 +1,23 @@
+{
+  "name": "observability-incident-tools",
+  "displayName": "Observability and Incident Tools",
+  "version": "1.0.0",
+  "description": "Governed incident evidence, health, status, and metrics adapters.",
+  "author": "Sidekick",
+  "type": "plugin",
+  "entryPoint": "entry.js",
+  "sidekick": ">=1.0.0",
+  "capabilities": ["incident-evidence", "health-observability", "metrics-observability"],
+  "tools": {
+    "observability_incident_snapshot": { "risk": "medium", "category": "Observability" },
+    "observability_health_review": { "risk": "high", "category": "Observability" },
+    "observability_metrics_query": { "risk": "high", "category": "Observability" }
+  },
+  "permissions": [
+    { "tool": "black_box", "risk": "medium" },
+    { "tool": "health", "risk": "high" },
+    { "tool": "status", "risk": "medium" },
+    { "tool": "metrics", "risk": "high" }
+  ],
+  "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
+}

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "pack_api": 1,
+  "name": "linux-systems-administration",
+  "display_name": "Linux Systems Administration",
+  "version": "1.0.0",
+  "description": "Bounded Linux host status, health, and systemd service operations through Sidekick's governed tools.",
+  "publisher": "Sidekick",
+  "compatibility": { "sidekick": ">=1.0.0" },
+  "modules": [{ "name": "linux-systems-tools", "path": "modules/linux-systems-tools", "entry_point": "entry.js", "config_from_pack": true }],
+  "workflows": [
+    { "path": "workflows/linux-systems-administration/host-health.json" },
+    { "path": "workflows/linux-systems-administration/service-status.json" }
+  ],
+  "knowledge": [{ "path": "knowledge/operating.md", "title": "Linux Systems Administration: operating model", "category": "operations", "tags": ["linux", "systemd", "health", "operations"] }],
+  "requires": { "tools": ["status", "health", "service"], "optional_tools": [] },
+  "permissions": [
+    { "tool": "status", "risk": "medium" },
+    { "tool": "health", "risk": "high" },
+    { "tool": "service", "risk": "high" }
+  ],
+  "configuration": { "schema": { "type": "object", "properties": { "default_services": { "type": "string", "maxLength": 2000 } }, "additionalProperties": false }, "defaults": { "default_services": "sidekick-mcp,sidekick-dashboard,sidekick-agent" } }
+}

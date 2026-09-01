@@ -1,0 +1,22 @@
+{
+  "name": "linux-systems-tools",
+  "displayName": "Linux Systems Tools",
+  "version": "1.0.0",
+  "description": "Governed Linux host and systemd service adapters.",
+  "author": "Sidekick",
+  "type": "plugin",
+  "entryPoint": "entry.js",
+  "sidekick": ">=1.0.0",
+  "capabilities": ["linux-host-status", "systemd-service-operations"],
+  "tools": {
+    "linux_system_status": { "risk": "medium", "category": "Linux Systems" },
+    "linux_system_health": { "risk": "high", "category": "Linux Systems" },
+    "linux_service_operation": { "risk": "high", "category": "Linux Systems" }
+  },
+  "permissions": [
+    { "tool": "status", "risk": "medium" },
+    { "tool": "health", "risk": "high" },
+    { "tool": "service", "risk": "high" }
+  ],
+  "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
+}

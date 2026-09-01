@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "name": "backup-restore-dr/backup-readiness",
+  "version": "1.0.0",
+  "title": "Backup and DR readiness",
+  "description": "Read-only Proxmox backup evidence for coverage, history, and verification limits.",
+  "mode": "read_only",
+  "inputs": { "profile": { "type": "string", "required": false, "default": "" } },
+  "steps": [{ "name": "readiness", "tool": "backup_dr_readiness", "args": { "profile": "${inputs.profile}" }, "expect": "json" }],
+  "result": { "readiness": "${steps.readiness.json}" }, "tags": ["backup", "dr", "proxmox", "read-only"]
+}

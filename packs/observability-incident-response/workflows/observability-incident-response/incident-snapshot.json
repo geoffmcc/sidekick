@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "observability-incident-response/incident-snapshot",
+  "version": "1.0.0",
+  "title": "Incident snapshot",
+  "description": "Read-only structured incident capture with provider-owned evidence.",
+  "mode": "read_only",
+  "inputs": { "name": { "type": "string", "required": true }, "profile": { "type": "string", "required": false, "default": "standard" } },
+  "steps": [{ "name": "capture", "tool": "observability_incident_snapshot", "args": { "name": "${inputs.name}", "profile": "${inputs.profile}" }, "expect": "json" }],
+  "result": { "capture": "${steps.capture.json}" },
+  "tags": ["observability", "incident", "evidence", "read-only"]
+}

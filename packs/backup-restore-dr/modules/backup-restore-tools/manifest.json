@@ -1,0 +1,24 @@
+{
+  "name": "backup-restore-tools",
+  "displayName": "Backup and Restore Tools",
+  "version": "1.0.0",
+  "description": "Governed backup, restore, comparison, and virtualization backup adapters.",
+  "author": "Sidekick",
+  "type": "plugin",
+  "entryPoint": "entry.js",
+  "sidekick": ">=1.0.0",
+  "capabilities": ["database-backups", "database-restore", "dr-readiness"],
+  "tools": {
+    "backup_database": { "risk": "medium", "category": "Backup and DR" },
+    "restore_database": { "risk": "critical", "category": "Backup and DR" },
+    "compare_backup_snapshots": { "risk": "low", "category": "Backup and DR" },
+    "backup_dr_readiness": { "risk": "low", "category": "Backup and DR" }
+  },
+  "permissions": [
+    { "tool": "db_backup", "risk": "medium" },
+    { "tool": "db_restore", "risk": "critical" },
+    { "tool": "db_diff", "risk": "low" },
+    { "tool": "proxmox", "risk": "low" }
+  ],
+  "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
+}

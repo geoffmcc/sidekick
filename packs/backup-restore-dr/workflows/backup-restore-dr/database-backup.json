@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "name": "backup-restore-dr/database-backup",
+  "version": "1.0.0",
+  "title": "Database backup",
+  "description": "Create one governed database backup; restore is deliberately separate and critical.",
+  "mode": "mutating",
+  "inputs": { "path": { "type": "string", "required": false, "default": "" }, "compress": { "type": "boolean", "required": false, "default": false } },
+  "steps": [{ "name": "backup", "tool": "backup_database", "args": { "path": "${inputs.path}", "compress": "${inputs.compress}" }, "expect": "json" }],
+  "result": { "backup": "${steps.backup.json}" }, "tags": ["backup", "database"]
+}

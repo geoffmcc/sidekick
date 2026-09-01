@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "observability-incident-response/health-review",
+  "version": "1.0.0",
+  "title": "Observability health review",
+  "description": "Read-only status and health evidence for triage.",
+  "mode": "read_only",
+  "inputs": { "services": { "type": "string", "required": false, "default": "" } },
+  "steps": [{ "name": "review", "tool": "observability_health_review", "args": { "services": "${inputs.services}" }, "expect": "json" }],
+  "result": { "review": "${steps.review.json}" },
+  "tags": ["observability", "health", "read-only"]
+}
