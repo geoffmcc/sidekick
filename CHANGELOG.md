@@ -4,6 +4,18 @@ All notable changes to Sidekick.
 
 ## Unreleased
 
+### Platform boundaries and Dashboard observability
+
+- Added a repository-owned architecture and cycle check with actionable import
+  paths, and moved capability-pack schema ownership beside the platform kernel
+  while retaining the old schema module as a compatibility export.
+- Extracted Dashboard database administration and Agent relay routes into
+  injected route modules. Database query/search behavior remains governed by
+  the canonical dispatcher.
+- Added a stable platform error taxonomy, canonical safe configuration metadata,
+  bounded Dashboard request metrics, ETag/static caching, and capped server-side
+  tool/stat filtering. Added focused regression and documentation drift checks.
+
 ### Governed WSL execution node
 
 - Added a general authenticated outbound execution-node protocol that reuses

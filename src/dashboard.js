@@ -43,6 +43,8 @@ const { registerStatsToolsRoutes } = require("./dashboard/stats-tools-routes");
 const { registerSummaryRoute } = require("./dashboard/summary-route");
 const { registerResearchSourceRoutes } = require("./dashboard/research-source-routes");
 const { registerNetworkScopeRoutes } = require("./dashboard/network-scope-routes");
+const { registerDatabaseRoutes } = require("./dashboard/database-routes");
+const { registerAgentProxyRoutes } = require("./dashboard/agent-proxy-routes");
 const { runDoctor, formatDoctorText, createSupportBundle } = require("./doctor");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
@@ -2538,138 +2540,9 @@ function requireDashboardTool(req, res, toolName) {
   return false;
 }
 
-// Database API endpoints
-app.get("/api/db/schema", (req, res) => {
-  if (!requireDashboardTool(req, res, "sidekick_db_schema")) return;
-  try {
-    const db = dbStore.getDb();
-    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
-    const result = {};
-    for (const t of tables) {
-      const columns = db.prepare(`PRAGMA table_info("${t.name}")`).all();
-      const indexes = db.prepare(`PRAGMA index_list("${t.name}")`).all();
-      const count = db.prepare(`SELECT COUNT(*) as count FROM "${t.name}"`).get();
-      result[t.name] = { columns, indexes, rowCount: count.count };
-    }
-    res.json({ ok: true, schema: result });
-  } catch (e) {
-    res.json({ ok: false, error: e.message });
-  }
-});
-
-app.post("/api/db/query", async (req, res) => {
-  if (!requireDashboardTool(req, res, "sidekick_db_query")) return;
-  try {
-    const { sql, params, readonly, limit } = req.body || {};
-    if (!sql) return res.json({ ok: false, error: "No SQL provided" });
-    const start = Date.now();
-    // Route through the centralized dispatcher instead of executing directly
-    // against the database. This subjects dashboard SQL — including write-mode
-    // queries (readonly:false) — to the same policy, approval, redaction and
-    // audit controls as every other tool call, closing the previous bypass
-    // where raw SQL ran with only an HTTP policy check.
-    const result = await callDashboardTool(
-      "db_query",
-      { sql, params: params || [], readonly: readonly !== false, limit: limit || 1000 },
-      // Attribute the real authenticated user when one exists — a write-mode
-      // query attributed to the literal "dashboard" cannot be traced to a
-      // person. The marker remains only for unauthenticated deployments.
-      dashboardExecutionMetadata(req, authenticatedUser(req) || "dashboard")
-    );
-    const duration = Date.now() - start;
-    const text = result && result.content && result.content[0] ? result.content[0].text : "";
-    if (result && result.isError) {
-      return res.json({ ok: false, error: text || "Query failed" });
-    }
-    let rows;
-    try { rows = JSON.parse(text); } catch { rows = text; }
-    res.json({ ok: true, rows, duration, count: Array.isArray(rows) ? rows.length : undefined });
-  } catch (e) {
-    res.json({ ok: false, error: e.message });
-  }
-});
-
-app.get("/api/db/stats", (req, res) => {
-  if (!requireDashboardTool(req, res, "sidekick_db_stats")) return;
-  try {
-    const db = dbStore.getDb();
-    const dbPath = path.join(DATA_DIR, "sidekick.db");
-    const stats = fs.statSync(dbPath);
-    const walMode = db.prepare("PRAGMA journal_mode").get();
-    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
-    const pageCount = db.prepare("PRAGMA page_count").get();
-    const pageSize = db.prepare("PRAGMA page_size").get();
-    const dbSize = (pageCount?.page_count || 0) * (pageSize?.page_size || 4096);
-    res.json({ ok: true, size: stats.size, tableCount: tables.length, walMode: walMode?.journal_mode, dbSize });
-  } catch (e) {
-    res.json({ ok: false, error: e.message });
-  }
-});
-
-app.post("/api/db/backup", (req, res) => {
-  if (!requireDashboardTool(req, res, "sidekick_db_backup")) return;
-  try {
-    const backupDir = path.join(DATA_DIR, "backups");
-    fs.mkdirSync(backupDir, { recursive: true });
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const backupPath = path.join(backupDir, `sidekick-${timestamp}.db`);
-    const srcDb = dbStore.getDb();
-    srcDb.backup(backupPath).then(() => {
-      auditLog(req, 'db.backup', { path: backupPath });
-      res.json({ ok: true, path: backupPath });
-    }).catch(e => res.json({ ok: false, error: e.message }));
-  } catch (e) {
-    res.json({ ok: false, error: e.message });
-  }
-});
-
-app.get("/api/db/search", async (req, res) => {
-  if (!requireDashboardTool(req, res, "sidekick_db_search")) return;
-  try {
-    const { q, limit } = req.query;
-    if (!q) return res.status(400).json({ ok: false, error: "No query provided" });
-    // Routed through the dispatcher's db_search tool so its redaction, policy,
-    // and audit apply — the previous raw LIKE-scan over every table returned
-    // row contents (including any stored secrets) with no redaction at all.
-    const result = await callDashboardTool(
-      "db_search",
-      { query: String(q), limit: parseInt(limit) || 50 },
-      dashboardExecutionMetadata(req, authenticatedUser(req) || "dashboard")
-    );
-    const text = result?.content?.[0]?.text || "";
-    if (result?.isError) {
-      return res.status(500).json({ ok: false, error: text || "search failed" });
-    }
-    let results;
-    try { results = JSON.parse(text); } catch { results = text; }
-    res.json({ ok: true, results });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-app.get("/api/db/migrations", (req, res) => {
-  if (!requireDashboardTool(req, res, "sidekick_db_migrate")) return;
-  try {
-    const db = dbStore.getDb();
-    const meta = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get();
-    const currentVersion = meta ? parseInt(meta.value) : 0;
-    const migrationsDir = path.join(__dirname, "..", "migrations");
-    let migrations = [];
-    if (fs.existsSync(migrationsDir)) {
-      migrations = fs.readdirSync(migrationsDir)
-        .filter(f => f.endsWith(".sql"))
-        .map(f => {
-          const match = f.match(/^(\d+)/);
-          const version = match ? parseInt(match[1]) : 0;
-          return { file: f, version, applied: version <= currentVersion };
-        })
-        .sort((a, b) => a.version - b.version);
-    }
-    res.json({ ok: true, currentVersion, migrations });
-  } catch (e) {
-    res.json({ ok: false, error: e.message });
-  }
+registerDatabaseRoutes({
+  app, dbStore, dataDir: DATA_DIR, path, fs, callDashboardTool,
+  dashboardExecutionMetadata, authenticatedUser, requireDashboardTool, auditLog,
 });
 
 // Destructive clears report what actually happened. These previously answered
@@ -2760,144 +2633,14 @@ app.post('/api/webhook/:source', (req, res) => {
   }
 });
 
-// --- Agent Proxy ---
-
-function proxyAgent(req, res, method, body) {
-  const headers = { "Content-Type": "application/json" };
-  if (req.authPrincipal?.principal_id) headers["X-Sidekick-Principal-ID"] = String(req.authPrincipal.principal_id).slice(0, 160);
-  if (Array.isArray(req.authPrincipal?.scopes)) headers["X-Sidekick-Principal-Scopes"] = JSON.stringify(req.authPrincipal.scopes.slice(0, 80)).slice(0, 4000);
-  if (req.authPrincipal?.delegation_id) headers["X-Sidekick-Delegation-ID"] = String(req.authPrincipal.delegation_id).slice(0, 160);
-  if (body) headers["Content-Length"] = Buffer.byteLength(body);
-  const opts = {
-    hostname: "127.0.0.1",
-    port: AGENT_PORT,
-    path: req.originalUrl,
-    method: method,
-    headers: headers
-  };
-  const proxy = http.request(opts, (upstream) => {
-    res.writeHead(upstream.statusCode, upstream.headers);
-    upstream.pipe(res);
-  });
-  proxy.on("error", (e) => {
-    res.status(502).json({ error: "Agent bridge unavailable: " + e.message });
-  });
-  if (body) proxy.write(body);
-  proxy.end();
-}
-
-app.post("/api/agent/run", (req, res) => {
-  const body = JSON.stringify(req.body);
-  proxyAgent(req, res, "POST", body);
-});
-
-app.get("/api/agent/tasks", (req, res) => {
-  proxyAgent(req, res, "GET");
-});
-
-app.get("/api/agent/tasks/:taskId", (req, res) => {
-  proxyAgent(req, res, "GET");
-});
-
-app.get("/api/agent/tasks/:taskId/control-room", (req, res) => {
-  proxyAgent(req, res, "GET");
-});
-
-app.post("/api/agent/tasks/:taskId/plans", (req, res) => {
-  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
-});
-
-app.post("/api/agent/tasks/:taskId/escalations", (req, res) => {
-  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
-});
-
-app.post("/api/agent/tasks/:taskId/work-packages", (req, res) => {
-  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
-});
-
-app.post("/api/agent/tasks/:taskId/work-packages/:packageId/claim", (req, res) => {
-  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
-});
-
-app.get("/api/agent/tasks/:taskId/workspace-transactions", (req, res) => {
-  proxyAgent(req, res, "GET");
-});
-
-app.post("/api/agent/tasks/:taskId/workspace-transactions/:transactionId/rollback", (req, res) => {
-  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
-});
-
-app.post("/api/agent/tasks/:taskId/verification-recipes", (req, res) => {
-  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
-});
-
-app.post("/api/agent/tasks/:taskId/verification-recipes/:recipeId/run", (req, res) => {
-  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
-});
-app.get("/api/agent/learning-candidates", (req, res) => { proxyAgent(req, res, "GET"); });
-app.post("/api/agent/learning-candidates", (req, res) => { proxyAgent(req, res, "POST", JSON.stringify(req.body || {})); });
-app.post("/api/agent/learning-candidates/:candidateId/review", (req, res) => {
-  const body = { ...(req.body || {}) };
-  if (body.state === "active") {
-    const principal = req.authPrincipal?.principal_id || null;
-    if (!principal) return res.status(403).json({ error: "authenticated operator approval is required" });
-    body.approved_by = principal;
-  }
-  proxyAgent(req, res, "POST", JSON.stringify(body));
-});
-
-app.post("/api/agent/tasks/:taskId/guidance", (req, res) => {
-  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
-});
-
-app.post("/api/agent/tasks/:taskId/resume", (req, res) => {
-  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
-});
-
-app.post("/api/agent/tasks/:taskId/pause", (req, res) => {
-  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
-});
-
-app.post("/api/agent/tasks/:taskId/act-on", (req, res) => {
-  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
-});
-
-// Canonical follow-up: create a child task continuing a terminal parent.
-app.post("/api/agent/run/:taskId/follow-up", (req, res) => {
-  const body = JSON.stringify(req.body);
-  proxyAgent(req, res, "POST", body);
-});
-
-// Cancel a live task. The agent service owns the cancel semantics; the
-// dashboard only relays and reports the backend's honest answer (404 when the
-// task is not running).
-app.post("/api/agent/run/:taskId/cancel", (req, res) => {
-  const body = JSON.stringify(req.body || {});
-  proxyAgent(req, res, "POST", body);
-});
-
-app.get("/api/agent/stream/:taskId", (req, res) => {
-  proxyAgent(req, res, "GET");
-});
-
-app.get("/api/agent/history", (req, res) => {
-  proxyAgent(req, res, "GET");
-});
-
-app.get("/api/agent/session/:rootId", (req, res) => {
-  proxyAgent(req, res, "GET");
-});
-
-app.get("/api/agent/run/:id", (req, res) => {
-  proxyAgent(req, res, "GET");
-});
+registerAgentProxyRoutes({ app, http, agentPort: AGENT_PORT });
 
 // --- Frontend ---
 
 app.get("/", (req, res) => {
   const html = fs.readFileSync(path.join(__dirname, "dashboard.html"), "utf-8")
     .replace("__VPS_IP__", VPS_IP);
-  res.set("Content-Type", "text/html; charset=utf-8").send(html);
+  res.set("Content-Type", "text/html; charset=utf-8").set("Cache-Control", "no-cache").send(html);
 });
 
 let dashboardServer = null;

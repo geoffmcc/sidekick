@@ -1,4 +1,5 @@
 const { redactSensitive } = require("../redact");
+const { DEFINITIONS } = require("../core/errors");
 
 function sanitizeText(value) {
   const text = value && value.stack ? value.message : String(value == null ? "" : value);
@@ -22,11 +23,17 @@ function textResult(text, metadata = {}) {
 
 function errorResult(error, code = "handler_error", metadata = {}) {
   const safeMessage = sanitizeText(error && error.message ? error.message : String(error || "Unknown error"));
+  const definition = DEFINITIONS[code];
   return {
     content: [{ type: "text", text: code === "handler_error" ? "Error: " + safeMessage : safeMessage }],
     isError: true,
     code,
     status: metadata.status || code,
+    httpStatus: metadata.httpStatus || definition?.[0],
+    retryable: metadata.retryable ?? definition?.[1] ?? false,
+    subsystem: metadata.subsystem || "platform",
+    correlationId: metadata.correlationId || null,
+    details: metadata.details && typeof metadata.details === "object" ? metadata.details : {},
     approvalRequired: metadata.approvalRequired,
     approvalId: metadata.approvalId,
     timedOut: metadata.timedOut,
