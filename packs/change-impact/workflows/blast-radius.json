@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "change-impact/blast-radius",
+  "version": "1.0.0",
+  "title": "Change blast-radius analysis",
+  "description": "Read-only change summary followed by semantic repository blast-radius discovery.",
+  "mode": "read_only",
+  "tags": ["change-impact", "blast-radius", "read-only"],
+  "inputs": { "path": { "type": "string", "required": true }, "base": { "type": "string", "required": false }, "query": { "type": "string", "required": false } },
+  "steps": [{ "name": "analysis", "title": "Analyze changed surface and semantic relationships", "tool": "change_impact", "args": { "path": "${inputs.path}", "base": "${inputs.base}", "query": "${inputs.query}" }, "expect": "json", "on_error": "fail" }],
+  "result": { "analysis": "${steps.analysis.json}" }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "change-impact-tools",
+  "displayName": "Change Impact Tools",
+  "version": "1.0.0",
+  "description": "Read-only diff classification and semantic caller/callee blast-radius analysis.",
+  "author": "Sidekick",
+  "type": "plugin",
+  "entryPoint": "entry.js",
+  "sidekick": ">=1.0.0",
+  "capabilities": ["change-impact-analysis", "blast-radius-analysis"],
+  "configSchema": { "type": "object", "properties": { "max_files": { "type": "integer", "minimum": 1, "maximum": 2000 } }, "additionalProperties": false },
+  "tools": { "change_impact": { "risk": "low", "category": "Development", "aliases": ["blast_radius"] } },
+  "permissions": [{ "tool": "dev_change_summary", "risk": "low" }, { "tool": "semantic_repo", "risk": "low" }],
+  "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
+}

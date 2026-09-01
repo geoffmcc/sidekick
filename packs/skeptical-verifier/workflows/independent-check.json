@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "skeptical-verifier/independent-check",
+  "version": "1.0.0",
+  "title": "Independent read-only verification",
+  "description": "Collect independent repository and platform checks without running project commands or changing state.",
+  "mode": "read_only",
+  "tags": ["verification", "independent", "read-only"],
+  "inputs": { "path": { "type": "string", "required": true }, "snapshot": { "type": "string", "required": false } },
+  "steps": [{ "name": "verify", "title": "Collect independent evidence", "tool": "skeptical_verify", "args": { "path": "${inputs.path}", "snapshot": "${inputs.snapshot}" }, "expect": "json", "on_error": "fail" }],
+  "result": { "verification": "${steps.verify.json}" }
+}

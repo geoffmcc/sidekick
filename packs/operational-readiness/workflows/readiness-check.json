@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "operational-readiness/readiness-check",
+  "version": "1.0.0",
+  "title": "Operational readiness evidence check",
+  "description": "Require attributable evidence before collecting current health, repository and handoff readiness inputs.",
+  "mode": "read_only",
+  "tags": ["operations", "readiness", "evidence-gated"],
+  "inputs": { "project": { "type": "string", "required": true }, "path": { "type": "string", "required": true }, "evidence": { "type": "array", "required": true } },
+  "steps": [{ "name": "readiness", "title": "Collect evidence-gated readiness inputs", "tool": "operational_readiness", "args": { "project": "${inputs.project}", "path": "${inputs.path}", "evidence": "${inputs.evidence}" }, "expect": "json", "on_error": "fail" }],
+  "result": { "assessment": "${steps.readiness.json}" }
+}

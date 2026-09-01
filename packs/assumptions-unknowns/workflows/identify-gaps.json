@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "assumptions-unknowns/identify-gaps",
+  "version": "1.0.0",
+  "title": "Identify assumptions and unknowns",
+  "description": "Read canonical continuity stores and return explicit evidence gaps without persisting a second memory record.",
+  "mode": "read_only",
+  "tags": ["assumptions", "unknowns", "read-only"],
+  "inputs": { "project": { "type": "string", "required": true }, "query": { "type": "string", "required": false } },
+  "steps": [{ "name": "gaps", "title": "Read continuity evidence", "tool": "assumptions", "args": { "project": "${inputs.project}", "query": "${inputs.query}" }, "expect": "json", "on_error": "fail" }],
+  "result": { "gaps": "${steps.gaps.json}" }
+}

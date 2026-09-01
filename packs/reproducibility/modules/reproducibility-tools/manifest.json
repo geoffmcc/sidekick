@@ -1,0 +1,15 @@
+{
+  "name": "reproducibility-tools",
+  "displayName": "Reproducibility Tools",
+  "version": "1.0.0",
+  "description": "Bounded secret-safe reproducibility bundle creation through research evidence custody.",
+  "author": "Sidekick",
+  "type": "plugin",
+  "entryPoint": "entry.js",
+  "sidekick": ">=1.0.0",
+  "capabilities": ["reproducibility-bundles", "secret-safe-artifacts"],
+  "configSchema": { "type": "object", "properties": { "max_chars": { "type": "integer", "minimum": 1000, "maximum": 60000 } }, "additionalProperties": false },
+  "tools": { "reproducibility": { "risk": "medium", "category": "Development", "aliases": ["repro_bundle"] } },
+  "permissions": [{ "tool": "dev_repo_profile", "risk": "low" }, { "tool": "semantic_repo", "risk": "low" }, { "tool": "research_evidence", "risk": "medium" }],
+  "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
+}
