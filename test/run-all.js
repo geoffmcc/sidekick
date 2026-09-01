@@ -18,6 +18,7 @@ const SKIP_EXIT_CODE = 77;
 const suites = [
   { file: 'test/invariants-doctor.test.js', critical: true, description: 'Read-only durable invariants, redacted Doctor diagnostics, and support-bundle safety' },
   { file: 'test/certification.test.js', critical: true, description: 'Versioned Agent certification scenarios, canonical tool assertions, and bounded reports' },
+  { file: 'test/certification-isolation.test.js', critical: true, description: 'Certification isolation from operator data and temporary cleanup' },
   { file: 'test/certification-lifecycle.test.js', critical: true, description: 'Loopback Agent lifecycle certification, durable polling, cancellation, and bounded failures' },
   { file: 'test/live-agent-certification.test.js', critical: true, description: 'Loopback Agent-tab certification executor and durable terminal projection' },
   { file: 'test/agent-health-startup.test.js', critical: true, description: 'Agent startup migrations and truthful health readiness' },
@@ -90,10 +91,13 @@ const suites = [
   { file: 'test/per-action-risk.test.js', critical: false, description: 'Per-action tool risk resolution, fail-closed downgrade rules, and approval/policy decisions at the dispatcher boundary' },
   { file: 'test/compute-model-dedup.test.js', critical: false, description: 'Single model authority, shared trust ordering between router and placement, and maintained worker health_state' },
   { file: 'test/kernel-migration-parity.test.js', critical: true, description: 'Fresh migration boot vs runtime kernel boot schema parity' },
+  { file: 'test/fts-migration-parity.test.js', critical: true, description: 'Migration-owned knowledge FTS schema and runtime repair parity' },
   { file: 'test/migration-self-containment.test.js', critical: true, description: 'Migrations build a complete schema standalone (C1) and tolerate runtime-created columns (C2)' },
   { file: 'test/reliability-fixes.test.js', critical: true, description: 'Bounded reliability regressions for suite selection, custom database paths, and migration locking' },
   { file: 'test/project-identity.test.js', critical: false, description: 'Canonical project projection, cross-source identity, backfill, and encrypted workspace secrets' },
+  { file: 'test/project-context-isolation.test.js', critical: true, description: 'Canonical project context aggregation and cross-project log isolation' },
   { file: 'test/project-registry-tool.test.js', critical: false, description: 'Project registry invocation surface and gated backfill' },
+  { file: 'test/workspace-identity-wiring.test.js', critical: true, description: 'Workspace ownership and secret mutation actor provenance from durable identity' },
   { file: 'test/compute-audit-fixes.test.js', critical: false, description: 'Compute placement explain arguments, device allowlists, model fallback, and requested-device placement' },
   { file: 'test/compute-cancellation.test.js', critical: false, description: 'Compute two-phase cancellation, legal transitions, lease recovery, and active admission accounting' },
   { file: 'test/compute-direct-runner.test.js', critical: false, description: 'Direct compute runner source failures, lease caps, interruption recovery, and cancellation' },
@@ -149,6 +153,7 @@ const suites = [
   { file: 'test/developer-pack.test.js', critical: true, description: 'Developer pack behaviour against real git repositories: repo profile, change summary, governed verification, and runnable workflows' },
   { file: 'test/semantic-repository.test.js', critical: true, description: 'Semantic Repository Intelligence: static multi-language parsing, determinism, cache invalidation, safety and integrity' },
   { file: 'test/execution-node.test.js', critical: true, description: 'Governed execution node workspace containment, placement, leases, idempotency, and receipts' },
+  { file: 'test/execution-node-protocol.test.js', critical: true, description: 'Authenticated execution-node protocol lifecycle and bounded response behavior' },
   { file: 'test/proxmox-unit.test.js', critical: true, description: 'Proxmox pack unit/security: endpoint/identifier/UPID validation, credential redaction, response normalization, error taxonomy, provider detection, profile resolution' },
   { file: 'test/proxmox-pack.test.js', critical: true, description: 'Proxmox pack integration: install/configure/health, pinned-CA TLS (and fail-closed without it), normalized discovery, guest lifecycle task monitoring, idempotency, and token-leak defense against a mock Proxmox API' },
   { file: 'test/jellyfin-pack.test.js', critical: true, description: 'Jellyfin pack profile security, deterministic playback diagnosis, capability normalization, and graceful degradation' },
@@ -237,7 +242,20 @@ function selectSuites(allSuites, requested) {
   return { selected, unknown, error: unknown.length ? `Invalid test suite selection: ${unknown.join(', ')}` : null };
 }
 
-function runSuites({ allSuites = discoverSuites(), requested = [], cwd = root, spawnSyncImpl = spawnSync, output = console } = {}) {
+function boundedSuiteTimeout(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(1000, Math.min(Math.trunc(parsed), 30 * 60 * 1000)) : 5 * 60 * 1000;
+}
+
+function killTimedOutSuite(result) {
+  // spawnSync's timeout only signals the suite process. Run each suite in its
+  // own Unix process group so a timed-out suite cannot orphan its server or
+  // other descendants for the next suite.
+  if (process.platform === 'win32' || !result?.pid) return;
+  try { process.kill(-result.pid, 'SIGKILL'); } catch {}
+}
+
+function runSuites({ allSuites = discoverSuites(), requested = [], cwd = root, spawnSyncImpl = spawnSync, output = console, suiteTimeoutMs = boundedSuiteTimeout(process.env.SIDEKICK_TEST_SUITE_TIMEOUT_MS) } = {}) {
   const selection = selectSuites(allSuites, requested);
   if (selection.error || selection.selected.length === 0) {
     output.error(selection.error || 'No test suites selected.');
@@ -281,10 +299,22 @@ function runSuites({ allSuites = discoverSuites(), requested = [], cwd = root, s
     const result = spawnSyncImpl(process.execPath, [suitePath], {
       cwd,
       stdio: 'inherit',
+      detached: process.platform !== 'win32',
       env: { ...process.env, NODE_ENV: 'test' },
+      timeout: suiteTimeoutMs,
     });
 
-    if (result.status === SKIP_EXIT_CODE) {
+    if (result.error && result.error.code === 'ETIMEDOUT') {
+      killTimedOutSuite(result);
+      failed++;
+      failures.push(`${suite.file} (timeout after ${suiteTimeoutMs}ms)`);
+      output.log(`\n❌ ${suite.file} timed out after ${suiteTimeoutMs}ms`);
+      if (suite.critical) {
+        notRun.push(...selection.selected.slice(index + 1).map((remaining) => remaining.file));
+        output.log('\nStopping because a critical suite timed out.');
+        break;
+      }
+    } else if (result.status === SKIP_EXIT_CODE) {
       skipped++;
       output.log(`\n↷ ${suite.file} skipped`);
     } else if (result.status === 0) {

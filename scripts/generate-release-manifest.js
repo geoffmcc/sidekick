@@ -45,6 +45,22 @@ function readChecksums(workerRoot) {
   return { files, total_bytes: totalBytes, manifest_sha256: sha256(checksumPath) };
 }
 
+function readInstallSurface(repoRoot, packageJson) {
+  const root = path.resolve(repoRoot);
+  const entries = [...(packageJson.files || []), ...Object.values(packageJson.bin || {})];
+  const paths = [...new Set(entries.map(safeRelative))].sort();
+  for (const relative of paths) {
+    const absolute = path.resolve(root, relative);
+    if (!absolute.startsWith(`${root}${path.sep}`) || !fs.existsSync(absolute)) {
+      throw new Error(`package install surface is missing: ${relative}`);
+    }
+  }
+  return {
+    files: (packageJson.files || []).map(safeRelative),
+    bin: Object.fromEntries(Object.entries(packageJson.bin || {}).map(([name, target]) => [name, safeRelative(target)])),
+  };
+}
+
 function generateManifest({ repoRoot = path.join(__dirname, ".."), workerPackage } = {}) {
   const packagePath = path.join(repoRoot, "package.json");
   const lockPath = path.join(repoRoot, "package-lock.json");
@@ -53,6 +69,7 @@ function generateManifest({ repoRoot = path.join(__dirname, ".."), workerPackage
   if (packageJson.name !== lockJson.name || packageJson.version !== lockJson.version) {
     throw new Error("package.json and package-lock.json identity/version do not match");
   }
+  const installSurface = readInstallSurface(repoRoot, packageJson);
 
   const workerRoot = path.resolve(workerPackage || path.join(repoRoot, "dist", `sidekick-compute-worker-${packageJson.version}`));
   const workerPackageJson = JSON.parse(fs.readFileSync(path.join(workerRoot, "package.json"), "utf8"));
@@ -67,6 +84,7 @@ function generateManifest({ repoRoot = path.join(__dirname, ".."), workerPackage
       engines: packageJson.engines || {},
       package_json_sha256: sha256(packagePath),
       package_lock_sha256: sha256(lockPath),
+      install_surface: installSurface,
     },
     worker_package: {
       name: workerPackageJson.name,
@@ -100,4 +118,4 @@ if (require.main === module) {
   try { main(); } catch (error) { console.error(`generate-release-manifest: ${error.message}`); process.exitCode = 1; }
 }
 
-module.exports = { generateManifest, readChecksums };
+module.exports = { generateManifest, readChecksums, readInstallSurface };

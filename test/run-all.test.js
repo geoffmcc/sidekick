@@ -61,6 +61,22 @@ try {
   assert.deepStrictEqual(stopped.notRun, ['test/after.test.js']);
   assert.ok(stopOutput.lines.includes('  - test/after.test.js'), 'not-run suites must be reported');
   console.log('  passed: critical failure reports suites not run');
+
+  const timeoutOutput = silentOutput();
+  const timedOut = runner.runSuites({
+    cwd: temporary,
+    suiteTimeoutMs: 1234,
+    allSuites: [{ file: 'test/pass.test.js', critical: false, description: 'timeout fixture' }],
+    spawnSyncImpl: (_command, _args, options) => {
+      assert.strictEqual(options.timeout, 1234, 'suite timeout must reach the child process boundary');
+      assert.strictEqual(options.detached, process.platform !== 'win32', 'suites must isolate descendants for timeout cleanup');
+      return { status: null, error: { code: 'ETIMEDOUT' } };
+    },
+    output: timeoutOutput,
+  });
+  assert.strictEqual(timedOut.failed, 1);
+  assert.match(timedOut.failures[0], /timeout after 1234ms/);
+  console.log('  passed: stalled suites become bounded failures');
 } finally {
   fs.rmSync(temporary, { recursive: true, force: true });
 }

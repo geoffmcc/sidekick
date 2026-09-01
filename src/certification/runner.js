@@ -108,12 +108,44 @@ async function runLiveScenario(scenario, availability, liveExecutor) {
   }
 }
 
-async function runCertification({ scenarioIds, mode, theme, availability = false, liveExecutor = null, registry = getBuiltinRegistry() } = {}) {
+async function runLifecycleScenario(scenario, lifecycleExecutor) {
+  if (!lifecycleExecutor || typeof lifecycleExecutor.run !== "function") {
+    return result(scenario, "blocked", "required Agent lifecycle executor is unavailable");
+  }
+  try {
+    const observed = await lifecycleExecutor.run(scenario);
+    const terminal = observed && observed.timeout !== true && observed.state && ["completed", "partial", "failed", "cancelled", "timed_out", "blocked"].includes(observed.state);
+    if (!terminal) return result(scenario, "failed", "lifecycle executor did not return a terminal durable task", { observed });
+    if (observed.source !== "durable_task_store") return result(scenario, "failed", "lifecycle executor did not provide the authoritative durable projection", { observed });
+    if (!Array.isArray(observed.events) || !Array.isArray(observed.receipts)) return result(scenario, "failed", "lifecycle executor omitted durable events or receipts", { observed });
+    const dispatchTotal = Number(observed.dispatch_counts?.total || 0);
+    if (!Number.isInteger(dispatchTotal) || dispatchTotal < 1 || dispatchTotal > scenario.bounded.max_steps) {
+      return result(scenario, "failed", "lifecycle executor did not provide a bounded dispatch", { observed });
+    }
+    const observedTools = new Set([
+      ...(Array.isArray(observed.receipts) ? observed.receipts.map(item => String(item.capability || item.tool || "")) : []),
+      ...(Array.isArray(observed.events) ? observed.events.map(item => String(item.tool_name || item.capability || "")) : []),
+    ].filter(Boolean));
+    const forbidden = scenario.forbidden_tools.filter(tool => observedTools.has(tool) || observedTools.has(`sidekick_${tool}`));
+    if (forbidden.length) return result(scenario, "failed", `forbidden tools were selected: ${forbidden.join(", ")}`, { observed });
+    const missingExpected = scenario.expected_tools.filter(tool => !observedTools.has(tool) && !observedTools.has(`sidekick_${tool}`));
+    if (missingExpected.length) return result(scenario, "failed", `expected tools were not observed: ${missingExpected.join(", ")}`, { observed });
+    const expectedFailure = scenario.outcome.expected === "failed";
+    const passed = expectedFailure
+      ? ["failed", "blocked", "cancelled", "timed_out"].includes(observed.state)
+      : observed.state === "completed" && observed.result?.status === "verified";
+    return result(scenario, passed ? "passed" : "failed", passed ? null : `unexpected lifecycle task state: ${observed.state}`, { observed });
+  } catch (error) {
+    return result(scenario, "failed", "Agent lifecycle certification execution failed", { error: error.message });
+  }
+}
+
+async function runCertification({ scenarioIds, mode, theme, availability = false, liveExecutor = null, lifecycleExecutor = null, registry = getBuiltinRegistry() } = {}) {
   const selected = listScenarios({ mode, theme }).filter(scenario => !scenarioIds || scenarioIds.includes(scenario.id));
   const results = [];
   for (const scenario of selected) {
     if (scenario.mode === "lifecycle") {
-      results.push(result(scenario, "blocked", "run the required Agent lifecycle certification"));
+      results.push(await runLifecycleScenario(scenario, lifecycleExecutor || liveExecutor));
       continue;
     }
     if (scenario.mode === "live") {

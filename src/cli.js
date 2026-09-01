@@ -2,6 +2,8 @@
 "use strict";
 
 const fs = require("fs");
+const os = require("os");
+const path = require("path");
 const { serveStdio } = require("@modelcontextprotocol/server/stdio");
 const packageJson = require("../package.json");
 const { prepareLocalEnvironment, acquireBootstrapLock, getLocalPaths } = require("./local/paths");
@@ -39,11 +41,21 @@ function provisionCertificationPacks() {
   }
 }
 
+function prepareCertificationEnvironment() {
+  const configured = process.env.SIDEKICK_CERTIFICATION_DATA_DIR;
+  const data = configured ? path.resolve(configured) : fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-certification-"));
+  process.env.SIDEKICK_HOME = path.join(data, "home");
+  process.env.SIDEKICK_DATA_DIR = data;
+  process.env.SIDEKICK_BACKUP_DIR = path.join(data, "backups");
+  return { data, temporary: !configured };
+}
+
 async function run() {
   const command = process.argv[2];
   if (command === "version") return console.log(packageJson.version);
   if (command === "status") return status();
   if (command === "doctor" || command === "setup" || command === "certify") {
+    const certificationEnvironment = command === "certify" ? prepareCertificationEnvironment() : null;
     const paths = prepareLocalEnvironment();
     const release = acquireBootstrapLock(paths.lock);
     try { console.error(`Sidekick local data: ${paths.data}`); }
@@ -54,34 +66,41 @@ async function run() {
       if (process.argv.includes("--bundle")) return console.log(JSON.stringify(createSupportBundle({ report }), null, 2));
       if (process.argv.includes("--json")) return console.log(JSON.stringify(report, null, 2));
       return console.log(formatDoctorText(report));
-     }
-     if (command === "certify") {
+      }
+      if (command === "certify") {
         const db = require("./db");
-        db.runPendingMigrations();
-        provisionCertificationPacks();
-        const { runCertification, formatCertificationText, createLifecycleExecutorFromEnv } = require("./certification");
-        const live = process.argv.includes("--live");
-        const liveExecutor = live ? createLifecycleExecutorFromEnv() : null;
-        const previousTestPolicy = process.env.SIDEKICK_TEST_TOOL_POLICY;
-        const previousTestApproval = process.env.SIDEKICK_TEST_APPROVAL_MODE;
-        process.env.SIDEKICK_TEST_TOOL_POLICY = "open";
-        process.env.SIDEKICK_TEST_APPROVAL_MODE = "off";
-        let report;
         try {
+          db.runPendingMigrations();
+          provisionCertificationPacks();
+          const { runCertification, formatCertificationText, createLifecycleExecutorFromEnv } = require("./certification");
+          const live = process.argv.includes("--live");
+          const liveExecutor = live ? createLifecycleExecutorFromEnv() : null;
+          const previousTestPolicy = process.env.SIDEKICK_TEST_TOOL_POLICY;
+          const previousTestApproval = process.env.SIDEKICK_TEST_APPROVAL_MODE;
+          process.env.SIDEKICK_TEST_TOOL_POLICY = "open";
+          process.env.SIDEKICK_TEST_APPROVAL_MODE = "off";
+          let report;
+          try {
           report = await runCertification({ mode: live ? "live" : "hermetic", availability: liveExecutor ? () => liveExecutor.available() : false, liveExecutor });
-        } finally {
-          if (previousTestPolicy === undefined) delete process.env.SIDEKICK_TEST_TOOL_POLICY;
-          else process.env.SIDEKICK_TEST_TOOL_POLICY = previousTestPolicy;
-          if (previousTestApproval === undefined) delete process.env.SIDEKICK_TEST_APPROVAL_MODE;
-          else process.env.SIDEKICK_TEST_APPROVAL_MODE = previousTestApproval;
-        }
-      if (process.argv.includes("--json")) console.log(JSON.stringify(report, null, 2));
-      else console.log(formatCertificationText(report));
+          } finally {
+            if (previousTestPolicy === undefined) delete process.env.SIDEKICK_TEST_TOOL_POLICY;
+            else process.env.SIDEKICK_TEST_TOOL_POLICY = previousTestPolicy;
+            if (previousTestApproval === undefined) delete process.env.SIDEKICK_TEST_APPROVAL_MODE;
+            else process.env.SIDEKICK_TEST_APPROVAL_MODE = previousTestApproval;
+          }
+          if (process.argv.includes("--json")) console.log(JSON.stringify(report, null, 2));
+          else console.log(formatCertificationText(report));
         // Unavailability is diagnostic information, never release evidence.
         // Keep the legacy flag accepted, but it cannot turn blocked or skipped
         // required certification into a pass.
-        if (report.verdict !== "passed") process.exitCode = 1;
-      return;
+          if (report.verdict !== "passed") process.exitCode = 1;
+          return;
+        } finally {
+          db.closeDatabase();
+          if (certificationEnvironment.temporary) {
+            try { fs.rmSync(certificationEnvironment.data, { recursive: true, force: true }); } catch {}
+          }
+        }
     }
     return;
   }

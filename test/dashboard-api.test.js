@@ -87,7 +87,10 @@ setTimeout(async () => {
 
     console.log('Test 3.0aa: dashboard exposes bounded artifact custody metadata');
     {
-      const response = await makeRequest('GET', '/api/artifacts?limit=2');
+      const unscoped = await makeRequest('GET', '/api/artifacts?limit=2');
+      assert.strictEqual(unscoped.status, 400, 'Artifact metadata must reject an authenticated request without project scope');
+      assert.strictEqual(unscoped.data.code, 'project_scope_required', 'Missing artifact scope should be machine-readable');
+      const response = await makeRequest('GET', '/api/artifacts?project_id=dashboard-test&limit=2');
       assert.strictEqual(response.status, 200, 'Artifact dashboard API should succeed');
       assert.strictEqual(response.data.ok, true, 'Artifact dashboard API should report success');
       assert.ok(Array.isArray(response.data.artifacts), 'Artifact dashboard API should return rows');

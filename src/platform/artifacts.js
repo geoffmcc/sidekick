@@ -11,7 +11,12 @@ function createArtifactStore({ ensureSchema, dbStore, normalizeArtifact, nowIso,
     if (!["original", "derivative"].includes(role)) throw new Error("artifact lineage role must be original or derivative");
     if (role === "original" && input.supersedes_artifact_id) throw new Error("original artifacts cannot supersede another artifact");
     if (role === "derivative" && !input.supersedes_artifact_id) throw new Error("derivative artifacts require supersedes_artifact_id");
-    if (input.supersedes_artifact_id) { const parent = dbStore.getDb().prepare("SELECT artifact_id, deleted_at FROM platform_artifacts WHERE artifact_id = ?").get(input.supersedes_artifact_id); if (!parent) throw new Error(`Parent artifact not found: ${input.supersedes_artifact_id}`); if (parent.deleted_at) throw new Error("derivatives cannot be created from deleted artifacts"); }
+    if (input.supersedes_artifact_id) {
+      const parent = dbStore.getDb().prepare("SELECT artifact_id, project_id, deleted_at FROM platform_artifacts WHERE artifact_id = ?").get(input.supersedes_artifact_id);
+      if (!parent) throw new Error(`Parent artifact not found: ${input.supersedes_artifact_id}`);
+      if (parent.deleted_at) throw new Error("derivatives cannot be created from deleted artifacts");
+      if (String(parent.project_id || "") !== String(input.project_id || "")) throw new Error("derivative parent must belong to the same project");
+    }
     if (input.content_hash !== undefined && !/^(?:sha256:)?[a-f0-9]{64}$/i.test(String(input.content_hash))) throw new Error("content_hash must be a SHA-256 digest");
     if (input.byte_size !== undefined && (!Number.isInteger(input.byte_size) || input.byte_size < 0)) throw new Error("byte_size must be a non-negative integer");
     lineage.role = role; const id = input.artifact_id || newId("art"), ts = input.created_at || nowIso();
@@ -21,7 +26,19 @@ function createArtifactStore({ ensureSchema, dbStore, normalizeArtifact, nowIso,
     return getArtifact(id);
   }
   function getArtifact(id) { ensureSchema(); return normalizeArtifact(dbStore.getDb().prepare("SELECT * FROM platform_artifacts WHERE artifact_id = ?").get(String(id))); }
-  function listArtifacts(query = {}) { ensureSchema(); const conditions = ["deleted_at IS NULL"], params = []; if (query.project_id) { conditions.push("project_id = ?"); params.push(String(query.project_id)); } if (query.execution_id) { conditions.push("execution_id = ?"); params.push(String(query.execution_id)); } if (query.custody_role) { if (!["original", "derivative"].includes(query.custody_role)) throw new Error("Invalid custody_role"); conditions.push("json_extract(lineage_json, '$.role') = ?"); params.push(query.custody_role); } const limit = Math.max(1, Math.min(Number(query.limit) || 50, 100)); return dbStore.getDb().prepare(`SELECT * FROM platform_artifacts WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC LIMIT ?`).all(...params, limit).map(normalizeArtifact); }
+  function listArtifacts(query = {}) {
+    ensureSchema();
+    const conditions = ["deleted_at IS NULL"], params = [];
+    if (query.project_id) { conditions.push("project_id = ?"); params.push(String(query.project_id)); }
+    if (query.principal_id) {
+      conditions.push("(owner_principal_id = ? OR created_by_principal_id = ?)");
+      params.push(String(query.principal_id), String(query.principal_id));
+    }
+    if (query.execution_id) { conditions.push("execution_id = ?"); params.push(String(query.execution_id)); }
+    if (query.custody_role) { if (!["original", "derivative"].includes(query.custody_role)) throw new Error("Invalid custody_role"); conditions.push("json_extract(lineage_json, '$.role') = ?"); params.push(query.custody_role); }
+    const limit = Math.max(1, Math.min(Number(query.limit) || 50, 100));
+    return dbStore.getDb().prepare(`SELECT * FROM platform_artifacts WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC LIMIT ?`).all(...params, limit).map(normalizeArtifact);
+  }
   return { registerArtifact, getArtifact, listArtifacts };
 }
 module.exports = { createArtifactStore };

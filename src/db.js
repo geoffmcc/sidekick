@@ -1860,6 +1860,10 @@ function rebuildKnowledgeFts() {
       SELECT id, category, title, content, tags, version_added, updated_at
       FROM knowledge;
     `);
+    db.prepare(`
+      INSERT INTO meta (key, value) VALUES ('knowledge_fts_schema_version', '1')
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `).run();
     return { success: true, count: db.prepare("SELECT COUNT(*) AS count FROM knowledge_fts").get().count };
   } catch (error) {
     return { success: false, error: error.message };

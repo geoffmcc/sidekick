@@ -11,9 +11,14 @@ async function recoverDurableAgentTasks({ platformKernel, taskStore, receiptStor
   const workPackages = workPackageStore && typeof workPackageStore.recoverExpiredWorkPackages === "function" ? workPackageStore.recoverExpiredWorkPackages(now ? now() : new Date().toISOString()) : { queued: [], parked: [], checked_at: now ? now() : new Date().toISOString() };
   const recovered = [];
   const failed = [];
+  const handledTasks = new Set();
   for (const executionId of recoveredClaims.orphaned || []) {
     const execution = platformKernel.getExecution(executionId);
     if (!execution || !execution.task_id) continue;
+    // A task can be referenced by more than one stale claim after a crash.
+    // Recover its durable state once per scan, not once per orphan record.
+    if (handledTasks.has(execution.task_id)) continue;
+    handledTasks.add(execution.task_id);
     const task = taskStore.getTask(execution.task_id);
     if (!task || TERMINAL.has(task.state)) continue;
     const receipts = receiptStore ? receiptStore.listReceipts(task.task_id) : [];

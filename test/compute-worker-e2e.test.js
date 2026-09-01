@@ -12,7 +12,8 @@ const { spawn, execFileSync } = require('child_process');
 
 const ROOT = path.join(__dirname, '..');
 const AGENT = path.join(ROOT, 'src', 'compute', 'worker-agent.js');
-const PORT = 47399;
+// Keep parallel/aborted runs from sharing a stale fixed-port server.
+const PORT = 47000 + (process.pid % 10000);
 const API_KEY = 'sk-e2e-worker-key';
 const admin = { Authorization: `Bearer ${API_KEY}` };
 const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-srv-'));
@@ -23,6 +24,7 @@ const CRED = path.join(WORK_DIR, 'worker-credential.json');
 const NODE_ID = 'node_e2e_worker_01';
 
 let passed = 0, failed = 0, skipped = 0;
+let server = null;
 function check(name, cond) {
   if (cond) { passed++; console.log(`  \x1b[32m✓\x1b[0m ${name}`); }
   else { failed++; console.log(`  \x1b[31m✗\x1b[0m ${name}`); }
@@ -51,9 +53,41 @@ function cli(args, expectFail = false) {
   catch (e) { if (expectFail) return (e.stdout || '') + (e.stderr || ''); throw e; }
 }
 
+function waitForExit(child, timeoutMs = 5000) {
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    child.once('exit', () => finish(true));
+    if (child.exitCode !== null || child.signalCode) finish(true);
+  });
+}
+
+async function stopServer() {
+  if (!server || server.exitCode !== null || server.signalCode) return;
+  server.kill('SIGTERM');
+  if (await waitForExit(server)) {
+    assert.ok(server.exitCode !== null || server.signalCode, 'E2E server must be reaped after cleanup');
+    return;
+  }
+  server.kill('SIGKILL');
+  assert.strictEqual(await waitForExit(server), true, 'E2E server must exit after forced cleanup');
+}
+
+async function handleSignal(signal) {
+  try { await stopServer(); } finally { process.exit(signal === 'SIGINT' ? 130 : 143); }
+}
+process.once('SIGINT', () => { handleSignal('SIGINT').catch(() => process.exit(130)); });
+process.once('SIGTERM', () => { handleSignal('SIGTERM').catch(() => process.exit(143)); });
+
 async function main() {
   console.log('Running Compute Worker E2E Acceptance Tests...\n');
-  const server = spawn(process.execPath, ['src/index.js'], { cwd: ROOT, stdio: ['ignore', 'ignore', 'ignore'],
+  server = spawn(process.execPath, ['src/index.js'], { cwd: ROOT, stdio: ['ignore', 'ignore', 'ignore'],
     env: { ...process.env, NODE_ENV: 'test', SIDEKICK_DATA_DIR: DATA_DIR, SIDEKICK_PORT: String(PORT), SIDEKICK_API_KEY: API_KEY } });
   try {
     let healthy = false;
@@ -96,7 +130,7 @@ async function main() {
     const recovered = (await req('GET', '/compute/admin/workers')).data.workers.find(w => w.nodeId === NODE_ID);
     check('recovered worker credential is active again', recovered && recovered.credentialState === 'active');
   } finally {
-    server.kill('SIGKILL');
+    await stopServer();
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
     fs.rmSync(WORK_DIR, { recursive: true, force: true });
   }

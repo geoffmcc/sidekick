@@ -50,6 +50,30 @@ function dispatchCounts(projection) {
   return counts;
 }
 
+async function boundedResponseText(response) {
+  if (response.body && typeof response.body.getReader === "function") {
+    const reader = response.body.getReader();
+    const chunks = [];
+    let bytes = 0;
+    try {
+      while (true) {
+        const next = await reader.read();
+        if (next.done) break;
+        const chunk = Buffer.from(next.value);
+        bytes += chunk.length;
+        if (bytes > MAX_RESPONSE_BYTES) throw new Error("certification Agent response exceeds the size bound");
+        chunks.push(chunk);
+      }
+    } finally {
+      try { reader.releaseLock(); } catch {}
+    }
+    return Buffer.concat(chunks).toString("utf8");
+  }
+  const text = await response.text();
+  if (Buffer.byteLength(text, "utf8") > MAX_RESPONSE_BYTES) throw new Error("certification Agent response exceeds the size bound");
+  return text;
+}
+
 function observation(taskId, projection, extra = {}) {
   const task = projection.task || {};
   return sanitize({
@@ -81,8 +105,7 @@ function createLifecycleExecutor({ baseUrl, fetchImpl = globalThis.fetch, timeou
         signal: controller.signal,
         headers: { accept: "application/json", ...configuredHeaders, ...(options.headers || {}) },
       });
-      const text = await response.text();
-      if (Buffer.byteLength(text, "utf8") > MAX_RESPONSE_BYTES) throw new Error("certification Agent response exceeds the size bound");
+      const text = await boundedResponseText(response);
       let body;
       try { body = JSON.parse(text); } catch { throw new Error("certification Agent returned invalid JSON"); }
       if (!response.ok) throw new Error(`certification Agent request failed with HTTP ${response.status}: ${sanitize(String(body.error || "request failed")).slice(0, 300)}`);

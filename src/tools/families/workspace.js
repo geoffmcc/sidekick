@@ -31,6 +31,14 @@ function scopedProject() {
   return project ? canonicalProject(project) : null;
 }
 
+function identityDetails() {
+  const identity = getExecutionContext().authIdentity;
+  return {
+    ownerId: identity?.acting_for_principal_id || identity?.principal_id || null,
+    actorId: identity?.principal_id || null,
+  };
+}
+
 function assertProjectAccess(row, requestedProject) {
   const current = scopedProject();
   const requested = requestedProject ? canonicalProject(requestedProject) : null;
@@ -69,6 +77,7 @@ async function sidekick_workspace({ action, workspace_id, project, name, config,
       case "create": {
         if (!project) return errorResult("project required for create");
         assertProjectAccess(null, project);
+        const { ownerId, actorId } = identityDetails();
         const row = platformKernel.createProjectWorkspace({
           project_id: project,
           name,
@@ -76,7 +85,8 @@ async function sidekick_workspace({ action, workspace_id, project, name, config,
           environment,
           resource_limits,
           metadata,
-          owner_id: getExecutionSource() || "system",
+          owner_id: ownerId || getExecutionSource() || "system",
+          actor_id: actorId,
           source: getExecutionSource(),
         });
         return textResult(JSON.stringify(row, null, 2));
@@ -86,7 +96,9 @@ async function sidekick_workspace({ action, workspace_id, project, name, config,
         const existing = platformKernel.getProjectWorkspace(workspace_id);
         if (!existing) return errorResult(`Workspace not found: ${workspace_id}`);
         assertProjectAccess(existing);
+        const { actorId } = identityDetails();
         const updates = { source: getExecutionSource() };
+        if (actorId) updates.actor_id = actorId;
         if (config !== undefined) updates.config = config;
         if (environment !== undefined) updates.environment = environment;
         if (resource_limits !== undefined) updates.resource_limits = resource_limits;
@@ -101,9 +113,10 @@ async function sidekick_workspace({ action, workspace_id, project, name, config,
         assertProjectAccess(existing);
         if (!secret_name) return errorResult("secret_name required for set_secret");
         if (secret_value == null || secret_value === "") return errorResult("secret_value required for set_secret");
+        const { actorId } = identityDetails();
         // Fails closed without SIDEKICK_SECRET_KEY (kernel throws; surfaced
         // below). The returned workspace exposes secret NAMES only.
-        const row = platformKernel.setWorkspaceSecret(workspace_id, secret_name, secret_value, { source: getExecutionSource() });
+        const row = platformKernel.setWorkspaceSecret(workspace_id, secret_name, secret_value, { source: getExecutionSource(), actor_id: actorId });
         return textResult(JSON.stringify(row, null, 2));
       }
       case "delete_secret": {
@@ -112,7 +125,8 @@ async function sidekick_workspace({ action, workspace_id, project, name, config,
         const existing = platformKernel.getProjectWorkspace(workspace_id);
         if (!existing) return errorResult(`Workspace not found: ${workspace_id}`);
         assertProjectAccess(existing);
-        const result = platformKernel.deleteWorkspaceSecret(workspace_id, secret_name, { source: getExecutionSource() });
+        const { actorId } = identityDetails();
+        const result = platformKernel.deleteWorkspaceSecret(workspace_id, secret_name, { source: getExecutionSource(), actor_id: actorId });
         if (!result.deleted) return errorResult(`Secret not found on workspace ${workspace_id}: ${secret_name}`);
         return textResult(JSON.stringify(result, null, 2));
       }

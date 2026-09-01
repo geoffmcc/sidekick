@@ -114,8 +114,12 @@ console.log('Running Scheduling Cancel Tests...\n');
     assert.strictEqual(claimOf(watch2.platform_execution_id).cancel_requested, false, 'resume requested no cancel');
     console.log('Passed\n');
 
+    platformKernel.releaseExecutionClaim({ execution_id: watch2.platform_execution_id, claimed_by: 'test-runner-watch2', claim_epoch: resumeClaim.claim.claim_epoch });
+    await TOOLS.watch({ action: 'remove', id: watch2.id });
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+    db.closeDatabase();
     console.log('All Scheduling Cancel Tests Passed!');
+    process.exit(0);
   } catch (e) {
     console.error('Scheduling cancel test failed:', e);
     process.exit(1);
