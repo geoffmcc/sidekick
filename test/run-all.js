@@ -52,6 +52,7 @@ const suites = [
   { file: 'test/health.test.js', critical: true, description: 'Composite health aggregation and stable failure shapes' },
   { file: 'test/agent-protocol.test.js', critical: true, description: 'Agent decision parsing, model selection, and chat roles' },
   { file: 'test/agent-capability-broker.test.js', critical: true, description: 'Generic canonical Agent capability discovery and live-state routing' },
+  { file: 'test/capability-catalog.test.js', critical: true, description: 'Shared capability catalog ownership, readiness, filtering, and dispatcher projection' },
   { file: 'test/agent-loop.test.js', critical: true, description: 'Agent Bridge tool-execution loop (approved, denied, unavailable, failing, and no-tool paths)' },
   { file: 'test/agent-capability-repair.test.js', critical: true, description: 'Generic Agent schema preflight, failure classification, and bounded repair guidance' },
   { file: 'test/agent-adaptive-durability.test.js', critical: true, description: 'Adaptive Agent authority envelopes, canonical effect classification, and fail-closed retries' },

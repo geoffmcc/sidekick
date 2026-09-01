@@ -47,6 +47,16 @@ function createAgentCatalog({ getToolDefsForSource, getBuiltinRegistry, crypto }
     return getToolDefsForSource("agent").filter(tool => tool.enabled);
   }
 
+  // Discovery-only projection. Preflight still resolves the live descriptor
+  // and the dispatcher rechecks schema, policy and approval before execution.
+  function getLiveAgentCapabilityCatalog(options = {}) {
+    try {
+      return require("../capabilities/catalog").project({ ...options, source: "agent", kind: options.kind || "tool" });
+    } catch {
+      return { ok: false, source: "agent", total: 0, offset: 0, limit: 0, has_more: false, entries: [], error: "capability catalog unavailable" };
+    }
+  }
+
   return {
     getLiveAgentToolDefs,
     getLiveAgentDescriptor,
@@ -54,6 +64,7 @@ function createAgentCatalog({ getToolDefsForSource, getBuiltinRegistry, crypto }
     getLiveAgentToolContracts,
     liveAgentCatalogFingerprint,
     brainAgentTools,
+    getLiveAgentCapabilityCatalog,
   };
 }
 

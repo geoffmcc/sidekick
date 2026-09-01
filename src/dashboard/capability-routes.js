@@ -1,6 +1,18 @@
 "use strict";
 
 function registerCapabilityRoutes({ app, capabilityAction, capabilityResult, callDashboardTool, dashboardExecutionMetadata, authenticatedUser, logError }) {
+  app.get("/api/capabilities/catalog", (req, res) => capabilityAction(req, res, {
+    action: "catalog",
+    source: "dashboard",
+    query: req.query.q,
+    kind: req.query.kind,
+    owner: req.query.owner,
+    state: req.query.state,
+    available: req.query.available === undefined ? undefined : req.query.available === "true",
+    offset: req.query.offset === undefined ? undefined : Number(req.query.offset),
+    limit: req.query.limit === undefined ? undefined : Number(req.query.limit),
+  }, "catalog"));
+
   app.get("/api/capabilities", (req, res) => capabilityAction(req, res, { action: "list" }, "list"));
 
   app.get("/api/capabilities/:name", (req, res) =>

@@ -15,6 +15,7 @@ const {
   getLiveAgentDescriptor,
   getLiveAgentRegistry,
   getLiveAgentToolContracts,
+  getLiveAgentCapabilityCatalog,
   liveAgentCatalogFingerprint,
   brainAgentTools,
 } = createAgentCatalog({ getToolDefsForSource, getBuiltinRegistry, crypto });
@@ -997,6 +998,10 @@ async function runAgent(goal, taskId, parentContext = null, cancelController = n
     visible_count: visibleAgentTools.length,
     candidate_count: capabilityCandidates.length,
     candidates: capabilityCandidates.slice(0, 24).map(tool => tool.name),
+    catalog: (() => {
+      const catalog = getLiveAgentCapabilityCatalog({ limit: 500 });
+      return { total: catalog.total, unavailable_count: catalog.entries.filter(entry => !entry.available).length, has_more: catalog.has_more };
+    })(),
   };
 
   let status = "iteration_limit";
@@ -2468,6 +2473,7 @@ module.exports = {
   buildSystemPrompt,
   buildInstalledPackContext,
   getLiveAgentToolContracts,
+  getLiveAgentCapabilityCatalog,
   CONV_DIR,
   startApprovalContinuationJobs,
   finalizeResumedTask,
