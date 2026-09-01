@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "api-engineering/api-contract-check",
+  "version": "1.0.0",
+  "title": "API Contract Check",
+  "description": "Run caller-supplied deterministic assertions against an explicitly scoped API target.",
+  "mode": "read_only",
+  "tags": ["api", "contract", "network-scope"],
+  "inputs": { "url": { "type": "string", "required": true }, "network_scope": { "type": "string", "required": true }, "assertions": { "type": "array", "required": true }, "project": { "type": "string", "required": false } },
+  "steps": [{ "name": "contract", "title": "Evaluate API contract", "tool": "api_contract_check", "args": { "url": "${inputs.url}", "network_scope": "${inputs.network_scope}", "assertions": "${inputs.assertions}", "project": "${inputs.project}", "capture_evidence": true }, "expect": "json", "on_error": "fail" }],
+  "result": { "contract": "${steps.contract.json.contract}", "scope": "${inputs.network_scope}", "not_performed": "writes, authentication changes and API mutations" }
+}

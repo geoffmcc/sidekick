@@ -1,0 +1,14 @@
+{
+  "name": "ci-cd-release-tools",
+  "displayName": "CI/CD Release Tools",
+  "version": "1.0.0",
+  "description": "Read-only CI and release readiness composition.",
+  "author": "Sidekick",
+  "type": "plugin",
+  "entryPoint": "entry.js",
+  "sidekick": ">=1.0.0",
+  "capabilities": ["ci-readiness", "release-gating", "release-notes-preview"],
+  "tools": { "release_readiness": { "risk": "high", "category": "Development" }, "ci_release_health": { "risk": "low", "category": "Development" } },
+  "permissions": [],
+  "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
+}

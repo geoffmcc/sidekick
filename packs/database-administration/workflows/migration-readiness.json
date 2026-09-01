@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "database-administration/migration-readiness",
+  "version": "1.0.0",
+  "title": "Migration Readiness",
+  "description": "Report migration state and schema evidence. Applying migrations is intentionally outside this workflow.",
+  "mode": "read_only",
+  "tags": ["database", "migrations", "safety"],
+  "inputs": { "database": { "type": "string", "required": false, "default": "sqlite" } },
+  "steps": [{ "name": "migrations", "title": "Inspect migration status", "tool": "database_admin", "args": { "action": "migrations", "database": "${inputs.database}" }, "expect": "json", "on_error": "fail" }],
+  "result": { "migration_evidence": "${steps.migrations.json.evidence}", "not_performed": "migration apply, rollback, restore and backup" }
+}

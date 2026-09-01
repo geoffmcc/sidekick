@@ -1,0 +1,14 @@
+{
+  "name": "infrastructure-as-code-tools",
+  "displayName": "Infrastructure as Code Tools",
+  "version": "1.0.0",
+  "description": "Plan-only infrastructure validation composed from governed Compose inspection and parsing.",
+  "author": "Sidekick",
+  "type": "plugin",
+  "entryPoint": "entry.js",
+  "sidekick": ">=1.0.0",
+  "capabilities": ["iac-plan", "compose-preflight", "configuration-parsing"],
+  "tools": { "iac_plan": { "risk": "medium", "category": "Infrastructure" }, "iac_health": { "risk": "low", "category": "Infrastructure" } },
+  "permissions": [],
+  "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
+}

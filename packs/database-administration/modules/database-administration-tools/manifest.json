@@ -1,0 +1,14 @@
+{
+  "name": "database-administration-tools",
+  "displayName": "Database Administration Tools",
+  "version": "1.0.0",
+  "description": "Database readiness and safe parameterized inspection composed from Sidekick database tools.",
+  "author": "Sidekick",
+  "type": "plugin",
+  "entryPoint": "entry.js",
+  "sidekick": ">=1.0.0",
+  "capabilities": ["database-health", "schema-inspection", "migration-readiness", "parameterized-read-only-query"],
+  "tools": { "database_admin": { "risk": "medium", "category": "Database" }, "database_health": { "risk": "low", "category": "Database" } },
+  "permissions": [],
+  "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
+}

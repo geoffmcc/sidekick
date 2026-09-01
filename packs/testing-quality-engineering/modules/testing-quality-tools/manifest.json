@@ -1,0 +1,14 @@
+{
+  "name": "testing-quality-tools",
+  "displayName": "Testing Quality Tools",
+  "version": "1.0.0",
+  "description": "Quality gates composed from the project's own verification and semantic repository tools.",
+  "author": "Sidekick",
+  "type": "plugin",
+  "entryPoint": "entry.js",
+  "sidekick": ">=1.0.0",
+  "capabilities": ["quality-gates", "test-execution", "verification-planning", "semantic-test-coverage"],
+  "tools": { "quality_gate": { "risk": "high", "category": "Development" }, "quality_health": { "risk": "low", "category": "Development" } },
+  "permissions": [],
+  "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
+}

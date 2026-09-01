@@ -1,0 +1,14 @@
+{
+  "name": "api-engineering-tools",
+  "displayName": "API Engineering Tools",
+  "version": "1.0.0",
+  "description": "Contract and health checks composed from governed browser HTTP tools and named network scopes.",
+  "author": "Sidekick",
+  "type": "plugin",
+  "entryPoint": "entry.js",
+  "sidekick": ">=1.0.0",
+  "capabilities": ["api-contract-testing", "api-health", "scoped-http"],
+  "tools": { "api_contract_check": { "risk": "high", "category": "Development" }, "api_engineering_health": { "risk": "low", "category": "Development" } },
+  "permissions": [],
+  "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
+}

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "infrastructure-as-code/iac-plan",
+  "version": "1.0.0",
+  "title": "Infrastructure Plan",
+  "description": "Validate configured infrastructure and return a plan without applying it.",
+  "mode": "read_only",
+  "tags": ["iac", "plan", "compose"],
+  "inputs": { "profile": { "type": "string", "required": false }, "file": { "type": "string", "required": false } },
+  "steps": [{ "name": "plan", "title": "Build infrastructure plan", "tool": "iac_plan", "args": { "profile": "${inputs.profile}", "file": "${inputs.file}" }, "expect": "json", "on_error": "fail" }],
+  "result": { "plan": "${steps.plan.json}", "apply_allowed": false }
+}

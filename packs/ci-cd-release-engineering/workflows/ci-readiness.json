@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "ci-cd-release-engineering/ci-readiness",
+  "version": "1.0.0",
+  "title": "CI Readiness",
+  "description": "Profile a repository and select its verification commands without executing or modifying it.",
+  "mode": "read_only",
+  "tags": ["ci", "verification", "read-only"],
+  "inputs": { "path": { "type": "string", "required": true } },
+  "steps": [{ "name": "health", "title": "Check CI/CD dependencies", "tool": "ci_release_health", "args": {}, "expect": "json", "on_error": "fail" }, { "name": "profile", "title": "Profile repository CI configuration", "tool": "dev_repo_profile", "args": { "path": "${inputs.path}" }, "expect": "json", "on_error": "fail" }],
+  "result": { "health": "${steps.health.json}", "ci": "${steps.profile.json.ci}", "verification": "${steps.profile.json.verification}", "not_performed": "verification execution, push and release publication" }
+}

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "database-administration/database-audit",
+  "version": "1.0.0",
+  "title": "Database Audit",
+  "description": "Collect schema, statistics and migration status without changing the database.",
+  "mode": "read_only",
+  "tags": ["database", "audit", "read-only"],
+  "inputs": { "database": { "type": "string", "required": false, "default": "sqlite" } },
+  "steps": [{ "name": "audit", "title": "Inspect database state", "tool": "database_admin", "args": { "action": "audit", "database": "${inputs.database}", "detailed": false }, "expect": "json", "on_error": "fail" }],
+  "result": { "database": "${inputs.database}", "evidence": "${steps.audit.json.evidence}", "mutations_performed": "${steps.audit.json.mutations_performed}" }
+}
