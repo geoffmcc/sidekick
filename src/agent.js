@@ -8,54 +8,17 @@ const { callAgentTool, getBuiltinRegistry, DATA_DIR, loadDelays, saveDelays, loa
 const { requiredToolPermission } = require("./tools/dispatcher");
 const authorization = require("./core/authorization");
 const identity = require("./core/identity");
+const { createAgentCatalog } = require("./agent/catalog");
 
-// Every Agent preflight must inspect the same live, source-filtered catalog
-// that is exposed to planning.  The canonical registry remains the execution
-// authority, but a broad registry lookup here could expose a disabled,
-// dashboard-only, or otherwise unauthorized capability to recovery or early
-// classification.  Keep this adapter deliberately narrow: it cannot execute
-// anything and callAgentTool still performs the authoritative dispatch check.
-function getLiveAgentToolDefs() {
-  return getToolDefsForSource("agent").filter(tool => tool && tool.enabled !== false);
-}
-function getLiveAgentDescriptor(name) {
-  const requested = String(name || "").replace(/^sidekick_/i, "");
-  const visible = getLiveAgentToolDefs().find(tool => String(tool.name || "").replace(/^sidekick_/i, "") === requested);
-  if (!visible) return null;
-  try { return getBuiltinRegistry().get(name) || visible; } catch { return visible; }
-}
-function getLiveAgentRegistry() {
-  const canonical = getBuiltinRegistry();
-  const visible = new Set(getLiveAgentToolDefs().map(tool => String(tool.name || "").replace(/^sidekick_/i, "")));
-  return {
-    // This is a live source-filtered catalog identity, not the built-in
-    // registry's static version. Pack/module/generated capability changes
-    // therefore invalidate persisted plans and rollback/recovery lookups.
-    version: liveAgentCatalogFingerprint(),
-    get(name) { return visible.has(String(name || "").replace(/^sidekick_/i, "")) ? getLiveAgentDescriptor(name) : null; },
-    toolDefs() { return getLiveAgentToolDefs(); },
-  };
-}
-function getLiveAgentToolContracts() {
-  const visible = getLiveAgentToolDefs();
-  let registry;
-  try { registry = getBuiltinRegistry(); } catch { return []; }
-  return visible.map(tool => registry.get(tool.name)).filter(descriptor => descriptor && descriptor.schema && typeof descriptor.schema.safeParse === "function");
-}
-function liveAgentCatalogFingerprint() {
-  const entries = getLiveAgentToolDefs().map(tool => {
-    const descriptor = getLiveAgentDescriptor(tool.name);
-    return {
-      name: String(tool.name || ""),
-      risk: tool.risk || descriptor?.risk || null,
-      source: tool.source || descriptor?.source || null,
-      version: descriptor?.version || null,
-      args: tool.argumentDescriptions || tool.args || {},
-      annotations: descriptor?.annotations || {},
-    };
-  });
-  return crypto.createHash("sha256").update(JSON.stringify(entries)).digest("hex");
-}
+const {
+  getLiveAgentToolDefs,
+  getLiveAgentDescriptor,
+  getLiveAgentRegistry,
+  getLiveAgentToolContracts,
+  liveAgentCatalogFingerprint,
+  brainAgentTools,
+} = createAgentCatalog({ getToolDefsForSource, getBuiltinRegistry, crypto });
+
 function persistedTaskAuthIdentity(task) {
   const principalId = task && (task.actor_principal_id || task.requested_by_principal_id);
   if (!principalId || !task.principal_context || task.principal_context.version !== 1) return null;
@@ -171,14 +134,6 @@ try {
   console.error("[Modules] Builtin module provisioning failed:", error.message);
 }
 
-// Brain planning receives the complete live, source-filtered Agent catalog:
-// built-ins, enabled modules/packs, and authorized trial/active generated
-// capabilities. The plan validator and canonical dispatcher still revalidate
-// the descriptor, schema, policy, risk, and approval immediately before use.
-function brainAgentTools() {
-  return getToolDefsForSource("agent")
-    .filter(t => t.enabled);
-}
 const { recordAgentTaskMemory, inferProjectFromText } = require("./memory");
 const { assembleContext } = require("./context");
 const { classifyEvidenceRequirement } = require("./agent-protocol");
