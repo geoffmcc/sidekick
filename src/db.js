@@ -11,6 +11,8 @@ const { createKvStore } = require("./db/kv-store");
 const { createToolLogStore } = require("./db/tool-logs");
 const { createGeneratedCapabilityStore } = require("./db/generated-capabilities");
 const { createGeneratedExecutionRowMappers } = require("./db/generated-execution-rows");
+const { createDatabaseInspection } = require("./db/inspection");
+const { createDatabaseQuery } = require("./db/query");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const DB_FILE = process.env.SIDEKICK_DB_FILE || path.join(DATA_DIR, "sidekick.db");
@@ -33,6 +35,13 @@ try {
 }
 
 let db = new Database(DB_FILE);
+
+const databaseInspection = createDatabaseInspection({
+  getDb: () => db,
+  fs,
+  dbFile: DB_FILE,
+});
+const databaseQuery = createDatabaseQuery({ getDb: () => db });
 
 function configureDatabase(connection) {
   connection.exec(`
@@ -1526,139 +1535,9 @@ function importMemories(data, options = {}) {
 
 // === Database Tool Helpers ===
 
-function clampLimit(limit) {
-  const parsed = parseInt(limit, 10);
-  if (!Number.isFinite(parsed) || parsed < 1) return 1000;
-  return Math.min(parsed, 5000);
-}
+const { clampLimit, isReadonlySql, quoteIdentifier, executeQuery } = databaseQuery;
 
-function isReadonlySql(sql) {
-  const trimmed = String(sql || "").trim();
-  if (!trimmed) return false;
-  const withoutTrailingSemicolon = trimmed.replace(/;\s*$/, "");
-  if (withoutTrailingSemicolon.includes(";")) return false;
-
-  const upper = withoutTrailingSemicolon.toUpperCase();
-  if (/\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|REPLACE|VACUUM|ATTACH|DETACH|REINDEX)\b/.test(upper)) {
-    return false;
-  }
-  if (upper.startsWith("PRAGMA")) {
-    return /^PRAGMA\s+(TABLE_INFO|INDEX_LIST|INDEX_INFO|FOREIGN_KEY_LIST|JOURNAL_MODE|PAGE_COUNT|PAGE_SIZE|DATABASE_LIST|INTEGRITY_CHECK|QUICK_CHECK)\b/.test(upper);
-  }
-  return /^(SELECT|WITH|EXPLAIN)\b/.test(upper);
-}
-
-function quoteIdentifier(identifier) {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(identifier)) {
-    throw new Error(`Invalid identifier: ${identifier}`);
-  }
-  return `"${identifier.replace(/"/g, '""')}"`;
-}
-
-function executeQuery(sql, params = [], options = {}) {
-  const { readonly = true, limit = 1000, timeout = 5000 } = options;
-  const maxRows = clampLimit(limit);
-  
-  if (readonly && !isReadonlySql(sql)) {
-    throw new Error("Write operations and multi-statement SQL are not allowed in readonly mode. Set readonly=false to allow.");
-  }
-  
-  let limitedSql = sql;
-  if (readonly && !/^\s*PRAGMA\b/i.test(sql) && !/\bLIMIT\b/i.test(sql)) {
-    limitedSql = sql.replace(/;?\s*$/, "") + ` LIMIT ${maxRows}`;
-  }
-  
-  const stmt = db.prepare(limitedSql);
-  if (readonly && !stmt.reader) {
-    throw new Error("Readonly mode only allows statements that return rows.");
-  }
-  const results = stmt.all(...params);
-  return results.slice(0, maxRows);
-}
-
-function getTableList() {
-  return db.prepare(`
-    SELECT name, type, sql 
-    FROM sqlite_master 
-    WHERE type IN ('table', 'view') 
-    AND name NOT LIKE 'sqlite_%'
-    ORDER BY name
-  `).all();
-}
-
-function getTableInfo(tableName) {
-  const table = quoteIdentifier(tableName);
-  const columns = db.prepare(`PRAGMA table_info(${table})`).all();
-  const indexes = db.prepare(`PRAGMA index_list(${table})`).all();
-  const foreignKeys = db.prepare(`PRAGMA foreign_key_list(${table})`).all();
-  
-  const indexDetails = indexes.map(idx => ({
-    ...idx,
-    columns: db.prepare(`PRAGMA index_info(${quoteIdentifier(idx.name)})`).all()
-  }));
-  
-  let rowCount = 0;
-  try {
-    rowCount = db.prepare(`SELECT COUNT(*) as count FROM ${table}`).get().count;
-  } catch (e) {}
-  
-  return { columns, indexes: indexDetails, foreignKeys, rowCount };
-}
-
-function getDatabaseStats() {
-  const dbSize = fs.statSync(DB_FILE).size;
-  
-  const pageCount = db.prepare("PRAGMA page_count").get().page_count;
-  const pageSize = db.prepare("PRAGMA page_size").get().page_size;
-  const freelistCount = db.prepare("PRAGMA freelist_count").get().freelist_count;
-  
-  const journalMode = db.prepare("PRAGMA journal_mode").get().journal_mode;
-  const walCheckpoint = db.prepare("PRAGMA wal_checkpoint").get();
-  
-  const cacheSize = db.prepare("PRAGMA cache_size").get().cache_size;
-  
-  let cacheHitRatio = null;
-  try {
-    const stats = db.prepare(`
-      SELECT 
-        SUM(CASE WHEN name LIKE 'sqlite_stat%' THEN 0 ELSE 1 END) as user_tables
-      FROM sqlite_master 
-      WHERE type = 'table'
-    `).get();
-  } catch (e) {}
-  
-  const tables = getTableList();
-  const tableStats = tables.map(t => {
-    let size = 0;
-    let rowCount = 0;
-    try {
-      rowCount = db.prepare(`SELECT COUNT(*) as count FROM ${t.name}`).get().count;
-      size = db.prepare(`SELECT page_count * ${pageSize} as size FROM pragma_page_count('${t.name}')`).get().size || 0;
-    } catch (e) {}
-    return { name: t.name, rowCount, size };
-  });
-  
-  return {
-    dbSize,
-    dbSizeHuman: formatBytes(dbSize),
-    pageCount,
-    pageSize,
-    freelistCount,
-    journalMode,
-    walCheckpoint,
-    cacheSize,
-    tables: tableStats,
-    totalTables: tables.length
-  };
-}
-
-function formatBytes(bytes) {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + " " + sizes[i];
-}
+const { getTableList, getTableInfo, getDatabaseStats, formatBytes } = databaseInspection;
 
 function createBackup(destPath = null, compress = true) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");

@@ -1,6 +1,9 @@
 # Dashboard
 
-The dashboard bootstrap/composition is implemented in `src/dashboard.js` and defaults to port 4098. Coherent route families are registered from `src/dashboard/`, including authentication/identity, approvals, KV, system, logs, connectors, quick actions, statistics/tools, and summary routes. It serves a browser UI plus JSON endpoints for logs, KV data, system status, service status, tool metadata, webhook capture, and agent task proxying.
+The dashboard bootstrap/composition is implemented in `src/dashboard.js` and defaults to port 4098. Coherent route families are registered from `src/dashboard/`, including authentication/identity, approvals, KV, system, logs, connectors, quick actions, statistics/tools, summary, database administration, performance, and Agent proxy routes. The composition root owns startup and shared middleware; route modules own HTTP parsing and response compatibility. It serves a browser UI plus JSON endpoints for logs, KV data, system status, service status, tool metadata, webhook capture, and agent task proxying.
+
+The database administration implementation is `src/dashboard/database-routes.js`
+and the Agent relay implementation is `src/dashboard/agent-proxy-routes.js`.
 
 ## Main UI areas
 
@@ -121,6 +124,10 @@ Mission Control includes authenticated quick actions backed by `POST /api/quick-
 The Metrics tab embeds Grafana through the authenticated dashboard under `/grafana/*`; it does not require enabling anonymous Grafana access. The dashboard proxy authenticates to the local Grafana service with `SIDEKICK_GRAFANA_ADMIN_USER` (default `sidekick`) and `SIDEKICK_GRAFANA_ADMIN_PASSWORD`.
 
 Metrics collection is handled by `sidekick-metrics.timer`, which runs `scripts/collect-metrics.js` every minute with `/home/sidekick/sidekick/.env` loaded. The timer writes to InfluxDB using `SIDEKICK_INFLUX_*` settings.
+
+`GET /api/dashboard-performance` exposes a bounded, authenticated RED view of
+Dashboard requests. Route labels are normalized templates; request content and
+identifiers are never recorded. See [`docs/metrics.md`](metrics.md).
 
 ## Data editing
 

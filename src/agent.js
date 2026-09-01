@@ -8,54 +8,17 @@ const { callAgentTool, getBuiltinRegistry, DATA_DIR, loadDelays, saveDelays, loa
 const { requiredToolPermission } = require("./tools/dispatcher");
 const authorization = require("./core/authorization");
 const identity = require("./core/identity");
+const { createAgentCatalog } = require("./agent/catalog");
 
-// Every Agent preflight must inspect the same live, source-filtered catalog
-// that is exposed to planning.  The canonical registry remains the execution
-// authority, but a broad registry lookup here could expose a disabled,
-// dashboard-only, or otherwise unauthorized capability to recovery or early
-// classification.  Keep this adapter deliberately narrow: it cannot execute
-// anything and callAgentTool still performs the authoritative dispatch check.
-function getLiveAgentToolDefs() {
-  return getToolDefsForSource("agent").filter(tool => tool && tool.enabled !== false);
-}
-function getLiveAgentDescriptor(name) {
-  const requested = String(name || "").replace(/^sidekick_/i, "");
-  const visible = getLiveAgentToolDefs().find(tool => String(tool.name || "").replace(/^sidekick_/i, "") === requested);
-  if (!visible) return null;
-  try { return getBuiltinRegistry().get(name) || visible; } catch { return visible; }
-}
-function getLiveAgentRegistry() {
-  const canonical = getBuiltinRegistry();
-  const visible = new Set(getLiveAgentToolDefs().map(tool => String(tool.name || "").replace(/^sidekick_/i, "")));
-  return {
-    // This is a live source-filtered catalog identity, not the built-in
-    // registry's static version. Pack/module/generated capability changes
-    // therefore invalidate persisted plans and rollback/recovery lookups.
-    version: liveAgentCatalogFingerprint(),
-    get(name) { return visible.has(String(name || "").replace(/^sidekick_/i, "")) ? getLiveAgentDescriptor(name) : null; },
-    toolDefs() { return getLiveAgentToolDefs(); },
-  };
-}
-function getLiveAgentToolContracts() {
-  const visible = getLiveAgentToolDefs();
-  let registry;
-  try { registry = getBuiltinRegistry(); } catch { return []; }
-  return visible.map(tool => registry.get(tool.name)).filter(descriptor => descriptor && descriptor.schema && typeof descriptor.schema.safeParse === "function");
-}
-function liveAgentCatalogFingerprint() {
-  const entries = getLiveAgentToolDefs().map(tool => {
-    const descriptor = getLiveAgentDescriptor(tool.name);
-    return {
-      name: String(tool.name || ""),
-      risk: tool.risk || descriptor?.risk || null,
-      source: tool.source || descriptor?.source || null,
-      version: descriptor?.version || null,
-      args: tool.argumentDescriptions || tool.args || {},
-      annotations: descriptor?.annotations || {},
-    };
-  });
-  return crypto.createHash("sha256").update(JSON.stringify(entries)).digest("hex");
-}
+const {
+  getLiveAgentToolDefs,
+  getLiveAgentDescriptor,
+  getLiveAgentRegistry,
+  getLiveAgentToolContracts,
+  liveAgentCatalogFingerprint,
+  brainAgentTools,
+} = createAgentCatalog({ getToolDefsForSource, getBuiltinRegistry, crypto });
+
 function persistedTaskAuthIdentity(task) {
   const principalId = task && (task.actor_principal_id || task.requested_by_principal_id);
   if (!principalId || !task.principal_context || task.principal_context.version !== 1) return null;
@@ -171,14 +134,6 @@ try {
   console.error("[Modules] Builtin module provisioning failed:", error.message);
 }
 
-// Brain planning receives the complete live, source-filtered Agent catalog:
-// built-ins, enabled modules/packs, and authorized trial/active generated
-// capabilities. The plan validator and canonical dispatcher still revalidate
-// the descriptor, schema, policy, risk, and approval immediately before use.
-function brainAgentTools() {
-  return getToolDefsForSource("agent")
-    .filter(t => t.enabled);
-}
 const { recordAgentTaskMemory, inferProjectFromText } = require("./memory");
 const { assembleContext } = require("./context");
 const { classifyEvidenceRequirement } = require("./agent-protocol");
@@ -204,7 +159,9 @@ const { createHandoffContinuity } = require("./agent/handoff-continuity");
 const { createResumedTaskFinalizer } = require("./agent/recovery");
 const { createContinuationJobStarter } = require("./agent/continuation-jobs");
 const { createDelayScheduler } = require("./agent/delay-scheduler");
+const { createDelayExecution } = require("./agent/delay-execution");
 const { createWatchRuntime } = require("./agent/watch-runtime");
+const { createWatchScheduler } = require("./agent/watch-scheduler");
 const durableTaskModel = require("./agent/task-model");
 const durableTaskStore = require("./agent/task-store");
 const dbStore = require("./db");
@@ -322,110 +279,17 @@ try {
   });
 } catch (e) {}
 
-async function executeDelay(delay) {
-  const delays = loadDelays();
-  const current = delays.find(d => d.id === delay.id);
-
-  if (!current || current.status !== "pending") {
-    delete delayTimers[delay.id];
-    return;
-  }
-
-  // Fenced claim (Phase 4/B): the agent timer and an MCP-side `delay run` can
-  // race on the same delay; only the claim winner dispatches. Any claim
-  // failure (held, terminal, missing) refuses dispatch rather than running
-  // unfenced.
-  let runClaim = null;
-  if (current.platform_execution_id) {
-    const claimRes = platformKernel.claimExecution({ execution_id: current.platform_execution_id, claimed_by: `sidekick-agent:${process.pid}` });
-    if (!claimRes.ok) {
-      console.log(`Delay ${delay.id} not dispatchable (${claimRes.code}${claimRes.claimed_by ? `, held by ${claimRes.claimed_by}` : ""}), skipping`);
-      delete delayTimers[delay.id];
-      return;
-    }
-    runClaim = claimRes.claim;
-    if (runClaim.cancel_requested) {
-      current.status = "cancelled";
-      current.cancelledAt = new Date().toISOString();
-      transitionScheduledPlatformExecution("delay", current, "cancelled", { source: "agent", actor: "agent", reason: "cancel requested before dispatch", result_status: "cancelled" });
-      appendScheduledPlatformEvent("delay", current, "schedule.delay.cancelled", { cancelled_at: current.cancelledAt }, { source: "agent", actor: "agent" });
-      saveDelays(delays);
-      releaseScheduledClaim(current.platform_execution_id, runClaim);
-      delete delayTimers[delay.id];
-      console.log(`Delay ${delay.id} cancelled before dispatch`);
-      return;
-    }
-  }
-
-  current.status = "running";
-  current.startedAt = new Date().toISOString();
-  transitionScheduledPlatformExecution("delay", current, "running", { source: "agent", actor: "agent", reason: "scheduled delay execution started" });
-  saveDelays(delays);
-  const renewTimer = startScheduledLeaseRenewal(current.platform_execution_id, runClaim);
-  
-  console.log(`Executing delay ${delay.id}: ${delay.tool}`);
-  
-  try {
-    const result = await callAgentTool(delay.tool, delay.args || {}, {
-      parentId: current.platform_execution_id || null,
-      rootExecutionId: current.platform_execution_id || null,
-      correlationId: delay.id,
-    });
-    if (renewTimer) clearInterval(renewTimer);
-    const release = releaseScheduledClaim(current.platform_execution_id, runClaim);
-    if (runClaim && !release.ok && release.code === "release_rejected") {
-      console.error(`Delay ${delay.id} completed but its claim was superseded; leaving state to the current claimant`);
-      delete delayTimers[delay.id];
-      return;
-    }
-    const delaysAfter = loadDelays();
-    const updated = delaysAfter.find(d => d.id === delay.id);
-    if (updated) {
-      updated.status = result.isError ? "failed" : "completed";
-      updated.completedAt = new Date().toISOString();
-      updated.result = result.content?.[0]?.text?.substring(0, 200) || "ok";
-      transitionScheduledPlatformExecution("delay", updated, result.isError ? "failed" : "completed", {
-        source: "agent",
-        actor: "agent",
-        reason: result.isError ? "scheduled delay execution failed" : "scheduled delay execution completed",
-        result_status: result.isError ? "failure" : "success",
-        result_summary: updated.result,
-      });
-      appendScheduledPlatformEvent("delay", updated, result.isError ? "schedule.delay.failed" : "schedule.delay.completed", { completed_at: updated.completedAt }, { source: "agent", actor: "agent", severity: result.isError ? "error" : "info" });
-      saveDelays(delaysAfter);
-    }
-    console.log(`Delay ${delay.id} completed`);
-  } catch (e) {
-    if (renewTimer) clearInterval(renewTimer);
-    const release = releaseScheduledClaim(current.platform_execution_id, runClaim);
-    if (runClaim && !release.ok && release.code === "release_rejected") {
-      console.error(`Delay ${delay.id} threw (${e.message}) but its claim was superseded; leaving state to the current claimant`);
-      delete delayTimers[delay.id];
-      return;
-    }
-    const delaysAfter = loadDelays();
-    const updated = delaysAfter.find(d => d.id === delay.id);
-    if (updated) {
-      updated.status = "failed";
-      updated.completedAt = new Date().toISOString();
-      updated.error = e.message;
-      transitionScheduledPlatformExecution("delay", updated, "failed", {
-        source: "agent",
-        actor: "agent",
-        reason: "scheduled delay execution threw",
-        result_status: "failure",
-        result_summary: e.message,
-      });
-      appendScheduledPlatformEvent("delay", updated, "schedule.delay.failed", { error: e.message }, { source: "agent", actor: "agent", severity: "error" });
-      saveDelays(delaysAfter);
-    }
-    console.error(`Delay ${delay.id} failed: ${e.message}`);
-  }
-
-  delete delayTimers[delay.id];
-}
-
-const { delayTimers, scheduleDelay, loadAndScheduleDelays } = createDelayScheduler({ loadDelays, executeDelay });
+let delayTimers;
+let scheduleDelay;
+let loadAndScheduleDelays;
+const executeDelay = createDelayExecution({
+  loadDelays, saveDelays, callAgentTool,
+  claimExecution: platformKernel.claimExecution,
+  releaseScheduledClaim, startScheduledLeaseRenewal,
+  transitionScheduledPlatformExecution, appendScheduledPlatformEvent,
+  getDelayTimers: () => delayTimers, processId: process.pid,
+});
+({ delayTimers, scheduleDelay, loadAndScheduleDelays } = createDelayScheduler({ loadDelays, executeDelay }));
 
 try {
   const recovered = recoverStrandedDelays({ source: "agent", actor: "agent" });
@@ -531,148 +395,18 @@ if (typeof durableRecoveryTimer.unref === "function") durableRecoveryTimer.unref
 
 loadAndScheduleDelays();
 
-const watchIntervals = {};
 let agentServer = null;
 let continuationJobs = null;
 let agentShutdown = null;
 
-function parseWatchInterval(interval) {
-  if (!interval) return 60000;
-  const match = interval.match(/^(\d+)(s|m|h)$/);
-  if (!match) return 60000;
-  const amount = parseInt(match[1]);
-  const unit = match[2];
-  const multipliers = { s: 1000, m: 60000, h: 3600000 };
-  return amount * multipliers[unit];
-}
-
-async function checkWatch(watch) {
-  const watches = loadWatches();
-  const current = watches.find(w => w.id === watch.id);
-
-  if (!current || current.status !== "active") {
-    return;
-  }
-
-  // Fenced claim (Phase 4/B): the agent interval and an MCP-side `watch
-  // check` cannot both run the same watch's tick; only the claim winner
-  // proceeds. Any other claim failure skips the tick rather than running
-  // unfenced.
-  let checkClaim = { ok: true, claim: null };
-  if (current.platform_execution_id) {
-    checkClaim = claimScheduledDefinition(current, `sidekick-agent:${process.pid}`, "watch");
-    if (!checkClaim.ok) {
-      if (checkClaim.code !== "claim_held") console.log(`Watch ${watch.id} tick skipped (${checkClaim.code})`);
-      return;
-    }
-    if (checkClaim.claim && checkClaim.claim.cancel_requested) {
-      pauseWatchForCancel(current, checkClaim.claim, { source: "agent", actor: "agent" });
-      if (watchIntervals[watch.id]) {
-        clearInterval(watchIntervals[watch.id]);
-        delete watchIntervals[watch.id];
-      }
-      console.log(`Watch ${watch.id} paused by cancel request`);
-      return;
-    }
-  }
-  // Everything after a successful claim runs under try/finally: a mid-check
-  // throw must clear the renewal timer (which would otherwise keep the lease
-  // fresh forever) and release the claim.
-  const renewTimer = startScheduledLeaseRenewal(current.platform_execution_id, checkClaim.claim);
-  try {
-    let checkResult;
-    if (watch.source === "service") {
-      checkResult = checkService(watch.target);
-    } else if (watch.source === "process") {
-      checkResult = checkProcess(watch.target);
-    } else if (watch.source === "endpoint") {
-      checkResult = checkEndpoint(watch.target);
-    } else if (watch.source === "file") {
-      checkResult = checkFile(watch.target, watch.condition === "content_matches" ? watch.value : null);
-    }
-
-    const triggered = evaluateWatchCondition(watch, checkResult);
-    const checkExecution = createScheduledPlatformExecution("watch", watch, {
-      attach: false,
-      parentExecutionId: watch.platform_execution_id || null,
-      rootExecutionId: watch.platform_execution_id || null,
-      operationType: "watch_check",
-      state: "running",
-      source: "agent",
-      actor: "agent",
-      risk: "medium",
-      metadata: { source: watch.source, target: watch.target, condition: watch.condition },
-      reason: "scheduled watch check started",
-    });
-
-    const watchesAfter = loadWatches();
-    const updated = watchesAfter.find(w => w.id === watch.id);
-    if (updated) {
-      updated.lastCheck = new Date().toISOString();
-      if (triggered) {
-        updated.lastTriggered = new Date().toISOString();
-        updated.triggerCount = (updated.triggerCount || 0) + 1;
-        saveWatches(watchesAfter);
-        console.log(`Watch ${watch.id} triggered: ${watch.source} ${watch.target} (${watch.condition})`);
-        appendScheduledPlatformEvent("watch", updated, "schedule.watch.triggered", { check_result: checkResult }, { source: "agent", actor: "agent", executionId: checkExecution?.execution_id, rootExecutionId: watch.platform_execution_id || checkExecution?.root_execution_id });
-        const actionResult = await executeWatchAction(watch, checkResult, {
-          parentId: checkExecution?.execution_id || watch.platform_execution_id || null,
-          rootExecutionId: watch.platform_execution_id || checkExecution?.root_execution_id || null,
-          correlationId: watch.id,
-        });
-        if (checkExecution) platformKernel.transitionExecution(checkExecution.execution_id, actionResult?.isError ? "failed" : "completed", {
-          source: "agent",
-          actor_id: "agent",
-          reason: actionResult?.isError ? "scheduled watch action failed" : "scheduled watch action completed",
-          result_status: actionResult?.isError ? "failure" : "success",
-          result_summary: actionResult?.content?.[0]?.text || "watch triggered",
-          correlation_id: watch.id,
-        });
-      } else {
-        if (checkExecution) platformKernel.transitionExecution(checkExecution.execution_id, "completed", {
-          source: "agent",
-          actor_id: "agent",
-          reason: "scheduled watch check completed without trigger",
-          result_status: "not_triggered",
-          result_summary: `Watch ${watch.id} did not trigger`,
-          correlation_id: watch.id,
-        });
-        saveWatches(watchesAfter);
-      }
-    }
-  } finally {
-    if (renewTimer) clearInterval(renewTimer);
-    releaseScheduledClaim(current.platform_execution_id, checkClaim.claim);
-  }
-}
-
-function scheduleWatch(watch) {
-  const intervalMs = parseWatchInterval(watch.interval);
-
-  if (watchIntervals[watch.id]) {
-    clearInterval(watchIntervals[watch.id]);
-    delete watchIntervals[watch.id];
-  }
-
-  watchIntervals[watch.id] = setInterval(() => {
-    checkWatch(watch).catch(e => console.error(`Watch ${watch.id} check failed: ${e.message}`));
-  }, intervalMs);
-  
-  console.log(`Scheduled watch ${watch.id} every ${watch.interval} (${intervalMs}ms)`);
-}
-
-function loadAndScheduleWatches() {
-  const watches = loadWatches();
-  const active = watches.filter(w => w.status === "active");
-  
-  for (const watch of active) {
-    scheduleWatch(watch);
-  }
-  
-  console.log(`Loaded ${active.length} active watches`);
-}
-
 const { checkService, checkProcess, checkEndpoint, checkFile, evaluateWatchCondition, executeWatchAction } = createWatchRuntime({ callAgentTool });
+const { watchIntervals, scheduleWatch, loadAndScheduleWatches } = createWatchScheduler({
+  loadWatches, saveWatches, claimScheduledDefinition, pauseWatchForCancel,
+  startScheduledLeaseRenewal, releaseScheduledClaim, createScheduledPlatformExecution,
+  appendScheduledPlatformEvent, transitionExecution: platformKernel.transitionExecution,
+  executeWatchAction, checkService, checkProcess, checkEndpoint, checkFile,
+  evaluateWatchCondition, processId: process.pid,
+});
 
 loadAndScheduleWatches();
 
@@ -934,111 +668,6 @@ async function callDirectAnswerLLM(goal, combinedBrief, continuationBrief, llmCa
 function emit(taskId, data) {
   const ee = taskEmitters[taskId];
   if (ee) ee.emit("data", data);
-}
-
-function startAgentExecutionLegacy(goal, taskId, project, lineage = null) {
-  try {
-    const execution = platformKernel.createExecution({
-      task_id: taskId,
-      // Reuse the platform kernel's existing parent/root execution lineage for a
-      // follow-up child rather than inventing a parallel graph. For a root task
-      // these stay null/self-rooted exactly as before.
-      parent_execution_id: (lineage && lineage.parentExecutionId) || null,
-      root_execution_id: (lineage && lineage.rootExecutionId) || null,
-      session_id: (lineage && lineage.sessionId) || null,
-      project_id: project || null,
-      actor_id: "agent",
-      client_id: "agent-bridge",
-      trigger_type: "agent",
-      operation_type: "agent_task",
-      tool_name: "sidekick_agent",
-      tool_action: "run",
-      resource_scope: project || "agent",
-      environment: process.env.SIDEKICK_ENVIRONMENT || null,
-      risk: "medium",
-      source: "agent",
-      correlation_id: taskId,
-      metadata: {
-        goal_summary: redactSensitive(String(goal || "")).slice(0, 300),
-        ...(lineage && lineage.parentTaskId ? { parent_task_id: lineage.parentTaskId, root_task_id: lineage.rootTaskId, continuation_depth: lineage.continuationDepth } : {}),
-      },
-    });
-    return platformKernel.transitionExecution(execution.execution_id, "running", { source: "agent", reason: "agent task started" });
-  } catch {
-    return null;
-  }
-}
-
-function appendAgentExecutionEventLegacy(execution, eventType, payload = {}, severity = "info") {
-  if (!execution) return;
-  try {
-    platformKernel.appendEvent({
-      event_type: eventType,
-      source: "agent",
-      actor_id: execution.actor_id,
-      execution_id: execution.execution_id,
-      root_execution_id: execution.root_execution_id,
-      task_id: execution.task_id,
-      session_id: execution.session_id,
-      project_id: execution.project_id,
-      environment: execution.environment,
-      severity,
-      payload,
-      correlation_id: execution.root_execution_id,
-    });
-  } catch {
-    // Platform observability must not interrupt agent task execution.
-  }
-}
-
-function finishAgentExecutionLegacy(execution, status, details = {}) {
-  if (!execution) return;
-  // A Brain task parked at `waiting_for_approval` is not a failure: it is
-  // suspended awaiting a human decision and will be resumed by the scheduler
-  // (docs/adr-approval-continuation.md §5/T1). Map it to the kernel's real
-  // `awaiting_approval` state so the platform timeline reads it as parked, not
-  // failed, and so the resumed `awaiting_approval → completed` exit is legal.
-  // `cancelled` maps to the kernel's own first-class cancelled state
-  // (running → cancelled is a legal transition) so a user-stopped task never
-  // reads as a failure in the platform timeline.
-  const state = status === "completed" ? "completed" : status === "iteration_limit" ? "timed_out" : status === "waiting_for_approval" ? "awaiting_approval" : status === "cancelled" ? "cancelled" : "failed";
-  try {
-    platformKernel.transitionExecution(execution.execution_id, state, {
-      source: "agent",
-      actor_id: execution.actor_id,
-      result_status: status,
-      error_category: details.error_category || null,
-      result_summary: details.result_summary || null,
-      reason: details.reason || null,
-    });
-  } catch {
-    // Platform observability must not interrupt agent task execution.
-  }
-}
-
-function registerAgentTranscriptLegacy(execution, transcriptPath, taskId, status) {
-  if (!execution || !transcriptPath) return;
-  try {
-    const stat = fs.statSync(transcriptPath);
-    platformKernel.registerArtifact({
-      execution_id: execution.execution_id,
-      task_id: execution.task_id,
-      project_id: execution.project_id,
-      producer: "agent",
-      type: "agent_transcript",
-      name: `${taskId}.json`,
-      storage_ref: path.relative(DATA_DIR, transcriptPath),
-      content_type: "application/json",
-      byte_size: stat.size,
-      sensitivity: "sensitive",
-      redaction_state: "unknown",
-      source: "agent",
-      correlation_id: execution.root_execution_id,
-      metadata: { status },
-    });
-  } catch {
-    // Transcript remains available through the existing conversation store.
-  }
 }
 
 // Procedure-suggestion inference. Routes through Compute like all other agent

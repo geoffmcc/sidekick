@@ -12,7 +12,10 @@ const path = require("path");
 
 const clientJs = fs.readFileSync(path.join(__dirname, "..", "static", "dashboard.js"), "utf-8");
 const dashHtml = fs.readFileSync(path.join(__dirname, "..", "src", "dashboard.html"), "utf-8");
-const dashServer = fs.readFileSync(path.join(__dirname, "..", "src", "dashboard.js"), "utf-8");
+const dashServer = [
+  fs.readFileSync(path.join(__dirname, "..", "src", "dashboard.js"), "utf-8"),
+  fs.readFileSync(path.join(__dirname, "..", "src", "dashboard", "agent-proxy-routes.js"), "utf-8"),
+].join("\n");
 const agentServer = fs.readFileSync(path.join(__dirname, "..", "src", "agent.js"), "utf-8");
 
 console.log("Running Agent tab follow-up UI tests...\n");

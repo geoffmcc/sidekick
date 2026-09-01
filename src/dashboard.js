@@ -35,6 +35,11 @@ const compute = require("./compute");
 const { probeConnector } = require("./connectors/health");
 const { registerConnectorRoutes } = require("./dashboard/connectors-routes");
 const { registerKvRoutes } = require("./dashboard/kv-routes");
+const { registerMemoryReadRoutes } = require("./dashboard/memory-read-routes");
+const { registerSyncRoutes } = require("./dashboard/sync-routes");
+const { registerHandoffReadRoutes } = require("./dashboard/handoff-read-routes");
+const { registerComputeReadRoutes } = require("./dashboard/compute-read-routes");
+const { registerEventRoutes } = require("./dashboard/event-routes");
 const { registerSystemRoutes } = require("./dashboard/system-routes");
 const { registerLogsRoute } = require("./dashboard/logs-route");
 const { registerApprovalRoutes } = require("./dashboard/approval-routes");
@@ -43,6 +48,12 @@ const { registerStatsToolsRoutes } = require("./dashboard/stats-tools-routes");
 const { registerSummaryRoute } = require("./dashboard/summary-route");
 const { registerResearchSourceRoutes } = require("./dashboard/research-source-routes");
 const { registerNetworkScopeRoutes } = require("./dashboard/network-scope-routes");
+const { registerDatabaseRoutes } = require("./dashboard/database-routes");
+const { registerAgentProxyRoutes } = require("./dashboard/agent-proxy-routes");
+const { registerBlackboxRoutes } = require("./dashboard/blackbox-routes");
+const { registerPredictRoutes } = require("./dashboard/predict-routes");
+const { registerCapabilityRoutes } = require("./dashboard/capability-routes");
+const { registerEvolveRoutes } = require("./dashboard/evolve-routes");
 const { runDoctor, formatDoctorText, createSupportBundle } = require("./doctor");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
@@ -1222,56 +1233,7 @@ app.get("/api/repository/semantic", async (req, res) => {
   } catch (error) { return res.status(400).json({ ok: false, error: error.message, code: "semantic_query_failed" }); }
 });
 
-app.get("/api/event-deliveries", (req, res) => {
-  try {
-    const deliveries = platformKernel.listEventDeliveries({
-      subscription_id: req.query.subscription_id,
-      status: req.query.status,
-      limit: req.query.limit,
-    });
-    res.json({
-      ok: true,
-      subscriptions: platformKernel.listEventSubscriptions(),
-      deliveries,
-      total: deliveries.length,
-      stats: platformKernel.getEventDeliveryStats(),
-    });
-  } catch (error) {
-    res.status(400).json({ ok: false, error: error.message });
-  }
-});
-
-app.post("/api/event-subscriptions", (req, res) => {
-  const actor = authenticatedUser(req);
-  if (!actor) return res.status(403).json({ ok: false, error: "Connector and event operations require an authenticated dashboard user" });
-  try {
-    const subscription = platformKernel.registerEventSubscription({ ...req.body, source: "dashboard" });
-    auditLog(req, "event_subscription.register", { subscription_id: subscription.subscription_id, event_type: subscription.event_type, actor });
-    res.json({ ok: true, subscription });
-  } catch (error) { res.status(400).json({ ok: false, error: error.message }); }
-});
-
-app.post("/api/event-subscriptions/:subscriptionId/:action", (req, res) => {
-  const actor = authenticatedUser(req);
-  if (!actor) return res.status(403).json({ ok: false, error: "Event subscription operations require an authenticated dashboard user" });
-  const state = req.params.action === "pause" ? "paused" : req.params.action === "resume" ? "active" : null;
-  if (!state) return res.status(404).json({ ok: false, error: "unknown subscription action" });
-  try {
-    const subscription = platformKernel.setEventSubscriptionState(req.params.subscriptionId, state);
-    auditLog(req, `event_subscription.${req.params.action}`, { subscription_id: subscription.subscription_id, actor });
-    res.json({ ok: true, subscription });
-  } catch (error) { res.status(400).json({ ok: false, error: error.message }); }
-});
-
-app.post("/api/event-deliveries/:deliveryId/requeue", (req, res) => {
-  const actor = authenticatedUser(req);
-  if (!actor) return res.status(403).json({ ok: false, error: "Delivery operations require an authenticated dashboard user" });
-  try {
-    const delivery = platformKernel.requeueEventDelivery(req.params.deliveryId);
-    auditLog(req, "event_delivery.requeue", { delivery_id: delivery.delivery_id, actor });
-    res.json({ ok: true, delivery });
-  } catch (error) { res.status(400).json({ ok: false, error: error.message }); }
-});
+registerEventRoutes({ app, platformKernel, authenticatedUser, auditLog });
 
 registerConnectorRoutes({
   app,
@@ -1408,52 +1370,6 @@ app.get("/api/tool-categories", (req, res) => {
   res.json({ categories: getToolCategoriesWithTools("dashboard") });
 });
 
-app.get("/api/compute", (req, res) => {
-  try {
-    compute.initialize();
-    res.json({ ok: true, overview: compute.overview() });
-  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
-});
-
-app.get("/api/compute/workers", (req, res) => {
-  try {
-    compute.initialize();
-    res.json({
-      ok: true,
-      workers: compute.workerManager.listWorkers(req.query || {}),
-      telemetry: compute.workerManager.listWorkerTelemetry(req.query || {}),
-      stats: compute.workerManager.getWorkerStats(),
-    });
-  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
-});
-
-app.get("/api/compute/jobs", (req, res) => {
-  try {
-    compute.initialize();
-    res.json({
-      ok: true,
-      jobs: compute.jobManager.listJobs({
-        status: req.query.status,
-        jobType: req.query.jobType || req.query.job_type,
-        project: req.query.project,
-        workerId: req.query.workerId || req.query.worker_id,
-        capability: req.query.capability,
-        limit: req.query.limit ? Math.min(200, Math.max(1, Number(req.query.limit) || 50)) : 50,
-      }),
-      stats: compute.jobManager.getJobStats(),
-    });
-  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
-});
-
-app.get("/api/compute/jobs/:jobId", (req, res) => {
-  try {
-    compute.initialize();
-    const job = compute.jobManager.getJob(req.params.jobId);
-    if (!job) return res.status(404).json({ ok: false, error: "job not found" });
-    res.json({ ok: true, job, attempts: compute.jobManager.listAttempts(req.params.jobId), artifacts: compute.jobManager.listArtifacts(req.params.jobId) });
-  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
-});
-
 function computeInstallInfo(req, enrollmentToken) {
   const serverUrl = new URL(`${req.protocol}://${req.get("host")}`);
   serverUrl.port = String(MCP_PORT);
@@ -1491,10 +1407,7 @@ function computeInstallInfo(req, enrollmentToken) {
   };
 }
 
-app.get("/api/compute/install", (req, res) => {
-  try { res.json({ ok: true, install: computeInstallInfo(req) }); }
-  catch (e) { res.status(500).json({ ok: false, error: e.message }); }
-});
+registerComputeReadRoutes({ app, compute, computeInstallInfo });
 
 app.post("/api/compute/enrollment-tokens", (req, res) => {
   const body = req.body || {};
@@ -1532,176 +1445,9 @@ app.post("/api/compute/jobs/:jobId/:action", (req, res) => {
 
 app.post("/api/compute/recover", (req, res) => governedDashboardMutation(req, res, "compute_jobs", { action: "recover" }, "compute.jobs.recover"));
 
-app.get("/api/blackbox/profiles", (req, res) => {
-  if (!requireIdentityPermission(req, res, "blackbox.read")) return;
-  res.json({ profiles: blackbox.PROFILE_INFO });
-});
+registerBlackboxRoutes({ app, blackbox, requireIdentityPermission, blackboxJson, governedDashboardMutation });
 
-app.get("/api/blackbox/health", (req, res) => {
-  if (!requireIdentityPermission(req, res, "blackbox.read")) return;
-  return blackboxJson(res, () => blackbox.blackboxHealth());
-});
-
-app.get("/api/blackbox/storage", (req, res) => {
-  if (!requireIdentityPermission(req, res, "blackbox.read")) return;
-  return blackboxJson(res, () => blackbox.storageStatus());
-});
-
-app.get("/api/blackbox/incidents", (req, res) => {
-  if (!requireIdentityPermission(req, res, "blackbox.read")) return;
-  return blackboxJson(res, () => ({ incidents: blackbox.listIncidents(req.query) }));
-});
-
-app.post("/api/blackbox/capture", (req, res) => governedDashboardMutation(req, res, "black_box", { action: "capture", ...(req.body || {}) }, "blackbox.capture"));
-
-app.get("/api/blackbox/incidents/:id", (req, res) => {
-  if (!requireIdentityPermission(req, res, "blackbox.read")) return;
-  return blackboxJson(res, () => {
-    const incident = blackbox.getIncident(req.params.id, { includeTimeline: true, includeAnalysis: true });
-    if (!incident) {
-      res.status(404);
-      return { error: "Incident not found" };
-    }
-    return { incident };
-  });
-});
-
-app.patch("/api/blackbox/incidents/:id", (req, res) => governedDashboardMutation(req, res, "black_box", { action: "update_incident", incident_id: req.params.id, ...(req.body || {}) }, "blackbox.update"));
-
-app.delete("/api/blackbox/incidents/:id", (req, res) => governedDashboardMutation(req, res, "black_box", { action: "delete", incident_id: req.params.id }, "blackbox.delete"));
-
-app.get("/api/blackbox/incidents/:id/timeline", (req, res) => {
-  if (!requireIdentityPermission(req, res, "blackbox.read")) return;
-  return blackboxJson(res, () => ({ timeline: blackbox.getTimeline(req.params.id) }));
-});
-
-app.get("/api/blackbox/incidents/:id/export", (req, res) => {
-  if (!requireIdentityPermission(req, res, "blackbox.read")) return;
-  return blackboxJson(res, () => ({ export: blackbox.exportIncident(req.params.id, { format: req.query.format || "json" }) }));
-});
-
-app.post("/api/blackbox/incidents/:id/analyze", (req, res) => governedDashboardMutation(req, res, "black_box", { action: "analyze", incident_id: req.params.id, ...(req.body || {}) }, "blackbox.analyze"));
-
-app.post("/api/blackbox/incidents/:id/notes", (req, res) => governedDashboardMutation(req, res, "black_box", { action: "add_note", incident_id: req.params.id, ...(req.body || {}) }, "blackbox.note"));
-
-app.get("/api/blackbox/captures/:id", (req, res) => {
-  if (!requireIdentityPermission(req, res, "blackbox.read")) return;
-  return blackboxJson(res, () => ({ capture: blackbox.getCapture(req.params.id, { includeSources: true }) }));
-});
-
-app.post("/api/blackbox/captures/:id/cancel", (req, res) => governedDashboardMutation(req, res, "black_box", { action: "cancel_capture", capture_id: req.params.id }, "blackbox.cancel"));
-
-app.post("/api/blackbox/captures/:id/retry", (req, res) => governedDashboardMutation(req, res, "black_box", { action: "retry_capture", capture_id: req.params.id, ...(req.body || {}) }, "blackbox.retry"));
-
-app.post("/api/blackbox/captures/:id/repair", (req, res) => governedDashboardMutation(req, res, "black_box", { action: "repair", capture_id: req.params.id }, "blackbox.repair"));
-
-app.get("/api/blackbox/captures/:id/stream", (req, res) => {
-  if (!requireIdentityPermission(req, res, "blackbox.read")) return;
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache, no-transform',
-    'Connection': 'keep-alive'
-  });
-  res.write(`event: snapshot\ndata: ${JSON.stringify(blackbox.captureStatus(req.params.id))}\n\n`);
-  const unsubscribe = blackbox.subscribeCapture(req.params.id, event => {
-    res.write(`event: progress\ndata: ${JSON.stringify(event)}\n\n`);
-  });
-  req.on('close', unsubscribe);
-});
-
-app.get("/api/blackbox/sources/:id", (req, res) => {
-  if (!requireIdentityPermission(req, res, "blackbox.read")) return;
-  return blackboxJson(res, () => ({ source: blackbox.getSource(req.params.id, { offset: Number(req.query.offset || 0), limit: Number(req.query.limit || 65536) }) }));
-});
-
-app.get("/api/blackbox/search", (req, res) => {
-  if (!requireIdentityPermission(req, res, "blackbox.read")) return;
-  return blackboxJson(res, () => ({ results: blackbox.searchIncidents(req.query.q || req.query.query || "", req.query) }));
-});
-
-app.get("/api/blackbox/compare", (req, res) => {
-  if (!requireIdentityPermission(req, res, "blackbox.read")) return;
-  return blackboxJson(res, () => blackbox.compareCaptures(req.query.a, req.query.b));
-});
-
-app.get("/api/blackbox/purge-preview", (req, res) => {
-  if (!requireIdentityPermission(req, res, "blackbox.read")) return;
-  return blackboxJson(res, () => blackbox.purgePreview());
-});
-
-app.post("/api/blackbox/purge", (req, res) => governedDashboardMutation(req, res, "black_box", { action: "purge", confirm: req.body?.confirm === true }, "blackbox.purge"));
-
-// --- Predict API routes ---
-app.get("/api/predict/status", (req, res) => {
-  res.json(predictEngine.engineStatus());
-});
-
-app.get("/api/predict", (req, res) => {
-  const { status, type, project, session_id, task_id, confidence, limit, offset } = req.query;
-  const predictions = predictEngine.listPredictions({
-    status, type, project, session_id, task_id, confidence,
-    limit: parseInt(limit || "20", 10), offset: parseInt(offset || "0", 10)
-  });
-  res.json({ ok: true, count: predictions.length, predictions });
-});
-
-app.get("/api/predict/:id", (req, res) => {
-  const pred = predictEngine.getPrediction(req.params.id);
-  if (!pred) return res.status(404).json({ ok: false, error: "Not found" });
-  const evidence = predictEngine.getPredictionEvidence(req.params.id);
-  const feedback = predictEngine.getPredictionFeedback(req.params.id);
-  res.json({ ok: true, prediction: pred, evidence, feedback });
-});
-
-app.post("/api/predict/analyze", (req, res) => governedDashboardMutation(req, res, "predict", { action: "analyze", ...(req.body || {}), maxAge: req.body?.maxAge || "7d" }, "predict.analyze"));
-
-app.get("/api/predict/maintenance/purge-preview", (req, res) => {
-  const retention = req.query.retention_days === undefined
-    ? undefined : Number(req.query.retention_days);
-  if (!predictEngine.isValidRetentionDays(retention)) {
-    return res.status(400).json({ ok: false, error: "retention_days must be a non-negative number" });
-  }
-  res.json(predictEngine.purgePreview({
-    retention_days: retention,
-    purge_legacy: req.query.purge_legacy === "true",
-  }));
-});
-
-app.post("/api/predict/maintenance/purge", (req, res) => governedDashboardMutation(req, res, "predict", { action: "purge", ...(req.body || {}) }, "predict.purge"));
-
-app.get("/api/predict/maintenance/diagnose", (req, res) => {
-  res.json(predictEngine.diagnose());
-});
-
-app.post("/api/predict/:id/feedback", (req, res) => governedDashboardMutation(req, res, "predict", { action: "feedback", id: req.params.id, ...(req.body || {}) }, "predict.feedback"));
-
-app.post("/api/predict/:id/outcome", (req, res) => governedDashboardMutation(req, res, "predict", { action: "outcome", id: req.params.id, ...(req.body || {}) }, "predict.outcome"));
-
-app.post("/api/predict/:id/dismiss", (req, res) => governedDashboardMutation(req, res, "predict", { action: "dismiss", id: req.params.id }, "predict.dismiss"));
-
-app.get("/api/predict/:id/explain", (req, res) => {
-  const pred = predictEngine.getPrediction(req.params.id);
-  if (!pred) return res.status(404).json({ ok: false, error: "Not found" });
-  const evidence = predictEngine.getPredictionEvidence(req.params.id);
-  res.json({
-    ok: true,
-    prediction_id: pred.id,
-    type: pred.type,
-    subject: pred.subject,
-    explanation: pred.explanation,
-    probability: pred.probability,
-    confidence: pred.confidence,
-    score_breakdown: pred.score_breakdown,
-    observation_count: pred.observation_count,
-    evidence: evidence.map(e => ({
-      source_type: e.source_type, source_id: e.source_id,
-      summary: e.summary, timestamp: e.source_timestamp
-    })),
-    created_at: pred.created_at, expires_at: pred.expires_at, rule_version: pred.rule_version
-  });
-});
-
-app.post("/api/predict/migrate", (req, res) => governedDashboardMutation(req, res, "predict", { action: "migrate" }, "predict.migrate"));
+registerPredictRoutes({ app, predictEngine, governedDashboardMutation });
 
 app.get("/api/evolve", (req, res) => {
   const capabilities = dbStore.listGeneratedCapabilities({ includeInactive: true }).map(cap => ["trial", "active"].includes(cap.state) ? (dbStore.syncGeneratedCapabilityStats(cap.id) || cap) : cap);
@@ -1808,73 +1554,7 @@ async function capabilityAction(req, res, args, auditAction) {
   }
 }
 
-app.get("/api/capabilities", (req, res) => capabilityAction(req, res, { action: "list" }, "list"));
-
-app.get("/api/capabilities/:name", (req, res) =>
-  capabilityAction(req, res, { action: "show", name: req.params.name }, "show"));
-
-app.get("/api/capabilities/:name/health", (req, res) =>
-  capabilityAction(req, res, { action: "health", name: req.params.name }, "health"));
-
-app.post("/api/capabilities/inspect", (req, res) =>
-  capabilityAction(req, res, { action: "inspect", name: req.body?.name, path: req.body?.path }, "inspect"));
-
-app.post("/api/capabilities/install", (req, res) =>
-  capabilityAction(req, res, {
-    action: "install",
-    name: req.body?.name,
-    path: req.body?.path,
-    config: req.body?.config,
-    enable: req.body?.enable === true,
-  }, "install"));
-
-app.post("/api/capabilities/:name/configure", (req, res) =>
-  capabilityAction(req, res, { action: "configure", name: req.params.name, config: req.body?.config || {} }, "configure"));
-
-app.post("/api/capabilities/:name/enable", (req, res) =>
-  capabilityAction(req, res, { action: "enable", name: req.params.name }, "enable"));
-
-app.post("/api/capabilities/:name/disable", (req, res) =>
-  capabilityAction(req, res, { action: "disable", name: req.params.name }, "disable"));
-
-app.post("/api/capabilities/:name/upgrade", (req, res) =>
-  capabilityAction(req, res, {
-    action: "upgrade",
-    name: req.params.name,
-    path: req.body?.path,
-    allow_same_version: req.body?.allow_same_version === true,
-    allow_downgrade: req.body?.allow_downgrade === true,
-  }, "upgrade"));
-
-app.post("/api/capabilities/:name/uninstall", (req, res) =>
-  capabilityAction(req, res, {
-    action: "uninstall",
-    name: req.params.name,
-    remove_knowledge: req.body?.remove_knowledge !== false,
-  }, "uninstall"));
-
-app.get("/api/capabilities/:name/workflows", async (req, res) => {
-  try {
-    const result = await callDashboardTool("workflow", { action: "list", owner: req.params.name }, dashboardExecutionMetadata(req, authenticatedUser(req) || "dashboard"));
-    return capabilityResult(res, result);
-  } catch (error) {
-    logError(req.originalUrl, 500, error, "capability", req.headers["user-agent"]);
-    return res.status(500).json({ ok: false, error: error.message });
-  }
-});
-
-app.post("/api/evolve/analyze", (req, res) => evolveDashboardAction(req, res, "analyze"));
-app.post("/api/evolve/:id/validate", (req, res) => evolveDashboardAction(req, res, "validate"));
-// The approver is the authenticated user, never the literal string
-// "dashboard": an approval record that cannot name a person is not an
-// approval. evolveDashboardAction rejects the request when there is no
-// authenticated user, so this is always a real principal.
-app.post("/api/evolve/:id/approve", (req, res) =>
-  evolveDashboardAction(req, res, "approve", { approver: authenticatedUser(req) || undefined }));
-app.post("/api/evolve/:id/promote", (req, res) => evolveDashboardAction(req, res, "promote"));
-app.post("/api/evolve/:id/reject", (req, res) => evolveDashboardAction(req, res, "reject"));
-app.post("/api/evolve/:id/deprecate", (req, res) => evolveDashboardAction(req, res, "deprecate"));
-app.post("/api/evolve/:id/feedback", (req, res) => evolveDashboardAction(req, res, "feedback"));
+registerCapabilityRoutes({ app, capabilityAction, capabilityResult, callDashboardTool, dashboardExecutionMetadata, authenticatedUser, logError });
 
 function shapeExecution(execution) {
   if (!execution) return null;
@@ -1914,91 +1594,10 @@ function shapeExecution(execution) {
   };
 }
 
-app.get("/api/evolve/executions", (req, res) => {
-  const executions = dbStore.listGeneratedToolExecutions({ capabilityId: req.query.capability_id, limit: req.query.limit }).map(shapeExecution);
-  res.json({ ok: true, executions });
-});
-
-app.get("/api/evolve/executions/:executionId", (req, res) => {
-  const execution = dbStore.getGeneratedToolExecution(req.params.executionId);
-  if (!execution) return res.status(404).json({ ok: false, error: "Execution not found" });
-  res.json({ ok: true, execution: shapeExecution(execution) });
-});
-
-app.post("/api/evolve/:id/run", (req, res) => {
-  // Executing a self-generated capability runs model-authored code paths on the
-  // host; it carries the same attribution requirement as approving one.
-  const actor = requireAttributedActor(req, res, "Running a generated tool");
-  if (!actor) return;
-  const cap = dbStore.getGeneratedCapability(req.params.id) || dbStore.getGeneratedCapabilityByName(req.params.id);
-  if (!cap || !["trial", "active"].includes(cap.state)) return res.status(400).json({ ok: false, error: "Generated tool is not trial or active" });
-  const executionId = `gte_${Date.now().toString(36)}_${crypto.randomBytes(6).toString("hex")}`;
-  const timeoutMs = Number(req.body?.timeout_ms || 0) || null;
-  dbStore.createGeneratedToolExecution({
-    id: executionId,
-    capabilityId: cap.id,
-    toolName: cap.name,
-    state: "queued",
-    source: "dashboard",
-    args: req.body?.args || {},
-    successCriteria: cap.successCriteria || "All generated workflow steps must complete successfully",
-    timeoutMs,
-  });
-  setImmediate(async () => {
-    try {
-      const result = await callDashboardTool(cap.name, req.body?.args || {}, dashboardExecutionMetadata(req, actor, { executionId, timeoutMs }));
-      // Policy denial and approval-required come back as an error RESULT
-      // (isError), not a throw — the pre-created execution row would sit
-      // `queued` forever while the route had already answered ok. Only touch
-      // rows the handler never finalized: a dispatched run that failed inside
-      // the generated workflow records its own, more specific, terminal state.
-      if (result && result.isError) {
-        const current = dbStore.getGeneratedToolExecution(executionId);
-        if (current && ["queued", "running"].includes(current.state)) {
-          dbStore.updateGeneratedToolExecution(executionId, {
-            state: "failed",
-            completedAt: new Date().toISOString(),
-            finalSummary: redactSensitive(result.content?.[0]?.text || result.code || "generated tool dispatch failed"),
-            errorCategory: result.code || "error",
-            successCriteriaSatisfied: false,
-          });
-        }
-      }
-    } catch (error) {
-      dbStore.updateGeneratedToolExecution(executionId, {
-        state: "failed",
-        completedAt: new Date().toISOString(),
-        finalSummary: redactSensitive(error.message),
-        errorCategory: "error",
-        successCriteriaSatisfied: false,
-      });
-    }
-  });
-  auditLog(req, "evolve.run", { id: cap.id, execution_id: executionId });
-  res.json({ ok: true, execution_id: executionId, execution: shapeExecution(dbStore.getGeneratedToolExecution(executionId)) });
-});
-
-app.post("/api/evolve/executions/:executionId/cancel", (req, res) => {
-  const execution = dynamicTools.cancelExecution(req.params.executionId);
-  if (!execution) return res.status(404).json({ ok: false, error: "Execution not found" });
-  auditLog(req, "evolve.cancel", { execution_id: execution.id });
-  res.json({ ok: true, execution: shapeExecution(execution) });
-});
-
-app.get("/api/evolve/executions/:executionId/stream", (req, res) => {
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
-    Connection: "keep-alive"
-  });
-  const send = execution => {
-    if (execution.id !== req.params.executionId) return;
-    res.write(`event: execution\ndata: ${JSON.stringify(shapeExecution(execution))}\n\n`);
-  };
-  const current = dbStore.getGeneratedToolExecution(req.params.executionId);
-  if (current) res.write(`event: execution\ndata: ${JSON.stringify(shapeExecution(current))}\n\n`);
-  const off = dynamicTools.onExecutionEvent(send);
-  req.on("close", off);
+registerEvolveRoutes({
+  app, evolveDashboardAction, authenticatedUser, dbStore, shapeExecution,
+  requireAttributedActor, crypto, callDashboardTool, dashboardExecutionMetadata,
+  redactSensitive, auditLog, dynamicTools,
 });
 
 registerApprovalRoutes({ app, listApprovals, renderContinuationApprovalPreview, authenticatedUser, auditLog, logError, resolveApproval, requireIdentityPermission });
@@ -2124,96 +1723,7 @@ app.get("/api/knowledge", (req, res) => {
   }
 });
 
-app.get("/api/memories", (req, res) => {
-  try {
-    const { project, type, include_disabled, limit, query } = req.query;
-    const options = {
-      limit: parseInt(limit) || 100,
-      includeDisabled: include_disabled === "true"
-    };
-    if (project) options.project = project;
-    if (type) options.type = type;
-    if (query) options.query = query;
-
-    const memories = dbStore.searchMemories(options);
-    const formatted = memories.map(m => ({
-      id: m.id,
-      type: m.type,
-      category: memoryCategory(m),
-      project: m.project,
-      content: m.content,
-      summary: m.summary,
-      tags: m.tags,
-      confidence: m.confidence,
-      importance: m.metadata?.importance || (m.confidence >= 0.8 ? "high" : m.confidence >= 0.55 ? "normal" : "low"),
-      source: m.source,
-      source_tool: m.source_tool,
-      source_task_id: m.source_task_id,
-      source_ref: m.source_ref,
-      enabled: m.enabled,
-      automatic: m.automatic,
-      times_confirmed: m.times_confirmed,
-      state: m.state || m.metadata?.state || "active",
-      memory_class: m.memory_class,
-      primary_scope_type: m.primary_scope_type,
-      primary_scope_id: m.primary_scope_id,
-      source_type: m.source_type,
-      evidence_excerpt: m.evidence_excerpt,
-      directness: m.directness,
-      source_authority: m.source_authority,
-      confidence_components: m.confidence_components,
-      observed_at: m.observed_at,
-      valid_from: m.valid_from,
-      valid_to: m.valid_to,
-      revalidate_after: m.revalidate_after,
-      pinned: m.pinned,
-      sensitivity: m.sensitivity,
-      current: m.current,
-      supersedes_id: m.supersedes_id,
-      conflict_group: m.conflict_group,
-      requires_confirmation: m.requires_confirmation,
-      last_confirmed_at: m.last_confirmed_at,
-      expires_at: m.expires_at,
-      deleted_at: m.deleted_at,
-      expired_at: m.expired_at,
-      metadata: m.metadata || {},
-      created_at: m.created_at,
-      updated_at: m.updated_at,
-      last_seen_at: m.last_seen_at
-    }));
-    res.json({ ok: true, memories: formatted, count: formatted.length });
-  } catch (error) {
-    res.json({ ok: false, error: error.message, memories: [] });
-  }
-});
-
-app.get("/api/memories/projects", (req, res) => {
-  try {
-    const db = dbStore.getDb();
-    const rows = db.prepare(`
-      SELECT DISTINCT project FROM memories
-      WHERE project IS NOT NULL AND project != ''
-        AND enabled = 1
-      ORDER BY project
-    `).all();
-    res.json({ ok: true, projects: rows.map(r => r.project) });
-  } catch (error) {
-    res.json({ ok: false, error: error.message, projects: [] });
-  }
-});
-
-app.get("/api/memories/types", (req, res) => {
-  try {
-    const db = dbStore.getDb();
-    const rows = db.prepare(`
-      SELECT DISTINCT type FROM memories
-      ORDER BY type
-    `).all();
-    res.json({ ok: true, types: rows.map(r => r.type) });
-  } catch (error) {
-    res.json({ ok: false, error: error.message, types: [] });
-  }
-});
+registerMemoryReadRoutes({ app, dbStore, memoryCategory });
 
 /**
  * Memory mutations route through the dispatcher where a tool action exists
@@ -2319,15 +1829,6 @@ app.post("/api/memories/import", async (req, res) => {
   }
 });
 
-app.get("/api/memories/stats", (req, res) => {
-  try {
-    const stats = dbStore.getMemoryIntelligenceStats();
-    res.json({ ok: true, stats });
-  } catch (error) {
-    res.json({ ok: false, error: error.message, stats: null });
-  }
-});
-
 app.post("/api/memories/expire", (req, res) => {
   // Bulk stale expiry has no memory_manage action (`expire` there takes a
   // single id; `process_auto_expirations` is a different sweep), so this stays
@@ -2346,166 +1847,9 @@ app.post("/api/memories/expire", (req, res) => {
   }
 });
 
-function canReadDashboardHandoff(req, handoff) {
-  const principal = req.authPrincipal;
-  if (!principal?.principal_id || !handoff) return false;
-  if (handoff.owner_principal_id === principal.principal_id || handoff.created_by_principal_id === principal.principal_id) return true;
-  const roles = Array.isArray(principal.roles) ? principal.roles : [];
-  return roles.some(role => ["owner", "administrator"].includes(String(role).toLowerCase()));
-}
+registerHandoffReadRoutes({ app, dbStore });
 
-function requireDashboardHandoff(req, res) {
-  const handoff = dbStore.getHandoff(req.params.id);
-  if (!handoff || !canReadDashboardHandoff(req, handoff)) {
-    res.status(404).json({ ok: false, error: "Handoff not found" });
-    return null;
-  }
-  return handoff;
-}
-
-app.get("/api/handoffs", (req, res) => {
-  try {
-    const handoffs = dbStore.listHandoffs({ project: req.query.project, includeArchived: req.query.include_archived === "true", limit: Math.min(Number(req.query.limit) || 50, 500) });
-    res.json({ ok: true, handoffs: handoffs.filter(handoff => canReadDashboardHandoff(req, handoff)) });
-  } catch (error) {
-    res.json({ ok: false, error: error.message, handoffs: [] });
-  }
-});
-
-app.get("/api/handoffs/:id/readiness", (req, res) => {
-  try {
-    if (!requireDashboardHandoff(req, res)) return;
-    const readiness = dbStore.getHandoffReadiness(req.params.id, { recipient: req.query.recipient });
-    if (readiness.status === "invalid" && readiness.reasons?.includes("handoff not found")) return res.status(404).json({ ok: false, readiness });
-    res.json({ ok: true, readiness });
-  } catch (error) {
-    res.status(400).json({ ok: false, error: error.message });
-  }
-});
-
-app.get("/api/handoffs/:id/start-here", (req, res) => {
-  try {
-    if (!requireDashboardHandoff(req, res)) return;
-    const projection = dbStore.getHandoffReceiverProjection(req.params.id, { recipient: req.query.recipient });
-    if (!projection) return res.status(404).json({ ok: false, error: "Handoff not found" });
-    res.json({ ok: true, projection });
-  } catch (error) {
-    res.status(400).json({ ok: false, error: error.message });
-  }
-});
-
-app.get("/api/handoffs/:id/preflight", (req, res) => {
-  try {
-    if (!requireDashboardHandoff(req, res)) return;
-    const preflight = dbStore.getHandoffResumePreflight(req.params.id, { recipient: req.query.recipient, simulate: req.query.simulate === "true" });
-    if (preflight.status === "invalid") return res.status(404).json({ ok: false, preflight });
-    res.json({ ok: true, preflight });
-  } catch (error) {
-    res.status(400).json({ ok: false, error: error.message });
-  }
-});
-
-app.get("/api/handoffs/:id/events", (req, res) => {
-  try {
-    if (!requireDashboardHandoff(req, res)) return;
-    res.json({ ok: true, handoff_id: req.params.id, events: dbStore.listHandoffEvents(req.params.id, req.query.limit || 100) });
-  } catch (error) {
-    res.status(400).json({ ok: false, error: error.message });
-  }
-});
-
-app.get("/api/handoffs/:id", (req, res) => {
-  try {
-    const handoff = requireDashboardHandoff(req, res);
-    if (!handoff) return;
-    const memories = dbStore.searchMemories({ project: handoff.project, includeDisabled: true, limit: 200 }).filter(memory => memory.source_ref === handoff.id || memory.metadata?.handoff_id === handoff.id);
-    res.json({ ok: true, handoff, memories });
-  } catch (error) {
-    res.json({ ok: false, error: error.message });
-  }
-});
-
-app.get("/api/memories/:id/evidence", (req, res) => {
-  try {
-    const memory = dbStore.getMemoryById(req.params.id, { includeDisabled: true });
-    if (!memory) return res.status(404).json({ ok: false, error: "Memory not found" });
-    res.json({ ok: true, memory, evidence: dbStore.getMemoryEvidence(req.params.id) });
-  } catch (error) {
-    res.json({ ok: false, error: error.message });
-  }
-});
-
-app.get("/api/sync/identity", (req, res) => {
-  try {
-    const machineId = dbStore.getMachineId();
-    const userId = dbStore.getUserId();
-    res.json({ ok: true, machine_id: machineId, user_id: userId });
-  } catch (error) {
-    res.json({ ok: false, error: error.message });
-  }
-});
-
-app.post("/api/sync/identity", (req, res) => {
-  try {
-    const { user_id } = req.body || {};
-    if (!user_id || typeof user_id !== "string") {
-      return res.json({ ok: false, error: "user_id required" });
-    }
-    dbStore.setUserId(user_id);
-    auditLog(req, "sync_set_user_id", { user_id });
-    res.json({ ok: true, user_id });
-  } catch (error) {
-    res.json({ ok: false, error: error.message });
-  }
-});
-
-app.get("/api/sync/export", (req, res) => {
-  try {
-    const { project, since, include_disabled } = req.query;
-    const options = {};
-    if (project) options.project = project;
-    if (since) options.since = since;
-    if (include_disabled === "false") options.includeDisabled = false;
-    
-    const data = dbStore.exportForSync(options);
-    auditLog(req, "sync_export", { count: data.count, project, since });
-    res.json({ ok: true, data });
-  } catch (error) {
-    res.json({ ok: false, error: error.message });
-  }
-});
-
-app.post("/api/sync/import", (req, res) => {
-  try {
-    const { data, strategy, preserve_ids } = req.body || {};
-    const options = {
-      strategy: strategy || "newest",
-      preserveIds: preserve_ids === true
-    };
-    const result = dbStore.importFromSync(data, options);
-    auditLog(req, "sync_import", { 
-      imported: result.imported, 
-      conflicts: result.conflicts, 
-      strategy 
-    });
-    res.json({ ok: true, ...result });
-  } catch (error) {
-    res.json({ ok: false, error: error.message });
-  }
-});
-
-app.get("/api/sync/diff", (req, res) => {
-  try {
-    const { since } = req.query;
-    if (!since) {
-      return res.json({ ok: false, error: "since parameter required" });
-    }
-    const diff = dbStore.getSyncDiff(since);
-    res.json({ ok: true, ...diff });
-  } catch (error) {
-    res.json({ ok: false, error: error.message });
-  }
-});
+registerSyncRoutes({ app, dbStore, auditLog });
 
 app.get("/api/procedures", (req, res) => {
   const proceduresFile = path.join(DATA_DIR, "procedures.json");
@@ -2538,138 +1882,9 @@ function requireDashboardTool(req, res, toolName) {
   return false;
 }
 
-// Database API endpoints
-app.get("/api/db/schema", (req, res) => {
-  if (!requireDashboardTool(req, res, "sidekick_db_schema")) return;
-  try {
-    const db = dbStore.getDb();
-    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
-    const result = {};
-    for (const t of tables) {
-      const columns = db.prepare(`PRAGMA table_info("${t.name}")`).all();
-      const indexes = db.prepare(`PRAGMA index_list("${t.name}")`).all();
-      const count = db.prepare(`SELECT COUNT(*) as count FROM "${t.name}"`).get();
-      result[t.name] = { columns, indexes, rowCount: count.count };
-    }
-    res.json({ ok: true, schema: result });
-  } catch (e) {
-    res.json({ ok: false, error: e.message });
-  }
-});
-
-app.post("/api/db/query", async (req, res) => {
-  if (!requireDashboardTool(req, res, "sidekick_db_query")) return;
-  try {
-    const { sql, params, readonly, limit } = req.body || {};
-    if (!sql) return res.json({ ok: false, error: "No SQL provided" });
-    const start = Date.now();
-    // Route through the centralized dispatcher instead of executing directly
-    // against the database. This subjects dashboard SQL — including write-mode
-    // queries (readonly:false) — to the same policy, approval, redaction and
-    // audit controls as every other tool call, closing the previous bypass
-    // where raw SQL ran with only an HTTP policy check.
-    const result = await callDashboardTool(
-      "db_query",
-      { sql, params: params || [], readonly: readonly !== false, limit: limit || 1000 },
-      // Attribute the real authenticated user when one exists — a write-mode
-      // query attributed to the literal "dashboard" cannot be traced to a
-      // person. The marker remains only for unauthenticated deployments.
-      dashboardExecutionMetadata(req, authenticatedUser(req) || "dashboard")
-    );
-    const duration = Date.now() - start;
-    const text = result && result.content && result.content[0] ? result.content[0].text : "";
-    if (result && result.isError) {
-      return res.json({ ok: false, error: text || "Query failed" });
-    }
-    let rows;
-    try { rows = JSON.parse(text); } catch { rows = text; }
-    res.json({ ok: true, rows, duration, count: Array.isArray(rows) ? rows.length : undefined });
-  } catch (e) {
-    res.json({ ok: false, error: e.message });
-  }
-});
-
-app.get("/api/db/stats", (req, res) => {
-  if (!requireDashboardTool(req, res, "sidekick_db_stats")) return;
-  try {
-    const db = dbStore.getDb();
-    const dbPath = path.join(DATA_DIR, "sidekick.db");
-    const stats = fs.statSync(dbPath);
-    const walMode = db.prepare("PRAGMA journal_mode").get();
-    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
-    const pageCount = db.prepare("PRAGMA page_count").get();
-    const pageSize = db.prepare("PRAGMA page_size").get();
-    const dbSize = (pageCount?.page_count || 0) * (pageSize?.page_size || 4096);
-    res.json({ ok: true, size: stats.size, tableCount: tables.length, walMode: walMode?.journal_mode, dbSize });
-  } catch (e) {
-    res.json({ ok: false, error: e.message });
-  }
-});
-
-app.post("/api/db/backup", (req, res) => {
-  if (!requireDashboardTool(req, res, "sidekick_db_backup")) return;
-  try {
-    const backupDir = path.join(DATA_DIR, "backups");
-    fs.mkdirSync(backupDir, { recursive: true });
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const backupPath = path.join(backupDir, `sidekick-${timestamp}.db`);
-    const srcDb = dbStore.getDb();
-    srcDb.backup(backupPath).then(() => {
-      auditLog(req, 'db.backup', { path: backupPath });
-      res.json({ ok: true, path: backupPath });
-    }).catch(e => res.json({ ok: false, error: e.message }));
-  } catch (e) {
-    res.json({ ok: false, error: e.message });
-  }
-});
-
-app.get("/api/db/search", async (req, res) => {
-  if (!requireDashboardTool(req, res, "sidekick_db_search")) return;
-  try {
-    const { q, limit } = req.query;
-    if (!q) return res.status(400).json({ ok: false, error: "No query provided" });
-    // Routed through the dispatcher's db_search tool so its redaction, policy,
-    // and audit apply — the previous raw LIKE-scan over every table returned
-    // row contents (including any stored secrets) with no redaction at all.
-    const result = await callDashboardTool(
-      "db_search",
-      { query: String(q), limit: parseInt(limit) || 50 },
-      dashboardExecutionMetadata(req, authenticatedUser(req) || "dashboard")
-    );
-    const text = result?.content?.[0]?.text || "";
-    if (result?.isError) {
-      return res.status(500).json({ ok: false, error: text || "search failed" });
-    }
-    let results;
-    try { results = JSON.parse(text); } catch { results = text; }
-    res.json({ ok: true, results });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-app.get("/api/db/migrations", (req, res) => {
-  if (!requireDashboardTool(req, res, "sidekick_db_migrate")) return;
-  try {
-    const db = dbStore.getDb();
-    const meta = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get();
-    const currentVersion = meta ? parseInt(meta.value) : 0;
-    const migrationsDir = path.join(__dirname, "..", "migrations");
-    let migrations = [];
-    if (fs.existsSync(migrationsDir)) {
-      migrations = fs.readdirSync(migrationsDir)
-        .filter(f => f.endsWith(".sql"))
-        .map(f => {
-          const match = f.match(/^(\d+)/);
-          const version = match ? parseInt(match[1]) : 0;
-          return { file: f, version, applied: version <= currentVersion };
-        })
-        .sort((a, b) => a.version - b.version);
-    }
-    res.json({ ok: true, currentVersion, migrations });
-  } catch (e) {
-    res.json({ ok: false, error: e.message });
-  }
+registerDatabaseRoutes({
+  app, dbStore, dataDir: DATA_DIR, path, fs, callDashboardTool,
+  dashboardExecutionMetadata, authenticatedUser, requireDashboardTool, auditLog,
 });
 
 // Destructive clears report what actually happened. These previously answered
@@ -2760,144 +1975,14 @@ app.post('/api/webhook/:source', (req, res) => {
   }
 });
 
-// --- Agent Proxy ---
-
-function proxyAgent(req, res, method, body) {
-  const headers = { "Content-Type": "application/json" };
-  if (req.authPrincipal?.principal_id) headers["X-Sidekick-Principal-ID"] = String(req.authPrincipal.principal_id).slice(0, 160);
-  if (Array.isArray(req.authPrincipal?.scopes)) headers["X-Sidekick-Principal-Scopes"] = JSON.stringify(req.authPrincipal.scopes.slice(0, 80)).slice(0, 4000);
-  if (req.authPrincipal?.delegation_id) headers["X-Sidekick-Delegation-ID"] = String(req.authPrincipal.delegation_id).slice(0, 160);
-  if (body) headers["Content-Length"] = Buffer.byteLength(body);
-  const opts = {
-    hostname: "127.0.0.1",
-    port: AGENT_PORT,
-    path: req.originalUrl,
-    method: method,
-    headers: headers
-  };
-  const proxy = http.request(opts, (upstream) => {
-    res.writeHead(upstream.statusCode, upstream.headers);
-    upstream.pipe(res);
-  });
-  proxy.on("error", (e) => {
-    res.status(502).json({ error: "Agent bridge unavailable: " + e.message });
-  });
-  if (body) proxy.write(body);
-  proxy.end();
-}
-
-app.post("/api/agent/run", (req, res) => {
-  const body = JSON.stringify(req.body);
-  proxyAgent(req, res, "POST", body);
-});
-
-app.get("/api/agent/tasks", (req, res) => {
-  proxyAgent(req, res, "GET");
-});
-
-app.get("/api/agent/tasks/:taskId", (req, res) => {
-  proxyAgent(req, res, "GET");
-});
-
-app.get("/api/agent/tasks/:taskId/control-room", (req, res) => {
-  proxyAgent(req, res, "GET");
-});
-
-app.post("/api/agent/tasks/:taskId/plans", (req, res) => {
-  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
-});
-
-app.post("/api/agent/tasks/:taskId/escalations", (req, res) => {
-  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
-});
-
-app.post("/api/agent/tasks/:taskId/work-packages", (req, res) => {
-  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
-});
-
-app.post("/api/agent/tasks/:taskId/work-packages/:packageId/claim", (req, res) => {
-  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
-});
-
-app.get("/api/agent/tasks/:taskId/workspace-transactions", (req, res) => {
-  proxyAgent(req, res, "GET");
-});
-
-app.post("/api/agent/tasks/:taskId/workspace-transactions/:transactionId/rollback", (req, res) => {
-  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
-});
-
-app.post("/api/agent/tasks/:taskId/verification-recipes", (req, res) => {
-  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
-});
-
-app.post("/api/agent/tasks/:taskId/verification-recipes/:recipeId/run", (req, res) => {
-  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
-});
-app.get("/api/agent/learning-candidates", (req, res) => { proxyAgent(req, res, "GET"); });
-app.post("/api/agent/learning-candidates", (req, res) => { proxyAgent(req, res, "POST", JSON.stringify(req.body || {})); });
-app.post("/api/agent/learning-candidates/:candidateId/review", (req, res) => {
-  const body = { ...(req.body || {}) };
-  if (body.state === "active") {
-    const principal = req.authPrincipal?.principal_id || null;
-    if (!principal) return res.status(403).json({ error: "authenticated operator approval is required" });
-    body.approved_by = principal;
-  }
-  proxyAgent(req, res, "POST", JSON.stringify(body));
-});
-
-app.post("/api/agent/tasks/:taskId/guidance", (req, res) => {
-  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
-});
-
-app.post("/api/agent/tasks/:taskId/resume", (req, res) => {
-  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
-});
-
-app.post("/api/agent/tasks/:taskId/pause", (req, res) => {
-  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
-});
-
-app.post("/api/agent/tasks/:taskId/act-on", (req, res) => {
-  proxyAgent(req, res, "POST", JSON.stringify(req.body || {}));
-});
-
-// Canonical follow-up: create a child task continuing a terminal parent.
-app.post("/api/agent/run/:taskId/follow-up", (req, res) => {
-  const body = JSON.stringify(req.body);
-  proxyAgent(req, res, "POST", body);
-});
-
-// Cancel a live task. The agent service owns the cancel semantics; the
-// dashboard only relays and reports the backend's honest answer (404 when the
-// task is not running).
-app.post("/api/agent/run/:taskId/cancel", (req, res) => {
-  const body = JSON.stringify(req.body || {});
-  proxyAgent(req, res, "POST", body);
-});
-
-app.get("/api/agent/stream/:taskId", (req, res) => {
-  proxyAgent(req, res, "GET");
-});
-
-app.get("/api/agent/history", (req, res) => {
-  proxyAgent(req, res, "GET");
-});
-
-app.get("/api/agent/session/:rootId", (req, res) => {
-  proxyAgent(req, res, "GET");
-});
-
-app.get("/api/agent/run/:id", (req, res) => {
-  proxyAgent(req, res, "GET");
-});
+registerAgentProxyRoutes({ app, http, agentPort: AGENT_PORT });
 
 // --- Frontend ---
 
 app.get("/", (req, res) => {
   const html = fs.readFileSync(path.join(__dirname, "dashboard.html"), "utf-8")
     .replace("__VPS_IP__", VPS_IP);
-  res.set("Content-Type", "text/html; charset=utf-8").send(html);
+  res.set("Content-Type", "text/html; charset=utf-8").set("Cache-Control", "no-cache").send(html);
 });
 
 let dashboardServer = null;

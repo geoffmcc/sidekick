@@ -125,6 +125,11 @@ Compatibility maps are derived from the registry:
 
 New production code should depend on `src/tools/index.js`, `dispatchTool`, or `callTool`, not on `src/tools-legacy.js`.
 
+The repository-owned import and cycle guard is `npm run check:architecture`.
+It rejects new pack-to-internal, repository-to-transport, platform-to-pack, and
+handler-to-HTTP imports and reports the complete violating path. A small
+documented allowlist covers pre-existing transitional compatibility cycles.
+
 ## Dispatcher Pipeline
 
 `src/tools/dispatcher.js` owns the runtime execution pipeline for production tool calls.
