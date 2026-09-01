@@ -500,7 +500,7 @@ async function fetchLatestStable(services) {
 // ---- read tool -------------------------------------------------------------
 
 async function read(services, args, runtime) {
-  const userFilterActions = new Set(["activity", "user_status", "user_access_audit", "user_media_state", "user_unwatched", "item_details"]);
+  const userFilterActions = new Set(["activity", "user_status", "user_access_audit", "user_media_state", "user_unwatched", "item_details", "continue_watching", "next_up"]);
   if ((args.user_id || args.username) && !userFilterActions.has(args.action)) {
     throw new JellyfinError(
       "invalid_input",
@@ -627,7 +627,7 @@ async function read(services, args, runtime) {
       evidence_sources: ["/Library/VirtualFolders", "/Items/Counts", "/ScheduledTasks"],
     };
   }
-  if (args.action === "recent_media") {
+  if (["recent_media", "recently_added"].includes(args.action)) {
     // Verified against the 10.9/10.10 OpenAPI: GET /Items accepts
     // SortBy/SortOrder/Recursive server-wide with an admin API key — no user
     // context is required (unlike the legacy /Users/{id}/Items/Latest route).
@@ -654,6 +654,36 @@ async function read(services, args, runtime) {
       total_record_count: data?.TotalRecordCount ?? null,
       source: "/Items?SortBy=DateCreated&SortOrder=Descending&Recursive=true",
       bounded: true,
+    };
+  }
+  if (["continue_watching", "next_up"].includes(args.action)) {
+    if (!args.user_id && !args.username)
+      throw new JellyfinError("invalid_input", "user_id or username is required (use list_users to enumerate)");
+    const users = await getAll(c, "/Users", null, 100);
+    const user = users.find((x) => args.user_id && x.Id === args.user_id)
+      || users.find((x) => args.username && String(x.Name || "").toLowerCase() === String(args.username).toLowerCase());
+    if (!user) throw new JellyfinError("not_found", "no matching Jellyfin user");
+    const endpoint = args.action === "continue_watching"
+      ? `/Users/${encodeURIComponent(user.Id)}/Items/Resume`
+      : "/Shows/NextUp";
+    const data = await c.get(endpoint, {
+      UserId: args.action === "next_up" ? user.Id : undefined,
+      Limit: bounded(args.limit, 50),
+      StartIndex: Math.max(0, args.start_index ?? args.start ?? 0),
+      EnableTotalRecordCount: true,
+      Fields: "Overview,MediaSources,MediaStreams,ProviderIds,UserData,Path,DateCreated",
+    });
+    const items = Array.isArray(data?.Items) ? data.Items : [];
+    return {
+      profile: p.name,
+      user: { id: user.Id, name: user.Name || null },
+      view: args.action,
+      items: items.slice(0, 100).map(mediaListView),
+      total_record_count: data?.TotalRecordCount ?? null,
+      bounded: true,
+      note: args.action === "continue_watching"
+        ? "Jellyfin's user-scoped resume list; no watch state is changed."
+        : "Jellyfin's user-scoped next-up list; this is not a recommendation or behavioral inference.",
     };
   }
   if (["library_analytics", "metadata_completeness"].includes(args.action)) {
@@ -815,11 +845,12 @@ async function read(services, args, runtime) {
     };
   }
   if (args.action === "list_media") {
+    const fullLibrary = args.all === true;
     const filters = {
       Recursive: true,
       ParentId: args.library_id || undefined,
       SearchTerm: args.query || undefined,
-      IncludeItemTypes: args.include_item_types || "Movie,Series",
+      IncludeItemTypes: args.include_item_types || (fullLibrary ? undefined : "Movie,Series"),
       Genres: args.genre || args.genres || undefined,
       Tags: args.tags || undefined,
       Years: args.years || undefined,
@@ -833,7 +864,6 @@ async function read(services, args, runtime) {
       StartIndex: Math.max(0, args.start_index ?? args.start ?? 0),
     };
     const pageSize = bounded(args.limit, 100);
-    const fullLibrary = args.all === true;
     const page = fullLibrary
       ? await getPagedItems(c, filters, { limit: pageSize, maxItems: args.max_items || 10000 })
       : (() => null)();
@@ -1850,7 +1880,7 @@ function supportsPlaybackCommand(session, action, requiredCommand) {
   // sessions, and require an affirmative CanSeek value for seek operations.
   if (!isDlnaSession(session) || session.SupportsMediaControl !== true) return false;
   if (isSeekAction(action) && session.PlayState?.CanSeek !== true) return false;
-  return ["pause", "resume", "stop", "seek", "fast_forward", "rewind"].includes(action);
+  return ["pause", "resume", "stop", "seek", "fast_forward", "rewind", "set_volume"].includes(action);
 }
 
 async function playback(services, args, runtime) {
@@ -2245,6 +2275,9 @@ const readActions = [
   "user_media_state",
   "user_unwatched",
   "recent_media",
+  "recently_added",
+  "continue_watching",
+  "next_up",
   "library_analytics",
   "metadata_completeness",
   "metadata_issues",
@@ -2343,6 +2376,9 @@ const entry = {
           max_premiere_date: "string",
           all: "boolean (enumerate all matching items through bounded pagination)",
           max_items: "number (full-library cap, default 10000)",
+          recently_added: "server-wide recently added items",
+          continue_watching: "user-scoped resume items; requires user_id or username",
+          next_up: "user-scoped next-up episodes; requires user_id or username",
           fields: "string (item_details groups: core,ratings,credits,artwork,collections,external_links,watch_state,chapters,media_sources)",
           task_id: "string",
           user_id: "string",
