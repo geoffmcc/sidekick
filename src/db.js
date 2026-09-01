@@ -11,6 +11,7 @@ const { createKvStore } = require("./db/kv-store");
 const { createToolLogStore } = require("./db/tool-logs");
 const { createGeneratedCapabilityStore } = require("./db/generated-capabilities");
 const { createGeneratedExecutionRowMappers } = require("./db/generated-execution-rows");
+const { createDatabaseInspection } = require("./db/inspection");
 
 const DATA_DIR = process.env.SIDEKICK_DATA_DIR || path.join(__dirname, "..", "data");
 const DB_FILE = process.env.SIDEKICK_DB_FILE || path.join(DATA_DIR, "sidekick.db");
@@ -33,6 +34,12 @@ try {
 }
 
 let db = new Database(DB_FILE);
+
+const databaseInspection = createDatabaseInspection({
+  getDb: () => db,
+  fs,
+  dbFile: DB_FILE,
+});
 
 function configureDatabase(connection) {
   connection.exec(`
@@ -1576,89 +1583,7 @@ function executeQuery(sql, params = [], options = {}) {
   return results.slice(0, maxRows);
 }
 
-function getTableList() {
-  return db.prepare(`
-    SELECT name, type, sql 
-    FROM sqlite_master 
-    WHERE type IN ('table', 'view') 
-    AND name NOT LIKE 'sqlite_%'
-    ORDER BY name
-  `).all();
-}
-
-function getTableInfo(tableName) {
-  const table = quoteIdentifier(tableName);
-  const columns = db.prepare(`PRAGMA table_info(${table})`).all();
-  const indexes = db.prepare(`PRAGMA index_list(${table})`).all();
-  const foreignKeys = db.prepare(`PRAGMA foreign_key_list(${table})`).all();
-  
-  const indexDetails = indexes.map(idx => ({
-    ...idx,
-    columns: db.prepare(`PRAGMA index_info(${quoteIdentifier(idx.name)})`).all()
-  }));
-  
-  let rowCount = 0;
-  try {
-    rowCount = db.prepare(`SELECT COUNT(*) as count FROM ${table}`).get().count;
-  } catch (e) {}
-  
-  return { columns, indexes: indexDetails, foreignKeys, rowCount };
-}
-
-function getDatabaseStats() {
-  const dbSize = fs.statSync(DB_FILE).size;
-  
-  const pageCount = db.prepare("PRAGMA page_count").get().page_count;
-  const pageSize = db.prepare("PRAGMA page_size").get().page_size;
-  const freelistCount = db.prepare("PRAGMA freelist_count").get().freelist_count;
-  
-  const journalMode = db.prepare("PRAGMA journal_mode").get().journal_mode;
-  const walCheckpoint = db.prepare("PRAGMA wal_checkpoint").get();
-  
-  const cacheSize = db.prepare("PRAGMA cache_size").get().cache_size;
-  
-  let cacheHitRatio = null;
-  try {
-    const stats = db.prepare(`
-      SELECT 
-        SUM(CASE WHEN name LIKE 'sqlite_stat%' THEN 0 ELSE 1 END) as user_tables
-      FROM sqlite_master 
-      WHERE type = 'table'
-    `).get();
-  } catch (e) {}
-  
-  const tables = getTableList();
-  const tableStats = tables.map(t => {
-    let size = 0;
-    let rowCount = 0;
-    try {
-      rowCount = db.prepare(`SELECT COUNT(*) as count FROM ${t.name}`).get().count;
-      size = db.prepare(`SELECT page_count * ${pageSize} as size FROM pragma_page_count('${t.name}')`).get().size || 0;
-    } catch (e) {}
-    return { name: t.name, rowCount, size };
-  });
-  
-  return {
-    dbSize,
-    dbSizeHuman: formatBytes(dbSize),
-    pageCount,
-    pageSize,
-    freelistCount,
-    journalMode,
-    walCheckpoint,
-    cacheSize,
-    tables: tableStats,
-    totalTables: tables.length
-  };
-}
-
-function formatBytes(bytes) {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + " " + sizes[i];
-}
+const { getTableList, getTableInfo, getDatabaseStats, formatBytes } = databaseInspection;
 
 function createBackup(destPath = null, compress = true) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
