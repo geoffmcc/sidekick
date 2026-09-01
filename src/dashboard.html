@@ -37,6 +37,7 @@
   <a onclick="showPage('evolve')" id="nav-evolve">Evolve</a>
   <a onclick="showPage('compute')" id="nav-compute">Compute</a>
   <a onclick="showPage('predict')" id="nav-predict">Predict</a>
+  <a onclick="showPage('brain')" id="nav-brain">Brain v3</a>
   <a onclick="showPage('metrics')" id="nav-metrics">Metrics</a>
 </nav>
 <div class="status-row">
@@ -890,6 +891,43 @@
   </div>
   <div id="predictList"></div>
   <div id="predictDetail" style="display:none"></div>
+</div>
+
+<!-- Brain v3 Page -->
+<div class="page" id="page-brain">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:12px;flex-wrap:wrap">
+    <div>
+      <div class="mission-kicker">Brain v3 Control Room</div>
+      <h2 style="margin:4px 0 6px">Evidence Graph and Gates</h2>
+      <div class="sub">Read-only projections of durable task metadata. Every value is scoped to the selected task and remains subject to the existing Agent authorization boundary.</div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <input id="brainTaskId" type="text" maxlength="80" placeholder="task id" aria-label="Brain task id">
+      <button class="btn btn-sm" onclick="loadBrainControlRoom()"><i class="fas fa-sync"></i> Load task</button>
+    </div>
+  </div>
+  <div id="brainStatus" class="sub" aria-live="polite">Select a task to inspect Brain v3 metadata.</div>
+  <div class="metric-strip" id="brainSummary"></div>
+  <div class="grid" style="grid-template-columns:repeat(2,minmax(0,1fr));gap:12px">
+    <div class="card" style="padding:12px">
+      <div class="section-title">Graph Coverage</div>
+      <div id="brainGraphCoverage" class="brain-projection"><div class="empty">No task loaded.</div></div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="section-title">Verification Gates</div>
+      <div id="brainVerificationGates" class="brain-projection"><div class="empty">No task loaded.</div></div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="section-title">Role Routing Decisions</div>
+      <div class="sub" style="margin-bottom:8px">Recorded placement decisions only. Missing metadata is not inferred.</div>
+      <div id="brainRoleRouting" class="brain-projection"><div class="empty">No task loaded.</div></div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="section-title">Governed Learning Candidates</div>
+      <div class="sub" style="margin-bottom:8px">Project-scoped proposals remain inactive until reviewed through the existing Agent controls.</div>
+      <div id="brainLearningCandidates" class="brain-projection"><div class="empty">No task loaded.</div></div>
+    </div>
+  </div>
 </div>
 
 <!-- Metrics Page -->

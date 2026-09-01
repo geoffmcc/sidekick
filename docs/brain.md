@@ -1,283 +1,233 @@
-# Brain v0.1
+# Brain v3 foundation
 
-Brain v0.1 is a small, bounded, feature-flagged orchestration layer on top of
-the Agent Bridge, Compute Placement, the tool dispatcher, and the existing
-memory and approval systems. It coordinates a single request end to end:
+Brain v3 is the structured-reasoning foundation used by Sidekick's durable
+Agent task path. It adds bounded task understanding and observability around
+the existing Agent Bridge, Compute Placement, dispatcher, memory, approval,
+and verification systems. It does **not** create a second execution authority:
+tool effects still go through the canonical dispatcher.
+
+The current flow is:
 
 ```text
-understand request
-→ classify evidence requirement (reuse agent-protocol classifier)
-→ retrieve relevant scoped memory (embeddings via Compute Placement)
-→ produce a bounded STRUCTURED plan (LLM, generation via Compute Placement)
-→ validate the plan DETERMINISTICALLY (a model never validates its own plan)
-→ execute approved steps through the dispatcher (callAgentTool)
-→ collect evidence
-→ verify required evidence exists
-→ synthesize the final answer
+request
+ → versioned TaskSpec compilation (or deterministic fallback)
+ → scoped context and evidence planning
+ → deterministic plan validation
+ → independent plan critique
+ → governed tool execution and evidence collection
+ → belief/trace checkpoints
+ → verification and synthesis
+ → durable task and control-room projections
 ```
 
-## Non-goals
+## Scope and compatibility
 
-Brain v0.1 is **not** an unbounded agent loop, a dispatcher replacement, a
-Compute replacement, self-modifying code, an automatic tool generator, or a way
-to bypass approvals. It plans within hard bounds and fails closed.
+Brain v3 is a foundation, not an unbounded autonomous loop, a dispatcher or
+Compute replacement, self-modifying code, or an approval bypass. Its new
+records are bounded projections: raw prompts, model chain-of-thought, secrets,
+and unredacted tool output are not stored in the Brain v3 tables.
 
-## Feature flag and rollback
+The durable Agent path uses Brain unless `SIDEKICK_BRAIN_ENABLED` is explicitly
+set to a false value; `1` and `true` explicitly enable it. In non-test runtime,
+an unset flag leaves the durable Brain path enabled. Test mode preserves the
+explicit-flag behavior for deterministic tests. Disabling the path retains the
+older Agent routing compatibility behavior and is the rollback switch for the
+Brain execution branch. Approval continuation and recovery remain governed by
+the existing durable task and approval contracts; see
+[`adr-approval-continuation.md`](adr-approval-continuation.md).
 
-Brain is **off by default**. It is enabled by `SIDEKICK_BRAIN_ENABLED=1`.
+Historical references to **Brain v0.1** in the ADR, source comments, and
+compatibility tests describe the original bounded planner contract. They do
+not describe the current production-wide Brain version.
 
-- **Disabled (default):** `runAgent` in `src/agent.js` behaves exactly as
-  before — the Brain branch is skipped entirely and the Agent Bridge uses its
-  existing direct-answer / tool-loop routing. The Brain module is loaded with a
-  guarded `require`, so even a Brain load error cannot affect the disabled path.
-- **Rollback:** unset the flag (or revert the single commit). No schema or data
-  migration is involved; disabling is instant and total.
+## TaskSpec compilation and revisions
 
-Enablement, default state, and rollback are covered by
-`test/brain-integration.test.js`, which asserts the disabled path preserves the
-prior routing, transcript shape, and step shape.
+`src/brain/task-spec.js` normalizes an objective into a version-3 TaskSpec.
+It includes the original and normalized objective, deliverables,
+requirements, success criteria, constraints, preferences, prohibited actions,
+assumptions, ambiguities, clarifications, evidence and verification
+requirements, dependencies, stopping conditions, authority boundary, live
+evidence/read-only/change flags, and preferred execution profile.
 
-## Architecture
+Compilation is deterministic and fail-closed:
 
-Focused modules under `src/brain/`:
+- forbidden prototype-pollution keys and model-asserted authority fields are
+  rejected at any nesting level;
+- text, list, depth, and item counts are bounded and prompt-injection markers
+  are rejected;
+- conflicting requirements are rejected;
+- an invalid or conflicting input produces a bounded fallback TaskSpec with a
+  stopping condition requiring an explicit validated specification. The
+  fallback is not permission to execute the rejected intent.
 
-- `config.js` — the feature flag plus `BRAIN_LIMITS`. Security-relevant bounds
-  are frozen and **not** environment-overridable (mirroring
-  `agent-continuation`'s `CONTINUATION_LIMITS`), so a bounded planner cannot be
-  silently widened into an unbounded loop.
-- `plan-validator.js` — the pure, deterministic validator (the trust boundary).
-- `brain.js` — the orchestrator. Pure and dependency-injected (LLM planner,
-  `callTool`, memory recall, synthesize, clock, cancel), so the lifecycle,
-  evidence gate, and honesty behavior are testable without a server or model.
-- `index.js` — production wiring: builds the LLM-backed planner/synthesizer
-  around the injected `callLLM` (→ Compute Placement) and layers untrusted
-  material into prompts safely.
+Every durable task invocation persists the validated compiled spec, or the
+deterministic fallback, in `brain_task_spec_revisions`. Revisions are numbered
+per task and retain the source (`compiled` or `deterministic_fallback`), spec
+identifier, bounded JSON, and timestamp. The runtime revalidates a spec before
+persistence; stored data is a record, not an authority grant.
 
-Integration lives in `src/agent.js` `runAgent`: a single early branch delegates
-to Brain when the flag is on.
+## Belief snapshots
 
-## Plan and deterministic validation
+`src/brain/belief-state.js` provides a version-3, immutable-style belief state
+projection. It tracks bounded hypotheses, evidence references, contradictions,
+required-evidence coverage, progress, and one of these states:
 
-The planner produces a strict JSON plan:
+`intake`, `active`, `blocked`, `stalled`, `complete`, or `contradicted`.
 
-```json
-{
-  "version": 1,
-  "goal": "Check current disk usage",
-  "steps": [
-    { "id": "step-1", "type": "memory_retrieval", "capability": "embeddings", "purpose": "..." },
-    { "id": "step-2", "type": "tool", "tool": "health", "arguments": {}, "purpose": "..." },
-    { "id": "step-3", "type": "synthesis", "depends_on": ["step-1", "step-2"] }
-  ]
-}
-```
+Transitions are explicit and terminal states cannot transition back. Evidence
+can support, contradict, or neutrally relate to a hypothesis. Coverage reports
+supported and missing requirements; repeated progress-free assessment can mark
+a task stalled, and contradictions can make it contradicted.
 
-`validatePlan` runs **before any step executes** and rejects the whole plan on
-any failure. A model never validates its own plan — the validator is a separate
-pure function with no model call. Benign unknown plan/step fields (`thoughts`,
-`status`, …) — which small local models routinely emit despite schema-only
-prompting — are **stripped and reported** (`stripped` in the result and in the
-`brain.plan_validated` event) rather than fatal; the validated plan is rebuilt
-exclusively from whitelisted fields, so a stripped key can never reach
-execution. Everything else rejects:
+The Agent runtime checkpoints this state in `brain_belief_snapshots` during
+task progress and completion. The latest snapshot is available in the task
+and control-room Brain v3 projections.
 
-- non-object plans
-- prototype-pollution-shaped keys (`__proto__`, `constructor`, `prototype`)
-  anywhere in the plan, a step, or step arguments
-- **model-asserted authority fields** — `risk`, `approved`/`approval`,
-  `trust_level`, `verified`, `provenance`, `source`, etc. Risk, approval, and
-  classification are computed server-side by policy/approval/placement and are
-  never taken from the model
-- unsupported version; unknown step type (only `memory_retrieval`, `tool`,
-  `synthesis`); unknown capability name
-- a `tool` step naming a tool that is not present in the **built-in**
-  agent-visible catalog (`getToolDefsForSource("agent")` ∩ built-in registry).
-  Generated/dynamic capabilities are deny-by-default for Brain v0.1
-- malformed tool names, oversized argument objects
-- unresolved dependencies, self-dependencies, and cycles (topological check)
-- step counts over the bound
+## Cognitive traces and metrics
 
-Legacy `sidekick_`-prefixed tool names in a plan resolve to their canonical
-catalog entry, exactly as the Agent Bridge loop does.
+`src/brain/cognitive-trace.js` records bounded operational events, not private
+reasoning. Events are capped at 256 with bounded fields and payloads. Trace
+redaction removes secret-like values, authority fields, forbidden keys, and
+over-deep data before persistence. Finalized traces aggregate deterministic
+metrics such as event counts, durations, tokens, tool calls, and revisions.
 
-A rejected plan gets bounded correction: the validator's error strings are fed
-back to the planner for up to `MAX_PLANNING_ATTEMPTS` total attempts. Error
-strings may embed short model-chosen fragments (a bad tool or type name), but
-these are sanitized and length-capped at the source (`frag()`), and the
-corrected plan is fully revalidated — the validator, never the model, decides
-acceptance on every attempt; past the bound the task fails closed.
+The runtime stores traces in `brain_cognitive_traces` and metrics in
+`brain_cognitive_metrics`. These are diagnostic projections; they must not be
+treated as a transcript of chain-of-thought or as an authorization record.
 
-## Tool execution and the dispatcher boundary
+## Planning and the independent critic
 
-Every `tool` step runs through `callAgentTool(name, args, {taskId, executionId,
-rootExecutionId})` — the sole sanctioned dispatcher seam. Brain never requires
-`tools/context` internals, never constructs an execution context, never reuses
-a context across steps, and never passes approval/bypass flags. Per-step schema
-validation, policy, approval, redaction, and audit re-run in the dispatcher for
-every call. The validator's allowlist is advisory defense-in-depth; the
-dispatcher remains authoritative.
+The planner still emits the small legacy JSON plan shape (version 1, bounded
+steps, and a final synthesis step). `plan-validator.js` independently checks
+that shape before any step executes. It rejects malformed, cyclic, oversized,
+unknown, or unauthorized-looking plans; it does not trust model-supplied risk,
+approval, provenance, trust, or verification fields. The live dispatcher
+rechecks schema, policy, approval, redaction, and audit requirements for every
+call.
 
-## Compute use
+After deterministic validation, `src/brain/critic.js` performs an independent
+deterministic critique. It can require revision when a plan has no steps, when
+live evidence is required but no tool step exists, or when a read-only TaskSpec
+contains a mutating effect. A `revise` result returns bounded feedback to the
+planner; the critic does not execute tools and cannot authorize a plan.
 
-Brain requests logical capabilities only; Compute Placement decides the
-provider/model/worker/executor/accelerator. Memory embeddings use the
-`embeddings` capability (NPU-preferred, policy-gated CPU fallback); planning and
-synthesis use `chat`/`generate`. Brain hardcodes no worker, provider, model,
-endpoint, or device — those belong to Compute Placement configuration.
+All tool steps use `callAgentTool` through the Agent Bridge. Compute is
+requested by logical capability (`embeddings`, `chat`, or `generate`); provider,
+model, worker, executor, and accelerator placement remains a Compute concern.
 
-## Memory
+## Evidence graph and verification compiler
 
-Retrieval uses `memory.js`'s scoped, bounded, redacted wrappers
-(`recallMemoryForTextAsync`), never `dbStore` directly. Recalled memory is
-treated as **untrusted** and is redacted and layered into prompts as
-clearly-labeled user-role content, never system authority. Memory write-back
-for a completed task goes through the existing redaction-guarded
-`recordAgentTaskMemory`. Brain stores no secrets, raw tool output, unredacted
-transcripts, chain-of-thought, or speculative conclusions, and does not create
-or promote generated tools.
+`src/brain/evidence-graph.js` is a deterministic, bounded evidence graph. It
+accepts governed references and typed nodes for objectives, deliverables,
+requirements, claims, evidence, verification, artifacts, receipts, and memory.
+Supported relations include `supports`, `contradicts`, `satisfies`, `verifies`,
+`produces`, `references`, and `derived_from`. It rejects unknown references,
+unknown nodes, and graph bounds violations. Its coverage function classifies a
+requirement as `supported`, `contradicted`, or `unverified` and returns bounded
+evidence references.
 
-## Evidence and honesty
+`src/brain/verification-compiler.js` deterministically turns TaskSpec success
+criteria and verification requirements into bounded verification gates. It
+labels each gate as requiring `fresh_authoritative` or `bounded_support`
+evidence and reports available read-only capabilities and mutation count.
 
-For a request classified as needing current evidence, the verifier requires at
-least one **successful** evidence tool call before a factual answer is allowed
-(the `respond` echo tool does not count, and failed/approval-pending calls do
-not count). With no evidence, Brain fails closed with an honest "Sidekick could
-not inspect the requested state" message rather than synthesizing a plausible
-answer. A tool step failure is honest failure, never fabricated evidence. Model
-chain-of-thought is never persisted or displayed.
+Both modules are exported through `src/brain/index.js` as Brain v3 foundation
+components. The live Agent completion path continues to use the established
+durable receipt/recipe verification gates and fresh read-only repair path; the
+verification compiler and evidence graph are not yet the sole authoritative
+completion implementation.
 
-## Task lifecycle and cancellation
+## Durable task and control-room projection
 
-States: `queued → planning → validating → running → [waiting_for_approval] →
-verifying → completed | failed | cancelled | timed_out`.
+The Agent service runs migration `075_brain_v3_foundations.sql`, creating:
 
-Terminal states are **monotonic and sticky**: once a task is cancelled or timed
-out, a late-arriving tool or compute result can never flip it to completed
-(every terminal transition is guarded by a check-and-set). Because Compute calls
-have a timeout ceiling but no proactive cancellation, Brain enforces its own
-total-task and per-step deadlines and simply discards late results. Ambiguous
-side-effecting steps are not auto-replayed after a restart.
+- `brain_task_spec_revisions`
+- `brain_belief_snapshots`
+- `brain_cognitive_traces`
+- `brain_cognitive_metrics`
 
-## Approval
+The authenticated routes `GET /api/agent/tasks/:taskId` and
+`GET /api/agent/tasks/:taskId/control-room` include an additive `brain_v3`
+object containing bounded task-spec revisions, the latest belief snapshot, and
+recent traces. The control-room route is a durable read projection; its
+`source` is `durable_task_store`. Task access checks still apply, and the
+projection does not turn stored model or tool text into authority.
 
-A tool step whose dispatcher result is `approval_required` parks the task in
-`waiting_for_approval` (surfacing the `approvalId`); Brain never retries or
-bypasses an approval-gated step and never asks the model to avoid approval.
+The transcript also carries additive Brain v3 metadata (`brain.version`, task
+spec revision marker, belief status, and requirement coverage), alongside the
+existing redacted Brain state and evidence count. It remains compatible with
+older transcript readers.
 
-## Observability
+## Configuration and migration
 
-The transcript carries an additive `brain` field
-(`{ enabled, state, evidence_count, awaiting_approval, error }` — `error` is
-the sanitized terminal failure reason, `null` on success, so a failed Brain
-task is diagnosable post-hoc without having watched the live stream) and Brain emits
-platform events (`brain.enabled`, `brain.state`, `brain.plan_validated`,
-`brain.step_started`/`brain.step_completed`, `brain.waiting_for_approval`,
-`brain.evidence_missing`). Plan internals and chain-of-thought are not exposed —
-only the validated high-level step list, execution status, evidence references,
-and sanitized failures.
+- `SIDEKICK_BRAIN_ENABLED=1` or `true` explicitly enables Brain; an explicitly
+  false value disables the branch. Do not rely on the old “off by default”
+  description for durable tasks.
+- Security-relevant Brain bounds are frozen in `BRAIN_LIMITS`; they are not
+  environment-overridable. They include 12 plan steps, 2 planning attempts,
+  180 seconds total task time, 60 seconds per tool step, 120 seconds per
+  generation request, bounded memory/evidence, and bounded output tokens.
+- Apply normal pending migrations at Agent startup. Migration 075 is additive
+  (`CREATE TABLE IF NOT EXISTS` plus indexes) and has no destructive operation.
+- Profiles (`quick`, `standard`, `deep`, `persistent`, and `research`) shape
+  the durable Agent iteration/replanning budget and planning guidance; they do
+  not grant authority or widen the frozen Brain limits.
 
-## Prompt-injection resistance
+## Approval, recovery, and security guarantees
 
-The user goal, retrieved memory, tool output, and provider output are all
-treated as untrusted data: separated from Sidekick's system instructions,
-labeled untrusted, and redacted before entering a prompt. Because steps come
-only from the validated plan object — never from free text produced during
-execution — untrusted content that appears to "add a step" is inert.
+A dispatcher result requiring approval parks the task in
+`waiting_for_approval`; Brain never retries or bypasses that approval. With
+the durable continuation seam, the plan, evidence, counters, identity
+lineage, and deadline are checkpointed atomically with the approval. Approval
+or denial wakes the same task, and the resumed answer is written to its
+transcript. `SIDEKICK_SECRET_KEY` is required to resume parked work; rotating
+it can strand parked tasks, so drain or explicitly fail them first.
+
+The approval sweeper (`SIDEKICK_APPROVAL_SWEEP_INTERVAL_MS`, default 60s) and
+resume scheduler (`SIDEKICK_BRAIN_RESUME_INTERVAL_MS`, default 5s) are Brain-
+gated background jobs. Monitor their structured sweep counts before disabling
+Brain with parked work. Ambiguous high-risk execution is placed in
+`reconciling` and is not automatically redispatched; an authenticated human
+must resolve it through the reconciliation flow.
+
+Terminal task states are sticky. Late tool or compute results cannot resurrect
+a cancelled or timed-out task, and ambiguous side effects are not replayed
+automatically. Every effect remains subject to current identity, project and
+workspace scope, policy, schema, approval, redaction, and audit checks.
+Untrusted goals, memory, provider output, and tool output are data rather than
+instructions and cannot add a step after validation.
 
 ## Limitations
 
-- Compute calls cannot be aborted mid-flight; a timed-out Brain task may still
-  hold a live socket until the compute ceiling (300s chat/generate, 30s embed).
-  Brain bounds this only by its conservative concurrency and by discarding late
-  results.
-- The evidence classifier is heuristic; the verifier is the real guarantee for
-  live-state honesty.
-- Redaction is regex-based; novel secret formats can slip through (shared with
-  the rest of Sidekick).
+- Compute calls have a timeout ceiling but no proactive cancellation; a timed-
+  out task can retain a provider socket until that ceiling, although late
+  results are discarded.
+- Evidence classification remains heuristic; the completion verifier and
+  durable verification gates are the guarantee for live-state honesty.
+- Regex-based redaction can miss novel secret formats.
+- The evidence graph and verification compiler are foundation APIs, not yet a
+  replacement for the existing receipt/recipe completion authority.
+- Brain v3 projections are bounded and intentionally omit chain-of-thought and
+  raw sensitive payloads; they cannot independently reconstruct every detail
+  of a task execution.
 
-## Approval continuation (v0.2)
+## Testing and manual checks
 
-A task that parks for approval now **resumes**. In v0.1 the plan, evidence and
-step counters were stack locals: parking discarded them, the approved tool ran
-standalone in a different execution tree, and its result was thrown away.
+Run the focused foundation and deterministic behavior checks:
 
-The contract is `docs/adr-approval-continuation.md`. In outline:
-
-```text
-step needs approval
-→ T1 park: plan + evidence + binding written durably, atomically with the approval
-→ human decides
-   ├─ approve  → T2: approval approved AND task runnable, in one transaction
-   │             → task runner claims (T3) → verifies (§6) → dispatches → T4A records
-   └─ deny / expire / cancel / supersede
-                 → T5: structured step outcome recorded AND task woken, in one transaction
-                 → task runner claims (T3, resume mode) → T4R consumes the outcome
-→ remaining plan steps run → synthesis
+```bash
+npm run test:brain-v3
 ```
 
-What this changes for someone operating Brain:
+This runs `test/brain-v3-foundations.test.js` and
+`scripts/evaluate-brain-v3.js`. For the repository documentation drift check:
 
-- **A parked task survives a restart.** The checkpoint is the durable copy;
-  nothing depends on process memory.
-- **A denial is not a dead end.** It reaches the planner as a structured step
-  outcome, which may explain it or route around it. It may not re-request the
-  same action — the derived idempotency key already exists.
-- **`SIDEKICK_SECRET_KEY` is now required to resume**, not merely to approve.
-  Rotating it strands parked tasks; drain or explicitly fail them first.
-- **A resumed task's answer lands in its transcript**, not in a new surface.
-  The transcript is rewritten when the resumption reaches a terminal state, so
-  the follow-up continuation builder, the task-history UI, and automatic memory
-  all see a normal completed task. A resumption that is still in flight
-  (`woken`, `reconciling`) writes nothing and is picked up again.
-- **Two background jobs are liveness dependencies**, started by the agent
-  service, and both are gated on `SIDEKICK_BRAIN_ENABLED` — turning Brain off
-  stops them, so drain parked tasks first: the expiry/orphan/deadline sweeper
-  (`SIDEKICK_APPROVAL_SWEEP_INTERVAL_MS`, default 60s) and the resume scheduler
-  (`SIDEKICK_BRAIN_RESUME_INTERVAL_MS`, default 5s). The sweep interval is an
-  upper bound on how long a task can wait past its approval's expiry, so it is
-  a correctness parameter rather than a tuning knob. **Monitor them** — each
-  sweep logs structured counts.
-- **A high-risk step whose execution is ambiguous parks in `reconciling`** and
-  is never redispatched automatically. Resolving it requires an authenticated
-  human via `POST /api/reconciliations/:taskId/resolve`, with four permitted
-  decisions. `confirm_not_executed` is the most dangerous: asserting an effect
-  did not land when it did produces the double-execution the gate exists to
-  prevent. It is audited but not verifiable.
+```bash
+npm run check:docs
+```
 
-The guarantee is deliberately **not** exactly-once, and the ADR's §8 is worth
-reading before relying on it: one claimant of record with write fencing,
-at-least-once for low/medium risk, at-most-once with manual reconciliation for
-high/critical/unknown. A tool misclassified as `low` gets silently retried
-after a crash, so risk classification is a correctness input, not a label.
-
-## Manual verification
-
-With `SIDEKICK_BRAIN_ENABLED=1` in the Agent tab:
-
-- **Live state:** "Check disk usage and tell me whether anything needs
-  attention." → a registered tool runs, the answer is evidence-based, and the
-  transcript `brain.state` is `completed`.
-- **Conceptual:** "Explain what an NPU is." → no unnecessary tool, bounded
-  generation, clear answer.
-- **Approval:** a high-risk action (with approval mode on) parks in
-  `waiting_for_approval` with an `approvalId` and is never auto-executed.
-- **Continuation:** approving that parked action makes the task runnable; the
-  resume scheduler picks it up within its poll interval and the step executes
-  through the runner. Observe it in the **task's transcript**
-  (`data/conversations/<task-id>.json`), which is rewritten in place when the
-  resumption finishes: `status` moves from `waiting_for_approval` to
-  `completed`, `result` holds the synthesized answer, the resumed steps are
-  appended, and `brain.resumed` is `true`. The task-history UI reads the same
-  record. Denying it instead resumes the task with a structured
-  `approval_denied` step outcome rather than leaving it parked.
-- **Reconciliation** has a dashboard control on the Approvals page, in an
-  **Ambiguous Executions** section kept deliberately separate from the approval
-  inbox: these are not approve-or-reject decisions, because the step may
-  already have run. Each entry shows the tool, risk, task and step, attempt
-  count, who authorized it, and the argument digest, with the arguments
-  themselves renderable on demand. The four decisions are offered as buttons;
-  **It did not run** carries an explicit confirmation, because it redispatches
-  a high-risk tool. Without an authenticated principal the section explains why
-  it cannot be used rather than offering buttons that would be refused.
-
-With the flag unset, the Agent tab behaves exactly as before.
+For a manual control-room check, submit a durable Agent task, then request
+`GET /api/agent/tasks/<task-id>/control-room` with the same authenticated
+project/task context. Confirm `brain_v3.task_specs`, `brain_v3.belief`, and
+`brain_v3.traces` are present, and inspect the durable task state rather than
+treating the transient SSE stream as authoritative.

@@ -49,6 +49,22 @@ test("a well-formed plan validates", () => {
   assert.strictEqual(r.plan.steps.length, 2);
 });
 
+test("validated plans preserve bounded hierarchical metadata", () => {
+  const result = validatePlan(goodPlan({
+    milestones: [{ id: "m1", description: "inspect", verification_gate_ids: ["g1"] }],
+    work_packages: [{ id: "p1", description: "read", step_ids: ["s1"] }],
+    verification_gates: [{ id: "g1", recipe_id: "recipe-1", description: "fresh result" }],
+    stopping_conditions: ["stop after verified"],
+    active_work_package: "p1",
+  }), { agentTools: TOOLS });
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(result.plan.milestones[0].id, "m1");
+  assert.deepStrictEqual(result.plan.milestones[0].verification_gate_ids, ["g1"]);
+  assert.strictEqual(result.plan.work_packages[0].step_ids[0], "s1");
+  assert.strictEqual(result.plan.verification_gates[0].recipe_id, "recipe-1");
+  assert.strictEqual(result.plan.active_work_package, "p1");
+});
+
 test("synthesis-only plan (conceptual) validates", () => {
   const r = validatePlan({ version: 1, goal: "what is an NPU", steps: [{ id: "s1", type: "synthesis" }] }, { agentTools: TOOLS });
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));

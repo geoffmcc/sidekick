@@ -19,7 +19,7 @@ const { BRAIN_LIMITS, ALLOWED_STEP_TYPES, ALLOWED_CAPABILITIES, FORBIDDEN_KEYS }
  */
 
 const STEP_ALLOWED_KEYS = new Set(["id", "type", "capability", "tool", "arguments", "purpose", "depends_on"]);
-const PLAN_ALLOWED_KEYS = new Set(["version", "goal", "steps"]);
+const PLAN_ALLOWED_KEYS = new Set(["version", "goal", "steps", "milestones", "work_packages", "verification_gates", "stopping_conditions", "active_work_package"]);
 // Fields a model might emit to assert its own authority. Present anywhere in a
 // plan, they are a hard rejection — they must never be honored.
 const FORBIDDEN_AUTHORITY_KEYS = new Set([
@@ -145,6 +145,23 @@ function planAssertsAuthority(candidate) {
 
 function canonicalToolName(name) {
   return String(name || "").replace(/^sidekick_/, "");
+}
+
+function boundedTextList(value, max = 32) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, max).filter(item => typeof item === "string" && item.trim()).map(item => item.trim().slice(0, 300));
+}
+
+function boundedRecords(value, fields, max = 32) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, max).filter(item => item && typeof item === "object" && !Array.isArray(item)).map(item => {
+    const record = {};
+    for (const field of fields) {
+      if (field === "verification_gate_ids" || field === "step_ids") record[field] = boundedTextList(item[field], 16);
+      else if (typeof item[field] === "string" && item[field].trim()) record[field] = item[field].trim().slice(0, 300);
+    }
+    return record;
+  }).filter(record => Object.keys(record).length > 0);
 }
 
 // Sanitize a model-controlled value before embedding it in an error string.
@@ -274,11 +291,19 @@ function validatePlan(candidate, { agentTools = [] } = {}) {
     }
   }
 
+  const metadata = {
+    milestones: boundedRecords(candidate.milestones, ["id", "description", "verification_gate", "verification_gate_ids"]),
+    work_packages: boundedRecords(candidate.work_packages, ["id", "description", "step_ids"]),
+    verification_gates: boundedRecords(candidate.verification_gates, ["id", "recipe_id", "requirement_id", "description"]),
+    stopping_conditions: boundedTextList(candidate.stopping_conditions),
+  };
+  if (typeof candidate.active_work_package === "string" && candidate.active_work_package.trim()) metadata.active_work_package = candidate.active_work_package.trim().slice(0, 120);
+
   return {
     ok: true,
     errors: [],
     stripped,
-    plan: { version: 1, goal: candidate.goal, steps: normalizedSteps },
+    plan: { version: 1, goal: candidate.goal, steps: normalizedSteps, ...metadata },
   };
 }
 

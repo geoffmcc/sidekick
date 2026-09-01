@@ -188,6 +188,7 @@ const suites = [
   { file: 'test/dashboard-api.test.js', critical: false, description: 'Dashboard API behavior' },
   { file: 'test/compute.test.js', critical: false, description: 'Compute provider-neutral inference and job system' },
   { file: 'test/compute-dashboard-ui.test.js', critical: false, description: 'Compute tab UI labelling, job detail fields, action-state parity, and refresh' },
+  { file: 'test/brain-dashboard-ui.test.js', critical: false, description: 'Brain v3 Dashboard graph, gate, routing, and learning projections' },
   { file: 'test/compute-placement.test.js', critical: false, description: 'Compute Placement v1 shared decision core, provenance, and explain parity' },
   { file: 'test/compute-provider-bootstrap.test.js', critical: false, description: 'Compute provider/model bootstrap from env, idempotency, secure-by-default cloud, and secret-reference credential resolution' },
   { file: 'test/inference-convergence.test.js', critical: true, description: 'Production inference callers route only through Compute (no direct Ollama/Groq egress)' },

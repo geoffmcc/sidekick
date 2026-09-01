@@ -31,6 +31,7 @@
     "test:ci": "node test/run-all.js",
     "test:certification": "node test/run-all.js test/certification.test.js test/certification-isolation.test.js test/certification-lifecycle.test.js test/artifact-resource-scope.test.js test/compute-artifact-custody.test.js test/execution-node-protocol.test.js",
     "test:security": "node test/security.test.js",
+    "test:brain-v3": "NODE_ENV=test node test/brain-v3-foundations.test.js && NODE_ENV=test node scripts/evaluate-brain-v3.js",
     "check:architecture": "node scripts/check-architecture.js",
     "check:docs": "node scripts/check-docs.js"
   },
