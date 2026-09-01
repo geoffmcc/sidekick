@@ -6,14 +6,15 @@ const tasks = new Map([[
   "task_1", { task_id: "task_1", state: "running", checkpoint: { version: 1, safe_boundary: "after_read", next_action: "resume" } }
 ]]);
 const kernel = {
-  recoverOrphanedExecutions: () => ({ scanned: 1, orphaned: ["exec_1"] }),
-  getExecution: () => ({ execution_id: "exec_1", task_id: "task_1" }),
+  recoverOrphanedExecutions: () => ({ scanned: 2, orphaned: ["exec_1", "exec_1_duplicate"] }),
+  getExecution: executionId => ({ execution_id: executionId, task_id: "task_1" }),
   getExecutionClaim: () => ({ checkpoint: { version: 1, safe_boundary: "after_read", next_action: "resume" } }),
 };
 const store = { getTask: id => tasks.get(id), updateTask: (id, patch, event) => { calls.push({ id, patch, event }); tasks.set(id, { ...tasks.get(id), ...patch }); } };
 (async () => {
   const result = await recoverDurableAgentTasks({ platformKernel: kernel, taskStore: store, now: () => "2026-01-01T00:00:00.000Z" });
   assert.deepStrictEqual(result.recovered, ["task_1"]);
+  assert.strictEqual(calls.length, 1, "duplicate orphan claims must recover a task only once per scan");
   assert.strictEqual(calls[0].event, "task.recovered");
   assert.strictEqual(calls[0].patch.state, "interrupted");
 

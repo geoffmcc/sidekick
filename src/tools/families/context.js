@@ -7,6 +7,7 @@ const { redactSensitive } = require("../../redact");
 const { assembleContext } = require("../../context");
 const { getExecutionContext } = require("../context");
 const { scopedProject: authorizeMemoryProject } = require("./memory-scope");
+const { canonicalizeProjectName } = require("../../core/project-identity");
 
 const DEFAULT_CONTEXT = {
   projects: {},
@@ -292,13 +293,20 @@ const { loadProcedures } = require("../../core/procedures-store");
 const loadSharedContext = loadContext;
 
 async function sidekick_project({ name, include }) {
+  let projectName;
+  try {
+    projectName = authorizeMemoryProject(name);
+  } catch (error) {
+    return { content: [{ type: "text", text: error.message }], isError: true };
+  }
+  if (!projectName) return { content: [{ type: "text", text: "project name required" }], isError: true };
   const sections = (include || "kv,context").split(",").map(s => s.trim());
   const output = {};
   if (sections.includes("kv")) {
     const allKV = dbStore.getAllKV();
     const kvResults = [];
     for (const [key, entry] of Object.entries(allKV)) {
-      if (typeof entry === 'object' && entry !== null && entry.project === name) {
+      if (typeof entry === 'object' && entry !== null && canonicalizeProjectName(entry.project) === projectName) {
         kvResults.push({ key, value: typeof entry.value === 'string' ? entry.value.substring(0, 200) : entry.value, updated: entry.updated });
       }
     }
@@ -306,7 +314,7 @@ async function sidekick_project({ name, include }) {
   }
   if (sections.includes("context")) {
     const ctx = loadSharedContext();
-    const structuredMemories = dbStore.searchMemories({ project: name, limit: 20 }).map(i => ({
+    const structuredMemories = dbStore.searchMemories({ project: projectName, limit: 20 }).map(i => ({
       type: i.type || "memory",
       summary: i.summary || i.content,
       created: i.last_seen_at || i.updated_at,
@@ -319,7 +327,7 @@ async function sidekick_project({ name, include }) {
       ...(ctx.patterns || []).map(i => ({ type: "pattern", summary: i.description, created: i.date, project: i.project })),
       ...(ctx.sessions || []).map(i => ({ type: "session", summary: i.summary, created: i.date, project: i.project })),
       ...(ctx.memories || []).map(i => ({ type: i.type || "memory", summary: i.summary || i.goal || i.tool, created: i.date, project: i.project }))
-    ].filter(i => i.project === name);
+    ].filter(i => canonicalizeProjectName(i.project) === projectName);
     output.context = items.slice(-20).map(i => ({
       type: i.type,
       summary: String(i.summary || "").substring(0, 200),
@@ -327,14 +335,14 @@ async function sidekick_project({ name, include }) {
     }));
   }
   if (sections.includes("logs")) {
-    const toolLogs = dbStore.readToolLogs(20);
+    const toolLogs = dbStore.readToolLogs(20).filter(l => canonicalizeProjectName(l.project) === projectName);
     output.logs = toolLogs.map(l => ({
       time: l.t, tool: l.n, ok: l.ok, summary: l.s
     }));
   }
   if (sections.includes("procedures")) {
     const procs = loadProcedures();
-    output.procedures = Object.keys(procs).filter(n => n.toLowerCase().includes(name.toLowerCase()));
+    output.procedures = Object.keys(procs).filter(n => n.toLowerCase().includes(projectName.toLowerCase()));
   }
   return { content: [{ type: "text", text: JSON.stringify(output, null, 2) }] };
 }

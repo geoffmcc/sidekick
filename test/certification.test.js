@@ -66,5 +66,51 @@ const { listScenarios, runCertification, formatCertificationText, collectReliabi
   assert.strictEqual(metrics.completion.terminal, 3);
   assert.strictEqual(metrics.completion.verified, 1);
   assert.strictEqual(metrics.completion.blocked, 1);
+  assert.strictEqual(metrics.timing.p50_completion_ms, 1000);
+  assert.strictEqual(metrics.timing.p95_completion_ms, 2000);
+  assert.strictEqual(metrics.timing.max_completion_ms, 2000);
+  assert.deepStrictEqual(metrics.failures.classes, {});
+  assert.deepStrictEqual(metrics.failures.coverage, { usage_json: true, last_error_code: false });
+
+  const legacyMetricRows = [{
+    state: "failed",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:01Z",
+    completed_at: "2026-01-01T00:00:01Z",
+    usage_json: "{}",
+    result_json: null,
+    verification_json: null,
+    last_error_code: "must-not-be-counted",
+  }];
+  const metricQueries = [];
+  const legacyMetrics = collectReliabilityMetrics({
+    db: {
+      getTableList: () => [{ name: "agent_tasks" }],
+      getDb: () => ({
+        prepare: query => {
+          metricQueries.push(query);
+          return { all: () => query.startsWith("PRAGMA") ? [{ name: "state" }, { name: "created_at" }, { name: "updated_at" }, { name: "completed_at" }, { name: "usage_json" }, { name: "result_json" }, { name: "verification_json" }] : legacyMetricRows };
+        },
+      }),
+    },
+  });
+  assert.ok(!metricQueries.some(query => query.includes("last_error_code")));
+  assert.deepStrictEqual(legacyMetrics.failures.classes, {});
+  assert.deepStrictEqual(legacyMetrics.failures.coverage, { usage_json: true, last_error_code: false });
+
+  const lifecycle = await runCertification({
+     mode: "lifecycle",
+     lifecycleExecutor: { run: async scenario => ({
+       state: scenario.theme === "ambiguous-effect" ? "blocked" : "completed",
+       source: "durable_task_store",
+       receipts: scenario.expected_tools.map(capability => ({ capability })),
+       events: [{ event_type: "task.completed" }],
+       dispatch_counts: { total: scenario.expected_tools.length },
+       result: { status: "verified" },
+     }) },
+  });
+  assert.strictEqual(lifecycle.summary.total, 6);
+  assert.strictEqual(lifecycle.summary.passed, 6);
+  assert.strictEqual(lifecycle.summary.failed, 0);
   console.log("Certification tests passed");
 })().catch(error => { console.error(error); process.exitCode = 1; });

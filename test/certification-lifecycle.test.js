@@ -1,6 +1,10 @@
 "use strict";
 
 const assert = require("assert");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const { spawn } = require("child_process");
 const { createLifecycleExecutor } = require("../src/certification/lifecycle");
 
 const scenario = { objective: "certify the bounded Agent lifecycle", required_initial_state: { project: "certification", workspace: "workspace:certification" } };
@@ -52,10 +56,79 @@ async function testValidationAndError() {
   await assert.rejects(() => executor.run({ ...scenario, fault_point: "dispatch" }), /fault injection/);
 }
 
+async function testResponseBound() {
+  const oversized = new Response("x".repeat(256 * 1024 + 1), { status: 200 });
+  const executor = createLifecycleExecutor({ baseUrl: "http://127.0.0.1", fetchImpl: async () => oversized });
+  await assert.rejects(() => executor.run(scenario), /response exceeds the size bound/);
+}
+
+async function testRealLoopbackAgentProcess() {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "sidekick-certification-agent-"));
+  const childScript = [
+    "const agent = require('./src/agent');",
+    "agent.__setLLMOverrideForTests(async () => { await new Promise(resolve => setTimeout(resolve, 500)); return { response: JSON.stringify({ think: 'waiting for cancellation' }), provider: 'test', model: 'test-model' }; });",
+    "const server = agent.app.listen(0, '127.0.0.1', () => console.log('CERT_PORT=' + server.address().port));",
+  ].join("\n");
+  const child = spawn(process.execPath, ["-e", childScript], {
+    cwd: path.resolve(__dirname, ".."),
+    env: {
+      ...process.env,
+      NODE_ENV: "test",
+      SIDEKICK_DATA_DIR: dataDir,
+      SIDEKICK_TOOL_POLICY: "open",
+      SIDEKICK_APPROVAL_MODE: "off",
+      SIDEKICK_DISABLE_OLLAMA_BOOTSTRAP: "1",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  let errors = "";
+  child.stdout.on("data", chunk => { output += chunk.toString(); });
+  child.stderr.on("data", chunk => { errors += chunk.toString(); });
+  try {
+    const port = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`real Agent process did not start: ${errors.slice(0, 300)}`)), 10000);
+      const onData = () => {
+        const match = output.match(/CERT_PORT=(\d+)/);
+        if (match) {
+          clearTimeout(timer);
+          resolve(Number(match[1]));
+        }
+      };
+      child.stdout.on("data", onData);
+      child.once("error", error => { clearTimeout(timer); reject(error); });
+      child.once("exit", (code, signal) => {
+        if (!output.includes("CERT_PORT=")) {
+          clearTimeout(timer);
+          reject(new Error(`real Agent process exited before listening (${code || signal})`));
+        }
+      });
+    });
+    const executor = createLifecycleExecutor({ baseUrl: `http://127.0.0.1:${port}`, pollMs: 10, timeoutMs: 45000 });
+    assert.strictEqual(await executor.available(), true);
+    const observed = await executor.run({
+      objective: "check disk usage on the loopback Agent",
+      required_initial_state: { project: "agent-certification", workspace: "workspace:agent-certification" },
+    }, { cancelAfterPolls: 1 });
+    assert.strictEqual(observed.source, "durable_task_store");
+    assert.strictEqual(observed.state, "cancelled");
+    assert.ok(observed.task_id);
+    assert.strictEqual(observed.cancellation.requested, true);
+    assert.ok(observed.events.some(event => event.event_type === "task.cancel_requested"));
+    assert.ok(observed.events.some(event => event.event_type === "task.completed"));
+  } finally {
+    child.kill("SIGTERM");
+    await new Promise(resolve => child.once("exit", resolve));
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+}
+
 (async () => {
   await testCompletion();
   await testCancel();
   await testTimeout();
   await testValidationAndError();
+  await testRealLoopbackAgentProcess();
+  await testResponseBound();
   console.log("Certification lifecycle tests passed");
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -1183,9 +1183,14 @@ app.get("/api/artifacts", (req, res) => {
   // identity principals, while allowing isolated pre-bootstrap test harnesses
   // to exercise the handler without manufacturing an Owner account.
   if (req.authPrincipal && !requireIdentityAdministrator(req, res)) return;
+  // Artifact metadata is a project resource. An authenticated Dashboard
+  // request must name its project and only sees artifacts owned or created by
+  // the requesting principal; internal custody callers may remain unscoped.
+  if (req.authPrincipal && !req.query.project_id) return res.status(400).json({ ok: false, error: "project_id is required for artifact access", code: "project_scope_required" });
   try {
     const artifacts = platformKernel.listArtifacts({
       project_id: req.query.project_id,
+      principal_id: req.authPrincipal?.principal_id,
       execution_id: req.query.execution_id,
       custody_role: req.query.custody_role,
       limit: req.query.limit,

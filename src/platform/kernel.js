@@ -1302,9 +1302,10 @@ function registerArtifactLegacy(input = {}) {
   if (custodyRole === "original" && input.supersedes_artifact_id) throw new Error("original artifacts cannot supersede another artifact");
   if (custodyRole === "derivative" && !input.supersedes_artifact_id) throw new Error("derivative artifacts require supersedes_artifact_id");
   if (input.supersedes_artifact_id) {
-    const parent = dbStore.getDb().prepare("SELECT artifact_id, deleted_at FROM platform_artifacts WHERE artifact_id = ?").get(input.supersedes_artifact_id);
+    const parent = dbStore.getDb().prepare("SELECT artifact_id, project_id, deleted_at FROM platform_artifacts WHERE artifact_id = ?").get(input.supersedes_artifact_id);
     if (!parent) throw new Error(`Parent artifact not found: ${input.supersedes_artifact_id}`);
     if (parent.deleted_at) throw new Error("derivatives cannot be created from deleted artifacts");
+    if (String(parent.project_id || "") !== String(input.project_id || "")) throw new Error("derivative parent must belong to the same project");
   }
   if (input.content_hash !== undefined && !/^(?:sha256:)?[a-f0-9]{64}$/i.test(String(input.content_hash))) {
     throw new Error("content_hash must be a SHA-256 digest");
@@ -1878,9 +1879,9 @@ function createProjectWorkspace(input = {}) {
   const wsId = newId("ws");
   dbStore.getDb().transaction(() => {
     dbStore.getDb().prepare("INSERT INTO platform_project_workspaces (workspace_id, name, project_id, owner_id, state, config_json, secrets_json, environment, resource_limits_json, created_at, updated_at, metadata_json) VALUES (?, ?, ?, ?, 'active', ?, '{}', ?, ?, ?, ?, ?)").run(wsId, input.name || projectId, projectId, input.owner_id || "system", json(input.config), input.environment || "default", json(input.resource_limits), ts, ts, json(input.metadata));
-    appendEvent({ event_type: "workspace.created", source: input.source || "platform", actor_id: input.owner_id, subject_type: "workspace", subject_id: wsId, project_id: projectId, payload: { name: input.name || projectId }, correlation_id: wsId });
+    appendEvent({ event_type: "workspace.created", source: input.source || "platform", actor_id: input.actor_id || input.owner_id, subject_type: "workspace", subject_id: wsId, project_id: projectId, payload: { name: input.name || projectId }, correlation_id: wsId });
     for (const [name, stored] of secretEntries) {
-      setWorkspaceSecret(wsId, name, stored, { source: input.source, actor_id: input.owner_id });
+      setWorkspaceSecret(wsId, name, stored, { source: input.source, actor_id: input.actor_id || input.owner_id });
     }
   })();
   return getProjectWorkspace(wsId);

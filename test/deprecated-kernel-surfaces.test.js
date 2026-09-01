@@ -43,6 +43,37 @@ test("identity-deployment declares itself experimental, do-not-call", () => {
   assert.ok(/DO NOT ADD PRODUCTION\s*\n?\/\/ CALLERS|DO NOT ADD PRODUCTION CALLERS/s.test(source.replace(/\n\/\//g, " ").replace(/\s+/g, " ")), "header forbids production callers");
 });
 
+test("identity-deployment fails closed in production without an explicit opt-in", () => {
+  const script = [
+    "process.env.NODE_ENV = 'production';",
+    "const { createIdentityDeploymentRegistry } = require('./src/platform/identity-deployment');",
+    "createIdentityDeploymentRegistry();",
+  ].join(" ");
+  assert.throws(
+    () => execSync(`node -e ${JSON.stringify(script)}`, { cwd: path.join(__dirname, ".."), stdio: "pipe" }),
+    /experimental and disabled in production/
+  );
+});
+
+test("identity-deployment remains available to its isolated non-production compatibility test", () => {
+  const script = [
+    "process.env.NODE_ENV = 'test';",
+    "const { createIdentityDeploymentRegistry } = require('./src/platform/identity-deployment');",
+    "if (!createIdentityDeploymentRegistry()) process.exit(2);",
+  ].join(" ");
+  execSync(`node -e ${JSON.stringify(script)}`, { cwd: path.join(__dirname, ".."), stdio: "pipe" });
+});
+
+test("identity-deployment production use requires the explicit compatibility opt-in", () => {
+  const script = [
+    "process.env.NODE_ENV = 'production';",
+    "process.env.SIDEKICK_ENABLE_EXPERIMENTAL_IDENTITY_DEPLOYMENT = 'true';",
+    "const { createIdentityDeploymentRegistry } = require('./src/platform/identity-deployment');",
+    "if (!createIdentityDeploymentRegistry()) process.exit(2);",
+  ].join(" ");
+  execSync(`node -e ${JSON.stringify(script)}`, { cwd: path.join(__dirname, ".."), stdio: "pipe" });
+});
+
 test("the deprecated platform_extensions registry has no production callers", () => {
   const raw = execSync(
     `grep -rnE '\\b(registerExtension|getExtensionByName|activateExtension|deactivateExtension|uninstallExtension|updateExtensionConfig|recordExtensionUsage|listExtensions)\\(' ${SRC} || true`,

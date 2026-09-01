@@ -26,6 +26,7 @@ const HEARTBEAT_MS = boundedInt(process.env.SIDEKICK_NODE_HEARTBEAT_MS, 30000, 5
 const POLL_MS = boundedInt(process.env.SIDEKICK_NODE_POLL_MS, 1000, 250, 60000);
 const CONCURRENCY = boundedInt(process.env.SIDEKICK_NODE_CONCURRENCY, 2, 1, 8);
 const MAX_OUTPUT = 1024 * 1024;
+const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 let workerId = null;
 let credential = null;
 let workspace = null;
@@ -40,6 +41,11 @@ function redact(value) { return String(value || "").replace(/(?:wksec_|enroll_)[
 function loadConfig() { try { const parsed = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")); if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("configuration must be an object"); return parsed; } catch (e) { if (e.code === "ENOENT") return {}; throw new Error(`invalid node configuration: ${e.message}`); } }
 function token() { const file = process.env.SIDEKICK_NODE_ENROLL_TOKEN_FILE || path.join(os.homedir(), ".config", "sidekick", "node-enrollment-token"); try { const value = fs.readFileSync(file, "utf8").trim(); return value || process.env.SIDEKICK_NODE_ENROLL_TOKEN; } catch { return process.env.SIDEKICK_NODE_ENROLL_TOKEN; } }
 function nodeId() { return process.env.SIDEKICK_NODE_ID || workerConfig.generateStableNodeId(); }
+function networkScopes() {
+  const configured = Array.isArray(nodeConfig.networkScopes) ? nodeConfig.networkScopes : [];
+  const environment = String(process.env.SIDEKICK_NODE_NETWORK_SCOPE || "").split(",").map(value => value.trim()).filter(Boolean);
+  return [...new Set([...configured, ...environment].map(String).filter(value => /^[A-Za-z][A-Za-z0-9_.:-]{0,120}$/.test(value)))].slice(0, 16);
+}
 function registry() {
   if (nodeRegistry) return nodeRegistry;
   const builtin = getCanonicalRegistry({ includeActiveModules: false });
@@ -62,12 +68,29 @@ function registry() {
 }
 function descriptorSetHash() { const names = registry().list().map(d => `${d.name}:${descriptorIdentity(d)}`).join("\n"); return crypto.createHash("sha256").update(names).digest("hex"); }
 function binaries() { const names = ["git", "rg", "grep", "node", "npm", "python3", "go", "cargo", "ruby", "java"]; return names.filter(name => { try { require("child_process").execFileSync("which", [name], { stdio: "ignore", timeout: 1000 }); return true; } catch { return false; } }); }
-function capabilities() { return { nodeId: nodeId(), executionHost: os.hostname(), nodeVersion: process.version, osType: os.type(), osRelease: os.release(), architecture: os.arch(), platform: process.platform, descriptorSetHash: descriptorSetHash(), binaries: binaries(), packs: Array.isArray(nodeConfig.packs) ? nodeConfig.packs.slice(0, 16) : [], workspaces: workspace ? [{ name: workspace.name, root: workspace.root, permissions: workspace.permissions, limits: workspace.limits }] : [], networkScopes: Array.isArray(nodeConfig.networkScopes) ? nodeConfig.networkScopes.slice(0, 16) : [], browser: false, privilege: false, healthy: true }; }
+function capabilities() { return { nodeId: nodeId(), executionHost: os.hostname(), nodeVersion: process.version, osType: os.type(), osRelease: os.release(), architecture: os.arch(), platform: process.platform, descriptorSetHash: descriptorSetHash(), binaries: binaries(), packs: Array.isArray(nodeConfig.packs) ? nodeConfig.packs.slice(0, 16) : [], workspaces: workspace ? [{ name: workspace.name, root: workspace.root, permissions: workspace.permissions, limits: workspace.limits }] : [], networkScopes: networkScopes(), browser: false, privilege: false, healthy: true }; }
 function request(method, endpoint, body, timeoutMs = 15000) {
   return new Promise((resolve, reject) => {
     const url = new URL(endpoint, SERVER_URL); const transport = url.protocol === "https:" ? https : http; const data = body == null ? null : JSON.stringify(body);
     const headers = { "content-type": "application/json", ...(data ? { "content-length": Buffer.byteLength(data) } : {}), ...(workerId && credential ? { authorization: `Bearer ${workerId}:${credential}` } : {}) };
-    const req = transport.request({ hostname: url.hostname, port: url.port, path: url.pathname + url.search, method, headers }, response => { let text = ""; response.on("data", chunk => { text += chunk; if (text.length > 2 * 1024 * 1024) req.destroy(new Error("response too large")); }); response.on("end", () => { let parsed = {}; try { parsed = text ? JSON.parse(text) : {}; } catch { parsed = { error: "invalid server response" }; } resolve({ status: response.statusCode, body: parsed }); }); });
+    const req = transport.request({ hostname: url.hostname, port: url.port, path: url.pathname + url.search, method, headers }, response => {
+      const chunks = [];
+      let bytes = 0;
+      response.on("data", chunk => {
+        bytes += chunk.length;
+        if (bytes > MAX_RESPONSE_BYTES) {
+          req.destroy(new Error("response too large"));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on("end", () => {
+        const text = Buffer.concat(chunks).toString("utf8");
+        let parsed = {};
+        try { parsed = text ? JSON.parse(text) : {}; } catch { parsed = { error: "invalid server response" }; }
+        resolve({ status: response.statusCode, body: parsed });
+      });
+    });
     req.setTimeout(timeoutMs, () => req.destroy(new Error("request timeout"))); req.on("error", reject); if (data) req.write(data); req.end();
   });
 }
@@ -97,7 +120,7 @@ function validateLocalArguments(descriptor, args) {
   if (safetyArguments && safetyArguments.some(key => Object.prototype.hasOwnProperty.call(rawArgs, key) && parsed.data[key] === undefined)) {
     throw new Error("stale tool schema: safety argument was stripped before local execution");
   }
-  if (descriptor.name === "git" && ["clone", "pull", "push"].includes(parsed.data.action) && !process.env.SIDEKICK_NODE_NETWORK_SCOPE) throw new Error("network scope is required for this Git operation");
+  if (descriptor.name === "git" && ["clone", "pull", "push"].includes(parsed.data.action) && networkScopes().length === 0) throw new Error("network scope is required for this Git operation");
   for (const [key, value] of pathFields(parsed.data)) {
     const operation = ["destination", "output", "path_a", "path_b"].includes(key) ? "write" : "read";
     workspaceForPath(value, operation === "write" && descriptor.name !== "read" ? "write" : "read");

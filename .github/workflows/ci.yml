@@ -63,6 +63,9 @@ jobs:
     - name: Run Agent lifecycle certification
       run: node test/certification-lifecycle.test.js
 
+    - name: Run certification custody and protocol tests
+      run: npm run test:certification
+
     - name: Run invariant and Doctor checks
       run: node test/invariants-doctor.test.js
 
