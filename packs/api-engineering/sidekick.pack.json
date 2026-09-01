@@ -9,7 +9,7 @@
   "compatibility": { "sidekick": ">=1.0.0" },
   "modules": [{ "name": "api-engineering-tools", "path": "modules/api-engineering-tools", "entry_point": "entry.js", "config_from_pack": true }],
   "workflows": [{ "path": "workflows/api-contract-check.json" }, { "path": "workflows/api-health.json" }],
-  "knowledge": [{ "path": "knowledge/api-engineering.md", "title": "API Engineering and Contract Testing pack", "category": "development", "tags": ["api", "contracts", "http", "network-scope"] }],
+  "knowledge": [{ "path": "knowledge/api-engineering.md", "title": "API Engineering and Contract Testing pack", "category": "development", "tags": ["api", "contracts", "http", "network-scope"] }, { "path": "knowledge/usage-reference.md", "title": "API Engineering: usage and result interpretation", "category": "development", "tags": ["api", "contracts", "assertions", "evidence"] }],
   "requires": { "tools": [], "optional_tools": ["web_check", "web_extract", "parse", "validate"] },
   "permissions": [],
   "configuration": { "schema": { "type": "object", "properties": { "max_assertions": { "type": "integer", "minimum": 1, "maximum": 50 } }, "additionalProperties": false }, "defaults": { "max_assertions": 20 } }

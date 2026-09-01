@@ -3,7 +3,7 @@
   "description": "Fail-closed authorization preflight for reproducible security labs; no public discovery or arbitrary execution.", "publisher": "Sidekick", "compatibility": { "sidekick": ">=1.0.0" },
   "modules": [{ "name": "security-lab-tools", "path": "modules/security-lab-tools", "entry_point": "entry.js", "config_from_pack": true }],
   "workflows": [{ "path": "workflows/lab-preflight.json" }],
-  "knowledge": [{ "path": "knowledge/operating.md", "title": "Security Lab and Reproduction operating model", "category": "security", "tags": ["security", "lab", "reproduction", "scope"] }],
+  "knowledge": [{ "path": "knowledge/operating.md", "title": "Security Lab and Reproduction operating model", "category": "security", "tags": ["security", "lab", "reproduction", "scope"] }, { "path": "knowledge/usage-reference.md", "title": "Security Lab and Reproduction: authorization preflight", "category": "security", "tags": ["security", "lab", "scope", "isolation"] }],
   "requires": { "tools": [], "optional_tools": ["research_scope", "network_scopes", "research_evidence"] },
   "permissions": [{ "tool": "research_scope", "risk": "medium" }, { "tool": "network_scopes", "risk": "medium" }, { "tool": "research_evidence", "risk": "medium" }],
   "configuration": { "schema": { "type": "object", "properties": { "require_isolated": { "type": "boolean" }, "allowed_target_kinds": { "type": "array", "items": { "type": "string", "enum": ["private_ip", "hostname", "fixture"] }, "maxItems": 8 } }, "additionalProperties": false }, "defaults": { "require_isolated": true, "allowed_target_kinds": ["private_ip", "hostname", "fixture"] } }

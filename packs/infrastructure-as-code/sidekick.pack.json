@@ -9,7 +9,7 @@
   "compatibility": { "sidekick": ">=1.0.0" },
   "modules": [{ "name": "infrastructure-as-code-tools", "path": "modules/infrastructure-as-code-tools", "entry_point": "entry.js", "config_from_pack": true }],
   "workflows": [{ "path": "workflows/iac-plan.json" }, { "path": "workflows/iac-preflight.json" }],
-  "knowledge": [{ "path": "knowledge/infrastructure-as-code.md", "title": "Infrastructure as Code pack", "category": "infrastructure", "tags": ["iac", "compose", "plan", "preflight"] }],
+  "knowledge": [{ "path": "knowledge/infrastructure-as-code.md", "title": "Infrastructure as Code pack", "category": "infrastructure", "tags": ["iac", "compose", "plan", "preflight"] }, { "path": "knowledge/usage-reference.md", "title": "Infrastructure as Code: plan and preflight reference", "category": "infrastructure", "tags": ["iac", "compose", "plan", "validation"] }],
   "requires": { "tools": [], "optional_tools": ["compose", "parse", "diff", "network"] },
   "permissions": [],
   "configuration": { "schema": { "type": "object", "properties": { "allow_apply": { "type": "boolean", "enum": [false] } }, "additionalProperties": false }, "defaults": { "allow_apply": false } }
