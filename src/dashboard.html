@@ -9,45 +9,30 @@
 <link rel="stylesheet" href="/static/dashboard.css?v=dashboard-ux-preview-5">
 </head>
 <body>
-<div class="header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;padding-bottom:12px;border-bottom:1px solid #21262d">
-  <div>
-    <h1 style="font-size:1.4rem;color:#58a6ff">Sidekick Dashboard <span id="serviceDots" style="font-size:.85rem;margin-left:12px"></span></h1>
-    <div class="sub">__VPS_IP__</div>
-  </div>
-  <div class="sub" id="lastUpdate"></div>
-</div>
+<div class="app-shell">
+  <aside class="sidebar" id="appSidebar" aria-label="Primary navigation">
+    <div class="brand-lockup"><div class="brand-mark" aria-hidden="true">S</div><div class="brand-copy"><strong>Sidekick</strong><span>Operations console</span></div><button class="icon-button sidebar-toggle" id="sidebarToggle" type="button" aria-label="Collapse navigation" aria-expanded="true" title="Collapse navigation"><i class="fas fa-angles-left" aria-hidden="true"></i></button></div>
+    <div class="workspace-switcher"><span class="eyebrow">Workspace</span><button class="workspace-button" type="button" aria-label="Current workspace: global"><span class="workspace-dot" aria-hidden="true"></span><span>Global workspace</span><i class="fas fa-chevron-down" aria-hidden="true"></i></button></div>
+    <nav class="side-nav" id="sideNav">
+      <div class="nav-group"><button class="nav-group-title" type="button" aria-expanded="true"><span>Overview</span><i class="fas fa-chevron-down" aria-hidden="true"></i></button><a class="active" href="#mission" data-page="mission" id="nav-mission"><i class="fas fa-compass" aria-hidden="true"></i><span>Mission Control</span></a><a href="#projects" data-page="projects" id="nav-projects"><i class="fas fa-folder-tree" aria-hidden="true"></i><span>Projects</span></a></div>
+      <div class="nav-group"><button class="nav-group-title" type="button" aria-expanded="true"><span>Work</span><i class="fas fa-chevron-down" aria-hidden="true"></i></button><a href="#agent" data-page="agent" id="nav-agent"><i class="fas fa-robot" aria-hidden="true"></i><span>Agent</span></a><a href="#handoffs" data-page="handoffs" id="nav-handoffs"><i class="fas fa-route" aria-hidden="true"></i><span>Handoffs</span></a><a href="#research" data-page="research" id="nav-research"><i class="fas fa-flask" aria-hidden="true"></i><span>Research</span></a><a href="#approvals" data-page="approvals" id="nav-approvals"><i class="fas fa-shield-halved" aria-hidden="true"></i><span>Approvals</span><span class="nav-count" id="navApprovalCount" hidden>0</span></a></div>
+      <div class="nav-group"><button class="nav-group-title" type="button" aria-expanded="true"><span>Intelligence</span><i class="fas fa-chevron-down" aria-hidden="true"></i></button><a href="#brain" data-page="brain" id="nav-brain"><i class="fas fa-brain" aria-hidden="true"></i><span>Brain</span></a><a href="#memory" data-page="memory" id="nav-memory"><i class="fas fa-database" aria-hidden="true"></i><span>Memory</span></a><a href="#predict" data-page="predict" id="nav-predict"><i class="fas fa-wand-magic-sparkles" aria-hidden="true"></i><span>Predict</span></a><a href="#evolve" data-page="evolve" id="nav-evolve"><i class="fas fa-seedling" aria-hidden="true"></i><span>Evolve</span></a></div>
+      <div class="nav-group"><button class="nav-group-title" type="button" aria-expanded="true"><span>Operations</span><i class="fas fa-chevron-down" aria-hidden="true"></i></button><a href="#activity" data-page="activity" id="nav-activity"><i class="fas fa-list-check" aria-hidden="true"></i><span>Activity</span></a><a href="#blackbox" data-page="blackbox" id="nav-blackbox"><i class="fas fa-life-ring" aria-hidden="true"></i><span>Black Box</span></a><a href="#compute" data-page="compute" id="nav-compute"><i class="fas fa-microchip" aria-hidden="true"></i><span>Compute</span></a><a href="#metrics" data-page="metrics" id="nav-metrics"><i class="fas fa-chart-line" aria-hidden="true"></i><span>Metrics</span></a></div>
+      <div class="nav-group"><button class="nav-group-title" type="button" aria-expanded="true"><span>Platform</span><i class="fas fa-chevron-down" aria-hidden="true"></i></button><a href="#tools" data-page="tools" id="nav-tools"><i class="fas fa-toolbox" aria-hidden="true"></i><span>Tools</span></a><a href="#capabilities" data-page="capabilities" id="nav-capabilities"><i class="fas fa-puzzle-piece" aria-hidden="true"></i><span>Capabilities</span></a><a href="#network-scopes" data-page="network-scopes" id="nav-network-scopes"><i class="fas fa-network-wired" aria-hidden="true"></i><span>Network Scopes</span></a><a href="#identity" data-page="identity" id="nav-identity"><i class="fas fa-id-badge" aria-hidden="true"></i><span>Identity</span></a></div>
+      <div class="nav-group"><button class="nav-group-title" type="button" aria-expanded="true"><span>System</span><i class="fas fa-chevron-down" aria-hidden="true"></i></button><a href="#system" data-page="system" id="nav-system"><i class="fas fa-heart-pulse" aria-hidden="true"></i><span>Health &amp; System</span></a><a href="#data" data-page="data" id="nav-data"><i class="fas fa-box-archive" aria-hidden="true"></i><span>Data</span></a><a href="#database" data-page="database" id="nav-database"><i class="fas fa-table" aria-hidden="true"></i><span>Database</span></a><a href="#config" data-page="config" id="nav-config"><i class="fas fa-sliders" aria-hidden="true"></i><span>Configuration</span></a></div>
+    </nav>
+    <div class="sidebar-footer"><span class="status-dot unknown" id="sidebarHealthDot" aria-hidden="true"></span><span id="sidebarHealthLabel">Checking health</span><span class="mono">__VPS_IP__</span></div>
+  </aside>
+  <div class="app-frame"><header class="topbar"><button class="icon-button mobile-menu" id="mobileMenu" type="button" aria-label="Open navigation"><i class="fas fa-bars" aria-hidden="true"></i></button><div class="breadcrumb"><span class="breadcrumb-section">Sidekick</span><i class="fas fa-chevron-right" aria-hidden="true"></i><strong id="pageTitle">Mission Control</strong></div><div class="topbar-actions"><button class="command-trigger" id="commandTrigger" type="button" aria-haspopup="dialog"><i class="fas fa-magnifying-glass" aria-hidden="true"></i><span>Search or jump to...</span><kbd>Ctrl K</kbd></button><span class="instance-badge"><span class="status-dot unknown" id="serviceDots" aria-hidden="true"></span><span id="instanceLabel">Instance checking</span></span><span class="topbar-updated" id="lastUpdate">Not checked</span></div></header><main class="main-content" id="mainContent"><div class="sr-status" id="liveStatus" role="status" aria-live="polite"></div>
 
-<nav>
-  <a class="active" onclick="showPage('mission')" id="nav-mission">Mission Control</a>
-  <a onclick="showPage('system')" id="nav-system">System</a>
-  <a onclick="showPage('activity')" id="nav-activity">Activity</a>
-  <a onclick="showPage('blackbox')" id="nav-blackbox">Black Box</a>
-  <a onclick="showPage('data')" id="nav-data">Data</a>
-  <a onclick="showPage('memory')" id="nav-memory">Memory</a>
-  <a onclick="showPage('database')" id="nav-database">Database</a>
-  <a onclick="showPage('config')" id="nav-config">Config</a>
-  <a onclick="showPage('agent')" id="nav-agent">Agent</a>
-  <a onclick="showPage('handoffs')" id="nav-handoffs">Handoffs</a>
-  <a onclick="showPage('research')" id="nav-research">Research</a>
-  <a onclick="showPage('approvals')" id="nav-approvals">Approvals</a>
-  <a onclick="showPage('tools')" id="nav-tools">Tools</a>
-  <a onclick="showPage('capabilities')" id="nav-capabilities">Capabilities</a>
-  <a onclick="showPage('network-scopes')" id="nav-network-scopes">Network Scopes</a>
-  <a onclick="showPage('identity')" id="nav-identity">Identity</a>
-  <a onclick="showPage('evolve')" id="nav-evolve">Evolve</a>
-  <a onclick="showPage('compute')" id="nav-compute">Compute</a>
-  <a onclick="showPage('predict')" id="nav-predict">Predict</a>
-  <a onclick="showPage('brain')" id="nav-brain">Brain v3</a>
-  <a onclick="showPage('metrics')" id="nav-metrics">Metrics</a>
-</nav>
-<div class="status-row">
-  <div class="status-box"><div class="s-label">Uptime</div><div class="s-val" id="s-uptime">...</div></div>
-  <!-- 1-minute load average, not a CPU percentage: os.loadavg is load, and pretending otherwise faked a percent. -->
-  <div class="status-box"><div class="s-label">Load (1m)</div><div class="s-val" id="s-cpu">...</div></div>
-  <div class="status-box"><div class="s-label">Memory</div><div class="s-val" id="s-memory">...</div></div>
-  <div class="status-box"><div class="s-label">Disk</div><div class="s-val" id="s-disk">...</div></div>
+      <div class="legacy-status" aria-hidden="true"><span id="s-uptime">--</span><span id="s-cpu">--</span><span id="s-memory">--</span><span id="s-disk">--</span></div>
+<!-- Projects Page -->
+<div class="page" id="page-projects">
+  <div class="page-header"><div><span class="eyebrow">Overview</span><h1>Projects</h1><p class="page-lede">A working view of project-scoped context. Relationships are shown only when the platform records them.</p></div><div class="page-header-actions"><button class="btn btn-outline" id="projectsRefresh" type="button"><i class="fas fa-rotate" aria-hidden="true"></i> Refresh</button></div></div>
+  <div class="metric-strip" id="projectsSummary"></div>
+  <div class="panel project-notice"><i class="fas fa-circle-info" aria-hidden="true"></i><div><strong>Project context is additive</strong><p>Unscoped activity and storage remain available in their specialist views. This workspace does not infer ownership from names or timestamps.</p></div></div>
+  <div class="projects-grid" id="projectsList"><div class="skeleton-stack"><div class="skeleton-line wide"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div></div></div>
 </div>
-
 <!-- Mission Control Page -->
 <div class="page active" id="page-mission">
   <div class="mission-hero">
@@ -1020,7 +1005,15 @@
   </div>
 </div>
 
-<footer>refreshes every 10s</footer>
+    </main>
+    <footer>Sidekick operations console <span aria-hidden="true">·</span> refreshes live views every 10s</footer>
+  </div>
+</div>
+<dialog class="command-dialog" id="commandDialog" aria-labelledby="commandTitle">
+  <div class="command-dialog-head"><div><span class="eyebrow">Quick navigation</span><h2 id="commandTitle">Jump to a workspace</h2></div><button class="icon-button" id="commandClose" type="button" aria-label="Close command palette"><i class="fas fa-xmark" aria-hidden="true"></i></button></div>
+  <input id="commandInput" class="command-input" type="search" placeholder="Search pages..." autocomplete="off" aria-label="Search pages">
+  <div id="commandResults" class="command-results" role="listbox" aria-label="Dashboard pages"></div>
+</dialog>
 
 <script src="/static/dashboard.js?v=dashboard-ux-preview-6"></script>
 </body>

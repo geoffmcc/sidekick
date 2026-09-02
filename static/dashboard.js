@@ -310,14 +310,21 @@ function getToolStatsRange(windowMode) {
 }
 
 function showPage(name){
+  if (!document.getElementById('page-' + name)) name = 'mission';
   currentPage = name;
   localStorage.setItem('sidekick_currentPage', name);
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
   $('page-' + name).classList.add('active');
-  $('nav-' + name).classList.add('active');
+  const navItem = $('nav-' + name);
+  if (navItem) navItem.classList.add('active');
+  const title = { mission: 'Mission Control', projects: 'Projects', system: 'Health & System', blackbox: 'Black Box', data: 'Data', memory: 'Memory', database: 'Database', config: 'Configuration', agent: 'Agent', handoffs: 'Handoffs', research: 'Research', approvals: 'Approvals', tools: 'Tools', capabilities: 'Capabilities', 'network-scopes': 'Network Scopes', identity: 'Identity', evolve: 'Evolve', compute: 'Compute', predict: 'Predict', brain: 'Brain', metrics: 'Metrics' }[name] || name;
+  const titleEl = $('pageTitle');
+  if (titleEl) titleEl.textContent = title;
+  ensurePageHeader(name, title);
   loadSystem();
   if (name === 'mission') loadMissionControl();
+  if (name === 'projects') loadProjects();
   if (name === 'system') { loadDashboardSummary(); loadLLM(); loadServices(); }
   if (name === 'activity') loadLogs();
   if (name === 'blackbox') loadBlackbox();
@@ -338,6 +345,51 @@ function showPage(name){
   if (name === 'predict') { loadPredictStatus(); loadPredict(); }
   if (name === 'brain') loadBrainControlRoom();
   if (name === 'metrics') loadGrafanaDashboard();
+}
+
+function routeToPage(name, replace) {
+  const target = document.getElementById('page-' + name) ? name : 'mission';
+  if (location.hash !== '#' + target) {
+    (replace ? history.replaceState : history.pushState).call(history, null, '', '#' + target);
+  }
+  showPage(target);
+  const sidebar = $('appSidebar');
+  if (sidebar) sidebar.classList.remove('mobile-open');
+}
+
+function ensurePageHeader(name, title) {
+  const page = $('page-' + name);
+  if (!page || page.querySelector(':scope > .page-header') || ['mission', 'blackbox', 'compute', 'brain', 'metrics', 'projects'].includes(name)) return;
+  const descriptions = { system: 'Inspect current service health and system capacity without conflating configuration with runtime state.', activity: 'Review what Sidekick did, grouped by durable session and task context when available.', data: 'Inspect stored records with explicit project and provenance metadata.', memory: 'Review durable learned context separately from operational and session records.', database: 'Inspect bounded database state and governed administration surfaces.', config: 'Review runtime configuration with redacted and unavailable values distinguished.', agent: 'Start and resume durable work with its plan, authority, evidence, and outcome visible.', handoffs: 'Find the latest verified next step for work that crosses sessions or operators.', research: 'Track authorized research workspaces, sources, evidence, and findings.', approvals: 'Review requested effects, scope, risk, and evidence before making a governed decision.', tools: 'Browse the live tool catalog and its effective policy state.', capabilities: 'Inspect installed capability packs and their lifecycle health.', 'network-scopes': 'Review named outbound boundaries and their effective state.', identity: 'Inspect identity and authorization administration state.', evolve: 'Review proposed, trial, approved, and rejected generated capabilities.', predict: 'Separate observed facts, derived predictions, confidence, and evidence.' };
+  const header = document.createElement('div');
+  header.className = 'page-header';
+  const copy = document.createElement('div');
+  copy.innerHTML = '<span class="eyebrow">Sidekick workspace</span><h1></h1><p class="page-lede"></p>';
+  copy.querySelector('h1').textContent = title;
+  copy.querySelector('p').textContent = descriptions[name] || 'Operational information for the selected Sidekick workspace.';
+  header.appendChild(copy);
+  page.insertBefore(header, page.firstElementChild);
+}
+
+function loadProjects() {
+  const list = $('projectsList');
+  const summary = $('projectsSummary');
+  if (!list) return;
+  list.innerHTML = '<div class="skeleton-stack"><div class="skeleton-line wide"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div></div>';
+  authFetch('/api/kv').then(response => response.json()).then(data => {
+    const projects = Array.isArray(data.projects) ? data.projects : [];
+    if (summary) summary.innerHTML = metric('Recorded projects', projects.length, 'Derived from explicit KV project metadata');
+    if (!projects.length) {
+      list.innerHTML = '<div class="panel project-empty"><div class="empty">No explicitly scoped projects are recorded yet.</div><p class="sub">Create project metadata through a governed workflow or inspect unscoped records in Data.</p></div>';
+      return;
+    }
+    const entries = Array.isArray(data.entries) ? data.entries : [];
+    list.innerHTML = projects.map(project => {
+      const count = entries.filter(entry => entry.project === project).length;
+      return '<article class="project-card"><span class="eyebrow">Project workspace</span><h2>' + esc(project) + '</h2><p>' + count + ' explicitly scoped record' + (count === 1 ? '' : 's') + ' in KV. Other work surfaces may remain unscoped.</p><button class="btn btn-outline btn-sm" type="button" data-project="' + attr(project) + '">Inspect project data</button></article>';
+    }).join('');
+    list.querySelectorAll('[data-project]').forEach(button => button.addEventListener('click', () => { routeToPage('data'); const filter = $('kvProjectFilter'); if (filter) { filter.value = button.dataset.project; if (typeof filterKV === 'function') filterKV(); } }));
+  }).catch(error => { list.innerHTML = '<div class="panel project-empty"><div class="error-text">Project data unavailable.</div><p class="sub">' + esc(error.message) + '</p></div>'; });
 }
 
 function brainProjectionEmpty(message) { return '<div class="empty">' + esc(message) + '</div>'; }
@@ -720,7 +772,16 @@ function formatMs(ms){
 function loadServices(){
   authFetch('/api/services').then(r=>r.json()).then(d=>{
     const container = $('serviceDots');
-    if (!d.services) { container.innerHTML = ''; return; }
+    if (!d.services) { if (container) container.textContent = ''; return; }
+    const values = Object.values(d.services);
+    const healthy = values.length > 0 && values.every(status => status === 'active');
+    const healthDot = $('sidebarHealthDot');
+    const healthLabel = $('sidebarHealthLabel');
+    if (healthDot) healthDot.className = 'status-dot ' + (healthy ? 'ok' : values.length ? 'danger' : 'unknown');
+    if (healthLabel) healthLabel.textContent = healthy ? 'Services healthy' : values.length ? 'Attention required' : 'Health unknown';
+    const instanceLabel = $('instanceLabel');
+    if (instanceLabel) instanceLabel.textContent = healthy ? 'Instance healthy' : values.length ? 'Instance degraded' : 'Instance unknown';
+    if (!container) return;
     container.innerHTML = Object.entries(d.services).map(([name, status]) => {
       const icon = SERVICE_ICONS[name] || 'fa-circle';
       const label = SERVICE_LABELS[name] || name;
@@ -733,17 +794,16 @@ function loadServices(){
 // -- System -- //
 function loadSystem(){
   return authFetch('/api/system').then(r=>r.json()).then(d=>{
-    if(d.error){ $('s-uptime').textContent='error'; return }
-    $('s-uptime').textContent = d.uptime || '?';
+    if(d.error){ if ($('s-uptime')) $('s-uptime').textContent='error'; return }
+    if ($('s-uptime')) $('s-uptime').textContent = d.uptime || '?';
     // load_1m is the 1-minute load average (not a percentage — the old code
     // faked a percent from it). Thresholds are relative to the core count:
     // load ≥ cores means saturated, ≥ half the cores means elevated.
     const load1 = Number(d.load_1m);
     const cores = Number(d.cpu_count) || 1;
-    $('s-cpu').textContent = Number.isFinite(load1) ? load1 + ' / ' + cores + ' cores' : '?';
-    $('s-cpu').className = 's-val' + (load1 >= cores ? ' warn' : load1 >= cores * 0.5 ? '' : ' ok');
-    $('s-memory').textContent = d.memory.used + '/' + d.memory.total;
-    $('s-disk').textContent = d.disk.free + ' free (' + d.disk.pct + ')';
+    if ($('s-cpu')) { $('s-cpu').textContent = Number.isFinite(load1) ? load1 + ' / ' + cores + ' cores' : '?'; $('s-cpu').className = 's-val' + (load1 >= cores ? ' warn' : load1 >= cores * 0.5 ? '' : ' ok'); }
+    if ($('s-memory')) $('s-memory').textContent = d.memory.used + '/' + d.memory.total;
+    if ($('s-disk')) $('s-disk').textContent = d.disk.free + ' free (' + d.disk.pct + ')';
   }).catch(e => apiError('/api/system', e, 0));
 }
 
@@ -905,10 +965,10 @@ function renderMissionSystem(system, summary){
   // Keep the global status strip in sync with Mission Control's first render.
   // Previously these values were only filled by loadSystem(), which made the
   // initial Mission Control view show ellipses until another tab was opened.
-  $('s-uptime').textContent = system.uptime || '?';
-  $('s-cpu').textContent = system.load_1m != null ? system.load_1m + ' / ' + (system.cpu_count || '?') + ' cores' : '?';
-  $('s-memory').textContent = system.memory ? system.memory.used + '/' + system.memory.total : '?';
-  $('s-disk').textContent = system.disk ? system.disk.free + ' free (' + system.disk.pct + ')' : '?';
+  if ($('s-uptime')) $('s-uptime').textContent = system.uptime || '?';
+  if ($('s-cpu')) $('s-cpu').textContent = system.load_1m != null ? system.load_1m + ' / ' + (system.cpu_count || '?') + ' cores' : '?';
+  if ($('s-memory')) $('s-memory').textContent = system.memory ? system.memory.used + '/' + system.memory.total : '?';
+  if ($('s-disk')) $('s-disk').textContent = system.disk ? system.disk.free + ' free (' + system.disk.pct + ')' : '?';
 }
 
 function renderMissionStats(data){
@@ -4433,10 +4493,43 @@ document.addEventListener('keydown', function (event) {
   if (target && target.id === 'agentGoal') { event.preventDefault(); runAgent(); }
   else if (target && target.id === 'agentFollowupGoal') { event.preventDefault(); submitFollowup(); }
 });
+const pageHash = location.hash.slice(1);
 const savedPage = localStorage.getItem('sidekick_currentPage');
-if (savedPage && savedPage !== 'mission') {
-  showPage(savedPage);
-}
+const initialPage = document.getElementById('page-' + pageHash) ? pageHash : (document.getElementById('page-' + savedPage) ? savedPage : 'mission');
+document.querySelectorAll('.side-nav a[data-page]').forEach(link => link.addEventListener('click', event => {
+  event.preventDefault();
+  routeToPage(link.dataset.page);
+}));
+window.addEventListener('popstate', () => routeToPage(location.hash.slice(1) || 'mission', true));
+window.addEventListener('hashchange', () => showPage(location.hash.slice(1) || 'mission'));
+document.querySelectorAll('.nav-group-title').forEach(button => button.addEventListener('click', () => {
+  const group = button.closest('.nav-group');
+  const collapsed = group.classList.toggle('is-collapsed');
+  button.setAttribute('aria-expanded', String(!collapsed));
+}));
+const sidebar = $('appSidebar');
+const sidebarCollapsed = localStorage.getItem('sidekick_sidebar_collapsed') === 'true';
+if (sidebarCollapsed) sidebar.classList.add('collapsed');
+const sidebarToggle = $('sidebarToggle');
+if (sidebarToggle) sidebarToggle.addEventListener('click', () => {
+  const collapsed = sidebar.classList.toggle('collapsed');
+  localStorage.setItem('sidekick_sidebar_collapsed', String(collapsed));
+  sidebarToggle.setAttribute('aria-expanded', String(!collapsed));
+  sidebarToggle.setAttribute('aria-label', collapsed ? 'Expand navigation' : 'Collapse navigation');
+});
+const mobileMenu = $('mobileMenu');
+if (mobileMenu) mobileMenu.addEventListener('click', () => sidebar.classList.add('mobile-open'));
+document.addEventListener('click', event => { if (window.innerWidth <= 900 && sidebar.classList.contains('mobile-open') && !sidebar.contains(event.target) && event.target !== mobileMenu) sidebar.classList.remove('mobile-open'); });
+showPage(initialPage);
+if (location.hash !== '#' + initialPage) history.replaceState(null, '', '#' + initialPage);
+const projectsRefresh = $('projectsRefresh');
+if (projectsRefresh) projectsRefresh.addEventListener('click', loadProjects);
+
+const commandPages = [['mission','Mission Control','fa-compass'],['projects','Projects','fa-folder-tree'],['agent','Agent','fa-robot'],['handoffs','Handoffs','fa-route'],['research','Research','fa-flask'],['approvals','Approvals','fa-shield-halved'],['brain','Brain','fa-brain'],['memory','Memory','fa-database'],['predict','Predict','fa-wand-magic-sparkles'],['evolve','Evolve','fa-seedling'],['activity','Activity','fa-list-check'],['blackbox','Black Box','fa-life-ring'],['compute','Compute','fa-microchip'],['metrics','Metrics','fa-chart-line'],['tools','Tools','fa-toolbox'],['capabilities','Capabilities','fa-puzzle-piece'],['network-scopes','Network Scopes','fa-network-wired'],['identity','Identity','fa-id-badge'],['system','Health & System','fa-heart-pulse'],['data','Data','fa-box-archive'],['database','Database','fa-table'],['config','Configuration','fa-sliders']];
+function renderCommandResults(query) { const results = $('commandResults'); if (!results) return; const q = query.trim().toLowerCase(); results.innerHTML = commandPages.filter(page => !q || page[1].toLowerCase().includes(q)).map(page => '<button class="command-result" type="button" role="option" data-command-page="' + page[0] + '"><i class="fas ' + page[2] + '" aria-hidden="true"></i><span>' + esc(page[1]) + '</span></button>').join('') || '<div class="empty">No matching workspace.</div>'; results.querySelectorAll('[data-command-page]').forEach(button => button.addEventListener('click', () => { commandDialog.close(); routeToPage(button.dataset.commandPage); })); }
+const commandDialog = $('commandDialog');
+if (commandDialog) { const openCommand = () => { commandDialog.showModal(); renderCommandResults(''); $('commandInput').focus(); }; $('commandTrigger').addEventListener('click', openCommand); $('commandClose').addEventListener('click', () => commandDialog.close()); $('commandInput').addEventListener('input', event => renderCommandResults(event.target.value)); }
+document.addEventListener('keydown', event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); if (commandDialog && !commandDialog.open) commandDialog.showModal(); renderCommandResults(''); $('commandInput').focus(); } if (event.key === 'Escape' && sidebar) sidebar.classList.remove('mobile-open'); });
 
 const toolStatsWindowSelect = $('toolStatsWindow');
 if (toolStatsWindowSelect) {
