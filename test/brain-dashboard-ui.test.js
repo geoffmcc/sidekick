@@ -10,7 +10,7 @@ const css = fs.readFileSync(path.join(__dirname, "..", "static", "dashboard.css"
 
 assert.match(html, /id="nav-brain"/);
 assert.match(html, /id="page-brain"/);
-for (const id of ["brainGraphCoverage", "brainVerificationGates", "brainRoleRouting", "brainLearningCandidates"]) assert.match(html, new RegExp(`id="${id}"`));
+for (const id of ["brainTaskSpec", "brainBeliefState", "brainTraceActivity", "brainGraphCoverage", "brainVerificationGates", "brainRoleRouting", "brainLearningCandidates"]) assert.match(html, new RegExp(`id="${id}"`));
 assert.match(js, /\/api\/agent\/tasks\/' \+ encodeURIComponent\(taskId\) \+ '\/control-room/);
 assert.match(js, /\/api\/agent\/tasks\?limit=1/);
 assert.match(js, /\/api\/agent\/learning-candidates\?project=/);
@@ -20,6 +20,10 @@ assert.match(js, /No durable Agent tasks available to inspect/);
 assert.match(js, /capabilityMaturity/);
 assert.match(js, /evidence_freshness/);
 assert.match(html, /Maturity is evidence-bound/);
+assert.match(js, /renderBrainSpec/);
+assert.match(js, /renderBrainBelief/);
+assert.match(js, /renderBrainTraces/);
+assert.match(js, /No durable Agent tasks available to inspect/);
 assert.match(css, /\.brain-projection/);
 assert.match(css, /\.brain-row/);
 console.log("Brain Dashboard UI projections: passed");
