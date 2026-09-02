@@ -358,7 +358,18 @@ function brainRoutingDecisions(data) {
 function loadBrainControlRoom() {
   const input = $('brainTaskId');
   const taskId = String((input && input.value) || currentAgentTaskId || localStorage.getItem(AGENT_LAST_TASK_KEY) || '').trim();
-  if (!taskId) { $('brainStatus').textContent = 'Select a task to inspect Brain v3 metadata.'; return; }
+  if (!taskId) {
+    $('brainStatus').textContent = 'Loading the latest durable Agent task...';
+    authFetch('/api/agent/tasks?limit=1').then(r => r.json().then(data => ({ ok: r.ok, data }))).then(({ ok, data }) => {
+      const latest = ok && Array.isArray(data.tasks) ? data.tasks[0] : null;
+      if (!latest) { $('brainStatus').textContent = 'No durable Agent tasks available to inspect.'; return; }
+      const latestId = String(latest.task_id || latest.taskId || '').trim();
+      if (!latestId) throw new Error('latest task has no usable id');
+      if (input) input.value = latestId;
+      loadBrainControlRoom();
+    }).catch(error => { $('brainStatus').textContent = 'Brain task list unavailable: ' + (error.message || String(error)); });
+    return;
+  }
   if (input) input.value = taskId;
   $('brainStatus').textContent = 'Loading durable task metadata...';
   authFetch('/api/agent/tasks/' + encodeURIComponent(taskId) + '/control-room').then(r => r.json().then(data => ({ ok: r.ok, data }))).then(({ ok, data }) => {
