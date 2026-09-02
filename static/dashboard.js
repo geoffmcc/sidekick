@@ -792,7 +792,7 @@ function formatMs(ms){
 function loadServices(){
   authFetch('/api/services').then(r=>r.json()).then(d=>{
     const container = $('serviceDots');
-    if (!d.services) { if (container) container.textContent = ''; return; }
+    if (!d.services) { if (container) container.className = 'status-dot unknown'; return; }
     const values = Object.values(d.services);
     const healthy = values.length > 0 && values.every(status => status === 'active');
     const healthDot = $('sidebarHealthDot');
@@ -801,12 +801,15 @@ function loadServices(){
     if (healthLabel) healthLabel.textContent = healthy ? 'Services healthy' : values.length ? 'Attention required' : 'Health unknown';
     const instanceLabel = $('instanceLabel');
     if (instanceLabel) instanceLabel.textContent = healthy ? 'Instance healthy' : values.length ? 'Instance degraded' : 'Instance unknown';
-    if (!container) return;
-    container.innerHTML = Object.entries(d.services).map(([name, status]) => {
-      const icon = SERVICE_ICONS[name] || 'fa-circle';
+    if (container) {
+      container.className = 'status-dot ' + (healthy ? 'ok' : values.length ? 'danger' : 'unknown');
+      container.title = Object.entries(d.services).map(([name, status]) => (SERVICE_LABELS[name] || name) + ': ' + status).join(' · ');
+    }
+    const serviceList = $('serviceStatusList');
+    if (serviceList) serviceList.innerHTML = Object.entries(d.services).map(([name, status]) => {
       const label = SERVICE_LABELS[name] || name;
-      const cls = status === 'active' ? 'on' : 'off';
-      return '<span class="service-indicator ' + cls + '"><i class="fas ' + icon + '"></i> ' + label + '</span>';
+      const state = status === 'active' ? 'ok' : status ? 'danger' : 'unknown';
+      return '<span class="service-status-item"><span class="status-dot ' + state + '" aria-hidden="true"></span><span>' + esc(label) + '</span></span>';
     }).join('');
   }).catch(e => apiError('/api/services', e, 0));
 }
@@ -4554,6 +4557,47 @@ showPage(initialPage);
 if (location.hash !== '#' + initialPage) history.replaceState(null, '', '#' + initialPage);
 const projectsRefresh = $('projectsRefresh');
 if (projectsRefresh) projectsRefresh.addEventListener('click', loadProjects);
+
+function setWorkspace(projectId, label, navigate) {
+  const workspaceLabel = $('workspaceLabel');
+  const workspaceButton = $('workspaceButton');
+  if (workspaceLabel) workspaceLabel.textContent = label;
+  if (workspaceButton) {
+    workspaceButton.setAttribute('aria-label', 'Current workspace: ' + projectId);
+    workspaceButton.setAttribute('aria-expanded', 'false');
+  }
+  try { localStorage.setItem('sidekick_workspace', projectId); } catch (_) {}
+  const menu = $('workspaceMenu');
+  if (menu) menu.hidden = true;
+  if (navigate && projectId !== 'global') routeToPage('projects');
+}
+
+function loadWorkspaceOptions() {
+  const menu = $('workspaceMenu');
+  const button = $('workspaceButton');
+  if (!menu || !button) return;
+  let current = 'global';
+  try { current = localStorage.getItem('sidekick_workspace') || 'global'; } catch (_) {}
+  button.addEventListener('click', async () => {
+    menu.hidden = !menu.hidden;
+    button.setAttribute('aria-expanded', String(!menu.hidden));
+    if (menu.hidden || menu.dataset.loaded) return;
+    menu.innerHTML = '<div class="view-state">Loading workspaces...</div>';
+    try {
+      const response = await authFetch('/api/projects?limit=200');
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Workspace list unavailable');
+      const options = [{ id: 'global', label: 'Global workspace', detail: 'Unscoped platform view' }].concat((data.projects || []).map(row => ({ id: row.project.project_id, label: row.project.display_name || row.project.project_id, detail: row.workspace ? 'Configured project workspace' : 'Project context only' })));
+      menu.innerHTML = options.map(option => '<button class="workspace-option" type="button" role="option" data-workspace-id="' + attr(option.id) + '" data-workspace-label="' + attr(option.label) + '" aria-selected="' + (option.id === current) + '">' + esc(option.label) + '<small>' + esc(option.detail) + '</small></button>').join('');
+      menu.dataset.loaded = 'true';
+      menu.querySelectorAll('[data-workspace-id]').forEach(option => option.addEventListener('click', () => setWorkspace(option.dataset.workspaceId, option.dataset.workspaceLabel, true)));
+    } catch (error) {
+      menu.innerHTML = '<div class="view-state view-state-error">' + esc(error.message) + '</div>';
+    }
+  });
+  setWorkspace(current, current === 'global' ? 'Global workspace' : current, false);
+}
+loadWorkspaceOptions();
 
 const commandPages = [['mission','Mission Control','fa-compass'],['projects','Projects','fa-folder-tree'],['agent','Agent','fa-robot'],['handoffs','Handoffs','fa-route'],['research','Research','fa-flask'],['approvals','Approvals','fa-shield-halved'],['brain','Brain','fa-brain'],['memory','Memory','fa-database'],['predict','Predict','fa-wand-magic-sparkles'],['evolve','Evolve','fa-seedling'],['activity','Activity','fa-list-check'],['blackbox','Black Box','fa-life-ring'],['compute','Compute','fa-microchip'],['metrics','Metrics','fa-chart-line'],['tools','Tools','fa-toolbox'],['capabilities','Capabilities','fa-puzzle-piece'],['network-scopes','Network Scopes','fa-network-wired'],['identity','Identity','fa-id-badge'],['system','Health & System','fa-heart-pulse'],['data','Data','fa-box-archive'],['database','Database','fa-table'],['config','Configuration','fa-sliders']];
 function renderCommandResults(query) { const results = $('commandResults'); if (!results) return; const q = query.trim().toLowerCase(); results.innerHTML = commandPages.filter(page => !q || page[1].toLowerCase().includes(q)).map(page => '<button class="command-result" type="button" role="option" data-command-page="' + page[0] + '"><i class="fas ' + page[2] + '" aria-hidden="true"></i><span>' + esc(page[1]) + '</span></button>').join('') || '<div class="empty">No matching workspace.</div>'; results.querySelectorAll('[data-command-page]').forEach(button => button.addEventListener('click', () => { commandDialog.close(); routeToPage(button.dataset.commandPage); })); }
