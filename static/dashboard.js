@@ -329,18 +329,27 @@ function getToolStatsRange(windowMode) {
 
 function showPage(name){
   if (!document.getElementById('page-' + name)) name = 'mission';
+  if (window.dashboardPageReady && currentPage === name) return;
   currentPage = name;
+  window.dashboardPageReady = true;
   localStorage.setItem('sidekick_currentPage', name);
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
   $('page-' + name).classList.add('active');
   const navItem = $('nav-' + name);
-  if (navItem) navItem.classList.add('active');
+  if (navItem) {
+    navItem.classList.add('active');
+    const group = navItem.closest('.nav-group');
+    if (group && group.classList.contains('is-collapsed')) {
+      group.classList.remove('is-collapsed');
+      const groupToggle = group.querySelector('.nav-group-title');
+      if (groupToggle) groupToggle.setAttribute('aria-expanded', 'true');
+    }
+  }
   const title = { mission: 'Mission Control', projects: 'Projects', system: 'Health & System', blackbox: 'Black Box', data: 'Data', memory: 'Memory', database: 'Database', config: 'Configuration', agent: 'Agent', handoffs: 'Handoffs', research: 'Research', approvals: 'Approvals', tools: 'Tools', capabilities: 'Capabilities', 'network-scopes': 'Network Scopes', identity: 'Identity', evolve: 'Evolve', compute: 'Compute', predict: 'Predict', brain: 'Brain', metrics: 'Metrics' }[name] || name;
   const titleEl = $('pageTitle');
   if (titleEl) titleEl.textContent = title;
   ensurePageHeader(name, title);
-  loadSystem();
   if (name === 'mission') loadMissionControl();
   if (name === 'projects') loadProjects();
   if (name === 'system') { loadDashboardSummary(); loadLLM(); loadServices(); }
@@ -371,8 +380,11 @@ function routeToPage(name, replace) {
     (replace ? history.replaceState : history.pushState).call(history, null, '', '#' + target);
   }
   showPage(target);
-  const sidebar = $('appSidebar');
-  if (sidebar) sidebar.classList.remove('mobile-open');
+  const workspaceMenu = $('workspaceMenu');
+  const workspaceButton = $('workspaceButton');
+  if (workspaceMenu) workspaceMenu.hidden = true;
+  if (workspaceButton) workspaceButton.setAttribute('aria-expanded', 'false');
+  if (typeof closeMobileNav === 'function') closeMobileNav();
 }
 
 function ensurePageHeader(name, title) {
@@ -789,29 +801,34 @@ function formatMs(ms){
 }
 
 // -- Services -- //
+function renderServiceStatus(services) {
+  const entries = services && typeof services === 'object' ? Object.entries(services) : [];
+  const statuses = entries.map(([, status]) => status);
+  const healthy = statuses.length > 0 && statuses.every(status => status === 'active');
+  const state = healthy ? 'ok' : statuses.length ? 'danger' : 'unknown';
+  const healthDot = $('sidebarHealthDot');
+  const healthLabel = $('sidebarHealthLabel');
+  const instanceDot = $('serviceDots');
+  const instanceLabel = $('instanceLabel');
+  const serviceList = $('serviceStatusList');
+  if (healthDot) healthDot.className = 'status-dot ' + state;
+  if (healthLabel) healthLabel.textContent = healthy ? 'Services healthy' : statuses.length ? 'Attention required' : 'Health unknown';
+  if (instanceDot) instanceDot.className = 'status-dot ' + state;
+  if (instanceLabel) instanceLabel.textContent = healthy ? 'Instance healthy' : statuses.length ? 'Instance degraded' : 'Instance unknown';
+  if (instanceDot) instanceDot.title = entries.map(([name, status]) => (SERVICE_LABELS[name] || name) + ': ' + String(status || 'unknown')).join(' · ');
+  if (!serviceList) return;
+  serviceList.innerHTML = entries.length ? entries.map(([name, status]) => {
+    const label = SERVICE_LABELS[name] || name;
+    const value = status || 'unknown';
+    const itemState = value === 'active' ? 'ok' : value === 'unknown' ? 'unknown' : 'danger';
+    return '<span class="service-status-item"><span class="status-dot ' + itemState + '" aria-hidden="true"></span><span>' + esc(label) + ': ' + esc(value) + '</span></span>';
+  }).join('') : '<span class="service-status-item"><span class="status-dot unknown" aria-hidden="true"></span><span>Services: unknown</span></span>';
+}
+
 function loadServices(){
   authFetch('/api/services').then(r=>r.json()).then(d=>{
-    const container = $('serviceDots');
-    if (!d.services) { if (container) container.className = 'status-dot unknown'; return; }
-    const values = Object.values(d.services);
-    const healthy = values.length > 0 && values.every(status => status === 'active');
-    const healthDot = $('sidebarHealthDot');
-    const healthLabel = $('sidebarHealthLabel');
-    if (healthDot) healthDot.className = 'status-dot ' + (healthy ? 'ok' : values.length ? 'danger' : 'unknown');
-    if (healthLabel) healthLabel.textContent = healthy ? 'Services healthy' : values.length ? 'Attention required' : 'Health unknown';
-    const instanceLabel = $('instanceLabel');
-    if (instanceLabel) instanceLabel.textContent = healthy ? 'Instance healthy' : values.length ? 'Instance degraded' : 'Instance unknown';
-    if (container) {
-      container.className = 'status-dot ' + (healthy ? 'ok' : values.length ? 'danger' : 'unknown');
-      container.title = Object.entries(d.services).map(([name, status]) => (SERVICE_LABELS[name] || name) + ': ' + status).join(' · ');
-    }
-    const serviceList = $('serviceStatusList');
-    if (serviceList) serviceList.innerHTML = Object.entries(d.services).map(([name, status]) => {
-      const label = SERVICE_LABELS[name] || name;
-      const state = status === 'active' ? 'ok' : status ? 'danger' : 'unknown';
-      return '<span class="service-status-item"><span class="status-dot ' + state + '" aria-hidden="true"></span><span>' + esc(label) + '</span></span>';
-    }).join('');
-  }).catch(e => apiError('/api/services', e, 0));
+    renderServiceStatus(d.services || null);
+  }).catch(e => { renderServiceStatus(null); apiError('/api/services', e, 0); });
 }
 
 // -- System -- //
@@ -937,13 +954,14 @@ function loadMissionControl(){
   Promise.all(requests).then(([summary, system, services, stats, logs]) => {
     const now = new Date();
     $('lastUpdate').textContent = 'updated ' + now.toLocaleTimeString();
+    renderServiceStatus(services && services.services);
     renderMissionReadiness(summary, services);
     renderMissionServices(services);
     renderMissionSystem(system, summary);
     renderMissionStats(stats);
     renderMissionActivity(logs);
     renderMissionAttention(summary, services, system, stats);
-  }).catch(e => apiError('/api/mission-control', e, 0));
+  }).catch(e => { renderServiceStatus(null); apiError('/api/mission-control', e, 0); });
 }
 
 function renderMissionReadiness(summary, services){
@@ -2080,34 +2098,6 @@ function loadConfig(){
 }
 
 // -- Agent -- //
-function runAgent(){
-  const goal = $('agentGoal').value.trim();
-  if (!goal || agentRunning) return;
-  agentRunning = true;
-  $('agentGo').disabled = true;
-  $('agentStop').disabled = false;
-  $('agentClear').disabled = true;
-  $('agentLog').innerHTML = '<span class="agent-step">► Starting agent...</span>\n';
-
-  authFetch('/api/agent/run', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ goal, profile: (($('agentProfile') || {}).value || 'standard') })
-  }).then(r=>r.json()).then(data => {
-    if (data.error) {
-      appendLog('<span class="agent-err">✖ Error: ' + esc(data.error) + '</span>');
-      finishAgentStream();
-      return;
-    }
-    const taskId = data.taskId;
-    streamAgentTask(taskId, { reset: false });
-  }).catch(e => {
-    appendLog('<span class="agent-err"> Request failed: ' + esc(e.message) + '</span>');
-    apiError('/api/agent/run', e, 0);
-    finishAgentStream();
-  });
-}
-
 function loadDurableAgentTask(taskId){
   if (!taskId) return Promise.resolve();
   return authFetch('/api/agent/tasks/' + encodeURIComponent(taskId)).then(r => r.json().then(data => ({ ok:r.ok, data }))).then(({ok,data}) => {
@@ -2211,84 +2201,10 @@ function sendAgentGuidance(){
     .then(r => r.json().then(data => ({ok:r.ok,data}))).then(({ok,data}) => { if (ok) { input.value=''; appendLog('<span class="agent-step">Guidance saved for the durable task.</span>'); loadDurableAgentTask(currentAgentTaskId); } else appendLog('<span class="agent-err">' + esc(data.error || 'Guidance failed') + '</span>'); }).catch(e => appendLog('<span class="agent-err">' + esc(e.message) + '</span>'));
 }
 
-// Shared streaming used by a follow-up child (and available for reuse). The
-// server-side transcript and lineage remain authoritative; this renders only
-// the live SSE and understands the follow-up `lineage` event.
-function streamAgentTask(taskId, opts){
-  opts = opts || {};
-  agentRunning = true;
-  currentAgentTaskId = taskId;
-  rememberAgentTask(taskId);
-  $('agentGo').disabled = true;
-  $('agentStop').disabled = false;
-  $('agentClear').disabled = true;
-  if (opts.reset) $('agentLog').innerHTML = '';
-  if (opts.parentTaskId) {
-    appendLog('<span class="agent-step">Follow-up to task ' + esc(opts.parentTaskId) +
-      (opts.rootTaskId ? ' · thread root ' + esc(opts.rootTaskId) : '') + '</span>');
-  }
-  if (opts.announce !== false) {
-    appendLog('<span class="agent-step">' + (opts.reconnect ? 'Reconnected to' : 'Task') + ' ' + esc(taskId) + (opts.reconnect ? '' : ' started') + '</span>');
-  }
-  agentStream = new EventSource('/api/agent/stream/' + taskId);
-  agentStream.onmessage = (e) => {
-    let msg;
-    try { msg = JSON.parse(e.data); } catch (err) { return; }
-    if (msg.type === 'lineage') {
-      appendLog('<span class="agent-step">Thread: follow-up to ' + esc(msg.parentTaskId) +
-        ', root ' + esc(msg.rootTaskId) + ' (depth ' + esc(String(msg.depth)) + ')</span>');
-    } else if (msg.type === 'step') appendLog('<span class="agent-step">' + esc(msg.text) + '</span>');
-    else if (msg.type === 'tool') appendLog('  <span class="agent-ok">' + esc(msg.tool) + '</span> ' + esc(msg.summary || ''));
-    else if (msg.type === 'error') { appendLog('<span class="agent-err">' + esc(msg.text) + '</span>'); finishAgentStream(); }
-    else if (msg.type === 'done') { appendLog('<span class="agent-done">' + esc(msg.text) + '</span>'); finishAgentStream(); }
-  };
-  agentStream.onerror = () => finishAgentStream();
-}
-
 // Reveal a terminal task's detail (which contains the follow-up form) and focus it.
 function openFollowup(id){
   if (!expandedHistory[id]) toggleRunDetail(id);
   setTimeout(() => { const el = $('followup-input-' + id); if (el) el.focus(); }, 60);
-}
-
-// Submit a follow-up against a terminal parent task. Guards duplicate submission
-// while a run is in flight and while this request is pending.
-function submitFollowup(id){
-  if (agentRunning) return;
-  const input = $('followup-input-' + id);
-  const goal = input ? input.value.trim() : '';
-  if (!goal) return;
-  const btn = document.querySelector('button[data-action="followup-submit"][data-id="' + id + '"]');
-  agentRunning = true;
-  $('agentGo').disabled = true;
-  $('agentStop').disabled = false;
-  $('agentClear').disabled = true;
-  if (btn) btn.disabled = true;
-  if (input) input.disabled = true;
-  $('agentLog').innerHTML = '';
-  appendLog('<span class="agent-step">Following up on task ' + esc(id) + '</span>');
-  authFetch('/api/agent/run/' + id + '/follow-up', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ goal })
-  }).then(r => r.json().then(data => ({ status: r.status, data })))
-    .then(({ status, data }) => {
-      if (status >= 400 || !data || data.error) {
-        appendLog('<span class="agent-err">' + esc((data && data.error) || ('HTTP ' + status)) + '</span>');
-        finishAgentStream();
-        if (btn) btn.disabled = false;
-        if (input) input.disabled = false;
-        return;
-      }
-      streamAgentTask(data.taskId, { reset: false, parentTaskId: data.parentTaskId || id, rootTaskId: data.rootTaskId });
-    })
-    .catch(e => {
-      appendLog('<span class="agent-err">Request failed: ' + esc(e.message) + '</span>');
-      apiError('/api/agent/run/' + id + '/follow-up', e, 0);
-      finishAgentStream();
-      if (btn) btn.disabled = false;
-      if (input) input.disabled = false;
-    });
 }
 
 function appendLog(html){
@@ -2318,125 +2234,6 @@ function renderAgentTranscript(run){
   if (!html && run && run.result) html = '<span class="agent-done">✔ ' + esc(run.result) + '</span>\n';
   if (html) $('agentLog').innerHTML = html;
   $('agentLog').scrollTop = $('agentLog').scrollHeight;
-}
-
-function restoreAgentState(){
-  if (agentRunning || agentRestoreInFlight) return;
-  const taskId = readRememberedAgentTask();
-  if (!taskId) return;
-  agentRestoreInFlight = true;
-  authFetch('/api/agent/run/' + encodeURIComponent(taskId)).then(r => {
-    if (r.ok) return r.json();
-    if (r.status === 404) return null;
-    throw new Error('HTTP ' + r.status);
-  }).then(run => {
-    if (run) {
-      rememberAgentTask(taskId);
-      renderAgentTranscript(run);
-      // Persisted transcripts only carry completed | failed | iteration_limit
-      // | cancelled | waiting_for_approval — the old queued/running check
-      // matched nothing and was dead. A parked task gets an explicit
-      // affordance instead of rendering as plain finished history.
-      if (run.status === 'waiting_for_approval') {
-        appendLog('<span class="agent-step">⏸ Task ' + esc(taskId) + ' is parked awaiting human approval' +
-          (run.brain && run.brain.awaiting_approval ? ' (approval ' + esc(String(run.brain.awaiting_approval)) + ')' : '') +
-          '. Decide it in the Approvals tab — the task runner resumes it after the decision.</span>');
-      }
-      return;
-    }
-    // Active tasks do not get a durable transcript until terminal completion.
-    // Reattaching to the existing governed SSE stream preserves the live run.
-    streamAgentTask(taskId, { reset: false, reconnect: true });
-  }).catch(e => {
-    appendLog('<span class="agent-err">Could not restore task ' + esc(taskId) + ': ' + esc(e.message) + '</span>');
-  }).finally(() => { agentRestoreInFlight = false; });
-}
-
-// Local stream cleanup only — used when the task itself has ended (done/error
-// events, stream failure, failed start). It never cancels the backend task.
-function finishAgentStream(){
-  if (agentStream) { agentStream.close(); agentStream = null; }
-  agentRunning = false;
-  currentAgentTaskId = null;
-  $('agentGo').disabled = false;
-  $('agentStop').disabled = true;
-  $('agentClear').disabled = false;
-}
-
-function clearAgent(){
-  if (agentRunning) return;
-  if (agentStream) { agentStream.close(); agentStream = null; }
-  currentAgentTaskId = null;
-  try { localStorage.removeItem(AGENT_LAST_TASK_KEY); } catch (e) {}
-  $('agentGoal').value = '';
-  $('agentLog').innerHTML = '<span class="empty">Submit a task above</span>';
-}
-
-// Stop button: actually cancel the backend task, report the backend's answer,
-// then close the stream. Closing the EventSource alone only stopped WATCHING —
-// the task kept running to completion server-side.
-function stopAgent(){
-  const taskId = currentAgentTaskId;
-  if (taskId && agentRunning) {
-    authFetch('/api/agent/run/' + encodeURIComponent(taskId) + '/cancel', { method: 'POST' })
-      .then(r => r.json().then(d => ({ status: r.status, d })).catch(() => ({ status: r.status, d: {} })))
-      .then(({ status, d }) => {
-        if (status === 200 && d.ok) {
-          appendLog('<span class="agent-step">Cancellation requested for task ' + esc(taskId) + '; backend will stop it between steps</span>');
-        } else if (status === 404) {
-          appendLog('<span class="agent-step">Task ' + esc(taskId) + ' is no longer running; nothing to cancel</span>');
-        } else {
-          appendLog('<span class="agent-err">Cancel failed: ' + esc((d && d.error) || ('HTTP ' + status)) + '</span>');
-        }
-      })
-      .catch(e => appendLog('<span class="agent-err">Cancel request failed: ' + esc(e.message) + '</span>'));
-  }
-  finishAgentStream();
-}
-
-function toggleHistory(){
-  const el = $('agentHistory');
-  const toggle = $('agentHistoryToggle');
-  const expanded = el.style.display === 'none';
-  el.style.display = expanded ? 'block' : 'none';
-  if (toggle) {
-    toggle.setAttribute('aria-expanded', String(expanded));
-    const chevron = $('agentHistoryChevron');
-    if (chevron) chevron.textContent = expanded ? '▲' : '▼';
-  }
-  if (expanded) {
-      authFetch('/api/agent/history').then(r=>r.json()).then(d=>{
-      let html = '<div class="agent-history-note">' +
-        '<i class="fas fa-info-circle"></i> Agent history shows tasks submitted via this dashboard. ' +
-        'Tool calls from opencode appear in the Activity tab, grouped by session.</div>';
-      if (!d.runs || !d.runs.length) { html += '<div class="empty">No past runs</div>'; el.innerHTML = html; return; }
-      html += d.runs.map(r =>
-        '<div class="history-item">' +
-        '<span class="log-time">' + fmtTime(r.t) + '</span> ' +
-        '<span class="' + (r.status === 'completed' ? 'log-ok' : 'log-fail') + '">' + r.status + '</span> ' +
-        '<span class="log-summary">' + esc(r.goal.substring(0,80)) +
-        (r.parentTaskId ? ' <span class="sub" title="Follow-up of ' + esc(r.parentTaskId) + '">(follow-up of ' + esc(r.parentTaskId) + ')</span>' : '') +
-        '</span>' +
-        '<button class="btn btn-sm btn-outline" data-action="followup" data-id="' + esc(r.id) + '" title="Follow up" aria-label="Follow up on task ' + esc(r.id) + '"><i class="fas fa-reply"></i></button>' +
-        '<button class="btn btn-sm btn-outline" data-action="export" data-id="' + esc(r.id) + '" title="Export"><i class="fas fa-download"></i></button>' +
-        '<button class="btn btn-sm btn-outline" data-action="toggle" data-id="' + esc(r.id) + '" title="Details"><i class="fas fa-chevron-down"></i></button>' +
-        '<div id="run-detail-' + esc(r.id) + '" class="agent-run-detail"></div>' +
-        '</div>'
-      ).join('');
-      el.innerHTML = html;
-
-      el.querySelectorAll('button[data-action]').forEach(btn => {
-        btn.addEventListener('click', function(e) {
-          e.stopPropagation();
-          const action = this.dataset.action;
-          const id = this.dataset.id;
-          if (action === 'export') exportRun(id);
-          else if (action === 'toggle') toggleRunDetail(id);
-          else if (action === 'followup') openFollowup(id);
-        });
-      });
-    }).catch(e => apiError('/api/agent/history', e, 0));
-  }
 }
 
 function toggleRunDetail(id){
@@ -4534,7 +4331,7 @@ document.querySelectorAll('.side-nav a[data-page]').forEach(link => link.addEven
   routeToPage(link.dataset.page);
 }));
 window.addEventListener('popstate', () => routeToPage(location.hash.slice(1) || 'mission', true));
-window.addEventListener('hashchange', () => showPage(location.hash.slice(1) || 'mission'));
+window.addEventListener('hashchange', () => routeToPage(location.hash.slice(1) || 'mission', true));
 document.querySelectorAll('.nav-group-title').forEach(button => button.addEventListener('click', () => {
   const group = button.closest('.nav-group');
   const collapsed = group.classList.toggle('is-collapsed');
@@ -4551,25 +4348,40 @@ if (sidebarToggle) sidebarToggle.addEventListener('click', () => {
   sidebarToggle.setAttribute('aria-label', collapsed ? 'Expand navigation' : 'Collapse navigation');
 });
 const mobileMenu = $('mobileMenu');
-if (mobileMenu) mobileMenu.addEventListener('click', () => sidebar.classList.add('mobile-open'));
-document.addEventListener('click', event => { if (window.innerWidth <= 900 && sidebar.classList.contains('mobile-open') && !sidebar.contains(event.target) && event.target !== mobileMenu) sidebar.classList.remove('mobile-open'); });
+const mobileBackdrop = $('mobileNavBackdrop');
+let mobileMenuReturnFocus = null;
+function closeMobileNav() {
+  if (!sidebar) return;
+  sidebar.classList.remove('mobile-open');
+  document.body.classList.remove('mobile-nav-open');
+  if (mobileBackdrop) mobileBackdrop.hidden = true;
+  if (mobileMenu) mobileMenu.setAttribute('aria-expanded', 'false');
+  if (mobileMenuReturnFocus && typeof mobileMenuReturnFocus.focus === 'function') mobileMenuReturnFocus.focus();
+  mobileMenuReturnFocus = null;
+}
+if (mobileMenu) mobileMenu.addEventListener('click', () => { mobileMenuReturnFocus = mobileMenu; sidebar.classList.add('mobile-open'); document.body.classList.add('mobile-nav-open'); if (mobileBackdrop) mobileBackdrop.hidden = false; mobileMenu.setAttribute('aria-expanded', 'true'); const close = $('mobileNavClose'); if (close) close.focus(); });
+const mobileNavClose = $('mobileNavClose');
+if (mobileNavClose) mobileNavClose.addEventListener('click', closeMobileNav);
+if (mobileBackdrop) mobileBackdrop.addEventListener('click', closeMobileNav);
 showPage(initialPage);
 if (location.hash !== '#' + initialPage) history.replaceState(null, '', '#' + initialPage);
 const projectsRefresh = $('projectsRefresh');
 if (projectsRefresh) projectsRefresh.addEventListener('click', loadProjects);
 
+let workspaceProjects = null;
+let workspaceMenuFocus = 0;
 function setWorkspace(projectId, label, navigate) {
   const workspaceLabel = $('workspaceLabel');
   const workspaceButton = $('workspaceButton');
   if (workspaceLabel) workspaceLabel.textContent = label;
   if (workspaceButton) {
-    workspaceButton.setAttribute('aria-label', 'Current workspace: ' + projectId);
+    workspaceButton.setAttribute('aria-label', 'Current workspace: ' + label);
     workspaceButton.setAttribute('aria-expanded', 'false');
   }
   try { localStorage.setItem('sidekick_workspace', projectId); } catch (_) {}
   const menu = $('workspaceMenu');
-  if (menu) menu.hidden = true;
-  if (navigate && projectId !== 'global') routeToPage('projects');
+  if (menu) { menu.hidden = true; menu.querySelectorAll('[data-workspace-id]').forEach(option => option.setAttribute('aria-selected', String(option.dataset.workspaceId === projectId))); }
+  if (navigate) routeToPage('projects');
 }
 
 function loadWorkspaceOptions() {
@@ -4578,32 +4390,38 @@ function loadWorkspaceOptions() {
   if (!menu || !button) return;
   let current = 'global';
   try { current = localStorage.getItem('sidekick_workspace') || 'global'; } catch (_) {}
+  const applyProjects = data => {
+    const rows = Array.isArray(data.projects) ? data.projects : [];
+    workspaceProjects = [{ id: 'global', label: 'Global workspace', detail: 'Unscoped platform view' }].concat(rows.map(row => { const project = row.project || row; return { id: project.project_id, label: project.display_name || project.project_id, detail: row.workspace ? 'Configured project workspace' : 'Project context only' }; }).filter(option => option.id));
+    const selected = workspaceProjects.some(option => option.id === current) ? current : 'global';
+    if (selected !== current) setWorkspace('global', 'Global workspace', false);
+    else setWorkspace(selected, workspaceProjects.find(option => option.id === selected).label, false);
+    menu.innerHTML = workspaceProjects.map(option => '<button class="workspace-option" id="workspace-option-' + attr(option.id) + '" type="button" role="option" data-workspace-id="' + attr(option.id) + '" data-workspace-label="' + attr(option.label) + '" aria-selected="' + (option.id === selected) + '">' + esc(option.label) + '<small>' + esc(option.detail) + '</small></button>').join('');
+    menu.dataset.loaded = 'true';
+    menu.querySelectorAll('[data-workspace-id]').forEach(option => option.addEventListener('click', () => setWorkspace(option.dataset.workspaceId, option.dataset.workspaceLabel, true)));
+  };
+  const fetchProjects = async () => { menu.innerHTML = '<div class="view-state">Loading workspaces...</div>'; const response = await authFetch('/api/projects?limit=200'); const data = await response.json(); if (!response.ok || data.ok === false) throw new Error(data.error || 'Workspace list unavailable'); applyProjects(data); };
   button.addEventListener('click', async () => {
     menu.hidden = !menu.hidden;
     button.setAttribute('aria-expanded', String(!menu.hidden));
     if (menu.hidden || menu.dataset.loaded) return;
-    menu.innerHTML = '<div class="view-state">Loading workspaces...</div>';
-    try {
-      const response = await authFetch('/api/projects?limit=200');
-      const data = await response.json();
-      if (!response.ok || !data.ok) throw new Error(data.error || 'Workspace list unavailable');
-      const options = [{ id: 'global', label: 'Global workspace', detail: 'Unscoped platform view' }].concat((data.projects || []).map(row => ({ id: row.project.project_id, label: row.project.display_name || row.project.project_id, detail: row.workspace ? 'Configured project workspace' : 'Project context only' })));
-      menu.innerHTML = options.map(option => '<button class="workspace-option" type="button" role="option" data-workspace-id="' + attr(option.id) + '" data-workspace-label="' + attr(option.label) + '" aria-selected="' + (option.id === current) + '">' + esc(option.label) + '<small>' + esc(option.detail) + '</small></button>').join('');
-      menu.dataset.loaded = 'true';
-      menu.querySelectorAll('[data-workspace-id]').forEach(option => option.addEventListener('click', () => setWorkspace(option.dataset.workspaceId, option.dataset.workspaceLabel, true)));
-    } catch (error) {
-      menu.innerHTML = '<div class="view-state view-state-error">' + esc(error.message) + '</div>';
-    }
+    try { await fetchProjects(); } catch (error) { menu.innerHTML = '<div class="view-state view-state-error">' + esc(error.message) + '</div>'; }
   });
-  setWorkspace(current, current === 'global' ? 'Global workspace' : current, false);
+  button.addEventListener('keydown', event => { if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') { event.preventDefault(); if (menu.hidden) button.click(); else menu.querySelector('[role="option"]')?.focus(); } });
+  menu.addEventListener('keydown', event => { const options = [...menu.querySelectorAll('[role="option"]')]; if (!options.length) return; if (event.key === 'Escape') { event.preventDefault(); menu.hidden = true; button.setAttribute('aria-expanded', 'false'); button.focus(); } else if (['ArrowDown','ArrowUp','Home','End'].includes(event.key)) { event.preventDefault(); workspaceMenuFocus = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : Math.max(0, Math.min(options.length - 1, (document.activeElement === options[workspaceMenuFocus] ? workspaceMenuFocus : 0) + (event.key === 'ArrowUp' ? -1 : 1))); options[workspaceMenuFocus].focus(); } else if (event.key === 'Enter') { event.preventDefault(); document.activeElement.click(); } });
+  document.addEventListener('click', event => { if (!menu.hidden && !menu.closest('.workspace-switcher').contains(event.target)) { menu.hidden = true; button.setAttribute('aria-expanded', 'false'); } });
+  fetchProjects().catch(() => {});
 }
 loadWorkspaceOptions();
 
 const commandPages = [['mission','Mission Control','fa-compass'],['projects','Projects','fa-folder-tree'],['agent','Agent','fa-robot'],['handoffs','Handoffs','fa-route'],['research','Research','fa-flask'],['approvals','Approvals','fa-shield-halved'],['brain','Brain','fa-brain'],['memory','Memory','fa-database'],['predict','Predict','fa-wand-magic-sparkles'],['evolve','Evolve','fa-seedling'],['activity','Activity','fa-list-check'],['blackbox','Black Box','fa-life-ring'],['compute','Compute','fa-microchip'],['metrics','Metrics','fa-chart-line'],['tools','Tools','fa-toolbox'],['capabilities','Capabilities','fa-puzzle-piece'],['network-scopes','Network Scopes','fa-network-wired'],['identity','Identity','fa-id-badge'],['system','Health & System','fa-heart-pulse'],['data','Data','fa-box-archive'],['database','Database','fa-table'],['config','Configuration','fa-sliders']];
-function renderCommandResults(query) { const results = $('commandResults'); if (!results) return; const q = query.trim().toLowerCase(); results.innerHTML = commandPages.filter(page => !q || page[1].toLowerCase().includes(q)).map(page => '<button class="command-result" type="button" role="option" data-command-page="' + page[0] + '"><i class="fas ' + page[2] + '" aria-hidden="true"></i><span>' + esc(page[1]) + '</span></button>').join('') || '<div class="empty">No matching workspace.</div>'; results.querySelectorAll('[data-command-page]').forEach(button => button.addEventListener('click', () => { commandDialog.close(); routeToPage(button.dataset.commandPage); })); }
+let commandResults = [];
+let commandIndex = 0;
+function renderCommandResults(query) { const results = $('commandResults'); if (!results) return; const q = query.trim().toLowerCase(); commandResults = commandPages.filter(page => !q || page[1].toLowerCase().includes(q)); commandIndex = 0; results.innerHTML = commandResults.map((page, index) => '<button class="command-result" id="command-result-' + page[0] + '" type="button" role="option" data-command-page="' + page[0] + '" aria-selected="' + (index === 0) + '"><i class="fas ' + page[2] + '" aria-hidden="true"></i><span>' + esc(page[1]) + '</span></button>').join('') || '<div class="empty" role="status">No matching workspace.</div>'; updateCommandActive(); results.querySelectorAll('[data-command-page]').forEach(button => button.addEventListener('click', () => { closeCommand(); routeToPage(button.dataset.commandPage); })); }
+function updateCommandActive() { const input = $('commandInput'); const results = $('commandResults'); if (!results) return; results.querySelectorAll('[role="option"]').forEach((option, index) => option.setAttribute('aria-selected', String(index === commandIndex))); const active = commandResults[commandIndex]; if (input) input.setAttribute('aria-activedescendant', active ? 'command-result-' + active[0] : ''); if (active) document.getElementById('command-result-' + active[0])?.scrollIntoView({ block: 'nearest' }); }
 const commandDialog = $('commandDialog');
-if (commandDialog) { const openCommand = () => { commandDialog.showModal(); renderCommandResults(''); $('commandInput').focus(); }; $('commandTrigger').addEventListener('click', openCommand); $('commandClose').addEventListener('click', () => commandDialog.close()); $('commandInput').addEventListener('input', event => renderCommandResults(event.target.value)); }
-document.addEventListener('keydown', event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); if (commandDialog && !commandDialog.open) commandDialog.showModal(); renderCommandResults(''); $('commandInput').focus(); } if (event.key === 'Escape' && sidebar) sidebar.classList.remove('mobile-open'); });
+if (commandDialog) { let commandReturnFocus = null; const openCommand = () => { commandReturnFocus = document.activeElement; commandDialog.showModal(); renderCommandResults(''); $('commandInput').focus(); }; const closeCommand = () => { if (commandDialog.open) commandDialog.close(); if (commandReturnFocus?.focus) commandReturnFocus.focus(); }; $('commandTrigger').addEventListener('click', openCommand); $('commandClose').addEventListener('click', closeCommand); commandDialog.addEventListener('cancel', event => { event.preventDefault(); closeCommand(); }); $('commandInput').addEventListener('input', event => renderCommandResults(event.target.value)); $('commandInput').addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); closeCommand(); } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Home' || event.key === 'End') { event.preventDefault(); commandIndex = event.key === 'Home' ? 0 : event.key === 'End' ? Math.max(0, commandResults.length - 1) : Math.max(0, Math.min(Math.max(0, commandResults.length - 1), commandIndex + (event.key === 'ArrowUp' ? -1 : 1))); updateCommandActive(); } else if (event.key === 'Enter' && commandResults[commandIndex]) { event.preventDefault(); closeCommand(); routeToPage(commandResults[commandIndex][0]); } }); }
+document.addEventListener('keydown', event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); if (commandDialog && !commandDialog.open) $('commandTrigger').click(); } if (event.key === 'Escape' && sidebar) closeMobileNav(); });
 
 const toolStatsWindowSelect = $('toolStatsWindow');
 if (toolStatsWindowSelect) {
@@ -4615,12 +4433,6 @@ if (toolStatsWindowSelect) {
 fetchToolCategories().then(() => {
   if (currentPage === 'mission') {
     loadMissionControl();
-  } else {
-    refresh();
-    loadSystem();
-    loadDashboardSummary();
-    loadLLM();
-    loadServices();
   }
 });
 setInterval(refresh, 10000);

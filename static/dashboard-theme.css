@@ -7,12 +7,15 @@
   --sk-border: #2b3948;
   --sk-border-subtle: #202b37;
   --sk-text: #e6edf3;
+  --sk-text-secondary: #a6b4c2;
   --sk-text-muted: #718092;
   --sk-accent: #6cb6ff;
   --sk-success: #56d364;
   --sk-warning: #e3b341;
   --sk-danger: #ff7b72;
 }
+
+html, body { overflow-x: hidden; }
 
 /* Normalize the older page renderers onto the shell's visual language. */
 .page > .grid,
@@ -434,4 +437,8 @@
 .workspace-option small { display: block; margin-top: 2px; color: var(--sk-text-muted); }
 .service-status-list { display: flex; align-items: center; gap: 8px; color: var(--sk-text-muted); font-size: 10px; white-space: nowrap; }
 .service-status-item { display: inline-flex; align-items: center; gap: 4px; }
-@media (max-width: 1180px) { .service-status-list { display: none; } }
+.mobile-nav-open { overflow: hidden; }
+.mobile-nav-backdrop { display: none; }
+.mobile-nav-close { display: none; }
+@media (max-width: 1180px) { .service-status-list { gap: 5px; font-size: 9px; } .service-status-item { gap: 3px; } }
+@media (max-width: 900px) { .mobile-nav-close { display: inline-grid; } .mobile-nav-backdrop { position: fixed; inset: 0; z-index: 19; display: block; background: rgba(3, 6, 10, .62); } .mobile-nav-backdrop[hidden] { display: none; } .service-status-list { max-width: 42vw; overflow: hidden; } }

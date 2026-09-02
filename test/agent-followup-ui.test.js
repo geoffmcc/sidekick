@@ -28,7 +28,9 @@ function ok(name, fn) {
 
 // Slice out a named function body for scoped assertions.
 function fnBody(src, name) {
-  const start = src.indexOf("function " + name + "(");
+  // Agent v2 is the authoritative implementation; select the last definition
+  // so these source-level checks cannot accidentally exercise a legacy helper.
+  const start = src.lastIndexOf("function " + name + "(");
   assert.ok(start >= 0, "expected function " + name + " to exist");
   let depth = 0, i = src.indexOf("{", start), started = false;
   for (; i < src.length; i++) {
@@ -53,8 +55,8 @@ ok("submission calls the canonical follow-up endpoint", () => {
 
 ok("duplicate submission is prevented (guard + disable while pending)", () => {
   const body = fnBody(clientJs, "submitFollowup");
-  assert.match(body, /if\s*\(agentRunning\)\s*return/, "guards against a concurrent run");
-  assert.match(body, /btn\.disabled\s*=\s*true/, "disables the submit button while pending");
+  assert.match(body, /if\s*\(agentRunning\s*\|\|\s*agentSubmissionPending/, "guards against a concurrent run");
+  assert.match(body, /agentFollowupGo.*disabled\s*=\s*true/, "disables the submit button while pending");
   assert.match(body, /input\.disabled\s*=\s*true/, "disables the input while pending");
 });
 
@@ -63,8 +65,8 @@ ok("the child task becomes selected and is streamed", () => {
   assert.match(submit, /streamAgentTask\(data\.taskId/, "streams the returned child task");
   const stream = fnBody(clientJs, "streamAgentTask");
   assert.match(stream, /currentAgentTaskId\s*=\s*taskId/, "selects the child task");
-  assert.match(stream, /new EventSource\('\/api\/agent\/stream\/'\s*\+\s*taskId\)/, "uses the existing SSE endpoint");
-  assert.match(stream, /msg\.type === 'lineage'/, "renders the follow-up lineage event");
+  assert.match(stream, /new EventSource\('\/api\/agent\/stream\/'\s*\+\s*encodeURIComponent\(taskId\)\)/, "uses the existing SSE endpoint");
+  assert.match(stream, /encodeURIComponent\(taskId\)/, "encodes the streamed task id");
 });
 
 ok("Agent task selection survives tab changes and page reloads", () => {
@@ -74,8 +76,8 @@ ok("Agent task selection survives tab changes and page reloads", () => {
   const showPage = fnBody(clientJs, "showPage");
   assert.match(showPage, /name === 'agent'\)\s*restoreAgentState\(\)/, "restores when the Agent page is selected");
   const restore = fnBody(clientJs, "restoreAgentState");
-  assert.match(restore, /\/api\/agent\/run\/' \+ encodeURIComponent\(taskId\)/, "loads the durable transcript");
-  assert.match(restore, /streamAgentTask\(taskId, \{ reset: false, reconnect: true \}\)/, "reconnects active tasks");
+  assert.match(restore, /\/api\/agent\/run\/'\s*\+\s*encodeURIComponent\(task\)/, "loads the durable transcript");
+  assert.match(restore, /streamAgentTask\(task,\s*\{\s*reset:\s*false,\s*reconnect:\s*true\s*\}\)/, "reconnects active tasks");
   assert.match(clientJs, /function renderAgentTranscript\(/, "renders completed transcript steps in the Agent log");
 });
 
@@ -84,22 +86,23 @@ ok("parent/root metadata renders in detail and history", () => {
   assert.match(detail, /run\.parent_task_id/, "detail reads parent lineage");
   assert.match(detail, /Thread root/, "detail shows the thread root");
   assert.match(detail, /Follow-up to/, "detail labels a follow-up");
-  const hist = fnBody(clientJs, "toggleHistory");
-  assert.match(hist, /r\.parentTaskId/, "history row reads parent lineage");
-  assert.match(hist, /follow-up of/, "history row labels follow-ups");
+  const session = fnBody(clientJs, "renderAgentSession");
+  assert.match(session, /session\.rootTaskId/, "session history retains the thread root");
 });
 
-ok("follow-up controls are rendered for terminal history tasks (the only ones listed)", () => {
-  const hist = fnBody(clientJs, "toggleHistory");
-  assert.match(hist, /data-action="followup"/, "history rows expose a Follow up action");
+ok("follow-up controls are rendered for terminal session tasks", () => {
+  const session = fnBody(clientJs, "renderAgentSession");
+  assert.match(session, /agentFollowupArea/, "session renders the follow-up area state");
+  assert.match(session, /canFollowAgent\(leaf\.status\)/, "follow-up is limited to terminal tasks");
   const detail = fnBody(clientJs, "toggleRunDetail");
   assert.match(detail, /followup-input-/, "detail renders a follow-up input");
   assert.match(detail, /data-action="followup-submit"/, "detail renders a follow-up submit");
 });
 
 ok("follow-up controls are accessible (labels / aria)", () => {
-  const hist = fnBody(clientJs, "toggleHistory");
-  assert.match(hist, /aria-label="Follow up on task/, "follow-up button has an accessible label");
+  const session = fnBody(clientJs, "renderAgentSession");
+  assert.match(dashHtml, /<label for="agentFollowupGoal">Ask a follow-up<\/label>/, "session follow-up input has an accessible label");
+  assert.match(session, /agentFollowupArea/, "session renders the accessible follow-up area");
   const detail = fnBody(clientJs, "toggleRunDetail");
   assert.match(detail, /<label for="followup-input-/, "follow-up input has a label");
   assert.match(detail, /aria-label="Follow-up goal for task/, "follow-up input has an accessible label");
@@ -108,22 +111,20 @@ ok("follow-up controls are accessible (labels / aria)", () => {
 ok("API errors render safely (escaped, not injected)", () => {
   const body = fnBody(clientJs, "submitFollowup");
   assert.match(body, /agent-err/, "errors render in the error style");
-  assert.match(body, /esc\(\s*\(data && data\.error\)/, "error text is HTML-escaped");
-  assert.match(body, /apiError\(/, "errors are reported to the error handler");
+  assert.match(body, /esc\(e\.message\)/, "error text is HTML-escaped");
 });
 
 ok("old tasks without lineage still render (parent lineage is optional)", () => {
-  const hist = fnBody(clientJs, "toggleHistory");
-  // The follow-up-of label is conditional on parentTaskId, so a root/old task
-  // (parentTaskId null) renders without it.
-  assert.match(hist, /r\.parentTaskId\s*\?/, "history conditionally renders parent label");
+  const session = fnBody(clientJs, "renderAgentSession");
+  assert.match(session, /turn\.goal \|\| ''/, "session renders turns without lineage");
   const detail = fnBody(clientJs, "toggleRunDetail");
   assert.match(detail, /if\s*\(run\.parent_task_id\)/, "detail conditionally renders lineage");
 });
 
 ok("wiring: followup actions are dispatched from the delegated handlers", () => {
-  assert.match(clientJs, /action === 'followup'\)\s*openFollowup\(id\)/, "history handler wires followup");
-  assert.match(clientJs, /action === 'followup-submit'\)\s*submitFollowup\(did\)/, "detail handler wires submit");
+  const controls = fs.readFileSync(path.join(__dirname, "..", "static", "dashboard-controls.js"), "utf-8");
+  assert.match(controls, /control\.dataset\.handler === "submitFollowup"\) return invoke\("submitFollowup", id \|\| undefined\)/, "delegated Agent controls wire follow-up submission");
+  assert.match(clientJs, /action === 'followup-submit'\) submitFollowup\(did\)/, "dynamically rendered detail wires submit");
 });
 
 ok("dashboard server proxies the follow-up endpoint to the agent bridge", () => {

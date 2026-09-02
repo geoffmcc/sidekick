@@ -20,15 +20,31 @@ project registry, including recorded sources and a workspace summary. It does
 not infer ownership from key names, timestamps, or activity. Unscoped records
 remain available from their specialist pages.
 
+The workspace selector always includes **Global workspace** and loads project
+display names from the authenticated project registry. A stale or inaccessible
+stored project ID is discarded and falls back to Global. Selecting a project
+opens Projects, where its recorded workspace and sources are shown; pages whose
+APIs do not accept project scope remain explicitly global rather than pretending
+to filter data.
+
 ## Dashboard foundation
 
-Shared dashboard tokens and shell primitives live in `static/dashboard.css`.
+Legacy compatibility rules remain in `static/dashboard.css`; shared redesign
+tokens and shell primitives live in `static/dashboard-theme.css`.
 Product text uses the system UI font stack; JetBrains Mono is reserved for
 paths, IDs, commands, logs, and structured values. Tokens cover canvas and
 surface levels, borders, text hierarchy, semantic states, radii, elevation,
 sidebar dimensions, and motion. The shell supports grouped navigation,
 keyboard-accessible collapse controls, a responsive drawer, a compact health
 indicator, and a command palette for navigation.
+
+The top bar exposes overall instance state plus individual MCP, Dashboard,
+Agent, and Ollama states. Status uses text and a dot shape together; failed
+service refreshes reset the projection to unknown instead of retaining a stale
+healthy state. The command palette opens with Ctrl+K or Cmd+K, supports typing,
+Arrow keys, Home/End, Enter, and Escape, and returns focus to its opening
+control. Mobile navigation has a close control, backdrop, Escape handling,
+focus return, and closes after navigation.
 
 Pages must preserve the shared status vocabulary and distinguish unknown,
 stale, unavailable, failed, and healthy data. Loading states should reserve
@@ -166,6 +182,24 @@ Metrics collection is handled by `sidekick-metrics.timer`, which runs `scripts/c
 `GET /api/dashboard-performance` exposes a bounded, authenticated RED view of
 Dashboard requests. Route labels are normalized templates; request content and
 identifiers are never recorded. See [`docs/metrics.md`](metrics.md).
+
+## Dashboard Verification
+
+Focused checks include:
+
+```text
+node test/dashboard-browser.test.js
+node test/dashboard-controls-contract.test.js
+node test/dashboard-workspace-a11y.test.js
+node test/dashboard-shell.test.js
+node test/dashboard-redesign-contract.test.js
+```
+
+The browser check serves the real shell, mocks bounded API responses, and
+exercises navigation, workspace selection, command-palette keyboard behavior,
+service-state text, mobile navigation, and document overflow. It reports an
+explicit environment skip when Chromium is unavailable. Stable screenshot
+baselines are not currently maintained.
 
 ## Data editing
 

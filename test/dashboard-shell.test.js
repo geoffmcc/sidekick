@@ -27,7 +27,7 @@ ok("responsive and reduced-motion contracts exist", css.includes("@media(max-wid
 ok("shared page theme is loaded after legacy styles", html.includes("dashboard-theme.css") && theme.includes(".data-browser") && theme.includes(".status-badge.unknown"));
 ok("unknown health is represented distinctly", html.includes('class="status-dot unknown"') && css.includes(".status-dot.unknown"));
 ok("workspace switcher is interactive and project-backed", html.includes('id="workspaceButton"') && html.includes('id="workspaceMenu"') && js.includes("/api/projects?limit=200") && js.includes("setWorkspace"));
-ok("service health updates the visible instance dot", js.includes("container.className = 'status-dot '") && !js.includes("container.innerHTML = Object.entries(d.services)"));
+ok("service health updates the visible instance dot", js.includes("function renderServiceStatus(services)") && js.includes("instanceDot.className = 'status-dot '"));
 ok("topbar exposes each service status separately", html.includes('id="serviceStatusList"') && js.includes("SERVICE_LABELS[name] || name") && js.includes("service-status-item"));
 ok("sidebar reserves a scrollable region for all navigation groups", theme.includes(".side-nav { min-height: 0; }"));
 ok("command palette is keyboard discoverable", html.includes('id="commandDialog"') && js.includes("event.key.toLowerCase() === 'k'"));
