@@ -67,7 +67,10 @@ function runSuites({ suites, allSuites = discoverSuites(suites), requested = [],
   }
   output.log(`\n╔═══════════════════════════════════════════════════════════╗\n║                       Summary                             ║\n╚═══════════════════════════════════════════════════════════╝\nPassed:  ${passed}\nFailed:  ${failed}\nSkipped: ${skipped}`);
   if (failures.length) output.log(`\nFailed suites:\n${failures.map(failure => `  - ${failure}`).join("\n")}`);
-  if (notRun.length) output.log(`\nNot run:\n${notRun.map(suite => `  - ${suite}`).join("\n")}`);
+  if (notRun.length) {
+    output.log("\nNot run:");
+    notRun.forEach(suite => output.log(`  - ${suite}`));
+  }
   return { passed, failed, skipped, failures, notRun, exitCode: failed > 0 ? 1 : 0 };
 }
 
