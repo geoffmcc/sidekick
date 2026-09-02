@@ -910,6 +910,19 @@
   <div class="metric-strip" id="brainSummary"></div>
   <div class="grid" style="grid-template-columns:repeat(2,minmax(0,1fr));gap:12px">
     <div class="card" style="padding:12px">
+      <div class="section-title">Task Specification</div>
+      <div id="brainTaskSpec" class="brain-projection"><div class="empty">No task loaded.</div></div>
+    </div>
+    <div class="card" style="padding:12px">
+      <div class="section-title">Belief State</div>
+      <div id="brainBeliefState" class="brain-projection"><div class="empty">No task loaded.</div></div>
+    </div>
+    <div class="card" style="padding:12px;grid-column:1 / -1">
+      <div class="section-title">Recent Cognitive Activity</div>
+      <div class="sub" style="margin-bottom:8px">Bounded operational events only. Private reasoning and raw prompts are not stored.</div>
+      <div id="brainTraceActivity" class="brain-projection"><div class="empty">No task loaded.</div></div>
+    </div>
+    <div class="card" style="padding:12px">
       <div class="section-title">Graph Coverage</div>
       <div id="brainGraphCoverage" class="brain-projection"><div class="empty">No task loaded.</div></div>
     </div>
