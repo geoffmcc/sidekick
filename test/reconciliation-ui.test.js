@@ -138,10 +138,9 @@ ok("ids reaching attribute and JS-string contexts use attr()/jsArg(), never esc(
   const body = fnBody(clientJs, "loadReconciliations");
   // esc() escapes & < > but not quotes, so it cannot safely close an attribute
   // or a JS string literal.
-  assert.ok(!/onclick="[^"]*esc\(/.test(body), "esc() must not be used inside an onclick handler");
-  assert.ok(!/id="[^"]*'\s*\+\s*esc\(/.test(body), "esc() must not be used to build an id attribute");
-  assert.ok(/onclick="resolveReconciliation\(' \+ jsArg\(r\.task_id\)/.test(body),
-    "task id must reach the handler through jsArg()");
+  assert.ok(!/onclick=/.test(body), "reconciliation controls must not use inline handlers");
+  assert.ok(/data-dashboard-action="callback" data-handler="resolveReconciliation" data-id="' \+ attr\(r\.task_id\)/.test(body),
+    "task id must reach the delegated handler through attr()");
   assert.ok(/id="approval-args-' \+ attr\(r\.approval_id\)/.test(body),
     "approval id must reach the id attribute through attr()");
 });

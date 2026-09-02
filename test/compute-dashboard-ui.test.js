@@ -196,8 +196,7 @@ ok("enrollment guards against double submission and offers a copy button", () =>
     "each click mints a distinct single-use token, so a double-click burns one");
   assert.match(body, /computeEnrollmentPending = true/);
   assert.match(body, /\.finally\(/, "the guard is released even when the request fails");
-  // The handler is emitted inside a single-quoted JS string, so the quotes are escaped.
-  assert.match(body, /copyElementText\(\\?'computeEnrollTokenValue/,
+  assert.match(body, /data-dashboard-action="copy-element"/,
     "the one-time secret is too long to hand-select reliably");
   assert.match(clientJs, /function copyElementText\(/);
 });
