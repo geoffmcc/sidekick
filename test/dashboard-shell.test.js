@@ -29,7 +29,7 @@ ok("unknown health is represented distinctly", html.includes('class="status-dot 
 ok("workspace switcher is interactive and project-backed", html.includes('id="workspaceButton"') && html.includes('id="workspaceMenu"') && js.includes("/api/projects?limit=200") && js.includes("setWorkspace"));
 ok("service health updates the visible instance dot", js.includes("function renderServiceStatus(services)") && js.includes("instanceDot.className = 'status-dot '"));
 ok("topbar exposes each service status separately", html.includes('id="serviceStatusList"') && js.includes("SERVICE_LABELS[name] || name") && js.includes("service-status-item"));
-ok("sidebar reserves a scrollable region for all navigation groups", theme.includes(".side-nav { min-height: 0; }"));
+ok("sidebar stacks all navigation groups in a scrollable region", theme.includes(".side-nav {") && theme.includes("flex-direction: column;") && theme.includes("min-height: 0;"));
 ok("command palette is keyboard discoverable", html.includes('id="commandDialog"') && js.includes("event.key.toLowerCase() === 'k'"));
 ok("project records use escaped rendering", js.includes("esc(project.display_name || project.project_id)") && js.includes("attr(project.project_id)"));
 const systemStart = html.indexOf('id="page-system"');
