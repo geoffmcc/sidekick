@@ -192,8 +192,8 @@ console.log('Running Platform Kernel Migration Parity Tests...\n');
     // platform_capability_pack_components and platform_workflow_definitions
     // (31 -> 34 tables) with 11 more explicit indexes (66 -> 77), including
     // the identity owner/actor indexes added by migration 048.
-    const expectedTables = 39;
-    const expectedIndexes = 87;
+    const expectedTables = 40;
+    const expectedIndexes = 90;
     const migratedTables = migratedSchema.filter(o => o.type === 'table').length;
     const migratedIndexes = migratedSchema.filter(o => o.type === 'index' && o.sql).length;
     const migratedAutoindexes = migratedSchema.filter(o => o.type === 'index' && !o.sql).length;

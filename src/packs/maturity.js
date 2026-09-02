@@ -22,11 +22,23 @@ function evidenceFingerprint(record) {
   })).digest("hex");
 }
 
+function configFingerprint(record) {
+  const crypto = require("crypto");
+  return crypto.createHash("sha256").update(JSON.stringify(record.config || {})).digest("hex");
+}
+
+function healthFingerprint(record) {
+  const crypto = require("crypto");
+  return crypto.createHash("sha256").update(JSON.stringify({ ok: record.health?.ok === true, status: record.health?.status || null })).digest("hex");
+}
+
 function evidenceState(record) {
-  const raw = record.metadata?.maturity_evidence;
-  if (!raw || typeof raw !== "object") return { entries: [], fingerprint: evidenceFingerprint(record) };
-  const entries = Array.isArray(raw.entries) ? raw.entries.filter(entry => entry && typeof entry === "object") : [];
-  return { entries, fingerprint: evidenceFingerprint(record), recorded_fingerprint: raw.fingerprint || null };
+  // Only server-validated rows are certification evidence. The metadata field
+  // is retained for historical inspection, but is deliberately not consulted.
+  const entries = Array.isArray(record.verified_evidence)
+    ? record.verified_evidence.filter(entry => entry && typeof entry === "object")
+    : [];
+  return { entries, fingerprint: evidenceFingerprint(record), recorded_fingerprint: null };
 }
 
 function fresh(entry, now) {
@@ -39,9 +51,16 @@ function evaluate(record, { now = Date.now() } = {}) {
   const evidence = evidenceState(record);
   const health = record.health || {};
   const operational = record.state === "enabled" && health.ok === true && health.status === "healthy";
-  const matching = evidence.recorded_fingerprint === evidence.fingerprint;
-  const latest = [...evidence.entries].sort((a, b) => (parseTime(b.observed_at) || 0) - (parseTime(a.observed_at) || 0))[0] || null;
-  const current = latest && matching && fresh(latest, now) ? latest : null;
+  const matching = true;
+  const lifecycleEpoch = Number(record.metadata?.maturity_lifecycle_epoch || 0);
+  const ordered = [...evidence.entries].sort((a, b) => (parseTime(b.observed_at) || 0) - (parseTime(a.observed_at) || 0));
+  const current = ordered.find(entry => matching && fresh(entry, now)
+    && entry.pack_version === record.version
+    && (entry.package_hash || null) === (record.package_hash || null)
+    && entry.config_fingerprint === configFingerprint(record)
+    && Number(entry.lifecycle_epoch) === lifecycleEpoch
+    && entry.health_fingerprint === healthFingerprint(record)
+    ? entry : null) || null;
   const has = key => current?.checks?.[key] === true;
   const integrated = operational && has("canonical_dispatch") && has("agent_discovery") && has("workflow");
   const certified = integrated && has("single_pack") && has("cross_pack") && has("skeptical_verification");
@@ -52,7 +71,7 @@ function evaluate(record, { now = Date.now() } = {}) {
   const reasons = [];
   if (record.state !== "enabled") reasons.push(`pack_state:${record.state}`);
   if (!health.ok || health.status !== "healthy") reasons.push(`health:${health.status || "unknown"}`);
-  if (!current) reasons.push(evidence.entries.length ? (matching ? "verification_evidence_stale" : "verification_fingerprint_mismatch") : "verification_evidence_missing");
+  if (!current) reasons.push(evidence.entries.length ? "verification_evidence_stale_or_mismatched" : "verification_evidence_missing");
   if (current) {
     for (const check of ["canonical_dispatch", "agent_discovery", "workflow", "single_pack", "cross_pack", "skeptical_verification"]) {
       if (!has(check)) reasons.push(`verification_missing:${check}`);
@@ -66,14 +85,19 @@ function evaluate(record, { now = Date.now() } = {}) {
       observed_at: entry.observed_at || null,
       source: entry.source || null,
       checks: entry.checks || {},
+      evidence_refs: entry.evidence_refs || [],
+      result_digest: entry.result_digest || null,
+      recipe_version: entry.recipe_version || null,
+      provider: entry.provider || null,
       current: entry === current,
     })),
     evidence_fingerprint: evidence.fingerprint,
     evidence_freshness: current ? "fresh" : evidence.entries.length ? "stale" : "missing",
     reasons,
-    optional_provider_integration: record.manifest?.provider_requirements ? (has("provider_integration") ? "verified" : "not_verified") : "not_required",
+    optional_provider_integration: has("provider_integration") ? "verified" : "not_verified",
+    provider_verified: has("provider_integration"),
     evaluated_at: new Date(now).toISOString(),
   };
 }
 
-module.exports = { LEVELS, MAX_EVIDENCE_AGE_MS, evidenceFingerprint, evaluate };
+module.exports = { LEVELS, MAX_EVIDENCE_AGE_MS, evidenceFingerprint, configFingerprint, healthFingerprint, evaluate };

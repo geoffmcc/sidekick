@@ -24,6 +24,9 @@ function registerCapabilityRoutes({ app, capabilityAction, capabilityResult, cal
   app.get("/api/capabilities/:name/maturity", (req, res) =>
     capabilityAction(req, res, { action: "maturity", name: req.params.name }, "maturity"));
 
+  app.post("/api/capabilities/:name/prove", (req, res) =>
+    capabilityAction(req, res, { action: "prove", name: req.params.name }, "prove"));
+
   app.post("/api/capabilities/inspect", (req, res) =>
     capabilityAction(req, res, { action: "inspect", name: req.body?.name, path: req.body?.path }, "inspect"));
 

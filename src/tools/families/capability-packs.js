@@ -137,6 +137,11 @@ async function sidekick_capability({ action = "list", name, path: sourcePath, co
       return jsonText({ ok: true, action, maturity: report });
     }
 
+    if (action === "prove") {
+      const { runRecipe } = require("../../proving/runner");
+      return jsonText({ ok: true, action, proving: await runRecipe(requireName(name, action), { project: "pack-proving", actor: "capability-proving" }) });
+    }
+
     if (action === "record_verification") {
       const result = lifecycle.recordVerification(requireName(name, action), config || {});
       return jsonText({ ok: true, action, ...result });
@@ -172,7 +177,7 @@ async function sidekick_capability({ action = "list", name, path: sourcePath, co
     }
 
     return failure(
-      `Unknown capability action: ${action}. Use list, catalog, available, show, inspect, validate, install, configure, enable, disable, health, maturity, record_verification, doctor, upgrade, or uninstall`,
+      `Unknown capability action: ${action}. Use list, catalog, available, show, inspect, validate, install, configure, enable, disable, health, maturity, prove, record_verification, doctor, upgrade, or uninstall`,
       { code: "unknown_action" }
     );
   } catch (error) {
@@ -192,7 +197,7 @@ const descriptors = Object.freeze([
       "Inspect the shared Sidekick capability catalog and manage installed or bundled packs. Installing or enabling a pack activates executable module code in the Sidekick process.",
     schema: z.object({
       action: z
-        .enum(["list", "catalog", "available", "show", "inspect", "validate", "install", "configure", "enable", "disable", "health", "maturity", "record_verification", "doctor", "upgrade", "uninstall"])
+        .enum(["list", "catalog", "available", "show", "inspect", "validate", "install", "configure", "enable", "disable", "health", "maturity", "prove", "record_verification", "doctor", "upgrade", "uninstall"])
         .optional()
         .describe("Capability pack action (default: list)"),
       name: z.string().optional().describe("Pack name (required for show/configure/enable/disable/health/upgrade/uninstall, and for installing a bundled pack)"),
@@ -213,7 +218,7 @@ const descriptors = Object.freeze([
       remove_module_data: z.boolean().optional().describe("Request removal of module-owned data on uninstall, where the module's manifest permits it (default false)"),
     }),
     args: {
-      action: "string (list|catalog|available|show|inspect|validate|install|configure|enable|disable|health|maturity|record_verification|doctor|upgrade|uninstall - default list)",
+       action: "string (list|catalog|available|show|inspect|validate|install|configure|enable|disable|health|maturity|prove|record_verification|doctor|upgrade|uninstall - default list)",
       name: "string (pack name)",
       path: "string (server-local package path)",
       config: "object (pack configuration)",

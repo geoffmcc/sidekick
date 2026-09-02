@@ -20,6 +20,7 @@ const { normalizeResult, errorResult, sanitizeText } = require("./result");
 const authorization = require("../core/authorization");
 const { recordSecurityEvent } = require("../core/security-audit");
 const { performance } = require("perf_hooks");
+const { createFactory } = require("./sensitive-result");
 
 const APPROVED_EXECUTION_CAPABILITY = Symbol("sidekick.approvedExecution");
 const TEST_DESCRIPTOR_CAPABILITY = Symbol("sidekick.testDescriptorExecution");
@@ -162,6 +163,16 @@ function withTimeoutAndCancellation(handler, args, runtime, context) {
   });
 }
 
+function sensitiveResultFactoryFor(descriptor, args, context) {
+  // Enrollment-token creation is the sole built-in operation with a one-time
+  // sensitive response. The source and authenticated principal/session are
+  // checked here, outside any pack handler.
+  if (descriptor.name !== "compute_nodes" || args.action !== "create_token") return null;
+  if (!context.authIdentity || (!context.authIdentity.principal_id && !context.authIdentity.principalId)) return null;
+  if (!context.sessionId && !context.requestId) return null;
+  return createFactory();
+}
+
 function log(name, args, started, result, context, extra = {}) {
   try {
     const summary = sanitizeText(result.content?.[0]?.text || (result.isError ? result.code || "error" : "(ok)")).substring(0, 1000);
@@ -287,12 +298,14 @@ async function executeResolvedTool(descriptor, args, context, requestedName = de
     // the descriptor and workspace again locally before invoking its handler.
     const nodeResult = await require("../node/dispatch").maybeExecute(descriptor, executionArgs, context);
     if (nodeResult) return normalizeResult(nodeResult);
-    return normalizeResult(await withTimeoutAndCancellation(
+    const createSensitiveResult = sensitiveResultFactoryFor(descriptor, executionArgs, context);
+    const handlerResult = await withTimeoutAndCancellation(
       descriptor.handler,
       executionArgs,
-      { context, signal: context.signal },
+      { context, signal: context.signal, createSensitiveResult },
       context
-    ));
+    );
+    return normalizeResult(handlerResult, { allowSensitiveOnce: Boolean(createSensitiveResult) });
   } catch (e) {
     return errorResult(e, "handler_error");
   }

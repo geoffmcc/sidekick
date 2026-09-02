@@ -22,13 +22,7 @@ const CREATE_TRUST_FLOOR = Object.freeze({
 // that promotion is always a deliberate second step against a known provider_id.
 const PROMOTION_FIELDS = ["trust_level", "data_classifications"];
 
-function ok(data) {
-  const exposeSensitiveOnce = Boolean(data && typeof data === "object" && data.__sidekickExposeSensitiveOnce === true);
-  if (exposeSensitiveOnce) {
-    const exposed = { ...data };
-    delete exposed.__sidekickExposeSensitiveOnce;
-    return { content: [{ type: "text", text: JSON.stringify(exposed, null, 2) }], __sidekickExposeSensitiveOnce: true };
-  }
+function ok(data, runtime = {}) {
   return { content: [{ type: "text", text: typeof data === "string" ? data : JSON.stringify(data, null, 2) }] };
 }
 function err(msg) {
@@ -139,7 +133,7 @@ async function sidekick_compute({ action, ...args }) {
   } catch (e) { return err("compute error: " + e.message); }
 }
 
-async function sidekick_compute_nodes({ action, node_id, worker_id, ...args }) {
+async function sidekick_compute_nodes({ action, node_id, worker_id, ...args }, runtime = {}) {
   try {
     compute.initialize();
     const targetWorkerId = worker_id || node_id;
@@ -201,7 +195,9 @@ async function sidekick_compute_nodes({ action, node_id, worker_id, ...args }) {
           createdBy: args.created_by || "admin",
           reEnrollmentOf: args.re_enrollment_of || null,
         });
-         return ok({ ...result, message: "Token created. Give the token value to the worker operator. It will not be shown again.", __sidekickExposeSensitiveOnce: true });
+          return runtime.createSensitiveResult
+            ? runtime.createSensitiveResult({ ...result, message: "Token created. Give the token value to the worker operator. It will not be shown again." })
+            : ok({ ...result, message: "Token created. The token value is available only through the authorized one-time display." });
       }
       case "list_tokens": {
         const dbStore = require("../db");
