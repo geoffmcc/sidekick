@@ -47,7 +47,7 @@ const server = http.createServer((req, res) => {
       const overflow = await page.evaluate(() => [...document.querySelectorAll("body *")].filter(el => el.getBoundingClientRect().right > window.innerWidth + 1).slice(0, 5).map(el => ({ tag: el.tagName, id: el.id, className: el.className, right: Math.round(el.getBoundingClientRect().right) })));
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `no document overflow at ${viewport[0]}x${viewport[1]}: ${JSON.stringify(overflow)}`);
     }
-    await page.setViewportSize({ width: 1366, height: 768 });
+    await page.setViewportSize({ width: 1440, height: 900 });
     assert.strictEqual(await page.locator("#nav-brain").isVisible(), true, "Intelligence navigation is visible");
     assert.strictEqual(await page.locator("#nav-config").isVisible(), true, "System navigation reaches the final option");
 
