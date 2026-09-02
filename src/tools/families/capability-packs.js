@@ -26,7 +26,7 @@ function requireName(name, action) {
   return String(name);
 }
 
-async function sidekick_capability({ action = "list", name, path: sourcePath, config, enable, allow_same_version, allow_downgrade, remove_knowledge, remove_module_data, source, query, kind, owner, state, available, offset, limit }) {
+async function sidekick_capability({ action = "list", name, path: sourcePath, config, enable, allow_same_version, allow_downgrade, remove_knowledge, remove_module_data, source, query, kind, owner, state, available, offset, limit }, runtime = {}) {
   // Lazy requires: this family is loaded while the registry is assembled, and
   // the pack lifecycle reaches back into the module loader and tool registry.
   const lifecycle = require("../../packs/lifecycle");
@@ -139,7 +139,7 @@ async function sidekick_capability({ action = "list", name, path: sourcePath, co
 
     if (action === "prove") {
       const { runRecipe } = require("../../proving/runner");
-      return jsonText({ ok: true, action, proving: await runRecipe(requireName(name, action), { project: "pack-proving", actor: "capability-proving" }) });
+      return jsonText({ ok: true, action, proving: await runRecipe(requireName(name, action), { project: "pack-proving", actor: "capability-proving", authIdentity: runtime.context?.authIdentity }) });
     }
 
     if (action === "record_verification") {

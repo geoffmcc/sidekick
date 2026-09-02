@@ -7,8 +7,8 @@
   "type": "plugin",
   "entryPoint": "entry.js",
   "sidekick": ">=1.0.0",
-  "capabilities": ["database-health", "schema-inspection", "migration-readiness", "parameterized-read-only-query"],
-  "tools": { "database_admin": { "risk": "medium", "category": "Database" }, "database_health": { "risk": "low", "category": "Database" } },
-  "permissions": [],
+  "capabilities": ["database-health", "schema-inspection", "migration-readiness", "parameterized-read-only-query", "migration-review"],
+  "tools": { "database_admin": { "risk": "medium", "category": "Database" }, "database_health": { "risk": "low", "category": "Database" }, "database_migration_review": { "risk": "medium", "category": "Database" } },
+  "permissions": [{ "tool": "db_schema", "risk": "low" }, { "tool": "db_stats", "risk": "low" }, { "tool": "db_query", "risk": "medium" }, { "tool": "db_migrate", "risk": "high" }],
   "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
 }

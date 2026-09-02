@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "database-administration/migration-review",
+  "version": "1.0.0",
+  "title": "Migration and Schema Review",
+  "description": "Collect migration status and schema evidence without applying changes.",
+  "mode": "read_only",
+  "tags": ["database", "migration", "schema", "read-only"],
+  "inputs": { "database": { "type": "string", "required": false, "default": "sqlite" }, "verbose": { "type": "boolean", "required": false, "default": false } },
+  "steps": [{ "name": "review", "tool": "database_migration_review", "args": { "database": "${inputs.database}", "verbose": "${inputs.verbose}" }, "expect": "json", "on_error": "fail" }],
+  "result": { "review": "${steps.review.json}", "not_performed": "migration apply, rollback, restore and backup" }
+}

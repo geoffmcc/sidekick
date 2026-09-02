@@ -32,6 +32,12 @@ function buildDescriptors(services) {
       args: { action: "string (start|stop|restart|status|enable|disable|logs)", service: "string", lines: "number" }, risk: "high", category: "Linux Systems",
       handler: args => validService(args.service) ? services.dispatch("service", args) : failure("invalid_input", "service must be one systemd unit name"),
     },
+    {
+      name: "linux_process_inspection", description: "Inspect bounded host processes through the governed process provider.",
+      schema: z.object({ action: z.enum(["list", "top", "tree"]), filter: z.string().max(200).regex(/^[^\0\r\n]*$/).optional() }).strict(),
+      args: { action: "string", filter: "string" }, risk: "low", category: "Linux Systems", annotations: { readOnlyHint: true, idempotentHint: true },
+      handler: args => services.dispatch("process", args),
+    },
   ];
 }
 

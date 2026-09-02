@@ -9,7 +9,7 @@
   "sidekick": ">=1.0.0",
   "capabilities": ["reproducibility-bundles", "secret-safe-artifacts"],
   "configSchema": { "type": "object", "properties": { "max_chars": { "type": "integer", "minimum": 1000, "maximum": 60000 } }, "additionalProperties": false },
-  "tools": { "reproducibility": { "risk": "medium", "category": "Development", "aliases": ["repro_bundle"] } },
-  "permissions": [{ "tool": "dev_repo_profile", "risk": "low" }, { "tool": "semantic_repo", "risk": "low" }, { "tool": "research_evidence", "risk": "medium" }],
+  "tools": { "reproducibility": { "risk": "medium", "category": "Development", "aliases": ["repro_bundle"] }, "reproducibility_compare": { "risk": "low", "category": "Development" } },
+  "permissions": [{ "tool": "dev_repo_profile", "risk": "low" }, { "tool": "semantic_repo", "risk": "low" }, { "tool": "research_evidence", "risk": "medium" }, { "tool": "research_compare", "risk": "low" }],
   "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
 }

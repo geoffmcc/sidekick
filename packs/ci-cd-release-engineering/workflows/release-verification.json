@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "ci-cd-release-engineering/release-verification",
+  "version": "1.0.0",
+  "title": "Governed Release Verification",
+  "description": "Run or plan the governed project verification path without publishing, pushing or deploying.",
+  "mode": "mutating",
+  "tags": ["ci", "release", "verification", "governed"],
+  "inputs": { "path": { "type": "string", "required": true }, "verification_mode": { "type": "string", "required": false, "default": "standard" }, "execute": { "type": "boolean", "required": false, "default": false } },
+  "steps": [{ "name": "gate", "title": "Evaluate governed verification", "tool": "release_gate", "args": { "path": "${inputs.path}", "verification_mode": "${inputs.verification_mode}", "execute": "${inputs.execute}" }, "expect": "json", "on_error": "fail" }],
+  "result": { "gate": "${steps.gate.json}", "not_performed": "push, tag, publish and deploy" }
+}

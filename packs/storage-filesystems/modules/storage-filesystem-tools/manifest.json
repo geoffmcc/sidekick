@@ -11,7 +11,8 @@
   "tools": {
     "storage_capacity_audit": { "risk": "low", "category": "Storage" },
     "storage_backend_audit": { "risk": "low", "category": "Storage" },
-    "storage_volume_inventory": { "risk": "low", "category": "Storage" }
+    "storage_volume_inventory": { "risk": "low", "category": "Storage" },
+    "storage_threshold_check": { "risk": "low", "category": "Storage" }
   },
   "permissions": [{ "tool": "status", "risk": "medium" }, { "tool": "proxmox", "risk": "low" }, { "tool": "containers", "risk": "low" }],
   "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }

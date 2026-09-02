@@ -34,7 +34,7 @@
     { "path": "knowledge/orphans.md", "title": "Container Operations: orphan candidates and cleanup", "category": "operations", "tags": ["containers", "orphans", "cleanup"] },
     { "path": "knowledge/usage-reference.md", "title": "Container Operations: tool and workflow reference", "category": "operations", "tags": ["containers", "docker", "podman", "workflows"] }
   ],
-  "requires": { "tools": [], "optional_tools": ["secret", "netdiag", "watch"] },
+  "requires": { "tools": [], "optional_tools": [] },
   "permissions": [],
   "configuration": {
     "schema": {

@@ -7,8 +7,8 @@
   "type": "plugin",
   "entryPoint": "entry.js",
   "sidekick": ">=1.0.0",
-  "capabilities": ["api-contract-testing", "api-health", "scoped-http"],
-  "tools": { "api_contract_check": { "risk": "high", "category": "Development" }, "api_engineering_health": { "risk": "low", "category": "Development" } },
-  "permissions": [],
+  "capabilities": ["api-contract-testing", "api-health", "scoped-http", "contract-matrix"],
+  "tools": { "api_contract_check": { "risk": "high", "category": "Development" }, "api_engineering_health": { "risk": "low", "category": "Development" }, "api_contract_matrix": { "risk": "high", "category": "Development" } },
+  "permissions": [{ "tool": "web_check", "risk": "medium" }],
   "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
 }

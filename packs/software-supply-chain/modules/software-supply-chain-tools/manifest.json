@@ -1,5 +1,5 @@
 {
   "name": "software-supply-chain-tools", "displayName": "Software Supply Chain Tools", "version": "1.0.0", "description": "Bounded manifest and repository integrity checks.", "author": "Sidekick", "type": "plugin", "entryPoint": "entry.js", "sidekick": ">=1.0.0",
-  "capabilities": ["dependency-integrity", "source-provenance"], "tools": { "supply_chain_audit": { "risk": "low", "category": "Security" } },
+  "capabilities": ["dependency-integrity", "source-provenance", "sbom-provenance"], "tools": { "supply_chain_audit": { "risk": "low", "category": "Security" }, "supply_chain_provenance": { "risk": "low", "category": "Security" } },
   "permissions": [{ "tool": "parse", "risk": "low" }, { "tool": "hash", "risk": "low" }, { "tool": "git", "risk": "medium" }, { "tool": "semantic_repo", "risk": "low" }], "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
 }

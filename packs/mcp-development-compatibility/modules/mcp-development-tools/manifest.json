@@ -1,5 +1,5 @@
 {
   "name": "mcp-development-tools", "displayName": "MCP Development Tools", "version": "1.0.0", "description": "Bounded static MCP contract and live catalog checks.", "author": "Sidekick", "type": "plugin", "entryPoint": "entry.js", "sidekick": ">=1.0.0",
-  "capabilities": ["mcp-compatibility", "protocol-audit"], "tools": { "mcp_compatibility": { "risk": "low", "category": "Development" } },
+  "capabilities": ["mcp-compatibility", "protocol-audit", "catalog-inspection"], "tools": { "mcp_compatibility": { "risk": "low", "category": "Development" }, "mcp_catalog_operation": { "risk": "low", "category": "Development" } },
   "permissions": [{ "tool": "semantic_repo", "risk": "low" }, { "tool": "tools", "risk": "low" }, { "tool": "parse", "risk": "low" }], "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
 }

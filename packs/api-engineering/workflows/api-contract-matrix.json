@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "api-engineering/api-contract-matrix",
+  "version": "1.0.0",
+  "title": "API Contract Matrix",
+  "description": "Evaluate up to ten explicitly scoped API targets and preserve per-target evidence.",
+  "mode": "read_only",
+  "tags": ["api", "contract", "matrix", "network-scope"],
+  "inputs": { "network_scope": { "type": "string", "required": true }, "targets": { "type": "array", "required": true }, "project": { "type": "string", "required": false } },
+  "steps": [{ "name": "matrix", "title": "Evaluate API contracts", "tool": "api_contract_matrix", "args": { "network_scope": "${inputs.network_scope}", "targets": "${inputs.targets}", "project": "${inputs.project}", "capture_evidence": true }, "expect": "json", "on_error": "fail" }],
+  "result": { "matrix": "${steps.matrix.json}", "not_performed": "API mutations, authentication changes and publication" }
+}

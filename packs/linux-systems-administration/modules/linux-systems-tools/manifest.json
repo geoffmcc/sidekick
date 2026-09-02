@@ -11,12 +11,14 @@
   "tools": {
     "linux_system_status": { "risk": "medium", "category": "Linux Systems" },
     "linux_system_health": { "risk": "high", "category": "Linux Systems" },
-    "linux_service_operation": { "risk": "high", "category": "Linux Systems" }
+    "linux_service_operation": { "risk": "high", "category": "Linux Systems" },
+    "linux_process_inspection": { "risk": "low", "category": "Linux Systems" }
   },
   "permissions": [
     { "tool": "status", "risk": "medium" },
     { "tool": "health", "risk": "high" },
-    { "tool": "service", "risk": "high" }
+    { "tool": "service", "risk": "high" },
+    { "tool": "process", "risk": "low" }
   ],
   "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
 }

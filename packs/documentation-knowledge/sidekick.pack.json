@@ -8,7 +8,7 @@
   "publisher": "Sidekick",
   "compatibility": { "sidekick": ">=1.0.0" },
   "modules": [{ "name": "documentation-knowledge-tools", "path": "modules/documentation-knowledge-tools", "entry_point": "entry.js", "config_from_pack": true }],
-  "workflows": [{ "path": "workflows/documentation-audit.json" }],
+  "workflows": [{ "path": "workflows/documentation-audit.json" }, { "path": "workflows/knowledge-operation.json" }],
   "knowledge": [{ "path": "knowledge/operating.md", "title": "Documentation and Knowledge Engineering operating model", "category": "documentation", "tags": ["documentation", "knowledge", "provenance"] }, { "path": "knowledge/usage-reference.md", "title": "Documentation and Knowledge Engineering: audit guide", "category": "documentation", "tags": ["documentation", "knowledge", "audit", "provenance"] }],
   "requires": { "tools": ["knowledge"], "optional_tools": ["semantic_repo", "parse"] },
   "permissions": [{ "tool": "semantic_repo", "risk": "low" }, { "tool": "knowledge", "risk": "low" }, { "tool": "parse", "risk": "low" }],

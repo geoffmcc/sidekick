@@ -2,9 +2,9 @@
   "schema_version": 1, "pack_api": 1, "name": "local-ai-model-operations", "display_name": "Local AI & Model Operations", "version": "1.0.0",
   "description": "Truthful local inference readiness and model inventory without downloads or direct provider access.", "publisher": "Sidekick", "compatibility": { "sidekick": ">=1.0.0" },
   "modules": [{ "name": "local-ai-model-tools", "path": "modules/local-ai-model-tools", "entry_point": "entry.js", "config_from_pack": true }],
-  "workflows": [{ "path": "workflows/model-readiness.json" }],
+  "workflows": [{ "path": "workflows/model-readiness.json" }, { "path": "workflows/route-explain.json" }],
   "knowledge": [{ "path": "knowledge/operating.md", "title": "Local AI and Model Operations operating model", "category": "compute", "tags": ["local-ai", "compute", "models", "privacy"] }, { "path": "knowledge/usage-reference.md", "title": "Local AI and Model Operations: routing and readiness", "category": "compute", "tags": ["local-ai", "compute", "routing", "data-classification"] }],
-  "requires": { "tools": [], "optional_tools": ["compute", "compute_models", "compute_providers", "compute_nodes", "compute_jobs"] },
-  "permissions": [{ "tool": "compute", "risk": "medium" }, { "tool": "compute_models", "risk": "medium" }, { "tool": "compute_providers", "risk": "high" }, { "tool": "compute_nodes", "risk": "medium" }, { "tool": "compute_jobs", "risk": "medium" }],
+  "requires": { "tools": [], "optional_tools": ["compute", "compute_models", "compute_providers", "compute_nodes", "compute_jobs", "compute_route"] },
+  "permissions": [{ "tool": "compute", "risk": "medium" }, { "tool": "compute_models", "risk": "medium" }, { "tool": "compute_providers", "risk": "high" }, { "tool": "compute_nodes", "risk": "medium" }, { "tool": "compute_jobs", "risk": "medium" }, { "tool": "compute_route", "risk": "low" }],
   "configuration": { "schema": { "type": "object", "properties": { "max_models": { "type": "integer", "minimum": 1, "maximum": 100 } }, "additionalProperties": false }, "defaults": { "max_models": 50 } }
 }

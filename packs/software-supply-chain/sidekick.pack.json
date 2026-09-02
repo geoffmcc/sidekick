@@ -2,7 +2,7 @@
   "schema_version": 1, "pack_api": 1, "name": "software-supply-chain", "display_name": "Software Supply Chain", "version": "1.0.0",
   "description": "Read-only, reproducible software supply-chain checks over manifests, hashes, Git state and semantic boundaries.", "publisher": "Sidekick", "compatibility": { "sidekick": ">=1.0.0" },
   "modules": [{ "name": "software-supply-chain-tools", "path": "modules/software-supply-chain-tools", "entry_point": "entry.js", "config_from_pack": true }],
-  "workflows": [{ "path": "workflows/supply-chain-audit.json" }],
+  "workflows": [{ "path": "workflows/supply-chain-audit.json" }, { "path": "workflows/provenance-audit.json" }],
   "knowledge": [{ "path": "knowledge/operating.md", "title": "Software Supply Chain operating model", "category": "security", "tags": ["supply-chain", "integrity", "dependencies"] }, { "path": "knowledge/usage-reference.md", "title": "Software Supply Chain: audit inputs and interpretation", "category": "security", "tags": ["supply-chain", "manifests", "hashes", "provenance"] }],
   "requires": { "tools": [], "optional_tools": ["parse", "hash", "git", "semantic_repo"] },
   "permissions": [{ "tool": "parse", "risk": "low" }, { "tool": "hash", "risk": "low" }, { "tool": "git", "risk": "medium" }, { "tool": "semantic_repo", "risk": "low" }],

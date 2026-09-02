@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "assumptions-unknowns/evidence-snapshot",
+  "version": "1.0.0",
+  "title": "Continuity Evidence Snapshot",
+  "description": "Collect canonical continuity stores and label supplied gaps for validation.",
+  "mode": "read_only",
+  "tags": ["assumptions", "unknowns", "evidence", "read-only"],
+  "inputs": { "project": { "type": "string", "required": true }, "query": { "type": "string", "required": false }, "assumptions": { "type": "array", "required": false }, "unknowns": { "type": "array", "required": false } },
+  "steps": [{ "name": "snapshot", "tool": "assumptions_snapshot", "args": { "project": "${inputs.project}", "query": "${inputs.query}", "assumptions": "${inputs.assumptions}", "unknowns": "${inputs.unknowns}" }, "expect": "json", "on_error": "fail" }],
+  "result": { "evidence": "${steps.snapshot.json}", "writes": false }
+}

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "change-impact/change-gate",
+  "version": "1.0.0",
+  "title": "Deterministic Change Gate",
+  "description": "Apply a bounded finding-count gate to repository-derived impact evidence.",
+  "mode": "read_only",
+  "tags": ["change-impact", "gate", "read-only"],
+  "inputs": { "path": { "type": "string", "required": true }, "base": { "type": "string", "required": false }, "max_findings": { "type": "number", "required": false, "default": 10 } },
+  "steps": [{ "name": "gate", "tool": "change_impact_gate", "args": { "path": "${inputs.path}", "base": "${inputs.base}", "max_findings": "${inputs.max_findings}" }, "expect": "json", "on_error": "fail" }],
+  "result": { "gate": "${steps.gate.json}", "mutations": false }
+}

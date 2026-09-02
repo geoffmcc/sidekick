@@ -9,7 +9,7 @@
   "sidekick": ">=1.0.0",
   "capabilities": ["independent-verification", "read-only-verification"],
   "configSchema": { "type": "object", "additionalProperties": false },
-  "tools": { "skeptical_verify": { "risk": "low", "category": "Verification", "aliases": ["independent_verify"] } },
-  "permissions": [{ "tool": "dev_repo_profile", "risk": "low" }, { "tool": "semantic_repo", "risk": "low" }, { "tool": "health", "risk": "low" }, { "tool": "snapshot", "risk": "low" }],
+  "tools": { "skeptical_verify": { "risk": "low", "category": "Verification", "aliases": ["independent_verify"] }, "skeptical_compare": { "risk": "low", "category": "Verification" } },
+  "permissions": [{ "tool": "dev_repo_profile", "risk": "low" }, { "tool": "semantic_repo", "risk": "low" }, { "tool": "health", "risk": "low" }, { "tool": "snapshot", "risk": "low" }, { "tool": "research_compare", "risk": "low" }],
   "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
 }

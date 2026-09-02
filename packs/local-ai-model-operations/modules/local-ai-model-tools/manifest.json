@@ -1,5 +1,5 @@
 {
   "name": "local-ai-model-tools", "displayName": "Local AI Model Tools", "version": "1.0.0", "description": "Compute-backed local model readiness checks.", "author": "Sidekick", "type": "plugin", "entryPoint": "entry.js", "sidekick": ">=1.0.0",
-  "capabilities": ["model-readiness", "provider-health"], "tools": { "model_readiness": { "risk": "low", "category": "Compute" } },
-  "permissions": [{ "tool": "compute", "risk": "medium" }, { "tool": "compute_models", "risk": "medium" }, { "tool": "compute_providers", "risk": "high" }, { "tool": "compute_nodes", "risk": "medium" }, { "tool": "compute_jobs", "risk": "medium" }], "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
+  "capabilities": ["model-readiness", "provider-health", "route-explanation"], "tools": { "model_readiness": { "risk": "low", "category": "Compute" }, "model_route_explain": { "risk": "low", "category": "Compute" } },
+  "permissions": [{ "tool": "compute", "risk": "medium" }, { "tool": "compute_models", "risk": "medium" }, { "tool": "compute_providers", "risk": "high" }, { "tool": "compute_nodes", "risk": "medium" }, { "tool": "compute_jobs", "risk": "medium" }, { "tool": "compute_route", "risk": "low" }], "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
 }

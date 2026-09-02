@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "security-lab-reproduction/lab-lifecycle",
+  "version": "1.0.0",
+  "title": "Security lab run lifecycle",
+  "description": "Inspect or plan a scope-bound research run without executing probes.",
+  "mode": "read_only",
+  "inputs": { "action": { "type": "string", "required": true }, "run_id": { "type": "string", "required": false }, "snapshot_id": { "type": "string", "required": false }, "network_scope": { "type": "string", "required": false } },
+  "steps": [{ "name": "lifecycle", "tool": "lab_run_lifecycle", "args": { "action": "${inputs.action}", "run_id": "${inputs.run_id}", "snapshot_id": "${inputs.snapshot_id}", "network_scope": "${inputs.network_scope}" }, "expect": "json", "on_error": "fail" }],
+  "result": { "lifecycle": "${steps.lifecycle.json}" },
+  "tags": ["security", "lab", "scope", "read-only"]
+}
