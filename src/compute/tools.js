@@ -23,6 +23,12 @@ const CREATE_TRUST_FLOOR = Object.freeze({
 const PROMOTION_FIELDS = ["trust_level", "data_classifications"];
 
 function ok(data) {
+  const exposeSensitiveOnce = Boolean(data && typeof data === "object" && data.__sidekickExposeSensitiveOnce === true);
+  if (exposeSensitiveOnce) {
+    const exposed = { ...data };
+    delete exposed.__sidekickExposeSensitiveOnce;
+    return { content: [{ type: "text", text: JSON.stringify(exposed, null, 2) }], __sidekickExposeSensitiveOnce: true };
+  }
   return { content: [{ type: "text", text: typeof data === "string" ? data : JSON.stringify(data, null, 2) }] };
 }
 function err(msg) {
@@ -195,7 +201,7 @@ async function sidekick_compute_nodes({ action, node_id, worker_id, ...args }) {
           createdBy: args.created_by || "admin",
           reEnrollmentOf: args.re_enrollment_of || null,
         });
-        return ok({ ...result, message: "Token created. Give the token value to the worker operator. It will not be shown again." });
+         return ok({ ...result, message: "Token created. Give the token value to the worker operator. It will not be shown again.", __sidekickExposeSensitiveOnce: true });
       }
       case "list_tokens": {
         const dbStore = require("../db");

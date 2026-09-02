@@ -140,6 +140,9 @@ function setPackState(name, state, { error = null } = {}) {
   }
   sets.push("error = ?");
   params.push(state === "error" ? String(error || "unknown pack error") : null);
+  const metadata = { ...(record.metadata || {}), maturity_lifecycle_epoch: Number(record.metadata?.maturity_lifecycle_epoch || 0) + 1 };
+  sets.push("metadata_json = ?");
+  params.push(JSON.stringify(metadata));
   // The observed state is part of the WHERE clause: if another process moved
   // the pack between our read and this write, the transition we validated is
   // not the transition we would be performing — fail instead of clobbering.

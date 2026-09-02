@@ -72,3 +72,8 @@ test("module exposes the compact governed tool surface", () => {
   assert.strictEqual(change.risk, "critical");
   assert.strictEqual(change.schema.safeParse({action:"preflight",profile:"lab",change_type:"firewall_rule",management_path:"unknown"}).success, true);
 });
+test("unconfigured health is unavailable rather than healthy", () => {
+  const report = entry.healthCheck({ config: { profiles: {} } });
+  assert.strictEqual(report.ok, false);
+  assert.strictEqual(report.status, "unavailable");
+});

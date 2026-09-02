@@ -83,6 +83,12 @@
       "permissions": [],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 2,
+        "missing_result": [],
+        "missing_tags": [],
+        "missing_step_error_policy": []
+      },
       "module_details": [
         {
           "name": "api-engineering-tools",
@@ -132,32 +138,16 @@
           "security_sensitive": false
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/api-engineering/modules/api-engineering-tools/entry.js"
+        ],
+        "behavior": "not_observed_in_module_source"
+      },
       "current_tests": [
-        "test/browser-automation-pack.test.js",
         "test/campaign-packs-6-10.test.js",
-        "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
-        "test/compute-worker-package.test.js",
-        "test/container-operations-pack.test.js",
-        "test/developer-pack.test.js",
-        "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
-        "test/network-firewall-pack.test.js",
-        "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
-        "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
-        "test/phase-packs-16-20.test.js",
-        "test/production-compatibility-packs-11-15.test.js",
-        "test/production-compatibility-packs.test.js",
-        "test/proxmox-pack.test.js",
-        "test/security-phase-10-packs-modules.test.js",
-        "test/security-phase-11-pack-specific.test.js",
-        "test/security-research-pack.test.js"
+        "test/pack-maturity.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
@@ -246,6 +236,12 @@
       ],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 1,
+        "missing_result": [],
+        "missing_tags": [],
+        "missing_step_error_policy": []
+      },
       "module_details": [
         {
           "name": "assumptions-unknowns-tools",
@@ -327,32 +323,15 @@
           "security_sensitive": false
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/assumptions-unknowns/modules/assumptions-unknowns-tools/entry.js"
+        ],
+        "behavior": "not_observed_in_module_source"
+      },
       "current_tests": [
-        "test/browser-automation-pack.test.js",
-        "test/campaign-packs-6-10.test.js",
-        "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
-        "test/compute-worker-package.test.js",
-        "test/container-operations-pack.test.js",
-        "test/developer-pack.test.js",
-        "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
-        "test/network-firewall-pack.test.js",
-        "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
-        "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
-        "test/phase-packs-16-20.test.js",
-        "test/production-compatibility-packs-11-15.test.js",
-        "test/production-compatibility-packs.test.js",
-        "test/proxmox-pack.test.js",
-        "test/security-phase-10-packs-modules.test.js",
-        "test/security-phase-11-pack-specific.test.js",
-        "test/security-research-pack.test.js"
+        "test/phase-packs-16-20.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
@@ -465,6 +444,12 @@
       ],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 2,
+        "missing_result": [],
+        "missing_tags": [],
+        "missing_step_error_policy": []
+      },
       "module_details": [
         {
           "name": "backup-restore-tools",
@@ -613,32 +598,15 @@
           "security_sensitive": false
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/backup-restore-dr/modules/backup-restore-tools/entry.js"
+        ],
+        "behavior": "explicit_unavailable_or_degraded_states"
+      },
       "current_tests": [
-        "test/browser-automation-pack.test.js",
-        "test/campaign-packs-6-10.test.js",
-        "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
-        "test/compute-worker-package.test.js",
-        "test/container-operations-pack.test.js",
-        "test/developer-pack.test.js",
-        "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
-        "test/network-firewall-pack.test.js",
-        "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
-        "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
-        "test/phase-packs-16-20.test.js",
-        "test/production-compatibility-packs-11-15.test.js",
-        "test/production-compatibility-packs.test.js",
-        "test/proxmox-pack.test.js",
-        "test/security-phase-10-packs-modules.test.js",
-        "test/security-phase-11-pack-specific.test.js",
-        "test/security-research-pack.test.js"
+        "test/production-compatibility-packs.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
@@ -786,6 +754,12 @@
       ],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 3,
+        "missing_result": [],
+        "missing_tags": [],
+        "missing_step_error_policy": []
+      },
       "module_details": [
         {
           "name": "browser-tools",
@@ -869,33 +843,20 @@
           "security_sensitive": false
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/browser-automation/modules/browser-tools/entry.js"
+        ],
+        "behavior": "explicit_unavailable_or_degraded_states"
+      },
       "current_tests": [
+        "test/brain.test.js",
         "test/browser-automation-pack.test.js",
+        "test/browser-egress.test.js",
+        "test/browser-subsystem.test.js",
         "test/campaign-packs-6-10.test.js",
-        "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
-        "test/compute-worker-package.test.js",
-        "test/container-operations-pack.test.js",
-        "test/developer-pack.test.js",
-        "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
-        "test/network-firewall-pack.test.js",
-        "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
-        "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
-        "test/phase-packs-16-20.test.js",
-        "test/production-compatibility-packs-11-15.test.js",
-        "test/production-compatibility-packs.test.js",
-        "test/proxmox-pack.test.js",
-        "test/security-phase-10-packs-modules.test.js",
-        "test/security-phase-11-pack-specific.test.js",
-        "test/security-phase-12-browser-automation.test.js",
-        "test/security-research-pack.test.js"
+        "test/security-phase-12-browser-automation.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
@@ -993,6 +954,12 @@
       ],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 1,
+        "missing_result": [],
+        "missing_tags": [],
+        "missing_step_error_policy": []
+      },
       "module_details": [
         {
           "name": "change-impact-tools",
@@ -1058,32 +1025,15 @@
           "security_sensitive": false
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/change-impact/modules/change-impact-tools/entry.js"
+        ],
+        "behavior": "not_observed_in_module_source"
+      },
       "current_tests": [
-        "test/browser-automation-pack.test.js",
-        "test/campaign-packs-6-10.test.js",
-        "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
-        "test/compute-worker-package.test.js",
-        "test/container-operations-pack.test.js",
-        "test/developer-pack.test.js",
-        "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
-        "test/network-firewall-pack.test.js",
-        "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
-        "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
-        "test/phase-packs-16-20.test.js",
-        "test/production-compatibility-packs-11-15.test.js",
-        "test/production-compatibility-packs.test.js",
-        "test/proxmox-pack.test.js",
-        "test/security-phase-10-packs-modules.test.js",
-        "test/security-phase-11-pack-specific.test.js",
-        "test/security-research-pack.test.js"
+        "test/phase-packs-16-20.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
@@ -1178,6 +1128,12 @@
       "permissions": [],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 2,
+        "missing_result": [],
+        "missing_tags": [],
+        "missing_step_error_policy": []
+      },
       "module_details": [
         {
           "name": "ci-cd-release-tools",
@@ -1227,32 +1183,15 @@
           "security_sensitive": false
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/ci-cd-release-engineering/modules/ci-cd-release-tools/entry.js"
+        ],
+        "behavior": "not_observed_in_module_source"
+      },
       "current_tests": [
-        "test/browser-automation-pack.test.js",
-        "test/campaign-packs-6-10.test.js",
-        "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
-        "test/compute-worker-package.test.js",
-        "test/container-operations-pack.test.js",
-        "test/developer-pack.test.js",
-        "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
-        "test/network-firewall-pack.test.js",
-        "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
-        "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
-        "test/phase-packs-16-20.test.js",
-        "test/production-compatibility-packs-11-15.test.js",
-        "test/production-compatibility-packs.test.js",
-        "test/proxmox-pack.test.js",
-        "test/security-phase-10-packs-modules.test.js",
-        "test/security-phase-11-pack-specific.test.js",
-        "test/security-research-pack.test.js"
+        "test/campaign-packs-6-10.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
@@ -1609,6 +1548,17 @@
       "permissions": [],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 4,
+        "missing_result": [],
+        "missing_tags": [],
+        "missing_step_error_policy": [
+          "docker-podman/health-assessment",
+          "docker-podman/update-check",
+          "docker-podman/troubleshoot",
+          "docker-podman/controlled-update"
+        ]
+      },
       "module_details": [
         {
           "name": "container-operations-tools",
@@ -1692,37 +1642,26 @@
           "security_sensitive": true
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/container-operations/modules/container-operations-tools/entry.js"
+        ],
+        "behavior": "explicit_unavailable_or_degraded_states"
+      },
       "current_tests": [
         "test/browser-automation-pack.test.js",
         "test/campaign-packs-6-10.test.js",
-        "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
-        "test/compute-worker-package.test.js",
         "test/container-operations-pack.test.js",
-        "test/developer-pack.test.js",
-        "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
-        "test/network-firewall-pack.test.js",
-        "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
-        "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
-        "test/phase-packs-16-20.test.js",
-        "test/production-compatibility-packs-11-15.test.js",
-        "test/production-compatibility-packs.test.js",
-        "test/proxmox-pack.test.js",
-        "test/security-phase-10-packs-modules.test.js",
-        "test/security-phase-11-pack-specific.test.js",
+        "test/deploy-scripts.test.js",
+        "test/security-hardening.test.js",
         "test/security-research-pack.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
         "no stored canonical-dispatch verification evidence",
-        "no stored cross-pack verification evidence"
+        "no stored cross-pack verification evidence",
+        "workflow contract fields require review"
       ],
       "overlaps": [],
       "evidence_status": "not_evaluated"
@@ -1819,6 +1758,12 @@
       "permissions": [],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 2,
+        "missing_result": [],
+        "missing_tags": [],
+        "missing_step_error_policy": []
+      },
       "module_details": [
         {
           "name": "database-administration-tools",
@@ -1868,32 +1813,15 @@
           "security_sensitive": false
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/database-administration/modules/database-administration-tools/entry.js"
+        ],
+        "behavior": "not_observed_in_module_source"
+      },
       "current_tests": [
-        "test/browser-automation-pack.test.js",
-        "test/campaign-packs-6-10.test.js",
-        "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
-        "test/compute-worker-package.test.js",
-        "test/container-operations-pack.test.js",
-        "test/developer-pack.test.js",
-        "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
-        "test/network-firewall-pack.test.js",
-        "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
-        "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
-        "test/phase-packs-16-20.test.js",
-        "test/production-compatibility-packs-11-15.test.js",
-        "test/production-compatibility-packs.test.js",
-        "test/proxmox-pack.test.js",
-        "test/security-phase-10-packs-modules.test.js",
-        "test/security-phase-11-pack-specific.test.js",
-        "test/security-research-pack.test.js"
+        "test/campaign-packs-6-10.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
@@ -2179,6 +2107,12 @@
       ],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 7,
+        "missing_result": [],
+        "missing_tags": [],
+        "missing_step_error_policy": []
+      },
       "module_details": [
         {
           "name": "developer-tools",
@@ -2295,32 +2229,33 @@
           "security_sensitive": true
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/developer/modules/developer-tools/entry.js"
+        ],
+        "behavior": "explicit_unavailable_or_degraded_states"
+      },
       "current_tests": [
-        "test/browser-automation-pack.test.js",
+        "test/agent-bridge-prompt.test.js",
+        "test/agent-capability-broker.test.js",
+        "test/agent-protocol.test.js",
+        "test/brain.test.js",
         "test/campaign-packs-6-10.test.js",
         "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
-        "test/compute-worker-package.test.js",
-        "test/container-operations-pack.test.js",
         "test/developer-pack.test.js",
-        "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
-        "test/network-firewall-pack.test.js",
+        "test/execution-node-protocol.test.js",
+        "test/pack-catalog-e2e.test.js",
         "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
         "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
+        "test/per-action-risk.test.js",
         "test/phase-packs-16-20.test.js",
         "test/production-compatibility-packs-11-15.test.js",
-        "test/production-compatibility-packs.test.js",
-        "test/proxmox-pack.test.js",
-        "test/security-phase-10-packs-modules.test.js",
-        "test/security-phase-11-pack-specific.test.js",
-        "test/security-research-pack.test.js"
+        "test/security-research-source.test.js",
+        "test/security-research-unit.test.js",
+        "test/semantic-repository.test.js",
+        "test/static-code-quality.test.js",
+        "test/tool-log-correlation.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
@@ -2416,6 +2351,14 @@
       ],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 1,
+        "missing_result": [],
+        "missing_tags": [
+          "documentation-knowledge/documentation-audit"
+        ],
+        "missing_step_error_policy": []
+      },
       "module_details": [
         {
           "name": "documentation-knowledge-tools",
@@ -2497,37 +2440,21 @@
           "security_sensitive": false
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/documentation-knowledge/modules/documentation-knowledge-tools/entry.js"
+        ],
+        "behavior": "not_observed_in_module_source"
+      },
       "current_tests": [
-        "test/browser-automation-pack.test.js",
-        "test/campaign-packs-6-10.test.js",
-        "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
-        "test/compute-worker-package.test.js",
-        "test/container-operations-pack.test.js",
-        "test/developer-pack.test.js",
-        "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
-        "test/network-firewall-pack.test.js",
-        "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
-        "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
-        "test/phase-packs-16-20.test.js",
-        "test/production-compatibility-packs-11-15.test.js",
-        "test/production-compatibility-packs.test.js",
-        "test/proxmox-pack.test.js",
-        "test/security-phase-10-packs-modules.test.js",
-        "test/security-phase-11-pack-specific.test.js",
-        "test/security-research-pack.test.js"
+        "test/production-compatibility-packs-11-15.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
         "no stored canonical-dispatch verification evidence",
-        "no stored cross-pack verification evidence"
+        "no stored cross-pack verification evidence",
+        "workflow contract fields require review"
       ],
       "overlaps": [],
       "evidence_status": "not_evaluated"
@@ -2613,6 +2540,12 @@
       "permissions": [],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 2,
+        "missing_result": [],
+        "missing_tags": [],
+        "missing_step_error_policy": []
+      },
       "module_details": [
         {
           "name": "infrastructure-as-code-tools",
@@ -2662,32 +2595,15 @@
           "security_sensitive": false
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/infrastructure-as-code/modules/infrastructure-as-code-tools/entry.js"
+        ],
+        "behavior": "not_observed_in_module_source"
+      },
       "current_tests": [
-        "test/browser-automation-pack.test.js",
-        "test/campaign-packs-6-10.test.js",
-        "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
-        "test/compute-worker-package.test.js",
-        "test/container-operations-pack.test.js",
-        "test/developer-pack.test.js",
-        "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
-        "test/network-firewall-pack.test.js",
-        "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
-        "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
-        "test/phase-packs-16-20.test.js",
-        "test/production-compatibility-packs-11-15.test.js",
-        "test/production-compatibility-packs.test.js",
-        "test/proxmox-pack.test.js",
-        "test/security-phase-10-packs-modules.test.js",
-        "test/security-phase-11-pack-specific.test.js",
-        "test/security-research-pack.test.js"
+        "test/campaign-packs-6-10.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
@@ -3075,6 +2991,12 @@
       ],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 14,
+        "missing_result": [],
+        "missing_tags": [],
+        "missing_step_error_policy": []
+      },
       "module_details": [
         {
           "name": "jellyfin-tools",
@@ -3190,33 +3112,18 @@
           "security_sensitive": true
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/jellyfin/modules/jellyfin-tools/entry.js"
+        ],
+        "behavior": "explicit_unavailable_or_degraded_states"
+      },
       "current_tests": [
-        "test/browser-automation-pack.test.js",
-        "test/campaign-packs-6-10.test.js",
-        "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
-        "test/compute-worker-package.test.js",
-        "test/container-operations-pack.test.js",
-        "test/developer-pack.test.js",
+        "test/agent-protocol.test.js",
+        "test/brain.test.js",
         "test/jellyfin-lifecycle.test.js",
-        "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
-        "test/network-firewall-pack.test.js",
-        "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
-        "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
-        "test/phase-packs-16-20.test.js",
-        "test/production-compatibility-packs-11-15.test.js",
-        "test/production-compatibility-packs.test.js",
-        "test/proxmox-pack.test.js",
-        "test/security-phase-10-packs-modules.test.js",
-        "test/security-phase-11-pack-specific.test.js",
-        "test/security-research-pack.test.js"
+        "test/jellyfin-pack.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
@@ -3318,6 +3225,15 @@
       ],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 2,
+        "missing_result": [],
+        "missing_tags": [],
+        "missing_step_error_policy": [
+          "linux-systems-administration/host-health",
+          "linux-systems-administration/service-status"
+        ]
+      },
       "module_details": [
         {
           "name": "linux-systems-tools",
@@ -3433,37 +3349,21 @@
           "security_sensitive": true
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/linux-systems-administration/modules/linux-systems-tools/entry.js"
+        ],
+        "behavior": "explicit_unavailable_or_degraded_states"
+      },
       "current_tests": [
-        "test/browser-automation-pack.test.js",
-        "test/campaign-packs-6-10.test.js",
-        "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
-        "test/compute-worker-package.test.js",
-        "test/container-operations-pack.test.js",
-        "test/developer-pack.test.js",
-        "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
-        "test/network-firewall-pack.test.js",
-        "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
-        "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
-        "test/phase-packs-16-20.test.js",
-        "test/production-compatibility-packs-11-15.test.js",
-        "test/production-compatibility-packs.test.js",
-        "test/proxmox-pack.test.js",
-        "test/security-phase-10-packs-modules.test.js",
-        "test/security-phase-11-pack-specific.test.js",
-        "test/security-research-pack.test.js"
+        "test/production-compatibility-packs.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
         "no stored canonical-dispatch verification evidence",
-        "no stored cross-pack verification evidence"
+        "no stored cross-pack verification evidence",
+        "workflow contract fields require review"
       ],
       "overlaps": [],
       "evidence_status": "not_evaluated"
@@ -3564,6 +3464,14 @@
       ],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 1,
+        "missing_result": [],
+        "missing_tags": [
+          "local-ai-model-operations/model-readiness"
+        ],
+        "missing_step_error_policy": []
+      },
       "module_details": [
         {
           "name": "local-ai-model-tools",
@@ -3677,37 +3585,21 @@
           "security_sensitive": false
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/local-ai-model-operations/modules/local-ai-model-tools/entry.js"
+        ],
+        "behavior": "not_observed_in_module_source"
+      },
       "current_tests": [
-        "test/browser-automation-pack.test.js",
-        "test/campaign-packs-6-10.test.js",
-        "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
-        "test/compute-worker-package.test.js",
-        "test/container-operations-pack.test.js",
-        "test/developer-pack.test.js",
-        "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
-        "test/network-firewall-pack.test.js",
-        "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
-        "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
-        "test/phase-packs-16-20.test.js",
-        "test/production-compatibility-packs-11-15.test.js",
-        "test/production-compatibility-packs.test.js",
-        "test/proxmox-pack.test.js",
-        "test/security-phase-10-packs-modules.test.js",
-        "test/security-phase-11-pack-specific.test.js",
-        "test/security-research-pack.test.js"
+        "test/production-compatibility-packs-11-15.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
         "no stored canonical-dispatch verification evidence",
-        "no stored cross-pack verification evidence"
+        "no stored cross-pack verification evidence",
+        "workflow contract fields require review"
       ],
       "overlaps": [],
       "evidence_status": "not_evaluated"
@@ -3798,6 +3690,14 @@
       ],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 1,
+        "missing_result": [],
+        "missing_tags": [
+          "mcp-development-compatibility/mcp-compatibility"
+        ],
+        "missing_step_error_policy": []
+      },
       "module_details": [
         {
           "name": "mcp-development-tools",
@@ -3879,37 +3779,21 @@
           "security_sensitive": false
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/mcp-development-compatibility/modules/mcp-development-tools/entry.js"
+        ],
+        "behavior": "not_observed_in_module_source"
+      },
       "current_tests": [
-        "test/browser-automation-pack.test.js",
-        "test/campaign-packs-6-10.test.js",
-        "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
-        "test/compute-worker-package.test.js",
-        "test/container-operations-pack.test.js",
-        "test/developer-pack.test.js",
-        "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
-        "test/network-firewall-pack.test.js",
-        "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
-        "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
-        "test/phase-packs-16-20.test.js",
-        "test/production-compatibility-packs-11-15.test.js",
-        "test/production-compatibility-packs.test.js",
-        "test/proxmox-pack.test.js",
-        "test/security-phase-10-packs-modules.test.js",
-        "test/security-phase-11-pack-specific.test.js",
-        "test/security-research-pack.test.js"
+        "test/production-compatibility-packs-11-15.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
         "no stored canonical-dispatch verification evidence",
-        "no stored cross-pack verification evidence"
+        "no stored cross-pack verification evidence",
+        "workflow contract fields require review"
       ],
       "overlaps": [],
       "evidence_status": "not_evaluated"
@@ -4099,6 +3983,12 @@
       "permissions": [],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 5,
+        "missing_result": [],
+        "missing_tags": [],
+        "missing_step_error_policy": []
+      },
       "module_details": [
         {
           "name": "network-firewall-tools",
@@ -4199,32 +4089,54 @@
           "security_sensitive": true
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/network-firewall/modules/network-firewall-tools/entry.js"
+        ],
+        "behavior": "explicit_unavailable_or_degraded_states"
+      },
       "current_tests": [
+        "test/agent-bridge-followup.test.js",
+        "test/agent-bridge-prompt.test.js",
+        "test/agent-cancel.test.js",
+        "test/agent-capability-broker.test.js",
+        "test/blackbox-lifecycle.test.js",
+        "test/brain-integration.test.js",
+        "test/brain.test.js",
         "test/browser-automation-pack.test.js",
+        "test/browser-egress.test.js",
+        "test/browser-subsystem.test.js",
         "test/campaign-packs-6-10.test.js",
-        "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
+        "test/compute-artifact-custody.test.js",
+        "test/compute-placement.test.js",
+        "test/compute-provider-bootstrap.test.js",
         "test/compute-worker-package.test.js",
+        "test/connector-authority.test.js",
         "test/container-operations-pack.test.js",
+        "test/dashboard-api.test.js",
         "test/developer-pack.test.js",
+        "test/download-custody.test.js",
+        "test/health.test.js",
         "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
+        "test/kernel-migration-parity.test.js",
+        "test/modules-builtin.test.js",
         "test/network-firewall-pack.test.js",
-        "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
+        "test/network-scope-fetch.test.js",
+        "test/network-scope.test.js",
+        "test/openvino-executor.test.js",
         "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
-        "test/phase-packs-16-20.test.js",
+        "test/platform-event-consumption.test.js",
         "test/production-compatibility-packs-11-15.test.js",
         "test/production-compatibility-packs.test.js",
         "test/proxmox-pack.test.js",
-        "test/security-phase-10-packs-modules.test.js",
+        "test/proxmox-unit.test.js",
+        "test/security-phase-08-http-network.test.js",
         "test/security-phase-11-pack-specific.test.js",
-        "test/security-research-pack.test.js"
+        "test/security-research-lab-policy.test.js",
+        "test/security-research-source.test.js",
+        "test/semantic-repository.test.js",
+        "test/task-runner-heartbeat.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
@@ -4331,6 +4243,15 @@
       ],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 2,
+        "missing_result": [],
+        "missing_tags": [],
+        "missing_step_error_policy": [
+          "network-services/network-service-audit",
+          "network-services/connectivity-review"
+        ]
+      },
       "module_details": [
         {
           "name": "network-services-tools",
@@ -4462,37 +4383,21 @@
           "security_sensitive": true
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/network-services/modules/network-services-tools/entry.js"
+        ],
+        "behavior": "explicit_unavailable_or_degraded_states"
+      },
       "current_tests": [
-        "test/browser-automation-pack.test.js",
-        "test/campaign-packs-6-10.test.js",
-        "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
-        "test/compute-worker-package.test.js",
-        "test/container-operations-pack.test.js",
-        "test/developer-pack.test.js",
-        "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
-        "test/network-firewall-pack.test.js",
-        "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
-        "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
-        "test/phase-packs-16-20.test.js",
-        "test/production-compatibility-packs-11-15.test.js",
-        "test/production-compatibility-packs.test.js",
-        "test/proxmox-pack.test.js",
-        "test/security-phase-10-packs-modules.test.js",
-        "test/security-phase-11-pack-specific.test.js",
-        "test/security-research-pack.test.js"
+        "test/production-compatibility-packs.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
         "no stored canonical-dispatch verification evidence",
-        "no stored cross-pack verification evidence"
+        "no stored cross-pack verification evidence",
+        "workflow contract fields require review"
       ],
       "overlaps": [],
       "evidence_status": "not_evaluated"
@@ -4603,6 +4508,15 @@
       ],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 2,
+        "missing_result": [],
+        "missing_tags": [],
+        "missing_step_error_policy": [
+          "observability-incident-response/incident-snapshot",
+          "observability-incident-response/health-review"
+        ]
+      },
       "module_details": [
         {
           "name": "observability-incident-tools",
@@ -4734,37 +4648,21 @@
           "security_sensitive": true
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/observability-incident-response/modules/observability-incident-tools/entry.js"
+        ],
+        "behavior": "explicit_unavailable_or_degraded_states"
+      },
       "current_tests": [
-        "test/browser-automation-pack.test.js",
-        "test/campaign-packs-6-10.test.js",
-        "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
-        "test/compute-worker-package.test.js",
-        "test/container-operations-pack.test.js",
-        "test/developer-pack.test.js",
-        "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
-        "test/network-firewall-pack.test.js",
-        "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
-        "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
-        "test/phase-packs-16-20.test.js",
-        "test/production-compatibility-packs-11-15.test.js",
-        "test/production-compatibility-packs.test.js",
-        "test/proxmox-pack.test.js",
-        "test/security-phase-10-packs-modules.test.js",
-        "test/security-phase-11-pack-specific.test.js",
-        "test/security-research-pack.test.js"
+        "test/production-compatibility-packs.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
         "no stored canonical-dispatch verification evidence",
-        "no stored cross-pack verification evidence"
+        "no stored cross-pack verification evidence",
+        "workflow contract fields require review"
       ],
       "overlaps": [],
       "evidence_status": "not_evaluated"
@@ -4870,6 +4768,12 @@
       ],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 1,
+        "missing_result": [],
+        "missing_tags": [],
+        "missing_step_error_policy": []
+      },
       "module_details": [
         {
           "name": "operational-readiness-tools",
@@ -4967,32 +4871,15 @@
           "security_sensitive": false
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/operational-readiness/modules/operational-readiness-tools/entry.js"
+        ],
+        "behavior": "explicit_unavailable_or_degraded_states"
+      },
       "current_tests": [
-        "test/browser-automation-pack.test.js",
-        "test/campaign-packs-6-10.test.js",
-        "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
-        "test/compute-worker-package.test.js",
-        "test/container-operations-pack.test.js",
-        "test/developer-pack.test.js",
-        "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
-        "test/network-firewall-pack.test.js",
-        "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
-        "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
-        "test/phase-packs-16-20.test.js",
-        "test/production-compatibility-packs-11-15.test.js",
-        "test/production-compatibility-packs.test.js",
-        "test/proxmox-pack.test.js",
-        "test/security-phase-10-packs-modules.test.js",
-        "test/security-phase-11-pack-specific.test.js",
-        "test/security-research-pack.test.js"
+        "test/phase-packs-16-20.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
@@ -5379,6 +5266,12 @@
       ],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 15,
+        "missing_result": [],
+        "missing_tags": [],
+        "missing_step_error_policy": []
+      },
       "module_details": [
         {
           "name": "proxmox-tools",
@@ -5513,33 +5406,24 @@
           "security_sensitive": true
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/proxmox/modules/proxmox-tools/entry.js"
+        ],
+        "behavior": "not_observed_in_module_source"
+      },
       "current_tests": [
-        "test/browser-automation-pack.test.js",
-        "test/campaign-packs-6-10.test.js",
-        "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
-        "test/compute-worker-package.test.js",
-        "test/container-operations-pack.test.js",
-        "test/developer-pack.test.js",
+        "test/agent-bridge-prompt.test.js",
+        "test/agent-protocol.test.js",
+        "test/brain.test.js",
         "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
-        "test/network-firewall-pack.test.js",
-        "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
         "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
-        "test/phase-packs-16-20.test.js",
-        "test/production-compatibility-packs-11-15.test.js",
-        "test/production-compatibility-packs.test.js",
         "test/proxmox-pack.test.js",
         "test/proxmox-unit.test.js",
-        "test/security-phase-10-packs-modules.test.js",
-        "test/security-phase-11-pack-specific.test.js",
-        "test/security-research-pack.test.js"
+        "test/security-research-pack.test.js",
+        "test/security-research-unit.test.js",
+        "test/tools.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
@@ -5646,6 +5530,12 @@
       ],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 1,
+        "missing_result": [],
+        "missing_tags": [],
+        "missing_step_error_policy": []
+      },
       "module_details": [
         {
           "name": "reproducibility-tools",
@@ -5727,32 +5617,15 @@
           "security_sensitive": false
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/reproducibility/modules/reproducibility-tools/entry.js"
+        ],
+        "behavior": "not_observed_in_module_source"
+      },
       "current_tests": [
-        "test/browser-automation-pack.test.js",
-        "test/campaign-packs-6-10.test.js",
-        "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
-        "test/compute-worker-package.test.js",
-        "test/container-operations-pack.test.js",
-        "test/developer-pack.test.js",
-        "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
-        "test/network-firewall-pack.test.js",
-        "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
-        "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
-        "test/phase-packs-16-20.test.js",
-        "test/production-compatibility-packs-11-15.test.js",
-        "test/production-compatibility-packs.test.js",
-        "test/proxmox-pack.test.js",
-        "test/security-phase-10-packs-modules.test.js",
-        "test/security-phase-11-pack-specific.test.js",
-        "test/security-research-pack.test.js"
+        "test/phase-packs-16-20.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
@@ -5863,6 +5736,14 @@
       ],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 1,
+        "missing_result": [],
+        "missing_tags": [
+          "security-lab-reproduction/lab-preflight"
+        ],
+        "missing_step_error_policy": []
+      },
       "module_details": [
         {
           "name": "security-lab-tools",
@@ -5944,37 +5825,21 @@
           "security_sensitive": true
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/security-lab-reproduction/modules/security-lab-tools/entry.js"
+        ],
+        "behavior": "explicit_unavailable_or_degraded_states"
+      },
       "current_tests": [
-        "test/browser-automation-pack.test.js",
-        "test/campaign-packs-6-10.test.js",
-        "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
-        "test/compute-worker-package.test.js",
-        "test/container-operations-pack.test.js",
-        "test/developer-pack.test.js",
-        "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
-        "test/network-firewall-pack.test.js",
-        "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
-        "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
-        "test/phase-packs-16-20.test.js",
-        "test/production-compatibility-packs-11-15.test.js",
-        "test/production-compatibility-packs.test.js",
-        "test/proxmox-pack.test.js",
-        "test/security-phase-10-packs-modules.test.js",
-        "test/security-phase-11-pack-specific.test.js",
-        "test/security-research-pack.test.js"
+        "test/production-compatibility-packs-11-15.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
         "no stored canonical-dispatch verification evidence",
-        "no stored cross-pack verification evidence"
+        "no stored cross-pack verification evidence",
+        "workflow contract fields require review"
       ],
       "overlaps": [],
       "evidence_status": "not_evaluated"
@@ -6299,6 +6164,14 @@
       ],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 2,
+        "missing_result": [],
+        "missing_tags": [],
+        "missing_step_error_policy": [
+          "security-research/source-regression"
+        ]
+      },
       "module_details": [
         {
           "name": "security-research-tools",
@@ -6614,43 +6487,37 @@
           "security_sensitive": true
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/security-research/modules/security-research-tools/entry.js"
+        ],
+        "behavior": "not_observed_in_module_source"
+      },
       "current_tests": [
-        "test/browser-automation-pack.test.js",
-        "test/campaign-packs-6-10.test.js",
-        "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
-        "test/compute-worker-package.test.js",
-        "test/container-operations-pack.test.js",
-        "test/developer-pack.test.js",
-        "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
-        "test/network-firewall-pack.test.js",
-        "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
+        "test/agent-protocol.test.js",
+        "test/brain.test.js",
+        "test/dashboard-research-source-routes.test.js",
+        "test/execution-node-protocol.test.js",
+        "test/execution-node.test.js",
+        "test/kernel-migration-parity.test.js",
         "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
         "test/phase-packs-16-20.test.js",
-        "test/production-compatibility-packs-11-15.test.js",
-        "test/production-compatibility-packs.test.js",
-        "test/proxmox-pack.test.js",
-        "test/security-phase-10-packs-modules.test.js",
-        "test/security-phase-11-pack-specific.test.js",
+        "test/platform-kernel.test.js",
         "test/security-phase-13-security-research.test.js",
         "test/security-research-adapter.test.js",
         "test/security-research-evidence-vault.test.js",
         "test/security-research-lab-policy.test.js",
         "test/security-research-pack.test.js",
         "test/security-research-source.test.js",
-        "test/security-research-unit.test.js"
+        "test/security-research-unit.test.js",
+        "test/static-code-quality.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
         "no stored canonical-dispatch verification evidence",
-        "no stored cross-pack verification evidence"
+        "no stored cross-pack verification evidence",
+        "workflow contract fields require review"
       ],
       "overlaps": [],
       "evidence_status": "not_evaluated"
@@ -6742,6 +6609,12 @@
       ],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 1,
+        "missing_result": [],
+        "missing_tags": [],
+        "missing_step_error_policy": []
+      },
       "module_details": [
         {
           "name": "skeptical-verifier-tools",
@@ -6839,32 +6712,15 @@
           "security_sensitive": false
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/skeptical-verifier/modules/skeptical-verifier-tools/entry.js"
+        ],
+        "behavior": "not_observed_in_module_source"
+      },
       "current_tests": [
-        "test/browser-automation-pack.test.js",
-        "test/campaign-packs-6-10.test.js",
-        "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
-        "test/compute-worker-package.test.js",
-        "test/container-operations-pack.test.js",
-        "test/developer-pack.test.js",
-        "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
-        "test/network-firewall-pack.test.js",
-        "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
-        "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
-        "test/phase-packs-16-20.test.js",
-        "test/production-compatibility-packs-11-15.test.js",
-        "test/production-compatibility-packs.test.js",
-        "test/proxmox-pack.test.js",
-        "test/security-phase-10-packs-modules.test.js",
-        "test/security-phase-11-pack-specific.test.js",
-        "test/security-research-pack.test.js"
+        "test/phase-packs-16-20.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
@@ -6964,6 +6820,14 @@
       ],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 1,
+        "missing_result": [],
+        "missing_tags": [
+          "software-supply-chain/supply-chain-audit"
+        ],
+        "missing_step_error_policy": []
+      },
       "module_details": [
         {
           "name": "software-supply-chain-tools",
@@ -7061,37 +6925,21 @@
           "security_sensitive": false
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/software-supply-chain/modules/software-supply-chain-tools/entry.js"
+        ],
+        "behavior": "not_observed_in_module_source"
+      },
       "current_tests": [
-        "test/browser-automation-pack.test.js",
-        "test/campaign-packs-6-10.test.js",
-        "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
-        "test/compute-worker-package.test.js",
-        "test/container-operations-pack.test.js",
-        "test/developer-pack.test.js",
-        "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
-        "test/network-firewall-pack.test.js",
-        "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
-        "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
-        "test/phase-packs-16-20.test.js",
-        "test/production-compatibility-packs-11-15.test.js",
-        "test/production-compatibility-packs.test.js",
-        "test/proxmox-pack.test.js",
-        "test/security-phase-10-packs-modules.test.js",
-        "test/security-phase-11-pack-specific.test.js",
-        "test/security-research-pack.test.js"
+        "test/production-compatibility-packs-11-15.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
         "no stored canonical-dispatch verification evidence",
-        "no stored cross-pack verification evidence"
+        "no stored cross-pack verification evidence",
+        "workflow contract fields require review"
       ],
       "overlaps": [],
       "evidence_status": "not_evaluated"
@@ -7188,6 +7036,15 @@
       ],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 2,
+        "missing_result": [],
+        "missing_tags": [],
+        "missing_step_error_policy": [
+          "storage-filesystems/storage-audit",
+          "storage-filesystems/volume-audit"
+        ]
+      },
       "module_details": [
         {
           "name": "storage-filesystem-tools",
@@ -7303,37 +7160,22 @@
           "security_sensitive": false
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/storage-filesystems/modules/storage-filesystem-tools/entry.js"
+        ],
+        "behavior": "explicit_unavailable_or_degraded_states"
+      },
       "current_tests": [
-        "test/browser-automation-pack.test.js",
-        "test/campaign-packs-6-10.test.js",
-        "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
-        "test/compute-worker-package.test.js",
-        "test/container-operations-pack.test.js",
-        "test/developer-pack.test.js",
-        "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
-        "test/network-firewall-pack.test.js",
-        "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
-        "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
-        "test/phase-packs-16-20.test.js",
-        "test/production-compatibility-packs-11-15.test.js",
         "test/production-compatibility-packs.test.js",
-        "test/proxmox-pack.test.js",
-        "test/security-phase-10-packs-modules.test.js",
-        "test/security-phase-11-pack-specific.test.js",
-        "test/security-research-pack.test.js"
+        "test/proxmox-pack.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",
         "no stored canonical-dispatch verification evidence",
-        "no stored cross-pack verification evidence"
+        "no stored cross-pack verification evidence",
+        "workflow contract fields require review"
       ],
       "overlaps": [],
       "evidence_status": "not_evaluated"
@@ -7428,6 +7270,12 @@
       "permissions": [],
       "network_scopes": [],
       "provider_requirements": null,
+      "workflow_contract": {
+        "total": 2,
+        "missing_result": [],
+        "missing_tags": [],
+        "missing_step_error_policy": []
+      },
       "module_details": [
         {
           "name": "testing-quality-tools",
@@ -7477,32 +7325,15 @@
           "security_sensitive": false
         }
       ],
+      "health_readiness": {
+        "has_health_or_readiness_operation": true,
+        "source_files": [
+          "packs/testing-quality-engineering/modules/testing-quality-tools/entry.js"
+        ],
+        "behavior": "not_observed_in_module_source"
+      },
       "current_tests": [
-        "test/browser-automation-pack.test.js",
-        "test/campaign-packs-6-10.test.js",
-        "test/capability-packs.test.js",
-        "test/certification-isolation.test.js",
-        "test/certification-lifecycle.test.js",
-        "test/certification.test.js",
-        "test/compute-worker-package.test.js",
-        "test/container-operations-pack.test.js",
-        "test/developer-pack.test.js",
-        "test/jellyfin-pack.test.js",
-        "test/live-agent-certification.test.js",
-        "test/modules-packaging.test.js",
-        "test/network-firewall-pack.test.js",
-        "test/pack-contract.test.js",
-        "test/pack-inventory.test.js",
-        "test/pack-manifest-consistency.test.js",
-        "test/pack-maturity.test.js",
-        "test/pack-services.test.js",
-        "test/phase-packs-16-20.test.js",
-        "test/production-compatibility-packs-11-15.test.js",
-        "test/production-compatibility-packs.test.js",
-        "test/proxmox-pack.test.js",
-        "test/security-phase-10-packs-modules.test.js",
-        "test/security-phase-11-pack-specific.test.js",
-        "test/security-research-pack.test.js"
+        "test/campaign-packs-6-10.test.js"
       ],
       "maturity_gaps": [
         "no stored fixture verification evidence",

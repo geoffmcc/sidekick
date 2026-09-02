@@ -17,6 +17,8 @@ function evidenceFingerprint(record) {
     package_hash: record.package_hash || null,
     version: record.version,
     config: record.config || {},
+    lifecycle_epoch: record.metadata?.maturity_lifecycle_epoch || 0,
+    health: { ok: record.health?.ok === true, status: record.health?.status || null },
   })).digest("hex");
 }
 

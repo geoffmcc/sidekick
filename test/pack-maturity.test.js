@@ -44,6 +44,10 @@ const stale = lifecycle.recordVerification(installed.pack.name, { source: "old-f
 assert.strictEqual(stale.maturity.level, "certified", "a stale historical entry must not erase the current fresh entry");
 assert.ok(stale.maturity.evidence.some(entry => entry.source === "old-fixture" && entry.current === false));
 
+lifecycle.disable(installed.pack.name);
+lifecycle.enable(installed.pack.name);
+assert.strictEqual(lifecycle.maturity(installed.pack.name).evidence_freshness, "stale", "lifecycle transitions invalidate prior verification");
+
 lifecycle.configure(installed.pack.name, { max_assertions: 10 });
 assert.strictEqual(lifecycle.maturity(installed.pack.name).level, "operational", "configuration changes invalidate verification without disabling the pack");
 assert.strictEqual(lifecycle.maturity(installed.pack.name).evidence_freshness, "stale");

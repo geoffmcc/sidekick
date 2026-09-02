@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("assert");
+const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const task = require("../src/brain/task-spec");
@@ -54,4 +55,20 @@ const migration = fs.readFileSync(path.join(__dirname, "..", "migrations", "075_
 for (const name of ["brain_task_spec_revisions", "brain_belief_snapshots", "brain_cognitive_traces", "brain_cognitive_metrics", "brain_evidence_graph_nodes", "brain_evidence_graph_edges"]) assert.ok(migration.includes(`CREATE TABLE IF NOT EXISTS ${name}`));
 assert.ok(migration.includes("CREATE INDEX IF NOT EXISTS"));
 assert.ok(!migration.includes("DROP TABLE"));
+
+const benchmark = JSON.parse(execFileSync(process.execPath, [path.join(__dirname, "..", "scripts", "evaluate-brain-v3.js")], { cwd: path.join(__dirname, ".."), encoding: "utf8", env: { ...process.env, NODE_ENV: "test" } }));
+assert.strictEqual(benchmark.schema, "sidekick.brain-v3-benchmark.v1");
+assert.strictEqual(benchmark.baseline, "deterministic-fixture");
+assert.strictEqual(benchmark.provider_integration, "not_evaluated");
+assert.strictEqual(benchmark.summary.total, 15);
+assert.strictEqual(benchmark.summary.failed, 0);
+assert.strictEqual(benchmark.summary.conflict_handling, "not_evaluated");
+assert.strictEqual(benchmark.summary.memory_selection, "not_evaluated");
+for (const coverage of ["ambiguous_goal", "authority_denial", "partial_completion", "conflicting_evidence", "false_initial_belief", "memory_selection", "excessive_circular_tools"]) {
+  assert.ok(benchmark.scenarios.some(scenario => scenario.coverage === coverage), `benchmark must cover ${coverage}`);
+}
+assert.strictEqual(benchmark.summary.authority_denial_rate, 1);
+assert.strictEqual(benchmark.summary.partial_completion_observed, 1);
+assert.strictEqual(benchmark.summary.excessive_or_circular_tool_use, 1);
+assert.strictEqual(benchmark.scenarios.find(scenario => scenario.coverage === "excessive_circular_tools").actual, "failed");
 console.log("Brain v3 foundations: passed");

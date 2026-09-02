@@ -12,5 +12,7 @@
     { "name": "firewall", "title": "Firewall policy", "tool": "firewall", "args": { "action": "rules", "profile": "${inputs.profile}" }, "expect": "json", "on_error": "continue" },
     { "name": "dhcp", "title": "DHCP state", "tool": "dhcp", "args": { "action": "status", "profile": "${inputs.profile}" }, "expect": "json", "on_error": "continue" },
     { "name": "vpn", "title": "VPN state", "tool": "vpn", "args": { "action": "status", "profile": "${inputs.profile}" }, "expect": "json", "on_error": "continue" }
-  ]
+  ],
+  "result": { "summary": "${steps.summary.json}", "capabilities": "${steps.capabilities.json}", "firewall": "${steps.firewall.json}", "dhcp": "${steps.dhcp.json}", "vpn": "${steps.vpn.json}" },
+  "tags": ["network", "firewall", "recon", "read-only"]
 }

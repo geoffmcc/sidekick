@@ -215,15 +215,19 @@ instructions and cannot add a step after validation.
 
 `npm run test:brain-v3` includes the versioned
 `sidekick.brain-v3-benchmark.v1` evaluator. It uses bounded fixture planner,
-tool, and synthesizer seams and therefore reports `provider_integration:
-not_evaluated`; it does not claim success for an unavailable local model or a
-live Agent process. The matrix covers direct answers, fresh evidence, missing
-evidence honesty, malformed plans, unavailable tools, critic replanning,
-cancellation, and deadline handling. Results include terminal correctness,
-verified completion, unsupported completion, tool selection, prerequisite
-detection, recovery, replans, intervention, and latency. Contradictory-evidence
-and provider-token measurements remain explicitly `not_evaluated` until a
-deterministic fixture for those paths is added.
+tool, memory, and synthesizer seams and therefore reports
+`provider_integration: not_evaluated`; it does not claim success for an
+unavailable local model or a live Agent process. The 15-scenario matrix covers
+direct answers, fresh evidence, missing evidence honesty, malformed plans,
+unavailable tools, critic replanning, cancellation, deadline handling,
+ambiguous goals, authority denial, partial completion, conflicting evidence,
+false initial beliefs, bounded memory retrieval, and excessive/circular tool
+use. Results include terminal correctness, verified completion, unsupported
+completion, tool selection, prerequisite detection, recovery, authority and
+partial-completion observations, replans, intervention, and latency. Memory
+selection and semantic conflict detection remain explicitly `not_evaluated`:
+the deterministic harness records bounded memory flow and conflicting fixture
+observations but does not pretend to evaluate model judgment or live results.
 
 ## Testing and manual checks
 

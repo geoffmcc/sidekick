@@ -169,6 +169,15 @@ async function executePlanSteps({
 }) {
   const steps = plan.steps || [];
   const boundedConcurrency = Math.max(1, Math.min(16, Number(concurrencyLimit) || 1));
+  const toolCallCounts = Object.create(null);
+  const reserveToolCall = step => {
+    let key;
+    try { key = `${step.tool}:${JSON.stringify(step.arguments || {})}`; } catch { key = `${step.tool}:unserializable`; }
+    const count = Number(toolCallCounts[key] || 0);
+    if (count >= 2) return false;
+    toolCallCounts[key] = count + 1;
+    return true;
+  };
   const authoritativeReadOnly = (step) => {
     if (!step || step.type !== "tool" || (step.depends_on || []).length) return false;
     const preflight = toolContracts && toolContracts.length
@@ -182,6 +191,7 @@ async function executePlanSteps({
     let packageHandle = null;
     const args = step.arguments || {};
     try {
+      if (!reserveToolCall(step)) return { isError: true, code: "repeated_tool_call", content: [{ type: "text", text: `Repeated equivalent tool call refused: ${step.tool}` }] };
       if (workPackageHooks && typeof workPackageHooks.start === "function") packageHandle = await workPackageHooks.start(step);
       const preflight = preflightCapabilityCall(step.tool, args, toolContracts);
       if (!preflight.ok) { if (packageHandle && workPackageHooks.finish) await workPackageHooks.finish(packageHandle, "failed", { code: "validation_failed" }); return { isError: true, code: "validation_failed", content: [{ type: "text", text: `Invalid arguments for ${step.tool}: ${preflight.error}` }] }; }
@@ -253,8 +263,10 @@ async function executePlanSteps({
       const preflight = toolContracts && toolContracts.length
         ? preflightCapabilityCall(step.tool, proposedArgs, toolContracts)
         : { ok: true, descriptor: null };
-      toolRes = preflight.ok
+      toolRes = preflight.ok && reserveToolCall(step)
         ? await callTool(step.tool, proposedArgs)
+        : preflight.ok
+          ? { isError: true, code: "repeated_tool_call", content: [{ type: "text", text: `Repeated equivalent tool call refused: ${step.tool}` }] }
         : { isError: true, code: "validation_failed", content: [{ type: "text", text: `Invalid arguments for ${step.tool}: ${preflight.error}` }] };
     } catch (e) {
       acc.steps.push({ type: "tool", id: step.id, tool: step.tool, error: redact(String(e && e.message || e)) });
@@ -506,7 +518,7 @@ async function runBrainTask(opts) {
     if (requiresEvidence && (acc.successfulToolEvidence || 0) === 0) {
       return terminal("failed", { error: "Sidekick could not inspect the requested state: the task required current evidence, but no inspection tool produced any. No answer was fabricated." });
     }
-    return terminal("failed", { error: `step ${outcome.stepId} (${outcome.tool}) failed`, extra: { failed_step: outcome.stepId } });
+    return terminal("failed", { error: `step ${outcome.stepId} (${outcome.tool}) failed`, extra: { failed_step: outcome.stepId, failure_code: outcome.toolRes?.code || outcome.failure?.code || outcome.failure?.kind || null } });
   }
 
   if (outcome.status === "approval_required") {
@@ -639,7 +651,7 @@ async function runBrainTask(opts) {
   return terminal("completed", { result: answer, extra: { evidence_count: evidence.length } });
 }
 
-function buildResult(state, { steps, result = "", error = "", evidence_count = 0, plan_errors = null, failed_step = null, awaitingApproval = null } = {}) {
+function buildResult(state, { steps, result = "", error = "", evidence_count = 0, plan_errors = null, failed_step = null, failure_code = null, awaitingApproval = null } = {}) {
   return {
     state,
     status: state, // alias for callers expecting `status`
@@ -649,6 +661,7 @@ function buildResult(state, { steps, result = "", error = "", evidence_count = 0
     evidenceCount: evidence_count,
     planErrors: plan_errors,
     failedStep: failed_step,
+    failure_code,
     awaitingApproval,
   };
 }

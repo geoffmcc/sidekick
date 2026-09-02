@@ -16,6 +16,9 @@ for (const pack of inventory.packs) {
   assert.ok(Array.isArray(pack.workflows) && pack.workflows.every(workflow => workflow.present));
   assert.ok(Array.isArray(pack.knowledge) && pack.knowledge.every(asset => asset.present));
   assert.ok(Array.isArray(pack.maturity_gaps));
+  assert.ok(pack.health_readiness && typeof pack.health_readiness.behavior === "string");
+  assert.ok(Array.isArray(pack.overlaps));
+  assert.ok(pack.workflow_contract && Number.isInteger(pack.workflow_contract.total));
   assert.strictEqual(pack.evidence_status, "not_evaluated");
 }
 assert.strictEqual(inventory.packs.reduce((count, pack) => count + pack.knowledge.length, 0), 95);

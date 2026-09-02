@@ -316,6 +316,11 @@ configuration fingerprint. Reconfiguration, upgrade, package drift, or a
 30-day evidence age therefore removes the integrated/certified claim until a
 new verification is recorded. No manifest field can declare certification.
 
+Pack health must report an unconfigured provider as unavailable or degraded,
+not healthy. Nested dispatcher failures retain their stable error code and are
+not converted into successful-looking results. Read-only workflows declare
+`mode: "read_only"`; workflows that can change state remain approval-gated.
+
 The reproducible repository audit matrix is generated with
 `npm run pack:inventory` and committed at
 [`compatibility-pack-inventory.json`](compatibility-pack-inventory.json). It
