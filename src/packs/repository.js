@@ -74,9 +74,33 @@ function normalizeRow(row) {
   };
 }
 
+function normalizeVerification(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    evidence_refs: parseJson(row.evidence_json, {}).refs || [],
+    checks: parseJson(row.evidence_json, {}).checks || {},
+    provider: parseJson(row.provider_json, {}),
+    source: row.actor_ref,
+    legacy: Boolean(row.legacy),
+  };
+}
+
 function getPack(name) {
   ensureStorage();
-  return normalizeRow(getDb().prepare("SELECT * FROM platform_capability_packs WHERE name = ?").get(String(name)));
+  const pack = normalizeRow(getDb().prepare("SELECT * FROM platform_capability_packs WHERE name = ?").get(String(name)));
+  if (pack) pack.verified_evidence = listVerifiedEvidence(pack.name);
+  return pack;
+}
+
+function listVerifiedEvidence(name) {
+  ensureStorage();
+  try {
+    return getDb().prepare("SELECT * FROM platform_pack_verification_evidence WHERE pack_name = ? AND legacy = 0 ORDER BY observed_at DESC LIMIT 32").all(String(name)).map(normalizeVerification);
+  } catch (error) {
+    if (/no such table/i.test(String(error.message))) return [];
+    throw error;
+  }
 }
 
 function listPacks({ state } = {}) {
@@ -187,30 +211,83 @@ function recordPackVerification(name, verification) {
   ensureStorage();
   const record = getPack(name);
   if (!record) throw new Error(`Capability pack "${name}" is not installed`);
-  if (!verification || typeof verification !== "object" || !verification.checks || typeof verification.checks !== "object") {
-    const error = new Error("pack verification requires a checks object");
+  if (!verification || typeof verification !== "object" || !Array.isArray(verification.evidence_refs) || verification.evidence_refs.length === 0) {
+    const error = new Error("pack verification requires server-verifiable evidence_refs; Boolean checks are not accepted");
     error.code = "invalid_pack_verification";
     throw error;
   }
-  if (typeof verification.source !== "string" || !verification.source.trim()) {
-    const error = new Error("pack verification requires an attributed source");
+  if (verification.evidence_refs.length > 32) {
+    const error = new Error("pack verification evidence_refs exceeds the bound");
+    error.code = "invalid_pack_verification";
+    throw error;
+  }
+  if (typeof verification.actor_ref !== "string" || !verification.actor_ref.trim()) {
+    const error = new Error("pack verification requires an attributed actor_ref");
     error.code = "verification_source_required";
     throw error;
   }
-  const checks = Object.fromEntries(Object.entries(verification.checks).map(([key, value]) => [String(key), value === true]));
-  const entry = {
-    id: verification.id || `pack-verification-${Date.now().toString(36)}`,
-    observed_at: verification.observed_at || nowIso(),
-    source: String(verification.source || "canonical_dispatch").slice(0, 120),
-    checks,
-  };
-  const metadata = { ...(record.metadata || {}), maturity_evidence: {
-    fingerprint: require("./maturity").evidenceFingerprint(record),
-    entries: [...(record.metadata?.maturity_evidence?.entries || []).slice(-9), entry],
-  }};
-  getDb().prepare("UPDATE platform_capability_packs SET metadata_json = ? WHERE pack_id = ?").run(JSON.stringify(metadata), record.pack_id);
-  recordPackEvent(name, "pack.verification_recorded", { verification_id: entry.id, source: entry.source });
+  const verified = verifyEvidenceReferences(record, verification.evidence_refs);
+  if (!verified.ok) {
+    const error = new Error(`pack verification evidence rejected: ${verified.reasons.join("; ")}`);
+    error.code = "verification_evidence_rejected";
+    throw error;
+  }
+  const crypto = require("crypto");
+  const observedAt = verification.observed_at || nowIso();
+  const expiresAt = verification.expires_at || new Date(Date.parse(observedAt) + 30 * 24 * 60 * 60 * 1000).toISOString();
+  const evidence = verified.refs;
+  const checks = verified.checks;
+  const resultDigest = verification.result_digest || crypto.createHash("sha256").update(JSON.stringify({ evidence, checks, observed_at: observedAt, expires_at: expiresAt })).digest("hex");
+  const id = verification.id || `pack-verification-${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`;
+  getDb().prepare(`INSERT INTO platform_pack_verification_evidence
+    (verification_id, pack_name, pack_version, package_hash, config_fingerprint, lifecycle_epoch,
+     health_fingerprint, recipe_version, evidence_json, result_digest, actor_ref, project_ref,
+     scope_revision, provider_json, status, observed_at, expires_at, legacy, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'verified', ?, ?, 0, ?)`)
+    .run(id, record.name, record.version, record.package_hash || null, verified.config_fingerprint,
+      Number(record.metadata?.maturity_lifecycle_epoch || 0), verified.health_fingerprint,
+      String(verification.recipe_version || "pack-proving-v1").slice(0, 64), JSON.stringify({ refs: evidence, checks }),
+      resultDigest, verification.actor_ref.slice(0, 256), verification.project_ref ? String(verification.project_ref).slice(0, 256) : null,
+      verification.scope_revision ? String(verification.scope_revision).slice(0, 256) : null,
+      JSON.stringify(verification.provider || {}), observedAt, expiresAt, nowIso());
+  recordPackEvent(name, "pack.verification_recorded", { verification_id: id, evidence_count: evidence.length, recipe_version: verification.recipe_version || "pack-proving-v1" });
   return getPack(name);
+}
+
+function verifyEvidenceReferences(record, references) {
+  const db = getDb();
+  const allowedTools = new Set();
+  for (const component of listComponents(record.name, { kind: "module" })) {
+    for (const tool of component.detail?.tools || []) allowedTools.add(String(tool).replace(/^sidekick_/, ""));
+  }
+  const refs = [];
+  const reasons = [];
+  for (const reference of references) {
+    if (!reference || typeof reference !== "object" || !["receipt", "workflow", "execution"].includes(reference.type) || typeof reference.id !== "string" || reference.id.length > 256 || !["canonical_dispatch", "agent_discovery", "workflow", "single_pack", "cross_pack", "skeptical_verification", "provider_integration"].includes(reference.role)) {
+      reasons.push("malformed evidence reference");
+      continue;
+    }
+    if (reference.type === "receipt") {
+      const row = db.prepare("SELECT receipt_id, task_id, capability, capability_version, dispatch_state, outcome_state, project_ref, principal_ref, updated_at FROM agent_operation_receipts WHERE receipt_id = ?").get(reference.id);
+      if (!row) { reasons.push(`receipt ${reference.id} does not exist`); continue; }
+      if (!["finalized", "verified"].includes(row.outcome_state)) { reasons.push(`receipt ${reference.id} is not terminal`); continue; }
+      if (!allowedTools.has(String(row.capability).replace(/^sidekick_/, ""))) { reasons.push(`receipt ${reference.id} used a tool outside pack ownership`); continue; }
+      refs.push({ type: "receipt", id: row.receipt_id, role: reference.role, task_id: row.task_id, capability: row.capability, capability_version: row.capability_version, project_ref: row.project_ref, principal_ref: row.principal_ref, observed_at: row.updated_at });
+    } else {
+      const row = db.prepare("SELECT name, state, updated_at FROM platform_workflows WHERE workflow_id = ?").get(reference.id);
+      if (!row) { reasons.push(`${reference.type} ${reference.id} does not exist`); continue; }
+      if (row.state !== "completed") { reasons.push(`${reference.type} ${reference.id} is not completed`); continue; }
+      refs.push({ type: reference.type, id: reference.id, role: reference.role, name: row.name, observed_at: row.updated_at });
+    }
+  }
+  const configFingerprint = crypto.createHash("sha256").update(JSON.stringify(record.config || {})).digest("hex");
+  const healthFingerprint = crypto.createHash("sha256").update(JSON.stringify({ ok: record.health?.ok === true, status: record.health?.status || null })).digest("hex");
+  const roles = new Set(refs.map(ref => ref.role));
+  const requiredRoles = ["canonical_dispatch", "agent_discovery", "workflow", "single_pack", "cross_pack", "skeptical_verification"];
+  const checks = Object.fromEntries(requiredRoles.map(role => [role, roles.has(role)]));
+  checks.provider_integration = roles.has("provider_integration");
+  for (const role of requiredRoles) if (!roles.has(role)) reasons.push(`required evidence role missing: ${role}`);
+  return { ok: reasons.length === 0 && refs.length > 0, reasons, refs, checks, config_fingerprint: configFingerprint, health_fingerprint: healthFingerprint };
 }
 
 function updatePackPackage(name, manifestInput, { packageHash, installPath, source, config, allowSameVersion = false, allowDowngrade = false } = {}) {
@@ -402,6 +479,7 @@ module.exports = {
   setPackConfig,
   recordPackHealth,
   recordPackVerification,
+  listVerifiedEvidence,
   updatePackPackage,
   restorePackPackage,
   deletePack,

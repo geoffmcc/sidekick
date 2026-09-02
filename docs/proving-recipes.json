@@ -1,0 +1,1757 @@
+{
+  "schema": "sidekick.pack-proving-recipes.v1",
+  "recipe_version": 1,
+  "source": "bundled pack manifests",
+  "pack_count": 27,
+  "recipes": [
+    {
+      "id": "pack-proving.api-engineering",
+      "version": 1,
+      "pack": "api-engineering",
+      "supported_versions": "=1.0.0",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "api_contract_check",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "api_engineering_health",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    },
+    {
+      "id": "pack-proving.assumptions-unknowns",
+      "version": 1,
+      "pack": "assumptions-unknowns",
+      "supported_versions": "=1.0.0",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "assumptions",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    },
+    {
+      "id": "pack-proving.backup-restore-dr",
+      "version": 1,
+      "pack": "backup-restore-dr",
+      "supported_versions": "=1.0.0",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "backup_database",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "restore_database",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "compare_backup_snapshots",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "backup_dr_readiness",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    },
+    {
+      "id": "pack-proving.browser-automation",
+      "version": 1,
+      "pack": "browser-automation",
+      "supported_versions": "=1.1.0",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "web_capture",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "web_extract",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "web_check",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    },
+    {
+      "id": "pack-proving.change-impact",
+      "version": 1,
+      "pack": "change-impact",
+      "supported_versions": "=1.0.0",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "change_impact",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    },
+    {
+      "id": "pack-proving.ci-cd-release-engineering",
+      "version": 1,
+      "pack": "ci-cd-release-engineering",
+      "supported_versions": "=1.0.0",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "release_readiness",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "ci_release_health",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    },
+    {
+      "id": "pack-proving.container-operations",
+      "version": 1,
+      "pack": "container-operations",
+      "supported_versions": "=1.0.1",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "containers",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "container_lifecycle",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "compose",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "compose_mutation",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    },
+    {
+      "id": "pack-proving.database-administration",
+      "version": 1,
+      "pack": "database-administration",
+      "supported_versions": "=1.0.0",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "database_admin",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "database_health",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    },
+    {
+      "id": "pack-proving.developer",
+      "version": 1,
+      "pack": "developer",
+      "supported_versions": "=1.0.1",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "dev_repo_profile",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "semantic_repo",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "dev_change_summary",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "dev_verify",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    },
+    {
+      "id": "pack-proving.documentation-knowledge",
+      "version": 1,
+      "pack": "documentation-knowledge",
+      "supported_versions": "=1.0.0",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "documentation_audit",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    },
+    {
+      "id": "pack-proving.infrastructure-as-code",
+      "version": 1,
+      "pack": "infrastructure-as-code",
+      "supported_versions": "=1.0.0",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "iac_plan",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "iac_health",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    },
+    {
+      "id": "pack-proving.jellyfin",
+      "version": 1,
+      "pack": "jellyfin",
+      "supported_versions": "=1.4.4",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "jellyfin",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "jellyfin_maintenance",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "jellyfin_playback",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    },
+    {
+      "id": "pack-proving.linux-systems-administration",
+      "version": 1,
+      "pack": "linux-systems-administration",
+      "supported_versions": "=1.0.0",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "linux_system_status",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "linux_system_health",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "linux_service_operation",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    },
+    {
+      "id": "pack-proving.local-ai-model-operations",
+      "version": 1,
+      "pack": "local-ai-model-operations",
+      "supported_versions": "=1.0.0",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "model_readiness",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    },
+    {
+      "id": "pack-proving.mcp-development-compatibility",
+      "version": 1,
+      "pack": "mcp-development-compatibility",
+      "supported_versions": "=1.0.0",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "mcp_compatibility",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    },
+    {
+      "id": "pack-proving.network-firewall",
+      "version": 1,
+      "pack": "network-firewall",
+      "supported_versions": "=1.0.0",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "network",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "firewall",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "dhcp",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "vpn",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "network_change",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    },
+    {
+      "id": "pack-proving.network-services",
+      "version": 1,
+      "pack": "network-services",
+      "supported_versions": "=1.0.0",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "network_service_audit",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "network_connectivity_review",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "network_nginx_operation",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    },
+    {
+      "id": "pack-proving.observability-incident-response",
+      "version": 1,
+      "pack": "observability-incident-response",
+      "supported_versions": "=1.0.0",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "observability_incident_snapshot",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "observability_health_review",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "observability_metrics_query",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    },
+    {
+      "id": "pack-proving.operational-readiness",
+      "version": 1,
+      "pack": "operational-readiness",
+      "supported_versions": "=1.0.0",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "operational_readiness",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    },
+    {
+      "id": "pack-proving.proxmox",
+      "version": 1,
+      "pack": "proxmox",
+      "supported_versions": "=1.6.0",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "proxmox",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "proxmox_guest",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "proxmox_provision",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "ansible_run",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "proxmox_migrate",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "proxmox_retire",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    },
+    {
+      "id": "pack-proving.reproducibility",
+      "version": 1,
+      "pack": "reproducibility",
+      "supported_versions": "=1.0.0",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "reproducibility",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    },
+    {
+      "id": "pack-proving.security-lab-reproduction",
+      "version": 1,
+      "pack": "security-lab-reproduction",
+      "supported_versions": "=1.0.0",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "lab_preflight",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    },
+    {
+      "id": "pack-proving.security-research",
+      "version": 1,
+      "pack": "security-research",
+      "supported_versions": "=1.2.0",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "research_status",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "research_project",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "research_hypothesis",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "research_scope",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "research_run",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "research_probe",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "research_evidence",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "research_compare",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    },
+    {
+      "id": "pack-proving.skeptical-verifier",
+      "version": 1,
+      "pack": "skeptical-verifier",
+      "supported_versions": "=1.0.0",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "skeptical_verify",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    },
+    {
+      "id": "pack-proving.software-supply-chain",
+      "version": 1,
+      "pack": "software-supply-chain",
+      "supported_versions": "=1.0.0",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "supply_chain_audit",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    },
+    {
+      "id": "pack-proving.storage-filesystems",
+      "version": 1,
+      "pack": "storage-filesystems",
+      "supported_versions": "=1.0.0",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "storage_capacity_audit",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "storage_backend_audit",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "storage_volume_inventory",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    },
+    {
+      "id": "pack-proving.testing-quality-engineering",
+      "version": 1,
+      "pack": "testing-quality-engineering",
+      "supported_versions": "=1.0.0",
+      "preconditions": [
+        "pack package hash is inspectable",
+        "pack configuration validates",
+        "pack lifecycle is enabled for dispatch checks"
+      ],
+      "required_configuration": "manifest.configuration.schema",
+      "live_provider_required": false,
+      "required_network_scopes": [],
+      "discovery": [
+        "capability.catalog",
+        "capability.show",
+        "capability.health"
+      ],
+      "single_pack": [
+        {
+          "capability": "quality_gate",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "quality_health",
+          "dispatch": "canonical",
+          "mutation": false
+        }
+      ],
+      "cross_pack": [],
+      "negative_checks": [
+        "schema rejection",
+        "unavailable-provider behavior",
+        "redaction",
+        "stale evidence invalidation",
+        "configuration-change invalidation",
+        "lifecycle-change invalidation"
+      ],
+      "expected_evidence": [
+        "receipt",
+        "workflow or execution",
+        "verification report"
+      ],
+      "independent_verification": [
+        "re-read receipt terminal state",
+        "recompute package/config/lifecycle fingerprints",
+        "verify evidence freshness and provenance"
+      ],
+      "cleanup": {
+        "required": true,
+        "idempotent": true,
+        "mutations": "none unless explicitly approved"
+      },
+      "mutation_policy": "read_only_by_default",
+      "bounds": {
+        "timeout_ms": 120000,
+        "max_steps": 8,
+        "max_retries": 1
+      },
+      "unavailable_outcome": "not_evaluated_without_dispatch_evidence"
+    }
+  ]
+}

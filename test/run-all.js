@@ -7,13 +7,7 @@
  * first, missing optional suites are skipped, and failures produce a summary.
  */
 
-const { spawnSync } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-
-const root = path.join(__dirname, '..');
-// Suites opt into an explicit, machine-readable skip result with this exit code.
-const SKIP_EXIT_CODE = 77;
+const { runSuites, discoverSuites, selectSuites, SKIP_EXIT_CODE } = require('./suite-runner');
 
 const suites = [
   { file: 'test/invariants-doctor.test.js', critical: true, description: 'Read-only durable invariants, redacted Doctor diagnostics, and support-bundle safety' },
@@ -117,6 +111,8 @@ const suites = [
   { file: 'test/scheduling-cancel.test.js', critical: false, description: 'Cron/watch cancellation coordination for live execution claims' },
   { file: 'test/pack-manifest-consistency.test.js', critical: false, description: 'Capability-pack module dispatch and manifest permission consistency' },
   { file: 'test/pack-maturity.test.js', critical: true, description: 'Evidence-bound capability-pack maturity and stale verification handling' },
+  { file: 'test/proving-recipes.test.js', critical: true, description: 'Versioned proving recipe catalog covers every bundled pack' },
+  { file: 'test/sensitive-result-boundary.test.js', critical: true, description: 'Dispatcher-owned non-forgeable sensitive-result exposure boundary' },
   { file: 'test/pack-inventory.test.js', critical: true, description: 'Complete deterministic bundled compatibility-pack audit inventory' },
   { file: 'test/pack-catalog-e2e.test.js', critical: true, description: 'Canonical lifecycle, catalog and detail dispatch for every bundled pack' },
   { file: 'test/tool-result-structure.test.js', critical: true, description: 'Structured redaction preserves valid JSON results' },
@@ -224,148 +220,9 @@ const suites = [
   { file: 'test/compute-live-worker.test.js', critical: false, description: 'Opt-in live compute worker smoke test' },
 ];
 
-function discoverSuites(testDir = __dirname) {
-  const discovered = fs.readdirSync(testDir)
-    .filter((file) => /\.test\.(?:js|cjs)$/.test(file))
-    .sort();
-  const metadata = new Map(suites.map((suite) => [suite.file, suite]));
-  const explicit = suites.filter((suite) => {
-    const expectedPath = path.resolve(root, suite.file);
-    return path.dirname(expectedPath) === path.resolve(testDir) && fs.existsSync(expectedPath);
-  });
-  const explicitFiles = new Set(explicit.map((suite) => path.basename(suite.file)));
-  const discoveredSuites = discovered
-    .filter((file) => !explicitFiles.has(file))
-    .map((file) => metadata.get(`test/${file}`) || { file: `test/${file}`, critical: false, description: 'Discovered test suite' });
-  return [...explicit, ...discoveredSuites];
-}
-
-function matchesSelection(suite, name) {
-  return name === suite.file || name === path.basename(suite.file);
-}
-
-function selectSuites(allSuites, requested) {
-  if (allSuites.length === 0) {
-    return { selected: [], unknown: [], error: 'No test suites were discovered.' };
-  }
-  if (requested.length === 0) return { selected: allSuites, unknown: [] };
-  const unknown = requested.filter((name) => !allSuites.some((suite) => matchesSelection(suite, name)));
-  const selected = allSuites.filter((suite) => requested.some((name) => matchesSelection(suite, name)));
-  return { selected, unknown, error: unknown.length ? `Invalid test suite selection: ${unknown.join(', ')}` : null };
-}
-
-function boundedSuiteTimeout(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? Math.max(1000, Math.min(Math.trunc(parsed), 30 * 60 * 1000)) : 5 * 60 * 1000;
-}
-
-function killTimedOutSuite(result) {
-  // spawnSync's timeout only signals the suite process. Run each suite in its
-  // own Unix process group so a timed-out suite cannot orphan its server or
-  // other descendants for the next suite.
-  if (process.platform === 'win32' || !result?.pid) return;
-  try { process.kill(-result.pid, 'SIGKILL'); } catch {}
-}
-
-function runSuites({ allSuites = discoverSuites(), requested = [], cwd = root, spawnSyncImpl = spawnSync, output = console, suiteTimeoutMs = boundedSuiteTimeout(process.env.SIDEKICK_TEST_SUITE_TIMEOUT_MS) } = {}) {
-  const selection = selectSuites(allSuites, requested);
-  if (selection.error || selection.selected.length === 0) {
-    output.error(selection.error || 'No test suites selected.');
-    return { passed: 0, failed: 1, skipped: 0, failures: [], notRun: [], exitCode: 1 };
-  }
-
-  let passed = 0;
-  let failed = 0;
-  let skipped = 0;
-  const failures = [];
-  const notRun = [];
-
-  output.log('╔═══════════════════════════════════════════════════════════╗');
-  output.log('║                    Sidekick Tests                         ║');
-  output.log('╚═══════════════════════════════════════════════════════════╝');
-
-  for (let index = 0; index < selection.selected.length; index++) {
-    const suite = selection.selected[index];
-    const suitePath = path.join(cwd, suite.file);
-    if (!fs.existsSync(suitePath)) {
-      if (suite.optional) {
-        skipped++;
-        output.log(`\n↷ Skipping optional missing suite: ${suite.file}`);
-        continue;
-      }
-      failed++;
-      failures.push(`${suite.file} (missing)`);
-      if (suite.critical) {
-        notRun.push(...selection.selected.slice(index + 1).map((remaining) => remaining.file));
-        break;
-      }
-      continue;
-    }
-
-    output.log('\n' + '═'.repeat(60));
-    output.log(`Running: ${suite.file}`);
-    output.log(`Purpose: ${suite.description}`);
-    if (suite.critical) output.log('Critical: yes');
-    output.log('═'.repeat(60) + '\n');
-
-    const result = spawnSyncImpl(process.execPath, [suitePath], {
-      cwd,
-      stdio: 'inherit',
-      detached: process.platform !== 'win32',
-      env: { ...process.env, NODE_ENV: 'test' },
-      timeout: suiteTimeoutMs,
-    });
-
-    if (result.error && result.error.code === 'ETIMEDOUT') {
-      killTimedOutSuite(result);
-      failed++;
-      failures.push(`${suite.file} (timeout after ${suiteTimeoutMs}ms)`);
-      output.log(`\n❌ ${suite.file} timed out after ${suiteTimeoutMs}ms`);
-      if (suite.critical) {
-        notRun.push(...selection.selected.slice(index + 1).map((remaining) => remaining.file));
-        output.log('\nStopping because a critical suite timed out.');
-        break;
-      }
-    } else if (result.status === SKIP_EXIT_CODE) {
-      skipped++;
-      output.log(`\n↷ ${suite.file} skipped`);
-    } else if (result.status === 0) {
-      passed++;
-      output.log(`\n✅ ${suite.file} passed`);
-    } else {
-      failed++;
-      failures.push(suite.file);
-      output.log(`\n❌ ${suite.file} failed`);
-      if (suite.critical) {
-        notRun.push(...selection.selected.slice(index + 1).map((remaining) => remaining.file));
-        output.log('\nStopping because a critical suite failed.');
-        break;
-      }
-    }
-  }
-
-  output.log('\n╔═══════════════════════════════════════════════════════════╗');
-  output.log('║                       Summary                             ║');
-  output.log('╚═══════════════════════════════════════════════════════════╝');
-  output.log(`Passed:  ${passed}`);
-  output.log(`Failed:  ${failed}`);
-  output.log(`Skipped: ${skipped}`);
-
-  if (failures.length) {
-    output.log('\nFailed suites:');
-    for (const failure of failures) output.log(`  - ${failure}`);
-  }
-  if (notRun.length) {
-    output.log('\nNot run:');
-    for (const suite of notRun) output.log(`  - ${suite}`);
-  }
-
-  return { passed, failed, skipped, failures, notRun, exitCode: failed > 0 ? 1 : 0 };
-}
-
 if (require.main === module) {
-  const result = runSuites({ requested: process.argv.slice(2) });
+  const result = runSuites({ suites, allSuites: discoverSuites(suites), requested: process.argv.slice(2) });
   process.exit(result.exitCode);
 }
 
-module.exports = { SKIP_EXIT_CODE, discoverSuites, selectSuites, runSuites };
+module.exports = { SKIP_EXIT_CODE, suites, discoverSuites: testDir => discoverSuites(suites, testDir), selectSuites, runSuites: options => runSuites({ suites, ...options }) };

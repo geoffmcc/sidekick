@@ -59,11 +59,11 @@ function errorResult(error, code = "handler_error", metadata = {}) {
   };
 }
 
-function normalizeResult(result) {
-  if (result && result.__sidekickExposeSensitiveOnce === true) {
-    const exposed = { ...result };
-    delete exposed.__sidekickExposeSensitiveOnce;
-    return exposed;
+function normalizeResult(result, { allowSensitiveOnce = false } = {}) {
+  if (allowSensitiveOnce) {
+    const { unwrap } = require("./sensitive-result");
+    const exposed = unwrap(result);
+    if (exposed !== null) return { content: [{ type: "text", text: JSON.stringify(exposed, null, 2) }] };
   }
   if (result && Array.isArray(result.content)) return { ...result, content: sanitizeContent(result.content) };
   if (result && result.isError) return { ...result, content: sanitizeContent(result.content) };
