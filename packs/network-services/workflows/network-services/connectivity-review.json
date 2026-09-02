@@ -6,6 +6,6 @@
   "description": "Read-only deterministic path analysis for an explicitly supplied source and destination.",
   "mode": "read_only",
   "inputs": { "source": { "type": "string", "required": true }, "destination": { "type": "string", "required": true }, "protocol": { "type": "string", "required": true }, "port": { "type": "number", "required": false } },
-  "steps": [{ "name": "review", "tool": "network_connectivity_review", "args": { "source": "${inputs.source}", "destination": "${inputs.destination}", "protocol": "${inputs.protocol}", "port": "${inputs.port}" }, "expect": "json" }],
+   "steps": [{ "name": "review", "tool": "network_connectivity_review", "args": { "source": "${inputs.source}", "destination": "${inputs.destination}", "protocol": "${inputs.protocol}", "port": "${inputs.port}" }, "expect": "json", "on_error": "fail" }],
   "result": { "review": "${steps.review.json}" }, "tags": ["network", "connectivity", "read-only"]
 }

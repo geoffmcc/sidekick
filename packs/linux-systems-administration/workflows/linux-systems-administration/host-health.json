@@ -7,7 +7,7 @@
   "mode": "read_only",
   "inputs": { "services": { "type": "string", "required": false, "default": "" } },
   "steps": [
-    { "name": "status", "tool": "linux_system_status", "args": { "services": "${inputs.services}" }, "expect": "json" },
+     { "name": "status", "tool": "linux_system_status", "args": { "services": "${inputs.services}" }, "expect": "json", "on_error": "fail" },
     { "name": "health", "tool": "linux_system_health", "args": { "services": "${inputs.services}" }, "expect": "json", "on_error": "continue" }
   ],
   "result": { "status": "${steps.status.json}", "health": "${steps.health.json}" },

@@ -43,6 +43,15 @@ function body(result) {
   const unavailable = await callInternalTool("api_contract_check", { url: "https://fixture.invalid/health", assertions: [{ kind: "url_contains", value: "health" }] });
   assert.strictEqual(unavailable.isError, true);
   assert.strictEqual(unavailable.code, "validation_failed");
-  console.log("Cross-pack canonical workflow fixtures passed: success, denied evidence, and unavailable scope paths");
+  const malformed = await callInternalTool("dev_repo_profile", { path: root, include_git: "yes" });
+  assert.strictEqual(malformed.isError, true);
+  assert.strictEqual(malformed.code, "validation_failed");
+  const nestedFailure = await callInternalTool("quality_gate", { path: root, dry_run: true, intents: ["unsupported"] });
+  assert.strictEqual(nestedFailure.isError, true);
+  assert.strictEqual(nestedFailure.code, "validation_failed");
+  const staleEvidence = await callInternalTool("change_impact", { path: root, base: "missing-base-ref" });
+  assert.strictEqual(staleEvidence.isError, true);
+  assert.strictEqual(JSON.parse(staleEvidence.content[0].text).ok, false, "stale evidence path must remain an unsuccessful structured result");
+  console.log("Cross-pack canonical workflow fixtures passed: success, denied, unavailable, malformed, nested-failure, and stale-evidence paths");
 })().catch(error => { console.error(error.stack || error); process.exitCode = 1; })
   .finally(() => setTimeout(() => fs.rmSync(dataDir, { recursive: true, force: true }), 0));

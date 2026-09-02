@@ -6,7 +6,7 @@
   "description": "Read-only update status check. Registry failures and unsupported comparisons remain unknown and are never reported as current.",
   "mode": "read_only",
   "inputs": { "profile": { "type": "string", "required": false, "default": "" } },
-  "steps": [ { "name": "updates", "tool": "containers", "args": { "action": "updates", "profile": "${inputs.profile}" }, "expect": "json" } ],
+  "steps": [ { "name": "updates", "tool": "containers", "args": { "action": "updates", "profile": "${inputs.profile}" }, "expect": "json", "on_error": "fail" } ],
   "result": { "updates": "${steps.updates.json}" },
   "tags": ["docker", "podman", "updates", "read-only"]
 }

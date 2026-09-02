@@ -1,4 +1,4 @@
 {
   "schema_version": 1, "name": "mcp-development-compatibility/mcp-compatibility", "version": "1.0.0", "title": "MCP compatibility check", "description": "Read-only static and live-contract MCP compatibility check.", "mode": "read_only",
-  "inputs": { "path": { "type": "string", "required": true }, "tool": { "type": "string", "required": false } }, "steps": [{ "name": "check", "tool": "mcp_compatibility", "args": { "path": "${inputs.path}", "tool": "${inputs.tool}" }, "expect": "json", "on_error": "fail" }], "result": { "compatibility": "${steps.check.json}" }
+  "inputs": { "path": { "type": "string", "required": true }, "tool": { "type": "string", "required": false } }, "steps": [{ "name": "check", "tool": "mcp_compatibility", "args": { "path": "${inputs.path}", "tool": "${inputs.tool}" }, "expect": "json", "on_error": "fail" }], "result": { "compatibility": "${steps.check.json}" }, "tags": ["mcp", "compatibility", "contract", "read-only"]
 }

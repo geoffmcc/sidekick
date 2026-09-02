@@ -6,6 +6,6 @@
   "description": "Read-only bounded inventory of configured container volumes.",
   "mode": "read_only",
   "inputs": { "profile": { "type": "string", "required": false, "default": "" } },
-  "steps": [{ "name": "volumes", "tool": "storage_volume_inventory", "args": { "profile": "${inputs.profile}" }, "expect": "json" }],
+   "steps": [{ "name": "volumes", "tool": "storage_volume_inventory", "args": { "profile": "${inputs.profile}" }, "expect": "json", "on_error": "fail" }],
   "result": { "volumes": "${steps.volumes.json}" }, "tags": ["storage", "volumes", "read-only"]
 }

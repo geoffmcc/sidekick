@@ -6,6 +6,6 @@
   "description": "Read-only bounded audit of configured network service providers.",
   "mode": "read_only",
   "inputs": { "profile": { "type": "string", "required": false, "default": "" } },
-  "steps": [{ "name": "audit", "tool": "network_service_audit", "args": { "profile": "${inputs.profile}" }, "expect": "json" }],
+   "steps": [{ "name": "audit", "tool": "network_service_audit", "args": { "profile": "${inputs.profile}" }, "expect": "json", "on_error": "fail" }],
   "result": { "audit": "${steps.audit.json}" }, "tags": ["network", "dhcp", "vpn", "nginx", "read-only"]
 }

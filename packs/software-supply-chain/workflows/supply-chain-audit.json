@@ -1,5 +1,5 @@
 {
   "schema_version": 1, "name": "software-supply-chain/supply-chain-audit", "version": "1.0.0", "title": "Supply-chain audit", "description": "Read-only dependency and source provenance audit.", "mode": "read_only",
   "inputs": { "manifest": { "type": "string", "required": true }, "format": { "type": "string", "required": false }, "repository": { "type": "string", "required": false } },
-  "steps": [{ "name": "audit", "tool": "supply_chain_audit", "args": { "manifest": "${inputs.manifest}", "format": "${inputs.format}", "repository": "${inputs.repository}" }, "expect": "json", "on_error": "fail" }], "result": { "audit": "${steps.audit.json}" }
+  "steps": [{ "name": "audit", "tool": "supply_chain_audit", "args": { "manifest": "${inputs.manifest}", "format": "${inputs.format}", "repository": "${inputs.repository}" }, "expect": "json", "on_error": "fail" }], "result": { "audit": "${steps.audit.json}" }, "tags": ["supply-chain", "dependencies", "provenance", "read-only"]
 }
