@@ -11,7 +11,7 @@
     "tail": { "type": "number", "required": false, "default": 100 }
   },
   "steps": [
-    { "name": "inspect", "tool": "containers", "args": { "action": "inspect", "profile": "${inputs.profile}", "target": "${inputs.target}" }, "expect": "json" },
+    { "name": "inspect", "tool": "containers", "args": { "action": "inspect", "profile": "${inputs.profile}", "target": "${inputs.target}" }, "expect": "json", "on_error": "fail" },
     { "name": "logs", "tool": "containers", "args": { "action": "logs", "profile": "${inputs.profile}", "target": "${inputs.target}", "tail": "${inputs.tail}" }, "expect": "json", "on_error": "continue" },
     { "name": "stats", "tool": "containers", "args": { "action": "stats", "profile": "${inputs.profile}", "target": "${inputs.target}" }, "expect": "json", "on_error": "continue" }
   ],

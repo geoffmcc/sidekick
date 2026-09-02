@@ -11,9 +11,9 @@
     "image": { "type": "string", "required": true }
   },
   "steps": [
-    { "name": "preflight", "tool": "containers", "args": { "action": "inspect", "profile": "${inputs.profile}", "target": "${inputs.target}" }, "expect": "json" },
-    { "name": "pull", "tool": "container_lifecycle", "args": { "action": "pull", "profile": "${inputs.profile}", "image": "${inputs.image}" }, "expect": "json" },
-    { "name": "recreate", "tool": "container_lifecycle", "args": { "action": "recreate", "profile": "${inputs.profile}", "target": "${inputs.target}" }, "expect": "json" },
+     { "name": "preflight", "tool": "containers", "args": { "action": "inspect", "profile": "${inputs.profile}", "target": "${inputs.target}" }, "expect": "json", "on_error": "fail" },
+     { "name": "pull", "tool": "container_lifecycle", "args": { "action": "pull", "profile": "${inputs.profile}", "image": "${inputs.image}" }, "expect": "json", "on_error": "fail" },
+     { "name": "recreate", "tool": "container_lifecycle", "args": { "action": "recreate", "profile": "${inputs.profile}", "target": "${inputs.target}" }, "expect": "json", "on_error": "fail" },
     { "name": "verify", "tool": "containers", "args": { "action": "inspect", "profile": "${inputs.profile}", "target": "${inputs.target}" }, "expect": "json", "on_error": "fail" }
   ],
   "result": { "preflight": "${steps.preflight.json}", "pull": "${steps.pull.json}", "recreate": "${steps.recreate.json}", "verify": "${steps.verify.json}", "rollback": "unavailable_without_explicit_restore_hook" },

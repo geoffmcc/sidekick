@@ -6,7 +6,7 @@
   "description": "Read-only status and health evidence for triage.",
   "mode": "read_only",
   "inputs": { "services": { "type": "string", "required": false, "default": "" } },
-  "steps": [{ "name": "review", "tool": "observability_health_review", "args": { "services": "${inputs.services}" }, "expect": "json" }],
+   "steps": [{ "name": "review", "tool": "observability_health_review", "args": { "services": "${inputs.services}" }, "expect": "json", "on_error": "fail" }],
   "result": { "review": "${steps.review.json}" },
   "tags": ["observability", "health", "read-only"]
 }

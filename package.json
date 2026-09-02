@@ -25,6 +25,7 @@
     "certify": "node src/cli.js certify",
     "package:worker": "node scripts/build-worker-package.js",
     "manifest:release": "node scripts/generate-release-manifest.js",
+    "pack:inventory": "node scripts/generate-pack-inventory.js",
     "sbom:release": "npm sbom --sbom-format cyclonedx --sbom-type application",
     "seed:knowledge": "node scripts/seed-knowledge.js",
     "test": "node test/run-all.js",

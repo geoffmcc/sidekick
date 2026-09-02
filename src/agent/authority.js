@@ -25,6 +25,9 @@ function intersectEnvelope(requested, principal = {}) {
 function determineEffect(descriptor, args = {}) {
   if (!descriptor || !descriptor.name) return { effect: "unknown", risk: "critical", authoritative: false };
   const name = String(descriptor.name).replace(/^sidekick_/i, ""); const ann = descriptor.annotations || getToolAnnotations(name); const action = typeof args.action === "string" ? args.action : null;
+  const staticRisk = () => {
+    try { return getStaticToolRisk(name); } catch { return "critical"; }
+  };
   const explicitEffect = [descriptor.effect_class, descriptor.effectClass, descriptor.effect, descriptor.metadata?.effect_class, descriptor.metadata?.effect, ann.effect_class, ann.effectClass].find(value => EFFECTS.includes(String(value || "")));
   const explicitRisk = [descriptor.risk_class, descriptor.riskClass, descriptor.metadata?.risk_class, descriptor.metadata?.risk, ann.risk_class, ann.riskClass].find(value => RISKS.includes(String(value || "")));
   const explicitIdempotent = [descriptor.idempotent, descriptor.idempotent_class === "idempotent" ? true : undefined, ann.idempotentHint].find(value => typeof value === "boolean");
@@ -32,12 +35,12 @@ function determineEffect(descriptor, args = {}) {
   if (explicitEffect) {
     const effectName = String(explicitEffect);
     if ((ann.destructiveHint === true || ann.openWorldHint === true) && ["read_only", "workspace_reversible", "build_test", "local_process"].includes(effectName)) return { effect: "unknown", risk: "critical", authoritative: false, idempotent: false, reversible: false };
-    return { effect: effectName, risk: String(explicitRisk || descriptor.risk || getStaticToolRisk(name)), authoritative: true, idempotent: explicitIdempotent === undefined ? Boolean(ann.idempotentHint) : explicitIdempotent, reversible: explicitReversible === undefined ? !["external", "production", "destructive", "credential", "identity", "policy"].includes(effectName) : explicitReversible };
+     return { effect: effectName, risk: String(explicitRisk || descriptor.risk || staticRisk()), authoritative: true, idempotent: explicitIdempotent === undefined ? Boolean(ann.idempotentHint) : explicitIdempotent, reversible: explicitReversible === undefined ? !["external", "production", "destructive", "credential", "identity", "policy"].includes(effectName) : explicitReversible };
   }
   const actionRiskOverride = action && TOOL_ACTION_RISK[name] && Object.prototype.hasOwnProperty.call(TOOL_ACTION_RISK[name], action)
     ? TOOL_ACTION_RISK[name][action]
     : null;
-  const actionRisk = actionRiskOverride || descriptor.risk || getStaticToolRisk(name);
+   const actionRisk = actionRiskOverride || descriptor.risk || staticRisk();
   // Creating or selecting a local task branch is a reversible workspace
   // operation. Keep its structured risk distinct from the generic Git
   // descriptor risk so routine authorized workspace setup does not inherit a

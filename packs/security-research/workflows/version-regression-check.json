@@ -18,14 +18,14 @@
       "title": "Execute the baseline probe",
       "tool": "research_probe",
       "args": { "run_id": "${inputs.run_id}", "probe": "${inputs.baseline_probe}" },
-      "expect": "json"
+      "expect": "json", "on_error": "fail"
     },
     {
       "name": "candidate",
       "title": "Execute the candidate probe",
       "tool": "research_probe",
       "args": { "run_id": "${inputs.run_id}", "probe": "${inputs.candidate_probe}" },
-      "expect": "json"
+      "expect": "json", "on_error": "fail"
     },
     {
       "name": "compare",
@@ -37,7 +37,7 @@
         "run_id": "${inputs.run_id}",
         "mode": "${inputs.compare_mode}"
       },
-      "expect": "json"
+      "expect": "json", "on_error": "fail"
     }
   ],
   "result": {

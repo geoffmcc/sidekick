@@ -6,7 +6,7 @@
   "description": "Read-only inspection of one explicitly selected systemd service.",
   "mode": "read_only",
   "inputs": { "service": { "type": "string", "required": true } },
-  "steps": [{ "name": "status", "tool": "linux_service_operation", "args": { "action": "status", "service": "${inputs.service}" }, "expect": "json" }],
+   "steps": [{ "name": "status", "tool": "linux_service_operation", "args": { "action": "status", "service": "${inputs.service}" }, "expect": "json", "on_error": "fail" }],
   "result": { "service": "${steps.status.json}" },
   "tags": ["linux", "systemd", "read-only"]
 }

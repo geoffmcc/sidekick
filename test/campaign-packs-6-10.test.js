@@ -73,5 +73,9 @@ function tool(pack, moduleName, name) {
   const failingQuality = require(path.join(root, "packs/testing-quality-engineering/modules/testing-quality-tools/entry.js"))
     .entry.buildDescriptors(failingServices).find(item => item.name === "quality_gate");
   assert.strictEqual(body(await failingQuality.handler({ path: root, dry_run: true, intents: ["syntax"] })).ok, false);
+  const failureServices = { ...services, dispatch: async () => ({ isError: true, code: "provider_unavailable", content: [{ type: "text", text: "unavailable" }] }) };
+  const failureQuality = require(path.join(root, "packs/testing-quality-engineering/modules/testing-quality-tools/entry.js"))
+    .entry.buildDescriptors(failureServices).find(item => item.name === "quality_gate");
+  await assert.rejects(() => failureQuality.handler({ path: root, dry_run: true, intents: ["syntax"] }), error => error.code === "provider_unavailable" && error.dependency === "dev_verify");
   console.log("Campaign packs 6-10 focused tests passed.");
 })().catch(error => { console.error(error.stack || error); process.exitCode = 1; });

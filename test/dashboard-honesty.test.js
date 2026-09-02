@@ -20,6 +20,7 @@ const path = require("path");
 const http = require("http");
 
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "sk-dash-honesty-"));
+process.env.NODE_ENV = "test";
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
 process.env.SIDEKICK_DASHBOARD_PORT = "4101";
 process.env.SIDEKICK_DASHBOARD_USER = "test-user";

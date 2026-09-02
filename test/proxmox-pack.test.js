@@ -20,6 +20,7 @@ const https = require("https");
 const { execFileSync } = require("child_process");
 
 const TEST_DATA_DIR = path.join(__dirname, "test-data-proxmox-pack");
+process.env.NODE_ENV = "test";
 fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
 fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
 process.env.SIDEKICK_DATA_DIR = TEST_DATA_DIR;
@@ -803,6 +804,7 @@ function storeToken() {
     packLifecycle.configure("proxmox", { profiles: { main: { endpoint, token_ref: "secret:proxmox_test_token", ca_pem: certPem, allow_lifecycle: true, default: true } } });
   });
 
+  server.closeAllConnections?.();
   server.close();
   if (failures > 0) {
     console.error(`\n${failures} test(s) failed.`);

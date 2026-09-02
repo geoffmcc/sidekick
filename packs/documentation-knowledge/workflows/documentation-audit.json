@@ -7,5 +7,6 @@
   "mode": "read_only",
   "inputs": { "path": { "type": "string", "required": true }, "topic": { "type": "string", "required": false } },
   "steps": [{ "name": "audit", "tool": "documentation_audit", "args": { "path": "${inputs.path}", "topic": "${inputs.topic}" }, "expect": "json", "on_error": "fail" }],
-  "result": { "audit": "${steps.audit.json}" }
+  "result": { "audit": "${steps.audit.json}" },
+  "tags": ["documentation", "knowledge", "audit", "read-only"]
 }

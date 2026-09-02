@@ -6,5 +6,7 @@
   "owner": "network-firewall",
   "description": "Produce a deterministic bounded plan and lockout assessment before any network/firewall mutation.",
   "inputs": { "profile": { "type": "string", "required": true }, "change_type": { "type": "string", "required": true }, "id": { "type": "string", "required": false, "default": "" }, "management_path": { "type": "string", "required": true } },
-  "steps": [ { "name": "preflight", "title": "Change safety preflight", "tool": "network_change", "args": { "action": "preflight", "profile": "${inputs.profile}", "change_type": "${inputs.change_type}", "id": "${inputs.id}", "management_path": "${inputs.management_path}" }, "expect": "json", "on_error": "fail" } ]
+  "steps": [ { "name": "preflight", "title": "Change safety preflight", "tool": "network_change", "args": { "action": "preflight", "profile": "${inputs.profile}", "change_type": "${inputs.change_type}", "id": "${inputs.id}", "management_path": "${inputs.management_path}" }, "expect": "json", "on_error": "fail" } ],
+  "result": { "preflight": "${steps.preflight.json}" },
+  "tags": ["network", "firewall", "change", "preflight", "read-only"]
 }

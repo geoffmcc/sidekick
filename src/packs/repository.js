@@ -140,6 +140,9 @@ function setPackState(name, state, { error = null } = {}) {
   }
   sets.push("error = ?");
   params.push(state === "error" ? String(error || "unknown pack error") : null);
+  const metadata = { ...(record.metadata || {}), maturity_lifecycle_epoch: Number(record.metadata?.maturity_lifecycle_epoch || 0) + 1 };
+  sets.push("metadata_json = ?");
+  params.push(JSON.stringify(metadata));
   // The observed state is part of the WHERE clause: if another process moved
   // the pack between our read and this write, the transition we validated is
   // not the transition we would be performing — fail instead of clobbering.
@@ -177,6 +180,36 @@ function recordPackHealth(name, health) {
   getDb()
     .prepare("UPDATE platform_capability_packs SET health_json = ?, last_health_check_at = ? WHERE pack_id = ?")
     .run(JSON.stringify(health || {}), nowIso(), record.pack_id);
+  return getPack(name);
+}
+
+function recordPackVerification(name, verification) {
+  ensureStorage();
+  const record = getPack(name);
+  if (!record) throw new Error(`Capability pack "${name}" is not installed`);
+  if (!verification || typeof verification !== "object" || !verification.checks || typeof verification.checks !== "object") {
+    const error = new Error("pack verification requires a checks object");
+    error.code = "invalid_pack_verification";
+    throw error;
+  }
+  if (typeof verification.source !== "string" || !verification.source.trim()) {
+    const error = new Error("pack verification requires an attributed source");
+    error.code = "verification_source_required";
+    throw error;
+  }
+  const checks = Object.fromEntries(Object.entries(verification.checks).map(([key, value]) => [String(key), value === true]));
+  const entry = {
+    id: verification.id || `pack-verification-${Date.now().toString(36)}`,
+    observed_at: verification.observed_at || nowIso(),
+    source: String(verification.source || "canonical_dispatch").slice(0, 120),
+    checks,
+  };
+  const metadata = { ...(record.metadata || {}), maturity_evidence: {
+    fingerprint: require("./maturity").evidenceFingerprint(record),
+    entries: [...(record.metadata?.maturity_evidence?.entries || []).slice(-9), entry],
+  }};
+  getDb().prepare("UPDATE platform_capability_packs SET metadata_json = ? WHERE pack_id = ?").run(JSON.stringify(metadata), record.pack_id);
+  recordPackEvent(name, "pack.verification_recorded", { verification_id: entry.id, source: entry.source });
   return getPack(name);
 }
 
@@ -368,6 +401,7 @@ module.exports = {
   setPackState,
   setPackConfig,
   recordPackHealth,
+  recordPackVerification,
   updatePackPackage,
   restorePackPackage,
   deletePack,

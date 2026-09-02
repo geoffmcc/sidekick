@@ -51,7 +51,8 @@
         "state": "analysis_only",
         "rationale": "Source comparison ${inputs.baseline_ref}..${inputs.candidate_ref}; see attached diffstat for the changed surface."
       },
-      "expect": "json"
+       "expect": "json",
+       "on_error": "fail"
     }
   ],
   "result": {

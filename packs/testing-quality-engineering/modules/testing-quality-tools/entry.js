@@ -2,7 +2,7 @@
 const { requireFromSidekick } = require("./deps");
 const { z } = requireFromSidekick("zod");
 const result = value => ({ content: [{ type: "text", text: JSON.stringify(value, null, 2) }] });
-async function call(services, name, args) { const value = await services.dispatch(name, args); if (value?.isError) throw new Error(`${name} dependency failed`); return value; }
+async function call(services, name, args) { const value = await services.dispatch(name, args); if (value?.isError) throw Object.assign(new Error(`${name} dependency failed`), { code: value.code || "dependency_failed", dependency: name }); return value; }
 function successful(value) { return value && !value.isError && /"ok"\s*:\s*(true|1)/i.test(value.content?.map(item => item.text || "").join("\n") || ""); }
 async function gate(services, args) {
   const mode = args.mode || services.config?.default_mode || "standard";
