@@ -10,7 +10,8 @@
   "modules": [{ "name": "backup-restore-tools", "path": "modules/backup-restore-tools", "entry_point": "entry.js", "config_from_pack": true }],
   "workflows": [
     { "path": "workflows/backup-restore-dr/backup-readiness.json" },
-    { "path": "workflows/backup-restore-dr/database-backup.json" }
+    { "path": "workflows/backup-restore-dr/database-backup.json" },
+    { "path": "workflows/backup-restore-dr/restore-preflight.json" }
   ],
   "knowledge": [{ "path": "knowledge/operating.md", "title": "Backup, Restore and DR: operating model", "category": "operations", "tags": ["backup", "restore", "disaster-recovery", "proxmox"] }, { "path": "knowledge/usage-reference.md", "title": "Backup, Restore and DR: procedures and recovery limits", "category": "operations", "tags": ["backup", "restore", "recovery", "rpo", "rto"] }],
   "requires": { "tools": ["db_backup", "db_restore", "db_diff"], "optional_tools": ["proxmox"] },

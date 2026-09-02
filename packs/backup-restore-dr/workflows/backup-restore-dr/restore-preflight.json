@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "backup-restore-dr/restore-preflight",
+  "version": "1.0.0",
+  "title": "Restore Preflight",
+  "description": "Compare snapshots before a separately authorized critical restore.",
+  "mode": "read_only",
+  "tags": ["backup", "restore", "preflight", "read-only"],
+  "inputs": { "snapshot_a": { "type": "string", "required": true }, "snapshot_b": { "type": "string", "required": true }, "table": { "type": "string", "required": false } },
+  "steps": [{ "name": "preflight", "tool": "backup_restore_preflight", "args": { "snapshot_a": "${inputs.snapshot_a}", "snapshot_b": "${inputs.snapshot_b}", "table": "${inputs.table}" }, "expect": "json", "on_error": "fail" }],
+  "result": { "preflight": "${steps.preflight.json}", "restore_attempted": false }
+}

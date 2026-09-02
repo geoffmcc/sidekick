@@ -32,6 +32,11 @@
           "capability": "api_engineering_health",
           "dispatch": "canonical",
           "mutation": false
+        },
+        {
+          "capability": "api_contract_matrix",
+          "dispatch": "canonical",
+          "mutation": false
         }
       ],
       "cross_pack": [],
@@ -87,6 +92,11 @@
       "single_pack": [
         {
           "capability": "assumptions",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "assumptions_snapshot",
           "dispatch": "canonical",
           "mutation": false
         }
@@ -154,6 +164,11 @@
         },
         {
           "capability": "compare_backup_snapshots",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "backup_restore_preflight",
           "dispatch": "canonical",
           "mutation": false
         },
@@ -285,6 +300,11 @@
           "capability": "change_impact",
           "dispatch": "canonical",
           "mutation": false
+        },
+        {
+          "capability": "change_impact_gate",
+          "dispatch": "canonical",
+          "mutation": false
         }
       ],
       "cross_pack": [],
@@ -345,6 +365,11 @@
         },
         {
           "capability": "ci_release_health",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "release_gate",
           "dispatch": "canonical",
           "mutation": false
         }
@@ -481,6 +506,11 @@
           "capability": "database_health",
           "dispatch": "canonical",
           "mutation": false
+        },
+        {
+          "capability": "database_migration_review",
+          "dispatch": "canonical",
+          "mutation": false
         }
       ],
       "cross_pack": [],
@@ -610,6 +640,11 @@
           "capability": "documentation_audit",
           "dispatch": "canonical",
           "mutation": false
+        },
+        {
+          "capability": "documentation_knowledge_operation",
+          "dispatch": "canonical",
+          "mutation": false
         }
       ],
       "cross_pack": [],
@@ -670,6 +705,11 @@
         },
         {
           "capability": "iac_health",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "iac_inspect",
           "dispatch": "canonical",
           "mutation": false
         }
@@ -806,6 +846,11 @@
           "capability": "linux_service_operation",
           "dispatch": "canonical",
           "mutation": false
+        },
+        {
+          "capability": "linux_process_inspection",
+          "dispatch": "canonical",
+          "mutation": false
         }
       ],
       "cross_pack": [],
@@ -863,6 +908,11 @@
           "capability": "model_readiness",
           "dispatch": "canonical",
           "mutation": false
+        },
+        {
+          "capability": "model_route_explain",
+          "dispatch": "canonical",
+          "mutation": false
         }
       ],
       "cross_pack": [],
@@ -918,6 +968,11 @@
       "single_pack": [
         {
           "capability": "mcp_compatibility",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "mcp_catalog_operation",
           "dispatch": "canonical",
           "mutation": false
         }
@@ -1061,6 +1116,11 @@
           "mutation": false
         },
         {
+          "capability": "network_service_inventory",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
           "capability": "network_nginx_operation",
           "dispatch": "canonical",
           "mutation": false
@@ -1129,6 +1189,11 @@
         },
         {
           "capability": "observability_metrics_query",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "observability_incident_operation",
           "dispatch": "canonical",
           "mutation": false
         }
@@ -1327,6 +1392,11 @@
           "capability": "reproducibility",
           "dispatch": "canonical",
           "mutation": false
+        },
+        {
+          "capability": "reproducibility_compare",
+          "dispatch": "canonical",
+          "mutation": false
         }
       ],
       "cross_pack": [],
@@ -1382,6 +1452,11 @@
       "single_pack": [
         {
           "capability": "lab_preflight",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "lab_run_lifecycle",
           "dispatch": "canonical",
           "mutation": false
         }
@@ -1533,6 +1608,11 @@
           "capability": "skeptical_verify",
           "dispatch": "canonical",
           "mutation": false
+        },
+        {
+          "capability": "skeptical_compare",
+          "dispatch": "canonical",
+          "mutation": false
         }
       ],
       "cross_pack": [],
@@ -1588,6 +1668,11 @@
       "single_pack": [
         {
           "capability": "supply_chain_audit",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "supply_chain_provenance",
           "dispatch": "canonical",
           "mutation": false
         }
@@ -1657,6 +1742,11 @@
           "capability": "storage_volume_inventory",
           "dispatch": "canonical",
           "mutation": false
+        },
+        {
+          "capability": "storage_threshold_check",
+          "dispatch": "canonical",
+          "mutation": false
         }
       ],
       "cross_pack": [],
@@ -1717,6 +1807,16 @@
         },
         {
           "capability": "quality_health",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "quality_result_normalize",
+          "dispatch": "canonical",
+          "mutation": false
+        },
+        {
+          "capability": "quality_lifecycle",
           "dispatch": "canonical",
           "mutation": false
         }

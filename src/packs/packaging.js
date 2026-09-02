@@ -19,6 +19,7 @@ const { PACK_MANIFEST_FILENAME, parsePackManifestFile, checkPackCompatibility, c
 const packDependencies = require("./dependencies");
 const modulePackaging = require("../modules/packaging");
 const { normalizeDefinition } = require("../workflows/definition");
+const { stripSidekickPrefix } = require("../core/tool-name");
 
 const IGNORED_DIRECTORIES = new Set([".git", "node_modules"]);
 const MAX_PACK_FILES = 5000;
@@ -191,12 +192,16 @@ function inspectPackPackage(sourcePath, options = {}) {
   const packOwnedTools = new Set();
   for (const entry of modules) {
     for (const tool of entry.inspection ? entry.inspection.tools : []) {
-      packOwnedTools.add(tool.name);
-      for (const alias of tool.aliases || []) packOwnedTools.add(alias);
+      packOwnedTools.add(stripSidekickPrefix(tool.name));
+      for (const alias of tool.aliases || []) packOwnedTools.add(stripSidekickPrefix(alias));
     }
   }
-  const toolAvailability = checkRequiredTools(manifest, { ...options, packOwnedTools });
-  problems.push(...toolAvailability.missing.map(tool => `required tool "${tool}" is not available in this Sidekick`));
+  const toolAvailability = checkRequiredTools(manifest, {
+    ...options,
+    packOwnedTools,
+    workflows: workflows.map(entry => entry.definition),
+  });
+  problems.push(...toolAvailability.problems);
 
   return Object.freeze({
     format: "sidekick-capability-pack-v1",
@@ -259,6 +264,7 @@ function inspectPackPackage(sourcePath, options = {}) {
       optional_tools: Object.freeze([...manifest.requires.optional_tools]),
       missing: Object.freeze(toolAvailability.missing),
       optional_missing: Object.freeze(toolAvailability.optionalMissing),
+      workflow_tools: Object.freeze(toolAvailability.workflowTools),
     }),
     configuration: Object.freeze({
       schema: manifest.configuration.schema || null,
@@ -309,7 +315,9 @@ function currentModuleNames() {
 }
 
 function checkRequiredTools(manifest, options = {}) {
-  const packOwnedTools = options.packOwnedTools || new Set();
+  const packOwnedTools = new Set([...options.packOwnedTools || []].map(stripSidekickPrefix));
+  const requiredTools = new Set(manifest.requires.tools.map(stripSidekickPrefix));
+  const optionalTools = new Set(manifest.requires.optional_tools.map(stripSidekickPrefix));
   let has = options.hasTool;
   if (typeof has !== "function") {
     let registry = null;
@@ -325,10 +333,26 @@ function checkRequiredTools(manifest, options = {}) {
       }
     };
   }
-  const available = name => packOwnedTools.has(name) || has(name);
+  const available = name => packOwnedTools.has(stripSidekickPrefix(name)) || has(name);
+  const workflowTools = [...new Set((options.workflows || []).flatMap(workflow =>
+    workflow.steps.map(step => stripSidekickPrefix(step.tool))
+  ))].sort();
+  const missing = manifest.requires.tools.filter(tool => !available(tool));
+  const optionalMissing = manifest.requires.optional_tools.filter(tool => !available(tool));
+  const problems = missing.map(tool => `required tool "${tool}" is not available in this Sidekick`);
+  for (const tool of workflowTools) {
+    if (packOwnedTools.has(tool)) continue;
+    if (!requiredTools.has(tool) && !optionalTools.has(tool)) {
+      problems.push(`workflow tool "${tool}" is not declared in requires.tools or requires.optional_tools`);
+    } else if (requiredTools.has(tool) && !available(tool)) {
+      problems.push(`required workflow tool "${tool}" is not available in this Sidekick`);
+    }
+  }
   return {
-    missing: manifest.requires.tools.filter(tool => !available(tool)),
-    optionalMissing: manifest.requires.optional_tools.filter(tool => !available(tool)),
+    missing,
+    optionalMissing,
+    workflowTools,
+    problems,
   };
 }
 

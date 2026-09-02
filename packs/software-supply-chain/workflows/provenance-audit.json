@@ -1,0 +1,3 @@
+{
+  "schema_version": 1, "name": "software-supply-chain/provenance-audit", "version": "1.0.0", "title": "SBOM and lockfile provenance", "description": "Parse an SBOM and hash lockfile content through governed read-only tools.", "mode": "read_only", "inputs": { "sbom": { "type": "string", "required": true }, "lockfile": { "type": "string", "required": true }, "format": { "type": "string", "required": false } }, "steps": [{ "name": "provenance", "tool": "supply_chain_provenance", "args": { "sbom": "${inputs.sbom}", "lockfile": "${inputs.lockfile}", "format": "${inputs.format}" }, "expect": "json", "on_error": "fail" }], "result": { "provenance": "${steps.provenance.json}" }, "tags": ["supply-chain", "sbom", "provenance", "read-only"]
+}

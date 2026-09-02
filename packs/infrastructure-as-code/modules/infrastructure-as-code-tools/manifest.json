@@ -8,7 +8,7 @@
   "entryPoint": "entry.js",
   "sidekick": ">=1.0.0",
   "capabilities": ["iac-plan", "compose-preflight", "configuration-parsing"],
-  "tools": { "iac_plan": { "risk": "medium", "category": "Infrastructure" }, "iac_health": { "risk": "low", "category": "Infrastructure" } },
-  "permissions": [],
+  "tools": { "iac_plan": { "risk": "medium", "category": "Infrastructure" }, "iac_health": { "risk": "low", "category": "Infrastructure" }, "iac_inspect": { "risk": "low", "category": "Infrastructure" } },
+  "permissions": [{ "tool": "compose", "risk": "low" }, { "tool": "parse", "risk": "low" }],
   "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
 }

@@ -10,7 +10,8 @@
   "modules": [{ "name": "observability-incident-tools", "path": "modules/observability-incident-tools", "entry_point": "entry.js", "config_from_pack": true }],
   "workflows": [
     { "path": "workflows/observability-incident-response/incident-snapshot.json" },
-    { "path": "workflows/observability-incident-response/health-review.json" }
+    { "path": "workflows/observability-incident-response/health-review.json" },
+    { "path": "workflows/observability-incident-response/incident-review.json" }
   ],
   "knowledge": [{ "path": "knowledge/operating.md", "title": "Observability and Incident Response: operating model", "category": "operations", "tags": ["observability", "incidents", "metrics", "evidence"] }, { "path": "knowledge/usage-reference.md", "title": "Observability and Incident Response: capture and review guide", "category": "operations", "tags": ["observability", "incidents", "metrics", "black-box"] }],
   "requires": { "tools": ["black_box", "health", "status", "metrics"], "optional_tools": [] },

@@ -7,9 +7,9 @@
   "type": "plugin",
   "entryPoint": "entry.js",
   "sidekick": ">=1.0.0",
-  "capabilities": ["assumption-tracking", "unknown-identification", "evidence-gap-analysis"],
+  "capabilities": ["assumption-tracking", "unknown-identification", "evidence-gap-analysis", "continuity-snapshot"],
   "configSchema": { "type": "object", "additionalProperties": false },
-  "tools": { "assumptions": { "risk": "low", "category": "Reasoning", "aliases": ["assumptions_unknowns"] } },
+  "tools": { "assumptions": { "risk": "low", "category": "Reasoning", "aliases": ["assumptions_unknowns"] }, "assumptions_snapshot": { "risk": "low", "category": "Reasoning" } },
   "permissions": [{ "tool": "context", "risk": "low" }, { "tool": "memory", "risk": "low" }, { "tool": "handoff", "risk": "low" }],
   "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
 }

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "infrastructure-as-code/iac-inspection",
+  "version": "1.0.0",
+  "title": "Infrastructure validation or diff",
+  "description": "Read-only provider-authoritative Compose validation or diff.",
+  "mode": "read_only",
+  "inputs": { "action": { "type": "string", "required": true }, "profile": { "type": "string", "required": false }, "file": { "type": "string", "required": false } },
+  "steps": [{ "name": "inspect", "tool": "iac_inspect", "args": { "action": "${inputs.action}", "profile": "${inputs.profile}", "file": "${inputs.file}" }, "expect": "json", "on_error": "fail" }],
+  "result": { "inspection": "${steps.inspect.json}" },
+  "tags": ["iac", "compose", "validation", "diff", "read-only"]
+}

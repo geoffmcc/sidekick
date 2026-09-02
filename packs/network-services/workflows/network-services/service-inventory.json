@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "network-services/service-inventory",
+  "version": "1.0.0",
+  "title": "Network service inventory",
+  "description": "Read-only inventory of one configured network service area.",
+  "mode": "read_only",
+  "inputs": { "area": { "type": "string", "required": true }, "profile": { "type": "string", "required": false } },
+  "steps": [{ "name": "inventory", "tool": "network_service_inventory", "args": { "area": "${inputs.area}", "profile": "${inputs.profile}" }, "expect": "json", "on_error": "fail" }],
+  "result": { "inventory": "${steps.inventory.json}" },
+  "tags": ["network", "dhcp", "vpn", "nginx", "inventory", "read-only"]
+}

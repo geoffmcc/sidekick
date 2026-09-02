@@ -7,9 +7,9 @@
   "type": "plugin",
   "entryPoint": "entry.js",
   "sidekick": ">=1.0.0",
-  "capabilities": ["change-impact-analysis", "blast-radius-analysis"],
+  "capabilities": ["change-impact-analysis", "blast-radius-analysis", "deterministic-change-gates"],
   "configSchema": { "type": "object", "properties": { "max_files": { "type": "integer", "minimum": 1, "maximum": 2000 } }, "additionalProperties": false },
-  "tools": { "change_impact": { "risk": "low", "category": "Development", "aliases": ["blast_radius"] } },
+  "tools": { "change_impact": { "risk": "low", "category": "Development", "aliases": ["blast_radius"] }, "change_impact_gate": { "risk": "low", "category": "Development" } },
   "permissions": [{ "tool": "dev_change_summary", "risk": "low" }, { "tool": "semantic_repo", "risk": "low" }],
   "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
 }

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "mcp-development-compatibility/catalog-audit",
+  "version": "1.0.0",
+  "title": "MCP catalog audit",
+  "description": "Read-only inspection of the governed tool catalog.",
+  "mode": "read_only",
+  "inputs": { "action": { "type": "string", "required": true }, "name": { "type": "string", "required": false }, "query": { "type": "string", "required": false } },
+  "steps": [{ "name": "catalog", "tool": "mcp_catalog_operation", "args": { "action": "${inputs.action}", "name": "${inputs.name}", "query": "${inputs.query}" }, "expect": "json", "on_error": "fail" }],
+  "result": { "catalog": "${steps.catalog.json}" },
+  "tags": ["mcp", "catalog", "policy", "read-only"]
+}

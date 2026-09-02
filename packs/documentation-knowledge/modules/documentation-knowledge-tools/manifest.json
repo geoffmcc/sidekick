@@ -8,7 +8,7 @@
   "entryPoint": "entry.js",
   "sidekick": ">=1.0.0",
   "capabilities": ["documentation-audit", "knowledge-grounding"],
-  "tools": { "documentation_audit": { "risk": "low", "category": "Documentation" } },
+  "tools": { "documentation_audit": { "risk": "low", "category": "Documentation" }, "documentation_knowledge_operation": { "risk": "medium", "category": "Documentation" } },
   "permissions": [{ "tool": "semantic_repo", "risk": "low" }, { "tool": "knowledge", "risk": "low" }, { "tool": "parse", "risk": "low" }],
   "lifecycle": { "disable": "stop_new_work", "uninstall": "retain_data" }
 }

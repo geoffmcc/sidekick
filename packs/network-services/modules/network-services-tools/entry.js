@@ -7,7 +7,7 @@ const identifier = value => typeof value === "string" && IDENTIFIER.test(value);
 const host = value => typeof value === "string" && value.length <= 253 && /^[A-Za-z0-9][A-Za-z0-9.:-]*[A-Za-z0-9]$/.test(value);
 const protocol = value => ["tcp", "udp", "icmp", "icmpv6", "sctp"].includes(String(value || "").toLowerCase());
 function failure(code, error) { return { content: [{ type: "text", text: JSON.stringify({ ok: false, code, error }) }], isError: true, code }; }
-async function read(services, tool, args) { try { return await services.dispatch(tool, args); } catch (error) { return { state: "unavailable", code: error.code || "provider_unavailable", error: String(error.message || error).slice(0, 300) }; } }
+async function read(services, tool, args) { try { const value = await services.dispatch(tool, args); return value?.isError ? { state: "unavailable", code: value.code || "provider_error", error: "provider returned an error" } : value; } catch (error) { return { state: "unavailable", code: error.code || "provider_unavailable", error: String(error.message || error).slice(0, 300) }; } }
 
 function buildDescriptors(services) {
   const nginxActions = ["status", "list_sites", "test_config", "reload", "add_site", "remove_site"];
@@ -26,6 +26,17 @@ function buildDescriptors(services) {
       name: "network_nginx_operation", description: "Inspect or change Nginx through its governed manager; configuration changes retain high risk and provider policy.",
       schema: z.object({ action: z.enum(nginxActions), site_name: z.string().regex(IDENTIFIER).optional(), domain: z.string().regex(/^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/).optional(), upstream_port: z.number().int().min(1).max(65535).optional(), ssl_email: z.string().email().max(255).optional() }).strict().superRefine((value, ctx) => { if (value.action === "add_site" && (!value.domain || value.upstream_port === undefined)) ctx.addIssue({ code: "custom", message: "add_site requires domain and upstream_port" }); if (value.action === "remove_site" && !value.site_name) ctx.addIssue({ code: "custom", message: "remove_site requires site_name" }); }), args: { action: "string (status|list_sites|test_config|reload|add_site|remove_site)", site_name: "string", domain: "string", upstream_port: "number", ssl_email: "string" }, risk: "high", category: "Network Services",
       handler: args => (args.action === "add_site" && (!args.domain || !/^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(args.domain) || args.upstream_port === undefined || args.upstream_port < 1 || args.upstream_port > 65535)) || (args.action === "remove_site" && !identifier(args.site_name)) ? failure("invalid_input", "add_site requires a valid domain and port; remove_site requires site_name") : services.dispatch("nginx", args),
+    },
+    {
+      name: "network_service_inventory", description: "Inspect one bounded network-service inventory area through its configured provider.",
+      schema: z.object({ area: z.enum(["interfaces", "networks", "routes", "gateways", "clients", "leases", "pools", "reservations", "vpn_interfaces", "vpn_peers", "nginx_sites"]), profile: z.string().regex(IDENTIFIER).or(z.literal("")).optional() }).strict(),
+      args: { area: "string", profile: "string" }, risk: "low", category: "Network Services", annotations: { readOnlyHint: true, idempotentHint: true },
+      handler: async args => {
+        const groups = { interfaces: ["network", "interfaces"], networks: ["network", "networks"], routes: ["network", "routes"], gateways: ["network", "gateways"], clients: ["network", "clients"], leases: ["dhcp", "leases"], pools: ["dhcp", "pools"], reservations: ["dhcp", "reservations"], vpn_interfaces: ["vpn", "interfaces"], vpn_peers: ["vpn", "peers"], nginx_sites: ["nginx", "list_sites"] };
+        const [tool, action] = groups[args.area];
+        const value = await read(services, tool, { action, profile: args.profile || services.config?.default_profile });
+        return { content: [{ type: "text", text: JSON.stringify({ ok: value?.state !== "unavailable", area: args.area, provider: tool, data: value, evidence: [{ source: tool, action }], unavailable_is_not_healthy: true }, null, 2) }] };
+      },
     },
   ];
 }

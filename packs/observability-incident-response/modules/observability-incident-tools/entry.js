@@ -6,7 +6,7 @@ const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$/;
 const identifier = value => typeof value === "string" && IDENTIFIER.test(value);
 function result(value) { return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] }; }
 function unavailable(error) { return { state: "unavailable", code: error?.code || "provider_unavailable", error: String(error?.message || error).slice(0, 300) }; }
-async function read(services, name, args) { try { return await services.dispatch(name, args); } catch (error) { return result(unavailable(error)); } }
+async function read(services, name, args) { try { const value = await services.dispatch(name, args); return value?.isError ? unavailable({ code: value.code || "provider_error", message: "provider returned an error" }) : value; } catch (error) { return unavailable(error); } }
 
 function buildDescriptors(services) {
   return [
@@ -35,6 +35,12 @@ function buildDescriptors(services) {
         if (args.action === "write" && (!args.fields || typeof args.fields !== "object" || Array.isArray(args.fields))) return result({ ok: false, code: "invalid_input", error: "fields are required for write" });
         return services.dispatch("metrics", args);
       },
+    },
+    {
+      name: "observability_incident_operation", description: "Inspect or analyze one existing incident or capture through the governed Black Box evidence system.",
+      schema: z.object({ action: z.enum(["list_incidents", "get_incident", "list_captures", "get_capture", "search", "analyze"]), incident_id: z.string().regex(IDENTIFIER).optional(), capture_id: z.string().regex(IDENTIFIER).optional(), query: z.string().max(500).optional(), limit: z.number().int().min(1).max(100).optional() }).strict().superRefine((v, c) => { if (["get_incident"].includes(v.action) && !v.incident_id) c.addIssue({ code: "custom", message: "incident_id is required" }); if (v.action === "get_capture" && !v.capture_id) c.addIssue({ code: "custom", message: "capture_id is required" }); if (v.action === "search" && !v.query) c.addIssue({ code: "custom", message: "query is required" }); }),
+      args: { action: "string", incident_id: "string", capture_id: "string", query: "string", limit: "number" }, risk: "medium", category: "Observability", annotations: { readOnlyHint: true },
+      handler: async args => { const value = await read(services, "black_box", args); return result({ ok: value?.state !== "unavailable", action: args.action, data: value, evidence: [{ source: "black_box", action: args.action }], unavailable_is_not_healthy: true }); },
     },
   ];
 }

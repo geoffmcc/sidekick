@@ -47,10 +47,21 @@ async function health(services) {
   }
   return result({ ok: Object.values(checks).every(check => check.ok), tool: "database_health", checks, read_only: true });
 }
+async function migrationReview(services, args) {
+  const database = args.database || services.config?.default_database || "sqlite";
+  const evidence = {};
+  const failures = [];
+  for (const [name, payload] of [["db_migrate", { action: "status" }], ["db_schema", { database, verbose: args.verbose === true }]]) {
+    try { evidence[name] = decode(await dispatch(services, name, payload), name); }
+    catch (error) { failures.push(name); evidence[name] = { ok: false, code: error.code || "dependency_failed", error: String(error.message || error).slice(0, 300) }; }
+  }
+  return result({ ok: failures.length === 0, action: "migration_review", database, evidence, readiness: failures.length === 0 ? "evidence_collected" : "incomplete", mutations_performed: [], not_performed: ["migration apply", "rollback", "restore"], provenance: { dependencies: ["db_migrate", "db_schema"] } });
+}
 const entry = {
   buildDescriptors(services) { return [
     { name: "database_admin", description: "Inspect database schema, statistics and migration readiness, or execute a strictly parameterized read-only query.", schema: z.object({ action: z.enum(["audit", "schema", "migrations", "query"]), database: z.enum(["sqlite", "postgres"]).optional(), table: z.string().max(128).optional(), verbose: z.boolean().optional(), detailed: z.boolean().optional(), sql: z.string().max(4000).optional(), params: z.array(z.any()).max(100).optional(), readonly: z.boolean().optional(), limit: z.number().int().min(1).max(1000).optional(), timeout: z.number().int().min(100).max(30000).optional() }).strict(), args: { action: "string (audit|schema|migrations|query)", database: "string", sql: "string (parameterized SELECT)" }, risk: "medium", category: "Database", handler: args => admin(services, args) },
-    { name: "database_health", description: "Run bounded, read-only dependency probes for schema, database statistics and migration status.", schema: z.object({}), args: {}, risk: "low", category: "Database", annotations: { readOnlyHint: true, idempotentHint: true }, handler: () => health(services) },
+     { name: "database_health", description: "Run bounded, read-only dependency probes for schema, database statistics and migration status.", schema: z.object({}), args: {}, risk: "low", category: "Database", annotations: { readOnlyHint: true, idempotentHint: true }, handler: () => health(services) },
+     { name: "database_migration_review", description: "Collect migration status and current schema evidence as a read-only readiness review; applying or rolling back migrations is never performed.", schema: z.object({ database: z.enum(["sqlite", "postgres"]).optional(), verbose: z.boolean().optional() }).strict(), args: { database: "string", verbose: "boolean" }, risk: "medium", category: "Database", annotations: { readOnlyHint: true, idempotentHint: true }, handler: args => migrationReview(services, args) },
   ]; },
   healthCheck({ config }) { const database = config?.default_database || "sqlite"; return { ok: ["sqlite", "postgres"].includes(database), details: { database, dependencies: ["db_schema", "db_stats", "db_query", "db_migrate"], policy: "query writes disabled; runtime probes available through database_health" } }; },
 };

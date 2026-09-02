@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "storage-filesystems/threshold-check",
+  "version": "1.0.0",
+  "title": "Storage threshold check",
+  "description": "Classify capacity with explicit warning and critical thresholds; unavailable providers remain unknown.",
+  "mode": "read_only",
+  "inputs": { "profile": { "type": "string", "required": false, "default": "" }, "node": { "type": "string", "required": false, "default": "" }, "warn_percent": { "type": "number", "required": false, "default": 80 }, "critical_percent": { "type": "number", "required": false, "default": 90 } },
+  "steps": [{ "name": "threshold", "tool": "storage_threshold_check", "args": { "profile": "${inputs.profile}", "node": "${inputs.node}", "warn_percent": "${inputs.warn_percent}", "critical_percent": "${inputs.critical_percent}" }, "expect": "json", "on_error": "fail" }],
+  "result": { "threshold": "${steps.threshold.json}" },
+  "tags": ["storage", "capacity", "threshold", "read-only"]
+}

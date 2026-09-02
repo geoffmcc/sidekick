@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "linux-systems-administration/process-audit",
+  "version": "1.0.0",
+  "title": "Linux process audit",
+  "description": "Read-only bounded process inspection.",
+  "mode": "read_only",
+  "inputs": { "action": { "type": "string", "required": true }, "filter": { "type": "string", "required": false } },
+  "steps": [{ "name": "processes", "tool": "linux_process_inspection", "args": { "action": "${inputs.action}", "filter": "${inputs.filter}" }, "expect": "json", "on_error": "fail" }],
+  "result": { "processes": "${steps.processes.json}" },
+  "tags": ["linux", "processes", "audit", "read-only"]
+}

@@ -8,7 +8,7 @@
   "publisher": "Sidekick",
   "compatibility": { "sidekick": ">=1.0.0" },
   "modules": [{ "name": "change-impact-tools", "path": "modules/change-impact-tools", "entry_point": "entry.js", "config_from_pack": true }],
-  "workflows": [{ "path": "workflows/blast-radius.json" }],
+  "workflows": [{ "path": "workflows/blast-radius.json" }, { "path": "workflows/change-gate.json" }],
   "knowledge": [{ "path": "knowledge/blast-radius.md", "title": "Change Impact pack: blast-radius analysis", "category": "development", "tags": ["change-impact", "blast-radius", "semantic"] }, { "path": "knowledge/usage-reference.md", "title": "Change Impact: inputs and evidence limits", "category": "development", "tags": ["change-impact", "diff", "semantic", "evidence"] }],
   "requires": { "tools": ["dev_change_summary", "semantic_repo"], "optional_tools": ["snapshot", "health"] },
   "permissions": [{ "tool": "dev_change_summary", "risk": "low" }, { "tool": "semantic_repo", "risk": "low" }],

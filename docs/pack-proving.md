@@ -1,7 +1,8 @@
 # Capability-Pack Proving
 
-`docs/proving-recipes.json` is the generated, versioned recipe catalog for the
-27 bundled packs. It is derived from the checked-in manifests and describes
+`docs/proving-recipes.json` is the generated, versioned recipe catalog for all
+currently bundled packs. Its pack count and names are derived from the
+checked-in manifests and it describes
 preconditions, bounded discovery, negative checks, cleanup, and whether a live
 provider is required.
 

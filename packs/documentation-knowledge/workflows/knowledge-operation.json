@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "documentation-knowledge/knowledge-operation",
+  "version": "1.0.0",
+  "title": "Knowledge operation",
+  "description": "Perform one explicit governed knowledge lookup or mutation.",
+  "mode": "mutating",
+  "inputs": { "action": { "type": "string", "required": true }, "query": { "type": "string", "required": false }, "id": { "type": "number", "required": false } },
+  "steps": [{ "name": "operation", "tool": "documentation_knowledge_operation", "args": { "action": "${inputs.action}", "query": "${inputs.query}", "id": "${inputs.id}" }, "expect": "json", "on_error": "fail" }],
+  "result": { "operation": "${steps.operation.json}" },
+  "tags": ["documentation", "knowledge", "governed"]
+}

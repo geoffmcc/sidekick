@@ -352,7 +352,7 @@ a shortcut would stop exercising the platform it exists to prove.
 Currently bundled:
 
 - **Developer / Software Engineering** (`packs/developer`) — repository
-  profiling, change-set impact analysis, governed verification, seven
+  profiling, change-set impact analysis, governed verification, and pack-aware
   engineering workflows. See `docs/developer-pack.md`.
 - **Proxmox VE** (`packs/proxmox`) — secure discovery, capability detection and
   a controlled guest lifecycle over the Proxmox API, with administrator

@@ -7,6 +7,7 @@ const identifier = value => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9
 function failure(code, error) { return { content: [{ type: "text", text: JSON.stringify({ ok: false, code, error }) }], isError: true, code }; }
 
 function buildDescriptors(services) {
+  const snapshotSchema = z.object({ snapshot_a: z.string().min(1).max(500).regex(/^[^\u0000\r\n]+$/).refine(safePath, "path contains traversal"), snapshot_b: z.string().min(1).max(500).regex(/^[^\u0000\r\n]+$/).refine(safePath, "path contains traversal"), table: z.string().regex(identifier).optional() }).strict();
   return [
     {
       name: "backup_database", description: "Create a timestamped governed database backup with optional compression.",
@@ -22,6 +23,18 @@ function buildDescriptors(services) {
       name: "compare_backup_snapshots", description: "Compare two database snapshots using the governed deterministic database diff.",
       schema: z.object({ snapshot_a: z.string().min(1).max(500).regex(/^[^\u0000\r\n]+$/).refine(safePath, "path contains traversal"), snapshot_b: z.string().min(1).max(500).regex(/^[^\u0000\r\n]+$/).refine(safePath, "path contains traversal"), table: z.string().regex(identifier).optional() }).strict(), args: { snapshot_a: "string", snapshot_b: "string", table: "string" }, risk: "low", category: "Backup and DR",
       handler: args => !safePath(args.snapshot_a) || !safePath(args.snapshot_b) ? failure("invalid_path", "snapshot paths contain traversal or control characters") : services.dispatch("db_diff", args),
+    },
+    {
+      name: "backup_restore_preflight", description: "Compare a known-good database snapshot with a candidate snapshot before a separately governed restore; no restore is attempted.",
+      schema: snapshotSchema, args: { snapshot_a: "string (known-good snapshot)", snapshot_b: "string (candidate snapshot)", table: "string" }, risk: "medium", category: "Backup and DR",
+      handler: async args => {
+        if (!safePath(args.snapshot_a) || !safePath(args.snapshot_b)) return failure("invalid_path", "snapshot paths contain traversal or control characters");
+        try {
+          const comparison = await services.dispatch("db_diff", args);
+          if (comparison?.isError) return failure("comparison_failed", "snapshot comparison dependency failed");
+          return { content: [{ type: "text", text: JSON.stringify({ ok: true, action: "preflight", comparison, restore: { attempted: false, authorization: "separate critical operation", recommendation: "review differences and verify the candidate before restore" }, provenance: { source: "db_diff", snapshot_a: args.snapshot_a, snapshot_b: args.snapshot_b } }, null, 2) }] };
+        } catch (error) { return failure("comparison_failed", String(error.message || error).slice(0, 300)); }
+      },
     },
     {
       name: "backup_dr_readiness", description: "Inspect Proxmox backup coverage, history, and verification evidence without changing the environment.",

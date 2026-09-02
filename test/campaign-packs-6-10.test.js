@@ -22,11 +22,29 @@ for (const [pack, moduleName, toolName] of cases) {
   const moduleManifest = JSON.parse(fs.readFileSync(path.join(packRoot, "modules", moduleName, "manifest.json"), "utf8"));
   assert.strictEqual(manifest.name, pack);
   assert.ok(moduleManifest.tools[toolName]);
+  assert.deepStrictEqual(manifest.permissions, moduleManifest.permissions);
   for (const workflow of manifest.workflows) {
     const definition = JSON.parse(fs.readFileSync(path.join(packRoot, workflow.path), "utf8"));
     assert.ok(definition.name.startsWith(`${pack}/`));
     assert.ok(definition.steps.length > 0);
   }
+}
+
+const manifestExpectations = {
+  "api-engineering": { required: [], optional: ["web_check"], permissions: ["web_check"] },
+  "database-administration": { required: ["db_schema", "db_stats", "db_query", "db_migrate"], optional: [], permissions: ["db_schema", "db_stats", "db_query", "db_migrate"] },
+  "ci-cd-release-engineering": { required: ["dev_repo_profile", "dev_verify", "changelog"], optional: [], permissions: ["dev_repo_profile", "dev_verify", "changelog"] },
+  "infrastructure-as-code": { required: [], optional: ["compose", "parse"], permissions: ["compose", "parse"] },
+  "testing-quality-engineering": { required: ["dev_repo_profile", "dev_verify", "semantic_repo"], optional: [], permissions: ["dev_repo_profile", "dev_verify", "semantic_repo"] },
+  "container-operations": { required: [], optional: [], permissions: [] },
+  "network-firewall": { required: [], optional: [], permissions: [] },
+};
+
+for (const [pack, expected] of Object.entries(manifestExpectations)) {
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, "packs", pack, "sidekick.pack.json"), "utf8"));
+  assert.deepStrictEqual(manifest.requires.tools, expected.required, `${pack} required tools`);
+  assert.deepStrictEqual(manifest.requires.optional_tools, expected.optional, `${pack} optional tools`);
+  assert.deepStrictEqual(manifest.permissions.map(permission => permission.tool), expected.permissions, `${pack} permissions`);
 }
 
 const calls = [];
@@ -76,6 +94,9 @@ function tool(pack, moduleName, name) {
   const failureServices = { ...services, dispatch: async () => ({ isError: true, code: "provider_unavailable", content: [{ type: "text", text: "unavailable" }] }) };
   const failureQuality = require(path.join(root, "packs/testing-quality-engineering/modules/testing-quality-tools/entry.js"))
     .entry.buildDescriptors(failureServices).find(item => item.name === "quality_gate");
-  await assert.rejects(() => failureQuality.handler({ path: root, dry_run: true, intents: ["syntax"] }), error => error.code === "provider_unavailable" && error.dependency === "dev_verify");
+  const unavailableQuality = body(await failureQuality.handler({ path: root, dry_run: true, intents: ["syntax"] }));
+  assert.strictEqual(unavailableQuality.ok, false);
+  assert.strictEqual(unavailableQuality.code, "provider_unavailable");
+  assert.strictEqual(unavailableQuality.dependency, "dev_verify");
   console.log("Campaign packs 6-10 focused tests passed.");
 })().catch(error => { console.error(error.stack || error); process.exitCode = 1; });

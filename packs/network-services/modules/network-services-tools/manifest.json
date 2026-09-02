@@ -7,10 +7,11 @@
   "type": "plugin",
   "entryPoint": "entry.js",
   "sidekick": ">=1.0.0",
-  "capabilities": ["network-discovery", "dhcp-inspection", "vpn-inspection", "nginx-services"],
+  "capabilities": ["network-discovery", "dhcp-inspection", "vpn-inspection", "nginx-services", "service-inventory"],
   "tools": {
     "network_service_audit": { "risk": "low", "category": "Network Services" },
     "network_connectivity_review": { "risk": "low", "category": "Network Services" },
+    "network_service_inventory": { "risk": "low", "category": "Network Services" },
     "network_nginx_operation": { "risk": "high", "category": "Network Services" }
   },
   "permissions": [{ "tool": "network", "risk": "low" }, { "tool": "dhcp", "risk": "low" }, { "tool": "vpn", "risk": "low" }, { "tool": "nginx", "risk": "high" }],

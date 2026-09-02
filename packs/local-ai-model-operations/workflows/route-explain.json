@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "local-ai-model-operations/route-explain",
+  "version": "1.0.0",
+  "title": "Compute route explanation",
+  "description": "Read-only explanation of Compute placement constraints.",
+  "mode": "read_only",
+  "inputs": { "workload_class": { "type": "string", "required": true }, "capabilities_required": { "type": "string", "required": false }, "data_classification": { "type": "string", "required": false } },
+  "steps": [{ "name": "route", "tool": "model_route_explain", "args": { "workload_class": "${inputs.workload_class}", "capabilities_required": "${inputs.capabilities_required}", "data_classification": "${inputs.data_classification}" }, "expect": "json", "on_error": "fail" }],
+  "result": { "route": "${steps.route.json}" },
+  "tags": ["compute", "routing", "read-only"]
+}

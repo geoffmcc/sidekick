@@ -7,11 +7,12 @@
   "type": "plugin",
   "entryPoint": "entry.js",
   "sidekick": ">=1.0.0",
-  "capabilities": ["incident-evidence", "health-observability", "metrics-observability"],
+  "capabilities": ["incident-evidence", "health-observability", "metrics-observability", "incident-analysis"],
   "tools": {
     "observability_incident_snapshot": { "risk": "medium", "category": "Observability" },
     "observability_health_review": { "risk": "high", "category": "Observability" },
-    "observability_metrics_query": { "risk": "high", "category": "Observability" }
+    "observability_metrics_query": { "risk": "high", "category": "Observability" },
+    "observability_incident_operation": { "risk": "medium", "category": "Observability" }
   },
   "permissions": [
     { "tool": "black_box", "risk": "medium" },

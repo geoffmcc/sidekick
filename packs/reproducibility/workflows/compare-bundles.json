@@ -1,0 +1,3 @@
+{
+  "schema_version": 1, "name": "reproducibility/compare-bundles", "version": "1.0.0", "title": "Compare reproducibility evidence", "description": "Mechanically compare two bounded evidence values without claiming causal equivalence.", "mode": "read_only", "inputs": { "baseline": { "type": "object", "required": true }, "candidate": { "type": "object", "required": true } }, "steps": [{ "name": "compare", "tool": "reproducibility_compare", "args": { "baseline": "${inputs.baseline}", "candidate": "${inputs.candidate}", "mode": "json" }, "expect": "json", "on_error": "fail" }], "result": { "comparison": "${steps.compare.json}" }, "tags": ["reproducibility", "comparison", "read-only"]
+}

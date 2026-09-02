@@ -8,9 +8,9 @@
   "publisher": "Sidekick",
   "compatibility": { "sidekick": ">=1.0.0" },
   "modules": [{ "name": "database-administration-tools", "path": "modules/database-administration-tools", "entry_point": "entry.js", "config_from_pack": true }],
-  "workflows": [{ "path": "workflows/database-audit.json" }, { "path": "workflows/migration-readiness.json" }],
+  "workflows": [{ "path": "workflows/database-audit.json" }, { "path": "workflows/migration-readiness.json" }, { "path": "workflows/migration-review.json" }],
   "knowledge": [{ "path": "knowledge/database-administration.md", "title": "Database Administration pack", "category": "database", "tags": ["database", "administration", "read-only", "migrations"] }, { "path": "knowledge/usage-reference.md", "title": "Database Administration: backends, queries and migrations", "category": "database", "tags": ["database", "sqlite", "postgres", "queries", "migrations"] }],
-  "requires": { "tools": ["db_schema", "db_stats", "db_query", "db_migrate"], "optional_tools": ["db_diff", "db_backup"] },
-  "permissions": [],
+  "requires": { "tools": ["db_schema", "db_stats", "db_query", "db_migrate"], "optional_tools": [] },
+  "permissions": [{ "tool": "db_schema", "risk": "low" }, { "tool": "db_stats", "risk": "low" }, { "tool": "db_query", "risk": "medium" }, { "tool": "db_migrate", "risk": "high" }],
   "configuration": { "schema": { "type": "object", "properties": { "default_database": { "type": "string", "enum": ["sqlite", "postgres"] }, "max_rows": { "type": "integer", "minimum": 1, "maximum": 1000 } }, "additionalProperties": false }, "defaults": { "default_database": "sqlite", "max_rows": 100 } }
 }

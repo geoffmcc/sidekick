@@ -101,6 +101,25 @@ function packWithModule(name, moduleName, modulePermissions, packOverrides = {})
   });
 }
 
+/** A module-less pack containing one workflow step. */
+function packWithWorkflow(name, tool, requires = {}) {
+  return writePack(baseManifest(name, {
+    requires: { tools: [], optional_tools: [], ...requires },
+    workflows: [{ path: 'workflows/fixture.json' }],
+  }), {
+    moduleFiles: {
+      'workflows/fixture.json': `${JSON.stringify({
+        name: `${name}/flow`,
+        version: '1.0.0',
+        title: 'Fixture workflow',
+        description: 'A workflow dependency fixture',
+        steps: [{ name: 'step', tool, args: {} }],
+        result: {},
+      }, null, 2)}\n`,
+    },
+  });
+}
+
 (async () => {
   console.log('Running pack contract tests...\n');
 
@@ -198,6 +217,45 @@ function packWithModule(name, moduleName, modulePermissions, packOverrides = {})
     const report = packLifecycle.validate(dir);
     assert.strictEqual(report.valid, true);
     assert.ok(report.findings.some(f => f.severity === 'warning' && f.area === 'permissions' && f.field === 'permissions'));
+  });
+
+  test('PC.9a: a workflow cannot reference a globally available but undeclared tool', () => {
+    const dir = packWithWorkflow('workflow-undeclared', 'get');
+    const inspection = packLifecycle.inspect(dir);
+    assert.strictEqual(inspection.installable, false);
+    assert.ok(inspection.problems.some(p => /workflow tool "get" is not declared/.test(p)), inspection.problems.join('; '));
+    assert.deepStrictEqual(inspection.requires.workflow_tools, ['get']);
+    assert.throws(() => packLifecycle.install(dir), /workflow tool "get" is not declared/);
+    assert.strictEqual(packRepository.getPack('workflow-undeclared'), null);
+  });
+
+  test('PC.9b: an unavailable required workflow tool is refused at inspection and install', () => {
+    const dir = packWithWorkflow('workflow-required-missing', 'missing_workflow_tool', { tools: ['missing_workflow_tool'] });
+    const inspection = packLifecycle.inspect(dir);
+    assert.strictEqual(inspection.installable, false);
+    assert.ok(inspection.problems.some(p => /required workflow tool "missing_workflow_tool" is not available/.test(p)), inspection.problems.join('; '));
+    assert.throws(() => packLifecycle.install(dir), /required workflow tool "missing_workflow_tool" is not available/);
+    assert.strictEqual(packRepository.getPack('workflow-required-missing'), null);
+  });
+
+  test('PC.9c: an unavailable optional workflow tool is accepted and remains visible as optional', () => {
+    const dir = packWithWorkflow('workflow-optional-missing', 'optional_workflow_tool', { optional_tools: ['optional_workflow_tool'] });
+    const inspection = packLifecycle.inspect(dir);
+    assert.strictEqual(inspection.installable, true, inspection.problems.join('; '));
+    assert.deepStrictEqual(inspection.requires.optional_missing, ['optional_workflow_tool']);
+    const installed = packLifecycle.install(dir);
+    assert.strictEqual(installed.pack.state, 'installed');
+    packLifecycle.uninstall('workflow-optional-missing');
+  });
+
+  test('PC.9d: a declared available workflow tool installs through the normal pack lifecycle', () => {
+    const dir = packWithWorkflow('workflow-declared', 'get', { tools: ['get'] });
+    const inspection = packLifecycle.inspect(dir);
+    assert.strictEqual(inspection.installable, true, inspection.problems.join('; '));
+    const installed = packLifecycle.install(dir);
+    assert.strictEqual(installed.pack.state, 'installed');
+    assert.deepStrictEqual(installed.components.workflows, ['workflow-declared/flow']);
+    packLifecycle.uninstall('workflow-declared');
   });
 
   // --- PC.10 structured validation -----------------------------------------

@@ -52,6 +52,108 @@ function testMatches(identifiers) {
   }).map(relative).sort();
 }
 
+const LIFECYCLE = [
+  "discovery", "inventory", "analysis", "diagnosis", "planning",
+  "execution", "verification", "recovery", "health", "workflows",
+  "composition", "security", "fixtures", "docs", "certification",
+];
+
+const LIFECYCLE_RULES = {
+  discovery: /discover|recon|profile|enumerat|capabilit/i,
+  inventory: /inventor|list_|list\b|catalog|scope/i,
+  analysis: /analys|audit|compare|diff|inspect|semantic/i,
+  diagnosis: /diagnos|troubleshoot|incident|problem|triage/i,
+  planning: /plan|preflight|readiness|prepare|gate/i,
+  execution: /execute|apply|create|configure|convert|migrat|provision|restore|run_task|scan_library|update/i,
+  verification: /verif|check|assert|validate|test|proof|evidence/i,
+  recovery: /recover|rollback|retry|restore|restart|reboot|cleanup|cancel/i,
+  health: /health|healthy|status|readiness|availability|degraded/i,
+  composition: /compose|depend|requires|optional_tools|proxmox|workflow.*tool/i,
+  security: /security|safe|safety|permission|credential|secret|scope|policy|auth|tls|least.?privilege/i,
+};
+
+function unique(values) {
+  return [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b));
+}
+
+function inferredUsers(text) {
+  const roles = [
+    ["developer", /developer|software|repository|code|release|ci/i],
+    ["operator", /operat|infrastructure|service|container|network|system|host/i],
+    ["administrator", /administrat|database|proxmox|jellyfin|storage/i],
+    ["security researcher", /security.?research|research|campaign|hypothes|probe/i],
+    ["quality engineer", /test|quality|verification|skeptical/i],
+  ];
+  const matches = roles.filter(([, pattern]) => pattern.test(text)).map(([role]) => role);
+  return matches.length ? matches : ["Sidekick operators"];
+}
+
+function workflowJob(workflow) {
+  return workflow.title || workflow.name || workflow.path.replace(/\.json$/, "").split("/").pop().replace(/[-_]+/g, " ");
+}
+
+function capabilityMatrix({ manifest, files, workflows, tools, gaps }) {
+  const descriptorText = JSON.stringify(manifest);
+  const sourceFiles = files.filter(file => file.kind === "source");
+  const workflowFiles = files.filter(file => file.kind === "workflow");
+  const testFiles = files.filter(file => file.kind === "test");
+  const implementationText = [...sourceFiles, ...workflowFiles].map(file => file.content).join("\n");
+  const evidence = {};
+  for (const area of LIFECYCLE) {
+    let paths = [];
+    let observed = false;
+    if (area === "workflows") {
+      observed = workflows.some(workflow => workflow.present);
+      paths = workflowFiles.map(file => file.path);
+    } else if (area === "fixtures") {
+      observed = testFiles.some(file => /fixture|mock|stub|fake|sample|tempdir|tmpdir/i.test(file.content));
+      paths = testFiles.filter(file => /fixture|mock|stub|fake|sample|tempdir|tmpdir/i.test(file.content)).map(file => file.path);
+    } else if (area === "docs") {
+      observed = manifest.knowledge?.some(asset => asset.present) === true;
+      paths = files.filter(file => file.kind === "docs").map(file => file.path);
+    } else if (area === "certification") {
+      observed = false;
+    } else {
+      const descriptorEvidence = area === "composition" || area === "security";
+      const candidates = descriptorEvidence
+        ? [{ path: manifest.manifest, content: descriptorText }, ...files]
+        : files;
+      paths = candidates.filter(file => LIFECYCLE_RULES[area].test(file.content)).map(file => file.path);
+      observed = paths.length > 0 && (descriptorEvidence || LIFECYCLE_RULES[area].test(implementationText));
+    }
+    evidence[area] = {
+      status: area === "certification" ? "not_evaluated" : observed ? "observed" : "not_observed",
+      implemented: observed,
+      evidence: unique(paths),
+    };
+  }
+  const weaknesses = unique([
+    ...gaps,
+    ...LIFECYCLE.filter(area => !evidence[area].implemented && area !== "certification").map(area => `no observed ${area} implementation evidence`),
+  ]);
+  const selectedImprovements = LIFECYCLE.filter(area => !evidence[area].implemented && area !== "certification")
+    .slice(0, 5).map(area => `add attributable ${area} coverage or evidence`);
+  const deferredItems = [
+    { item: "certification", reason: "Certification requires server-validated, current evidence; repository descriptors and tests cannot confer it." },
+    ...LIFECYCLE.filter(area => !evidence[area].implemented && area !== "certification" && !selectedImprovements.some(item => item.includes(` ${area} `)))
+      .map(area => ({ item: area, reason: "No implementation evidence was found in the discovered descriptor, workflow, source, or test files." })),
+  ];
+  return {
+    intended_users: inferredUsers(`${manifest.display_name || ""} ${manifest.description || ""} ${descriptorText}`),
+    jobs: unique([...workflows.filter(workflow => workflow.present).map(workflowJob), ...tools]),
+    lifecycle_coverage: evidence,
+    current_implementation_coverage: {
+      covered: LIFECYCLE.filter(area => evidence[area].implemented),
+      uncovered: LIFECYCLE.filter(area => !evidence[area].implemented),
+      evidence_sources: unique(files.map(file => file.path)),
+    },
+    weaknesses,
+    selected_improvements: selectedImprovements,
+    deferred_items: deferredItems,
+    evidence_status: "not_evaluated",
+  };
+}
+
 function inventoryPack(packDir) {
   const manifestPath = path.join(packDir, "sidekick.pack.json");
   const manifest = readJson(manifestPath);
@@ -68,7 +170,13 @@ function inventoryPack(packDir) {
   const workflowDefinitions = workflows.filter(workflow => workflow.present).map(workflow => readJson(path.join(root, workflow.file)));
   const permissions = (manifest.permissions || []).map(operationClass);
   const moduleFiles = manifest.modules.map(module => path.join(packDir, module.path, module.entry_point || "entry.js"));
-  const sourceText = moduleFiles.filter(fs.existsSync).map(file => fs.readFileSync(file, "utf8")).join("\n");
+  const descriptorEvidence = moduleDetails.map(module => ({ kind: "descriptor", path: module.manifest, content: fs.readFileSync(path.join(root, module.manifest), "utf8") }));
+  const sourceEvidence = moduleFiles.filter(fs.existsSync).map(file => ({ kind: "source", path: relative(file), content: fs.readFileSync(file, "utf8") }));
+  const workflowEvidence = workflows.filter(workflow => workflow.present).map(workflow => ({ kind: "workflow", path: workflow.file, content: fs.readFileSync(path.join(root, workflow.file), "utf8") }));
+  const testEvidence = testMatches([manifest.name, manifest.display_name, ...manifest.modules.map(module => module.name), ...moduleDetails.flatMap(module => module.tools.map(tool => tool.name))]).map(file => ({ kind: "test", path: file, content: fs.readFileSync(path.join(root, file), "utf8") }));
+  const docsEvidence = knowledge.filter(asset => asset.present).map(asset => ({ kind: "docs", path: asset.file, content: fs.readFileSync(path.join(root, asset.file), "utf8") }));
+  const matrixEvidence = [...descriptorEvidence, ...sourceEvidence, ...workflowEvidence, ...testEvidence, ...docsEvidence];
+  const sourceText = sourceEvidence.map(file => file.content).join("\n");
   const gaps = ["no stored fixture verification evidence", "no stored canonical-dispatch verification evidence", "no stored cross-pack verification evidence"];
   if (!manifest.configuration) gaps.push("configuration schema is not declared");
   if (!manifest.requires) gaps.push("dependency/tool requirements are not declared");
@@ -106,11 +214,13 @@ function inventoryPack(packDir) {
     current_tests: testMatches([manifest.name, manifest.display_name, ...manifest.modules.map(module => module.name), ...moduleDetails.flatMap(module => module.tools.map(tool => tool.name))]),
     maturity_gaps: gaps,
     overlaps: [],
+    capability_matrix: capabilityMatrix({ manifest: { ...manifest, manifest: relative(manifestPath), knowledge }, files: matrixEvidence, workflows, tools: moduleDetails.flatMap(module => module.tools.map(tool => tool.name)), gaps }),
     evidence_status: "not_evaluated",
   };
 }
 
-const packs = fs.readdirSync(packsRoot, { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => inventoryPack(path.join(packsRoot, entry.name))).sort((a, b) => a.name.localeCompare(b.name));
+const manifestPaths = walk(packsRoot).filter(file => path.basename(file) === "sidekick.pack.json");
+const packs = manifestPaths.map(file => inventoryPack(path.dirname(file))).sort((a, b) => a.name.localeCompare(b.name));
 for (const pack of packs) {
   pack.overlaps = packs.filter(other => other.name !== pack.name && pack.tools.some(tool => other.tools.includes(tool))).map(other => other.name).sort();
 }
