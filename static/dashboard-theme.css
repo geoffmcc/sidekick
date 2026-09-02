@@ -7,12 +7,15 @@
   --sk-border: #2b3948;
   --sk-border-subtle: #202b37;
   --sk-text: #e6edf3;
+  --sk-text-secondary: #a6b4c2;
   --sk-text-muted: #718092;
   --sk-accent: #6cb6ff;
   --sk-success: #56d364;
   --sk-warning: #e3b341;
   --sk-danger: #ff7b72;
 }
+
+html, body { overflow-x: hidden; }
 
 /* Normalize the older page renderers onto the shell's visual language. */
 .page > .grid,
@@ -426,3 +429,16 @@
 @media (prefers-reduced-motion: reduce) {
   .page *, .page *::before, .page *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
 }
+.side-nav { min-height: 0; }
+.workspace-switcher { position: relative; }
+.workspace-menu { position: absolute; z-index: 30; top: calc(100% - 8px); left: 6px; right: 6px; max-height: 320px; overflow-y: auto; padding: 5px; background: var(--sk-surface-raised); border: 1px solid var(--sk-border); border-radius: 6px; box-shadow: 0 12px 28px rgba(0,0,0,.35); }
+.workspace-option { display: block; width: 100%; padding: 8px 9px; color: var(--sk-text); text-align: left; background: transparent; border: 0; border-radius: 4px; cursor: pointer; }
+.workspace-option:hover, .workspace-option[aria-selected="true"] { background: var(--sk-surface); }
+.workspace-option small { display: block; margin-top: 2px; color: var(--sk-text-muted); }
+.service-status-list { display: flex; align-items: center; gap: 8px; color: var(--sk-text-muted); font-size: 10px; white-space: nowrap; }
+.service-status-item { display: inline-flex; align-items: center; gap: 4px; }
+.mobile-nav-open { overflow: hidden; }
+.mobile-nav-backdrop { display: none; }
+.mobile-nav-close { display: none; }
+@media (max-width: 1180px) { .service-status-list { gap: 5px; font-size: 9px; } .service-status-item { gap: 3px; } }
+@media (max-width: 900px) { .mobile-nav-close { display: inline-grid; } .mobile-nav-backdrop { position: fixed; inset: 0; z-index: 19; display: block; background: rgba(3, 6, 10, .62); } .mobile-nav-backdrop[hidden] { display: none; } .service-status-list { max-width: 42vw; overflow: hidden; } }
