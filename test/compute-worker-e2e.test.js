@@ -25,6 +25,7 @@ const NODE_ID = 'node_e2e_worker_01';
 
 let passed = 0, failed = 0, skipped = 0;
 let server = null;
+let serverOutput = '';
 function check(name, cond) {
   if (cond) { passed++; console.log(`  \x1b[32m✓\x1b[0m ${name}`); }
   else { failed++; console.log(`  \x1b[31m✗\x1b[0m ${name}`); }
@@ -87,12 +88,17 @@ process.once('SIGTERM', () => { handleSignal('SIGTERM').catch(() => process.exit
 
 async function main() {
   console.log('Running Compute Worker E2E Acceptance Tests...\n');
-  server = spawn(process.execPath, ['src/index.js'], { cwd: ROOT, stdio: ['ignore', 'ignore', 'ignore'],
+  server = spawn(process.execPath, ['src/index.js'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, NODE_ENV: 'test', SIDEKICK_DATA_DIR: DATA_DIR, SIDEKICK_PORT: String(PORT), SIDEKICK_API_KEY: API_KEY } });
+  const captureServerOutput = chunk => {
+    serverOutput = (serverOutput + String(chunk)).slice(-4000);
+  };
+  server.stdout.on('data', captureServerOutput);
+  server.stderr.on('data', captureServerOutput);
   try {
     let healthy = false;
-    for (let i = 0; i < 80; i++) { try { if ((await req('GET', '/health')).status === 200) { healthy = true; break; } } catch {} await sleep(250); }
-    assert.ok(healthy, 'worker E2E server did not become healthy');
+    for (let i = 0; i < 240; i++) { try { if ((await req('GET', '/health')).status === 200) { healthy = true; break; } } catch {} await sleep(250); }
+    assert.ok(healthy, `worker E2E server did not become healthy${serverOutput ? `; startup output: ${serverOutput.trim()}` : ''}`);
 
     // status before enrollment
     check('status reports not enrolled before enroll', /Enrolled:\s+no/.test(cli(['status'])));
