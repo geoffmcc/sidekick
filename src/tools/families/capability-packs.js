@@ -52,6 +52,7 @@ async function sidekick_capability({ action = "list", name, path: sourcePath, co
           state: pack.state,
           enabled: pack.enabled,
           health: pack.health.status,
+          maturity: pack.maturity,
           modules: pack.modules.map(m => m.name),
           tools: pack.tools,
           workflows: pack.workflows.map(w => w.name),
@@ -131,6 +132,16 @@ async function sidekick_capability({ action = "list", name, path: sourcePath, co
       return jsonText({ ok: report.ok, action, health: report });
     }
 
+    if (action === "maturity") {
+      const report = lifecycle.maturity(requireName(name, action));
+      return jsonText({ ok: true, action, maturity: report });
+    }
+
+    if (action === "record_verification") {
+      const result = lifecycle.recordVerification(requireName(name, action), config || {});
+      return jsonText({ ok: true, action, ...result });
+    }
+
     if (action === "doctor") {
       const report = lifecycle.doctor(requireName(name, action));
       repository.recordPackHealth(name, report.health);
@@ -161,7 +172,7 @@ async function sidekick_capability({ action = "list", name, path: sourcePath, co
     }
 
     return failure(
-      `Unknown capability action: ${action}. Use list, available, show, inspect, validate, install, configure, enable, disable, health, doctor, upgrade, or uninstall`,
+      `Unknown capability action: ${action}. Use list, catalog, available, show, inspect, validate, install, configure, enable, disable, health, maturity, record_verification, doctor, upgrade, or uninstall`,
       { code: "unknown_action" }
     );
   } catch (error) {
@@ -181,12 +192,12 @@ const descriptors = Object.freeze([
       "Inspect the shared Sidekick capability catalog and manage installed or bundled packs. Installing or enabling a pack activates executable module code in the Sidekick process.",
     schema: z.object({
       action: z
-        .enum(["list", "catalog", "available", "show", "inspect", "validate", "install", "configure", "enable", "disable", "health", "doctor", "upgrade", "uninstall"])
+        .enum(["list", "catalog", "available", "show", "inspect", "validate", "install", "configure", "enable", "disable", "health", "maturity", "record_verification", "doctor", "upgrade", "uninstall"])
         .optional()
         .describe("Capability pack action (default: list)"),
       name: z.string().optional().describe("Pack name (required for show/configure/enable/disable/health/upgrade/uninstall, and for installing a bundled pack)"),
       path: z.string().optional().describe("Server-local package path for inspect/validate/install/upgrade of a non-bundled pack"),
-      config: z.record(z.any()).optional().describe("Pack configuration object, validated against the pack's configuration schema"),
+      config: z.record(z.any()).optional().describe("Pack configuration or attributed verification object"),
       enable: z.boolean().optional().describe("Enable the pack immediately after install (default false)"),
       allow_same_version: z.boolean().optional().describe("Permit replacing the installed version with the same version (upgrade)"),
       allow_downgrade: z.boolean().optional().describe("Permit moving to a lower version (upgrade)"),
@@ -202,7 +213,7 @@ const descriptors = Object.freeze([
       remove_module_data: z.boolean().optional().describe("Request removal of module-owned data on uninstall, where the module's manifest permits it (default false)"),
     }),
     args: {
-      action: "string (list|catalog|available|show|inspect|validate|install|configure|enable|disable|health|doctor|upgrade|uninstall - default list)",
+      action: "string (list|catalog|available|show|inspect|validate|install|configure|enable|disable|health|maturity|record_verification|doctor|upgrade|uninstall - default list)",
       name: "string (pack name)",
       path: "string (server-local package path)",
       config: "object (pack configuration)",

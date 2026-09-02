@@ -23,7 +23,7 @@ function packRows() {
   const rows = repository.listPacks().map(pack => {
     const detail = lifecycle.describe(pack.name, { includeHealth: true });
     const enabled = detail.enabled === true && detail.health?.ok === true;
-    return { kind: "pack", id: pack.name, name: pack.name, owner: { kind: "core", name: null }, state: detail.state, available: enabled, availability: { state: enabled ? "available" : "unavailable", reasons: enabled ? [] : [`pack_state:${detail.state}`, ...(detail.health?.ok ? [] : [`health:${detail.health?.status || "unknown"}`])] }, version: detail.version, description: detail.description, dependencies: detail.depends, configuration: detail.configuration, health: detail.health, permissions: detail.permissions, network_scopes: [], components: { modules: detail.modules, tools: detail.tools, workflows: detail.workflows, knowledge: detail.knowledge }, provenance: detail.provenance };
+    return { kind: "pack", id: pack.name, name: pack.name, owner: { kind: "core", name: null }, state: detail.state, available: enabled, availability: { state: enabled ? "available" : "unavailable", reasons: enabled ? [] : [`pack_state:${detail.state}`, ...(detail.health?.ok ? [] : [`health:${detail.health?.status || "unknown"}`])] }, version: detail.version, description: detail.description, dependencies: detail.depends, configuration: detail.configuration, health: detail.health, maturity: detail.maturity, permissions: detail.permissions, network_scopes: [], components: { modules: detail.modules, tools: detail.tools, workflows: detail.workflows, knowledge: detail.knowledge }, provenance: detail.provenance };
   });
   for (const candidate of bundled.listBundledPacks()) {
     if (installed.has(candidate.name)) continue;

@@ -211,6 +211,20 @@ instructions and cannot add a step after validation.
   raw sensitive payloads; they cannot independently reconstruct every detail
   of a task execution.
 
+## Deterministic benchmark
+
+`npm run test:brain-v3` includes the versioned
+`sidekick.brain-v3-benchmark.v1` evaluator. It uses bounded fixture planner,
+tool, and synthesizer seams and therefore reports `provider_integration:
+not_evaluated`; it does not claim success for an unavailable local model or a
+live Agent process. The matrix covers direct answers, fresh evidence, missing
+evidence honesty, malformed plans, unavailable tools, critic replanning,
+cancellation, and deadline handling. Results include terminal correctness,
+verified completion, unsupported completion, tool selection, prerequisite
+detection, recovery, replans, intervention, and latency. Contradictory-evidence
+and provider-token measurements remain explicitly `not_evaluated` until a
+deterministic fixture for those paths is added.
+
 ## Testing and manual checks
 
 Run the focused foundation and deterministic behavior checks:

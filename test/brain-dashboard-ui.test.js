@@ -15,6 +15,9 @@ assert.match(js, /\/api\/agent\/tasks\/' \+ encodeURIComponent\(taskId\) \+ '\/c
 assert.match(js, /\/api\/agent\/learning-candidates\?project=/);
 assert.match(js, /No role-routing decisions recorded/);
 assert.match(js, /candidate\.state \|\| 'proposal'/);
+assert.match(js, /capabilityMaturity/);
+assert.match(js, /evidence_freshness/);
+assert.match(html, /Maturity is evidence-bound/);
 assert.match(css, /\.brain-projection/);
 assert.match(css, /\.brain-row/);
 console.log("Brain Dashboard UI projections: passed");

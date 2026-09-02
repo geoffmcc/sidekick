@@ -4535,6 +4535,7 @@ function renderInstalledCapabilities(packs) {
     const actions = [];
     actions.push('<button class="btn btn-sm" onclick="capabilityDetail(' + jsArg(pack.name) + ')"><i class="fas fa-circle-info"></i> Details</button>');
     actions.push('<button class="btn btn-sm" onclick="capabilityHealth(' + jsArg(pack.name) + ')"><i class="fas fa-stethoscope"></i> Health Check</button>');
+    actions.push('<button class="btn btn-sm btn-outline" onclick="capabilityMaturity(' + jsArg(pack.name) + ')"><i class="fas fa-certificate"></i> Maturity</button>');
     if (pack.enabled) {
       actions.push('<button class="btn btn-sm btn-outline" onclick="capabilityAction(' + jsArg(pack.name) + ',\'disable\')"><i class="fas fa-pause"></i> Disable</button>');
     } else {
@@ -4551,7 +4552,8 @@ function renderInstalledCapabilities(packs) {
       + esc(pack.provenance === 'first_party' ? 'first-party' : 'third-party')
       + (pack.bundled ? ' &middot; bundled' : '') + '</div>'
       + '</div>'
-      + '<div>' + capPill(pack.health) + ' <span class="metrics-status-pill ' + (pack.enabled ? 'ok' : 'warn') + '">' + esc(pack.state) + '</span></div>'
+      + '<div>' + capPill(pack.health) + ' <span class="metrics-status-pill ' + (pack.enabled ? 'ok' : 'warn') + '">' + esc(pack.state) + '</span>'
+       + ' <span class="metrics-status-pill ' + (pack.maturity && pack.maturity.level === 'certified' ? 'ok' : 'warn') + '" title="Evidence-bound pack maturity">' + esc((pack.maturity && pack.maturity.level) || 'foundation') + '</span></div>'
       + '</div>'
       + '<div class="sub" style="margin-top:8px">'
       + 'Modules: ' + (pack.modules.length ? esc(pack.modules.join(', ')) : 'none')
@@ -4639,6 +4641,28 @@ async function capabilityHealth(name) {
     el.style.display = 'block';
   }
   loadCapabilities();
+}
+
+async function capabilityMaturity(name) {
+  const el = $('capDetail-' + name);
+  try {
+    const res = await authFetch('/api/capabilities/' + encodeURIComponent(name) + '/maturity');
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || 'maturity unavailable');
+    const maturity = data.maturity || {};
+    if (el) {
+      el.textContent = JSON.stringify({
+        level: maturity.level,
+        evidence_freshness: maturity.evidence_freshness,
+        optional_provider_integration: maturity.optional_provider_integration,
+        reasons: maturity.reasons || [],
+        evidence: maturity.evidence || [],
+      }, null, 2);
+      el.style.display = 'block';
+    }
+  } catch (error) {
+    capError('maturity: ' + error.message);
+  }
 }
 
 function capabilityUpgrade(name) {

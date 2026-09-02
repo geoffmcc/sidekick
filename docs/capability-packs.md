@@ -305,6 +305,25 @@ installed-but-unready or unhealthy one degrades, and optional gaps inform.
 
 A pack whose required component is unusable is never reported healthy.
 
+### Maturity and certification
+
+Health answers whether the current lifecycle components work. Maturity answers
+whether the pack has been exercised through the production path. The levels
+are `foundation`, `operational`, `integrated`, and `certified`; definitions and
+freshness rules are maintained in [`capability-catalog.md`](capability-catalog.md).
+Maturity evidence is bound to the installed package hash, version, and
+configuration fingerprint. Reconfiguration, upgrade, package drift, or a
+30-day evidence age therefore removes the integrated/certified claim until a
+new verification is recorded. No manifest field can declare certification.
+
+The reproducible repository audit matrix is generated with
+`npm run pack:inventory` and committed at
+[`compatibility-pack-inventory.json`](compatibility-pack-inventory.json). It
+lists all bundled packs, declared components, permissions, dependencies,
+operation classifications, existing tests, and evidence gaps. Its
+`not_evaluated` status is intentional until a canonical fixture run records
+evidence; it is not a provider-success claim.
+
 ### Client visibility after enable
 
 `restart_required` covers the server process; MCP **clients** have a separate,
@@ -442,7 +461,8 @@ capability action="install"   name="developer"     # or path=…, config={…}, 
 capability action="configure" name="developer" config={ "verification_mode": "full" }
 capability action="enable"    name="developer"
 capability action="disable"   name="developer"
-capability action="health"    name="developer"
+  capability action="health"    name="developer"
+capability action="maturity"  name="developer"
 capability action="upgrade"   name="developer"     # or path=…, allow_same_version / allow_downgrade
 capability action="uninstall" name="developer"
 ```

@@ -39,6 +39,7 @@ const moduleRepository = require("../modules/repository");
 const moduleLoader = require("../modules/loader");
 const workflowRepository = require("../workflows/repository");
 const { sidekickVersion } = require("../modules/packaging");
+const packMaturity = require("./maturity");
 
 const HEALTH_STATUS = Object.freeze({
   HEALTHY: "healthy",
@@ -877,10 +878,22 @@ function doctor(name) {
   return { ok: report.ok, status: report.status, checked_at: report.checked_at, health: report, actions };
 }
 
+function maturity(name) {
+  const record = repository.getPack(name);
+  if (!record) throw new Error(`Capability pack "${name}" is not installed`);
+  return packMaturity.evaluate({ ...record, health: health(name) });
+}
+
+function recordVerification(name, verification) {
+  const record = repository.recordPackVerification(name, verification);
+  return { pack: describe(name), maturity: packMaturity.evaluate(record) };
+}
+
 /** Operator-facing summary of one installed pack. */
 function describe(name, { includeHealth = true } = {}) {
   const record = repository.getPack(name);
   if (!record) return null;
+  const currentHealth = includeHealth ? health(name) : record.health;
   const components = repository.listComponents(name);
   const modules = components.filter(c => c.kind === "module");
   const tools = [];
@@ -918,7 +931,8 @@ function describe(name, { includeHealth = true } = {}) {
     workflows: components.filter(c => c.kind === "workflow").map(c => ({ name: c.ref, version: c.version, state: c.state, title: c.detail?.title, mode: c.detail?.mode })),
     knowledge: components.filter(c => c.kind === "knowledge").map(c => ({ title: c.ref, state: c.state, category: c.detail?.category })),
     requires: record.manifest.requires || { tools: [], optional_tools: [] },
-    health: includeHealth ? health(name) : record.health,
+    health: currentHealth,
+    maturity: packMaturity.evaluate({ ...record, health: currentHealth }),
     error: record.error || null,
   };
 }
@@ -1048,4 +1062,4 @@ function classifyInspectionProblem(problem) {
   return "package";
 }
 
-module.exports = { HEALTH_STATUS, inspect, install, configure, enable, disable, upgrade, uninstall, health, doctor, describe, validate };
+module.exports = { HEALTH_STATUS, inspect, install, configure, enable, disable, upgrade, uninstall, health, doctor, maturity, recordVerification, describe, validate };

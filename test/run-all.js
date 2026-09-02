@@ -116,6 +116,8 @@ const suites = [
   { file: 'test/queue-recover.test.js', critical: false, description: 'Queue poisoned-slot recovery and honest durability behavior' },
   { file: 'test/scheduling-cancel.test.js', critical: false, description: 'Cron/watch cancellation coordination for live execution claims' },
   { file: 'test/pack-manifest-consistency.test.js', critical: false, description: 'Capability-pack module dispatch and manifest permission consistency' },
+  { file: 'test/pack-maturity.test.js', critical: true, description: 'Evidence-bound capability-pack maturity and stale verification handling' },
+  { file: 'test/pack-inventory.test.js', critical: true, description: 'Complete deterministic bundled compatibility-pack audit inventory' },
   { file: 'test/tools.test.js', critical: false, description: 'Core tool behavior' },
   { file: 'test/knowledge-promotion.test.js', critical: true, description: 'Governed promotion of taught procedures into redacted, attributed knowledge' },
   { file: 'test/dispatcher.test.cjs', critical: false, description: 'Centralized tool dispatcher behavior' },
